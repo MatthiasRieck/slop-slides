@@ -2,7 +2,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-import { browserPreview } from "./dev/browserPreview";
+import { browserPreview } from "./dev/browserPreview.ts";
 
 const host = process.env.TAURI_DEV_HOST;
 
@@ -22,5 +22,7 @@ export default defineConfig({
     target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari15",
     minify: !process.env.TAURI_ENV_DEBUG,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    // Loaded from disk by the desktop app, so bundle size is not a network cost.
+    chunkSizeWarningLimit: 2000,
   },
 });

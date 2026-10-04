@@ -34,7 +34,9 @@ pub fn adopt_login_shell_path() {
             let _ = child.kill();
             return;
         }
-        let Ok(output) = child.wait_with_output() else { return };
+        let Ok(output) = child.wait_with_output() else {
+            return;
+        };
         let stdout = String::from_utf8_lossy(&output.stdout);
         if let Some(path) = stdout.split(marker).nth(1).filter(|p| !p.is_empty()) {
             std::env::set_var("PATH", path);
@@ -49,7 +51,9 @@ pub fn resolve_claude() -> Option<PathBuf> {
     if let Ok(found) = which::which("claude") {
         return Some(found);
     }
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)?;
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)?;
     let mut candidates = vec![
         home.join(".claude/local/claude"),
         home.join(".local/bin/claude"),

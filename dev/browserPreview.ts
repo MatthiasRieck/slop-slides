@@ -6,7 +6,7 @@ import path from "node:path";
 import type { Plugin } from "vite";
 
 const library = path.join(os.homedir(), "Documents", "SlopSlide");
-const stage = (name: string) => fs.readFileSync(path.join(__dirname, "../src-tauri/assets", name), "utf8");
+const stage = (name: string) => fs.readFileSync(path.join(import.meta.dirname, "../src-tauri/assets", name), "utf8");
 
 function readDeck(id: string) {
   const dir = path.join(library, id);

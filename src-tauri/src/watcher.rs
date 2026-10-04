@@ -26,20 +26,32 @@ struct DeckChanged {
 impl DeckWatcher {
     pub fn watch(&self, app: AppHandle, deck_id: String, dir: PathBuf) -> Result<()> {
         // Deleted files cannot be canonicalized, so match against both spellings of the root.
-        let roots = [dir.canonicalize().unwrap_or_else(|_| dir.clone()), dir.clone()];
-        let mut debouncer = new_debouncer(Duration::from_millis(120), move |res: DebounceEventResult| {
-            let Ok(events) = res else { return };
-            let mut paths: Vec<String> = events
-                .iter()
-                .filter_map(|event| roots.iter().find_map(|root| relative(root, &event.path)))
-                .filter(|rel| !rel.starts_with(INTERNAL_DIR) && !is_temp_file(rel))
-                .collect();
-            paths.sort();
-            paths.dedup();
-            if !paths.is_empty() {
-                let _ = app.emit("deck-changed", DeckChanged { deck_id: deck_id.clone(), paths });
-            }
-        })
+        let roots = [
+            dir.canonicalize().unwrap_or_else(|_| dir.clone()),
+            dir.clone(),
+        ];
+        let mut debouncer = new_debouncer(
+            Duration::from_millis(120),
+            move |res: DebounceEventResult| {
+                let Ok(events) = res else { return };
+                let mut paths: Vec<String> = events
+                    .iter()
+                    .filter_map(|event| roots.iter().find_map(|root| relative(root, &event.path)))
+                    .filter(|rel| !rel.starts_with(INTERNAL_DIR) && !is_temp_file(rel))
+                    .collect();
+                paths.sort();
+                paths.dedup();
+                if !paths.is_empty() {
+                    let _ = app.emit(
+                        "deck-changed",
+                        DeckChanged {
+                            deck_id: deck_id.clone(),
+                            paths,
+                        },
+                    );
+                }
+            },
+        )
         .map_err(|e| Error::msg(format!("cannot watch deck: {e}")))?;
         debouncer
             .watcher()
@@ -57,7 +69,10 @@ impl DeckWatcher {
 fn relative(root: &Path, path: &Path) -> Option<String> {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let rel = path.strip_prefix(root).ok()?;
-    let parts: Vec<_> = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+    let parts: Vec<_> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 

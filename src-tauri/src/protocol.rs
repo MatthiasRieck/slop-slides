@@ -31,7 +31,9 @@ pub fn handle(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Cow<'stati
 }
 
 fn serve(app: &AppHandle, raw_path: &str) -> Result<(&'static str, Vec<u8>), StatusCode> {
-    let path = percent_decode_str(raw_path).decode_utf8().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let path = percent_decode_str(raw_path)
+        .decode_utf8()
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
     let path = path.trim_start_matches('/');
     let (deck_id, rel) = path.split_once('/').ok_or(StatusCode::NOT_FOUND)?;
     let dir = deck::deck_dir(app, deck_id).map_err(|_| StatusCode::NOT_FOUND)?;
@@ -39,19 +41,28 @@ fn serve(app: &AppHandle, raw_path: &str) -> Result<(&'static str, Vec<u8>), Sta
     let bytes = std::fs::read(&file).map_err(|_| StatusCode::NOT_FOUND)?;
     let mime = mime_for(rel);
     if mime.starts_with("text/html") {
-        return Ok((mime, inject_stage(&String::from_utf8_lossy(&bytes)).into_bytes()));
+        return Ok((
+            mime,
+            inject_stage(&String::from_utf8_lossy(&bytes)).into_bytes(),
+        ));
     }
     Ok((mime, bytes))
 }
 
 /// Places the app's stage styles and key forwarding ahead of the deck's own `<head>` content.
 fn inject_stage(html: &str) -> String {
-    let snippet = format!("<style data-slopslide>{STAGE_CSS}</style><script data-slopslide>{STAGE_JS}</script>");
+    let snippet = format!(
+        "<style data-slopslide>{STAGE_CSS}</style><script data-slopslide>{STAGE_JS}</script>"
+    );
     let lower = html.to_ascii_lowercase();
     let insert_at = lower
         .find("<head")
         .and_then(|start| lower[start..].find('>').map(|end| start + end + 1))
-        .or_else(|| lower.find("<html").and_then(|start| lower[start..].find('>').map(|end| start + end + 1)))
+        .or_else(|| {
+            lower
+                .find("<html")
+                .and_then(|start| lower[start..].find('>').map(|end| start + end + 1))
+        })
         .unwrap_or(0);
     let mut out = String::with_capacity(html.len() + snippet.len());
     out.push_str(&html[..insert_at]);

@@ -29,17 +29,41 @@ pub struct AgentManager {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum AgentEvent {
-    Started { session_id: Option<String> },
+    Started {
+        session_id: Option<String>,
+    },
     Thinking,
     TextStart,
-    TextDelta { text: String },
-    ToolUse { id: String, name: String, input: Value },
-    ToolResult { id: String, is_error: bool },
-    Result { is_error: bool, text: Option<String>, cost_usd: Option<f64>, duration_ms: Option<u64> },
-    Error { message: String },
-    Finished { interrupted: bool },
+    TextDelta {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
+    ToolResult {
+        id: String,
+        is_error: bool,
+    },
+    Result {
+        is_error: bool,
+        text: Option<String>,
+        cost_usd: Option<f64>,
+        duration_ms: Option<u64>,
+    },
+    Error {
+        message: String,
+    },
+    Finished {
+        interrupted: bool,
+    },
 }
 
 #[derive(Clone, Serialize)]
@@ -79,9 +103,20 @@ impl AgentManager {
             running.insert(args.deck_id.clone(), cancel_tx);
         }
         tauri::async_runtime::spawn(async move {
-            let turn = Turn { app: app.clone(), deck_id: args.deck_id.clone(), dir, claude };
-            let interrupted = turn.run(&args.prompt, args.model.as_deref(), cancel_rx).await;
-            app.state::<AgentManager>().running.lock().unwrap().remove(&args.deck_id);
+            let turn = Turn {
+                app: app.clone(),
+                deck_id: args.deck_id.clone(),
+                dir,
+                claude,
+            };
+            let interrupted = turn
+                .run(&args.prompt, args.model.as_deref(), cancel_rx)
+                .await;
+            app.state::<AgentManager>()
+                .running
+                .lock()
+                .unwrap()
+                .remove(&args.deck_id);
             turn.emit(&AgentEvent::Finished { interrupted });
         });
         Ok(())
@@ -109,13 +144,26 @@ enum Outcome {
 
 impl Turn {
     fn emit(&self, event: &AgentEvent) {
-        let _ = self.app.emit("agent-event", Envelope { deck_id: &self.deck_id, event });
+        let _ = self.app.emit(
+            "agent-event",
+            Envelope {
+                deck_id: &self.deck_id,
+                event,
+            },
+        );
     }
 
     /// Returns whether the turn was interrupted.
-    async fn run(&self, prompt: &str, model: Option<&str>, mut cancel: watch::Receiver<bool>) -> bool {
+    async fn run(
+        &self,
+        prompt: &str,
+        model: Option<&str>,
+        mut cancel: watch::Receiver<bool>,
+    ) -> bool {
         let session = deck::read_session(&self.dir);
-        let mut outcome = self.run_once(prompt, model, session.as_deref(), &mut cancel).await;
+        let mut outcome = self
+            .run_once(prompt, model, session.as_deref(), &mut cancel)
+            .await;
         if matches!(outcome, Ok(Outcome::ResumeFailed)) {
             // The stored session is gone (other machine, cleared history): start fresh.
             let _ = deck::write_session(&self.dir, None);
@@ -125,7 +173,9 @@ impl Turn {
             Ok(Outcome::Interrupted) => true,
             Ok(_) => false,
             Err(e) => {
-                self.emit(&AgentEvent::Error { message: e.to_string() });
+                self.emit(&AgentEvent::Error {
+                    message: e.to_string(),
+                });
                 false
             }
         }
@@ -151,10 +201,15 @@ impl Turn {
         #[cfg(windows)]
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| Error::msg(format!("Could not start Claude Code ({}): {e}", self.claude.display())))?;
-        self.emit(&AgentEvent::Started { session_id: session.map(str::to_string) });
+        let mut child = cmd.spawn().map_err(|e| {
+            Error::msg(format!(
+                "Could not start Claude Code ({}): {e}",
+                self.claude.display()
+            ))
+        })?;
+        self.emit(&AgentEvent::Started {
+            session_id: session.map(str::to_string),
+        });
 
         let mut stdin = child.stdin.take().expect("piped stdin");
         stdin.write_all(prompt.as_bytes()).await?;
@@ -163,7 +218,10 @@ impl Turn {
         let mut stderr = child.stderr.take().expect("piped stderr");
         let stderr_task = tokio::spawn(async move {
             let mut buf = Vec::new();
-            let _ = (&mut stderr).take(STDERR_LIMIT as u64).read_to_end(&mut buf).await;
+            let _ = (&mut stderr)
+                .take(STDERR_LIMIT as u64)
+                .read_to_end(&mut buf)
+                .await;
             // Keep draining so the child never blocks on a full pipe.
             let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
             String::from_utf8_lossy(&buf).into_owned()
@@ -207,8 +265,14 @@ impl Turn {
         }
         if !status.success() && result_text.is_none() {
             let detail = stderr.trim();
-            let detail = if detail.is_empty() { format!("exit status {status}") } else { detail.to_string() };
-            return Err(Error::msg(format!("Claude Code stopped unexpectedly: {detail}")));
+            let detail = if detail.is_empty() {
+                format!("exit status {status}")
+            } else {
+                detail.to_string()
+            };
+            return Err(Error::msg(format!(
+                "Claude Code stopped unexpectedly: {detail}"
+            )));
         }
         Ok(Outcome::Done)
     }
@@ -269,12 +333,20 @@ fn parse_line(value: &Value) -> Vec<AgentEvent> {
     match value["type"].as_str() {
         Some("stream_event") => {
             let event = &value["event"];
-            match (event["type"].as_str(), event["content_block"]["type"].as_str(), event["delta"]["type"].as_str()) {
+            match (
+                event["type"].as_str(),
+                event["content_block"]["type"].as_str(),
+                event["delta"]["type"].as_str(),
+            ) {
                 (Some("content_block_start"), Some("text"), _) => vec![AgentEvent::TextStart],
                 (Some("content_block_start"), Some("thinking"), _) => vec![AgentEvent::Thinking],
                 (Some("content_block_delta"), _, Some("text_delta")) => event["delta"]["text"]
                     .as_str()
-                    .map(|text| vec![AgentEvent::TextDelta { text: text.to_string() }])
+                    .map(|text| {
+                        vec![AgentEvent::TextDelta {
+                            text: text.to_string(),
+                        }]
+                    })
                     .unwrap_or_default(),
                 _ => Vec::new(),
             }
@@ -290,7 +362,10 @@ fn parse_line(value: &Value) -> Vec<AgentEvent> {
         Some("user") => content_blocks(value)
             .filter(|block| block["type"] == "tool_result")
             .map(|block| AgentEvent::ToolResult {
-                id: block["tool_use_id"].as_str().unwrap_or_default().to_string(),
+                id: block["tool_use_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
                 is_error: block["is_error"].as_bool().unwrap_or(false),
             })
             .collect(),
@@ -318,7 +393,10 @@ mod tests {
         let start = json!({"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}});
         let delta = json!({"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hi"}}});
         assert_eq!(parse_line(&start), vec![AgentEvent::TextStart]);
-        assert_eq!(parse_line(&delta), vec![AgentEvent::TextDelta { text: "Hi".into() }]);
+        assert_eq!(
+            parse_line(&delta),
+            vec![AgentEvent::TextDelta { text: "Hi".into() }]
+        );
     }
 
     #[test]
@@ -326,22 +404,41 @@ mod tests {
         let tool = json!({"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/d/slides/01.html"}}]}});
         let result = json!({"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}});
         let done = json!({"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.02,"duration_ms":1200});
-        assert!(matches!(&parse_line(&tool)[0], AgentEvent::ToolUse { name, .. } if name == "Write"));
-        assert_eq!(parse_line(&result), vec![AgentEvent::ToolResult { id: "t1".into(), is_error: false }]);
-        assert!(matches!(&parse_line(&done)[0], AgentEvent::Result { is_error: false, .. }));
+        assert!(
+            matches!(&parse_line(&tool)[0], AgentEvent::ToolUse { name, .. } if name == "Write")
+        );
+        assert_eq!(
+            parse_line(&result),
+            vec![AgentEvent::ToolResult {
+                id: "t1".into(),
+                is_error: false
+            }]
+        );
+        assert!(matches!(
+            &parse_line(&done)[0],
+            AgentEvent::Result {
+                is_error: false,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn detects_missing_session() {
         let missing = json!({"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: x"]});
         assert!(is_missing_session(&missing));
-        assert!(!is_missing_session(&json!({"type":"result","subtype":"success"})));
+        assert!(!is_missing_session(
+            &json!({"type":"result","subtype":"success"})
+        ));
     }
 
     #[test]
     fn reads_session_from_init() {
         let init = json!({"type":"system","subtype":"init","session_id":"abc"});
         assert_eq!(session_id_of_init(&init).as_deref(), Some("abc"));
-        assert_eq!(session_id_of_init(&json!({"type":"system","subtype":"status"})), None);
+        assert_eq!(
+            session_id_of_init(&json!({"type":"system","subtype":"status"})),
+            None
+        );
     }
 }

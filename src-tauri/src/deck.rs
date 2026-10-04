@@ -23,8 +23,14 @@ const MANIFEST: &str = "deck.json";
 const BLANK_SLIDE: &str = include_str!("../assets/blank-slide.html");
 const STARTER_THEME: &str = include_str!("../assets/theme.css");
 const REFERENCE_DOCS: &[(&str, &str)] = &[
-    ("STYLE_PRESETS.md", include_str!("../prompts/STYLE_PRESETS.md")),
-    ("animation-patterns.md", include_str!("../prompts/animation-patterns.md")),
+    (
+        "STYLE_PRESETS.md",
+        include_str!("../prompts/STYLE_PRESETS.md"),
+    ),
+    (
+        "animation-patterns.md",
+        include_str!("../prompts/animation-patterns.md"),
+    ),
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,7 +123,11 @@ fn existing_slides(dir: &Path, manifest: &Manifest) -> Vec<String> {
         .iter()
         .map(|s| s.trim_start_matches("./").to_string())
         .filter(|s| seen.insert(s.clone()))
-        .filter(|s| resolve_in_deck(dir, s).map(|p| p.is_file()).unwrap_or(false))
+        .filter(|s| {
+            resolve_in_deck(dir, s)
+                .map(|p| p.is_file())
+                .unwrap_or(false)
+        })
         .collect()
 }
 
@@ -135,7 +145,9 @@ pub fn list(app: &AppHandle) -> Result<Vec<DeckSummary>> {
     let mut decks = Vec::new();
     for entry in fs::read_dir(&root)? {
         let dir = entry?.path();
-        let Ok(manifest) = read_manifest(&dir) else { continue };
+        let Ok(manifest) = read_manifest(&dir) else {
+            continue;
+        };
         let Some(id) = dir.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
             continue;
         };
@@ -163,11 +175,19 @@ fn slugify(title: &str) -> String {
     }
     let slug = slug.trim_end_matches('-');
     let slug: String = slug.chars().take(48).collect();
-    if slug.is_empty() { "untitled".into() } else { slug }
+    if slug.is_empty() {
+        "untitled".into()
+    } else {
+        slug
+    }
 }
 
 fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
-    let suffix = if ext.is_empty() { String::new() } else { format!(".{ext}") };
+    let suffix = if ext.is_empty() {
+        String::new()
+    } else {
+        format!(".{ext}")
+    };
     let first = dir.join(format!("{stem}{suffix}"));
     if !first.exists() {
         return first;
@@ -195,11 +215,21 @@ pub fn ensure_scaffold(dir: &Path) -> Result<()> {
 
 pub fn create(app: &AppHandle, title: &str) -> Result<Deck> {
     let title = title.trim();
-    let title = if title.is_empty() { "Untitled deck" } else { title };
+    let title = if title.is_empty() {
+        "Untitled deck"
+    } else {
+        title
+    };
     let dir = unique_path(&library_root(app)?, &slugify(title), "");
     fs::create_dir_all(&dir)?;
     ensure_scaffold(&dir)?;
-    write_manifest(&dir, &Manifest { title: title.to_string(), slides: Vec::new() })?;
+    write_manifest(
+        &dir,
+        &Manifest {
+            title: title.to_string(),
+            slides: Vec::new(),
+        },
+    )?;
     let id = dir.file_name().unwrap().to_string_lossy().into_owned();
     open(app, &id, true)
 }
@@ -242,7 +272,10 @@ fn trash(dir: &Path, rel: &str) -> Result<()> {
     let trash_dir = dir.join(INTERNAL_DIR).join("trash");
     fs::create_dir_all(&trash_dir)?;
     let name = src.file_stem().unwrap().to_string_lossy();
-    let ext = src.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = src
+        .extension()
+        .map(|e| e.to_string_lossy().into_owned())
+        .unwrap_or_default();
     fs::rename(&src, unique_path(&trash_dir, &name, &ext))?;
     Ok(())
 }
@@ -351,7 +384,10 @@ pub fn import_assets(app: &AppHandle, id: &str, paths: Vec<String>) -> Result<Ve
             .unwrap_or_default();
         let dest = unique_path(&assets, &stem, &ext);
         fs::copy(&source, &dest)?;
-        imported.push(format!("assets/{}", dest.file_name().unwrap().to_string_lossy()));
+        imported.push(format!(
+            "assets/{}",
+            dest.file_name().unwrap().to_string_lossy()
+        ));
     }
     Ok(imported)
 }
@@ -377,7 +413,9 @@ pub fn save_chat(app: &AppHandle, id: &str, chat: &serde_json::Value) -> Result<
 }
 
 pub fn read_session(dir: &Path) -> Option<String> {
-    fs::read_to_string(dir.join(INTERNAL_DIR).join("session")).ok().map(|s| s.trim().to_string())
+    fs::read_to_string(dir.join(INTERNAL_DIR).join("session"))
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 pub fn write_session(dir: &Path, session_id: Option<&str>) -> Result<()> {

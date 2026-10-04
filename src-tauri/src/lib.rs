@@ -40,7 +40,12 @@ fn create_deck(app: AppHandle, watcher: State<DeckWatcher>, title: String) -> Re
 }
 
 #[tauri::command]
-fn open_deck(app: AppHandle, agent: State<AgentManager>, watcher: State<DeckWatcher>, id: String) -> Result<Deck> {
+fn open_deck(
+    app: AppHandle,
+    agent: State<AgentManager>,
+    watcher: State<DeckWatcher>,
+    id: String,
+) -> Result<Deck> {
     let deck = deck::open(&app, &id, !agent.is_running(&id))?;
     watcher.watch(app, deck.id.clone(), deck.path.clone().into())?;
     Ok(deck)
@@ -62,7 +67,12 @@ fn rename_deck(app: AppHandle, id: String, title: String) -> Result<Deck> {
 }
 
 #[tauri::command]
-fn delete_deck(app: AppHandle, agent: State<AgentManager>, watcher: State<DeckWatcher>, id: String) -> Result<()> {
+fn delete_deck(
+    app: AppHandle,
+    agent: State<AgentManager>,
+    watcher: State<DeckWatcher>,
+    id: String,
+) -> Result<()> {
     agent.interrupt(&id);
     watcher.stop();
     deck::delete_deck(&app, &id)
@@ -143,7 +153,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AgentManager::default())
         .manage(DeckWatcher::default())
-        .register_uri_scheme_protocol("slop", |ctx, request| protocol::handle(ctx.app_handle(), request))
+        .register_uri_scheme_protocol("slop", |ctx, request| {
+            protocol::handle(ctx.app_handle(), request)
+        })
         .invoke_handler(tauri::generate_handler![
             list_decks,
             create_deck,

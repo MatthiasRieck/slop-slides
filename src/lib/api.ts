@@ -8,11 +8,20 @@ export interface DeckSummary {
   updatedMs: number;
 }
 
+export interface Slide {
+  /** The slide's `id` attribute in deck.html. */
+  id: string;
+  /** Changes when the slide's markup changes. */
+  hash: string;
+}
+
 export interface Deck {
   id: string;
   title: string;
   path: string;
-  slides: string[];
+  slides: Slide[];
+  /** Changes when anything outside the slides (styles, fonts) changes. */
+  shellHash: string;
 }
 
 export interface CreatedSlide {
@@ -66,6 +75,7 @@ export const api = {
     invoke<CreatedSlide>("duplicate_slide", { id, slide }),
   deleteSlide: (id: string, slide: string) => invoke<Deck>("delete_slide", { id, slide }),
   importAssets: (id: string, paths: string[]) => invoke<string[]>("import_assets", { id, paths }),
+  exportDeck: (id: string, dest: string) => invoke<void>("export_deck", { id, dest }),
   loadChat: (id: string) => invoke<unknown>("load_chat", { id }),
   saveChat: (id: string, chat: unknown) => invoke<void>("save_chat", { id, chat }),
   resetChat: (id: string) => invoke<void>("reset_chat", { id }),

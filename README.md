@@ -8,6 +8,9 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
 - **Right:** chat with the agent. It knows which slide you're on, and you can attach images
   (paperclip, or drop files anywhere on the window).
 - **Present:** full-screen slideshow (arrows/space/click to advance, `Esc` to exit).
+- **Export:** saves the deck as **one self-contained HTML file** (attached images embedded)
+  that plays in any browser: arrows/space/click to navigate, `F` for full screen, `#slide-id`
+  links, print to PDF.
 
 Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.
 
@@ -44,11 +47,12 @@ draft GitHub release. Code signing and notarization secrets are listed in the wo
 ```
 src/                    React UI (Zustand store, Tailwind)
 src-tauri/src/
-  deck.rs               deck folders: manifest, slides, assets, chat, session
+  deck.rs               deck folders: load/normalize, slide operations, export, snapshots
+  html.rs               finds the slide <section>s in deck.html and rewrites them;
+                        installs the player runtime (assets/runtime.{css,js})
   agent.rs              runs `claude -p --output-format stream-json` per turn, resumes the
                         deck's session, normalizes the stream into `agent-event`s
-  protocol.rs           `slop://` scheme serving deck files to slide iframes, injecting
-                        the stage CSS (1920×1080 canvas, reveal animations) and key forwarding
+  protocol.rs           `slop://` scheme serving deck files to the slide iframes
   watcher.rs            file watcher → `deck-changed` events, so edits stream into the UI
 src-tauri/prompts/      the agent's system prompt and design references
 ```
@@ -56,16 +60,20 @@ src-tauri/prompts/      the agent's system prompt and design references
 Each deck is a plain folder under `~/Documents/SlopSlide/<deck>/`:
 
 ```
-deck.json        {"title": "...", "slides": ["slides/01-title.html", ...]}   ← order
-theme.css        shared design system
-slides/*.html    one standalone HTML document per slide, authored at 1920×1080
-assets/          attached images and media
-.slopslide/      chat history, agent session, reference docs, trash (app-managed)
+deck.html        the whole presentation: <section class="slide" id="…"> per slide,
+                 shared styles, and the embedded player runtime
+assets/          attached images and media (inlined on export)
+.slopslide/      chat history, agent session, reference docs, snapshots (app-managed)
 ```
 
+`deck.html` already plays standalone in a browser. The editor renders individual slides of
+it in sandboxed iframes (`deck.html?embed&slide=<id>`), so the thumbnails, stage, and
+exported file all use the same player. Before every agent turn and slide deletion, a copy is
+saved to `.slopslide/snapshots/` (last 30 kept).
+
 The agent only gets file tools (Read/Write/Edit/Glob/Grep plus web search/fetch). It has no
-shell access and loads no MCP servers. Slides render in sandboxed iframes, so you can also
-edit the files by hand in any editor and the app picks up the changes.
+shell access and loads no MCP servers. You can also edit `deck.html` by hand in any editor;
+the app picks up the changes.
 
 The design guidance in the agent's prompt draws on
 [frontend-slides](https://github.com/zarazhangrui/frontend-slides) (MIT). See

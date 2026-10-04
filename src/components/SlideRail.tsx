@@ -12,10 +12,10 @@ import { CSS } from "@dnd-kit/utilities";
 import { Copy, Plus, Trash2 } from "lucide-react";
 import { useEffect, useRef } from "react";
 
-import { api, errorMessage } from "../lib/api";
+import { api, errorMessage, type Slide } from "../lib/api";
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
-import { SlideFrame } from "./SlideFrame";
+import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
 export function SlideRail() {
   const deck = useApp((s) => s.deck);
@@ -24,12 +24,17 @@ export function SlideRail() {
 
   const onDragEnd = async ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
-    const from = deck.slides.indexOf(String(active.id));
-    const to = deck.slides.indexOf(String(over.id));
+    const from = deck.slides.findIndex((s) => s.id === active.id);
+    const to = deck.slides.findIndex((s) => s.id === over.id);
     const slides = arrayMove(deck.slides, from, to);
     useApp.getState().setDeck({ ...deck, slides });
     try {
-      useApp.getState().setDeck(await api.reorderSlides(deck.id, slides));
+      useApp.getState().setDeck(
+        await api.reorderSlides(
+          deck.id,
+          slides.map((s) => s.id),
+        ),
+      );
     } catch (error) {
       useApp.getState().setError(errorMessage(error));
       useApp.getState().setDeck(await api.loadDeck(deck.id));
@@ -74,10 +79,10 @@ export function SlideRail() {
             modifiers={[restrictToVerticalAxis]}
             onDragEnd={onDragEnd}
           >
-            <SortableContext items={deck.slides} strategy={verticalListSortingStrategy}>
+            <SortableContext items={deck.slides.map((s) => s.id)} strategy={verticalListSortingStrategy}>
               <ol className="flex flex-col gap-3">
                 {deck.slides.map((slide, index) => (
-                  <Thumbnail key={slide} deckId={deck.id} slide={slide} index={index} />
+                  <Thumbnail key={slide.id} deckId={deck.id} slide={slide} index={index} />
                 ))}
               </ol>
             </SortableContext>
@@ -88,10 +93,11 @@ export function SlideRail() {
   );
 }
 
-function Thumbnail({ deckId, slide, index }: { deckId: string; slide: string; index: number }) {
-  const selected = useApp((s) => s.selected === slide);
+function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; index: number }) {
+  const selected = useApp((s) => s.selected === slide.id);
+  const version = useSlideVersion(slide);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: slide,
+    id: slide.id,
   });
   const itemRef = useRef<HTMLLIElement | null>(null);
 
@@ -101,7 +107,7 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: string; in
 
   const duplicate = async () => {
     try {
-      const created = await api.duplicateSlide(deckId, slide);
+      const created = await api.duplicateSlide(deckId, slide.id);
       useApp.getState().setDeck(created.deck);
       useApp.getState().select(created.slide);
     } catch (error) {
@@ -112,8 +118,8 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: string; in
   const remove = async () => {
     try {
       const before = useApp.getState().deck?.slides ?? [];
-      const neighbor = before[index + 1] ?? before[index - 1] ?? null;
-      const next = await api.deleteSlide(deckId, slide);
+      const neighbor = (before[index + 1] ?? before[index - 1])?.id ?? null;
+      const next = await api.deleteSlide(deckId, slide.id);
       if (selected) useApp.getState().select(neighbor);
       useApp.getState().setDeck(next);
     } catch (error) {
@@ -143,13 +149,13 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: string; in
       <div className="relative min-w-0 flex-1">
         <button
           type="button"
-          onClick={() => useApp.getState().select(slide)}
+          onClick={() => useApp.getState().select(slide.id)}
           className={cn(
             "block w-full overflow-hidden rounded-md ring-1 ring-border transition-shadow",
             selected ? "ring-2 ring-primary" : "hover:ring-input",
           )}
         >
-          <SlideFrame deckId={deckId} slide={slide} thumbnail />
+          <SlideFrame deckId={deckId} slideId={slide.id} version={version} thumbnail />
         </button>
         <div className="absolute right-1 top-1 hidden gap-0.5 group-hover:flex">
           <RailAction title="Duplicate" onClick={duplicate}>

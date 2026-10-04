@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{TITLE}}</title>
+  <style>
+    /* Deck design system. The agent rewrites this when it styles the deck. */
+    @import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Instrument+Sans:wght@400;500&display=swap");
+
+    :root {
+      --bg: #f4f1ea;
+      --ink: #1c1b19;
+      --muted: #6b675f;
+      --accent: #d6461f;
+      --font-display: "Fraunces", Georgia, serif;
+      --font-body: "Instrument Sans", "Helvetica Neue", sans-serif;
+    }
+
+    .slide {
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font-body);
+      font-size: 32px;
+      line-height: 1.4;
+    }
+
+    .slide h1,
+    .slide h2,
+    .slide h3 {
+      font-family: var(--font-display);
+      font-weight: 600;
+      line-height: 1.05;
+      margin: 0;
+    }
+
+    .slide h1 { font-size: 120px; letter-spacing: -0.02em; }
+    .slide h2 { font-size: 80px; }
+    .slide p { margin: 0; color: var(--muted); }
+
+    .layout-blank {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 32px;
+      padding: 120px;
+    }
+  </style>
+</head>
+<body>
+  <main class="deck">
+  </main>
+</body>
+</html>

@@ -1,27 +1,30 @@
-//! Deck storage. A deck is a folder in the library:
+//! Deck storage. A deck is a folder in the library holding one self-contained HTML file:
 //!
 //! ```text
 //! <library>/<deck-id>/
-//!   deck.json      title + ordered slide paths (source of truth for order)
-//!   theme.css      shared design system
-//!   slides/*.html  one 1920×1080 document per slide
-//!   assets/        user-attached media
-//!   .slopslide/    app internals: chat history, agent session, reference docs, trash
+//!   deck.html      every slide, the shared styles, and the embedded player runtime
+//!   assets/        user-attached media, referenced as assets/<file>
+//!   .slopslide/    app internals: chat history, agent session, reference docs, snapshots
 //! ```
+//!
+//! `deck.html` opens directly in any browser as a slideshow; [`export`] inlines the
+//! assets so the single file can be shared on its own.
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::error::{Error, Result};
+use crate::html;
 
 pub const INTERNAL_DIR: &str = ".slopslide";
-const MANIFEST: &str = "deck.json";
+pub const DECK_FILE: &str = "deck.html";
+const DECK_TEMPLATE: &str = include_str!("../assets/deck-template.html");
 const BLANK_SLIDE: &str = include_str!("../assets/blank-slide.html");
-const STARTER_THEME: &str = include_str!("../assets/theme.css");
+const SNAPSHOTS_KEPT: usize = 30;
 const REFERENCE_DOCS: &[(&str, &str)] = &[
     (
         "STYLE_PRESETS.md",
@@ -32,13 +35,6 @@ const REFERENCE_DOCS: &[(&str, &str)] = &[
         include_str!("../prompts/animation-patterns.md"),
     ),
 ];
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Manifest {
-    pub title: String,
-    #[serde(default)]
-    pub slides: Vec<String>,
-}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -52,11 +48,21 @@ pub struct DeckSummary {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct Slide {
+    pub id: String,
+    /// Changes whenever this slide's markup changes, so only its preview reloads.
+    pub hash: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Deck {
     pub id: String,
     pub title: String,
     pub path: String,
-    pub slides: Vec<String>,
+    pub slides: Vec<Slide>,
+    /// Changes whenever anything outside the slides (styles, fonts, runtime) changes.
+    pub shell_hash: String,
 }
 
 pub fn library_root(app: &AppHandle) -> Result<PathBuf> {
@@ -75,7 +81,7 @@ pub fn deck_dir(app: &AppHandle, id: &str) -> Result<PathBuf> {
         return Err(Error::msg(format!("invalid deck id: {id}")));
     }
     let dir = library_root(app)?.join(id);
-    if !dir.join(MANIFEST).is_file() {
+    if !dir.join(DECK_FILE).is_file() {
         return Err(Error::msg(format!("deck not found: {id}")));
     }
     Ok(dir)
@@ -98,14 +104,12 @@ fn is_plain_name(name: &str) -> bool {
     matches!(parts.next(), Some(Component::Normal(_))) && parts.next().is_none()
 }
 
-pub fn read_manifest(dir: &Path) -> Result<Manifest> {
-    let raw = fs::read_to_string(dir.join(MANIFEST))?;
-    serde_json::from_str(&raw).map_err(|e| Error::msg(format!("deck.json is invalid: {e}")))
+fn read_html(dir: &Path) -> Result<String> {
+    Ok(fs::read_to_string(dir.join(DECK_FILE))?)
 }
 
-pub fn write_manifest(dir: &Path, manifest: &Manifest) -> Result<()> {
-    let json = serde_json::to_string_pretty(manifest).expect("manifest serializes");
-    atomic_write(&dir.join(MANIFEST), format!("{json}\n").as_bytes())
+fn write_html(dir: &Path, html: &str) -> Result<()> {
+    atomic_write(&dir.join(DECK_FILE), html.as_bytes())
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -113,22 +117,6 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::write(&tmp, bytes)?;
     fs::rename(&tmp, path)?;
     Ok(())
-}
-
-/// Slides listed in the manifest whose files exist, in manifest order, deduplicated.
-fn existing_slides(dir: &Path, manifest: &Manifest) -> Vec<String> {
-    let mut seen = std::collections::HashSet::new();
-    manifest
-        .slides
-        .iter()
-        .map(|s| s.trim_start_matches("./").to_string())
-        .filter(|s| seen.insert(s.clone()))
-        .filter(|s| {
-            resolve_in_deck(dir, s)
-                .map(|p| p.is_file())
-                .unwrap_or(false)
-        })
-        .collect()
 }
 
 fn modified_ms(path: &Path) -> u64 {
@@ -140,75 +128,56 @@ fn modified_ms(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
+fn fallback_title(id: &str) -> String {
+    id.replace('-', " ")
+}
+
 pub fn list(app: &AppHandle) -> Result<Vec<DeckSummary>> {
     let root = library_root(app)?;
     let mut decks = Vec::new();
     for entry in fs::read_dir(&root)? {
         let dir = entry?.path();
-        let Ok(manifest) = read_manifest(&dir) else {
+        let Ok(source) = read_html(&dir) else {
             continue;
         };
         let Some(id) = dir.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
             continue;
         };
-        let slides = existing_slides(&dir, &manifest);
+        let slides = html::find_slides(&source);
         decks.push(DeckSummary {
-            id,
-            title: manifest.title,
+            title: html::title(&source).unwrap_or_else(|| fallback_title(&id)),
             slide_count: slides.len(),
-            first_slide: slides.first().cloned(),
-            updated_ms: modified_ms(&dir.join(MANIFEST)),
+            first_slide: slides.first().and_then(|s| s.id.clone()),
+            updated_ms: modified_ms(&dir.join(DECK_FILE)),
+            id,
         });
     }
     decks.sort_by_key(|d| std::cmp::Reverse(d.updated_ms));
     Ok(decks)
 }
 
-fn slugify(title: &str) -> String {
-    let mut slug = String::new();
-    for ch in title.chars().flat_map(char::to_lowercase) {
-        if ch.is_ascii_alphanumeric() {
-            slug.push(ch);
-        } else if !slug.ends_with('-') && !slug.is_empty() {
-            slug.push('-');
-        }
-    }
-    let slug = slug.trim_end_matches('-');
-    let slug: String = slug.chars().take(48).collect();
-    if slug.is_empty() {
-        "untitled".into()
-    } else {
-        slug
-    }
-}
-
-fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
-    let suffix = if ext.is_empty() {
-        String::new()
-    } else {
-        format!(".{ext}")
-    };
-    let first = dir.join(format!("{stem}{suffix}"));
-    if !first.exists() {
-        return first;
-    }
-    (2..)
-        .map(|n| dir.join(format!("{stem}-{n}{suffix}")))
+fn unique_dir(root: &Path, stem: &str) -> PathBuf {
+    let stem = if stem.is_empty() { "untitled" } else { stem };
+    std::iter::once(root.join(stem))
+        .chain((2..).map(|n| root.join(format!("{stem}-{n}"))))
         .find(|p| !p.exists())
-        .expect("unbounded range yields a free name")
+        .expect("unbounded")
 }
 
-/// Writes app-owned files (reference docs, folders). Safe to call on every open.
-pub fn ensure_scaffold(dir: &Path) -> Result<()> {
-    fs::create_dir_all(dir.join("slides"))?;
+/// Writes app-owned files and keeps the deck consistent: unique slide ids and the current
+/// player runtime. Safe to call repeatedly; only writes when something changed.
+pub fn normalize(dir: &Path) -> Result<()> {
     fs::create_dir_all(dir.join("assets"))?;
     let reference = dir.join(INTERNAL_DIR).join("reference");
     fs::create_dir_all(&reference)?;
     for (name, body) in REFERENCE_DOCS {
         fs::write(reference.join(name), body)?;
     }
-    if !dir.join("theme.css").exists() {
-        fs::write(dir.join("theme.css"), STARTER_THEME)?;
+    let source = read_html(dir)?;
+    let fixed = html::normalize_ids(&source).unwrap_or_else(|| source.clone());
+    let fixed = html::ensure_runtime(&fixed);
+    if fixed != source {
+        write_html(dir, &fixed)?;
     }
     Ok(())
 }
@@ -220,151 +189,138 @@ pub fn create(app: &AppHandle, title: &str) -> Result<Deck> {
     } else {
         title
     };
-    let dir = unique_path(&library_root(app)?, &slugify(title), "");
+    let dir = unique_dir(&library_root(app)?, &html::slugify(title));
     fs::create_dir_all(&dir)?;
-    ensure_scaffold(&dir)?;
-    write_manifest(
-        &dir,
-        &Manifest {
-            title: title.to_string(),
-            slides: Vec::new(),
-        },
-    )?;
+    write_html(&dir, &html::set_title(DECK_TEMPLATE, title))?;
     let id = dir.file_name().unwrap().to_string_lossy().into_owned();
     open(app, &id, true)
 }
 
-/// Loads a deck and, when `prune` is set, moves slide files that fell out of the manifest
-/// into the trash. Do not prune while the agent may be writing a slide it has yet to list.
-pub fn open(app: &AppHandle, id: &str, prune: bool) -> Result<Deck> {
+/// Loads a deck, normalizing it first unless the agent may be mid-edit.
+pub fn open(app: &AppHandle, id: &str, normalize_first: bool) -> Result<Deck> {
     let dir = deck_dir(app, id)?;
-    ensure_scaffold(&dir)?;
-    if !prune {
-        return load(&dir, id);
-    }
-    let manifest = read_manifest(&dir)?;
-    let slides = existing_slides(&dir, &manifest);
-    for entry in fs::read_dir(dir.join("slides"))? {
-        let path = entry?.path();
-        let rel = format!("slides/{}", path.file_name().unwrap().to_string_lossy());
-        if path.extension().is_some_and(|e| e == "html") && !slides.contains(&rel) {
-            trash(&dir, &rel)?;
-        }
+    if normalize_first {
+        normalize(&dir)?;
     }
     load(&dir, id)
 }
 
 pub fn load(dir: &Path, id: &str) -> Result<Deck> {
-    let manifest = read_manifest(dir)?;
+    let source = read_html(dir)?;
+    let spans = html::find_slides(&source);
+    let slides = spans
+        .iter()
+        .enumerate()
+        .map(|(index, span)| Slide {
+            // A slide the agent has not given an id yet is addressed by position until
+            // the turn ends and `normalize` assigns one.
+            id: span.id.clone().unwrap_or_else(|| format!("#{}", index + 1)),
+            hash: html::content_hash(&source[span.range.clone()]),
+        })
+        .collect();
     Ok(Deck {
         id: id.to_string(),
-        title: manifest.title.clone(),
+        title: html::title(&source).unwrap_or_else(|| fallback_title(id)),
         path: dir.to_string_lossy().into_owned(),
-        slides: existing_slides(dir, &manifest),
+        shell_hash: html::shell_hash(&source, &spans),
+        slides,
     })
 }
 
-fn trash(dir: &Path, rel: &str) -> Result<()> {
-    let src = resolve_in_deck(dir, rel)?;
-    if !src.exists() {
-        return Ok(());
+/// Saves a copy of deck.html under `.slopslide/snapshots/`, keeping the newest few.
+pub fn snapshot(dir: &Path) -> Result<()> {
+    let snapshots = dir.join(INTERNAL_DIR).join("snapshots");
+    fs::create_dir_all(&snapshots)?;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    fs::copy(dir.join(DECK_FILE), snapshots.join(format!("{stamp}.html")))?;
+    let mut files: Vec<_> = fs::read_dir(&snapshots)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
+    files.sort();
+    for old in files.iter().rev().skip(SNAPSHOTS_KEPT) {
+        let _ = fs::remove_file(old);
     }
-    let trash_dir = dir.join(INTERNAL_DIR).join("trash");
-    fs::create_dir_all(&trash_dir)?;
-    let name = src.file_stem().unwrap().to_string_lossy();
-    let ext = src
-        .extension()
-        .map(|e| e.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    fs::rename(&src, unique_path(&trash_dir, &name, &ext))?;
     Ok(())
 }
 
-fn update<F: FnOnce(&Path, &mut Manifest) -> Result<()>>(
-    app: &AppHandle,
-    id: &str,
-    f: F,
-) -> Result<Deck> {
+type EditResult<T> = std::result::Result<(String, T), String>;
+
+fn edit<T>(app: &AppHandle, id: &str, f: impl FnOnce(&str) -> EditResult<T>) -> Result<(Deck, T)> {
     let dir = deck_dir(app, id)?;
-    let mut manifest = read_manifest(&dir)?;
-    manifest.slides = existing_slides(&dir, &manifest);
-    f(&dir, &mut manifest)?;
-    write_manifest(&dir, &manifest)?;
-    load(&dir, id)
+    let source = read_html(&dir)?;
+    let (updated, value) = f(&source).map_err(Error::Message)?;
+    write_html(&dir, &updated)?;
+    Ok((load(&dir, id)?, value))
 }
 
 pub fn rename(app: &AppHandle, id: &str, title: &str) -> Result<Deck> {
-    update(app, id, |_, m| {
-        m.title = title.trim().to_string();
-        Ok(())
-    })
+    let title = title.trim().to_string();
+    Ok(edit(app, id, |s| Ok((html::set_title(s, &title), ())))?.0)
 }
 
 pub fn reorder(app: &AppHandle, id: &str, slides: Vec<String>) -> Result<Deck> {
-    update(app, id, |_, m| {
-        let mut current = m.slides.clone();
-        current.sort();
-        let mut proposed = slides.clone();
-        proposed.sort();
-        if current != proposed {
-            return Err(Error::msg("slide list changed while reordering; try again"));
-        }
-        m.slides = slides;
-        Ok(())
-    })
-}
-
-fn next_slide_path(dir: &Path, stem_hint: &str) -> String {
-    let slides = dir.join("slides");
-    let path = unique_path(&slides, stem_hint, "html");
-    format!("slides/{}", path.file_name().unwrap().to_string_lossy())
-}
-
-fn insert_after(m: &mut Manifest, after: Option<&str>, rel: String) {
-    let index = after
-        .and_then(|a| m.slides.iter().position(|s| s == a))
-        .map(|i| i + 1)
-        .unwrap_or(m.slides.len());
-    m.slides.insert(index, rel);
+    Ok(edit(app, id, |s| Ok((html::reorder(s, &slides)?, ())))?.0)
 }
 
 pub fn add_blank(app: &AppHandle, id: &str, after: Option<String>) -> Result<(Deck, String)> {
-    let mut created = String::new();
-    let deck = update(app, id, |dir, m| {
-        let rel = next_slide_path(dir, &format!("{:02}-slide", m.slides.len() + 1));
-        fs::write(resolve_in_deck(dir, &rel)?, BLANK_SLIDE)?;
-        insert_after(m, after.as_deref(), rel.clone());
-        created = rel;
-        Ok(())
-    })?;
-    Ok((deck, created))
-}
-
-pub fn duplicate(app: &AppHandle, id: &str, slide: &str) -> Result<(Deck, String)> {
-    let mut created = String::new();
-    let deck = update(app, id, |dir, m| {
-        let src = resolve_in_deck(dir, slide)?;
-        let stem = src.file_stem().unwrap().to_string_lossy().into_owned();
-        let rel = next_slide_path(dir, &format!("{stem}-copy"));
-        fs::copy(&src, resolve_in_deck(dir, &rel)?)?;
-        insert_after(m, Some(slide), rel.clone());
-        created = rel;
-        Ok(())
-    })?;
-    Ok((deck, created))
-}
-
-pub fn delete_slide(app: &AppHandle, id: &str, slide: &str) -> Result<Deck> {
-    update(app, id, |dir, m| {
-        m.slides.retain(|s| s != slide);
-        trash(dir, slide)
+    edit(app, id, |s| {
+        html::insert(s, after.as_deref(), BLANK_SLIDE, "slide")
     })
 }
 
+pub fn duplicate(app: &AppHandle, id: &str, slide: &str) -> Result<(Deck, String)> {
+    edit(app, id, |s| html::duplicate(s, slide))
+}
+
+pub fn delete_slide(app: &AppHandle, id: &str, slide: &str) -> Result<Deck> {
+    snapshot(&deck_dir(app, id)?)?;
+    Ok(edit(app, id, |s| Ok((html::delete(s, slide)?, ())))?.0)
+}
+
 pub fn delete_deck(app: &AppHandle, id: &str) -> Result<()> {
-    let dir = deck_dir(app, id)?;
-    fs::remove_dir_all(dir)?;
+    fs::remove_dir_all(deck_dir(app, id)?)?;
     Ok(())
+}
+
+/// Writes a standalone copy of the deck with attached assets embedded as data URIs.
+pub fn export(app: &AppHandle, id: &str, dest: &Path) -> Result<()> {
+    let dir = deck_dir(app, id)?;
+    let source = html::ensure_runtime(&read_html(&dir)?);
+    let standalone = html::inline_assets(&source, |rel| {
+        let path = resolve_in_deck(&dir, rel).ok()?;
+        Some((mime_for(rel).to_string(), fs::read(path).ok()?))
+    });
+    fs::write(dest, standalone)?;
+    Ok(())
+}
+
+pub fn mime_for(path: &str) -> &'static str {
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "json" => "application/json",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        "ico" => "image/x-icon",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "pdf" => "application/pdf",
+        _ => "application/octet-stream",
+    }
 }
 
 pub fn import_assets(app: &AppHandle, id: &str, paths: Vec<String>) -> Result<Vec<String>> {
@@ -377,12 +333,20 @@ pub fn import_assets(app: &AppHandle, id: &str, paths: Vec<String>) -> Result<Ve
         if !source.is_file() {
             continue;
         }
-        let stem = slugify(&source.file_stem().unwrap_or_default().to_string_lossy());
+        let stem = html::slugify(&source.file_stem().unwrap_or_default().to_string_lossy());
+        let stem = if stem.is_empty() {
+            "asset".to_string()
+        } else {
+            stem
+        };
         let ext = source
             .extension()
-            .map(|e| e.to_string_lossy().to_lowercase())
+            .map(|e| format!(".{}", e.to_string_lossy().to_lowercase()))
             .unwrap_or_default();
-        let dest = unique_path(&assets, &stem, &ext);
+        let dest = std::iter::once(assets.join(format!("{stem}{ext}")))
+            .chain((2..).map(|n| assets.join(format!("{stem}-{n}{ext}"))))
+            .find(|p| !p.exists())
+            .expect("unbounded");
         fs::copy(&source, &dest)?;
         imported.push(format!(
             "assets/{}",
@@ -433,19 +397,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slugify_produces_safe_names() {
-        assert_eq!(slugify("Q3 Board Update!"), "q3-board-update");
-        assert_eq!(slugify("  "), "untitled");
-        assert_eq!(slugify("Über Café"), "ber-caf");
-    }
-
-    #[test]
     fn resolve_rejects_escapes() {
         let dir = Path::new("/tmp/deck");
         assert!(resolve_in_deck(dir, "../secret").is_err());
         assert!(resolve_in_deck(dir, "/etc/passwd").is_err());
-        assert!(resolve_in_deck(dir, "slides/../../x").is_err());
-        assert!(resolve_in_deck(dir, "slides/01.html").is_ok());
+        assert!(resolve_in_deck(dir, "assets/../../x").is_err());
+        assert!(resolve_in_deck(dir, "assets/photo.png").is_ok());
     }
 
     #[test]
@@ -453,5 +410,15 @@ mod tests {
         assert!(is_plain_name("my-deck"));
         assert!(!is_plain_name("a/b"));
         assert!(!is_plain_name(".."));
+    }
+
+    #[test]
+    fn template_is_a_valid_empty_deck() {
+        let deck = html::ensure_runtime(&html::set_title(DECK_TEMPLATE, "Hello"));
+        assert!(html::find_slides(&deck).is_empty());
+        assert_eq!(html::title(&deck).as_deref(), Some("Hello"));
+        let (with_slide, id) = html::insert(&deck, None, BLANK_SLIDE, "slide").unwrap();
+        assert_eq!(id, "slide");
+        assert_eq!(html::find_slides(&with_slide).len(), 1);
     }
 }

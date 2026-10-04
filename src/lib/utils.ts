@@ -18,9 +18,10 @@ export function deckFileUrl(deckId: string, path: string, query?: string): strin
   return `${base}/${encoded}${query ? `?${query}` : ""}`;
 }
 
-export function slideLabel(path: string): string {
-  const stem = path.split("/").pop()?.replace(/\.html?$/, "") ?? path;
-  return stem.replace(/^\d+[-_]?/, "").replace(/[-_]+/g, " ").trim() || stem;
+/** One slide of a deck rendered by the embedded player, for editor previews. */
+export function slideUrl(deckId: string, slideId: string, version: string, still = false): string {
+  const query = `embed&slide=${encodeURIComponent(slideId)}&v=${version}${still ? "&static" : ""}`;
+  return deckFileUrl(deckId, "deck.html", query);
 }
 
 export function relativeTime(ms: number): string {

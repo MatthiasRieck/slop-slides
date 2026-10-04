@@ -1,5 +1,6 @@
+import { save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { ChevronLeft, FolderOpen, Play } from "lucide-react";
+import { ChevronLeft, FolderOpen, Play, Share } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api, errorMessage } from "../lib/api";
@@ -18,6 +19,22 @@ export function TopBar() {
     if (!next || next === deck.title) return setTitle(deck.title);
     try {
       useApp.getState().setDeck(await api.renameDeck(deck.id, next));
+    } catch (error) {
+      useApp.getState().setError(errorMessage(error));
+    }
+  };
+
+  const exportDeck = async () => {
+    const name = deck.title.replace(/[\\/:*?"<>|]+/g, "").trim() || "presentation";
+    const dest = await save({
+      title: "Export presentation",
+      defaultPath: `${name}.html`,
+      filters: [{ name: "HTML presentation", extensions: ["html"] }],
+    });
+    if (!dest) return;
+    try {
+      await api.exportDeck(deck.id, dest);
+      await revealItemInDir(dest);
     } catch (error) {
       useApp.getState().setError(errorMessage(error));
     }
@@ -57,11 +74,21 @@ export function TopBar() {
       <div data-tauri-drag-region className="flex-1 self-stretch" />
       <button
         type="button"
-        onClick={() => void revealItemInDir(`${deck.path}/deck.json`)}
+        onClick={() => void revealItemInDir(`${deck.path}/deck.html`)}
         title="Show deck folder"
         className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
       >
         <FolderOpen className="size-4" />
+      </button>
+      <button
+        type="button"
+        disabled={deck.slides.length === 0}
+        onClick={() => void exportDeck()}
+        title="Save as one self-contained HTML file to share"
+        className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-40"
+      >
+        <Share className="size-3.5" />
+        Export
       </button>
       <button
         type="button"

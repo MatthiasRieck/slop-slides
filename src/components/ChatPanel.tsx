@@ -137,7 +137,7 @@ function MessageList(props: { messages: ChatMessage[]; running: boolean; childre
 
 function UserBubble(props: { text: string; slide: string | null; attachments: string[] }) {
   const deck = useApp((s) => s.deck);
-  const slideNumber = props.slide && deck ? deck.slides.indexOf(props.slide) + 1 : 0;
+  const slideNumber = props.slide && deck ? deck.slides.findIndex((s) => s.id === props.slide) + 1 : 0;
   return (
     <div className="flex flex-col items-end gap-1">
       <div className="selectable max-w-[90%] whitespace-pre-wrap rounded-xl rounded-br-sm bg-accent px-3 py-2 text-sm leading-relaxed">
@@ -198,7 +198,7 @@ function AssistantBlock({ message }: { message: AssistantMessage }) {
 function ToolRow({ part }: { part: Extract<ChatPart, { kind: "tool" }> }) {
   const deck = useApp((s) => s.deck);
   const { icon: Icon, label, target } = describeTool(part, deck?.id ?? "");
-  const slide = target && deck?.slides.includes(target) ? target : null;
+  const slide = target === "deck.html" ? editedSlide(part, deck?.slides.map((s) => s.id) ?? []) : null;
   return (
     <button
       type="button"
@@ -216,10 +216,23 @@ function ToolRow({ part }: { part: Extract<ChatPart, { kind: "tool" }> }) {
       <span className="truncate">
         {label}
         {target && <span className="font-mono text-[0.95em] text-foreground/80"> {target}</span>}
+        {slide && <span className="font-mono text-[0.95em] text-foreground/80"> · #{slide}</span>}
       </span>
       {part.status === "done" && slide && <Check className="size-3 shrink-0 text-emerald-500" />}
     </button>
   );
+}
+
+/** The slide an Edit of deck.html touched, found via an `id="…"` in the edited text. */
+function editedSlide(part: Extract<ChatPart, { kind: "tool" }>, slideIds: string[]): string | null {
+  for (const key of ["new_string", "old_string"]) {
+    const text = part.input[key];
+    if (typeof text !== "string") continue;
+    for (const match of text.matchAll(/\bid=["']([^"']+)["']/g)) {
+      if (match[1] && slideIds.includes(match[1])) return match[1];
+    }
+  }
+  return null;
 }
 
 function describeTool(part: Extract<ChatPart, { kind: "tool" }>, deckId: string) {
@@ -263,7 +276,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const [dragging, setDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const slideNumber = selected && deck ? deck.slides.indexOf(selected) + 1 : 0;
+  const slideNumber = selected && deck ? deck.slides.findIndex((s) => s.id === selected) + 1 : 0;
 
   useLayoutEffect(() => {
     const el = textareaRef.current;

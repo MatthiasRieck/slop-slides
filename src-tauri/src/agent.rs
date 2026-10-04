@@ -109,9 +109,19 @@ impl AgentManager {
                 dir,
                 claude,
             };
+            // The whole deck is one file: keep a copy to fall back on before every turn.
+            if let Err(e) = deck::snapshot(&turn.dir) {
+                log::warn!("snapshot failed: {e}");
+            }
             let interrupted = turn
                 .run(&args.prompt, args.model.as_deref(), cancel_rx)
                 .await;
+            // Give new slides ids and restore the player runtime if the agent touched it.
+            if let Err(e) = deck::normalize(&turn.dir) {
+                turn.emit(&AgentEvent::Error {
+                    message: format!("Could not tidy deck.html after this turn: {e}"),
+                });
+            }
             app.state::<AgentManager>()
                 .running
                 .lock()

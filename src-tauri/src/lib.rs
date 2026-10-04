@@ -2,6 +2,7 @@ mod agent;
 mod deck;
 mod env;
 mod error;
+mod html;
 mod protocol;
 mod watcher;
 
@@ -106,6 +107,11 @@ fn import_assets(app: AppHandle, id: String, paths: Vec<String>) -> Result<Vec<S
 }
 
 #[tauri::command]
+fn export_deck(app: AppHandle, id: String, dest: String) -> Result<()> {
+    deck::export(&app, &id, std::path::Path::new(&dest))
+}
+
+#[tauri::command]
 fn load_chat(app: AppHandle, id: String) -> Result<serde_json::Value> {
     deck::load_chat(&app, &id)
 }
@@ -169,6 +175,7 @@ pub fn run() {
             duplicate_slide,
             delete_slide,
             import_assets,
+            export_deck,
             load_chat,
             save_chat,
             reset_chat,

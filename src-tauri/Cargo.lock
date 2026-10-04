@@ -3242,6 +3242,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 name = "slopslide"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "log",
  "notify",
  "notify-debouncer-mini",

@@ -1,47 +1,32 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
+import { deckFileUrl } from "../lib/utils";
 import { useApp } from "../store";
-import { SlideFrame } from "./SlideFrame";
 
-const NEXT = new Set(["ArrowRight", "ArrowDown", "PageDown", " ", "Enter"]);
-const PREV = new Set(["ArrowLeft", "ArrowUp", "PageUp", "Backspace"]);
-
-/** Full-screen slideshow of the open deck, starting at the selected slide. */
+/**
+ * Full-screen slideshow. Plays deck.html with its own embedded player (the same thing
+ * anyone you share the file with sees), starting at the selected slide.
+ */
 export function Presenter() {
   const deck = useApp((s) => s.deck);
-  const selected = useApp((s) => s.selected);
-  const areaRef = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
-
-  useLayoutEffect(() => {
-    const el = areaRef.current;
-    if (!el) return;
-    const observer = new ResizeObserver(([entry]) => {
-      if (!entry) return;
-      const { width: w, height: h } = entry.contentRect;
-      setWidth(Math.min(w, (h * 16) / 9));
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  // Start where the editor is; afterwards the player owns navigation.
+  const startRef = useRef(useApp.getState().selected);
 
   useEffect(() => {
     const window_ = getCurrentWindow();
     void window_.setFullscreen(true);
     const exit = () => useApp.getState().setPresenting(false);
-    const handle = (key: string) => {
-      if (NEXT.has(key)) useApp.getState().selectRelative(1);
-      else if (PREV.has(key)) useApp.getState().selectRelative(-1);
-      else if (key === "Escape") exit();
-    };
     const onKey = (event: KeyboardEvent) => {
-      event.preventDefault();
-      handle(event.key);
+      if (event.key === "Escape") exit();
+      else frameRef.current?.focus();
     };
-    // Keys pressed while a slide iframe has focus are forwarded by the injected stage script.
     const onMessage = (event: MessageEvent) => {
-      if (event.data?.type === "slop:key") handle(String(event.data.key));
+      if (event.source !== frameRef.current?.contentWindow) return;
+      if (event.data?.type === "slop:key" && event.data.key === "Escape") exit();
+      // Keep the editor's selection in step so leaving the show lands on the same slide.
+      if (event.data?.type === "slop:slide" && event.data.id) useApp.getState().select(String(event.data.id));
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("message", onMessage);
@@ -52,16 +37,18 @@ export function Presenter() {
     };
   }, []);
 
-  if (!deck || !selected) return null;
+  if (!deck) return null;
+  const hash = startRef.current ? `#${encodeURIComponent(startRef.current)}` : "";
   return (
-    <div
-      ref={areaRef}
-      className="fixed inset-0 z-50 flex cursor-none items-center justify-center bg-black"
-      onClick={() => useApp.getState().selectRelative(1)}
-    >
-      <div style={{ width }} className="pointer-events-none">
-        <SlideFrame key={selected} deckId={deck.id} slide={selected} />
-      </div>
+    <div className="fixed inset-0 z-50 bg-black">
+      <iframe
+        ref={frameRef}
+        title="Presentation"
+        src={`${deckFileUrl(deck.id, "deck.html", `v=${deck.shellHash}`)}${hash}`}
+        sandbox="allow-scripts"
+        onLoad={(event) => event.currentTarget.focus()}
+        className="size-full border-0"
+      />
     </div>
   );
 }

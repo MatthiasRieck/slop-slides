@@ -52,11 +52,10 @@ export const MODELS = [
 
 interface AppState {
   deck: Deck | null;
+  /** Id of the selected slide. */
   selected: string | null;
-  /** Bumped per slide when its file changes, so its iframe reloads. */
-  slideRevs: Record<string, number>;
-  /** Bumped when shared files (theme.css, assets) change, reloading every slide. */
-  sharedRev: number;
+  /** Bumped when attached assets change, reloading every slide preview. */
+  assetsRev: number;
   messages: ChatMessage[];
   running: boolean;
   model: string;
@@ -83,8 +82,7 @@ const newId = () => crypto.randomUUID();
 export const useApp = create<AppState>((set, get) => ({
   deck: null,
   selected: null,
-  slideRevs: {},
-  sharedRev: 0,
+  assetsRev: 0,
   messages: [],
   running: false,
   model: localStorage.getItem("slopslide.model") ?? "",
@@ -117,8 +115,8 @@ export const useApp = create<AppState>((set, get) => ({
 
   setDeck: (deck) => {
     const { selected } = get();
-    const stillThere = selected !== null && deck.slides.includes(selected);
-    set({ deck, selected: stillThere ? selected : (deck.slides[0] ?? null) });
+    const stillThere = deck.slides.some((s) => s.id === selected);
+    set({ deck, selected: stillThere ? selected : (deck.slides[0]?.id ?? null) });
   },
 
   select: (slide) => set({ selected: slide }),
@@ -126,9 +124,9 @@ export const useApp = create<AppState>((set, get) => ({
   selectRelative: (delta) => {
     const { deck, selected } = get();
     if (!deck || deck.slides.length === 0) return;
-    const index = selected ? deck.slides.indexOf(selected) : -1;
+    const index = deck.slides.findIndex((s) => s.id === selected);
     const next = Math.min(deck.slides.length - 1, Math.max(0, index + delta));
-    set({ selected: deck.slides[next] ?? null });
+    set({ selected: deck.slides[next]?.id ?? null });
   },
 
   setModel: (model) => {
@@ -196,9 +194,8 @@ async function loadDeckState(deck: Deck) {
   const messages = Array.isArray(chat) ? (chat as ChatMessage[]) : [];
   useApp.setState({
     deck,
-    selected: deck.slides[0] ?? null,
-    slideRevs: {},
-    sharedRev: 0,
+    selected: deck.slides[0]?.id ?? null,
+    assetsRev: 0,
     messages: messages.map(settleInterrupted),
     running,
     presenting: false,
@@ -214,9 +211,9 @@ function settleInterrupted(message: ChatMessage): ChatMessage {
 function buildPrompt(deck: Deck, message: UserMessage): string {
   const context: string[] = [];
   if (message.slide) {
-    const index = deck.slides.indexOf(message.slide);
+    const index = deck.slides.findIndex((s) => s.id === message.slide);
     context.push(
-      `Current slide: ${message.slide} (slide ${index + 1} of ${deck.slides.length})`,
+      `Current slide: <section id="${message.slide}"> in deck.html (slide ${index + 1} of ${deck.slides.length})`,
     );
   } else if (deck.slides.length === 0) {
     context.push("The deck has no slides yet.");
@@ -317,32 +314,26 @@ function applyAgentEvent(event: AgentEvent) {
 let reloadTimer: ReturnType<typeof setTimeout> | undefined;
 
 function applyDeckChanged(paths: string[]) {
-  const slideRevs = { ...useApp.getState().slideRevs };
-  let shared = false;
-  let manifest = false;
-  for (const path of paths) {
-    if (path === "deck.json") manifest = true;
-    else if (path.startsWith("slides/")) slideRevs[path] = (slideRevs[path] ?? 0) + 1;
-    else shared = true;
+  if (paths.some((p) => p.startsWith("assets/"))) {
+    useApp.setState((s) => ({ assetsRev: s.assetsRev + 1 }));
   }
-  useApp.setState((s) => ({ slideRevs, sharedRev: shared ? s.sharedRev + 1 : s.sharedRev }));
-  if (manifest) {
-    // The agent may write deck.json several times in a burst; reload once it settles.
-    clearTimeout(reloadTimer);
-    reloadTimer = setTimeout(async () => {
-      const { deck } = useApp.getState();
-      if (!deck) return;
-      try {
-        const next = await api.loadDeck(deck.id);
-        const added = next.slides.filter((s) => !deck.slides.includes(s));
-        useApp.getState().setDeck(next);
-        // Follow the agent to the slide it just created.
-        if (added.length > 0 && useApp.getState().running) useApp.setState({ selected: added.at(-1) });
-      } catch {
-        // deck.json is mid-write or briefly invalid; the next change event retries.
-      }
-    }, 150);
-  }
+  if (!paths.includes("deck.html")) return;
+  // Edits arrive in bursts while the agent works; reload once they settle.
+  clearTimeout(reloadTimer);
+  reloadTimer = setTimeout(async () => {
+    const { deck } = useApp.getState();
+    if (!deck) return;
+    try {
+      const next = await api.loadDeck(deck.id);
+      const before = new Map(deck.slides.map((s) => [s.id, s.hash]));
+      const changed = next.slides.find((s) => before.get(s.id) !== s.hash);
+      useApp.getState().setDeck(next);
+      // Follow the agent to the slide it is working on.
+      if (changed && useApp.getState().running) useApp.setState({ selected: changed.id });
+    } catch {
+      // deck.html is mid-write; the next change event retries.
+    }
+  }, 120);
 }
 
 export async function initEventBridge() {

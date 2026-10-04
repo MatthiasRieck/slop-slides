@@ -2,7 +2,8 @@ import { ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { useApp } from "../store";
-import { SlideFrame } from "./SlideFrame";
+import { SlideFrame, useSlideVersion } from "./SlideFrame";
+import type { Slide } from "../lib/api";
 
 /** The current slide, fit to the available space with letterboxing. */
 export function Stage() {
@@ -26,17 +27,18 @@ export function Stage() {
   useSlideKeyboard();
 
   if (!deck) return null;
-  const index = selected ? deck.slides.indexOf(selected) : -1;
+  const index = deck.slides.findIndex((s) => s.id === selected);
+  const slide = deck.slides[index];
 
   return (
     <div className="flex h-full flex-col bg-canvas">
       <div ref={areaRef} className="flex min-h-0 flex-1 items-center justify-center p-8">
-        {selected ? (
+        {slide ? (
           <div
             style={{ width }}
             className="overflow-hidden rounded-lg shadow-[0_20px_50px_-24px_rgb(0_0_0/0.45)] ring-1 ring-border"
           >
-            <SlideFrame deckId={deck.id} slide={selected} />
+            <CurrentSlide deckId={deck.id} slide={slide} />
           </div>
         ) : (
           <EmptyStage />
@@ -67,6 +69,10 @@ export function Stage() {
       )}
     </div>
   );
+}
+
+function CurrentSlide({ deckId, slide }: { deckId: string; slide: Slide }) {
+  return <SlideFrame deckId={deckId} slideId={slide.id} version={useSlideVersion(slide)} />;
 }
 
 function EmptyStage() {

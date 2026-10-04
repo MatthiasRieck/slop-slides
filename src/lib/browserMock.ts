@@ -4,10 +4,11 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 
 interface RawDeck {
   id: string;
-  dir: string;
   title: string;
-  slides: string[];
-  mtime: number;
+  path: string;
+  slides: { id: string; hash: string }[];
+  shellHash: string;
+  updatedMs: number;
 }
 
 export function installBrowserMock() {
@@ -16,7 +17,7 @@ export function installBrowserMock() {
   const deck = async (id: unknown) => {
     const found = (await decks()).find((d) => d.id === id);
     if (!found) throw new Error(`deck not found: ${String(id)}`);
-    return { id: found.id, title: found.title, path: found.dir, slides: found.slides };
+    return { id: found.id, title: found.title, path: found.path, slides: found.slides, shellHash: found.shellHash };
   };
   mockIPC(
     async (cmd, args) => {
@@ -27,8 +28,8 @@ export function installBrowserMock() {
             id: d.id,
             title: d.title,
             slideCount: d.slides.length,
-            firstSlide: d.slides[0] ?? null,
-            updatedMs: d.mtime,
+            firstSlide: d.slides[0]?.id ?? null,
+            updatedMs: d.updatedMs,
           }));
         case "open_deck":
         case "load_deck":

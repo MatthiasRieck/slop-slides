@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { deckFileUrl } from "../lib/utils";
+import type { Slide } from "../lib/api";
+import { slideUrl } from "../lib/utils";
 import { useApp } from "../store";
 
 const STAGE_W = 1920;
@@ -8,7 +9,9 @@ const STAGE_H = 1080;
 
 interface SlideFrameProps {
   deckId: string;
-  slide: string;
+  slideId: string;
+  /** Any change reloads the preview; see {@link useSlideVersion}. */
+  version: string;
   /** Thumbnails render the final animation frame and ignore pointer input. */
   thumbnail?: boolean;
   className?: string;
@@ -16,14 +19,12 @@ interface SlideFrameProps {
 }
 
 /**
- * A slide document in a 1920×1080 iframe, scaled to fill its (16:9) container. When the
- * file changes, the new version loads behind the current one and swaps in once painted,
- * so edits stream in without white flashes.
+ * One slide of deck.html, rendered by the deck's own player in a 1920×1080 iframe scaled to
+ * fill its (16:9) container. When the slide changes, the new version loads behind the
+ * current one and swaps in once painted, so edits stream in without white flashes.
  */
-export function SlideFrame({ deckId, slide, thumbnail, className, onFrameReady }: SlideFrameProps) {
-  const rev = useApp((s) => s.slideRevs[slide] ?? 0);
-  const sharedRev = useApp((s) => s.sharedRev);
-  const src = deckFileUrl(deckId, slide, `v=${sharedRev}.${rev}${thumbnail ? "&static" : ""}`);
+export function SlideFrame({ deckId, slideId, version, thumbnail, className, onFrameReady }: SlideFrameProps) {
+  const src = slideUrl(deckId, slideId, version, thumbnail);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0);
@@ -57,7 +58,7 @@ export function SlideFrame({ deckId, slide, thumbnail, className, onFrameReady }
           <iframe
             key={url}
             src={url}
-            title={slide}
+            title={slideId}
             tabIndex={thumbnail ? -1 : undefined}
             sandbox="allow-scripts"
             onLoad={(event) => {
@@ -83,4 +84,11 @@ export function SlideFrame({ deckId, slide, thumbnail, className, onFrameReady }
         ))}
     </div>
   );
+}
+
+/** Version key for a slide of the open deck: its markup, the deck's shared styles, assets. */
+export function useSlideVersion(slide: Slide): string {
+  const shellHash = useApp((s) => s.deck?.shellHash ?? "");
+  const assetsRev = useApp((s) => s.assetsRev);
+  return `${shellHash}.${slide.hash}.${assetsRev}`;
 }

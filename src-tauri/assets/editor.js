@@ -7,7 +7,11 @@
    handle to reset.
    Double-click (or Enter) edits its text, Escape selects the parent, Delete removes it.
    Every change is posted to the app as the slide's new markup:
-   { type: "slop:edit-commit", slide, markup, select }. */
+   { type: "slop:edit-commit", slide, markup, select }.
+
+   Anything that runs past the slide's edge or is cut off by its own box is outlined with a red
+   dashed wire (the slide itself clips it) and reported as { type: "slop:edit-overflow", slide,
+   items } so the app can offer to tidy the layout. */
 (function () {
   var slide = document.querySelector(".deck > .slide.active");
   if (!slide || window.parent === window) return;
@@ -20,6 +24,8 @@
   var NUDGE_SAVE_MS = 500;
   var ROTATE_SNAP = 15;
   var MIN_SCALE = 0.1;
+  var OVERFLOW_TOLERANCE = 2;
+  var OVERFLOW_STRIP = 10;
 
   var style = document.createElement("style");
   style.textContent =
@@ -40,6 +46,11 @@
     "[data-slop-ui][data-narrow] > [data-axis=y], [data-slop-ui][data-flat] > [data-axis=x] { display: none; }" +
     "[data-slop-ui] > [data-handle=rotate] { border-radius: 50%; width: 18px; height: 18px; margin: 0 0 0 -9px;" +
     " left: 50%; top: -48px; cursor: grab; }" +
+    "[data-slop-overflow] { position: fixed; inset: 0; z-index: 2147483646; pointer-events: none; }" +
+    "[data-slop-overflow][data-quiet] { display: none; }" +
+    "[data-slop-overflow] > * { position: absolute; box-sizing: border-box; }" +
+    "[data-slop-overflow] > [data-wire] { outline: 3px dashed #ef4444; outline-offset: -1px; background: rgba(239, 68, 68, 0.08); }" +
+    "[data-slop-overflow] > [data-cut] { background: #ef4444; }" +
     "[data-slop-ui] > [data-stem] { pointer-events: none; width: 2px; height: 32px; margin: 0 0 0 -1px;" +
     " left: 50%; top: -32px; border: 0; box-shadow: none; background: #3b82f6; }" +
     // While typing, overlays (like invisible hover zones) let clicks through to the text.
@@ -76,6 +87,10 @@
       .join("");
   document.body.appendChild(ui);
 
+  var wires = document.createElement("div");
+  wires.setAttribute("data-slop-overflow", "");
+  document.body.appendChild(wires);
+
   var saved = serialize();
   var selected = null;
   var hovered = null;
@@ -83,6 +98,8 @@
   var drag = null;
   var nudgeTimer = null;
   var lastDown = { el: null, at: 0 };
+  var overflowFrame = 0;
+  var reportedOverflow = null;
 
   /** The slide's markup without anything the editor or the player added. */
   function serialize() {
@@ -266,6 +283,7 @@
 
   /** Lays the handles over the selection's box, turned with it; they keep their size on screen. */
   function placeHandles() {
+    scheduleOverflow();
     if (!selected || editing || !slide.contains(selected)) {
       ui.style.display = "none";
       return;
@@ -376,6 +394,91 @@
     moveTo(drag.el, drag.offset.x + shift.x, drag.offset.y + shift.y);
   }
 
+  /** Which of the slide's edges `rect` runs past, with by how many slide pixels. */
+  function pastEdges(rect, bounds) {
+    var past = [];
+    var add = function (side, by) {
+      if (by > OVERFLOW_TOLERANCE) past.push({ side: side, by: Math.round(by) });
+    };
+    add("top", bounds.top - rect.top);
+    add("right", rect.right - bounds.right);
+    add("bottom", rect.bottom - bounds.bottom);
+    add("left", bounds.left - rect.left);
+    return past;
+  }
+
+  /** Elements that run past the slide's edge or are cut off by their own box; the innermost ones. */
+  function findOverflow() {
+    var bounds = slide.getBoundingClientRect();
+    var hits = [];
+    Array.prototype.forEach.call(slide.querySelectorAll("*"), function (el) {
+      var svg = el.closest("svg");
+      if ((svg && svg !== el) || el.closest(".notes")) return;
+      var rect = el.getBoundingClientRect();
+      if (!rect.width && !rect.height) return;
+      var past = paints(el) ? pastEdges(rect, bounds) : [];
+      var style = getComputedStyle(el);
+      var clips = style.overflowX !== "visible" || style.overflowY !== "visible";
+      var cut = clips && (el.scrollWidth > el.clientWidth + OVERFLOW_TOLERANCE || el.scrollHeight > el.clientHeight + OVERFLOW_TOLERANCE);
+      if (past.length || cut) hits.push({ el: el, rect: rect, past: past, cut: cut });
+    });
+    return hits.filter(function (hit) {
+      return !hits.some(function (other) {
+        return other !== hit && hit.el.contains(other.el);
+      });
+    });
+  }
+
+  function describeOverflow(hit) {
+    var text = hit.el.textContent.replace(/\s+/g, " ").trim();
+    var name = "<" + hit.el.tagName.toLowerCase() + ">" + (text ? ' "' + text.slice(0, 40) + (text.length > 40 ? "…" : "") + '"' : "");
+    var what = hit.past.map(function (p) {
+      return "runs past the " + p.side + " edge by " + p.by + "px";
+    });
+    if (hit.cut) what.push("is cut off by its own box");
+    return name + " " + what.join(" and ");
+  }
+
+  function drawOverflow(hits, bounds) {
+    wires.textContent = "";
+    var box = function (name, left, top, width, height) {
+      var div = document.createElement("div");
+      div.setAttribute(name, "");
+      div.style.cssText = "left:" + left + "px;top:" + top + "px;width:" + Math.max(0, width) + "px;height:" + Math.max(0, height) + "px";
+      wires.appendChild(div);
+    };
+    hits.forEach(function (hit) {
+      var left = Math.max(hit.rect.left, bounds.left);
+      var top = Math.max(hit.rect.top, bounds.top);
+      var right = Math.min(hit.rect.right, bounds.right);
+      var bottom = Math.min(hit.rect.bottom, bounds.bottom);
+      box("data-wire", left, top, right - left, bottom - top);
+      // The slide clips what lies beyond its edge, so mark that edge instead.
+      hit.past.forEach(function (p) {
+        if (p.side === "top") box("data-cut", left, bounds.top, right - left, OVERFLOW_STRIP);
+        else if (p.side === "bottom") box("data-cut", left, bounds.bottom - OVERFLOW_STRIP, right - left, OVERFLOW_STRIP);
+        else if (p.side === "left") box("data-cut", bounds.left, top, OVERFLOW_STRIP, bottom - top);
+        else box("data-cut", bounds.right - OVERFLOW_STRIP, top, OVERFLOW_STRIP, bottom - top);
+      });
+    });
+  }
+
+  function refreshOverflow() {
+    overflowFrame = 0;
+    var hits = findOverflow();
+    drawOverflow(hits, slide.getBoundingClientRect());
+    var items = hits.map(describeOverflow);
+    var key = JSON.stringify(items);
+    if (key === reportedOverflow) return;
+    reportedOverflow = key;
+    window.parent.postMessage({ type: "slop:edit-overflow", slide: slide.id, items: items }, "*");
+  }
+
+  /** Re-checks for overflow once per frame, however many changes came in. */
+  function scheduleOverflow() {
+    if (!overflowFrame) overflowFrame = window.requestAnimationFrame(refreshOverflow);
+  }
+
   function startEditing(el, x, y) {
     if (!el || editing || /^(img|svg|video|canvas|iframe|hr|br)$/i.test(el.tagName)) return;
     if (!el.textContent.trim()) return;
@@ -419,6 +522,7 @@
 
   document.addEventListener("pointerdown", function (event) {
     if (event.button !== 0) return;
+    wires.removeAttribute("data-quiet");
     if (editing && editing.contains(event.target)) return;
     finishEditing();
     if (nudgeTimer) commit();
@@ -478,6 +582,9 @@
     hover(null);
   });
   window.addEventListener("resize", placeHandles);
+  window.addEventListener("load", scheduleOverflow);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleOverflow);
+  scheduleOverflow();
   document.addEventListener("input", placeHandles);
   // Clicking elsewhere in the app ends text editing, keeping the text.
   window.addEventListener("blur", finishEditing);
@@ -547,6 +654,8 @@
     if (data.type === "slop:edit-select") {
       finishEditing();
       select(atPath(data.path));
+      // Clearing the selection for a screenshot hides the wires too, until the next interaction.
+      if (data.quiet) mark(wires, "data-quiet", true);
     }
   });
 })();

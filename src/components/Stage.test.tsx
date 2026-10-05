@@ -390,7 +390,7 @@ describe("Stage", () => {
       expect(undo).not.toHaveBeenCalled();
     });
 
-    it("offers to tidy a slide with moved elements", () => {
+    it("always offers to tidy the slide, and is busy while the agent runs", () => {
       const tidy = vi.fn().mockResolvedValue(undefined);
       vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
         cb(0);
@@ -398,15 +398,42 @@ describe("Stage", () => {
       });
       useApp.setState({ tidyLayout: tidy });
       render(<Stage />);
-      expect(screen.queryByRole("button", { name: /Tidy layout/ })).toBeNull();
-      const deck = useApp.getState().deck!;
-      act(() =>
-        useApp.setState({ deck: { ...deck, slides: deck.slides.map((s) => (s.id === "intro" ? { ...s, moved: true } : s)) } }),
-      );
       fireEvent.click(screen.getByRole("button", { name: /Tidy layout/ }));
       expect(tidy).toHaveBeenCalledTimes(1);
+      expect(tidy).toHaveBeenCalledWith([]);
       act(() => useApp.setState({ running: true }));
       expect((screen.getByRole("button", { name: /Tidy layout/ }) as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it("warns about overflow found in the editor and hands it to the agent", () => {
+      const tidy = vi.fn().mockResolvedValue(undefined);
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+        cb(0);
+        return 0;
+      });
+      useApp.setState({ tidyLayout: tidy });
+      const { container } = render(<Stage />);
+      expect(screen.queryByText("Overflow")).toBeNull();
+      fireEvent.click(editButton());
+      const items = ['<h1> "Hello" runs past the bottom edge by 40px'];
+      fromFrame(stageFrame(container), { type: "slop:edit-overflow", slide: "intro", items });
+      expect(screen.getByText("Overflow").getAttribute("title")).toContain(items[0]);
+      fireEvent.click(screen.getByRole("button", { name: /Tidy layout/ }));
+      expect(tidy).toHaveBeenCalledWith(items);
+      fromFrame(stageFrame(container), { type: "slop:edit-overflow", slide: "intro", items: [] });
+      expect(screen.queryByText("Overflow")).toBeNull();
+    });
+
+    it("ignores overflow reports for another slide or from other windows, and drops them leaving edit mode", () => {
+      const { container } = render(<Stage />);
+      fireEvent.click(editButton());
+      fromFrame(stageFrame(container), { type: "slop:edit-overflow", slide: "other", items: ["x"] });
+      fromFrame(null, { type: "slop:edit-overflow", slide: "intro", items: ["x"] });
+      expect(screen.queryByText("Overflow")).toBeNull();
+      fromFrame(stageFrame(container), { type: "slop:edit-overflow", slide: "intro", items: ["x"] });
+      expect(screen.getByText("Overflow")).toBeTruthy();
+      fireEvent.click(editButton());
+      expect(screen.queryByText("Overflow")).toBeNull();
     });
   });
 });

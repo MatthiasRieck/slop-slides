@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, ChevronRight, Pencil, Redo2, Sparkles, Undo2, Wand2, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, Pencil, Redo2, Sparkles, Undo2, Wand2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { SKETCH_TARGET_ATTR, useApp } from "../store";
@@ -20,6 +20,7 @@ export function Stage() {
   const annotations = useAnnotations(selected ?? "", { ink: sketches, setInk: useApp.getState().setSketches });
   const areaRef = useRef<HTMLDivElement>(null);
   const editFrames = useSlideEditing(areaRef);
+  const overflow = editFrames.overflow;
   const [width, setWidth] = useState(0);
 
   useLayoutEffect(() => {
@@ -127,17 +128,29 @@ export function Stage() {
             </button>
           </div>
           <div className="flex min-w-0 items-center justify-end">
-            {slide?.moved && (
+            {overflow.length > 0 && (
+              <span
+                title={`Runs past the slide or is cut off:\n${overflow.join("\n")}`}
+                className="mr-1 flex items-center gap-1 rounded-md px-1.5 py-1 text-amber-600 dark:text-amber-400"
+              >
+                <AlertTriangle className="size-3.5" />
+                Overflow
+              </span>
+            )}
+            {slide && (
               <button
                 type="button"
-                title="Ask the agent to rebuild this slide's layout around the elements you moved, rotated or scaled, using a screenshot"
+                title="Ask the agent to rebuild this slide's layout, fixing overflow and clipping and keeping the elements you moved, rotated or scaled, using a screenshot"
                 disabled={running}
                 onClick={() => {
                   editFrames.clearSelection();
                   // Give the preview a frame to drop its selection outline before the screenshot.
-                  requestAnimationFrame(() => requestAnimationFrame(() => void useApp.getState().tidyLayout()));
+                  requestAnimationFrame(() => requestAnimationFrame(() => void useApp.getState().tidyLayout(overflow)));
                 }}
-                className="flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+                className={cn(
+                  "flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
+                  (slide.moved || overflow.length > 0) && "font-medium text-foreground",
+                )}
               >
                 <Wand2 className="size-3.5" />
                 Tidy layout
@@ -212,6 +225,7 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>) {
   // What to select again once the edited slide reloads.
   const restore = useRef<{ slide: string; path: number[] } | null>(null);
   const frame = useRef<HTMLIFrameElement | null>(null);
+  const [overflow, setOverflow] = useState<{ slide: string; items: string[] } | null>(null);
 
   useEffect(() => {
     const fromStage = (source: MessageEventSource | null) =>
@@ -223,6 +237,8 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>) {
       if (data?.type === "slop:edit-commit" && data.slide === selected && typeof data.markup === "string") {
         restore.current = Array.isArray(data.select) ? { slide: data.slide, path: data.select } : null;
         void useApp.getState().saveSlideEdit(data.slide, data.markup);
+      } else if (data?.type === "slop:edit-overflow" && data.slide === selected && Array.isArray(data.items)) {
+        setOverflow({ slide: data.slide, items: data.items.map(String) });
       } else if (data?.type === "slop:key") {
         if (data.mod) runHistoryKey(String(data.key), Boolean(data.shift));
         else if (data.key === "Escape") useApp.getState().setEditing(false);
@@ -241,7 +257,11 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>) {
     };
   }, [areaRef]);
 
+  const current = useApp((s) => s.selected);
+  const editing = useApp((s) => s.editing);
+
   return {
+    overflow: editing && overflow?.slide === current ? overflow.items : NO_OVERFLOW,
     onFrameReady: (loaded: HTMLIFrameElement) => {
       frame.current = loaded;
       const { editing, selected } = useApp.getState();
@@ -252,10 +272,12 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>) {
     },
     clearSelection: () => {
       restore.current = null;
-      frame.current?.contentWindow?.postMessage({ type: "slop:edit-select", path: null }, "*");
+      frame.current?.contentWindow?.postMessage({ type: "slop:edit-select", path: null, quiet: true }, "*");
     },
   };
 }
+
+const NO_OVERFLOW: string[] = [];
 
 /** ⌘Z undoes, ⇧⌘Z / ⌘Y redo; true when the key was one of them. */
 function runHistoryKey(key: string, shift: boolean) {

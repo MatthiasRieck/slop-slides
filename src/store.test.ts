@@ -1038,6 +1038,18 @@ describe("editing slides on the stage", () => {
       });
     });
 
+    it("lists the overflow the editor found in the request", async () => {
+      const { useApp, tidyPrompt } = await freshModule();
+      backend({ capture_sketch: () => ".slopslide/sketches/4.png" });
+      useApp.setState({ deck: DECK, selected: "intro" });
+      const overflow = ['<p> "Long" runs past the bottom edge by 80px', "<h1> is cut off by its own box"];
+      await useApp.getState().tidyLayout(overflow);
+      const prompt = (calls("send_message")[0]!.args as { prompt: string }).prompt;
+      expect(prompt.endsWith(tidyPrompt(overflow))).toBe(true);
+      expect(prompt).toContain(`The editor found overflow:\n- ${overflow[0]}\n- ${overflow[1]}`);
+      expect(tidyPrompt()).toBe(tidyPrompt([]));
+    });
+
     it("keeps any sketch on the slide with the message", async () => {
       const useApp = await freshStore();
       backend({ capture_sketch: () => ".slopslide/sketches/3.png" });

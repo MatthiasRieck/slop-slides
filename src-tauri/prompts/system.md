@@ -150,14 +150,18 @@ edits change the markup in place; keep them. A hand-transformed element carries 
 and inline styles: `translate: Xpx Ypx` (slide pixels), `rotate: Ndeg`, and/or `scale: N`
 or `scale: X Y` (around its center; the `translate` already accounts for which side the
 user dragged). How it looks on screen now is what the user wants, but these are quick
-fixes that ignore the layout, so things may overlap, clip, or sit slightly off the grid.
+fixes that ignore the layout, so things may overlap, clip, or sit slightly off the grid. Text
+edits can also overflow (a longer text or extra lines push past the slide edge or out of
+their box); the editor outlines that in red and the user can ask for a tidy at any time, even
+with nothing moved.
 
-When asked to tidy a slide (the context then includes a screenshot of it), read the
-screenshot first. Rebuild that slide's layout so every moved element sits where it appears
-in the screenshot (snap to the slide's grid and alignments where it is close) using the
+When asked to tidy a slide (the context then includes a screenshot of it, and may list
+elements the editor found running past the slide or cut off), read the screenshot first.
+Rebuild that slide's layout so every moved element sits where it appears in the screenshot (snap to the slide's grid and alignments where it is close) using the
 deck's normal layout tools (flex, grid, padding, gaps, a slide-scoped rule). Turn a `scale`
 into real sizes (width, height, font-size) and keep a `rotate` the user set as part of the
 slide's styles. Then remove `data-moved` and the inline `translate`, `rotate`, and `scale`
 from each one. Keep the user's text. Fix anything the
-edits broke: overlaps, clipping, uneven spacing. The `moved-element` lint warning lists every
+edits broke: overlaps, clipping, uneven spacing, and overflow (give the text room, reflow or
+resize the layout; do not shrink it to unreadable sizes or drop words). The `moved-element` lint warning lists every
 element still waiting for this.

@@ -62,6 +62,7 @@ function editor({ slide = "intro", framed = true } = {}) {
     window,
     doc,
     $,
+    posted: () => posted,
     commits: () => posted.filter((m) => (m as Commit).type === "slop:edit-commit") as Commit[],
     keys: () => posted.filter((m) => (m as { type: string }).type === "slop:key"),
     down: (target: Element, x = 100, y = 100) => pointer("pointerdown", target, x, y),
@@ -454,6 +455,82 @@ describe("slide editor", () => {
       expect(ui.style.display).toBe("none");
       e.key("Escape");
       expect(ui.style.display).toBe("");
+    });
+  });
+
+  describe("overflow", () => {
+    const rect = (left: number, top: number, right: number, bottom: number) =>
+      ({ left, top, right, bottom, width: right - left, height: bottom - top, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
+    const frame = () => new Promise((resolve) => setTimeout(resolve, 40));
+    const overflows = (e: ReturnType<typeof editor>) =>
+      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-overflow") as { slide: string; items: string[] }[];
+
+    function laidOut(e: ReturnType<typeof editor>, boxes: Record<string, DOMRect>) {
+      e.$("#intro").getBoundingClientRect = () => rect(0, 0, 1920, 1080);
+      for (const [selector, box] of Object.entries(boxes)) e.$(selector).getBoundingClientRect = () => box;
+    }
+
+    it("reports nothing for a slide that fits", async () => {
+      const e = editor();
+      laidOut(e, { h1: rect(100, 100, 600, 200), ".card": rect(100, 300, 600, 500) });
+      e.key("Tab");
+      await frame();
+      expect(overflows(e).at(-1)).toEqual({ type: "slop:edit-overflow", slide: "intro", items: [] });
+      expect(e.doc.querySelector("[data-slop-overflow]")!.children).toHaveLength(0);
+    });
+
+    it("outlines text running past the slide's edge and reports it", async () => {
+      const e = editor();
+      laidOut(e, { h1: rect(100, 1000, 600, 1200) });
+      e.down(e.$("h1"));
+      await frame();
+      const [report] = overflows(e).slice(-1);
+      expect(report!.slide).toBe("intro");
+      expect(report!.items).toEqual(['<h1> "Hello there" runs past the bottom edge by 120px']);
+      const layer = e.doc.querySelector("[data-slop-overflow]")!;
+      expect(layer.querySelectorAll("[data-wire]")).toHaveLength(1);
+      expect(layer.querySelectorAll("[data-cut]")).toHaveLength(1);
+    });
+
+    it("reports only the innermost element and only when the list changes", async () => {
+      const e = editor();
+      laidOut(e, { ".card": rect(100, 900, 600, 1300), ".card p": rect(100, 1000, 600, 1300) });
+      e.down(e.$("h1"));
+      await frame();
+      const first = overflows(e);
+      expect(first.at(-1)!.items).toEqual(['<p> "One" runs past the bottom edge by 220px']);
+      e.down(e.$("h1"));
+      await frame();
+      expect(overflows(e)).toHaveLength(first.length);
+    });
+
+    it("reports text cut off by its own box", async () => {
+      const e = editor();
+      laidOut(e, { h1: rect(100, 100, 600, 200) });
+      const h1 = e.$("h1");
+      h1.style.overflowX = "hidden";
+      h1.style.overflowY = "hidden";
+      Object.defineProperty(h1, "clientHeight", { value: 100, configurable: true });
+      Object.defineProperty(h1, "scrollHeight", { value: 260, configurable: true });
+      e.down(h1);
+      await frame();
+      expect(overflows(e).at(-1)!.items).toEqual(['<h1> "Hello there" is cut off by its own box']);
+    });
+
+    it("re-checks while typing, and hides the wires for a screenshot until the next click", async () => {
+      const e = editor();
+      laidOut(e, { h1: rect(100, 100, 600, 200) });
+      e.down(e.$("h1"));
+      await frame();
+      expect(overflows(e).at(-1)!.items).toEqual([]);
+      e.$("h1").getBoundingClientRect = () => rect(100, 100, 600, 1300);
+      e.$("h1").dispatchEvent(new e.window.Event("input", { bubbles: true }));
+      await frame();
+      expect(overflows(e).at(-1)!.items).toHaveLength(1);
+      e.fromParent({ type: "slop:edit-select", path: null, quiet: true });
+      expect(e.doc.querySelector("[data-slop-overflow]")!.hasAttribute("data-quiet")).toBe(true);
+      e.down(e.$("h1"));
+      expect(e.doc.querySelector("[data-slop-overflow]")!.hasAttribute("data-quiet")).toBe(false);
     });
   });
 });

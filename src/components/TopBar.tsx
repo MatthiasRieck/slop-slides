@@ -1,7 +1,7 @@
 import { save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { ChevronLeft, Code2, FolderOpen, Play, Presentation, Share } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api, errorMessage } from "../lib/api";
 import { cn, isMac } from "../lib/utils";
@@ -10,11 +10,17 @@ import { useApp, type StageView } from "../store";
 export function TopBar() {
   const deck = useApp((s) => s.deck);
   const [title, setTitle] = useState(deck?.title ?? "");
+  // Escape blurs the field, and blur commits; this keeps that blur from saving the edit.
+  const cancelled = useRef(false);
 
   useEffect(() => setTitle(deck?.title ?? ""), [deck?.title]);
   if (!deck) return null;
 
   const commitTitle = async () => {
+    if (cancelled.current) {
+      cancelled.current = false;
+      return;
+    }
     const next = title.trim();
     if (!next || next === deck.title) return setTitle(deck.title);
     try {
@@ -65,6 +71,7 @@ export function TopBar() {
         onKeyDown={(e) => {
           if (e.key === "Enter") e.currentTarget.blur();
           if (e.key === "Escape") {
+            cancelled.current = true;
             setTitle(deck.title);
             e.currentTarget.blur();
           }

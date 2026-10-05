@@ -667,4 +667,378 @@ mod tests {
             "bare text is not a reference"
         );
     }
+
+    #[test]
+    fn records_id_value_ranges_and_tag_name_end() {
+        let html = r#"<SECTION CLASS="slide" ID="Up"></SECTION><section class="slide"></section>"#;
+        let slides = find_slides(html);
+        assert_eq!(slides.len(), 2);
+        assert_eq!(slides[0].id.as_deref(), Some("Up"));
+        assert_eq!(&html[slides[0].id_value.clone().unwrap()], "Up");
+        assert_eq!(
+            &html[slides[0].range.start..slides[0].tag_name_end],
+            "<SECTION"
+        );
+        assert!(slides[1].id_value.is_none());
+        assert_eq!(
+            &html[slides[1].range.clone()],
+            r#"<section class="slide"></section>"#
+        );
+    }
+
+    #[test]
+    fn empty_id_attribute_counts_as_missing_but_keeps_its_range() {
+        let html = r#"<section class="slide" id=""></section>"#;
+        let slide = &find_slides(html)[0];
+        assert_eq!(slide.id, None);
+        let range = slide.id_value.clone().unwrap();
+        assert!(range.is_empty());
+        assert_eq!(&html[..range.start], r#"<section class="slide" id=""#);
+    }
+
+    #[test]
+    fn unterminated_raw_text_and_tags_end_the_scan() {
+        assert_eq!(
+            ids(
+                r#"<section class="slide" id="a"></section><textarea><section class="slide" id="b"></section>"#
+            ),
+            ["a"]
+        );
+        assert_eq!(
+            ids(r#"<section class="slide" id="a"></section><section class="slide" id="b""#),
+            ["a"]
+        );
+        assert!(find_slides("<").is_empty());
+        assert!(find_slides("<<<>>>").is_empty());
+    }
+
+    #[test]
+    fn handles_multibyte_text_around_slides() {
+        let html = "<p>héllo 👋</p><section class=\"slide\" id=\"ü\">日本</section>";
+        let slide = &find_slides(html)[0];
+        assert_eq!(slide.id.as_deref(), Some("ü"));
+        assert_eq!(
+            &html[slide.range.clone()],
+            "<section class=\"slide\" id=\"ü\">日本</section>"
+        );
+    }
+
+    #[test]
+    fn content_hash_is_stable_and_sensitive() {
+        assert_eq!(content_hash("abc"), content_hash("abc"));
+        assert_ne!(content_hash("abc"), content_hash("abd"));
+        assert!(content_hash("").chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn shell_hash_ignores_slide_edits_but_not_shell_edits() {
+        let deck = normalize_ids(DECK).unwrap();
+        let hash = |html: &str| shell_hash(html, &find_slides(html));
+        let slide_edit = deck.replace("<p>Plan</p>", "<p>New plan</p>");
+        assert_eq!(hash(&deck), hash(&slide_edit));
+        let style_edit = deck.replace("color: red", "color: blue");
+        assert_ne!(hash(&deck), hash(&style_edit));
+        let reordered = reorder(
+            &deck,
+            &[
+                "plan".to_string(),
+                "intro".to_string(),
+                "slide-3".to_string(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(hash(&deck), hash(&reordered));
+    }
+
+    #[test]
+    fn title_edge_cases() {
+        assert_eq!(title("<html><head></head></html>"), None);
+        assert_eq!(title("<title>   </title>"), None);
+        assert_eq!(
+            title("<TITLE lang=en> Spaced </TITLE>").as_deref(),
+            Some("Spaced")
+        );
+        assert_eq!(
+            title("<title>&lt;a&gt; &quot;b&quot; &#39;c&#39; &amp;amp;</title>").as_deref(),
+            Some("<a> \"b\" 'c' &amp;"),
+            "&amp; is decoded last so it cannot create new entities"
+        );
+    }
+
+    #[test]
+    fn set_title_inserts_a_title_when_missing() {
+        let html = "<html><head><meta charset=\"utf-8\"></head><body></body></html>";
+        let out = set_title(html, "Fresh & new");
+        assert_eq!(title(&out).as_deref(), Some("Fresh & new"));
+        assert!(out.find("<title>").unwrap() > out.find("<head>").unwrap());
+        assert!(out.find("<title>").unwrap() < out.find("</head>").unwrap());
+        // No <head> at all: the title goes first.
+        assert!(set_title("<p>x</p>", "T").starts_with("\n  <title>T</title>"));
+    }
+
+    #[test]
+    fn set_title_round_trips_special_characters() {
+        for name in [
+            "Q3 & Q4",
+            "a < b > c",
+            "  trimmed?  ",
+            "émoji 🎉",
+            "&amp; literal",
+        ] {
+            let out = set_title(DECK, name);
+            assert_eq!(title(&out).as_deref(), Some(name.trim()), "{name}");
+            assert_eq!(ids(&out), ids(DECK), "slides untouched for {name}");
+        }
+    }
+
+    #[test]
+    fn slugify_cases() {
+        assert_eq!(slugify("Hello, World!"), "hello-world");
+        assert_eq!(
+            slugify("  --Leading and trailing--  "),
+            "leading-and-trailing"
+        );
+        assert_eq!(slugify("Q3   2024 / Plan"), "q3-2024-plan");
+        assert_eq!(slugify("ÜBER café"), "ber-caf");
+        assert_eq!(slugify("日本語"), "");
+        assert_eq!(slugify(""), "");
+        let long = slugify(&"word ".repeat(30));
+        assert!(long.len() <= 48, "{long}");
+        assert!(!long.ends_with('-'), "{long}");
+    }
+
+    #[test]
+    fn unique_id_appends_the_first_free_number() {
+        let taken: HashSet<String> = ["slide", "slide-2", "slide-4"].map(String::from).into();
+        assert_eq!(unique_id(&taken, "slide"), "slide-3");
+        assert_eq!(unique_id(&taken, "other"), "other");
+        assert_eq!(
+            unique_id(&taken, ""),
+            "slide-3",
+            "empty base falls back to 'slide'"
+        );
+    }
+
+    #[test]
+    fn normalize_ids_slugifies_duplicates_and_fills_empty_ids_in_place() {
+        let html = r#"<main><section class="slide" id="Big Idea"></section><section class="slide" id="Big Idea"></section><section class="slide" id=""></section></main>"#;
+        let out = normalize_ids(html).unwrap();
+        assert_eq!(ids(&out), ["Big Idea", "big-idea", "slide-3"]);
+        assert!(
+            !out.contains(r#"id="""#),
+            "empty id replaced, not duplicated"
+        );
+        assert_eq!(out.matches(" id=").count(), 3);
+    }
+
+    #[test]
+    fn normalize_ids_never_collides_with_later_ids() {
+        // Slide 1 has no id; "slide-1" is not taken yet when it is assigned, but slide 2
+        // already claims it, so the second gets a suffix.
+        let html =
+            r#"<section class="slide"></section><section class="slide" id="slide-1"></section>"#;
+        let out = normalize_ids(html).unwrap();
+        let found = ids(&out);
+        assert_eq!(found.len(), 2);
+        assert_ne!(found[0], found[1]);
+    }
+
+    #[test]
+    fn normalize_ids_leaves_the_rest_of_the_document_alone() {
+        let html = "<html>\n<section class=\"slide\">A</section>\n<p>tail</p></html>";
+        let out = normalize_ids(html).unwrap();
+        assert_eq!(
+            out,
+            "<html>\n<section id=\"slide-1\" class=\"slide\">A</section>\n<p>tail</p></html>"
+        );
+    }
+
+    #[test]
+    fn reorder_rejects_unknown_or_missing_ids() {
+        let deck = normalize_ids(DECK).unwrap();
+        let order = |ids: &[&str]| ids.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(reorder(&deck, &order(&["intro", "plan", "nope"])).is_err());
+        assert!(reorder(&deck, &order(&["intro", "plan", "slide-3", "extra"])).is_err());
+        assert!(reorder(&deck, &order(&["intro", "intro", "plan"])).is_err());
+        // A slide without an id cannot be addressed, so reordering is refused.
+        assert!(reorder(DECK, &order(&["intro", "plan"])).is_err());
+    }
+
+    #[test]
+    fn reorder_keeps_whitespace_and_surrounding_markup() {
+        let deck = normalize_ids(DECK).unwrap();
+        let same = reorder(&deck, &["intro".into(), "plan".into(), "slide-3".into()]).unwrap();
+        assert_eq!(same, deck);
+        let swapped = reorder(&deck, &["plan".into(), "intro".into(), "slide-3".into()]).unwrap();
+        assert_eq!(swapped.len(), deck.len());
+        assert_eq!(
+            shell_hash(&swapped, &find_slides(&swapped)),
+            shell_hash(&deck, &find_slides(&deck))
+        );
+    }
+
+    #[test]
+    fn delete_removes_the_slide_and_its_leading_whitespace() {
+        let html = "<main>\n  <section class=\"slide\" id=\"a\">A</section>\n  <section class=\"slide\" id=\"b\">B</section>\n</main>";
+        assert_eq!(
+            delete(html, "b").unwrap(),
+            "<main>\n  <section class=\"slide\" id=\"a\">A</section>\n</main>"
+        );
+        assert_eq!(
+            delete(html, "a").unwrap(),
+            "<main>\n  <section class=\"slide\" id=\"b\">B</section>\n</main>"
+        );
+        let err = delete(html, "zzz").unwrap_err();
+        assert!(err.contains("zzz"), "{err}");
+    }
+
+    #[test]
+    fn duplicate_copies_markup_with_a_fresh_unique_id() {
+        let deck = normalize_ids(DECK).unwrap();
+        let (once, first) = duplicate(&deck, "plan").unwrap();
+        let (twice, second) = duplicate(&once, "plan").unwrap();
+        assert_eq!(first, "plan-copy");
+        assert_eq!(second, "plan-copy-2");
+        assert_eq!(
+            ids(&twice),
+            ["intro", "plan", "plan-copy-2", "plan-copy", "slide-3"]
+        );
+        let copy = find_slides(&twice)
+            .into_iter()
+            .find(|s| s.id.as_deref() == Some("plan-copy-2"))
+            .unwrap();
+        assert_eq!(
+            &twice[copy.range],
+            "<section class='slide' id=plan-copy-2><p>Plan</p></section>"
+        );
+        assert!(duplicate(&deck, "missing").is_err());
+    }
+
+    #[test]
+    fn duplicate_keeps_nested_sections() {
+        let deck = normalize_ids(DECK).unwrap();
+        let (out, id) = duplicate(&deck, "intro").unwrap();
+        let copy = find_slides(&out)
+            .into_iter()
+            .find(|s| s.id.as_deref() == Some(id.as_str()))
+            .unwrap();
+        assert!(out[copy.range].contains(r#"<section class="inner">x</section>"#));
+    }
+
+    #[test]
+    fn insert_matches_the_indentation_of_the_anchor_slide() {
+        let html = "<main>\n      <section class=\"slide\" id=\"a\"></section>\n</main>";
+        let (out, _) = insert(
+            html,
+            Some("a"),
+            "<section class=\"slide\" id=\"{{ID}}\"></section>\n",
+            "b",
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            "<main>\n      <section class=\"slide\" id=\"a\"></section>\n      <section class=\"slide\" id=\"b\"></section>\n</main>"
+        );
+    }
+
+    #[test]
+    fn insert_after_unknown_slide_appends_at_the_end() {
+        let deck = normalize_ids(DECK).unwrap();
+        let section = r#"<section class="slide" id="{{ID}}"></section>"#;
+        let (out, id) = insert(&deck, Some("ghost"), section, "intro").unwrap();
+        assert_eq!(id, "intro-2", "hint collides with an existing id");
+        assert_eq!(ids(&out), ["intro", "plan", "slide-3", "intro-2"]);
+        let (out, _) = insert(&deck, None, section, "x").unwrap();
+        assert_eq!(ids(&out).last().map(String::as_str), Some("x"));
+    }
+
+    #[test]
+    fn insert_into_empty_deck_falls_back_to_body_or_fails() {
+        let section = r#"<section class="slide" id="{{ID}}"></section>"#;
+        let (out, id) = insert("<html><BODY>\n</BODY></html>", None, section, "").unwrap();
+        assert_eq!(id, "slide");
+        assert!(out.find(&format!("id=\"{id}\"")).unwrap() < out.find("</BODY>").unwrap());
+        assert!(insert("<p>no container</p>", None, section, "x").is_err());
+    }
+
+    #[test]
+    fn ensure_runtime_works_without_head_or_body() {
+        let out = ensure_runtime(r#"<section class="slide" id="a"></section>"#);
+        assert!(out.starts_with("\n  ") && out.contains(CSS_START));
+        assert!(out.contains(JS_END));
+        assert!(out.find(CSS_END).unwrap() < out.find("<section").unwrap());
+        assert!(out.find(JS_START).unwrap() > out.find("</section>").unwrap());
+        assert_eq!(
+            ids(&out),
+            ["a"],
+            "runtime script is not mistaken for slides"
+        );
+    }
+
+    #[test]
+    fn ensure_runtime_replaces_a_stale_or_edited_runtime() {
+        let stale = DECK
+            .replace(
+                "</head>",
+                &format!("{CSS_START}<style>old</style>{CSS_END}</head>"),
+            )
+            .replace(
+                "</body>",
+                &format!("{JS_START}<script>tampered()</script>{JS_END}</body>"),
+            );
+        let out = ensure_runtime(&stale);
+        assert!(!out.contains("old</style>"));
+        assert!(!out.contains("tampered()"));
+        assert_eq!(out.matches(JS_START).count(), 1);
+        assert!(out.contains(RUNTIME_JS));
+        // Refreshed in place: the block stays after the deck's own <style>.
+        assert!(out.find(CSS_START).unwrap() > out.find(".slide { color: red }").unwrap());
+        assert_eq!(out, ensure_runtime(&out));
+    }
+
+    #[test]
+    fn ensure_runtime_embeds_the_current_assets() {
+        let out = ensure_runtime(DECK);
+        assert!(out.contains(RUNTIME_CSS));
+        assert!(out.contains(RUNTIME_JS));
+    }
+
+    #[test]
+    fn inline_assets_stops_at_query_and_fragment() {
+        let html = r##"<img src="assets/a.png?v=2"><use href="assets/icons.svg#star"/>"##;
+        let mut seen = Vec::new();
+        let out = inline_assets(html, |p| {
+            seen.push(p.to_string());
+            Some(("x/y".into(), vec![1, 2, 3]))
+        });
+        assert_eq!(seen, ["assets/a.png", "assets/icons.svg"]);
+        assert_eq!(
+            out,
+            r##"<img src="data:x/y;base64,AQID?v=2"><use href="data:x/y;base64,AQID#star"/>"##
+        );
+    }
+
+    #[test]
+    fn inline_assets_leaves_unloadable_and_unquoted_references() {
+        let html =
+            r#"<img src="assets/missing.png"><a href=assets/x.png>x</a><img src='assets/ok.png'>"#;
+        let out = inline_assets(html, |p| {
+            (p == "assets/ok.png").then(|| ("image/png".into(), b"ok".to_vec()))
+        });
+        assert_eq!(
+            out,
+            r#"<img src="assets/missing.png"><a href=assets/x.png>x</a><img src='data:image/png;base64,b2s='>"#
+        );
+    }
+
+    #[test]
+    fn inline_assets_ignores_lookalike_paths() {
+        let html =
+            r#"<img src="myassets/a.png"><img src="/assets/a.png"><img src="../assets/a.png">"#;
+        let out = inline_assets(html, |_| Some(("image/png".into(), vec![0])));
+        assert_eq!(
+            out, html,
+            "only deck-relative assets/ references are inlined"
+        );
+    }
 }

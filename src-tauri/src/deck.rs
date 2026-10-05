@@ -19,6 +19,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::error::{Error, Result};
 use crate::html;
+use crate::lint;
 
 pub const INTERNAL_DIR: &str = ".slopslide";
 pub const DECK_FILE: &str = "deck.html";
@@ -332,6 +333,15 @@ pub fn export(dir: &Path, dest: &Path) -> Result<()> {
     });
     fs::write(dest, standalone)?;
     Ok(())
+}
+
+/// Lints deck.html; asset references are checked against the deck's own files.
+pub fn lint(dir: &Path) -> Result<Vec<lint::Issue>> {
+    let source = read_html(dir)?;
+    Ok(lint::lint(&source, |rel| {
+        let rel = percent_encoding::percent_decode_str(rel).decode_utf8_lossy();
+        resolve_in_deck(dir, &rel).is_ok_and(|path| path.is_file())
+    }))
 }
 
 pub fn mime_for(path: &str) -> &'static str {
@@ -930,6 +940,28 @@ mod tests {
         delete_deck(&dir).unwrap();
         assert!(!dir.exists());
         assert!(delete_deck(&dir).is_err());
+    }
+
+    #[test]
+    fn lint_checks_assets_on_disk() {
+        let deck = TempDeck::new(
+            "<!DOCTYPE html><html><head><title>T</title></head><body><main class=\"deck\"><section class=\"slide\" id=\"a\"><img src=\"assets/my%20dot.png\" alt=\"\"><img src=\"assets/missing.png\" alt=\"\"><img src=\"assets/../deck.html\" alt=\"\"></section></main></body></html>",
+        );
+        fs::create_dir_all(deck.0.join("assets")).unwrap();
+        fs::write(deck.0.join("assets/my dot.png"), [0]).unwrap();
+        let missing: Vec<_> = lint(&deck.0)
+            .unwrap()
+            .into_iter()
+            .filter(|i| i.rule == "missing-asset")
+            .map(|i| i.message)
+            .collect();
+        assert_eq!(missing.len(), 2, "{missing:?}");
+        assert!(missing[0].contains("assets/missing.png"));
+        assert!(
+            missing[1].contains("assets/../deck.html"),
+            "escaping paths count as missing"
+        );
+        assert!(lint(&deck.0.join("nope")).is_err());
     }
 
     #[test]

@@ -9,6 +9,7 @@ import {
   type AgentEventEnvelope,
   type Deck,
   type DeckChanged,
+  type LintIssue,
 } from "./lib/api";
 
 export type ChatPart =
@@ -71,6 +72,10 @@ interface AppState {
   presenting: boolean;
   claudePath: string | null | undefined;
   error: string | null;
+  /** Lint result for the saved deck.html; null until the first check finishes. */
+  lint: LintIssue[] | null;
+  /** Text to put in the chat composer, with a counter so the same text can be sent twice. */
+  composerFill: { text: string; rev: number } | null;
 
   openDeck: (id: string) => Promise<void>;
   createDeck: (title: string) => Promise<void>;
@@ -83,12 +88,15 @@ interface AppState {
   setModel: (model: string) => void;
   setPresenting: (presenting: boolean) => void;
   setError: (error: string | null) => void;
+  refreshLint: () => Promise<void>;
+  fillComposer: (text: string) => void;
   send: (text: string, options: { includeSlide: boolean; attachments: string[] }) => Promise<void>;
   interrupt: () => void;
   resetChat: () => Promise<void>;
 }
 
 const newId = () => crypto.randomUUID();
+let lintRun = 0;
 
 export const useApp = create<AppState>((set, get) => ({
   deck: null,
@@ -103,6 +111,8 @@ export const useApp = create<AppState>((set, get) => ({
   presenting: false,
   claudePath: undefined,
   error: null,
+  lint: null,
+  composerFill: null,
 
   openDeck: async (id) => {
     try {
@@ -125,7 +135,7 @@ export const useApp = create<AppState>((set, get) => ({
   closeDeck: async () => {
     if (get().codeDirty && !(await confirmDiscardEdits())) return;
     await api.closeDeck();
-    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false });
+    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null });
   },
 
   setDeck: (deck) => {
@@ -159,6 +169,21 @@ export const useApp = create<AppState>((set, get) => ({
   setPresenting: (presenting) => set({ presenting }),
 
   setError: (error) => set({ error }),
+
+  refreshLint: async () => {
+    const { deck } = get();
+    if (!deck) return;
+    const run = ++lintRun;
+    try {
+      const issues = await api.lintDeck(deck.id);
+      // Ignore answers that a newer check (or another deck) has overtaken.
+      if (run === lintRun && get().deck?.id === deck.id) set({ lint: Array.isArray(issues) ? issues : null });
+    } catch {
+      if (run === lintRun) set({ lint: null });
+    }
+  },
+
+  fillComposer: (text) => set((s) => ({ composerFill: { text, rev: (s.composerFill?.rev ?? 0) + 1 } })),
 
   send: async (text, { includeSlide, attachments }) => {
     const { deck, selected, running, model } = get();
@@ -230,7 +255,23 @@ async function loadDeckState(deck: Deck) {
     messages: messages.map(settleInterrupted),
     running,
     presenting: false,
+    lint: null,
+    composerFill: null,
   });
+}
+
+/** Chat instructions asking the agent to fix `issues` and verify with its lint tool. */
+export function lintFixPrompt(issues: LintIssue[]): string {
+  const lines = issues.map(
+    (i) => `- line ${i.line} ${i.severity} [${i.rule}]${i.slide ? ` (slide \`${i.slide}\`)` : ""}: ${i.message}`,
+  );
+  return [
+    "deck.html does not pass the HTML lint. Fix these issues without changing how the slides look:",
+    "",
+    ...lines,
+    "",
+    "Then run the lint_deck tool to verify, and repeat until it reports no issues.",
+  ].join("\n");
 }
 
 /** A transcript saved mid-turn (app quit) cannot resume streaming. */

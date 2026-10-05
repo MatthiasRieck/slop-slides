@@ -17,6 +17,7 @@ use tokio::sync::watch;
 use crate::deck::{self, INTERNAL_DIR};
 use crate::env;
 use crate::error::{Error, Result};
+use crate::mcp;
 
 const SYSTEM_PROMPT: &str = include_str!("../prompts/system.md");
 /// The agent edits files only: no shell, no MCP servers.
@@ -201,9 +202,14 @@ impl Turn {
     ) -> Result<Outcome> {
         let system_prompt = self.dir.join(INTERNAL_DIR).join("system-prompt.md");
         std::fs::write(&system_prompt, SYSTEM_PROMPT)?;
+        let mcp_config = self.dir.join(INTERNAL_DIR).join("mcp.json");
+        std::fs::write(
+            &mcp_config,
+            lint_server_config(&std::env::current_exe()?, &self.dir),
+        )?;
 
         let mut cmd = Command::new(&self.claude);
-        cmd.args(build_args(&system_prompt, model, session))
+        cmd.args(build_args(&system_prompt, &mcp_config, model, session))
             .current_dir(&self.dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -289,7 +295,26 @@ impl Turn {
     }
 }
 
-fn build_args(system_prompt: &Path, model: Option<&str>, session: Option<&str>) -> Vec<String> {
+/// MCP config running this app binary as the agent's lint tool server (`mcp.rs`).
+fn lint_server_config(exe: &Path, dir: &Path) -> String {
+    serde_json::json!({
+        "mcpServers": {
+            mcp::SERVER: {
+                "type": "stdio",
+                "command": exe,
+                "args": [mcp::FLAG, dir],
+            }
+        }
+    })
+    .to_string()
+}
+
+fn build_args(
+    system_prompt: &Path,
+    mcp_config: &Path,
+    model: Option<&str>,
+    session: Option<&str>,
+) -> Vec<String> {
     let mut args: Vec<String> = [
         "-p",
         "--output-format",
@@ -301,14 +326,18 @@ fn build_args(system_prompt: &Path, model: Option<&str>, session: Option<&str>) 
         "--strict-mcp-config",
         "--tools",
         TOOLS,
-        "--allowedTools",
-        TOOLS,
-        "--append-system-prompt-file",
     ]
     .into_iter()
     .map(String::from)
     .collect();
-    args.push(system_prompt.to_string_lossy().into_owned());
+    args.extend([
+        "--allowedTools".into(),
+        format!("{TOOLS},{}", mcp::QUALIFIED_TOOL),
+        "--mcp-config".into(),
+        mcp_config.to_string_lossy().into_owned(),
+        "--append-system-prompt-file".into(),
+        system_prompt.to_string_lossy().into_owned(),
+    ]);
     if let Some(model) = model.filter(|m| !m.is_empty()) {
         args.extend(["--model".into(), model.into()]);
     }
@@ -572,7 +601,8 @@ mod tests {
     #[test]
     fn builds_cli_arguments() {
         let prompt = Path::new("/deck/.slopslide/system-prompt.md");
-        let base = build_args(prompt, None, None);
+        let mcp = Path::new("/deck/.slopslide/mcp.json");
+        let base = build_args(prompt, mcp, None, None);
         assert_eq!(base[..3], ["-p", "--output-format", "stream-json"]);
         let after = |args: &[String], flag: &str| {
             args.iter()
@@ -584,7 +614,14 @@ mod tests {
             Some("acceptEdits")
         );
         assert_eq!(after(&base, "--tools").as_deref(), Some(TOOLS));
-        assert_eq!(after(&base, "--allowedTools").as_deref(), Some(TOOLS));
+        assert_eq!(
+            after(&base, "--allowedTools").as_deref(),
+            Some(format!("{TOOLS},mcp__slopslide__lint_deck").as_str())
+        );
+        assert_eq!(
+            after(&base, "--mcp-config").as_deref(),
+            Some("/deck/.slopslide/mcp.json")
+        );
         assert_eq!(
             after(&base, "--append-system-prompt-file").as_deref(),
             Some("/deck/.slopslide/system-prompt.md")
@@ -594,14 +631,27 @@ mod tests {
         assert!(!base.contains(&"--resume".to_string()));
         assert!(!TOOLS.contains("Bash"), "the agent must not get a shell");
 
-        let full = build_args(prompt, Some("opus"), Some("s-1"));
+        let full = build_args(prompt, mcp, Some("opus"), Some("s-1"));
         assert_eq!(after(&full, "--model").as_deref(), Some("opus"));
         assert_eq!(after(&full, "--resume").as_deref(), Some("s-1"));
         assert_eq!(
-            build_args(prompt, Some(""), None),
+            build_args(prompt, mcp, Some(""), None),
             base,
             "empty model means default"
         );
+    }
+
+    #[test]
+    fn lint_server_config_runs_this_binary_for_the_deck() {
+        let config: Value = serde_json::from_str(&lint_server_config(
+            Path::new("/Apps/SlopSlide"),
+            Path::new("/decks/my deck"),
+        ))
+        .unwrap();
+        let server = &config["mcpServers"]["slopslide"];
+        assert_eq!(server["type"], "stdio");
+        assert_eq!(server["command"], "/Apps/SlopSlide");
+        assert_eq!(server["args"], json!(["--lint-mcp", "/decks/my deck"]));
     }
 
     #[test]

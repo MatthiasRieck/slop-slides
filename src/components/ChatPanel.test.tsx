@@ -371,3 +371,22 @@ describe("ChatPanel: transcript", () => {
     expect(container.querySelector(".markdown")).toBeNull();
   });
 });
+
+describe("composer fill", () => {
+  it("puts text handed over by the app into the composer and focuses it", () => {
+    useApp.setState({ composerFill: null });
+    render(<ChatPanel />);
+    act(() => useApp.getState().fillComposer("Fix the lint issues"));
+    expect(textarea().value).toBe("Fix the lint issues");
+    expect(document.activeElement).toBe(textarea());
+  });
+
+  it("replaces a typed draft and can be refilled with the same text", () => {
+    useApp.setState({ composerFill: null });
+    render(<ChatPanel />);
+    act(() => useApp.getState().fillComposer("Fix it"));
+    type("something else");
+    act(() => useApp.getState().fillComposer("Fix it"));
+    expect(textarea().value).toBe("Fix it");
+  });
+});

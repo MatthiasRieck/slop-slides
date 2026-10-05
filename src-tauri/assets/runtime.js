@@ -78,7 +78,7 @@
   window.addEventListener("keydown", function (event) {
     if (framed) {
       var mod = event.metaKey || event.ctrlKey;
-      window.parent.postMessage({ type: "slop:key", key: event.key, mod: mod }, "*");
+      window.parent.postMessage({ type: "slop:key", key: event.key, mod: mod, shift: event.shiftKey }, "*");
     }
     if (!embed && navigate(event.key)) event.preventDefault();
   });

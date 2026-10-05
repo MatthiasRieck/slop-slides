@@ -258,7 +258,7 @@ fn check_markup(l: &mut Linter) {
                         Severity::Warning,
                         i,
                         format!(
-                            "<{}> was moved by hand ({MOVED_ATTR} with an inline `translate`). Rework the slide's layout so it sits where it appears now without the offset, then remove both.",
+                            "<{}> was moved, rotated or scaled by hand ({MOVED_ATTR} with an inline `translate`, `rotate` or `scale`). Rework the slide's layout so it sits where it appears now without the offset, turn a scale into real sizes, keep an intended rotation in the slide's styles, then remove the attribute and the inline transforms.",
                             tag.name
                         ),
                     );
@@ -762,14 +762,24 @@ mod tests {
     fn flags_hand_edits_awaiting_cleanup() {
         let found = lint(
             &deck(
-                "<section class=\"slide\" id=\"a\">\n<h2 data-moved style=\"translate: 40px -12px\">Moved</h2>\n<p contenteditable=\"true\" data-slop-selected>Left over</p>\n</section>",
+                "<section class=\"slide\" id=\"a\">\n<h2 data-moved style=\"translate: 40px -12px\">Moved</h2>\n<img data-moved style=\"translate: 0px 12px; rotate: 15deg; scale: 1.5 0.8\" src=\"a.png\" alt=\"\">\n<p contenteditable=\"true\" data-slop-selected>Left over</p>\n</section>",
             ),
             |_| true,
         );
         let found: Vec<_> = found.iter().map(|i| (i.rule, i.slide.as_deref())).collect();
         assert_eq!(
             found,
-            [("moved-element", Some("a")), ("editor-leftover", Some("a"))]
+            [
+                ("moved-element", Some("a")),
+                ("moved-element", Some("a")),
+                ("editor-leftover", Some("a"))
+            ]
+        );
+        assert_eq!(
+            rules(&deck(
+                "<section class=\"slide\" id=\"a\" data-slop-typing><p>Hi</p></section>"
+            )),
+            ["editor-leftover"]
         );
         // Outside slides (or as text) the attributes mean nothing to the editor.
         assert_eq!(

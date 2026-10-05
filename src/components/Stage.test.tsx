@@ -249,7 +249,7 @@ describe("Stage", () => {
 
   describe("editing the slide", () => {
     const NoLayout = globalThis.ResizeObserver;
-    const { saveSlideEdit, undoSlideEdit, tidyLayout } = useApp.getState();
+    const { saveSlideEdit, undoSlideEdit, redoSlideEdit, discardSlideEdits, tidyLayout } = useApp.getState();
     const editButton = () => screen.getByRole("button", { name: "Edit text and move elements" });
     const editing = () => editButton().getAttribute("aria-pressed") === "true";
     const stageFrame = (container: HTMLElement) => container.querySelector("iframe")!;
@@ -269,12 +269,18 @@ describe("Stage", () => {
         unobserve() {}
         disconnect() {}
       } as unknown as typeof ResizeObserver;
-      useApp.setState({ editing: false, editReload: 0, slideUndo: [], running: false });
+      useApp.setState({ editing: false, editReload: 0, slideUndo: [], slideRedo: [], running: false });
     });
     afterEach(() => {
       globalThis.ResizeObserver = NoLayout;
-      useApp.setState({ saveSlideEdit, undoSlideEdit, tidyLayout });
+      useApp.setState({ saveSlideEdit, undoSlideEdit, redoSlideEdit, discardSlideEdits, tidyLayout });
       vi.restoreAllMocks();
+    });
+
+    it("shows a pencil icon on the edit button", () => {
+      render(<Stage />);
+      expect(editButton().querySelector("svg.lucide-pencil")).not.toBeNull();
+      expect(editButton().querySelector("svg.lucide-move")).toBeNull();
     });
 
     it("toggles edit mode, which loads the slide editor into the preview", () => {
@@ -291,12 +297,43 @@ describe("Stage", () => {
 
     it("takes turns with the sketch tools", () => {
       render(<Stage />);
-      fireEvent.click(editButton());
       fireEvent.click(screen.getByRole("button", { name: "Draw on the slide" }));
-      expect(editing()).toBe(false);
       fireEvent.click(editButton());
       expect(editing()).toBe(true);
+      expect(screen.queryByRole("button", { name: "Draw on the slide" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: /Accept/ }));
       expect(screen.getByRole("button", { name: "Draw on the slide" }).getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("marks the slide and shows the edit bar while editing", () => {
+      const { container } = render(<Stage />);
+      const slide = () => container.querySelector("[data-sketch-target]")!;
+      expect(slide().hasAttribute("data-editing")).toBe(false);
+      expect(screen.queryByText("Editing")).toBeNull();
+      fireEvent.click(editButton());
+      expect(slide().hasAttribute("data-editing")).toBe(true);
+      expect(slide().className).toContain("ring-primary");
+      expect(screen.getByText("Editing")).toBeTruthy();
+    });
+
+    it("undo, redo, discard and accept buttons drive the edit history", () => {
+      const undo = vi.fn().mockResolvedValue(undefined);
+      const redo = vi.fn().mockResolvedValue(undefined);
+      const discard = vi.fn().mockResolvedValue(undefined);
+      useApp.setState({ undoSlideEdit: undo, redoSlideEdit: redo, discardSlideEdits: discard });
+      render(<Stage />);
+      fireEvent.click(editButton());
+      const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
+      expect(button("Undo").disabled).toBe(true);
+      expect(button("Redo").disabled).toBe(true);
+      const entry = { slide: "intro", markup: "", after: "" };
+      act(() => useApp.setState({ slideUndo: [entry], slideRedo: [entry] }));
+      fireEvent.click(button("Undo"));
+      fireEvent.click(button("Redo"));
+      fireEvent.click(screen.getByRole("button", { name: /Discard/ }));
+      expect([undo, redo, discard].map((f) => f.mock.calls.length)).toEqual([1, 1, 1]);
+      fireEvent.click(screen.getByRole("button", { name: /Accept/ }));
+      expect(useApp.getState()).toMatchObject({ editing: false, slideUndo: [], slideRedo: [] });
     });
 
     it("saves the markup the editor posts for the current slide", () => {
@@ -338,6 +375,19 @@ describe("Stage", () => {
       expect(undo).toHaveBeenCalledTimes(2);
       fromFrame(stageFrame(container), { type: "slop:key", key: "Escape", mod: false });
       expect(useApp.getState().editing).toBe(false);
+    });
+
+    it("redoes with ⇧⌘Z or Ctrl+Y from the slide or the window", () => {
+      const undo = vi.fn().mockResolvedValue(undefined);
+      const redo = vi.fn().mockResolvedValue(undefined);
+      useApp.setState({ undoSlideEdit: undo, redoSlideEdit: redo });
+      const { container } = render(<Stage />);
+      fireEvent.click(editButton());
+      fireEvent.keyDown(document.body, { key: "Z", metaKey: true, shiftKey: true });
+      fireEvent.keyDown(document.body, { key: "y", ctrlKey: true });
+      fromFrame(stageFrame(container), { type: "slop:key", key: "z", mod: true, shift: true });
+      expect(redo).toHaveBeenCalledTimes(3);
+      expect(undo).not.toHaveBeenCalled();
     });
 
     it("offers to tidy a slide with moved elements", () => {

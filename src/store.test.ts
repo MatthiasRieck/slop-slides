@@ -839,8 +839,9 @@ describe("lint", () => {
 describe("editing slides on the stage", () => {
   const MOVED = `<section class="slide" id="intro">\n  <h1 data-moved="" style="translate: 4px 0px;">Hello</h1>\n</section>`;
   const ORIGINAL = `<section class="slide" id="intro">\n  <h1>Hello</h1>\n</section>`;
-  /** Backend whose `update_slide` swaps in the markup and bumps the slide's hash. */
+  /** Backend whose `update_slide` swaps in the markup; like the real one, the hash follows the content. */
   function slideBackend() {
+    const revs = new Map([[ORIGINAL, 1]]);
     let rev = 1;
     let markup = ORIGINAL;
     backend({
@@ -848,7 +849,8 @@ describe("editing slides on the stage", () => {
         if (base !== `${String(slide)}-${rev}`) throw "The slide changed while you were editing it.";
         const previous = markup;
         markup = String(next);
-        rev += 1;
+        if (!revs.has(markup)) revs.set(markup, revs.size + 1);
+        rev = revs.get(markup)!;
         const deck = deckFor(DECK_HTML, String(rev));
         return { deck: { ...deck, slides: deck.slides.map((s) => (s.id === slide ? { ...s, moved: markup.includes("data-moved") } : s)) }, previous };
       },
@@ -923,11 +925,83 @@ describe("editing slides on the stage", () => {
     expect(useApp.getState().slideUndo).toEqual([]);
   });
 
+  it("redoes an undone edit, and a new edit forgets what could be redone", async () => {
+    const useApp = await freshStore();
+    const disk = slideBackend();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    await useApp.getState().saveSlideEdit("intro", MOVED);
+    await useApp.getState().undoSlideEdit();
+    expect(useApp.getState().slideRedo).toEqual([{ slide: "intro", markup: MOVED, after: "intro-1" }]);
+    await useApp.getState().redoSlideEdit();
+    expect(disk.markup()).toBe(MOVED);
+    expect(calls("update_slide")[2]).toEqual({ id: "talk", slide: "intro", markup: MOVED, base: "intro-1" });
+    expect(useApp.getState().slideRedo).toEqual([]);
+    expect(useApp.getState().slideUndo).toEqual([{ slide: "intro", markup: ORIGINAL, after: "intro-2" }]);
+    await useApp.getState().undoSlideEdit();
+    await useApp.getState().saveSlideEdit("intro", MOVED.replace("Hello", "Hi"));
+    expect(useApp.getState().slideRedo).toEqual([]);
+    await useApp.getState().redoSlideEdit();
+    expect(calls("update_slide")).toHaveLength(5);
+  });
+
+  it("refuses to redo once the slide changed again", async () => {
+    const useApp = await freshStore();
+    slideBackend();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    await useApp.getState().saveSlideEdit("intro", MOVED);
+    await useApp.getState().undoSlideEdit();
+    useApp.getState().setDeck(deckFor(DECK_HTML, "agent"));
+    await useApp.getState().redoSlideEdit();
+    expect(calls("update_slide")).toHaveLength(2);
+    expect(useApp.getState().error).toContain("cannot be redone");
+  });
+
+  it("discard undoes every edit of the session and leaves edit mode", async () => {
+    const useApp = await freshStore();
+    const disk = slideBackend();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    useApp.getState().setEditing(true);
+    await useApp.getState().saveSlideEdit("intro", MOVED);
+    await useApp.getState().saveSlideEdit("intro", MOVED.replace("Hello", "Hi"));
+    await useApp.getState().discardSlideEdits();
+    expect(disk.markup()).toBe(ORIGINAL);
+    expect(useApp.getState()).toMatchObject({ editing: false, slideUndo: [], slideRedo: [], error: null });
+  });
+
+  it("discard stops at an edit it cannot undo", async () => {
+    const useApp = await freshStore();
+    slideBackend();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    useApp.getState().setEditing(true);
+    await useApp.getState().saveSlideEdit("intro", MOVED);
+    useApp.getState().setDeck(deckFor(DECK_HTML, "agent"));
+    await useApp.getState().discardSlideEdits();
+    expect(calls("update_slide")).toHaveLength(1);
+    expect(useApp.getState().error).toContain("cannot be undone");
+    expect(useApp.getState().editing).toBe(false);
+  });
+
+  it("accepting (leaving edit mode) keeps the edits, and each session starts with fresh history", async () => {
+    const useApp = await freshStore();
+    const disk = slideBackend();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    useApp.getState().setEditing(true);
+    await useApp.getState().saveSlideEdit("intro", MOVED);
+    useApp.getState().setEditing(true);
+    expect(useApp.getState().slideUndo).toHaveLength(1);
+    useApp.getState().setEditing(false);
+    expect(disk.markup()).toBe(MOVED);
+    expect(useApp.getState()).toMatchObject({ editing: false, slideUndo: [], slideRedo: [] });
+    useApp.getState().setEditing(true);
+    expect(useApp.getState().slideUndo).toEqual([]);
+  });
+
   it("leaves edit mode and forgets undo history when the deck closes", async () => {
     const useApp = await freshStore();
-    useApp.setState({ deck: DECK, editing: true, slideUndo: [{ slide: "intro", markup: ORIGINAL, after: "x" }] });
+    const entry = { slide: "intro", markup: ORIGINAL, after: "x" };
+    useApp.setState({ deck: DECK, editing: true, slideUndo: [entry], slideRedo: [entry] });
     await useApp.getState().closeDeck();
-    expect(useApp.getState()).toMatchObject({ editing: false, slideUndo: [] });
+    expect(useApp.getState()).toMatchObject({ editing: false, slideUndo: [], slideRedo: [] });
   });
 
   describe("tidying the layout", () => {

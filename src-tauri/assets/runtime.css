@@ -42,6 +42,10 @@ body {
   transition: opacity 0.35s ease;
   z-index: 1;
 }
+/* Section markers only label the editor's slide rail; the player never shows them. */
+.deck > .deck-section {
+  display: none !important;
+}
 .slide .notes {
   display: none !important;
 }

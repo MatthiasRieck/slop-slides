@@ -7,6 +7,7 @@ interface RawDeck {
   title: string;
   path: string;
   slides: { id: string; hash: string; hidden: boolean }[];
+  sections: { index: number; title: string; before: number }[];
   shellHash: string;
   updatedMs: number;
 }
@@ -17,7 +18,7 @@ export function installBrowserMock() {
   const deck = async (id: unknown) => {
     const found = (await decks()).find((d) => d.id === id);
     if (!found) throw new Error(`deck not found: ${String(id)}`);
-    return { id: found.id, title: found.title, path: found.path, slides: found.slides, shellHash: found.shellHash };
+    return { id: found.id, title: found.title, path: found.path, slides: found.slides, sections: found.sections, shellHash: found.shellHash };
   };
   mockIPC(
     async (cmd, args) => {

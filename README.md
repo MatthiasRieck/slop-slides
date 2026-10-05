@@ -4,6 +4,9 @@ A desktop slide editor you drive by chatting. Describe a presentation, and an ag
 the slides. Keep talking to it to restyle, rewrite, split, or add slides while you watch them change.
 
 - **Left:** live thumbnails. Drag to reorder; hover to duplicate or delete; `+` adds a blank slide.
+  Sections group slides under a heading in this column (never in the presentation): the
+  section button starts one at the selected slide; double-click a heading to rename it, drag
+  it to move the boundary, hover to remove it.
 - **Middle:** the current slide on a fixed 1920×1080 stage, scaled to fit. Arrow keys navigate.
 - **Right:** chat with the agent. It knows which slide you're on, and you can attach images
   (paperclip, or drop files anywhere on the window).
@@ -69,7 +72,8 @@ Each deck is a plain folder under `~/Documents/SlopSlide/<deck>/`:
 
 ```
 deck.html        the whole presentation: <section class="slide" id="…"> per slide,
-                 shared styles, and the embedded player runtime
+                 optional <div class="deck-section" data-title="…"> markers between them
+                 that start a section, shared styles, and the embedded player runtime
 assets/          attached images and media (inlined on export)
 .slopslide/      chat history, agent session, reference docs, snapshots (app-managed)
 ```

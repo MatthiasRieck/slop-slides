@@ -14,15 +14,21 @@ function readDeck(id: string) {
   const dir = path.join(library, id);
   const file = path.join(dir, "deck.html");
   const html = fs.readFileSync(file, "utf8");
-  const slides = [...html.matchAll(/<section\b[^>]*\bclass=["'][^"']*\bslide\b[^"']*["'][^>]*>/gi)].map(
-    (match, index) => {
-      const id = /\bid=["']([^"']+)["']/i.exec(match[0])?.[1] ?? `#${index + 1}`;
-      const hidden = /\sdata-hidden\b/i.test(match[0]);
-      return { id, hash: hash(html.slice(match.index, html.indexOf("</section>", match.index))), hidden };
-    },
+  const slideTags = [...html.matchAll(/<section\b[^>]*\bclass=["'][^"']*\bslide\b[^"']*["'][^>]*>/gi)];
+  const slides = slideTags.map((match, index) => {
+    const id = /\bid=["']([^"']+)["']/i.exec(match[0])?.[1] ?? `#${index + 1}`;
+    const hidden = /\sdata-hidden\b/i.test(match[0]);
+    return { id, hash: hash(html.slice(match.index, html.indexOf("</section>", match.index))), hidden };
+  });
+  const sections = [...html.matchAll(/<div\b[^>]*\bclass=["'][^"']*\bdeck-section\b[^"']*["'][^>]*>/gi)].map(
+    (match, index) => ({
+      index,
+      title: /\bdata-title=["']([^"']*)["']/i.exec(match[0])?.[1] ?? "",
+      before: slideTags.filter((slide) => slide.index < match.index).length,
+    }),
   );
   const title = /<title>([^<]*)<\/title>/i.exec(html)?.[1] ?? id;
-  return { id, title, path: dir, slides, shellHash: hash(html), updatedMs: fs.statSync(file).mtimeMs };
+  return { id, title, path: dir, slides, sections, shellHash: hash(html), updatedMs: fs.statSync(file).mtimeMs };
 }
 
 export function browserPreview(): Plugin {

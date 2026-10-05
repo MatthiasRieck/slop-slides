@@ -34,6 +34,7 @@ so everything the deck needs must live inside it (apart from `assets/` files and
 <body>
   <main class="deck">
     <section class="slide" id="title"> … </section>
+    <div class="deck-section" data-title="The problem"></div>
     <section class="slide" id="market-size"> … </section>
   </main>
   <!-- slopslide:runtime-js … --> … <!-- /slopslide:runtime-js -->
@@ -46,6 +47,13 @@ Rules (NON-NEGOTIABLE):
 - Each slide is a `<section class="slide" id="…">` and a direct child of
   `<main class="deck">`. Their order in the file is the slide order. To add, remove, or
   reorder slides, add, delete, or move whole `<section>` elements.
+- Sections group slides in the editor's slide rail. A section starts at an empty marker
+  `<div class="deck-section" data-title="Section name"></div>`, placed as a direct child of
+  `<main class="deck">` between two slides, and runs until the next marker. Slides before the
+  first marker belong to no section. Markers are not slides: the player hides them, so never
+  put content in one. Add a marker when the user asks for sections or an agenda-style
+  structure; leave existing markers (and their titles) in place when editing or moving slides.
+  Use `data-title` for the name (escape quotes and `&`).
 - Every slide has a unique, descriptive kebab-case `id` (`problem`, `pricing-tiers`). Keep
   existing ids when editing a slide; the app tracks slides by id.
 - Never edit or remove the `slopslide:runtime-css` / `slopslide:runtime-js` blocks. They

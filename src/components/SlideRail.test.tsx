@@ -183,3 +183,127 @@ describe("hidden slides in the rail", () => {
     expect(useApp.getState().deck?.slides[0]?.hidden).toBe(false);
   });
 });
+
+const SECTIONED_HTML = DECK_HTML.replace(
+  `<section class="slide">`,
+  `<div class="deck-section" data-title="Middle"></div>\n<section class="slide">`,
+);
+const headers = () => [...document.querySelectorAll<HTMLElement>("[data-testid=section-header]")];
+
+describe("sections in the rail", () => {
+  beforeEach(() => {
+    useApp.setState({ deck: deckFor(SECTIONED_HTML) });
+  });
+
+  it("shows a header row before the slide that starts the section, without numbering it", () => {
+    render(<SlideRail />);
+    expect(items().map((li) => (li.dataset.testid === "section-header" ? li.textContent : li.querySelector("span")?.textContent))).toEqual([
+      "1",
+      "Middle",
+      "2",
+      "3",
+    ]);
+    expect(screen.getByText("Slides · 3")).toBeTruthy();
+  });
+
+  it("shows a placeholder for an untitled section", () => {
+    useApp.setState({ deck: { ...deckFor(SECTIONED_HTML), sections: [{ index: 0, title: "", before: 1 }] } });
+    render(<SlideRail />);
+    expect(screen.getByText("Untitled section")).toBeTruthy();
+  });
+
+  it("starts a section at the selected slide and lets you name it", async () => {
+    useApp.setState({ deck: DECK, selected: "outro" });
+    invoke.mockResolvedValue(deckFor(DECK_HTML.replace(`<section class="slide" id="outro">`, `<div class="deck-section" data-title="New section"></div>\n<section class="slide" id="outro">`)));
+    render(<SlideRail />);
+    await act(async () => fireEvent.click(screen.getByTitle("Start a section at this slide")));
+    expect(invoke).toHaveBeenCalledWith("add_section", { id: "talk", before: "outro", title: "New section" });
+    expect(headers()).toHaveLength(1);
+    const input = screen.getByLabelText("Section title") as HTMLInputElement;
+    expect(input.value).toBe("New section");
+  });
+
+  it("cannot start a second section at a slide that already starts one", () => {
+    useApp.setState({ selected: "#2" });
+    render(<SlideRail />);
+    const button = screen.getByTitle("This slide already starts a section") as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
+  it("cannot add a section without a selected slide", () => {
+    useApp.setState({ deck: { ...DECK, slides: [] }, selected: null });
+    render(<SlideRail />);
+    expect((screen.getByTitle("Start a section at this slide") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("renames a section by double-clicking its title", async () => {
+    const renamed = deckFor(SECTIONED_HTML.replace("Middle", "Core"), "2");
+    invoke.mockResolvedValue(renamed);
+    render(<SlideRail />);
+    fireEvent.doubleClick(screen.getByText("Middle"));
+    const input = screen.getByLabelText("Section title") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "  Core  " } });
+    await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
+    await act(async () => fireEvent.blur(input));
+    expect(invoke).toHaveBeenCalledWith("rename_section", { id: "talk", index: 0, title: "Core" });
+    expect(useApp.getState().deck).toBe(renamed);
+    expect(screen.queryByLabelText("Section title")).toBeNull();
+  });
+
+  it("renames through the hover action and cancels with Escape", async () => {
+    render(<SlideRail />);
+    fireEvent.click(within(headers()[0]!).getByTitle("Rename section"));
+    const input = screen.getByLabelText("Section title") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Changed" } });
+    await act(async () => fireEvent.keyDown(input, { key: "Escape" }));
+    await act(async () => fireEvent.blur(input));
+    expect(invoke).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Section title")).toBeNull();
+    expect(screen.getByText("Middle")).toBeTruthy();
+  });
+
+  it("does not save an empty or unchanged title", async () => {
+    render(<SlideRail />);
+    for (const value of ["", "   ", "Middle"]) {
+      fireEvent.doubleClick(screen.getByText("Middle"));
+      const input = screen.getByLabelText("Section title");
+      fireEvent.change(input, { target: { value } });
+      await act(async () => fireEvent.blur(input));
+    }
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("removes a section but keeps its slides", async () => {
+    invoke.mockResolvedValue(deckFor(DECK_HTML, "2"));
+    render(<SlideRail />);
+    await act(async () => fireEvent.click(within(headers()[0]!).getByTitle("Remove section")));
+    expect(invoke).toHaveBeenCalledWith("delete_section", { id: "talk", index: 0 });
+    expect(headers()).toHaveLength(0);
+    expect(items()).toHaveLength(3);
+  });
+
+  it.each([
+    ["Rename section", "rename_section"],
+    ["Remove section", "delete_section"],
+  ])("reports a failed %s", async (title, command) => {
+    invoke.mockRejectedValue("Section not found: 0");
+    render(<SlideRail />);
+    if (command === "rename_section") {
+      fireEvent.click(within(headers()[0]!).getByTitle(title));
+      const input = screen.getByLabelText("Section title");
+      fireEvent.change(input, { target: { value: "X" } });
+      await act(async () => fireEvent.blur(input));
+    } else {
+      await act(async () => fireEvent.click(within(headers()[0]!).getByTitle(title)));
+    }
+    await waitFor(() => expect(useApp.getState().error).toBe("Section not found: 0"));
+  });
+
+  it("reports a failed add", async () => {
+    invoke.mockRejectedValue("Slide not found: intro");
+    render(<SlideRail />);
+    await act(async () => fireEvent.click(screen.getByTitle("Start a section at this slide")));
+    await waitFor(() => expect(useApp.getState().error).toBe("Slide not found: intro"));
+    expect(screen.queryByLabelText("Section title")).toBeNull();
+  });
+});

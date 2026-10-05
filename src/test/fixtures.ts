@@ -1,4 +1,4 @@
-import type { Deck } from "../lib/api";
+import type { Deck, Section } from "../lib/api";
 
 /** A deck.html with three slides; the second has no id yet. */
 export const DECK_HTML = [
@@ -17,16 +17,21 @@ export const DECK_HTML = [
   `</main></body></html>`,
 ].join("\n");
 
+/** Reads slides and `deck-section` markers the way the backend reports them. */
 export function deckFor(html: string, rev = "1"): Deck {
-  const slides = [...html.matchAll(/<section class="slide"(?: id="([^"]+)")?([^>]*)>/g)].map((m, i) => ({
-    id: m[1] ?? `#${i + 1}`,
-    hidden: /\bdata-hidden\b/.test(m[2] ?? ""),
-  }));
+  const slides: { id: string; hidden: boolean }[] = [];
+  const sections: Section[] = [];
+  const tags = /<section class="slide"(?: id="([^"]+)")?([^>]*)>|<div class="deck-section" data-title="([^"]*)">/g;
+  for (const m of html.matchAll(tags)) {
+    if (m[3] !== undefined) sections.push({ index: sections.length, title: m[3], before: slides.length });
+    else slides.push({ id: m[1] ?? `#${slides.length + 1}`, hidden: /\bdata-hidden\b/.test(m[2] ?? "") });
+  }
   return {
     id: "talk",
     title: "Talk",
     path: "/decks/talk",
     slides: slides.map(({ id, hidden }) => ({ id, hash: `${id}-${rev}`, hidden })),
+    sections,
     shellHash: `shell-${rev}`,
   };
 }

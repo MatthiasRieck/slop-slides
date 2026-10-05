@@ -22,3 +22,16 @@ impl Serialize for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serializes_as_a_plain_message() {
+        let err = Error::msg("deck not found: x");
+        assert_eq!(serde_json::to_value(&err).unwrap(), "deck not found: x");
+        let io: Error = std::io::Error::new(std::io::ErrorKind::NotFound, "gone").into();
+        assert_eq!(serde_json::to_value(&io).unwrap(), "gone");
+    }
+}

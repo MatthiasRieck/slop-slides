@@ -1,0 +1,135 @@
+import { act, fireEvent, render, renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
+
+import { useApp } from "../store";
+import { DECK_HTML, deckFor } from "../test/fixtures";
+import { SlideFrame, useSlideVersion } from "./SlideFrame";
+
+const NoLayout = globalThis.ResizeObserver;
+let width = 960;
+const observers: { callback: ResizeObserverCallback; disconnected: boolean }[] = [];
+
+/** Reports `width` for every observed element, like a browser after layout. */
+class MeasuringObserver {
+  private entry: { callback: ResizeObserverCallback; disconnected: boolean };
+  constructor(callback: ResizeObserverCallback) {
+    this.entry = { callback, disconnected: false };
+    observers.push(this.entry);
+  }
+  observe(target: Element) {
+    this.entry.callback([{ target, contentRect: { width } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+  }
+  unobserve() {}
+  disconnect() {
+    this.entry.disconnected = true;
+  }
+}
+
+beforeEach(() => {
+  width = 960;
+  observers.length = 0;
+  globalThis.ResizeObserver = MeasuringObserver as unknown as typeof ResizeObserver;
+});
+
+afterEach(() => {
+  globalThis.ResizeObserver = NoLayout;
+});
+
+const frames = (container: HTMLElement) => [...container.querySelectorAll("iframe")];
+
+describe("SlideFrame", () => {
+  it("renders the slide through the deck's player, scaled to fit", () => {
+    const { container } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" />);
+    const [frame] = frames(container);
+    expect(frame!.getAttribute("src")).toBe("/__deck/talk/deck.html?embed&slide=intro&v=v1");
+    expect(frame!.title).toBe("intro");
+    expect(frame!.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame!.style.width).toBe("1920px");
+    expect(frame!.style.height).toBe("1080px");
+    expect(frame!.style.transform).toBe("scale(0.5)");
+    expect(frame!.style.pointerEvents).toBe("auto");
+    expect(frame!.tabIndex).not.toBe(-1);
+  });
+
+  it("waits for layout before loading anything", () => {
+    globalThis.ResizeObserver = NoLayout;
+    const { container } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" />);
+    expect(frames(container)).toEqual([]);
+  });
+
+  it("follows size changes", () => {
+    const { container } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" />);
+    width = 1920;
+    act(() => observers[0]!.callback([{ contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver));
+    expect(frames(container)[0]!.style.transform).toBe("scale(1)");
+  });
+
+  it("stops observing when unmounted", () => {
+    const { unmount } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" />);
+    unmount();
+    expect(observers[0]!.disconnected).toBe(true);
+  });
+
+  it("thumbnails are static and inert", () => {
+    const { container } = render(<SlideFrame deckId="talk" slideId="#2" version="v1" thumbnail />);
+    const [frame] = frames(container);
+    expect(frame!.getAttribute("src")).toBe("/__deck/talk/deck.html?embed&slide=%232&v=v1&static");
+    expect(frame!.tabIndex).toBe(-1);
+    expect(frame!.style.pointerEvents).toBe("none");
+  });
+
+  it("loads a new version behind the current one and swaps once it has loaded", () => {
+    const onFrameReady = vi.fn();
+    const { container, rerender } = render(
+      <SlideFrame deckId="talk" slideId="intro" version="v1" onFrameReady={onFrameReady} />,
+    );
+    rerender(<SlideFrame deckId="talk" slideId="intro" version="v2" onFrameReady={onFrameReady} />);
+    const [current, next] = frames(container);
+    expect(current!.getAttribute("src")).toContain("v=v1");
+    expect(next!.getAttribute("src")).toContain("v=v2");
+    expect(current!.style.visibility).toBe("visible");
+    expect(next!.style.visibility).toBe("hidden");
+
+    // The old frame finishing a reload changes nothing.
+    fireEvent.load(current!);
+    expect(frames(container)).toHaveLength(2);
+
+    fireEvent.load(next!);
+    expect(frames(container)).toEqual([next]);
+    expect(next!.style.visibility).toBe("visible");
+    expect(onFrameReady).toHaveBeenLastCalledWith(next);
+  });
+
+  it("only keeps the newest pending version", () => {
+    const { container, rerender } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" />);
+    rerender(<SlideFrame deckId="talk" slideId="intro" version="v2" />);
+    rerender(<SlideFrame deckId="talk" slideId="intro" version="v3" />);
+    expect(frames(container).map((f) => f.getAttribute("src")!.split("v=")[1])).toEqual(["v1", "v3"]);
+  });
+
+  it("reports the first load too", () => {
+    const onFrameReady = vi.fn();
+    const { container } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" onFrameReady={onFrameReady} />);
+    fireEvent.load(frames(container)[0]!);
+    expect(onFrameReady).toHaveBeenCalledWith(frames(container)[0]);
+  });
+});
+
+describe("useSlideVersion", () => {
+  it("changes with the slide, the deck's shared styles, and attached assets", () => {
+    useApp.setState({ deck: deckFor(DECK_HTML), assetsRev: 0 });
+    const slide = { id: "intro", hash: "h1" };
+    const { result, rerender } = renderHook(({ s }) => useSlideVersion(s), { initialProps: { s: slide } });
+    expect(result.current).toBe("shell-1.h1.0");
+    rerender({ s: { ...slide, hash: "h2" } });
+    expect(result.current).toBe("shell-1.h2.0");
+    act(() => useApp.setState({ assetsRev: 3 }));
+    expect(result.current).toBe("shell-1.h2.3");
+    act(() => useApp.setState({ deck: deckFor(DECK_HTML, "9") }));
+    expect(result.current).toBe("shell-9.h2.3");
+  });
+});

@@ -1,10 +1,13 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+const invoke = vi.fn();
+const save = vi.fn();
+const revealItemInDir = vi.fn();
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(), save: vi.fn() }));
-vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(), save: (...args: unknown[]) => save(...args) }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: (...args: unknown[]) => revealItemInDir(...args) }));
 
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
@@ -13,7 +16,10 @@ import { TopBar } from "./TopBar";
 const toggle = (name: "Slides" | "HTML") => screen.getByRole("button", { name }) as HTMLButtonElement;
 
 beforeEach(() => {
-  useApp.setState({ deck: deckFor(DECK_HTML), view: "slides", codeDirty: false });
+  invoke.mockReset();
+  save.mockReset();
+  revealItemInDir.mockReset();
+  useApp.setState({ deck: deckFor(DECK_HTML), view: "slides", codeDirty: false, presenting: false, error: null });
 });
 
 describe("Slides / HTML toggle", () => {
@@ -45,5 +51,152 @@ describe("Slides / HTML toggle", () => {
     render(<TopBar />);
     expect(toggle("HTML").title).toMatch(/deck\.html/);
     expect(toggle("Slides").title).toMatch(/rendered slide/);
+  });
+});
+
+describe("deck title", () => {
+  const titleInput = () => document.querySelector("header input") as HTMLInputElement;
+
+  it("shows the deck title", () => {
+    render(<TopBar />);
+    expect(titleInput().value).toBe("Talk");
+  });
+
+  it("renames on Enter", async () => {
+    invoke.mockResolvedValue({ ...deckFor(DECK_HTML), title: "Board meeting" });
+    render(<TopBar />);
+    fireEvent.change(titleInput(), { target: { value: "  Board meeting " } });
+    titleInput().focus();
+    await act(async () => fireEvent.keyDown(titleInput(), { key: "Enter" }));
+    expect(invoke).toHaveBeenCalledWith("rename_deck", { id: "talk", title: "Board meeting" });
+    expect(useApp.getState().deck!.title).toBe("Board meeting");
+    expect(titleInput().value).toBe("Board meeting");
+  });
+
+  it("renames when focus leaves the field", async () => {
+    invoke.mockResolvedValue({ ...deckFor(DECK_HTML), title: "New" });
+    render(<TopBar />);
+    fireEvent.change(titleInput(), { target: { value: "New" } });
+    await act(async () => fireEvent.blur(titleInput()));
+    expect(invoke).toHaveBeenCalledWith("rename_deck", { id: "talk", title: "New" });
+  });
+
+  it("Escape restores the saved title without renaming", async () => {
+    render(<TopBar />);
+    fireEvent.change(titleInput(), { target: { value: "Oops" } });
+    titleInput().focus();
+    // Escape blurs the field, and blurring normally commits the edit.
+    await act(async () => fireEvent.keyDown(titleInput(), { key: "Escape" }));
+    expect(titleInput().value).toBe("Talk");
+    expect(document.activeElement).not.toBe(titleInput());
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("still renames normally after an Escape", async () => {
+    invoke.mockResolvedValue({ ...deckFor(DECK_HTML), title: "Second try" });
+    render(<TopBar />);
+    titleInput().focus();
+    await act(async () => fireEvent.keyDown(titleInput(), { key: "Escape" }));
+    fireEvent.change(titleInput(), { target: { value: "Second try" } });
+    await act(async () => fireEvent.blur(titleInput()));
+    expect(invoke).toHaveBeenCalledWith("rename_deck", { id: "talk", title: "Second try" });
+  });
+
+  it.each([[""], ["   "], ["Talk"], [" Talk "]])("does not rename to %j", async (value) => {
+    render(<TopBar />);
+    fireEvent.change(titleInput(), { target: { value } });
+    await act(async () => fireEvent.blur(titleInput()));
+    expect(invoke).not.toHaveBeenCalled();
+    expect(titleInput().value).toBe("Talk");
+  });
+
+  it("reports a failed rename", async () => {
+    invoke.mockRejectedValue("deck not found: talk");
+    render(<TopBar />);
+    fireEvent.change(titleInput(), { target: { value: "New" } });
+    await act(async () => fireEvent.blur(titleInput()));
+    expect(useApp.getState().error).toBe("deck not found: talk");
+  });
+
+  it("picks up title changes made elsewhere (e.g. by the agent)", () => {
+    render(<TopBar />);
+    act(() => useApp.getState().setDeck({ ...deckFor(DECK_HTML), title: "Agent's title" }));
+    expect(titleInput().value).toBe("Agent's title");
+  });
+});
+
+describe("toolbar actions", () => {
+  const exportButton = () => screen.getByRole("button", { name: /Export/ }) as HTMLButtonElement;
+  const presentButton = () => screen.getByRole("button", { name: /Present/ }) as HTMLButtonElement;
+
+  it("exports to the chosen file and reveals it", async () => {
+    save.mockResolvedValue("/Users/me/Desktop/Talk.html");
+    render(<TopBar />);
+    await act(async () => fireEvent.click(exportButton()));
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: "Talk.html" }));
+    expect(invoke).toHaveBeenCalledWith("export_deck", { id: "talk", dest: "/Users/me/Desktop/Talk.html" });
+    expect(revealItemInDir).toHaveBeenCalledWith("/Users/me/Desktop/Talk.html");
+  });
+
+  it.each([
+    [`Q3: "Plan" / <2025>?`, "Q3 Plan  2025.html"],
+    [`a\\b|c*d`, "abcd.html"],
+    [`///`, "presentation.html"],
+  ])("suggests a file name safe on every OS for %j", async (title, expected) => {
+    useApp.setState({ deck: { ...deckFor(DECK_HTML), title } });
+    save.mockResolvedValue(null);
+    render(<TopBar />);
+    await act(async () => fireEvent.click(exportButton()));
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: expected }));
+  });
+
+  it("does nothing when the save dialog is cancelled", async () => {
+    save.mockResolvedValue(null);
+    render(<TopBar />);
+    await act(async () => fireEvent.click(exportButton()));
+    expect(invoke).not.toHaveBeenCalled();
+    expect(revealItemInDir).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed export", async () => {
+    save.mockResolvedValue("/read-only/Talk.html");
+    invoke.mockRejectedValue("Permission denied (os error 13)");
+    render(<TopBar />);
+    await act(async () => fireEvent.click(exportButton()));
+    expect(useApp.getState().error).toBe("Permission denied (os error 13)");
+    expect(revealItemInDir).not.toHaveBeenCalled();
+  });
+
+  it("starts the presentation", () => {
+    render(<TopBar />);
+    fireEvent.click(presentButton());
+    expect(useApp.getState().presenting).toBe(true);
+  });
+
+  it("cannot export or present an empty deck", () => {
+    useApp.setState({ deck: { ...deckFor(DECK_HTML), slides: [] } });
+    render(<TopBar />);
+    expect(exportButton().disabled).toBe(true);
+    expect(presentButton().disabled).toBe(true);
+  });
+
+  it("reveals deck.html in the file manager", () => {
+    render(<TopBar />);
+    fireEvent.click(screen.getByTitle("Show deck folder"));
+    expect(revealItemInDir).toHaveBeenCalledWith("/decks/talk/deck.html");
+  });
+
+  it("goes back to the deck library", async () => {
+    invoke.mockResolvedValue(undefined);
+    render(<TopBar />);
+    await act(async () => fireEvent.click(screen.getByTitle("All decks")));
+    expect(invoke).toHaveBeenCalledWith("close_deck");
+    expect(useApp.getState().deck).toBeNull();
+  });
+
+  it("renders nothing without a deck", () => {
+    useApp.setState({ deck: null });
+    const { container } = render(<TopBar />);
+    expect(container.innerHTML).toBe("");
   });
 });

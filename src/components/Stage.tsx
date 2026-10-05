@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { SKETCH_TARGET_ATTR, useApp } from "../store";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { SketchToolbar } from "./SketchToolbar";
-import { SlideFrame, useSlideVersion } from "./SlideFrame";
+import { EDIT_FIT, SlideFrame, useSlideVersion } from "./SlideFrame";
 import type { Slide } from "../lib/api";
 import { cn } from "../lib/utils";
 
@@ -21,7 +21,9 @@ export function Stage() {
   const areaRef = useRef<HTMLDivElement>(null);
   const editFrames = useSlideEditing(areaRef);
   const overflow = editFrames.overflow;
-  const [width, setWidth] = useState(0);
+  const [fullWidth, setWidth] = useState(0);
+  // Editing leaves room around the slide, where content that runs past its edge shows.
+  const width = editing ? fullWidth * EDIT_FIT : fullWidth;
 
   useLayoutEffect(() => {
     const el = areaRef.current;
@@ -66,11 +68,12 @@ export function Stage() {
             {...{ [SKETCH_TARGET_ATTR]: "" }}
             data-editing={editing || undefined}
             className={cn(
-              "relative overflow-hidden rounded-lg shadow-[0_20px_50px_-24px_rgb(0_0_0/0.45)] ring-1 ring-border",
+              "relative shadow-[0_20px_50px_-24px_rgb(0_0_0/0.45)] ring-1 ring-border",
+              !editing && "overflow-hidden rounded-lg",
               editing && "ring-2 ring-primary ring-offset-4 ring-offset-canvas",
             )}
           >
-            <CurrentSlide deckId={deck.id} slide={slide} editing={editing} onFrameReady={editFrames.onFrameReady} />
+            <CurrentSlide deckId={deck.id} slide={slide} editing={editing} canvas={areaRef} onFrameReady={editFrames.onFrameReady} />
             <AnnotationLayer annotations={annotations} />
           </div>
         ) : (
@@ -202,6 +205,8 @@ function CurrentSlide(props: {
   deckId: string;
   slide: Slide;
   editing: boolean;
+  /** The panel around the slide; its color dims what lies outside the slide in the editor. */
+  canvas: React.RefObject<HTMLElement | null>;
   onFrameReady: (frame: HTMLIFrameElement) => void;
 }) {
   const editReload = useApp((s) => s.editReload);
@@ -211,7 +216,14 @@ function CurrentSlide(props: {
       slideId={props.slide.id}
       version={useSlideVersion(props.slide)}
       editKey={props.editing ? String(editReload) : undefined}
-      onFrameReady={props.onFrameReady}
+      bleed={props.editing}
+      onFrameReady={(frame) => {
+        if (props.editing && props.canvas.current) {
+          const color = getComputedStyle(props.canvas.current.parentElement ?? props.canvas.current).backgroundColor;
+          frame.contentWindow?.postMessage({ type: "slop:edit-canvas", color }, "*");
+        }
+        props.onFrameReady(frame);
+      }}
     />
   );
 }

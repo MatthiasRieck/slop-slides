@@ -458,6 +458,39 @@ describe("slide editor", () => {
     });
   });
 
+  describe("room around the slide", () => {
+    it("centers the slide at full size in a larger preview and stops it clipping", () => {
+      const e = editor();
+      const deck = e.$(".deck");
+      expect(deck.style.transform).toBe("translate(0px,0px)");
+      Object.defineProperty(e.window, "innerWidth", { value: 2560, configurable: true });
+      Object.defineProperty(e.window, "innerHeight", { value: 1440, configurable: true });
+      e.window.dispatchEvent(new e.window.Event("resize"));
+      expect(deck.style.transform).toBe("translate(320px,180px)");
+      const frame = e.$("[data-slop-frame]");
+      expect(frame.style.cssText).toContain("left: 320px");
+      expect(frame.style.cssText).toContain("width: 1920px");
+      const css = [...e.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
+      expect(css).toMatch(/\.deck, \.deck > \.slide\.active \{ overflow: visible !important/);
+      expect(css).toMatch(/html, body \{ background: transparent !important/);
+    });
+
+    it("dims what lies outside the slide in the color of the panel the app reports", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-canvas", color: "rgb(1, 2, 3)" });
+      expect(e.doc.documentElement.style.getPropertyValue("--slop-canvas")).toBe("rgb(1, 2, 3)");
+    });
+
+    it("lets an element that sits outside the slide be picked and dragged back in", () => {
+      const e = editor();
+      const h1 = e.$("h1");
+      e.drag(h1, -300, 0);
+      expect(h1.style.translate).toBe("-300px 0px");
+      e.drag(h1, 300, 0);
+      expect(h1.hasAttribute("data-moved")).toBe(false);
+    });
+  });
+
   describe("overflow", () => {
     const rect = (left: number, top: number, right: number, bottom: number) =>
       ({ left, top, right, bottom, width: right - left, height: bottom - top, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
@@ -489,7 +522,6 @@ describe("slide editor", () => {
       expect(report!.items).toEqual(['<h1> "Hello there" runs past the bottom edge by 120px']);
       const layer = e.doc.querySelector("[data-slop-overflow]")!;
       expect(layer.querySelectorAll("[data-wire]")).toHaveLength(1);
-      expect(layer.querySelectorAll("[data-cut]")).toHaveLength(1);
     });
 
     it("reports only the innermost element and only when the list changes", async () => {
@@ -502,6 +534,15 @@ describe("slide editor", () => {
       e.down(e.$("h1"));
       await frame();
       expect(overflows(e)).toHaveLength(first.length);
+    });
+
+    it("ignores decoration that bleeds off the edge on purpose", async () => {
+      const e = editor();
+      laidOut(e, { ".shape": rect(1700, -200, 2300, 400), ".overlay": rect(0, 0, 3000, 1080) });
+      e.$(".overlay").setAttribute("aria-hidden", "true");
+      e.down(e.$("h1"));
+      await frame();
+      expect(overflows(e).at(-1)!.items).toEqual([]);
     });
 
     it("reports text cut off by its own box", async () => {

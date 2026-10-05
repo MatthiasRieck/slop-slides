@@ -390,6 +390,23 @@ describe("Stage", () => {
       expect(undo).not.toHaveBeenCalled();
     });
 
+    it("shrinks the slide to leave room around it for overflow, and sends the panel color", () => {
+      const { container } = render(<Stage />);
+      const slideBox = () => container.querySelector<HTMLElement>("[data-sketch-target]")!;
+      expect(slideBox().style.width).toBe("960px");
+      expect(slideBox().className).toContain("overflow-hidden");
+      fireEvent.click(editButton());
+      expect(slideBox().style.width).toBe("720px");
+      expect(slideBox().className).not.toContain("overflow-hidden");
+      const frame = stageFrame(container);
+      expect(frame.style.width).toBe("2560px");
+      const post = vi.spyOn(frame.contentWindow!, "postMessage");
+      fireEvent.load(frame);
+      expect(post).toHaveBeenCalledWith({ type: "slop:edit-canvas", color: expect.any(String) }, "*");
+      fireEvent.click(editButton());
+      expect(slideBox().style.width).toBe("960px");
+    });
+
     it("always offers to tidy the slide, and is busy while the agent runs", () => {
       const tidy = vi.fn().mockResolvedValue(undefined);
       vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {

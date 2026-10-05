@@ -66,6 +66,17 @@ describe("SlideFrame", () => {
     );
   });
 
+  it("lets the preview extend beyond the slide when given room, keeping the slide's scale", () => {
+    const { container } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" editKey="0" bleed />);
+    const [frame] = frames(container);
+    expect(frame!.style.width).toBe("2560px");
+    expect(frame!.style.height).toBe("1440px");
+    expect(frame!.style.left).toBe("-160px");
+    expect(frame!.style.top).toBe("-90px");
+    expect(frame!.style.transform).toBe("scale(0.5)");
+    expect((container.firstElementChild as HTMLElement).style.overflow).toBe("visible");
+  });
+
   it("waits for layout before loading anything", () => {
     globalThis.ResizeObserver = NoLayout;
     const { container } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" />);

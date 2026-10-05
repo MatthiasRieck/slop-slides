@@ -90,22 +90,37 @@ function EmptyStage() {
   );
 }
 
-/** Arrow keys / PageUp / PageDown move between slides unless the user is typing. */
+/**
+ * Arrow keys / PageUp / PageDown move between slides unless the user is typing. Also handles
+ * keys the slide preview forwards as `slop:key` messages, so navigation keeps working after
+ * clicking into the slide (which moves focus into its iframe).
+ */
 function useSlideKeyboard() {
   useEffect(() => {
+    const navigate = (key: string) => {
+      if (useApp.getState().presenting) return false;
+      if (["ArrowDown", "ArrowRight", "PageDown"].includes(key)) useApp.getState().selectRelative(1);
+      else if (["ArrowUp", "ArrowLeft", "PageUp"].includes(key)) useApp.getState().selectRelative(-1);
+      else return false;
+      return true;
+    };
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, [contenteditable]")) return;
-      if (useApp.getState().presenting) return;
-      if (["ArrowDown", "ArrowRight", "PageDown"].includes(event.key)) {
-        event.preventDefault();
-        useApp.getState().selectRelative(1);
-      } else if (["ArrowUp", "ArrowLeft", "PageUp"].includes(event.key)) {
-        event.preventDefault();
-        useApp.getState().selectRelative(-1);
-      }
+      if (navigate(event.key)) event.preventDefault();
+    };
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type !== "slop:key") return;
+      const fromSlide = Array.from(document.querySelectorAll("iframe")).some(
+        (frame) => frame.contentWindow === event.source,
+      );
+      if (fromSlide) navigate(String(event.data.key));
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("message", onMessage);
+    };
   }, []);
 }

@@ -42,6 +42,7 @@ beforeEach(() => {
     model: "",
     claudePath: "/usr/local/bin/claude",
     error: null,
+    sketches: {},
     send,
     resetChat,
     interrupt,
@@ -163,6 +164,34 @@ describe("ChatPanel: composing", () => {
     expect(send).toHaveBeenCalledWith("Whole deck", { includeSlide: false, attachments: [] });
   });
 
+  describe("sketch", () => {
+    const mark = { tool: "pen" as const, color: "#ef4444", points: [[0.5, 0.5]] as [number, number][] };
+
+    it("shows that the drawing on the current slide goes along", () => {
+      render(<ChatPanel />);
+      expect(screen.queryByText("Sketch")).toBeNull();
+      act(() => useApp.setState({ sketches: { intro: [mark] } }));
+      expect(screen.getByText("Sketch")).toBeTruthy();
+      act(() => useApp.getState().select("#2"));
+      expect(screen.queryByText("Sketch")).toBeNull();
+    });
+
+    it("can be discarded", () => {
+      useApp.setState({ sketches: { intro: [mark], outro: [mark] } });
+      render(<ChatPanel />);
+      fireEvent.click(screen.getByRole("button", { name: "Discard sketch" }));
+      expect(useApp.getState().sketches).toEqual({ outro: [mark] });
+      expect(screen.queryByText("Sketch")).toBeNull();
+    });
+
+    it("is left out with the slide", () => {
+      useApp.setState({ sketches: { intro: [mark] } });
+      render(<ChatPanel />);
+      fireEvent.click(screen.getByRole("button", { name: "Slide 1" }));
+      expect(screen.queryByText("Sketch")).toBeNull();
+    });
+  });
+
   it("does not reference a slide when none is selected", () => {
     useApp.setState({ selected: null });
     render(<ChatPanel />);
@@ -281,6 +310,12 @@ describe("ChatPanel: transcript", () => {
     expect(screen.getByText("Bigger title")).toBeTruthy();
     expect(screen.getByText("on slide 3")).toBeTruthy();
     expect(screen.getByText("· logo.svg")).toBeTruthy();
+  });
+
+  it("notes when the message came with a sketch", () => {
+    const bounds = { left: 0, top: 0, right: 10, bottom: 10 };
+    showMessages({ id: "u", role: "user", text: "Fix", slide: "outro", attachments: [], sketch: { image: null, bounds }, createdAt: 0 });
+    expect(screen.getByText("· with sketch")).toBeTruthy();
   });
 
   it("omits the slide when it no longer exists", () => {

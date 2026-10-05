@@ -4,7 +4,8 @@
 //! <library>/<deck-id>/
 //!   deck.html      every slide, the shared styles, and the embedded player runtime
 //!   assets/        user-attached media, referenced as assets/<file>
-//!   .slopslide/    app internals: chat history, agent session, reference docs, snapshots
+//!   .slopslide/    app internals: chat history, agent session, reference docs, snapshots,
+//!                  sketches (screenshots of slides the user drew on, for the agent)
 //! ```
 //!
 //! `deck.html` opens directly in any browser as a slideshow; [`export`] inlines the
@@ -26,6 +27,7 @@ pub const DECK_FILE: &str = "deck.html";
 const DECK_TEMPLATE: &str = include_str!("../assets/deck-template.html");
 const BLANK_SLIDE: &str = include_str!("../assets/blank-slide.html");
 const SNAPSHOTS_KEPT: usize = 30;
+const SKETCHES_KEPT: usize = 30;
 const REFERENCE_DOCS: &[(&str, &str)] = &[
     (
         "STYLE_PRESETS.md",
@@ -242,11 +244,32 @@ pub fn snapshot(dir: &Path) -> Result<()> {
         .unwrap_or_default()
         .as_millis();
     fs::copy(dir.join(DECK_FILE), snapshots.join(format!("{stamp}.html")))?;
-    let mut files: Vec<_> = fs::read_dir(&snapshots)?
+    prune_oldest(&snapshots, SNAPSHOTS_KEPT)
+}
+
+/// Saves a screenshot of a sketched-on slide under `.slopslide/sketches/`, keeping the
+/// newest few. Returns its deck-relative path, for the agent to read.
+pub fn save_sketch(dir: &Path, png: &[u8]) -> Result<String> {
+    let sketches = dir.join(INTERNAL_DIR).join("sketches");
+    fs::create_dir_all(&sketches)?;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let short = &uuid::Uuid::new_v4().simple().to_string()[..8];
+    let name = format!("{stamp}-{short}.png");
+    fs::write(sketches.join(&name), png)?;
+    prune_oldest(&sketches, SKETCHES_KEPT)?;
+    Ok(format!("{INTERNAL_DIR}/sketches/{name}"))
+}
+
+/// Deletes all but the `keep` newest files of `dir`, whose names start with a timestamp.
+fn prune_oldest(dir: &Path, keep: usize) -> Result<()> {
+    let mut files: Vec<_> = fs::read_dir(dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .collect();
     files.sort();
-    for old in files.iter().rev().skip(SNAPSHOTS_KEPT) {
+    for old in files.iter().rev().skip(keep) {
         let _ = fs::remove_file(old);
     }
     Ok(())
@@ -865,6 +888,44 @@ mod tests {
         );
         let newest = snapshots.join(names.last().unwrap());
         assert_eq!(fs::read_to_string(newest).unwrap(), ORIGINAL);
+    }
+
+    #[test]
+    fn save_sketch_writes_a_png_and_prunes_old_ones() {
+        let deck = TempDeck::new(ORIGINAL);
+        let sketches = deck.0.join(INTERNAL_DIR).join("sketches");
+        fs::create_dir_all(&sketches).unwrap();
+        for n in 0..SKETCHES_KEPT + 3 {
+            let name = format!("{}-old.png", 1_000_000_000_000u64 + n as u64);
+            fs::write(sketches.join(name), b"old").unwrap();
+        }
+        let rel = save_sketch(&deck.0, b"\x89PNG fake").unwrap();
+        assert!(
+            rel.starts_with(".slopslide/sketches/") && rel.ends_with(".png"),
+            "{rel}"
+        );
+        assert_eq!(fs::read(deck.0.join(&rel)).unwrap(), b"\x89PNG fake");
+        let names: Vec<_> = fs::read_dir(&sketches)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), SKETCHES_KEPT);
+        assert!(
+            !names.contains(&"1000000000000-old.png".to_string()),
+            "oldest pruned"
+        );
+        assert!(
+            rel.ends_with(names.iter().max().unwrap().as_str()),
+            "new sketch kept"
+        );
+    }
+
+    #[test]
+    fn save_sketch_names_are_unique() {
+        let deck = TempDeck::new(ORIGINAL);
+        let a = save_sketch(&deck.0, b"a").unwrap();
+        let b = save_sketch(&deck.0, b"b").unwrap();
+        assert_ne!(a, b);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-/** Presenter annotation tools: the pure parts, shared by the overlay and its tests. */
+/** Annotation tools (presenter ink, slide sketches): the pure parts, shared by the overlay and its tests. */
 
 export type Tool = "pointer" | "laser" | "pen" | "highlighter" | "eraser";
 export type InkTool = "pen" | "highlighter";
@@ -47,3 +47,34 @@ export function toFraction(clientX: number, clientY: number, rect: DOMRect): [nu
 
 const round = (n: number) => Math.round(n * 10_000) / 10_000;
 const px = (n: number) => Math.round(n * 10) / 10;
+
+/** Slide size in pixels; sketches are reported to the agent in these units. */
+export const SLIDE_SIZE = { width: 1920, height: 1080 } as const;
+
+/**
+ * The area a set of strokes covers, in slide pixels, widened by the ink's own width and
+ * clamped to the slide. Null when there are no points.
+ */
+export function inkBounds(
+  strokes: readonly Stroke[],
+): { left: number; top: number; right: number; bottom: number } | null {
+  let [left, top, right, bottom] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const stroke of strokes) {
+    // Ink is drawn in screen pixels, so its width is only approximate in slide pixels.
+    const pad = INK_STYLE[stroke.tool].width;
+    for (const [x, y] of stroke.points) {
+      left = Math.min(left, x * SLIDE_SIZE.width - pad);
+      right = Math.max(right, x * SLIDE_SIZE.width + pad);
+      top = Math.min(top, y * SLIDE_SIZE.height - pad);
+      bottom = Math.max(bottom, y * SLIDE_SIZE.height + pad);
+    }
+  }
+  if (left === Infinity) return null;
+  const clamp = (n: number, max: number) => Math.round(Math.min(max, Math.max(0, n)));
+  return {
+    left: clamp(left, SLIDE_SIZE.width),
+    top: clamp(top, SLIDE_SIZE.height),
+    right: clamp(right, SLIDE_SIZE.width),
+    bottom: clamp(bottom, SLIDE_SIZE.height),
+  };
+}

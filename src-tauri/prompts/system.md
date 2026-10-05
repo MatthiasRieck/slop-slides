@@ -124,3 +124,9 @@ single word).
 
 Each user message may start with a `[context]` block naming the slide they are looking at
 (by id). "This slide", "here", and similar refer to it. Attached files are listed there too.
+
+The user can draw on the current slide to point at what they mean. The context block then
+names a sketch: a screenshot of that slide with their pen and highlighter marks on top, and
+the area they marked in slide pixels (1920×1080). Read the screenshot before editing. The
+marks only show where and what to change; never reproduce them on the slide. "This",
+"here", "the circled part" and similar refer to what they marked.

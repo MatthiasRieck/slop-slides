@@ -1,4 +1,5 @@
 mod agent;
+mod capture;
 mod deck;
 mod env;
 mod error;
@@ -142,6 +143,19 @@ fn lint_deck(app: AppHandle, id: String) -> Result<Vec<lint::Issue>> {
     deck::lint(&deck::deck_dir(&app, &id)?)
 }
 
+/// Screenshots `rect` of the window (the sketched-on slide) into the deck's internals.
+#[tauri::command]
+async fn capture_sketch(
+    app: AppHandle,
+    webview: tauri::Webview,
+    id: String,
+    rect: capture::Rect,
+) -> Result<String> {
+    let dir = deck::deck_dir(&app, &id)?;
+    let png = capture::snapshot(&webview, rect).await?;
+    deck::save_sketch(&dir, &png)
+}
+
 #[tauri::command]
 fn load_chat(app: AppHandle, id: String) -> Result<serde_json::Value> {
     deck::load_chat(&deck::deck_dir(&app, &id)?)
@@ -219,6 +233,7 @@ pub fn run() {
             import_assets,
             export_deck,
             lint_deck,
+            capture_sketch,
             load_chat,
             save_chat,
             reset_chat,

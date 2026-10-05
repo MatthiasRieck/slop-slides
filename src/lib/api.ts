@@ -93,6 +93,9 @@ export const api = {
   importAssets: (id: string, paths: string[]) => invoke<string[]>("import_assets", { id, paths }),
   exportDeck: (id: string, dest: string) => invoke<void>("export_deck", { id, dest }),
   lintDeck: (id: string) => invoke<LintIssue[]>("lint_deck", { id }),
+  /** Screenshots `rect` (CSS pixels) of the window; returns the deck-relative image path. */
+  captureSketch: (id: string, rect: { x: number; y: number; width: number; height: number }) =>
+    invoke<string>("capture_sketch", { id, rect }),
   loadChat: (id: string) => invoke<unknown>("load_chat", { id }),
   saveChat: (id: string, chat: unknown) => invoke<void>("save_chat", { id, chat }),
   resetChat: (id: string) => invoke<void>("reset_chat", { id }),

@@ -38,6 +38,12 @@ describe("api", () => {
     ["importAssets", () => api.importAssets("talk", ["/a.png"]), "import_assets", { id: "talk", paths: ["/a.png"] }],
     ["exportDeck", () => api.exportDeck("talk", "/out.html"), "export_deck", { id: "talk", dest: "/out.html" }],
     ["lintDeck", () => api.lintDeck("talk"), "lint_deck", { id: "talk" }],
+    [
+      "captureSketch",
+      () => api.captureSketch("talk", { x: 1, y: 2, width: 300, height: 168.75 }),
+      "capture_sketch",
+      { id: "talk", rect: { x: 1, y: 2, width: 300, height: 168.75 } },
+    ],
     ["loadChat", () => api.loadChat("talk"), "load_chat", { id: "talk" }],
     ["saveChat", () => api.saveChat("talk", [1]), "save_chat", { id: "talk", chat: [1] }],
     ["resetChat", () => api.resetChat("talk"), "reset_chat", { id: "talk" }],
@@ -57,7 +63,7 @@ describe("api", () => {
   });
 
   it("covers every api function", () => {
-    expect(Object.keys(api)).toHaveLength(23);
+    expect(Object.keys(api)).toHaveLength(24);
   });
 
   it("passes backend rejections through", async () => {

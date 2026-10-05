@@ -1,20 +1,21 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 
-import { useApp } from "../store";
+import { SKETCH_TARGET_ATTR, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Stage } from "./Stage";
 
 beforeEach(() => {
-  useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", presenting: false });
+  useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", presenting: false, sketches: {} });
 });
 
 const position = () => screen.getByText(/^\d+ \/ \d+$/).textContent;
-const [prev, next] = [() => screen.getAllByRole("button")[0]!, () => screen.getAllByRole("button")[1]!];
+const prev = () => screen.getByRole("button", { name: "Previous slide" });
+const next = () => screen.getByRole("button", { name: "Next slide" });
 
 describe("Stage", () => {
   it("shows the position of the selected slide", () => {
@@ -132,6 +133,117 @@ describe("Stage", () => {
       forward("ArrowRight", null);
       act(() => void window.dispatchEvent(new MessageEvent("message", { data: { type: "other", key: "ArrowRight" } })));
       expect(useApp.getState().selected).toBe("intro");
+    });
+  });
+
+  describe("sketching", () => {
+    const layer = () => screen.getByTestId("annotation-layer");
+    const tool = (name: string) => screen.getByRole("button", { name });
+    const pressed = (name: string) => tool(name).getAttribute("aria-pressed") === "true";
+
+    beforeEach(() => {
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 500));
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    function draw(points: [number, number][]) {
+      const [first, ...rest] = points;
+      fireEvent.pointerDown(layer(), { button: 0, buttons: 1, clientX: first![0], clientY: first![1], pointerId: 1 });
+      for (const [x, y] of rest) fireEvent.pointerMove(layer(), { buttons: 1, clientX: x, clientY: y, pointerId: 1 });
+      fireEvent.pointerUp(layer(), { pointerId: 1 });
+    }
+
+    it("leaves the slide clickable until a tool is picked", () => {
+      render(<Stage />);
+      expect(layer().style.pointerEvents).toBe("none");
+      fireEvent.click(tool("Draw on the slide"));
+      expect(pressed("Draw on the slide")).toBe(true);
+      expect(layer().style.pointerEvents).toBe("auto");
+      fireEvent.click(tool("Draw on the slide"));
+      expect(pressed("Draw on the slide")).toBe(false);
+      expect(layer().style.pointerEvents).toBe("none");
+    });
+
+    it("marks the slide being screenshotted when sending", () => {
+      const { container } = render(<Stage />);
+      const target = container.querySelector(`[${SKETCH_TARGET_ATTR}]`)!;
+      expect(target.contains(layer())).toBe(true);
+      expect(target.querySelector("iframe, [style*='aspect-ratio']")).toBeTruthy();
+    });
+
+    it("keeps the drawing in the store, per slide", () => {
+      render(<Stage />);
+      fireEvent.click(tool("Draw on the slide"));
+      draw([
+        [100, 100],
+        [500, 250],
+      ]);
+      expect(useApp.getState().sketches.intro).toEqual([
+        {
+          tool: "pen",
+          color: "#ef4444",
+          points: [
+            [0.1, 0.2],
+            [0.5, 0.5],
+          ],
+        },
+      ]);
+      act(() => useApp.getState().select("#2"));
+      expect(layer().querySelectorAll("[data-stroke]")).toHaveLength(0);
+      act(() => useApp.getState().select("intro"));
+      expect(layer().querySelectorAll("[data-stroke]")).toHaveLength(1);
+    });
+
+    it("highlights in the highlighter color", () => {
+      render(<Stage />);
+      fireEvent.click(tool("Highlight on the slide"));
+      draw([
+        [10, 10],
+        [20, 20],
+      ]);
+      expect(useApp.getState().sketches.intro?.[0]).toMatchObject({ tool: "highlighter", color: "#facc15" });
+    });
+
+    it("offers colors while inking", () => {
+      render(<Stage />);
+      expect(screen.queryByRole("button", { name: /^Color/ })).toBeNull();
+      fireEvent.click(tool("Draw on the slide"));
+      fireEvent.click(tool("Color #3b82f6"));
+      draw([[10, 10]]);
+      expect(useApp.getState().sketches.intro?.[0]?.color).toBe("#3b82f6");
+    });
+
+    it("undoes and clears marks", () => {
+      render(<Stage />);
+      expect(screen.queryByRole("button", { name: "Undo mark" })).toBeNull();
+      fireEvent.click(tool("Draw on the slide"));
+      draw([[10, 10]]);
+      draw([[20, 20]]);
+      fireEvent.click(tool("Undo mark"));
+      expect(useApp.getState().sketches.intro).toHaveLength(1);
+      fireEvent.click(tool("Clear marks"));
+      expect(useApp.getState().sketches.intro).toEqual([]);
+      expect(screen.queryByRole("button", { name: "Clear marks" })).toBeNull();
+    });
+
+    it("Escape puts the tool away, but not while typing", () => {
+      render(
+        <>
+          <Stage />
+          <textarea data-testid="textarea" />
+        </>,
+      );
+      fireEvent.click(tool("Draw on the slide"));
+      fireEvent.keyDown(screen.getByTestId("textarea"), { key: "Escape" });
+      expect(pressed("Draw on the slide")).toBe(true);
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(pressed("Draw on the slide")).toBe(false);
+    });
+
+    it("shows a drawing made before the stage mounted", () => {
+      useApp.setState({ sketches: { intro: [{ tool: "pen", color: "#ef4444", points: [[0.5, 0.5]] }] } });
+      render(<Stage />);
+      expect(layer().querySelectorAll("[data-stroke]")).toHaveLength(1);
     });
   });
 });

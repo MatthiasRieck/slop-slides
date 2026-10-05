@@ -38,6 +38,8 @@ export function installBrowserMock() {
           return { claudePath: "/mock/claude", libraryPath: "~/Documents/SlopSlide" };
         case "agent_running":
           return false;
+        case "save_deck_source":
+          throw new Error("Saving is not available in the browser preview.");
         case "load_chat":
           return JSON.parse(localStorage.getItem(`mock-chat-${String(a.id)}`) ?? "null");
         default:

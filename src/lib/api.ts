@@ -74,6 +74,8 @@ export const api = {
   duplicateSlide: (id: string, slide: string) =>
     invoke<CreatedSlide>("duplicate_slide", { id, slide }),
   deleteSlide: (id: string, slide: string) => invoke<Deck>("delete_slide", { id, slide }),
+  saveDeckSource: (id: string, source: string, base: string | null) =>
+    invoke<Deck>("save_deck_source", { id, source, base }),
   importAssets: (id: string, paths: string[]) => invoke<string[]>("import_assets", { id, paths }),
   exportDeck: (id: string, dest: string) => invoke<void>("export_deck", { id, dest }),
   loadChat: (id: string) => invoke<unknown>("load_chat", { id }),

@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 
 import { ChatPanel } from "./components/ChatPanel";
+import { CodeView } from "./components/CodeView";
 import { Home } from "./components/Home";
 import { Presenter } from "./components/Presenter";
 import { SlideRail } from "./components/SlideRail";
@@ -23,6 +24,7 @@ export function App() {
 }
 
 function Editor() {
+  const view = useApp((s) => s.view);
   return (
     <div className="flex h-full flex-col">
       <TopBar />
@@ -32,7 +34,9 @@ function Editor() {
         </Panel>
         <ResizeHandle />
         <Panel id="stage" minSize={360}>
-          <Stage />
+          {/* The HTML view stays mounted so unsaved edits survive switching to the slides. */}
+          <CodeView active={view === "code"} />
+          {view === "slides" && <Stage />}
         </Panel>
         <ResizeHandle />
         <Panel id="chat" defaultSize={380} minSize={300} maxSize={640}>

@@ -280,6 +280,46 @@ pub fn delete_slide(app: &AppHandle, id: &str, slide: &str) -> Result<Deck> {
     Ok(edit(app, id, |s| Ok((html::delete(s, slide)?, ())))?.0)
 }
 
+/// Replaces deck.html with hand-edited source. `base` is the text the edit started from;
+/// when given and the file has changed since (say, the agent wrote to it), the save is
+/// refused so neither side's work is silently lost.
+pub fn save_source(
+    app: &AppHandle,
+    id: &str,
+    source: &str,
+    base: Option<&str>,
+    normalize_after: bool,
+) -> Result<Deck> {
+    write_source(&deck_dir(app, id)?, id, source, base, normalize_after)
+}
+
+fn write_source(
+    dir: &Path,
+    id: &str,
+    source: &str,
+    base: Option<&str>,
+    normalize_after: bool,
+) -> Result<Deck> {
+    if let Some(base) = base {
+        if !same_text(&read_html(dir)?, base) {
+            return Err(Error::msg(
+                "deck.html changed on disk since you started editing",
+            ));
+        }
+    }
+    snapshot(dir)?;
+    write_html(dir, source)?;
+    if normalize_after {
+        normalize(dir)?;
+    }
+    load(dir, id)
+}
+
+/// Equal up to line endings (the editor normalizes them to `\n`).
+fn same_text(a: &str, b: &str) -> bool {
+    a.replace("\r\n", "\n") == b.replace("\r\n", "\n")
+}
+
 pub fn delete_deck(app: &AppHandle, id: &str) -> Result<()> {
     fs::remove_dir_all(deck_dir(app, id)?)?;
     Ok(())
@@ -410,6 +450,129 @@ mod tests {
         assert!(is_plain_name("my-deck"));
         assert!(!is_plain_name("a/b"));
         assert!(!is_plain_name(".."));
+    }
+
+    /// A throwaway deck folder holding `html` as deck.html.
+    struct TempDeck(PathBuf);
+
+    impl TempDeck {
+        fn new(html: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("slopslide-test-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join(DECK_FILE), html).unwrap();
+            TempDeck(dir)
+        }
+        fn html(&self) -> String {
+            fs::read_to_string(self.0.join(DECK_FILE)).unwrap()
+        }
+        fn snapshots(&self) -> Vec<String> {
+            let dir = self.0.join(INTERNAL_DIR).join("snapshots");
+            let Ok(entries) = fs::read_dir(dir) else {
+                return Vec::new();
+            };
+            entries
+                .map(|e| fs::read_to_string(e.unwrap().path()).unwrap())
+                .collect()
+        }
+    }
+
+    impl Drop for TempDeck {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    const ORIGINAL: &str = "<html><head><title>Talk</title></head><body><main>\n<section class=\"slide\" id=\"a\">A</section>\n</main></body></html>";
+    const EDITED: &str = "<html><head><title>Talk</title></head><body><main>\n<section class=\"slide\" id=\"a\">A!</section>\n<section class=\"slide\" id=\"b\">B</section>\n</main></body></html>";
+
+    #[test]
+    fn saves_source_when_base_matches() {
+        let deck = TempDeck::new(ORIGINAL);
+        let saved = write_source(&deck.0, "talk", EDITED, Some(ORIGINAL), false).unwrap();
+        assert_eq!(deck.html(), EDITED);
+        let ids: Vec<_> = saved.slides.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b"]);
+        assert_eq!(saved.title, "Talk");
+    }
+
+    #[test]
+    fn save_snapshots_the_previous_version() {
+        let deck = TempDeck::new(ORIGINAL);
+        write_source(&deck.0, "talk", EDITED, Some(ORIGINAL), false).unwrap();
+        assert_eq!(deck.snapshots(), [ORIGINAL]);
+    }
+
+    #[test]
+    fn save_refuses_when_file_changed_since_base() {
+        let deck = TempDeck::new(ORIGINAL);
+        let agent_version = ORIGINAL.replace(">A<", ">Agent<");
+        fs::write(deck.0.join(DECK_FILE), &agent_version).unwrap();
+        let err = write_source(&deck.0, "talk", EDITED, Some(ORIGINAL), false).unwrap_err();
+        assert!(err.to_string().contains("changed on disk"), "{err}");
+        assert_eq!(
+            deck.html(),
+            agent_version,
+            "the agent's version must survive"
+        );
+        assert!(deck.snapshots().is_empty());
+    }
+
+    #[test]
+    fn save_without_base_overwrites() {
+        let deck = TempDeck::new(ORIGINAL);
+        fs::write(deck.0.join(DECK_FILE), "<html>agent</html>").unwrap();
+        write_source(&deck.0, "talk", EDITED, None, false).unwrap();
+        assert_eq!(deck.html(), EDITED);
+    }
+
+    #[test]
+    fn save_accepts_base_with_different_line_endings() {
+        let deck = TempDeck::new(&ORIGINAL.replace('\n', "\r\n"));
+        write_source(&deck.0, "talk", EDITED, Some(ORIGINAL), false).unwrap();
+        assert_eq!(deck.html(), EDITED);
+    }
+
+    #[test]
+    fn save_normalizes_when_asked() {
+        let deck = TempDeck::new(ORIGINAL);
+        let no_id = EDITED.replace(" id=\"b\"", "");
+        let saved = write_source(&deck.0, "talk", &no_id, Some(ORIGINAL), true).unwrap();
+        let html = deck.html();
+        assert!(html.contains("slopslide:runtime-js"), "runtime installed");
+        assert!(
+            saved.slides.iter().all(|s| !s.id.starts_with('#')),
+            "ids assigned"
+        );
+        assert_eq!(saved.slides.len(), 2);
+        assert!(deck.0.join("assets").is_dir());
+    }
+
+    #[test]
+    fn save_leaves_markup_alone_without_normalizing() {
+        let deck = TempDeck::new(ORIGINAL);
+        let no_id = EDITED.replace(" id=\"b\"", "");
+        let saved = write_source(&deck.0, "talk", &no_id, None, false).unwrap();
+        assert_eq!(deck.html(), no_id);
+        assert_eq!(
+            saved.slides[1].id, "#2",
+            "unnamed slide addressed by position"
+        );
+    }
+
+    #[test]
+    fn save_reports_missing_deck() {
+        let deck = TempDeck::new(ORIGINAL);
+        fs::remove_file(deck.0.join(DECK_FILE)).unwrap();
+        assert!(write_source(&deck.0, "talk", EDITED, Some(ORIGINAL), false).is_err());
+        assert!(!deck.0.join(DECK_FILE).exists());
+    }
+
+    #[test]
+    fn edit_base_ignores_line_endings() {
+        assert!(same_text("<p>\r\n</p>\r\n", "<p>\n</p>\n"));
+        assert!(same_text("", ""));
+        assert!(!same_text("<p>a</p>", "<p>b</p>"));
+        assert!(!same_text("<p>\n</p>", "<p>\n\n</p>"));
     }
 
     #[test]

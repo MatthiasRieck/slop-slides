@@ -463,6 +463,38 @@ mod tests {
   <script>const s = '<section class="slide" id="fake">';</script>
 </body></html>"#;
 
+    /// Cases shared with the frontend's copy of the slide finder (src/lib/slideSpans.ts),
+    /// so the two cannot drift apart.
+    #[test]
+    fn matches_shared_slide_fixtures() {
+        let cases: serde_json::Value =
+            serde_json::from_str(include_str!("../../fixtures/slide-spans.json")).unwrap();
+        for case in cases.as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let html = case["html"].as_str().unwrap();
+            let actual: Vec<(String, &str)> = find_slides(html)
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let id = s.id.clone().unwrap_or_else(|| format!("#{}", i + 1));
+                    (id, &html[s.range.clone()])
+                })
+                .collect();
+            let expected: Vec<(String, &str)> = case["slides"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| {
+                    (
+                        s["id"].as_str().unwrap().to_string(),
+                        s["source"].as_str().unwrap(),
+                    )
+                })
+                .collect();
+            assert_eq!(actual, expected, "fixture: {name}");
+        }
+    }
+
     fn ids(html: &str) -> Vec<String> {
         find_slides(html)
             .into_iter()

@@ -29,5 +29,6 @@ jobs:
         with:
           workspaces: src-tauri -> target
       - run: pnpm install --frozen-lockfile
+      - run: pnpm test
       - run: pnpm build
       - run: cargo test --manifest-path src-tauri/Cargo.toml

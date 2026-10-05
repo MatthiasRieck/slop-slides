@@ -1,4 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
 
 import {
@@ -50,10 +51,18 @@ export const MODELS = [
   { id: "haiku", label: "Haiku" },
 ] as const;
 
+export type StageView = "slides" | "code";
+
 interface AppState {
   deck: Deck | null;
   /** Id of the selected slide. */
   selected: string | null;
+  /** Bumped whenever the user picks a slide, so views can reveal it even if unchanged. */
+  revealRev: number;
+  /** Whether the stage shows the rendered slide or deck.html's source. */
+  view: StageView;
+  /** The HTML view holds edits that are not saved to deck.html yet. */
+  codeDirty: boolean;
   /** Bumped when attached assets change, reloading every slide preview. */
   assetsRev: number;
   messages: ChatMessage[];
@@ -69,6 +78,8 @@ interface AppState {
   setDeck: (deck: Deck) => void;
   select: (slide: string | null) => void;
   selectRelative: (delta: number) => void;
+  setView: (view: StageView) => void;
+  setCodeDirty: (dirty: boolean) => void;
   setModel: (model: string) => void;
   setPresenting: (presenting: boolean) => void;
   setError: (error: string | null) => void;
@@ -82,6 +93,9 @@ const newId = () => crypto.randomUUID();
 export const useApp = create<AppState>((set, get) => ({
   deck: null,
   selected: null,
+  revealRev: 0,
+  view: localStorage.getItem("slopslide.view") === "code" ? "code" : "slides",
+  codeDirty: false,
   assetsRev: 0,
   messages: [],
   running: false,
@@ -109,8 +123,9 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   closeDeck: async () => {
+    if (get().codeDirty && !(await confirmDiscardEdits())) return;
     await api.closeDeck();
-    set({ deck: null, selected: null, messages: [], running: false, presenting: false });
+    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false });
   },
 
   setDeck: (deck) => {
@@ -119,15 +134,22 @@ export const useApp = create<AppState>((set, get) => ({
     set({ deck, selected: stillThere ? selected : (deck.slides[0]?.id ?? null) });
   },
 
-  select: (slide) => set({ selected: slide }),
+  select: (slide) => set((s) => ({ selected: slide, revealRev: s.revealRev + 1 })),
 
   selectRelative: (delta) => {
     const { deck, selected } = get();
     if (!deck || deck.slides.length === 0) return;
     const index = deck.slides.findIndex((s) => s.id === selected);
     const next = Math.min(deck.slides.length - 1, Math.max(0, index + delta));
-    set({ selected: deck.slides[next]?.id ?? null });
+    set((s) => ({ selected: deck.slides[next]?.id ?? null, revealRev: s.revealRev + 1 }));
   },
+
+  setView: (view) => {
+    localStorage.setItem("slopslide.view", view);
+    set({ view });
+  },
+
+  setCodeDirty: (codeDirty) => set({ codeDirty }),
 
   setModel: (model) => {
     localStorage.setItem("slopslide.model", model);
@@ -188,6 +210,15 @@ export const useApp = create<AppState>((set, get) => ({
     set({ messages: [], running: false });
   },
 }));
+
+async function confirmDiscardEdits(): Promise<boolean> {
+  const message = "You have unsaved changes to deck.html. Discard them?";
+  try {
+    return await ask(message, { title: "Unsaved changes", kind: "warning", okLabel: "Discard" });
+  } catch {
+    return window.confirm(message);
+  }
+}
 
 async function loadDeckState(deck: Deck) {
   const [chat, running] = await Promise.all([api.loadChat(deck.id), api.agentRunning(deck.id)]);

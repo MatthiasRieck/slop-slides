@@ -2,6 +2,7 @@
  * The player embedded in every deck.html (src-tauri/assets/runtime.js). It runs in the
  * editor's slide iframes, in the presenter, and in exported files opened in any browser.
  */
+import { readFileSync } from "node:fs";
 import { JSDOM, type DOMWindow } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -349,5 +350,39 @@ describe("player: hidden slides", () => {
   it("still renders a hidden slide when the editor embeds it", () => {
     expect(play("?embed&slide=b").activeId()).toBe("b");
     expect(play("?embed&slide=%232").activeId()).toBe("b");
+  });
+});
+
+describe("player: section markers", () => {
+  const SECTIONED = DECK.replace(
+    `<section class="slide" id="end">`,
+    `<div class="deck-section" data-title="Last part"></div>\n  <section class="slide" id="end">`,
+  ).replace(
+    `<main class="deck">`,
+    `<main class="deck">\n  <div class="deck-section" data-title="First part"></div>`,
+  );
+
+  it("steps through slides only, never stopping on a marker", () => {
+    const p = player({ html: SECTIONED });
+    const seen: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      seen.push(p.doc.querySelector(".slide.active")?.id ?? "");
+      p.key("ArrowRight");
+    }
+    expect(seen).toEqual(["intro", "", "end"]);
+    expect(p.activeCount()).toBe(1);
+    expect(p.doc.querySelectorAll(".deck-section.active")).toHaveLength(0);
+  });
+
+  it("addresses slides by position without counting markers", () => {
+    const p = player({ html: SECTIONED, at: "#2" });
+    expect(p.active()).toBe(1);
+    const embedded = player({ html: SECTIONED, at: "?embed&slide=end" });
+    expect(embedded.doc.querySelector(".slide.active")?.id).toBe("end");
+  });
+
+  it("is hidden by the runtime stylesheet, on screen and in print", () => {
+    const css = readFileSync("src-tauri/assets/runtime.css", "utf8");
+    expect(css).toMatch(/\.deck > \.deck-section\s*\{[^}]*display:\s*none\s*!important/);
   });
 });

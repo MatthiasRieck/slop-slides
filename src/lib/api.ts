@@ -17,11 +17,21 @@ export interface Slide {
   hidden: boolean;
 }
 
+/** A named group of slides, started by a marker between slides in deck.html. */
+export interface Section {
+  /** Position among the deck's section markers, in document order. */
+  index: number;
+  title: string;
+  /** Number of slides before the marker: the section starts at the slide with this index. */
+  before: number;
+}
+
 export interface Deck {
   id: string;
   title: string;
   path: string;
   slides: Slide[];
+  sections: Section[];
   /** Changes when anything outside the slides (styles, fonts) changes. */
   shellHash: string;
 }
@@ -81,12 +91,18 @@ export const api = {
   loadDeck: (id: string) => invoke<Deck>("load_deck", { id }),
   renameDeck: (id: string, title: string) => invoke<Deck>("rename_deck", { id, title }),
   deleteDeck: (id: string) => invoke<void>("delete_deck", { id }),
+  /** `slides` lists every slide id and section key (see `sectionKey`) in the new order. */
   reorderSlides: (id: string, slides: string[]) => invoke<Deck>("reorder_slides", { id, slides }),
   addSlide: (id: string, after: string | null) => invoke<CreatedSlide>("add_slide", { id, after }),
   duplicateSlide: (id: string, slide: string) =>
     invoke<CreatedSlide>("duplicate_slide", { id, slide }),
   setSlideHidden: (id: string, slide: string, hidden: boolean) =>
     invoke<Deck>("set_slide_hidden", { id, slide, hidden }),
+  addSection: (id: string, before: string | null, title: string) =>
+    invoke<Deck>("add_section", { id, before, title }),
+  renameSection: (id: string, index: number, title: string) =>
+    invoke<Deck>("rename_section", { id, index, title }),
+  deleteSection: (id: string, index: number) => invoke<Deck>("delete_section", { id, index }),
   deleteSlide: (id: string, slide: string) => invoke<Deck>("delete_slide", { id, slide }),
   saveDeckSource: (id: string, source: string, base: string | null) =>
     invoke<Deck>("save_deck_source", { id, source, base }),

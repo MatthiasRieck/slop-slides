@@ -28,6 +28,19 @@ describe("api", () => {
       "set_slide_hidden",
       { id: "talk", slide: "a", hidden: true },
     ],
+    [
+      "addSection",
+      () => api.addSection("talk", "b", "Part two"),
+      "add_section",
+      { id: "talk", before: "b", title: "Part two" },
+    ],
+    [
+      "renameSection",
+      () => api.renameSection("talk", 1, "Wrap up"),
+      "rename_section",
+      { id: "talk", index: 1, title: "Wrap up" },
+    ],
+    ["deleteSection", () => api.deleteSection("talk", 1), "delete_section", { id: "talk", index: 1 }],
     ["deleteSlide", () => api.deleteSlide("talk", "a"), "delete_slide", { id: "talk", slide: "a" }],
     [
       "saveDeckSource",

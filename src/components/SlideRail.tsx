@@ -9,32 +9,33 @@ import {
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Copy, Eye, EyeOff, Plus, Trash2 } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { Copy, Eye, EyeOff, Pencil, Plus, SquareSplitVertical, Trash2, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 
-import { api, errorMessage, type Slide } from "../lib/api";
+import { api, errorMessage, type Section, type Slide } from "../lib/api";
+import { applyOrder, railItems, startsSection } from "../lib/sections";
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
 export function SlideRail() {
   const deck = useApp((s) => s.deck);
+  const selected = useApp((s) => s.selected);
+  const [editingSection, setEditingSection] = useState<number | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   if (!deck) return null;
 
+  const items = railItems(deck);
+  const keys = items.map((item) => item.key);
+  const selectedIndex = deck.slides.findIndex((s) => s.id === selected);
+  const canAddSection = selectedIndex >= 0 && !startsSection(deck, selectedIndex);
+
   const onDragEnd = async ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
-    const from = deck.slides.findIndex((s) => s.id === active.id);
-    const to = deck.slides.findIndex((s) => s.id === over.id);
-    const slides = arrayMove(deck.slides, from, to);
-    useApp.getState().setDeck({ ...deck, slides });
+    const order = arrayMove(keys, keys.indexOf(String(active.id)), keys.indexOf(String(over.id)));
+    useApp.getState().setDeck(applyOrder(deck, order));
     try {
-      useApp.getState().setDeck(
-        await api.reorderSlides(
-          deck.id,
-          slides.map((s) => s.id),
-        ),
-      );
+      useApp.getState().setDeck(await api.reorderSlides(deck.id, order));
     } catch (error) {
       useApp.getState().setError(errorMessage(error));
       useApp.getState().setDeck(await api.loadDeck(deck.id));
@@ -52,20 +53,46 @@ export function SlideRail() {
     }
   };
 
+  const addSection = async () => {
+    try {
+      const next = await api.addSection(deck.id, selected, "New section");
+      useApp.getState().setDeck(next);
+      const created = next.sections.filter((s) => s.before === selectedIndex).at(-1);
+      setEditingSection(created?.index ?? null);
+    } catch (error) {
+      useApp.getState().setError(errorMessage(error));
+    }
+  };
+
   return (
     <div className="flex h-full flex-col bg-sidebar">
       <div className="flex h-10 shrink-0 items-center justify-between px-3">
         <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
           Slides · {deck.slides.length}
         </span>
-        <button
-          type="button"
-          onClick={addSlide}
-          title="Add blank slide"
-          className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          <Plus className="size-4" />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={addSection}
+            disabled={!canAddSection}
+            title={
+              selectedIndex >= 0 && !canAddSection
+                ? "This slide already starts a section"
+                : "Start a section at this slide"
+            }
+            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+          >
+            <SquareSplitVertical className="size-4" />
+          </button>
+          <button
+            type="button"
+            onClick={addSlide}
+            title="Add blank slide"
+            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <Plus className="size-4" />
+          </button>
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
         {deck.slides.length === 0 ? (
@@ -79,17 +106,132 @@ export function SlideRail() {
             modifiers={[restrictToVerticalAxis]}
             onDragEnd={onDragEnd}
           >
-            <SortableContext items={deck.slides.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+            <SortableContext items={keys} strategy={verticalListSortingStrategy}>
               <ol className="flex flex-col gap-3">
-                {deck.slides.map((slide, index) => (
-                  <Thumbnail key={slide.id} deckId={deck.id} slide={slide} index={index} />
-                ))}
+                {items.map((item) =>
+                  item.kind === "slide" ? (
+                    <Thumbnail key={item.key} deckId={deck.id} slide={item.slide} index={item.index} />
+                  ) : (
+                    <SectionHeader
+                      key={item.key}
+                      itemKey={item.key}
+                      deckId={deck.id}
+                      section={item.section}
+                      editing={editingSection === item.section.index}
+                      onEditing={(editing) => setEditingSection(editing ? item.section.index : null)}
+                    />
+                  ),
+                )}
               </ol>
             </SortableContext>
           </DndContext>
         )}
       </div>
     </div>
+  );
+}
+
+/** Divider row that names a section. Only the editor shows it; the player never does. */
+function SectionHeader(props: {
+  itemKey: string;
+  deckId: string;
+  section: Section;
+  editing: boolean;
+  onEditing: (editing: boolean) => void;
+}) {
+  const { deckId, section, editing, onEditing } = props;
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: props.itemKey,
+  });
+
+  const commit = async (title: string) => {
+    onEditing(false);
+    const next = title.trim();
+    if (!next || next === section.title) return;
+    try {
+      useApp.getState().setDeck(await api.renameSection(deckId, section.index, next));
+    } catch (error) {
+      useApp.getState().setError(errorMessage(error));
+    }
+  };
+
+  const remove = async () => {
+    try {
+      useApp.getState().setDeck(await api.deleteSection(deckId, section.index));
+    } catch (error) {
+      useApp.getState().setError(errorMessage(error));
+    }
+  };
+
+  return (
+    <li
+      ref={setNodeRef}
+      data-testid="section-header"
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={cn("group flex items-center gap-2 pt-1", isDragging && "z-10 opacity-80")}
+      {...attributes}
+      {...listeners}
+    >
+      <span className="w-4 shrink-0" />
+      {editing ? (
+        <input
+          autoFocus
+          aria-label="Section title"
+          defaultValue={section.title}
+          onFocus={(e) => e.currentTarget.select()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") e.currentTarget.blur();
+            else if (e.key === "Escape") {
+              e.currentTarget.value = section.title;
+              e.currentTarget.blur();
+            }
+          }}
+          onBlur={(e) => void commit(e.currentTarget.value)}
+          className="min-w-0 flex-1 rounded border border-input bg-background px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wide text-foreground outline-none focus:ring-1 focus:ring-primary"
+        />
+      ) : (
+        <>
+          <span
+            title="Double-click to rename"
+            onDoubleClick={() => onEditing(true)}
+            className={cn(
+              "min-w-0 truncate text-2xs font-medium uppercase tracking-wide text-muted-foreground",
+              !section.title && "italic",
+            )}
+          >
+            {section.title || "Untitled section"}
+          </span>
+          <span className="h-px flex-1 bg-border" />
+          <div className="hidden shrink-0 gap-0.5 group-hover:flex">
+            <SectionAction title="Rename section" onClick={() => onEditing(true)}>
+              <Pencil className="size-3" />
+            </SectionAction>
+            <SectionAction title="Remove section" onClick={remove}>
+              <X className="size-3" />
+            </SectionAction>
+          </div>
+        </>
+      )}
+    </li>
+  );
+}
+
+function SectionAction(props: { title: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      title={props.title}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        props.onClick();
+      }}
+      className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+    >
+      {props.children}
+    </button>
   );
 }
 

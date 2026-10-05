@@ -235,8 +235,11 @@ export function CodeView({ active }: { active: boolean }) {
   const saveRef = useRef<(force?: boolean) => void>(() => {});
 
   const deckId = deck?.id;
-  // Any change to the document's markup changes one of these hashes.
-  const version = deck ? `${deck.shellHash}.${deck.slides.map((s) => s.hash).join(".")}` : "";
+  // Any change to the document's markup changes one of these. Section markers are not part of
+  // the shell or slide hashes (so renaming one does not reload previews); they count here.
+  const version = deck
+    ? `${deck.shellHash}.${deck.slides.map((s) => s.hash).join(".")}.${JSON.stringify(deck.sections)}`
+    : "";
 
   useEffect(() => {
     if (!deckId) return;

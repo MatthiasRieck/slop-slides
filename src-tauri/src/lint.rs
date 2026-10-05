@@ -6,7 +6,9 @@ use std::collections::HashSet;
 
 use serde::Serialize;
 
-use crate::html::{self, find_ci, has_class, parse_tag, HIDDEN_ATTR};
+use crate::html::{
+    self, find_ci, has_class, parse_tag, HIDDEN_ATTR, SECTION_CLASS, SECTION_TITLE_ATTR,
+};
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
@@ -96,6 +98,7 @@ pub fn lint(source: &str, asset_exists: impl Fn(&str) -> bool) -> Vec<Issue> {
     check_markup(&mut l);
     check_document(&mut l);
     check_slides(&mut l);
+    check_sections(&mut l);
     check_assets(&mut l, asset_exists);
     l.issues.sort_by_key(|i| (i.line, i.severity));
     l.issues
@@ -175,7 +178,8 @@ fn check_markup(l: &mut Linter) {
             }
             if deck_depth == Some(stack.len()) {
                 let is_slide = tag.name == "section" && has_class(&tag, "slide");
-                if !is_slide && !matches!(tag.name.as_str(), "script" | "template") {
+                let is_marker = tag.name == "div" && has_class(&tag, SECTION_CLASS);
+                if !is_slide && !is_marker && !matches!(tag.name.as_str(), "script" | "template") {
                     l.report(
                         "deck-stray-content",
                         Severity::Warning,
@@ -186,6 +190,18 @@ fn check_markup(l: &mut Linter) {
                         ),
                     );
                 }
+            }
+            if tag.name == "div"
+                && has_class(&tag, SECTION_CLASS)
+                && deck_depth != Some(stack.len())
+            {
+                l.report(
+                    "section-marker-misplaced",
+                    Severity::Warning,
+                    i,
+                    "Section markers must be direct children of <main class=\"deck\">, between slides."
+                        .into(),
+                );
             }
             if tag.name == "section" && has_class(&tag, "slide") && deck_depth != Some(stack.len())
             {
@@ -397,6 +413,33 @@ fn check_slides(l: &mut Linter) {
                     ),
                 );
             }
+        }
+    }
+}
+
+/// Section markers between slides: each needs a title and no content of its own.
+fn check_sections(l: &mut Linter) {
+    for (index, section) in html::find_sections(l.html).iter().enumerate() {
+        let at = section.range.start;
+        if section.title.is_empty() {
+            l.report(
+                "section-title-missing",
+                Severity::Warning,
+                at,
+                format!(
+                    "Section {} needs a non-empty {SECTION_TITLE_ATTR} attribute.",
+                    index + 1
+                ),
+            );
+        }
+        if !section.empty {
+            l.report(
+                "section-marker-content",
+                Severity::Warning,
+                at,
+                "A section marker must be empty: <div class=\"deck-section\" data-title=\"…\"></div>."
+                    .into(),
+            );
         }
     }
 }
@@ -730,5 +773,55 @@ mod tests {
             serde_json::to_value(&issue).unwrap(),
             serde_json::json!({"rule":"title","severity":"warning","message":"m","line":1,"slide":null})
         );
+    }
+
+    #[test]
+    fn accepts_section_markers_between_slides() {
+        let html = deck(
+            r#"<section class="slide" id="a">A</section>
+<div class="deck-section" data-title="Part two"></div>
+<section class="slide" id="b">B</section>"#,
+        );
+        assert_eq!(rules(&html), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn flags_section_markers_without_title_or_with_content() {
+        let found = rules(&deck(
+            r#"<div class="deck-section"></div>
+<div class="deck-section" data-title="  "></div>
+<section class="slide" id="a">A</section>
+<div class="deck-section" data-title="Ok"><p>x</p></div>"#,
+        ));
+        assert_eq!(
+            found,
+            [
+                "section-title-missing",
+                "section-title-missing",
+                "section-marker-content"
+            ]
+        );
+        let issues = lint(
+            &deck(
+                "<div class=\"deck-section\"></div>\n<section class=\"slide\" id=\"a\">A</section>",
+            ),
+            |_| true,
+        );
+        assert_eq!(issues[0].line, 10);
+        assert!(issues[0].message.contains("Section 1"));
+    }
+
+    #[test]
+    fn flags_section_markers_outside_the_deck_level() {
+        let inside = rules(&deck(
+            r#"<section class="slide" id="a"><div class="deck-section" data-title="X"></div></section>"#,
+        ));
+        assert_eq!(inside, ["section-marker-misplaced"]);
+        let wrapped = rules(&deck(
+            r#"<div class="wrap"><div class="deck-section" data-title="X"></div></div>
+<section class="slide" id="a">A</section>"#,
+        ));
+        assert!(wrapped.contains(&"section-marker-misplaced"));
+        assert!(wrapped.contains(&"deck-stray-content"));
     }
 }

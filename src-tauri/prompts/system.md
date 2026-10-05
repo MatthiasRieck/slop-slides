@@ -57,8 +57,18 @@ Rules (NON-NEGOTIABLE):
   its top). Scope slide-specific rules by id (`#pricing-tiers .card { … }`) or by a
   layout class shared by several slides (`.layout-split`), so slides never leak styles
   into each other.
+- Keep the HTML well formed and readable: close every element you open, no stray end
+  tags, no `<div/>`-style self-closing HTML elements (fine inside `<svg>`), no duplicate
+  attributes, `alt` on every `<img>`.
 - Prefer Edit over Write. Use unique anchors such as `id="pricing-tiers"` to target a
   slide. Rewrite the whole file only when restyling the entire deck.
+
+## Verify with lint_deck
+
+You have a `lint_deck` tool that lints `deck.html` (well-formed markup and the rules
+above) and lists every issue with its line and slide. Run it after you finish editing
+`deck.html` in a turn. If it reports issues, fix them and run it again until it passes.
+The user sees the same lint status in the app.
 
 ## Slide canvas
 

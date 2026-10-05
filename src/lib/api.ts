@@ -31,6 +31,16 @@ export interface CreatedSlide {
   slide: string;
 }
 
+export interface LintIssue {
+  /** Rule id, e.g. `unclosed-tag` (see src-tauri/src/lint.rs). */
+  rule: string;
+  severity: "error" | "warning";
+  message: string;
+  /** 1-based line in deck.html. */
+  line: number;
+  slide: string | null;
+}
+
 export interface AgentStatus {
   claudePath: string | null;
   libraryPath: string;
@@ -82,6 +92,7 @@ export const api = {
     invoke<Deck>("save_deck_source", { id, source, base }),
   importAssets: (id: string, paths: string[]) => invoke<string[]>("import_assets", { id, paths }),
   exportDeck: (id: string, dest: string) => invoke<void>("export_deck", { id, dest }),
+  lintDeck: (id: string) => invoke<LintIssue[]>("lint_deck", { id }),
   loadChat: (id: string) => invoke<unknown>("load_chat", { id }),
   saveChat: (id: string, chat: unknown) => invoke<void>("save_chat", { id, chat }),
   resetChat: (id: string) => invoke<void>("reset_chat", { id }),

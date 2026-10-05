@@ -34,7 +34,13 @@ export function ChatPanel() {
   const running = useApp((s) => s.running);
   const claudePath = useApp((s) => s.claudePath);
   const deckEmpty = useApp((s) => (s.deck?.slides.length ?? 0) === 0);
+  const composerFill = useApp((s) => s.composerFill);
   const [draft, setDraft] = useState("");
+
+  // Other parts of the app (e.g. the lint status) can hand the composer a prepared message.
+  useEffect(() => {
+    if (composerFill) setDraft(composerFill.text);
+  }, [composerFill]);
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -288,6 +294,11 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   useEffect(() => {
     textareaRef.current?.focus();
   }, [draft === ""]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const composerFill = useApp((s) => s.composerFill);
+  useEffect(() => {
+    textareaRef.current?.focus();
+  }, [composerFill]);
 
   const importPaths = async (paths: string[]) => {
     if (!deck || paths.length === 0) return;

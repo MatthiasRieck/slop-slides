@@ -66,3 +66,23 @@ describe("App", () => {
     expect(screen.queryByText("deck not found: x")).toBeNull();
   });
 });
+
+describe("lint status", () => {
+  it("re-lints the open deck whenever deck.html changes", async () => {
+    const refreshLint = vi.fn(async () => {});
+    useApp.setState({ deck: deckFor(DECK_HTML), refreshLint });
+    render(<App />);
+    expect(refreshLint).toHaveBeenCalledTimes(1);
+    act(() => useApp.setState({ deck: deckFor(DECK_HTML) }));
+    expect(refreshLint).toHaveBeenCalledTimes(1);
+    act(() => useApp.setState({ deck: deckFor(DECK_HTML, "2") }));
+    expect(refreshLint).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not lint without an open deck", () => {
+    const refreshLint = vi.fn(async () => {});
+    useApp.setState({ refreshLint });
+    render(<App />);
+    expect(refreshLint).not.toHaveBeenCalled();
+  });
+});

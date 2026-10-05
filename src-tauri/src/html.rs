@@ -9,9 +9,11 @@ use std::ops::Range;
 
 const RUNTIME_CSS: &str = include_str!("../assets/runtime.css");
 const RUNTIME_JS: &str = include_str!("../assets/runtime.js");
-const CSS_START: &str = "<!-- slopslide:runtime-css (managed by SlopSlide, do not edit) -->";
+pub(crate) const CSS_START: &str =
+    "<!-- slopslide:runtime-css (managed by SlopSlide, do not edit) -->";
 const CSS_END: &str = "<!-- /slopslide:runtime-css -->";
-const JS_START: &str = "<!-- slopslide:runtime-js (managed by SlopSlide, do not edit) -->";
+pub(crate) const JS_START: &str =
+    "<!-- slopslide:runtime-js (managed by SlopSlide, do not edit) -->";
 const JS_END: &str = "<!-- /slopslide:runtime-js -->";
 
 #[derive(Debug, Clone)]
@@ -30,13 +32,13 @@ pub struct SlideSpan {
 /// Marks a slide the player skips. The editor still shows it, muted.
 pub const HIDDEN_ATTR: &str = "data-hidden";
 
-struct Tag {
-    name: String,
-    closing: bool,
+pub(crate) struct Tag {
+    pub name: String,
+    pub closing: bool,
     /// (name, value, value range, whole attribute range)
-    attrs: Vec<(String, String, Range<usize>, Range<usize>)>,
-    name_end: usize,
-    end: usize,
+    pub attrs: Vec<(String, String, Range<usize>, Range<usize>)>,
+    pub name_end: usize,
+    pub end: usize,
 }
 
 /// Top-level slide sections in document order.
@@ -94,20 +96,20 @@ pub fn find_slides(html: &str) -> Vec<SlideSpan> {
     slides
 }
 
-fn has_class(tag: &Tag, class: &str) -> bool {
+pub(crate) fn has_class(tag: &Tag, class: &str) -> bool {
     tag.attrs
         .iter()
         .any(|(n, v, _, _)| n == "class" && v.split_ascii_whitespace().any(|c| c == class))
 }
 
-fn find_ci(html: &str, from: usize, needle: &str) -> Option<usize> {
+pub(crate) fn find_ci(html: &str, from: usize, needle: &str) -> Option<usize> {
     html.get(from..)?
         .to_ascii_lowercase()
         .find(&needle.to_ascii_lowercase())
         .map(|p| from + p)
 }
 
-fn parse_tag(html: &str, start: usize) -> Option<Tag> {
+pub(crate) fn parse_tag(html: &str, start: usize) -> Option<Tag> {
     let bytes = html.as_bytes();
     let mut i = start + 1;
     let closing = bytes.get(i) == Some(&b'/');
@@ -442,13 +444,10 @@ pub fn duplicate(html: &str, id: &str) -> Result<(String, String), String> {
     insert(html, Some(id), &copy, &format!("{id}-copy"))
 }
 
-/// Replaces deck-relative `assets/…` references with data URIs so the file stands alone.
-pub fn inline_assets(
-    html: &str,
-    mut load: impl FnMut(&str) -> Option<(String, Vec<u8>)>,
-) -> String {
-    use base64::Engine;
-    let mut out = String::with_capacity(html.len());
+/// Quoted deck-relative `assets/…` references in document order: the byte range of each
+/// reference (including a leading `./`) and the path without query or fragment.
+pub fn asset_refs(html: &str) -> Vec<(Range<usize>, &str)> {
+    let mut refs = Vec::new();
     let mut at = 0;
     for (pos, _) in html.match_indices("assets/") {
         if pos < at {
@@ -458,23 +457,36 @@ pub fn inline_assets(
         if html[..pos].ends_with("./") {
             start -= 2;
         }
-        let quoted = html[..start].ends_with(['"', '\'', '(']);
-        if !quoted {
+        if !html[..start].ends_with(['"', '\'', '(']) {
             continue;
         }
         let end = html[pos..]
             .find(|c: char| matches!(c, '"' | '\'' | ')' | '?' | '#') || c.is_whitespace())
             .map_or(html.len(), |e| pos + e);
-        let path = &html[pos..end];
+        refs.push((start..end, &html[pos..end]));
+        at = end;
+    }
+    refs
+}
+
+/// Replaces deck-relative `assets/…` references with data URIs so the file stands alone.
+pub fn inline_assets(
+    html: &str,
+    mut load: impl FnMut(&str) -> Option<(String, Vec<u8>)>,
+) -> String {
+    use base64::Engine;
+    let mut out = String::with_capacity(html.len());
+    let mut at = 0;
+    for (range, path) in asset_refs(html) {
         let Some((mime, bytes)) = load(path) else {
             continue;
         };
-        out.push_str(&html[at..start]);
+        out.push_str(&html[at..range.start]);
         out.push_str(&format!(
             "data:{mime};base64,{}",
             base64::engine::general_purpose::STANDARD.encode(bytes)
         ));
-        at = end;
+        at = range.end;
     }
     out.push_str(&html[at..]);
     out

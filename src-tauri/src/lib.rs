@@ -3,6 +3,8 @@ mod deck;
 mod env;
 mod error;
 mod html;
+mod lint;
+mod mcp;
 mod protocol;
 mod watcher;
 
@@ -136,6 +138,11 @@ fn export_deck(app: AppHandle, id: String, dest: String) -> Result<()> {
 }
 
 #[tauri::command]
+fn lint_deck(app: AppHandle, id: String) -> Result<Vec<lint::Issue>> {
+    deck::lint(&deck::deck_dir(&app, &id)?)
+}
+
+#[tauri::command]
 fn load_chat(app: AppHandle, id: String) -> Result<serde_json::Value> {
     deck::load_chat(&deck::deck_dir(&app, &id)?)
 }
@@ -178,6 +185,14 @@ fn agent_status(app: AppHandle) -> Result<AgentStatus> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // `slopslide --lint-mcp <deck dir>`: the agent's lint tool, started by Claude Code.
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some(mcp::FLAG) {
+        let dir = args
+            .get(2)
+            .map_or_else(|| ".".into(), std::path::PathBuf::from);
+        return mcp::serve(&dir);
+    }
     env::adopt_login_shell_path();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -203,6 +218,7 @@ pub fn run() {
             save_deck_source,
             import_assets,
             export_deck,
+            lint_deck,
             load_chat,
             save_chat,
             reset_chat,

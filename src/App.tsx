@@ -1,4 +1,5 @@
 import { X } from "lucide-react";
+import { useEffect } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 
 import { ChatPanel } from "./components/ChatPanel";
@@ -25,6 +26,13 @@ export function App() {
 
 function Editor() {
   const view = useApp((s) => s.view);
+  // Re-lint whenever deck.html changes on disk (agent, HTML view, slide operations).
+  const deckVersion = useApp((s) =>
+    s.deck ? [s.deck.id, s.deck.shellHash, ...s.deck.slides.map((x) => `${x.id}:${x.hash}`)].join("|") : "",
+  );
+  useEffect(() => {
+    void useApp.getState().refreshLint();
+  }, [deckVersion]);
   return (
     <div className="flex h-full flex-col">
       <TopBar />

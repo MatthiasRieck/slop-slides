@@ -36,6 +36,10 @@ UI work. Chat and editing need the desktop app.
 
 Checks: `pnpm typecheck`, `cargo test --manifest-path src-tauri/Cargo.toml`.
 
+The top bar shows whether `deck.html` passes the HTML lint. When it does not, clicking the
+status puts fix instructions into the chat composer; the agent then fixes the issues and
+re-checks with its `lint_deck` tool.
+
 ## Releases
 
 Push a tag such as `v0.1.0`. `.github/workflows/release.yml` then builds macOS (Apple
@@ -50,6 +54,10 @@ src-tauri/src/
   deck.rs               deck folders: load/normalize, slide operations, export, snapshots
   html.rs               finds the slide <section>s in deck.html and rewrites them;
                         installs the player runtime (assets/runtime.{css,js})
+  lint.rs               HTML lint for deck.html: well-formed markup plus the deck format
+                        rules; shown as the status button in the top bar
+  mcp.rs                stdio MCP server (`slopslide --lint-mcp <deck>`) exposing the
+                        linter to the agent as its `lint_deck` tool
   agent.rs              runs `claude -p --output-format stream-json` per turn, resumes the
                         deck's session, normalizes the stream into `agent-event`s
   protocol.rs           `slop://` scheme serving deck files to the slide iframes
@@ -71,8 +79,8 @@ it in sandboxed iframes (`deck.html?embed&slide=<id>`), so the thumbnails, stage
 exported file all use the same player. Before every agent turn and slide deletion, a copy is
 saved to `.slopslide/snapshots/` (last 30 kept).
 
-The agent only gets file tools (Read/Write/Edit/Glob/Grep plus web search/fetch). It has no
-shell access and loads no MCP servers. You can also edit `deck.html` by hand in any editor;
+The agent only gets file tools (Read/Write/Edit/Glob/Grep plus web search/fetch) and the
+app's own `lint_deck` tool. It has no shell access and loads no other MCP servers. You can also edit `deck.html` by hand in any editor;
 the app picks up the changes.
 
 The design guidance in the agent's prompt draws on

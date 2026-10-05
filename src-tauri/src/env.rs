@@ -68,3 +68,28 @@ pub fn resolve_claude() -> Option<PathBuf> {
     }
     candidates.into_iter().find(|p| p.is_file())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The only test that touches SLOPSLIDE_CLAUDE_PATH, so parallel tests cannot race on it.
+    #[test]
+    fn custom_claude_path_must_be_a_file() {
+        let dir = std::env::temp_dir().join(format!("slopslide-env-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let claude = dir.join("claude");
+        std::fs::write(&claude, "").unwrap();
+
+        std::env::set_var("SLOPSLIDE_CLAUDE_PATH", &claude);
+        assert_eq!(resolve_claude(), Some(claude.clone()));
+        // A bad override is reported as missing rather than silently falling back.
+        std::env::set_var("SLOPSLIDE_CLAUDE_PATH", dir.join("nope"));
+        assert_eq!(resolve_claude(), None);
+        std::env::set_var("SLOPSLIDE_CLAUDE_PATH", &dir);
+        assert_eq!(resolve_claude(), None, "a directory is not an executable");
+        std::env::remove_var("SLOPSLIDE_CLAUDE_PATH");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

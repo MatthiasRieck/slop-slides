@@ -23,7 +23,8 @@
   function indexFor(ref) {
     if (!ref) return 0;
     for (var i = 0; i < slides.length; i++) if (slides[i].id === ref) return i;
-    var n = parseInt(ref, 10);
+    // The editor addresses slides without an id by position, as "#2".
+    var n = parseInt(ref.replace(/^#/, ""), 10);
     return isNaN(n) ? 0 : Math.min(slides.length - 1, Math.max(0, n - 1));
   }
 

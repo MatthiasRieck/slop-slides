@@ -30,12 +30,12 @@ struct AgentStatus {
 
 #[tauri::command]
 fn list_decks(app: AppHandle) -> Result<Vec<DeckSummary>> {
-    deck::list(&app)
+    deck::list(&deck::library_root(&app)?)
 }
 
 #[tauri::command]
 fn create_deck(app: AppHandle, watcher: State<DeckWatcher>, title: String) -> Result<Deck> {
-    let deck = deck::create(&app, &title)?;
+    let deck = deck::create(&deck::library_root(&app)?, &title)?;
     watcher.watch(app, deck.id.clone(), deck.path.clone().into())?;
     Ok(deck)
 }
@@ -47,7 +47,7 @@ fn open_deck(
     watcher: State<DeckWatcher>,
     id: String,
 ) -> Result<Deck> {
-    let deck = deck::open(&app, &id, !agent.is_running(&id))?;
+    let deck = deck::open(&deck::deck_dir(&app, &id)?, &id, !agent.is_running(&id))?;
     watcher.watch(app, deck.id.clone(), deck.path.clone().into())?;
     Ok(deck)
 }
@@ -64,7 +64,7 @@ fn load_deck(app: AppHandle, id: String) -> Result<Deck> {
 
 #[tauri::command]
 fn rename_deck(app: AppHandle, id: String, title: String) -> Result<Deck> {
-    deck::rename(&app, &id, &title)
+    deck::rename(&deck::deck_dir(&app, &id)?, &id, &title)
 }
 
 #[tauri::command]
@@ -76,29 +76,29 @@ fn delete_deck(
 ) -> Result<()> {
     agent.interrupt(&id);
     watcher.stop();
-    deck::delete_deck(&app, &id)
+    deck::delete_deck(&deck::deck_dir(&app, &id)?)
 }
 
 #[tauri::command]
 fn reorder_slides(app: AppHandle, id: String, slides: Vec<String>) -> Result<Deck> {
-    deck::reorder(&app, &id, slides)
+    deck::reorder(&deck::deck_dir(&app, &id)?, &id, slides)
 }
 
 #[tauri::command]
 fn add_slide(app: AppHandle, id: String, after: Option<String>) -> Result<CreatedSlide> {
-    let (deck, slide) = deck::add_blank(&app, &id, after)?;
+    let (deck, slide) = deck::add_blank(&deck::deck_dir(&app, &id)?, &id, after)?;
     Ok(CreatedSlide { deck, slide })
 }
 
 #[tauri::command]
 fn duplicate_slide(app: AppHandle, id: String, slide: String) -> Result<CreatedSlide> {
-    let (deck, slide) = deck::duplicate(&app, &id, &slide)?;
+    let (deck, slide) = deck::duplicate(&deck::deck_dir(&app, &id)?, &id, &slide)?;
     Ok(CreatedSlide { deck, slide })
 }
 
 #[tauri::command]
 fn delete_slide(app: AppHandle, id: String, slide: String) -> Result<Deck> {
-    deck::delete_slide(&app, &id, &slide)
+    deck::delete_slide(&deck::deck_dir(&app, &id)?, &id, &slide)
 }
 
 #[tauri::command]
@@ -111,34 +111,41 @@ fn save_deck_source(
 ) -> Result<Deck> {
     // Normalizing mid-turn could rewrite ids the agent is about to reference.
     let normalize = !agent.is_running(&id);
-    deck::save_source(&app, &id, &source, base.as_deref(), normalize)
+    deck::save_source(
+        &deck::deck_dir(&app, &id)?,
+        &id,
+        &source,
+        base.as_deref(),
+        normalize,
+    )
 }
 
 #[tauri::command]
 fn import_assets(app: AppHandle, id: String, paths: Vec<String>) -> Result<Vec<String>> {
-    deck::import_assets(&app, &id, paths)
+    deck::import_assets(&deck::deck_dir(&app, &id)?, paths)
 }
 
 #[tauri::command]
 fn export_deck(app: AppHandle, id: String, dest: String) -> Result<()> {
-    deck::export(&app, &id, std::path::Path::new(&dest))
+    deck::export(&deck::deck_dir(&app, &id)?, std::path::Path::new(&dest))
 }
 
 #[tauri::command]
 fn load_chat(app: AppHandle, id: String) -> Result<serde_json::Value> {
-    deck::load_chat(&app, &id)
+    deck::load_chat(&deck::deck_dir(&app, &id)?)
 }
 
 #[tauri::command]
 fn save_chat(app: AppHandle, id: String, chat: serde_json::Value) -> Result<()> {
-    deck::save_chat(&app, &id, &chat)
+    deck::save_chat(&deck::deck_dir(&app, &id)?, &chat)
 }
 
 #[tauri::command]
 fn reset_chat(app: AppHandle, agent: State<AgentManager>, id: String) -> Result<()> {
     agent.interrupt(&id);
-    deck::write_session(&deck::deck_dir(&app, &id)?, None)?;
-    deck::save_chat(&app, &id, &serde_json::Value::Null)
+    let dir = deck::deck_dir(&app, &id)?;
+    deck::write_session(&dir, None)?;
+    deck::save_chat(&dir, &serde_json::Value::Null)
 }
 
 #[tauri::command]

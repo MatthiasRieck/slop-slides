@@ -111,6 +111,7 @@ const VIEWS: { id: StageView; label: string; title: string; icon: typeof Code2 }
 
 function ViewToggle() {
   const view = useApp((s) => s.view);
+  const codeDirty = useApp((s) => s.codeDirty);
   return (
     <div className="flex items-center rounded-md border bg-muted p-0.5">
       {VIEWS.map(({ id, label, title, icon: Icon }) => (
@@ -127,6 +128,9 @@ function ViewToggle() {
         >
           <Icon className="size-3.5" />
           {label}
+          {id === "code" && codeDirty && (
+            <span title="Unsaved changes" className="size-1.5 rounded-full bg-primary" />
+          )}
         </button>
       ))}
     </div>

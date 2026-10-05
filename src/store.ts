@@ -1,4 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
 
 import {
@@ -60,6 +61,8 @@ interface AppState {
   revealRev: number;
   /** Whether the stage shows the rendered slide or deck.html's source. */
   view: StageView;
+  /** The HTML view holds edits that are not saved to deck.html yet. */
+  codeDirty: boolean;
   /** Bumped when attached assets change, reloading every slide preview. */
   assetsRev: number;
   messages: ChatMessage[];
@@ -76,6 +79,7 @@ interface AppState {
   select: (slide: string | null) => void;
   selectRelative: (delta: number) => void;
   setView: (view: StageView) => void;
+  setCodeDirty: (dirty: boolean) => void;
   setModel: (model: string) => void;
   setPresenting: (presenting: boolean) => void;
   setError: (error: string | null) => void;
@@ -91,6 +95,7 @@ export const useApp = create<AppState>((set, get) => ({
   selected: null,
   revealRev: 0,
   view: localStorage.getItem("slopslide.view") === "code" ? "code" : "slides",
+  codeDirty: false,
   assetsRev: 0,
   messages: [],
   running: false,
@@ -118,8 +123,9 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   closeDeck: async () => {
+    if (get().codeDirty && !(await confirmDiscardEdits())) return;
     await api.closeDeck();
-    set({ deck: null, selected: null, messages: [], running: false, presenting: false });
+    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false });
   },
 
   setDeck: (deck) => {
@@ -142,6 +148,8 @@ export const useApp = create<AppState>((set, get) => ({
     localStorage.setItem("slopslide.view", view);
     set({ view });
   },
+
+  setCodeDirty: (codeDirty) => set({ codeDirty }),
 
   setModel: (model) => {
     localStorage.setItem("slopslide.model", model);
@@ -202,6 +210,15 @@ export const useApp = create<AppState>((set, get) => ({
     set({ messages: [], running: false });
   },
 }));
+
+async function confirmDiscardEdits(): Promise<boolean> {
+  const message = "You have unsaved changes to deck.html. Discard them?";
+  try {
+    return await ask(message, { title: "Unsaved changes", kind: "warning", okLabel: "Discard" });
+  } catch {
+    return window.confirm(message);
+  }
+}
 
 async function loadDeckState(deck: Deck) {
   const [chat, running] = await Promise.all([api.loadChat(deck.id), api.agentRunning(deck.id)]);

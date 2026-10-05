@@ -29,6 +29,7 @@ run() {
 
 manifest=src-tauri/Cargo.toml
 run "TypeScript typecheck"  pnpm -s typecheck
+run "Frontend tests"        pnpm -s test
 run "Frontend build"        pnpm -s exec vite build --logLevel warn
 run "Rust format"           cargo fmt --manifest-path "$manifest" --check
 run "Rust lint (clippy)"    cargo clippy --manifest-path "$manifest" --all-targets --quiet -- -D warnings

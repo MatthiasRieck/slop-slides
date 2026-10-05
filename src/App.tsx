@@ -34,7 +34,9 @@ function Editor() {
         </Panel>
         <ResizeHandle />
         <Panel id="stage" minSize={360}>
-          {view === "code" ? <CodeView /> : <Stage />}
+          {/* The HTML view stays mounted so unsaved edits survive switching to the slides. */}
+          <CodeView active={view === "code"} />
+          {view === "slides" && <Stage />}
         </Panel>
         <ResizeHandle />
         <Panel id="chat" defaultSize={380} minSize={300} maxSize={640}>

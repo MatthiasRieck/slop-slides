@@ -1,0 +1,234 @@
+[
+  {
+    "name": "two slides with ids",
+    "html": "<html><body><main>\n<section class=\"slide\" id=\"intro\">\n  <h1>Hi</h1>\n</section>\n<section class=\"slide\" id=\"next\"><p>Two</p></section>\n</main></body></html>",
+    "slides": [
+      {
+        "id": "intro",
+        "source": "<section class=\"slide\" id=\"intro\">\n  <h1>Hi</h1>\n</section>"
+      },
+      {
+        "id": "next",
+        "source": "<section class=\"slide\" id=\"next\"><p>Two</p></section>"
+      }
+    ]
+  },
+  {
+    "name": "empty document",
+    "html": "",
+    "slides": []
+  },
+  {
+    "name": "no slides",
+    "html": "<html><body><section><p>plain section</p></section></body></html>",
+    "slides": []
+  },
+  {
+    "name": "missing and empty ids are addressed by position",
+    "html": "<section class=\"slide\" id=\"a\">1</section><section class=\"slide\">2</section><section class=\"slide\" id=\"\">3</section>",
+    "slides": [
+      {
+        "id": "a",
+        "source": "<section class=\"slide\" id=\"a\">1</section>"
+      },
+      {
+        "id": "#2",
+        "source": "<section class=\"slide\">2</section>"
+      },
+      {
+        "id": "#3",
+        "source": "<section class=\"slide\" id=\"\">3</section>"
+      }
+    ]
+  },
+  {
+    "name": "nested sections belong to their slide",
+    "html": "<main><section class=\"slide\" id=\"outer\"><section><section>deep</section></section><p>after</p></section><section class=\"slide\" id=\"b\">b</section></main>",
+    "slides": [
+      {
+        "id": "outer",
+        "source": "<section class=\"slide\" id=\"outer\"><section><section>deep</section></section><p>after</p></section>"
+      },
+      {
+        "id": "b",
+        "source": "<section class=\"slide\" id=\"b\">b</section>"
+      }
+    ]
+  },
+  {
+    "name": "class must contain the slide token",
+    "html": "<section class=\"slide-x\" id=\"no1\">x</section><section class=\"slides\" id=\"no2\">x</section><section class=\"big  slide\tdark\" id=\"yes\">y</section><section id=\"no3\">z</section>",
+    "slides": [
+      {
+        "id": "yes",
+        "source": "<section class=\"big  slide\tdark\" id=\"yes\">y</section>"
+      }
+    ]
+  },
+  {
+    "name": "comments are skipped",
+    "html": "<!-- <section class=\"slide\" id=\"ghost\"></section> --><section class=\"slide\" id=\"real\"><!-- </section> -->kept</section>",
+    "slides": [
+      {
+        "id": "real",
+        "source": "<section class=\"slide\" id=\"real\"><!-- </section> -->kept</section>"
+      }
+    ]
+  },
+  {
+    "name": "raw text elements are skipped",
+    "html": "<head><title><section class=\"slide\" id=\"t\"></section></title><style>.x::before{content:\"<section class='slide' id='s'>\"}</style></head><script>const s = '<section class=\"slide\" id=\"js\"></section>';</SCRIPT><section class=\"slide\" id=\"ok\"><textarea></section></textarea></section>",
+    "slides": [
+      {
+        "id": "ok",
+        "source": "<section class=\"slide\" id=\"ok\"><textarea></section></textarea></section>"
+      }
+    ]
+  },
+  {
+    "name": "tag and attribute names are case-insensitive",
+    "html": "<SECTION CLASS=\"slide\" ID=\"Upper\">u</SECTION><Section Class=\"slide\" Id=\"mixed\">m</sEcTiOn>",
+    "slides": [
+      {
+        "id": "Upper",
+        "source": "<SECTION CLASS=\"slide\" ID=\"Upper\">u</SECTION>"
+      },
+      {
+        "id": "mixed",
+        "source": "<Section Class=\"slide\" Id=\"mixed\">m</sEcTiOn>"
+      }
+    ]
+  },
+  {
+    "name": "single-quoted and unquoted attributes",
+    "html": "<section class='slide' id='single'>s</section><section class=slide id=bare>b</section>",
+    "slides": [
+      {
+        "id": "single",
+        "source": "<section class='slide' id='single'>s</section>"
+      },
+      {
+        "id": "bare",
+        "source": "<section class=slide id=bare>b</section>"
+      }
+    ]
+  },
+  {
+    "name": "quoted attribute values may contain angle brackets",
+    "html": "<section class=\"slide\" data-note=\"a > b\" id=\"gt\">x</section>",
+    "slides": [
+      {
+        "id": "gt",
+        "source": "<section class=\"slide\" data-note=\"a > b\" id=\"gt\">x</section>"
+      }
+    ]
+  },
+  {
+    "name": "first duplicate attribute wins",
+    "html": "<section class=\"slide\" id=\"first\" id=\"second\">x</section>",
+    "slides": [
+      {
+        "id": "first",
+        "source": "<section class=\"slide\" id=\"first\" id=\"second\">x</section>"
+      }
+    ]
+  },
+  {
+    "name": "non-ascii content",
+    "html": "<p>Grüße 👋</p><section class=\"slide\" id=\"umlaut\"><h1>Über – naïve 🎉</h1></section><section class=\"slide\" id=\"z\">ß</section>",
+    "slides": [
+      {
+        "id": "umlaut",
+        "source": "<section class=\"slide\" id=\"umlaut\"><h1>Über – naïve 🎉</h1></section>"
+      },
+      {
+        "id": "z",
+        "source": "<section class=\"slide\" id=\"z\">ß</section>"
+      }
+    ]
+  },
+  {
+    "name": "windows line endings",
+    "html": "<main>\r\n  <section class=\"slide\" id=\"crlf\">\r\n    <p>x</p>\r\n  </section>\r\n</main>\r\n",
+    "slides": [
+      {
+        "id": "crlf",
+        "source": "<section class=\"slide\" id=\"crlf\">\r\n    <p>x</p>\r\n  </section>"
+      }
+    ]
+  },
+  {
+    "name": "stray angle brackets in text",
+    "html": "<section class=\"slide\" id=\"lt\"><p>a < b and <3 and 2<4</p></section>",
+    "slides": [
+      {
+        "id": "lt",
+        "source": "<section class=\"slide\" id=\"lt\"><p>a < b and <3 and 2<4</p></section>"
+      }
+    ]
+  },
+  {
+    "name": "whitespace before the closing bracket",
+    "html": "<section\n  class=\"slide\"\n  id=\"spaced\"\n>x</section >",
+    "slides": [
+      {
+        "id": "spaced",
+        "source": "<section\n  class=\"slide\"\n  id=\"spaced\"\n>x</section >"
+      }
+    ]
+  },
+  {
+    "name": "similarly named tags are not sections",
+    "html": "<sections class=\"slide\" id=\"no\">x</sections><section class=\"slide\" id=\"yes\"><sectionx>y</sectionx></section>",
+    "slides": [
+      {
+        "id": "yes",
+        "source": "<section class=\"slide\" id=\"yes\"><sectionx>y</sectionx></section>"
+      }
+    ]
+  },
+  {
+    "name": "slide inside a non-slide section",
+    "html": "<section class=\"wrapper\"><section class=\"slide\" id=\"inner\">i</section></section>",
+    "slides": [
+      {
+        "id": "inner",
+        "source": "<section class=\"slide\" id=\"inner\">i</section>"
+      }
+    ]
+  },
+  {
+    "name": "unclosed slide is not reported",
+    "html": "<section class=\"slide\" id=\"done\">d</section><section class=\"slide\" id=\"open\"><p>never closed",
+    "slides": [
+      {
+        "id": "done",
+        "source": "<section class=\"slide\" id=\"done\">d</section>"
+      }
+    ]
+  },
+  {
+    "name": "duplicate ids are reported as written",
+    "html": "<section class=\"slide\" id=\"dup\">1</section><section class=\"slide\" id=\"dup\">2</section>",
+    "slides": [
+      {
+        "id": "dup",
+        "source": "<section class=\"slide\" id=\"dup\">1</section>"
+      },
+      {
+        "id": "dup",
+        "source": "<section class=\"slide\" id=\"dup\">2</section>"
+      }
+    ]
+  },
+  {
+    "name": "void and self-closing tags inside slides",
+    "html": "<section class=\"slide\" id=\"media\"><img src=\"a.png\" alt=\"x\"/><br><input value=\"</section>\"></section>",
+    "slides": [
+      {
+        "id": "media",
+        "source": "<section class=\"slide\" id=\"media\"><img src=\"a.png\" alt=\"x\"/><br><input value=\"</section>\"></section>"
+      }
+    ]
+  }
+]

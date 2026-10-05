@@ -102,6 +102,19 @@ fn delete_slide(app: AppHandle, id: String, slide: String) -> Result<Deck> {
 }
 
 #[tauri::command]
+fn save_deck_source(
+    app: AppHandle,
+    agent: State<AgentManager>,
+    id: String,
+    source: String,
+    base: Option<String>,
+) -> Result<Deck> {
+    // Normalizing mid-turn could rewrite ids the agent is about to reference.
+    let normalize = !agent.is_running(&id);
+    deck::save_source(&app, &id, &source, base.as_deref(), normalize)
+}
+
+#[tauri::command]
 fn import_assets(app: AppHandle, id: String, paths: Vec<String>) -> Result<Vec<String>> {
     deck::import_assets(&app, &id, paths)
 }
@@ -174,6 +187,7 @@ pub fn run() {
             add_slide,
             duplicate_slide,
             delete_slide,
+            save_deck_source,
             import_assets,
             export_deck,
             load_chat,

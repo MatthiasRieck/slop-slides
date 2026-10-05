@@ -23,12 +23,18 @@ pub struct SlideSpan {
     pub id_value: Option<Range<usize>>,
     /// Byte offset just after `<section`.
     pub tag_name_end: usize,
+    /// Byte range of the whole `data-hidden` attribute, when the slide is hidden.
+    pub hidden: Option<Range<usize>>,
 }
+
+/// Marks a slide the player skips. The editor still shows it, muted.
+pub const HIDDEN_ATTR: &str = "data-hidden";
 
 struct Tag {
     name: String,
     closing: bool,
-    attrs: Vec<(String, String, Range<usize>)>,
+    /// (name, value, value range, whole attribute range)
+    attrs: Vec<(String, String, Range<usize>, Range<usize>)>,
     name_end: usize,
     end: usize,
 }
@@ -67,13 +73,15 @@ pub fn find_slides(html: &str) -> Vec<SlideSpan> {
                     slides.push(slide);
                 }
                 (None, false) if has_class(&tag, "slide") => {
-                    let id = tag.attrs.iter().find(|(n, _, _)| n == "id");
+                    let id = tag.attrs.iter().find(|(n, _, _, _)| n == "id");
+                    let hidden = tag.attrs.iter().find(|(n, _, _, _)| n == HIDDEN_ATTR);
                     open = Some((
                         SlideSpan {
                             range: i..i,
-                            id: id.map(|(_, v, _)| v.clone()).filter(|v| !v.is_empty()),
-                            id_value: id.map(|(_, _, r)| r.clone()),
+                            id: id.map(|(_, v, _, _)| v.clone()).filter(|v| !v.is_empty()),
+                            id_value: id.map(|(_, _, r, _)| r.clone()),
                             tag_name_end: tag.name_end,
+                            hidden: hidden.map(|(_, _, _, r)| r.clone()),
                         },
                         0,
                     ));
@@ -89,7 +97,7 @@ pub fn find_slides(html: &str) -> Vec<SlideSpan> {
 fn has_class(tag: &Tag, class: &str) -> bool {
     tag.attrs
         .iter()
-        .any(|(n, v, _)| n == "class" && v.split_ascii_whitespace().any(|c| c == class))
+        .any(|(n, v, _, _)| n == "class" && v.split_ascii_whitespace().any(|c| c == class))
 }
 
 fn find_ci(html: &str, from: usize, needle: &str) -> Option<usize> {
@@ -137,7 +145,8 @@ fn parse_tag(html: &str, start: usize) -> Option<Tag> {
             i += 1;
         }
         if bytes.get(i) != Some(&b'=') {
-            attrs.push((attr, String::new(), i..i));
+            let name_end = attr_start + attr.len();
+            attrs.push((attr, String::new(), i..i, attr_start..name_end));
             continue;
         }
         i += 1;
@@ -159,7 +168,12 @@ fn parse_tag(html: &str, start: usize) -> Option<Tag> {
                 s..i
             }
         };
-        attrs.push((attr, html[value.clone()].to_string(), value));
+        attrs.push((
+            attr,
+            html[value.clone()].to_string(),
+            value.clone(),
+            attr_start..i,
+        ));
     }
     Some(Tag {
         name,
@@ -394,6 +408,25 @@ pub fn insert(
     Ok((out, id))
 }
 
+/// Adds or removes the slide's `data-hidden` attribute. Leaves the markup untouched when
+/// the slide is already in the requested state.
+pub fn set_hidden(html: &str, id: &str, hidden: bool) -> Result<String, String> {
+    let slides = find_slides(html);
+    let span = span_of(&slides, id).ok_or_else(|| format!("Slide not found: {id}"))?;
+    Ok(match (&span.hidden, hidden) {
+        (None, true) => format!(
+            "{} {HIDDEN_ATTR}{}",
+            &html[..span.tag_name_end],
+            &html[span.tag_name_end..]
+        ),
+        (Some(attr), false) => {
+            let start = html[..attr.start].trim_end().len();
+            format!("{}{}", &html[..start], &html[attr.end..])
+        }
+        _ => html.to_string(),
+    })
+}
+
 pub fn duplicate(html: &str, id: &str) -> Result<(String, String), String> {
     let slides = find_slides(html);
     let span = span_of(&slides, id).ok_or_else(|| format!("Slide not found: {id}"))?;
@@ -544,6 +577,49 @@ mod tests {
         .unwrap();
         assert_eq!(id, "slide");
         assert_eq!(ids(&added), ["intro", "slide", "plan", "slide-3"]);
+    }
+
+    fn hidden(html: &str) -> Vec<bool> {
+        find_slides(html)
+            .into_iter()
+            .map(|s| s.hidden.is_some())
+            .collect()
+    }
+
+    #[test]
+    fn detects_hidden_slides() {
+        let html = r#"<main class="deck">
+<section class="slide" id="a" data-hidden></section>
+<section data-hidden="" class="slide" id="b"><section data-hidden>nested</section></section>
+<section class="slide" id="c" data-hidden-not="x"></section>
+</main>"#;
+        assert_eq!(hidden(html), [true, true, false]);
+        assert_eq!(ids(html), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn hides_and_unhides_slides() {
+        let deck = normalize_ids(DECK).unwrap();
+        let hid = set_hidden(&deck, "plan", true).unwrap();
+        assert_eq!(hidden(&hid), [false, true, false]);
+        assert!(hid.contains("<section data-hidden class='slide' id=plan>"));
+        assert_eq!(set_hidden(&hid, "plan", true).unwrap(), hid, "idempotent");
+
+        let shown = set_hidden(&hid, "plan", false).unwrap();
+        assert_eq!(shown, deck, "unhiding restores the original markup");
+        assert_eq!(set_hidden(&shown, "plan", false).unwrap(), deck);
+
+        let valued = deck.replace("id=plan>", r#"id=plan data-hidden="true">"#);
+        assert_eq!(set_hidden(&valued, "plan", false).unwrap(), deck);
+
+        assert!(set_hidden(&deck, "missing", true).is_err());
+    }
+
+    #[test]
+    fn duplicating_a_hidden_slide_keeps_it_hidden() {
+        let deck = set_hidden(&normalize_ids(DECK).unwrap(), "intro", true).unwrap();
+        let (copied, _) = duplicate(&deck, "intro").unwrap();
+        assert_eq!(hidden(&copied), [true, true, false, false]);
     }
 
     #[test]

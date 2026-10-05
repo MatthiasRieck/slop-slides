@@ -13,6 +13,8 @@ export interface Slide {
   id: string;
   /** Changes when the slide's markup changes. */
   hash: string;
+  /** Has `data-hidden`: skipped when presenting, shown muted in the editor. */
+  hidden: boolean;
 }
 
 export interface Deck {
@@ -73,6 +75,8 @@ export const api = {
   addSlide: (id: string, after: string | null) => invoke<CreatedSlide>("add_slide", { id, after }),
   duplicateSlide: (id: string, slide: string) =>
     invoke<CreatedSlide>("duplicate_slide", { id, slide }),
+  setSlideHidden: (id: string, slide: string, hidden: boolean) =>
+    invoke<Deck>("set_slide_hidden", { id, slide, hidden }),
   deleteSlide: (id: string, slide: string) => invoke<Deck>("delete_slide", { id, slide }),
   saveDeckSource: (id: string, source: string, base: string | null) =>
     invoke<Deck>("save_deck_source", { id, source, base }),

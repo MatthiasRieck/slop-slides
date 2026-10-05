@@ -303,3 +303,51 @@ describe("player: in the presenter", () => {
     expect(parent.postMessage.mock.calls.filter(([d]) => (d as { type: string }).type === "slop:slide")).toEqual([]);
   });
 });
+
+describe("player: hidden slides", () => {
+  const HIDDEN = `<!DOCTYPE html><html><body>
+<main class="deck">
+  <section class="slide" id="a"></section>
+  <section class="slide" id="b" data-hidden></section>
+  <section class="slide" id="c"></section>
+  <section class="slide" id="d" data-hidden></section>
+</main></body></html>`;
+  const play = (at: string, parent?: PlayerOptions["parent"]) => {
+    const p = player({ at, html: HIDDEN, parent });
+    return { ...p, activeId: () => p.doc.querySelector(".slide.active")?.id };
+  };
+
+  it("skips hidden slides when navigating", () => {
+    const p = play("#a");
+    expect(p.activeId()).toBe("a");
+    p.key("ArrowRight");
+    expect(p.activeId()).toBe("c");
+    p.key("ArrowRight");
+    expect(p.activeId()).toBe("c");
+    p.key("ArrowLeft");
+    expect(p.activeId()).toBe("a");
+    p.key("End");
+    expect(p.activeId()).toBe("c");
+  });
+
+  it("starting on a hidden slide lands on the next shown one, or the last", () => {
+    expect(play("#b").activeId()).toBe("c");
+    expect(play("#d").activeId()).toBe("c");
+  });
+
+  it("numbers slides by shown position", () => {
+    expect(play("#2").activeId()).toBe("c");
+  });
+
+  it("never reports a hidden slide to the presenter", () => {
+    const postMessage = vi.fn();
+    play("#b", { postMessage });
+    const ids = postMessage.mock.calls.map(([data]) => (data as { id?: string }).id);
+    expect(ids).toEqual(["c"]);
+  });
+
+  it("still renders a hidden slide when the editor embeds it", () => {
+    expect(play("?embed&slide=b").activeId()).toBe("b");
+    expect(play("?embed&slide=%232").activeId()).toBe("b");
+  });
+});

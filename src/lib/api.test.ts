@@ -22,6 +22,12 @@ describe("api", () => {
     ["reorderSlides", () => api.reorderSlides("talk", ["b", "a"]), "reorder_slides", { id: "talk", slides: ["b", "a"] }],
     ["addSlide", () => api.addSlide("talk", null), "add_slide", { id: "talk", after: null }],
     ["duplicateSlide", () => api.duplicateSlide("talk", "a"), "duplicate_slide", { id: "talk", slide: "a" }],
+    [
+      "setSlideHidden",
+      () => api.setSlideHidden("talk", "a", true),
+      "set_slide_hidden",
+      { id: "talk", slide: "a", hidden: true },
+    ],
     ["deleteSlide", () => api.deleteSlide("talk", "a"), "delete_slide", { id: "talk", slide: "a" }],
     [
       "saveDeckSource",
@@ -50,7 +56,7 @@ describe("api", () => {
   });
 
   it("covers every api function", () => {
-    expect(Object.keys(api)).toHaveLength(21);
+    expect(Object.keys(api)).toHaveLength(22);
   });
 
   it("passes backend rejections through", async () => {

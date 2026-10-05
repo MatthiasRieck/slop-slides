@@ -12,7 +12,7 @@ import { DECK_HTML, deckFor } from "../test/fixtures";
 import { SlideRail } from "./SlideRail";
 
 const DECK = deckFor(DECK_HTML);
-const withSlides = (...ids: string[]): Deck => ({ ...DECK, slides: ids.map((id) => ({ id, hash: id })) });
+const withSlides = (...ids: string[]): Deck => ({ ...DECK, slides: ids.map((id) => ({ id, hash: id, hidden: false })) });
 
 beforeEach(() => {
   invoke.mockReset();
@@ -22,6 +22,9 @@ beforeEach(() => {
 // dnd-kit gives sortable items role="button", so find them by tag.
 const items = () => [...document.querySelectorAll<HTMLElement>("ol > li")];
 const item = (index: number) => within(items()[index]!);
+
+const HIDDEN_HTML = DECK_HTML.replace(`id="outro"`, `id="outro" data-hidden`);
+const thumbnail = (li: HTMLElement) => li.querySelector("button > div") as HTMLElement;
 
 describe("SlideRail", () => {
   it("numbers every slide and shows the count", () => {
@@ -126,5 +129,57 @@ describe("SlideRail", () => {
     await act(async () => fireEvent.click(button()));
     await waitFor(() => expect(useApp.getState().error).toBe("Slide not found: intro"));
     expect(useApp.getState().deck).toEqual(DECK);
+  });
+});
+
+describe("hidden slides in the rail", () => {
+  beforeEach(() => {
+    useApp.setState({ deck: deckFor(HIDDEN_HTML) });
+  });
+
+  it("mutes hidden slides and strikes them through", () => {
+    render(<SlideRail />);
+    const [intro, , outro] = items() as [HTMLElement, HTMLElement, HTMLElement];
+    expect(thumbnail(outro).className).toMatch(/opacity-35/);
+    expect(thumbnail(outro).className).toMatch(/grayscale/);
+    expect(within(outro).getByTestId("hidden-mark")).toBeTruthy();
+    expect(within(outro).getByText("3").className).toMatch(/line-through/);
+
+    expect(thumbnail(intro).className).not.toMatch(/opacity-35/);
+    expect(within(intro).queryByTestId("hidden-mark")).toBeNull();
+  });
+
+  it("still renders hidden slides in place, keeping their number", () => {
+    render(<SlideRail />);
+    expect(items()).toHaveLength(3);
+    expect(screen.getByText("Slides · 3")).toBeTruthy();
+    expect(items().map((li) => li.querySelector("span")?.textContent)).toEqual(["1", "2", "3"]);
+    expect(thumbnail(items()[2]!)).toBeTruthy();
+  });
+
+  it("hides a shown slide", async () => {
+    const next = deckFor(HIDDEN_HTML.replace(`id="intro"`, `id="intro" data-hidden`), "2");
+    invoke.mockResolvedValue(next);
+    render(<SlideRail />);
+    await act(async () => fireEvent.click(within(items()[0]!).getByTitle("Hide slide")));
+    expect(invoke).toHaveBeenCalledWith("set_slide_hidden", { id: "talk", slide: "intro", hidden: true });
+    expect(useApp.getState().deck).toBe(next);
+    expect(within(items()[0]!).getByTestId("hidden-mark")).toBeTruthy();
+  });
+
+  it("shows a hidden slide again", async () => {
+    invoke.mockResolvedValue(deckFor(DECK_HTML, "2"));
+    render(<SlideRail />);
+    await act(async () => fireEvent.click(within(items()[2]!).getByTitle("Show slide")));
+    expect(invoke).toHaveBeenCalledWith("set_slide_hidden", { id: "talk", slide: "outro", hidden: false });
+    expect(screen.queryByTestId("hidden-mark")).toBeNull();
+  });
+
+  it("reports a failed toggle", async () => {
+    invoke.mockRejectedValue("disk full");
+    render(<SlideRail />);
+    await act(async () => fireEvent.click(within(items()[0]!).getByTitle("Hide slide")));
+    expect(useApp.getState().error).toBe("disk full");
+    expect(useApp.getState().deck?.slides[0]?.hidden).toBe(false);
   });
 });

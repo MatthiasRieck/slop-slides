@@ -9,7 +9,7 @@ import {
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Copy, Plus, Trash2 } from "lucide-react";
+import { Copy, Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 import { api, errorMessage, type Slide } from "../lib/api";
@@ -115,6 +115,14 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
     }
   };
 
+  const toggleHidden = async () => {
+    try {
+      useApp.getState().setDeck(await api.setSlideHidden(deckId, slide.id, !slide.hidden));
+    } catch (error) {
+      useApp.getState().setError(errorMessage(error));
+    }
+  };
+
   const remove = async () => {
     try {
       const before = useApp.getState().deck?.slides ?? [];
@@ -142,6 +150,7 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
         className={cn(
           "w-4 shrink-0 pt-0.5 text-right text-2xs tabular-nums text-muted-foreground",
           selected && "font-semibold text-foreground",
+          slide.hidden && "line-through opacity-60",
         )}
       >
         {index + 1}
@@ -155,9 +164,19 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
             selected ? "ring-2 ring-primary" : "hover:ring-input",
           )}
         >
-          <SlideFrame deckId={deckId} slideId={slide.id} version={version} thumbnail />
+          <SlideFrame
+            deckId={deckId}
+            slideId={slide.id}
+            version={version}
+            thumbnail
+            className={cn(slide.hidden && "opacity-35 grayscale")}
+          />
         </button>
+        {slide.hidden && <HiddenMark />}
         <div className="absolute right-1 top-1 hidden gap-0.5 group-hover:flex">
+          <RailAction title={slide.hidden ? "Show slide" : "Hide slide"} onClick={toggleHidden}>
+            {slide.hidden ? <Eye className="size-3" /> : <EyeOff className="size-3" />}
+          </RailAction>
           <RailAction title="Duplicate" onClick={duplicate}>
             <Copy className="size-3" />
           </RailAction>
@@ -167,6 +186,30 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
         </div>
       </div>
     </li>
+  );
+}
+
+/** Diagonal strike across a hidden slide's thumbnail. */
+function HiddenMark() {
+  return (
+    <svg
+      data-testid="hidden-mark"
+      aria-label="Hidden slide"
+      role="img"
+      viewBox="0 0 16 9"
+      preserveAspectRatio="none"
+      className="pointer-events-none absolute inset-0 size-full overflow-hidden rounded-md text-muted-foreground"
+    >
+      <line
+        x1="0"
+        y1="9"
+        x2="16"
+        y2="0"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
   );
 }
 

@@ -566,7 +566,7 @@ describe("deck file changes", () => {
   });
 
   it("follows the agent to a newly added slide", async () => {
-    const added = { ...DECK, slides: [...DECK.slides, { id: "fresh", hash: "f" }] };
+    const added = { ...DECK, slides: [...DECK.slides, { id: "fresh", hash: "f", hidden: false }] };
     const { useApp, changed } = await watching(() => added);
     useApp.setState({ running: true });
     changed(["deck.html"]);

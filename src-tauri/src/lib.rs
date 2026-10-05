@@ -97,6 +97,11 @@ fn duplicate_slide(app: AppHandle, id: String, slide: String) -> Result<CreatedS
 }
 
 #[tauri::command]
+fn set_slide_hidden(app: AppHandle, id: String, slide: String, hidden: bool) -> Result<Deck> {
+    deck::set_slide_hidden(&deck::deck_dir(&app, &id)?, &id, &slide, hidden)
+}
+
+#[tauri::command]
 fn delete_slide(app: AppHandle, id: String, slide: String) -> Result<Deck> {
     deck::delete_slide(&deck::deck_dir(&app, &id)?, &id, &slide)
 }
@@ -193,6 +198,7 @@ pub fn run() {
             reorder_slides,
             add_slide,
             duplicate_slide,
+            set_slide_hidden,
             delete_slide,
             save_deck_source,
             import_assets,

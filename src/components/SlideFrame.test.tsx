@@ -122,7 +122,7 @@ describe("SlideFrame", () => {
 describe("useSlideVersion", () => {
   it("changes with the slide, the deck's shared styles, and attached assets", () => {
     useApp.setState({ deck: deckFor(DECK_HTML), assetsRev: 0 });
-    const slide = { id: "intro", hash: "h1" };
+    const slide = { id: "intro", hash: "h1", hidden: false };
     const { result, rerender } = renderHook(({ s }) => useSlideVersion(s), { initialProps: { s: slide } });
     expect(result.current).toBe("shell-1.h1.0");
     rerender({ s: { ...slide, hash: "h2" } });

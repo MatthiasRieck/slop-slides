@@ -18,12 +18,15 @@ export const DECK_HTML = [
 ].join("\n");
 
 export function deckFor(html: string, rev = "1"): Deck {
-  const ids = [...html.matchAll(/<section class="slide"(?: id="([^"]+)")?/g)].map((m, i) => m[1] ?? `#${i + 1}`);
+  const slides = [...html.matchAll(/<section class="slide"(?: id="([^"]+)")?([^>]*)>/g)].map((m, i) => ({
+    id: m[1] ?? `#${i + 1}`,
+    hidden: /\bdata-hidden\b/.test(m[2] ?? ""),
+  }));
   return {
     id: "talk",
     title: "Talk",
     path: "/decks/talk",
-    slides: ids.map((id) => ({ id, hash: `${id}-${rev}` })),
+    slides: slides.map(({ id, hidden }) => ({ id, hash: `${id}-${rev}`, hidden })),
     shellHash: `shell-${rev}`,
   };
 }

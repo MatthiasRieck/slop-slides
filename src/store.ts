@@ -99,6 +99,8 @@ interface AppState {
   editReload: number;
   /** Slide edits that can be undone, newest last. */
   slideUndo: SlideUndo[];
+  /** Undone slide edits that can be redone, newest last. */
+  slideRedo: SlideUndo[];
 
   openDeck: (id: string) => Promise<void>;
   createDeck: (title: string) => Promise<void>;
@@ -117,10 +119,14 @@ interface AppState {
   clearSketch: (slide: string) => void;
   startImageExport: (dir: string) => void;
   endImageExport: () => void;
+  /** Enters or leaves edit mode, keeping the edits made so far. */
   setEditing: (editing: boolean) => void;
   /** Saves `markup` as the new version of `slide`, after any edits still being saved. */
   saveSlideEdit: (slide: string, markup: string) => Promise<void>;
   undoSlideEdit: () => Promise<void>;
+  redoSlideEdit: () => Promise<void>;
+  /** Undoes every edit made since entering edit mode, then leaves it. */
+  discardSlideEdits: () => Promise<void>;
   /** Asks the agent to rebuild the current slide's layout around the user's hand edits. */
   tidyLayout: () => Promise<void>;
   send: (
@@ -142,7 +148,7 @@ interface SlideUndo {
 const UNDO_KEPT = 50;
 
 export const TIDY_PROMPT =
-  "Tidy up the layout of this slide. I edited it by hand: keep my text and keep things where I moved them, but rebuild the layout cleanly.";
+  "Tidy up the layout of this slide. I edited it by hand: keep my text and keep things where I moved them, at the size and angle I gave them, but rebuild the layout cleanly.";
 
 const newId = () => crypto.randomUUID();
 let lintRun = 0;
@@ -169,6 +175,7 @@ export const useApp = create<AppState>((set, get) => ({
   editing: false,
   editReload: 0,
   slideUndo: [],
+  slideRedo: [],
 
   openDeck: async (id) => {
     try {
@@ -191,7 +198,7 @@ export const useApp = create<AppState>((set, get) => ({
   closeDeck: async () => {
     if (get().codeDirty && !(await confirmDiscardEdits())) return;
     await api.closeDeck();
-    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null, sketches: {}, imageExport: null, editing: false, slideUndo: [] });
+    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null, sketches: {}, imageExport: null, editing: false, slideUndo: [], slideRedo: [] });
   },
 
   setDeck: (deck) => {
@@ -256,7 +263,11 @@ export const useApp = create<AppState>((set, get) => ({
 
   endImageExport: () => set({ imageExport: null }),
 
-  setEditing: (editing) => set({ editing }),
+  setEditing: (editing) => {
+    if (editing === get().editing) return;
+    // Each edit session starts with fresh history; leaving keeps the edits.
+    set({ editing, slideUndo: [], slideRedo: [] });
+  },
 
   saveSlideEdit: (slide, markup) => {
     const save = async () => {
@@ -268,7 +279,7 @@ export const useApp = create<AppState>((set, get) => ({
         if (get().deck?.id !== deck.id) return;
         const after = next.slides.find((s) => s.id === slide)?.hash ?? "";
         get().setDeck(next);
-        set((s) => ({ slideUndo: [...s.slideUndo, { slide, markup: previous, after }].slice(-UNDO_KEPT) }));
+        set((s) => ({ slideUndo: [...s.slideUndo, { slide, markup: previous, after }].slice(-UNDO_KEPT), slideRedo: [] }));
       } catch (error) {
         set((s) => ({ error: errorMessage(error), editReload: s.editReload + 1 }));
       }
@@ -278,26 +289,23 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   undoSlideEdit: () => {
-    const undo = async () => {
-      const { deck, slideUndo } = get();
-      const last = slideUndo.at(-1);
-      if (!deck || !last) return;
-      set({ slideUndo: slideUndo.slice(0, -1) });
-      const current = deck.slides.find((s) => s.id === last.slide)?.hash;
-      if (current !== last.after) {
-        set({ error: "The slide changed since that edit, so it cannot be undone." });
-        return;
+    editQueue = editQueue.then(() => stepSlideHistory("slideUndo", "slideRedo")).then(() => undefined);
+    return editQueue;
+  },
+
+  redoSlideEdit: () => {
+    editQueue = editQueue.then(() => stepSlideHistory("slideRedo", "slideUndo")).then(() => undefined);
+    return editQueue;
+  },
+
+  discardSlideEdits: () => {
+    const discard = async () => {
+      while (get().slideUndo.length > 0) {
+        if (!(await stepSlideHistory("slideUndo", "slideRedo"))) break;
       }
-      try {
-        const { deck: next } = await api.updateSlide(deck.id, last.slide, last.markup, current);
-        if (get().deck?.id !== deck.id) return;
-        get().setDeck(next);
-        get().select(last.slide);
-      } catch (error) {
-        set({ error: errorMessage(error) });
-      }
+      set({ editing: false, slideUndo: [], slideRedo: [] });
     };
-    editQueue = editQueue.then(undo);
+    editQueue = editQueue.then(discard);
     return editQueue;
   },
 
@@ -373,6 +381,34 @@ export const useApp = create<AppState>((set, get) => ({
   },
 }));
 
+/**
+ * Restores the newest entry of one slide edit history (undo or redo) and records how to
+ * reverse that in the other. False when there was nothing to restore or it was refused.
+ */
+async function stepSlideHistory(from: "slideUndo" | "slideRedo", to: "slideUndo" | "slideRedo"): Promise<boolean> {
+  const { deck, [from]: history } = useApp.getState();
+  const last = history.at(-1);
+  if (!deck || !last) return false;
+  useApp.setState({ [from]: history.slice(0, -1) });
+  const current = deck.slides.find((s) => s.id === last.slide)?.hash;
+  if (current !== last.after) {
+    useApp.setState({ error: `The slide changed since that edit, so it cannot be ${from === "slideUndo" ? "undone" : "redone"}.` });
+    return false;
+  }
+  try {
+    const { deck: next, previous } = await api.updateSlide(deck.id, last.slide, last.markup, current);
+    if (useApp.getState().deck?.id !== deck.id) return false;
+    const after = next.slides.find((s) => s.id === last.slide)?.hash ?? "";
+    useApp.getState().setDeck(next);
+    useApp.getState().select(last.slide);
+    useApp.setState((s) => ({ [to]: [...s[to], { slide: last.slide, markup: previous, after }].slice(-UNDO_KEPT) }));
+    return true;
+  } catch (error) {
+    useApp.setState({ error: errorMessage(error) });
+    return false;
+  }
+}
+
 async function confirmDiscardEdits(): Promise<boolean> {
   const message = "You have unsaved changes to deck.html. Discard them?";
   try {
@@ -398,6 +434,7 @@ async function loadDeckState(deck: Deck) {
     imageExport: null,
     editing: false,
     slideUndo: [],
+    slideRedo: [],
   });
 }
 

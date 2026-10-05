@@ -1,28 +1,80 @@
 /* SlopSlide slide editor. The app adds it to the stage's slide preview in edit mode (see
    src-tauri/src/protocol.rs); it is never part of deck.html or an export.
 
-   Click selects an element, drag (or arrow keys) moves it, double-click (or Enter) edits its
-   text, Escape selects the parent, Delete removes it. Every change is posted to the app as
-   the slide's new markup: { type: "slop:edit-commit", slide, markup, select }. */
+   Click selects an element, drag (or arrow keys) moves it. Its corner and edge handles
+   stretch it while the opposite side stays put (Shift keeps the aspect ratio, Alt scales
+   from the center); the handle above it rotates it (Shift snaps to 15°). Double-click a
+   handle to reset.
+   Double-click (or Enter) edits its text, Escape selects the parent, Delete removes it.
+   Every change is posted to the app as the slide's new markup:
+   { type: "slop:edit-commit", slide, markup, select }. */
 (function () {
   var slide = document.querySelector(".deck > .slide.active");
   if (!slide || window.parent === window) return;
 
   // Attributes the editor adds while it works; stripped from the markup it saves.
-  var EDITOR_ATTRS = ["contenteditable", "data-slop-selected", "data-slop-hover", "data-slop-editing"];
+  var EDITOR_ATTRS = ["contenteditable", "data-slop-selected", "data-slop-hover", "data-slop-editing", "data-slop-typing"];
   var MOVED = "data-moved";
   var DRAG_THRESHOLD = 3;
   var DOUBLE_CLICK_MS = 400;
   var NUDGE_SAVE_MS = 500;
+  var ROTATE_SNAP = 15;
+  var MIN_SCALE = 0.1;
 
   var style = document.createElement("style");
   style.textContent =
     ".deck > .slide.active, .deck > .slide.active * { -webkit-user-select: none; user-select: none; }" +
     "[data-slop-hover] { outline: 3px dashed rgba(59, 130, 246, 0.7) !important; outline-offset: 4px; }" +
-    "[data-slop-selected] { outline: 4px solid #3b82f6 !important; outline-offset: 4px; cursor: move !important; }" +
+    // The selection frame is drawn by the handle overlay, so it keeps its size on screen.
+    "[data-slop-selected] { cursor: move !important; }" +
+    "[data-slop-editing] { outline: 3px solid #3b82f6 !important; outline-offset: 4px; }" +
+    "[data-slop-ui] { position: fixed; z-index: 2147483647; pointer-events: none; box-sizing: border-box;" +
+    " outline: 2px solid #3b82f6; }" +
+    "[data-slop-ui] > * { position: absolute; box-sizing: border-box; pointer-events: auto; background: #fff;" +
+    " border: 2px solid #3b82f6; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); touch-action: none;" +
+    " width: 16px; height: 16px; }" +
+    "[data-slop-ui] > [data-handle=scale] { border-radius: 3px; }" +
+    "[data-slop-ui] > [data-axis] { border-radius: 8px; }" +
+    "[data-slop-ui] > [data-axis=x] { height: 24px; }" +
+    "[data-slop-ui] > [data-axis=y] { width: 24px; }" +
+    "[data-slop-ui][data-narrow] > [data-axis=y], [data-slop-ui][data-flat] > [data-axis=x] { display: none; }" +
+    "[data-slop-ui] > [data-handle=rotate] { border-radius: 50%; width: 18px; height: 18px; margin: 0 0 0 -9px;" +
+    " left: 50%; top: -48px; cursor: grab; }" +
+    "[data-slop-ui] > [data-stem] { pointer-events: none; width: 2px; height: 32px; margin: 0 0 0 -1px;" +
+    " left: 50%; top: -32px; border: 0; box-shadow: none; background: #3b82f6; }" +
+    // While typing, overlays (like invisible hover zones) let clicks through to the text.
+    ".deck > .slide.active[data-slop-typing] * { pointer-events: none !important; }" +
+    ".deck > .slide.active[data-slop-typing] [data-slop-editing]," +
+    " .deck > .slide.active[data-slop-typing] [data-slop-editing] * { pointer-events: auto !important; }" +
     ".deck > .slide.active [data-slop-editing], .deck > .slide.active [data-slop-editing] * {" +
     " -webkit-user-select: text; user-select: text; cursor: text !important; }";
   document.head.appendChild(style);
+
+  // Scale and rotate handles, outside the slide so they never end up in its markup. They sit
+  // just outside the frame, so even small text stays clickable (and double-clickable) inside it.
+  var ui = document.createElement("div");
+  ui.setAttribute("data-slop-ui", "");
+  ui.style.display = "none";
+  ui.innerHTML =
+    '<div data-stem></div><div data-handle="rotate" title="Rotate (Shift snaps to 15°, double-click resets)"></div>' +
+    [[-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]]
+      .map(function (d) {
+        var cursor = d[0] === 0 ? "ns" : d[1] === 0 ? "ew" : d[0] === d[1] ? "nwse" : "nesw";
+        var axis = d[0] === 0 ? ' data-axis="y"' : d[1] === 0 ? ' data-axis="x"' : "";
+        var w = d[0] === 0 ? 24 : 16;
+        var h = d[1] === 0 ? 24 : 16;
+        var outside = function (dir, size) {
+          return dir < 0 ? -size - 2 : dir > 0 ? 2 : -size / 2;
+        };
+        return (
+          '<div data-handle="scale" data-dir="' + d[0] + " " + d[1] + '"' + axis +
+          ' title="Stretch (Shift keeps the aspect ratio, Alt scales from the center, double-click resets)"' +
+          ' style="left: ' + (d[0] + 1) * 50 + "%; top: " + (d[1] + 1) * 50 + "%; margin: " + outside(d[1], h) + "px 0 0 " +
+          outside(d[0], w) + "px; cursor: " + cursor + '-resize"></div>'
+        );
+      })
+      .join("");
+  document.body.appendChild(ui);
 
   var saved = serialize();
   var selected = null;
@@ -125,6 +177,7 @@
     mark(selected, "data-slop-selected", false);
     selected = el;
     mark(selected, "data-slop-selected", true);
+    placeHandles();
   }
 
   function hover(el) {
@@ -143,14 +196,184 @@
   function moveTo(el, x, y) {
     x = Math.round(x);
     y = Math.round(y);
-    if (x === 0 && y === 0) {
-      el.style.removeProperty("translate");
-      if (!el.getAttribute("style")) el.removeAttribute("style");
-      el.removeAttribute(MOVED);
-    } else {
-      el.style.translate = x + "px " + y + "px";
-      el.setAttribute(MOVED, "");
+    setInline(el, "translate", x === 0 && y === 0 ? null : x + "px " + y + "px");
+  }
+
+  /** The element's rotation in degrees and its (uniform) scale, inline or from the stylesheet. */
+  function angleOf(el) {
+    var match = (el.style.rotate || getComputedStyle(el).rotate || "").match(/^(-?[\d.]+)deg$/);
+    return match ? parseFloat(match[1]) : 0;
+  }
+  function scaleOf(el) {
+    return parseScale(el.style.scale || getComputedStyle(el).scale);
+  }
+  function parseScale(value) {
+    var parts = String(value || "").trim().split(/\s+/).map(parseFloat);
+    var x = isFinite(parts[0]) && parts[0] > 0 ? parts[0] : 1;
+    var y = isFinite(parts[1]) && parts[1] > 0 ? parts[1] : x;
+    return { x: x, y: y };
+  }
+
+  /** What the stylesheet alone gives `el` for `prop`. */
+  function sheetValue(el, prop) {
+    var inline = el.style[prop];
+    if (!inline) return getComputedStyle(el)[prop];
+    el.style[prop] = "";
+    var value = getComputedStyle(el)[prop];
+    el.style[prop] = inline;
+    return value;
+  }
+
+  function rotateTo(el, degrees) {
+    degrees = Math.round(degrees) % 360;
+    if (degrees > 180) degrees -= 360;
+    if (degrees <= -180) degrees += 360;
+    var sheet = sheetValue(el, "rotate");
+    var same = degrees === 0 ? !sheet || sheet === "none" || sheet === "0deg" : sheet === degrees + "deg";
+    setInline(el, "rotate", same ? null : degrees + "deg");
+  }
+
+  function scaleTo(el, x, y) {
+    x = Math.max(MIN_SCALE, Math.round(x * 1000) / 1000);
+    y = Math.max(MIN_SCALE, Math.round(y * 1000) / 1000);
+    var sheet = parseScale(sheetValue(el, "scale"));
+    setInline(el, "scale", sheet.x === x && sheet.y === y ? null : x === y ? String(x) : x + " " + y);
+  }
+
+  /** Sets (or with null, drops) an inline transform; `data-moved` marks any hand transform. */
+  function setInline(el, prop, value) {
+    if (value === null) el.style.removeProperty(prop);
+    else el.style[prop] = value;
+    if (!el.getAttribute("style")) el.removeAttribute("style");
+    mark(el, MOVED, !!(el.style.translate || el.style.rotate || el.style.scale));
+    placeHandles();
+  }
+
+  /** The element's untransformed size, in slide pixels. */
+  function sizeOf(el) {
+    var computed = getComputedStyle(el);
+    return {
+      w: el.offsetWidth || parseFloat(computed.width) || 0,
+      h: el.offsetHeight || parseFloat(computed.height) || 0,
+    };
+  }
+
+  /** Screen pixels per slide pixel. */
+  function zoom() {
+    var value = slide.getBoundingClientRect().width / slide.offsetWidth;
+    return isFinite(value) && value > 0 ? value : 1;
+  }
+
+  /** Lays the handles over the selection's box, turned with it; they keep their size on screen. */
+  function placeHandles() {
+    if (!selected || editing || !slide.contains(selected)) {
+      ui.style.display = "none";
+      return;
     }
+    var rect = selected.getBoundingClientRect();
+    var size = sizeOf(selected);
+    var scale = scaleOf(selected);
+    var w = size.w * scale.x * zoom();
+    var h = size.h * scale.y * zoom();
+    ui.style.display = "";
+    ui.style.left = rect.left + rect.width / 2 - w / 2 + "px";
+    ui.style.top = rect.top + rect.height / 2 - h / 2 + "px";
+    ui.style.width = w + "px";
+    ui.style.height = h + "px";
+    ui.style.transform = "rotate(" + angleOf(selected) + "deg)";
+    // Edge handles only where there is room for them between the corners.
+    mark(ui, "data-narrow", w < 40);
+    mark(ui, "data-flat", h < 40);
+  }
+
+  ui.addEventListener("pointerdown", function (event) {
+    var kind = event.target.getAttribute && event.target.getAttribute("data-handle");
+    if (event.button !== 0 || !kind || !selected) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (nudgeTimer) commit();
+    var rect = selected.getBoundingClientRect();
+    var dir = (event.target.getAttribute("data-dir") || "0 0").split(" ").map(Number);
+    drag = {
+      mode: kind,
+      el: selected,
+      center: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
+      start: { x: event.clientX, y: event.clientY },
+      angle: angleOf(selected),
+      scale: scaleOf(selected),
+      offset: offsetOf(selected),
+      size: sizeOf(selected),
+      zoom: zoom(),
+      dir: { x: dir[0], y: dir[1] },
+      moved: false,
+    };
+    if (event.target.setPointerCapture) {
+      try {
+        event.target.setPointerCapture(event.pointerId);
+      } catch (e) {
+        // Synthetic events have no active pointer to capture.
+      }
+    }
+  });
+  ui.addEventListener("dblclick", function (event) {
+    var kind = event.target.getAttribute && event.target.getAttribute("data-handle");
+    event.stopPropagation();
+    if (!kind || !selected) return;
+    if (kind === "rotate") rotateTo(selected, 0);
+    else scaleTo(selected, 1, 1);
+    commit();
+  });
+
+  /** Turns the screen vector (x, y) by `degrees`. */
+  function turn(x, y, degrees) {
+    var a = (degrees * Math.PI) / 180;
+    return { x: x * Math.cos(a) - y * Math.sin(a), y: x * Math.sin(a) + y * Math.cos(a) };
+  }
+
+  /** Applies a handle drag to the pointer at `event`. */
+  function transformTo(event) {
+    if (drag.mode === "rotate") {
+      var c = drag.center;
+      var start = Math.atan2(drag.start.y - c.y, drag.start.x - c.x);
+      var degrees = drag.angle + ((Math.atan2(event.clientY - c.y, event.clientX - c.x) - start) * 180) / Math.PI;
+      rotateTo(drag.el, event.shiftKey ? Math.round(degrees / ROTATE_SNAP) * ROTATE_SNAP : degrees);
+      return;
+    }
+    stretchTo(event.clientX - drag.start.x, event.clientY - drag.start.y, event.shiftKey, event.altKey);
+  }
+
+  /**
+   * Stretches along the dragged handle's axes, working in the element's own (turned) frame
+   * in slide pixels: the handle follows the pointer and the opposite side stays put, or with
+   * `fromCenter` the center does. `keepRatio` scales both axes by the same factor.
+   */
+  function stretchTo(dx, dy, keepRatio, fromCenter) {
+    var d = drag.dir;
+    var w = drag.size.w;
+    var h = drag.size.h;
+    var s0 = drag.scale;
+    var moved = turn(dx / drag.zoom, dy / drag.zoom, -drag.angle);
+    // The dragged handle's new spot, relative to the element's center before the drag.
+    var hx = (d.x * w * s0.x) / 2 + moved.x;
+    var hy = (d.y * h * s0.y) / 2 + moved.y;
+    var reach = fromCenter ? 2 : 1;
+    var sx = d.x && w ? (reach * d.x * (hx + (fromCenter ? 0 : (d.x * w * s0.x) / 2))) / w : s0.x;
+    var sy = d.y && h ? (reach * d.y * (hy + (fromCenter ? 0 : (d.y * h * s0.y) / 2))) / h : s0.y;
+    if (keepRatio) {
+      var fx = sx / s0.x;
+      var fy = sy / s0.y;
+      var f = !d.x ? fy : !d.y ? fx : Math.abs(fx - 1) > Math.abs(fy - 1) ? fx : fy;
+      sx = s0.x * f;
+      sy = s0.y * f;
+    }
+    sx = Math.max(MIN_SCALE, sx);
+    sy = Math.max(MIN_SCALE, sy);
+    // Where the center goes so the opposite side stays put (only along the dragged axes).
+    var cx = fromCenter || !d.x ? 0 : (d.x * w * (sx - s0.x)) / 2;
+    var cy = fromCenter || !d.y ? 0 : (d.y * h * (sy - s0.y)) / 2;
+    var shift = turn(cx, cy, drag.angle);
+    scaleTo(drag.el, sx, sy);
+    moveTo(drag.el, drag.offset.x + shift.x, drag.offset.y + shift.y);
   }
 
   function startEditing(el, x, y) {
@@ -160,7 +383,9 @@
     editing = el;
     el.setAttribute("contenteditable", "true");
     el.setAttribute("data-slop-editing", "");
+    slide.setAttribute("data-slop-typing", "");
     el.focus();
+    placeHandles();
     var range = x !== undefined && document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y) : null;
     if (!range || !el.contains(range.startContainer)) {
       range = document.createRange();
@@ -177,9 +402,11 @@
     if (!editing) return;
     editing.removeAttribute("contenteditable");
     editing.removeAttribute("data-slop-editing");
+    slide.removeAttribute("data-slop-typing");
     editing = null;
     var selection = window.getSelection();
     if (selection) selection.removeAllRanges();
+    placeHandles();
     commit();
   }
 
@@ -202,12 +429,14 @@
     select(el);
     if (!el) return;
     if (double) {
+      // Otherwise the browser moves focus to what was clicked, which may be an overlay.
+      event.preventDefault();
       startEditing(el, event.clientX, event.clientY);
       return;
     }
     event.preventDefault();
     var start = offsetOf(el);
-    drag = { el: el, x: event.clientX, y: event.clientY, from: start, moved: false };
+    drag = { mode: "move", el: el, x: event.clientX, y: event.clientY, from: start, moved: false };
     if (el.setPointerCapture) {
       try {
         el.setPointerCapture(event.pointerId);
@@ -219,7 +448,13 @@
 
   document.addEventListener("pointermove", function (event) {
     if (!drag) {
-      hover(editing ? null : pickable(event.target, event.clientX, event.clientY));
+      var onHandle = ui.contains(event.target);
+      hover(editing || onHandle ? null : pickable(event.target, event.clientX, event.clientY));
+      return;
+    }
+    if (drag.mode !== "move") {
+      drag.moved = true;
+      transformTo(event);
       return;
     }
     var dx = event.clientX - drag.x;
@@ -242,6 +477,8 @@
   document.documentElement.addEventListener("pointerleave", function () {
     hover(null);
   });
+  window.addEventListener("resize", placeHandles);
+  document.addEventListener("input", placeHandles);
   // Clicking elsewhere in the app ends text editing, keeping the text.
   window.addEventListener("blur", finishEditing);
   document.addEventListener("dblclick", function (event) {

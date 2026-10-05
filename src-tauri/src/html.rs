@@ -36,8 +36,8 @@ pub struct SlideSpan {
 /// Marks a slide the player skips. The editor still shows it, muted.
 pub const HIDDEN_ATTR: &str = "data-hidden";
 
-/// Marks an element the user dragged by hand in the editor; it carries an inline `translate`
-/// offset until the agent tidies the slide's layout.
+/// Marks an element the user moved, rotated or scaled by hand in the editor; it carries inline
+/// `translate` / `rotate` / `scale` styles until the agent tidies the slide's layout.
 pub const MOVED_ATTR: &str = "data-moved";
 
 /// Attributes the in-editor slide editor puts on elements while it works. They never belong
@@ -47,6 +47,7 @@ pub const EDITOR_ATTRS: &[&str] = &[
     "data-slop-selected",
     "data-slop-hover",
     "data-slop-editing",
+    "data-slop-typing",
 ];
 
 /// Class of the marker element that starts a section; its title is the `data-title` attribute.

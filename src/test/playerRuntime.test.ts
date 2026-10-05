@@ -228,7 +228,7 @@ describe("player: embedded in the editor", () => {
     const event = p.key("ArrowRight");
     expect(p.active()).toBe(0);
     expect(event.defaultPrevented).toBe(false);
-    expect(parent.postMessage).toHaveBeenCalledWith({ type: "slop:key", key: "ArrowRight", mod: false }, "*");
+    expect(parent.postMessage).toHaveBeenCalledWith({ type: "slop:key", key: "ArrowRight", mod: false, shift: false }, "*");
     p.click(p.doc.body, 1500);
     expect(p.active()).toBe(0);
   });
@@ -245,7 +245,7 @@ describe("player: in the presenter", () => {
     const p = player({ at: "#intro", parent });
     expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:slide", id: "intro", index: 0 }, "*");
     p.key("ArrowRight");
-    expect(parent.postMessage).toHaveBeenCalledWith({ type: "slop:key", key: "ArrowRight", mod: false }, "*");
+    expect(parent.postMessage).toHaveBeenCalledWith({ type: "slop:key", key: "ArrowRight", mod: false, shift: false }, "*");
     expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:slide", id: null, index: 1 }, "*");
     expect(p.active()).toBe(1);
   });
@@ -254,9 +254,11 @@ describe("player: in the presenter", () => {
     const parent = { postMessage: vi.fn() };
     const p = player({ parent });
     p.window.dispatchEvent(new p.window.KeyboardEvent("keydown", { key: "z", metaKey: true }));
-    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:key", key: "z", mod: true }, "*");
+    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:key", key: "z", mod: true, shift: false }, "*");
     p.window.dispatchEvent(new p.window.KeyboardEvent("keydown", { key: "z", ctrlKey: true }));
-    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:key", key: "z", mod: true }, "*");
+    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:key", key: "z", mod: true, shift: false }, "*");
+    p.window.dispatchEvent(new p.window.KeyboardEvent("keydown", { key: "Z", metaKey: true, shiftKey: true }));
+    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:key", key: "Z", mod: true, shift: true }, "*");
   });
 
   it("navigates on keys the presenter forwards while its drawing tools have focus", () => {

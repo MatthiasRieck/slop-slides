@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Move, Sparkles, Wand2 } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Pencil, Redo2, Sparkles, Undo2, Wand2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { SKETCH_TARGET_ATTR, useApp } from "../store";
@@ -15,6 +15,8 @@ export function Stage() {
   const sketches = useApp((s) => s.sketches);
   const editing = useApp((s) => s.editing);
   const running = useApp((s) => s.running);
+  const canUndo = useApp((s) => s.slideUndo.length > 0);
+  const canRedo = useApp((s) => s.slideRedo.length > 0);
   const annotations = useAnnotations(selected ?? "", { ink: sketches, setInk: useApp.getState().setSketches });
   const areaRef = useRef<HTMLDivElement>(null);
   const editFrames = useSlideEditing(areaRef);
@@ -50,12 +52,22 @@ export function Stage() {
 
   return (
     <div className="flex h-full flex-col bg-canvas">
-      <div ref={areaRef} className="flex min-h-0 flex-1 items-center justify-center p-8">
+      <div ref={areaRef} className="relative flex min-h-0 flex-1 items-center justify-center p-8">
+        {slide && editing && (
+          <span className="absolute top-2 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-primary px-2.5 py-0.5 text-xs font-medium text-primary-foreground shadow-sm [&_svg]:size-3">
+            <Pencil />
+            Editing
+          </span>
+        )}
         {slide ? (
           <div
             style={{ width }}
             {...{ [SKETCH_TARGET_ATTR]: "" }}
-            className="relative overflow-hidden rounded-lg shadow-[0_20px_50px_-24px_rgb(0_0_0/0.45)] ring-1 ring-border"
+            data-editing={editing || undefined}
+            className={cn(
+              "relative overflow-hidden rounded-lg shadow-[0_20px_50px_-24px_rgb(0_0_0/0.45)] ring-1 ring-border",
+              editing && "ring-2 ring-primary ring-offset-4 ring-offset-canvas",
+            )}
           >
             <CurrentSlide deckId={deck.id} slide={slide} editing={editing} onFrameReady={editFrames.onFrameReady} />
             <AnnotationLayer annotations={annotations} />
@@ -72,18 +84,22 @@ export function Stage() {
                 <button
                   type="button"
                   aria-label="Edit text and move elements"
-                  title="Edit text and move elements: click to select, drag to move, double-click to edit text"
+                  title="Edit the slide: click to select, drag to move, drag the handles to scale or rotate, double-click to edit text"
                   aria-pressed={editing}
                   onClick={toggleEditing}
                   className={cn(
                     "rounded-md p-1 hover:bg-accent hover:text-foreground [&_svg]:size-4",
-                    editing && "bg-accent text-foreground",
+                    editing && "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground",
                   )}
                 >
-                  <Move />
+                  <Pencil />
                 </button>
                 <div className="mx-1 h-4 w-px bg-border" />
-                <SketchToolbar annotations={annotations} />
+                {editing ? (
+                  <EditBar canUndo={canUndo} canRedo={canRedo} />
+                ) : (
+                  <SketchToolbar annotations={annotations} />
+                )}
               </>
             )}
           </div>
@@ -114,7 +130,7 @@ export function Stage() {
             {slide?.moved && (
               <button
                 type="button"
-                title="Ask the agent to rebuild this slide's layout around the elements you moved, using a screenshot"
+                title="Ask the agent to rebuild this slide's layout around the elements you moved, rotated or scaled, using a screenshot"
                 disabled={running}
                 onClick={() => {
                   editFrames.clearSelection();
@@ -130,6 +146,41 @@ export function Stage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Shown in place of the sketch tools while editing: history and leaving edit mode. */
+function EditBar(props: { canUndo: boolean; canRedo: boolean }) {
+  const icon = "rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4";
+  const app = useApp.getState;
+  return (
+    <div className="flex min-w-0 items-center gap-0.5">
+      <button type="button" aria-label="Undo" title="Undo (⌘Z)" disabled={!props.canUndo} onClick={() => void app().undoSlideEdit()} className={icon}>
+        <Undo2 />
+      </button>
+      <button type="button" aria-label="Redo" title="Redo (⇧⌘Z)" disabled={!props.canRedo} onClick={() => void app().redoSlideEdit()} className={icon}>
+        <Redo2 />
+      </button>
+      <div className="mx-1 h-4 w-px bg-border" />
+      <button
+        type="button"
+        title="Undo all edits made since entering edit mode"
+        onClick={() => void app().discardSlideEdits()}
+        className="flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-accent hover:text-foreground [&_svg]:size-3.5"
+      >
+        <X />
+        Discard
+      </button>
+      <button
+        type="button"
+        title="Keep the edits and leave edit mode (Esc)"
+        onClick={() => app().setEditing(false)}
+        className="flex items-center gap-1 rounded-md bg-primary px-1.5 py-1 font-medium text-primary-foreground hover:bg-primary/90 [&_svg]:size-3.5"
+      >
+        <Check />
+        Accept
+      </button>
     </div>
   );
 }
@@ -173,17 +224,14 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>) {
         restore.current = Array.isArray(data.select) ? { slide: data.slide, path: data.select } : null;
         void useApp.getState().saveSlideEdit(data.slide, data.markup);
       } else if (data?.type === "slop:key") {
-        if (data.mod && String(data.key).toLowerCase() === "z") void useApp.getState().undoSlideEdit();
+        if (data.mod) runHistoryKey(String(data.key), Boolean(data.shift));
         else if (data.key === "Escape") useApp.getState().setEditing(false);
       }
     };
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (!useApp.getState().editing || target?.closest("input, textarea, [contenteditable]")) return;
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z" && !event.shiftKey) {
-        event.preventDefault();
-        void useApp.getState().undoSlideEdit();
-      }
+      if ((event.metaKey || event.ctrlKey) && runHistoryKey(event.key, event.shiftKey)) event.preventDefault();
     };
     window.addEventListener("message", onMessage);
     window.addEventListener("keydown", onKey);
@@ -207,6 +255,15 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>) {
       frame.current?.contentWindow?.postMessage({ type: "slop:edit-select", path: null }, "*");
     },
   };
+}
+
+/** ⌘Z undoes, ⇧⌘Z / ⌘Y redo; true when the key was one of them. */
+function runHistoryKey(key: string, shift: boolean) {
+  const lower = key.toLowerCase();
+  if (lower === "z" && !shift) void useApp.getState().undoSlideEdit();
+  else if ((lower === "z" && shift) || lower === "y") void useApp.getState().redoSlideEdit();
+  else return false;
+  return true;
 }
 
 function EmptyStage() {

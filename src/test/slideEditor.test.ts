@@ -162,7 +162,7 @@ describe("slide editor", () => {
   it("lets keys through to the app when nothing is selected", () => {
     const e = editor();
     e.key("ArrowRight");
-    expect(e.keys()).toEqual([{ type: "slop:key", key: "ArrowRight", mod: false }]);
+    expect(e.keys()).toEqual([{ type: "slop:key", key: "ArrowRight", mod: false, shift: false }]);
   });
 
   it("saves a pending nudge before passing undo to the app", () => {
@@ -172,7 +172,7 @@ describe("slide editor", () => {
     e.key("ArrowLeft");
     e.key("z", { metaKey: true });
     expect(e.commits()).toHaveLength(1);
-    expect(e.keys()).toEqual([{ type: "slop:key", key: "z", mod: true }]);
+    expect(e.keys()).toEqual([{ type: "slop:key", key: "z", mod: true, shift: false }]);
   });
 
   it("walks up to the parent with Escape", () => {
@@ -211,6 +211,25 @@ describe("slide editor", () => {
     const [commit] = e.commits();
     expect(commit!.markup).toContain(`<div class="card"><p>Uno</p>`);
     expect(commit!.markup).not.toMatch(/contenteditable|data-slop/);
+  });
+
+  it("keeps focus in the text it starts editing, and lets clicks through overlays while typing", () => {
+    const e = editor();
+    const p = e.$(".card p");
+    e.down(p);
+    e.up(p);
+    const second = new e.window.PointerEvent("pointerdown", { clientX: 100, clientY: 100, button: 0, bubbles: true, cancelable: true });
+    p.dispatchEvent(second);
+    // The browser would otherwise move focus to whatever was clicked, like an invisible overlay.
+    expect(second.defaultPrevented).toBe(true);
+    expect(e.doc.activeElement).toBe(p);
+    expect(e.$("#intro").hasAttribute("data-slop-typing")).toBe(true);
+    expect(e.window.getComputedStyle(e.$(".overlay")).pointerEvents).toBe("none");
+    expect(e.window.getComputedStyle(p).pointerEvents).toBe("auto");
+    p.textContent = "Uno";
+    e.key("Enter");
+    expect(e.$("#intro").hasAttribute("data-slop-typing")).toBe(false);
+    expect(e.commits()[0]!.markup).not.toMatch(/data-slop/);
   });
 
   it("starts editing with Enter and ends it by clicking elsewhere", () => {
@@ -253,5 +272,188 @@ describe("slide editor", () => {
     expect(e.selected()).toEqual([]);
     e.drag(e.$("#outro p"), 30, 0);
     expect(e.commits()[0]).toMatchObject({ slide: "outro", select: [0] });
+  });
+  describe("scale and rotate handles", () => {
+    /** Selects the heading, laid out as a 200×100 box centered at (500, 300). */
+    function withHeading() {
+      const e = editor();
+      const h1 = e.$("h1");
+      Object.defineProperty(h1, "offsetWidth", { value: 200, configurable: true });
+      Object.defineProperty(h1, "offsetHeight", { value: 100, configurable: true });
+      h1.getBoundingClientRect = () => new e.window.DOMRect(400, 250, 200, 100);
+      e.down(h1);
+      e.up(h1);
+      const ui = e.$("[data-slop-ui]");
+      /** "rotate", or a stretch handle by direction from the center, like "1 1" (bottom right). */
+      const handle = (kind: string) =>
+        ui.querySelector<HTMLElement>(kind === "rotate" ? `[data-handle="rotate"]` : `[data-dir="${kind}"]`)!;
+      const pointer = (type: string, target: Element, x: number, y: number, init: PointerEventInit = {}) =>
+        target.dispatchEvent(
+          new e.window.PointerEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true, ...init }),
+        );
+      const pull = (kind: string, from: [number, number], to: [number, number], init: PointerEventInit = {}) => {
+        pointer("pointerdown", handle(kind), ...from);
+        pointer("pointermove", handle(kind), ...to, init);
+        pointer("pointerup", handle(kind), ...to);
+      };
+      return { e, h1, ui, handle, pull };
+    }
+
+    it("shows handles around the selection, outside the slide", () => {
+      const { e, ui, handle } = withHeading();
+      expect(ui.style.display).toBe("");
+      expect([ui.style.left, ui.style.top, ui.style.width, ui.style.height]).toEqual(["400px", "250px", "200px", "100px"]);
+      expect(ui.querySelectorAll('[data-handle="scale"]')).toHaveLength(8);
+      expect(ui.querySelectorAll("[data-axis]")).toHaveLength(4);
+      expect(handle("rotate")).toBeTruthy();
+      expect(e.$("#intro").contains(ui)).toBe(false);
+      e.down(e.$("#intro"));
+      expect(ui.style.display).toBe("none");
+    });
+
+    it("stretches from a corner while the opposite corner stays put", () => {
+      const { e, h1, ui, pull } = withHeading();
+      pull("1 1", [600, 350], [650, 400]);
+      // 250×150 now; the top-left corner stays at (400, 250), so the center moves by (25, 25).
+      expect(h1.style.scale).toBe("1.25 1.5");
+      expect(h1.style.translate).toBe("25px 25px");
+      expect(h1.hasAttribute("data-moved")).toBe(true);
+      expect([ui.style.width, ui.style.height]).toEqual(["250px", "150px"]);
+      expect(e.selected()).toEqual([h1]);
+      const [commit] = e.commits();
+      expect(commit!.markup).toContain(`style="scale: 1.25 1.5; translate: 25px 25px;" data-moved="">Hello`);
+      expect(commit!.markup).not.toMatch(/data-slop/);
+      expect(commit!.select).toEqual([0]);
+      expect(e.commits()).toHaveLength(1);
+    });
+
+    it("stretches one axis from an edge, and from the top-left corner the other way", () => {
+      const { e, h1, pull } = withHeading();
+      pull("1 0", [600, 300], [650, 320]);
+      expect([h1.style.scale, h1.style.translate]).toEqual(["1.25 1", "25px 0px"]);
+      e.down(e.$("#intro"));
+      e.down(h1);
+      pull("-1 -1", [400, 250], [350, 200]);
+      // Width 250 → 300 to the left, height 100 → 150 upwards: the bottom-right stays put.
+      expect([h1.style.scale, h1.style.translate]).toEqual(["1.5", "0px -25px"]);
+    });
+
+    it("keeps the aspect ratio with Shift", () => {
+      const { h1, pull } = withHeading();
+      pull("1 1", [600, 350], [700, 360], { shiftKey: true });
+      expect([h1.style.scale, h1.style.translate]).toEqual(["1.5", "50px 25px"]);
+      // Back to the original width, and so to the original height: no inline scale left.
+      pull("1 0", [600, 300], [500, 300], { shiftKey: true });
+      expect(h1.style.scale).toBe("");
+    });
+
+    it("scales from the center with Alt", () => {
+      const { h1, pull } = withHeading();
+      pull("1 1", [600, 350], [650, 360], { altKey: true });
+      expect(h1.style.scale).toBe("1.5 1.2");
+      expect(h1.style.translate).toBe("");
+      pull("1 0", [600, 300], [650, 300], { altKey: true, shiftKey: true });
+      expect(h1.style.scale).toBe("2 1.6");
+    });
+
+    it("stretches along a turned element's own axes", () => {
+      const { h1, pull } = withHeading();
+      h1.style.rotate = "90deg";
+      // Turned a quarter, the right edge faces down.
+      pull("1 0", [500, 400], [500, 450]);
+      expect([h1.style.scale, h1.style.translate]).toEqual(["1.25 1", "0px 25px"]);
+    });
+
+    it("never scales down to nothing", () => {
+      const { h1, pull } = withHeading();
+      pull("1 0", [600, 300], [300, 300]);
+      expect(h1.style.scale).toBe("0.1 1");
+    });
+
+    it("rotates the selection around its center, snapping to 15° with Shift", () => {
+      const { e, h1, ui, pull } = withHeading();
+      pull("rotate", [500, 200], [600, 300]);
+      expect(h1.style.rotate).toBe("90deg");
+      expect(ui.style.transform).toBe("rotate(90deg)");
+      // From straight up, a pointer at about 21° to the right snaps to 15°.
+      pull("rotate", [500, 200], [538, 200], { shiftKey: true });
+      expect(h1.style.rotate).toBe("105deg");
+      expect(e.commits().map((c) => c.markup.match(/rotate: [^;]+/)?.[0])).toEqual(["rotate: 90deg", "rotate: 105deg"]);
+    });
+
+    it("drops the inline transform and the moved mark when turned or scaled back", () => {
+      const { h1, pull } = withHeading();
+      pull("rotate", [500, 200], [600, 300]);
+      pull("rotate", [600, 300], [500, 200]);
+      expect(h1.hasAttribute("style")).toBe(false);
+      expect(h1.hasAttribute("data-moved")).toBe(false);
+    });
+
+    it("keeps the move and other styles when rotating", () => {
+      const { e, h1, pull } = withHeading();
+      e.down(e.$("#intro")); // so the drag is not a double-click
+      e.drag(h1, 40, 0);
+      pull("rotate", [500, 200], [600, 300]);
+      expect(h1.getAttribute("style")).toBe("translate: 40px 0px; rotate: 90deg;");
+    });
+
+    it("resets rotation or scale when a handle is double-clicked", () => {
+      const { e, h1, handle, pull } = withHeading();
+      pull("1 1", [600, 350], [700, 400], { altKey: true });
+      pull("rotate", [500, 200], [600, 300]);
+      handle("rotate").dispatchEvent(new e.window.MouseEvent("dblclick", { bubbles: true }));
+      expect(h1.getAttribute("style")).toBe("scale: 2;");
+      handle("1 1").dispatchEvent(new e.window.MouseEvent("dblclick", { bubbles: true }));
+      expect(h1.hasAttribute("style")).toBe(false);
+      expect(h1.hasAttribute("data-moved")).toBe(false);
+      expect(h1.hasAttribute("contenteditable")).toBe(false);
+      expect(e.commits()).toHaveLength(4);
+    });
+
+    it("pressing a handle keeps the selection instead of picking what is under it", () => {
+      const { e, h1, handle } = withHeading();
+      handle("rotate").dispatchEvent(new e.window.PointerEvent("pointerdown", { button: 0, bubbles: true, cancelable: true }));
+      expect(e.selected()).toEqual([h1]);
+    });
+
+    it("starts from a rotation the stylesheet already gives, and returns to it without inline styles", () => {
+      const { e, h1, pull } = withHeading();
+      const sheet = e.doc.createElement("style");
+      sheet.textContent = ".title { rotate: 10deg; }";
+      e.doc.head.appendChild(sheet);
+      pull("rotate", [500, 200], [600, 300]);
+      expect(h1.style.rotate).toBe("100deg");
+      pull("rotate", [600, 300], [500, 200]);
+      expect(h1.hasAttribute("style")).toBe(false);
+      expect(h1.hasAttribute("data-moved")).toBe(false);
+    });
+
+    it("keeps the handles just outside the frame, so small text stays double-clickable", () => {
+      const { e, h1, handle } = withHeading();
+      const margin = (kind: string) => handle(kind).style.margin;
+      expect(margin("-1 -1")).toBe("-18px 0px 0px -18px");
+      expect(margin("1 1")).toBe("2px 0px 0px 2px");
+      expect(margin("0 -1")).toBe("-18px 0px 0px -12px");
+      expect(margin("1 0")).toBe("-12px 0px 0px 2px");
+      // A double-click inside the selection edits its text.
+      e.down(h1);
+      expect(h1.getAttribute("contenteditable")).toBe("true");
+    });
+
+    it("hides edge handles on boxes too small on screen for them", () => {
+      const { e, h1, ui } = withHeading();
+      expect(ui.hasAttribute("data-narrow") || ui.hasAttribute("data-flat")).toBe(false);
+      Object.defineProperty(h1, "offsetHeight", { value: 30, configurable: true });
+      e.window.dispatchEvent(new e.window.Event("resize"));
+      expect([ui.hasAttribute("data-narrow"), ui.hasAttribute("data-flat")]).toEqual([false, true]);
+    });
+
+    it("hides the handles while editing text", () => {
+      const { e, ui } = withHeading();
+      e.key("Enter");
+      expect(ui.style.display).toBe("none");
+      e.key("Escape");
+      expect(ui.style.display).toBe("");
+    });
   });
 });

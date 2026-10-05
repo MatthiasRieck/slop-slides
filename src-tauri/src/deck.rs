@@ -57,6 +57,17 @@ pub struct Slide {
     pub hidden: bool,
 }
 
+/// A named group of slides, started by a marker between slides in deck.html.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Section {
+    /// Position among the deck's section markers, in document order.
+    pub index: usize,
+    pub title: String,
+    /// Number of slides before the marker; the section starts at the slide with this index.
+    pub before: usize,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Deck {
@@ -64,6 +75,7 @@ pub struct Deck {
     pub title: String,
     pub path: String,
     pub slides: Vec<Slide>,
+    pub sections: Vec<Section>,
     /// Changes whenever anything outside the slides (styles, fonts, runtime) changes.
     pub shell_hash: String,
 }
@@ -213,6 +225,7 @@ pub fn open(dir: &Path, id: &str, normalize_first: bool) -> Result<Deck> {
 pub fn load(dir: &Path, id: &str) -> Result<Deck> {
     let source = read_html(dir)?;
     let spans = html::find_slides(&source);
+    let section_spans = html::find_sections(&source);
     let slides = spans
         .iter()
         .enumerate()
@@ -228,7 +241,16 @@ pub fn load(dir: &Path, id: &str) -> Result<Deck> {
         id: id.to_string(),
         title: html::title(&source).unwrap_or_else(|| fallback_title(id)),
         path: dir.to_string_lossy().into_owned(),
-        shell_hash: html::shell_hash(&source, &spans),
+        shell_hash: html::shell_hash(&source, &spans, &section_spans),
+        sections: section_spans
+            .iter()
+            .enumerate()
+            .map(|(index, span)| Section {
+                index,
+                title: span.title.clone(),
+                before: span.before,
+            })
+            .collect(),
         slides,
     })
 }
@@ -282,6 +304,24 @@ pub fn duplicate(dir: &Path, id: &str, slide: &str) -> Result<(Deck, String)> {
 
 pub fn set_slide_hidden(dir: &Path, id: &str, slide: &str, hidden: bool) -> Result<Deck> {
     Ok(edit(dir, id, |s| Ok((html::set_hidden(s, slide, hidden)?, ())))?.0)
+}
+
+pub fn add_section(dir: &Path, id: &str, before: Option<String>, title: &str) -> Result<Deck> {
+    Ok(edit(dir, id, |s| {
+        Ok((html::add_section(s, before.as_deref(), title)?, ()))
+    })?
+    .0)
+}
+
+pub fn rename_section(dir: &Path, id: &str, index: usize, title: &str) -> Result<Deck> {
+    Ok(edit(dir, id, |s| {
+        Ok((html::rename_section(s, index, title)?, ()))
+    })?
+    .0)
+}
+
+pub fn delete_section(dir: &Path, id: &str, index: usize) -> Result<Deck> {
+    Ok(edit(dir, id, |s| Ok((html::delete_section(s, index)?, ())))?.0)
 }
 
 pub fn delete_slide(dir: &Path, id: &str, slide: &str) -> Result<Deck> {
@@ -1084,5 +1124,79 @@ mod tests {
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, [DECK_FILE]);
+    }
+
+    const SECTIONED: &str = "<html><head><title>S</title></head><body><main class=\"deck\">\n  <section class=\"slide\" id=\"a\">A</section>\n  <div class=\"deck-section\" data-title=\"Part two\"></div>\n  <section class=\"slide\" id=\"b\">B</section>\n  <section class=\"slide\" id=\"c\">C</section>\n</main></body></html>";
+
+    fn sections(deck: &Deck) -> Vec<(usize, &str, usize)> {
+        deck.sections
+            .iter()
+            .map(|s| (s.index, s.title.as_str(), s.before))
+            .collect()
+    }
+
+    #[test]
+    fn load_lists_sections_without_counting_them_as_slides() {
+        let deck = TempDeck::new(SECTIONED);
+        let loaded = load(&deck.0, "s").unwrap();
+        assert_eq!(slide_ids(&loaded), ["a", "b", "c"]);
+        assert_eq!(sections(&loaded), [(0, "Part two", 1)]);
+        assert!(load(&TempDeck::new(THREE).0, "three")
+            .unwrap()
+            .sections
+            .is_empty());
+        let json = serde_json::to_value(&loaded).unwrap();
+        assert_eq!(json["sections"][0]["title"], "Part two");
+        assert_eq!(json["sections"][0]["before"], 1);
+    }
+
+    #[test]
+    fn adds_renames_and_deletes_sections() {
+        let deck = TempDeck::new(THREE);
+        let added = add_section(&deck.0, "three", Some("c".into()), "Finale").unwrap();
+        assert_eq!(sections(&added), [(0, "Finale", 2)]);
+        let added = add_section(&deck.0, "three", Some("a".into()), "Start").unwrap();
+        assert_eq!(sections(&added), [(0, "Start", 0), (1, "Finale", 2)]);
+        let renamed = rename_section(&deck.0, "three", 1, "The end").unwrap();
+        assert_eq!(sections(&renamed), [(0, "Start", 0), (1, "The end", 2)]);
+        let removed = delete_section(&deck.0, "three", 0).unwrap();
+        assert_eq!(sections(&removed), [(0, "The end", 2)]);
+        assert_eq!(slide_ids(&removed), ["a", "b", "c"]);
+        assert!(delete_section(&deck.0, "three", 4).is_err());
+        assert!(rename_section(&deck.0, "three", 4, "x").is_err());
+        assert!(add_section(&deck.0, "three", Some("zzz".into()), "x").is_err());
+    }
+
+    #[test]
+    fn section_edits_do_not_reload_slide_previews() {
+        let deck = TempDeck::new(SECTIONED);
+        let before = load(&deck.0, "s").unwrap();
+        let renamed = rename_section(&deck.0, "s", 0, "Renamed").unwrap();
+        assert_eq!(before.shell_hash, renamed.shell_hash);
+        assert!(before
+            .slides
+            .iter()
+            .zip(&renamed.slides)
+            .all(|(a, b)| a.hash == b.hash));
+    }
+
+    #[test]
+    fn reorder_slides_and_sections_together() {
+        let deck = TempDeck::new(SECTIONED);
+        let order = ["a", "b", "section:0", "c"].map(String::from).to_vec();
+        let out = reorder(&deck.0, "s", order).unwrap();
+        assert_eq!(slide_ids(&out), ["a", "b", "c"]);
+        assert_eq!(sections(&out), [(0, "Part two", 2)]);
+        assert!(reorder(&deck.0, "s", vec!["a".into(), "b".into(), "c".into()]).is_err());
+    }
+
+    #[test]
+    fn export_keeps_section_markers_for_the_player_to_hide() {
+        let deck = TempDeck::new(SECTIONED);
+        let dest = deck.0.join("out.html");
+        export(&deck.0, &dest).unwrap();
+        let exported = fs::read_to_string(dest).unwrap();
+        assert!(exported.contains("data-title=\"Part two\""));
+        assert!(exported.contains(".deck > .deck-section"));
     }
 }

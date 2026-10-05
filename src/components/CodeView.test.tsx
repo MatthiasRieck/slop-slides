@@ -389,3 +389,58 @@ describe("CodeView: conflicts with changes on disk", () => {
     expect(screen.queryByText(/changed on disk while/)).toBeNull();
   });
 });
+
+describe("CodeView: section markers", () => {
+  const SECTIONED = DECK_HTML.replace(
+    `<section class="slide" id="outro">`,
+    `<div class="deck-section" data-title="Wrap up"></div>\n<section class="slide" id="outro">`,
+  );
+
+  /** What the backend reports after a section edit: slide and shell hashes do not change. */
+  const sectionEdit = async (html: string) => {
+    disk = html;
+    await act(async () => useApp.getState().setDeck(deckFor(html, "0")));
+  };
+
+  beforeEach(() => {
+    disk = SECTIONED;
+    useApp.setState({ deck: deckFor(SECTIONED, "0") });
+  });
+
+  it("shows a section renamed in the rail, which leaves the slide hashes alone", async () => {
+    const { view } = await renderView();
+    expect(view.state.doc.toString()).toContain(`data-title="Wrap up"`);
+    await sectionEdit(SECTIONED.replace("Wrap up", "Closing"));
+    await waitFor(() => expect(view.state.doc.toString()).toContain(`data-title="Closing"`));
+    expect(useApp.getState().codeDirty).toBe(false);
+  });
+
+  it("shows a section added or removed elsewhere", async () => {
+    const { view } = await renderView();
+    await sectionEdit(DECK_HTML);
+    await waitFor(() => expect(view.state.doc.toString()).not.toContain("deck-section"));
+    await sectionEdit(SECTIONED);
+    await waitFor(() => expect(view.state.doc.toString()).toContain("deck-section"));
+  });
+
+  it("saves a renamed section after the rail renamed it, without a false conflict", async () => {
+    const { view } = await renderView();
+    await sectionEdit(SECTIONED.replace("Wrap up", "Closing"));
+    await waitFor(() => expect(view.state.doc.toString()).toContain("Closing"));
+    await type(view, `data-title="Closing`, ` time`);
+    const renamed = SECTIONED.replace("Wrap up", "Closing time");
+    invoke.mockImplementation(async (command: string) => {
+      if (command !== "save_deck_source") return null;
+      disk = renamed;
+      return deckFor(renamed, "0");
+    });
+    await act(async () => fireEvent.click(button("Save")));
+    expect(invoke).toHaveBeenCalledWith("save_deck_source", {
+      id: "talk",
+      source: renamed,
+      base: SECTIONED.replace("Wrap up", "Closing"),
+    });
+    expect(useApp.getState().deck?.sections[0]?.title).toBe("Closing time");
+    expect(screen.queryByText(/changed on disk/)).toBeNull();
+  });
+});

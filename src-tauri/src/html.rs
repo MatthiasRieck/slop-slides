@@ -2,6 +2,10 @@
 //! `<section class="slide" id="…">` elements are the slides, in order. This module finds
 //! those sections without a full HTML parser (it skips comments, `<script>`, `<style>`
 //! and quoted attributes) and rewrites the document for slide-level operations.
+//!
+//! Between slides, `<div class="deck-section" data-title="…"></div>` markers start a named
+//! section. They are shown in the editor's slide rail but are not slides: the player hides
+//! them and nothing counts them.
 
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
@@ -32,6 +36,31 @@ pub struct SlideSpan {
 /// Marks a slide the player skips. The editor still shows it, muted.
 pub const HIDDEN_ATTR: &str = "data-hidden";
 
+/// Class of the marker element that starts a section; its title is the `data-title` attribute.
+pub const SECTION_CLASS: &str = "deck-section";
+pub const SECTION_TITLE_ATTR: &str = "data-title";
+
+/// Key of the section marker with this document-order index, as used by [`reorder`].
+pub fn section_key(index: usize) -> String {
+    format!("section:{index}")
+}
+
+#[derive(Debug, Clone)]
+pub struct SectionSpan {
+    /// The marker element, including an immediately following `</div>`.
+    pub range: Range<usize>,
+    /// Decoded `data-title`; empty when missing.
+    pub title: String,
+    /// Byte range of the title attribute's value, when present.
+    pub title_value: Option<Range<usize>>,
+    /// Byte offset just after `<div`.
+    pub tag_name_end: usize,
+    /// Number of slides that come before the marker.
+    pub before: usize,
+    /// Whether the marker has no content besides its own end tag.
+    pub empty: bool,
+}
+
 pub(crate) struct Tag {
     pub name: String,
     pub closing: bool,
@@ -41,19 +70,18 @@ pub(crate) struct Tag {
     pub end: usize,
 }
 
-/// Top-level slide sections in document order.
-pub fn find_slides(html: &str) -> Vec<SlideSpan> {
-    let bytes = html.as_bytes();
-    let mut slides = Vec::new();
-    let mut open: Option<(SlideSpan, usize)> = None; // (slide, nested <section> depth)
+/// Every tag outside comments and raw-text elements (`<script>`, `<style>`, …), with the
+/// byte offset it starts at.
+fn tags(html: &str) -> impl Iterator<Item = (usize, Tag)> + '_ {
     let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != b'<' {
-            i += 1;
-            continue;
-        }
+    std::iter::from_fn(move || loop {
+        let Some(found) = html.get(i..).and_then(|rest| rest.find('<')) else {
+            i = html.len();
+            return None;
+        };
+        i += found;
         if html[i..].starts_with("<!--") {
-            i = html[i..].find("-->").map_or(bytes.len(), |e| i + e + 3);
+            i = html[i..].find("-->").map_or(html.len(), |e| i + e + 3);
             continue;
         }
         let Some(tag) = parse_tag(html, i) else {
@@ -62,38 +90,84 @@ pub fn find_slides(html: &str) -> Vec<SlideSpan> {
         };
         if !tag.closing && matches!(tag.name.as_str(), "script" | "style" | "textarea" | "title") {
             let close = format!("</{}", tag.name);
-            i = find_ci(html, tag.end, &close).unwrap_or(bytes.len());
+            i = find_ci(html, tag.end, &close).unwrap_or(html.len());
             continue;
         }
-        if tag.name == "section" {
-            match (&mut open, tag.closing) {
-                (Some((_, depth)), false) => *depth += 1,
-                (Some((_, depth)), true) if *depth > 0 => *depth -= 1,
-                (Some(_), true) => {
-                    let (mut slide, _) = open.take().unwrap();
-                    slide.range.end = tag.end;
-                    slides.push(slide);
-                }
-                (None, false) if has_class(&tag, "slide") => {
-                    let id = tag.attrs.iter().find(|(n, _, _, _)| n == "id");
-                    let hidden = tag.attrs.iter().find(|(n, _, _, _)| n == HIDDEN_ATTR);
-                    open = Some((
-                        SlideSpan {
-                            range: i..i,
-                            id: id.map(|(_, v, _, _)| v.clone()).filter(|v| !v.is_empty()),
-                            id_value: id.map(|(_, _, r, _)| r.clone()),
-                            tag_name_end: tag.name_end,
-                            hidden: hidden.map(|(_, _, _, r)| r.clone()),
-                        },
-                        0,
-                    ));
-                }
-                _ => {}
-            }
-        }
+        let start = i;
         i = tag.end;
+        return Some((start, tag));
+    })
+}
+
+/// Top-level slide sections in document order.
+pub fn find_slides(html: &str) -> Vec<SlideSpan> {
+    let mut slides = Vec::new();
+    let mut open: Option<(SlideSpan, usize)> = None; // (slide, nested <section> depth)
+    for (i, tag) in tags(html) {
+        if tag.name != "section" {
+            continue;
+        }
+        match (&mut open, tag.closing) {
+            (Some((_, depth)), false) => *depth += 1,
+            (Some((_, depth)), true) if *depth > 0 => *depth -= 1,
+            (Some(_), true) => {
+                let (mut slide, _) = open.take().unwrap();
+                slide.range.end = tag.end;
+                slides.push(slide);
+            }
+            (None, false) if has_class(&tag, "slide") => {
+                let id = tag.attrs.iter().find(|(n, _, _, _)| n == "id");
+                let hidden = tag.attrs.iter().find(|(n, _, _, _)| n == HIDDEN_ATTR);
+                open = Some((
+                    SlideSpan {
+                        range: i..i,
+                        id: id.map(|(_, v, _, _)| v.clone()).filter(|v| !v.is_empty()),
+                        id_value: id.map(|(_, _, r, _)| r.clone()),
+                        tag_name_end: tag.name_end,
+                        hidden: hidden.map(|(_, _, _, r)| r.clone()),
+                    },
+                    0,
+                ));
+            }
+            _ => {}
+        }
     }
     slides
+}
+
+/// Section markers between slides, in document order. Markers inside a slide are content
+/// of that slide, not sections.
+pub fn find_sections(html: &str) -> Vec<SectionSpan> {
+    let slides = find_slides(html);
+    let mut sections = Vec::new();
+    for (i, tag) in tags(html) {
+        if tag.closing
+            || tag.name != "div"
+            || !has_class(&tag, SECTION_CLASS)
+            || slides.iter().any(|s| s.range.contains(&i))
+        {
+            continue;
+        }
+        let title = tag.attrs.iter().find(|(n, ..)| n == SECTION_TITLE_ATTR);
+        let rest = &html[tag.end..];
+        let after_ws = rest.trim_start();
+        let closer = after_ws
+            .get(..5)
+            .filter(|c| c.eq_ignore_ascii_case("</div"))
+            .and_then(|_| after_ws.find('>'))
+            .map(|e| tag.end + (rest.len() - after_ws.len()) + e + 1);
+        sections.push(SectionSpan {
+            range: i..closer.unwrap_or(tag.end),
+            title: title
+                .map(|(_, v, ..)| decode_entities(v).trim().to_string())
+                .unwrap_or_default(),
+            title_value: title.map(|(_, _, r, _)| r.clone()),
+            tag_name_end: tag.name_end,
+            before: slides.iter().filter(|s| s.range.end <= i).count(),
+            empty: closer.is_some(),
+        });
+    }
+    sections
 }
 
 pub(crate) fn has_class(tag: &Tag, class: &str) -> bool {
@@ -192,13 +266,22 @@ pub fn content_hash(text: &str) -> String {
     format!("{:x}", hasher.finish())
 }
 
-/// Hash of everything except the slides: shared styles, fonts, runtime.
-pub fn shell_hash(html: &str, slides: &[SlideSpan]) -> String {
+/// Hash of everything except the slides and section markers: shared styles, fonts, runtime.
+/// A marker's leading whitespace goes with it, so adding or removing one leaves the hash alone.
+pub fn shell_hash(html: &str, slides: &[SlideSpan], sections: &[SectionSpan]) -> String {
+    let mut cut: Vec<Range<usize>> = slides.iter().map(|s| s.range.clone()).collect();
+    cut.extend(sections.iter().map(|s| {
+        let start = html[..s.range.start].trim_end().len();
+        start..s.range.end
+    }));
+    cut.sort_by_key(|r| r.start);
     let mut shell = String::with_capacity(html.len());
     let mut at = 0;
-    for slide in slides {
-        shell.push_str(&html[at..slide.range.start]);
-        at = slide.range.end;
+    for range in cut {
+        if range.start >= at {
+            shell.push_str(&html[at..range.start]);
+        }
+        at = at.max(range.end);
     }
     shell.push_str(&html[at..]);
     content_hash(&shell)
@@ -227,6 +310,10 @@ fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+fn escape_attr(text: &str) -> String {
+    escape(text).replace('"', "&quot;")
 }
 
 fn decode_entities(text: &str) -> String {
@@ -345,21 +432,43 @@ fn indent_before(html: &str, at: usize) -> &str {
     }
 }
 
+/// Reorders slides and section markers. `order` lists every slide id and every marker key
+/// (see [`section_key`]) in the new order; the items trade places, everything between them
+/// stays where it is.
 pub fn reorder(html: &str, order: &[String]) -> Result<String, String> {
     let slides = find_slides(html);
-    let mut current: Vec<_> = slides.iter().filter_map(|s| s.id.clone()).collect();
+    let sections = find_sections(html);
+    let mut items: Vec<(Range<usize>, Option<String>)> = slides
+        .iter()
+        .map(|s| (s.range.clone(), s.id.clone()))
+        .chain(
+            sections
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (s.range.clone(), Some(section_key(i)))),
+        )
+        .collect();
+    items.sort_by_key(|(range, _)| range.start);
+    let mut current: Vec<_> = items.iter().filter_map(|(_, key)| key.clone()).collect();
     let mut proposed = order.to_vec();
     current.sort();
     proposed.sort();
-    if current != proposed || current.len() != slides.len() {
+    if current != proposed || current.len() != items.len() {
         return Err("The slides changed while reordering; try again.".into());
     }
+    let range_of = |key: &str| {
+        items
+            .iter()
+            .find(|(_, k)| k.as_deref() == Some(key))
+            .map(|(range, _)| range.clone())
+            .expect("keys were validated")
+    };
     let mut out = String::with_capacity(html.len());
     let mut at = 0;
-    for (slot, id) in slides.iter().zip(order) {
-        out.push_str(&html[at..slot.range.start]);
-        out.push_str(&html[span_of(&slides, id).unwrap().range.clone()]);
-        at = slot.range.end;
+    for ((slot, _), key) in items.iter().zip(order) {
+        out.push_str(&html[at..slot.start]);
+        out.push_str(&html[range_of(key)]);
+        at = slot.end;
     }
     out.push_str(&html[at..]);
     Ok(out)
@@ -370,6 +479,16 @@ pub fn delete(html: &str, id: &str) -> Result<String, String> {
     let span = span_of(&slides, id).ok_or_else(|| format!("Slide not found: {id}"))?;
     let start = html[..span.range.start].trim_end().len();
     Ok(format!("{}{}", &html[..start], &html[span.range.end..]))
+}
+
+/// Where new content goes in a deck without slides: just before the end of `<main>`.
+fn end_of_deck(html: &str) -> Result<usize, String> {
+    let lower = html.to_ascii_lowercase();
+    let at = lower
+        .rfind("</main")
+        .or_else(|| lower.rfind("</body"))
+        .ok_or("The deck has no <main class=\"deck\"> container.")?;
+    Ok(html[..at].trim_end().len())
 }
 
 /// Inserts `section` (with `{{ID}}` replaced) after slide `after`, after the last slide,
@@ -390,15 +509,7 @@ pub fn insert(
             span.range.end,
             indent_before(html, span.range.start).to_string(),
         ),
-        None => {
-            let lower = html.to_ascii_lowercase();
-            let at = lower
-                .rfind("</main")
-                .or_else(|| lower.rfind("</body"))
-                .ok_or("The deck has no <main class=\"deck\"> container.")?;
-            let at = html[..at].trim_end().len();
-            (at, "    ".to_string())
-        }
+        None => (end_of_deck(html)?, "    ".to_string()),
     };
     let out = format!(
         "{}\n{}{}{}",
@@ -427,6 +538,63 @@ pub fn set_hidden(html: &str, id: &str, hidden: bool) -> Result<String, String> 
         }
         _ => html.to_string(),
     })
+}
+
+fn section_span(sections: &[SectionSpan], index: usize) -> Result<&SectionSpan, String> {
+    sections
+        .get(index)
+        .ok_or_else(|| format!("Section not found: {index}"))
+}
+
+/// Starts a new section with `title` right before slide `before`, or after the last slide
+/// when `before` is `None`.
+pub fn add_section(html: &str, before: Option<&str>, title: &str) -> Result<String, String> {
+    let slides = find_slides(html);
+    let marker = format!(
+        "<div class=\"{SECTION_CLASS}\" {SECTION_TITLE_ATTR}=\"{}\"></div>",
+        escape_attr(title.trim())
+    );
+    match before {
+        Some(id) => {
+            let span = span_of(&slides, id).ok_or_else(|| format!("Slide not found: {id}"))?;
+            let at = span.range.start;
+            let indent = indent_before(html, at);
+            Ok(format!("{}{marker}\n{indent}{}", &html[..at], &html[at..]))
+        }
+        None => {
+            let (at, indent) = match slides.last() {
+                Some(last) => (
+                    last.range.end,
+                    indent_before(html, last.range.start).to_string(),
+                ),
+                None => (end_of_deck(html)?, "    ".to_string()),
+            };
+            Ok(format!("{}\n{indent}{marker}{}", &html[..at], &html[at..]))
+        }
+    }
+}
+
+/// Sets the title of the section with this document-order index, keeping its other attributes.
+pub fn rename_section(html: &str, index: usize, title: &str) -> Result<String, String> {
+    let sections = find_sections(html);
+    let span = section_span(&sections, index)?;
+    let title = escape_attr(title.trim());
+    Ok(match &span.title_value {
+        Some(value) => format!("{}{title}{}", &html[..value.start], &html[value.end..]),
+        None => format!(
+            "{} {SECTION_TITLE_ATTR}=\"{title}\"{}",
+            &html[..span.tag_name_end],
+            &html[span.tag_name_end..]
+        ),
+    })
+}
+
+/// Removes a section marker; its slides stay and join the previous section.
+pub fn delete_section(html: &str, index: usize) -> Result<String, String> {
+    let sections = find_sections(html);
+    let span = section_span(&sections, index)?;
+    let start = html[..span.range.start].trim_end().len();
+    Ok(format!("{}{}", &html[..start], &html[span.range.end..]))
 }
 
 pub fn duplicate(html: &str, id: &str) -> Result<(String, String), String> {
@@ -745,7 +913,7 @@ mod tests {
     #[test]
     fn shell_hash_ignores_slide_edits_but_not_shell_edits() {
         let deck = normalize_ids(DECK).unwrap();
-        let hash = |html: &str| shell_hash(html, &find_slides(html));
+        let hash = |html: &str| shell_hash(html, &find_slides(html), &find_sections(html));
         let slide_edit = deck.replace("<p>Plan</p>", "<p>New plan</p>");
         assert_eq!(hash(&deck), hash(&slide_edit));
         let style_edit = deck.replace("color: red", "color: blue");
@@ -884,8 +1052,8 @@ mod tests {
         let swapped = reorder(&deck, &["plan".into(), "intro".into(), "slide-3".into()]).unwrap();
         assert_eq!(swapped.len(), deck.len());
         assert_eq!(
-            shell_hash(&swapped, &find_slides(&swapped)),
-            shell_hash(&deck, &find_slides(&deck))
+            shell_hash(&swapped, &find_slides(&swapped), &find_sections(&swapped)),
+            shell_hash(&deck, &find_slides(&deck), &find_sections(&deck))
         );
     }
 
@@ -1053,4 +1221,184 @@ mod tests {
             "only deck-relative assets/ references are inlined"
         );
     }
+
+    const SECTIONED: &str = r#"<main class="deck">
+    <section class="slide" id="a">A</section>
+    <div class="deck-section" data-title="Intro &amp; &quot;goals&quot;"></div>
+    <section class="slide" id="b">B<div class="deck-section" data-title="inside"></div></section>
+    <section class="slide" id="c">C</section>
+    <!-- <div class="deck-section" data-title="ghost"></div> -->
+    <div class="deck-section" data-title="Wrap up" ></div>
+    <section class="slide" id="d">D</section>
+  </main>"#;
+
+    fn section_titles(html: &str) -> Vec<(String, usize)> {
+        find_sections(html)
+            .into_iter()
+            .map(|s| (s.title, s.before))
+            .collect()
+    }
+
+    #[test]
+    fn finds_section_markers_between_slides_only() {
+        assert_eq!(
+            section_titles(SECTIONED),
+            [
+                ("Intro & \"goals\"".to_string(), 1),
+                ("Wrap up".to_string(), 3)
+            ]
+        );
+        assert_eq!(ids(SECTIONED), ["a", "b", "c", "d"]);
+        assert!(find_sections("<main class=\"deck\"></main>").is_empty());
+    }
+
+    #[test]
+    fn section_markers_are_not_slides_and_cover_their_end_tag() {
+        let sections = find_sections(SECTIONED);
+        assert!(SECTIONED[sections[0].range.clone()].ends_with("></div>"));
+        assert!(sections.iter().all(|s| s.empty));
+        let open = "<div class=\"deck-section\" data-title=\"x\"><p>hi</p></div>";
+        let found = find_sections(open);
+        assert!(!found[0].empty);
+        assert_eq!(
+            &open[found[0].range.clone()],
+            &open[..open.find('>').unwrap() + 1]
+        );
+        let upper = "<DIV CLASS=\"deck-section\" DATA-TITLE=\"Up\"> </DIV>";
+        let found = find_sections(upper);
+        assert_eq!(found[0].title, "Up");
+        assert_eq!(found[0].range, 0..upper.len());
+        assert!(found[0].empty);
+    }
+
+    #[test]
+    fn section_without_a_title_has_an_empty_one() {
+        let found = find_sections("<div class=\"deck-section\"></div>");
+        assert_eq!(found[0].title, "");
+        assert!(found[0].title_value.is_none());
+        let found =
+            find_sections("<div class=\"other deck-section\" data-title=\"  Padded  \"></div>");
+        assert_eq!(found[0].title, "Padded");
+    }
+
+    #[test]
+    fn section_markers_in_scripts_and_styles_are_ignored() {
+        let html = "<script>x = '<div class=\"deck-section\" data-title=\"js\"></div>'</script>\
+            <div class=\"deck-section\" data-title=\"real\"></div>";
+        assert_eq!(section_titles(html), [("real".to_string(), 0)]);
+    }
+
+    #[test]
+    fn adds_a_section_before_a_slide_with_matching_indent() {
+        let out = add_section(THREE_SLIDES, Some("b"), "Part \"2\" & more").unwrap();
+        assert_eq!(
+            out,
+            THREE_SLIDES.replace(
+                "  <section class=\"slide\" id=\"b\">",
+                "  <div class=\"deck-section\" data-title=\"Part &quot;2&quot; &amp; more\"></div>\n  <section class=\"slide\" id=\"b\">"
+            )
+        );
+        assert_eq!(section_titles(&out), [("Part \"2\" & more".to_string(), 1)]);
+        assert_eq!(ids(&out), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn adds_a_section_at_the_end_or_into_an_empty_deck() {
+        let out = add_section(THREE_SLIDES, None, "End").unwrap();
+        assert_eq!(section_titles(&out), [("End".to_string(), 3)]);
+        assert!(out.ends_with("</div>\n</main></body></html>"));
+        let empty = "<main class=\"deck\">\n</main>";
+        let out = add_section(empty, None, "Only").unwrap();
+        assert_eq!(section_titles(&out), [("Only".to_string(), 0)]);
+        assert!(add_section("<p>x</p>", None, "x").is_err());
+        assert!(add_section(THREE_SLIDES, Some("nope"), "x").is_err());
+    }
+
+    #[test]
+    fn renames_a_section_and_keeps_other_attributes() {
+        let out = rename_section(SECTIONED, 1, "Closing <b>").unwrap();
+        assert_eq!(section_titles(&out)[1], ("Closing <b>".to_string(), 3),);
+        assert!(out.contains("data-title=\"Closing &lt;b&gt;\" ></div>"));
+        assert_eq!(section_titles(&out)[0].0, "Intro & \"goals\"");
+        let bare = "<div class=\"deck-section\" id=\"s\"></div>";
+        let out = rename_section(bare, 0, "New").unwrap();
+        assert_eq!(
+            out,
+            "<div data-title=\"New\" class=\"deck-section\" id=\"s\"></div>"
+        );
+        assert!(rename_section(SECTIONED, 2, "x").is_err());
+    }
+
+    #[test]
+    fn deletes_only_the_marker() {
+        let out = delete_section(SECTIONED, 0).unwrap();
+        assert_eq!(section_titles(&out), [("Wrap up".to_string(), 3)]);
+        assert_eq!(ids(&out), ["a", "b", "c", "d"]);
+        assert!(!out.contains("Intro"));
+        assert!(out.contains("<section class=\"slide\" id=\"b\">"));
+        assert!(delete_section(SECTIONED, 5).is_err());
+    }
+
+    #[test]
+    fn reorder_moves_markers_together_with_slides() {
+        let html = "<main>\n<section class=\"slide\" id=\"a\">A</section>\n<div class=\"deck-section\" data-title=\"One\"></div>\n<section class=\"slide\" id=\"b\">B</section>\n<section class=\"slide\" id=\"c\">C</section>\n</main>";
+        let order = |keys: &[&str]| keys.iter().map(|k| k.to_string()).collect::<Vec<_>>();
+        let out = reorder(html, &order(&["a", "b", "section:0", "c"])).unwrap();
+        assert_eq!(section_titles(&out), [("One".to_string(), 2)]);
+        assert_eq!(ids(&out), ["a", "b", "c"]);
+        let out = reorder(html, &order(&["section:0", "c", "b", "a"])).unwrap();
+        assert_eq!(section_titles(&out), [("One".to_string(), 0)]);
+        assert_eq!(ids(&out), ["c", "b", "a"]);
+        assert!(out.starts_with("<main>\n<div class=\"deck-section\""));
+        assert!(out.ends_with("</section>\n</main>"));
+    }
+
+    #[test]
+    fn reorder_requires_every_marker() {
+        let err = reorder(SECTIONED, &["a".into(), "b".into(), "c".into(), "d".into()]);
+        assert!(err.is_err(), "markers missing from the order");
+        let all: Vec<String> = ["a", "section:0", "b", "c", "section:1", "d"]
+            .map(String::from)
+            .into();
+        assert_eq!(reorder(SECTIONED, &all).unwrap(), SECTIONED);
+    }
+
+    #[test]
+    fn shell_hash_ignores_section_markers() {
+        let hash = |html: &str| shell_hash(html, &find_slides(html), &find_sections(html));
+        let base = hash(SECTIONED);
+        assert_eq!(base, hash(&rename_section(SECTIONED, 0, "Other").unwrap()));
+        assert_eq!(base, hash(&delete_section(SECTIONED, 1).unwrap()));
+        assert_eq!(
+            base,
+            hash(&add_section(SECTIONED, Some("d"), "More").unwrap())
+        );
+        assert_ne!(
+            base,
+            hash(&SECTIONED.replace("<main", "<header></header><main"))
+        );
+    }
+
+    #[test]
+    fn inserting_and_duplicating_slides_keeps_markers() {
+        let (out, new) = duplicate(SECTIONED, "a").unwrap();
+        assert_eq!(new, "a-copy");
+        assert_eq!(
+            section_titles(&out)
+                .iter()
+                .map(|(_, before)| *before)
+                .collect::<Vec<_>>(),
+            [2, 4]
+        );
+        let (out, _) = insert(
+            SECTIONED,
+            Some("c"),
+            "<section class=\"slide\" id=\"{{ID}}\"></section>",
+            "new",
+        )
+        .unwrap();
+        assert_eq!(section_titles(&out)[1].1, 4);
+    }
+
+    const THREE_SLIDES: &str = "<html><body><main class=\"deck\">\n  <section class=\"slide\" id=\"a\">A</section>\n  <section class=\"slide\" id=\"b\">B</section>\n  <section class=\"slide\" id=\"c\">C</section>\n</main></body></html>";
 }

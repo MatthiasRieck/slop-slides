@@ -227,7 +227,7 @@ describe("player: embedded in the editor", () => {
     const event = p.key("ArrowRight");
     expect(p.active()).toBe(0);
     expect(event.defaultPrevented).toBe(false);
-    expect(parent.postMessage).toHaveBeenCalledWith({ type: "slop:key", key: "ArrowRight" }, "*");
+    expect(parent.postMessage).toHaveBeenCalledWith({ type: "slop:key", key: "ArrowRight", mod: false }, "*");
     p.click(p.doc.body, 1500);
     expect(p.active()).toBe(0);
   });
@@ -242,11 +242,48 @@ describe("player: in the presenter", () => {
   it("reports each slide shown to the editor", () => {
     const parent = { postMessage: vi.fn() };
     const p = player({ at: "#intro", parent });
-    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:slide", id: "intro" }, "*");
+    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:slide", id: "intro", index: 0 }, "*");
     p.key("ArrowRight");
-    expect(parent.postMessage).toHaveBeenCalledWith({ type: "slop:key", key: "ArrowRight" }, "*");
-    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:slide", id: null }, "*");
+    expect(parent.postMessage).toHaveBeenCalledWith({ type: "slop:key", key: "ArrowRight", mod: false }, "*");
+    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:slide", id: null, index: 1 }, "*");
     expect(p.active()).toBe(1);
+  });
+
+  it("tells the presenter when a modifier is held", () => {
+    const parent = { postMessage: vi.fn() };
+    const p = player({ parent });
+    p.window.dispatchEvent(new p.window.KeyboardEvent("keydown", { key: "z", metaKey: true }));
+    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:key", key: "z", mod: true }, "*");
+    p.window.dispatchEvent(new p.window.KeyboardEvent("keydown", { key: "z", ctrlKey: true }));
+    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:key", key: "z", mod: true }, "*");
+  });
+
+  it("navigates on keys the presenter forwards while its drawing tools have focus", () => {
+    const parent = { postMessage: vi.fn() };
+    const p = player({ parent });
+    const go = (key: unknown) =>
+      p.window.dispatchEvent(new p.window.MessageEvent("message", { data: { type: "slop:go", key } }));
+    go("ArrowRight");
+    expect(p.active()).toBe(1);
+    go("End");
+    expect(p.active()).toBe(2);
+    go("ArrowLeft");
+    expect(p.active()).toBe(1);
+    go("x");
+    p.window.dispatchEvent(new p.window.MessageEvent("message", { data: "ArrowRight" }));
+    p.window.dispatchEvent(new p.window.MessageEvent("message", { data: null }));
+    expect(p.active()).toBe(1);
+  });
+
+  it("ignores forwarded keys when not in the presenter", () => {
+    const go = (p: ReturnType<typeof player>) =>
+      p.window.dispatchEvent(new p.window.MessageEvent("message", { data: { type: "slop:go", key: "End" } }));
+    const standalone = player();
+    go(standalone);
+    expect(standalone.active()).toBe(0);
+    const embedded = player({ at: "?embed&slide=intro", parent: { postMessage: vi.fn() } });
+    go(embedded);
+    expect(embedded.active()).toBe(0);
   });
 
   it("leaves full screen to the app", () => {

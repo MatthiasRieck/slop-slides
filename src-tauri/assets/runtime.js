@@ -42,17 +42,14 @@
     } catch (e) {
       // Sandboxed frames and some file:// contexts refuse URL updates; navigation still works.
     }
-    if (framed) window.parent.postMessage({ type: "slop:slide", id: slides[index].id || null }, "*");
+    if (framed) window.parent.postMessage({ type: "slop:slide", id: slides[index].id || null, index: index }, "*");
   }
 
   window.addEventListener("resize", fit);
   fit();
   show(indexFor(embed ? params.get("slide") : decodeURIComponent(location.hash.slice(1))));
 
-  window.addEventListener("keydown", function (event) {
-    if (framed) window.parent.postMessage({ type: "slop:key", key: event.key }, "*");
-    if (embed) return;
-    var key = event.key;
+  function navigate(key) {
     if (key === "ArrowRight" || key === "ArrowDown" || key === "PageDown" || key === " ") show(current + 1);
     else if (key === "ArrowLeft" || key === "ArrowUp" || key === "PageUp") show(current - 1);
     else if (key === "Home") show(0);
@@ -60,11 +57,23 @@
     else if ((key === "f" || key === "F") && !framed) {
       if (document.fullscreenElement) document.exitFullscreen();
       else root.requestFullscreen && root.requestFullscreen();
-    } else return;
-    event.preventDefault();
+    } else return false;
+    return true;
+  }
+
+  window.addEventListener("keydown", function (event) {
+    if (framed) {
+      var mod = event.metaKey || event.ctrlKey;
+      window.parent.postMessage({ type: "slop:key", key: event.key, mod: mod }, "*");
+    }
+    if (!embed && navigate(event.key)) event.preventDefault();
   });
 
   if (embed) return;
+  // The presenter forwards keys pressed while its drawing tools have focus.
+  window.addEventListener("message", function (event) {
+    if (framed && event.data && event.data.type === "slop:go") navigate(String(event.data.key));
+  });
   window.addEventListener("hashchange", function () {
     show(indexFor(decodeURIComponent(location.hash.slice(1))));
   });

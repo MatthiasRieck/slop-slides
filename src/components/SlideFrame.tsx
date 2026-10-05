@@ -14,6 +14,8 @@ interface SlideFrameProps {
   version: string;
   /** Thumbnails render the final animation frame and ignore pointer input. */
   thumbnail?: boolean;
+  /** Loads the slide editor (final animation frame, editable); changing the key reloads it. */
+  editKey?: string;
   className?: string;
   onFrameReady?: (frame: HTMLIFrameElement) => void;
 }
@@ -23,8 +25,8 @@ interface SlideFrameProps {
  * fill its (16:9) container. When the slide changes, the new version loads behind the
  * current one and swaps in once painted, so edits stream in without white flashes.
  */
-export function SlideFrame({ deckId, slideId, version, thumbnail, className, onFrameReady }: SlideFrameProps) {
-  const src = slideUrl(deckId, slideId, version, thumbnail);
+export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, className, onFrameReady }: SlideFrameProps) {
+  const src = slideUrl(deckId, slideId, version, thumbnail || editKey !== undefined, editKey);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0);

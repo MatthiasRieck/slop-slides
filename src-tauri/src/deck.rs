@@ -57,6 +57,8 @@ pub struct Slide {
     pub hash: String,
     /// Skipped by the player (presenting, exported file); still shown in the editor.
     pub hidden: bool,
+    /// Has elements the user moved by hand, waiting for the agent to tidy the layout.
+    pub moved: bool,
 }
 
 /// A named group of slides, started by a marker between slides in deck.html.
@@ -237,6 +239,7 @@ pub fn load(dir: &Path, id: &str) -> Result<Deck> {
             id: span.id.clone().unwrap_or_else(|| format!("#{}", index + 1)),
             hash: html::content_hash(&source[span.range.clone()]),
             hidden: span.hidden.is_some(),
+            moved: html::has_moved(&source[span.range.clone()]),
         })
         .collect();
     Ok(Deck {
@@ -350,6 +353,31 @@ pub fn delete_section(dir: &Path, id: &str, index: usize) -> Result<Deck> {
 pub fn delete_slide(dir: &Path, id: &str, slide: &str) -> Result<Deck> {
     snapshot(dir)?;
     Ok(edit(dir, id, |s| Ok((html::delete(s, slide)?, ())))?.0)
+}
+
+/// Replaces one slide with markup edited on the stage. `base` is the slide's hash the edit
+/// started from; the save is refused when the slide has changed since. Returns the slide's
+/// previous markup, so the edit can be undone by saving it back.
+pub fn update_slide(
+    dir: &Path,
+    id: &str,
+    slide: &str,
+    markup: &str,
+    base: &str,
+) -> Result<(Deck, String)> {
+    let source = read_html(dir)?;
+    let current = html::find_slides(&source)
+        .into_iter()
+        .find(|s| s.id.as_deref() == Some(slide))
+        .map(|s| html::content_hash(&source[s.range]))
+        .ok_or_else(|| Error::msg(format!("Slide not found: {slide}")))?;
+    if current != base {
+        return Err(Error::msg(
+            "The slide changed while you were editing it; your last change was not saved.",
+        ));
+    }
+    snapshot(dir)?;
+    edit(dir, id, |s| html::replace_slide(s, slide, markup))
 }
 
 /// Replaces deck.html with hand-edited source. `base` is the text the edit started from;
@@ -669,6 +697,42 @@ mod tests {
             saved.slides[1].id, "#2",
             "unnamed slide addressed by position"
         );
+    }
+
+    #[test]
+    fn update_slide_replaces_it_and_returns_the_old_markup() {
+        let deck = TempDeck::new(EDITED);
+        let base = load(&deck.0, "talk").unwrap().slides[0].hash.clone();
+        let markup = "<section class=\"slide\" id=\"a\"><p data-moved=\"\" style=\"translate: 10px 0px\">A!</p></section>";
+        let (saved, previous) = update_slide(&deck.0, "talk", "a", markup, &base).unwrap();
+        assert_eq!(previous, "<section class=\"slide\" id=\"a\">A!</section>");
+        assert_eq!(deck.html(), EDITED.replace(&previous, markup));
+        assert_eq!(deck.snapshots(), [EDITED]);
+        let moved: Vec<_> = saved.slides.iter().map(|s| s.moved).collect();
+        assert_eq!(moved, [true, false]);
+        assert_ne!(saved.slides[0].hash, base);
+
+        // Undo: save the previous markup back on top of the new version.
+        let (restored, _) =
+            update_slide(&deck.0, "talk", "a", &previous, &saved.slides[0].hash).unwrap();
+        assert_eq!(deck.html(), EDITED);
+        assert_eq!(restored.slides[0].hash, base);
+    }
+
+    #[test]
+    fn update_slide_refuses_when_the_slide_changed_since_base() {
+        let deck = TempDeck::new(EDITED);
+        let markup = "<section class=\"slide\" id=\"a\">mine</section>";
+        let err = update_slide(&deck.0, "talk", "a", markup, "stale").unwrap_err();
+        assert!(err.to_string().contains("changed"), "{err}");
+        assert_eq!(deck.html(), EDITED);
+        assert!(deck.snapshots().is_empty());
+
+        let base = load(&deck.0, "talk").unwrap().slides[0].hash.clone();
+        assert!(update_slide(&deck.0, "talk", "zz", markup, &base).is_err());
+        let other = "<section class=\"slide\" id=\"b\">mine</section>";
+        assert!(update_slide(&deck.0, "talk", "a", other, &base).is_err());
+        assert_eq!(deck.html(), EDITED);
     }
 
     #[test]

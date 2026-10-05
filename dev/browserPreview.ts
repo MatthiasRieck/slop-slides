@@ -18,7 +18,8 @@ function readDeck(id: string) {
   const slides = slideTags.map((match, index) => {
     const id = /\bid=["']([^"']+)["']/i.exec(match[0])?.[1] ?? `#${index + 1}`;
     const hidden = /\sdata-hidden\b/i.test(match[0]);
-    return { id, hash: hash(html.slice(match.index, html.indexOf("</section>", match.index))), hidden };
+    const source = html.slice(match.index, html.indexOf("</section>", match.index));
+    return { id, hash: hash(source), hidden, moved: /<[^>]*\sdata-moved\b/i.test(source) };
   });
   const sections = [...html.matchAll(/<div\b[^>]*\bclass=["'][^"']*\bdeck-section\b[^"']*["'][^>]*>/gi)].map(
     (match, index) => ({
@@ -54,7 +55,17 @@ export function browserPreview(): Plugin {
           res.statusCode = 404;
           return res.end();
         }
-        if (file.endsWith(".html")) res.setHeader("content-type", "text/html; charset=utf-8");
+        if (file.endsWith(".html")) {
+          res.setHeader("content-type", "text/html; charset=utf-8");
+          // Like src-tauri/src/protocol.rs: `?edit` adds the slide editor.
+          if (url.searchParams.has("edit")) {
+            const editor = fs.readFileSync(new URL("../src-tauri/assets/editor.js", import.meta.url), "utf8");
+            const html = fs.readFileSync(file, "utf8");
+            const at = html.toLowerCase().lastIndexOf("</body");
+            const script = `<script>\n${editor}</script>\n`;
+            return res.end(at < 0 ? html + script : html.slice(0, at) + script + html.slice(at));
+          }
+        }
         fs.createReadStream(file).pipe(res);
       });
     },

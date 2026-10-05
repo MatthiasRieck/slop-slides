@@ -95,6 +95,9 @@ must never reflow, scroll, or overflow.
   JavaScript, for slide visuals.
 - Speaker notes, if requested, go in `<aside class="notes">…</aside>` inside the slide
   (hidden by the runtime).
+- The user can edit text and drag elements on the slide by hand. A moved element gets a
+  `data-moved` attribute and an inline `translate: Xpx Ypx` offset (see "Hand edits" below).
+  Never add `data-moved`, `contenteditable`, or `data-slop-*` attributes yourself.
 - A slide with the `data-hidden` attribute is hidden: the user muted it in the editor and
   the player skips it when presenting. Keep the attribute when editing such a slide;
   remove it only when asked to show the slide again.
@@ -138,3 +141,19 @@ names a sketch: a screenshot of that slide with their pen and highlighter marks 
 the area they marked in slide pixels (1920×1080). Read the screenshot before editing. The
 marks only show where and what to change; never reproduce them on the slide. "This",
 "here", "the circled part" and similar refer to what they marked.
+
+## Hand edits
+
+The user can edit text and move elements directly on the slide. Text edits change the
+markup in place; keep them. A moved element carries `data-moved` and an inline
+`translate: Xpx Ypx` (slide pixels): its position on screen now is where the user wants it,
+but the offset is a quick fix that ignores the layout, so things may overlap, clip, or sit
+slightly off the grid.
+
+When asked to tidy a slide (the context then includes a screenshot of it), read the
+screenshot first. Rebuild that slide's layout so every moved element sits where it appears
+in the screenshot (snap to the slide's grid and alignments where it is close) using the
+deck's normal layout tools (flex, grid, padding, gaps, a slide-scoped rule), then remove
+`data-moved` and the `translate` from each one. Keep the user's text. Fix anything the
+edits broke: overlaps, clipping, uneven spacing. The `moved-element` lint warning lists every
+element still waiting for this.

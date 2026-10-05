@@ -26,6 +26,14 @@ struct CreatedSlide {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct UpdatedSlide {
+    deck: Deck,
+    /// The slide's markup before the update, to undo it.
+    previous: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AgentStatus {
     claude_path: Option<String>,
     library_path: String,
@@ -122,6 +130,21 @@ fn delete_section(app: AppHandle, id: String, index: usize) -> Result<Deck> {
 #[tauri::command]
 fn delete_slide(app: AppHandle, id: String, slide: String) -> Result<Deck> {
     deck::delete_slide(&deck::deck_dir(&app, &id)?, &id, &slide)
+}
+
+/// Saves a slide edited on the stage (text edits, moved elements). `base` is its hash when
+/// the edit started.
+#[tauri::command]
+fn update_slide(
+    app: AppHandle,
+    id: String,
+    slide: String,
+    markup: String,
+    base: String,
+) -> Result<UpdatedSlide> {
+    let (deck, previous) =
+        deck::update_slide(&deck::deck_dir(&app, &id)?, &id, &slide, &markup, &base)?;
+    Ok(UpdatedSlide { deck, previous })
 }
 
 #[tauri::command]
@@ -273,6 +296,7 @@ pub fn run() {
             rename_section,
             delete_section,
             delete_slide,
+            update_slide,
             save_deck_source,
             import_assets,
             export_deck,

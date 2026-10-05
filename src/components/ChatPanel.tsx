@@ -154,6 +154,7 @@ function UserBubble({ message }: { message: UserMessage }) {
         <div className="flex flex-wrap justify-end gap-1 text-2xs text-muted-foreground">
           {slideNumber > 0 && <span>on slide {slideNumber}</span>}
           {message.sketch && <span>· with sketch</span>}
+          {message.screenshot && <span>· with screenshot</span>}
           {message.attachments.map((a) => (
             <span key={a}>· {a.replace(/^assets\//, "")}</span>
           ))}

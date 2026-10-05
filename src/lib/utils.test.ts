@@ -28,6 +28,7 @@ describe("deck URLs (browser preview)", () => {
   it("builds embedded single-slide URLs", () => {
     expect(slideUrl("talk", "intro", "abc")).toBe("/__deck/talk/deck.html?embed&slide=intro&v=abc");
     expect(slideUrl("talk", "#2", "abc", true)).toBe("/__deck/talk/deck.html?embed&slide=%232&v=abc&static");
+    expect(slideUrl("talk", "intro", "abc", true, "3")).toBe("/__deck/talk/deck.html?embed&slide=intro&v=abc&static&edit=3");
   });
 });
 

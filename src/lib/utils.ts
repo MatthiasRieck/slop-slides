@@ -18,9 +18,13 @@ export function deckFileUrl(deckId: string, path: string, query?: string): strin
   return `${base}/${encoded}${query ? `?${query}` : ""}`;
 }
 
-/** One slide of a deck rendered by the embedded player, for editor previews. */
-export function slideUrl(deckId: string, slideId: string, version: string, still = false): string {
-  const query = `embed&slide=${encodeURIComponent(slideId)}&v=${version}${still ? "&static" : ""}`;
+/**
+ * One slide of a deck rendered by the embedded player, for editor previews. With `edit`
+ * (any value; changing it reloads the slide), the backend adds the slide editor.
+ */
+export function slideUrl(deckId: string, slideId: string, version: string, still = false, edit?: string): string {
+  const editing = edit === undefined ? "" : `&edit=${encodeURIComponent(edit)}`;
+  const query = `embed&slide=${encodeURIComponent(slideId)}&v=${version}${still ? "&static" : ""}${editing}`;
   return deckFileUrl(deckId, "deck.html", query);
 }
 

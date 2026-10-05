@@ -12,7 +12,7 @@ import { DECK_HTML, deckFor } from "../test/fixtures";
 import { SlideRail } from "./SlideRail";
 
 const DECK = deckFor(DECK_HTML);
-const withSlides = (...ids: string[]): Deck => ({ ...DECK, slides: ids.map((id) => ({ id, hash: id, hidden: false })) });
+const withSlides = (...ids: string[]): Deck => ({ ...DECK, slides: ids.map((id) => ({ id, hash: id, hidden: false, moved: false })) });
 
 beforeEach(() => {
   invoke.mockReset();

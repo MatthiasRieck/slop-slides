@@ -36,6 +36,19 @@ pub struct SlideSpan {
 /// Marks a slide the player skips. The editor still shows it, muted.
 pub const HIDDEN_ATTR: &str = "data-hidden";
 
+/// Marks an element the user dragged by hand in the editor; it carries an inline `translate`
+/// offset until the agent tidies the slide's layout.
+pub const MOVED_ATTR: &str = "data-moved";
+
+/// Attributes the in-editor slide editor puts on elements while it works. They never belong
+/// in deck.html; the editor strips them before saving.
+pub const EDITOR_ATTRS: &[&str] = &[
+    "contenteditable",
+    "data-slop-selected",
+    "data-slop-hover",
+    "data-slop-editing",
+];
+
 /// Class of the marker element that starts a section; its title is the `data-title` attribute.
 pub const SECTION_CLASS: &str = "deck-section";
 pub const SECTION_TITLE_ATTR: &str = "data-title";
@@ -597,6 +610,31 @@ pub fn delete_section(html: &str, index: usize) -> Result<String, String> {
     Ok(format!("{}{}", &html[..start], &html[span.range.end..]))
 }
 
+/// Whether the slide markup contains an element moved by hand (see [`MOVED_ATTR`]).
+pub fn has_moved(slide: &str) -> bool {
+    tags(slide).any(|(_, tag)| !tag.closing && tag.attrs.iter().any(|a| a.0 == MOVED_ATTR))
+}
+
+/// Replaces slide `id` with `markup`, which must be one whole `<section class="slide">` with
+/// the same id. Returns the new document and the slide's previous markup.
+pub fn replace_slide(html: &str, id: &str, markup: &str) -> Result<(String, String), String> {
+    let markup = markup.trim();
+    let replacement = find_slides(markup);
+    match replacement.as_slice() {
+        [only] if only.range == (0..markup.len()) && only.id.as_deref() == Some(id) => {}
+        _ => return Err(format!("The edited markup is not slide `{id}`.")),
+    }
+    let slides = find_slides(html);
+    let span = span_of(&slides, id).ok_or_else(|| format!("Slide not found: {id}"))?;
+    let previous = html[span.range.clone()].to_string();
+    let out = format!(
+        "{}{markup}{}",
+        &html[..span.range.start],
+        &html[span.range.end..]
+    );
+    Ok((out, previous))
+}
+
 pub fn duplicate(html: &str, id: &str) -> Result<(String, String), String> {
     let slides = find_slides(html);
     let span = span_of(&slides, id).ok_or_else(|| format!("Slide not found: {id}"))?;
@@ -713,6 +751,52 @@ mod tests {
             .into_iter()
             .map(|s| s.id.unwrap_or_default())
             .collect()
+    }
+
+    #[test]
+    fn replaces_one_slide_and_returns_the_old_markup() {
+        let html = "<main class=\"deck\">\n  <section class=\"slide\" id=\"a\"><p>A</p></section>\n  <section class=\"slide\" id=\"b\">B</section>\n</main>";
+        let edited = "  <section class=\"slide\" id=\"a\"><p style=\"translate: 4px 2px\" data-moved=\"\">A!</p></section>\n";
+        let (out, previous) = replace_slide(html, "a", edited).unwrap();
+        assert_eq!(
+            previous,
+            "<section class=\"slide\" id=\"a\"><p>A</p></section>"
+        );
+        assert_eq!(
+            out,
+            "<main class=\"deck\">\n  <section class=\"slide\" id=\"a\"><p style=\"translate: 4px 2px\" data-moved=\"\">A!</p></section>\n  <section class=\"slide\" id=\"b\">B</section>\n</main>"
+        );
+        // Restoring the previous markup undoes the edit exactly.
+        assert_eq!(replace_slide(&out, "a", &previous).unwrap().0, html);
+    }
+
+    #[test]
+    fn refuses_markup_that_is_not_the_slide() {
+        let html = "<main class=\"deck\"><section class=\"slide\" id=\"a\">A</section></main>";
+        for bad in [
+            "<section class=\"slide\" id=\"b\">A</section>",
+            "<section class=\"slide\">A</section>",
+            "<div>A</div>",
+            "<section class=\"slide\" id=\"a\">A</section><section class=\"slide\" id=\"a\">A</section>",
+            "<section class=\"slide\" id=\"a\">A</section><p>trailing</p>",
+            "<section class=\"slide\" id=\"a\">unclosed",
+            "",
+        ] {
+            assert!(replace_slide(html, "a", bad).is_err(), "accepted {bad:?}");
+        }
+        assert!(
+            replace_slide(html, "zz", "<section class=\"slide\" id=\"zz\"></section>").is_err()
+        );
+    }
+
+    #[test]
+    fn detects_hand_moved_elements() {
+        assert!(has_moved(
+            r#"<section class="slide" id="a"><p data-moved style="translate: 1px 2px">A</p></section>"#
+        ));
+        assert!(!has_moved(
+            r#"<section class="slide" id="a"><p>data-moved</p><!-- <p data-moved> --></section>"#
+        ));
     }
 
     #[test]

@@ -6,6 +6,7 @@ import { ChatPanel } from "./components/ChatPanel";
 import { CodeView } from "./components/CodeView";
 import { Home } from "./components/Home";
 import { Presenter } from "./components/Presenter";
+import { SlideImageExport } from "./components/SlideImageExport";
 import { SlideRail } from "./components/SlideRail";
 import { Stage } from "./components/Stage";
 import { TopBar } from "./components/TopBar";
@@ -19,6 +20,7 @@ export function App() {
     <>
       {deck ? <Editor /> : <Home />}
       {presenting && <Presenter />}
+      <SlideImageExport />
       <ErrorToast />
     </>
   );

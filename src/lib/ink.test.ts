@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isDot, strokePath, TOOL_KEYS, toFraction, toPixels } from "./ink";
+import { INK_STYLE, inkBounds, isDot, SLIDE_SIZE, strokePath, TOOL_KEYS, toFraction, toPixels, type Stroke } from "./ink";
 
 describe("strokePath", () => {
   it("draws a line through every point", () => {
@@ -80,5 +80,45 @@ describe("toFraction", () => {
 describe("TOOL_KEYS", () => {
   it("binds the drawing tools to their initials", () => {
     expect(TOOL_KEYS).toEqual({ l: "laser", p: "pen", h: "highlighter", e: "eraser" });
+  });
+});
+
+describe("inkBounds", () => {
+  const pen = (points: [number, number][]): Stroke => ({ tool: "pen", color: "#ef4444", points });
+
+  it("is null without ink", () => {
+    expect(inkBounds([])).toBeNull();
+    expect(inkBounds([pen([])])).toBeNull();
+  });
+
+  it("covers every stroke in slide pixels, padded by the ink width", () => {
+    const pad = INK_STYLE.pen.width;
+    expect(
+      inkBounds([
+        pen([
+          [0.25, 0.5],
+          [0.5, 0.25],
+        ]),
+        pen([[0.75, 0.75]]),
+      ]),
+    ).toEqual({ left: 480 - pad, top: 270 - pad, right: 1440 + pad, bottom: 810 + pad });
+  });
+
+  it("pads highlighter strokes more than pen strokes", () => {
+    const point: [number, number][] = [[0.5, 0.5]];
+    const marker = inkBounds([{ tool: "highlighter", color: "#facc15", points: point }])!;
+    const line = inkBounds([pen(point)])!;
+    expect(marker.right - marker.left).toBeGreaterThan(line.right - line.left);
+  });
+
+  it("stays on the slide", () => {
+    expect(
+      inkBounds([
+        pen([
+          [0, 0],
+          [1, 1],
+        ]),
+      ]),
+    ).toEqual({ left: 0, top: 0, right: SLIDE_SIZE.width, bottom: SLIDE_SIZE.height });
   });
 });

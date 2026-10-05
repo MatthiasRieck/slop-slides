@@ -11,6 +11,7 @@ import {
   type DeckChanged,
   type LintIssue,
 } from "./lib/api";
+import { inkBounds, SLIDE_SIZE, type Stroke } from "./lib/ink";
 
 export type ChatPart =
   | { kind: "text"; text: string }
@@ -28,7 +29,17 @@ export interface UserMessage {
   text: string;
   slide: string | null;
   attachments: string[];
+  /** The user drew on the slide before sending; absent in chats saved before sketches. */
+  sketch?: Sketch | null;
   createdAt: number;
+}
+
+/** What the agent is told about a drawing on the current slide. */
+export interface Sketch {
+  /** Deck-relative path of the slide screenshot with the drawing; null if it failed. */
+  image: string | null;
+  /** The marked area in slide pixels. */
+  bounds: { left: number; top: number; right: number; bottom: number };
 }
 
 export interface AssistantMessage {
@@ -76,6 +87,10 @@ interface AppState {
   lint: LintIssue[] | null;
   /** Text to put in the chat composer, with a counter so the same text can be sent twice. */
   composerFill: { text: string; rev: number } | null;
+  /** Ink drawn on slides in the editor, by slide id; sent along with the next message. */
+  sketches: Record<string, Stroke[]>;
+  /** Slides being saved as images into `dir`, one at a time; null when not exporting. */
+  imageExport: { dir: string; slides: string[] } | null;
 
   openDeck: (id: string) => Promise<void>;
   createDeck: (title: string) => Promise<void>;
@@ -90,6 +105,10 @@ interface AppState {
   setError: (error: string | null) => void;
   refreshLint: () => Promise<void>;
   fillComposer: (text: string) => void;
+  setSketches: (update: (all: Record<string, Stroke[]>) => Record<string, Stroke[]>) => void;
+  clearSketch: (slide: string) => void;
+  startImageExport: (dir: string) => void;
+  endImageExport: () => void;
   send: (text: string, options: { includeSlide: boolean; attachments: string[] }) => Promise<void>;
   interrupt: () => void;
   resetChat: () => Promise<void>;
@@ -113,6 +132,8 @@ export const useApp = create<AppState>((set, get) => ({
   error: null,
   lint: null,
   composerFill: null,
+  sketches: {},
+  imageExport: null,
 
   openDeck: async (id) => {
     try {
@@ -135,7 +156,7 @@ export const useApp = create<AppState>((set, get) => ({
   closeDeck: async () => {
     if (get().codeDirty && !(await confirmDiscardEdits())) return;
     await api.closeDeck();
-    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null });
+    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null, sketches: {}, imageExport: null });
   },
 
   setDeck: (deck) => {
@@ -185,16 +206,34 @@ export const useApp = create<AppState>((set, get) => ({
 
   fillComposer: (text) => set((s) => ({ composerFill: { text, rev: (s.composerFill?.rev ?? 0) + 1 } })),
 
+  setSketches: (update) => set((s) => ({ sketches: update(s.sketches) })),
+
+  clearSketch: (slide) =>
+    set((s) => {
+      const { [slide]: _, ...rest } = s.sketches;
+      return { sketches: rest };
+    }),
+
+  startImageExport: (dir) => {
+    const { deck } = get();
+    if (deck && deck.slides.length > 0) set({ imageExport: { dir, slides: deck.slides.map((s) => s.id) } });
+  },
+
+  endImageExport: () => set({ imageExport: null }),
+
   send: async (text, { includeSlide, attachments }) => {
     const { deck, selected, running, model } = get();
     if (!deck || running) return;
     const slide = includeSlide ? selected : null;
-    const user: UserMessage = {
+    const strokes = slide ? (get().sketches[slide] ?? []) : [];
+    const bounds = inkBounds(strokes);
+    let user: UserMessage = {
       id: newId(),
       role: "user",
       text,
       slide,
       attachments,
+      sketch: bounds ? { image: null, bounds } : null,
       createdAt: Date.now(),
     };
     const assistant: AssistantMessage = {
@@ -209,6 +248,13 @@ export const useApp = create<AppState>((set, get) => ({
       createdAt: Date.now(),
     };
     set((s) => ({ messages: [...s.messages, user, assistant], running: true }));
+    if (slide && user.sketch) {
+      // Screenshot the slide with the ink still on it, then put the ink away.
+      const captured: UserMessage = { ...user, sketch: { ...user.sketch, image: await captureSlide(deck.id) } };
+      user = captured;
+      set((s) => ({ messages: s.messages.map((m) => (m.id === captured.id ? captured : m)) }));
+      get().clearSketch(slide);
+    }
     try {
       await api.sendMessage(deck.id, buildPrompt(deck, user), model || null);
     } catch (error) {
@@ -257,7 +303,27 @@ async function loadDeckState(deck: Deck) {
     presenting: false,
     lint: null,
     composerFill: null,
+    sketches: {},
+    imageExport: null,
   });
+}
+
+/** Marks the slide on the stage to screenshot when sending a sketch. */
+export const SKETCH_TARGET_ATTR = "data-sketch-target";
+
+/** Screenshot of the slide on the stage, ink included; null when it cannot be taken. */
+async function captureSlide(deckId: string): Promise<string | null> {
+  const target = document.querySelector(`[${SKETCH_TARGET_ATTR}]`);
+  if (!target) return null;
+  const { x, y, width, height } = target.getBoundingClientRect();
+  try {
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    return await api.captureSketch(deckId, { x, y, width, height }, viewport);
+  } catch (error) {
+    // The marked area still tells the agent where to look.
+    console.warn("slide screenshot failed:", errorMessage(error));
+    return null;
+  }
 }
 
 /** Chat instructions asking the agent to fix `issues` and verify with its lint tool. */
@@ -292,6 +358,15 @@ function buildPrompt(deck: Deck, message: UserMessage): string {
   }
   if (message.attachments.length > 0) {
     context.push(`Attached files: ${message.attachments.join(", ")}`);
+  }
+  if (message.sketch) {
+    const { image, bounds } = message.sketch;
+    if (image) {
+      context.push(`Sketch: ${image} (screenshot of the current slide with the user's marks drawn on top)`);
+    }
+    context.push(
+      `Marked area: x ${bounds.left}–${bounds.right}, y ${bounds.top}–${bounds.bottom} of the ${SLIDE_SIZE.width}×${SLIDE_SIZE.height} slide`,
+    );
   }
   if (context.length === 0) return message.text;
   return `[context]\n${context.join("\n")}\n[/context]\n\n${message.text}`;

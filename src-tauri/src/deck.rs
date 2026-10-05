@@ -4,7 +4,8 @@
 //! <library>/<deck-id>/
 //!   deck.html      every slide, the shared styles, and the embedded player runtime
 //!   assets/        user-attached media, referenced as assets/<file>
-//!   .slopslide/    app internals: chat history, agent session, reference docs, snapshots
+//!   .slopslide/    app internals: chat history, agent session, reference docs, snapshots,
+//!                  sketches (screenshots of slides the user drew on, for the agent)
 //! ```
 //!
 //! `deck.html` opens directly in any browser as a slideshow; [`export`] inlines the
@@ -26,6 +27,7 @@ pub const DECK_FILE: &str = "deck.html";
 const DECK_TEMPLATE: &str = include_str!("../assets/deck-template.html");
 const BLANK_SLIDE: &str = include_str!("../assets/blank-slide.html");
 const SNAPSHOTS_KEPT: usize = 30;
+const SKETCHES_KEPT: usize = 30;
 const REFERENCE_DOCS: &[(&str, &str)] = &[
     (
         "STYLE_PRESETS.md",
@@ -264,11 +266,32 @@ pub fn snapshot(dir: &Path) -> Result<()> {
         .unwrap_or_default()
         .as_millis();
     fs::copy(dir.join(DECK_FILE), snapshots.join(format!("{stamp}.html")))?;
-    let mut files: Vec<_> = fs::read_dir(&snapshots)?
+    prune_oldest(&snapshots, SNAPSHOTS_KEPT)
+}
+
+/// Saves a screenshot of a sketched-on slide under `.slopslide/sketches/`, keeping the
+/// newest few. Returns its deck-relative path, for the agent to read.
+pub fn save_sketch(dir: &Path, png: &[u8]) -> Result<String> {
+    let sketches = dir.join(INTERNAL_DIR).join("sketches");
+    fs::create_dir_all(&sketches)?;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let short = &uuid::Uuid::new_v4().simple().to_string()[..8];
+    let name = format!("{stamp}-{short}.png");
+    fs::write(sketches.join(&name), png)?;
+    prune_oldest(&sketches, SKETCHES_KEPT)?;
+    Ok(format!("{INTERNAL_DIR}/sketches/{name}"))
+}
+
+/// Deletes all but the `keep` newest files of `dir`, whose names start with a timestamp.
+fn prune_oldest(dir: &Path, keep: usize) -> Result<()> {
+    let mut files: Vec<_> = fs::read_dir(dir)?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .collect();
     files.sort();
-    for old in files.iter().rev().skip(SNAPSHOTS_KEPT) {
+    for old in files.iter().rev().skip(keep) {
         let _ = fs::remove_file(old);
     }
     Ok(())
@@ -373,6 +396,49 @@ pub fn export(dir: &Path, dest: &Path) -> Result<()> {
     });
     fs::write(dest, standalone)?;
     Ok(())
+}
+
+/// Creates a new folder for exported slide images inside `parent`, named after the deck
+/// title (made safe for file systems); `Title 2`, `Title 3`, … if that name is taken.
+pub fn create_export_dir(parent: &Path, title: &str) -> Result<PathBuf> {
+    if !parent.is_dir() {
+        return Err(Error::msg(format!("not a folder: {}", parent.display())));
+    }
+    let name = safe_file_name(title);
+    let name = if name.is_empty() {
+        "presentation".into()
+    } else {
+        name
+    };
+    for n in 1.. {
+        let dir = parent.join(if n == 1 {
+            name.clone()
+        } else {
+            format!("{name} {n}")
+        });
+        match fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    unreachable!("unbounded")
+}
+
+/// `text` without characters file systems reject, trimmed of spaces and trailing dots.
+fn safe_file_name(text: &str) -> String {
+    let cleaned: String = text
+        .chars()
+        .filter(|c| !c.is_control() && !r#"\/:*?"<>|"#.contains(*c))
+        .collect();
+    cleaned.trim().trim_end_matches('.').trim().to_string()
+}
+
+/// File name of the `index`th (0-based) of `total` exported slides: `slide-01.png`, with
+/// enough digits that the files sort in slide order.
+pub fn slide_image_name(index: usize, total: usize) -> String {
+    let digits = total.max(1).to_string().len().max(2);
+    format!("slide-{:0digits$}.png", index + 1)
 }
 
 /// Lints deck.html; asset references are checked against the deck's own files.
@@ -905,6 +971,98 @@ mod tests {
         );
         let newest = snapshots.join(names.last().unwrap());
         assert_eq!(fs::read_to_string(newest).unwrap(), ORIGINAL);
+    }
+
+    #[test]
+    fn save_sketch_writes_a_png_and_prunes_old_ones() {
+        let deck = TempDeck::new(ORIGINAL);
+        let sketches = deck.0.join(INTERNAL_DIR).join("sketches");
+        fs::create_dir_all(&sketches).unwrap();
+        for n in 0..SKETCHES_KEPT + 3 {
+            let name = format!("{}-old.png", 1_000_000_000_000u64 + n as u64);
+            fs::write(sketches.join(name), b"old").unwrap();
+        }
+        let rel = save_sketch(&deck.0, b"\x89PNG fake").unwrap();
+        assert!(
+            rel.starts_with(".slopslide/sketches/") && rel.ends_with(".png"),
+            "{rel}"
+        );
+        assert_eq!(fs::read(deck.0.join(&rel)).unwrap(), b"\x89PNG fake");
+        let names: Vec<_> = fs::read_dir(&sketches)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), SKETCHES_KEPT);
+        assert!(
+            !names.contains(&"1000000000000-old.png".to_string()),
+            "oldest pruned"
+        );
+        assert!(
+            rel.ends_with(names.iter().max().unwrap().as_str()),
+            "new sketch kept"
+        );
+    }
+
+    #[test]
+    fn export_dir_is_named_after_the_deck() {
+        let parent = TempDeck::new(ORIGINAL);
+        let dir = create_export_dir(&parent.0, "Q3 Review").unwrap();
+        assert_eq!(dir, parent.0.join("Q3 Review"));
+        assert!(dir.is_dir());
+    }
+
+    #[test]
+    fn export_dir_never_reuses_an_existing_folder() {
+        let parent = TempDeck::new(ORIGINAL);
+        fs::create_dir(parent.0.join("Talk")).unwrap();
+        fs::write(parent.0.join("Talk").join("slide-01.png"), b"keep").unwrap();
+        assert_eq!(
+            create_export_dir(&parent.0, "Talk").unwrap(),
+            parent.0.join("Talk 2")
+        );
+        assert_eq!(
+            create_export_dir(&parent.0, "Talk").unwrap(),
+            parent.0.join("Talk 3")
+        );
+        assert_eq!(
+            fs::read(parent.0.join("Talk").join("slide-01.png")).unwrap(),
+            b"keep"
+        );
+    }
+
+    #[test]
+    fn export_dir_names_are_safe() {
+        let parent = TempDeck::new(ORIGINAL);
+        let dir = create_export_dir(&parent.0, " A/B: \"why?\" <draft>. ").unwrap();
+        assert_eq!(dir.file_name().unwrap(), "AB why draft");
+        let dir = create_export_dir(&parent.0, "../..").unwrap();
+        assert_eq!(dir, parent.0.join("presentation"));
+        let dir = create_export_dir(&parent.0, "\t").unwrap();
+        assert_eq!(dir, parent.0.join("presentation 2"));
+    }
+
+    #[test]
+    fn export_dir_needs_an_existing_parent() {
+        let parent = TempDeck::new(ORIGINAL);
+        assert!(create_export_dir(&parent.0.join("missing"), "Talk").is_err());
+        assert!(create_export_dir(&parent.0.join(DECK_FILE), "Talk").is_err());
+    }
+
+    #[test]
+    fn slide_images_sort_in_slide_order() {
+        assert_eq!(slide_image_name(0, 1), "slide-01.png");
+        assert_eq!(slide_image_name(8, 12), "slide-09.png");
+        assert_eq!(slide_image_name(99, 120), "slide-100.png");
+        assert_eq!(slide_image_name(4, 120), "slide-005.png");
+        assert_eq!(slide_image_name(0, 0), "slide-01.png");
+    }
+
+    #[test]
+    fn save_sketch_names_are_unique() {
+        let deck = TempDeck::new(ORIGINAL);
+        let a = save_sketch(&deck.0, b"a").unwrap();
+        let b = save_sketch(&deck.0, b"b").unwrap();
+        assert_ne!(a, b);
     }
 
     #[test]

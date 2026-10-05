@@ -10,6 +10,7 @@ import {
   Loader2,
   Paperclip,
   Pencil,
+  PenLine,
   RotateCcw,
   Search,
   Square,
@@ -21,7 +22,7 @@ import remarkGfm from "remark-gfm";
 
 import { api, errorMessage } from "../lib/api";
 import { cn } from "../lib/utils";
-import { MODELS, useApp, type AssistantMessage, type ChatMessage, type ChatPart } from "../store";
+import { MODELS, useApp, type AssistantMessage, type ChatMessage, type ChatPart, type UserMessage } from "../store";
 
 const SUGGESTIONS = [
   "A 6-slide pitch for a neighborhood tool-sharing app, bold and warm",
@@ -131,7 +132,7 @@ function MessageList(props: { messages: ChatMessage[]; running: boolean; childre
         {props.children}
         {props.messages.map((message) =>
           message.role === "user" ? (
-            <UserBubble key={message.id} text={message.text} slide={message.slide} attachments={message.attachments} />
+            <UserBubble key={message.id} message={message} />
           ) : (
             <AssistantBlock key={message.id} message={message} />
           ),
@@ -141,18 +142,19 @@ function MessageList(props: { messages: ChatMessage[]; running: boolean; childre
   );
 }
 
-function UserBubble(props: { text: string; slide: string | null; attachments: string[] }) {
+function UserBubble({ message }: { message: UserMessage }) {
   const deck = useApp((s) => s.deck);
-  const slideNumber = props.slide && deck ? deck.slides.findIndex((s) => s.id === props.slide) + 1 : 0;
+  const slideNumber = message.slide && deck ? deck.slides.findIndex((s) => s.id === message.slide) + 1 : 0;
   return (
     <div className="flex flex-col items-end gap-1">
       <div className="selectable max-w-[90%] whitespace-pre-wrap rounded-xl rounded-br-sm bg-accent px-3 py-2 text-sm leading-relaxed">
-        {props.text}
+        {message.text}
       </div>
-      {(slideNumber > 0 || props.attachments.length > 0) && (
+      {(slideNumber > 0 || message.attachments.length > 0) && (
         <div className="flex flex-wrap justify-end gap-1 text-2xs text-muted-foreground">
           {slideNumber > 0 && <span>on slide {slideNumber}</span>}
-          {props.attachments.map((a) => (
+          {message.sketch && <span>· with sketch</span>}
+          {message.attachments.map((a) => (
             <span key={a}>· {a.replace(/^assets\//, "")}</span>
           ))}
         </div>
@@ -283,6 +285,8 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const slideNumber = selected && deck ? deck.slides.findIndex((s) => s.id === selected) + 1 : 0;
+  const sketched = useApp((s) => (selected ? (s.sketches[selected]?.length ?? 0) > 0 : false));
+  const sendsSketch = sketched && includeSlide && slideNumber > 0;
 
   useLayoutEffect(() => {
     const el = textareaRef.current;
@@ -371,6 +375,23 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
               >
                 Slide {slideNumber}
               </button>
+            )}
+            {sendsSketch && (
+              <span
+                title="A screenshot of the slide with your drawing is sent along"
+                className="flex items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-2xs text-primary"
+              >
+                <PenLine className="size-3" />
+                Sketch
+                <button
+                  type="button"
+                  aria-label="Discard sketch"
+                  onClick={() => selected && useApp.getState().clearSketch(selected)}
+                  className="hover:text-foreground"
+                >
+                  <X className="size-3" />
+                </button>
+              </span>
             )}
             {attachments.map((a) => (
               <span key={a} className="flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-2xs text-muted-foreground">

@@ -116,11 +116,12 @@ describe("stage view", () => {
 describe("closing a deck with unsaved HTML edits", () => {
   it("closes immediately when there are no edits", async () => {
     const useApp = await freshStore();
-    useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: false });
+    useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: false, sketches: { intro: [{ tool: "pen", color: "#fff", points: [[0, 0]] }] } });
     await useApp.getState().closeDeck();
     expect(ask).not.toHaveBeenCalled();
     expect(invoke).toHaveBeenCalledWith("close_deck");
     expect(useApp.getState().deck).toBeNull();
+    expect(useApp.getState().sketches).toEqual({});
   });
 
   it("stays open when the user keeps their edits", async () => {
@@ -185,7 +186,7 @@ describe("opening and creating decks", () => {
     const useApp = await freshStore();
     const chat: ChatMessage[] = [userMessage("hi"), assistantMessage()];
     backend({ open_deck: () => DECK, load_chat: () => chat, agent_running: () => true });
-    useApp.setState({ assetsRev: 4, presenting: true, selected: "stale" });
+    useApp.setState({ assetsRev: 4, presenting: true, selected: "stale", sketches: { intro: [{ tool: "pen", color: "#fff", points: [[0, 0]] }] } });
     await useApp.getState().openDeck("talk");
     expect(calls("open_deck")).toEqual([{ id: "talk" }]);
     expect(calls("load_chat")).toEqual([{ id: "talk" }]);
@@ -196,6 +197,7 @@ describe("opening and creating decks", () => {
     expect(state.running).toBe(true);
     expect(state.assetsRev).toBe(0);
     expect(state.presenting).toBe(false);
+    expect(state.sketches).toEqual({});
   });
 
   it("settles a transcript that was saved mid-turn", async () => {
@@ -260,6 +262,36 @@ describe("opening and creating decks", () => {
     useApp.setState({ deck: DECK, selected: "intro", messages: [userMessage("x")], running: true, presenting: true });
     await useApp.getState().closeDeck();
     expect(useApp.getState()).toMatchObject({ deck: null, selected: null, messages: [], running: false, presenting: false });
+  });
+});
+
+describe("slide image export", () => {
+  it("remembers the folder and which slides to save", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK });
+    useApp.getState().startImageExport("/out/Talk");
+    expect(useApp.getState().imageExport).toEqual({ dir: "/out/Talk", slides: ["intro", "#2", "outro"] });
+    useApp.getState().endImageExport();
+    expect(useApp.getState().imageExport).toBeNull();
+  });
+
+  it("does not start without slides", async () => {
+    const useApp = await freshStore();
+    useApp.getState().startImageExport("/out/Talk");
+    useApp.setState({ deck: { ...DECK, slides: [] } });
+    useApp.getState().startImageExport("/out/Talk");
+    expect(useApp.getState().imageExport).toBeNull();
+  });
+
+  it("is abandoned when the deck closes or another opens", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, imageExport: { dir: "/out", slides: ["intro"] } });
+    await useApp.getState().closeDeck();
+    expect(useApp.getState().imageExport).toBeNull();
+    backend({ open_deck: () => DECK, load_chat: () => [], agent_running: () => false });
+    useApp.setState({ imageExport: { dir: "/out", slides: ["intro"] } });
+    await useApp.getState().openDeck("talk");
+    expect(useApp.getState().imageExport).toBeNull();
   });
 });
 
@@ -350,6 +382,117 @@ describe("sending a message", () => {
     expect(reply).toMatchObject({ status: "error", thinking: false, error: "Claude Code was not found." });
     expect(useApp.getState().running).toBe(false);
     expect(calls("save_chat")).toEqual([{ id: "talk", chat: useApp.getState().messages }]);
+  });
+
+  describe("with a sketch on the slide", () => {
+    // Pen strokes from (0.25, 0.5) to (0.5, 0.25) of the slide: x 480–960, y 270–540, padded by 4px.
+    const mark = {
+      tool: "pen" as const,
+      color: "#ef4444",
+      points: [
+        [0.25, 0.5],
+        [0.5, 0.25],
+      ] as [number, number][],
+    };
+    let target: HTMLElement;
+
+    beforeEach(() => {
+      target = document.createElement("div");
+      target.setAttribute("data-sketch-target", "");
+      target.getBoundingClientRect = () => new DOMRect(40, 60, 800, 450);
+      document.body.appendChild(target);
+    });
+    afterEach(() => target.remove());
+
+    it("screenshots the slide with the ink, then clears that slide's ink", async () => {
+      const useApp = await freshStore();
+      let inkWhenCaptured: unknown;
+      backend({
+        capture_sketch: () => {
+          inkWhenCaptured = useApp.getState().sketches.outro;
+          return ".slopslide/sketches/1-ab.png";
+        },
+      });
+      useApp.setState({ deck: DECK, selected: "outro", sketches: { outro: [mark], intro: [mark] } });
+      await useApp.getState().send("Move this up", { includeSlide: true, attachments: [] });
+      expect(calls("capture_sketch")).toEqual([
+        {
+          id: "talk",
+          rect: { x: 40, y: 60, width: 800, height: 450 },
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+        },
+      ]);
+      expect(inkWhenCaptured).toEqual([mark]);
+      expect(useApp.getState().sketches).toEqual({ intro: [mark] });
+      expect(prompt()).toBe(
+        [
+          "[context]",
+          'Current slide: <section id="outro"> in deck.html (slide 3 of 3)',
+          "Sketch: .slopslide/sketches/1-ab.png (screenshot of the current slide with the user's marks drawn on top)",
+          "Marked area: x 476–964, y 266–544 of the 1920×1080 slide",
+          "[/context]",
+          "",
+          "Move this up",
+        ].join("\n"),
+      );
+      expect(useApp.getState().messages[0]).toMatchObject({
+        sketch: { image: ".slopslide/sketches/1-ab.png", bounds: { left: 476, top: 266, right: 964, bottom: 544 } },
+      });
+    });
+
+    it("still describes the marked area when the screenshot fails", async () => {
+      const useApp = await freshStore();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      backend({
+        capture_sketch: () => {
+          throw "slide screenshots are not supported on this platform yet";
+        },
+      });
+      useApp.setState({ deck: DECK, selected: "outro", sketches: { outro: [mark] } });
+      await useApp.getState().send("Fix", { includeSlide: true, attachments: [] });
+      expect(prompt()).not.toContain("Sketch:");
+      expect(prompt()).toContain("Marked area: x 476–964, y 266–544 of the 1920×1080 slide");
+      expect(useApp.getState().messages[0]).toMatchObject({ sketch: { image: null } });
+      expect(useApp.getState().sketches).toEqual({});
+      expect(calls("send_message")).toHaveLength(1);
+      vi.restoreAllMocks();
+    });
+
+    it("skips the screenshot when the slide is not on screen", async () => {
+      const useApp = await freshStore();
+      target.remove();
+      useApp.setState({ deck: DECK, selected: "outro", sketches: { outro: [mark] } });
+      await useApp.getState().send("Fix", { includeSlide: true, attachments: [] });
+      expect(calls("capture_sketch")).toEqual([]);
+      expect(prompt()).toContain("Marked area:");
+    });
+
+    it("leaves the sketch alone when the message is not about the slide", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "outro", sketches: { outro: [mark] } });
+      await useApp.getState().send("Whole deck", { includeSlide: false, attachments: [] });
+      expect(calls("capture_sketch")).toEqual([]);
+      expect(prompt()).toBe("Whole deck");
+      expect(useApp.getState().messages[0]).toMatchObject({ sketch: null });
+      expect(useApp.getState().sketches).toEqual({ outro: [mark] });
+    });
+
+    it("ignores another slide's sketch and emptied sketches", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "outro", sketches: { intro: [mark], outro: [] } });
+      await useApp.getState().send("Fix", { includeSlide: true, attachments: [] });
+      expect(calls("capture_sketch")).toEqual([]);
+      expect(prompt()).not.toContain("Marked area");
+    });
+  });
+
+  it("clearSketch and setSketches edit ink per slide", async () => {
+    const useApp = await freshStore();
+    const ink = [{ tool: "pen" as const, color: "#fff", points: [[0, 0]] as [number, number][] }];
+    useApp.getState().setSketches((all) => ({ ...all, a: ink, b: ink }));
+    useApp.getState().clearSketch("a");
+    useApp.getState().clearSketch("missing");
+    expect(useApp.getState().sketches).toEqual({ b: ink });
   });
 
   it("interrupt asks the backend to stop this deck's agent", async () => {

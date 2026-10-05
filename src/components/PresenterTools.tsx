@@ -36,11 +36,18 @@ export interface Annotations {
   peek: number;
 }
 
+/** Where ink lives, per slide key; by default in the hook's own state. */
+export interface InkStore {
+  ink: Record<string, Stroke[]>;
+  setInk: (update: (all: Record<string, Stroke[]>) => Record<string, Stroke[]>) => void;
+}
+
 /** Laser, pen, highlighter and eraser state, with ink kept per slide for the whole show. */
-export function useAnnotations(slideKey: string): Annotations {
+export function useAnnotations(slideKey: string, store?: InkStore): Annotations {
   const [tool, setToolState] = useState<Tool>("pointer");
   const [colors, setColors] = useState(DEFAULT_COLORS);
-  const [ink, setInk] = useState<Record<string, Stroke[]>>({});
+  const [localInk, setLocalInk] = useState<Record<string, Stroke[]>>({});
+  const { ink, setInk } = store ?? { ink: localInk, setInk: setLocalInk };
   const [peek, setPeek] = useState(0);
   const strokes = ink[slideKey] ?? [];
 
@@ -90,15 +97,17 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
   const [size, setSize] = useState({ width: 0, height: 0 });
   const active = tool !== "pointer";
 
-  // Ink is stored in fractions of the screen but drawn in pixels, so strokes keep their width.
+  // Ink is stored in fractions of the layer but drawn in pixels, so strokes keep their width.
   useLayoutEffect(() => {
+    const el = layerRef.current!;
     const measure = () => {
-      const rect = layerRef.current!.getBoundingClientRect();
+      const rect = el.getBoundingClientRect();
       setSize({ width: rect.width, height: rect.height });
     };
     measure();
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {

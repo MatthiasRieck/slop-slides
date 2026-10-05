@@ -1,7 +1,9 @@
 import { ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { useApp } from "../store";
+import { SKETCH_TARGET_ATTR, useApp } from "../store";
+import { AnnotationLayer, useAnnotations } from "./PresenterTools";
+import { SketchToolbar } from "./SketchToolbar";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import type { Slide } from "../lib/api";
 
@@ -9,6 +11,8 @@ import type { Slide } from "../lib/api";
 export function Stage() {
   const deck = useApp((s) => s.deck);
   const selected = useApp((s) => s.selected);
+  const sketches = useApp((s) => s.sketches);
+  const annotations = useAnnotations(selected ?? "", { ink: sketches, setInk: useApp.getState().setSketches });
   const areaRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
 
@@ -25,6 +29,7 @@ export function Stage() {
   }, []);
 
   useSlideKeyboard();
+  useSketchKeyboard(annotations.tool !== "pointer", () => annotations.setTool("pointer"));
 
   if (!deck) return null;
   const index = deck.slides.findIndex((s) => s.id === selected);
@@ -36,35 +41,42 @@ export function Stage() {
         {slide ? (
           <div
             style={{ width }}
-            className="overflow-hidden rounded-lg shadow-[0_20px_50px_-24px_rgb(0_0_0/0.45)] ring-1 ring-border"
+            {...{ [SKETCH_TARGET_ATTR]: "" }}
+            className="relative overflow-hidden rounded-lg shadow-[0_20px_50px_-24px_rgb(0_0_0/0.45)] ring-1 ring-border"
           >
             <CurrentSlide deckId={deck.id} slide={slide} />
+            <AnnotationLayer annotations={annotations} />
           </div>
         ) : (
           <EmptyStage />
         )}
       </div>
       {deck.slides.length > 0 && (
-        <div className="flex h-10 shrink-0 items-center justify-center gap-2 text-xs text-muted-foreground">
-          <button
-            type="button"
-            onClick={() => useApp.getState().selectRelative(-1)}
-            disabled={index <= 0}
-            className="rounded-md p-1 hover:bg-accent hover:text-foreground disabled:opacity-30"
-          >
-            <ChevronLeft className="size-4" />
-          </button>
-          <span className="tabular-nums">
-            {index + 1} / {deck.slides.length}
-          </span>
-          <button
-            type="button"
-            onClick={() => useApp.getState().selectRelative(1)}
-            disabled={index >= deck.slides.length - 1}
-            className="rounded-md p-1 hover:bg-accent hover:text-foreground disabled:opacity-30"
-          >
-            <ChevronRight className="size-4" />
-          </button>
+        <div className="grid h-10 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 text-xs text-muted-foreground">
+          <div className="flex min-w-0 items-center">{slide && <SketchToolbar annotations={annotations} />}</div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              aria-label="Previous slide"
+              onClick={() => useApp.getState().selectRelative(-1)}
+              disabled={index <= 0}
+              className="rounded-md p-1 hover:bg-accent hover:text-foreground disabled:opacity-30"
+            >
+              <ChevronLeft className="size-4" />
+            </button>
+            <span className="tabular-nums">
+              {index + 1} / {deck.slides.length}
+            </span>
+            <button
+              type="button"
+              aria-label="Next slide"
+              onClick={() => useApp.getState().selectRelative(1)}
+              disabled={index >= deck.slides.length - 1}
+              className="rounded-md p-1 hover:bg-accent hover:text-foreground disabled:opacity-30"
+            >
+              <ChevronRight className="size-4" />
+            </button>
+          </div>
         </div>
       )}
     </div>
@@ -88,6 +100,24 @@ function EmptyStage() {
       </p>
     </div>
   );
+}
+
+/** Escape puts a sketch tool away, unless the user is typing. */
+function useSketchKeyboard(active: boolean, putAway: () => void) {
+  const putAwayRef = useRef(putAway);
+  putAwayRef.current = putAway;
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (event.key !== "Escape" || target?.closest("input, textarea, [contenteditable]")) return;
+      if (useApp.getState().presenting) return;
+      putAwayRef.current();
+      event.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active]);
 }
 
 /**

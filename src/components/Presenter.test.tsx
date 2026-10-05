@@ -108,7 +108,10 @@ describe("Presenter tools", () => {
   beforeEach(() => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 500));
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   function draw(points: [number, number][]) {
     const [first, ...rest] = points;
@@ -214,7 +217,18 @@ describe("Presenter tools", () => {
     expect(strokes()[1]!.getAttribute("r")).toBe("2");
   });
 
-  it("draws in pixels so strokes keep their width, and follows window resizes", () => {
+  it("draws in pixels so strokes keep their width, and follows resizes", () => {
+    const resized: (() => void)[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          resized.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
     render(<Presenter />);
     fireEvent.keyDown(document.body, { key: "p" });
     draw([
@@ -225,7 +239,7 @@ describe("Presenter tools", () => {
     expect(svg.hasAttribute("viewBox")).toBe(false);
     expect(strokes()[0]!.hasAttribute("vector-effect")).toBe(false);
     vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue(new DOMRect(0, 0, 2000, 1000));
-    act(() => void window.dispatchEvent(new Event("resize")));
+    act(() => resized.forEach((callback) => callback()));
     expect(strokes()[0]!.getAttribute("d")).toBe("M200 200L1000 500");
   });
 

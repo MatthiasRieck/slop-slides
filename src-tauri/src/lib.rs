@@ -1,4 +1,5 @@
 mod agent;
+mod capture;
 mod deck;
 mod env;
 mod error;
@@ -157,6 +158,45 @@ fn lint_deck(app: AppHandle, id: String) -> Result<Vec<lint::Issue>> {
     deck::lint(&deck::deck_dir(&app, &id)?)
 }
 
+/// Screenshots `rect` of the window (the sketched-on slide) into the deck's internals.
+/// Both are in CSS pixels; `viewport` is the window's size, to find the display scale.
+#[tauri::command]
+async fn capture_sketch(
+    app: AppHandle,
+    webview: tauri::Webview,
+    id: String,
+    rect: capture::Rect,
+    viewport: capture::Size,
+) -> Result<String> {
+    let dir = deck::deck_dir(&app, &id)?;
+    let png = capture::snapshot(&webview, rect, viewport, capture::SKETCH_WIDTH).await?;
+    deck::save_sketch(&dir, &png)
+}
+
+/// Creates `<parent>/<deck title>` (or `<deck title> 2`, …) for exported slide images.
+#[tauri::command]
+fn create_image_export_dir(app: AppHandle, id: String, parent: String) -> Result<String> {
+    let deck = deck::load(&deck::deck_dir(&app, &id)?, &id)?;
+    let dir = deck::create_export_dir(std::path::Path::new(&parent), &deck.title)?;
+    Ok(dir.to_string_lossy().into_owned())
+}
+
+/// Screenshots `rect` of the window (one slide, shown full size) as `<dir>/<slide-NN>.png`.
+#[tauri::command]
+async fn export_slide_image(
+    webview: tauri::Webview,
+    dir: String,
+    index: usize,
+    total: usize,
+    rect: capture::Rect,
+    viewport: capture::Size,
+) -> Result<String> {
+    let png = capture::snapshot(&webview, rect, viewport, capture::SLIDE_WIDTH).await?;
+    let path = std::path::Path::new(&dir).join(deck::slide_image_name(index, total));
+    std::fs::write(&path, png)?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 fn load_chat(app: AppHandle, id: String) -> Result<serde_json::Value> {
     deck::load_chat(&deck::deck_dir(&app, &id)?)
@@ -237,6 +277,9 @@ pub fn run() {
             import_assets,
             export_deck,
             lint_deck,
+            capture_sketch,
+            create_image_export_dir,
+            export_slide_image,
             load_chat,
             save_chat,
             reset_chat,

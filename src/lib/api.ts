@@ -108,7 +108,27 @@ export const api = {
     invoke<Deck>("save_deck_source", { id, source, base }),
   importAssets: (id: string, paths: string[]) => invoke<string[]>("import_assets", { id, paths }),
   exportDeck: (id: string, dest: string) => invoke<void>("export_deck", { id, dest }),
+  /** Creates a new folder named after the deck inside `parent`; returns its path. */
+  createImageExportDir: (id: string, parent: string) =>
+    invoke<string>("create_image_export_dir", { id, parent }),
+  /** Screenshots `rect` (one slide, CSS pixels) as `<dir>/slide-NN.png`; returns its path. */
+  exportSlideImage: (
+    dir: string,
+    index: number,
+    total: number,
+    rect: { x: number; y: number; width: number; height: number },
+    viewport: { width: number; height: number },
+  ) => invoke<string>("export_slide_image", { dir, index, total, rect, viewport }),
   lintDeck: (id: string) => invoke<LintIssue[]>("lint_deck", { id }),
+  /**
+   * Screenshots `rect` of the window; returns the deck-relative image path. Both are in CSS
+   * pixels; the viewport size lets the backend work out the display's scale.
+   */
+  captureSketch: (
+    id: string,
+    rect: { x: number; y: number; width: number; height: number },
+    viewport: { width: number; height: number },
+  ) => invoke<string>("capture_sketch", { id, rect, viewport }),
   loadChat: (id: string) => invoke<unknown>("load_chat", { id }),
   saveChat: (id: string, chat: unknown) => invoke<void>("save_chat", { id, chat }),
   resetChat: (id: string) => invoke<void>("reset_chat", { id }),

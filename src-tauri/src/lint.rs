@@ -7,7 +7,8 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 use crate::html::{
-    self, find_ci, has_class, parse_tag, HIDDEN_ATTR, SECTION_CLASS, SECTION_TITLE_ATTR,
+    self, find_ci, has_class, parse_tag, EDITOR_ATTRS, HIDDEN_ATTR, MOVED_ATTR, SECTION_CLASS,
+    SECTION_TITLE_ATTR,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -234,6 +235,32 @@ fn check_markup(l: &mut Linter) {
                         Severity::Warning,
                         i,
                         "Slides should not contain <script>; use CSS for slide visuals.".into(),
+                    );
+                }
+                if let Some((name, ..)) = tag
+                    .attrs
+                    .iter()
+                    .find(|(n, ..)| EDITOR_ATTRS.contains(&n.as_str()))
+                {
+                    l.report(
+                        "editor-leftover",
+                        Severity::Warning,
+                        i,
+                        format!(
+                            "<{}> has `{name}`, left over from editing in the app; remove it.",
+                            tag.name
+                        ),
+                    );
+                }
+                if tag.attrs.iter().any(|(n, ..)| n == MOVED_ATTR) {
+                    l.report(
+                        "moved-element",
+                        Severity::Warning,
+                        i,
+                        format!(
+                            "<{}> was moved by hand ({MOVED_ATTR} with an inline `translate`). Rework the slide's layout so it sits where it appears now without the offset, then remove both.",
+                            tag.name
+                        ),
                     );
                 }
             }
@@ -729,6 +756,35 @@ mod tests {
             "<section class=\"slide\" id=\"a\"><style>p{}</style><script>1</script></section>",
         ));
         assert_eq!(found, ["style-in-slide", "script-in-slide"]);
+    }
+
+    #[test]
+    fn flags_hand_edits_awaiting_cleanup() {
+        let found = lint(
+            &deck(
+                "<section class=\"slide\" id=\"a\">\n<h2 data-moved style=\"translate: 40px -12px\">Moved</h2>\n<p contenteditable=\"true\" data-slop-selected>Left over</p>\n</section>",
+            ),
+            |_| true,
+        );
+        let found: Vec<_> = found.iter().map(|i| (i.rule, i.slide.as_deref())).collect();
+        assert_eq!(
+            found,
+            [("moved-element", Some("a")), ("editor-leftover", Some("a"))]
+        );
+        // Outside slides (or as text) the attributes mean nothing to the editor.
+        assert_eq!(
+            rules(&deck(
+                "<section class=\"slide\" id=\"a\"><p>data-moved</p></section>"
+            )),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            rules(&format!(
+                "{}<div data-moved contenteditable></div>",
+                deck("<section class=\"slide\" id=\"a\"></section>")
+            )),
+            Vec::<&str>::new()
+        );
     }
 
     #[test]

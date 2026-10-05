@@ -55,6 +55,17 @@ describe("SlideFrame", () => {
     expect(frame!.tabIndex).not.toBe(-1);
   });
 
+  it("loads the slide editor (on the final animation frame) in edit mode", () => {
+    const { container, rerender } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" editKey="0" />);
+    expect(frames(container)[0]!.getAttribute("src")).toBe("/__deck/talk/deck.html?embed&slide=intro&v=v1&static&edit=0");
+    expect(frames(container)[0]!.style.pointerEvents).toBe("auto");
+    // A new key reloads the slide, e.g. after a refused save.
+    rerender(<SlideFrame deckId="talk" slideId="intro" version="v1" editKey="1" />);
+    expect(frames(container).map((f) => f.getAttribute("src"))).toContain(
+      "/__deck/talk/deck.html?embed&slide=intro&v=v1&static&edit=1",
+    );
+  });
+
   it("waits for layout before loading anything", () => {
     globalThis.ResizeObserver = NoLayout;
     const { container } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" />);
@@ -122,7 +133,7 @@ describe("SlideFrame", () => {
 describe("useSlideVersion", () => {
   it("changes with the slide, the deck's shared styles, and attached assets", () => {
     useApp.setState({ deck: deckFor(DECK_HTML), assetsRev: 0 });
-    const slide = { id: "intro", hash: "h1", hidden: false };
+    const slide = { id: "intro", hash: "h1", hidden: false, moved: false };
     const { result, rerender } = renderHook(({ s }) => useSlideVersion(s), { initialProps: { s: slide } });
     expect(result.current).toBe("shell-1.h1.0");
     rerender({ s: { ...slide, hash: "h2" } });

@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
+import { ChevronLeft, ChevronRight, Move, Sparkles, Wand2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { SKETCH_TARGET_ATTR, useApp } from "../store";
@@ -6,14 +6,18 @@ import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { SketchToolbar } from "./SketchToolbar";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import type { Slide } from "../lib/api";
+import { cn } from "../lib/utils";
 
 /** The current slide, fit to the available space with letterboxing. */
 export function Stage() {
   const deck = useApp((s) => s.deck);
   const selected = useApp((s) => s.selected);
   const sketches = useApp((s) => s.sketches);
+  const editing = useApp((s) => s.editing);
+  const running = useApp((s) => s.running);
   const annotations = useAnnotations(selected ?? "", { ink: sketches, setInk: useApp.getState().setSketches });
   const areaRef = useRef<HTMLDivElement>(null);
+  const editFrames = useSlideEditing(areaRef);
   const [width, setWidth] = useState(0);
 
   useLayoutEffect(() => {
@@ -31,6 +35,15 @@ export function Stage() {
   useSlideKeyboard();
   useSketchKeyboard(annotations.tool !== "pointer", () => annotations.setTool("pointer"));
 
+  // Drawing and editing take turns: picking a pen leaves edit mode.
+  useEffect(() => {
+    if (annotations.tool !== "pointer") useApp.getState().setEditing(false);
+  }, [annotations.tool]);
+  const toggleEditing = () => {
+    if (!editing) annotations.setTool("pointer");
+    useApp.getState().setEditing(!editing);
+  };
+
   if (!deck) return null;
   const index = deck.slides.findIndex((s) => s.id === selected);
   const slide = deck.slides[index];
@@ -44,7 +57,7 @@ export function Stage() {
             {...{ [SKETCH_TARGET_ATTR]: "" }}
             className="relative overflow-hidden rounded-lg shadow-[0_20px_50px_-24px_rgb(0_0_0/0.45)] ring-1 ring-border"
           >
-            <CurrentSlide deckId={deck.id} slide={slide} />
+            <CurrentSlide deckId={deck.id} slide={slide} editing={editing} onFrameReady={editFrames.onFrameReady} />
             <AnnotationLayer annotations={annotations} />
           </div>
         ) : (
@@ -53,7 +66,27 @@ export function Stage() {
       </div>
       {deck.slides.length > 0 && (
         <div className="grid h-10 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 text-xs text-muted-foreground">
-          <div className="flex min-w-0 items-center">{slide && <SketchToolbar annotations={annotations} />}</div>
+          <div className="flex min-w-0 items-center gap-0.5">
+            {slide && (
+              <>
+                <button
+                  type="button"
+                  aria-label="Edit text and move elements"
+                  title="Edit text and move elements: click to select, drag to move, double-click to edit text"
+                  aria-pressed={editing}
+                  onClick={toggleEditing}
+                  className={cn(
+                    "rounded-md p-1 hover:bg-accent hover:text-foreground [&_svg]:size-4",
+                    editing && "bg-accent text-foreground",
+                  )}
+                >
+                  <Move />
+                </button>
+                <div className="mx-1 h-4 w-px bg-border" />
+                <SketchToolbar annotations={annotations} />
+              </>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -77,14 +110,103 @@ export function Stage() {
               <ChevronRight className="size-4" />
             </button>
           </div>
+          <div className="flex min-w-0 items-center justify-end">
+            {slide?.moved && (
+              <button
+                type="button"
+                title="Ask the agent to rebuild this slide's layout around the elements you moved, using a screenshot"
+                disabled={running}
+                onClick={() => {
+                  editFrames.clearSelection();
+                  // Give the preview a frame to drop its selection outline before the screenshot.
+                  requestAnimationFrame(() => requestAnimationFrame(() => void useApp.getState().tidyLayout()));
+                }}
+                className="flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+              >
+                <Wand2 className="size-3.5" />
+                Tidy layout
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-function CurrentSlide({ deckId, slide }: { deckId: string; slide: Slide }) {
-  return <SlideFrame deckId={deckId} slideId={slide.id} version={useSlideVersion(slide)} />;
+function CurrentSlide(props: {
+  deckId: string;
+  slide: Slide;
+  editing: boolean;
+  onFrameReady: (frame: HTMLIFrameElement) => void;
+}) {
+  const editReload = useApp((s) => s.editReload);
+  return (
+    <SlideFrame
+      deckId={props.deckId}
+      slideId={props.slide.id}
+      version={useSlideVersion(props.slide)}
+      editKey={props.editing ? String(editReload) : undefined}
+      onFrameReady={props.onFrameReady}
+    />
+  );
+}
+
+/**
+ * Connects the stage to the slide editor running in its preview (src-tauri/assets/editor.js):
+ * saves the markup it posts, keeps the selection across the reload that follows, and
+ * handles undo and leaving edit mode.
+ */
+function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>) {
+  // What to select again once the edited slide reloads.
+  const restore = useRef<{ slide: string; path: number[] } | null>(null);
+  const frame = useRef<HTMLIFrameElement | null>(null);
+
+  useEffect(() => {
+    const fromStage = (source: MessageEventSource | null) =>
+      Array.from(areaRef.current?.querySelectorAll("iframe") ?? []).some((f) => f.contentWindow === source);
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data;
+      const { editing, selected } = useApp.getState();
+      if (!editing || !fromStage(event.source)) return;
+      if (data?.type === "slop:edit-commit" && data.slide === selected && typeof data.markup === "string") {
+        restore.current = Array.isArray(data.select) ? { slide: data.slide, path: data.select } : null;
+        void useApp.getState().saveSlideEdit(data.slide, data.markup);
+      } else if (data?.type === "slop:key") {
+        if (data.mod && String(data.key).toLowerCase() === "z") void useApp.getState().undoSlideEdit();
+        else if (data.key === "Escape") useApp.getState().setEditing(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!useApp.getState().editing || target?.closest("input, textarea, [contenteditable]")) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z" && !event.shiftKey) {
+        event.preventDefault();
+        void useApp.getState().undoSlideEdit();
+      }
+    };
+    window.addEventListener("message", onMessage);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [areaRef]);
+
+  return {
+    onFrameReady: (loaded: HTMLIFrameElement) => {
+      frame.current = loaded;
+      const { editing, selected } = useApp.getState();
+      const again = restore.current;
+      if (editing && again && again.slide === selected) {
+        loaded.contentWindow?.postMessage({ type: "slop:edit-select", path: again.path }, "*");
+      }
+    },
+    clearSelection: () => {
+      restore.current = null;
+      frame.current?.contentWindow?.postMessage({ type: "slop:edit-select", path: null }, "*");
+    },
+  };
 }
 
 function EmptyStage() {

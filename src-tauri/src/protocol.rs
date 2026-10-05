@@ -2,6 +2,10 @@
 //! `slop://localhost/<deck-id>/<path>` (`http://slop.localhost/...` on Windows), so the
 //! deck's relative `assets/…` references resolve exactly as they do when the file is opened
 //! in a browser.
+//!
+//! With `?edit` in the query, deck.html is served with the slide editor
+//! (`assets/editor.js`) added, so the stage can edit text and move elements in place. The
+//! editor never becomes part of deck.html or an export.
 
 use std::borrow::Cow;
 use std::path::Path;
@@ -12,8 +16,19 @@ use tauri::AppHandle;
 
 use crate::deck;
 
+const EDITOR_JS: &str = include_str!("../assets/editor.js");
+
 pub fn handle(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
-    match serve(app, request.uri().path()) {
+    let uri = request.uri();
+    let served = serve(app, uri.path()).map(|(mime, body)| {
+        if wants_editor(uri.query()) && mime.starts_with("text/html") {
+            let html = String::from_utf8_lossy(&body);
+            (mime, with_editor(&html).into_bytes())
+        } else {
+            (mime, body)
+        }
+    });
+    match served {
         Ok((mime, body)) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, mime)
@@ -45,6 +60,21 @@ fn split_path(raw_path: &str) -> Result<(String, String), StatusCode> {
         .split_once('/')
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok((deck_id.to_string(), rel.to_string()))
+}
+
+/// Whether the query string has an `edit` parameter (`edit` or `edit=<value>`).
+fn wants_editor(query: Option<&str>) -> bool {
+    query.is_some_and(|q| q.split('&').any(|p| p == "edit" || p.starts_with("edit=")))
+}
+
+/// Adds the slide editor after everything else in `<body>`, so it runs after the player.
+fn with_editor(html: &str) -> String {
+    let script = format!("<script>\n{EDITOR_JS}</script>\n");
+    let at = html
+        .to_ascii_lowercase()
+        .rfind("</body")
+        .unwrap_or(html.len());
+    format!("{}{script}{}", &html[..at], &html[at..])
 }
 
 fn read_in_deck(dir: &Path, rel: &str) -> Result<(&'static str, Vec<u8>), StatusCode> {
@@ -97,6 +127,25 @@ mod tests {
         assert_eq!(split("/"), Err(StatusCode::NOT_FOUND));
         assert_eq!(split(""), Err(StatusCode::NOT_FOUND));
         assert_eq!(split("/talk/%FF"), Err(StatusCode::BAD_REQUEST));
+    }
+
+    #[test]
+    fn editor_only_on_request() {
+        assert!(wants_editor(Some("embed&slide=a&edit=abc")));
+        assert!(wants_editor(Some("edit")));
+        assert!(!wants_editor(Some("embed&slide=edit&static")));
+        assert!(!wants_editor(Some("editor")));
+        assert!(!wants_editor(None));
+    }
+
+    #[test]
+    fn adds_the_editor_at_the_end_of_the_body() {
+        let html = "<html><body><main class=\"deck\"></main><script>player</script></BODY></html>";
+        let out = with_editor(html);
+        let editor = out.find(EDITOR_JS).expect("editor inlined");
+        assert!(out.find("player").unwrap() < editor);
+        assert!(editor < out.find("</BODY>").unwrap());
+        assert!(with_editor("<p>no body").starts_with("<p>no body<script>"));
     }
 
     #[test]

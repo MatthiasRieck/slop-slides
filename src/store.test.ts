@@ -709,7 +709,7 @@ describe("deck file changes", () => {
   });
 
   it("follows the agent to a newly added slide", async () => {
-    const added = { ...DECK, slides: [...DECK.slides, { id: "fresh", hash: "f", hidden: false }] };
+    const added = { ...DECK, slides: [...DECK.slides, { id: "fresh", hash: "f", hidden: false, moved: false }] };
     const { useApp, changed } = await watching(() => added);
     useApp.setState({ running: true });
     changed(["deck.html"]);
@@ -833,5 +833,149 @@ describe("lint", () => {
     expect(prompt).toContain("- line 12 error [unclosed-tag] (slide `intro`): <div> is never closed.");
     expect(prompt).toContain("- line 1 warning [title]: Needs a title.");
     expect(prompt).toMatch(/run the lint_deck tool to verify/);
+  });
+});
+
+describe("editing slides on the stage", () => {
+  const MOVED = `<section class="slide" id="intro">\n  <h1 data-moved="" style="translate: 4px 0px;">Hello</h1>\n</section>`;
+  const ORIGINAL = `<section class="slide" id="intro">\n  <h1>Hello</h1>\n</section>`;
+  /** Backend whose `update_slide` swaps in the markup and bumps the slide's hash. */
+  function slideBackend() {
+    let rev = 1;
+    let markup = ORIGINAL;
+    backend({
+      update_slide: ({ slide, markup: next, base }) => {
+        if (base !== `${String(slide)}-${rev}`) throw "The slide changed while you were editing it.";
+        const previous = markup;
+        markup = String(next);
+        rev += 1;
+        const deck = deckFor(DECK_HTML, String(rev));
+        return { deck: { ...deck, slides: deck.slides.map((s) => (s.id === slide ? { ...s, moved: markup.includes("data-moved") } : s)) }, previous };
+      },
+    });
+    return { markup: () => markup };
+  }
+
+  it("saves an edit against the slide's current hash and remembers how to undo it", async () => {
+    const useApp = await freshStore();
+    slideBackend();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    await useApp.getState().saveSlideEdit("intro", MOVED);
+    expect(calls("update_slide")).toEqual([{ id: "talk", slide: "intro", markup: MOVED, base: "intro-1" }]);
+    const deck = useApp.getState().deck!;
+    expect(deck.slides[0]).toMatchObject({ hash: "intro-2", moved: true });
+    expect(useApp.getState().slideUndo).toEqual([{ slide: "intro", markup: ORIGINAL, after: "intro-2" }]);
+  });
+
+  it("saves edits one after another, each on top of the last", async () => {
+    const useApp = await freshStore();
+    const disk = slideBackend();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    const first = useApp.getState().saveSlideEdit("intro", MOVED);
+    const second = useApp.getState().saveSlideEdit("intro", MOVED.replace("Hello", "Hi"));
+    await Promise.all([first, second]);
+    expect(calls("update_slide").map((c) => c.base)).toEqual(["intro-1", "intro-2"]);
+    expect(disk.markup()).toContain("Hi");
+    expect(useApp.getState().error).toBeNull();
+  });
+
+  it("reports a refused save and reloads the slide from disk", async () => {
+    const useApp = await freshStore();
+    slideBackend();
+    useApp.setState({ deck: deckFor(DECK_HTML, "9"), selected: "intro", editReload: 0 });
+    await useApp.getState().saveSlideEdit("intro", MOVED);
+    expect(useApp.getState().error).toContain("changed");
+    expect(useApp.getState().editReload).toBe(1);
+    expect(useApp.getState().slideUndo).toEqual([]);
+  });
+
+  it("ignores edits of slides that are gone", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    await useApp.getState().saveSlideEdit("deleted", MOVED);
+    expect(calls("update_slide")).toEqual([]);
+  });
+
+  it("undo saves the previous markup back and selects the slide", async () => {
+    const useApp = await freshStore();
+    const disk = slideBackend();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    await useApp.getState().saveSlideEdit("intro", MOVED);
+    useApp.getState().select("outro");
+    await useApp.getState().undoSlideEdit();
+    expect(disk.markup()).toBe(ORIGINAL);
+    expect(calls("update_slide")[1]).toEqual({ id: "talk", slide: "intro", markup: ORIGINAL, base: "intro-2" });
+    expect(useApp.getState().selected).toBe("intro");
+    expect(useApp.getState().slideUndo).toEqual([]);
+    await useApp.getState().undoSlideEdit();
+    expect(calls("update_slide")).toHaveLength(2);
+  });
+
+  it("refuses to undo once the slide changed again (say, by the agent)", async () => {
+    const useApp = await freshStore();
+    slideBackend();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    await useApp.getState().saveSlideEdit("intro", MOVED);
+    useApp.getState().setDeck(deckFor(DECK_HTML, "agent"));
+    await useApp.getState().undoSlideEdit();
+    expect(calls("update_slide")).toHaveLength(1);
+    expect(useApp.getState().error).toContain("cannot be undone");
+    expect(useApp.getState().slideUndo).toEqual([]);
+  });
+
+  it("leaves edit mode and forgets undo history when the deck closes", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, editing: true, slideUndo: [{ slide: "intro", markup: ORIGINAL, after: "x" }] });
+    await useApp.getState().closeDeck();
+    expect(useApp.getState()).toMatchObject({ editing: false, slideUndo: [] });
+  });
+
+  describe("tidying the layout", () => {
+    let target: HTMLElement;
+    beforeEach(() => {
+      target = document.createElement("div");
+      target.setAttribute("data-sketch-target", "");
+      target.getBoundingClientRect = () => new DOMRect(0, 0, 640, 360);
+      document.body.appendChild(target);
+    });
+    afterEach(() => target.remove());
+
+    it("sends the agent a screenshot of the slide with tidy-up instructions", async () => {
+      const { useApp, TIDY_PROMPT } = await freshModule();
+      backend({ capture_sketch: () => ".slopslide/sketches/2-cd.png" });
+      useApp.setState({ deck: DECK, selected: "intro" });
+      await useApp.getState().tidyLayout();
+      expect(calls("capture_sketch")).toHaveLength(1);
+      expect((calls("send_message")[0]!.args as { prompt: string }).prompt).toBe(
+        [
+          "[context]",
+          'Current slide: <section id="intro"> in deck.html (slide 1 of 3)',
+          "Screenshot: .slopslide/sketches/2-cd.png (the current slide as it looks now, with the user's hand edits)",
+          "[/context]",
+          "",
+          TIDY_PROMPT,
+        ].join("\n"),
+      );
+      expect(useApp.getState().messages[0]).toMatchObject({
+        text: TIDY_PROMPT,
+        slide: "intro",
+        sketch: null,
+        screenshot: ".slopslide/sketches/2-cd.png",
+      });
+    });
+
+    it("keeps any sketch on the slide with the message", async () => {
+      const useApp = await freshStore();
+      backend({ capture_sketch: () => ".slopslide/sketches/3.png" });
+      const ink = [{ tool: "pen" as const, color: "#f00", points: [[0.5, 0.5]] as [number, number][] }];
+      useApp.setState({ deck: DECK, selected: "intro", sketches: { intro: ink } });
+      await useApp.getState().tidyLayout();
+      expect(calls("capture_sketch")).toHaveLength(1);
+      expect(useApp.getState().messages[0]).toMatchObject({
+        sketch: { image: ".slopslide/sketches/3.png" },
+        screenshot: ".slopslide/sketches/3.png",
+      });
+      expect(useApp.getState().sketches).toEqual({});
+    });
   });
 });

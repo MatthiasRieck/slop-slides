@@ -31,6 +31,8 @@ export interface UserMessage {
   attachments: string[];
   /** The user drew on the slide before sending; absent in chats saved before sketches. */
   sketch?: Sketch | null;
+  /** Deck-relative path of a screenshot of the slide sent along (for tidying hand edits). */
+  screenshot?: string | null;
   createdAt: number;
 }
 
@@ -91,6 +93,12 @@ interface AppState {
   sketches: Record<string, Stroke[]>;
   /** Slides being saved as images into `dir`, one at a time; null when not exporting. */
   imageExport: { dir: string; slides: string[] } | null;
+  /** The stage lets the user edit text and move elements on the slide. */
+  editing: boolean;
+  /** Bumped when a slide edit could not be saved, so the stage reloads the slide from disk. */
+  editReload: number;
+  /** Slide edits that can be undone, newest last. */
+  slideUndo: SlideUndo[];
 
   openDeck: (id: string) => Promise<void>;
   createDeck: (title: string) => Promise<void>;
@@ -109,13 +117,37 @@ interface AppState {
   clearSketch: (slide: string) => void;
   startImageExport: (dir: string) => void;
   endImageExport: () => void;
-  send: (text: string, options: { includeSlide: boolean; attachments: string[] }) => Promise<void>;
+  setEditing: (editing: boolean) => void;
+  /** Saves `markup` as the new version of `slide`, after any edits still being saved. */
+  saveSlideEdit: (slide: string, markup: string) => Promise<void>;
+  undoSlideEdit: () => Promise<void>;
+  /** Asks the agent to rebuild the current slide's layout around the user's hand edits. */
+  tidyLayout: () => Promise<void>;
+  send: (
+    text: string,
+    options: { includeSlide: boolean; attachments: string[]; screenshot?: boolean },
+  ) => Promise<void>;
   interrupt: () => void;
   resetChat: () => Promise<void>;
 }
 
+interface SlideUndo {
+  slide: string;
+  /** Markup to restore. */
+  markup: string;
+  /** The slide's hash right after the edit; undo is refused once the slide changed again. */
+  after: string;
+}
+
+const UNDO_KEPT = 50;
+
+export const TIDY_PROMPT =
+  "Tidy up the layout of this slide. I edited it by hand: keep my text and keep things where I moved them, but rebuild the layout cleanly.";
+
 const newId = () => crypto.randomUUID();
 let lintRun = 0;
+/** Slide edits are saved one after another, each based on the previous one's result. */
+let editQueue: Promise<void> = Promise.resolve();
 
 export const useApp = create<AppState>((set, get) => ({
   deck: null,
@@ -134,6 +166,9 @@ export const useApp = create<AppState>((set, get) => ({
   composerFill: null,
   sketches: {},
   imageExport: null,
+  editing: false,
+  editReload: 0,
+  slideUndo: [],
 
   openDeck: async (id) => {
     try {
@@ -156,7 +191,7 @@ export const useApp = create<AppState>((set, get) => ({
   closeDeck: async () => {
     if (get().codeDirty && !(await confirmDiscardEdits())) return;
     await api.closeDeck();
-    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null, sketches: {}, imageExport: null });
+    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null, sketches: {}, imageExport: null, editing: false, slideUndo: [] });
   },
 
   setDeck: (deck) => {
@@ -221,7 +256,58 @@ export const useApp = create<AppState>((set, get) => ({
 
   endImageExport: () => set({ imageExport: null }),
 
-  send: async (text, { includeSlide, attachments }) => {
+  setEditing: (editing) => set({ editing }),
+
+  saveSlideEdit: (slide, markup) => {
+    const save = async () => {
+      const { deck } = get();
+      const base = deck?.slides.find((s) => s.id === slide)?.hash;
+      if (!deck || !base) return;
+      try {
+        const { deck: next, previous } = await api.updateSlide(deck.id, slide, markup, base);
+        if (get().deck?.id !== deck.id) return;
+        const after = next.slides.find((s) => s.id === slide)?.hash ?? "";
+        get().setDeck(next);
+        set((s) => ({ slideUndo: [...s.slideUndo, { slide, markup: previous, after }].slice(-UNDO_KEPT) }));
+      } catch (error) {
+        set((s) => ({ error: errorMessage(error), editReload: s.editReload + 1 }));
+      }
+    };
+    editQueue = editQueue.then(save);
+    return editQueue;
+  },
+
+  undoSlideEdit: () => {
+    const undo = async () => {
+      const { deck, slideUndo } = get();
+      const last = slideUndo.at(-1);
+      if (!deck || !last) return;
+      set({ slideUndo: slideUndo.slice(0, -1) });
+      const current = deck.slides.find((s) => s.id === last.slide)?.hash;
+      if (current !== last.after) {
+        set({ error: "The slide changed since that edit, so it cannot be undone." });
+        return;
+      }
+      try {
+        const { deck: next } = await api.updateSlide(deck.id, last.slide, last.markup, current);
+        if (get().deck?.id !== deck.id) return;
+        get().setDeck(next);
+        get().select(last.slide);
+      } catch (error) {
+        set({ error: errorMessage(error) });
+      }
+    };
+    editQueue = editQueue.then(undo);
+    return editQueue;
+  },
+
+  tidyLayout: async () => {
+    // Let any edit still being saved land first, so the agent sees the final version.
+    await editQueue;
+    await get().send(TIDY_PROMPT, { includeSlide: true, attachments: [], screenshot: true });
+  },
+
+  send: async (text, { includeSlide, attachments, screenshot = false }) => {
     const { deck, selected, running, model } = get();
     if (!deck || running) return;
     const slide = includeSlide ? selected : null;
@@ -248,12 +334,17 @@ export const useApp = create<AppState>((set, get) => ({
       createdAt: Date.now(),
     };
     set((s) => ({ messages: [...s.messages, user, assistant], running: true }));
-    if (slide && user.sketch) {
+    if (slide && (user.sketch || screenshot)) {
       // Screenshot the slide with the ink still on it, then put the ink away.
-      const captured: UserMessage = { ...user, sketch: { ...user.sketch, image: await captureSlide(deck.id) } };
+      const image = await captureSlide(deck.id);
+      const captured: UserMessage = {
+        ...user,
+        ...(user.sketch && { sketch: { ...user.sketch, image } }),
+        ...(screenshot && { screenshot: image }),
+      };
       user = captured;
       set((s) => ({ messages: s.messages.map((m) => (m.id === captured.id ? captured : m)) }));
-      get().clearSketch(slide);
+      if (user.sketch) get().clearSketch(slide);
     }
     try {
       await api.sendMessage(deck.id, buildPrompt(deck, user), model || null);
@@ -305,6 +396,8 @@ async function loadDeckState(deck: Deck) {
     composerFill: null,
     sketches: {},
     imageExport: null,
+    editing: false,
+    slideUndo: [],
   });
 }
 
@@ -367,6 +460,9 @@ function buildPrompt(deck: Deck, message: UserMessage): string {
     context.push(
       `Marked area: x ${bounds.left}–${bounds.right}, y ${bounds.top}–${bounds.bottom} of the ${SLIDE_SIZE.width}×${SLIDE_SIZE.height} slide`,
     );
+  }
+  if (message.screenshot) {
+    context.push(`Screenshot: ${message.screenshot} (the current slide as it looks now, with the user's hand edits)`);
   }
   if (context.length === 0) return message.text;
   return `[context]\n${context.join("\n")}\n[/context]\n\n${message.text}`;

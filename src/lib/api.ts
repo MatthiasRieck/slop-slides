@@ -15,6 +15,8 @@ export interface Slide {
   hash: string;
   /** Has `data-hidden`: skipped when presenting, shown muted in the editor. */
   hidden: boolean;
+  /** Has elements moved by hand (`data-moved`) that the agent has not tidied up yet. */
+  moved: boolean;
 }
 
 /** A named group of slides, started by a marker between slides in deck.html. */
@@ -39,6 +41,12 @@ export interface Deck {
 export interface CreatedSlide {
   deck: Deck;
   slide: string;
+}
+
+export interface UpdatedSlide {
+  deck: Deck;
+  /** The slide's markup before the update; saving it back undoes the update. */
+  previous: string;
 }
 
 export interface LintIssue {
@@ -104,6 +112,9 @@ export const api = {
     invoke<Deck>("rename_section", { id, index, title }),
   deleteSection: (id: string, index: number) => invoke<Deck>("delete_section", { id, index }),
   deleteSlide: (id: string, slide: string) => invoke<Deck>("delete_slide", { id, slide }),
+  /** Replaces one slide's markup; refused when the slide's hash is no longer `base`. */
+  updateSlide: (id: string, slide: string, markup: string, base: string) =>
+    invoke<UpdatedSlide>("update_slide", { id, slide, markup, base }),
   saveDeckSource: (id: string, source: string, base: string | null) =>
     invoke<Deck>("save_deck_source", { id, source, base }),
   importAssets: (id: string, paths: string[]) => invoke<string[]>("import_assets", { id, paths }),

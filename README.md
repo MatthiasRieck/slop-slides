@@ -8,6 +8,11 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   section button starts one at the selected slide; double-click a heading to rename it, drag
   it to move the boundary, hover to remove it.
 - **Middle:** the current slide on a fixed 1920×1080 stage, scaled to fit. Arrow keys navigate.
+  The move button below it turns on edit mode: click an element to select it, drag it (or
+  use the arrow keys) to move it, double-click (or press Enter) to edit its text, Escape to
+  select the parent, Delete to remove it, and ⌘Z / Ctrl+Z to undo. Moved elements keep a
+  temporary offset; **Tidy layout** then sends the agent a screenshot so it rebuilds the
+  slide's layout around where you put things.
 - **Right:** chat with the agent. It knows which slide you're on, and you can attach images
   (paperclip, or drop files anywhere on the window).
 - **Present:** full-screen slideshow (arrows/space/click to advance, `Esc` to exit).
@@ -63,7 +68,8 @@ src-tauri/src/
                         linter to the agent as its `lint_deck` tool
   agent.rs              runs `claude -p --output-format stream-json` per turn, resumes the
                         deck's session, normalizes the stream into `agent-event`s
-  protocol.rs           `slop://` scheme serving deck files to the slide iframes
+  protocol.rs           `slop://` scheme serving deck files to the slide iframes;
+                        adds the slide editor (assets/editor.js) for edit mode
   watcher.rs            file watcher → `deck-changed` events, so edits stream into the UI
 src-tauri/prompts/      the agent's system prompt and design references
 ```

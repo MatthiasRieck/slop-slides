@@ -42,6 +42,12 @@ const CASES = [
   ["deleteSection", () => api.deleteSection("talk", 1), "delete_section", { id: "talk", index: 1 }],
   ["deleteSlide", () => api.deleteSlide("talk", "a"), "delete_slide", { id: "talk", slide: "a" }],
   [
+    "updateSlide",
+    () => api.updateSlide("talk", "a", "<section>", "h1"),
+    "update_slide",
+    { id: "talk", slide: "a", markup: "<section>", base: "h1" },
+  ],
+  [
     "saveDeckSource",
     () => api.saveDeckSource("talk", "<html>", "<old>"),
     "save_deck_source",

@@ -19,18 +19,26 @@ export const DECK_HTML = [
 
 /** Reads slides and `deck-section` markers the way the backend reports them. */
 export function deckFor(html: string, rev = "1"): Deck {
-  const slides: { id: string; hidden: boolean }[] = [];
+  const slides: { id: string; hidden: boolean; moved: boolean }[] = [];
   const sections: Section[] = [];
   const tags = /<section class="slide"(?: id="([^"]+)")?([^>]*)>|<div class="deck-section" data-title="([^"]*)">/g;
   for (const m of html.matchAll(tags)) {
     if (m[3] !== undefined) sections.push({ index: sections.length, title: m[3], before: slides.length });
-    else slides.push({ id: m[1] ?? `#${slides.length + 1}`, hidden: /\bdata-hidden\b/.test(m[2] ?? "") });
+    else {
+      const start = (m.index ?? 0) + m[0].length;
+      const body = html.slice(start, html.indexOf("</section>", start));
+      slides.push({
+        id: m[1] ?? `#${slides.length + 1}`,
+        hidden: /\bdata-hidden\b/.test(m[2] ?? ""),
+        moved: /<[^>]*\sdata-moved\b/.test(body),
+      });
+    }
   }
   return {
     id: "talk",
     title: "Talk",
     path: "/decks/talk",
-    slides: slides.map(({ id, hidden }) => ({ id, hash: `${id}-${rev}`, hidden })),
+    slides: slides.map(({ id, hidden, moved }) => ({ id, hash: `${id}-${rev}`, hidden, moved })),
     sections,
     shellHash: `shell-${rev}`,
   };

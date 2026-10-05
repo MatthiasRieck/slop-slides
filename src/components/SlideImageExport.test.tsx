@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -65,6 +66,15 @@ describe("SlideImageExport", () => {
     expect(frame().getAttribute("src")).toContain("&static");
   });
 
+  it("keeps the spinner steady: own layer, and a progress label that does not resize it", () => {
+    render(<SlideImageExport />);
+    const spinner = document.querySelector(".animate-spin")!;
+    expect(spinner.classList.contains("will-change-transform")).toBe(true);
+    expect(spinner.classList.contains("shrink-0")).toBe(true);
+    const label = screen.getByText("Saving slide 1 of 3…");
+    expect((label as HTMLElement).style.minWidth).toBe("16ch");
+  });
+
   it("saves every slide in order, then reveals the folder", async () => {
     render(<SlideImageExport />);
     for (const id of ["intro", "#2", "outro"]) {
@@ -77,6 +87,20 @@ describe("SlideImageExport", () => {
     expect(useApp.getState().imageExport).toBeNull();
     expect(revealItemInDir).toHaveBeenCalledWith(DIR);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps going under StrictMode's double-mounted effects", async () => {
+    render(
+      <StrictMode>
+        <SlideImageExport />
+      </StrictMode>,
+    );
+    for (const id of ["intro", "#2", "outro"]) {
+      expect(frame().getAttribute("title")).toBe(id);
+      await loadSlide();
+    }
+    expect(exports()).toHaveLength(3);
+    expect(useApp.getState().imageExport).toBeNull();
   });
 
   it("waits for the slide to settle before capturing", async () => {

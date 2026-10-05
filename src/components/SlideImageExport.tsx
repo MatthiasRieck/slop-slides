@@ -53,6 +53,7 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
       event.preventDefault();
       cancel();
     };
+    stopped.current = false;
     window.addEventListener("keydown", onKey);
     return () => {
       stopped.current = true;
@@ -105,8 +106,8 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
         )}
       </div>
       <div className="flex h-12 shrink-0 items-center justify-center gap-3 text-sm text-white/80">
-        <Loader2 className="size-4 animate-spin" />
-        <span className="tabular-nums">
+        <Loader2 className="size-4 shrink-0 animate-spin will-change-transform" />
+        <span className="tabular-nums" style={{ minWidth: `${14 + 2 * String(total).length}ch` }}>
           Saving slide {Math.min(index + 1, total)} of {total}…
         </span>
         <button

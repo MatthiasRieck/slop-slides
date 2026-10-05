@@ -89,6 +89,8 @@ interface AppState {
   composerFill: { text: string; rev: number } | null;
   /** Ink drawn on slides in the editor, by slide id; sent along with the next message. */
   sketches: Record<string, Stroke[]>;
+  /** Slides being saved as images into `dir`, one at a time; null when not exporting. */
+  imageExport: { dir: string; slides: string[] } | null;
 
   openDeck: (id: string) => Promise<void>;
   createDeck: (title: string) => Promise<void>;
@@ -105,6 +107,8 @@ interface AppState {
   fillComposer: (text: string) => void;
   setSketches: (update: (all: Record<string, Stroke[]>) => Record<string, Stroke[]>) => void;
   clearSketch: (slide: string) => void;
+  startImageExport: (dir: string) => void;
+  endImageExport: () => void;
   send: (text: string, options: { includeSlide: boolean; attachments: string[] }) => Promise<void>;
   interrupt: () => void;
   resetChat: () => Promise<void>;
@@ -129,6 +133,7 @@ export const useApp = create<AppState>((set, get) => ({
   lint: null,
   composerFill: null,
   sketches: {},
+  imageExport: null,
 
   openDeck: async (id) => {
     try {
@@ -151,7 +156,7 @@ export const useApp = create<AppState>((set, get) => ({
   closeDeck: async () => {
     if (get().codeDirty && !(await confirmDiscardEdits())) return;
     await api.closeDeck();
-    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null, sketches: {} });
+    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null, sketches: {}, imageExport: null });
   },
 
   setDeck: (deck) => {
@@ -208,6 +213,13 @@ export const useApp = create<AppState>((set, get) => ({
       const { [slide]: _, ...rest } = s.sketches;
       return { sketches: rest };
     }),
+
+  startImageExport: (dir) => {
+    const { deck } = get();
+    if (deck && deck.slides.length > 0) set({ imageExport: { dir, slides: deck.slides.map((s) => s.id) } });
+  },
+
+  endImageExport: () => set({ imageExport: null }),
 
   send: async (text, { includeSlide, attachments }) => {
     const { deck, selected, running, model } = get();
@@ -292,6 +304,7 @@ async function loadDeckState(deck: Deck) {
     lint: null,
     composerFill: null,
     sketches: {},
+    imageExport: null,
   });
 }
 
@@ -304,7 +317,8 @@ async function captureSlide(deckId: string): Promise<string | null> {
   if (!target) return null;
   const { x, y, width, height } = target.getBoundingClientRect();
   try {
-    return await api.captureSketch(deckId, { x, y, width, height });
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    return await api.captureSketch(deckId, { x, y, width, height }, viewport);
   } catch (error) {
     // The marked area still tells the agent where to look.
     console.warn("slide screenshot failed:", errorMessage(error));

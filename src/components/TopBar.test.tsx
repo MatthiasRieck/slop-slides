@@ -3,10 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
 const save = vi.fn();
+const openDialog = vi.fn();
 const revealItemInDir = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(), save: (...args: unknown[]) => save(...args) }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  ask: vi.fn(),
+  save: (...args: unknown[]) => save(...args),
+  open: (...args: unknown[]) => openDialog(...args),
+}));
 vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: (...args: unknown[]) => revealItemInDir(...args) }));
 
 import { useApp } from "../store";
@@ -18,8 +23,9 @@ const toggle = (name: "Slides" | "HTML") => screen.getByRole("button", { name })
 beforeEach(() => {
   invoke.mockReset();
   save.mockReset();
+  openDialog.mockReset();
   revealItemInDir.mockReset();
-  useApp.setState({ deck: deckFor(DECK_HTML), view: "slides", codeDirty: false, presenting: false, error: null });
+  useApp.setState({ deck: deckFor(DECK_HTML), view: "slides", codeDirty: false, presenting: false, error: null, imageExport: null });
 });
 
 describe("Slides / HTML toggle", () => {
@@ -128,11 +134,15 @@ describe("deck title", () => {
 describe("toolbar actions", () => {
   const exportButton = () => screen.getByRole("button", { name: /Export/ }) as HTMLButtonElement;
   const presentButton = () => screen.getByRole("button", { name: /Present/ }) as HTMLButtonElement;
+  async function exportAs(item: "HTML file" | "PNG images") {
+    fireEvent.click(exportButton());
+    await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: new RegExp(item) })));
+  }
 
   it("exports to the chosen file and reveals it", async () => {
     save.mockResolvedValue("/Users/me/Desktop/Talk.html");
     render(<TopBar />);
-    await act(async () => fireEvent.click(exportButton()));
+    await exportAs("HTML file");
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: "Talk.html" }));
     expect(invoke).toHaveBeenCalledWith("export_deck", { id: "talk", dest: "/Users/me/Desktop/Talk.html" });
     expect(revealItemInDir).toHaveBeenCalledWith("/Users/me/Desktop/Talk.html");
@@ -146,14 +156,14 @@ describe("toolbar actions", () => {
     useApp.setState({ deck: { ...deckFor(DECK_HTML), title } });
     save.mockResolvedValue(null);
     render(<TopBar />);
-    await act(async () => fireEvent.click(exportButton()));
+    await exportAs("HTML file");
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: expected }));
   });
 
   it("does nothing when the save dialog is cancelled", async () => {
     save.mockResolvedValue(null);
     render(<TopBar />);
-    await act(async () => fireEvent.click(exportButton()));
+    await exportAs("HTML file");
     expect(invoke).not.toHaveBeenCalled();
     expect(revealItemInDir).not.toHaveBeenCalled();
   });
@@ -162,9 +172,55 @@ describe("toolbar actions", () => {
     save.mockResolvedValue("/read-only/Talk.html");
     invoke.mockRejectedValue("Permission denied (os error 13)");
     render(<TopBar />);
-    await act(async () => fireEvent.click(exportButton()));
+    await exportAs("HTML file");
     expect(useApp.getState().error).toBe("Permission denied (os error 13)");
     expect(revealItemInDir).not.toHaveBeenCalled();
+  });
+
+  it("opens and closes the export menu", () => {
+    render(<TopBar />);
+    expect(screen.queryByRole("menu")).toBeNull();
+    fireEvent.click(exportButton());
+    expect(exportButton().getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
+      "HTML fileOne self-contained file to share",
+      "PNG imagesOne image per slide, in a new folder",
+    ]);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    fireEvent.click(exportButton());
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("exports PNGs into a new folder named after the deck", async () => {
+    openDialog.mockResolvedValue("/Users/me/Desktop");
+    invoke.mockImplementation(async (command: string) =>
+      command === "create_image_export_dir" ? "/Users/me/Desktop/Talk" : undefined,
+    );
+    render(<TopBar />);
+    await exportAs("PNG images");
+    expect(openDialog).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
+    expect(invoke).toHaveBeenCalledWith("create_image_export_dir", { id: "talk", parent: "/Users/me/Desktop" });
+    expect(useApp.getState().imageExport).toEqual({ dir: "/Users/me/Desktop/Talk", slides: ["intro", "#2", "outro"] });
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("does nothing when no folder is chosen", async () => {
+    openDialog.mockResolvedValue(null);
+    render(<TopBar />);
+    await exportAs("PNG images");
+    expect(invoke).not.toHaveBeenCalled();
+    expect(useApp.getState().imageExport).toBeNull();
+  });
+
+  it("reports a folder that cannot be created", async () => {
+    openDialog.mockResolvedValue("/read-only");
+    invoke.mockRejectedValue("Permission denied (os error 13)");
+    render(<TopBar />);
+    await exportAs("PNG images");
+    expect(useApp.getState().error).toBe("Permission denied (os error 13)");
+    expect(useApp.getState().imageExport).toBeNull();
   });
 
   it("starts the presentation", () => {

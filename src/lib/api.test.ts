@@ -38,11 +38,18 @@ describe("api", () => {
     ["importAssets", () => api.importAssets("talk", ["/a.png"]), "import_assets", { id: "talk", paths: ["/a.png"] }],
     ["exportDeck", () => api.exportDeck("talk", "/out.html"), "export_deck", { id: "talk", dest: "/out.html" }],
     ["lintDeck", () => api.lintDeck("talk"), "lint_deck", { id: "talk" }],
+    ["createImageExportDir", () => api.createImageExportDir("talk", "/out"), "create_image_export_dir", { id: "talk", parent: "/out" }],
+    [
+      "exportSlideImage",
+      () => api.exportSlideImage("/out/Talk", 2, 9, { x: 0, y: 10, width: 640, height: 360 }, { width: 640, height: 400 }),
+      "export_slide_image",
+      { dir: "/out/Talk", index: 2, total: 9, rect: { x: 0, y: 10, width: 640, height: 360 }, viewport: { width: 640, height: 400 } },
+    ],
     [
       "captureSketch",
-      () => api.captureSketch("talk", { x: 1, y: 2, width: 300, height: 168.75 }),
+      () => api.captureSketch("talk", { x: 1, y: 2, width: 300, height: 168.75 }, { width: 1480, height: 920 }),
       "capture_sketch",
-      { id: "talk", rect: { x: 1, y: 2, width: 300, height: 168.75 } },
+      { id: "talk", rect: { x: 1, y: 2, width: 300, height: 168.75 }, viewport: { width: 1480, height: 920 } },
     ],
     ["loadChat", () => api.loadChat("talk"), "load_chat", { id: "talk" }],
     ["saveChat", () => api.saveChat("talk", [1]), "save_chat", { id: "talk", chat: [1] }],
@@ -63,7 +70,7 @@ describe("api", () => {
   });
 
   it("covers every api function", () => {
-    expect(Object.keys(api)).toHaveLength(24);
+    expect(Object.keys(api)).toHaveLength(26);
   });
 
   it("passes backend rejections through", async () => {

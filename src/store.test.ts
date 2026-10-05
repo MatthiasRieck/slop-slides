@@ -265,6 +265,36 @@ describe("opening and creating decks", () => {
   });
 });
 
+describe("slide image export", () => {
+  it("remembers the folder and which slides to save", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK });
+    useApp.getState().startImageExport("/out/Talk");
+    expect(useApp.getState().imageExport).toEqual({ dir: "/out/Talk", slides: ["intro", "#2", "outro"] });
+    useApp.getState().endImageExport();
+    expect(useApp.getState().imageExport).toBeNull();
+  });
+
+  it("does not start without slides", async () => {
+    const useApp = await freshStore();
+    useApp.getState().startImageExport("/out/Talk");
+    useApp.setState({ deck: { ...DECK, slides: [] } });
+    useApp.getState().startImageExport("/out/Talk");
+    expect(useApp.getState().imageExport).toBeNull();
+  });
+
+  it("is abandoned when the deck closes or another opens", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, imageExport: { dir: "/out", slides: ["intro"] } });
+    await useApp.getState().closeDeck();
+    expect(useApp.getState().imageExport).toBeNull();
+    backend({ open_deck: () => DECK, load_chat: () => [], agent_running: () => false });
+    useApp.setState({ imageExport: { dir: "/out", slides: ["intro"] } });
+    await useApp.getState().openDeck("talk");
+    expect(useApp.getState().imageExport).toBeNull();
+  });
+});
+
 describe("model choice", () => {
   it("defaults to the CLI's default model", async () => {
     const useApp = await freshStore();
@@ -385,7 +415,13 @@ describe("sending a message", () => {
       });
       useApp.setState({ deck: DECK, selected: "outro", sketches: { outro: [mark], intro: [mark] } });
       await useApp.getState().send("Move this up", { includeSlide: true, attachments: [] });
-      expect(calls("capture_sketch")).toEqual([{ id: "talk", rect: { x: 40, y: 60, width: 800, height: 450 } }]);
+      expect(calls("capture_sketch")).toEqual([
+        {
+          id: "talk",
+          rect: { x: 40, y: 60, width: 800, height: 450 },
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+        },
+      ]);
       expect(inkWhenCaptured).toEqual([mark]);
       expect(useApp.getState().sketches).toEqual({ intro: [mark] });
       expect(prompt()).toBe(

@@ -358,6 +358,49 @@ pub fn export(dir: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Creates a new folder for exported slide images inside `parent`, named after the deck
+/// title (made safe for file systems); `Title 2`, `Title 3`, … if that name is taken.
+pub fn create_export_dir(parent: &Path, title: &str) -> Result<PathBuf> {
+    if !parent.is_dir() {
+        return Err(Error::msg(format!("not a folder: {}", parent.display())));
+    }
+    let name = safe_file_name(title);
+    let name = if name.is_empty() {
+        "presentation".into()
+    } else {
+        name
+    };
+    for n in 1.. {
+        let dir = parent.join(if n == 1 {
+            name.clone()
+        } else {
+            format!("{name} {n}")
+        });
+        match fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    unreachable!("unbounded")
+}
+
+/// `text` without characters file systems reject, trimmed of spaces and trailing dots.
+fn safe_file_name(text: &str) -> String {
+    let cleaned: String = text
+        .chars()
+        .filter(|c| !c.is_control() && !r#"\/:*?"<>|"#.contains(*c))
+        .collect();
+    cleaned.trim().trim_end_matches('.').trim().to_string()
+}
+
+/// File name of the `index`th (0-based) of `total` exported slides: `slide-01.png`, with
+/// enough digits that the files sort in slide order.
+pub fn slide_image_name(index: usize, total: usize) -> String {
+    let digits = total.max(1).to_string().len().max(2);
+    format!("slide-{:0digits$}.png", index + 1)
+}
+
 /// Lints deck.html; asset references are checked against the deck's own files.
 pub fn lint(dir: &Path) -> Result<Vec<lint::Issue>> {
     let source = read_html(dir)?;
@@ -918,6 +961,60 @@ mod tests {
             rel.ends_with(names.iter().max().unwrap().as_str()),
             "new sketch kept"
         );
+    }
+
+    #[test]
+    fn export_dir_is_named_after_the_deck() {
+        let parent = TempDeck::new(ORIGINAL);
+        let dir = create_export_dir(&parent.0, "Q3 Review").unwrap();
+        assert_eq!(dir, parent.0.join("Q3 Review"));
+        assert!(dir.is_dir());
+    }
+
+    #[test]
+    fn export_dir_never_reuses_an_existing_folder() {
+        let parent = TempDeck::new(ORIGINAL);
+        fs::create_dir(parent.0.join("Talk")).unwrap();
+        fs::write(parent.0.join("Talk").join("slide-01.png"), b"keep").unwrap();
+        assert_eq!(
+            create_export_dir(&parent.0, "Talk").unwrap(),
+            parent.0.join("Talk 2")
+        );
+        assert_eq!(
+            create_export_dir(&parent.0, "Talk").unwrap(),
+            parent.0.join("Talk 3")
+        );
+        assert_eq!(
+            fs::read(parent.0.join("Talk").join("slide-01.png")).unwrap(),
+            b"keep"
+        );
+    }
+
+    #[test]
+    fn export_dir_names_are_safe() {
+        let parent = TempDeck::new(ORIGINAL);
+        let dir = create_export_dir(&parent.0, " A/B: \"why?\" <draft>. ").unwrap();
+        assert_eq!(dir.file_name().unwrap(), "AB why draft");
+        let dir = create_export_dir(&parent.0, "../..").unwrap();
+        assert_eq!(dir, parent.0.join("presentation"));
+        let dir = create_export_dir(&parent.0, "\t").unwrap();
+        assert_eq!(dir, parent.0.join("presentation 2"));
+    }
+
+    #[test]
+    fn export_dir_needs_an_existing_parent() {
+        let parent = TempDeck::new(ORIGINAL);
+        assert!(create_export_dir(&parent.0.join("missing"), "Talk").is_err());
+        assert!(create_export_dir(&parent.0.join(DECK_FILE), "Talk").is_err());
+    }
+
+    #[test]
+    fn slide_images_sort_in_slide_order() {
+        assert_eq!(slide_image_name(0, 1), "slide-01.png");
+        assert_eq!(slide_image_name(8, 12), "slide-09.png");
+        assert_eq!(slide_image_name(99, 120), "slide-100.png");
+        assert_eq!(slide_image_name(4, 120), "slide-005.png");
+        assert_eq!(slide_image_name(0, 0), "slide-01.png");
     }
 
     #[test]

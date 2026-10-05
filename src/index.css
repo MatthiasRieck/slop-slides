@@ -169,3 +169,43 @@
 .markdown strong {
   font-weight: 600;
 }
+
+/* Syntax colors for the HTML view (CodeMirror + @lezer/highlight's classHighlighter). */
+.cm-editor {
+  --tok-tag: #116329;
+  --tok-attr: #0550ae;
+  --tok-string: #0a3069;
+  --tok-comment: #6e7781;
+  --tok-keyword: #cf222e;
+  --tok-class: #953800;
+  --tok-variable: #8250df;
+  --tok-punct: #57606a;
+}
+.dark .cm-editor {
+  --tok-tag: #7ee787;
+  --tok-attr: #79c0ff;
+  --tok-string: #a5d6ff;
+  --tok-comment: #8b949e;
+  --tok-keyword: #ff7b72;
+  --tok-class: #ffa657;
+  --tok-variable: #d2a8ff;
+  --tok-punct: #8b949e;
+}
+.cm-editor .tok-typeName { color: var(--tok-tag); }
+.cm-editor .tok-propertyName { color: var(--tok-attr); }
+.cm-editor .tok-string,
+.cm-editor .tok-string2 { color: var(--tok-string); }
+.cm-editor .tok-comment { color: var(--tok-comment); font-style: italic; }
+.cm-editor .tok-keyword,
+.cm-editor .tok-operator { color: var(--tok-keyword); }
+.cm-editor .tok-className,
+.cm-editor .tok-labelName { color: var(--tok-class); }
+.cm-editor .tok-number,
+.cm-editor .tok-atom,
+.cm-editor .tok-bool,
+.cm-editor .tok-literal { color: var(--tok-attr); }
+.cm-editor .tok-variableName.tok-definition,
+.cm-editor .tok-macroName { color: var(--tok-variable); }
+.cm-editor .tok-punctuation,
+.cm-editor .tok-meta { color: var(--tok-punct); }
+.cm-editor .tok-invalid { color: var(--destructive); }

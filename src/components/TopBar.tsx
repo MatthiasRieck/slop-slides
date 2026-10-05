@@ -1,11 +1,11 @@
 import { save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { ChevronLeft, FolderOpen, Play, Share } from "lucide-react";
+import { ChevronLeft, Code2, FolderOpen, Play, Presentation, Share } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api, errorMessage } from "../lib/api";
 import { cn, isMac } from "../lib/utils";
-import { useApp } from "../store";
+import { useApp, type StageView } from "../store";
 
 export function TopBar() {
   const deck = useApp((s) => s.deck);
@@ -72,6 +72,7 @@ export function TopBar() {
         className="min-w-0 max-w-md flex-1 truncate rounded-md bg-transparent px-1.5 py-1 text-sm font-medium outline-none hover:bg-accent focus:bg-accent"
       />
       <div data-tauri-drag-region className="flex-1 self-stretch" />
+      <ViewToggle />
       <button
         type="button"
         onClick={() => void revealItemInDir(`${deck.path}/deck.html`)}
@@ -100,5 +101,34 @@ export function TopBar() {
         Present
       </button>
     </header>
+  );
+}
+
+const VIEWS: { id: StageView; label: string; title: string; icon: typeof Code2 }[] = [
+  { id: "slides", label: "Slides", title: "Show the rendered slide", icon: Presentation },
+  { id: "code", label: "HTML", title: "Show deck.html, scrolled to the selected slide", icon: Code2 },
+];
+
+function ViewToggle() {
+  const view = useApp((s) => s.view);
+  return (
+    <div className="flex items-center rounded-md border bg-muted p-0.5">
+      {VIEWS.map(({ id, label, title, icon: Icon }) => (
+        <button
+          key={id}
+          type="button"
+          title={title}
+          aria-pressed={view === id}
+          onClick={() => useApp.getState().setView(id)}
+          className={cn(
+            "flex items-center gap-1.5 rounded px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground",
+            view === id && "bg-background text-foreground shadow-sm ring-1 ring-border",
+          )}
+        >
+          <Icon className="size-3.5" />
+          {label}
+        </button>
+      ))}
+    </div>
   );
 }

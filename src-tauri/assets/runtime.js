@@ -7,9 +7,15 @@
   if (params.has("static")) root.setAttribute("data-slop-static", "");
 
   var deck = document.querySelector(".deck");
-  var slides = Array.prototype.filter.call(document.querySelectorAll(".slide"), function (el) {
+  var all = Array.prototype.filter.call(document.querySelectorAll(".slide"), function (el) {
     return !el.parentElement || !el.parentElement.closest(".slide");
   });
+  // Hidden slides (data-hidden) are skipped by the show; the editor still embeds them.
+  var slides = embed
+    ? all
+    : all.filter(function (el) {
+        return !el.hasAttribute("data-hidden");
+      });
   if (!deck || slides.length === 0) return;
   var current = -1;
 
@@ -22,7 +28,15 @@
 
   function indexFor(ref) {
     if (!ref) return 0;
-    for (var i = 0; i < slides.length; i++) if (slides[i].id === ref) return i;
+    // A hidden slide's id lands on the next shown slide (or the last one).
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].id !== ref) continue;
+      for (var j = i; j < all.length; j++) {
+        var index = slides.indexOf(all[j]);
+        if (index >= 0) return index;
+      }
+      return slides.length - 1;
+    }
     var n = parseInt(ref, 10);
     return isNaN(n) ? 0 : Math.min(slides.length - 1, Math.max(0, n - 1));
   }

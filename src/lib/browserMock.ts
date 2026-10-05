@@ -6,7 +6,7 @@ interface RawDeck {
   id: string;
   title: string;
   path: string;
-  slides: { id: string; hash: string }[];
+  slides: { id: string; hash: string; hidden: boolean }[];
   shellHash: string;
   updatedMs: number;
 }

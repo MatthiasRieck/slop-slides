@@ -17,7 +17,8 @@ function readDeck(id: string) {
   const slides = [...html.matchAll(/<section\b[^>]*\bclass=["'][^"']*\bslide\b[^"']*["'][^>]*>/gi)].map(
     (match, index) => {
       const id = /\bid=["']([^"']+)["']/i.exec(match[0])?.[1] ?? `#${index + 1}`;
-      return { id, hash: hash(html.slice(match.index, html.indexOf("</section>", match.index))) };
+      const hidden = /\sdata-hidden\b/i.test(match[0]);
+      return { id, hash: hash(html.slice(match.index, html.indexOf("</section>", match.index))), hidden };
     },
   );
   const title = /<title>([^<]*)<\/title>/i.exec(html)?.[1] ?? id;

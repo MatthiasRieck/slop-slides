@@ -52,6 +52,8 @@ pub struct Slide {
     pub id: String,
     /// Changes whenever this slide's markup changes, so only its preview reloads.
     pub hash: String,
+    /// Skipped by the player (presenting, exported file); still shown in the editor.
+    pub hidden: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -216,6 +218,7 @@ pub fn load(dir: &Path, id: &str) -> Result<Deck> {
             // the turn ends and `normalize` assigns one.
             id: span.id.clone().unwrap_or_else(|| format!("#{}", index + 1)),
             hash: html::content_hash(&source[span.range.clone()]),
+            hidden: span.hidden.is_some(),
         })
         .collect();
     Ok(Deck {
@@ -273,6 +276,10 @@ pub fn add_blank(app: &AppHandle, id: &str, after: Option<String>) -> Result<(De
 
 pub fn duplicate(app: &AppHandle, id: &str, slide: &str) -> Result<(Deck, String)> {
     edit(app, id, |s| html::duplicate(s, slide))
+}
+
+pub fn set_slide_hidden(app: &AppHandle, id: &str, slide: &str, hidden: bool) -> Result<Deck> {
+    Ok(edit(app, id, |s| Ok((html::set_hidden(s, slide, hidden)?, ())))?.0)
 }
 
 pub fn delete_slide(app: &AppHandle, id: &str, slide: &str) -> Result<Deck> {
@@ -557,6 +564,14 @@ mod tests {
             saved.slides[1].id, "#2",
             "unnamed slide addressed by position"
         );
+    }
+
+    #[test]
+    fn load_reports_hidden_slides() {
+        let deck = TempDeck::new(&EDITED.replace(" id=\"b\"", " id=\"b\" data-hidden"));
+        let loaded = load(&deck.0, "talk").unwrap();
+        let hidden: Vec<_> = loaded.slides.iter().map(|s| s.hidden).collect();
+        assert_eq!(hidden, [false, true]);
     }
 
     #[test]

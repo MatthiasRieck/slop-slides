@@ -77,6 +77,9 @@ must never reflow, scroll, or overflow.
   JavaScript, for slide visuals.
 - Speaker notes, if requested, go in `<aside class="notes">…</aside>` inside the slide
   (hidden by the runtime).
+- A slide with the `data-hidden` attribute is hidden: the user muted it in the editor and
+  the player skips it when presenting. Keep the attribute when editing such a slide;
+  remove it only when asked to show the slide again.
 
 ## Design standard
 

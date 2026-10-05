@@ -111,6 +111,9 @@ html[data-slop-static] *::after {
     opacity: 1 !important;
     break-after: page;
   }
+  .deck > .slide[data-hidden] {
+    display: none !important;
+  }
   .slide .reveal {
     opacity: 1 !important;
     animation: none !important;

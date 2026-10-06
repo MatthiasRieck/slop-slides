@@ -8,6 +8,7 @@ import {
   Globe,
   Image as ImageIcon,
   Loader2,
+  PanelRightClose,
   Paperclip,
   Pencil,
   PenLine,
@@ -49,17 +50,28 @@ export function ChatPanel() {
         <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
           Chat
         </span>
-        {messages.length > 0 && (
+        <div className="flex items-center gap-1">
+          {messages.length > 0 && (
+            <button
+              type="button"
+              title="New conversation (slides are kept)"
+              onClick={() => void useApp.getState().resetChat()}
+              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-2xs text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <RotateCcw className="size-3" />
+              New chat
+            </button>
+          )}
           <button
             type="button"
-            title="New conversation (slides are kept)"
-            onClick={() => void useApp.getState().resetChat()}
-            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-2xs text-muted-foreground hover:bg-accent hover:text-foreground"
+            title="Hide chat"
+            aria-label="Hide chat"
+            onClick={() => useApp.getState().setChatOpen(false)}
+            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
-            <RotateCcw className="size-3" />
-            New chat
+            <PanelRightClose className="size-3.5" />
           </button>
-        )}
+        </div>
       </div>
       {claudePath === null && <MissingClaude />}
       <MessageList messages={messages} running={running}>

@@ -77,6 +77,8 @@ interface AppState {
   view: StageView;
   /** The HTML view holds edits that are not saved to deck.html yet. */
   codeDirty: boolean;
+  /** The chat panel is shown; the user can collapse it to give the stage more room. */
+  chatOpen: boolean;
   /** Bumped when attached assets change, reloading every slide preview. */
   assetsRev: number;
   messages: ChatMessage[];
@@ -110,6 +112,7 @@ interface AppState {
   selectRelative: (delta: number) => void;
   setView: (view: StageView) => void;
   setCodeDirty: (dirty: boolean) => void;
+  setChatOpen: (open: boolean) => void;
   setModel: (model: string) => void;
   setPresenting: (presenting: boolean) => void;
   setError: (error: string | null) => void;
@@ -165,6 +168,7 @@ export const useApp = create<AppState>((set, get) => ({
   revealRev: 0,
   view: localStorage.getItem("slopslide.view") === "code" ? "code" : "slides",
   codeDirty: false,
+  chatOpen: localStorage.getItem("slopslide.chatOpen") !== "false",
   assetsRev: 0,
   messages: [],
   running: false,
@@ -227,6 +231,11 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setCodeDirty: (codeDirty) => set({ codeDirty }),
+
+  setChatOpen: (chatOpen) => {
+    localStorage.setItem("slopslide.chatOpen", String(chatOpen));
+    set({ chatOpen });
+  },
 
   setModel: (model) => {
     localStorage.setItem("slopslide.model", model);

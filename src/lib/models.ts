@@ -1,0 +1,61 @@
+export type Provider = "claude" | "codex";
+
+export const PROVIDER_IDS: Provider[] = ["claude", "codex"];
+
+export const PROVIDERS: Record<Provider, { label: string; cli: string; install: string }> = {
+  claude: {
+    label: "Claude",
+    cli: "Claude Code",
+    install: "Install it from claude.com/claude-code and run `claude` once to sign in.",
+  },
+  codex: {
+    label: "Codex",
+    cli: "Codex",
+    install: "Install it with `npm i -g @openai/codex` and run `codex` once to sign in.",
+  },
+};
+
+/** A model as reported by the backend (Codex: live `model/list`; Claude: fixed catalog). */
+export interface ProviderModel {
+  id: string;
+  label: string;
+  isDefault: boolean;
+  efforts: string[];
+  defaultEffort: string | null;
+}
+
+export interface ProviderInfo {
+  id: Provider;
+  installed: boolean;
+  path: string | null;
+  models: ProviderModel[];
+  /** The CLI is installed but its models could not be listed. */
+  error: string | null;
+}
+
+const EFFORT_LABELS: Record<string, string> = {
+  none: "None",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Max",
+};
+
+export function effortLabel(effort: string): string {
+  return EFFORT_LABELS[effort] ?? effort.charAt(0).toUpperCase() + effort.slice(1);
+}
+
+export const modelKey = (provider: Provider, id: string) => `${provider}:${id}`;
+
+export function defaultModel(info: ProviderInfo): ProviderModel | undefined {
+  return info.models.find((m) => m.isDefault) ?? info.models[0];
+}
+
+/** Keeps `effort` when the model supports it, else the model's own default. */
+export function pickEffort(model: ProviderModel, effort: string): string {
+  if (model.efforts.length === 0 || model.efforts.includes(effort)) return effort;
+  if (model.defaultEffort && model.efforts.includes(model.defaultEffort)) return model.defaultEffort;
+  return model.efforts.includes("medium") ? "medium" : model.efforts[0]!;
+}

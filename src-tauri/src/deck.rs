@@ -376,14 +376,15 @@ pub fn save_chat(app: &AppHandle, id: &str, chat: &serde_json::Value) -> Result<
     atomic_write(&path, serde_json::to_string(chat).expect("json").as_bytes())
 }
 
-pub fn read_session(dir: &Path) -> Option<String> {
-    fs::read_to_string(dir.join(INTERNAL_DIR).join("session"))
+/// Each agent provider keeps its own resumable session, stored under `name`.
+pub fn read_session(dir: &Path, name: &str) -> Option<String> {
+    fs::read_to_string(dir.join(INTERNAL_DIR).join(name))
         .ok()
         .map(|s| s.trim().to_string())
 }
 
-pub fn write_session(dir: &Path, session_id: Option<&str>) -> Result<()> {
-    let path = dir.join(INTERNAL_DIR).join("session");
+pub fn write_session(dir: &Path, name: &str, session_id: Option<&str>) -> Result<()> {
+    let path = dir.join(INTERNAL_DIR).join(name);
     match session_id {
         Some(id) => fs::write(path, id)?,
         None if path.exists() => fs::remove_file(path)?,

@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import type { Provider, ProviderInfo } from "./models";
+
 export interface DeckSummary {
   id: string;
   title: string;
@@ -27,11 +29,6 @@ export interface Deck {
 export interface CreatedSlide {
   deck: Deck;
   slide: string;
-}
-
-export interface AgentStatus {
-  claudePath: string | null;
-  libraryPath: string;
 }
 
 export type AgentEvent =
@@ -79,11 +76,14 @@ export const api = {
   loadChat: (id: string) => invoke<unknown>("load_chat", { id }),
   saveChat: (id: string, chat: unknown) => invoke<void>("save_chat", { id, chat }),
   resetChat: (id: string) => invoke<void>("reset_chat", { id }),
-  sendMessage: (deckId: string, prompt: string, model: string | null) =>
-    invoke<void>("send_message", { args: { deckId, prompt, model } }),
+  sendMessage: (
+    deckId: string,
+    prompt: string,
+    selection: { provider: Provider; model: string; effort: string },
+  ) => invoke<void>("send_message", { args: { deckId, prompt, ...selection } }),
   interruptAgent: (id: string) => invoke<void>("interrupt_agent", { id }),
   agentRunning: (id: string) => invoke<boolean>("agent_running", { id }),
-  agentStatus: () => invoke<AgentStatus>("agent_status"),
+  listProviders: () => invoke<ProviderInfo[]>("list_providers"),
 };
 
 export function errorMessage(error: unknown): string {

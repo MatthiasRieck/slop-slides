@@ -461,11 +461,20 @@ describe("slide editor", () => {
   describe("pasteboard around the slide", () => {
     const views = (e: ReturnType<typeof editor>) =>
       e.posted().filter((m) => (m as { type: string }).type === "slop:edit-view") as { slide: string; x: number; y: number; k: number }[];
-    const wheel = (e: ReturnType<typeof editor>, init: WheelEventInit) => {
+    // Wheel events carry their time so tests can say which belong to one gesture; by default
+    // each call starts a new one.
+    let clock = 0;
+    const wheel = (e: ReturnType<typeof editor>, init: WheelEventInit, extra: { wheelDeltaY?: number; sameGesture?: boolean } = {}) => {
+      clock += extra.sameGesture ? 16 : 1000;
       const event = new e.window.WheelEvent("wheel", { cancelable: true, bubbles: true, ...init });
+      Object.defineProperty(event, "timeStamp", { value: clock });
+      if (extra.wheelDeltaY !== undefined) Object.defineProperty(event, "wheelDeltaY", { value: extra.wheelDeltaY });
       e.doc.body.dispatchEvent(event);
       return event;
     };
+    /** A mouse wheel turned by whole notches (up is negative), as WebKit and Chromium report it. */
+    const notch = (e: ReturnType<typeof editor>, notches: number, at: { clientX?: number; clientY?: number } = {}) =>
+      wheel(e, { deltaY: notches * 40, ...at }, { wheelDeltaY: -notches * 120 });
     const resize = (e: ReturnType<typeof editor>, width: number, height: number) => {
       Object.defineProperty(e.window, "innerWidth", { value: width, configurable: true });
       Object.defineProperty(e.window, "innerHeight", { value: height, configurable: true });
@@ -501,37 +510,60 @@ describe("slide editor", () => {
       expect(h1.hasAttribute("data-moved")).toBe(false);
     });
 
-    it("pans with scrolling, keeping the slide's markup out of it", () => {
+    it("zooms with the mouse wheel around the pointer, keeping the slide's markup out of it", () => {
+      const e = editor();
+      const event = notch(e, -1, { clientX: 0, clientY: 0 });
+      expect(event.defaultPrevented).toBe(true);
+      expect(views(e).at(-1)!.k).toBeCloseTo(Math.exp(0.2), 5);
+      // Zooming at the slide's corner leaves that corner where it was.
+      expect(e.$(".deck").style.transform).toContain("translate(0px,0px)");
+      notch(e, 1, { clientX: 0, clientY: 0 });
+      expect(views(e).at(-1)!.k).toBeCloseTo(1, 5);
+      expect(views(e).at(-1)!.x).toBeCloseTo(0, 5);
+      expect(e.commits()).toEqual([]);
+    });
+
+    it("zooms with a line-based mouse wheel (Firefox)", () => {
+      const e = editor();
+      wheel(e, { deltaY: -3, deltaMode: 1 });
+      expect(views(e).at(-1)!.k).toBeGreaterThan(1);
+    });
+
+    it("pans when swiping on a trackpad, without limit", () => {
       const e = editor();
       const event = wheel(e, { deltaX: 30, deltaY: 100 });
       expect(event.defaultPrevented).toBe(true);
       expect(e.$(".deck").style.transform).toBe("translate(-30px,-100px) scale(1)");
-      expect(e.$("[data-slop-frame]").style.cssText).toContain("left: -30px");
       expect(views(e).at(-1)).toEqual({ type: "slop:edit-view", slide: "intro", x: -30, y: -100, k: 1 });
+      // Purely vertical swipes pan too; Chromium reports their wheelDelta as 3× the pixels.
+      wheel(e, { deltaY: 7 }, { wheelDeltaY: -21 });
+      expect(e.$(".deck").style.transform).toBe("translate(-30px,-107px) scale(1)");
+      for (let i = 0; i < 50; i++) wheel(e, { deltaY: -400 });
+      expect(e.$(".deck").style.transform).toBe("translate(-30px,19893px) scale(1)");
       expect(e.commits()).toEqual([]);
     });
 
-    it("pans without limit, so far-away content can always be reached", () => {
+    it("keeps a trackpad swipe a pan even when one of its events looks like a mouse notch", () => {
       const e = editor();
-      for (let i = 0; i < 50; i++) wheel(e, { deltaY: -400 });
-      expect(e.$(".deck").style.transform).toBe("translate(0px,20000px) scale(1)");
+      wheel(e, { deltaY: 5 }, { wheelDeltaY: -15 });
+      wheel(e, { deltaY: 40 }, { wheelDeltaY: -120, sameGesture: true });
+      expect(e.$(".deck").style.transform).toBe("translate(0px,-45px) scale(1)");
+      // A new gesture is judged afresh.
+      notch(e, -1);
+      expect(views(e).at(-1)!.k).toBeCloseTo(Math.exp(0.2), 5);
     });
 
-    it("zooms with Ctrl/⌘+scroll (pinch) around the pointer", () => {
+    it("zooms when pinching on a trackpad (Ctrl+wheel), or with ⌘/Ctrl+scroll", () => {
       const e = editor();
       wheel(e, { ctrlKey: true, deltaY: -60, clientX: 0, clientY: 0 });
-      const zoomed = views(e).at(-1)!;
-      expect(zoomed.k).toBeCloseTo(Math.exp(0.3), 5);
-      // Zooming at the slide's corner leaves that corner where it was.
-      expect(e.$(".deck").style.transform).toContain("translate(0px,0px)");
+      expect(views(e).at(-1)!.k).toBeCloseTo(Math.exp(0.3), 5);
       wheel(e, { metaKey: true, deltaY: 60, clientX: 0, clientY: 0 });
       expect(views(e).at(-1)!.k).toBeCloseTo(1, 5);
-      expect(views(e).at(-1)!.x).toBeCloseTo(0, 5);
     });
 
     it("keeps the point under the pointer fixed while zooming", () => {
       const e = editor();
-      wheel(e, { ctrlKey: true, deltaY: -60, clientX: 1000, clientY: 500 });
+      notch(e, -1, { clientX: 1000, clientY: 500 });
       const { x, y, k } = views(e).at(-1)!;
       // The slide point that was under the pointer at 1000,500 still is.
       expect(x + 1000 * k).toBeCloseTo(1000, 5);
@@ -540,9 +572,9 @@ describe("slide editor", () => {
 
     it("limits how far it zooms", () => {
       const e = editor();
-      for (let i = 0; i < 40; i++) wheel(e, { ctrlKey: true, deltaY: -60 });
+      for (let i = 0; i < 40; i++) notch(e, -2);
       expect(views(e).at(-1)!.k).toBe(8);
-      for (let i = 0; i < 80; i++) wheel(e, { ctrlKey: true, deltaY: 60 });
+      for (let i = 0; i < 80; i++) notch(e, 2);
       expect(views(e).at(-1)!.k).toBe(0.1);
     });
 
@@ -590,6 +622,22 @@ describe("slide editor", () => {
       expect(e.doc.documentElement.style.cursor).toBe("");
     });
 
+    it("pans with the middle button even while typing, and keeps the text being edited", () => {
+      const e = editor();
+      const h1 = e.$("h1");
+      e.down(h1);
+      e.up(h1);
+      e.key("Enter");
+      h1.dispatchEvent(new e.window.PointerEvent("pointerdown", { clientX: 0, clientY: 0, button: 1, bubbles: true, cancelable: true }));
+      e.move(h1, 40, 20);
+      e.up(h1, 40, 20);
+      expect(e.$(".deck").style.transform).toBe("translate(40px,20px) scale(1)");
+      expect(h1.getAttribute("contenteditable")).toBe("true");
+      const click = new e.window.MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true });
+      h1.dispatchEvent(click);
+      expect(click.defaultPrevented).toBe(true);
+    });
+
     it("does not treat Space or 0 as commands while typing", () => {
       const e = editor();
       const h1 = e.$("h1");
@@ -607,12 +655,12 @@ describe("slide editor", () => {
     it("returns to the slide with 0 or when the app asks", () => {
       const e = editor();
       wheel(e, { deltaY: 100 });
-      wheel(e, { ctrlKey: true, deltaY: -30 });
+      notch(e, -1);
       const zero = e.key("0");
       expect(zero.defaultPrevented).toBe(true);
       expect(e.$(".deck").style.transform).toBe("translate(0px,0px) scale(1)");
       expect(views(e).at(-1)).toEqual({ type: "slop:edit-view", slide: "intro", x: 0, y: 0, k: 1 });
-      wheel(e, { deltaY: 100 });
+      wheel(e, { deltaX: 100 });
       e.fromParent({ type: "slop:edit-camera", home: true });
       expect(e.$(".deck").style.transform).toBe("translate(0px,0px) scale(1)");
     });

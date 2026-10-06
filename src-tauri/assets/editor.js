@@ -11,9 +11,10 @@
 
    The preview fills the whole stage area and the slide sits in its middle, at the size it has
    outside edit mode. The slide no longer clips, so content that runs past its edge stays visible
-   (dimmed outside the slide), and the surroundings are an endless pasteboard: scroll or drag
-   empty space (or hold Space, or use the middle button) to pan, pinch or Ctrl/⌘+scroll to zoom,
-   0 returns to the start. Content moved far away can always be panned to and dragged back.
+   (dimmed outside the slide), and the surroundings are an endless pasteboard: drag with the
+   middle button (pressed mouse wheel), swipe on a trackpad, drag empty space or hold Space to
+   pan; turn the mouse wheel, pinch or Ctrl/⌘+scroll to zoom; 0 returns to the start. Content
+   moved far away can always be panned to and dragged back.
    The view is reported as { type: "slop:edit-view", slide, x, y, k } (pan in px, zoom) and
    restored with { type: "slop:edit-camera", x, y, k } or { type: "slop:edit-camera", home: true }.
    Anything that runs past the slide's edge or is cut off by its own box is outlined with a red
@@ -38,6 +39,8 @@
   var MIN_ZOOM = 0.1;
   var MAX_ZOOM = 8;
   var WHEEL_ZOOM = 0.005;
+  // Wheel events closer together than this belong to one gesture (a swipe and its momentum).
+  var WHEEL_GESTURE_MS = 150;
 
   var deck = slide.parentElement;
   var style = document.createElement("style");
@@ -604,8 +607,9 @@
   document.addEventListener("pointerdown", function (event) {
     if (event.button !== 0 && event.button !== 1) return;
     wires.removeAttribute("data-quiet");
+    // The middle button (pressing the mouse wheel) always pans, even while typing.
     if (event.button === 1 || (spaceDown && !editing)) {
-      if (!editing) startPan(event);
+      startPan(event);
       return;
     }
     if (editing && editing.contains(event.target)) return;
@@ -697,7 +701,23 @@
     if (editing) event.preventDefault();
   });
 
-  // Scrolling pans the pasteboard; pinching (reported as Ctrl+wheel) or ⌘/Ctrl+scroll zooms it.
+  /**
+   * Whether a wheel event comes from a notched mouse wheel rather than a trackpad. Browsers don't
+   * say, so this goes by what the event looks like: a mouse wheel scrolls in whole notches (lines,
+   * or wheelDelta in steps of 120) and only vertically, while a trackpad sends a stream of
+   * pixel deltas, usually with some sideways motion.
+   */
+  function fromMouseWheel(event) {
+    if (event.deltaMode !== 0) return true;
+    if (event.deltaX) return false;
+    var ticks = event.wheelDeltaY;
+    return typeof ticks === "number" && ticks !== 0 && ticks % 120 === 0;
+  }
+  var wheelGesture = { at: -Infinity, mouse: false };
+
+  // Pinching (reported as Ctrl+wheel) and the mouse wheel zoom the pasteboard around the pointer;
+  // with a mouse, panning is the middle button. Swiping on a trackpad pans. A gesture is
+  // classified by its first event, so a swipe never turns into a zoom halfway through.
   window.addEventListener(
     "wheel",
     function (event) {
@@ -705,7 +725,10 @@
       var unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
       var dx = event.deltaX * unit;
       var dy = event.deltaY * unit;
-      if (event.ctrlKey || event.metaKey) {
+      var now = event.timeStamp || Date.now();
+      if (now - wheelGesture.at > WHEEL_GESTURE_MS) wheelGesture.mouse = fromMouseWheel(event);
+      wheelGesture.at = now;
+      if (event.ctrlKey || event.metaKey || (wheelGesture.mouse && dy)) {
         zoomAt(event.clientX, event.clientY, Math.exp(-Math.max(-60, Math.min(60, dy)) * WHEEL_ZOOM));
       } else {
         setCamera(cam.x - dx, cam.y - dy, cam.k);
@@ -713,6 +736,10 @@
     },
     { passive: false },
   );
+  // Otherwise a middle click may paste (Linux) or open the autoscroll cursor.
+  document.addEventListener("auxclick", function (event) {
+    if (event.button === 1) event.preventDefault();
+  });
 
   // Capture phase, so keys the editor handles never reach the player (which forwards keys
   // to the app for slide navigation).

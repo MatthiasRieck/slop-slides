@@ -1,6 +1,6 @@
 //! Drives a coding agent CLI headless inside a deck folder, one process per turn, resuming
 //! the deck's session between turns: Claude Code (`claude -p --output-format stream-json`)
-//! or OpenAI Codex (`codex exec --json`). Stream events are normalized into [`AgentEvent`]s
+//! OpenAI Codex (`codex exec --json`), or GitHub Copilot (see [`crate::copilot`]). Stream events are normalized into [`AgentEvent`]s
 //! and emitted to the frontend as `agent-event`.
 
 use std::collections::{HashMap, HashSet};
@@ -16,12 +16,13 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::watch;
 
+use crate::copilot;
 use crate::deck::{self, INTERNAL_DIR};
 use crate::env;
 use crate::error::{Error, Result};
 use crate::mcp;
 
-const SYSTEM_PROMPT: &str = include_str!("../prompts/system.md");
+pub(crate) const SYSTEM_PROMPT: &str = include_str!("../prompts/system.md");
 /// The agent edits files only: no shell, no MCP servers.
 const TOOLS: &str = "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch";
 const STDERR_LIMIT: usize = 16 * 1024;
@@ -32,16 +33,18 @@ pub enum Provider {
     #[default]
     Claude,
     Codex,
+    Copilot,
 }
 
 impl Provider {
-    pub const ALL: [Provider; 2] = [Provider::Claude, Provider::Codex];
+    pub const ALL: [Provider; 3] = [Provider::Claude, Provider::Codex, Provider::Copilot];
 
     /// File under `.slopslide/` holding this provider's resumable session id.
     pub fn session_file(self) -> &'static str {
         match self {
             Provider::Claude => "session",
             Provider::Codex => "codex-session",
+            Provider::Copilot => "copilot-session",
         }
     }
 
@@ -49,6 +52,7 @@ impl Provider {
         match self {
             Provider::Claude => "Claude Code",
             Provider::Codex => "Codex",
+            Provider::Copilot => "GitHub Copilot",
         }
     }
 
@@ -64,6 +68,12 @@ impl Provider {
                 Error::msg(
                     "Codex was not found. Install it with `npm i -g @openai/codex` and sign in, \
                      or set SLOPSLIDE_CODEX_PATH to the `codex` executable.",
+                )
+            }),
+            Provider::Copilot => env::resolve_copilot().ok_or_else(|| {
+                Error::msg(
+                    "GitHub Copilot was not found. Install it with `npm i -g @github/copilot` and \
+                     sign in, or set SLOPSLIDE_COPILOT_PATH to the `copilot` executable.",
                 )
             }),
         }
@@ -202,7 +212,7 @@ struct Turn {
     effort: Option<String>,
 }
 
-enum Outcome {
+pub(crate) enum Outcome {
     Done,
     Interrupted,
     ResumeFailed,
@@ -243,24 +253,38 @@ impl Turn {
     ) -> Result<Outcome> {
         let model = self.model.as_deref();
         let effort = self.effort.as_deref();
-        let args = match self.provider {
-            Provider::Claude => {
-                let system_prompt = self.dir.join(INTERNAL_DIR).join("system-prompt.md");
-                std::fs::write(&system_prompt, SYSTEM_PROMPT)?;
-                let mcp_config = self.dir.join(INTERNAL_DIR).join("mcp.json");
-                std::fs::write(
-                    &mcp_config,
-                    lint_server_config(&std::env::current_exe()?, &self.dir),
-                )?;
-                build_claude_args(&system_prompt, &mcp_config, model, effort, session)
-            }
-            Provider::Codex => {
-                build_codex_args(&std::env::current_exe()?, &self.dir, model, effort, session)
-            }
-        };
-        let mut parser = match self.provider {
-            Provider::Claude => Parser::Claude,
-            Provider::Codex => Parser::Codex(CodexParser::default()),
+        if self.provider == Provider::Copilot {
+            let args = copilot::TurnArgs {
+                bin: &self.bin,
+                dir: &self.dir,
+                lint_server: &std::env::current_exe()?,
+                prompt,
+                model,
+                effort,
+                session,
+            };
+            let on_session =
+                |id: &str| deck::write_session(&self.dir, self.provider.session_file(), Some(id));
+            return copilot::run_turn(args, cancel, &|event| self.emit(event), &on_session).await;
+        }
+        // Claude Code and Codex stream JSON lines from a one-shot process.
+        let (args, mut parser) = if self.provider == Provider::Codex {
+            (
+                build_codex_args(&std::env::current_exe()?, &self.dir, model, effort, session),
+                Parser::Codex(CodexParser::default()),
+            )
+        } else {
+            let system_prompt = self.dir.join(INTERNAL_DIR).join("system-prompt.md");
+            std::fs::write(&system_prompt, SYSTEM_PROMPT)?;
+            let mcp_config = self.dir.join(INTERNAL_DIR).join("mcp.json");
+            std::fs::write(
+                &mcp_config,
+                lint_server_config(&std::env::current_exe()?, &self.dir),
+            )?;
+            (
+                build_claude_args(&system_prompt, &mcp_config, model, effort, session),
+                Parser::Claude,
+            )
         };
         let started = Instant::now();
 

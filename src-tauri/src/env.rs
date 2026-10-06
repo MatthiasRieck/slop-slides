@@ -1,4 +1,4 @@
-//! Process environment for spawning agent CLIs (Claude Code, Codex) from a GUI app.
+//! Process environment for spawning agent CLIs (Claude Code, Codex, Copilot) from a GUI app.
 
 use std::path::PathBuf;
 
@@ -50,6 +50,10 @@ pub fn resolve_claude() -> Option<PathBuf> {
 
 pub fn resolve_codex() -> Option<PathBuf> {
     resolve_cli("codex", "SLOPSLIDE_CODEX_PATH", &[])
+}
+
+pub fn resolve_copilot() -> Option<PathBuf> {
+    resolve_cli("copilot", "SLOPSLIDE_COPILOT_PATH", &[])
 }
 
 fn resolve_cli(name: &str, override_var: &str, extra: &[&str]) -> Option<PathBuf> {

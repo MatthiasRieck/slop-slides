@@ -41,6 +41,7 @@ const PROVIDERS: ProviderInfo[] = [
     models: [{ id: "gpt-6-astra", label: "GPT-6-Astra", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }],
     error: null,
   },
+  { id: "copilot", installed: false, path: null, models: [], error: null },
 ];
 
 const send = vi.fn(async () => {});
@@ -274,6 +275,14 @@ describe("ChatPanel: composing", () => {
     expect(screen.getByText("Codex is not installed")).toBeTruthy();
     expect(screen.getByText(/npm i -g @openai\/codex/)).toBeTruthy();
     expect(screen.queryByRole("option")).toBeNull();
+  });
+
+  it("explains how to install GitHub Copilot", () => {
+    render(<ChatPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
+    fireEvent.click(screen.getByTitle("GitHub Copilot is not installed"));
+    expect(screen.getByText("GitHub Copilot is not installed")).toBeTruthy();
+    expect(screen.getByText(/npm i -g @github\/copilot/)).toBeTruthy();
   });
 
   it("explains a provider whose models could not be listed, and checks again", () => {

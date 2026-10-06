@@ -9,21 +9,17 @@
    Every change is posted to the app as the slide's new markup:
    { type: "slop:edit-commit", slide, markup, select }.
 
-   The preview fills the whole stage area and the slide sits in its middle, at the size it has
-   outside edit mode. The slide no longer clips, so content that runs past its edge stays visible
-   (dimmed outside the slide), and the surroundings are an endless pasteboard: drag with the
-   middle button (pressed mouse wheel), swipe on a trackpad, drag empty space or hold Space to
-   pan; turn the mouse wheel, pinch or Ctrl/⌘+scroll to zoom; 0 returns to the start. Content
-   moved far away can always be panned to and dragged back.
-   The view is reported as { type: "slop:edit-view", slide, x, y, k } (pan in px, zoom) and
-   restored with { type: "slop:edit-camera", x, y, k } or { type: "slop:edit-camera", home: true }.
+   It runs on the pasteboard (pasteboard.js), which pans and zooms the view; dragging empty space
+   pans too. The slide no longer clips, so content that runs past its edge stays visible (dimmed
+   outside the slide, in the color of the panel around it), and the slide's frame turns into the
+   app's accent color. Content moved far away can always be panned to and dragged back.
    Anything that runs past the slide's edge or is cut off by its own box is outlined with a red
    dashed wire and reported as { type: "slop:edit-overflow", slide, items } so the app can offer
-   to tidy the layout. The app also sends { type: "slop:edit-canvas", color }, the color of the
-   panel around the slide, used to dim what lies outside it. */
+   to tidy the layout. */
 (function () {
   var slide = document.querySelector(".deck > .slide.active");
-  if (!slide || window.parent === window) return;
+  var pasteboard = window.slopPasteboard;
+  if (!slide || !pasteboard || window.parent === window) return;
 
   // Attributes the editor adds while it works; stripped from the markup it saves.
   var EDITOR_ATTRS = ["contenteditable", "data-slop-selected", "data-slop-hover", "data-slop-editing", "data-slop-typing"];
@@ -34,19 +30,10 @@
   var ROTATE_SNAP = 15;
   var MIN_SCALE = 0.1;
   var OVERFLOW_TOLERANCE = 2;
-  var STAGE_W = 1920;
-  var STAGE_H = 1080;
-  var MIN_ZOOM = 0.1;
-  var MAX_ZOOM = 8;
-  var WHEEL_ZOOM = 0.005;
-  // Wheel events closer together than this belong to one gesture (a swipe and its momentum).
-  var WHEEL_GESTURE_MS = 150;
 
-  var deck = slide.parentElement;
   var style = document.createElement("style");
   style.textContent =
-    // The preview is transparent around the slide, and the slide shows what runs past its edge.
-    "html, body { background: transparent !important; }" +
+    // The slide shows what runs past its edge.
     ".deck, .deck > .slide.active { overflow: visible !important; }" +
     ".deck > .slide.active, .deck > .slide.active * { -webkit-user-select: none; user-select: none; }" +
     "[data-slop-hover] { outline: 3px dashed rgba(59, 130, 246, 0.7) !important; outline-offset: 4px; }" +
@@ -69,8 +56,8 @@
     "[data-slop-overflow][data-quiet] { display: none; }" +
     "[data-slop-overflow] > * { position: absolute; box-sizing: border-box; }" +
     "[data-slop-overflow] > [data-wire] { outline: 3px dashed #ef4444; outline-offset: -1px; background: rgba(239, 68, 68, 0.08); }" +
-    "[data-slop-frame] { position: fixed; z-index: 2147483645; pointer-events: none; box-sizing: border-box;" +
-    " outline: 2px solid rgba(113, 113, 122, 0.8); box-shadow: 0 0 0 9999px" +
+    // The slide's frame marks edit mode, and dims everything outside the slide.
+    "[data-slop-frame] { outline: 2px solid var(--slop-accent, #3b82f6); outline-offset: 4px; box-shadow: 0 0 0 9999px" +
     " color-mix(in srgb, var(--slop-canvas, #f4f4f5) 55%, transparent); }" +
     "[data-slop-ui] > [data-stem] { pointer-events: none; width: 2px; height: 32px; margin: 0 0 0 -1px;" +
     " left: 50%; top: -32px; border: 0; box-shadow: none; background: #3b82f6; }" +
@@ -108,11 +95,6 @@
       .join("");
   document.body.appendChild(ui);
 
-  // Dims everything outside the slide and outlines the slide's edge.
-  var frame = document.createElement("div");
-  frame.setAttribute("data-slop-frame", "");
-  document.body.appendChild(frame);
-
   var wires = document.createElement("div");
   wires.setAttribute("data-slop-overflow", "");
   document.body.appendChild(wires);
@@ -126,49 +108,12 @@
   var lastDown = { el: null, at: 0 };
   var overflowFrame = 0;
   var reportedOverflow = null;
-  // The view: pan in px away from the slide being centered, and zoom.
-  var cam = { x: 0, y: 0, k: 1 };
-  var reportedView = "0,0,1";
-  var spaceDown = false;
-
-  /** Where the slide's top-left corner sits when the view is not panned: it is centered. */
-  function home() {
-    return { x: Math.max(0, (window.innerWidth - STAGE_W) / 2), y: Math.max(0, (window.innerHeight - STAGE_H) / 2) };
-  }
-
-  /** Puts the slide (and the frame that dims what is around it) where the view says. */
-  function applyCamera() {
-    var h = home();
-    var x = h.x + cam.x;
-    var y = h.y + cam.y;
-    deck.style.transform = "translate(" + x + "px," + y + "px) scale(" + cam.k + ")";
-    frame.style.cssText = "left:" + x + "px;top:" + y + "px;width:" + STAGE_W * cam.k + "px;height:" + STAGE_H * cam.k + "px";
-    placeHandles();
-    var key = [cam.x, cam.y, cam.k].join(",");
-    if (key === reportedView) return;
-    reportedView = key;
-    window.parent.postMessage({ type: "slop:edit-view", slide: slide.id, x: cam.x, y: cam.y, k: cam.k }, "*");
-  }
-
-  function setCamera(x, y, k) {
-    cam = { x: x, y: y, k: Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, k)) };
-    applyCamera();
-  }
-
-  /** Zooms by `factor` keeping the slide point under the screen point (px, py) in place. */
-  function zoomAt(px, py, factor) {
-    var h = home();
-    var k = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, cam.k * factor));
-    var f = k / cam.k;
-    setCamera(px - (px - h.x - cam.x) * f - h.x, py - (py - h.y - cam.y) * f - h.y, k);
-  }
-
-  function setPanning(on) {
-    spaceDown = on;
-    document.documentElement.style.cursor = on ? "grab" : "";
-  }
-  applyCamera();
-  window.addEventListener("resize", applyCamera);
+  // The handles keep to the selection as the view pans and zooms.
+  pasteboard.onChange(placeHandles);
+  // Space and 0 are text while typing, and Space+drag selects it.
+  pasteboard.busy = function () {
+    return !!editing;
+  };
 
   /** The slide's markup without anything the editor or the player added. */
   function serialize() {
@@ -590,28 +535,10 @@
     commit();
   }
 
-  /** Drags the view along with the pointer. */
-  function startPan(event) {
-    event.preventDefault();
-    drag = { mode: "pan", x: event.clientX, y: event.clientY, from: { x: cam.x, y: cam.y }, moved: false };
-    document.documentElement.style.cursor = "grabbing";
-    if (event.target.setPointerCapture) {
-      try {
-        event.target.setPointerCapture(event.pointerId);
-      } catch (e) {
-        // Synthetic events have no active pointer to capture.
-      }
-    }
-  }
-
   document.addEventListener("pointerdown", function (event) {
-    if (event.button !== 0 && event.button !== 1) return;
+    // The pasteboard takes the middle button and Space+drag before this sees them.
+    if (event.button !== 0) return;
     wires.removeAttribute("data-quiet");
-    // The middle button (pressing the mouse wheel) always pans, even while typing.
-    if (event.button === 1 || (spaceDown && !editing)) {
-      startPan(event);
-      return;
-    }
     if (editing && editing.contains(event.target)) return;
     finishEditing();
     if (nudgeTimer) commit();
@@ -621,7 +548,7 @@
     lastDown = { el: el, at: double ? 0 : now };
     select(el);
     if (!el) {
-      startPan(event);
+      pasteboard.startPan(event);
       return;
     }
     if (double) {
@@ -648,10 +575,6 @@
       hover(editing || onHandle ? null : pickable(event.target, event.clientX, event.clientY));
       return;
     }
-    if (drag.mode === "pan") {
-      setCamera(drag.from.x + event.clientX - drag.x, drag.from.y + event.clientY - drag.y, cam.k);
-      return;
-    }
     if (drag.mode !== "move") {
       drag.moved = true;
       transformTo(event);
@@ -669,7 +592,6 @@
   function endDrag() {
     if (!drag) return;
     var moved = drag.moved;
-    if (drag.mode === "pan") document.documentElement.style.cursor = spaceDown ? "grab" : "";
     drag = null;
     if (moved) commit();
   }
@@ -701,46 +623,6 @@
     if (editing) event.preventDefault();
   });
 
-  /**
-   * Whether a wheel event comes from a notched mouse wheel rather than a trackpad. Browsers don't
-   * say, so this goes by what the event looks like: a mouse wheel scrolls in whole notches (lines,
-   * or wheelDelta in steps of 120) and only vertically, while a trackpad sends a stream of
-   * pixel deltas, usually with some sideways motion.
-   */
-  function fromMouseWheel(event) {
-    if (event.deltaMode !== 0) return true;
-    if (event.deltaX) return false;
-    var ticks = event.wheelDeltaY;
-    return typeof ticks === "number" && ticks !== 0 && ticks % 120 === 0;
-  }
-  var wheelGesture = { at: -Infinity, mouse: false };
-
-  // Pinching (reported as Ctrl+wheel) and the mouse wheel zoom the pasteboard around the pointer;
-  // with a mouse, panning is the middle button. Swiping on a trackpad pans. A gesture is
-  // classified by its first event, so a swipe never turns into a zoom halfway through.
-  window.addEventListener(
-    "wheel",
-    function (event) {
-      event.preventDefault();
-      var unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
-      var dx = event.deltaX * unit;
-      var dy = event.deltaY * unit;
-      var now = event.timeStamp || Date.now();
-      if (now - wheelGesture.at > WHEEL_GESTURE_MS) wheelGesture.mouse = fromMouseWheel(event);
-      wheelGesture.at = now;
-      if (event.ctrlKey || event.metaKey || (wheelGesture.mouse && dy)) {
-        zoomAt(event.clientX, event.clientY, Math.exp(-Math.max(-60, Math.min(60, dy)) * WHEEL_ZOOM));
-      } else {
-        setCamera(cam.x - dx, cam.y - dy, cam.k);
-      }
-    },
-    { passive: false },
-  );
-  // Otherwise a middle click may paste (Linux) or open the autoscroll cursor.
-  document.addEventListener("auxclick", function (event) {
-    if (event.button === 1) event.preventDefault();
-  });
-
   // Capture phase, so keys the editor handles never reach the player (which forwards keys
   // to the app for slide navigation).
   window.addEventListener(
@@ -754,13 +636,6 @@
           event.preventDefault();
           document.execCommand("insertLineBreak");
         }
-        event.stopImmediatePropagation();
-        return;
-      }
-      if (!event.metaKey && !event.ctrlKey && !event.altKey && (event.key === " " || event.key === "0")) {
-        if (event.key === "0") setCamera(0, 0, 1);
-        else setPanning(true);
-        event.preventDefault();
         event.stopImmediatePropagation();
         return;
       }
@@ -792,19 +667,6 @@
     true,
   );
 
-  window.addEventListener(
-    "keyup",
-    function (event) {
-      if (event.key !== " " || !spaceDown) return;
-      setPanning(false);
-      event.stopImmediatePropagation();
-    },
-    true,
-  );
-  window.addEventListener("blur", function () {
-    if (spaceDown) setPanning(false);
-  });
-
   window.addEventListener("message", function (event) {
     var data = event.data;
     if (event.source !== window.parent || !data) return;
@@ -813,11 +675,6 @@
       select(atPath(data.path));
       // Clearing the selection for a screenshot hides the wires too, until the next interaction.
       if (data.quiet) mark(wires, "data-quiet", true);
-    } else if (data.type === "slop:edit-camera") {
-      if (data.home) setCamera(0, 0, 1);
-      else if ([data.x, data.y, data.k].every(Number.isFinite)) setCamera(data.x, data.y, data.k);
-    } else if (data.type === "slop:edit-canvas" && typeof data.color === "string") {
-      document.documentElement.style.setProperty("--slop-canvas", data.color);
     }
   });
 })();

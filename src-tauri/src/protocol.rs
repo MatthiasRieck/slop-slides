@@ -3,9 +3,10 @@
 //! deck's relative `assets/…` references resolve exactly as they do when the file is opened
 //! in a browser.
 //!
-//! With `?edit` in the query, deck.html is served with the slide editor
-//! (`assets/editor.js`) added, so the stage can edit text and move elements in place. The
-//! editor never becomes part of deck.html or an export.
+//! With `?pan` in the query, deck.html is served with the pasteboard (`assets/pasteboard.js`)
+//! added, so the stage can pan and zoom around the slide. With `?edit`, it also gets the slide
+//! editor (`assets/editor.js`), which builds on the pasteboard, so the stage can edit text and
+//! move elements in place. Neither ever becomes part of deck.html or an export.
 
 use std::borrow::Cow;
 use std::path::Path;
@@ -16,14 +17,16 @@ use tauri::AppHandle;
 
 use crate::deck;
 
+const PASTEBOARD_JS: &str = include_str!("../assets/pasteboard.js");
 const EDITOR_JS: &str = include_str!("../assets/editor.js");
 
 pub fn handle(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     let uri = request.uri();
     let served = serve(app, uri.path()).map(|(mime, body)| {
-        if wants_editor(uri.query()) && mime.starts_with("text/html") {
+        let scripts = stage_scripts(uri.query());
+        if !scripts.is_empty() && mime.starts_with("text/html") {
             let html = String::from_utf8_lossy(&body);
-            (mime, with_editor(&html).into_bytes())
+            (mime, with_scripts(&html, &scripts).into_bytes())
         } else {
             (mime, body)
         }
@@ -62,19 +65,38 @@ fn split_path(raw_path: &str) -> Result<(String, String), StatusCode> {
     Ok((deck_id.to_string(), rel.to_string()))
 }
 
-/// Whether the query string has an `edit` parameter (`edit` or `edit=<value>`).
-fn wants_editor(query: Option<&str>) -> bool {
-    query.is_some_and(|q| q.split('&').any(|p| p == "edit" || p.starts_with("edit=")))
+/// Whether the query string has the parameter `name` (`name` or `name=<value>`).
+fn has_param(query: Option<&str>, name: &str) -> bool {
+    query.is_some_and(|q| {
+        q.split('&')
+            .any(|p| p == name || p.strip_prefix(name).is_some_and(|v| v.starts_with('=')))
+    })
 }
 
-/// Adds the slide editor after everything else in `<body>`, so it runs after the player.
-fn with_editor(html: &str) -> String {
-    let script = format!("<script>\n{EDITOR_JS}</script>\n");
+/// The scripts the stage asked for, in the order they run: the editor needs the pasteboard.
+fn stage_scripts(query: Option<&str>) -> Vec<&'static str> {
+    let editor = has_param(query, "edit");
+    let mut scripts = Vec::new();
+    if editor || has_param(query, "pan") {
+        scripts.push(PASTEBOARD_JS);
+    }
+    if editor {
+        scripts.push(EDITOR_JS);
+    }
+    scripts
+}
+
+/// Adds `scripts` after everything else in `<body>`, so they run after the player.
+fn with_scripts(html: &str, scripts: &[&str]) -> String {
+    let tags: String = scripts
+        .iter()
+        .map(|js| format!("<script>\n{js}</script>\n"))
+        .collect();
     let at = html
         .to_ascii_lowercase()
         .rfind("</body")
         .unwrap_or(html.len());
-    format!("{}{script}{}", &html[..at], &html[at..])
+    format!("{}{tags}{}", &html[..at], &html[at..])
 }
 
 fn read_in_deck(dir: &Path, rel: &str) -> Result<(&'static str, Vec<u8>), StatusCode> {
@@ -130,22 +152,31 @@ mod tests {
     }
 
     #[test]
-    fn editor_only_on_request() {
-        assert!(wants_editor(Some("embed&slide=a&edit=abc")));
-        assert!(wants_editor(Some("edit")));
-        assert!(!wants_editor(Some("embed&slide=edit&static")));
-        assert!(!wants_editor(Some("editor")));
-        assert!(!wants_editor(None));
+    fn scripts_only_on_request() {
+        assert_eq!(
+            stage_scripts(Some("embed&slide=a&edit=abc")),
+            [PASTEBOARD_JS, EDITOR_JS],
+            "the editor builds on the pasteboard"
+        );
+        assert_eq!(stage_scripts(Some("edit&pan")), [PASTEBOARD_JS, EDITOR_JS]);
+        assert_eq!(stage_scripts(Some("embed&slide=a&pan")), [PASTEBOARD_JS]);
+        assert_eq!(stage_scripts(Some("pan=1")), [PASTEBOARD_JS]);
+        assert!(stage_scripts(Some("embed&slide=edit&static")).is_empty());
+        assert!(stage_scripts(Some("embed&slide=pan")).is_empty());
+        assert!(stage_scripts(Some("editor&panel")).is_empty());
+        assert!(stage_scripts(None).is_empty());
     }
 
     #[test]
-    fn adds_the_editor_at_the_end_of_the_body() {
+    fn adds_the_scripts_at_the_end_of_the_body_in_order() {
         let html = "<html><body><main class=\"deck\"></main><script>player</script></BODY></html>";
-        let out = with_editor(html);
+        let out = with_scripts(html, &[PASTEBOARD_JS, EDITOR_JS]);
+        let pasteboard = out.find(PASTEBOARD_JS).expect("pasteboard inlined");
         let editor = out.find(EDITOR_JS).expect("editor inlined");
-        assert!(out.find("player").unwrap() < editor);
+        assert!(out.find("player").unwrap() < pasteboard);
+        assert!(pasteboard < editor);
         assert!(editor < out.find("</BODY>").unwrap());
-        assert!(with_editor("<p>no body").starts_with("<p>no body<script>"));
+        assert!(with_scripts("<p>no body", &[EDITOR_JS]).starts_with("<p>no body<script>"));
     }
 
     #[test]

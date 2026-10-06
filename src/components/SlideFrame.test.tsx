@@ -89,17 +89,32 @@ describe("SlideFrame", () => {
     expect(frame!.style.left).toBe("0px");
   });
 
-  it("gives only the editor's preview the arena, so a plain one never scales up while it loads", () => {
+  it("puts a preview given an arena on the pasteboard, in view and edit mode", () => {
     const { container, rerender } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" arena={arena} />);
-    expect((container.firstElementChild as HTMLElement).style.overflow).toBe("hidden");
+    const [viewer] = frames(container);
+    expect(viewer!.getAttribute("src")).toBe("/__deck/talk/deck.html?embed&slide=intro&v=v1&pan");
+    expect(viewer!.style.width).toBe("2400px");
+    expect(viewer!.style.left).toBe("-120px");
+    const box = container.firstElementChild as HTMLElement;
+    expect(box.style.overflow).toBe("visible");
+    // The slide may be panned anywhere, so nothing is painted where it started.
+    expect(box.style.background).toBe("transparent");
     rerender(<SlideFrame deckId="talk" slideId="intro" version="v1" editKey="0" arena={arena} />);
-    const [plain, editor] = frames(container);
-    expect(plain!.getAttribute("src")).not.toContain("edit=");
-    expect(plain!.style.width).toBe("1920px");
-    expect(plain!.style.left).toBe("0px");
-    expect(editor!.getAttribute("src")).toContain("edit=0");
-    expect(editor!.style.width).toBe("2400px");
-    expect((container.firstElementChild as HTMLElement).style.overflow).toBe("visible");
+    const editor = frames(container).at(-1)!;
+    expect(editor.getAttribute("src")).toBe("/__deck/talk/deck.html?embed&slide=intro&v=v1&static&pan&edit=0");
+    expect(editor.style.width).toBe("2400px");
+  });
+
+  it("keeps a plain preview and thumbnails to the slide, clipped, with no pasteboard", () => {
+    const { container, rerender } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" />);
+    const box = () => container.firstElementChild as HTMLElement;
+    expect(frames(container)[0]!.getAttribute("src")).not.toContain("pan");
+    expect(box().style.overflow).toBe("hidden");
+    expect(box().style.background).toBe("rgb(0, 0, 0)");
+    rerender(<SlideFrame deckId="talk" slideId="intro" version="v1" thumbnail arena={arena} />);
+    const thumb = frames(container).at(-1)!;
+    expect(thumb.getAttribute("src")).not.toContain("pan");
+    expect(thumb.style.width).toBe("1920px");
   });
 
   it("waits for layout before loading anything", () => {

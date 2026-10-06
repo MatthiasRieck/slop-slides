@@ -139,6 +139,9 @@ pub struct SendArgs {
     pub provider: Provider,
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Claude only: `200k` or `1m`.
+    #[serde(default)]
+    pub context_window: Option<String>,
 }
 
 impl AgentManager {
@@ -172,7 +175,13 @@ impl AgentManager {
                 dir,
                 provider: args.provider,
                 bin,
-                model: args.model.filter(|m| !m.is_empty()),
+                model: args
+                    .model
+                    .filter(|m| !m.is_empty())
+                    .map(|m| match args.provider {
+                        Provider::Claude => claude_model(m, args.context_window.as_deref()),
+                        _ => m,
+                    }),
                 effort: args.effort.filter(|e| !e.is_empty()),
             };
             // The whole deck is one file: keep a copy to fall back on before every turn.
@@ -397,6 +406,14 @@ fn lint_server_config(exe: &Path, dir: &Path) -> String {
         }
     })
     .to_string()
+}
+
+/// Claude Code selects the 1M-token context window with a `[1m]` model suffix.
+fn claude_model(model: String, context_window: Option<&str>) -> String {
+    match context_window {
+        Some("1m") if !model.ends_with("[1m]") => format!("{model}[1m]"),
+        _ => model,
+    }
 }
 
 fn build_claude_args(
@@ -692,6 +709,26 @@ fn codex_tool(item: &Value) -> Option<(String, Value)> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn claude_model_adds_1m_suffix() {
+        assert_eq!(
+            claude_model("claude-opus-5-5".into(), Some("1m")),
+            "claude-opus-5-5[1m]"
+        );
+        assert_eq!(
+            claude_model("claude-opus-5-5[1m]".into(), Some("1m")),
+            "claude-opus-5-5[1m]"
+        );
+        assert_eq!(
+            claude_model("claude-sonnet-5".into(), Some("200k")),
+            "claude-sonnet-5"
+        );
+        assert_eq!(
+            claude_model("claude-haiku-4-5".into(), None),
+            "claude-haiku-4-5"
+        );
+    }
 
     #[test]
     fn parses_text_stream() {

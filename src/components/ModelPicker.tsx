@@ -2,6 +2,7 @@ import { AlertTriangle, Check, ChevronDown, Loader2, RotateCw, Search, Star } fr
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import {
+  contextWindowLabel,
   effortLabel,
   modelKey,
   PROVIDER_IDS,
@@ -296,6 +297,7 @@ function ProviderStatus({ info }: { info: ProviderInfo }) {
   );
 }
 
+/** Reasoning effort and context window for the selected model, like T3 Code's traits menu. */
 export function EffortPicker() {
   const selection = useApp((s) => s.selection);
   const [open, setOpen] = useState(false);
@@ -303,42 +305,72 @@ export function EffortPicker() {
   const close = useMemo(() => () => setOpen(false), []);
   useDismiss(rootRef, open, close);
 
-  const efforts =
-    useApp((s) =>
-      s.providers
-        ?.find((p) => p.id === s.selection.provider)
-        ?.models.find((m) => m.id === s.selection.model)?.efforts,
-    ) ?? [];
-  if (efforts.length === 0) return null;
+  const model = useApp((s) =>
+    s.providers
+      ?.find((p) => p.id === s.selection.provider)
+      ?.models.find((m) => m.id === s.selection.model),
+  );
+  const efforts = model?.efforts ?? [];
+  const contextWindows = model?.contextWindows ?? [];
+  if (efforts.length === 0 && contextWindows.length === 0) return null;
+
+  const showContextWindow = contextWindows.length > 0 && selection.contextWindow !== null;
+  const label = [
+    efforts.length > 0 ? effortLabel(selection.effort) : null,
+    showContextWindow ? contextWindowLabel(selection.contextWindow!) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const sections = [
+    {
+      title: "Effort",
+      options: efforts.map((id) => ({ id, label: effortLabel(id) })),
+      current: selection.effort,
+      choose: (id: string) => useApp.getState().setEffort(id),
+    },
+    {
+      title: "Context Window",
+      options: contextWindows.map((id) => ({ id, label: contextWindowLabel(id) })),
+      current: selection.contextWindow,
+      choose: (id: string) => useApp.getState().setContextWindow(id),
+    },
+  ].filter((section) => section.options.length > 0);
 
   return (
     <div ref={rootRef} className="relative">
       <button
         type="button"
         aria-expanded={open}
-        title="Reasoning effort"
+        title={showContextWindow ? "Reasoning effort and context window" : "Reasoning effort"}
         onClick={() => setOpen((v) => !v)}
         className={triggerClass}
       >
-        <span>{effortLabel(selection.effort)}</span>
+        <span>{label}</span>
         <ChevronDown className="size-3 opacity-60" />
       </button>
       {open && (
         <div className="absolute bottom-full left-0 z-50 mb-2 w-40 rounded-xl border bg-card p-1.5 shadow-xl shadow-black/20">
-          <div className="px-2 pt-1 pb-1.5 text-2xs font-medium text-muted-foreground">Effort</div>
-          {efforts.map((effort) => (
-            <button
-              key={effort}
-              type="button"
-              onClick={() => {
-                useApp.getState().setEffort(effort);
-                close();
-              }}
-              className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-sm hover:bg-accent"
-            >
-              {effortLabel(effort)}
-              {effort === selection.effort && <Check className="size-3.5 text-primary" />}
-            </button>
+          {sections.map((section, index) => (
+            <div key={section.title} className={cn(index > 0 && "mt-1.5 border-t pt-1.5")}>
+              <div className="px-2 pt-1 pb-1.5 text-2xs font-medium text-muted-foreground">
+                {section.title}
+              </div>
+              {section.options.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => {
+                    section.choose(option.id);
+                    close();
+                  }}
+                  className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left text-sm hover:bg-accent"
+                >
+                  {option.label}
+                  {option.id === section.current && <Check className="size-3.5 text-primary" />}
+                </button>
+              ))}
+            </div>
           ))}
         </div>
       )}

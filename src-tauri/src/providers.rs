@@ -18,13 +18,17 @@ use crate::error::{Error, Result};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const CLAUDE_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
-const CLAUDE_MODELS: [(&str, &str); 6] = [
-    ("claude-opus-5-5", "Claude Opus 5.5"),
-    ("claude-fable-5-1", "Claude Fable 5.1"),
-    ("claude-opus-5", "Claude Opus 5"),
-    ("claude-sonnet-5-5", "Claude Sonnet 5.5"),
-    ("claude-sonnet-5", "Claude Sonnet 5"),
-    ("claude-haiku-4-5", "Claude Haiku 4.5"),
+/// Context window sizes Claude Code can run a model with; `1m` is requested with the
+/// `[1m]` model suffix (see `agent::claude_model`).
+pub const CLAUDE_CONTEXT_WINDOWS: [&str; 2] = ["200k", "1m"];
+/// Id, label, and default context window (`None`: the model has a single, fixed window).
+const CLAUDE_MODELS: [(&str, &str, Option<&str>); 6] = [
+    ("claude-opus-5-5", "Claude Opus 5.5", Some("1m")),
+    ("claude-fable-5-1", "Claude Fable 5.1", Some("1m")),
+    ("claude-opus-5", "Claude Opus 5", Some("1m")),
+    ("claude-sonnet-5-5", "Claude Sonnet 5.5", Some("200k")),
+    ("claude-sonnet-5", "Claude Sonnet 5", Some("200k")),
+    ("claude-haiku-4-5", "Claude Haiku 4.5", None),
 ];
 
 #[derive(Debug, Serialize)]
@@ -46,6 +50,9 @@ pub struct ModelInfo {
     pub is_default: bool,
     pub efforts: Vec<String>,
     pub default_effort: Option<String>,
+    /// Selectable context window sizes; empty when the provider picks it.
+    pub context_windows: Vec<String>,
+    pub default_context_window: Option<String>,
 }
 
 pub async fn list() -> Vec<ProviderInfo> {
@@ -59,12 +66,17 @@ fn claude() -> ProviderInfo {
         CLAUDE_MODELS
             .iter()
             .enumerate()
-            .map(|(i, (id, label))| ModelInfo {
+            .map(|(i, (id, label, context_window))| ModelInfo {
                 id: id.to_string(),
                 label: label.to_string(),
                 is_default: i == 0,
                 efforts: CLAUDE_EFFORTS.map(String::from).to_vec(),
                 default_effort: Some("medium".into()),
+                context_windows: match context_window {
+                    Some(_) => CLAUDE_CONTEXT_WINDOWS.map(String::from).to_vec(),
+                    None => Vec::new(),
+                },
+                default_context_window: context_window.map(String::from),
             })
             .collect()
     } else {
@@ -255,6 +267,8 @@ fn parse_codex_model(model: &Value) -> Option<ModelInfo> {
             .filter_map(|e| e["reasoningEffort"].as_str().map(str::to_string))
             .collect(),
         default_effort: model["defaultReasoningEffort"].as_str().map(str::to_string),
+        context_windows: Vec::new(),
+        default_context_window: None,
         id,
     })
 }
@@ -301,6 +315,8 @@ mod tests {
                 is_default: true,
                 efforts: vec!["low".into(), "high".into()],
                 default_effort: Some("medium".into()),
+                context_windows: Vec::new(),
+                default_context_window: None,
             })
         );
         assert_eq!(

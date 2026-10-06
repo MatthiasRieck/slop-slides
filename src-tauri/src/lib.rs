@@ -1,4 +1,5 @@
 mod agent;
+mod copilot;
 mod deck;
 mod env;
 mod error;

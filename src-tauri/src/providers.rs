@@ -1,6 +1,7 @@
-//! Which agent CLIs are installed and which models each offers. Codex reports the models
-//! available to the signed-in account through `codex app-server`'s `model/list`; Claude
-//! Code has no such query, so its catalog is fixed here.
+//! Which agent CLIs are installed and which models each offers. Codex and Copilot report
+//! the models available to the signed-in account (`codex app-server`'s `model/list`,
+//! `copilot --server`'s `models.list`); Claude Code has no such query, so its catalog is
+//! fixed here.
 
 use std::path::Path;
 use std::process::Stdio;
@@ -11,10 +12,11 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{ChildStdin, ChildStdout, Command};
 
+use crate::copilot;
 use crate::env;
 use crate::error::{Error, Result};
 
-const CODEX_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const CLAUDE_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 const CLAUDE_MODELS: [(&str, &str); 6] = [
     ("claude-opus-5-5", "Claude Opus 5.5"),
@@ -39,15 +41,16 @@ pub struct ProviderInfo {
 #[derive(Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelInfo {
-    id: String,
-    label: String,
-    is_default: bool,
-    efforts: Vec<String>,
-    default_effort: Option<String>,
+    pub id: String,
+    pub label: String,
+    pub is_default: bool,
+    pub efforts: Vec<String>,
+    pub default_effort: Option<String>,
 }
 
 pub async fn list() -> Vec<ProviderInfo> {
-    vec![claude(), codex().await]
+    let (codex, copilot) = tokio::join!(codex(), copilot());
+    vec![claude(), codex, copilot]
 }
 
 fn claude() -> ProviderInfo {
@@ -86,7 +89,7 @@ async fn codex() -> ProviderInfo {
             error: None,
         };
     };
-    let result = tokio::time::timeout(CODEX_PROBE_TIMEOUT, codex_models(&path))
+    let result = tokio::time::timeout(PROBE_TIMEOUT, codex_models(&path))
         .await
         .unwrap_or_else(|_| Err(Error::msg("Codex did not answer in time.")));
     let (models, error) = match result {
@@ -99,6 +102,39 @@ async fn codex() -> ProviderInfo {
     };
     ProviderInfo {
         id: "codex",
+        installed: true,
+        path: Some(path.to_string_lossy().into_owned()),
+        models,
+        error,
+    }
+}
+
+async fn copilot() -> ProviderInfo {
+    let Some(path) = env::resolve_copilot() else {
+        return ProviderInfo {
+            id: "copilot",
+            installed: false,
+            path: None,
+            models: Vec::new(),
+            error: None,
+        };
+    };
+    let result = tokio::time::timeout(PROBE_TIMEOUT, copilot::list_models(&path))
+        .await
+        .unwrap_or_else(|_| Err(Error::msg("GitHub Copilot did not answer in time.")));
+    let (models, error) = match result {
+        Ok(models) if models.is_empty() => (
+            models,
+            Some(
+                "GitHub Copilot reported no models. Run `copilot` and use /login to sign in."
+                    .into(),
+            ),
+        ),
+        Ok(models) => (models, None),
+        Err(e) => (Vec::new(), Some(e.to_string())),
+    };
+    ProviderInfo {
+        id: "copilot",
         installed: true,
         path: Some(path.to_string_lossy().into_owned()),
         models,

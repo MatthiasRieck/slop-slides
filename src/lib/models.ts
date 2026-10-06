@@ -1,6 +1,6 @@
-export type Provider = "claude" | "codex";
+export type Provider = "claude" | "codex" | "copilot";
 
-export const PROVIDER_IDS: Provider[] = ["claude", "codex"];
+export const PROVIDER_IDS: Provider[] = ["claude", "codex", "copilot"];
 
 export const PROVIDERS: Record<Provider, { label: string; cli: string; install: string }> = {
   claude: {
@@ -13,9 +13,14 @@ export const PROVIDERS: Record<Provider, { label: string; cli: string; install: 
     cli: "Codex",
     install: "Install it with `npm i -g @openai/codex` and run `codex` once to sign in.",
   },
+  copilot: {
+    label: "GitHub Copilot",
+    cli: "GitHub Copilot",
+    install: "Install it with `npm i -g @github/copilot`, then run `copilot` and use /login to sign in.",
+  },
 };
 
-/** A model as reported by the backend (Codex: live `model/list`; Claude: fixed catalog). */
+/** A model as reported by the backend (Codex and Copilot: live lists; Claude: fixed catalog). */
 export interface ProviderModel {
   id: string;
   label: string;

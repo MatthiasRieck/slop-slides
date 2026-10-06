@@ -47,6 +47,16 @@ export function installBrowserMock() {
               error: null,
             },
             { id: "codex", installed: false, path: null, models: [], error: null },
+            {
+              id: "copilot",
+              installed: true,
+              path: "/mock/copilot",
+              models: [
+                { id: "gpt-6-astra", label: "GPT-6 Astra", isDefault: false, efforts: ["low", "medium", "high"], defaultEffort: "medium" },
+                { id: "claude-sonnet-5", label: "Claude Sonnet 5", isDefault: false, efforts: [], defaultEffort: null },
+              ],
+              error: null,
+            },
           ];
         case "agent_running":
           return false;

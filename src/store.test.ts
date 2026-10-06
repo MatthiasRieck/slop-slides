@@ -85,6 +85,29 @@ describe("slide selection", () => {
   });
 });
 
+describe("chat panel", () => {
+  it("is open by default", async () => {
+    const useApp = await freshStore();
+    expect(useApp.getState().chatOpen).toBe(true);
+  });
+
+  it("restores a collapsed chat from localStorage", async () => {
+    localStorage.setItem("slopslide.chatOpen", "false");
+    const useApp = await freshStore();
+    expect(useApp.getState().chatOpen).toBe(false);
+  });
+
+  it("setChatOpen switches and persists", async () => {
+    const useApp = await freshStore();
+    useApp.getState().setChatOpen(false);
+    expect(useApp.getState().chatOpen).toBe(false);
+    expect(localStorage.getItem("slopslide.chatOpen")).toBe("false");
+    useApp.getState().setChatOpen(true);
+    expect(useApp.getState().chatOpen).toBe(true);
+    expect(localStorage.getItem("slopslide.chatOpen")).toBe("true");
+  });
+});
+
 describe("stage view", () => {
   it("defaults to slides", async () => {
     const useApp = await freshStore();

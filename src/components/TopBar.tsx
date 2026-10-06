@@ -10,6 +10,8 @@ import {
   FolderOpen,
   Images,
   Loader2,
+  PanelRightClose,
+  PanelRightOpen,
   Play,
   Presentation,
   Share,
@@ -127,7 +129,27 @@ export function TopBar() {
         <Play className="size-3.5 fill-current" />
         Present
       </button>
+      <ChatToggle />
     </header>
+  );
+}
+
+/** Shows or hides the chat panel on the right. */
+function ChatToggle() {
+  const chatOpen = useApp((s) => s.chatOpen);
+  const Icon = chatOpen ? PanelRightClose : PanelRightOpen;
+  const label = chatOpen ? "Hide chat" : "Show chat";
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={chatOpen}
+      onClick={() => useApp.getState().setChatOpen(!chatOpen)}
+      className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+    >
+      <Icon className="size-4" />
+    </button>
   );
 }
 

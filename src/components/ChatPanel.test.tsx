@@ -86,6 +86,15 @@ function showMessages(...messages: ChatMessage[]) {
   return render(<ChatPanel />);
 }
 
+describe("ChatPanel: header", () => {
+  it("collapses the chat panel", () => {
+    useApp.setState({ chatOpen: true });
+    render(<ChatPanel />);
+    fireEvent.click(screen.getByRole("button", { name: "Hide chat" }));
+    expect(useApp.getState().chatOpen).toBe(false);
+  });
+});
+
 describe("ChatPanel: empty chat", () => {
   it("offers starter prompts for an empty deck, which fill the composer", () => {
     useApp.setState({ deck: { ...deckFor(DECK_HTML), slides: [] }, selected: null });

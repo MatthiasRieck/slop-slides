@@ -28,6 +28,7 @@ export function App() {
 
 function Editor() {
   const view = useApp((s) => s.view);
+  const chatOpen = useApp((s) => s.chatOpen);
   // Re-lint whenever deck.html changes on disk (agent, HTML view, slide operations).
   const deckVersion = useApp((s) =>
     s.deck ? [s.deck.id, s.deck.shellHash, ...s.deck.slides.map((x) => `${x.id}:${x.hash}`)].join("|") : "",
@@ -48,10 +49,14 @@ function Editor() {
           <CodeView active={view === "code"} />
           {view === "slides" && <Stage />}
         </Panel>
-        <ResizeHandle />
-        <Panel id="chat" defaultSize={380} minSize={300} maxSize={640}>
-          <ChatPanel />
-        </Panel>
+        {chatOpen && (
+          <>
+            <ResizeHandle />
+            <Panel id="chat" defaultSize={380} minSize={300} maxSize={640}>
+              <ChatPanel />
+            </Panel>
+          </>
+        )}
       </Group>
     </div>
   );

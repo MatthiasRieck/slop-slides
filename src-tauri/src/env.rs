@@ -1,4 +1,4 @@
-//! Process environment for spawning Claude Code from a GUI app.
+//! Process environment for spawning agent CLIs (Claude Code, Codex) from a GUI app.
 
 use std::path::PathBuf;
 
@@ -45,25 +45,33 @@ pub fn adopt_login_shell_path() {
 }
 
 pub fn resolve_claude() -> Option<PathBuf> {
-    if let Some(custom) = std::env::var_os("SLOPSLIDE_CLAUDE_PATH").map(PathBuf::from) {
+    resolve_cli("claude", "SLOPSLIDE_CLAUDE_PATH", &[".claude/local/claude"])
+}
+
+pub fn resolve_codex() -> Option<PathBuf> {
+    resolve_cli("codex", "SLOPSLIDE_CODEX_PATH", &[])
+}
+
+fn resolve_cli(name: &str, override_var: &str, extra: &[&str]) -> Option<PathBuf> {
+    if let Some(custom) = std::env::var_os(override_var).map(PathBuf::from) {
         return custom.is_file().then_some(custom);
     }
-    if let Ok(found) = which::which("claude") {
+    if let Ok(found) = which::which(name) {
         return Some(found);
     }
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)?;
-    let mut candidates = vec![
-        home.join(".claude/local/claude"),
-        home.join(".local/bin/claude"),
-        PathBuf::from("/opt/homebrew/bin/claude"),
-        PathBuf::from("/usr/local/bin/claude"),
-    ];
+    let mut candidates: Vec<PathBuf> = extra.iter().map(|p| home.join(p)).collect();
+    candidates.extend([
+        home.join(".local/bin").join(name),
+        PathBuf::from("/opt/homebrew/bin").join(name),
+        PathBuf::from("/usr/local/bin").join(name),
+    ]);
     if cfg!(windows) {
-        candidates.push(home.join(".local\\bin\\claude.exe"));
+        candidates.push(home.join(".local\\bin").join(format!("{name}.exe")));
         if let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) {
-            candidates.push(appdata.join("npm\\claude.cmd"));
+            candidates.push(appdata.join("npm").join(format!("{name}.cmd")));
         }
     }
     candidates.into_iter().find(|p| p.is_file())

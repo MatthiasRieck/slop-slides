@@ -18,9 +18,30 @@ vi.mock("@tauri-apps/api/webview", () => ({
   }),
 }));
 
+import type { ProviderInfo } from "../lib/models";
 import { useApp, type AssistantMessage, type ChatMessage, type ChatPart } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ChatPanel } from "./ChatPanel";
+
+const PROVIDERS: ProviderInfo[] = [
+  {
+    id: "claude",
+    installed: true,
+    path: "/bin/claude",
+    models: [
+      { id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true, efforts: ["low", "medium", "high", "max"], defaultEffort: "medium" },
+      { id: "claude-sonnet-5", label: "Claude Sonnet 5", isDefault: false, efforts: ["low", "medium", "high", "max"], defaultEffort: "medium" },
+    ],
+    error: null,
+  },
+  {
+    id: "codex",
+    installed: true,
+    path: "/bin/codex",
+    models: [{ id: "gpt-6-astra", label: "GPT-6-Astra", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }],
+    error: null,
+  },
+];
 
 const send = vi.fn(async () => {});
 const resetChat = vi.fn(async () => {});
@@ -39,8 +60,9 @@ beforeEach(() => {
     selected: "intro",
     messages: [],
     running: false,
-    model: "",
-    claudePath: "/usr/local/bin/claude",
+    selection: { provider: "claude", model: "claude-opus-5-5", label: "Claude Opus 5.5", effort: "medium" },
+    providers: PROVIDERS,
+    favoriteModels: [],
     error: null,
     sketches: {},
     send,
@@ -112,20 +134,20 @@ describe("ChatPanel: empty chat", () => {
     expect(screen.queryByTitle(/New conversation/)).toBeNull();
   });
 
-  it("warns when Claude Code is not installed", () => {
-    useApp.setState({ claudePath: null });
+  it("warns when the selected model's CLI is not installed", () => {
+    useApp.setState({ providers: PROVIDERS.map((p) => (p.id === "claude" ? { ...p, installed: false, models: [] } : p)) });
     render(<ChatPanel />);
-    expect(screen.getByText(/Claude Code was not found/)).toBeTruthy();
+    expect(screen.getByText(/Claude Code is not installed/)).toBeTruthy();
   });
 
   it("does not warn while the check is pending or when it is found", () => {
-    useApp.setState({ claudePath: undefined });
+    useApp.setState({ providers: undefined });
     const { unmount } = render(<ChatPanel />);
-    expect(screen.queryByText(/Claude Code was not found/)).toBeNull();
+    expect(screen.queryByText(/is not installed/)).toBeNull();
     unmount();
-    useApp.setState({ claudePath: "/bin/claude" });
+    useApp.setState({ providers: PROVIDERS });
     render(<ChatPanel />);
-    expect(screen.queryByText(/Claude Code was not found/)).toBeNull();
+    expect(screen.queryByText(/is not installed/)).toBeNull();
   });
 });
 
@@ -223,13 +245,57 @@ describe("ChatPanel: composing", () => {
     expect(interrupt).toHaveBeenCalledOnce();
   });
 
-  it("switches models", () => {
+  it("switches models in the picker", () => {
     render(<ChatPanel />);
-    const select = screen.getByTitle("Model") as HTMLSelectElement;
-    expect([...select.options].map((o) => o.textContent)).toEqual(["Default", "Opus", "Sonnet", "Haiku"]);
-    fireEvent.change(select, { target: { value: "sonnet" } });
-    expect(useApp.getState().model).toBe("sonnet");
-    expect(localStorage.getItem("slopslide.model")).toBe("sonnet");
+    fireEvent.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      expect.stringContaining("Claude Opus 5.5"),
+      expect.stringContaining("Claude Sonnet 5"),
+    ]);
+    fireEvent.click(screen.getByRole("option", { name: /Claude Sonnet 5/ }));
+    expect(useApp.getState().selection).toMatchObject({ provider: "claude", model: "claude-sonnet-5" });
+    expect(JSON.parse(localStorage.getItem("slopslide.selection")!)).toMatchObject({ model: "claude-sonnet-5" });
+    expect(screen.queryByRole("option")).toBeNull();
+  });
+
+  it("searches across providers", () => {
+    render(<ChatPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
+    fireEvent.change(screen.getByPlaceholderText("Search models..."), { target: { value: "astra" } });
+    fireEvent.click(screen.getByRole("option", { name: /GPT-6-Astra/ }));
+    expect(useApp.getState().selection).toMatchObject({ provider: "codex", model: "gpt-6-astra", effort: "high" });
+  });
+
+  it("explains a provider that is not installed", () => {
+    useApp.setState({ providers: PROVIDERS.map((p) => (p.id === "codex" ? { ...p, installed: false, models: [] } : p)) });
+    render(<ChatPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
+    fireEvent.click(screen.getByTitle("Codex is not installed"));
+    expect(screen.getByText("Codex is not installed")).toBeTruthy();
+    expect(screen.getByText(/npm i -g @openai\/codex/)).toBeTruthy();
+    expect(screen.queryByRole("option")).toBeNull();
+  });
+
+  it("explains a provider whose models could not be listed, and checks again", () => {
+    const refreshProviders = vi.fn(async () => {});
+    useApp.setState({
+      refreshProviders,
+      providers: PROVIDERS.map((p) => (p.id === "codex" ? { ...p, models: [], error: "Not signed in" } : p)),
+    });
+    render(<ChatPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
+    fireEvent.click(screen.getByTitle("Codex"));
+    expect(screen.getByText("Not signed in")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Check again/ }));
+    expect(refreshProviders).toHaveBeenCalledOnce();
+  });
+
+  it("offers the selected model's effort levels", () => {
+    render(<ChatPanel />);
+    fireEvent.click(screen.getByTitle("Reasoning effort"));
+    expect(screen.getByRole("button", { name: "Max" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "High" }));
+    expect(useApp.getState().selection.effort).toBe("high");
   });
 
   it("starts a new conversation", () => {

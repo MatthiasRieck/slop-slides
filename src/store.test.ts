@@ -14,6 +14,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: (...args: unknown[]) => ask(...args) }));
 
 import type { AgentEvent, Deck } from "./lib/api";
+import type { ProviderInfo } from "./lib/models";
 import type { AssistantMessage, ChatMessage, UserMessage } from "./store";
 import { DECK_HTML, deckFor } from "./test/fixtures";
 
@@ -319,17 +320,84 @@ describe("slide image export", () => {
 });
 
 describe("model choice", () => {
-  it("defaults to the CLI's default model", async () => {
+  const PROVIDERS: ProviderInfo[] = [
+    {
+      id: "claude",
+      installed: true,
+      path: "/bin/claude",
+      models: [
+        { id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true, efforts: ["low", "medium", "high", "max"], defaultEffort: "medium" },
+        { id: "claude-sonnet-5", label: "Claude Sonnet 5", isDefault: false, efforts: ["low", "medium", "high", "max"], defaultEffort: "medium" },
+      ],
+      error: null,
+    },
+    {
+      id: "codex",
+      installed: true,
+      path: "/bin/codex",
+      models: [{ id: "gpt-6-astra", label: "GPT-6-Astra", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }],
+      error: null,
+    },
+  ];
+
+  it("defaults to Claude Opus 5.5 at medium effort", async () => {
     const useApp = await freshStore();
-    expect(useApp.getState().model).toBe("");
+    expect(useApp.getState().selection).toEqual({
+      provider: "claude",
+      model: "claude-opus-5-5",
+      label: "Claude Opus 5.5",
+      effort: "medium",
+    });
   });
 
-  it("persists and restores the chosen model", async () => {
+  it("persists and restores the chosen model, keeping a supported effort", async () => {
     let useApp = await freshStore();
-    useApp.getState().setModel("opus");
-    expect(useApp.getState().model).toBe("opus");
+    useApp.setState({ providers: PROVIDERS });
+    useApp.getState().setModel("codex", "gpt-6-astra");
+    // Codex's model has no "medium", so its own default applies.
+    expect(useApp.getState().selection).toEqual({ provider: "codex", model: "gpt-6-astra", label: "GPT-6-Astra", effort: "high" });
+    useApp.getState().setEffort("low");
     useApp = await freshStore();
-    expect(useApp.getState().model).toBe("opus");
+    expect(useApp.getState().selection).toMatchObject({ provider: "codex", model: "gpt-6-astra", effort: "low" });
+  });
+
+  it("ignores models that are not offered", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ providers: PROVIDERS });
+    useApp.getState().setModel("codex", "nope");
+    expect(useApp.getState().selection.provider).toBe("claude");
+  });
+
+  it("moves a selection whose provider is not installed onto an installed default", async () => {
+    localStorage.setItem(
+      "slopslide.selection",
+      JSON.stringify({ provider: "codex", model: "gone", label: "Gone", effort: "max" }),
+    );
+    const useApp = await freshStore();
+    const providers = PROVIDERS.map((p) => (p.id === "codex" ? { ...p, installed: false, models: [] } : p));
+    backend({ list_providers: () => providers });
+    await useApp.getState().refreshProviders();
+    expect(useApp.getState().providers).toEqual(providers);
+    expect(useApp.getState().selection).toEqual({ provider: "claude", model: "claude-opus-5-5", label: "Claude Opus 5.5", effort: "max" });
+  });
+
+  it("keeps the saved model when its provider could not list models", async () => {
+    const saved = { provider: "codex", model: "gpt-6-astra", label: "GPT-6-Astra", effort: "high" };
+    localStorage.setItem("slopslide.selection", JSON.stringify(saved));
+    const useApp = await freshStore();
+    const failing = PROVIDERS.map((p) => (p.id === "codex" ? { ...p, models: [], error: "not signed in" } : p));
+    backend({ list_providers: () => failing });
+    await useApp.getState().refreshProviders();
+    expect(useApp.getState().selection).toEqual(saved);
+  });
+
+  it("toggles and persists favorite models", async () => {
+    let useApp = await freshStore();
+    useApp.getState().toggleFavoriteModel("codex:gpt-6-astra");
+    useApp = await freshStore();
+    expect(useApp.getState().favoriteModels).toEqual(["codex:gpt-6-astra"]);
+    useApp.getState().toggleFavoriteModel("codex:gpt-6-astra");
+    expect(useApp.getState().favoriteModels).toEqual([]);
   });
 });
 
@@ -382,14 +450,20 @@ describe("sending a message", () => {
     );
   });
 
-  it("passes the model, or null for the default", async () => {
+  it("passes the selected provider, model, and effort", async () => {
     const useApp = await freshStore();
-    useApp.setState({ deck: DECK, model: "" });
+    useApp.setState({
+      deck: DECK,
+      selection: { provider: "codex", model: "gpt-6-astra", label: "GPT-6-Astra", effort: "high" },
+    });
     await useApp.getState().send("a", { includeSlide: false, attachments: [] });
-    useApp.setState({ running: false, model: "haiku" });
-    await useApp.getState().send("b", { includeSlide: false, attachments: [] });
-    expect(calls("send_message").map((c) => (c.args as { model: unknown }).model)).toEqual([null, "haiku"]);
-    expect(calls("send_message")[0]!.args).toMatchObject({ deckId: "talk" });
+    expect(calls("send_message")[0]!.args).toEqual({
+      deckId: "talk",
+      prompt: "a",
+      provider: "codex",
+      model: "gpt-6-astra",
+      effort: "high",
+    });
   });
 
   it("shows a failed send on the reply and saves the transcript", async () => {
@@ -542,7 +616,7 @@ describe("sending a message", () => {
 describe("agent events", () => {
   async function bridged(messages: ChatMessage[] = [userMessage("hi"), assistantMessage({ status: "streaming", thinking: true })]) {
     const store = await freshModule();
-    backend({ agent_status: () => ({ claudePath: "/bin/claude", libraryPath: "/lib" }) });
+    backend({ list_providers: () => [] });
     await store.initEventBridge();
     store.useApp.setState({ deck: DECK, messages, running: true });
     const emit = (event: AgentEvent, deckId = "talk") => listeners.get("agent-event")!({ payload: { deckId, event } });
@@ -550,17 +624,20 @@ describe("agent events", () => {
     return { useApp: store.useApp, emit, reply };
   }
 
-  it("initEventBridge records where Claude Code is, or null when it cannot tell", async () => {
-    const { useApp } = await bridged();
-    expect(useApp.getState().claudePath).toBe("/bin/claude");
+  it("initEventBridge loads the installed providers, or none when the check fails", async () => {
     const store = await freshModule();
+    const providers = [{ id: "claude", installed: false, path: null, models: [], error: null }];
+    backend({ list_providers: () => providers });
+    await store.initEventBridge();
+    await vi.waitFor(() => expect(store.useApp.getState().providers).toEqual(providers));
+    const failing = await freshModule();
     backend({
-      agent_status: () => {
+      list_providers: () => {
         throw new Error("no");
       },
     });
-    await store.initEventBridge();
-    expect(store.useApp.getState().claudePath).toBeNull();
+    await failing.initEventBridge();
+    await vi.waitFor(() => expect(failing.useApp.getState().providers).toEqual([]));
   });
 
   it("streams text into the last reply", async () => {

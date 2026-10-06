@@ -1,11 +1,13 @@
-//! Drives Claude Code headless (`claude -p --output-format stream-json`) inside a deck
-//! folder, one process per turn, resuming the deck's session between turns. Stream events
-//! are normalized into [`AgentEvent`]s and emitted to the frontend as `agent-event`.
+//! Drives a coding agent CLI headless inside a deck folder, one process per turn, resuming
+//! the deck's session between turns: Claude Code (`claude -p --output-format stream-json`)
+//! or OpenAI Codex (`codex exec --json`). Stream events are normalized into [`AgentEvent`]s
+//! and emitted to the frontend as `agent-event`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Mutex;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -23,6 +25,50 @@ const SYSTEM_PROMPT: &str = include_str!("../prompts/system.md");
 /// The agent edits files only: no shell, no MCP servers.
 const TOOLS: &str = "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch";
 const STDERR_LIMIT: usize = 16 * 1024;
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum Provider {
+    #[default]
+    Claude,
+    Codex,
+}
+
+impl Provider {
+    pub const ALL: [Provider; 2] = [Provider::Claude, Provider::Codex];
+
+    /// File under `.slopslide/` holding this provider's resumable session id.
+    pub fn session_file(self) -> &'static str {
+        match self {
+            Provider::Claude => "session",
+            Provider::Codex => "codex-session",
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Provider::Claude => "Claude Code",
+            Provider::Codex => "Codex",
+        }
+    }
+
+    fn resolve(self) -> Result<PathBuf> {
+        match self {
+            Provider::Claude => env::resolve_claude().ok_or_else(|| {
+                Error::msg(
+                    "Claude Code was not found. Install it from https://claude.com/claude-code, \
+                     or set SLOPSLIDE_CLAUDE_PATH to the `claude` executable.",
+                )
+            }),
+            Provider::Codex => env::resolve_codex().ok_or_else(|| {
+                Error::msg(
+                    "Codex was not found. Install it with `npm i -g @openai/codex` and sign in, \
+                     or set SLOPSLIDE_CODEX_PATH to the `codex` executable.",
+                )
+            }),
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct AgentManager {
@@ -79,7 +125,10 @@ struct Envelope<'a> {
 pub struct SendArgs {
     pub deck_id: String,
     pub prompt: String,
+    #[serde(default)]
+    pub provider: Provider,
     pub model: Option<String>,
+    pub effort: Option<String>,
 }
 
 impl AgentManager {
@@ -89,12 +138,7 @@ impl AgentManager {
 
     pub fn send(&self, app: AppHandle, args: SendArgs) -> Result<()> {
         let dir = deck::deck_dir(&app, &args.deck_id)?;
-        let claude = env::resolve_claude().ok_or_else(|| {
-            Error::msg(
-                "Claude Code was not found. Install it from https://claude.com/claude-code, \
-                 or set SLOPSLIDE_CLAUDE_PATH to the `claude` executable.",
-            )
-        })?;
+        let bin = args.provider.resolve()?;
         let (cancel_tx, cancel_rx) = watch::channel(false);
         {
             let mut running = self.running.lock().unwrap();
@@ -116,15 +160,16 @@ impl AgentManager {
                     );
                 }),
                 dir,
-                claude,
+                provider: args.provider,
+                bin,
+                model: args.model.filter(|m| !m.is_empty()),
+                effort: args.effort.filter(|e| !e.is_empty()),
             };
             // The whole deck is one file: keep a copy to fall back on before every turn.
             if let Err(e) = deck::snapshot(&turn.dir) {
                 log::warn!("snapshot failed: {e}");
             }
-            let interrupted = turn
-                .run(&args.prompt, args.model.as_deref(), cancel_rx)
-                .await;
+            let interrupted = turn.run(&args.prompt, cancel_rx).await;
             // Give new slides ids and restore the player runtime if the agent touched it.
             if let Err(e) = deck::normalize(&turn.dir) {
                 turn.emit(&AgentEvent::Error {
@@ -151,7 +196,10 @@ impl AgentManager {
 struct Turn {
     emit: Box<dyn Fn(&AgentEvent) + Send + Sync>,
     dir: PathBuf,
-    claude: PathBuf,
+    provider: Provider,
+    bin: PathBuf,
+    model: Option<String>,
+    effort: Option<String>,
 }
 
 enum Outcome {
@@ -166,20 +214,14 @@ impl Turn {
     }
 
     /// Returns whether the turn was interrupted.
-    async fn run(
-        &self,
-        prompt: &str,
-        model: Option<&str>,
-        mut cancel: watch::Receiver<bool>,
-    ) -> bool {
-        let session = deck::read_session(&self.dir);
-        let mut outcome = self
-            .run_once(prompt, model, session.as_deref(), &mut cancel)
-            .await;
+    async fn run(&self, prompt: &str, mut cancel: watch::Receiver<bool>) -> bool {
+        let session_file = self.provider.session_file();
+        let session = deck::read_session(&self.dir, session_file);
+        let mut outcome = self.run_once(prompt, session.as_deref(), &mut cancel).await;
         if matches!(outcome, Ok(Outcome::ResumeFailed)) {
             // The stored session is gone (other machine, cleared history): start fresh.
-            let _ = deck::write_session(&self.dir, None);
-            outcome = self.run_once(prompt, model, None, &mut cancel).await;
+            let _ = deck::write_session(&self.dir, session_file, None);
+            outcome = self.run_once(prompt, None, &mut cancel).await;
         }
         match outcome {
             Ok(Outcome::Interrupted) => true,
@@ -196,20 +238,34 @@ impl Turn {
     async fn run_once(
         &self,
         prompt: &str,
-        model: Option<&str>,
         session: Option<&str>,
         cancel: &mut watch::Receiver<bool>,
     ) -> Result<Outcome> {
-        let system_prompt = self.dir.join(INTERNAL_DIR).join("system-prompt.md");
-        std::fs::write(&system_prompt, SYSTEM_PROMPT)?;
-        let mcp_config = self.dir.join(INTERNAL_DIR).join("mcp.json");
-        std::fs::write(
-            &mcp_config,
-            lint_server_config(&std::env::current_exe()?, &self.dir),
-        )?;
+        let model = self.model.as_deref();
+        let effort = self.effort.as_deref();
+        let args = match self.provider {
+            Provider::Claude => {
+                let system_prompt = self.dir.join(INTERNAL_DIR).join("system-prompt.md");
+                std::fs::write(&system_prompt, SYSTEM_PROMPT)?;
+                let mcp_config = self.dir.join(INTERNAL_DIR).join("mcp.json");
+                std::fs::write(
+                    &mcp_config,
+                    lint_server_config(&std::env::current_exe()?, &self.dir),
+                )?;
+                build_claude_args(&system_prompt, &mcp_config, model, effort, session)
+            }
+            Provider::Codex => {
+                build_codex_args(&std::env::current_exe()?, &self.dir, model, effort, session)
+            }
+        };
+        let mut parser = match self.provider {
+            Provider::Claude => Parser::Claude,
+            Provider::Codex => Parser::Codex(CodexParser::default()),
+        };
+        let started = Instant::now();
 
-        let mut cmd = Command::new(&self.claude);
-        cmd.args(build_args(&system_prompt, &mcp_config, model, session))
+        let mut cmd = Command::new(&self.bin);
+        cmd.args(args)
             .current_dir(&self.dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -220,8 +276,9 @@ impl Turn {
 
         let mut child = cmd.spawn().map_err(|e| {
             Error::msg(format!(
-                "Could not start Claude Code ({}): {e}",
-                self.claude.display()
+                "Could not start {} ({}): {e}",
+                self.provider.name(),
+                self.bin.display()
             ))
         })?;
         self.emit(&AgentEvent::Started {
@@ -246,24 +303,27 @@ impl Turn {
 
         let mut lines = BufReader::new(child.stdout.take().expect("piped stdout")).lines();
         let mut saw_init = false;
+        let mut saw_output = false;
         let mut result_text = None;
         loop {
             tokio::select! {
                 line = lines.next_line() => {
                     let Some(line) = line? else { break };
                     let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
-                    if let Some(id) = session_id_of_init(&value) {
+                    saw_output = true;
+                    if let Some(id) = parser.session_id(&value) {
                         saw_init = true;
-                        deck::write_session(&self.dir, Some(&id))?;
+                        deck::write_session(&self.dir, self.provider.session_file(), Some(&id))?;
                         self.emit(&AgentEvent::Started { session_id: Some(id) });
                     }
                     if session.is_some() && !saw_init && is_missing_session(&value) {
                         let _ = child.kill().await;
                         return Ok(Outcome::ResumeFailed);
                     }
-                    for event in parse_line(&value) {
-                        if let AgentEvent::Result { text, .. } = &event {
+                    for mut event in parser.parse(&value) {
+                        if let AgentEvent::Result { text, duration_ms, .. } = &mut event {
                             result_text = text.clone();
+                            duration_ms.get_or_insert(started.elapsed().as_millis() as u64);
                         }
                         self.emit(&event);
                     }
@@ -280,6 +340,11 @@ impl Turn {
         if session.is_some() && !saw_init && stderr.contains(MISSING_SESSION) {
             return Ok(Outcome::ResumeFailed);
         }
+        // Codex exits before emitting anything when the thread to resume is gone.
+        if session.is_some() && self.provider == Provider::Codex && !saw_output && !status.success()
+        {
+            return Ok(Outcome::ResumeFailed);
+        }
         if !status.success() && result_text.is_none() {
             let detail = stderr.trim();
             let detail = if detail.is_empty() {
@@ -288,7 +353,8 @@ impl Turn {
                 detail.to_string()
             };
             return Err(Error::msg(format!(
-                "Claude Code stopped unexpectedly: {detail}"
+                "{} stopped unexpectedly: {detail}",
+                self.provider.name()
             )));
         }
         Ok(Outcome::Done)
@@ -309,10 +375,11 @@ fn lint_server_config(exe: &Path, dir: &Path) -> String {
     .to_string()
 }
 
-fn build_args(
+fn build_claude_args(
     system_prompt: &Path,
     mcp_config: &Path,
     model: Option<&str>,
+    effort: Option<&str>,
     session: Option<&str>,
 ) -> Vec<String> {
     let mut args: Vec<String> = [
@@ -338,13 +405,83 @@ fn build_args(
         "--append-system-prompt-file".into(),
         system_prompt.to_string_lossy().into_owned(),
     ]);
-    if let Some(model) = model.filter(|m| !m.is_empty()) {
+    if let Some(model) = model {
         args.extend(["--model".into(), model.into()]);
+    }
+    if let Some(effort) = effort {
+        args.extend(["--effort".into(), effort.into()]);
     }
     if let Some(session) = session {
         args.extend(["--resume".into(), session.into()]);
     }
     args
+}
+
+/// `codex exec` options go before the `resume` subcommand; the prompt is read from stdin.
+fn build_codex_args(
+    exe: &Path,
+    dir: &Path,
+    model: Option<&str>,
+    effort: Option<&str>,
+    session: Option<&str>,
+) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "exec",
+        "--json",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "workspace-write",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    // A JSON string is a valid TOML basic string, so this survives Codex's `-c` parsing.
+    let instructions = serde_json::to_string(SYSTEM_PROMPT).expect("json");
+    // The lint tool server, as in `lint_server_config`; JSON arrays are valid TOML too.
+    let command = serde_json::to_string(&exe.to_string_lossy()).expect("json");
+    let server_args = serde_json::json!([mcp::FLAG, dir.to_string_lossy()]);
+    args.extend([
+        "-c".into(),
+        format!("developer_instructions={instructions}"),
+        "-c".into(),
+        format!("mcp_servers.{}.command={command}", mcp::SERVER),
+        "-c".into(),
+        format!("mcp_servers.{}.args={server_args}", mcp::SERVER),
+    ]);
+    if let Some(model) = model {
+        args.extend(["--model".into(), model.into()]);
+    }
+    if let Some(effort) = effort {
+        args.extend(["-c".into(), format!("model_reasoning_effort=\"{effort}\"")]);
+    }
+    if let Some(session) = session {
+        args.extend(["resume".into(), session.into()]);
+    }
+    args.push("-".into());
+    args
+}
+
+enum Parser {
+    Claude,
+    Codex(CodexParser),
+}
+
+impl Parser {
+    fn session_id(&self, value: &Value) -> Option<String> {
+        match self {
+            Parser::Claude => session_id_of_init(value),
+            Parser::Codex(_) => (value["type"] == "thread.started")
+                .then(|| value["thread_id"].as_str().map(str::to_string))
+                .flatten(),
+        }
+    }
+
+    fn parse(&mut self, value: &Value) -> Vec<AgentEvent> {
+        match self {
+            Parser::Claude => parse_line(value),
+            Parser::Codex(codex) => codex.parse(value),
+        }
+    }
 }
 
 const MISSING_SESSION: &str = "No conversation found";
@@ -423,6 +560,110 @@ fn content_blocks(value: &Value) -> impl Iterator<Item = &Value> {
     value["message"]["content"].as_array().into_iter().flatten()
 }
 
+/// Maps `codex exec --json` lines to UI events. Codex reports whole items (no token
+/// deltas): agent messages arrive complete, tools as started/completed pairs.
+#[derive(Default)]
+struct CodexParser {
+    started: HashSet<String>,
+    last_message: Option<String>,
+}
+
+impl CodexParser {
+    fn parse(&mut self, value: &Value) -> Vec<AgentEvent> {
+        match value["type"].as_str() {
+            Some("turn.started") => vec![AgentEvent::Thinking],
+            Some("item.started") => {
+                let item = &value["item"];
+                match codex_tool(item) {
+                    Some((name, input)) => {
+                        let id = item["id"].as_str().unwrap_or_default().to_string();
+                        self.started.insert(id.clone());
+                        vec![AgentEvent::ToolUse { id, name, input }]
+                    }
+                    None => Vec::new(),
+                }
+            }
+            Some("item.completed") => {
+                let item = &value["item"];
+                let id = item["id"].as_str().unwrap_or_default().to_string();
+                match item["type"].as_str() {
+                    Some("agent_message") => {
+                        let text = item["text"].as_str().unwrap_or_default().to_string();
+                        self.last_message = Some(text.clone());
+                        vec![AgentEvent::TextStart, AgentEvent::TextDelta { text }]
+                    }
+                    Some("reasoning") => vec![AgentEvent::Thinking],
+                    _ => {
+                        let Some((name, input)) = codex_tool(item) else {
+                            return Vec::new();
+                        };
+                        let is_error = item["status"] == "failed"
+                            || item["exit_code"].as_i64().is_some_and(|c| c != 0);
+                        let mut events = Vec::new();
+                        if !self.started.remove(&id) {
+                            events.push(AgentEvent::ToolUse {
+                                id: id.clone(),
+                                name,
+                                input,
+                            });
+                        }
+                        events.push(AgentEvent::ToolResult { id, is_error });
+                        events
+                    }
+                }
+            }
+            Some("turn.completed") => vec![AgentEvent::Result {
+                is_error: false,
+                text: self.last_message.take(),
+                cost_usd: None,
+                duration_ms: None,
+            }],
+            Some("turn.failed") => vec![AgentEvent::Result {
+                is_error: true,
+                text: value["error"]["message"].as_str().map(str::to_string),
+                cost_usd: None,
+                duration_ms: None,
+            }],
+            Some("error") => value["message"]
+                .as_str()
+                .map(|message| {
+                    vec![AgentEvent::Error {
+                        message: message.to_string(),
+                    }]
+                })
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// A Codex tool item as a Claude-style tool name and input, so the chat renders both alike.
+fn codex_tool(item: &Value) -> Option<(String, Value)> {
+    match item["type"].as_str()? {
+        "command_execution" => Some((
+            "Bash".into(),
+            serde_json::json!({ "command": item["command"] }),
+        )),
+        "file_change" => {
+            let path = item["changes"]
+                .as_array()
+                .and_then(|changes| changes.first())
+                .map(|change| change["path"].clone())
+                .unwrap_or(Value::Null);
+            Some(("Edit".into(), serde_json::json!({ "file_path": path })))
+        }
+        "web_search" => Some((
+            "WebSearch".into(),
+            serde_json::json!({ "query": item["query"] }),
+        )),
+        "mcp_tool_call" => Some((
+            item["tool"].as_str().unwrap_or("Tool").to_string(),
+            item["arguments"].clone(),
+        )),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,6 +711,59 @@ mod tests {
         assert!(!is_missing_session(
             &json!({"type":"result","subtype":"success"})
         ));
+    }
+
+    #[test]
+    fn parses_codex_items() {
+        let mut parser = CodexParser::default();
+        let start = json!({"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"ls","status":"in_progress"}});
+        let done = json!({"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"ls","exit_code":0,"status":"completed"}});
+        let edit = json!({"type":"item.completed","item":{"id":"item_2","type":"file_change","changes":[{"path":"/d/deck.html","kind":"update"}],"status":"completed"}});
+        let message = json!({"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Done"}});
+        assert!(
+            matches!(&parser.parse(&start)[..], [AgentEvent::ToolUse { name, .. }] if name == "Bash")
+        );
+        assert_eq!(
+            parser.parse(&done),
+            vec![AgentEvent::ToolResult {
+                id: "item_1".into(),
+                is_error: false
+            }]
+        );
+        assert!(matches!(
+            &parser.parse(&edit)[..],
+            [AgentEvent::ToolUse { name, .. }, AgentEvent::ToolResult { .. }] if name == "Edit"
+        ));
+        assert_eq!(
+            parser.parse(&message),
+            vec![
+                AgentEvent::TextStart,
+                AgentEvent::TextDelta {
+                    text: "Done".into()
+                }
+            ]
+        );
+        assert!(matches!(
+            &parser.parse(&json!({"type":"turn.completed"}))[..],
+            [AgentEvent::Result { is_error: false, text: Some(t), .. }] if t == "Done"
+        ));
+    }
+
+    #[test]
+    fn codex_args_resume_after_options() {
+        let args = build_codex_args(
+            Path::new("/app/slopslide"),
+            Path::new("/d"),
+            Some("gpt-6-astra"),
+            Some("high"),
+            Some("t1"),
+        );
+        let resume = args.iter().position(|a| a == "resume").unwrap();
+        let model = args.iter().position(|a| a == "--model").unwrap();
+        assert!(model < resume);
+        assert_eq!(&args[resume + 1..], ["t1", "-"]);
+        assert!(args.contains(&"model_reasoning_effort=\"high\"".to_string()));
+        assert!(args.contains(&r#"mcp_servers.slopslide.args=["--lint-mcp","/d"]"#.to_string()));
     }
 
     #[test]
@@ -602,7 +896,7 @@ mod tests {
     fn builds_cli_arguments() {
         let prompt = Path::new("/deck/.slopslide/system-prompt.md");
         let mcp = Path::new("/deck/.slopslide/mcp.json");
-        let base = build_args(prompt, mcp, None, None);
+        let base = build_claude_args(prompt, mcp, None, None, None);
         assert_eq!(base[..3], ["-p", "--output-format", "stream-json"]);
         let after = |args: &[String], flag: &str| {
             args.iter()
@@ -629,16 +923,13 @@ mod tests {
         assert!(base.contains(&"--strict-mcp-config".to_string()));
         assert!(!base.contains(&"--model".to_string()));
         assert!(!base.contains(&"--resume".to_string()));
+        assert!(!base.contains(&"--effort".to_string()));
         assert!(!TOOLS.contains("Bash"), "the agent must not get a shell");
 
-        let full = build_args(prompt, mcp, Some("opus"), Some("s-1"));
+        let full = build_claude_args(prompt, mcp, Some("opus"), Some("high"), Some("s-1"));
         assert_eq!(after(&full, "--model").as_deref(), Some("opus"));
+        assert_eq!(after(&full, "--effort").as_deref(), Some("high"));
         assert_eq!(after(&full, "--resume").as_deref(), Some("s-1"));
-        assert_eq!(
-            build_args(prompt, mcp, Some(""), None),
-            base,
-            "empty model means default"
-        );
     }
 
     #[test]
@@ -724,9 +1015,18 @@ mod tests {
             ("talk", "Hi")
         );
         assert_eq!(args.model, None);
-        let args: SendArgs =
-            serde_json::from_value(json!({"deckId":"t","prompt":"","model":"opus"})).unwrap();
-        assert_eq!(args.model.as_deref(), Some("opus"));
+        assert_eq!(
+            args.provider,
+            Provider::Claude,
+            "older frontends send no provider"
+        );
+        let args: SendArgs = serde_json::from_value(
+            json!({"deckId":"t","prompt":"","provider":"codex","model":"gpt-6-astra","effort":"high"}),
+        )
+        .unwrap();
+        assert_eq!(args.provider, Provider::Codex);
+        assert_eq!(args.model.as_deref(), Some("gpt-6-astra"));
+        assert_eq!(args.effort.as_deref(), Some("high"));
     }
 
     #[test]
@@ -778,21 +1078,25 @@ mod tests {
             }
 
             fn turn(&self) -> Turn {
-                self.turn_with(self.dir.join("claude"))
+                self.turn_with(self.dir.join("claude"), None)
             }
 
-            fn turn_with(&self, claude: PathBuf) -> Turn {
+            fn turn_with(&self, claude: PathBuf, model: Option<&str>) -> Turn {
                 let events = self.events.clone();
                 Turn {
                     emit: Box::new(move |e| events.lock().unwrap().push(e.clone())),
                     dir: self.dir.clone(),
-                    claude,
+                    provider: Provider::Claude,
+                    bin: claude,
+                    model: model.map(str::to_string),
+                    effort: None,
                 }
             }
 
             async fn run(&self, prompt: &str, model: Option<&str>) -> bool {
                 let (_tx, rx) = watch::channel(false);
-                tokio::time::timeout(Duration::from_secs(20), self.turn().run(prompt, model, rx))
+                let turn = self.turn_with(self.dir.join("claude"), model);
+                tokio::time::timeout(Duration::from_secs(20), turn.run(prompt, rx))
                     .await
                     .expect("turn timed out")
             }
@@ -827,7 +1131,7 @@ mod tests {
             }
 
             fn session(&self) -> Option<String> {
-                deck::read_session(&self.dir)
+                deck::read_session(&self.dir, Provider::Claude.session_file())
             }
         }
 
@@ -911,7 +1215,7 @@ echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id
                 r#"echo "{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$RESUME\"}}"
 {OK}"#
             ));
-            deck::write_session(&fx.dir, Some("old-session")).unwrap();
+            deck::write_session(&fx.dir, "session", Some("old-session")).unwrap();
             assert!(!fx.run("Again", None).await);
             let runs = fx.invocations();
             assert_eq!(runs.len(), 1);
@@ -937,7 +1241,7 @@ fi
 {INIT}
 {OK}"#
             ));
-            deck::write_session(&fx.dir, Some("gone")).unwrap();
+            deck::write_session(&fx.dir, "session", Some("gone")).unwrap();
             assert!(!fx.run("Hi", None).await);
             let runs = fx.invocations();
             assert_eq!(runs.len(), 2, "retried once");
@@ -970,7 +1274,7 @@ fi
 {INIT}
 {OK}"#
             ));
-            deck::write_session(&fx.dir, Some("gone")).unwrap();
+            deck::write_session(&fx.dir, "session", Some("gone")).unwrap();
             assert!(!fx.run("Hi", None).await);
             assert_eq!(fx.invocations().len(), 2);
             assert_eq!(fx.session().as_deref(), Some("new-session"));
@@ -1038,7 +1342,7 @@ fi
             let fx = Fixture::new(&format!("{INIT}\nexec sleep 30"));
             let (tx, rx) = watch::channel(false);
             let turn = fx.turn();
-            let run = tokio::spawn(async move { turn.run("Hi", None, rx).await });
+            let run = tokio::spawn(async move { turn.run("Hi", rx).await });
             // Wait until the turn is under way.
             for _ in 0..200 {
                 if fx.session().is_some() {
@@ -1061,7 +1365,7 @@ fi
             let fx = Fixture::new("");
             let (_tx, rx) = watch::channel(false);
             let missing = fx.dir.join("no-such-claude");
-            assert!(!fx.turn_with(missing).run("Hi", None, rx).await);
+            assert!(!fx.turn_with(missing, None).run("Hi", rx).await);
             let errors = fx.errors();
             assert_eq!(errors.len(), 1);
             assert!(

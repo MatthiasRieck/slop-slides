@@ -35,8 +35,20 @@ export function installBrowserMock() {
         case "open_deck":
         case "load_deck":
           return deck(a.id);
-        case "agent_status":
-          return { claudePath: "/mock/claude", libraryPath: "~/Documents/SlopSlide" };
+        case "list_providers":
+          return [
+            {
+              id: "claude",
+              installed: true,
+              path: "/mock/claude",
+              models: [
+                { id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true, efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "medium" },
+                { id: "claude-sonnet-5", label: "Claude Sonnet 5", isDefault: false, efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "medium" },
+              ],
+              error: null,
+            },
+            { id: "codex", installed: false, path: null, models: [], error: null },
+          ];
         case "agent_running":
           return false;
         case "lint_deck":

@@ -12,6 +12,12 @@ import {
   type LintIssue,
 } from "./lib/api";
 import { inkBounds, SLIDE_SIZE, type Stroke } from "./lib/ink";
+import {
+  defaultModel,
+  pickEffort,
+  type Provider,
+  type ProviderInfo,
+} from "./lib/models";
 
 export type ChatPart =
   | { kind: "text"; text: string }
@@ -58,12 +64,65 @@ export interface AssistantMessage {
 
 export type ChatMessage = UserMessage | AssistantMessage;
 
-export const MODELS = [
-  { id: "", label: "Default" },
-  { id: "opus", label: "Opus" },
-  { id: "sonnet", label: "Sonnet" },
-  { id: "haiku", label: "Haiku" },
-] as const;
+export interface ModelSelection {
+  provider: Provider;
+  model: string;
+  /** Shown until the provider list arrives. */
+  label: string;
+  effort: string;
+}
+
+const SELECTION_KEY = "slopslide.selection";
+const FAVORITES_KEY = "slopslide.favoriteModels";
+
+const DEFAULT_SELECTION: ModelSelection = {
+  provider: "claude",
+  model: "claude-opus-5-5",
+  label: "Claude Opus 5.5",
+  effort: "medium",
+};
+
+function loadSelection(): ModelSelection {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SELECTION_KEY) ?? "null") as Partial<ModelSelection> | null;
+    if (saved?.provider && saved.model && saved.label && saved.effort) return saved as ModelSelection;
+  } catch {
+    // Fall through to the default.
+  }
+  return DEFAULT_SELECTION;
+}
+
+function saveSelection(selection: ModelSelection) {
+  localStorage.setItem(SELECTION_KEY, JSON.stringify(selection));
+  useApp.setState({ selection });
+}
+
+/** Moves a selection that is no longer offered onto an installed provider's default model. */
+function reconcileSelection(selection: ModelSelection, providers: ProviderInfo[]): ModelSelection {
+  const current = providers.find((p) => p.id === selection.provider);
+  const model = current?.models.find((m) => m.id === selection.model);
+  if (model) return { ...selection, label: model.label, effort: pickEffort(model, selection.effort) };
+  // A provider whose models could not be listed keeps the saved choice rather than losing it.
+  if (current?.installed && current.error) return selection;
+  const fallback = [current, ...providers].find((p) => p?.installed && p.models.length > 0);
+  const next = fallback && defaultModel(fallback);
+  if (!fallback || !next) return selection;
+  return {
+    provider: fallback.id,
+    model: next.id,
+    label: next.label,
+    effort: pickEffort(next, selection.effort),
+  };
+}
+
+function loadFavorites(): string[] {
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(FAVORITES_KEY) ?? "[]");
+    return Array.isArray(saved) ? saved.filter((k): k is string => typeof k === "string") : [];
+  } catch {
+    return [];
+  }
+}
 
 export type StageView = "slides" | "code";
 
@@ -83,9 +142,12 @@ interface AppState {
   assetsRev: number;
   messages: ChatMessage[];
   running: boolean;
-  model: string;
+  selection: ModelSelection;
+  /** `provider:model` keys starred in the model picker. */
+  favoriteModels: string[];
   presenting: boolean;
-  claudePath: string | null | undefined;
+  /** Installed agent CLIs and their models; `undefined` while loading. */
+  providers: ProviderInfo[] | undefined;
   error: string | null;
   /** Lint result for the saved deck.html; null until the first check finishes. */
   lint: LintIssue[] | null;
@@ -113,7 +175,10 @@ interface AppState {
   setView: (view: StageView) => void;
   setCodeDirty: (dirty: boolean) => void;
   setChatOpen: (open: boolean) => void;
-  setModel: (model: string) => void;
+  setModel: (provider: Provider, model: string) => void;
+  setEffort: (effort: string) => void;
+  refreshProviders: () => Promise<void>;
+  toggleFavoriteModel: (key: string) => void;
   setPresenting: (presenting: boolean) => void;
   setError: (error: string | null) => void;
   refreshLint: () => Promise<void>;
@@ -172,9 +237,10 @@ export const useApp = create<AppState>((set, get) => ({
   assetsRev: 0,
   messages: [],
   running: false,
-  model: localStorage.getItem("slopslide.model") ?? "",
+  selection: loadSelection(),
+  favoriteModels: loadFavorites(),
   presenting: false,
-  claudePath: undefined,
+  providers: undefined,
   error: null,
   lint: null,
   composerFill: null,
@@ -237,9 +303,32 @@ export const useApp = create<AppState>((set, get) => ({
     set({ chatOpen });
   },
 
-  setModel: (model) => {
-    localStorage.setItem("slopslide.model", model);
-    set({ model });
+  setModel: (provider, id) => {
+    const model = get()
+      .providers?.find((p) => p.id === provider)
+      ?.models.find((m) => m.id === id);
+    if (!model) return;
+    const effort = pickEffort(model, get().selection.effort);
+    saveSelection({ provider, model: id, label: model.label, effort });
+  },
+
+  setEffort: (effort) => saveSelection({ ...get().selection, effort }),
+
+  refreshProviders: async () => {
+    set({ providers: undefined });
+    const result = await api.listProviders().catch(() => null);
+    const providers = Array.isArray(result) ? result : [];
+    set({ providers });
+    if (providers.length > 0) saveSelection(reconcileSelection(get().selection, providers));
+  },
+
+  toggleFavoriteModel: (key) => {
+    const { favoriteModels } = get();
+    const next = favoriteModels.includes(key)
+      ? favoriteModels.filter((k) => k !== key)
+      : [...favoriteModels, key];
+    localStorage.setItem(FAVORITES_KEY, JSON.stringify(next));
+    set({ favoriteModels: next });
   },
 
   setPresenting: (presenting) => set({ presenting }),
@@ -329,7 +418,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   send: async (text, { includeSlide, attachments, screenshot = false }) => {
-    const { deck, selected, running, model } = get();
+    const { deck, selected, running, selection } = get();
     if (!deck || running) return;
     const slide = includeSlide ? selected : null;
     const strokes = slide ? (get().sketches[slide] ?? []) : [];
@@ -368,7 +457,8 @@ export const useApp = create<AppState>((set, get) => ({
       if (user.sketch) get().clearSketch(slide);
     }
     try {
-      await api.sendMessage(deck.id, buildPrompt(deck, user), model || null);
+      const { provider, model, effort } = selection;
+      await api.sendMessage(deck.id, buildPrompt(deck, user), { provider, model, effort });
     } catch (error) {
       updateAssistant(assistant.id, (m) => ({
         ...m,
@@ -630,8 +720,8 @@ function applyDeckChanged(paths: string[]) {
 }
 
 export async function initEventBridge() {
-  const status = await api.agentStatus().catch(() => null);
-  useApp.setState({ claudePath: status?.claudePath ?? null });
+  // Listing Codex models starts its app server; don't hold up the rest of the bridge.
+  void useApp.getState().refreshProviders();
   await listen<AgentEventEnvelope>("agent-event", ({ payload }) => {
     if (payload.deckId === useApp.getState().deck?.id) applyAgentEvent(payload.event);
   });

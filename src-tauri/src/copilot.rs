@@ -212,6 +212,8 @@ fn parse_model(model: &Value) -> Option<ModelInfo> {
             .filter_map(|e| e.as_str().map(str::to_string))
             .collect(),
         default_effort: model["defaultReasoningEffort"].as_str().map(str::to_string),
+        context_windows: Vec::new(),
+        default_context_window: None,
         id,
     })
 }

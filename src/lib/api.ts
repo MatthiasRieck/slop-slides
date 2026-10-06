@@ -79,7 +79,7 @@ export const api = {
   sendMessage: (
     deckId: string,
     prompt: string,
-    selection: { provider: Provider; model: string; effort: string },
+    selection: { provider: Provider; model: string; effort: string; contextWindow: string | null },
   ) => invoke<void>("send_message", { args: { deckId, prompt, ...selection } }),
   interruptAgent: (id: string) => invoke<void>("interrupt_agent", { id }),
   agentRunning: (id: string) => invoke<boolean>("agent_running", { id }),

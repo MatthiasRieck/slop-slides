@@ -31,11 +31,11 @@ interface View {
   k: number;
 }
 
-function pasteboard({ framed = true, bodyStyle = "" } = {}) {
+function pasteboard({ framed = true, bodyStyle = "", show = false } = {}) {
   const posted: unknown[] = [];
   const parent = { postMessage: (data: unknown) => posted.push(data) };
   const dom = new JSDOM(DECK(bodyStyle), {
-    url: "https://example.test/deck.html?embed&slide=intro&pan",
+    url: show ? "https://example.test/deck.html?v=1&show#intro" : "https://example.test/deck.html?embed&slide=intro&pan",
     runScripts: "outside-only",
     pretendToBeVisual: true,
     beforeParse(window) {
@@ -58,6 +58,7 @@ function pasteboard({ framed = true, bodyStyle = "" } = {}) {
     $,
     transform: () => $(".deck").style.transform,
     views: () => posted.filter((m) => (m as View).type === "slop:view") as View[],
+    zooms: () => posted.filter((m) => (m as View).type === "slop:zoom") as View[],
     keys: () => posted.filter((m) => (m as View).type === "slop:key"),
     drag(target: Element, dx: number, dy: number, button = 0) {
       pointer("pointerdown", target, 100, 100, button);
@@ -69,11 +70,14 @@ function pasteboard({ framed = true, bodyStyle = "" } = {}) {
       doc.body.dispatchEvent(event);
       return event;
     },
-    wheel: (init: WheelEventInit) => {
+    wheel: (init: WheelEventInit, timeStamp?: number) => {
       const event = new window.WheelEvent("wheel", { cancelable: true, bubbles: true, ...init });
+      if (timeStamp !== undefined) Object.defineProperty(event, "timeStamp", { value: timeStamp });
       doc.body.dispatchEvent(event);
       return event;
     },
+    click: (target: Element, x = 1500) =>
+      target.dispatchEvent(new window.MouseEvent("click", { clientX: x, clientY: 100, bubbles: true, cancelable: true })),
     fromParent: (data: unknown) => {
       const event = new window.MessageEvent("message", { data });
       Object.defineProperty(event, "source", { value: parent });
@@ -140,6 +144,22 @@ describe("pasteboard", () => {
     expect(p.$("[data-slop-frame]").style.cssText).toContain(`width: ${1920 * k}px`);
   });
 
+  it("zooms with the mouse wheel in view mode too, in Chromium and in WebKit", () => {
+    const p = pasteboard();
+    const notch = (deltaY: number, wheelDeltaY: number) => {
+      const event = new p.window.WheelEvent("wheel", { deltaY, cancelable: true, bubbles: true });
+      Object.defineProperty(event, "timeStamp", { value: (p.views().length + 1) * 1000 });
+      Object.defineProperty(event, "wheelDeltaY", { value: wheelDeltaY });
+      p.doc.body.dispatchEvent(event);
+    };
+    notch(-40, 120);
+    expect(p.views().at(-1)!.k).toBeCloseTo(Math.exp(0.2), 5);
+    notch(-4.000244140625, 12);
+    // WebKit's notch is a fraction of a line; it zooms rather than panning.
+    expect(p.views().at(-1)!.k).toBeCloseTo(Math.exp(0.2 + 4.000244140625 * 0.005), 5);
+    expect(p.transform()).toContain(`scale(${p.views().at(-1)!.k})`);
+  });
+
   it("returns home with 0 and pans with Space held, keeping both keys from the app", () => {
     const p = pasteboard();
     p.drag(p.$("h1"), 50, 50);
@@ -168,5 +188,72 @@ describe("pasteboard", () => {
       "rgb(4, 5, 6)",
       "rgb(7, 8, 9)",
     ]);
+  });
+
+  describe("in a show", () => {
+    // The window is 2560×1440, so the player fits the slide at 4/3 scale, filling it.
+    it("starts with the slide fit to the window, drawing nothing around it", () => {
+      const p = pasteboard({ show: true, bodyStyle: "body { background: rgb(10, 20, 30) }" });
+      expect(p.transform()).toBe(`translate(0px,0px) scale(${4 / 3})`);
+      expect(p.doc.querySelector("[data-slop-frame]")).toBeNull();
+      const css = [...p.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
+      expect(css).not.toContain("transparent");
+      expect(p.$(".deck").style.backgroundColor).toBe("");
+      expect(p.views()).toEqual([]);
+    });
+
+    it("zooms with the mouse wheel around the pointer and reports where ink belongs", () => {
+      const p = pasteboard({ show: true });
+      const event = new p.window.WheelEvent("wheel", { deltaY: -4.000244140625, clientX: 1000, clientY: 500, cancelable: true, bubbles: true });
+      Object.defineProperty(event, "wheelDeltaY", { value: 12 });
+      p.doc.body.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      const { x, y, k } = p.zooms().at(-1)!;
+      expect(k).toBeCloseTo(Math.exp(4.000244140625 * 0.005), 5);
+      // What lay under the pointer still does, so ink drawn there moves along with the slide.
+      expect(x + 1000 * k).toBeCloseTo(1000, 5);
+      expect(y + 500 * k).toBeCloseTo(500, 5);
+    });
+
+    it("zooms with a mouse notch and a pinch, pans with a swipe, and follows the window's size", () => {
+      const p = pasteboard({ show: true });
+      p.wheel({ ctrlKey: true, deltaY: -60, clientX: 0, clientY: 0 }, 1000);
+      expect(p.zooms().at(-1)).toMatchObject({ x: 0, y: 0 });
+      expect(p.zooms().at(-1)!.k).toBeCloseTo(Math.exp(0.3), 5);
+      p.wheel({ deltaY: -3, deltaMode: 1, clientX: 0, clientY: 0 }, 2000);
+      expect(p.zooms().at(-1)!.k).toBeGreaterThan(Math.exp(0.3));
+      p.key("0");
+      p.wheel({ deltaX: 30, deltaY: 100 }, 3000);
+      expect(p.transform()).toBe(`translate(-30px,-100px) scale(${4 / 3})`);
+      expect(p.zooms().at(-1)).toEqual({ type: "slop:zoom", x: -30, y: -100, k: 1 });
+      Object.defineProperty(p.window, "innerWidth", { value: 1920, configurable: true });
+      p.window.dispatchEvent(new p.window.Event("resize"));
+      // Now letterboxed, 180px down, and still panned.
+      expect(p.transform()).toBe("translate(-30px,80px) scale(1)");
+    });
+
+    it("leaves clicks and Space to the player, and pans with the middle button", () => {
+      const p = pasteboard({ show: true });
+      p.drag(p.$("h1"), 50, 0);
+      expect(p.transform()).toBe(`translate(0px,0px) scale(${4 / 3})`);
+      p.key(" ");
+      expect(p.$("#outro").classList.contains("active")).toBe(true);
+      expect(p.doc.documentElement.style.cursor).toBe("");
+      p.drag(p.$("h1"), 50, 20, 1);
+      expect(p.zooms().at(-1)).toEqual({ type: "slop:zoom", x: 50, y: 20, k: 1 });
+    });
+
+    it("fits each slide the show moves to, and when the app asks", async () => {
+      const p = pasteboard({ show: true });
+      p.wheel({ ctrlKey: true, deltaY: -60 }, 1000);
+      p.fromParent({ type: "slop:camera", home: true });
+      expect(p.transform()).toBe(`translate(0px,0px) scale(${4 / 3})`);
+      p.wheel({ ctrlKey: true, deltaY: -60 }, 2000);
+      p.click(p.doc.body);
+      expect(p.$("#outro").classList.contains("active")).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(p.transform()).toBe(`translate(0px,0px) scale(${4 / 3})`);
+      expect(p.zooms().at(-1)).toEqual({ type: "slop:zoom", x: 0, y: 0, k: 1 });
+    });
   });
 });

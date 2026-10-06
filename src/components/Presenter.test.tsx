@@ -25,20 +25,20 @@ function fromFrame(data: unknown, source: MessageEventSource | null = frame().co
 describe("Presenter", () => {
   it("plays the whole deck from the selected slide", () => {
     render(<Presenter />);
-    expect(frame().getAttribute("src")).toBe("/__deck/talk/deck.html?v=shell-1#outro");
+    expect(frame().getAttribute("src")).toBe("/__deck/talk/deck.html?v=shell-1&show#outro");
     expect(frame().getAttribute("sandbox")).toBe("allow-scripts");
   });
 
   it("encodes positional slide ids in the hash", () => {
     useApp.setState({ selected: "#2" });
     render(<Presenter />);
-    expect(frame().getAttribute("src")).toBe("/__deck/talk/deck.html?v=shell-1#%232");
+    expect(frame().getAttribute("src")).toBe("/__deck/talk/deck.html?v=shell-1&show#%232");
   });
 
   it("starts at the beginning without a selection", () => {
     useApp.setState({ selected: null });
     render(<Presenter />);
-    expect(frame().getAttribute("src")).toBe("/__deck/talk/deck.html?v=shell-1");
+    expect(frame().getAttribute("src")).toBe("/__deck/talk/deck.html?v=shell-1&show");
   });
 
   it("does not restart when the editor selection follows the show", () => {
@@ -82,6 +82,40 @@ describe("Presenter", () => {
     fromFrame("not an object");
     expect(useApp.getState().presenting).toBe(true);
     expect(useApp.getState().selected).toBe("outro");
+  });
+
+  it("keeps the ink on the slide as it is zoomed and panned, ignoring nonsense", () => {
+    render(<Presenter />);
+    const zoom = () => screen.getByTestId("annotation-zoom").style.transform;
+    expect(zoom()).toBe("translate(0px, 0px) scale(1)");
+    fromFrame({ type: "slop:zoom", x: -100, y: -50, k: 2 });
+    expect(zoom()).toBe("translate(-100px, -50px) scale(2)");
+    fromFrame({ type: "slop:zoom", x: "a", y: 0, k: 1 });
+    fromFrame({ type: "slop:zoom", x: 0, y: 0, k: 1 }, window);
+    expect(zoom()).toBe("translate(-100px, -50px) scale(2)");
+  });
+
+  it("0 fits the slide to the screen again, from the app too", () => {
+    render(<Presenter />);
+    const post = vi.spyOn(frame().contentWindow!, "postMessage");
+    fireEvent.keyDown(document.body, { key: "0" });
+    expect(post).toHaveBeenCalledWith({ type: "slop:camera", home: true }, "*");
+    expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:go" }), "*");
+  });
+
+  it("offers to fit the slide again once it is zoomed or panned", () => {
+    render(<Presenter />);
+    const recenter = () => screen.queryByTitle(/fit to the screen/);
+    expect(recenter()).toBeNull();
+    fromFrame({ type: "slop:zoom", x: 10, y: 0, k: 1 });
+    expect(recenter()!.textContent).toBe("100%");
+    fromFrame({ type: "slop:zoom", x: -100, y: -50, k: 2 });
+    expect(recenter()!.textContent).toBe("200%");
+    const post = vi.spyOn(frame().contentWindow!, "postMessage");
+    fireEvent.click(recenter()!);
+    expect(post).toHaveBeenCalledWith({ type: "slop:camera", home: true }, "*");
+    fromFrame({ type: "slop:zoom", x: 0, y: 0, k: 1 });
+    expect(recenter()).toBeNull();
   });
 
   it("stops listening after the show", () => {

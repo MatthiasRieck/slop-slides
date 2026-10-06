@@ -57,13 +57,20 @@ export function browserPreview(): Plugin {
         }
         if (file.endsWith(".html")) {
           res.setHeader("content-type", "text/html; charset=utf-8");
-          // Like src-tauri/src/protocol.rs: `?edit` adds the slide editor.
-          if (url.searchParams.has("edit")) {
-            const editor = fs.readFileSync(new URL("../src-tauri/assets/editor.js", import.meta.url), "utf8");
+          // Like src-tauri/src/protocol.rs: `?pan` and `?show` add the pasteboard, `?edit` the
+          // slide editor on top of it.
+          const { searchParams: q } = url;
+          const names = [
+            ...(q.has("pan") || q.has("show") || q.has("edit") ? ["pasteboard.js"] : []),
+            ...(q.has("edit") ? ["editor.js"] : []),
+          ];
+          if (names.length > 0) {
+            const scripts = names
+              .map((name) => `<script>\n${fs.readFileSync(new URL(`../src-tauri/assets/${name}`, import.meta.url), "utf8")}</script>\n`)
+              .join("");
             const html = fs.readFileSync(file, "utf8");
             const at = html.toLowerCase().lastIndexOf("</body");
-            const script = `<script>\n${editor}</script>\n`;
-            return res.end(at < 0 ? html + script : html.slice(0, at) + script + html.slice(at));
+            return res.end(at < 0 ? html + scripts : html.slice(0, at) + scripts + html.slice(at));
           }
         }
         fs.createReadStream(file).pipe(res);

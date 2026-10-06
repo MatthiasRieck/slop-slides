@@ -548,6 +548,17 @@ describe("slide editor", () => {
       expect(views(e).at(-1)!.k).toBeGreaterThan(1);
     });
 
+    it("zooms with a mouse wheel in WebKit, which reports notches as fractions of a line", () => {
+      const e = editor();
+      // A slow notch is a tenth of a 40px line; a fast spin, several tenths.
+      wheel(e, { deltaY: -4.000244140625, clientX: 0, clientY: 0 }, { wheelDeltaY: 12 });
+      expect(views(e).at(-1)!.k).toBeCloseTo(Math.exp(4.000244140625 * 0.005), 5);
+      wheel(e, { deltaY: 12.000732421875, clientX: 0, clientY: 0 }, { wheelDeltaY: -36 });
+      expect(views(e).at(-1)!.k).toBeCloseTo(Math.exp(-8.00048828125 * 0.005), 5);
+      expect(views(e).at(-1)!.x).toBeCloseTo(0, 5);
+      expect(e.$(".deck").style.transform).toContain("translate(0px,0px)");
+    });
+
     it("pans when swiping on a trackpad, without limit", () => {
       const e = editor();
       const event = wheel(e, { deltaX: 30, deltaY: 100 });

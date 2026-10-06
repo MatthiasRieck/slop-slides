@@ -11,10 +11,19 @@
    sends { type: "slop:canvas", color, accent }: the color of the panel around the slide and its
    accent color, which the editor uses to dim what lies outside the slide and mark edit mode.
 
-   The slide editor (editor.js) runs after this and builds on window.slopPasteboard. */
+   The slide editor (editor.js) runs after this and builds on window.slopPasteboard.
+
+   With ?show, the presenter plays the whole deck and this zooms and pans the slide being shown
+   instead: the view starts with the slide fit to the window, as the player has it, and returns
+   there whenever the show moves to another slide. Clicks and Space stay the player's, so only the
+   middle button and trackpad swipes pan, and nothing is drawn around the slide. The view is
+   reported as { type: "slop:zoom", x, y, k }: the transform (translate, then scale around the
+   top-left corner) that puts what is drawn over the fitted slide onto the zoomed one. */
 (function () {
   var slide = document.querySelector(".deck > .slide.active");
   if (!slide || window.parent === window) return;
+  var params = new URLSearchParams(location.search);
+  var show = params.has("show");
 
   var STAGE_W = 1920;
   var STAGE_H = 1080;
@@ -24,12 +33,12 @@
   var DRAG_THRESHOLD = 3;
   // Wheel events closer together than this belong to one gesture (a swipe and its momentum).
   var WHEEL_GESTURE_MS = 150;
-  var editor = new URLSearchParams(location.search).has("edit");
+  var editor = params.has("edit");
 
   var deck = slide.parentElement;
   var root = document.documentElement;
   // The page is transparent around the slide, so keep whatever the deck painted behind it.
-  if (getComputedStyle(deck).backgroundColor === "rgba(0, 0, 0, 0)") {
+  if (!show && getComputedStyle(deck).backgroundColor === "rgba(0, 0, 0, 0)") {
     var behind = [document.body, root]
       .map(function (el) {
         return getComputedStyle(el).backgroundColor;
@@ -39,17 +48,19 @@
       })[0];
     deck.style.backgroundColor = behind || "#000";
   }
-  var style = document.createElement("style");
-  style.textContent =
-    "html, body { background: transparent !important; }" +
-    "[data-slop-frame] { position: fixed; z-index: 2147483645; pointer-events: none; box-sizing: border-box;" +
-    " box-shadow: 0 20px 50px -24px rgba(0, 0, 0, 0.45); outline: 1px solid var(--slop-border, rgba(0, 0, 0, 0.1)); }";
-  document.head.appendChild(style);
-
-  // Outlines the slide's edge; the editor also dims everything outside it.
-  var frame = document.createElement("div");
-  frame.setAttribute("data-slop-frame", "");
-  document.body.appendChild(frame);
+  // Outlines the slide's edge; the editor also dims everything outside it. A show has none.
+  var frame = null;
+  if (!show) {
+    var style = document.createElement("style");
+    style.textContent =
+      "html, body { background: transparent !important; }" +
+      "[data-slop-frame] { position: fixed; z-index: 2147483645; pointer-events: none; box-sizing: border-box;" +
+      " box-shadow: 0 20px 50px -24px rgba(0, 0, 0, 0.45); outline: 1px solid var(--slop-border, rgba(0, 0, 0, 0.1)); }";
+    document.head.appendChild(style);
+    frame = document.createElement("div");
+    frame.setAttribute("data-slop-frame", "");
+    document.body.appendChild(frame);
+  }
 
   // The view: pan in px away from the slide being centered, and zoom.
   var cam = { x: 0, y: 0, k: 1 };
@@ -75,9 +86,17 @@
   };
   window.slopPasteboard = api;
 
-  /** Where the slide's top-left corner sits when the view is not panned: it is centered. */
+  /**
+   * Where the slide's top-left corner sits when the view is not panned, and its scale: centered
+   * at full size, or in a show fit to the window like the player has it.
+   */
   function home() {
-    return { x: Math.max(0, (window.innerWidth - STAGE_W) / 2), y: Math.max(0, (window.innerHeight - STAGE_H) / 2) };
+    var w = window.innerWidth;
+    var h = window.innerHeight;
+    var s = show ? Math.min(w / STAGE_W, h / STAGE_H) : 1;
+    var x = (w - STAGE_W * s) / 2;
+    var y = (h - STAGE_H * s) / 2;
+    return show ? { x: x, y: y, s: s } : { x: Math.max(0, x), y: Math.max(0, y), s: 1 };
   }
 
   /** Puts the slide (and its frame) where the view says. */
@@ -85,15 +104,20 @@
     var h = home();
     var x = h.x + cam.x;
     var y = h.y + cam.y;
-    deck.style.transform = "translate(" + x + "px," + y + "px) scale(" + cam.k + ")";
-    frame.style.cssText = "left:" + x + "px;top:" + y + "px;width:" + STAGE_W * cam.k + "px;height:" + STAGE_H * cam.k + "px";
+    var k = h.s * cam.k;
+    deck.style.transform = "translate(" + x + "px," + y + "px) scale(" + k + ")";
+    if (frame) frame.style.cssText = "left:" + x + "px;top:" + y + "px;width:" + STAGE_W * k + "px;height:" + STAGE_H * k + "px";
     listeners.forEach(function (fn) {
       fn();
     });
-    var key = [cam.x, cam.y, cam.k].join(",");
+    // In a show, what is drawn over the fitted slide scales around the window's top-left corner.
+    var view = show
+      ? { type: "slop:zoom", x: cam.x + h.x * (1 - cam.k), y: cam.y + h.y * (1 - cam.k), k: cam.k }
+      : { type: "slop:view", slide: slide.id, x: cam.x, y: cam.y, k: cam.k };
+    var key = [view.x, view.y, view.k].join(",");
     if (key === reportedView) return;
     reportedView = key;
-    window.parent.postMessage({ type: "slop:view", slide: slide.id, x: cam.x, y: cam.y, k: cam.k }, "*");
+    window.parent.postMessage(view, "*");
   }
 
   function setCamera(x, y, k) {
@@ -117,6 +141,17 @@
   // Registered after the player's, which fits the slide to the window on resize.
   window.addEventListener("resize", applyCamera);
 
+  // Each slide of a show starts fit to the window.
+  if (show) {
+    new MutationObserver(function () {
+      var active = deck.querySelector(":scope > .slide.active");
+      if (!active || active === slide) return;
+      slide = active;
+      pan = null;
+      setCamera(0, 0, 1);
+    }).observe(deck, { subtree: true, attributes: true, attributeFilter: ["class"] });
+  }
+
   /** Drags the view along with the pointer. */
   function startPan(event) {
     event.preventDefault();
@@ -132,13 +167,14 @@
   }
 
   // The middle button (pressing the mouse wheel) always pans, even while typing; Space+drag pans
-  // unless typing. Without the editor, the primary button pans too, except on controls.
+  // unless typing. Without the editor, the primary button pans too, except on controls; in a show
+  // it clicks through the slides.
   document.addEventListener("pointerdown", function (event) {
     // A press always ends an earlier pan, even one whose release never arrived.
     pan = null;
     var primary = event.button === 0;
     if (event.button !== 1 && !(primary && spaceDown && !api.busy())) {
-      if (!primary || editor || event.target.closest("a, button, input, select, textarea, video, audio, [contenteditable]")) return;
+      if (!primary || editor || show || event.target.closest("a, button, input, select, textarea, video, audio, [contenteditable]")) return;
     }
     startPan(event);
     event.stopImmediatePropagation();
@@ -169,11 +205,14 @@
    * Whether a wheel event comes from a notched mouse wheel rather than a trackpad. Browsers don't
    * say, so this goes by what the event looks like: a mouse wheel scrolls in whole notches (lines,
    * or wheelDelta in steps of 120) and only vertically, while a trackpad sends a stream of
-   * pixel deltas, usually with some sideways motion.
+   * pixel deltas, usually with some sideways motion. WebKit (the macOS app) reports a notch as an
+   * accelerated fraction of a 40px line, like 4.000244px, with a wheelDelta that is no multiple of
+   * 120; trackpad deltas are whole pixels.
    */
   function fromMouseWheel(event) {
     if (event.deltaMode !== 0) return true;
     if (event.deltaX) return false;
+    if (event.deltaY % 1 !== 0) return true;
     var ticks = event.wheelDeltaY;
     return typeof ticks === "number" && ticks !== 0 && ticks % 120 === 0;
   }
@@ -201,12 +240,12 @@
     { passive: false },
   );
 
-  // Capture phase, so the player never forwards these keys to the app.
+  // Capture phase, so the player never forwards these keys to the app. In a show, Space advances.
   window.addEventListener(
     "keydown",
     function (event) {
       if (api.busy() || event.metaKey || event.ctrlKey || event.altKey) return;
-      if (event.key !== " " && event.key !== "0") return;
+      if ((event.key !== " " || show) && event.key !== "0") return;
       if (event.key === "0") setCamera(0, 0, 1);
       else setPanning(true);
       event.preventDefault();

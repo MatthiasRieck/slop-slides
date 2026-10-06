@@ -6,7 +6,9 @@
 //! With `?pan` in the query, deck.html is served with the pasteboard (`assets/pasteboard.js`)
 //! added, so the stage can pan and zoom around the slide. With `?edit`, it also gets the slide
 //! editor (`assets/editor.js`), which builds on the pasteboard, so the stage can edit text and
-//! move elements in place. Neither ever becomes part of deck.html or an export.
+//! move elements in place. With `?show`, the presenter's whole-deck player gets the pasteboard
+//! too, to zoom and pan the slide being shown. None of them ever becomes part of deck.html or an
+//! export.
 
 use std::borrow::Cow;
 use std::path::Path;
@@ -73,11 +75,12 @@ fn has_param(query: Option<&str>, name: &str) -> bool {
     })
 }
 
-/// The scripts the stage asked for, in the order they run: the editor needs the pasteboard.
+/// The scripts the stage or the show asked for, in the order they run: the editor needs the
+/// pasteboard.
 fn stage_scripts(query: Option<&str>) -> Vec<&'static str> {
     let editor = has_param(query, "edit");
     let mut scripts = Vec::new();
-    if editor || has_param(query, "pan") {
+    if editor || has_param(query, "pan") || has_param(query, "show") {
         scripts.push(PASTEBOARD_JS);
     }
     if editor {
@@ -160,6 +163,8 @@ mod tests {
         );
         assert_eq!(stage_scripts(Some("edit&pan")), [PASTEBOARD_JS, EDITOR_JS]);
         assert_eq!(stage_scripts(Some("embed&slide=a&pan")), [PASTEBOARD_JS]);
+        assert_eq!(stage_scripts(Some("v=1&show")), [PASTEBOARD_JS]);
+        assert!(stage_scripts(Some("v=1&shown")).is_empty());
         assert_eq!(stage_scripts(Some("pan=1")), [PASTEBOARD_JS]);
         assert!(stage_scripts(Some("embed&slide=edit&static")).is_empty());
         assert!(stage_scripts(Some("embed&slide=pan")).is_empty());

@@ -1,4 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Maximize } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { deckFileUrl } from "../lib/utils";
@@ -8,7 +9,9 @@ import { AnnotationLayer, PresenterToolbar, useAnnotations } from "./PresenterTo
 /**
  * Full-screen slideshow. Plays deck.html with its own embedded player (the same thing
  * anyone you share the file with sees), starting at the selected slide. On top sit the
- * presenter's tools: laser pointer, pen, highlighter and eraser.
+ * presenter's tools: laser pointer, pen, highlighter and eraser. With `show`, the backend adds
+ * the pasteboard (src-tauri/assets/pasteboard.js), so the slide can be zoomed with the mouse
+ * wheel or a pinch and panned with a swipe or the middle button; 0 fits it again.
  */
 export function Presenter() {
   const deck = useApp((s) => s.deck);
@@ -20,6 +23,9 @@ export function Presenter() {
   const annotations = useAnnotations(slideKey);
   const handleKeyRef = useRef(annotations.handleKey);
   handleKeyRef.current = annotations.handleKey;
+  // How the slide is zoomed and panned; the ink goes along with it.
+  const [zoom, setZoom] = useState({ x: 0, y: 0, k: 1 });
+  const moved = !(zoom.x === 0 && zoom.y === 0 && zoom.k === 1);
 
   useEffect(() => {
     const window_ = getCurrentWindow();
@@ -30,6 +36,10 @@ export function Presenter() {
       if (handleKeyRef.current(key, mod)) return true;
       if (key === "Escape") {
         exit();
+        return true;
+      }
+      if (key === "0" && !mod) {
+        fitSlide(frameRef.current);
         return true;
       }
       return false;
@@ -47,6 +57,10 @@ export function Presenter() {
     const onMessage = (event: MessageEvent) => {
       if (event.source !== frameRef.current?.contentWindow) return;
       if (event.data?.type === "slop:key") handle(String(event.data.key), Boolean(event.data.mod));
+      if (event.data?.type === "slop:zoom") {
+        const { x, y, k } = event.data;
+        if ([x, y, k].every(Number.isFinite)) setZoom({ x, y, k });
+      }
       if (event.data?.type === "slop:slide") {
         if (typeof event.data.index === "number") setSlideKey(String(event.data.index));
         // Keep the editor's selection in step so leaving the show lands on the same slide.
@@ -69,13 +83,37 @@ export function Presenter() {
       <iframe
         ref={frameRef}
         title="Presentation"
-        src={`${deckFileUrl(deck.id, "deck.html", `v=${deck.shellHash}`)}${hash}`}
+        src={`${deckFileUrl(deck.id, "deck.html", `v=${deck.shellHash}&show`)}${hash}`}
         sandbox="allow-scripts"
         onLoad={(event) => event.currentTarget.focus()}
         className="size-full border-0"
       />
-      <AnnotationLayer annotations={annotations} />
+      <div
+        data-testid="annotation-zoom"
+        className="pointer-events-none absolute inset-0 origin-top-left"
+        style={{ transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.k})` }}
+      >
+        <AnnotationLayer annotations={annotations} />
+      </div>
+      {moved && (
+        <button
+          type="button"
+          title="Back to the slide, fit to the screen (0)"
+          // Keep keyboard focus where it was, so Space still advances the slide.
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => fitSlide(frameRef.current)}
+          className="absolute right-4 bottom-4 z-10 flex items-center gap-1.5 rounded-xl border border-white/10 bg-neutral-900/85 px-2.5 py-1.5 text-xs text-white/80 tabular-nums shadow-lg backdrop-blur hover:text-white [&_svg]:size-3.5"
+        >
+          <Maximize />
+          {Math.round(zoom.k * 100)}%
+        </button>
+      )}
       <PresenterToolbar annotations={annotations} onExit={() => useApp.getState().setPresenting(false)} />
     </div>
   );
+}
+
+/** Asks the show's pasteboard to fit the slide to the screen again. */
+function fitSlide(frame: HTMLIFrameElement | null) {
+  frame?.contentWindow?.postMessage({ type: "slop:camera", home: true }, "*");
 }

@@ -62,7 +62,8 @@ export function Stage() {
 
   return (
     <div className="flex h-full flex-col bg-canvas">
-      <div ref={areaRef} className="relative flex min-h-0 flex-1 items-center justify-center p-8">
+      {/* Clips the ink, which zooms past the slide along with the pasteboard, so it stays off the bar below. */}
+      <div ref={areaRef} data-testid="stage-area" className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-8">
         {slide && editing && (
           <span className="pointer-events-none absolute top-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full bg-primary px-2.5 py-0.5 text-xs font-medium text-primary-foreground shadow-sm [&_svg]:size-3">
             <Pencil />

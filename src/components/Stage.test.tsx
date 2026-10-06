@@ -290,7 +290,7 @@ describe("Stage", () => {
       expect(editing()).toBe(true);
       expect(useApp.getState().editing).toBe(true);
       const sources = [...container.querySelectorAll("iframe")].map((f) => f.getAttribute("src"));
-      expect(sources.some((src) => src?.includes("&static&edit=0"))).toBe(true);
+      expect(sources.some((src) => src?.includes("&static&pan&edit=0"))).toBe(true);
       fireEvent.click(editButton());
       expect(useApp.getState().editing).toBe(false);
     });
@@ -312,7 +312,8 @@ describe("Stage", () => {
       expect(screen.queryByText("Editing")).toBeNull();
       fireEvent.click(editButton());
       expect(slide().hasAttribute("data-editing")).toBe(true);
-      expect(slide().className).toContain("ring-primary");
+      // The ring around the slide is drawn by the preview, so it pans and zooms with the slide.
+      expect(slide().className).not.toContain("ring");
       expect(screen.getByText("Editing")).toBeTruthy();
     });
 
@@ -390,27 +391,31 @@ describe("Stage", () => {
       expect(undo).not.toHaveBeenCalled();
     });
 
-    it("keeps the slide at its size in edit mode and fills the area around it, and sends the panel color", () => {
+    it("keeps the slide at its size on a pasteboard filling the area, in view and edit mode, and sends the panel colors", () => {
       const { container } = render(<Stage />);
       const slideBox = () => container.querySelector<HTMLElement>("[data-sketch-target]")!;
       expect(slideBox().style.width).toBe("960px");
-      expect(slideBox().className).toContain("overflow-hidden");
+      expect(slideBox().className).not.toContain("overflow-hidden");
+      const viewer = stageFrame(container);
+      expect(viewer.getAttribute("src")).toContain("&pan");
+      expect(viewer.getAttribute("src")).not.toContain("edit=");
+      // The 960x540 area plus its 32px padding, at the slide's 0.5 scale.
+      expect(viewer.style.width).toBe("2048px");
+      expect(viewer.style.height).toBe("1208px");
+      expect(viewer.style.left).toBe("-32px");
+      expect(viewer.style.top).toBe("-32px");
+      const viewPost = vi.spyOn(viewer.contentWindow!, "postMessage");
+      fireEvent.load(viewer);
+      const colors = { type: "slop:canvas", color: expect.any(String), accent: expect.any(String), border: expect.any(String) };
+      expect(viewPost).toHaveBeenCalledWith(colors, "*");
       fireEvent.click(editButton());
       expect(slideBox().style.width).toBe("960px");
-      expect(slideBox().className).not.toContain("overflow-hidden");
-      expect(slideBox().className).not.toContain("transition-[width]");
-      const frames = container.querySelectorAll("iframe");
-      expect(frames[0]!.style.width).toBe("1920px");
-      const frame = frames[frames.length - 1]!;
+      const frame = [...container.querySelectorAll("iframe")].at(-1)!;
       expect(frame.getAttribute("src")).toContain("edit=");
-      // The 960x540 area plus its 32px padding, at the slide's 0.5 scale.
       expect(frame.style.width).toBe("2048px");
-      expect(frame.style.height).toBe("1208px");
-      expect(frame.style.left).toBe("-32px");
-      expect(frame.style.top).toBe("-32px");
       const post = vi.spyOn(frame.contentWindow!, "postMessage");
       fireEvent.load(frame);
-      expect(post).toHaveBeenCalledWith({ type: "slop:edit-canvas", color: expect.any(String) }, "*");
+      expect(post).toHaveBeenCalledWith(colors, "*");
       fireEvent.click(editButton());
       expect(slideBox().style.width).toBe("960px");
     });
@@ -429,39 +434,78 @@ describe("Stage", () => {
         const { frame } = enterEditing();
         fireEvent.load(frame);
         expect(resetButton()).toBeNull();
-        fromFrame(frame, { type: "slop:edit-view", slide: "intro", x: 0, y: 0, k: 1 });
+        fromFrame(frame, { type: "slop:view", slide: "intro", x: 0, y: 0, k: 1 });
         expect(resetButton()).toBeNull();
-        fromFrame(frame, { type: "slop:edit-view", slide: "intro", x: -400, y: 120, k: 0.5 });
+        fromFrame(frame, { type: "slop:view", slide: "intro", x: -400, y: 120, k: 0.5 });
         const reset = resetButton()!;
         expect(reset.textContent).toBe("50%");
         const post = vi.spyOn(frame.contentWindow!, "postMessage");
         fireEvent.click(reset);
-        expect(post).toHaveBeenCalledWith({ type: "slop:edit-camera", home: true }, "*");
-        fromFrame(frame, { type: "slop:edit-view", slide: "intro", x: 0, y: 0, k: 1 });
+        expect(post).toHaveBeenCalledWith({ type: "slop:camera", home: true }, "*");
+        fromFrame(frame, { type: "slop:view", slide: "intro", x: 0, y: 0, k: 1 });
         expect(resetButton()).toBeNull();
       });
 
-      it("ignores views from other slides or windows, and forgets them leaving edit mode", () => {
+      it("ignores views from other slides or windows", () => {
         const { frame } = enterEditing();
-        fromFrame(frame, { type: "slop:edit-view", slide: "other", x: 5, y: 5, k: 2 });
-        fromFrame(null, { type: "slop:edit-view", slide: "intro", x: 5, y: 5, k: 2 });
+        fromFrame(frame, { type: "slop:view", slide: "other", x: 5, y: 5, k: 2 });
+        fromFrame(null, { type: "slop:view", slide: "intro", x: 5, y: 5, k: 2 });
+        fromFrame(frame, { type: "slop:view", slide: "intro", x: "a", y: 5, k: 2 });
         expect(resetButton()).toBeNull();
-        fromFrame(frame, { type: "slop:edit-view", slide: "intro", x: 5, y: 5, k: 2 });
+        fromFrame(frame, { type: "slop:view", slide: "intro", x: 5, y: 5, k: 2 });
         expect(resetButton()).not.toBeNull();
+      });
+
+      it("pans and zooms in view mode too, and keeps the view entering and leaving edit mode", () => {
+        const { container } = render(<Stage />);
+        const viewer = stageFrame(container);
+        fireEvent.load(viewer);
+        fromFrame(viewer, { type: "slop:view", slide: "intro", x: 40, y: -20, k: 2 });
+        expect(resetButton()!.textContent).toBe("200%");
+        const viewPost = vi.spyOn(viewer.contentWindow!, "postMessage");
+        fireEvent.click(resetButton()!);
+        expect(viewPost).toHaveBeenCalledWith({ type: "slop:camera", home: true }, "*");
         fireEvent.click(editButton());
-        expect(resetButton()).toBeNull();
+        expect(resetButton()!.textContent).toBe("200%");
+        const editor = [...container.querySelectorAll("iframe")].at(-1)!;
+        const post = vi.spyOn(editor.contentWindow!, "postMessage");
+        fireEvent.load(editor);
+        expect(post).toHaveBeenCalledWith({ type: "slop:camera", x: 40, y: -20, k: 2 }, "*");
         fireEvent.click(editButton());
+        expect(resetButton()!.textContent).toBe("200%");
+      });
+
+      it("starts each slide centered at full size", () => {
+        const { container } = render(<Stage />);
+        fromFrame(stageFrame(container), { type: "slop:view", slide: "intro", x: 40, y: -20, k: 2 });
+        expect(resetButton()).not.toBeNull();
+        act(() => useApp.getState().select("outro"));
         expect(resetButton()).toBeNull();
+        const post = vi.spyOn(stageFrame(container).contentWindow!, "postMessage");
+        fireEvent.load(stageFrame(container));
+        expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:camera" }), "*");
+        act(() => useApp.getState().select("intro"));
+        expect(resetButton()).toBeNull();
+      });
+
+      it("moves the ink with the slide as the view pans and zooms", () => {
+        const { container } = render(<Stage />);
+        const ink = () => screen.getByTestId("annotation-view");
+        expect(ink().style.transform).toBe("");
+        // Slide pixels on a 960px wide slide: half a CSS px each.
+        fromFrame(stageFrame(container), { type: "slop:view", slide: "intro", x: 40, y: -20, k: 2 });
+        expect(ink().style.transform).toBe("translate(20px, -10px) scale(2)");
+        expect(ink().contains(screen.getByTestId("annotation-layer"))).toBe(true);
       });
 
       it("puts the view back when the slide reloads after an edit, but not for a slide that was never moved", () => {
         const { container, frame } = enterEditing();
         const post = vi.spyOn(frame.contentWindow!, "postMessage");
         fireEvent.load(frame);
-        expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-camera" }), "*");
-        fromFrame(frame, { type: "slop:edit-view", slide: "intro", x: -400, y: 120, k: 0.5 });
+        expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:camera" }), "*");
+        fromFrame(frame, { type: "slop:view", slide: "intro", x: -400, y: 120, k: 0.5 });
         fireEvent.load(container.querySelectorAll("iframe")[container.querySelectorAll("iframe").length - 1]!);
-        expect(post).toHaveBeenCalledWith({ type: "slop:edit-camera", x: -400, y: 120, k: 0.5 }, "*");
+        expect(post).toHaveBeenCalledWith({ type: "slop:camera", x: -400, y: 120, k: 0.5 }, "*");
       });
 
       it("brings the slide back to the middle before a tidy screenshot", () => {
@@ -470,7 +514,7 @@ describe("Stage", () => {
         fireEvent.load(frame);
         post.mockClear();
         fireEvent.click(screen.getByRole("button", { name: /Tidy layout/ }));
-        expect(post).toHaveBeenCalledWith({ type: "slop:edit-camera", home: true }, "*");
+        expect(post).toHaveBeenCalledWith({ type: "slop:camera", home: true }, "*");
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-select", path: null, quiet: true }, "*");
       });
     });

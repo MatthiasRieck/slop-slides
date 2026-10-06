@@ -98,11 +98,12 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
   const active = tool !== "pointer";
 
   // Ink is stored in fractions of the layer but drawn in pixels, so strokes keep their width.
+  // Those are the layer's own pixels, which the stage may zoom along with the slide.
   useLayoutEffect(() => {
     const el = layerRef.current!;
     const measure = () => {
       const rect = el.getBoundingClientRect();
-      setSize({ width: rect.width, height: rect.height });
+      setSize({ width: el.offsetWidth || rect.width, height: el.offsetHeight || rect.height });
     };
     measure();
     const observer = new ResizeObserver(measure);
@@ -133,8 +134,10 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
 
   const onPointerMove = (event: ReactPointerEvent) => {
     if (tool === "laser") {
-      const rect = layerRef.current!.getBoundingClientRect();
-      setLaser({ x: event.clientX - rect.left, y: event.clientY - rect.top });
+      const el = layerRef.current!;
+      const rect = el.getBoundingClientRect();
+      const zoom = el.offsetWidth ? rect.width / el.offsetWidth : 1;
+      setLaser({ x: (event.clientX - rect.left) / zoom, y: (event.clientY - rect.top) / zoom });
     } else if (tool === "eraser" && event.buttons & 1) {
       eraseUnder(event);
     } else if (draft) {

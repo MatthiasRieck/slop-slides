@@ -1,11 +1,12 @@
 /**
  * The slide editor (src-tauri/assets/editor.js) that the backend adds to the stage's slide
- * preview in edit mode. It runs after the player, in the slide's iframe.
+ * preview in edit mode. It runs after the player and the pasteboard, in the slide's iframe.
  */
 import { JSDOM } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import EDITOR from "../../src-tauri/assets/editor.js?raw";
+import PASTEBOARD from "../../src-tauri/assets/pasteboard.js?raw";
 import RUNTIME from "../../src-tauri/assets/runtime.js?raw";
 
 const DECK = `<!DOCTYPE html><html><head></head><body>
@@ -50,6 +51,7 @@ function editor({ slide = "intro", framed = true } = {}) {
   });
   doms.push(dom);
   dom.window.eval(RUNTIME);
+  dom.window.eval(PASTEBOARD);
   dom.window.eval(EDITOR);
   const { window } = dom;
   const doc = window.document;
@@ -460,7 +462,7 @@ describe("slide editor", () => {
 
   describe("pasteboard around the slide", () => {
     const views = (e: ReturnType<typeof editor>) =>
-      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-view") as { slide: string; x: number; y: number; k: number }[];
+      e.posted().filter((m) => (m as { type: string }).type === "slop:view") as { slide: string; x: number; y: number; k: number }[];
     // Wheel events carry their time so tests can say which belong to one gesture; by default
     // each call starts a new one.
     let clock = 0;
@@ -495,10 +497,27 @@ describe("slide editor", () => {
       expect(css).toMatch(/html, body \{ background: transparent !important/);
     });
 
-    it("dims what lies outside the slide in the color of the panel the app reports", () => {
+    it("dims what lies outside the slide in the panel's color, and rings it in the app's accent", () => {
       const e = editor();
-      e.fromParent({ type: "slop:edit-canvas", color: "rgb(1, 2, 3)" });
+      e.fromParent({ type: "slop:canvas", color: "rgb(1, 2, 3)", accent: "rgb(4, 5, 6)" });
       expect(e.doc.documentElement.style.getPropertyValue("--slop-canvas")).toBe("rgb(1, 2, 3)");
+      expect(e.doc.documentElement.style.getPropertyValue("--slop-accent")).toBe("rgb(4, 5, 6)");
+      const css = [...e.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
+      expect(css).toMatch(/\[data-slop-frame\] \{ outline: 2px solid var\(--slop-accent[^}]*outline-offset: 4px[^}]*var\(--slop-canvas/);
+      // One frame, which the pasteboard moves with the slide.
+      expect(e.doc.querySelectorAll("[data-slop-frame]")).toHaveLength(1);
+      e.fromParent({ type: "slop:camera", x: 30, y: 40, k: 0.5 });
+      expect(e.$("[data-slop-frame]").style.cssText).toContain("left: 30px");
+      expect(e.$("[data-slop-frame]").style.cssText).toContain("width: 960px");
+    });
+
+    it("does nothing without the pasteboard", () => {
+      const dom = new JSDOM(DECK, { url: "https://example.test/deck.html?embed&slide=intro&static&edit=0", runScripts: "outside-only" });
+      doms.push(dom);
+      Object.defineProperty(dom.window, "parent", { value: { postMessage() {} }, configurable: true });
+      dom.window.eval(RUNTIME);
+      dom.window.eval(EDITOR);
+      expect(dom.window.document.querySelector("[data-slop-ui]")).toBeNull();
     });
 
     it("lets an element that sits outside the slide be picked and dragged back in", () => {
@@ -534,7 +553,7 @@ describe("slide editor", () => {
       const event = wheel(e, { deltaX: 30, deltaY: 100 });
       expect(event.defaultPrevented).toBe(true);
       expect(e.$(".deck").style.transform).toBe("translate(-30px,-100px) scale(1)");
-      expect(views(e).at(-1)).toEqual({ type: "slop:edit-view", slide: "intro", x: -30, y: -100, k: 1 });
+      expect(views(e).at(-1)).toEqual({ type: "slop:view", slide: "intro", x: -30, y: -100, k: 1 });
       // Purely vertical swipes pan too; Chromium reports their wheelDelta as 3× the pixels.
       wheel(e, { deltaY: 7 }, { wheelDeltaY: -21 });
       expect(e.$(".deck").style.transform).toBe("translate(-30px,-107px) scale(1)");
@@ -659,18 +678,18 @@ describe("slide editor", () => {
       const zero = e.key("0");
       expect(zero.defaultPrevented).toBe(true);
       expect(e.$(".deck").style.transform).toBe("translate(0px,0px) scale(1)");
-      expect(views(e).at(-1)).toEqual({ type: "slop:edit-view", slide: "intro", x: 0, y: 0, k: 1 });
+      expect(views(e).at(-1)).toEqual({ type: "slop:view", slide: "intro", x: 0, y: 0, k: 1 });
       wheel(e, { deltaX: 100 });
-      e.fromParent({ type: "slop:edit-camera", home: true });
+      e.fromParent({ type: "slop:camera", home: true });
       expect(e.$(".deck").style.transform).toBe("translate(0px,0px) scale(1)");
     });
 
     it("restores a view the app sends back after a reload, ignoring nonsense", () => {
       const e = editor();
-      e.fromParent({ type: "slop:edit-camera", x: -200, y: 50, k: 0.5 });
+      e.fromParent({ type: "slop:camera", x: -200, y: 50, k: 0.5 });
       expect(e.$(".deck").style.transform).toBe("translate(-200px,50px) scale(0.5)");
       expect(e.$("[data-slop-frame]").style.cssText).toContain("width: 960px");
-      e.fromParent({ type: "slop:edit-camera", x: "a", y: 0, k: 1 });
+      e.fromParent({ type: "slop:camera", x: "a", y: 0, k: 1 });
       expect(e.$(".deck").style.transform).toBe("translate(-200px,50px) scale(0.5)");
     });
 
@@ -683,7 +702,7 @@ describe("slide editor", () => {
 
     it("reports overflow in slide pixels whatever the zoom", async () => {
       const e = editor();
-      e.fromParent({ type: "slop:edit-camera", x: 0, y: 0, k: 0.5 });
+      e.fromParent({ type: "slop:camera", x: 0, y: 0, k: 0.5 });
       e.$("#intro").getBoundingClientRect = () => ({ left: 0, top: 0, right: 960, bottom: 540, width: 960, height: 540 }) as DOMRect;
       Object.defineProperty(e.$("#intro"), "offsetWidth", { value: 1920, configurable: true });
       e.$("h1").getBoundingClientRect = () => ({ left: 50, top: 500, right: 300, bottom: 640, width: 250, height: 140 }) as DOMRect;

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { Slide } from "../lib/api";
-import { isEditUrl, slideUrl } from "../lib/utils";
+import { isPasteboardUrl, slideUrl } from "../lib/utils";
 import { useApp } from "../store";
 
 const STAGE_W = 1920;
@@ -16,7 +16,10 @@ interface SlideFrameProps {
   thumbnail?: boolean;
   /** Loads the slide editor (final animation frame, editable); changing the key reloads it. */
   editKey?: string;
-  /** The space (CSS px) the editor's preview may fill around the centered slide, as a pasteboard. */
+  /**
+   * The space (CSS px) the preview fills around the centered slide, as a pasteboard to pan and
+   * zoom on. The pasteboard draws the slide's frame, which moves with it.
+   */
   arena?: { width: number; height: number };
   className?: string;
   onFrameReady?: (frame: HTMLIFrameElement) => void;
@@ -28,7 +31,7 @@ interface SlideFrameProps {
  * current one and swaps in once painted, so edits stream in without white flashes.
  */
 export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena, className, onFrameReady }: SlideFrameProps) {
-  const src = slideUrl(deckId, slideId, version, thumbnail || editKey !== undefined, editKey);
+  const src = slideUrl(deckId, slideId, version, thumbnail || editKey !== undefined, editKey, arena !== undefined && !thumbnail);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0);
@@ -45,18 +48,24 @@ export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena
     return () => observer.disconnect();
   }, []);
 
+  // Until the first layout nothing is shown, so there is nothing to keep while a new version
+  // loads: the preview starts with whatever is current then (e.g. once the stage's arena is known).
+  const [laidOut, setLaidOut] = useState(false);
+  if (!laidOut && src !== shown) setShown(src);
+  if (!laidOut && scale > 0) setLaidOut(true);
+
   useEffect(() => {
-    if (src !== shown) setPending(src);
-  }, [src, shown]);
+    if (laidOut && src !== shown) setPending(src);
+  }, [src, shown, laidOut]);
 
   const frames = pending ? [shown, pending] : [shown];
-  // Only the editor's preview fills the arena, with the slide in its middle. A plain preview given
-  // the same room would scale the slide up to fill it, which shows while the editor loads.
+  // Only a pasteboard preview fills the arena, with the slide in its middle. A plain preview given
+  // the same room would scale the slide up to fill it.
   const slideW = STAGE_W * scale;
   const slideH = STAGE_H * scale;
   const sizeFor = (url: string) =>
-    isEditUrl(url) && arena ? { w: Math.max(arena.width, slideW), h: Math.max(arena.height, slideH) } : { w: slideW, h: slideH };
-  const bleeds = frames.some(isEditUrl);
+    isPasteboardUrl(url) && arena ? { w: Math.max(arena.width, slideW), h: Math.max(arena.height, slideH) } : { w: slideW, h: slideH };
+  const bleeds = frames.some(isPasteboardUrl);
 
   return (
     <div
@@ -66,7 +75,8 @@ export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena
         position: "relative",
         aspectRatio: "16 / 9",
         overflow: bleeds ? "visible" : "hidden",
-        background: "#000",
+        // The pasteboard paints the slide wherever it is panned to, and nothing around it.
+        background: bleeds ? "transparent" : "#000",
       }}
     >
       {scale > 0 &&

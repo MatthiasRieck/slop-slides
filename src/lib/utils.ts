@@ -19,17 +19,18 @@ export function deckFileUrl(deckId: string, path: string, query?: string): strin
 }
 
 /**
- * One slide of a deck rendered by the embedded player, for editor previews. With `edit`
- * (any value; changing it reloads the slide), the backend adds the slide editor.
+ * One slide of a deck rendered by the embedded player, for editor previews. With `pan`, the
+ * backend adds the pasteboard to pan and zoom around the slide; with `edit` (any value; changing
+ * it reloads the slide), the slide editor, which comes with the pasteboard.
  */
-export function slideUrl(deckId: string, slideId: string, version: string, still = false, edit?: string): string {
+export function slideUrl(deckId: string, slideId: string, version: string, still = false, edit?: string, pan = false): string {
   const editing = edit === undefined ? "" : `&edit=${encodeURIComponent(edit)}`;
-  const query = `embed&slide=${encodeURIComponent(slideId)}&v=${version}${still ? "&static" : ""}${editing}`;
+  const query = `embed&slide=${encodeURIComponent(slideId)}&v=${version}${still ? "&static" : ""}${pan ? "&pan" : ""}${editing}`;
   return deckFileUrl(deckId, "deck.html", query);
 }
 
-/** Whether `url` is a slide preview with the editor (see {@link slideUrl}). */
-export const isEditUrl = (url: string) => url.includes("&edit=");
+/** Whether `url` is a slide preview on the pasteboard, with or without the editor (see {@link slideUrl}). */
+export const isPasteboardUrl = (url: string) => /&(pan(&|$)|edit=)/.test(url);
 
 export function relativeTime(ms: number): string {
   const diff = Date.now() - ms;

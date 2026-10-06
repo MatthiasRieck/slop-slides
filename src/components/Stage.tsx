@@ -1,12 +1,15 @@
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, Pencil, Redo2, Sparkles, Undo2, Wand2, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, Maximize, Pencil, Redo2, Sparkles, Undo2, Wand2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { SKETCH_TARGET_ATTR, useApp } from "../store";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { SketchToolbar } from "./SketchToolbar";
-import { EDIT_FIT, SlideFrame, useSlideVersion } from "./SlideFrame";
+import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import type { Slide } from "../lib/api";
 import { cn } from "../lib/utils";
+
+/** The stage area's padding (Tailwind p-8), which the editor's pasteboard covers too. */
+const AREA_PADDING = 32;
 
 /** The current slide, fit to the available space with letterboxing. */
 export function Stage() {
@@ -21,9 +24,10 @@ export function Stage() {
   const areaRef = useRef<HTMLDivElement>(null);
   const editFrames = useSlideEditing(areaRef);
   const overflow = editFrames.overflow;
-  const [fullWidth, setWidth] = useState(0);
-  // Editing leaves room around the slide, where content that runs past its edge shows.
-  const width = editing ? fullWidth * EDIT_FIT : fullWidth;
+  const view = editFrames.view;
+  const [width, setWidth] = useState(0);
+  // While editing, the preview fills the whole area around the slide: an endless pasteboard.
+  const [arena, setArena] = useState<{ width: number; height: number } | undefined>();
 
   useLayoutEffect(() => {
     const el = areaRef.current;
@@ -32,6 +36,7 @@ export function Stage() {
       if (!entry) return;
       const { width: w, height: h } = entry.contentRect;
       setWidth(Math.max(0, Math.min(w, (h * 16) / 9)));
+      setArena({ width: w + 2 * AREA_PADDING, height: h + 2 * AREA_PADDING });
     });
     observer.observe(el);
     return () => observer.disconnect();
@@ -57,7 +62,7 @@ export function Stage() {
     <div className="flex h-full flex-col bg-canvas">
       <div ref={areaRef} className="relative flex min-h-0 flex-1 items-center justify-center p-8">
         {slide && editing && (
-          <span className="absolute top-2 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-primary px-2.5 py-0.5 text-xs font-medium text-primary-foreground shadow-sm [&_svg]:size-3">
+          <span className="pointer-events-none absolute top-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full bg-primary px-2.5 py-0.5 text-xs font-medium text-primary-foreground shadow-sm [&_svg]:size-3">
             <Pencil />
             Editing
           </span>
@@ -73,7 +78,7 @@ export function Stage() {
               editing && "ring-2 ring-primary ring-offset-4 ring-offset-canvas",
             )}
           >
-            <CurrentSlide deckId={deck.id} slide={slide} editing={editing} canvas={areaRef} onFrameReady={editFrames.onFrameReady} />
+            <CurrentSlide deckId={deck.id} slide={slide} editing={editing} arena={arena} canvas={areaRef} onFrameReady={editFrames.onFrameReady} />
             <AnnotationLayer annotations={annotations} />
           </div>
         ) : (
@@ -131,6 +136,17 @@ export function Stage() {
             </button>
           </div>
           <div className="flex min-w-0 items-center justify-end">
+            {view && (
+              <button
+                type="button"
+                title="Back to the slide, centered at full size (0)"
+                onClick={editFrames.resetView}
+                className="mr-1 flex items-center gap-1 rounded-md px-1.5 py-1 tabular-nums hover:bg-accent hover:text-foreground"
+              >
+                <Maximize className="size-3.5" />
+                {Math.round(view.k * 100)}%
+              </button>
+            )}
             {overflow.length > 0 && (
               <span
                 title={`Runs past the slide or is cut off:\n${overflow.join("\n")}`}
@@ -207,6 +223,7 @@ function CurrentSlide(props: {
   editing: boolean;
   /** The panel around the slide; its color dims what lies outside the slide in the editor. */
   canvas: React.RefObject<HTMLElement | null>;
+  arena?: { width: number; height: number };
   onFrameReady: (frame: HTMLIFrameElement) => void;
 }) {
   const editReload = useApp((s) => s.editReload);
@@ -216,7 +233,7 @@ function CurrentSlide(props: {
       slideId={props.slide.id}
       version={useSlideVersion(props.slide)}
       editKey={props.editing ? String(editReload) : undefined}
-      bleed={props.editing}
+      arena={props.arena}
       onFrameReady={(frame) => {
         if (props.editing && props.canvas.current) {
           const color = getComputedStyle(props.canvas.current.parentElement ?? props.canvas.current).backgroundColor;
@@ -238,6 +255,8 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>) {
   const restore = useRef<{ slide: string; path: number[] } | null>(null);
   const frame = useRef<HTMLIFrameElement | null>(null);
   const [overflow, setOverflow] = useState<{ slide: string; items: string[] } | null>(null);
+  // How the editor has panned and zoomed its pasteboard; kept to put it back after each reload.
+  const [view, setView] = useState<EditView | null>(null);
 
   useEffect(() => {
     const fromStage = (source: MessageEventSource | null) =>
@@ -251,6 +270,8 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>) {
         void useApp.getState().saveSlideEdit(data.slide, data.markup);
       } else if (data?.type === "slop:edit-overflow" && data.slide === selected && Array.isArray(data.items)) {
         setOverflow({ slide: data.slide, items: data.items.map(String) });
+      } else if (data?.type === "slop:edit-view" && data.slide === selected && [data.x, data.y, data.k].every(Number.isFinite)) {
+        setView({ slide: data.slide, x: data.x, y: data.y, k: data.k });
       } else if (data?.type === "slop:key") {
         if (data.mod) runHistoryKey(String(data.key), Boolean(data.shift));
         else if (data.key === "Escape") useApp.getState().setEditing(false);
@@ -272,24 +293,48 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>) {
   const current = useApp((s) => s.selected);
   const editing = useApp((s) => s.editing);
 
+  // Each visit to a slide's editor starts with the slide centered.
+  useEffect(() => {
+    setView(null);
+  }, [current, editing]);
+
+  const shown = editing && view?.slide === current ? view : null;
+  const resetView = () => frame.current?.contentWindow?.postMessage({ type: "slop:edit-camera", home: true }, "*");
+
   return {
     overflow: editing && overflow?.slide === current ? overflow.items : NO_OVERFLOW,
+    view: shown && !(shown.x === 0 && shown.y === 0 && shown.k === 1) ? shown : null,
+    resetView,
     onFrameReady: (loaded: HTMLIFrameElement) => {
       frame.current = loaded;
       const { editing, selected } = useApp.getState();
+      if (!editing) return;
+      if (view?.slide === selected) {
+        loaded.contentWindow?.postMessage({ type: "slop:edit-camera", x: view.x, y: view.y, k: view.k }, "*");
+      }
       const again = restore.current;
-      if (editing && again && again.slide === selected) {
+      if (again && again.slide === selected) {
         loaded.contentWindow?.postMessage({ type: "slop:edit-select", path: again.path }, "*");
       }
     },
+    // Takes the selection, wires and any panning out of the preview, for a screenshot of just the slide.
     clearSelection: () => {
       restore.current = null;
+      resetView();
       frame.current?.contentWindow?.postMessage({ type: "slop:edit-select", path: null, quiet: true }, "*");
     },
   };
 }
 
 const NO_OVERFLOW: string[] = [];
+
+/** The editor's pasteboard: pan in slide pixels and zoom, relative to the slide centered at full size. */
+interface EditView {
+  slide: string;
+  x: number;
+  y: number;
+  k: number;
+}
 
 /** ⌘Z undoes, ⇧⌘Z / ⌘Y redo; true when the key was one of them. */
 function runHistoryKey(key: string, shift: boolean) {

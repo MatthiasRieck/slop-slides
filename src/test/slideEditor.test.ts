@@ -458,15 +458,26 @@ describe("slide editor", () => {
     });
   });
 
-  describe("room around the slide", () => {
+  describe("pasteboard around the slide", () => {
+    const views = (e: ReturnType<typeof editor>) =>
+      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-view") as { slide: string; x: number; y: number; k: number }[];
+    const wheel = (e: ReturnType<typeof editor>, init: WheelEventInit) => {
+      const event = new e.window.WheelEvent("wheel", { cancelable: true, bubbles: true, ...init });
+      e.doc.body.dispatchEvent(event);
+      return event;
+    };
+    const resize = (e: ReturnType<typeof editor>, width: number, height: number) => {
+      Object.defineProperty(e.window, "innerWidth", { value: width, configurable: true });
+      Object.defineProperty(e.window, "innerHeight", { value: height, configurable: true });
+      e.window.dispatchEvent(new e.window.Event("resize"));
+    };
+
     it("centers the slide at full size in a larger preview and stops it clipping", () => {
       const e = editor();
       const deck = e.$(".deck");
-      expect(deck.style.transform).toBe("translate(0px,0px)");
-      Object.defineProperty(e.window, "innerWidth", { value: 2560, configurable: true });
-      Object.defineProperty(e.window, "innerHeight", { value: 1440, configurable: true });
-      e.window.dispatchEvent(new e.window.Event("resize"));
-      expect(deck.style.transform).toBe("translate(320px,180px)");
+      expect(deck.style.transform).toBe("translate(0px,0px) scale(1)");
+      resize(e, 2560, 1440);
+      expect(deck.style.transform).toBe("translate(320px,180px) scale(1)");
       const frame = e.$("[data-slop-frame]");
       expect(frame.style.cssText).toContain("left: 320px");
       expect(frame.style.cssText).toContain("width: 1920px");
@@ -488,6 +499,150 @@ describe("slide editor", () => {
       expect(h1.style.translate).toBe("-300px 0px");
       e.drag(h1, 300, 0);
       expect(h1.hasAttribute("data-moved")).toBe(false);
+    });
+
+    it("pans with scrolling, keeping the slide's markup out of it", () => {
+      const e = editor();
+      const event = wheel(e, { deltaX: 30, deltaY: 100 });
+      expect(event.defaultPrevented).toBe(true);
+      expect(e.$(".deck").style.transform).toBe("translate(-30px,-100px) scale(1)");
+      expect(e.$("[data-slop-frame]").style.cssText).toContain("left: -30px");
+      expect(views(e).at(-1)).toEqual({ type: "slop:edit-view", slide: "intro", x: -30, y: -100, k: 1 });
+      expect(e.commits()).toEqual([]);
+    });
+
+    it("pans without limit, so far-away content can always be reached", () => {
+      const e = editor();
+      for (let i = 0; i < 50; i++) wheel(e, { deltaY: -400 });
+      expect(e.$(".deck").style.transform).toBe("translate(0px,20000px) scale(1)");
+    });
+
+    it("zooms with Ctrl/⌘+scroll (pinch) around the pointer", () => {
+      const e = editor();
+      wheel(e, { ctrlKey: true, deltaY: -60, clientX: 0, clientY: 0 });
+      const zoomed = views(e).at(-1)!;
+      expect(zoomed.k).toBeCloseTo(Math.exp(0.3), 5);
+      // Zooming at the slide's corner leaves that corner where it was.
+      expect(e.$(".deck").style.transform).toContain("translate(0px,0px)");
+      wheel(e, { metaKey: true, deltaY: 60, clientX: 0, clientY: 0 });
+      expect(views(e).at(-1)!.k).toBeCloseTo(1, 5);
+      expect(views(e).at(-1)!.x).toBeCloseTo(0, 5);
+    });
+
+    it("keeps the point under the pointer fixed while zooming", () => {
+      const e = editor();
+      wheel(e, { ctrlKey: true, deltaY: -60, clientX: 1000, clientY: 500 });
+      const { x, y, k } = views(e).at(-1)!;
+      // The slide point that was under the pointer at 1000,500 still is.
+      expect(x + 1000 * k).toBeCloseTo(1000, 5);
+      expect(y + 500 * k).toBeCloseTo(500, 5);
+    });
+
+    it("limits how far it zooms", () => {
+      const e = editor();
+      for (let i = 0; i < 40; i++) wheel(e, { ctrlKey: true, deltaY: -60 });
+      expect(views(e).at(-1)!.k).toBe(8);
+      for (let i = 0; i < 80; i++) wheel(e, { ctrlKey: true, deltaY: 60 });
+      expect(views(e).at(-1)!.k).toBe(0.1);
+    });
+
+    it("moves elements by slide pixels however far the view is zoomed", () => {
+      const e = editor();
+      const h1 = e.$("h1");
+      e.$("#intro").getBoundingClientRect = () => ({ width: 960 }) as DOMRect;
+      Object.defineProperty(e.$("#intro"), "offsetWidth", { value: 1920, configurable: true });
+      e.drag(h1, 100, -50);
+      expect(h1.style.translate).toBe("200px -100px");
+    });
+
+    it("pans by dragging empty space, and deselects", () => {
+      const e = editor();
+      e.down(e.$("h1"));
+      e.up(e.$("h1"));
+      expect(e.selected()).toHaveLength(1);
+      e.down(e.doc.body, 10, 10);
+      e.move(e.doc.body, 60, 40);
+      expect(e.selected()).toEqual([]);
+      expect(e.$(".deck").style.transform).toBe("translate(50px,30px) scale(1)");
+      e.up(e.doc.body, 60, 40);
+      e.move(e.doc.body, 200, 200);
+      expect(e.$(".deck").style.transform).toBe("translate(50px,30px) scale(1)");
+      expect(e.commits()).toEqual([]);
+    });
+
+    it("pans with the middle button or with Space held, without moving the element under the pointer", () => {
+      const e = editor();
+      const h1 = e.$("h1");
+      h1.dispatchEvent(new e.window.PointerEvent("pointerdown", { clientX: 10, clientY: 10, button: 1, bubbles: true, cancelable: true }));
+      e.move(h1, 30, 10);
+      e.up(h1, 30, 10);
+      expect(e.$(".deck").style.transform).toBe("translate(20px,0px) scale(1)");
+      expect(h1.style.translate).toBe("");
+      const space = e.key(" ");
+      expect(space.defaultPrevented).toBe(true);
+      expect(e.doc.documentElement.style.cursor).toBe("grab");
+      e.down(h1, 0, 0);
+      e.move(h1, 5, 5);
+      e.up(h1, 5, 5);
+      expect(e.$(".deck").style.transform).toBe("translate(25px,5px) scale(1)");
+      expect(h1.style.translate).toBe("");
+      e.doc.defaultView!.dispatchEvent(new e.window.KeyboardEvent("keyup", { key: " ", bubbles: true }));
+      expect(e.doc.documentElement.style.cursor).toBe("");
+    });
+
+    it("does not treat Space or 0 as commands while typing", () => {
+      const e = editor();
+      const h1 = e.$("h1");
+      e.down(h1);
+      e.up(h1);
+      e.key("Enter");
+      expect(h1.getAttribute("contenteditable")).toBe("true");
+      wheel(e, { deltaY: 50 });
+      e.key("0");
+      e.key(" ");
+      expect(e.$(".deck").style.transform).toBe("translate(0px,-50px) scale(1)");
+      expect(e.doc.documentElement.style.cursor).toBe("");
+    });
+
+    it("returns to the slide with 0 or when the app asks", () => {
+      const e = editor();
+      wheel(e, { deltaY: 100 });
+      wheel(e, { ctrlKey: true, deltaY: -30 });
+      const zero = e.key("0");
+      expect(zero.defaultPrevented).toBe(true);
+      expect(e.$(".deck").style.transform).toBe("translate(0px,0px) scale(1)");
+      expect(views(e).at(-1)).toEqual({ type: "slop:edit-view", slide: "intro", x: 0, y: 0, k: 1 });
+      wheel(e, { deltaY: 100 });
+      e.fromParent({ type: "slop:edit-camera", home: true });
+      expect(e.$(".deck").style.transform).toBe("translate(0px,0px) scale(1)");
+    });
+
+    it("restores a view the app sends back after a reload, ignoring nonsense", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-camera", x: -200, y: 50, k: 0.5 });
+      expect(e.$(".deck").style.transform).toBe("translate(-200px,50px) scale(0.5)");
+      expect(e.$("[data-slop-frame]").style.cssText).toContain("width: 960px");
+      e.fromParent({ type: "slop:edit-camera", x: "a", y: 0, k: 1 });
+      expect(e.$(".deck").style.transform).toBe("translate(-200px,50px) scale(0.5)");
+    });
+
+    it("keeps the slide centered when the preview resizes, relative to the pan", () => {
+      const e = editor();
+      wheel(e, { deltaX: -40 });
+      resize(e, 2560, 1440);
+      expect(e.$(".deck").style.transform).toBe("translate(360px,180px) scale(1)");
+    });
+
+    it("reports overflow in slide pixels whatever the zoom", async () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-camera", x: 0, y: 0, k: 0.5 });
+      e.$("#intro").getBoundingClientRect = () => ({ left: 0, top: 0, right: 960, bottom: 540, width: 960, height: 540 }) as DOMRect;
+      Object.defineProperty(e.$("#intro"), "offsetWidth", { value: 1920, configurable: true });
+      e.$("h1").getBoundingClientRect = () => ({ left: 50, top: 500, right: 300, bottom: 640, width: 250, height: 140 }) as DOMRect;
+      e.key("Tab");
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      const report = e.posted().filter((m) => (m as { type: string }).type === "slop:edit-overflow").at(-1) as { items: string[] };
+      expect(report.items[0]).toContain("runs past the bottom edge by 200px");
     });
   });
 

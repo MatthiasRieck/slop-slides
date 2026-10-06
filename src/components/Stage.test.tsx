@@ -498,6 +498,15 @@ describe("Stage", () => {
         expect(ink().contains(screen.getByTestId("annotation-layer"))).toBe(true);
       });
 
+      it("keeps zoomed ink inside the stage area, off the bar below", () => {
+        const { container } = render(<Stage />);
+        fromFrame(stageFrame(container), { type: "slop:view", slide: "intro", x: 0, y: 0, k: 8 });
+        const area = screen.getByTestId("stage-area");
+        expect(area.classList).toContain("overflow-hidden");
+        expect(area.contains(screen.getByTestId("annotation-view"))).toBe(true);
+        expect(area.contains(screen.getByRole("button", { name: /Tidy layout/ }))).toBe(false);
+      });
+
       it("puts the view back when the slide reloads after an edit, but not for a slide that was never moved", () => {
         const { container, frame } = enterEditing();
         const post = vi.spyOn(frame.contentWindow!, "postMessage");

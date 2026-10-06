@@ -62,6 +62,7 @@ function editor({ slide = "intro", framed = true } = {}) {
     window,
     doc,
     $,
+    posted: () => posted,
     commits: () => posted.filter((m) => (m as Commit).type === "slop:edit-commit") as Commit[],
     keys: () => posted.filter((m) => (m as { type: string }).type === "slop:key"),
     down: (target: Element, x = 100, y = 100) => pointer("pointerdown", target, x, y),
@@ -454,6 +455,326 @@ describe("slide editor", () => {
       expect(ui.style.display).toBe("none");
       e.key("Escape");
       expect(ui.style.display).toBe("");
+    });
+  });
+
+  describe("pasteboard around the slide", () => {
+    const views = (e: ReturnType<typeof editor>) =>
+      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-view") as { slide: string; x: number; y: number; k: number }[];
+    // Wheel events carry their time so tests can say which belong to one gesture; by default
+    // each call starts a new one.
+    let clock = 0;
+    const wheel = (e: ReturnType<typeof editor>, init: WheelEventInit, extra: { wheelDeltaY?: number; sameGesture?: boolean } = {}) => {
+      clock += extra.sameGesture ? 16 : 1000;
+      const event = new e.window.WheelEvent("wheel", { cancelable: true, bubbles: true, ...init });
+      Object.defineProperty(event, "timeStamp", { value: clock });
+      if (extra.wheelDeltaY !== undefined) Object.defineProperty(event, "wheelDeltaY", { value: extra.wheelDeltaY });
+      e.doc.body.dispatchEvent(event);
+      return event;
+    };
+    /** A mouse wheel turned by whole notches (up is negative), as WebKit and Chromium report it. */
+    const notch = (e: ReturnType<typeof editor>, notches: number, at: { clientX?: number; clientY?: number } = {}) =>
+      wheel(e, { deltaY: notches * 40, ...at }, { wheelDeltaY: -notches * 120 });
+    const resize = (e: ReturnType<typeof editor>, width: number, height: number) => {
+      Object.defineProperty(e.window, "innerWidth", { value: width, configurable: true });
+      Object.defineProperty(e.window, "innerHeight", { value: height, configurable: true });
+      e.window.dispatchEvent(new e.window.Event("resize"));
+    };
+
+    it("centers the slide at full size in a larger preview and stops it clipping", () => {
+      const e = editor();
+      const deck = e.$(".deck");
+      expect(deck.style.transform).toBe("translate(0px,0px) scale(1)");
+      resize(e, 2560, 1440);
+      expect(deck.style.transform).toBe("translate(320px,180px) scale(1)");
+      const frame = e.$("[data-slop-frame]");
+      expect(frame.style.cssText).toContain("left: 320px");
+      expect(frame.style.cssText).toContain("width: 1920px");
+      const css = [...e.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
+      expect(css).toMatch(/\.deck, \.deck > \.slide\.active \{ overflow: visible !important/);
+      expect(css).toMatch(/html, body \{ background: transparent !important/);
+    });
+
+    it("dims what lies outside the slide in the color of the panel the app reports", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-canvas", color: "rgb(1, 2, 3)" });
+      expect(e.doc.documentElement.style.getPropertyValue("--slop-canvas")).toBe("rgb(1, 2, 3)");
+    });
+
+    it("lets an element that sits outside the slide be picked and dragged back in", () => {
+      const e = editor();
+      const h1 = e.$("h1");
+      e.drag(h1, -300, 0);
+      expect(h1.style.translate).toBe("-300px 0px");
+      e.drag(h1, 300, 0);
+      expect(h1.hasAttribute("data-moved")).toBe(false);
+    });
+
+    it("zooms with the mouse wheel around the pointer, keeping the slide's markup out of it", () => {
+      const e = editor();
+      const event = notch(e, -1, { clientX: 0, clientY: 0 });
+      expect(event.defaultPrevented).toBe(true);
+      expect(views(e).at(-1)!.k).toBeCloseTo(Math.exp(0.2), 5);
+      // Zooming at the slide's corner leaves that corner where it was.
+      expect(e.$(".deck").style.transform).toContain("translate(0px,0px)");
+      notch(e, 1, { clientX: 0, clientY: 0 });
+      expect(views(e).at(-1)!.k).toBeCloseTo(1, 5);
+      expect(views(e).at(-1)!.x).toBeCloseTo(0, 5);
+      expect(e.commits()).toEqual([]);
+    });
+
+    it("zooms with a line-based mouse wheel (Firefox)", () => {
+      const e = editor();
+      wheel(e, { deltaY: -3, deltaMode: 1 });
+      expect(views(e).at(-1)!.k).toBeGreaterThan(1);
+    });
+
+    it("pans when swiping on a trackpad, without limit", () => {
+      const e = editor();
+      const event = wheel(e, { deltaX: 30, deltaY: 100 });
+      expect(event.defaultPrevented).toBe(true);
+      expect(e.$(".deck").style.transform).toBe("translate(-30px,-100px) scale(1)");
+      expect(views(e).at(-1)).toEqual({ type: "slop:edit-view", slide: "intro", x: -30, y: -100, k: 1 });
+      // Purely vertical swipes pan too; Chromium reports their wheelDelta as 3× the pixels.
+      wheel(e, { deltaY: 7 }, { wheelDeltaY: -21 });
+      expect(e.$(".deck").style.transform).toBe("translate(-30px,-107px) scale(1)");
+      for (let i = 0; i < 50; i++) wheel(e, { deltaY: -400 });
+      expect(e.$(".deck").style.transform).toBe("translate(-30px,19893px) scale(1)");
+      expect(e.commits()).toEqual([]);
+    });
+
+    it("keeps a trackpad swipe a pan even when one of its events looks like a mouse notch", () => {
+      const e = editor();
+      wheel(e, { deltaY: 5 }, { wheelDeltaY: -15 });
+      wheel(e, { deltaY: 40 }, { wheelDeltaY: -120, sameGesture: true });
+      expect(e.$(".deck").style.transform).toBe("translate(0px,-45px) scale(1)");
+      // A new gesture is judged afresh.
+      notch(e, -1);
+      expect(views(e).at(-1)!.k).toBeCloseTo(Math.exp(0.2), 5);
+    });
+
+    it("zooms when pinching on a trackpad (Ctrl+wheel), or with ⌘/Ctrl+scroll", () => {
+      const e = editor();
+      wheel(e, { ctrlKey: true, deltaY: -60, clientX: 0, clientY: 0 });
+      expect(views(e).at(-1)!.k).toBeCloseTo(Math.exp(0.3), 5);
+      wheel(e, { metaKey: true, deltaY: 60, clientX: 0, clientY: 0 });
+      expect(views(e).at(-1)!.k).toBeCloseTo(1, 5);
+    });
+
+    it("keeps the point under the pointer fixed while zooming", () => {
+      const e = editor();
+      notch(e, -1, { clientX: 1000, clientY: 500 });
+      const { x, y, k } = views(e).at(-1)!;
+      // The slide point that was under the pointer at 1000,500 still is.
+      expect(x + 1000 * k).toBeCloseTo(1000, 5);
+      expect(y + 500 * k).toBeCloseTo(500, 5);
+    });
+
+    it("limits how far it zooms", () => {
+      const e = editor();
+      for (let i = 0; i < 40; i++) notch(e, -2);
+      expect(views(e).at(-1)!.k).toBe(8);
+      for (let i = 0; i < 80; i++) notch(e, 2);
+      expect(views(e).at(-1)!.k).toBe(0.1);
+    });
+
+    it("moves elements by slide pixels however far the view is zoomed", () => {
+      const e = editor();
+      const h1 = e.$("h1");
+      e.$("#intro").getBoundingClientRect = () => ({ width: 960 }) as DOMRect;
+      Object.defineProperty(e.$("#intro"), "offsetWidth", { value: 1920, configurable: true });
+      e.drag(h1, 100, -50);
+      expect(h1.style.translate).toBe("200px -100px");
+    });
+
+    it("pans by dragging empty space, and deselects", () => {
+      const e = editor();
+      e.down(e.$("h1"));
+      e.up(e.$("h1"));
+      expect(e.selected()).toHaveLength(1);
+      e.down(e.doc.body, 10, 10);
+      e.move(e.doc.body, 60, 40);
+      expect(e.selected()).toEqual([]);
+      expect(e.$(".deck").style.transform).toBe("translate(50px,30px) scale(1)");
+      e.up(e.doc.body, 60, 40);
+      e.move(e.doc.body, 200, 200);
+      expect(e.$(".deck").style.transform).toBe("translate(50px,30px) scale(1)");
+      expect(e.commits()).toEqual([]);
+    });
+
+    it("pans with the middle button or with Space held, without moving the element under the pointer", () => {
+      const e = editor();
+      const h1 = e.$("h1");
+      h1.dispatchEvent(new e.window.PointerEvent("pointerdown", { clientX: 10, clientY: 10, button: 1, bubbles: true, cancelable: true }));
+      e.move(h1, 30, 10);
+      e.up(h1, 30, 10);
+      expect(e.$(".deck").style.transform).toBe("translate(20px,0px) scale(1)");
+      expect(h1.style.translate).toBe("");
+      const space = e.key(" ");
+      expect(space.defaultPrevented).toBe(true);
+      expect(e.doc.documentElement.style.cursor).toBe("grab");
+      e.down(h1, 0, 0);
+      e.move(h1, 5, 5);
+      e.up(h1, 5, 5);
+      expect(e.$(".deck").style.transform).toBe("translate(25px,5px) scale(1)");
+      expect(h1.style.translate).toBe("");
+      e.doc.defaultView!.dispatchEvent(new e.window.KeyboardEvent("keyup", { key: " ", bubbles: true }));
+      expect(e.doc.documentElement.style.cursor).toBe("");
+    });
+
+    it("pans with the middle button even while typing, and keeps the text being edited", () => {
+      const e = editor();
+      const h1 = e.$("h1");
+      e.down(h1);
+      e.up(h1);
+      e.key("Enter");
+      h1.dispatchEvent(new e.window.PointerEvent("pointerdown", { clientX: 0, clientY: 0, button: 1, bubbles: true, cancelable: true }));
+      e.move(h1, 40, 20);
+      e.up(h1, 40, 20);
+      expect(e.$(".deck").style.transform).toBe("translate(40px,20px) scale(1)");
+      expect(h1.getAttribute("contenteditable")).toBe("true");
+      const click = new e.window.MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true });
+      h1.dispatchEvent(click);
+      expect(click.defaultPrevented).toBe(true);
+    });
+
+    it("does not treat Space or 0 as commands while typing", () => {
+      const e = editor();
+      const h1 = e.$("h1");
+      e.down(h1);
+      e.up(h1);
+      e.key("Enter");
+      expect(h1.getAttribute("contenteditable")).toBe("true");
+      wheel(e, { deltaY: 50 });
+      e.key("0");
+      e.key(" ");
+      expect(e.$(".deck").style.transform).toBe("translate(0px,-50px) scale(1)");
+      expect(e.doc.documentElement.style.cursor).toBe("");
+    });
+
+    it("returns to the slide with 0 or when the app asks", () => {
+      const e = editor();
+      wheel(e, { deltaY: 100 });
+      notch(e, -1);
+      const zero = e.key("0");
+      expect(zero.defaultPrevented).toBe(true);
+      expect(e.$(".deck").style.transform).toBe("translate(0px,0px) scale(1)");
+      expect(views(e).at(-1)).toEqual({ type: "slop:edit-view", slide: "intro", x: 0, y: 0, k: 1 });
+      wheel(e, { deltaX: 100 });
+      e.fromParent({ type: "slop:edit-camera", home: true });
+      expect(e.$(".deck").style.transform).toBe("translate(0px,0px) scale(1)");
+    });
+
+    it("restores a view the app sends back after a reload, ignoring nonsense", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-camera", x: -200, y: 50, k: 0.5 });
+      expect(e.$(".deck").style.transform).toBe("translate(-200px,50px) scale(0.5)");
+      expect(e.$("[data-slop-frame]").style.cssText).toContain("width: 960px");
+      e.fromParent({ type: "slop:edit-camera", x: "a", y: 0, k: 1 });
+      expect(e.$(".deck").style.transform).toBe("translate(-200px,50px) scale(0.5)");
+    });
+
+    it("keeps the slide centered when the preview resizes, relative to the pan", () => {
+      const e = editor();
+      wheel(e, { deltaX: -40 });
+      resize(e, 2560, 1440);
+      expect(e.$(".deck").style.transform).toBe("translate(360px,180px) scale(1)");
+    });
+
+    it("reports overflow in slide pixels whatever the zoom", async () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-camera", x: 0, y: 0, k: 0.5 });
+      e.$("#intro").getBoundingClientRect = () => ({ left: 0, top: 0, right: 960, bottom: 540, width: 960, height: 540 }) as DOMRect;
+      Object.defineProperty(e.$("#intro"), "offsetWidth", { value: 1920, configurable: true });
+      e.$("h1").getBoundingClientRect = () => ({ left: 50, top: 500, right: 300, bottom: 640, width: 250, height: 140 }) as DOMRect;
+      e.key("Tab");
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      const report = e.posted().filter((m) => (m as { type: string }).type === "slop:edit-overflow").at(-1) as { items: string[] };
+      expect(report.items[0]).toContain("runs past the bottom edge by 200px");
+    });
+  });
+
+  describe("overflow", () => {
+    const rect = (left: number, top: number, right: number, bottom: number) =>
+      ({ left, top, right, bottom, width: right - left, height: bottom - top, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
+    const frame = () => new Promise((resolve) => setTimeout(resolve, 40));
+    const overflows = (e: ReturnType<typeof editor>) =>
+      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-overflow") as { slide: string; items: string[] }[];
+
+    function laidOut(e: ReturnType<typeof editor>, boxes: Record<string, DOMRect>) {
+      e.$("#intro").getBoundingClientRect = () => rect(0, 0, 1920, 1080);
+      for (const [selector, box] of Object.entries(boxes)) e.$(selector).getBoundingClientRect = () => box;
+    }
+
+    it("reports nothing for a slide that fits", async () => {
+      const e = editor();
+      laidOut(e, { h1: rect(100, 100, 600, 200), ".card": rect(100, 300, 600, 500) });
+      e.key("Tab");
+      await frame();
+      expect(overflows(e).at(-1)).toEqual({ type: "slop:edit-overflow", slide: "intro", items: [] });
+      expect(e.doc.querySelector("[data-slop-overflow]")!.children).toHaveLength(0);
+    });
+
+    it("outlines text running past the slide's edge and reports it", async () => {
+      const e = editor();
+      laidOut(e, { h1: rect(100, 1000, 600, 1200) });
+      e.down(e.$("h1"));
+      await frame();
+      const [report] = overflows(e).slice(-1);
+      expect(report!.slide).toBe("intro");
+      expect(report!.items).toEqual(['<h1> "Hello there" runs past the bottom edge by 120px']);
+      const layer = e.doc.querySelector("[data-slop-overflow]")!;
+      expect(layer.querySelectorAll("[data-wire]")).toHaveLength(1);
+    });
+
+    it("reports only the innermost element and only when the list changes", async () => {
+      const e = editor();
+      laidOut(e, { ".card": rect(100, 900, 600, 1300), ".card p": rect(100, 1000, 600, 1300) });
+      e.down(e.$("h1"));
+      await frame();
+      const first = overflows(e);
+      expect(first.at(-1)!.items).toEqual(['<p> "One" runs past the bottom edge by 220px']);
+      e.down(e.$("h1"));
+      await frame();
+      expect(overflows(e)).toHaveLength(first.length);
+    });
+
+    it("ignores decoration that bleeds off the edge on purpose", async () => {
+      const e = editor();
+      laidOut(e, { ".shape": rect(1700, -200, 2300, 400), ".overlay": rect(0, 0, 3000, 1080) });
+      e.$(".overlay").setAttribute("aria-hidden", "true");
+      e.down(e.$("h1"));
+      await frame();
+      expect(overflows(e).at(-1)!.items).toEqual([]);
+    });
+
+    it("reports text cut off by its own box", async () => {
+      const e = editor();
+      laidOut(e, { h1: rect(100, 100, 600, 200) });
+      const h1 = e.$("h1");
+      h1.style.overflowX = "hidden";
+      h1.style.overflowY = "hidden";
+      Object.defineProperty(h1, "clientHeight", { value: 100, configurable: true });
+      Object.defineProperty(h1, "scrollHeight", { value: 260, configurable: true });
+      e.down(h1);
+      await frame();
+      expect(overflows(e).at(-1)!.items).toEqual(['<h1> "Hello there" is cut off by its own box']);
+    });
+
+    it("re-checks while typing, and hides the wires for a screenshot until the next click", async () => {
+      const e = editor();
+      laidOut(e, { h1: rect(100, 100, 600, 200) });
+      e.down(e.$("h1"));
+      await frame();
+      expect(overflows(e).at(-1)!.items).toEqual([]);
+      e.$("h1").getBoundingClientRect = () => rect(100, 100, 600, 1300);
+      e.$("h1").dispatchEvent(new e.window.Event("input", { bubbles: true }));
+      await frame();
+      expect(overflows(e).at(-1)!.items).toHaveLength(1);
+      e.fromParent({ type: "slop:edit-select", path: null, quiet: true });
+      expect(e.doc.querySelector("[data-slop-overflow]")!.hasAttribute("data-quiet")).toBe(true);
+      e.down(e.$("h1"));
+      expect(e.doc.querySelector("[data-slop-overflow]")!.hasAttribute("data-quiet")).toBe(false);
     });
   });
 });

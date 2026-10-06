@@ -390,7 +390,92 @@ describe("Stage", () => {
       expect(undo).not.toHaveBeenCalled();
     });
 
-    it("offers to tidy a slide with moved elements", () => {
+    it("keeps the slide at its size in edit mode and fills the area around it, and sends the panel color", () => {
+      const { container } = render(<Stage />);
+      const slideBox = () => container.querySelector<HTMLElement>("[data-sketch-target]")!;
+      expect(slideBox().style.width).toBe("960px");
+      expect(slideBox().className).toContain("overflow-hidden");
+      fireEvent.click(editButton());
+      expect(slideBox().style.width).toBe("960px");
+      expect(slideBox().className).not.toContain("overflow-hidden");
+      expect(slideBox().className).not.toContain("transition-[width]");
+      const frames = container.querySelectorAll("iframe");
+      expect(frames[0]!.style.width).toBe("1920px");
+      const frame = frames[frames.length - 1]!;
+      expect(frame.getAttribute("src")).toContain("edit=");
+      // The 960x540 area plus its 32px padding, at the slide's 0.5 scale.
+      expect(frame.style.width).toBe("2048px");
+      expect(frame.style.height).toBe("1208px");
+      expect(frame.style.left).toBe("-32px");
+      expect(frame.style.top).toBe("-32px");
+      const post = vi.spyOn(frame.contentWindow!, "postMessage");
+      fireEvent.load(frame);
+      expect(post).toHaveBeenCalledWith({ type: "slop:edit-canvas", color: expect.any(String) }, "*");
+      fireEvent.click(editButton());
+      expect(slideBox().style.width).toBe("960px");
+    });
+
+    describe("pasteboard view", () => {
+      const resetButton = () => screen.queryByRole("button", { name: /^\d+%$/ });
+      const enterEditing = () => {
+        const utils = render(<Stage />);
+        fireEvent.click(editButton());
+        const frames = utils.container.querySelectorAll("iframe");
+        const frame = frames[frames.length - 1]!;
+        return { ...utils, frame };
+      };
+
+      it("offers to go back to the slide once the view is panned or zoomed", () => {
+        const { frame } = enterEditing();
+        fireEvent.load(frame);
+        expect(resetButton()).toBeNull();
+        fromFrame(frame, { type: "slop:edit-view", slide: "intro", x: 0, y: 0, k: 1 });
+        expect(resetButton()).toBeNull();
+        fromFrame(frame, { type: "slop:edit-view", slide: "intro", x: -400, y: 120, k: 0.5 });
+        const reset = resetButton()!;
+        expect(reset.textContent).toBe("50%");
+        const post = vi.spyOn(frame.contentWindow!, "postMessage");
+        fireEvent.click(reset);
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-camera", home: true }, "*");
+        fromFrame(frame, { type: "slop:edit-view", slide: "intro", x: 0, y: 0, k: 1 });
+        expect(resetButton()).toBeNull();
+      });
+
+      it("ignores views from other slides or windows, and forgets them leaving edit mode", () => {
+        const { frame } = enterEditing();
+        fromFrame(frame, { type: "slop:edit-view", slide: "other", x: 5, y: 5, k: 2 });
+        fromFrame(null, { type: "slop:edit-view", slide: "intro", x: 5, y: 5, k: 2 });
+        expect(resetButton()).toBeNull();
+        fromFrame(frame, { type: "slop:edit-view", slide: "intro", x: 5, y: 5, k: 2 });
+        expect(resetButton()).not.toBeNull();
+        fireEvent.click(editButton());
+        expect(resetButton()).toBeNull();
+        fireEvent.click(editButton());
+        expect(resetButton()).toBeNull();
+      });
+
+      it("puts the view back when the slide reloads after an edit, but not for a slide that was never moved", () => {
+        const { container, frame } = enterEditing();
+        const post = vi.spyOn(frame.contentWindow!, "postMessage");
+        fireEvent.load(frame);
+        expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-camera" }), "*");
+        fromFrame(frame, { type: "slop:edit-view", slide: "intro", x: -400, y: 120, k: 0.5 });
+        fireEvent.load(container.querySelectorAll("iframe")[container.querySelectorAll("iframe").length - 1]!);
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-camera", x: -400, y: 120, k: 0.5 }, "*");
+      });
+
+      it("brings the slide back to the middle before a tidy screenshot", () => {
+        const { frame } = enterEditing();
+        const post = vi.spyOn(frame.contentWindow!, "postMessage");
+        fireEvent.load(frame);
+        post.mockClear();
+        fireEvent.click(screen.getByRole("button", { name: /Tidy layout/ }));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-camera", home: true }, "*");
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-select", path: null, quiet: true }, "*");
+      });
+    });
+
+    it("always offers to tidy the slide, and is busy while the agent runs", () => {
       const tidy = vi.fn().mockResolvedValue(undefined);
       vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
         cb(0);
@@ -398,15 +483,42 @@ describe("Stage", () => {
       });
       useApp.setState({ tidyLayout: tidy });
       render(<Stage />);
-      expect(screen.queryByRole("button", { name: /Tidy layout/ })).toBeNull();
-      const deck = useApp.getState().deck!;
-      act(() =>
-        useApp.setState({ deck: { ...deck, slides: deck.slides.map((s) => (s.id === "intro" ? { ...s, moved: true } : s)) } }),
-      );
       fireEvent.click(screen.getByRole("button", { name: /Tidy layout/ }));
       expect(tidy).toHaveBeenCalledTimes(1);
+      expect(tidy).toHaveBeenCalledWith([]);
       act(() => useApp.setState({ running: true }));
       expect((screen.getByRole("button", { name: /Tidy layout/ }) as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it("warns about overflow found in the editor and hands it to the agent", () => {
+      const tidy = vi.fn().mockResolvedValue(undefined);
+      vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+        cb(0);
+        return 0;
+      });
+      useApp.setState({ tidyLayout: tidy });
+      const { container } = render(<Stage />);
+      expect(screen.queryByText("Overflow")).toBeNull();
+      fireEvent.click(editButton());
+      const items = ['<h1> "Hello" runs past the bottom edge by 40px'];
+      fromFrame(stageFrame(container), { type: "slop:edit-overflow", slide: "intro", items });
+      expect(screen.getByText("Overflow").getAttribute("title")).toContain(items[0]);
+      fireEvent.click(screen.getByRole("button", { name: /Tidy layout/ }));
+      expect(tidy).toHaveBeenCalledWith(items);
+      fromFrame(stageFrame(container), { type: "slop:edit-overflow", slide: "intro", items: [] });
+      expect(screen.queryByText("Overflow")).toBeNull();
+    });
+
+    it("ignores overflow reports for another slide or from other windows, and drops them leaving edit mode", () => {
+      const { container } = render(<Stage />);
+      fireEvent.click(editButton());
+      fromFrame(stageFrame(container), { type: "slop:edit-overflow", slide: "other", items: ["x"] });
+      fromFrame(null, { type: "slop:edit-overflow", slide: "intro", items: ["x"] });
+      expect(screen.queryByText("Overflow")).toBeNull();
+      fromFrame(stageFrame(container), { type: "slop:edit-overflow", slide: "intro", items: ["x"] });
+      expect(screen.getByText("Overflow")).toBeTruthy();
+      fireEvent.click(editButton());
+      expect(screen.queryByText("Overflow")).toBeNull();
     });
   });
 });

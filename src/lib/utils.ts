@@ -28,6 +28,9 @@ export function slideUrl(deckId: string, slideId: string, version: string, still
   return deckFileUrl(deckId, "deck.html", query);
 }
 
+/** Whether `url` is a slide preview with the editor (see {@link slideUrl}). */
+export const isEditUrl = (url: string) => url.includes("&edit=");
+
 export function relativeTime(ms: number): string {
   const diff = Date.now() - ms;
   const minutes = Math.round(diff / 60_000);

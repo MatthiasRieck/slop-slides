@@ -66,6 +66,42 @@ describe("SlideFrame", () => {
     );
   });
 
+  const arena = { width: 1200, height: 700 };
+
+  it("lets the editor's preview fill the arena around the centered slide, keeping the slide's scale", () => {
+    const { container } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" editKey="0" arena={arena} />);
+    const [frame] = frames(container);
+    expect(frame!.style.width).toBe("2400px");
+    expect(frame!.style.height).toBe("1400px");
+    expect(frame!.style.left).toBe("-120px");
+    expect(frame!.style.top).toBe("-80px");
+    expect(frame!.style.transform).toBe("scale(0.5)");
+    expect((container.firstElementChild as HTMLElement).style.overflow).toBe("visible");
+  });
+
+  it("never makes the preview smaller than the slide", () => {
+    const { container } = render(
+      <SlideFrame deckId="talk" slideId="intro" version="v1" editKey="0" arena={{ width: 100, height: 100 }} />,
+    );
+    const [frame] = frames(container);
+    expect(frame!.style.width).toBe("1920px");
+    expect(frame!.style.height).toBe("1080px");
+    expect(frame!.style.left).toBe("0px");
+  });
+
+  it("gives only the editor's preview the arena, so a plain one never scales up while it loads", () => {
+    const { container, rerender } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" arena={arena} />);
+    expect((container.firstElementChild as HTMLElement).style.overflow).toBe("hidden");
+    rerender(<SlideFrame deckId="talk" slideId="intro" version="v1" editKey="0" arena={arena} />);
+    const [plain, editor] = frames(container);
+    expect(plain!.getAttribute("src")).not.toContain("edit=");
+    expect(plain!.style.width).toBe("1920px");
+    expect(plain!.style.left).toBe("0px");
+    expect(editor!.getAttribute("src")).toContain("edit=0");
+    expect(editor!.style.width).toBe("2400px");
+    expect((container.firstElementChild as HTMLElement).style.overflow).toBe("visible");
+  });
+
   it("waits for layout before loading anything", () => {
     globalThis.ResizeObserver = NoLayout;
     const { container } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" />);

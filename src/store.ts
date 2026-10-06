@@ -128,7 +128,8 @@ interface AppState {
   /** Undoes every edit made since entering edit mode, then leaves it. */
   discardSlideEdits: () => Promise<void>;
   /** Asks the agent to rebuild the current slide's layout around the user's hand edits. */
-  tidyLayout: () => Promise<void>;
+  /** `overflow` lists elements the slide editor found running past the slide or cut off. */
+  tidyLayout: (overflow?: string[]) => Promise<void>;
   send: (
     text: string,
     options: { includeSlide: boolean; attachments: string[]; screenshot?: boolean },
@@ -148,7 +149,10 @@ interface SlideUndo {
 const UNDO_KEPT = 50;
 
 export const TIDY_PROMPT =
-  "Tidy up the layout of this slide. I edited it by hand: keep my text and keep things where I moved them, at the size and angle I gave them, but rebuild the layout cleanly.";
+  "Tidy up the layout of this slide. I edited it by hand: keep my text and keep things where I moved them, at the size and angle I gave them, but rebuild the layout cleanly and fix any overflow or clipping.";
+
+export const tidyPrompt = (overflow: string[] = []) =>
+  overflow.length ? `${TIDY_PROMPT}\n\nThe editor found overflow:\n${overflow.map((o) => `- ${o}`).join("\n")}` : TIDY_PROMPT;
 
 const newId = () => crypto.randomUUID();
 let lintRun = 0;
@@ -309,10 +313,10 @@ export const useApp = create<AppState>((set, get) => ({
     return editQueue;
   },
 
-  tidyLayout: async () => {
+  tidyLayout: async (overflow = []) => {
     // Let any edit still being saved land first, so the agent sees the final version.
     await editQueue;
-    await get().send(TIDY_PROMPT, { includeSlide: true, attachments: [], screenshot: true });
+    await get().send(tidyPrompt(overflow), { includeSlide: true, attachments: [], screenshot: true });
   },
 
   send: async (text, { includeSlide, attachments, screenshot = false }) => {

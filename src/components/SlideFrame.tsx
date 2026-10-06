@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { Slide } from "../lib/api";
-import { slideUrl } from "../lib/utils";
+import { isEditUrl, slideUrl } from "../lib/utils";
 import { useApp } from "../store";
 
 const STAGE_W = 1920;
@@ -16,6 +16,8 @@ interface SlideFrameProps {
   thumbnail?: boolean;
   /** Loads the slide editor (final animation frame, editable); changing the key reloads it. */
   editKey?: string;
+  /** The space (CSS px) the editor's preview may fill around the centered slide, as a pasteboard. */
+  arena?: { width: number; height: number };
   className?: string;
   onFrameReady?: (frame: HTMLIFrameElement) => void;
 }
@@ -25,7 +27,7 @@ interface SlideFrameProps {
  * fill its (16:9) container. When the slide changes, the new version loads behind the
  * current one and swaps in once painted, so edits stream in without white flashes.
  */
-export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, className, onFrameReady }: SlideFrameProps) {
+export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena, className, onFrameReady }: SlideFrameProps) {
   const src = slideUrl(deckId, slideId, version, thumbnail || editKey !== undefined, editKey);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -48,42 +50,57 @@ export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, class
   }, [src, shown]);
 
   const frames = pending ? [shown, pending] : [shown];
+  // Only the editor's preview fills the arena, with the slide in its middle. A plain preview given
+  // the same room would scale the slide up to fill it, which shows while the editor loads.
+  const slideW = STAGE_W * scale;
+  const slideH = STAGE_H * scale;
+  const sizeFor = (url: string) =>
+    isEditUrl(url) && arena ? { w: Math.max(arena.width, slideW), h: Math.max(arena.height, slideH) } : { w: slideW, h: slideH };
+  const bleeds = frames.some(isEditUrl);
 
   return (
     <div
       ref={containerRef}
       className={className}
-      style={{ position: "relative", aspectRatio: "16 / 9", overflow: "hidden", background: "#000" }}
+      style={{
+        position: "relative",
+        aspectRatio: "16 / 9",
+        overflow: bleeds ? "visible" : "hidden",
+        background: "#000",
+      }}
     >
       {scale > 0 &&
-        frames.map((url) => (
-          <iframe
-            key={url}
-            src={url}
-            title={slideId}
-            tabIndex={thumbnail ? -1 : undefined}
-            sandbox="allow-scripts"
-            onLoad={(event) => {
-              if (url === pending) {
-                setShown(url);
-                setPending(null);
-              }
-              onFrameReady?.(event.currentTarget);
-            }}
-            style={{
-              position: "absolute",
-              left: 0,
-              top: 0,
-              width: STAGE_W,
-              height: STAGE_H,
-              border: 0,
-              transformOrigin: "0 0",
-              transform: `scale(${scale})`,
-              pointerEvents: thumbnail ? "none" : "auto",
-              visibility: url === shown ? "visible" : "hidden",
-            }}
-          />
-        ))}
+        frames.map((url) => {
+          const size = sizeFor(url);
+          return (
+            <iframe
+              key={url}
+              src={url}
+              title={slideId}
+              tabIndex={thumbnail ? -1 : undefined}
+              sandbox="allow-scripts"
+              onLoad={(event) => {
+                if (url === pending) {
+                  setShown(url);
+                  setPending(null);
+                }
+                onFrameReady?.(event.currentTarget);
+              }}
+              style={{
+                position: "absolute",
+                left: (slideW - size.w) / 2,
+                top: (slideH - size.h) / 2,
+                width: size.w / scale,
+                height: size.h / scale,
+                border: 0,
+                transformOrigin: "0 0",
+                transform: `scale(${scale})`,
+                pointerEvents: thumbnail ? "none" : "auto",
+                visibility: url === shown ? "visible" : "hidden",
+              }}
+            />
+          );
+        })}
     </div>
   );
 }

@@ -69,23 +69,29 @@ pasteboard cap, which only matters for tiny slides.
 A first version of the proposed direction below. On a device, an open deck shows `DeviceDeck`
 instead of the editor:
 
-- Only the current slide, full screen, as one page sized to the fit slide (`SlideFrame`'s device
-  path). Bars float over it (deck list, chat, sketch tools, prev/next, slide list) and a tap
-  hides them. Swipe left/right or the arrow keys change slides.
-- Zoom and pan are the app's own (`src/lib/deviceView.ts`): pinch, double tap, one-finger pan when
-  zoomed. Safari's page zoom is blocked (`lockPageZoom`: viewport `maximum-scale=1` plus cancelled
-  `gesturestart`/`gesturechange`, `touch-action: none` on the slide). While pinching the page is
-  scaled with CSS; once the fingers lift it is redrawn at the zoomed size, capped at 1920 CSS px
-  wide (`MAX_PAGE_WIDTH`, the size that is known to work), and scaled up beyond that.
-- Pen, highlighter, eraser, undo and clear draw review marks, as in the editor; a second finger
-  turns a stroke into a pinch and drops it. Marks go to the agent from the chat sheet, through
-  `capture_remote_sketch` as before.
+- The current slide, fit to the screen above one bar of tools (deck list, sketch tools,
+  prev/next, slide list, chat). Swipe left/right or the arrow keys change slides.
+- A flat stack, for speed on iPads: no app zoom or pan (a first version had them; transforms and
+  resizing the slide's page made iOS redraw it on every change), nothing transformed between the
+  screen and the slide's page, and the bar beside the slide instead of blurred over it. Safari's
+  page zoom is blocked (`lockPageZoom`: viewport `maximum-scale=1` plus cancelled
+  `gesturestart`/`gesturechange`, `touch-action: none` and a non-passive `touchmove` on the slide).
+- The deck is loaded once, as one page that the player switches slides in (`slop:show`, in
+  `runtime.js`); it reloads only when the deck changes. A page per slide meant downloading and
+  laying out the whole deck.html and its assets again on every swipe.
+- Slides show in their final state (`static`): no 0.35 s fade and no staggered `reveal`
+  entrance animations.
+- Ink (`AnnotationLayer`, also used by the editor and presenter): finished strokes are an SVG that
+  re-renders only when a stroke is added or removed; the stroke being drawn goes on a canvas, a
+  segment per move. Redrawing the whole SVG on every move (WebKit paints SVG on the CPU) made
+  drawing and everything around it slower the more marks a slide had.
+- Strokes end when the finger or pencil is lifted, not on `pointerleave`: iOS sends a leave
+  right after a touch stroke starts, which cut every stroke off after a point or two. Pencil
+  positions between frames come from `getCoalescedEvents()`.
+- Pen, highlighter, eraser, undo and clear draw review marks, as in the editor. Marks go to the
+  agent from the chat sheet, through `capture_remote_sketch` as before.
 - The slide list is a sheet with numbers and ids, no thumbnails.
-- Not on the device: edit mode, the HTML view, the presenter, lint. Edit mode still needs the
-  editor to work in a page that is not 1920×1080 (see below).
-
-None of this has been run on a real device yet; the memory estimates above say one page at most
-1920 px wide should stay well under the limit.
+- Not on the device: zoom, edit mode, the HTML view, the presenter, lint.
 
 ## Proposed direction: a device-only "slide" UI
 

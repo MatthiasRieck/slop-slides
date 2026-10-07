@@ -14,10 +14,7 @@ const SCREEN = { width: 1600, height: 900 };
 
 const NoLayout = globalThis.ResizeObserver;
 
-/**
- * Reports the screen for the view, and for the slide's preview the width its page wrapper
- * sets, like a browser after layout.
- */
+/** Reports the space for the slide, and for the slide's preview the slide's width, like a browser after layout. */
 class MeasuringObserver {
   constructor(private callback: ResizeObserverCallback) {}
   observe(target: HTMLElement) {
@@ -28,7 +25,7 @@ class MeasuringObserver {
     const contentRect =
       target.dataset.testid === "device-stage"
         ? SCREEN
-        : { width: parseFloat(target.parentElement?.style.width ?? "") || 0, height: 0 };
+        : { width: parseFloat(target.closest<HTMLElement>("[data-testid=device-slide]")?.style.width ?? "") || 0, height: 0 };
     this.callback([{ target, contentRect } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
   }
   unobserve() {}
@@ -36,8 +33,6 @@ class MeasuringObserver {
 }
 
 const observed: (() => void)[] = [];
-/** Measures every observed element again, as a browser does once a size changes. */
-const relayout = () => act(() => [...observed].forEach((measure) => measure()));
 
 /** The view and the store as a device loads them (both read `isRemote` when imported). */
 async function load() {
@@ -79,16 +74,6 @@ const pointer = (type: "down" | "move" | "up", id: number, x: number, y: number,
   else fireEvent.pointerUp(target, init);
 };
 
-/** Two fingers spreading from 100 px apart to `spread` px apart, around the screen's center. */
-const pinch = (spread: number, target?: Element) => {
-  pointer("down", 1, 750, 450, target);
-  pointer("down", 2, 850, 450, target);
-  pointer("move", 1, 800 - spread / 2, 450, target);
-  pointer("move", 2, 800 + spread / 2, 450, target);
-  pointer("up", 1, 800 - spread / 2, 450, target);
-  pointer("up", 2, 800 + spread / 2, 450, target);
-};
-
 describe("DeviceDeck", () => {
   it("shows only the current slide, as one page the size it is shown", () => {
     const { container } = show();
@@ -97,11 +82,49 @@ describe("DeviceDeck", () => {
     expect(frames[0]!.getAttribute("src")).toContain("slide=intro");
     // No pasteboard, and not a 1920×1080 page scaled down: that is what iOS kills the page over.
     expect(frames[0]!.getAttribute("src")).not.toMatch(/&pan|&edit=/);
+    // Without the fade and entrance animations, a slide is all there the moment it is shown.
+    expect(frames[0]!.getAttribute("src")).toContain("&static");
     expect(frames[0]!.style.width).toBe("1600px");
-    expect(frames[0]!.style.transform).toBe("");
     expect(slideBox().style.width).toBe("1600px");
     expect(slideBox().style.height).toBe("900px");
     expect(button("All slides").textContent).toBe("1 / 3");
+  });
+
+  it("keeps the stack flat: nothing between the screen and the slide's page is transformed", () => {
+    const { container } = show();
+    const frame = container.querySelector("iframe")!;
+    for (let el: HTMLElement | null = frame; el; el = el.parentElement) {
+      expect(el.style.transform, el.outerHTML.slice(0, 80)).toBe("");
+    }
+    // The tools sit in their own bar, not blurred over the slide.
+    expect(container.querySelector("[class*=backdrop-blur]")).toBeNull();
+    expect(stage().contains(screen.getByRole("toolbar", { name: "Sketch tools" }))).toBe(false);
+  });
+
+  it("keeps one page for the deck and switches slides in it, without loading the deck again", () => {
+    const { container } = show();
+    const frame = container.querySelector("iframe")!;
+    const src = frame.getAttribute("src");
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    fireEvent.click(button("Next slide"));
+    expect(container.querySelectorAll("iframe")).toHaveLength(1);
+    expect(container.querySelector("iframe")).toBe(frame);
+    expect(frame.getAttribute("src")).toBe(src);
+    expect(post).toHaveBeenLastCalledWith({ type: "slop:show", slide: "#2" }, "*");
+    // A page that finishes loading is told the slide to show, in case it changed meanwhile.
+    fireEvent.load(frame);
+    expect(post).toHaveBeenLastCalledWith({ type: "slop:show", slide: "#2" }, "*");
+  });
+
+  it("loads the deck again when it changes, starting on the slide shown", () => {
+    const { container } = show();
+    fireEvent.click(button("Next slide"));
+    const before = container.querySelector("iframe")!.getAttribute("src");
+    act(() => app.useApp.setState({ deck: deckFor(DECK_HTML, "2") }));
+    const urls = [...container.querySelectorAll("iframe")].map((f) => f.getAttribute("src"));
+    const next = urls.find((url) => url !== before)!;
+    expect(next).toContain("slide=%232");
+    expect(next).not.toContain("slide=intro");
   });
 
   it("moves between slides with the buttons and the keyboard", () => {
@@ -142,67 +165,20 @@ describe("DeviceDeck", () => {
     expect(selected()).toBe("intro");
   });
 
+  it("does not swipe with two fingers", () => {
+    show();
+    pointer("down", 1, 900, 450);
+    pointer("down", 2, 1000, 450);
+    pointer("up", 1, 600, 450);
+    pointer("up", 2, 700, 450);
+    expect(selected()).toBe("intro");
+  });
+
   it("does not change slides on a mostly vertical drag", () => {
     show();
     pointer("down", 1, 800, 200);
     pointer("up", 1, 740, 600);
     expect(selected()).toBe("intro");
-  });
-
-  it("pinches to zoom, then draws the page larger to stay sharp, but never past the known-safe size", () => {
-    const { container } = show();
-    pinch(200);
-    expect(slideBox().style.transform).toBe("translate(0px, 0px) scale(2)");
-    expect(button("Fit the slide to the screen").textContent).toBe("200%");
-    // 2× the 1600 px slide would be a 3200 px page; it stops at 1920 px and is scaled up from there.
-    const page = screen.getByTestId("device-page");
-    expect(page.style.width).toBe("1920px");
-    expect(page.style.transform).toBe(`scale(${1600 / 1920})`);
-    relayout();
-    expect(container.querySelector("iframe")!.style.width).toBe("1920px");
-  });
-
-  it("pans a zoomed slide instead of swiping, and fits it again on request", () => {
-    show();
-    pinch(200);
-    pointer("down", 1, 800, 450);
-    pointer("move", 1, 500, 300);
-    pointer("up", 1, 500, 300);
-    expect(selected()).toBe("intro");
-    expect(slideBox().style.transform).toBe("translate(-300px, -150px) scale(2)");
-    fireEvent.click(button("Fit the slide to the screen"));
-    expect(slideBox().style.transform).toBe("translate(0px, 0px) scale(1)");
-    expect(screen.getByTestId("device-page").style.width).toBe("1600px");
-  });
-
-  it("zooms in on a double tap and back out on the next one", () => {
-    show();
-    const tap = (x: number, y: number) => {
-      pointer("down", 1, x, y);
-      pointer("up", 1, x, y);
-    };
-    tap(1000, 450);
-    tap(1000, 450);
-    expect(slideBox().style.transform).toBe("translate(-300px, 0px) scale(2.5)");
-    tap(1000, 450);
-    tap(1000, 450);
-    expect(slideBox().style.transform).toBe("translate(0px, 0px) scale(1)");
-  });
-
-  it("hides and shows the bars on a single tap", () => {
-    vi.useFakeTimers();
-    show();
-    const footer = () => screen.getByRole("toolbar", { name: "Sketch tools" }).closest("footer")!;
-    pointer("down", 1, 800, 450);
-    pointer("up", 1, 800, 450);
-    expect(footer().className).not.toContain("opacity-0");
-    act(() => vi.advanceTimersByTime(400));
-    expect(footer().className).toContain("opacity-0");
-    vi.advanceTimersByTime(1000);
-    pointer("down", 1, 800, 450);
-    pointer("up", 1, 800, 450);
-    act(() => vi.advanceTimersByTime(400));
-    expect(footer().className).not.toContain("opacity-0");
   });
 
   it("draws review marks on the slide with the pen, and does not swipe while drawing", () => {
@@ -224,25 +200,64 @@ describe("DeviceDeck", () => {
     expect(app.useApp.getState().sketches.intro).toEqual([]);
   });
 
-  it("turns a stroke into a pinch when a second finger lands, leaving no mark", () => {
+  it("keeps a touch stroke going when Safari reports the finger leaving the layer", () => {
     show();
-    fireEvent.click(button("Highlight on the slide"));
-    pinch(300, screen.getByTestId("annotation-layer"));
-    expect(app.useApp.getState().sketches.intro ?? []).toEqual([]);
-    expect(slideBox().style.transform).toBe("translate(0px, 0px) scale(3)");
-    // The pen still works afterwards.
+    fireEvent.click(button("Draw on the slide"));
     const layer = screen.getByTestId("annotation-layer");
     pointer("down", 1, 800, 450, layer);
-    pointer("move", 1, 820, 450, layer);
-    pointer("up", 1, 820, 450, layer);
-    expect(app.useApp.getState().sketches.intro).toHaveLength(1);
+    fireEvent.pointerLeave(layer, { pointerId: 1, pointerType: "touch" });
+    pointer("move", 1, 900, 450, layer);
+    pointer("move", 1, 1000, 450, layer);
+    pointer("up", 1, 1000, 450, layer);
+    const marks = app.useApp.getState().sketches.intro!;
+    expect(marks).toHaveLength(1);
+    expect(marks[0]!.points).toHaveLength(3);
   });
 
-  it("starts each slide fit to the screen", () => {
+  it("records every position a pencil reports between frames", () => {
     show();
-    pinch(200);
-    fireEvent.click(button("Next slide"));
-    expect(slideBox().style.transform).toBe("translate(0px, 0px) scale(1)");
+    fireEvent.click(button("Draw on the slide"));
+    const layer = screen.getByTestId("annotation-layer");
+    pointer("down", 1, 800, 450, layer);
+    const move = new PointerEvent("pointermove", { pointerId: 1, clientX: 960, clientY: 450, bubbles: true });
+    const between = [880, 920, 960].map((x) => new PointerEvent("pointermove", { clientX: x, clientY: 450 }));
+    Object.assign(move, { getCoalescedEvents: () => between });
+    act(() => void layer.dispatchEvent(move));
+    pointer("up", 1, 960, 450, layer);
+    expect(app.useApp.getState().sketches.intro![0]!.points.map(([x]) => x)).toEqual([0.5, 0.55, 0.575, 0.6]);
+  });
+
+  it("draws the stroke in progress on a canvas, a segment per move, and the finished one in the SVG", () => {
+    const calls: string[] = [];
+    const ctx = new Proxy({} as Record<string, unknown>, {
+      get: (target, key: string) => (key in target ? target[key] : (...args: unknown[]) => calls.push(`${key}(${args.join(",")})`)),
+      set: (target, key: string, value) => ((target[key] = value), true),
+    });
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
+      (ctx as { canvas?: HTMLCanvasElement }).canvas = this;
+      return ctx as unknown as CanvasRenderingContext2D;
+    });
+    show();
+    fireEvent.click(button("Draw on the slide"));
+    const layer = screen.getByTestId("annotation-layer");
+    const svg = layer.querySelector("svg")!;
+    pointer("down", 1, 800, 450, layer);
+    pointer("move", 1, 900, 450, layer);
+    pointer("move", 1, 1000, 450, layer);
+    // Nothing is rendered for the stroke while it is drawn: the canvas gets just the new segments.
+    expect(svg.children).toHaveLength(0);
+    expect(calls.filter((c) => c.startsWith("lineTo"))).toHaveLength(2);
+    expect(calls.filter((c) => c.startsWith("stroke("))).toHaveLength(2);
+    pointer("up", 1, 1000, 450, layer);
+    expect(svg.querySelectorAll("[data-stroke]")).toHaveLength(1);
+    expect(calls.at(-1)).toMatch(/^clearRect/);
+  });
+
+  it("keeps Safari from taking a drag on the slide over", () => {
+    show();
+    const drag = new Event("touchmove", { cancelable: true, bubbles: true });
+    stage().dispatchEvent(drag);
+    expect(drag.defaultPrevented).toBe(true);
   });
 
   it("opens the chat over the slide and shows when the agent is working", () => {

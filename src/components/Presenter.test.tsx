@@ -292,6 +292,17 @@ describe("Presenter tools", () => {
     expect(tool(/Color #facc15/).getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("ends a mouse stroke when the mouse leaves the slide", () => {
+    render(<Presenter />);
+    fireEvent.click(tool(/^Pen/));
+    fireEvent.pointerDown(layer(), { button: 0, buttons: 1, clientX: 10, clientY: 10, pointerId: 1 });
+    fireEvent.pointerMove(layer(), { buttons: 1, clientX: 20, clientY: 20, pointerId: 1 });
+    fireEvent.pointerLeave(layer(), { pointerId: 1, pointerType: "mouse" });
+    expect(strokes()).toHaveLength(1);
+    fireEvent.pointerMove(layer(), { buttons: 1, clientX: 40, clientY: 40, pointerId: 1 });
+    expect(strokes()).toHaveLength(1);
+  });
+
   it("ignores right clicks and moves without a press", () => {
     render(<Presenter />);
     fireEvent.click(tool(/^Pen/));

@@ -235,6 +235,14 @@ describe("SlideFrame on a device", () => {
     expect(frame.style.transform).toBe("");
   });
 
+  it("renders a still preview's final frame without making it a placeholder", async () => {
+    const OnDevice = await onDevice();
+    const { container } = render(<OnDevice deckId="talk" slideId="intro" version="v1" still />);
+    const frame = container.querySelector("iframe")!;
+    expect(frame.getAttribute("src")).toContain("&static");
+    expect(frame.style.pointerEvents).toBe("auto");
+  });
+
   it("keeps the slide editor's page at full size, scaled down: the editor works in slide pixels", async () => {
     const OnDevice = await onDevice();
     const { container } = render(<OnDevice deckId="talk" slideId="intro" version="v1" editKey="0" />);

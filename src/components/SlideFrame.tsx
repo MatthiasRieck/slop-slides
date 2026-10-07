@@ -20,6 +20,8 @@ interface SlideFrameProps {
   version: string;
   /** Thumbnails render the final animation frame and ignore pointer input. */
   thumbnail?: boolean;
+  /** Renders the final frame of every animation and transition, so slides show up at once. */
+  still?: boolean;
   /** Loads the slide editor (final animation frame, editable); changing the key reloads it. */
   editKey?: string;
   /**
@@ -47,8 +49,8 @@ function ThumbnailPlaceholder({ className }: { className?: string }) {
   return <div data-testid="thumbnail-placeholder" className={cn("aspect-video bg-muted", className)} />;
 }
 
-function LiveSlideFrame({ deckId, slideId, version, thumbnail, editKey, arena, className, onFrameReady }: SlideFrameProps) {
-  const src = slideUrl(deckId, slideId, version, thumbnail || editKey !== undefined, editKey, arena !== undefined && !thumbnail);
+function LiveSlideFrame({ deckId, slideId, version, thumbnail, still, editKey, arena, className, onFrameReady }: SlideFrameProps) {
+  const src = slideUrl(deckId, slideId, version, thumbnail || still || editKey !== undefined, editKey, arena !== undefined && !thumbnail);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0);

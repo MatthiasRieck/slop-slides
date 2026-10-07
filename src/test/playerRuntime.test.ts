@@ -233,6 +233,28 @@ describe("player: embedded in the editor", () => {
     expect(p.active()).toBe(0);
   });
 
+  it("switches slides in place when the device view asks, by id or position", () => {
+    const parent = { postMessage: vi.fn() };
+    const p = player({ at: "?embed&slide=intro", parent });
+    const ask = (slide: string) =>
+      p.window.dispatchEvent(new p.window.MessageEvent("message", { data: { type: "slop:show", slide } }));
+    ask("end");
+    expect(p.active()).toBe(2);
+    ask("#2");
+    expect(p.active()).toBe(1);
+    expect(p.activeCount()).toBe(1);
+    expect(hashOf(p.window)).toBe("");
+    // Other messages are not slide requests.
+    p.window.dispatchEvent(new p.window.MessageEvent("message", { data: { type: "slop:go", key: "End" } }));
+    expect(p.active()).toBe(1);
+  });
+
+  it("ignores slide requests outside a frame", () => {
+    const p = player({ at: "?embed&slide=intro" });
+    p.window.dispatchEvent(new p.window.MessageEvent("message", { data: { type: "slop:show", slide: "end" } }));
+    expect(p.active()).toBe(0);
+  });
+
   it("marks thumbnails as static so animations show their final frame", () => {
     expect(player({ at: "?embed&slide=intro&static" }).doc.documentElement.hasAttribute("data-slop-static")).toBe(true);
     expect(player({ at: "?embed&slide=intro" }).doc.documentElement.hasAttribute("data-slop-static")).toBe(false);

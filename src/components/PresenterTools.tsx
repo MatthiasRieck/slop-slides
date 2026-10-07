@@ -1,5 +1,5 @@
 import { Eraser, Highlighter, MousePointer2, PenLine, Trash2, Undo2, Wand2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 
 import {
   DEFAULT_COLORS,
@@ -89,13 +89,18 @@ export function useAnnotations(slideKey: string, store?: InkStore): Annotations 
 }
 
 /**
- * Transparent layer over the slide that draws ink and the laser dot. While `suspended` (e.g. a
- * second finger turned the stroke into a pinch), the stroke being drawn is dropped.
+ * Transparent layer over the slide that draws ink and the laser dot. Finished strokes are an SVG
+ * that only changes when a stroke is added or removed; the stroke being drawn goes on a canvas,
+ * a segment per move. Redrawing every stroke on every move made drawing slow on iPads, more so
+ * the more marks a slide had (WebKit paints SVG on the CPU).
  */
-export function AnnotationLayer({ annotations, suspended = false }: { annotations: Annotations; suspended?: boolean }) {
+export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
   const { tool, colors, strokes, addStroke, erase } = annotations;
   const layerRef = useRef<HTMLDivElement>(null);
-  const [draft, setDraft] = useState<Stroke | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // The stroke being drawn, and where its canvas pen is (layer px). Not state: drawing a
+  // stroke renders nothing until it is done.
+  const draft = useRef<{ stroke: Stroke; pen: [number, number]; ctx: CanvasRenderingContext2D | null } | null>(null);
   const [laser, setLaser] = useState<{ x: number; y: number } | null>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const active = tool !== "pointer";
@@ -114,13 +119,26 @@ export function AnnotationLayer({ annotations, suspended = false }: { annotation
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
-    setDraft(null);
-    setLaser(null);
-  }, [tool, suspended]);
+  const clearDraft = () => {
+    const ctx = draft.current?.ctx;
+    draft.current = null;
+    if (!ctx) return;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  };
 
-  const at = (event: ReactPointerEvent) =>
-    toFraction(event.clientX, event.clientY, layerRef.current!.getBoundingClientRect());
+  useEffect(() => {
+    clearDraft();
+    setLaser(null);
+  }, [tool]);
+
+  /** A pointer position in layer pixels and in fractions of the layer. */
+  const locate = (event: { clientX: number; clientY: number }) => {
+    const el = layerRef.current!;
+    const fraction = toFraction(event.clientX, event.clientY, el.getBoundingClientRect());
+    const px: [number, number] = [fraction[0] * el.offsetWidth, fraction[1] * el.offsetHeight];
+    return { fraction, px };
+  };
 
   const eraseUnder = (event: ReactPointerEvent) => {
     const hit = (event.target as Element).closest?.("[data-stroke]");
@@ -128,15 +146,23 @@ export function AnnotationLayer({ annotations, suspended = false }: { annotation
   };
 
   const onPointerDown = (event: ReactPointerEvent) => {
-    if (event.button !== 0 || suspended) return;
+    if (event.button !== 0) return;
     if (tool === "eraser") eraseUnder(event);
     if (tool !== "pen" && tool !== "highlighter") return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
-    setDraft({ tool, color: colors[tool], points: [at(event)] });
+    clearDraft();
+    const { fraction, px } = locate(event);
+    const color = colors[tool];
+    const ctx = startCanvas(canvasRef.current!, layerRef.current!, tool, color);
+    draft.current = { stroke: { tool, color, points: [fraction] }, pen: px, ctx };
+    if (ctx) {
+      ctx.beginPath();
+      ctx.arc(px[0], px[1], INK_STYLE[tool].width / 2, 0, 2 * Math.PI);
+      ctx.fill();
+    }
   };
 
   const onPointerMove = (event: ReactPointerEvent) => {
-    if (suspended) return;
     if (tool === "laser") {
       const el = layerRef.current!;
       const rect = el.getBoundingClientRect();
@@ -144,15 +170,29 @@ export function AnnotationLayer({ annotations, suspended = false }: { annotation
       setLaser({ x: (event.clientX - rect.left) / zoom, y: (event.clientY - rect.top) / zoom });
     } else if (tool === "eraser" && event.buttons & 1) {
       eraseUnder(event);
-    } else if (draft) {
-      const point = at(event);
-      setDraft((d) => d && { ...d, points: [...d.points, point] });
+    } else if (draft.current) {
+      const current = draft.current;
+      // A pencil reports many more positions than there are frames; the browser coalesces them.
+      const coalesced = event.nativeEvent.getCoalescedEvents?.() ?? [];
+      for (const e of coalesced.length ? coalesced : [event]) {
+        const { fraction, px } = locate(e);
+        current.stroke.points.push(fraction);
+        if (current.ctx) {
+          current.ctx.beginPath();
+          current.ctx.moveTo(...current.pen);
+          current.ctx.lineTo(...px);
+          current.ctx.stroke();
+        }
+        current.pen = px;
+      }
     }
   };
 
   const finish = () => {
-    if (draft && !suspended) addStroke(draft);
-    setDraft(null);
+    const stroke = draft.current?.stroke;
+    // The finished stroke renders before the next paint, so the canvas can be cleared now.
+    if (stroke) addStroke(stroke);
+    clearDraft();
   };
 
   return (
@@ -169,38 +209,16 @@ export function AnnotationLayer({ annotations, suspended = false }: { annotation
       onPointerMove={onPointerMove}
       onPointerUp={finish}
       onPointerCancel={finish}
-      onPointerLeave={() => {
-        finish();
+      onPointerLeave={(event) => {
+        // A mouse that leaves the slide ends its stroke. Touch and pencil strokes end when lifted:
+        // iOS sends a leave right after the stroke starts (around the pointer capture), which
+        // would cut every stroke off after its first point or two.
+        if (event.pointerType === "mouse") finish();
         setLaser(null);
       }}
     >
-      <svg className="absolute inset-0 size-full">
-        {[...strokes, ...(draft ? [draft] : [])].map((stroke, i) => {
-          const { width, opacity } = INK_STYLE[stroke.tool];
-          const points = toPixels(stroke.points, size.width, size.height);
-          const common = {
-            "data-stroke": i < strokes.length ? i : undefined,
-            style: { pointerEvents: tool === "eraser" ? ("visiblePainted" as const) : ("none" as const) },
-          };
-          if (isDot(points)) {
-            const [[cx, cy]] = points as [[number, number]];
-            return <circle key={i} {...common} cx={cx} cy={cy} r={width / 2} fill={stroke.color} fillOpacity={opacity} />;
-          }
-          return (
-            <path
-              key={i}
-              {...common}
-              d={strokePath(points)}
-              fill="none"
-              stroke={stroke.color}
-              strokeWidth={width}
-              strokeOpacity={opacity}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          );
-        })}
-      </svg>
+      <InkPaths strokes={strokes} width={size.width} height={size.height} erasable={tool === "eraser"} />
+      <canvas ref={canvasRef} data-testid="ink-draft" className="pointer-events-none absolute inset-0 size-full" />
       {laser && (
         <div
           data-testid="laser"
@@ -215,6 +233,59 @@ export function AnnotationLayer({ annotations, suspended = false }: { annotation
     </div>
   );
 }
+
+/**
+ * Readies the canvas for a stroke: sized to the layer at the screen's density, in layer pixels,
+ * with the tool's look. A highlighter's opacity is the canvas's, so its segments don't darken
+ * where they overlap. Null where there is no 2D canvas (tests).
+ */
+function startCanvas(canvas: HTMLCanvasElement, layer: HTMLElement, tool: InkTool, color: string) {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  const density = window.devicePixelRatio || 1;
+  const width = Math.round(layer.offsetWidth * density);
+  const height = Math.round(layer.offsetHeight * density);
+  if (canvas.width !== width) canvas.width = width;
+  if (canvas.height !== height) canvas.height = height;
+  ctx.setTransform(density, 0, 0, density, 0, 0);
+  ctx.strokeStyle = ctx.fillStyle = color;
+  ctx.lineWidth = INK_STYLE[tool].width;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  canvas.style.opacity = String(INK_STYLE[tool].opacity);
+  return ctx;
+}
+
+/** The finished strokes; renders again only when they, the layer's size or erasing change. */
+const InkPaths = memo(function InkPaths(props: { strokes: Stroke[]; width: number; height: number; erasable: boolean }) {
+  const pointerEvents = props.erasable ? ("visiblePainted" as const) : ("none" as const);
+  return (
+    <svg className="absolute inset-0 size-full">
+      {props.strokes.map((stroke, i) => {
+        const { width, opacity } = INK_STYLE[stroke.tool];
+        const points = toPixels(stroke.points, props.width, props.height);
+        const common = { "data-stroke": i, style: { pointerEvents } };
+        if (isDot(points)) {
+          const [[cx, cy]] = points as [[number, number]];
+          return <circle key={i} {...common} cx={cx} cy={cy} r={width / 2} fill={stroke.color} fillOpacity={opacity} />;
+        }
+        return (
+          <path
+            key={i}
+            {...common}
+            d={strokePath(points)}
+            fill="none"
+            stroke={stroke.color}
+            strokeWidth={width}
+            strokeOpacity={opacity}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        );
+      })}
+    </svg>
+  );
+});
 
 /**
  * Tool palette in the bottom-left corner. Hidden while presenting; appears when the mouse

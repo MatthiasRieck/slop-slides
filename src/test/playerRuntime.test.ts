@@ -388,3 +388,71 @@ describe("player: section markers", () => {
     expect(css).toMatch(/\.deck > \.deck-section\s*\{[^}]*display:\s*none\s*!important/);
   });
 });
+
+describe("player: review marks", () => {
+  const MARKS = {
+    intro: [
+      { tool: "pen", color: "#ef4444", points: [[0.1, 0.2], [0.5, 0.5]] },
+      { tool: "highlighter", color: "#facc15", points: [[0.25, 0.25]] },
+    ],
+    gone: [{ tool: "pen", color: "#000", points: [[0, 0]] }],
+  };
+  const REVIEWED = DECK.replace(
+    "</body>",
+    `<script type="application/json" id="slopslide-review">${JSON.stringify(MARKS)}</script></body>`,
+  );
+  const shown = (p: ReturnType<typeof player>) => p.doc.documentElement.hasAttribute("data-slop-review");
+
+  it("starts hidden and toggles with R", () => {
+    const p = player({ html: REVIEWED });
+    expect(shown(p)).toBe(false);
+    expect(p.doc.querySelector(".slop-review")).toBeNull();
+    expect(p.key("r").defaultPrevented).toBe(true);
+    expect(shown(p)).toBe(true);
+    p.key("R");
+    expect(shown(p)).toBe(false);
+    p.key("r");
+    expect(p.doc.querySelectorAll(".slop-review")).toHaveLength(1);
+  });
+
+  it("draws each slide's strokes over that slide, in slide pixels", () => {
+    const p = player({ html: REVIEWED, at: "?review" });
+    expect(shown(p)).toBe(true);
+    const svg = p.doc.querySelector("#intro > svg.slop-review")!;
+    expect(svg.getAttribute("viewBox")).toBe("0 0 1920 1080");
+    const [pen, dot] = [...svg.querySelectorAll("path")];
+    expect(pen!.getAttribute("d")).toBe("M192 216L960 540");
+    expect(pen!.getAttribute("stroke")).toBe("#ef4444");
+    expect(pen!.getAttribute("vector-effect")).toBe("non-scaling-stroke");
+    expect(dot!.getAttribute("d")).toBe("M480 270l0.01 0");
+    expect(dot!.getAttribute("stroke-opacity")).toBe("0.4");
+  });
+
+  it("leaves Cmd+R to the browser and decks without marks alone", () => {
+    const p = player({ html: REVIEWED });
+    const event = new p.window.KeyboardEvent("keydown", { key: "r", metaKey: true, cancelable: true });
+    p.window.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+    expect(shown(p)).toBe(false);
+    const plain = player();
+    expect(plain.key("r").defaultPrevented).toBe(false);
+    expect(shown(plain)).toBe(false);
+  });
+
+  it("leaves the marks to the editor in embedded previews", () => {
+    const p = player({ html: REVIEWED, at: "?embed&review" });
+    expect(p.doc.querySelector(".slop-review")).toBeNull();
+  });
+
+  it("ignores a damaged review block", () => {
+    const p = player({ html: REVIEWED.replace('{"intro"', '{intro') });
+    expect(p.key("r").defaultPrevented).toBe(false);
+    expect(p.active()).toBe(0);
+  });
+
+  it("is hidden by the runtime stylesheet until shown", () => {
+    const css = readFileSync("src-tauri/assets/runtime.css", "utf8");
+    expect(css).toMatch(/\.slide > \.slop-review\s*\{[^}]*display:\s*none/);
+    expect(css).toMatch(/html\[data-slop-review\] \.slide > \.slop-review\s*\{[^}]*display:\s*block/);
+  });
+});

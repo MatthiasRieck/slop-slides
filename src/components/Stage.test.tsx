@@ -5,12 +5,15 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 
-import { SKETCH_TARGET_ATTR, useApp } from "../store";
+import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Stage } from "./Stage";
 
+// Drawing schedules a save of the review marks; finish it here, not in the next test.
+afterEach(() => flushReviewSave());
+
 beforeEach(() => {
-  useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", presenting: false, sketches: {} });
+  useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", presenting: false, sketches: {}, reviewVisible: true });
 });
 
 const position = () => screen.getByText(/^\d+ \/ \d+$/).textContent;
@@ -221,9 +224,38 @@ describe("Stage", () => {
       draw([[20, 20]]);
       fireEvent.click(tool("Undo mark"));
       expect(useApp.getState().sketches.intro).toHaveLength(1);
-      fireEvent.click(tool("Clear marks"));
+      fireEvent.click(tool("Clear marks on this slide"));
       expect(useApp.getState().sketches.intro).toEqual([]);
-      expect(screen.queryByRole("button", { name: "Clear marks" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Clear marks on this slide" })).toBeNull();
+    });
+
+    it("shows and hides the review marks", () => {
+      const mark = { tool: "pen" as const, color: "#ef4444", points: [[0.5, 0.5]] as [number, number][] };
+      render(<Stage />);
+      expect(screen.queryByRole("button", { name: "Hide review marks" })).toBeNull();
+      // Marks on any slide offer the toggle, even when the current slide has none.
+      act(() => useApp.setState({ sketches: { "#2": [mark] } }));
+      fireEvent.click(tool("Draw on the slide"));
+      draw([[10, 10]]);
+      expect(layer().querySelectorAll("[data-stroke]")).toHaveLength(1);
+      fireEvent.click(tool("Hide review marks"));
+      expect(useApp.getState().reviewVisible).toBe(false);
+      expect(pressed("Draw on the slide")).toBe(false);
+      expect(layer().querySelectorAll("[data-stroke]")).toHaveLength(0);
+      expect(screen.queryByRole("button", { name: "Undo mark" })).toBeNull();
+      expect(useApp.getState().sketches.intro).toHaveLength(1);
+      fireEvent.click(tool("Show review marks"));
+      expect(layer().querySelectorAll("[data-stroke]")).toHaveLength(1);
+    });
+
+    it("picking a pen shows hidden review marks", () => {
+      const mark = { tool: "pen" as const, color: "#ef4444", points: [[0.5, 0.5]] as [number, number][] };
+      useApp.setState({ sketches: { intro: [mark] }, reviewVisible: false });
+      render(<Stage />);
+      expect(layer().querySelectorAll("[data-stroke]")).toHaveLength(0);
+      fireEvent.click(tool("Highlight on the slide"));
+      expect(useApp.getState().reviewVisible).toBe(true);
+      expect(layer().querySelectorAll("[data-stroke]")).toHaveLength(1);
     });
 
     it("Escape puts the tool away, but not while typing", () => {

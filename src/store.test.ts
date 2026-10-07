@@ -549,7 +549,7 @@ describe("sending a message", () => {
     });
     afterEach(() => target.remove());
 
-    it("screenshots the slide with the ink, then clears that slide's ink", async () => {
+    it("screenshots the slide with the ink, which stays on the slide as a review", async () => {
       const useApp = await freshStore();
       let inkWhenCaptured: unknown;
       backend({
@@ -568,7 +568,7 @@ describe("sending a message", () => {
         },
       ]);
       expect(inkWhenCaptured).toEqual([mark]);
-      expect(useApp.getState().sketches).toEqual({ intro: [mark] });
+      expect(useApp.getState().sketches).toEqual({ outro: [mark], intro: [mark] });
       expect(prompt()).toBe(
         [
           "[context]",
@@ -598,7 +598,7 @@ describe("sending a message", () => {
       expect(prompt()).not.toContain("Sketch:");
       expect(prompt()).toContain("Marked area: x 476–964, y 266–544 of the 1920×1080 slide");
       expect(useApp.getState().messages[0]).toMatchObject({ sketch: { image: null } });
-      expect(useApp.getState().sketches).toEqual({});
+      expect(useApp.getState().sketches).toEqual({ outro: [mark] });
       expect(calls("send_message")).toHaveLength(1);
       vi.restoreAllMocks();
     });
@@ -622,6 +622,43 @@ describe("sending a message", () => {
       expect(useApp.getState().sketches).toEqual({ outro: [mark] });
     });
 
+    it("sends the marks once, and again after they change", async () => {
+      const useApp = await freshStore();
+      backend({ capture_sketch: () => ".slopslide/sketches/1.png" });
+      useApp.setState({ deck: DECK, selected: "outro", sketches: { outro: [mark] } });
+      const send = async (text: string) => {
+        await useApp.getState().send(text, { includeSlide: true, attachments: [] });
+        useApp.setState({ running: false });
+      };
+      await send("Fix");
+      await send("And the title");
+      const prompts = () => calls("send_message").map((c) => (c.args as { prompt: string }).prompt);
+      expect(calls("capture_sketch")).toHaveLength(1);
+      expect(prompts()[1]).not.toContain("Marked area");
+      useApp.getState().setSketches((all) => ({ ...all, outro: [mark, mark] }));
+      await send("Also this");
+      expect(calls("capture_sketch")).toHaveLength(2);
+      expect(prompts()[2]).toContain("Marked area");
+    });
+
+    it("skipSketch keeps the current marks out of the next message", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "outro", sketches: { outro: [mark] } });
+      useApp.getState().skipSketch("outro");
+      await useApp.getState().send("Fix", { includeSlide: true, attachments: [] });
+      expect(calls("capture_sketch")).toEqual([]);
+      expect(prompt()).not.toContain("Marked area");
+      expect(useApp.getState().sketches).toEqual({ outro: [mark] });
+    });
+
+    it("does not send hidden review marks", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "outro", sketches: { outro: [mark] }, reviewVisible: false });
+      await useApp.getState().send("Fix", { includeSlide: true, attachments: [] });
+      expect(calls("capture_sketch")).toEqual([]);
+      expect(useApp.getState().messages[0]).toMatchObject({ sketch: null });
+    });
+
     it("ignores another slide's sketch and emptied sketches", async () => {
       const useApp = await freshStore();
       useApp.setState({ deck: DECK, selected: "outro", sketches: { intro: [mark], outro: [] } });
@@ -638,6 +675,77 @@ describe("sending a message", () => {
     useApp.getState().clearSketch("a");
     useApp.getState().clearSketch("missing");
     expect(useApp.getState().sketches).toEqual({ b: ink });
+  });
+
+  describe("review marks", () => {
+    const ink = [{ tool: "pen" as const, color: "#fff", points: [[0.5, 0.5]] as [number, number][] }];
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("are saved to deck.html once drawing pauses, without empty slides", async () => {
+      vi.useFakeTimers();
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK });
+      useApp.getState().setSketches((all) => ({ ...all, intro: ink }));
+      useApp.getState().setSketches((all) => ({ ...all, outro: ink }));
+      useApp.getState().clearSketch("outro");
+      useApp.getState().setSketches((all) => ({ ...all, "#2": [] }));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(calls("save_review")).toEqual([]);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(calls("save_review")).toEqual([{ id: "talk", review: { intro: ink } }]);
+    });
+
+    it("are saved right away when the deck closes", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK });
+      useApp.getState().setSketches(() => ({ intro: ink }));
+      await useApp.getState().closeDeck();
+      expect(calls("save_review")).toEqual([{ id: "talk", review: { intro: ink } }]);
+      const order = invoke.mock.calls.map(([c]) => c);
+      expect(order.indexOf("save_review")).toBeLessThan(order.indexOf("close_deck"));
+    });
+
+    it("are not saved when they end up as the file has them", async () => {
+      const { useApp, flushReviewSave } = await freshModule();
+      useApp.setState({ deck: DECK });
+      useApp.getState().setSketches(() => ({ intro: ink }));
+      useApp.getState().clearSketch("intro");
+      await flushReviewSave();
+      expect(calls("save_review")).toEqual([]);
+    });
+
+    it("report a failed save", async () => {
+      const { useApp, flushReviewSave } = await freshModule();
+      backend({
+        save_review: () => {
+          throw "disk full";
+        },
+      });
+      useApp.setState({ deck: DECK });
+      useApp.getState().setSketches(() => ({ intro: ink }));
+      await flushReviewSave();
+      expect(useApp.getState().error).toBe("Could not save the review marks: disk full");
+    });
+
+    it("are loaded with the deck", async () => {
+      const useApp = await freshStore();
+      backend({ open_deck: () => ({ ...DECK, review: { intro: ink } }), load_chat: () => [], agent_running: () => false });
+      await useApp.getState().openDeck("talk");
+      expect(useApp.getState().sketches).toEqual({ intro: ink });
+    });
+
+    it("visibility is remembered", async () => {
+      localStorage.removeItem("slopslide.reviewVisible");
+      let useApp = await freshStore();
+      expect(useApp.getState().reviewVisible).toBe(true);
+      useApp.getState().setReviewVisible(false);
+      useApp = await freshStore();
+      expect(useApp.getState().reviewVisible).toBe(false);
+      localStorage.removeItem("slopslide.reviewVisible");
+    });
   });
 
   it("interrupt asks the backend to stop this deck's agent", async () => {
@@ -905,6 +1013,33 @@ describe("deck file changes", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("takes on review marks changed outside the app", async () => {
+    const ink = [{ tool: "pen" as const, color: "#fff", points: [[0.5, 0.5]] as [number, number][] }];
+    let review: Deck["review"] = { intro: ink };
+    const { useApp, changed } = await watching(() => ({ ...DECK, review }));
+    useApp.setState({ sketches: {} });
+    changed(["deck.html"]);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(useApp.getState().sketches).toEqual({ intro: ink });
+    // The agent cleared the review when asked to.
+    review = undefined;
+    changed(["deck.html"]);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(useApp.getState().sketches).toEqual({});
+  });
+
+  it("keeps marks the user is still drawing over the file's older ones", async () => {
+    const ink = [{ tool: "pen" as const, color: "#fff", points: [[0.5, 0.5]] as [number, number][] }];
+    const { useApp, changed } = await watching(() => ({ ...DECK, review: {} }));
+    useApp.getState().setSketches(() => ({ intro: ink }));
+    changed(["deck.html"]);
+    await vi.advanceTimersByTimeAsync(130);
+    expect(useApp.getState().sketches).toEqual({ intro: ink });
+    // Once saved, the file matches what was saved and nothing is taken on.
+    await vi.advanceTimersByTimeAsync(400);
+    expect(calls("save_review")).toHaveLength(1);
   });
 
   it("reloads every preview when attached assets change", async () => {
@@ -1299,7 +1434,7 @@ describe("editing slides on the stage", () => {
         sketch: { image: ".slopslide/sketches/3.png" },
         screenshot: ".slopslide/sketches/3.png",
       });
-      expect(useApp.getState().sketches).toEqual({});
+      expect(useApp.getState().sketches).toEqual({ intro: ink });
     });
   });
 });

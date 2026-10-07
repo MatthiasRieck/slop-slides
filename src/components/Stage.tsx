@@ -6,6 +6,7 @@ import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { SketchToolbar } from "./SketchToolbar";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import type { Slide } from "../lib/api";
+import type { Stroke } from "../lib/ink";
 import { cn } from "../lib/utils";
 
 /** The stage area's padding (Tailwind p-8), which the pasteboard covers too. */
@@ -17,11 +18,15 @@ export function Stage() {
   const deck = useApp((s) => s.deck);
   const selected = useApp((s) => s.selected);
   const sketches = useApp((s) => s.sketches);
+  const reviewVisible = useApp((s) => s.reviewVisible);
   const editing = useApp((s) => s.editing);
   const running = useApp((s) => s.running);
   const canUndo = useApp((s) => s.slideUndo.length > 0);
   const canRedo = useApp((s) => s.slideRedo.length > 0);
-  const annotations = useAnnotations(selected ?? "", { ink: sketches, setInk: useApp.getState().setSketches });
+  const annotations = useAnnotations(selected ?? "", {
+    ink: reviewVisible ? sketches : NO_INK,
+    setInk: useApp.getState().setSketches,
+  });
   const areaRef = useRef<HTMLDivElement>(null);
   const pasteboard = usePasteboard(areaRef);
   const editFrames = useSlideEditing(areaRef, pasteboard.resetView);
@@ -47,9 +52,12 @@ export function Stage() {
   useSlideKeyboard();
   useSketchKeyboard(annotations.tool !== "pointer", () => annotations.setTool("pointer"));
 
-  // Drawing and editing take turns: picking a pen leaves edit mode.
+  // Drawing and editing take turns: picking a pen leaves edit mode. It also shows the review
+  // marks, so the new ones are not drawn blind.
   useEffect(() => {
-    if (annotations.tool !== "pointer") useApp.getState().setEditing(false);
+    if (annotations.tool === "pointer") return;
+    useApp.getState().setEditing(false);
+    useApp.getState().setReviewVisible(true);
   }, [annotations.tool]);
   const toggleEditing = () => {
     if (!editing) annotations.setTool("pointer");
@@ -390,6 +398,7 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
 }
 
 const NO_OVERFLOW: string[] = [];
+const NO_INK: Record<string, Stroke[]> = {};
 
 /** ⌘Z undoes, ⇧⌘Z / ⌘Y redo; true when the key was one of them. */
 function runHistoryKey(key: string, shift: boolean) {

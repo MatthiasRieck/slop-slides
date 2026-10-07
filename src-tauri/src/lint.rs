@@ -10,6 +10,7 @@ use crate::html::{
     self, find_ci, has_class, parse_tag, EDITOR_ATTRS, HIDDEN_ATTR, MOVED_ATTR, SECTION_CLASS,
     SECTION_TITLE_ATTR,
 };
+use crate::review;
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
@@ -100,6 +101,7 @@ pub fn lint(source: &str, asset_exists: impl Fn(&str) -> bool) -> Vec<Issue> {
     check_document(&mut l);
     check_slides(&mut l);
     check_sections(&mut l);
+    check_review(&mut l);
     check_assets(&mut l, asset_exists);
     l.issues.sort_by_key(|i| (i.line, i.severity));
     l.issues
@@ -471,6 +473,32 @@ fn check_sections(l: &mut Linter) {
     }
 }
 
+/// The app-managed review block (the user's marks on slides): readable, and outside the slides.
+fn check_review(l: &mut Linter) {
+    let html = l.html;
+    let Some(at) = html.find(review::START) else {
+        return;
+    };
+    if let Err(problem) = review::parse(html) {
+        l.report(
+            "review-invalid",
+            Severity::Warning,
+            at,
+            format!(
+                "{problem} The slopslide:review block holds the user's review marks and is managed by the app: restore it as it was, or delete the whole block (from its start comment to its end comment) if the user asked to clear the review."
+            ),
+        );
+    }
+    if l.slides.iter().any(|s| s.range.contains(&at)) {
+        l.report(
+            "review-misplaced",
+            Severity::Warning,
+            at,
+            "The slopslide:review block belongs at the end of <body>, outside the slides; move it back there unchanged.".into(),
+        );
+    }
+}
+
 fn is_kebab_case(id: &str) -> bool {
     !id.is_empty()
         && id.split('-').all(|p| {
@@ -613,6 +641,47 @@ mod tests {
 <section class="slide" id="plan-2025" data-hidden><p>Plan</p></section>"#,
         );
         assert_eq!(lint(&html, |p| p == "assets/logo.png"), vec![]);
+    }
+
+    fn stroke() -> review::Stroke {
+        review::Stroke {
+            tool: review::InkTool::Pen,
+            color: "#ef4444".into(),
+            points: vec![[0.5, 0.5]],
+        }
+    }
+
+    #[test]
+    fn accepts_review_marks() {
+        let marks = [("intro".to_string(), vec![stroke()])].into();
+        let html = review::write(
+            &deck(r#"<section class="slide" id="intro"><p>Hi</p></section>"#),
+            &marks,
+        );
+        assert!(html.contains(review::START));
+        assert_eq!(rules(&html), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn flags_damaged_or_misplaced_review_marks() {
+        let marks = [("intro".to_string(), vec![stroke()])].into();
+        let html = review::write(
+            &deck(r#"<section class="slide" id="intro"><p>Hi</p></section>"#),
+            &marks,
+        );
+        assert_eq!(rules(&html.replace("#ef4444", "red")), ["review-invalid"]);
+        assert_eq!(rules(&html.replace(review::END, "")), ["review-invalid"]);
+        let block = &html[review::block_range(&html).unwrap()];
+        let inside = deck(&format!(
+            r#"<section class="slide" id="intro"><p>Hi</p>{block}</section>"#
+        ));
+        let found = rules(&inside);
+        assert!(found.contains(&"review-misplaced"), "{found:?}");
+        let issue = lint(&html.replace("[[", "["), |_| true).remove(0);
+        assert_eq!(
+            issue.line,
+            html[..html.find(review::START).unwrap()].lines().count()
+        );
     }
 
     #[test]

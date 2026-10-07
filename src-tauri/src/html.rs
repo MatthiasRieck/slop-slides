@@ -280,14 +280,14 @@ pub fn content_hash(text: &str) -> String {
     format!("{:x}", hasher.finish())
 }
 
-/// Hash of everything except the slides and section markers: shared styles, fonts, runtime.
-/// A marker's leading whitespace goes with it, so adding or removing one leaves the hash alone.
+/// Hash of everything except the slides, section markers and review marks: shared styles,
+/// fonts, runtime. A marker's (or the review block's) leading whitespace goes with it, so
+/// adding or removing one leaves the hash alone.
 pub fn shell_hash(html: &str, slides: &[SlideSpan], sections: &[SectionSpan]) -> String {
     let mut cut: Vec<Range<usize>> = slides.iter().map(|s| s.range.clone()).collect();
-    cut.extend(sections.iter().map(|s| {
-        let start = html[..s.range.start].trim_end().len();
-        start..s.range.end
-    }));
+    let with_indent = |range: &Range<usize>| html[..range.start].trim_end().len()..range.end;
+    cut.extend(sections.iter().map(|s| with_indent(&s.range)));
+    cut.extend(crate::review::block_range(html).map(|r| with_indent(&r)));
     cut.sort_by_key(|r| r.start);
     let mut shell = String::with_capacity(html.len());
     let mut at = 0;
@@ -1446,6 +1446,22 @@ mod tests {
             .map(String::from)
             .into();
         assert_eq!(reorder(SECTIONED, &all).unwrap(), SECTIONED);
+    }
+
+    #[test]
+    fn shell_hash_ignores_review_marks() {
+        let hash = |html: &str| shell_hash(html, &find_slides(html), &find_sections(html));
+        let deck = ensure_runtime(
+            "<html><head></head><body><main class=\"deck\"><section class=\"slide\" id=\"a\"></section></main></body></html>",
+        );
+        let stroke = crate::review::Stroke {
+            tool: crate::review::InkTool::Pen,
+            color: "#000".into(),
+            points: vec![[0.5, 0.5]],
+        };
+        let marked = crate::review::write(&deck, &[("a".to_string(), vec![stroke])].into());
+        assert_ne!(marked, deck);
+        assert_eq!(hash(&marked), hash(&deck));
     }
 
     #[test]

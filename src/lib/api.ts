@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import type { Stroke } from "./ink";
 import type { Provider, ProviderInfo } from "./models";
 
 export interface DeckSummary {
@@ -38,6 +39,8 @@ export interface Deck {
   sections: Section[];
   /** Changes when anything outside the slides (styles, fonts) changes. */
   shellHash: string;
+  /** Review marks the user drew, by slide id, stored in deck.html. */
+  review?: Record<string, Stroke[]>;
 }
 
 export interface CreatedSlide {
@@ -98,6 +101,8 @@ export const api = {
   openDeck: (id: string) => invoke<Deck>("open_deck", { id }),
   closeDeck: () => invoke<void>("close_deck"),
   loadDeck: (id: string) => invoke<Deck>("load_deck", { id }),
+  /** Stores the review marks (by slide id) in deck.html. */
+  saveReview: (id: string, review: Record<string, Stroke[]>) => invoke<void>("save_review", { id, review }),
   renameDeck: (id: string, title: string) => invoke<Deck>("rename_deck", { id, title }),
   deleteDeck: (id: string) => invoke<void>("delete_deck", { id }),
   /** `slides` lists every slide id and section key (see `sectionKey`) in the new order. */

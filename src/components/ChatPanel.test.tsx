@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
 const openDialog = vi.fn();
@@ -19,7 +19,7 @@ vi.mock("@tauri-apps/api/webview", () => ({
 }));
 
 import type { ProviderInfo } from "../lib/models";
-import { useApp, type AssistantMessage, type ChatMessage, type ChatPart } from "../store";
+import { flushReviewSave, useApp, type AssistantMessage, type ChatMessage, type ChatPart } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ChatPanel } from "./ChatPanel";
 
@@ -49,6 +49,9 @@ const resetChat = vi.fn(async () => {});
 const interrupt = vi.fn();
 const compact = vi.fn(async () => {});
 
+// Drawing schedules a save of the review marks; finish it here, not in the next test.
+afterEach(() => flushReviewSave());
+
 beforeEach(() => {
   invoke.mockReset();
   openDialog.mockReset();
@@ -68,6 +71,8 @@ beforeEach(() => {
     favoriteModels: [],
     error: null,
     sketches: {},
+    sketchesSent: {},
+    reviewVisible: true,
     send,
     resetChat,
     interrupt,
@@ -211,12 +216,23 @@ describe("ChatPanel: composing", () => {
       expect(screen.queryByText("Sketch")).toBeNull();
     });
 
-    it("can be discarded", () => {
+    it("can be left out, keeping the marks on the slide", () => {
       useApp.setState({ sketches: { intro: [mark], outro: [mark] } });
       render(<ChatPanel />);
-      fireEvent.click(screen.getByRole("button", { name: "Discard sketch" }));
-      expect(useApp.getState().sketches).toEqual({ outro: [mark] });
+      fireEvent.click(screen.getByRole("button", { name: "Don't send sketch" }));
+      expect(useApp.getState().sketches).toEqual({ intro: [mark], outro: [mark] });
       expect(screen.queryByText("Sketch")).toBeNull();
+      // New marks go along again.
+      act(() => useApp.setState((s) => ({ sketches: { ...s.sketches, intro: [mark, mark] } })));
+      expect(screen.getByText("Sketch")).toBeTruthy();
+    });
+
+    it("is not sent while the review marks are hidden", () => {
+      useApp.setState({ sketches: { intro: [mark] }, reviewVisible: false });
+      render(<ChatPanel />);
+      expect(screen.queryByText("Sketch")).toBeNull();
+      act(() => useApp.getState().setReviewVisible(true));
+      expect(screen.getByText("Sketch")).toBeTruthy();
     });
 
     it("is left out with the slide", () => {

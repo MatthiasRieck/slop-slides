@@ -17,6 +17,12 @@ const CASES = [
   ["closeDeck", () => api.closeDeck(), "close_deck", undefined],
   ["loadDeck", () => api.loadDeck("talk"), "load_deck", { id: "talk" }],
   ["renameDeck", () => api.renameDeck("talk", "New"), "rename_deck", { id: "talk", title: "New" }],
+  [
+    "saveReview",
+    () => api.saveReview("talk", { intro: [{ tool: "pen", color: "#fff", points: [[0.5, 0.5]] }] }),
+    "save_review",
+    { id: "talk", review: { intro: [{ tool: "pen", color: "#fff", points: [[0.5, 0.5]] }] } },
+  ],
   ["deleteDeck", () => api.deleteDeck("talk"), "delete_deck", { id: "talk" }],
   ["reorderSlides", () => api.reorderSlides("talk", ["b", "a"]), "reorder_slides", { id: "talk", slides: ["b", "a"] }],
   ["addSlide", () => api.addSlide("talk", null), "add_slide", { id: "talk", after: null }],

@@ -49,6 +49,21 @@ body {
 .slide .notes {
   display: none !important;
 }
+/* Review marks from the editor, drawn by the player over their slide; R shows and hides them. */
+.slide > .slop-review {
+  display: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  pointer-events: none;
+  z-index: 2147483647;
+}
+html[data-slop-review] .slide > .slop-review {
+  display: block;
+}
 .slide img,
 .slide video,
 .slide canvas,

@@ -1,16 +1,25 @@
-import { Eraser, Highlighter, PenLine, Trash2, Undo2 } from "lucide-react";
+import { Eraser, Eye, EyeOff, Highlighter, PenLine, Trash2, Undo2 } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { INK_COLORS } from "../lib/ink";
+import { useApp } from "../store";
 import { cn } from "../lib/utils";
 import type { Annotations } from "./PresenterTools";
 
 /**
- * Pen, highlighter and eraser for marking up the slide in the editor. The drawing is sent
- * to the agent as a screenshot with the next chat message.
+ * Pen, highlighter and eraser for marking up the slide in the editor. The marks are saved in
+ * deck.html as a review, which can be shown and hidden, and sent to the agent as a screenshot
+ * with the next chat message.
  */
 export function SketchToolbar({ annotations }: { annotations: Annotations }) {
   const { tool, setTool, colors, setColor, strokes, undo, clear } = annotations;
+  const reviewVisible = useApp((s) => s.reviewVisible);
+  const hasReview = useApp((s) => Object.values(s.sketches).some((marks) => marks.length > 0));
+  const toggleReview = () => {
+    // Hidden marks can't be drawn on, so the tools go away with them.
+    if (reviewVisible) setTool("pointer");
+    useApp.getState().setReviewVisible(!reviewVisible);
+  };
   const inking = tool === "pen" || tool === "highlighter";
   // Clicking the active tool puts it away, so the slide is clickable again.
   const toggle = (next: typeof tool) => setTool(tool === next ? "pointer" : next);
@@ -50,8 +59,16 @@ export function SketchToolbar({ annotations }: { annotations: Annotations }) {
           <SketchButton label="Undo mark" onClick={undo}>
             <Undo2 />
           </SketchButton>
-          <SketchButton label="Clear marks" onClick={clear}>
+          <SketchButton label="Clear marks on this slide" onClick={clear}>
             <Trash2 />
+          </SketchButton>
+        </>
+      )}
+      {hasReview && (
+        <>
+          <div className="mx-1 h-4 w-px bg-border" />
+          <SketchButton label={reviewVisible ? "Hide review marks" : "Show review marks"} onClick={toggleReview}>
+            {reviewVisible ? <Eye /> : <EyeOff />}
           </SketchButton>
         </>
       )}

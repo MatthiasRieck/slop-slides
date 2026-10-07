@@ -636,6 +636,8 @@ export async function flushReviewSave() {
   const { deck, sketches } = useApp.getState();
   if (deck?.id !== deckId) return;
   const review = Object.fromEntries(Object.entries(sketches).filter(([, strokes]) => strokes.length > 0));
+  // Drawing and undoing back to where the file is leaves nothing to save.
+  if (reviewKey(review) === savedReview) return;
   reviewSaving++;
   try {
     await api.saveReview(deckId, review);

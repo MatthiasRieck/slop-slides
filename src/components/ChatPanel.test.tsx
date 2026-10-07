@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
 const openDialog = vi.fn();
@@ -19,7 +19,7 @@ vi.mock("@tauri-apps/api/webview", () => ({
 }));
 
 import type { ProviderInfo } from "../lib/models";
-import { useApp, type AssistantMessage, type ChatMessage, type ChatPart } from "../store";
+import { flushReviewSave, useApp, type AssistantMessage, type ChatMessage, type ChatPart } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ChatPanel } from "./ChatPanel";
 
@@ -47,6 +47,9 @@ const PROVIDERS: ProviderInfo[] = [
 const send = vi.fn(async () => {});
 const resetChat = vi.fn(async () => {});
 const interrupt = vi.fn();
+
+// Drawing schedules a save of the review marks; finish it here, not in the next test.
+afterEach(() => flushReviewSave());
 
 beforeEach(() => {
   invoke.mockReset();
@@ -217,7 +220,7 @@ describe("ChatPanel: composing", () => {
       expect(useApp.getState().sketches).toEqual({ intro: [mark], outro: [mark] });
       expect(screen.queryByText("Sketch")).toBeNull();
       // New marks go along again.
-      act(() => useApp.getState().setSketches((all) => ({ ...all, intro: [mark, mark] })));
+      act(() => useApp.setState((s) => ({ sketches: { ...s.sketches, intro: [mark, mark] } })));
       expect(screen.getByText("Sketch")).toBeTruthy();
     });
 

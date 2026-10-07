@@ -686,6 +686,15 @@ describe("sending a message", () => {
       expect(order.indexOf("save_review")).toBeLessThan(order.indexOf("close_deck"));
     });
 
+    it("are not saved when they end up as the file has them", async () => {
+      const { useApp, flushReviewSave } = await freshModule();
+      useApp.setState({ deck: DECK });
+      useApp.getState().setSketches(() => ({ intro: ink }));
+      useApp.getState().clearSketch("intro");
+      await flushReviewSave();
+      expect(calls("save_review")).toEqual([]);
+    });
+
     it("report a failed save", async () => {
       const { useApp, flushReviewSave } = await freshModule();
       backend({

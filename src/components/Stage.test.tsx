@@ -5,9 +5,12 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 
-import { SKETCH_TARGET_ATTR, useApp } from "../store";
+import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Stage } from "./Stage";
+
+// Drawing schedules a save of the review marks; finish it here, not in the next test.
+afterEach(() => flushReviewSave());
 
 beforeEach(() => {
   useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", presenting: false, sketches: {}, reviewVisible: true });

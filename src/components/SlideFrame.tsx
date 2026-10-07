@@ -1,11 +1,17 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { Slide } from "../lib/api";
-import { isPasteboardUrl, slideUrl } from "../lib/utils";
+import { isRemote } from "../lib/platform";
+import { cn, isPasteboardUrl, slideUrl } from "../lib/utils";
 import { useApp } from "../store";
 
 const STAGE_W = 1920;
 const STAGE_H = 1080;
+/**
+ * The pasteboard's largest size, in slides: a slide squeezed small (e.g. on a phone) would
+ * otherwise get a preview page tens of thousands of px across, which iOS kills the page over.
+ */
+export const MAX_ARENA_SLIDES = 3;
 
 interface SlideFrameProps {
   deckId: string;
@@ -30,7 +36,18 @@ interface SlideFrameProps {
  * fill its (16:9) container. When the slide changes, the new version loads behind the
  * current one and swaps in once painted, so edits stream in without white flashes.
  */
-export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena, className, onFrameReady }: SlideFrameProps) {
+export function SlideFrame(props: SlideFrameProps) {
+  // Every preview is a whole page of its own; phones and tablets kill the app's page when it
+  // holds a dozen of them (one per thumbnail), so there thumbnails are plain placeholders.
+  if (isRemote && props.thumbnail) return <ThumbnailPlaceholder className={props.className} />;
+  return <LiveSlideFrame {...props} />;
+}
+
+function ThumbnailPlaceholder({ className }: { className?: string }) {
+  return <div data-testid="thumbnail-placeholder" className={cn("aspect-video bg-muted", className)} />;
+}
+
+function LiveSlideFrame({ deckId, slideId, version, thumbnail, editKey, arena, className, onFrameReady }: SlideFrameProps) {
   const src = slideUrl(deckId, slideId, version, thumbnail || editKey !== undefined, editKey, arena !== undefined && !thumbnail);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -64,7 +81,12 @@ export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena
   const slideW = STAGE_W * scale;
   const slideH = STAGE_H * scale;
   const sizeFor = (url: string) =>
-    isPasteboardUrl(url) && arena ? { w: Math.max(arena.width, slideW), h: Math.max(arena.height, slideH) } : { w: slideW, h: slideH };
+    isPasteboardUrl(url) && arena
+      ? {
+          w: Math.min(Math.max(arena.width, slideW), MAX_ARENA_SLIDES * slideW),
+          h: Math.min(Math.max(arena.height, slideH), MAX_ARENA_SLIDES * slideH),
+        }
+      : { w: slideW, h: slideH };
   const bleeds = frames.some(isPasteboardUrl);
 
   return (
@@ -82,6 +104,11 @@ export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena
       {scale > 0 &&
         frames.map((url) => {
           const size = sizeFor(url);
+          // iOS draws a slide's page at its own size, however small it is shown: a 1920×1080 page
+          // scaled down costs a phone ~75 MB, and many times that once zoomed in, so the page is
+          // killed. On a device the page is the size it is shown and the deck's player fits the
+          // slide into it. The pasteboard (and the editor on it) needs the slide at full size.
+          const fitted = isRemote && !isPasteboardUrl(url);
           return (
             <iframe
               key={url}
@@ -100,11 +127,11 @@ export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena
                 position: "absolute",
                 left: (slideW - size.w) / 2,
                 top: (slideH - size.h) / 2,
-                width: size.w / scale,
-                height: size.h / scale,
+                width: fitted ? size.w : size.w / scale,
+                height: fitted ? size.h : size.h / scale,
                 border: 0,
                 transformOrigin: "0 0",
-                transform: `scale(${scale})`,
+                transform: fitted ? undefined : `scale(${scale})`,
                 pointerEvents: thumbnail ? "none" : "auto",
                 visibility: url === shown ? "visible" : "hidden",
               }}

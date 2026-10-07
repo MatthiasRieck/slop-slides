@@ -441,13 +441,30 @@ pub fn delete_deck(dir: &Path) -> Result<()> {
 
 /// Writes a standalone copy of the deck with attached assets embedded as data URIs.
 pub fn export(dir: &Path, dest: &Path) -> Result<()> {
+    fs::write(dest, export_html(dir)?)?;
+    Ok(())
+}
+
+/// The deck as one self-contained HTML file: the player runtime and every asset inlined.
+pub fn export_html(dir: &Path) -> Result<String> {
     let source = html::ensure_runtime(&read_html(dir)?);
-    let standalone = html::inline_assets(&source, |rel| {
+    Ok(html::inline_assets(&source, |rel| {
         let path = resolve_in_deck(dir, rel).ok()?;
         Some((mime_for(rel).to_string(), fs::read(path).ok()?))
-    });
-    fs::write(dest, standalone)?;
-    Ok(())
+    }))
+}
+
+/// File name for an exported deck: its title made safe for file systems, plus `.html`.
+pub fn export_file_name(title: &str) -> String {
+    let name = safe_file_name(title);
+    format!(
+        "{}.html",
+        if name.is_empty() {
+            "presentation"
+        } else {
+            &name
+        }
+    )
 }
 
 /// Creates a new folder for exported slide images inside `parent`, named after the deck
@@ -529,35 +546,55 @@ pub fn mime_for(path: &str) -> &'static str {
 }
 
 pub fn import_assets(dir: &Path, paths: Vec<String>) -> Result<Vec<String>> {
-    let assets = dir.join("assets");
-    fs::create_dir_all(&assets)?;
     let mut imported = Vec::new();
     for source in paths {
         let source = PathBuf::from(source);
         if !source.is_file() {
             continue;
         }
-        let stem = html::slugify(&source.file_stem().unwrap_or_default().to_string_lossy());
-        let stem = if stem.is_empty() {
-            "asset".to_string()
-        } else {
-            stem
-        };
-        let ext = source
-            .extension()
-            .map(|e| format!(".{}", e.to_string_lossy().to_lowercase()))
-            .unwrap_or_default();
-        let dest = std::iter::once(assets.join(format!("{stem}{ext}")))
-            .chain((2..).map(|n| assets.join(format!("{stem}-{n}{ext}"))))
-            .find(|p| !p.exists())
-            .expect("unbounded");
+        let name = source.file_name().unwrap_or_default().to_string_lossy();
+        let dest = new_asset_path(dir, &name)?;
         fs::copy(&source, &dest)?;
-        imported.push(format!(
-            "assets/{}",
-            dest.file_name().unwrap().to_string_lossy()
-        ));
+        imported.push(asset_rel(&dest));
     }
     Ok(imported)
+}
+
+/// Saves an uploaded file (e.g. from a phone or tablet) into `assets/` under a free name
+/// based on `name`; returns its deck-relative path.
+pub fn save_asset(dir: &Path, name: &str, bytes: &[u8]) -> Result<String> {
+    let dest = new_asset_path(dir, name)?;
+    fs::write(&dest, bytes)?;
+    Ok(asset_rel(&dest))
+}
+
+/// A free path in the deck's `assets/` for a file called `name`: slugified, keeping its
+/// lowercased extension, numbered (`photo-2.png`) when taken.
+fn new_asset_path(dir: &Path, name: &str) -> Result<PathBuf> {
+    let assets = dir.join("assets");
+    fs::create_dir_all(&assets)?;
+    // Only the last component: an uploaded name may carry a client path.
+    let name = Path::new(name.rsplit(['/', '\\']).next().unwrap_or(name));
+    let stem = html::slugify(&name.file_stem().unwrap_or_default().to_string_lossy());
+    let stem = if stem.is_empty() {
+        "asset".to_string()
+    } else {
+        stem
+    };
+    let ext = name
+        .extension()
+        .map(|e| html::slugify(&e.to_string_lossy()))
+        .filter(|e| !e.is_empty())
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+    Ok(std::iter::once(assets.join(format!("{stem}{ext}")))
+        .chain((2..).map(|n| assets.join(format!("{stem}-{n}{ext}"))))
+        .find(|p| !p.exists())
+        .expect("unbounded"))
+}
+
+fn asset_rel(path: &Path) -> String {
+    format!("assets/{}", path.file_name().unwrap().to_string_lossy())
 }
 
 fn internal_file(dir: &Path, name: &str) -> Result<PathBuf> {
@@ -1399,6 +1436,39 @@ mod tests {
             "png"
         );
         assert!(import_assets(&deck.0, vec![]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn saves_uploaded_assets_under_safe_unique_names() {
+        let deck = TempDeck::new(ORIGINAL);
+        assert_eq!(
+            save_asset(&deck.0, "IMG 0042.HEIC", b"a").unwrap(),
+            "assets/img-0042.heic"
+        );
+        assert_eq!(
+            save_asset(&deck.0, "IMG 0042.HEIC", b"b").unwrap(),
+            "assets/img-0042-2.heic"
+        );
+        assert_eq!(
+            save_asset(&deck.0, "../../evil.sh", b"c").unwrap(),
+            "assets/evil.sh",
+            "a client path never leaves assets/"
+        );
+        assert_eq!(
+            save_asset(&deck.0, "C:\\Users\\me\\scan.pdf", b"d").unwrap(),
+            "assets/scan.pdf"
+        );
+        assert_eq!(save_asset(&deck.0, "", b"e").unwrap(), "assets/asset");
+        assert_eq!(
+            fs::read(deck.0.join("assets/img-0042-2.heic")).unwrap(),
+            b"b"
+        );
+    }
+
+    #[test]
+    fn export_file_names_are_safe() {
+        assert_eq!(export_file_name("Q3: Plans"), "Q3 Plans.html");
+        assert_eq!(export_file_name("///"), "presentation.html");
     }
 
     #[test]

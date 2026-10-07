@@ -2,6 +2,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Maximize } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { isRemote } from "../lib/platform";
 import { deckFileUrl } from "../lib/utils";
 import { useApp } from "../store";
 import { AnnotationLayer, PresenterToolbar, useAnnotations } from "./PresenterTools";
@@ -28,8 +29,7 @@ export function Presenter() {
   const moved = !(zoom.x === 0 && zoom.y === 0 && zoom.k === 1);
 
   useEffect(() => {
-    const window_ = getCurrentWindow();
-    void window_.setFullscreen(true);
+    setFullscreen(true);
     const exit = () => useApp.getState().setPresenting(false);
     /** Tool shortcuts first; Escape puts a tool away before it ends the show. */
     const handle = (key: string, mod: boolean) => {
@@ -72,7 +72,7 @@ export function Presenter() {
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("message", onMessage);
-      void window_.setFullscreen(false);
+      setFullscreen(false);
     };
   }, []);
 
@@ -111,6 +111,17 @@ export function Presenter() {
       <PresenterToolbar annotations={annotations} onExit={() => useApp.getState().setPresenting(false)} />
     </div>
   );
+}
+
+/** The window goes full screen natively; a browser on a device as far as it allows. */
+function setFullscreen(on: boolean) {
+  if (!isRemote) {
+    void getCurrentWindow().setFullscreen(on);
+  } else if (on) {
+    void document.documentElement.requestFullscreen?.().catch(() => {});
+  } else if (document.fullscreenElement) {
+    void document.exitFullscreen?.().catch(() => {});
+  }
 }
 
 /** Asks the show's pasteboard to fit the slide to the screen again. */

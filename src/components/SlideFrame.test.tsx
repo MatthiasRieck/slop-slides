@@ -7,7 +7,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { SlideFrame, useSlideVersion } from "./SlideFrame";
+import { MAX_ARENA_SLIDES, SlideFrame, useSlideVersion } from "./SlideFrame";
 
 const NoLayout = globalThis.ResizeObserver;
 let width = 960;
@@ -87,6 +87,17 @@ describe("SlideFrame", () => {
     expect(frame!.style.width).toBe("1920px");
     expect(frame!.style.height).toBe("1080px");
     expect(frame!.style.left).toBe("0px");
+  });
+
+  it("caps the pasteboard around a slide squeezed small, which iOS cannot hold", () => {
+    width = 40;
+    const { container } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" arena={{ width: 400, height: 900 }} />);
+    const [frame] = frames(container);
+    expect(frame!.style.width).toBe(`${MAX_ARENA_SLIDES * 1920}px`);
+    expect(frame!.style.height).toBe(`${MAX_ARENA_SLIDES * 1080}px`);
+    // Still centered on the slide.
+    expect(frame!.style.left).toBe("-40px");
+    expect(frame!.style.top).toBe("-22.5px");
   });
 
   it("puts a preview given an arena on the pasteboard, in view and edit mode", () => {
@@ -193,5 +204,42 @@ describe("useSlideVersion", () => {
     expect(result.current).toBe("shell-1.h2.3");
     act(() => useApp.setState({ deck: deckFor(DECK_HTML, "9") }));
     expect(result.current).toBe("shell-9.h2.3");
+  });
+});
+
+describe("SlideFrame on a device", () => {
+  afterEach(() => {
+    delete window.__SLOPSLIDE_REMOTE__;
+  });
+
+  async function onDevice() {
+    window.__SLOPSLIDE_REMOTE__ = { base: "/s/tok" };
+    vi.resetModules();
+    return (await import("./SlideFrame")).SlideFrame;
+  }
+
+  it("shows thumbnails as placeholders: a page per thumbnail is more than a phone holds", async () => {
+    const OnDevice = await onDevice();
+    const { container, getByTestId } = render(<OnDevice deckId="talk" slideId="intro" version="v1" thumbnail className="opacity-35" />);
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(getByTestId("thumbnail-placeholder").className).toContain("opacity-35");
+  });
+
+  it("makes the slide's page the size it is shown, for the deck's player to fit the slide into", async () => {
+    const OnDevice = await onDevice();
+    const { container } = render(<OnDevice deckId="talk" slideId="intro" version="v1" />);
+    const frame = container.querySelector("iframe")!;
+    expect(frame.getAttribute("src")).toContain("slide=intro");
+    expect(frame.style.width).toBe("960px");
+    expect(frame.style.height).toBe("540px");
+    expect(frame.style.transform).toBe("");
+  });
+
+  it("keeps the slide editor's page at full size, scaled down: the editor works in slide pixels", async () => {
+    const OnDevice = await onDevice();
+    const { container } = render(<OnDevice deckId="talk" slideId="intro" version="v1" editKey="0" />);
+    const frame = container.querySelector("iframe")!;
+    expect(frame.style.width).toBe("1920px");
+    expect(frame.style.transform).toBe("scale(0.5)");
   });
 });

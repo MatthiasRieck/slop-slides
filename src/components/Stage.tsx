@@ -7,6 +7,7 @@ import { SketchToolbar } from "./SketchToolbar";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import type { Slide } from "../lib/api";
 import type { Stroke } from "../lib/ink";
+import { isRemote } from "../lib/platform";
 import { cn } from "../lib/utils";
 
 /** The stage area's padding (Tailwind p-8), which the pasteboard covers too. */
@@ -86,7 +87,9 @@ export function Stage() {
               deckId={deck.id}
               slide={slide}
               editing={editing}
-              arena={arena}
+              // A pasteboard page spans the area in slide pixels: around a small slide it is huge,
+              // and phones and tablets kill the app's page over it (twice over while a slide swaps).
+              arena={isRemote ? undefined : arena}
               canvas={areaRef}
               onFrameReady={(frame) => {
                 pasteboard.onFrameReady(frame);

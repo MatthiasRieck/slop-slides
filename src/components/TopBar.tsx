@@ -20,8 +20,10 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import { api, errorMessage } from "../lib/api";
-import { cn, isMac } from "../lib/utils";
+import { exportUrl, isRemote } from "../lib/platform";
+import { cn, hasTrafficLights } from "../lib/utils";
 import { lintFixPrompt, useApp, type StageView } from "../store";
+import { ShareDevice } from "./ShareDevice";
 
 export function TopBar() {
   const deck = useApp((s) => s.deck);
@@ -47,6 +49,14 @@ export function TopBar() {
   };
 
   const exportDeck = async () => {
+    if (isRemote) {
+      // The browser downloads what the desktop app exports.
+      const link = document.createElement("a");
+      link.href = exportUrl(deck.id);
+      link.download = "";
+      link.click();
+      return;
+    }
     const name = deck.title.replace(/[\\/:*?"<>|]+/g, "").trim() || "presentation";
     const dest = await save({
       title: "Export presentation",
@@ -77,7 +87,7 @@ export function TopBar() {
       data-tauri-drag-region
       className={cn(
         "flex h-12 shrink-0 items-center gap-2 border-b bg-background pr-3",
-        isMac ? "pl-[84px]" : "pl-3",
+        hasTrafficLights ? "pl-[84px]" : "pl-3",
       )}
     >
       <button
@@ -107,18 +117,22 @@ export function TopBar() {
       <div data-tauri-drag-region className="flex-1 self-stretch" />
       <LintStatus />
       <ViewToggle />
-      <button
-        type="button"
-        onClick={() => void revealItemInDir(`${deck.path}/deck.html`)}
-        title="Show deck folder"
-        className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-      >
-        <FolderOpen className="size-4" />
-      </button>
+      <ShareDevice />
+      {!isRemote && (
+        <button
+          type="button"
+          onClick={() => void revealItemInDir(`${deck.path}/deck.html`)}
+          title="Show deck folder"
+          className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <FolderOpen className="size-4" />
+        </button>
+      )}
       <ExportMenu
         disabled={deck.slides.length === 0}
         onHtml={() => void exportDeck()}
-        onImages={() => void exportImages()}
+        // Slide images are native screenshots of the window, so only it can save them.
+        onImages={isRemote ? undefined : () => void exportImages()}
       />
       <button
         type="button"
@@ -154,7 +168,7 @@ function ChatToggle() {
 }
 
 /** The Export button and its choices: one shareable HTML file, or a PNG per slide. */
-function ExportMenu(props: { disabled: boolean; onHtml: () => void; onImages: () => void }) {
+function ExportMenu(props: { disabled: boolean; onHtml: () => void; onImages?: () => void }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -199,7 +213,9 @@ function ExportMenu(props: { disabled: boolean; onHtml: () => void; onImages: ()
           className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card p-1 shadow-lg"
         >
           <ExportItem icon={FileCode2} label="HTML file" hint="One self-contained file to share" onClick={choose(props.onHtml)} />
-          <ExportItem icon={Images} label="PNG images" hint="One image per slide, in a new folder" onClick={choose(props.onImages)} />
+          {props.onImages && (
+            <ExportItem icon={Images} label="PNG images" hint="One image per slide, in a new folder" onClick={choose(props.onImages)} />
+          )}
         </div>
       )}
     </div>

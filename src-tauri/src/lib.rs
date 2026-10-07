@@ -9,11 +9,12 @@ mod lint;
 mod mcp;
 mod protocol;
 mod providers;
+mod remote;
 mod review;
 mod watcher;
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use agent::{AgentManager, SendArgs};
 use deck::{Deck, DeckSummary};
@@ -59,9 +60,12 @@ fn open_deck(
     Ok(deck)
 }
 
+/// `id` is the deck the client closes; it stays watched while another client has it open.
 #[tauri::command]
-fn close_deck(watcher: State<DeckWatcher>) {
-    watcher.stop();
+fn close_deck(watcher: State<DeckWatcher>, id: Option<String>) {
+    if let Some(id) = id {
+        watcher.release(&id);
+    }
 }
 
 #[tauri::command]
@@ -87,7 +91,7 @@ fn delete_deck(
     id: String,
 ) -> Result<()> {
     agent.interrupt(&id);
-    watcher.stop();
+    watcher.forget(&id);
     deck::delete_deck(&deck::deck_dir(&app, &id)?)
 }
 
@@ -226,19 +230,46 @@ fn load_chat(app: AppHandle, id: String) -> Result<serde_json::Value> {
     deck::load_chat(&deck::deck_dir(&app, &id)?)
 }
 
-#[tauri::command]
-fn save_chat(app: AppHandle, id: String, chat: serde_json::Value) -> Result<()> {
-    deck::save_chat(&deck::deck_dir(&app, &id)?, &chat)
+/// Tells every client (the window, devices) that a deck's chat was saved. `origin` is the
+/// client that saved it, which has it already.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatChanged {
+    deck_id: String,
+    origin: Option<String>,
+}
+
+fn chat_changed(app: &AppHandle, deck_id: String, origin: Option<String>) {
+    let _ = app.emit("chat-changed", ChatChanged { deck_id, origin });
 }
 
 #[tauri::command]
-fn reset_chat(app: AppHandle, agent: State<AgentManager>, id: String) -> Result<()> {
+fn save_chat(
+    app: AppHandle,
+    id: String,
+    chat: serde_json::Value,
+    origin: Option<String>,
+) -> Result<()> {
+    deck::save_chat(&deck::deck_dir(&app, &id)?, &chat)?;
+    chat_changed(&app, id, origin);
+    Ok(())
+}
+
+#[tauri::command]
+fn reset_chat(
+    app: AppHandle,
+    agent: State<AgentManager>,
+    id: String,
+    origin: Option<String>,
+) -> Result<()> {
     agent.interrupt(&id);
     let dir = deck::deck_dir(&app, &id)?;
     for provider in agent::Provider::ALL {
         deck::write_session(&dir, provider.session_file(), None)?;
     }
-    deck::save_chat(&dir, &serde_json::Value::Null)
+    deck::save_chat(&dir, &serde_json::Value::Null)?;
+    chat_changed(&app, id, origin);
+    Ok(())
 }
 
 #[tauri::command]
@@ -261,6 +292,35 @@ async fn list_providers() -> Vec<providers::ProviderInfo> {
     providers::list().await
 }
 
+/// Starts serving the app to phones and tablets on the network (see src/remote.rs).
+#[tauri::command]
+async fn remote_start(app: AppHandle) -> Result<remote::RemoteInfo> {
+    remote::start(&app).await
+}
+
+#[tauri::command]
+fn remote_stop(app: AppHandle) {
+    remote::stop(&app);
+}
+
+#[tauri::command]
+fn remote_status(app: AppHandle) -> Option<remote::RemoteInfo> {
+    remote::status(&app)
+}
+
+/// The window's answer to a device's `remote-capture` request: the screenshot's path, or why
+/// it could not take one.
+#[tauri::command]
+fn remote_capture_done(
+    app: AppHandle,
+    request: String,
+    path: Option<String>,
+    error: Option<String>,
+) {
+    let result = path.ok_or_else(|| error.unwrap_or_else(|| "no screenshot".into()));
+    remote::capture_done(&app, &request, result);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // `slopslide --lint-mcp <deck dir>`: the agent's lint tool, started by Claude Code.
@@ -277,6 +337,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AgentManager::default())
         .manage(DeckWatcher::default())
+        .manage(remote::RemoteServer::default())
+        .setup(|app| {
+            remote::forward_events(app.handle());
+            Ok(())
+        })
         .register_uri_scheme_protocol("slop", |ctx, request| {
             protocol::handle(ctx.app_handle(), request)
         })
@@ -312,6 +377,10 @@ pub fn run() {
             interrupt_agent,
             agent_running,
             list_providers,
+            remote_start,
+            remote_stop,
+            remote_status,
+            remote_capture_done,
         ])
         .run(tauri::generate_context!())
         .expect("error while running SlopSlide");

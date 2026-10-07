@@ -1,5 +1,3 @@
-import { listen } from "@tauri-apps/api/event";
-import { ask } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
 
 import {
@@ -7,9 +5,11 @@ import {
   errorMessage,
   type AgentEvent,
   type AgentEventEnvelope,
+  type ChatChanged,
   type Deck,
   type DeckChanged,
   type LintIssue,
+  type RemoteCaptureRequest,
 } from "./lib/api";
 import { latestContext, mergeContext, type ContextUsage } from "./lib/context";
 import { inkBounds, SLIDE_SIZE, type Stroke } from "./lib/ink";
@@ -21,6 +21,7 @@ import {
   type Provider,
   type ProviderInfo,
 } from "./lib/models";
+import { clientId, confirmDialog, isRemote, listen, randomId, RESYNC_EVENT } from "./lib/platform";
 
 export type ChatPart =
   | { kind: "text"; text: string }
@@ -199,6 +200,8 @@ interface AppState {
   slideUndo: SlideUndo[];
   /** Undone slide edits that can be redone, newest last. */
   slideRedo: SlideUndo[];
+  /** In the window: devices waiting for it to screenshot their sketch, oldest first. */
+  remoteCaptures: RemoteCaptureRequest[];
 
   openDeck: (id: string) => Promise<void>;
   createDeck: (title: string) => Promise<void>;
@@ -244,6 +247,8 @@ interface AppState {
   compact: () => Promise<void>;
   interrupt: () => void;
   resetChat: () => Promise<void>;
+  /** Takes the oldest device sketch screenshot off the queue once it is answered. */
+  endRemoteCapture: (request: string) => void;
 }
 
 interface SlideUndo {
@@ -262,7 +267,12 @@ export const TIDY_PROMPT =
 export const tidyPrompt = (overflow: string[] = []) =>
   overflow.length ? `${TIDY_PROMPT}\n\nThe editor found overflow:\n${overflow.map((o) => `- ${o}`).join("\n")}` : TIDY_PROMPT;
 
-const newId = () => crypto.randomUUID();
+const newId = randomId;
+/**
+ * This client started the agent turn that is running. Only that client saves the chat as
+ * the turn goes; other clients (the window, a tablet) follow along and reload what it saved.
+ */
+let ownTurn = false;
 let lintRun = 0;
 /** Slide edits are saved one after another, each based on the previous one's result. */
 let editQueue: Promise<void> = Promise.resolve();
@@ -292,6 +302,7 @@ export const useApp = create<AppState>((set, get) => ({
   editReload: 0,
   slideUndo: [],
   slideRedo: [],
+  remoteCaptures: [],
 
   openDeck: async (id) => {
     try {
@@ -314,7 +325,8 @@ export const useApp = create<AppState>((set, get) => ({
   closeDeck: async () => {
     if (get().codeDirty && !(await confirmDiscardEdits())) return;
     await flushReviewSave();
-    await api.closeDeck();
+    const deck = get().deck;
+    if (deck) await api.closeDeck(deck.id);
     set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null, sketches: {}, sketchesSent: {}, imageExport: null, editing: false, slideUndo: [], slideRedo: [] });
   },
 
@@ -497,9 +509,10 @@ export const useApp = create<AppState>((set, get) => ({
     };
     const assistant = newReply(selection.provider);
     set((s) => ({ messages: [...s.messages, user, assistant], running: true }));
+    ownTurn = true;
     if (slide && (user.sketch || screenshot)) {
       // Screenshot the slide with the ink on it.
-      const image = await captureSlide(deck.id);
+      const image = await captureSlide(deck.id, slide, get().reviewVisible ? strokes : []);
       const captured: UserMessage = {
         ...user,
         ...(user.sketch && { sketch: { ...user.sketch, image } }),
@@ -509,6 +522,8 @@ export const useApp = create<AppState>((set, get) => ({
       set((s) => ({ messages: s.messages.map((m) => (m.id === captured.id ? captured : m)) }));
       if (user.sketch) set((s) => ({ sketchesSent: { ...s.sketchesSent, [slide]: strokes } }));
     }
+    // Other clients show the message (and follow the reply) from the saved chat.
+    await saveChatNow();
     await startTurn(deck.id, assistant.id, buildPrompt(deck, user), false);
   },
 
@@ -526,6 +541,8 @@ export const useApp = create<AppState>((set, get) => ({
     };
     const assistant = newReply(selection.provider);
     set((s) => ({ messages: [...s.messages, user, assistant], running: true }));
+    ownTurn = true;
+    await saveChatNow();
     await startTurn(deck.id, assistant.id, COMPACT_COMMAND, true);
   },
 
@@ -538,8 +555,11 @@ export const useApp = create<AppState>((set, get) => ({
     const { deck } = get();
     if (!deck) return;
     await api.resetChat(deck.id);
+    ownTurn = false;
     set({ messages: [], running: false });
   },
+
+  endRemoteCapture: (request) => set((s) => ({ remoteCaptures: s.remoteCaptures.filter((r) => r.request !== request) })),
 }));
 
 export const COMPACT_COMMAND = "/compact";
@@ -576,6 +596,7 @@ async function startTurn(deckId: string, replyId: string, prompt: string, compac
     }));
     useApp.setState({ running: false });
     persistChat();
+    ownTurn = false;
   }
 }
 
@@ -607,17 +628,14 @@ async function stepSlideHistory(from: "slideUndo" | "slideRedo", to: "slideUndo"
   }
 }
 
-async function confirmDiscardEdits(): Promise<boolean> {
+function confirmDiscardEdits(): Promise<boolean> {
   const message = "You have unsaved changes to deck.html. Discard them?";
-  try {
-    return await ask(message, { title: "Unsaved changes", kind: "warning", okLabel: "Discard" });
-  } catch {
-    return window.confirm(message);
-  }
+  return confirmDialog(message, { title: "Unsaved changes", kind: "warning", okLabel: "Discard" });
 }
 
 async function loadDeckState(deck: Deck) {
   const [chat, running] = await Promise.all([api.loadChat(deck.id), api.agentRunning(deck.id)]);
+  ownTurn = false;
   savedReview = reviewKey(deck.review ?? {});
   const messages = Array.isArray(chat) ? (chat as ChatMessage[]) : [];
   useApp.setState({
@@ -700,12 +718,16 @@ export async function flushReviewSave() {
 /** Marks the slide on the stage to screenshot when sending a sketch. */
 export const SKETCH_TARGET_ATTR = "data-sketch-target";
 
-/** Screenshot of the slide on the stage, ink included; null when it cannot be taken. */
-async function captureSlide(deckId: string): Promise<string | null> {
-  const target = document.querySelector(`[${SKETCH_TARGET_ATTR}]`);
-  if (!target) return null;
-  const { x, y, width, height } = target.getBoundingClientRect();
+/**
+ * Screenshot of the slide on the stage, ink included; null when it cannot be taken. A device
+ * cannot take one itself, so the window draws `slide` with `strokes` and takes it.
+ */
+async function captureSlide(deckId: string, slide: string, strokes: Stroke[]): Promise<string | null> {
   try {
+    if (isRemote) return await api.captureRemoteSketch(deckId, slide, strokes);
+    const target = document.querySelector(`[${SKETCH_TARGET_ATTR}]`);
+    if (!target) return null;
+    const { x, y, width, height } = target.getBoundingClientRect();
     const viewport = { width: window.innerWidth, height: window.innerHeight };
     return await api.captureSketch(deckId, { x, y, width, height }, viewport);
   } catch (error) {
@@ -780,8 +802,56 @@ function replyProvider(message: AssistantMessage): Provider {
 }
 
 function persistChat() {
+  void saveChatNow();
+}
+
+async function saveChatNow() {
   const { deck, messages } = useApp.getState();
-  if (deck) void api.saveChat(deck.id, messages);
+  if (!deck) return;
+  try {
+    await api.saveChat(deck.id, messages);
+  } catch (error) {
+    console.warn("could not save the chat:", errorMessage(error));
+  }
+}
+
+/** Set while the chat another client saved is loading; agent events wait for it. */
+let chatReload: Promise<void> | null = null;
+
+/** Takes on the chat another client saved (it sent a message, or the reply finished). */
+function reloadChat(deckId: string) {
+  const load = async () => {
+    try {
+      const chat = await api.loadChat(deckId);
+      if (useApp.getState().deck?.id !== deckId) return;
+      const messages = Array.isArray(chat) ? (chat as ChatMessage[]) : [];
+      const last = messages.at(-1);
+      ownTurn = false;
+      useApp.setState({ messages, running: last?.role === "assistant" && last.status === "streaming" });
+    } catch (error) {
+      console.warn("could not load the chat:", errorMessage(error));
+    }
+  };
+  const run: Promise<void> = (chatReload ?? Promise.resolve()).then(load).finally(() => {
+    if (chatReload === run) chatReload = null;
+  });
+  chatReload = run;
+}
+
+/** A device that lost its connection catches up on what it missed. */
+async function resync() {
+  const { deck } = useApp.getState();
+  if (!deck) return;
+  applyDeckChanged(["deck.html", "assets/"]);
+  if (ownTurn) return;
+  reloadChat(deck.id);
+  try {
+    const running = await api.agentRunning(deck.id);
+    await chatReload;
+    if (!running && useApp.getState().deck?.id === deck.id) useApp.setState({ running: false });
+  } catch {
+    // Still offline; the next reconnect tries again.
+  }
 }
 
 function applyAgentEvent(event: AgentEvent) {
@@ -864,7 +934,8 @@ function applyAgentEvent(event: AgentEvent) {
         ),
       }));
       useApp.setState({ running: false });
-      persistChat();
+      if (ownTurn) persistChat();
+      ownTurn = false;
       return;
   }
 }
@@ -899,9 +970,21 @@ export async function initEventBridge() {
   // Listing Codex models starts its app server; don't hold up the rest of the bridge.
   void useApp.getState().refreshProviders();
   await listen<AgentEventEnvelope>("agent-event", ({ payload }) => {
-    if (payload.deckId === useApp.getState().deck?.id) applyAgentEvent(payload.event);
+    if (payload.deckId !== useApp.getState().deck?.id) return;
+    // Events of a reply whose start is still loading belong after it.
+    if (chatReload) void chatReload.then(() => applyAgentEvent(payload.event));
+    else applyAgentEvent(payload.event);
   });
   await listen<DeckChanged>("deck-changed", ({ payload }) => {
     if (payload.deckId === useApp.getState().deck?.id) applyDeckChanged(payload.paths);
   });
+  await listen<ChatChanged>("chat-changed", ({ payload }) => {
+    if (payload.deckId === useApp.getState().deck?.id && payload.origin !== clientId) reloadChat(payload.deckId);
+  });
+  await listen<null>(RESYNC_EVENT, () => void resync());
+  if (!isRemote) {
+    await listen<RemoteCaptureRequest>("remote-capture", ({ payload }) => {
+      useApp.setState((s) => ({ remoteCaptures: [...s.remoteCaptures, payload] }));
+    });
+  }
 }

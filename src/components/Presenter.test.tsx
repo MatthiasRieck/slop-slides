@@ -405,3 +405,30 @@ describe("Presenter tools", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 });
+
+describe("Presenter on a device", () => {
+  afterEach(() => {
+    delete window.__SLOPSLIDE_REMOTE__;
+    vi.restoreAllMocks();
+  });
+
+  it("goes full screen through the browser and plays the deck from the desktop app's server", async () => {
+    window.__SLOPSLIDE_REMOTE__ = { base: "/s/tok" };
+    vi.resetModules();
+    const store = await import("../store");
+    const { Presenter: DevicePresenter } = await import("./Presenter");
+    store.useApp.setState({ deck: deckFor(DECK_HTML), selected: "outro", presenting: true });
+    const request = vi.fn(async () => {});
+    const exit = vi.fn(async () => {});
+    Object.assign(document.documentElement, { requestFullscreen: request });
+    Object.assign(document, { exitFullscreen: exit });
+    const { unmount } = render(<DevicePresenter />);
+    expect(request).toHaveBeenCalledOnce();
+    expect(frame().getAttribute("src")).toBe("/s/tok/deck/talk/deck.html?v=shell-1&show#outro");
+    Object.defineProperty(document, "fullscreenElement", { value: document.documentElement, configurable: true });
+    unmount();
+    expect(exit).toHaveBeenCalledOnce();
+    expect(setFullscreen).not.toHaveBeenCalled();
+    delete (document as { fullscreenElement?: unknown }).fullscreenElement;
+  });
+});

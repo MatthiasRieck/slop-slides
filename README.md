@@ -20,6 +20,14 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   that plays in any browser: arrows/space/click to navigate, `F` for full screen, `#slide-id`
   links, print to PDF.
 
+- **Use on another device:** the tablet button (top bar, or the deck list) shows a QR code.
+  Scan it with a phone or tablet on the same Wi-Fi to get the whole editor there, e.g. to mark
+  up slides with a pen and send the marks to the agent. Everything runs on the computer:
+  the device talks to it over the local network, and the computer's window takes the
+  sketch screenshots. The address carries a random token that is only valid until you stop
+  sharing (or quit). Anyone who has it can edit your decks and use the agent, so only share
+  on networks you trust. Exporting slide images and showing the deck folder stay on the computer.
+
 Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.
 
 ## Requirements
@@ -41,6 +49,9 @@ pnpm app:build      # installers for the current OS → src-tauri/target/release
 `pnpm dev` alone serves the UI at http://localhost:1420 in a plain browser, with mocked IPC
 and read-only access to your deck library (`dev/browserPreview.ts`). This is handy for
 UI work. Chat and editing need the desktop app.
+
+To try "Use on another device" from `pnpm app:dev`, run `pnpm build` once: devices get the
+built frontend from `dist/`, not the Vite dev server.
 
 Checks: `pnpm typecheck`, `cargo test --manifest-path src-tauri/Cargo.toml`.
 
@@ -71,6 +82,8 @@ src-tauri/src/
   protocol.rs           `slop://` scheme serving deck files to the slide iframes;
                         adds the slide editor (assets/editor.js) for edit mode
   watcher.rs            file watcher → `deck-changed` events, so edits stream into the UI
+  remote.rs             "Use on another device": serves the UI, deck files, commands and
+                        events over HTTP on the local network, behind a per-session token
 src-tauri/prompts/      the agent's system prompt and design references
 ```
 

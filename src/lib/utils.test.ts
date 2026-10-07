@@ -97,3 +97,19 @@ describe("relativeTime", () => {
     expect(relativeTime(now + 5 * MIN)).toBe("just now");
   });
 });
+
+describe("deck URLs (on a device)", () => {
+  afterEach(() => {
+    delete window.__SLOPSLIDE_REMOTE__;
+  });
+
+  it("serves deck files from the desktop app's server, under its token", async () => {
+    window.__SLOPSLIDE_REMOTE__ = { base: "/s/tok" };
+    vi.resetModules();
+    const utils = await import("./utils");
+    expect(utils.deckFileUrl("my talk", "assets/a b.png")).toBe("/s/tok/deck/my%20talk/assets/a%20b.png");
+    expect(utils.slideUrl("talk", "intro", "v1")).toBe("/s/tok/deck/talk/deck.html?embed&slide=intro&v=v1");
+    // An iPad reports itself as a Mac, but its browser has no traffic lights to make room for.
+    expect(utils.hasTrafficLights).toBe(false);
+  });
+});

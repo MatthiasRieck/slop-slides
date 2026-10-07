@@ -235,6 +235,8 @@ pub struct TurnArgs<'a> {
     pub model: Option<&'a str>,
     pub effort: Option<&'a str>,
     pub session: Option<&'a str>,
+    /// Summarize the session's history instead of sending `prompt`.
+    pub compact: bool,
 }
 
 /// Runs one turn. `on_session` persists the session id as soon as it is known.
@@ -291,15 +293,59 @@ pub async fn run_turn(
     emit(&AgentEvent::Started {
         session_id: Some(session_id.clone()),
     });
-    emit(&AgentEvent::Thinking);
 
+    let mut mapper = EventMapper::default();
+    if args.compact {
+        emit(&AgentEvent::Compacting);
+        let result = tokio::select! {
+            result = conn.request("session.history.compact", json!({ "sessionId": session_id })) => result,
+            _ = cancel.changed() => {
+                let _ = child.kill().await;
+                return Ok(Outcome::Interrupted);
+            }
+        };
+        // Compaction and usage events that arrived while it ran.
+        let mut compacted = false;
+        while let Some(message) = conn.queued.pop_front() {
+            if message["method"] == "session.event" {
+                for event in mapper.map(&message["params"]["event"]) {
+                    compacted |= event == AgentEvent::Compacted;
+                    emit(&event);
+                }
+            }
+        }
+        match result {
+            Ok(result) if result["success"].as_bool() == Some(true) => {
+                // Only when the server did not say so itself: it reports the new size after.
+                if !compacted {
+                    emit(&AgentEvent::Compacted);
+                }
+                emit(&AgentEvent::Result {
+                    is_error: false,
+                    text: None,
+                    cost_usd: None,
+                    duration_ms: Some(started.elapsed().as_millis() as u64),
+                });
+            }
+            Ok(_) => emit(&AgentEvent::Error {
+                message: "GitHub Copilot could not compact the conversation.".into(),
+            }),
+            Err(e) => emit(&AgentEvent::Error {
+                message: Error::from(e).to_string(),
+            }),
+        }
+        detach(&mut conn, &session_id).await;
+        let _ = child.kill().await;
+        return Ok(Outcome::Done);
+    }
+
+    emit(&AgentEvent::Thinking);
     conn.request(
         "session.send",
         json!({ "sessionId": session_id, "prompt": args.prompt }),
     )
     .await?;
 
-    let mut mapper = EventMapper::default();
     loop {
         let message = tokio::select! {
             message = conn.next() => message?,
@@ -345,14 +391,18 @@ pub async fn run_turn(
         }
     }
 
-    // Detach so the CLI flushes the session to disk before exiting.
+    detach(&mut conn, &session_id).await;
+    let _ = child.kill().await;
+    Ok(Outcome::Done)
+}
+
+/// Detaches so the CLI flushes the session to disk before exiting.
+async fn detach(conn: &mut Conn, session_id: &str) {
     let _ = tokio::time::timeout(
         DETACH_TIMEOUT,
         conn.request("session.detach", json!({ "sessionId": session_id })),
     )
     .await;
-    let _ = child.kill().await;
-    Ok(Outcome::Done)
 }
 
 /// Like the Claude provider's tool allowlist: read anything, write only inside the deck
@@ -481,6 +531,26 @@ impl EventMapper {
                     .unwrap_or("GitHub Copilot reported an error.")
                     .to_string(),
             }],
+            // Sub-agents report their own, separate context.
+            "session.usage_info" if !event["agentId"].is_string() => vec![AgentEvent::Usage {
+                context_tokens: data["currentTokens"].as_u64(),
+                context_window: data["tokenLimit"].as_u64(),
+            }],
+            "session.compaction_start" if !event["agentId"].is_string() => {
+                vec![AgentEvent::Compacting]
+            }
+            "session.compaction_complete" if !event["agentId"].is_string() => {
+                if data["success"].as_bool().unwrap_or(false) {
+                    vec![AgentEvent::Compacted]
+                } else {
+                    vec![AgentEvent::Error {
+                        message: data["error"]
+                            .as_str()
+                            .unwrap_or("GitHub Copilot could not compact the conversation.")
+                            .to_string(),
+                    }]
+                }
+            }
             "session.idle" => vec![AgentEvent::Result {
                 is_error: false,
                 text: self.last_message.take(),
@@ -554,6 +624,35 @@ mod tests {
             &mapper.map(&idle)[..],
             [AgentEvent::Result { text: Some(t), .. }] if t == "Hi"
         ));
+    }
+
+    #[test]
+    fn maps_context_usage_and_compaction() {
+        let mut mapper = EventMapper::default();
+        let usage = json!({"type":"session.usage_info","data":{"tokenLimit":128000,"currentTokens":11591,"messagesLength":2}});
+        assert_eq!(
+            mapper.map(&usage),
+            vec![AgentEvent::Usage {
+                context_tokens: Some(11591),
+                context_window: Some(128000)
+            }]
+        );
+        let sub_agent = json!({"type":"session.usage_info","agentId":"a1","data":{"tokenLimit":1,"currentTokens":1}});
+        assert!(mapper.map(&sub_agent).is_empty());
+        assert_eq!(
+            mapper.map(&json!({"type":"session.compaction_start","data":{"currentTokens":11805}})),
+            vec![AgentEvent::Compacting]
+        );
+        assert_eq!(
+            mapper.map(&json!({"type":"session.compaction_complete","data":{"success":true,"postCompactionTokens":539}})),
+            vec![AgentEvent::Compacted]
+        );
+        assert_eq!(
+            mapper.map(&json!({"type":"session.compaction_complete","data":{"success":false,"error":"rate limited"}})),
+            vec![AgentEvent::Error {
+                message: "rate limited".into()
+            }]
+        );
     }
 
     #[test]
@@ -657,5 +756,108 @@ read()
         let models = models.unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].label, "Model One");
+    }
+
+    /// A stand-in server that resumes a session and compacts it, logging each method.
+    #[cfg(unix)]
+    #[test]
+    fn compacts_over_framed_stdio() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Mutex;
+
+        let dir = std::env::temp_dir().join(format!("slopslide-compact-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = r#"#!/usr/bin/env python3
+import json, sys
+log = open("methods.log", "w")
+def read():
+    length = None
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line: sys.exit(0)
+        line = line.strip()
+        if not line: break
+        name, _, value = line.partition(b":")
+        if name.lower() == b"content-length": length = int(value)
+    message = json.loads(sys.stdin.buffer.read(length))
+    log.write(message.get("method", "") + "\n"); log.flush()
+    return message
+def send(message):
+    body = json.dumps(message).encode()
+    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+    sys.stdout.buffer.flush()
+def event(kind, data):
+    send({"jsonrpc": "2.0", "method": "session.event", "params": {"event": {"type": kind, "data": data}}})
+while True:
+    request = read()
+    method = request["method"]
+    if method == "session.history.compact":
+        event("session.compaction_start", {"currentTokens": 90000})
+        event("session.compaction_complete", {"success": True})
+        event("session.usage_info", {"currentTokens": 12000, "tokenLimit": 128000, "messagesLength": 1})
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {"success": True, "tokensRemoved": 78000, "messagesRemoved": 9}})
+    else:
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {}})
+"#;
+        let bin = dir.join("copilot");
+        std::fs::write(&bin, script).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let events = Mutex::new(Vec::new());
+        let (_tx, mut rx) = watch::channel(false);
+        let args = TurnArgs {
+            bin: &bin,
+            dir: &dir,
+            lint_server: Path::new("/app/slopslide"),
+            prompt: "/compact",
+            model: None,
+            effort: None,
+            session: Some("s1"),
+            compact: true,
+        };
+        let outcome = runtime.block_on(run_turn(
+            args,
+            &mut rx,
+            &|e| events.lock().unwrap().push(e.clone()),
+            &|_| Ok(()),
+        ));
+        let methods = std::fs::read_to_string(dir.join("methods.log")).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(matches!(outcome, Ok(Outcome::Done)));
+        let methods: Vec<_> = methods.lines().collect();
+        assert_eq!(
+            methods,
+            [
+                "connect",
+                "session.resume",
+                "session.history.compact",
+                "session.detach"
+            ],
+            "nothing is sent to the model"
+        );
+        let events = events.into_inner().unwrap();
+        assert!(
+            matches!(
+                &events[..],
+                [
+                    AgentEvent::Started { .. },
+                    AgentEvent::Compacting,
+                    AgentEvent::Compacting,
+                    AgentEvent::Compacted,
+                    AgentEvent::Usage {
+                        context_tokens: Some(12000),
+                        context_window: Some(128000)
+                    },
+                    AgentEvent::Result {
+                        is_error: false,
+                        ..
+                    },
+                ]
+            ),
+            "{events:?}"
+        );
     }
 }

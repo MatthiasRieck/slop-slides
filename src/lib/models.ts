@@ -27,6 +27,9 @@ export interface ProviderModel {
   isDefault: boolean;
   efforts: string[];
   defaultEffort: string | null;
+  /** Selectable context window sizes (`200k`, `1m`); empty when the provider picks it. */
+  contextWindows: string[];
+  defaultContextWindow: string | null;
 }
 
 export interface ProviderInfo {
@@ -52,6 +55,12 @@ export function effortLabel(effort: string): string {
   return EFFORT_LABELS[effort] ?? effort.charAt(0).toUpperCase() + effort.slice(1);
 }
 
+const CONTEXT_WINDOW_LABELS: Record<string, string> = { "200k": "200k", "1m": "1M" };
+
+export function contextWindowLabel(contextWindow: string): string {
+  return CONTEXT_WINDOW_LABELS[contextWindow] ?? contextWindow.toUpperCase();
+}
+
 export const modelKey = (provider: Provider, id: string) => `${provider}:${id}`;
 
 export function defaultModel(info: ProviderInfo): ProviderModel | undefined {
@@ -68,4 +77,14 @@ export function pickEffort(model: ProviderModel, effort: string): string {
 /** The effort to request: none for a model known to take no effort setting. */
 export function requestEffort(model: ProviderModel | undefined, effort: string): string {
   return model && model.efforts.length === 0 ? "" : effort;
+}
+
+/** Keeps `contextWindow` when the model offers it, else the model's own default. */
+export function pickContextWindow(model: ProviderModel, contextWindow: string | null): string | null {
+  if (model.contextWindows.length === 0) return null;
+  if (contextWindow && model.contextWindows.includes(contextWindow)) return contextWindow;
+  if (model.defaultContextWindow && model.contextWindows.includes(model.defaultContextWindow)) {
+    return model.defaultContextWindow;
+  }
+  return model.contextWindows[0]!;
 }

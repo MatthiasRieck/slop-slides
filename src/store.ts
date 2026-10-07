@@ -14,6 +14,7 @@ import {
 import { inkBounds, SLIDE_SIZE, type Stroke } from "./lib/ink";
 import {
   defaultModel,
+  pickContextWindow,
   pickEffort,
   requestEffort,
   type Provider,
@@ -71,6 +72,8 @@ export interface ModelSelection {
   /** Shown until the provider list arrives. */
   label: string;
   effort: string;
+  /** Claude only; `null` when the model has a single context window. */
+  contextWindow: string | null;
 }
 
 const SELECTION_KEY = "slopslide.selection";
@@ -81,12 +84,15 @@ const DEFAULT_SELECTION: ModelSelection = {
   model: "claude-opus-5-5",
   label: "Claude Opus 5.5",
   effort: "medium",
+  contextWindow: "1m",
 };
 
 function loadSelection(): ModelSelection {
   try {
     const saved = JSON.parse(localStorage.getItem(SELECTION_KEY) ?? "null") as Partial<ModelSelection> | null;
-    if (saved?.provider && saved.model && saved.label && saved.effort) return saved as ModelSelection;
+    if (saved?.provider && saved.model && saved.label && saved.effort) {
+      return { ...saved, contextWindow: saved.contextWindow ?? null } as ModelSelection;
+    }
   } catch {
     // Fall through to the default.
   }
@@ -102,7 +108,14 @@ function saveSelection(selection: ModelSelection) {
 function reconcileSelection(selection: ModelSelection, providers: ProviderInfo[]): ModelSelection {
   const current = providers.find((p) => p.id === selection.provider);
   const model = current?.models.find((m) => m.id === selection.model);
-  if (model) return { ...selection, label: model.label, effort: pickEffort(model, selection.effort) };
+  if (model) {
+    return {
+      ...selection,
+      label: model.label,
+      effort: pickEffort(model, selection.effort),
+      contextWindow: pickContextWindow(model, selection.contextWindow),
+    };
+  }
   // A provider whose models could not be listed keeps the saved choice rather than losing it.
   if (current?.installed && current.error) return selection;
   const fallback = [current, ...providers].find((p) => p?.installed && p.models.length > 0);
@@ -113,6 +126,7 @@ function reconcileSelection(selection: ModelSelection, providers: ProviderInfo[]
     model: next.id,
     label: next.label,
     effort: pickEffort(next, selection.effort),
+    contextWindow: pickContextWindow(next, null),
   };
 }
 
@@ -178,6 +192,7 @@ interface AppState {
   setChatOpen: (open: boolean) => void;
   setModel: (provider: Provider, model: string) => void;
   setEffort: (effort: string) => void;
+  setContextWindow: (contextWindow: string) => void;
   refreshProviders: () => Promise<void>;
   toggleFavoriteModel: (key: string) => void;
   setPresenting: (presenting: boolean) => void;
@@ -310,10 +325,14 @@ export const useApp = create<AppState>((set, get) => ({
       ?.models.find((m) => m.id === id);
     if (!model) return;
     const effort = pickEffort(model, get().selection.effort);
-    saveSelection({ provider, model: id, label: model.label, effort });
+    // Each model starts on its own default window: 1M costs more on models where it is optional.
+    const contextWindow = pickContextWindow(model, null);
+    saveSelection({ provider, model: id, label: model.label, effort, contextWindow });
   },
 
   setEffort: (effort) => saveSelection({ ...get().selection, effort }),
+
+  setContextWindow: (contextWindow) => saveSelection({ ...get().selection, contextWindow }),
 
   refreshProviders: async () => {
     set({ providers: undefined });
@@ -458,10 +477,10 @@ export const useApp = create<AppState>((set, get) => ({
       if (user.sketch) get().clearSketch(slide);
     }
     try {
-      const { provider, model } = selection;
+      const { provider, model, contextWindow } = selection;
       const info = get().providers?.find((p) => p.id === provider)?.models.find((m) => m.id === model);
       const effort = requestEffort(info, selection.effort);
-      await api.sendMessage(deck.id, buildPrompt(deck, user), { provider, model, effort });
+      await api.sendMessage(deck.id, buildPrompt(deck, user), { provider, model, effort, contextWindow });
     } catch (error) {
       updateAssistant(assistant.id, (m) => ({
         ...m,

@@ -74,9 +74,9 @@ const CASES = [
   ["resetChat", () => api.resetChat("talk"), "reset_chat", { id: "talk" }],
   [
     "sendMessage",
-    () => api.sendMessage("talk", "Hi", { provider: "codex", model: "gpt-6-astra", effort: "high" }),
+    () => api.sendMessage("talk", "Hi", { provider: "claude", model: "claude-opus-5-5", effort: "high", contextWindow: "1m" }),
     "send_message",
-    { args: { deckId: "talk", prompt: "Hi", provider: "codex", model: "gpt-6-astra", effort: "high" } },
+    { args: { deckId: "talk", prompt: "Hi", provider: "claude", model: "claude-opus-5-5", effort: "high", contextWindow: "1m" } },
   ],
   ["interruptAgent", () => api.interruptAgent("talk"), "interrupt_agent", { id: "talk" }],
   ["agentRunning", () => api.agentRunning("talk"), "agent_running", { id: "talk" }],

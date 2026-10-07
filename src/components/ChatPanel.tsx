@@ -306,8 +306,12 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const slideNumber = selected && deck ? deck.slides.findIndex((s) => s.id === selected) + 1 : 0;
-  const sketched = useApp((s) => (selected ? (s.sketches[selected]?.length ?? 0) > 0 : false));
-  const sendsSketch = sketched && includeSlide && slideNumber > 0;
+  // Marks go out once while on show (see `send`); they stay on the slide as a review.
+  const unsentSketch = useApp((s) => {
+    const marks = selected ? s.sketches[selected] : undefined;
+    return !!selected && !!marks?.length && s.reviewVisible && marks !== s.sketchesSent[selected];
+  });
+  const sendsSketch = unsentSketch && includeSlide && slideNumber > 0;
 
   useLayoutEffect(() => {
     const el = textareaRef.current;
@@ -405,15 +409,16 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
             )}
             {sendsSketch && (
               <span
-                title="A screenshot of the slide with your drawing is sent along"
+                title="A screenshot of the slide with your marks is sent along; the marks stay on the slide as a review"
                 className="flex h-5 items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 text-xs text-primary"
               >
                 <PenLine className="size-3" />
                 Sketch
                 <button
                   type="button"
-                  aria-label="Discard sketch"
-                  onClick={() => selected && useApp.getState().clearSketch(selected)}
+                  aria-label="Don't send sketch"
+                  title="Don't send these marks; they stay on the slide"
+                  onClick={() => selected && useApp.getState().skipSketch(selected)}
                   className="hover:text-foreground"
                 >
                   <X className="size-3" />

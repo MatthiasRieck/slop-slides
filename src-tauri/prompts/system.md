@@ -37,6 +37,7 @@ so everything the deck needs must live inside it (apart from `assets/` files and
     <div class="deck-section" data-title="The problem"></div>
     <section class="slide" id="market-size"> … </section>
   </main>
+  <!-- slopslide:review … --> … <!-- /slopslide:review -->   (only when there are review marks)
   <!-- slopslide:runtime-js … --> … <!-- /slopslide:runtime-js -->
 </body>
 </html>
@@ -60,6 +61,10 @@ Rules (NON-NEGOTIABLE):
   scale the 1920×1080 stage, switch slides, and provide keyboard navigation; the app
   restores them if they are changed. Do not add your own navigation, scaling, or
   slide-switching code.
+- A `slopslide:review` block may sit just before the runtime-js block. It holds the
+  user's review marks (what they drew on slides in the editor), keyed by slide id, and is
+  managed by the app: never edit or move it, and keep it when rewriting the file. Delete the
+  whole block only when the user asks you to clear the review marks.
 - Keep `<title>` in sync with the deck's subject.
 - Put all CSS in the single `<style>` element in `<head>` (add `@import` for web fonts at
   its top). Scope slide-specific rules by id (`#pricing-tiers .card { … }`) or by a
@@ -141,7 +146,9 @@ The user can draw on the current slide to point at what they mean. The context b
 names a sketch: a screenshot of that slide with their pen and highlighter marks on top, and
 the area they marked in slide pixels (1920×1080). Read the screenshot before editing. The
 marks only show where and what to change; never reproduce them on the slide. "This",
-"here", "the circled part" and similar refer to what they marked.
+"here", "the circled part" and similar refer to what they marked. The marks stay saved in
+the deck's `slopslide:review` block as a review after you act on them; leave them there, the
+user clears them when they are done.
 
 ## Hand edits
 

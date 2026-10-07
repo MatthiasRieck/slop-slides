@@ -21,6 +21,7 @@ use tauri::{AppHandle, Manager};
 use crate::error::{Error, Result};
 use crate::html;
 use crate::lint;
+use crate::review::{self, Review};
 
 pub const INTERNAL_DIR: &str = ".slopslide";
 pub const DECK_FILE: &str = "deck.html";
@@ -82,6 +83,8 @@ pub struct Deck {
     pub sections: Vec<Section>,
     /// Changes whenever anything outside the slides (styles, fonts, runtime) changes.
     pub shell_hash: String,
+    /// What the user drew on slides, by slide id (see [`review`]).
+    pub review: Review,
 }
 
 pub fn library_root(app: &AppHandle) -> Result<PathBuf> {
@@ -198,10 +201,18 @@ pub fn normalize(dir: &Path) -> Result<()> {
     let source = read_html(dir)?;
     let fixed = html::normalize_ids(&source).unwrap_or_else(|| source.clone());
     let fixed = html::ensure_runtime(&fixed);
+    let fixed = prune_review(&fixed).unwrap_or(fixed);
     if fixed != source {
         write_html(dir, &fixed)?;
     }
     Ok(())
+}
+
+/// `html` without review marks of slides it no longer has; None when there are none to drop.
+fn prune_review(html: &str) -> Option<String> {
+    let slides = html::find_slides(html);
+    let ids = slides.iter().filter_map(|s| s.id.as_deref()).collect();
+    review::prune(html, &ids)
 }
 
 pub fn create(root: &Path, title: &str) -> Result<Deck> {
@@ -247,6 +258,7 @@ pub fn load(dir: &Path, id: &str) -> Result<Deck> {
         title: html::title(&source).unwrap_or_else(|| fallback_title(id)),
         path: dir.to_string_lossy().into_owned(),
         shell_hash: html::shell_hash(&source, &spans, &section_spans),
+        review: review::read(&source),
         sections: section_spans
             .iter()
             .enumerate()
@@ -307,6 +319,18 @@ fn edit<T>(dir: &Path, id: &str, f: impl FnOnce(&str) -> EditResult<T>) -> Resul
     let (updated, value) = f(&source).map_err(Error::Message)?;
     write_html(dir, &updated)?;
     Ok((load(dir, id)?, value))
+}
+
+/// Stores the user's review marks in deck.html, dropping those of slides that are gone.
+/// Leaves the file alone when nothing changed, so the watcher stays quiet.
+pub fn save_review(dir: &Path, review: &Review) -> Result<()> {
+    let source = read_html(dir)?;
+    let updated = review::write(&source, review);
+    let updated = prune_review(&updated).unwrap_or(updated);
+    if updated != source {
+        write_html(dir, &updated)?;
+    }
+    Ok(())
 }
 
 pub fn rename(dir: &Path, id: &str, title: &str) -> Result<Deck> {
@@ -1120,6 +1144,73 @@ mod tests {
         assert_eq!(slide_image_name(99, 120), "slide-100.png");
         assert_eq!(slide_image_name(4, 120), "slide-005.png");
         assert_eq!(slide_image_name(0, 0), "slide-01.png");
+    }
+
+    fn marks(ids: &[&str]) -> Review {
+        ids.iter()
+            .map(|id| {
+                let stroke = review::Stroke {
+                    tool: review::InkTool::Highlighter,
+                    color: "#facc15".into(),
+                    points: vec![[0.25, 0.5], [0.75, 0.5]],
+                };
+                (id.to_string(), vec![stroke])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn review_marks_are_saved_in_the_deck_and_loaded_back() {
+        let deck = TempDeck::new(THREE);
+        save_review(&deck.0, &marks(&["b", "gone"])).unwrap();
+        let loaded = load(&deck.0, "three").unwrap();
+        assert_eq!(
+            loaded.review,
+            marks(&["b"]),
+            "marks of missing slides are dropped"
+        );
+        assert!(deck.html().contains(review::START));
+
+        save_review(&deck.0, &Review::new()).unwrap();
+        assert_eq!(deck.html(), THREE, "clearing every mark removes the block");
+    }
+
+    #[test]
+    fn saving_unchanged_review_marks_leaves_the_file_alone() {
+        let deck = TempDeck::new(THREE);
+        save_review(&deck.0, &marks(&["a"])).unwrap();
+        let path = deck.0.join(DECK_FILE);
+        let before = fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        save_review(&deck.0, &marks(&["a"])).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
+    }
+
+    #[test]
+    fn review_marks_leave_slide_and_shell_hashes_alone() {
+        let deck = TempDeck::new(THREE);
+        let before = load(&deck.0, "three").unwrap();
+        save_review(&deck.0, &marks(&["a", "c"])).unwrap();
+        let after = load(&deck.0, "three").unwrap();
+        assert_eq!(before.shell_hash, after.shell_hash);
+        assert!(before
+            .slides
+            .iter()
+            .zip(&after.slides)
+            .all(|(a, b)| a.hash == b.hash));
+    }
+
+    #[test]
+    fn normalize_drops_marks_of_deleted_slides() {
+        let deck = TempDeck::new(&review::write(THREE, &marks(&["a", "b"])));
+        fs::write(
+            deck.0.join(DECK_FILE),
+            deck.html()
+                .replace("<section class=\"slide\" id=\"b\">B</section>", ""),
+        )
+        .unwrap();
+        normalize(&deck.0).unwrap();
+        assert_eq!(load(&deck.0, "three").unwrap().review, marks(&["a"]));
     }
 
     #[test]

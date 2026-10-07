@@ -76,6 +76,7 @@ export interface ModelSelection {
 }
 
 const SELECTION_KEY = "slopslide.selection";
+const REVIEW_VISIBLE_KEY = "slopslide.reviewVisible";
 const FAVORITES_KEY = "slopslide.favoriteModels";
 
 const DEFAULT_SELECTION: ModelSelection = {
@@ -167,8 +168,15 @@ interface AppState {
   lint: LintIssue[] | null;
   /** Text to put in the chat composer, with a counter so the same text can be sent twice. */
   composerFill: { text: string; rev: number } | null;
-  /** Ink drawn on slides in the editor, by slide id; sent along with the next message. */
+  /**
+   * Ink drawn on slides in the editor, by slide id. Saved in deck.html as review marks, and
+   * sent along with the next message about the slide while it has changed since last sent.
+   */
   sketches: Record<string, Stroke[]>;
+  /** The marks each slide had when they were last sent (or skipped), so they go out once. */
+  sketchesSent: Record<string, Stroke[]>;
+  /** Review marks are shown on the stage (and sent to the agent). */
+  reviewVisible: boolean;
   /** Slides being saved as images into `dir`, one at a time; null when not exporting. */
   imageExport: { dir: string; slides: string[] } | null;
   /** The stage lets the user edit text and move elements on the slide. */
@@ -200,6 +208,9 @@ interface AppState {
   fillComposer: (text: string) => void;
   setSketches: (update: (all: Record<string, Stroke[]>) => Record<string, Stroke[]>) => void;
   clearSketch: (slide: string) => void;
+  /** Keeps the slide's current marks out of the next message. */
+  skipSketch: (slide: string) => void;
+  setReviewVisible: (visible: boolean) => void;
   startImageExport: (dir: string) => void;
   endImageExport: () => void;
   /** Enters or leaves edit mode, keeping the edits made so far. */
@@ -260,6 +271,8 @@ export const useApp = create<AppState>((set, get) => ({
   lint: null,
   composerFill: null,
   sketches: {},
+  sketchesSent: {},
+  reviewVisible: localStorage.getItem(REVIEW_VISIBLE_KEY) !== "false",
   imageExport: null,
   editing: false,
   editReload: 0,
@@ -286,8 +299,9 @@ export const useApp = create<AppState>((set, get) => ({
 
   closeDeck: async () => {
     if (get().codeDirty && !(await confirmDiscardEdits())) return;
+    await flushReviewSave();
     await api.closeDeck();
-    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null, sketches: {}, imageExport: null, editing: false, slideUndo: [], slideRedo: [] });
+    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null, sketches: {}, sketchesSent: {}, imageExport: null, editing: false, slideUndo: [], slideRedo: [] });
   },
 
   setDeck: (deck) => {
@@ -369,13 +383,25 @@ export const useApp = create<AppState>((set, get) => ({
 
   fillComposer: (text) => set((s) => ({ composerFill: { text, rev: (s.composerFill?.rev ?? 0) + 1 } })),
 
-  setSketches: (update) => set((s) => ({ sketches: update(s.sketches) })),
+  setSketches: (update) => {
+    set((s) => ({ sketches: update(s.sketches) }));
+    scheduleReviewSave();
+  },
 
-  clearSketch: (slide) =>
+  clearSketch: (slide) => {
     set((s) => {
       const { [slide]: _, ...rest } = s.sketches;
       return { sketches: rest };
-    }),
+    });
+    scheduleReviewSave();
+  },
+
+  skipSketch: (slide) => set((s) => ({ sketchesSent: { ...s.sketchesSent, [slide]: s.sketches[slide] ?? [] } })),
+
+  setReviewVisible: (reviewVisible) => {
+    localStorage.setItem(REVIEW_VISIBLE_KEY, String(reviewVisible));
+    set({ reviewVisible });
+  },
 
   startImageExport: (dir) => {
     const { deck } = get();
@@ -441,7 +467,9 @@ export const useApp = create<AppState>((set, get) => ({
     if (!deck || running) return;
     const slide = includeSlide ? selected : null;
     const strokes = slide ? (get().sketches[slide] ?? []) : [];
-    const bounds = inkBounds(strokes);
+    // Marks go out once, while they are on show; they stay on the slide as a review.
+    const unsent = !!slide && get().reviewVisible && strokes !== get().sketchesSent[slide];
+    const bounds = unsent ? inkBounds(strokes) : null;
     let user: UserMessage = {
       id: newId(),
       role: "user",
@@ -464,7 +492,7 @@ export const useApp = create<AppState>((set, get) => ({
     };
     set((s) => ({ messages: [...s.messages, user, assistant], running: true }));
     if (slide && (user.sketch || screenshot)) {
-      // Screenshot the slide with the ink still on it, then put the ink away.
+      // Screenshot the slide with the ink on it.
       const image = await captureSlide(deck.id);
       const captured: UserMessage = {
         ...user,
@@ -473,7 +501,7 @@ export const useApp = create<AppState>((set, get) => ({
       };
       user = captured;
       set((s) => ({ messages: s.messages.map((m) => (m.id === captured.id ? captured : m)) }));
-      if (user.sketch) get().clearSketch(slide);
+      if (user.sketch) set((s) => ({ sketchesSent: { ...s.sketchesSent, [slide]: strokes } }));
     }
     try {
       const { provider, model, effort, contextWindow } = selection;
@@ -542,6 +570,7 @@ async function confirmDiscardEdits(): Promise<boolean> {
 
 async function loadDeckState(deck: Deck) {
   const [chat, running] = await Promise.all([api.loadChat(deck.id), api.agentRunning(deck.id)]);
+  savedReview = reviewKey(deck.review ?? {});
   const messages = Array.isArray(chat) ? (chat as ChatMessage[]) : [];
   useApp.setState({
     deck,
@@ -552,12 +581,70 @@ async function loadDeckState(deck: Deck) {
     presenting: false,
     lint: null,
     composerFill: null,
-    sketches: {},
+    sketches: deck.review ?? {},
+    sketchesSent: {},
     imageExport: null,
     editing: false,
     slideUndo: [],
     slideRedo: [],
   });
+}
+
+const REVIEW_SAVE_DELAY = 400;
+let reviewSave: { deckId: string; timer: ReturnType<typeof setTimeout> } | null = null;
+/** Review saves still on their way to disk. */
+let reviewSaving = 0;
+/** The review marks as deck.html holds them, as far as the app knows (see `reviewKey`). */
+let savedReview = reviewKey({});
+
+/** Compares review marks independent of slide order; slides without marks don't count. */
+function reviewKey(review: Record<string, Stroke[]>): string {
+  return JSON.stringify(
+    Object.entries(review)
+      .filter(([, strokes]) => strokes.length > 0)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  );
+}
+
+/**
+ * Takes on review marks changed outside the app's own saves (the agent clearing them, an
+ * edit in the HTML view), unless the user's latest marks are still being saved.
+ */
+function adoptReview(deck: Deck) {
+  const review = deck.review ?? {};
+  const key = reviewKey(review);
+  if (reviewSave || reviewSaving > 0 || key === savedReview) return;
+  savedReview = key;
+  if (key !== reviewKey(useApp.getState().sketches)) useApp.setState({ sketches: review, sketchesSent: {} });
+}
+
+/** Saves the review marks to deck.html once drawing pauses. */
+function scheduleReviewSave() {
+  const deck = useApp.getState().deck;
+  if (!deck) return;
+  if (reviewSave && reviewSave.deckId !== deck.id) void flushReviewSave();
+  if (reviewSave) clearTimeout(reviewSave.timer);
+  reviewSave = { deckId: deck.id, timer: setTimeout(() => void flushReviewSave(), REVIEW_SAVE_DELAY) };
+}
+
+/** Saves review marks still waiting for drawing to pause, right away. */
+export async function flushReviewSave() {
+  if (!reviewSave) return;
+  const { deckId, timer } = reviewSave;
+  clearTimeout(timer);
+  reviewSave = null;
+  const { deck, sketches } = useApp.getState();
+  if (deck?.id !== deckId) return;
+  const review = Object.fromEntries(Object.entries(sketches).filter(([, strokes]) => strokes.length > 0));
+  reviewSaving++;
+  try {
+    await api.saveReview(deckId, review);
+    savedReview = reviewKey(review);
+  } catch (error) {
+    useApp.setState({ error: `Could not save the review marks: ${errorMessage(error)}` });
+  } finally {
+    reviewSaving--;
+  }
 }
 
 /** Marks the slide on the stage to screenshot when sending a sketch. */
@@ -730,6 +817,7 @@ function applyDeckChanged(paths: string[]) {
       const before = new Map(deck.slides.map((s) => [s.id, s.hash]));
       const changed = next.slides.find((s) => before.get(s.id) !== s.hash);
       useApp.getState().setDeck(next);
+      adoptReview(next);
       // Follow the agent to the slide it is working on.
       if (changed && useApp.getState().running) useApp.setState({ selected: changed.id });
     } catch {

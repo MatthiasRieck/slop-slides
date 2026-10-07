@@ -66,6 +66,8 @@ beforeEach(() => {
     favoriteModels: [],
     error: null,
     sketches: {},
+    sketchesSent: {},
+    reviewVisible: true,
     send,
     resetChat,
     interrupt,
@@ -208,12 +210,23 @@ describe("ChatPanel: composing", () => {
       expect(screen.queryByText("Sketch")).toBeNull();
     });
 
-    it("can be discarded", () => {
+    it("can be left out, keeping the marks on the slide", () => {
       useApp.setState({ sketches: { intro: [mark], outro: [mark] } });
       render(<ChatPanel />);
-      fireEvent.click(screen.getByRole("button", { name: "Discard sketch" }));
-      expect(useApp.getState().sketches).toEqual({ outro: [mark] });
+      fireEvent.click(screen.getByRole("button", { name: "Don't send sketch" }));
+      expect(useApp.getState().sketches).toEqual({ intro: [mark], outro: [mark] });
       expect(screen.queryByText("Sketch")).toBeNull();
+      // New marks go along again.
+      act(() => useApp.getState().setSketches((all) => ({ ...all, intro: [mark, mark] })));
+      expect(screen.getByText("Sketch")).toBeTruthy();
+    });
+
+    it("is not sent while the review marks are hidden", () => {
+      useApp.setState({ sketches: { intro: [mark] }, reviewVisible: false });
+      render(<ChatPanel />);
+      expect(screen.queryByText("Sketch")).toBeNull();
+      act(() => useApp.getState().setReviewVisible(true));
+      expect(screen.getByText("Sketch")).toBeTruthy();
     });
 
     it("is left out with the slide", () => {

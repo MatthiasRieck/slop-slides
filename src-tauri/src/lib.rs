@@ -9,6 +9,7 @@ mod lint;
 mod mcp;
 mod protocol;
 mod providers;
+mod review;
 mod watcher;
 
 use serde::Serialize;
@@ -66,6 +67,11 @@ fn close_deck(watcher: State<DeckWatcher>) {
 #[tauri::command]
 fn load_deck(app: AppHandle, id: String) -> Result<Deck> {
     deck::load(&deck::deck_dir(&app, &id)?, &id)
+}
+
+#[tauri::command]
+fn save_review(app: AppHandle, id: String, review: review::Review) -> Result<()> {
+    deck::save_review(&deck::deck_dir(&app, &id)?, &review)
 }
 
 #[tauri::command]
@@ -281,6 +287,7 @@ pub fn run() {
             close_deck,
             load_deck,
             rename_deck,
+            save_review,
             delete_deck,
             reorder_slides,
             add_slide,

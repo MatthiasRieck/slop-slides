@@ -1,4 +1,4 @@
-/* SlopSlide player. Keys: ←/→, space, PageUp/PageDown, Home/End, F for full screen. */
+/* SlopSlide player. Keys: ←/→, space, PageUp/PageDown, Home/End, F for full screen, R for review marks. */
 (function () {
   var root = document.documentElement;
   var params = new URLSearchParams(location.search);
@@ -59,6 +59,67 @@
     if (framed) window.parent.postMessage({ type: "slop:slide", id: slides[index].id || null, index: index }, "*");
   }
 
+  // Review marks drawn in the editor (the slopslide:review block), hidden until R or ?review
+  // shows them. The editor draws them itself, so embedded previews leave them out.
+  var review = null;
+  var reviewData = document.getElementById("slopslide-review");
+  if (reviewData && !embed) {
+    try {
+      review = JSON.parse(reviewData.textContent);
+    } catch (e) {
+      review = null;
+    }
+  }
+  var SVG = "http://www.w3.org/2000/svg";
+  // Widths in screen pixels, as the editor draws them.
+  var INK = { pen: { width: 4, opacity: 1 }, highlighter: { width: 28, opacity: 0.4 } };
+
+  function drawReview(slide, strokes) {
+    var svg = document.createElementNS(SVG, "svg");
+    svg.setAttribute("class", "slop-review");
+    svg.setAttribute("viewBox", "0 0 1920 1080");
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("aria-hidden", "true");
+    strokes.forEach(function (stroke) {
+      var ink = stroke && INK[stroke.tool];
+      var points = stroke && stroke.points;
+      if (!ink || !Array.isArray(points) || points.length === 0) return;
+      var d = points
+        .map(function (p, i) {
+          return (i ? "L" : "M") + Math.round(p[0] * 19200) / 10 + " " + Math.round(p[1] * 10800) / 10;
+        })
+        .join("");
+      // A tap never moves; a tiny step makes the round cap draw it as a dot.
+      if (points.every(function (p) { return p[0] === points[0][0] && p[1] === points[0][1]; })) d += "l0.01 0";
+      var path = document.createElementNS(SVG, "path");
+      path.setAttribute("d", d);
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", String(stroke.color));
+      path.setAttribute("stroke-width", String(ink.width));
+      path.setAttribute("stroke-opacity", String(ink.opacity));
+      path.setAttribute("stroke-linecap", "round");
+      path.setAttribute("stroke-linejoin", "round");
+      path.setAttribute("vector-effect", "non-scaling-stroke");
+      svg.appendChild(path);
+    });
+    slide.appendChild(svg);
+  }
+
+  /** Shows or hides the review marks; false when the deck has none. */
+  function toggleReview(on) {
+    if (!review || typeof review !== "object") return false;
+    if (on) {
+      all.forEach(function (slide) {
+        var strokes = slide.id && review[slide.id];
+        if (Array.isArray(strokes) && !slide.querySelector(":scope > .slop-review")) drawReview(slide, strokes);
+      });
+    }
+    if (on) root.setAttribute("data-slop-review", "");
+    else root.removeAttribute("data-slop-review");
+    return true;
+  }
+  if (params.has("review")) toggleReview(true);
+
   window.addEventListener("resize", fit);
   fit();
   show(indexFor(embed ? params.get("slide") : decodeURIComponent(location.hash.slice(1))));
@@ -80,7 +141,11 @@
       var mod = event.metaKey || event.ctrlKey;
       window.parent.postMessage({ type: "slop:key", key: event.key, mod: mod, shift: event.shiftKey }, "*");
     }
-    if (!embed && navigate(event.key)) event.preventDefault();
+    if (embed) return;
+    var plain = !event.metaKey && !event.ctrlKey && !event.altKey;
+    if ((event.key === "r" || event.key === "R") && plain) {
+      if (toggleReview(!root.hasAttribute("data-slop-review"))) event.preventDefault();
+    } else if (navigate(event.key)) event.preventDefault();
   });
 
   if (embed) return;

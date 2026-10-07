@@ -196,6 +196,42 @@ describe("slide editor", () => {
     expect(e.commits()[0]!.markup).toContain(`<div class="card"><p style="color: red">Two</p></div>`);
   });
 
+  it("removes the selection with Backspace too, and ignores Delete with nothing selected", () => {
+    const e = editor();
+    e.key("Delete");
+    expect(e.commits()).toEqual([]);
+    e.down(e.$(".shape"));
+    e.key("Backspace");
+    expect(e.doc.querySelector(".shape")).toBeNull();
+    expect(e.commits()).toHaveLength(1);
+    expect(e.selected()).toEqual([]);
+  });
+
+  it("removes the selection when the app asks, ending any text editing first", () => {
+    const e = editor();
+    e.fromParent({ type: "slop:edit-delete" });
+    expect(e.commits()).toEqual([]);
+    e.down(e.$(".card p"));
+    e.key("Enter");
+    expect(e.$(".card p").hasAttribute("contenteditable")).toBe(true);
+    e.fromParent({ type: "slop:edit-delete" });
+    expect(e.doc.querySelectorAll(".card p")).toHaveLength(1);
+    const last = e.commits().at(-1)!;
+    expect(last.markup).toContain(`<div class="card"><p style="color: red">Two</p></div>`);
+    expect(last.markup).not.toContain("contenteditable");
+  });
+
+  it("tells the app whether anything is selected, when that changes", () => {
+    const e = editor();
+    const reports = () => e.posted().filter((m) => (m as { type: string }).type === "slop:edit-selection");
+    e.down(e.$("h1"));
+    e.down(e.$(".card p"));
+    expect(reports()).toEqual([{ type: "slop:edit-selection", slide: "intro", selected: true }]);
+    e.key("Delete");
+    expect(reports().at(-1)).toEqual({ type: "slop:edit-selection", slide: "intro", selected: false });
+    expect(reports()).toHaveLength(2);
+  });
+
   it("edits text on double-click and saves it when done", () => {
     const e = editor();
     const p = e.$(".card p");

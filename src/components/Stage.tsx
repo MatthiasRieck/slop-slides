@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, Maximize, Pencil, Redo2, Sparkles, Undo2, Wand2, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, Maximize, Pencil, Redo2, Sparkles, Trash2, Undo2, Wand2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { SKETCH_TARGET_ATTR, useApp } from "../store";
@@ -126,7 +126,7 @@ export function Stage() {
                 </button>
                 <div className="mx-1 h-4 w-px bg-border" />
                 {editing ? (
-                  <EditBar canUndo={canUndo} canRedo={canRedo} />
+                  <EditBar canUndo={canUndo} canRedo={canRedo} canDelete={editFrames.hasSelection} onDelete={editFrames.deleteSelection} />
                 ) : (
                   <SketchToolbar annotations={annotations} />
                 )}
@@ -203,8 +203,8 @@ export function Stage() {
   );
 }
 
-/** Shown in place of the sketch tools while editing: history and leaving edit mode. */
-function EditBar(props: { canUndo: boolean; canRedo: boolean }) {
+/** Shown in place of the sketch tools while editing: history, deleting, and leaving edit mode. */
+function EditBar(props: { canUndo: boolean; canRedo: boolean; canDelete: boolean; onDelete: () => void }) {
   const icon = "rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4";
   const app = useApp.getState;
   return (
@@ -214,6 +214,16 @@ function EditBar(props: { canUndo: boolean; canRedo: boolean }) {
       </button>
       <button type="button" aria-label="Redo" title="Redo (⇧⌘Z)" disabled={!props.canRedo} onClick={() => void app().redoSlideEdit()} className={icon}>
         <Redo2 />
+      </button>
+      <button
+        type="button"
+        aria-label="Delete selected element"
+        title="Delete the selected element (⌫)"
+        disabled={!props.canDelete}
+        onClick={props.onDelete}
+        className={icon}
+      >
+        <Trash2 />
       </button>
       <div className="mx-1 h-4 w-px bg-border" />
       <button
@@ -344,6 +354,8 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
   const restore = useRef<{ slide: string; path: number[] } | null>(null);
   const frame = useRef<HTMLIFrameElement | null>(null);
   const [overflow, setOverflow] = useState<{ slide: string; items: string[] } | null>(null);
+  // Which slide has an element selected in the editor, if any.
+  const [selection, setSelection] = useState<string | null>(null);
 
   useEffect(() => {
     const fromStage = (source: MessageEventSource | null) =>
@@ -357,6 +369,8 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
         void useApp.getState().saveSlideEdit(data.slide, data.markup);
       } else if (data?.type === "slop:edit-overflow" && data.slide === selected && Array.isArray(data.items)) {
         setOverflow({ slide: data.slide, items: data.items.map(String) });
+      } else if (data?.type === "slop:edit-selection" && data.slide === selected) {
+        setSelection(data.selected ? data.slide : null);
       } else if (data?.type === "slop:key") {
         if (data.mod) runHistoryKey(String(data.key), Boolean(data.shift));
         else if (data.key === "Escape") useApp.getState().setEditing(false);
@@ -380,8 +394,12 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
 
   return {
     overflow: editing && overflow?.slide === current ? overflow.items : NO_OVERFLOW,
+    hasSelection: editing && selection !== null && selection === current,
+    deleteSelection: () => frame.current?.contentWindow?.postMessage({ type: "slop:edit-delete" }, "*"),
     onFrameReady: (loaded: HTMLIFrameElement) => {
       frame.current = loaded;
+      // A fresh editor starts with nothing selected; it reports a restored selection itself.
+      setSelection(null);
       const { editing, selected } = useApp.getState();
       const again = restore.current;
       if (editing && again && again.slide === selected) {

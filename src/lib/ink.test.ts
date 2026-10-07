@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { INK_STYLE, inkBounds, isDot, SLIDE_SIZE, strokePath, TOOL_KEYS, toFraction, toPixels, type Stroke } from "./ink";
+import { INK_STYLE, inkBounds, isDot, SLIDE_SIZE, strokePath, TOOL_KEYS, toFraction, toPixels, zoomBox, type Stroke } from "./ink";
 
 describe("strokePath", () => {
   it("draws a line through every point", () => {
@@ -74,6 +74,13 @@ describe("toFraction", () => {
 
   it("survives an unmeasured rect", () => {
     expect(toFraction(5, 7, new DOMRect(0, 0, 0, 0))).toEqual([5, 7]);
+  });
+});
+
+describe("zoomBox", () => {
+  it("lays the layer out where the zoom puts it, at the zoomed size", () => {
+    expect(zoomBox(0, 0, 1)).toEqual({ left: "0px", top: "0px", width: "100%", height: "100%" });
+    expect(zoomBox(-100, 25.5, 2.5)).toEqual({ left: "-100px", top: "25.5px", width: "250%", height: "250%" });
   });
 });
 

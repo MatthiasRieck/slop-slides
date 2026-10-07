@@ -38,6 +38,15 @@ export function strokePath(points: readonly [number, number][]): string {
   return points.map(([x, y], i) => `${i ? "L" : "M"}${x} ${y}`).join("");
 }
 
+/**
+ * Puts an ink layer where a zoom (translate by `x`, `y` CSS px, then scale by `k` around the
+ * top-left corner) has its container. It is laid out at the zoomed size rather than CSS-scaled,
+ * since a scaled layer is painted at its own size and then stretched, blurring the ink.
+ */
+export function zoomBox(x: number, y: number, k: number): { left: string; top: string; width: string; height: string } {
+  return { left: `${x}px`, top: `${y}px`, width: `${k * 100}%`, height: `${k * 100}%` };
+}
+
 /** Position of a pointer event inside `rect`, as fractions of its size. */
 export function toFraction(clientX: number, clientY: number, rect: DOMRect): [number, number] {
   const x = (clientX - rect.left) / (rect.width || 1);

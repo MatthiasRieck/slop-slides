@@ -2,6 +2,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Maximize } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { zoomBox } from "../lib/ink";
 import { deckFileUrl } from "../lib/utils";
 import { useApp } from "../store";
 import { AnnotationLayer, PresenterToolbar, useAnnotations } from "./PresenterTools";
@@ -90,10 +91,10 @@ export function Presenter() {
       />
       <div
         data-testid="annotation-zoom"
-        className="pointer-events-none absolute inset-0 origin-top-left"
-        style={{ transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.k})` }}
+        className="pointer-events-none absolute"
+        style={zoomBox(zoom.x, zoom.y, zoom.k)}
       >
-        <AnnotationLayer annotations={annotations} />
+        <AnnotationLayer annotations={annotations} zoom={zoom.k} />
       </div>
       {moved && (
         <button

@@ -11,11 +11,13 @@ import {
   type DeckChanged,
   type LintIssue,
 } from "./lib/api";
+import { latestContext, mergeContext, type ContextUsage } from "./lib/context";
 import { inkBounds, SLIDE_SIZE, type Stroke } from "./lib/ink";
 import {
   defaultModel,
   pickContextWindow,
   pickEffort,
+  requestEffort,
   type Provider,
   type ProviderInfo,
 } from "./lib/models";
@@ -40,6 +42,8 @@ export interface UserMessage {
   sketch?: Sketch | null;
   /** Deck-relative path of a screenshot of the slide sent along (for tidying hand edits). */
   screenshot?: string | null;
+  /** Set when the message ran a command instead of prompting the agent. */
+  command?: "compact";
   createdAt: number;
 }
 
@@ -60,6 +64,14 @@ export interface AssistantMessage {
   error: string | null;
   costUsd: number | null;
   durationMs: number | null;
+  /** The provider that wrote this reply; absent in chats saved before it was recorded. */
+  provider?: Provider;
+  /** How full the provider's context was after this reply, as far as it was reported. */
+  context?: ContextUsage | null;
+  /** The agent is summarizing the conversation. */
+  compacting?: boolean;
+  /** The conversation was summarized during this reply. */
+  compacted?: boolean;
   createdAt: number;
 }
 
@@ -228,6 +240,8 @@ interface AppState {
     text: string,
     options: { includeSlide: boolean; attachments: string[]; screenshot?: boolean },
   ) => Promise<void>;
+  /** Has the agent summarize the conversation so far, freeing up its context. */
+  compact: () => Promise<void>;
   interrupt: () => void;
   resetChat: () => Promise<void>;
 }
@@ -465,6 +479,8 @@ export const useApp = create<AppState>((set, get) => ({
   send: async (text, { includeSlide, attachments, screenshot = false }) => {
     const { deck, selected, running, selection } = get();
     if (!deck || running) return;
+    // Typed as a message, the command still compacts rather than reaching the agent as text.
+    if (text.trim() === COMPACT_COMMAND) return get().compact();
     const slide = includeSlide ? selected : null;
     const strokes = slide ? (get().sketches[slide] ?? []) : [];
     // Marks go out once, while they are on show; they stay on the slide as a review.
@@ -479,17 +495,7 @@ export const useApp = create<AppState>((set, get) => ({
       sketch: bounds ? { image: null, bounds } : null,
       createdAt: Date.now(),
     };
-    const assistant: AssistantMessage = {
-      id: newId(),
-      role: "assistant",
-      parts: [],
-      status: "streaming",
-      thinking: true,
-      error: null,
-      costUsd: null,
-      durationMs: null,
-      createdAt: Date.now(),
-    };
+    const assistant = newReply(selection.provider);
     set((s) => ({ messages: [...s.messages, user, assistant], running: true }));
     if (slide && (user.sketch || screenshot)) {
       // Screenshot the slide with the ink on it.
@@ -503,19 +509,24 @@ export const useApp = create<AppState>((set, get) => ({
       set((s) => ({ messages: s.messages.map((m) => (m.id === captured.id ? captured : m)) }));
       if (user.sketch) set((s) => ({ sketchesSent: { ...s.sketchesSent, [slide]: strokes } }));
     }
-    try {
-      const { provider, model, effort, contextWindow } = selection;
-      await api.sendMessage(deck.id, buildPrompt(deck, user), { provider, model, effort, contextWindow });
-    } catch (error) {
-      updateAssistant(assistant.id, (m) => ({
-        ...m,
-        status: "error",
-        thinking: false,
-        error: errorMessage(error),
-      }));
-      set({ running: false });
-      persistChat();
-    }
+    await startTurn(deck.id, assistant.id, buildPrompt(deck, user), false);
+  },
+
+  compact: async () => {
+    const { deck, running, selection } = get();
+    if (!deck || running) return;
+    const user: UserMessage = {
+      id: newId(),
+      role: "user",
+      text: COMPACT_COMMAND,
+      slide: null,
+      attachments: [],
+      command: "compact",
+      createdAt: Date.now(),
+    };
+    const assistant = newReply(selection.provider);
+    set((s) => ({ messages: [...s.messages, user, assistant], running: true }));
+    await startTurn(deck.id, assistant.id, COMPACT_COMMAND, true);
   },
 
   interrupt: () => {
@@ -530,6 +541,43 @@ export const useApp = create<AppState>((set, get) => ({
     set({ messages: [], running: false });
   },
 }));
+
+export const COMPACT_COMMAND = "/compact";
+
+function newReply(provider: Provider): AssistantMessage {
+  return {
+    id: newId(),
+    role: "assistant",
+    parts: [],
+    status: "streaming",
+    thinking: true,
+    error: null,
+    costUsd: null,
+    durationMs: null,
+    provider,
+    createdAt: Date.now(),
+  };
+}
+
+/** Hands `prompt` to the selected agent; a failure to start lands on reply `replyId`. */
+async function startTurn(deckId: string, replyId: string, prompt: string, compact: boolean) {
+  const { selection, providers } = useApp.getState();
+  try {
+    const { provider, model, contextWindow } = selection;
+    const info = providers?.find((p) => p.id === provider)?.models.find((m) => m.id === model);
+    const effort = requestEffort(info, selection.effort);
+    await api.sendMessage(deckId, prompt, { provider, model, effort, contextWindow }, compact);
+  } catch (error) {
+    updateAssistant(replyId, (m) => ({
+      ...m,
+      status: "error",
+      thinking: false,
+      error: errorMessage(error),
+    }));
+    useApp.setState({ running: false });
+    persistChat();
+  }
+}
 
 /**
  * Restores the newest entry of one slide edit history (undo or redo) and records how to
@@ -684,7 +732,7 @@ export function lintFixPrompt(issues: LintIssue[]): string {
 /** A transcript saved mid-turn (app quit) cannot resume streaming. */
 function settleInterrupted(message: ChatMessage): ChatMessage {
   if (message.role !== "assistant" || message.status !== "streaming") return message;
-  return { ...message, status: "interrupted", thinking: false };
+  return { ...message, status: "interrupted", thinking: false, compacting: false };
 }
 
 function buildPrompt(deck: Deck, message: UserMessage): string {
@@ -725,6 +773,10 @@ function updateAssistant(id: string, update: (m: AssistantMessage) => AssistantM
 function updateLastAssistant(update: (m: AssistantMessage) => AssistantMessage) {
   const last = useApp.getState().messages.findLast((m) => m.role === "assistant");
   if (last) updateAssistant(last.id, update);
+}
+
+function replyProvider(message: AssistantMessage): Provider {
+  return message.provider ?? useApp.getState().selection.provider;
 }
 
 function persistChat() {
@@ -787,10 +839,25 @@ function applyAgentEvent(event: AgentEvent) {
       });
     case "error":
       return updateLastAssistant((m) => ({ ...m, error: event.message }));
+    case "usage":
+      return updateLastAssistant((m) => {
+        const provider = replyProvider(m);
+        return { ...m, context: mergeContext(latestContext(useApp.getState().messages, provider), provider, event) };
+      });
+    case "compacting":
+      return updateLastAssistant((m) => ({ ...m, thinking: false, compacting: true }));
+    case "compacted":
+      return updateLastAssistant((m) => {
+        const provider = replyProvider(m);
+        const window = latestContext(useApp.getState().messages, provider)?.window ?? null;
+        // The new size is only known once the agent reports usage again.
+        return { ...m, compacting: false, compacted: true, context: { provider, tokens: null, window } };
+      });
     case "finished":
       updateLastAssistant((m) => ({
         ...m,
         thinking: false,
+        compacting: false,
         status: event.interrupted ? "interrupted" : m.error ? "error" : "done",
         parts: m.parts.map((p) =>
           p.kind === "tool" && p.status === "running" ? { ...p, status: "done" } : p,

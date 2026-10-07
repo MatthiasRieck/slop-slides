@@ -226,10 +226,10 @@ describe("opening and creating decks", () => {
 
   it("settles a transcript that was saved mid-turn", async () => {
     const useApp = await freshStore();
-    const streaming = assistantMessage({ status: "streaming", thinking: true });
+    const streaming = assistantMessage({ status: "streaming", thinking: true, compacting: true });
     backend({ open_deck: () => DECK, load_chat: () => [userMessage("hi"), streaming], agent_running: () => false });
     await useApp.getState().openDeck("talk");
-    expect(useApp.getState().messages[1]).toEqual({ ...streaming, status: "interrupted", thinking: false });
+    expect(useApp.getState().messages[1]).toEqual({ ...streaming, status: "interrupted", thinking: false, compacting: false });
   });
 
   it("starts with an empty transcript when the chat file is missing or not a list", async () => {
@@ -489,7 +489,29 @@ describe("sending a message", () => {
       model: "gpt-6-astra",
       effort: "high",
       contextWindow: null,
+      compact: false,
     });
+  });
+
+  it("sends no effort for a model that takes none", async () => {
+    const useApp = await freshStore();
+    useApp.setState({
+      deck: DECK,
+      providers: [
+        {
+          id: "copilot",
+          installed: true,
+          path: "/bin/copilot",
+          models: [
+            { id: "auto", label: "Auto", isDefault: false, efforts: [], defaultEffort: null, contextWindows: [], defaultContextWindow: null },
+          ],
+          error: null,
+        },
+      ],
+      selection: { provider: "copilot", model: "auto", label: "Auto", effort: "medium", contextWindow: null },
+    });
+    await useApp.getState().send("a", { includeSlide: false, attachments: [] });
+    expect(calls("send_message")[0]!.args).toMatchObject({ provider: "copilot", model: "auto", effort: "" });
   });
 
   it("shows a failed send on the reply and saves the transcript", async () => {
@@ -735,6 +757,57 @@ describe("sending a message", () => {
     expect(calls("interrupt_agent")).toEqual([{ id: "talk" }]);
   });
 
+  it("records which provider writes the reply", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, selection: { ...useApp.getState().selection, provider: "copilot" } });
+    await useApp.getState().send("hi", { includeSlide: false, attachments: [] });
+    expect(useApp.getState().messages[1]).toMatchObject({ role: "assistant", provider: "copilot" });
+    expect(calls("send_message")[0]!.args).toMatchObject({ compact: false });
+  });
+
+  describe("compacting", () => {
+    it("asks the agent to compact, without slide context, and shows it as a command", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "intro" });
+      await useApp.getState().compact();
+      expect(calls("send_message")[0]!.args).toMatchObject({ prompt: "/compact", compact: true, provider: "claude" });
+      const [user, reply] = useApp.getState().messages as [UserMessage, AssistantMessage];
+      expect(user).toMatchObject({ text: "/compact", command: "compact", slide: null, attachments: [] });
+      expect(reply).toMatchObject({ status: "streaming", provider: "claude" });
+      expect(useApp.getState().running).toBe(true);
+    });
+
+    it("does nothing without a deck or while the agent runs", async () => {
+      const useApp = await freshStore();
+      await useApp.getState().compact();
+      useApp.setState({ deck: DECK, running: true });
+      await useApp.getState().compact();
+      expect(calls("send_message")).toEqual([]);
+      expect(useApp.getState().messages).toEqual([]);
+    });
+
+    it("treats a typed /compact as the command", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "intro" });
+      await useApp.getState().send("  /compact ", { includeSlide: true, attachments: [] });
+      expect(calls("send_message")[0]!.args).toMatchObject({ prompt: "/compact", compact: true });
+      expect(useApp.getState().messages[0]).toMatchObject({ command: "compact", slide: null });
+    });
+
+    it("shows a refused compaction on the reply", async () => {
+      const useApp = await freshStore();
+      backend({
+        send_message: () => {
+          throw "The agent is still working on this deck.";
+        },
+      });
+      useApp.setState({ deck: DECK });
+      await useApp.getState().compact();
+      expect(useApp.getState().messages[1]).toMatchObject({ status: "error", error: "The agent is still working on this deck." });
+      expect(useApp.getState().running).toBe(false);
+    });
+  });
+
   it("resetChat clears the transcript", async () => {
     const useApp = await freshStore();
     await useApp.getState().resetChat();
@@ -868,6 +941,45 @@ describe("agent events", () => {
     const { useApp, emit } = await bridged([first, userMessage("again"), assistantMessage({ id: "a-1", status: "streaming" })]);
     emit({ type: "textDelta", text: "new" });
     expect(useApp.getState().messages[0]).toEqual(first);
+  });
+
+  describe("context usage", () => {
+    it("records the context size on the reply, keeping what a report leaves out", async () => {
+      const { emit, reply } = await bridged([userMessage("hi"), assistantMessage({ status: "streaming", provider: "claude" })]);
+      emit({ type: "usage", contextTokens: 20_000, contextWindow: null });
+      expect(reply().context).toEqual({ provider: "claude", tokens: 20_000, window: null });
+      emit({ type: "usage", contextTokens: null, contextWindow: 200_000 });
+      expect(reply().context).toEqual({ provider: "claude", tokens: 20_000, window: 200_000 });
+    });
+
+    it("carries the window over from an earlier reply of the same provider", async () => {
+      const earlier = assistantMessage({ id: "a-0", provider: "claude", context: { provider: "claude", tokens: 5, window: 1_000_000 } });
+      const other = assistantMessage({ id: "a-1", provider: "copilot", context: { provider: "copilot", tokens: 9, window: 128_000 } });
+      const { emit, reply } = await bridged([earlier, other, userMessage("hi"), assistantMessage({ id: "a-2", status: "streaming", provider: "claude" })]);
+      emit({ type: "usage", contextTokens: 60_000, contextWindow: null });
+      expect(reply().context).toEqual({ provider: "claude", tokens: 60_000, window: 1_000_000 });
+    });
+
+    it("falls back to the selected provider for replies saved before providers were recorded", async () => {
+      const { useApp, emit, reply } = await bridged();
+      useApp.setState({ selection: { ...useApp.getState().selection, provider: "copilot" } });
+      emit({ type: "usage", contextTokens: 1, contextWindow: 2 });
+      expect(reply().context).toEqual({ provider: "copilot", tokens: 1, window: 2 });
+    });
+
+    it("shows compaction, forgets the old size, and settles when the turn ends", async () => {
+      const earlier = assistantMessage({ id: "a-0", provider: "claude", context: { provider: "claude", tokens: 90_000, window: 200_000 } });
+      const { emit, reply } = await bridged([earlier, userMessage("/compact"), assistantMessage({ id: "a-1", status: "streaming", thinking: true, provider: "claude" })]);
+      emit({ type: "compacting" });
+      expect(reply()).toMatchObject({ compacting: true, thinking: false });
+      emit({ type: "compacted" });
+      expect(reply()).toMatchObject({ compacting: false, compacted: true, context: { provider: "claude", tokens: null, window: 200_000 } });
+      emit({ type: "usage", contextTokens: 12_000, contextWindow: 128_000 });
+      expect(reply().context).toEqual({ provider: "claude", tokens: 12_000, window: 128_000 });
+      emit({ type: "compacting" });
+      emit({ type: "finished", interrupted: true });
+      expect(reply()).toMatchObject({ compacting: false, status: "interrupted" });
+    });
   });
 
   it("ignores events for other decks", async () => {

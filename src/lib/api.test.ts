@@ -82,8 +82,9 @@ const CASES = [
     "sendMessage",
     () => api.sendMessage("talk", "Hi", { provider: "claude", model: "claude-opus-5-5", effort: "high", contextWindow: "1m" }),
     "send_message",
-    { args: { deckId: "talk", prompt: "Hi", provider: "claude", model: "claude-opus-5-5", effort: "high", contextWindow: "1m" } },
+    { args: { deckId: "talk", prompt: "Hi", provider: "claude", model: "claude-opus-5-5", effort: "high", contextWindow: "1m", compact: false } },
   ],
+
   ["interruptAgent", () => api.interruptAgent("talk"), "interrupt_agent", { id: "talk" }],
   ["agentRunning", () => api.agentRunning("talk"), "agent_running", { id: "talk" }],
   ["listProviders", () => api.listProviders(), "list_providers", undefined],
@@ -94,6 +95,14 @@ describe("api", () => {
     await expect(call()).resolves.toBe("result");
     expect(invoke).toHaveBeenCalledOnce();
     expect(invoke.mock.calls[0]).toEqual(args === undefined ? [command] : [command, args]);
+  });
+
+  it("sendMessage can ask for a compaction instead of a prompt", async () => {
+    invoke.mockResolvedValue(undefined);
+    await api.sendMessage("talk", "/compact", { provider: "copilot", model: "gpt-x", effort: "", contextWindow: null }, true);
+    expect(invoke).toHaveBeenLastCalledWith("send_message", {
+      args: { deckId: "talk", prompt: "/compact", provider: "copilot", model: "gpt-x", effort: "", contextWindow: null, compact: true },
+    });
   });
 
   it("covers every api function", () => {

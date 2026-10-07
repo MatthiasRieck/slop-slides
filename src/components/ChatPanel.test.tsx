@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
@@ -47,6 +47,7 @@ const PROVIDERS: ProviderInfo[] = [
 const send = vi.fn(async () => {});
 const resetChat = vi.fn(async () => {});
 const interrupt = vi.fn();
+const compact = vi.fn(async () => {});
 
 // Drawing schedules a save of the review marks; finish it here, not in the next test.
 afterEach(() => flushReviewSave());
@@ -59,6 +60,7 @@ beforeEach(() => {
   send.mockClear();
   resetChat.mockClear();
   interrupt.mockClear();
+  compact.mockClear();
   useApp.setState({
     deck: deckFor(DECK_HTML),
     selected: "intro",
@@ -74,6 +76,7 @@ beforeEach(() => {
     send,
     resetChat,
     interrupt,
+    compact,
   });
 });
 
@@ -524,6 +527,101 @@ describe("ChatPanel: transcript", () => {
   it("hides blank text parts", () => {
     const { container } = showMessages(reply({ parts: [{ kind: "text", text: "   " }] }));
     expect(container.querySelector(".markdown")).toBeNull();
+  });
+});
+
+describe("ChatPanel: context meter", () => {
+  const used = (tokens: number | null, window: number | null, provider: "claude" | "codex" | "copilot" = "claude") =>
+    reply({ provider, context: { provider, tokens, window } });
+  const meter = () => screen.queryByRole("progressbar", { name: "Context used" });
+  const compactButton = () => screen.queryByRole("button", { name: "Compact" }) as HTMLButtonElement | null;
+  const copilot = { provider: "copilot" as const, model: "gpt-x", label: "GPT X", effort: "medium", contextWindow: null };
+
+  it("is hidden until the agent reports its context", () => {
+    showMessages(reply({}));
+    expect(meter()).toBeNull();
+    expect(compactButton()).toBeNull();
+  });
+
+  it("shows the tokens held and the share of the window, without compacting at 30% or less", () => {
+    useApp.setState({ selection: copilot });
+    showMessages(used(38_400, 128_000, "copilot"));
+    expect(meter()!.getAttribute("aria-valuenow")).toBe("30");
+    expect(screen.getByText("38k tokens")).toBeTruthy();
+    expect(screen.getByText("30% of 128k context used")).toBeTruthy();
+    expect(compactButton()).toBeNull();
+  });
+
+  it("offers /compact above 30%", () => {
+    useApp.setState({ selection: copilot });
+    showMessages(used(40_000, 128_000, "copilot"));
+    expect(screen.getByText("31% of 128k context used")).toBeTruthy();
+    fireEvent.click(compactButton()!);
+    expect(compact).toHaveBeenCalledOnce();
+  });
+
+  it("cannot compact while the agent works", () => {
+    useApp.setState({ selection: copilot, running: true });
+    showMessages(used(100_000, 128_000, "copilot"));
+    expect(compactButton()!.disabled).toBe(true);
+  });
+
+  it("measures Claude against the chosen context window", () => {
+    showMessages(used(80_000, 1_000_000));
+    expect(screen.getByText("8% of 1M context used")).toBeTruthy();
+    expect(compactButton()).toBeNull();
+    cleanup();
+    useApp.setState({ selection: { ...useApp.getState().selection, contextWindow: "200k" } });
+    showMessages(used(80_000, 1_000_000));
+    expect(screen.getByText("40% of 200k context used")).toBeTruthy();
+    expect(compactButton()).toBeTruthy();
+  });
+
+  it("shows the count alone while the window is unknown", () => {
+    useApp.setState({ selection: { ...useApp.getState().selection, contextWindow: null } });
+    showMessages(used(12_300, null));
+    expect(screen.getByText("12k tokens")).toBeTruthy();
+    expect(screen.getByText("in context")).toBeTruthy();
+    expect(meter()!.getAttribute("aria-valuenow")).toBeNull();
+    expect(compactButton()).toBeNull();
+  });
+
+  it("follows the selected provider's own conversation", () => {
+    useApp.setState({ selection: copilot });
+    showMessages(used(100_000, 200_000));
+    expect(meter()).toBeNull();
+  });
+
+  it("says the conversation was compacted until its new size is known", () => {
+    showMessages(used(null, 200_000));
+    expect(screen.getByText("Compacted")).toBeTruthy();
+    expect(screen.getByText("New size shows after the next message")).toBeTruthy();
+    expect(meter()!.getAttribute("aria-valuenow")).toBeNull();
+    expect(compactButton()).toBeNull();
+  });
+
+  it("warns as the context fills up", () => {
+    useApp.setState({ selection: copilot });
+    showMessages(used(120_000, 128_000, "copilot"));
+    expect(meter()!.firstElementChild!.className).toContain("bg-destructive");
+  });
+});
+
+describe("ChatPanel: compaction in the transcript", () => {
+  it("shows the agent compacting, then the result", () => {
+    const { rerender } = showMessages(reply({ status: "streaming", compacting: true }));
+    expect(screen.getByText("Compacting the conversation…")).toBeTruthy();
+    expect(screen.queryByText("Thinking…")).toBeNull();
+    useApp.setState({ messages: [reply({ status: "streaming", compacted: true })] });
+    rerender(<ChatPanel />);
+    expect(screen.getByText("Conversation compacted")).toBeTruthy();
+    expect(screen.queryByText("Compacting the conversation…")).toBeNull();
+    expect(screen.queryByText("Thinking…")).toBeNull();
+  });
+
+  it("keeps the notice on a finished reply", () => {
+    showMessages(reply({ compacted: true, durationMs: 1200 }));
+    expect(screen.getByText("Conversation compacted")).toBeTruthy();
   });
 });
 

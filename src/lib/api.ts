@@ -79,6 +79,10 @@ export type AgentEvent =
       durationMs: number | null;
     }
   | { type: "error"; message: string }
+  /** A null field is not known from this event; keep what was known before. */
+  | { type: "usage"; contextTokens: number | null; contextWindow: number | null }
+  | { type: "compacting" }
+  | { type: "compacted" }
   | { type: "finished"; interrupted: boolean };
 
 export interface AgentEventEnvelope {
@@ -149,7 +153,9 @@ export const api = {
     deckId: string,
     prompt: string,
     selection: { provider: Provider; model: string; effort: string; contextWindow: string | null },
-  ) => invoke<void>("send_message", { args: { deckId, prompt, ...selection } }),
+    /** Summarize the conversation so far instead of sending `prompt`. */
+    compact = false,
+  ) => invoke<void>("send_message", { args: { deckId, prompt, ...selection, compact } }),
   interruptAgent: (id: string) => invoke<void>("interrupt_agent", { id }),
   agentRunning: (id: string) => invoke<boolean>("agent_running", { id }),
   listProviders: () => invoke<ProviderInfo[]>("list_providers"),

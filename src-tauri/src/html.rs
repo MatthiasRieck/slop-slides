@@ -40,6 +40,11 @@ pub const HIDDEN_ATTR: &str = "data-hidden";
 /// `translate` / `rotate` / `scale` styles until the agent tidies the slide's layout.
 pub const MOVED_ATTR: &str = "data-moved";
 
+/// Marks an element the user added in the editor: a text box (`text`), shape (`shape`) or
+/// freehand drawing (`drawing`), absolutely positioned on the slide with inline styles until
+/// the agent tidies the slide's layout.
+pub const ADDED_ATTR: &str = "data-added";
+
 /// Attributes the in-editor slide editor puts on elements while it works. They never belong
 /// in deck.html; the editor strips them before saving.
 pub const EDITOR_ATTRS: &[&str] = &[
@@ -611,9 +616,16 @@ pub fn delete_section(html: &str, index: usize) -> Result<String, String> {
     Ok(format!("{}{}", &html[..start], &html[span.range.end..]))
 }
 
-/// Whether the slide markup contains an element moved by hand (see [`MOVED_ATTR`]).
+/// Whether the slide markup contains an element moved or added by hand (see [`MOVED_ATTR`] and
+/// [`ADDED_ATTR`]).
 pub fn has_moved(slide: &str) -> bool {
-    tags(slide).any(|(_, tag)| !tag.closing && tag.attrs.iter().any(|a| a.0 == MOVED_ATTR))
+    tags(slide).any(|(_, tag)| {
+        !tag.closing
+            && tag
+                .attrs
+                .iter()
+                .any(|a| a.0 == MOVED_ATTR || a.0 == ADDED_ATTR)
+    })
 }
 
 /// Replaces slide `id` with `markup`, which must be one whole `<section class="slide">` with
@@ -797,6 +809,12 @@ mod tests {
         ));
         assert!(!has_moved(
             r#"<section class="slide" id="a"><p>data-moved</p><!-- <p data-moved> --></section>"#
+        ));
+        assert!(has_moved(
+            r#"<section class="slide" id="a"><div data-added="shape" style="position: absolute; left: 10px; top: 20px"></div></section>"#
+        ));
+        assert!(!has_moved(
+            r#"<section class="slide" id="a"><p>data-added</p></section>"#
         ));
     }
 

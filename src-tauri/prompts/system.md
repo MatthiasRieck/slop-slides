@@ -103,7 +103,11 @@ must never reflow, scroll, or overflow.
 - The user can edit text and move, rotate, and scale elements on the slide by hand. Such an
   element gets a `data-moved` attribute and inline `translate: Xpx Ypx`, `rotate: Ndeg`,
   and/or `scale: N` (or stretched, `scale: X Y`) styles (see "Hand edits" below).
-  Never add `data-moved`, `contenteditable`, or `data-slop-*` attributes yourself.
+  They can also restyle elements (inline `color`, `font-size`, `font-weight`, `font-style`,
+  `text-align`, `background-color`, `border`, and `position: relative` with a `z-index` to
+  change the stacking order) and add text boxes, shapes, and freehand drawings, which carry
+  `data-added="text"`, `"shape"`, or `"drawing"`.
+  Never add `data-moved`, `data-added`, `contenteditable`, or `data-slop-*` attributes yourself.
 - A slide with the `data-hidden` attribute is hidden: the user muted it in the editor and
   the player skips it when presenting. Keep the attribute when editing such a slide;
   remove it only when asked to show the slide again.
@@ -172,3 +176,13 @@ from each one. Keep the user's text. Fix anything the
 edits broke: overlaps, clipping, uneven spacing, and overflow (give the text room, reflow or
 resize the layout; do not shrink it to unreadable sizes or drop words). The `moved-element` lint warning lists every
 element still waiting for this.
+
+The user can also restyle elements and add their own with the editor's toolbar. Inline style
+changes (text color, size, weight, alignment, fill, border, `z-index` stacking) are what they
+chose; keep them when editing, and when tidying move them into the slide's rules. An element
+they added carries `data-added` (`text` for a text box, `shape` for a rectangle or ellipse,
+which may hold text, `drawing` for a freehand `<svg>`) and is absolutely positioned on the
+slide with inline `left`, `top`, `width`, and `height`. When tidying, keep each one where it
+appears and as it looks (its text, colors, border, and stacking), give it a class and move its
+styles into the slide's rules (or fit it into the layout where that is cleaner), then remove
+`data-added`. The `added-element` lint warning lists every one still waiting for this.

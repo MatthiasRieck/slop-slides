@@ -6,6 +6,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) })
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 
 import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
+import { DEFAULT_EDIT_STYLES } from "../lib/editTools";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Stage } from "./Stage";
 
@@ -341,12 +342,218 @@ describe("Stage", () => {
       const { container } = render(<Stage />);
       const slide = () => container.querySelector("[data-sketch-target]")!;
       expect(slide().hasAttribute("data-editing")).toBe(false);
-      expect(screen.queryByText("Editing")).toBeNull();
+      expect(screen.queryByRole("toolbar", { name: "Edit tools" })).toBeNull();
       fireEvent.click(editButton());
       expect(slide().hasAttribute("data-editing")).toBe(true);
       // The ring around the slide is drawn by the preview, so it pans and zooms with the slide.
       expect(slide().className).not.toContain("ring");
-      expect(screen.getByText("Editing")).toBeTruthy();
+      expect(screen.getByRole("toolbar", { name: "Edit tools" })).toBeTruthy();
+    });
+
+    describe("edit toolbar", () => {
+      const button = (name: string | RegExp) => screen.getByRole("button", { name }) as HTMLButtonElement;
+      const SELECTION = {
+        kind: "shape",
+        text: true,
+        vector: false,
+        color: "#ffffff",
+        fontSize: 40,
+        bold: false,
+        italic: true,
+        align: "center",
+        valign: "middle",
+        fill: "#3b82f6",
+        stroke: null,
+        strokeWidth: 0,
+      };
+      const enter = () => {
+        const view = render(<Stage />);
+        fireEvent.click(editButton());
+        const frame = stageFrame(view.container);
+        fireEvent.load(frame);
+        return { ...view, frame, post: vi.spyOn(frame.contentWindow!, "postMessage") };
+      };
+      const select = (frame: HTMLIFrameElement, selection: unknown = SELECTION) =>
+        fromFrame(frame, { type: "slop:edit-selection", slide: "intro", selection });
+
+      beforeEach(() => useApp.setState({ editTool: "select", editStyles: DEFAULT_EDIT_STYLES }));
+
+      it("picks a tool, telling the editor with the style of what it adds", () => {
+        const { post } = enter();
+        expect(button("Select and move (V)").getAttribute("aria-pressed")).toBe("true");
+        fireEvent.click(button("Add a rectangle (R)"));
+        expect(useApp.getState().editTool).toBe("rect");
+        expect(button("Add a rectangle (R)").getAttribute("aria-pressed")).toBe("true");
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-tool", tool: "rect", style: DEFAULT_EDIT_STYLES.shape }, "*");
+        fireEvent.click(button("Draw freehand (D)"));
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-tool", tool: "draw", style: DEFAULT_EDIT_STYLES.draw }, "*");
+        fireEvent.click(button("Select and move (V)"));
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-tool", tool: "select", style: undefined }, "*");
+      });
+
+      it("tells a reloaded editor the current tool", () => {
+        const { frame } = enter();
+        fireEvent.click(button("Add text (T)"));
+        const post = vi.spyOn(frame.contentWindow!, "postMessage");
+        fireEvent.load(frame);
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-tool", tool: "text", style: DEFAULT_EDIT_STYLES.text }, "*");
+      });
+
+      it("follows the editor when it puts its tool away", () => {
+        const { frame } = enter();
+        fireEvent.click(button("Add an ellipse (O)"));
+        fromFrame(frame, { type: "slop:edit-tool", slide: "intro", tool: "select" });
+        expect(useApp.getState().editTool).toBe("select");
+        // Not from another slide, and not for tools it does not know.
+        fireEvent.click(button("Add an ellipse (O)"));
+        fromFrame(frame, { type: "slop:edit-tool", slide: "outro", tool: "select" });
+        fromFrame(frame, { type: "slop:edit-tool", slide: "intro", tool: "lasso" });
+        expect(useApp.getState().editTool).toBe("ellipse");
+      });
+
+      it("picks tools with single keys, and Escape puts the tool away before leaving edit mode", () => {
+        const { frame } = enter();
+        fireEvent.keyDown(document.body, { key: "t" });
+        expect(useApp.getState().editTool).toBe("text");
+        fromFrame(frame, { type: "slop:key", key: "r", mod: false });
+        expect(useApp.getState().editTool).toBe("rect");
+        fromFrame(frame, { type: "slop:key", key: "d", mod: false });
+        expect(useApp.getState().editTool).toBe("draw");
+        fireEvent.keyDown(document.body, { key: "Escape" });
+        expect(useApp.getState()).toMatchObject({ editTool: "select", editing: true });
+        // Escape in the app leaves edit mode only from the slide.
+        fireEvent.keyDown(document.body, { key: "Escape" });
+        expect(useApp.getState().editing).toBe(true);
+        fromFrame(frame, { type: "slop:key", key: "o", mod: false });
+        fromFrame(frame, { type: "slop:key", key: "Escape", mod: false });
+        expect(useApp.getState()).toMatchObject({ editTool: "select", editing: true });
+        fromFrame(frame, { type: "slop:key", key: "Escape", mod: false });
+        expect(useApp.getState().editing).toBe(false);
+      });
+
+      it("leaves typing alone", () => {
+        enter();
+        const input = document.createElement("textarea");
+        document.body.appendChild(input);
+        fireEvent.keyDown(input, { key: "t" });
+        expect(useApp.getState().editTool).toBe("select");
+        input.remove();
+      });
+
+      it("starts each edit session with the select tool", () => {
+        enter();
+        fireEvent.click(button("Add text (T)"));
+        fireEvent.click(editButton());
+        fireEvent.click(editButton());
+        expect(useApp.getState().editTool).toBe("select");
+      });
+
+      it("has nothing to style until something is selected or a tool is picked", () => {
+        const { frame } = enter();
+        for (const name of ["Text color", "Bold", "Fill", "Border color", "Bring to front", "Delete (⌫)"]) {
+          expect(button(name).disabled).toBe(true);
+        }
+        select(frame);
+        for (const name of ["Text color", "Bold", "Fill", "Border color", "Bring to front", "Delete (⌫)"]) {
+          expect(button(name).disabled).toBe(false);
+        }
+        select(frame, null);
+        expect(button("Fill").disabled).toBe(true);
+      });
+
+      it("shows the selection's style", () => {
+        const { frame } = enter();
+        select(frame);
+        expect(screen.getByLabelText("Font size").textContent).toBe("40");
+        expect(button("Italic").getAttribute("aria-pressed")).toBe("true");
+        expect(button("Bold").getAttribute("aria-pressed")).toBe("false");
+        expect(button("Center text").getAttribute("aria-pressed")).toBe("true");
+        expect(button("Center text vertically").getAttribute("aria-pressed")).toBe("true");
+        expect(screen.getByTestId("Fill swatch").style.background).toBe("rgb(59, 130, 246)");
+        expect((screen.getByLabelText("Border width") as HTMLSelectElement).value).toBe("0");
+      });
+
+      it("restyles the selection, and makes that the style of the next one of its kind", () => {
+        const { frame, post } = enter();
+        select(frame);
+        fireEvent.click(button("Larger text"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { fontSize: 48 } }, "*");
+        fireEvent.click(button("Bold"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { bold: true } }, "*");
+        fireEvent.click(button("Align text to the bottom"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { valign: "bottom" } }, "*");
+        fireEvent.change(screen.getByLabelText("Border width"), { target: { value: "8" } });
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { strokeWidth: 8 } }, "*");
+        expect(useApp.getState().editStyles.shape).toMatchObject({ fontSize: 48, bold: true, valign: "bottom", strokeWidth: 8 });
+        expect(useApp.getState().editStyles.text).toEqual(DEFAULT_EDIT_STYLES.text);
+      });
+
+      it("leaves the defaults alone when restyling the deck's own elements", () => {
+        const { frame, post } = enter();
+        select(frame, { ...SELECTION, kind: "element", valign: null });
+        expect(button("Align text to the top").disabled).toBe(true);
+        fireEvent.click(button("Align text right"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { align: "right" } }, "*");
+        expect(useApp.getState().editStyles).toEqual(DEFAULT_EDIT_STYLES);
+      });
+
+      it("offers a drawing's line color and width, without text controls", () => {
+        const { frame } = enter();
+        select(frame, { ...SELECTION, kind: "drawing", text: false, vector: true, stroke: "#ef4444", strokeWidth: 6, fill: null });
+        expect(button("Bold").disabled).toBe(true);
+        expect(button("Line color").disabled).toBe(false);
+        expect((screen.getByLabelText("Line width") as HTMLSelectElement).value).toBe("6");
+      });
+
+      it("styles what the tool adds when nothing is selected", () => {
+        const { post } = enter();
+        fireEvent.click(button("Add text (T)"));
+        expect(button("Fill").disabled).toBe(false);
+        fireEvent.click(button("Italic"));
+        expect(useApp.getState().editStyles.text.italic).toBe(true);
+        expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-style" }), "*");
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-tool", tool: "text", style: { ...DEFAULT_EDIT_STYLES.text, italic: true } }, "*");
+      });
+
+      it("picks colors from swatches, none, or a custom color", () => {
+        const { frame, post } = enter();
+        select(frame);
+        fireEvent.click(button("Fill"));
+        fireEvent.click(button("#ef4444"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { fill: "#ef4444" } }, "*");
+        expect(screen.queryByRole("dialog", { name: "Fill" })).toBeNull();
+        fireEvent.click(button("Border color"));
+        fireEvent.click(button("None"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { stroke: null } }, "*");
+        fireEvent.click(button("Text color"));
+        expect(screen.queryByRole("button", { name: "None" })).toBeNull();
+        fireEvent.change(screen.getByLabelText("Custom text color"), { target: { value: "#123456" } });
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { color: "#123456" } }, "*");
+        // Clicking elsewhere closes the picker.
+        fireEvent.pointerDown(document.body);
+        expect(screen.queryByRole("dialog", { name: "Text color" })).toBeNull();
+      });
+
+      it("moves the selection up and down the stack, and deletes it", () => {
+        const { frame, post } = enter();
+        select(frame);
+        fireEvent.click(button("Bring forward"));
+        fireEvent.click(button("Send to back"));
+        fireEvent.click(button("Delete (⌫)"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-order", to: "forward" }, "*");
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-order", to: "back" }, "*");
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-delete" }, "*");
+      });
+
+      it("ignores selections from other slides and drops a stale one when the editor reloads", () => {
+        const { frame } = enter();
+        fromFrame(frame, { type: "slop:edit-selection", slide: "outro", selection: SELECTION });
+        expect(button("Fill").disabled).toBe(true);
+        select(frame);
+        expect(button("Fill").disabled).toBe(false);
+        act(() => void fireEvent.load(frame));
+        expect(button("Fill").disabled).toBe(true);
+      });
     });
 
     it("undo, redo, discard and accept buttons drive the edit history", () => {

@@ -1372,9 +1372,24 @@ describe("editing slides on the stage", () => {
   it("leaves edit mode and forgets undo history when the deck closes", async () => {
     const useApp = await freshStore();
     const entry = { slide: "intro", markup: ORIGINAL, after: "x" };
-    useApp.setState({ deck: DECK, editing: true, slideUndo: [entry], slideRedo: [entry] });
+    useApp.setState({ deck: DECK, editing: true, editTool: "draw", slideUndo: [entry], slideRedo: [entry] });
     await useApp.getState().closeDeck();
-    expect(useApp.getState()).toMatchObject({ editing: false, slideUndo: [], slideRedo: [] });
+    expect(useApp.getState()).toMatchObject({ editing: false, editTool: "select", slideUndo: [], slideRedo: [] });
+  });
+
+  it("starts each edit session with the select tool, and keeps the styles for new elements", async () => {
+    const useApp = await freshStore();
+    expect(useApp.getState().editTool).toBe("select");
+    useApp.getState().setEditing(true);
+    useApp.getState().setEditTool("ellipse");
+    useApp.getState().setEditStyle("shape", { fill: "#ef4444" });
+    useApp.getState().setEditStyle("shape", { bold: true });
+    expect(useApp.getState().editStyles.shape).toMatchObject({ fill: "#ef4444", bold: true, color: "#ffffff" });
+    expect(useApp.getState().editStyles.text.fill).toBeNull();
+    useApp.getState().setEditing(false);
+    useApp.getState().setEditing(true);
+    expect(useApp.getState().editTool).toBe("select");
+    expect(useApp.getState().editStyles.shape.fill).toBe("#ef4444");
   });
 
   describe("tidying the layout", () => {

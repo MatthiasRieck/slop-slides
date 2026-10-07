@@ -7,8 +7,8 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 use crate::html::{
-    self, find_ci, has_class, parse_tag, EDITOR_ATTRS, HIDDEN_ATTR, MOVED_ATTR, SECTION_CLASS,
-    SECTION_TITLE_ATTR,
+    self, find_ci, has_class, parse_tag, ADDED_ATTR, EDITOR_ATTRS, HIDDEN_ATTR, MOVED_ATTR,
+    SECTION_CLASS, SECTION_TITLE_ATTR,
 };
 use crate::review;
 
@@ -262,6 +262,22 @@ fn check_markup(l: &mut Linter) {
                         format!(
                             "<{}> was moved, rotated or scaled by hand ({MOVED_ATTR} with an inline `translate`, `rotate` or `scale`). Rework the slide's layout so it sits where it appears now without the offset, turn a scale into real sizes, keep an intended rotation in the slide's styles, then remove the attribute and the inline transforms.",
                             tag.name
+                        ),
+                    );
+                }
+                if let Some((_, value, ..)) = tag.attrs.iter().find(|(n, ..)| n == ADDED_ATTR) {
+                    let what = match value.as_str() {
+                        "text" => "text box",
+                        "shape" => "shape",
+                        "drawing" => "drawing",
+                        _ => "element",
+                    };
+                    l.report(
+                        "added-element",
+                        Severity::Warning,
+                        i,
+                        format!(
+                            "This {what} was added by hand ({ADDED_ATTR}, absolutely positioned with inline styles). Keep it where it appears now, but give it a class and move its styles into the slide's rules (fitting it into the layout where that is cleaner), then remove the attribute."
                         ),
                     );
                 }
@@ -825,6 +841,41 @@ mod tests {
             "<section class=\"slide\" id=\"a\"><style>p{}</style><script>1</script></section>",
         ));
         assert_eq!(found, ["style-in-slide", "script-in-slide"]);
+    }
+
+    #[test]
+    fn flags_elements_added_by_hand() {
+        let found = lint(
+            &deck(
+                "<section class=\"slide\" id=\"a\">\n<div data-added=\"text\" style=\"position: absolute; left: 10px; top: 20px\">Hi</div>\n<div data-added=\"shape\" style=\"position: absolute; left: 0px; top: 0px; width: 320px; height: 200px\"></div>\n<svg data-added=\"drawing\" viewBox=\"0 0 10 10\" style=\"position: absolute\"><path d=\"M0 0 L10 10\" stroke=\"#111111\"/></svg>\n</section>",
+            ),
+            |_| true,
+        );
+        let found: Vec<_> = found.iter().map(|i| (i.rule, i.line)).collect();
+        assert_eq!(
+            found,
+            [
+                ("added-element", 11),
+                ("added-element", 12),
+                ("added-element", 13)
+            ]
+        );
+        let messages: Vec<_> = lint(
+            &deck("<section class=\"slide\" id=\"a\"><div data-added=\"shape\"></div><svg data-added=\"drawing\"></svg></section>"),
+            |_| true,
+        )
+        .into_iter()
+        .map(|i| i.message)
+        .collect();
+        assert!(messages[0].starts_with("This shape was added by hand"));
+        assert!(messages[1].starts_with("This drawing was added by hand"));
+        // As text it means nothing to the editor.
+        assert_eq!(
+            rules(&deck(
+                "<section class=\"slide\" id=\"a\"><p>data-added</p></section>"
+            )),
+            Vec::<&str>::new()
+        );
     }
 
     #[test]

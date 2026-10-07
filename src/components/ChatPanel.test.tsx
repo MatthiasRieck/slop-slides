@@ -518,7 +518,7 @@ describe("ChatPanel: context meter", () => {
   const used = (tokens: number | null, window: number | null, provider: "claude" | "codex" | "copilot" = "claude") =>
     reply({ provider, context: { provider, tokens, window } });
   const meter = () => screen.queryByRole("progressbar", { name: "Context used" });
-  const compactButton = () => screen.queryByRole("button", { name: /\/compact/ }) as HTMLButtonElement | null;
+  const compactButton = () => screen.queryByRole("button", { name: "Compact" }) as HTMLButtonElement | null;
   const copilot = { provider: "copilot" as const, model: "gpt-x", label: "GPT X", effort: "medium", contextWindow: null };
 
   it("is hidden until the agent reports its context", () => {
@@ -531,14 +531,15 @@ describe("ChatPanel: context meter", () => {
     useApp.setState({ selection: copilot });
     showMessages(used(38_400, 128_000, "copilot"));
     expect(meter()!.getAttribute("aria-valuenow")).toBe("30");
-    expect(screen.getByText("38k / 128k tokens · 30%")).toBeTruthy();
+    expect(screen.getByText("38k tokens")).toBeTruthy();
+    expect(screen.getByText("30% of 128k context used")).toBeTruthy();
     expect(compactButton()).toBeNull();
   });
 
   it("offers /compact above 30%", () => {
     useApp.setState({ selection: copilot });
     showMessages(used(40_000, 128_000, "copilot"));
-    expect(screen.getByText("40k / 128k tokens · 31%")).toBeTruthy();
+    expect(screen.getByText("31% of 128k context used")).toBeTruthy();
     fireEvent.click(compactButton()!);
     expect(compact).toHaveBeenCalledOnce();
   });
@@ -551,12 +552,12 @@ describe("ChatPanel: context meter", () => {
 
   it("measures Claude against the chosen context window", () => {
     showMessages(used(80_000, 1_000_000));
-    expect(screen.getByText("80k / 1M tokens · 8%")).toBeTruthy();
+    expect(screen.getByText("8% of 1M context used")).toBeTruthy();
     expect(compactButton()).toBeNull();
     cleanup();
     useApp.setState({ selection: { ...useApp.getState().selection, contextWindow: "200k" } });
     showMessages(used(80_000, 1_000_000));
-    expect(screen.getByText("80k / 200k tokens · 40%")).toBeTruthy();
+    expect(screen.getByText("40% of 200k context used")).toBeTruthy();
     expect(compactButton()).toBeTruthy();
   });
 
@@ -564,6 +565,7 @@ describe("ChatPanel: context meter", () => {
     useApp.setState({ selection: { ...useApp.getState().selection, contextWindow: null } });
     showMessages(used(12_300, null));
     expect(screen.getByText("12k tokens")).toBeTruthy();
+    expect(screen.getByText("in context")).toBeTruthy();
     expect(meter()!.getAttribute("aria-valuenow")).toBeNull();
     expect(compactButton()).toBeNull();
   });
@@ -577,6 +579,7 @@ describe("ChatPanel: context meter", () => {
   it("says the conversation was compacted until its new size is known", () => {
     showMessages(used(null, 200_000));
     expect(screen.getByText("Compacted")).toBeTruthy();
+    expect(screen.getByText("New size shows after the next message")).toBeTruthy();
     expect(meter()!.getAttribute("aria-valuenow")).toBeNull();
     expect(compactButton()).toBeNull();
   });

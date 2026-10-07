@@ -389,6 +389,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
 
   return (
     <div className="shrink-0 px-3 pb-3">
+      <ContextMeter />
       <div
         onClick={(e) => {
           if (e.target === e.currentTarget) textareaRef.current?.focus();
@@ -398,7 +399,6 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           dragging && "border-primary ring-2 ring-primary/30",
         )}
       >
-        <ContextMeter />
         {(attachments.length > 0 || slideNumber > 0) && (
           <div className="flex flex-wrap gap-1 px-3.5 pt-3">
             {slideNumber > 0 && (
@@ -517,27 +517,25 @@ function ContextMeter() {
   const window = (provider === "claude" && windowTokens(selectedWindow)) || context.window;
   const { tokens } = context;
   const percent = contextPercent(tokens, window);
-  const label =
-    tokens === null
-      ? "Compacted"
-      : window
-        ? `${formatTokens(tokens)} / ${formatTokens(window)} tokens`
-        : `${formatTokens(tokens)} tokens`;
   const title =
     tokens === null
       ? "The conversation was compacted. Its new size shows after the next message."
       : `The conversation holds ${tokens.toLocaleString("en-US")} tokens` +
         (window ? ` of the ${window.toLocaleString("en-US")}-token context window` : "");
 
+  // A tab resting on the composer's top edge.
   return (
-    <div className="flex h-7 items-center gap-2 px-3.5 pt-2" title={title}>
+    <div
+      title={title}
+      className="mx-3 flex h-8 items-center gap-2.5 rounded-t-xl border border-b-0 bg-muted px-3 text-xs"
+    >
       <div
         role="progressbar"
         aria-label="Context used"
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={percent === null ? undefined : Math.round(percent)}
-        className="h-1 min-w-8 flex-1 overflow-hidden rounded-full bg-accent"
+        className="h-1.5 w-12 shrink-0 overflow-hidden rounded-full bg-border"
       >
         <div
           className={cn(
@@ -551,20 +549,28 @@ function ContextMeter() {
           style={{ width: `${percent ?? 0}%` }}
         />
       </div>
-      <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">
-        {label}
-        {percent !== null && ` · ${Math.round(percent)}%`}
+      <span className="flex min-w-0 items-baseline gap-1.5">
+        <span className="shrink-0 font-medium tabular-nums text-foreground">
+          {tokens === null ? "Compacted" : `${formatTokens(tokens)} tokens`}
+        </span>
+        <span className="truncate tabular-nums text-muted-foreground">
+          {tokens === null
+            ? "New size shows after the next message"
+            : percent !== null && window
+              ? `${Math.round(percent)}% of ${formatTokens(window)} context used`
+              : "in context"}
+        </span>
       </span>
+      <div className="flex-1" />
       {percent !== null && percent > COMPACT_THRESHOLD && (
         <button
           type="button"
           disabled={running}
           onClick={() => void useApp.getState().compact()}
           title="Summarize the conversation so far to free up context (/compact)"
-          className="flex h-5 shrink-0 items-center gap-1 rounded-md border px-1.5 font-mono text-2xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+          className="shrink-0 font-medium text-foreground hover:opacity-70 disabled:opacity-40"
         >
-          <FoldVertical className="size-3" />
-          /compact
+          Compact
         </button>
       )}
     </div>

@@ -6,7 +6,7 @@ import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { SketchToolbar } from "./SketchToolbar";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import type { Slide } from "../lib/api";
-import type { Stroke } from "../lib/ink";
+import { zoomBox, type Stroke } from "../lib/ink";
 import { cn } from "../lib/utils";
 
 /** The stage area's padding (Tailwind p-8), which the pasteboard covers too. */
@@ -96,10 +96,10 @@ export function Stage() {
             {/* Ink sits on the slide, wherever the pasteboard has moved it. */}
             <div
               data-testid="annotation-view"
-              className="pointer-events-none absolute inset-0 origin-top-left"
-              style={pasteboard.current && width ? { transform: viewTransform(pasteboard.current, width / STAGE_W) } : undefined}
+              className="pointer-events-none absolute"
+              style={inkBox(pasteboard.current, width / STAGE_W)}
             >
-              <AnnotationLayer annotations={annotations} />
+              <AnnotationLayer annotations={annotations} zoom={pasteboard.current?.k} />
             </div>
           </div>
         ) : (
@@ -278,9 +278,9 @@ function canvasColors(canvas: HTMLElement) {
   return colors;
 }
 
-/** CSS transform that puts what lies on the slide (`scale` CSS px per slide px) where the view has it. */
-function viewTransform(view: PasteboardView, scale: number) {
-  return `translate(${view.x * scale}px, ${view.y * scale}px) scale(${view.k})`;
+/** Puts what lies on the slide (`scale` CSS px per slide px) where the view has it. */
+function inkBox(view: PasteboardView | null, scale: number) {
+  return view && scale ? zoomBox(view.x * scale, view.y * scale, view.k) : zoomBox(0, 0, 1);
 }
 
 /**

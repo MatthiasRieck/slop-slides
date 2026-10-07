@@ -1,5 +1,6 @@
 import { Eraser, Highlighter, MousePointer2, PenLine, Trash2, Undo2, Wand2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 
 import {
   DEFAULT_COLORS,
@@ -88,8 +89,12 @@ export function useAnnotations(slideKey: string, store?: InkStore): Annotations 
   return { tool, setTool, colors, setColor, strokes, addStroke, erase, undo, clear, handleKey, peek };
 }
 
-/** Transparent layer over the slide that draws ink and the laser dot. */
-export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
+/**
+ * Transparent layer over the slide that draws ink and the laser dot. `zoom` is how far the
+ * layer has been enlarged along with a zoomed slide: the ink is drawn at that size, as
+ * vectors, so it stays sharp, and thickens with the slide.
+ */
+export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annotations; zoom?: number }) {
   const { tool, colors, strokes, addStroke, erase } = annotations;
   const layerRef = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState<Stroke | null>(null);
@@ -97,8 +102,8 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
   const [size, setSize] = useState({ width: 0, height: 0 });
   const active = tool !== "pointer";
 
-  // Ink is stored in fractions of the layer but drawn in pixels, so strokes keep their width.
-  // Those are the layer's own pixels, which the stage may zoom along with the slide.
+  // Ink is stored in fractions of the layer but drawn in pixels, so strokes keep their width
+  // (times the zoom) as the layer resizes.
   useLayoutEffect(() => {
     const el = layerRef.current!;
     const measure = () => {
@@ -106,7 +111,9 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
       setSize({ width: el.offsetWidth || rect.width, height: el.offsetHeight || rect.height });
     };
     measure();
-    const observer = new ResizeObserver(measure);
+    // Redraw before the resized layer is painted: a zoom resizes it at once, and ink drawn a
+    // frame later at the old size flickers.
+    const observer = new ResizeObserver(() => flushSync(measure));
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
@@ -134,10 +141,8 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
 
   const onPointerMove = (event: ReactPointerEvent) => {
     if (tool === "laser") {
-      const el = layerRef.current!;
-      const rect = el.getBoundingClientRect();
-      const zoom = el.offsetWidth ? rect.width / el.offsetWidth : 1;
-      setLaser({ x: (event.clientX - rect.left) / zoom, y: (event.clientY - rect.top) / zoom });
+      const rect = layerRef.current!.getBoundingClientRect();
+      setLaser({ x: event.clientX - rect.left, y: event.clientY - rect.top });
     } else if (tool === "eraser" && event.buttons & 1) {
       eraseUnder(event);
     } else if (draft) {
@@ -172,7 +177,8 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
     >
       <svg className="absolute inset-0 size-full">
         {[...strokes, ...(draft ? [draft] : [])].map((stroke, i) => {
-          const { width, opacity } = INK_STYLE[stroke.tool];
+          const { opacity } = INK_STYLE[stroke.tool];
+          const width = INK_STYLE[stroke.tool].width * zoom;
           const points = toPixels(stroke.points, size.width, size.height);
           const common = {
             "data-stroke": i < strokes.length ? i : undefined,

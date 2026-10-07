@@ -86,13 +86,17 @@ describe("Presenter", () => {
 
   it("keeps the ink on the slide as it is zoomed and panned, ignoring nonsense", () => {
     render(<Presenter />);
-    const zoom = () => screen.getByTestId("annotation-zoom").style.transform;
-    expect(zoom()).toBe("translate(0px, 0px) scale(1)");
+    const zoom = () => {
+      const { left, top, width, height, transform } = screen.getByTestId("annotation-zoom").style;
+      return { left, top, width, height, transform };
+    };
+    expect(zoom()).toEqual({ left: "0px", top: "0px", width: "100%", height: "100%", transform: "" });
     fromFrame({ type: "slop:zoom", x: -100, y: -50, k: 2 });
-    expect(zoom()).toBe("translate(-100px, -50px) scale(2)");
+    // Laid out at the zoomed size, not CSS-scaled, so the ink is not stretched blurry.
+    expect(zoom()).toEqual({ left: "-100px", top: "-50px", width: "200%", height: "200%", transform: "" });
     fromFrame({ type: "slop:zoom", x: "a", y: 0, k: 1 });
     fromFrame({ type: "slop:zoom", x: 0, y: 0, k: 1 }, window);
-    expect(zoom()).toBe("translate(-100px, -50px) scale(2)");
+    expect(zoom()).toEqual({ left: "-100px", top: "-50px", width: "200%", height: "200%", transform: "" });
   });
 
   it("0 fits the slide to the screen again, from the app too", () => {
@@ -219,6 +223,38 @@ describe("Presenter tools", () => {
     expect(path.getAttribute("d")).toBe("M100 100L200 150L300 250");
     expect(path.getAttribute("stroke")).toBe("#ef4444");
     expect(path.getAttribute("stroke-width")).toBe("4");
+  });
+
+  it("draws ink as vectors at the zoomed size, thickening with the slide", () => {
+    const resized: (() => void)[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          resized.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    render(<Presenter />);
+    fireEvent.click(tool(/^Pen/));
+    draw([
+      [100, 100],
+      [200, 150],
+    ]);
+    fireEvent.keyDown(document.body, { key: "h" });
+    draw([[300, 200]]);
+    // The layer now measures twice the size, as it would once laid out at 200%.
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue(new DOMRect(-100, -50, 2000, 1000));
+    fromFrame({ type: "slop:zoom", x: -100, y: -50, k: 2 });
+    // Redrawn right in the resize callback, before the browser paints, so zooming doesn't flicker.
+    resized.forEach((callback) => callback());
+    const [pen, dot] = strokes();
+    expect(pen!.getAttribute("d")).toBe("M200 200L400 300");
+    expect(pen!.getAttribute("stroke-width")).toBe("8");
+    expect(dot!.getAttribute("r")).toBe("28");
+    expect(layer().querySelector("svg")!.style.transform).toBe("");
   });
 
   it("the highlighter draws wide, translucent strokes", () => {

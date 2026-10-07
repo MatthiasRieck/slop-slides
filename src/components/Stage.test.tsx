@@ -522,12 +522,16 @@ describe("Stage", () => {
 
       it("moves the ink with the slide as the view pans and zooms", () => {
         const { container } = render(<Stage />);
-        const ink = () => screen.getByTestId("annotation-view");
-        expect(ink().style.transform).toBe("");
-        // Slide pixels on a 960px wide slide: half a CSS px each.
+        const ink = () => {
+          const { left, top, width, height, transform } = screen.getByTestId("annotation-view").style;
+          return { left, top, width, height, transform };
+        };
+        expect(ink()).toEqual({ left: "0px", top: "0px", width: "100%", height: "100%", transform: "" });
+        // Slide pixels on a 960px wide slide: half a CSS px each. The ink is laid out at the
+        // zoomed size rather than CSS-scaled, so it stays sharp.
         fromFrame(stageFrame(container), { type: "slop:view", slide: "intro", x: 40, y: -20, k: 2 });
-        expect(ink().style.transform).toBe("translate(20px, -10px) scale(2)");
-        expect(ink().contains(screen.getByTestId("annotation-layer"))).toBe(true);
+        expect(ink()).toEqual({ left: "20px", top: "-10px", width: "200%", height: "200%", transform: "" });
+        expect(screen.getByTestId("annotation-view").contains(screen.getByTestId("annotation-layer"))).toBe(true);
       });
 
       it("keeps zoomed ink inside the stage area, off the bar below", () => {

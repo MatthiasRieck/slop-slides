@@ -33,6 +33,12 @@ describe("SlideRail", () => {
     expect(items().map((li) => li.textContent)).toEqual(["1", "2", "3"]);
   });
 
+  it("pads the top of the scroll area so the selection ring is not clipped", () => {
+    const { container } = render(<SlideRail />);
+    const scroller = container.querySelector(".overflow-y-auto");
+    expect(scroller?.classList.contains("pt-1.5")).toBe(true);
+  });
+
   it("explains what to do in an empty deck", () => {
     useApp.setState({ deck: { ...DECK, slides: [] }, selected: null });
     render(<SlideRail />);

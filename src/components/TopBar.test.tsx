@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
 const save = vi.fn();
@@ -17,6 +17,9 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: (...args: unknown
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { TopBar } from "./TopBar";
+
+/** Commands run, minus the share button's status check. */
+const commands = () => invoke.mock.calls.map(([command]) => command as string).filter((c) => c !== "remote_status");
 
 const toggle = (name: "Slides" | "HTML") => screen.getByRole("button", { name }) as HTMLButtonElement;
 
@@ -109,7 +112,7 @@ describe("deck title", () => {
     await act(async () => fireEvent.keyDown(titleInput(), { key: "Escape" }));
     expect(titleInput().value).toBe("Talk");
     expect(document.activeElement).not.toBe(titleInput());
-    expect(invoke).not.toHaveBeenCalled();
+    expect(commands()).toEqual([]);
   });
 
   it("still renames normally after an Escape", async () => {
@@ -126,7 +129,7 @@ describe("deck title", () => {
     render(<TopBar />);
     fireEvent.change(titleInput(), { target: { value } });
     await act(async () => fireEvent.blur(titleInput()));
-    expect(invoke).not.toHaveBeenCalled();
+    expect(commands()).toEqual([]);
     expect(titleInput().value).toBe("Talk");
   });
 
@@ -178,7 +181,7 @@ describe("toolbar actions", () => {
     save.mockResolvedValue(null);
     render(<TopBar />);
     await exportAs("HTML file");
-    expect(invoke).not.toHaveBeenCalled();
+    expect(commands()).toEqual([]);
     expect(revealItemInDir).not.toHaveBeenCalled();
   });
 
@@ -224,7 +227,7 @@ describe("toolbar actions", () => {
     openDialog.mockResolvedValue(null);
     render(<TopBar />);
     await exportAs("PNG images");
-    expect(invoke).not.toHaveBeenCalled();
+    expect(commands()).toEqual([]);
     expect(useApp.getState().imageExport).toBeNull();
   });
 
@@ -260,7 +263,7 @@ describe("toolbar actions", () => {
     invoke.mockResolvedValue(undefined);
     render(<TopBar />);
     await act(async () => fireEvent.click(screen.getByTitle("All decks")));
-    expect(invoke).toHaveBeenCalledWith("close_deck");
+    expect(invoke).toHaveBeenCalledWith("close_deck", { id: "talk" });
     expect(useApp.getState().deck).toBeNull();
   });
 
@@ -320,5 +323,42 @@ describe("lint status", () => {
     render(<TopBar />);
     expect((screen.getByRole("button", { name: /Lint: 1 error/ }) as HTMLButtonElement).disabled).toBe(true);
     useApp.setState({ running: false });
+  });
+});
+
+describe("on a device", () => {
+  async function renderOnDevice() {
+    window.__SLOPSLIDE_REMOTE__ = { base: "/s/tok" };
+    vi.resetModules();
+    const { useApp: deviceApp } = await import("../store");
+    const { TopBar: DeviceTopBar } = await import("./TopBar");
+    deviceApp.setState({ deck: deckFor(DECK_HTML), view: "slides", chatOpen: true, codeDirty: false });
+    render(<DeviceTopBar />);
+  }
+
+  afterEach(() => {
+    delete window.__SLOPSLIDE_REMOTE__;
+  });
+
+  it("leaves out what only the computer can do", async () => {
+    await renderOnDevice();
+    expect(screen.queryByTitle("Show deck folder")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Use on another device" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Export/ }));
+    expect(screen.getByRole("menuitem", { name: /HTML file/ })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /PNG images/ })).toBeNull();
+  });
+
+  it("downloads the exported deck through the browser", async () => {
+    await renderOnDevice();
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    fireEvent.click(screen.getByRole("button", { name: /Export/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /HTML file/ }));
+    expect(click).toHaveBeenCalledOnce();
+    const link = click.mock.contexts[0] as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("/s/tok/export/talk");
+    expect(link.hasAttribute("download")).toBe(true);
+    expect(save).not.toHaveBeenCalled();
+    click.mockRestore();
   });
 });

@@ -1,7 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
-
 import type { Stroke } from "./ink";
 import type { Provider, ProviderInfo } from "./models";
+import { clientId, invoke } from "./platform";
 
 export interface DeckSummary {
   id: string;
@@ -95,11 +94,34 @@ export interface DeckChanged {
   paths: string[];
 }
 
+/** A client saved a deck's chat; `origin` is the client that saved it (see `clientId`). */
+export interface ChatChanged {
+  deckId: string;
+  origin: string | null;
+}
+
+/** How the app is shared with phones and tablets (src-tauri/src/remote.rs). */
+export interface RemoteInfo {
+  url: string;
+  /** The URL as a QR code. */
+  qrSvg: string;
+  /** Devices connected right now. */
+  devices: number;
+}
+
+/** A device asks the window to screenshot a slide with the device's marks on it. */
+export interface RemoteCaptureRequest {
+  request: string;
+  deckId: string;
+  slide: string;
+  strokes: Stroke[];
+}
+
 export const api = {
   listDecks: () => invoke<DeckSummary[]>("list_decks"),
   createDeck: (title: string) => invoke<Deck>("create_deck", { title }),
   openDeck: (id: string) => invoke<Deck>("open_deck", { id }),
-  closeDeck: () => invoke<void>("close_deck"),
+  closeDeck: (id: string) => invoke<void>("close_deck", { id }),
   loadDeck: (id: string) => invoke<Deck>("load_deck", { id }),
   /** Stores the review marks (by slide id) in deck.html. */
   saveReview: (id: string, review: Record<string, Stroke[]>) => invoke<void>("save_review", { id, review }),
@@ -146,9 +168,15 @@ export const api = {
     rect: { x: number; y: number; width: number; height: number },
     viewport: { width: number; height: number },
   ) => invoke<string>("capture_sketch", { id, rect, viewport }),
+  /**
+   * On a device: has the window screenshot `slide` with `strokes` drawn on it; returns the
+   * deck-relative image path.
+   */
+  captureRemoteSketch: (id: string, slide: string, strokes: Stroke[]) =>
+    invoke<string>("capture_remote_sketch", { id, slide, strokes }),
   loadChat: (id: string) => invoke<unknown>("load_chat", { id }),
-  saveChat: (id: string, chat: unknown) => invoke<void>("save_chat", { id, chat }),
-  resetChat: (id: string) => invoke<void>("reset_chat", { id }),
+  saveChat: (id: string, chat: unknown) => invoke<void>("save_chat", { id, chat, origin: clientId }),
+  resetChat: (id: string) => invoke<void>("reset_chat", { id, origin: clientId }),
   sendMessage: (
     deckId: string,
     prompt: string,
@@ -159,6 +187,15 @@ export const api = {
   interruptAgent: (id: string) => invoke<void>("interrupt_agent", { id }),
   agentRunning: (id: string) => invoke<boolean>("agent_running", { id }),
   listProviders: () => invoke<ProviderInfo[]>("list_providers"),
+  remoteStart: () => invoke<RemoteInfo>("remote_start"),
+  remoteStop: () => invoke<void>("remote_stop"),
+  remoteStatus: () => invoke<RemoteInfo | null>("remote_status"),
+  remoteCaptureDone: (request: string, result: { path: string } | { error: string }) =>
+    invoke<void>("remote_capture_done", {
+      request,
+      path: "path" in result ? result.path : null,
+      error: "error" in result ? result.error : null,
+    }),
 };
 
 export function errorMessage(error: unknown): string {

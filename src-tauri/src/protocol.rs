@@ -1,5 +1,6 @@
 //! `slop://` URI scheme. Serves deck files to the editor's slide iframes as
-//! `slop://localhost/<deck-id>/<path>` (`http://slop.localhost/...` on Windows), so the
+//! `slop://localhost/<deck-id>/<path>` (`http://slop.localhost/...` on Windows; under
+//! `/s/<token>/deck/` when a phone or tablet uses the app, see src/remote.rs), so the
 //! deck's relative `assets/…` references resolve exactly as they do when the file is opened
 //! in a browser.
 //!
@@ -24,16 +25,7 @@ const EDITOR_JS: &str = include_str!("../assets/editor.js");
 
 pub fn handle(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     let uri = request.uri();
-    let served = serve(app, uri.path()).map(|(mime, body)| {
-        let scripts = stage_scripts(uri.query());
-        if !scripts.is_empty() && mime.starts_with("text/html") {
-            let html = String::from_utf8_lossy(&body);
-            (mime, with_scripts(&html, &scripts).into_bytes())
-        } else {
-            (mime, body)
-        }
-    });
-    match served {
+    match respond(app, uri.path(), uri.query()) {
         Ok((mime, body)) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, mime)
@@ -47,6 +39,24 @@ pub fn handle(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Cow<'stati
             .body(Cow::Borrowed(&b""[..]))
             .unwrap(),
     }
+}
+
+/// The file at `/<deck-id>/<path>` with the stage scripts `query` asks for, as its MIME type
+/// and bytes. Also used by the device server (src/remote.rs).
+pub fn respond(
+    app: &AppHandle,
+    raw_path: &str,
+    query: Option<&str>,
+) -> Result<(&'static str, Vec<u8>), StatusCode> {
+    serve(app, raw_path).map(|(mime, body)| {
+        let scripts = stage_scripts(query);
+        if !scripts.is_empty() && mime.starts_with("text/html") {
+            let html = String::from_utf8_lossy(&body);
+            (mime, with_scripts(&html, &scripts).into_bytes())
+        } else {
+            (mime, body)
+        }
+    })
 }
 
 fn serve(app: &AppHandle, raw_path: &str) -> Result<(&'static str, Vec<u8>), StatusCode> {

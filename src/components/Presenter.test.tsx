@@ -292,6 +292,17 @@ describe("Presenter tools", () => {
     expect(tool(/Color #facc15/).getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("ends a mouse stroke when the mouse leaves the slide", () => {
+    render(<Presenter />);
+    fireEvent.click(tool(/^Pen/));
+    fireEvent.pointerDown(layer(), { button: 0, buttons: 1, clientX: 10, clientY: 10, pointerId: 1 });
+    fireEvent.pointerMove(layer(), { buttons: 1, clientX: 20, clientY: 20, pointerId: 1 });
+    fireEvent.pointerLeave(layer(), { pointerId: 1, pointerType: "mouse" });
+    expect(strokes()).toHaveLength(1);
+    fireEvent.pointerMove(layer(), { buttons: 1, clientX: 40, clientY: 40, pointerId: 1 });
+    expect(strokes()).toHaveLength(1);
+  });
+
   it("ignores right clicks and moves without a press", () => {
     render(<Presenter />);
     fireEvent.click(tool(/^Pen/));
@@ -403,5 +414,32 @@ describe("Presenter tools", () => {
     const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
     tool(/^Pen/).dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
+  });
+});
+
+describe("Presenter on a device", () => {
+  afterEach(() => {
+    delete window.__SLOPSLIDE_REMOTE__;
+    vi.restoreAllMocks();
+  });
+
+  it("goes full screen through the browser and plays the deck from the desktop app's server", async () => {
+    window.__SLOPSLIDE_REMOTE__ = { base: "/s/tok" };
+    vi.resetModules();
+    const store = await import("../store");
+    const { Presenter: DevicePresenter } = await import("./Presenter");
+    store.useApp.setState({ deck: deckFor(DECK_HTML), selected: "outro", presenting: true });
+    const request = vi.fn(async () => {});
+    const exit = vi.fn(async () => {});
+    Object.assign(document.documentElement, { requestFullscreen: request });
+    Object.assign(document, { exitFullscreen: exit });
+    const { unmount } = render(<DevicePresenter />);
+    expect(request).toHaveBeenCalledOnce();
+    expect(frame().getAttribute("src")).toBe("/s/tok/deck/talk/deck.html?v=shell-1&show#outro");
+    Object.defineProperty(document, "fullscreenElement", { value: document.documentElement, configurable: true });
+    unmount();
+    expect(exit).toHaveBeenCalledOnce();
+    expect(setFullscreen).not.toHaveBeenCalled();
+    delete (document as { fullscreenElement?: unknown }).fullscreenElement;
   });
 });

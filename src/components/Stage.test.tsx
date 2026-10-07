@@ -423,6 +423,27 @@ describe("Stage", () => {
       expect(undo).not.toHaveBeenCalled();
     });
 
+    it("on a device, keeps the preview to the slide, with no pasteboard around it", async () => {
+      window.__SLOPSLIDE_REMOTE__ = { base: "/s/tok" };
+      try {
+        vi.resetModules();
+        const { Stage: OnDevice } = await import("./Stage");
+        const { useApp: deviceApp } = await import("../store");
+        deviceApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", presenting: false, sketches: {}, reviewVisible: true });
+        const { container } = render(<OnDevice />);
+        const viewer = stageFrame(container);
+        expect(viewer.getAttribute("src")).not.toContain("pan");
+        expect(viewer.style.width).toBe("960px");
+        expect(viewer.style.height).toBe("540px");
+        fireEvent.click(editButton());
+        const editor = [...container.querySelectorAll("iframe")].at(-1)!;
+        expect(editor.getAttribute("src")).toContain("&edit=0");
+        expect(editor.style.width).toBe("1920px");
+      } finally {
+        delete window.__SLOPSLIDE_REMOTE__;
+      }
+    });
+
     it("keeps the slide at its size on a pasteboard filling the area, in view and edit mode, and sends the panel colors", () => {
       const { container } = render(<Stage />);
       const slideBox = () => container.querySelector<HTMLElement>("[data-sketch-target]")!;

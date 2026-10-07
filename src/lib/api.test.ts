@@ -4,6 +4,7 @@ const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
 import { api, errorMessage } from "./api";
+import { clientId } from "./platform";
 
 beforeEach(() => {
   invoke.mockReset().mockResolvedValue("result");
@@ -14,7 +15,7 @@ const CASES = [
   ["listDecks", () => api.listDecks(), "list_decks", undefined],
   ["createDeck", () => api.createDeck("Talk"), "create_deck", { title: "Talk" }],
   ["openDeck", () => api.openDeck("talk"), "open_deck", { id: "talk" }],
-  ["closeDeck", () => api.closeDeck(), "close_deck", undefined],
+  ["closeDeck", () => api.closeDeck("talk"), "close_deck", { id: "talk" }],
   ["loadDeck", () => api.loadDeck("talk"), "load_deck", { id: "talk" }],
   ["renameDeck", () => api.renameDeck("talk", "New"), "rename_deck", { id: "talk", title: "New" }],
   [
@@ -76,8 +77,15 @@ const CASES = [
     { id: "talk", rect: { x: 1, y: 2, width: 300, height: 168.75 }, viewport: { width: 1480, height: 920 } },
   ],
   ["loadChat", () => api.loadChat("talk"), "load_chat", { id: "talk" }],
-  ["saveChat", () => api.saveChat("talk", [1]), "save_chat", { id: "talk", chat: [1] }],
-  ["resetChat", () => api.resetChat("talk"), "reset_chat", { id: "talk" }],
+  [
+    "captureRemoteSketch",
+    () => api.captureRemoteSketch("talk", "intro", []),
+    "capture_remote_sketch",
+    { id: "talk", slide: "intro", strokes: [] },
+  ],
+  // Other clients reload a chat saved elsewhere; the origin tells them apart.
+  ["saveChat", () => api.saveChat("talk", [1]), "save_chat", { id: "talk", chat: [1], origin: clientId }],
+  ["resetChat", () => api.resetChat("talk"), "reset_chat", { id: "talk", origin: clientId }],
   [
     "sendMessage",
     () => api.sendMessage("talk", "Hi", { provider: "claude", model: "claude-opus-5-5", effort: "high", contextWindow: "1m" }),
@@ -88,6 +96,15 @@ const CASES = [
   ["interruptAgent", () => api.interruptAgent("talk"), "interrupt_agent", { id: "talk" }],
   ["agentRunning", () => api.agentRunning("talk"), "agent_running", { id: "talk" }],
   ["listProviders", () => api.listProviders(), "list_providers", undefined],
+  ["remoteStart", () => api.remoteStart(), "remote_start", undefined],
+  ["remoteStop", () => api.remoteStop(), "remote_stop", undefined],
+  ["remoteStatus", () => api.remoteStatus(), "remote_status", undefined],
+  [
+    "remoteCaptureDone",
+    () => api.remoteCaptureDone("r1", { path: ".slopslide/sketches/a.png" }),
+    "remote_capture_done",
+    { request: "r1", path: ".slopslide/sketches/a.png", error: null },
+  ],
 ] as const;
 
 describe("api", () => {
@@ -103,6 +120,11 @@ describe("api", () => {
     expect(invoke).toHaveBeenLastCalledWith("send_message", {
       args: { deckId: "talk", prompt: "/compact", provider: "copilot", model: "gpt-x", effort: "", contextWindow: null, compact: true },
     });
+  });
+
+  it("reports a failed capture to the backend as an error", async () => {
+    await api.remoteCaptureDone("r1", { error: "window hidden" });
+    expect(invoke).toHaveBeenLastCalledWith("remote_capture_done", { request: "r1", path: null, error: "window hidden" });
   });
 
   it("covers every api function", () => {

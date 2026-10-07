@@ -148,6 +148,14 @@
     } else if (navigate(event.key)) event.preventDefault();
   });
 
+  // A phone or tablet loads the deck once and switches slides in place: a page per slide
+  // means downloading and laying out the whole deck again on every swipe.
+  if (embed && framed) {
+    window.addEventListener("message", function (event) {
+      if (event.data && event.data.type === "slop:show") show(indexFor(String(event.data.slide)));
+    });
+  }
+
   if (embed) return;
   // The presenter forwards keys pressed while its drawing tools have focus.
   window.addEventListener("message", function (event) {

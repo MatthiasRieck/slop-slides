@@ -1,10 +1,11 @@
-import { ask } from "@tauri-apps/plugin-dialog";
 import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api, errorMessage, type DeckSummary } from "../lib/api";
-import { cn, isMac, relativeTime } from "../lib/utils";
+import { confirmDialog } from "../lib/platform";
+import { cn, hasTrafficLights, relativeTime } from "../lib/utils";
 import { useApp } from "../store";
+import { ShareDevice } from "./ShareDevice";
 import { SlideFrame } from "./SlideFrame";
 
 export function Home() {
@@ -27,7 +28,7 @@ export function Home() {
   };
 
   const remove = async (deck: DeckSummary) => {
-    const confirmed = await ask(`Delete “${deck.title}”? Its folder and slides are removed.`, {
+    const confirmed = await confirmDialog(`Delete “${deck.title}”? Its folder and slides are removed.`, {
       title: "Delete deck",
       kind: "warning",
       okLabel: "Delete",
@@ -43,10 +44,12 @@ export function Home() {
 
   return (
     <div className="flex h-full flex-col">
-      <header data-tauri-drag-region className={cn("flex h-12 shrink-0 items-center", isMac ? "pl-[84px]" : "pl-4")}>
+      <header data-tauri-drag-region className={cn("flex h-12 shrink-0 items-center pr-3", hasTrafficLights ? "pl-[84px]" : "pl-4")}>
         <span data-tauri-drag-region className="text-sm font-semibold tracking-tight">
           SlopSlide
         </span>
+        <div data-tauri-drag-region className="flex-1 self-stretch" />
+        <ShareDevice />
       </header>
       <main className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-5xl flex-col gap-8 px-8 py-10">

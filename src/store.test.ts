@@ -326,8 +326,8 @@ describe("model choice", () => {
       installed: true,
       path: "/bin/claude",
       models: [
-        { id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true, efforts: ["low", "medium", "high", "max"], defaultEffort: "medium" },
-        { id: "claude-sonnet-5", label: "Claude Sonnet 5", isDefault: false, efforts: ["low", "medium", "high", "max"], defaultEffort: "medium" },
+        { id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true, efforts: ["low", "medium", "high", "max"], defaultEffort: "medium", contextWindows: ["200k", "1m"], defaultContextWindow: "1m" },
+        { id: "claude-sonnet-5", label: "Claude Sonnet 5", isDefault: false, efforts: ["low", "medium", "high", "max"], defaultEffort: "medium", contextWindows: ["200k", "1m"], defaultContextWindow: "200k" },
       ],
       error: null,
     },
@@ -335,7 +335,7 @@ describe("model choice", () => {
       id: "codex",
       installed: true,
       path: "/bin/codex",
-      models: [{ id: "gpt-6-astra", label: "GPT-6-Astra", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }],
+      models: [{ id: "gpt-6-astra", label: "GPT-6-Astra", isDefault: true, efforts: ["low", "high"], defaultEffort: "high", contextWindows: [], defaultContextWindow: null }],
       error: null,
     },
   ];
@@ -347,6 +347,7 @@ describe("model choice", () => {
       model: "claude-opus-5-5",
       label: "Claude Opus 5.5",
       effort: "medium",
+      contextWindow: "1m",
     });
   });
 
@@ -355,7 +356,7 @@ describe("model choice", () => {
     useApp.setState({ providers: PROVIDERS });
     useApp.getState().setModel("codex", "gpt-6-astra");
     // Codex's model has no "medium", so its own default applies.
-    expect(useApp.getState().selection).toEqual({ provider: "codex", model: "gpt-6-astra", label: "GPT-6-Astra", effort: "high" });
+    expect(useApp.getState().selection).toEqual({ provider: "codex", model: "gpt-6-astra", label: "GPT-6-Astra", effort: "high", contextWindow: null });
     useApp.getState().setEffort("low");
     useApp = await freshStore();
     expect(useApp.getState().selection).toMatchObject({ provider: "codex", model: "gpt-6-astra", effort: "low" });
@@ -378,7 +379,7 @@ describe("model choice", () => {
     backend({ list_providers: () => providers });
     await useApp.getState().refreshProviders();
     expect(useApp.getState().providers).toEqual(providers);
-    expect(useApp.getState().selection).toEqual({ provider: "claude", model: "claude-opus-5-5", label: "Claude Opus 5.5", effort: "max" });
+    expect(useApp.getState().selection).toEqual({ provider: "claude", model: "claude-opus-5-5", label: "Claude Opus 5.5", effort: "max", contextWindow: "1m" });
   });
 
   it("keeps the saved model when its provider could not list models", async () => {
@@ -388,7 +389,31 @@ describe("model choice", () => {
     const failing = PROVIDERS.map((p) => (p.id === "codex" ? { ...p, models: [], error: "not signed in" } : p));
     backend({ list_providers: () => failing });
     await useApp.getState().refreshProviders();
-    expect(useApp.getState().selection).toEqual(saved);
+    expect(useApp.getState().selection).toEqual({ ...saved, contextWindow: null });
+  });
+
+  it("starts each model on its default context window and persists a change", async () => {
+    let useApp = await freshStore();
+    useApp.setState({ providers: PROVIDERS });
+    useApp.getState().setModel("claude", "claude-sonnet-5");
+    expect(useApp.getState().selection.contextWindow).toBe("200k");
+    useApp.getState().setContextWindow("1m");
+    useApp = await freshStore();
+    expect(useApp.getState().selection).toMatchObject({ model: "claude-sonnet-5", contextWindow: "1m" });
+    useApp.setState({ providers: PROVIDERS });
+    useApp.getState().setModel("claude", "claude-opus-5-5");
+    expect(useApp.getState().selection.contextWindow).toBe("1m");
+  });
+
+  it("reconciles a saved context window with the model's options", async () => {
+    localStorage.setItem(
+      "slopslide.selection",
+      JSON.stringify({ provider: "claude", model: "claude-sonnet-5", label: "Claude Sonnet 5", effort: "high" }),
+    );
+    const useApp = await freshStore();
+    backend({ list_providers: () => PROVIDERS });
+    await useApp.getState().refreshProviders();
+    expect(useApp.getState().selection.contextWindow).toBe("200k");
   });
 
   it("toggles and persists favorite models", async () => {
@@ -450,11 +475,11 @@ describe("sending a message", () => {
     );
   });
 
-  it("passes the selected provider, model, and effort", async () => {
+  it("passes the selected provider, model, effort, and context window", async () => {
     const useApp = await freshStore();
     useApp.setState({
       deck: DECK,
-      selection: { provider: "codex", model: "gpt-6-astra", label: "GPT-6-Astra", effort: "high" },
+      selection: { provider: "codex", model: "gpt-6-astra", label: "GPT-6-Astra", effort: "high", contextWindow: null },
     });
     await useApp.getState().send("a", { includeSlide: false, attachments: [] });
     expect(calls("send_message")[0]!.args).toEqual({
@@ -463,6 +488,7 @@ describe("sending a message", () => {
       provider: "codex",
       model: "gpt-6-astra",
       effort: "high",
+      contextWindow: null,
     });
   });
 

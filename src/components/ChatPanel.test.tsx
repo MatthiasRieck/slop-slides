@@ -29,8 +29,8 @@ const PROVIDERS: ProviderInfo[] = [
     installed: true,
     path: "/bin/claude",
     models: [
-      { id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true, efforts: ["low", "medium", "high", "max"], defaultEffort: "medium" },
-      { id: "claude-sonnet-5", label: "Claude Sonnet 5", isDefault: false, efforts: ["low", "medium", "high", "max"], defaultEffort: "medium" },
+      { id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true, efforts: ["low", "medium", "high", "max"], defaultEffort: "medium", contextWindows: ["200k", "1m"], defaultContextWindow: "1m" },
+      { id: "claude-sonnet-5", label: "Claude Sonnet 5", isDefault: false, efforts: ["low", "medium", "high", "max"], defaultEffort: "medium", contextWindows: ["200k", "1m"], defaultContextWindow: "200k" },
     ],
     error: null,
   },
@@ -38,7 +38,7 @@ const PROVIDERS: ProviderInfo[] = [
     id: "codex",
     installed: true,
     path: "/bin/codex",
-    models: [{ id: "gpt-6-astra", label: "GPT-6-Astra", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }],
+    models: [{ id: "gpt-6-astra", label: "GPT-6-Astra", isDefault: true, efforts: ["low", "high"], defaultEffort: "high", contextWindows: [], defaultContextWindow: null }],
     error: null,
   },
   { id: "copilot", installed: false, path: null, models: [], error: null },
@@ -61,7 +61,7 @@ beforeEach(() => {
     selected: "intro",
     messages: [],
     running: false,
-    selection: { provider: "claude", model: "claude-opus-5-5", label: "Claude Opus 5.5", effort: "medium" },
+    selection: { provider: "claude", model: "claude-opus-5-5", label: "Claude Opus 5.5", effort: "medium", contextWindow: "1m" },
     providers: PROVIDERS,
     favoriteModels: [],
     error: null,
@@ -301,10 +301,30 @@ describe("ChatPanel: composing", () => {
 
   it("offers the selected model's effort levels", () => {
     render(<ChatPanel />);
-    fireEvent.click(screen.getByTitle("Reasoning effort"));
+    fireEvent.click(screen.getByTitle("Reasoning effort and context window"));
     expect(screen.getByRole("button", { name: "Max" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "High" }));
     expect(useApp.getState().selection.effort).toBe("high");
+  });
+
+  it("offers a Claude model's context windows", () => {
+    render(<ChatPanel />);
+    const trigger = screen.getByTitle("Reasoning effort and context window");
+    expect(trigger.textContent).toBe("Medium · 1M");
+    fireEvent.click(trigger);
+    expect(screen.getByText("Context Window")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "200k" }));
+    expect(useApp.getState().selection.contextWindow).toBe("200k");
+    expect(screen.getByTitle("Reasoning effort and context window").textContent).toBe("Medium · 200k");
+  });
+
+  it("shows only effort for models without context window options", () => {
+    useApp.setState({
+      selection: { provider: "codex", model: "gpt-6-astra", label: "GPT-6-Astra", effort: "high", contextWindow: null },
+    });
+    render(<ChatPanel />);
+    fireEvent.click(screen.getByTitle("Reasoning effort"));
+    expect(screen.queryByText("Context Window")).toBeNull();
   });
 
   it("starts a new conversation", () => {

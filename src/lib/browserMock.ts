@@ -42,8 +42,8 @@ export function installBrowserMock() {
               installed: true,
               path: "/mock/claude",
               models: [
-                { id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true, efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "medium" },
-                { id: "claude-sonnet-5", label: "Claude Sonnet 5", isDefault: false, efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "medium" },
+                { id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true, efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "medium", contextWindows: ["200k", "1m"], defaultContextWindow: "1m" },
+                { id: "claude-sonnet-5", label: "Claude Sonnet 5", isDefault: false, efforts: ["low", "medium", "high", "xhigh", "max"], defaultEffort: "medium", contextWindows: ["200k", "1m"], defaultContextWindow: "200k" },
               ],
               error: null,
             },
@@ -53,8 +53,8 @@ export function installBrowserMock() {
               installed: true,
               path: "/mock/copilot",
               models: [
-                { id: "gpt-6-astra", label: "GPT-6 Astra", isDefault: false, efforts: ["low", "medium", "high"], defaultEffort: "medium" },
-                { id: "claude-sonnet-5", label: "Claude Sonnet 5", isDefault: false, efforts: [], defaultEffort: null },
+                { id: "gpt-6-astra", label: "GPT-6 Astra", isDefault: false, efforts: ["low", "medium", "high"], defaultEffort: "medium", contextWindows: [], defaultContextWindow: null },
+                { id: "claude-sonnet-5", label: "Claude Sonnet 5", isDefault: false, efforts: [], defaultEffort: null, contextWindows: [], defaultContextWindow: null },
               ],
               error: null,
             },

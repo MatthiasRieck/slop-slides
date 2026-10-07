@@ -74,6 +74,11 @@ export function pickEffort(model: ProviderModel, effort: string): string {
   return model.efforts.includes("medium") ? "medium" : model.efforts[0]!;
 }
 
+/** The effort to request: none for a model known to take no effort setting. */
+export function requestEffort(model: ProviderModel | undefined, effort: string): string {
+  return model && model.efforts.length === 0 ? "" : effort;
+}
+
 /** Keeps `contextWindow` when the model offers it, else the model's own default. */
 export function pickContextWindow(model: ProviderModel, contextWindow: string | null): string | null {
   if (model.contextWindows.length === 0) return null;

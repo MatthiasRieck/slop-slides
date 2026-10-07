@@ -16,6 +16,7 @@ import {
   defaultModel,
   pickContextWindow,
   pickEffort,
+  requestEffort,
   type Provider,
   type ProviderInfo,
 } from "./lib/models";
@@ -476,7 +477,9 @@ export const useApp = create<AppState>((set, get) => ({
       if (user.sketch) get().clearSketch(slide);
     }
     try {
-      const { provider, model, effort, contextWindow } = selection;
+      const { provider, model, contextWindow } = selection;
+      const info = get().providers?.find((p) => p.id === provider)?.models.find((m) => m.id === model);
+      const effort = requestEffort(info, selection.effort);
       await api.sendMessage(deck.id, buildPrompt(deck, user), { provider, model, effort, contextWindow });
     } catch (error) {
       updateAssistant(assistant.id, (m) => ({

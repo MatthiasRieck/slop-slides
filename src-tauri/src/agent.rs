@@ -118,6 +118,16 @@ pub enum AgentEvent {
     Error {
         message: String,
     },
+    /// How full the session's context window is. A `None` field is not known from this
+    /// event; the frontend keeps what it knew before.
+    Usage {
+        context_tokens: Option<u64>,
+        context_window: Option<u64>,
+    },
+    /// The agent started summarizing the conversation to free up context.
+    Compacting,
+    /// The conversation was summarized; its new size is reported by the next `Usage`.
+    Compacted,
     Finished {
         interrupted: bool,
     },
@@ -142,6 +152,9 @@ pub struct SendArgs {
     /// Claude only: `200k` or `1m`.
     #[serde(default)]
     pub context_window: Option<String>,
+    /// Summarize the conversation so far instead of sending `prompt`.
+    #[serde(default)]
+    pub compact: bool,
 }
 
 impl AgentManager {
@@ -183,6 +196,7 @@ impl AgentManager {
                         _ => m,
                     }),
                 effort: args.effort.filter(|e| !e.is_empty()),
+                compact: args.compact,
             };
             // The whole deck is one file: keep a copy to fall back on before every turn.
             if let Err(e) = deck::snapshot(&turn.dir) {
@@ -219,7 +233,11 @@ struct Turn {
     bin: PathBuf,
     model: Option<String>,
     effort: Option<String>,
+    compact: bool,
 }
+
+/// The prompt Claude Code runs as its built-in compaction command.
+const CLAUDE_COMPACT: &str = "/compact";
 
 pub(crate) enum Outcome {
     Done,
@@ -236,7 +254,24 @@ impl Turn {
     async fn run(&self, prompt: &str, mut cancel: watch::Receiver<bool>) -> bool {
         let session_file = self.provider.session_file();
         let session = deck::read_session(&self.dir, session_file);
+        if self.compact {
+            if let Some(message) = compact_refusal(self.provider, session.as_deref()) {
+                self.emit(&AgentEvent::Error {
+                    message: message.into(),
+                });
+                return false;
+            }
+        }
         let mut outcome = self.run_once(prompt, session.as_deref(), &mut cancel).await;
+        if self.compact && matches!(outcome, Ok(Outcome::ResumeFailed)) {
+            // Starting fresh would leave nothing to compact.
+            let _ = deck::write_session(&self.dir, session_file, None);
+            self.emit(&AgentEvent::Error {
+                message: "The conversation could not be resumed, so there is nothing to compact."
+                    .into(),
+            });
+            return false;
+        }
         if matches!(outcome, Ok(Outcome::ResumeFailed)) {
             // The stored session is gone (other machine, cleared history): start fresh.
             let _ = deck::write_session(&self.dir, session_file, None);
@@ -271,6 +306,7 @@ impl Turn {
                 model,
                 effort,
                 session,
+                compact: self.compact,
             };
             let on_session =
                 |id: &str| deck::write_session(&self.dir, self.provider.session_file(), Some(id));
@@ -319,6 +355,7 @@ impl Turn {
         });
 
         let mut stdin = child.stdin.take().expect("piped stdin");
+        let prompt = if self.compact { CLAUDE_COMPACT } else { prompt };
         stdin.write_all(prompt.as_bytes()).await?;
         drop(stdin);
 
@@ -391,6 +428,18 @@ impl Turn {
             )));
         }
         Ok(Outcome::Done)
+    }
+}
+
+/// Why a compaction cannot run, if it cannot: there must be a conversation, and Codex's
+/// headless mode has no way to compact one.
+fn compact_refusal(provider: Provider, session: Option<&str>) -> Option<&'static str> {
+    if provider == Provider::Codex {
+        Some("Codex cannot compact the conversation from SlopSlide. Start a new chat instead.")
+    } else if session.is_none() {
+        Some("There is no conversation to compact yet.")
+    } else {
+        None
     }
 }
 
@@ -576,7 +625,18 @@ fn parse_line(value: &Value) -> Vec<AgentEvent> {
                 name: block["name"].as_str().unwrap_or_default().to_string(),
                 input: block["input"].clone(),
             })
+            .chain(
+                claude_context_tokens(&value["message"]["usage"]).map(|tokens| AgentEvent::Usage {
+                    context_tokens: Some(tokens),
+                    context_window: None,
+                }),
+            )
             .collect(),
+        Some("system") => match value["subtype"].as_str() {
+            Some("status") if value["status"] == "compacting" => vec![AgentEvent::Compacting],
+            Some("compact_boundary") => vec![AgentEvent::Compacted],
+            _ => Vec::new(),
+        },
         Some("user") => content_blocks(value)
             .filter(|block| block["type"] == "tool_result")
             .map(|block| AgentEvent::ToolResult {
@@ -587,14 +647,44 @@ fn parse_line(value: &Value) -> Vec<AgentEvent> {
                 is_error: block["is_error"].as_bool().unwrap_or(false),
             })
             .collect(),
-        Some("result") => vec![AgentEvent::Result {
-            is_error: value["is_error"].as_bool().unwrap_or(false) || value["subtype"] != "success",
-            text: value["result"].as_str().map(str::to_string),
-            cost_usd: value["total_cost_usd"].as_f64(),
-            duration_ms: value["duration_ms"].as_u64(),
-        }],
+        Some("result") => {
+            let mut events = vec![AgentEvent::Result {
+                is_error: value["is_error"].as_bool().unwrap_or(false)
+                    || value["subtype"] != "success",
+                text: value["result"].as_str().map(str::to_string),
+                cost_usd: value["total_cost_usd"].as_f64(),
+                duration_ms: value["duration_ms"].as_u64(),
+            }];
+            // Only the result says how large the window is. Background calls to smaller
+            // models are listed too, so take the largest.
+            let window = value["modelUsage"]
+                .as_object()
+                .into_iter()
+                .flat_map(|models| models.values())
+                .filter_map(|model| model["contextWindow"].as_u64())
+                .max();
+            if window.is_some() {
+                events.push(AgentEvent::Usage {
+                    context_tokens: None,
+                    context_window: window,
+                });
+            }
+            events
+        }
         _ => Vec::new(),
     }
+}
+
+/// Tokens in the context after one model call: everything it read plus what it wrote,
+/// which the next call reads back.
+fn claude_context_tokens(usage: &Value) -> Option<u64> {
+    let input = usage["input_tokens"].as_u64()?;
+    Some(
+        input
+            + usage["cache_creation_input_tokens"].as_u64().unwrap_or(0)
+            + usage["cache_read_input_tokens"].as_u64().unwrap_or(0)
+            + usage["output_tokens"].as_u64().unwrap_or(0),
+    )
 }
 
 fn content_blocks(value: &Value) -> impl Iterator<Item = &Value> {
@@ -763,6 +853,105 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn parses_context_usage() {
+        let assistant = json!({"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":9,"cache_creation_input_tokens":7662,"cache_read_input_tokens":12313,"output_tokens":4}}});
+        assert_eq!(
+            parse_line(&assistant),
+            vec![AgentEvent::Usage {
+                context_tokens: Some(19988),
+                context_window: None
+            }]
+        );
+        let tool = json!({"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{}}],"usage":{"input_tokens":100}}});
+        assert!(matches!(
+            &parse_line(&tool)[..],
+            [
+                AgentEvent::ToolUse { .. },
+                AgentEvent::Usage {
+                    context_tokens: Some(100),
+                    ..
+                }
+            ]
+        ));
+        let nested = json!({"type":"assistant","parent_tool_use_id":"t1","message":{"content":[],"usage":{"input_tokens":5}}});
+        assert!(
+            parse_line(&nested).is_empty(),
+            "sub-agents have their own context"
+        );
+        let no_usage =
+            json!({"type":"assistant","parent_tool_use_id":null,"message":{"content":[]}});
+        assert!(parse_line(&no_usage).is_empty());
+
+        let result = json!({"type":"result","subtype":"success","is_error":false,"result":"ok","modelUsage":{
+            "claude-haiku-4-5-20251001":{"contextWindow":200000},
+            "claude-opus-5-5":{"contextWindow":1000000}
+        }});
+        assert_eq!(
+            parse_line(&result)[1..],
+            [AgentEvent::Usage {
+                context_tokens: None,
+                context_window: Some(1_000_000)
+            }]
+        );
+        let bare = json!({"type":"result","subtype":"success","is_error":false,"result":"ok"});
+        assert_eq!(parse_line(&bare).len(), 1, "no window, no usage event");
+    }
+
+    #[test]
+    fn parses_compaction() {
+        let status = |status: Value| json!({"type":"system","subtype":"status","status":status});
+        assert_eq!(
+            parse_line(&status(json!("compacting"))),
+            vec![AgentEvent::Compacting]
+        );
+        assert!(parse_line(&status(Value::Null)).is_empty());
+        let boundary = json!({"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":20018,"post_tokens":1512}});
+        assert_eq!(parse_line(&boundary), vec![AgentEvent::Compacted]);
+        let init = json!({"type":"system","subtype":"init","session_id":"s"});
+        assert!(parse_line(&init).is_empty());
+    }
+
+    #[test]
+    fn refuses_compaction_it_cannot_run() {
+        assert_eq!(compact_refusal(Provider::Claude, Some("s")), None);
+        assert_eq!(compact_refusal(Provider::Copilot, Some("s")), None);
+        assert!(compact_refusal(Provider::Claude, None).is_some());
+        assert!(compact_refusal(Provider::Copilot, None).is_some());
+        assert!(compact_refusal(Provider::Codex, Some("s"))
+            .unwrap()
+            .starts_with("Codex cannot compact"));
+    }
+
+    #[test]
+    fn send_args_compact_defaults_to_off() {
+        let args: SendArgs =
+            serde_json::from_value(json!({"deckId":"d","prompt":"hi","provider":"claude"}))
+                .unwrap();
+        assert!(!args.compact);
+        let args: SendArgs = serde_json::from_value(
+            json!({"deckId":"d","prompt":"/compact","provider":"copilot","compact":true}),
+        )
+        .unwrap();
+        assert!(args.compact);
+    }
+
+    #[test]
+    fn serializes_usage_events_in_camel_case() {
+        let usage = AgentEvent::Usage {
+            context_tokens: Some(12),
+            context_window: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&usage).unwrap(),
+            json!({"type":"usage","contextTokens":12,"contextWindow":null})
+        );
+        assert_eq!(
+            serde_json::to_value(&AgentEvent::Compacted).unwrap(),
+            json!({"type":"compacted"})
+        );
     }
 
     #[test]
@@ -1151,7 +1340,20 @@ mod tests {
                     bin: claude,
                     model: model.map(str::to_string),
                     effort: None,
+                    compact: false,
                 }
+            }
+
+            async fn run_compact(&self) -> bool {
+                let (_tx, rx) = watch::channel(false);
+                let mut turn = self.turn();
+                turn.compact = true;
+                tokio::time::timeout(
+                    Duration::from_secs(20),
+                    turn.run("whatever the composer held", rx),
+                )
+                .await
+                .expect("turn timed out")
             }
 
             async fn run(&self, prompt: &str, model: Option<&str>) -> bool {
@@ -1340,6 +1542,55 @@ fi
             assert_eq!(fx.invocations().len(), 2);
             assert_eq!(fx.session().as_deref(), Some("new-session"));
             assert!(fx.errors().is_empty(), "{:?}", fx.errors());
+        }
+
+        #[tokio::test]
+        async fn compacts_the_stored_session() {
+            let fx = Fixture::new(&format!(
+                r#"echo "{{\"type\":\"system\",\"subtype\":\"status\",\"status\":\"compacting\"}}"
+echo "{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$RESUME\"}}"
+echo '{{"type":"system","subtype":"compact_boundary","compact_metadata":{{"trigger":"manual"}}}}'
+{OK}"#
+            ));
+            deck::write_session(&fx.dir, "session", Some("old-session")).unwrap();
+            assert!(!fx.run_compact().await);
+            let runs = fx.invocations();
+            assert_eq!(runs.len(), 1);
+            assert!(has_flag(&runs[0], "--resume", "old-session"));
+            assert_eq!(
+                fs::read_to_string(fx.dir.join(INTERNAL_DIR).join("stdin.log")).unwrap(),
+                "/compact"
+            );
+            let events = fx.events();
+            assert!(events.contains(&AgentEvent::Compacting));
+            assert!(events.contains(&AgentEvent::Compacted));
+            assert!(fx.errors().is_empty(), "{:?}", fx.errors());
+            assert_eq!(fx.session().as_deref(), Some("old-session"));
+        }
+
+        #[tokio::test]
+        async fn compacting_needs_a_conversation() {
+            let fx = Fixture::new(&format!("{INIT}\n{OK}"));
+            assert!(!fx.run_compact().await);
+            assert!(fx.invocations().is_empty(), "the CLI is not started");
+            assert_eq!(fx.errors(), ["There is no conversation to compact yet."]);
+        }
+
+        #[tokio::test]
+        async fn compacting_a_lost_session_does_not_start_fresh() {
+            let fx = Fixture::new(&format!(
+                r#"if [ -n "$RESUME" ]; then
+  echo '{{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: gone"]}}'
+  exit 1
+fi
+{INIT}
+{OK}"#
+            ));
+            deck::write_session(&fx.dir, "session", Some("gone")).unwrap();
+            assert!(!fx.run_compact().await);
+            assert_eq!(fx.invocations().len(), 1, "not retried without the session");
+            assert_eq!(fx.session(), None, "the stale session is forgotten");
+            assert_eq!(fx.errors().len(), 1);
         }
 
         #[tokio::test]

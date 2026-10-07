@@ -5,6 +5,7 @@ import {
   ArrowUp,
   Check,
   FileText,
+  FoldVertical,
   Globe,
   Image as ImageIcon,
   Loader2,
@@ -24,6 +25,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { api, errorMessage } from "../lib/api";
+import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowTokens } from "../lib/context";
 import { cn } from "../lib/utils";
 import { PROVIDERS, type Provider } from "../lib/models";
 import { useApp, type AssistantMessage, type ChatMessage, type ChatPart, type UserMessage } from "../store";
@@ -198,9 +200,20 @@ function AssistantBlock({ message }: { message: AssistantMessage }) {
           <ToolRow key={part.id} part={part} />
         ),
       )}
-      {streaming && (message.thinking || message.parts.length === 0) && (
-        <span className="shimmer-text text-xs">Thinking…</span>
+      {streaming && message.compacting && (
+        <span className="shimmer-text text-xs">Compacting the conversation…</span>
       )}
+      {message.compacted && (
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <FoldVertical className="size-3.5 shrink-0" />
+          Conversation compacted
+        </span>
+      )}
+      {streaming &&
+        !message.compacting &&
+        (message.thinking || (message.parts.length === 0 && !message.compacted)) && (
+          <span className="shimmer-text text-xs">Thinking…</span>
+        )}
       {streaming && !message.thinking && message.parts.at(-1)?.kind === "tool" && (
         <span className="shimmer-text text-xs">Working…</span>
       )}
@@ -385,6 +398,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           dragging && "border-primary ring-2 ring-primary/30",
         )}
       >
+        <ContextMeter />
         {(attachments.length > 0 || slideNumber > 0) && (
           <div className="flex flex-wrap gap-1 px-3.5 pt-3">
             {slideNumber > 0 && (
@@ -484,6 +498,75 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * How much of the agent's context window the conversation fills, with a way to compact it
+ * once it gets large. Hidden until the selected provider reports its usage.
+ */
+function ContextMeter() {
+  const provider = useApp((s) => s.selection.provider);
+  const selectedWindow = useApp((s) => s.selection.contextWindow);
+  const context = useApp((s) => latestContext(s.messages, s.selection.provider));
+  const running = useApp((s) => s.running);
+  if (!context) return null;
+
+  // Claude runs the next turn with the chosen window, which may differ from the last one.
+  const window = (provider === "claude" && windowTokens(selectedWindow)) || context.window;
+  const { tokens } = context;
+  const percent = contextPercent(tokens, window);
+  const label =
+    tokens === null
+      ? "Compacted"
+      : window
+        ? `${formatTokens(tokens)} / ${formatTokens(window)} tokens`
+        : `${formatTokens(tokens)} tokens`;
+  const title =
+    tokens === null
+      ? "The conversation was compacted. Its new size shows after the next message."
+      : `The conversation holds ${tokens.toLocaleString("en-US")} tokens` +
+        (window ? ` of the ${window.toLocaleString("en-US")}-token context window` : "");
+
+  return (
+    <div className="flex h-7 items-center gap-2 px-3.5 pt-2" title={title}>
+      <div
+        role="progressbar"
+        aria-label="Context used"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent === null ? undefined : Math.round(percent)}
+        className="h-1 min-w-8 flex-1 overflow-hidden rounded-full bg-accent"
+      >
+        <div
+          className={cn(
+            "h-full rounded-full transition-[width] duration-500",
+            percent === null || percent < 70
+              ? "bg-primary/70"
+              : percent < 90
+                ? "bg-amber-500"
+                : "bg-destructive",
+          )}
+          style={{ width: `${percent ?? 0}%` }}
+        />
+      </div>
+      <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">
+        {label}
+        {percent !== null && ` · ${Math.round(percent)}%`}
+      </span>
+      {percent !== null && percent > COMPACT_THRESHOLD && (
+        <button
+          type="button"
+          disabled={running}
+          onClick={() => void useApp.getState().compact()}
+          title="Summarize the conversation so far to free up context (/compact)"
+          className="flex h-5 shrink-0 items-center gap-1 rounded-md border px-1.5 font-mono text-2xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+        >
+          <FoldVertical className="size-3" />
+          /compact
+        </button>
+      )}
     </div>
   );
 }

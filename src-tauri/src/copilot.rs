@@ -190,12 +190,19 @@ pub async fn list_models(bin: &Path) -> Result<Vec<ModelInfo>> {
     conn.handshake().await?;
     let result = conn.request("models.list", json!({})).await?;
     let _ = child.kill().await;
-    Ok(result["models"]
+    Ok(parse_models(&result["models"]))
+}
+
+/// Enabled models, first occurrence of each id only (the CLI may list one twice).
+fn parse_models(models: &Value) -> Vec<ModelInfo> {
+    let mut seen = HashSet::new();
+    models
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(parse_model)
-        .collect())
+        .filter(|model| seen.insert(model.id.clone()))
+        .collect()
 }
 
 fn parse_model(model: &Value) -> Option<ModelInfo> {
@@ -590,6 +597,18 @@ mod tests {
         let model = parse_model(&enabled).unwrap();
         assert_eq!((model.label.as_str(), model.efforts.len()), ("GPT X", 2));
         assert!(parse_model(&disabled).is_none());
+    }
+
+    #[test]
+    fn drops_duplicate_models() {
+        let models = parse_models(&json!([
+            {"id":"auto","name":"Auto","capabilities":{}},
+            {"id":"auto","name":"Auto","capabilities":{}},
+            {"id":"gpt-x","name":"GPT X"},
+        ]));
+        let ids: Vec<_> = models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["auto", "gpt-x"]);
+        assert!(models[0].efforts.is_empty());
     }
 
     /// A stand-in `copilot --server --stdio` that answers by message order.

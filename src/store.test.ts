@@ -466,6 +466,25 @@ describe("sending a message", () => {
     });
   });
 
+  it("sends no effort for a model that takes none", async () => {
+    const useApp = await freshStore();
+    useApp.setState({
+      deck: DECK,
+      providers: [
+        {
+          id: "copilot",
+          installed: true,
+          path: "/bin/copilot",
+          models: [{ id: "auto", label: "Auto", isDefault: false, efforts: [], defaultEffort: null }],
+          error: null,
+        },
+      ],
+      selection: { provider: "copilot", model: "auto", label: "Auto", effort: "medium" },
+    });
+    await useApp.getState().send("a", { includeSlide: false, attachments: [] });
+    expect(calls("send_message")[0]!.args).toMatchObject({ provider: "copilot", model: "auto", effort: "" });
+  });
+
   it("shows a failed send on the reply and saves the transcript", async () => {
     const useApp = await freshStore();
     backend({

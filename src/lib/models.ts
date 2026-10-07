@@ -64,3 +64,8 @@ export function pickEffort(model: ProviderModel, effort: string): string {
   if (model.defaultEffort && model.efforts.includes(model.defaultEffort)) return model.defaultEffort;
   return model.efforts.includes("medium") ? "medium" : model.efforts[0]!;
 }
+
+/** The effort to request: none for a model known to take no effort setting. */
+export function requestEffort(model: ProviderModel | undefined, effort: string): string {
+  return model && model.efforts.length === 0 ? "" : effort;
+}

@@ -5,9 +5,11 @@
    stretch it while the opposite side stays put (Shift keeps the aspect ratio, Alt scales
    from the center); the handle above it rotates it (Shift snaps to 15°). Double-click a
    handle to reset.
-   Double-click (or Enter) edits its text, Escape selects the parent, Delete removes it.
+   Double-click (or Enter) edits its text, Escape selects the parent. Delete (or Backspace, or
+   { type: "slop:edit-delete" } from the app) removes it.
    Every change is posted to the app as the slide's new markup:
-   { type: "slop:edit-commit", slide, markup, select }.
+   { type: "slop:edit-commit", slide, markup, select }. Whether anything is selected is posted
+   as { type: "slop:edit-selection", slide, selected } whenever that changes.
 
    It runs on the pasteboard (pasteboard.js), which pans and zooms the view; dragging empty space
    pans too. The slide no longer clips, so content that runs past its edge stays visible (dimmed
@@ -205,10 +207,12 @@
 
   function select(el) {
     if (el === selected) return;
+    var had = !!selected;
     mark(selected, "data-slop-selected", false);
     selected = el;
     mark(selected, "data-slop-selected", true);
     placeHandles();
+    if (had !== !!el) window.parent.postMessage({ type: "slop:edit-selection", slide: slide.id, selected: !!el }, "*");
   }
 
   function hover(el) {
@@ -530,8 +534,10 @@
 
   function removeSelected() {
     var el = selected;
+    if (!el) return;
+    finishEditing();
     select(null);
-    el.parentElement.removeChild(el);
+    if (el.parentElement) el.parentElement.removeChild(el);
     commit();
   }
 
@@ -675,6 +681,8 @@
       select(atPath(data.path));
       // Clearing the selection for a screenshot hides the wires too, until the next interaction.
       if (data.quiet) mark(wires, "data-quiet", true);
+    } else if (data.type === "slop:edit-delete") {
+      removeSelected();
     }
   });
 })();

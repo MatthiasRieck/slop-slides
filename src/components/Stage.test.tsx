@@ -385,6 +385,29 @@ describe("Stage", () => {
       expect(save).toHaveBeenCalledTimes(1);
     });
 
+    it("deletes the editor's selection from the edit bar, enabled only while something is selected", () => {
+      const { container } = render(<Stage />);
+      fireEvent.click(editButton());
+      const frame = stageFrame(container);
+      fireEvent.load(frame);
+      const remove = () => screen.getByRole("button", { name: "Delete selected element" }) as HTMLButtonElement;
+      expect(remove().disabled).toBe(true);
+      fromFrame(frame, { type: "slop:edit-selection", slide: "outro", selected: true });
+      fromFrame(null, { type: "slop:edit-selection", slide: "intro", selected: true });
+      expect(remove().disabled).toBe(true);
+      fromFrame(frame, { type: "slop:edit-selection", slide: "intro", selected: true });
+      expect(remove().disabled).toBe(false);
+      const post = vi.spyOn(frame.contentWindow!, "postMessage");
+      fireEvent.click(remove());
+      expect(post).toHaveBeenCalledWith({ type: "slop:edit-delete" }, "*");
+      fromFrame(frame, { type: "slop:edit-selection", slide: "intro", selected: false });
+      expect(remove().disabled).toBe(true);
+      // A reloaded editor starts without a selection.
+      fromFrame(frame, { type: "slop:edit-selection", slide: "intro", selected: true });
+      fireEvent.load(frame);
+      expect(remove().disabled).toBe(true);
+    });
+
     it("selects the edited element again once the slide reloads", () => {
       useApp.setState({ saveSlideEdit: vi.fn().mockResolvedValue(undefined) });
       const { container } = render(<Stage />);

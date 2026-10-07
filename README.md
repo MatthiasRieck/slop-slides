@@ -10,7 +10,8 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
 - **Middle:** the current slide on a fixed 1920×1080 stage, scaled to fit. Arrow keys navigate.
   The move button below it turns on edit mode: click an element to select it, drag it (or
   use the arrow keys) to move it, double-click (or press Enter) to edit its text, Escape to
-  select the parent, Delete to remove it, and ⌘Z / Ctrl+Z to undo. Moved elements keep a
+  select the parent, Delete (or the trash button in the edit bar) to remove
+  it, and ⌘Z / Ctrl+Z to undo. Moved elements keep a
   temporary offset; **Tidy layout** then sends the agent a screenshot so it rebuilds the
   slide's layout around where you put things.
 - **Right:** chat with the agent. It knows which slide you're on, and you can attach images

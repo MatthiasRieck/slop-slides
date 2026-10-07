@@ -643,3 +643,72 @@ describe("composer fill", () => {
     expect(textarea().value).toBe("Fix it");
   });
 });
+
+describe("ChatPanel on a device", () => {
+  const fetchMock = vi.fn();
+
+  /** The panel as a phone or tablet gets it: files are uploaded rather than imported by path. */
+  async function renderOnDevice() {
+    window.__SLOPSLIDE_REMOTE__ = { base: "/s/tok" };
+    vi.resetModules();
+    const store = await import("../store");
+    const { ChatPanel: DeviceChatPanel } = await import("./ChatPanel");
+    const { deck, selected, selection, providers } = useApp.getState();
+    store.useApp.setState({ deck, selected, selection, providers, send });
+    const view = render(<DeviceChatPanel />);
+    return { ...view, useApp: store.useApp };
+  }
+
+  beforeEach(() => {
+    let n = 0;
+    fetchMock.mockReset().mockImplementation(async (url: string) => {
+      const name = decodeURIComponent(url.split("name=")[1]!).toLowerCase().replace(/ /g, "-");
+      return { ok: true, status: 200, text: async () => JSON.stringify(`assets/${n++ ? `${n}-` : ""}${name}`) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    delete window.__SLOPSLIDE_REMOTE__;
+    vi.unstubAllGlobals();
+  });
+
+  it("uploads picked files and attaches them", async () => {
+    await renderOnDevice();
+    const input = screen.getByTestId("attach-input") as HTMLInputElement;
+    const click = vi.spyOn(input, "click");
+    fireEvent.click(screen.getByTitle("Attach images or files"));
+    expect(click).toHaveBeenCalledOnce();
+    expect(openDialog).not.toHaveBeenCalled();
+    const photo = new File(["x"], "IMG 1.jpg", { type: "image/jpeg" });
+    await act(async () => fireEvent.change(input, { target: { files: [photo] } }));
+    expect(fetchMock).toHaveBeenCalledWith("/s/tok/upload/talk?name=IMG%201.jpg", { method: "POST", body: photo });
+    expect(screen.getByText("img-1.jpg")).toBeTruthy();
+    expect(invoke).not.toHaveBeenCalledWith("import_assets", expect.anything());
+  });
+
+  it("uploads files dropped on the page", async () => {
+    const { container } = await renderOnDevice();
+    const composer = () => container.querySelector(".shadow-composer")!;
+    const file = new File(["x"], "scan.pdf");
+    const dataTransfer = { types: ["Files"], files: [file] };
+    act(() => {
+      fireEvent.dragOver(window, { dataTransfer });
+    });
+    expect(composer().className).toContain("border-primary");
+    await act(async () => fireEvent.drop(window, { dataTransfer }));
+    expect(composer().className).not.toContain("border-primary");
+    expect(fetchMock).toHaveBeenCalledWith("/s/tok/upload/talk?name=scan.pdf", { method: "POST", body: file });
+    expect(screen.getByText("scan.pdf")).toBeTruthy();
+    // The window's native drag and drop is not there in a browser.
+    expect(dragDrop).toBeNull();
+  });
+
+  it("reports a failed upload", async () => {
+    const { useApp: deviceApp } = await renderOnDevice();
+    fetchMock.mockResolvedValue({ ok: false, status: 400, text: async () => "deck not found: talk" });
+    const input = screen.getByTestId("attach-input") as HTMLInputElement;
+    await act(async () => fireEvent.change(input, { target: { files: [new File(["x"], "a.png")] } }));
+    expect(deviceApp.getState().error).toBe("deck not found: talk");
+  });
+});

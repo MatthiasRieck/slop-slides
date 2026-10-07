@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 
 import { App } from "./App";
 import "./index.css";
+import { isRemote } from "./lib/platform";
 import { initEventBridge } from "./store";
 
 // Follow the OS appearance.
@@ -11,7 +12,8 @@ const applyTheme = () => document.documentElement.classList.toggle("dark", dark.
 applyTheme();
 dark.addEventListener("change", applyTheme);
 
-if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
+// A device served by the desktop app (src/lib/platform.ts) talks to the real backend.
+if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window) && !isRemote) {
   const { installBrowserMock } = await import("./lib/browserMock");
   installBrowserMock();
 }

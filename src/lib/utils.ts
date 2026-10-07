@@ -1,20 +1,31 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
+import { remote } from "./platform";
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
 export const isMac = navigator.userAgent.includes("Mac");
+/** The window's title bar overlays the macOS traffic lights; a browser on a device has none. */
+export const hasTrafficLights = isMac && !remote;
 const isWindows = navigator.userAgent.includes("Windows");
 /** Dev-only: the UI is running in a plain browser via dev/browserPreview.ts. */
-const inBrowserPreview = import.meta.env.DEV && !("__TAURI_INTERNALS__" in window);
+const inBrowserPreview = import.meta.env.DEV && !("__TAURI_INTERNALS__" in window) && !remote;
 
 /** URL of a deck file served by the backend's `slop://` protocol. */
 export function deckFileUrl(deckId: string, path: string, query?: string): string {
   const encoded = [deckId, ...path.split("/")].map(encodeURIComponent).join("/");
-  // WebView2 (Windows) and Android expose custom schemes as http://<scheme>.localhost.
-  const base = inBrowserPreview ? "/__deck" : isWindows ? "http://slop.localhost" : "slop://localhost";
+  // WebView2 (Windows) and Android expose custom schemes as http://<scheme>.localhost. A device
+  // gets the files from the desktop app's server (src-tauri/src/remote.rs).
+  const base = remote
+    ? `${remote.base}/deck`
+    : inBrowserPreview
+      ? "/__deck"
+      : isWindows
+        ? "http://slop.localhost"
+        : "slop://localhost";
   return `${base}/${encoded}${query ? `?${query}` : ""}`;
 }
 

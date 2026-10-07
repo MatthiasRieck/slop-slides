@@ -25,6 +25,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { api, errorMessage } from "../lib/api";
+import { isRemote, uploadAsset } from "../lib/platform";
 import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowTokens } from "../lib/context";
 import { cn } from "../lib/utils";
 import { PROVIDERS, type Provider } from "../lib/models";
@@ -317,6 +318,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const [attachments, setAttachments] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const slideNumber = selected && deck ? deck.slides.findIndex((s) => s.id === selected) + 1 : 0;
   // Marks go out once while on show (see `send`); they stay on the slide as a review.
@@ -342,18 +344,59 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     textareaRef.current?.focus();
   }, [composerFill]);
 
+  const addAttachments = (imported: string[]) =>
+    setAttachments((prev) => [...prev, ...imported.filter((a) => !prev.includes(a))]);
+
   const importPaths = async (paths: string[]) => {
     if (!deck || paths.length === 0) return;
     try {
-      const imported = await api.importAssets(deck.id, paths);
-      setAttachments((prev) => [...prev, ...imported.filter((a) => !prev.includes(a))]);
+      addAttachments(await api.importAssets(deck.id, paths));
     } catch (error) {
       useApp.getState().setError(errorMessage(error));
     }
   };
 
+  /** On a device: files come from the browser and are uploaded into the deck. */
+  const uploadFiles = async (files: File[]) => {
+    if (!deck || files.length === 0) return;
+    try {
+      addAttachments(await Promise.all(files.map((file) => uploadAsset(deck.id, file))));
+    } catch (error) {
+      useApp.getState().setError(errorMessage(error));
+    }
+  };
+
+  // On a device, files dropped anywhere on the page become attachments.
+  useEffect(() => {
+    if (!isRemote) return;
+    const hasFiles = (event: DragEvent) => event.dataTransfer?.types.includes("Files") ?? false;
+    const over = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      setDragging(true);
+    };
+    const leave = (event: DragEvent) => {
+      if (!event.relatedTarget) setDragging(false);
+    };
+    const drop = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      setDragging(false);
+      void uploadFiles([...(event.dataTransfer?.files ?? [])]);
+    };
+    window.addEventListener("dragover", over);
+    window.addEventListener("dragleave", leave);
+    window.addEventListener("drop", drop);
+    return () => {
+      window.removeEventListener("dragover", over);
+      window.removeEventListener("dragleave", leave);
+      window.removeEventListener("drop", drop);
+    };
+  }, [deck?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Files dropped anywhere on the window become attachments.
   useEffect(() => {
+    if (isRemote) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void getCurrentWebview()
@@ -376,6 +419,10 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   }, [deck?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pickFiles = async () => {
+    if (isRemote) {
+      fileInputRef.current?.click();
+      return;
+    }
     const picked = await open({
       multiple: true,
       filters: [{ name: "Images & media", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "mp4", "webm", "pdf", "csv", "md", "txt"] }],
@@ -473,6 +520,21 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           <div className="mx-0.5 h-4 w-px bg-border" />
           <EffortPicker />
           <div className="flex-1" />
+          {isRemote && (
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              data-testid="attach-input"
+              accept="image/*,video/*,.pdf,.csv,.md,.txt"
+              onChange={(event) => {
+                const files = [...(event.currentTarget.files ?? [])];
+                event.currentTarget.value = "";
+                void uploadFiles(files);
+              }}
+            />
+          )}
           <button
             type="button"
             onClick={pickFiles}

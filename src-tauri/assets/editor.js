@@ -4,10 +4,27 @@
    Click selects an element, drag (or arrow keys) moves it. Its corner and edge handles
    stretch it while the opposite side stays put (Shift keeps the aspect ratio, Alt scales
    from the center); the handle above it rotates it (Shift snaps to 15°). Double-click a
-   handle to reset.
+   handle to reset. Added shapes and drawings are resized rather than scaled: a shape gets a new
+   width and height, a drawing's points move apart, so borders and lines keep their width.
    Double-click (or Enter) edits its text, Escape selects the parent, Delete removes it.
    Every change is posted to the app as the slide's new markup:
    { type: "slop:edit-commit", slide, markup, select }.
+
+   The app's edit toolbar drives the rest with messages:
+   - { type: "slop:edit-tool", tool, style } picks a tool: "select", "text" (click or drag out a
+     text box), "rect" / "rounded" / "ellipse" (drag out a shape, Shift keeps it even) or "draw"
+     (freehand). `style` is what new elements get. Added elements are absolutely positioned on
+     the slide with inline styles and carry `data-added` ("text", "shape" or "drawing"). After a
+     text box or shape the tool goes back to "select", and Escape puts any tool away; the editor
+     tells the app with { type: "slop:edit-tool", slide, tool }.
+   - { type: "slop:edit-style", style } restyles the selection: text color, size, bold, italic,
+     alignment (vertical only in flex boxes, which added text boxes and shapes are), fill and
+     border (a drawing's fill and stroke).
+   - { type: "slop:edit-order", to } moves it "front", "forward", "backward" or "back" among the
+     elements it overlaps, with an inline z-index.
+   - { type: "slop:edit-delete" } removes it.
+   Whenever the selection changes it reports what the toolbar shows for it:
+   { type: "slop:edit-selection", slide, selection }.
 
    It runs on the pasteboard (pasteboard.js), which pans and zooms the view; dragging empty space
    pans too. The slide no longer clips, so content that runs past its edge stays visible (dimmed
@@ -30,6 +47,20 @@
   var ROTATE_SNAP = 15;
   var MIN_SCALE = 0.1;
   var OVERFLOW_TOLERANCE = 2;
+  // Marks an element the user added (a text box, shape or drawing); it stays in the markup.
+  var ADDED = "data-added";
+  var SVG_NS = "http://www.w3.org/2000/svg";
+  var TOOLS = ["select", "text", "rect", "rounded", "ellipse", "draw"];
+  var RADIUS = { rect: "0px", rounded: "24px", ellipse: "50%" };
+  var SHAPE_SIZE = { w: 320, h: 200 };
+  var DRAW_STEP = 2;
+  var BORDER_WIDTH = 4;
+  var BORDER_COLOR = "#111111";
+  // What a new element gets for anything the app's style leaves out.
+  var FALLBACK_STYLE = { color: "#111111", fontSize: 48, align: "left", valign: "top", stroke: "#111111", strokeWidth: 4 };
+  var JUSTIFY = { top: "flex-start", middle: "center", bottom: "flex-end" };
+  // Non-positioned elements paint below positioned ones at z-index 0 and above those below it.
+  var STATIC_Z = -0.5;
 
   var style = document.createElement("style");
   style.textContent =
@@ -59,6 +90,9 @@
     // The slide's frame marks edit mode, and dims everything outside the slide.
     "[data-slop-frame] { outline: 2px solid var(--slop-accent, #3b82f6); outline-offset: 4px; box-shadow: 0 0 0 9999px" +
     " color-mix(in srgb, var(--slop-canvas, #f4f4f5) 55%, transparent); }" +
+    // A drawing or shape tool draws wherever the pointer goes.
+    "html[data-slop-tool], html[data-slop-tool] * { cursor: crosshair !important; }" +
+    "html[data-slop-tool=text], html[data-slop-tool=text] * { cursor: text !important; }" +
     "[data-slop-ui] > [data-stem] { pointer-events: none; width: 2px; height: 32px; margin: 0 0 0 -1px;" +
     " left: 50%; top: -32px; border: 0; box-shadow: none; background: #3b82f6; }" +
     // While typing, overlays (like invisible hover zones) let clicks through to the text.
@@ -108,6 +142,10 @@
   var lastDown = { el: null, at: 0 };
   var overflowFrame = 0;
   var reportedOverflow = null;
+  var tool = "select";
+  var toolStyle = {};
+  // The text box, shape or drawing being dragged out with a tool.
+  var create = null;
   // The handles keep to the selection as the view pans and zooms.
   pasteboard.onChange(placeHandles);
   // Space and 0 are text while typing, and Space+drag selects it.
@@ -159,6 +197,7 @@
   function paints(el) {
     var style = getComputedStyle(el);
     if (style.visibility === "hidden" || style.opacity === "0") return false;
+    if (el.hasAttribute(ADDED)) return true;
     if (el.textContent.trim() || /^(img|svg|video|canvas|picture|iframe|object|embed)$/i.test(el.tagName)) return true;
     var bg = style.backgroundColor;
     var clear = !bg || bg === "transparent" || /rgba\(.*,\s*0\)$/.test(bg);
@@ -209,6 +248,70 @@
     selected = el;
     mark(selected, "data-slop-selected", true);
     placeHandles();
+    report();
+  }
+
+  /** Tells the app what its toolbar shows for the selection. */
+  function report() {
+    window.parent.postMessage({ type: "slop:edit-selection", slide: slide.id, selection: describe(selected) }, "*");
+  }
+
+  /** `#rrggbb` for a CSS color, or null when it is transparent or not a plain color. */
+  function toHex(value) {
+    value = String(value || "").trim().toLowerCase();
+    if (/^#[0-9a-f]{6}$/.test(value)) return value;
+    if (/^#[0-9a-f]{3}$/.test(value)) return "#" + value[1] + value[1] + value[2] + value[2] + value[3] + value[3];
+    var m = value.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+)(%?))?\s*\)$/);
+    if (!m || (m[4] !== undefined && parseFloat(m[4]) === 0)) return null;
+    return "#" + [m[1], m[2], m[3]].map(function (n) {
+      return ("0" + Math.min(255, Math.round(parseFloat(n))).toString(16)).slice(-2);
+    }).join("");
+  }
+
+  /** The shapes in a drawing, whose fill and stroke stand for the drawing's. */
+  function vectorsOf(el) {
+    return el.getAttribute(ADDED) === "drawing"
+      ? Array.prototype.slice.call(el.querySelectorAll("path, line, polyline, polygon, rect, circle, ellipse"))
+      : [];
+  }
+
+  function paintOf(vector, attr) {
+    var value = vector && vector.getAttribute(attr);
+    return value && value !== "none" ? toHex(value) : null;
+  }
+
+  /** Which way `el` lays out its text vertically, when it is a flex box; null otherwise. */
+  function valignOf(style) {
+    if (!/flex/.test(style.display || "")) return null;
+    var value = /column/.test(style.flexDirection || "") ? style.justifyContent : style.alignItems;
+    return /center/.test(value) ? "middle" : /end/.test(value) ? "bottom" : "top";
+  }
+
+  /** What the toolbar shows for `el`: its kind, text styles, fill and border. */
+  function describe(el) {
+    if (!el) return null;
+    var style = getComputedStyle(el);
+    var tag = el.tagName.toLowerCase();
+    var kind = el.getAttribute(ADDED) || (/^(img|svg|video|canvas|picture|iframe|object|embed)$/.test(tag) ? "media" : "element");
+    var vectors = vectorsOf(el);
+    var first = vectors[0];
+    var borderWidth = style.borderTopStyle && style.borderTopStyle !== "none" ? parseFloat(style.borderTopWidth) || 0 : 0;
+    var weight = style.fontWeight === "bold" ? 700 : parseInt(style.fontWeight, 10) || 400;
+    var align = style.textAlign || "left";
+    return {
+      kind: kind,
+      text: kind !== "drawing" && kind !== "media",
+      vector: kind === "drawing",
+      color: toHex(style.color),
+      fontSize: Math.round(parseFloat(style.fontSize)) || null,
+      bold: weight >= 600,
+      italic: style.fontStyle === "italic",
+      align: /center/.test(align) ? "center" : /right|end/.test(align) ? "right" : "left",
+      valign: valignOf(style),
+      fill: first ? paintOf(first, "fill") : toHex(style.backgroundColor),
+      stroke: first ? paintOf(first, "stroke") : borderWidth ? toHex(style.borderTopColor) : null,
+      strokeWidth: first ? parseFloat(first.getAttribute("stroke-width")) || 0 : borderWidth,
+    };
   }
 
   function hover(el) {
@@ -337,6 +440,7 @@
       size: sizeOf(selected),
       zoom: zoom(),
       dir: { x: dir[0], y: dir[1] },
+      vectors: resizable(selected) ? vectorShapes(selected) : null,
       moved: false,
     };
     if (event.target.setPointerCapture) {
@@ -404,8 +508,137 @@
     var cx = fromCenter || !d.x ? 0 : (d.x * w * (sx - s0.x)) / 2;
     var cy = fromCenter || !d.y ? 0 : (d.y * h * (sy - s0.y)) / 2;
     var shift = turn(cx, cy, drag.angle);
+    if (resizable(drag.el)) {
+      resizeTo(sx, sy, shift);
+      return;
+    }
     scaleTo(drag.el, sx, sy);
     moveTo(drag.el, drag.offset.x + shift.x, drag.offset.y + shift.y);
+  }
+
+  /** Added shapes and drawings stretch by their size, not a `scale`, so their borders and lines keep their width. */
+  function resizable(el) {
+    return /^(shape|drawing)$/.test(el.getAttribute(ADDED) || "");
+  }
+
+  /**
+   * Gives the dragged element the size `sx` × `sy` times its box (dropping any `scale`), with
+   * its center moved by `shift`. A drawing's points spread out to fill the new box.
+   */
+  function resizeTo(sx, sy, shift) {
+    var el = drag.el;
+    var w = drag.size.w;
+    var h = drag.size.h;
+    var nw = Math.max(1, Math.round(w * sx));
+    var nh = Math.max(1, Math.round(h * sy));
+    el.style.width = nw + "px";
+    el.style.height = nh + "px";
+    if (drag.vectors && w && h) spreadVectors(drag.vectors, nw / w, nh / h);
+    scaleTo(el, 1, 1);
+    // A wider box grows from its left and top, moving its center by half the growth; the
+    // translate makes up the rest.
+    moveTo(el, drag.offset.x + shift.x - (nw - w) / 2, drag.offset.y + shift.y - (nh - h) / 2);
+  }
+
+  /** A drawing's viewBox and its shapes' geometry, as they were when the stretch started. */
+  function vectorShapes(el) {
+    var box = (el.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(parseFloat);
+    var vectors = vectorsOf(el);
+    return {
+      el: el,
+      viewBox: box.length === 4 && box.every(isFinite) && box[2] > 0 && box[3] > 0 ? box : null,
+      // The line's half width pads the box around the points (see finishDrawing).
+      pad: vectors.length ? Math.ceil((parseFloat(vectors[0].getAttribute("stroke-width")) || 0) / 2) : 0,
+      items: vectors.map(function (vector) {
+        var attrs = {};
+        ["d", "points", "x1", "y1", "x2", "y2"].forEach(function (name) {
+          if (vector.hasAttribute(name)) attrs[name] = vector.getAttribute(name);
+        });
+        return { el: vector, attrs: attrs };
+      }),
+    };
+  }
+
+  /** Spreads the drawing's points by `kx` × `ky` around its padded box; the lines keep their width. */
+  function spreadVectors(shapes, kx, ky) {
+    var box = shapes.viewBox || [0, 0, drag.size.w, drag.size.h];
+    var pad = shapes.pad;
+    var vw = box[2] * kx;
+    var vh = box[3] * ky;
+    var factor = function (from, to) {
+      return Math.max(0, from > 2 * pad ? (to - 2 * pad) / (from - 2 * pad) : to / from);
+    };
+    var fx = factor(box[2], vw);
+    var fy = factor(box[3], vh);
+    var map = {
+      fx: fx,
+      fy: fy,
+      x: function (n) {
+        return box[0] + pad + (n - box[0] - pad) * fx;
+      },
+      y: function (n) {
+        return box[1] + pad + (n - box[1] - pad) * fy;
+      },
+    };
+    shapes.el.setAttribute("viewBox", [box[0], box[1], roundTenth(vw), roundTenth(vh)].join(" "));
+    shapes.items.forEach(function (item) {
+      var a = item.attrs;
+      if (a.d !== undefined) item.el.setAttribute("d", spreadPath(a.d, map));
+      if (a.points !== undefined) {
+        var n = 0;
+        item.el.setAttribute(
+          "points",
+          a.points.replace(NUMBER, function (value) {
+            return String(roundTenth(n++ % 2 ? map.y(parseFloat(value)) : map.x(parseFloat(value))));
+          }),
+        );
+      }
+      ["x1", "x2"].forEach(function (name) {
+        if (a[name] !== undefined) item.el.setAttribute(name, String(roundTenth(map.x(parseFloat(a[name]) || 0))));
+      });
+      ["y1", "y2"].forEach(function (name) {
+        if (a[name] !== undefined) item.el.setAttribute(name, String(roundTenth(map.y(parseFloat(a[name]) || 0))));
+      });
+    });
+  }
+
+  function roundTenth(n) {
+    return Math.round(n * 10) / 10;
+  }
+
+  var NUMBER = /-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi;
+  // What each parameter of a path command is: X / Y a point's coordinate, x / y a length
+  // along that axis, - anything else (an angle or a flag).
+  var PATH_PARAMS = { M: "XY", L: "XY", T: "XY", C: "XY", S: "XY", Q: "XY", H: "X", V: "Y", A: "xy---XY", Z: "" };
+
+  /** Path data with every point moved by `map` (and relative steps and radii scaled by it). */
+  function spreadPath(d, map) {
+    var out = "";
+    var command = "";
+    var params = "";
+    var i = 0;
+    var commands = 0;
+    (String(d).match(new RegExp("[a-df-z]|" + NUMBER.source, "gi")) || []).forEach(function (token) {
+      if (/^[a-z]$/i.test(token)) {
+        command = token;
+        params = PATH_PARAMS[token.toUpperCase()] || "";
+        i = 0;
+        commands++;
+        out += (out ? " " : "") + token;
+        return;
+      }
+      var kind = params ? params[i % params.length] : "-";
+      // A path's first move is absolute even when written as `m`.
+      var absolute = command === command.toUpperCase() || (commands === 1 && i < 2);
+      var n = parseFloat(token);
+      if (kind === "X") n = absolute ? map.x(n) : n * map.fx;
+      else if (kind === "Y") n = absolute ? map.y(n) : n * map.fy;
+      else if (kind === "x") n *= map.fx;
+      else if (kind === "y") n *= map.fy;
+      out += (/[a-z]$/i.test(out) ? "" : " ") + roundTenth(n);
+      i++;
+    });
+    return out;
   }
 
   /** Which of the slide's edges `rect` runs past, with by how many slide pixels. */
@@ -496,7 +729,7 @@
 
   function startEditing(el, x, y) {
     if (!el || editing || /^(img|svg|video|canvas|iframe|hr|br)$/i.test(el.tagName)) return;
-    if (!el.textContent.trim()) return;
+    if (!el.textContent.trim() && !/^(text|shape)$/.test(el.getAttribute(ADDED) || "")) return;
     select(el);
     editing = el;
     el.setAttribute("contenteditable", "true");
@@ -518,12 +751,298 @@
 
   function finishEditing() {
     if (!editing) return;
-    editing.removeAttribute("contenteditable");
-    editing.removeAttribute("data-slop-editing");
+    var el = editing;
+    el.removeAttribute("contenteditable");
+    el.removeAttribute("data-slop-editing");
     slide.removeAttribute("data-slop-typing");
     editing = null;
     var selection = window.getSelection();
     if (selection) selection.removeAllRanges();
+    // A text box left empty goes away.
+    if (el.getAttribute(ADDED) === "text" && !el.textContent.trim()) {
+      if (selected === el) select(null);
+      el.parentElement.removeChild(el);
+    }
+    placeHandles();
+    commit();
+  }
+
+  /** Picks a tool; `tell` lets the app know, when the editor switched by itself. */
+  function useTool(next, tell) {
+    tool = TOOLS.indexOf(next) >= 0 ? next : "select";
+    if (tool === "select") {
+      document.documentElement.removeAttribute("data-slop-tool");
+    } else {
+      document.documentElement.setAttribute("data-slop-tool", tool);
+      hover(null);
+    }
+    if (tell) window.parent.postMessage({ type: "slop:edit-tool", slide: slide.id, tool: tool }, "*");
+  }
+
+  /** The style for a new element: what the app sent, with fallbacks. */
+  function styleFor(key) {
+    var value = toolStyle[key];
+    return value === undefined ? FALLBACK_STYLE[key] : value;
+  }
+
+  /** Where the pointer at (x, y) is on the slide, in slide pixels. */
+  function slidePoint(x, y) {
+    var rect = slide.getBoundingClientRect();
+    var k = zoom();
+    return { x: Math.round((x - rect.left) / k), y: Math.round((y - rect.top) / k) };
+  }
+
+  function addElement(kind, css, svg) {
+    var el = svg ? document.createElementNS(SVG_NS, "svg") : document.createElement("div");
+    el.setAttribute(ADDED, kind);
+    el.setAttribute("style", css);
+    slide.appendChild(el);
+    return el;
+  }
+
+  function place(el, x, y, w, h) {
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+    if (w !== null) el.style.width = w + "px";
+    if (h !== null) el.style.height = h + "px";
+  }
+
+  function borderCss(color, width) {
+    return color && width > 0 ? width + "px solid " + color : "none";
+  }
+
+  /** Inline styles for text laid out in a flex column, so it can align top, middle or bottom. */
+  function textCss() {
+    var stroke = styleFor("stroke");
+    var width = styleFor("strokeWidth");
+    return (
+      " display: flex; flex-direction: column; justify-content: " + (JUSTIFY[styleFor("valign")] || "flex-start") +
+      "; text-align: " + styleFor("align") + "; color: " + styleFor("color") + "; font-size: " + styleFor("fontSize") + "px;" +
+      (styleFor("bold") ? " font-weight: 700;" : "") +
+      (styleFor("italic") ? " font-style: italic;" : "") +
+      (styleFor("fill") ? " background-color: " + styleFor("fill") + ";" : "") +
+      (stroke && width > 0 ? " border: " + borderCss(stroke, width) + ";" : "")
+    );
+  }
+
+  function newText(x, y, w) {
+    var el = addElement(
+      "text",
+      "position: absolute; left: " + x + "px; top: " + y + "px;" + (w ? " width: " + w + "px;" : "") +
+        " margin: 0; line-height: 1.2;" + textCss(),
+    );
+    el.textContent = "Text";
+    return el;
+  }
+
+  function newShape(kind, x, y, w, h) {
+    return addElement(
+      "shape",
+      "position: absolute; left: " + x + "px; top: " + y + "px; width: " + w + "px; height: " + h + "px; margin: 0;" +
+        " box-sizing: border-box; padding: 16px; border-radius: " + RADIUS[kind] + ";" + textCss(),
+    );
+  }
+
+  function newDrawing(at) {
+    var svg = addElement("drawing", "position: absolute; left: 0px; top: 0px; width: 1px; height: 1px; margin: 0; overflow: visible;", true);
+    var path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("fill", styleFor("fill") || "none");
+    path.setAttribute("stroke", styleFor("stroke") || BORDER_COLOR);
+    path.setAttribute("stroke-width", String(styleFor("strokeWidth") || BORDER_WIDTH));
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    svg.appendChild(path);
+    return { svg: svg, path: path, points: [[at.x, at.y]] };
+  }
+
+  function pathData(points, dx, dy) {
+    // A tap draws a dot: a zero-length line, which round caps make visible.
+    var all = points.length === 1 ? [points[0], points[0]] : points;
+    return all.map(function (p, i) {
+      return (i ? "L" : "M") + (p[0] - dx) + " " + (p[1] - dy);
+    }).join(" ");
+  }
+
+  /** Starts adding an element with the current tool at the pointer. */
+  function startCreating(event) {
+    var at = slidePoint(event.clientX, event.clientY);
+    if (tool === "text") {
+      // The text tool types into a text box or shape that is already there.
+      var target = pickable(event.target, event.clientX, event.clientY);
+      if (target && /^(text|shape)$/.test(target.getAttribute(ADDED) || "")) {
+        useTool("select", true);
+        startEditing(target, event.clientX, event.clientY);
+        return;
+      }
+    }
+    select(null);
+    create = { tool: tool, x: event.clientX, y: event.clientY, at: at, el: null, moved: false };
+    if (tool === "draw") {
+      create.drawing = newDrawing(at);
+      create.el = create.drawing.svg;
+      create.drawing.path.setAttribute("d", pathData(create.drawing.points, 0, 0));
+    }
+  }
+
+  function createTo(event) {
+    var dx = event.clientX - create.x;
+    var dy = event.clientY - create.y;
+    if (!create.moved && Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
+    create.moved = true;
+    var at = slidePoint(event.clientX, event.clientY);
+    if (create.drawing) {
+      var points = create.drawing.points;
+      var last = points[points.length - 1];
+      if (Math.abs(at.x - last[0]) < DRAW_STEP && Math.abs(at.y - last[1]) < DRAW_STEP) return;
+      points.push([at.x, at.y]);
+      create.drawing.path.setAttribute("d", pathData(points, 0, 0));
+      return;
+    }
+    var w = Math.abs(at.x - create.at.x);
+    var h = Math.abs(at.y - create.at.y);
+    if (event.shiftKey) w = h = Math.max(w, h);
+    var x = at.x < create.at.x ? create.at.x - w : create.at.x;
+    var y = at.y < create.at.y ? create.at.y - h : create.at.y;
+    if (!create.el) create.el = create.tool === "text" ? newText(x, y, w) : newShape(create.tool, x, y, w, h);
+    place(create.el, x, y, w, create.tool === "text" ? null : h);
+    placeHandles();
+  }
+
+  function finishCreating() {
+    var done = create;
+    create = null;
+    if (done.drawing) {
+      finishDrawing(done.drawing);
+      return;
+    }
+    var el = done.el;
+    if (!el) {
+      el = done.tool === "text" ? newText(done.at.x, done.at.y) : newShape(done.tool, done.at.x, done.at.y, SHAPE_SIZE.w, SHAPE_SIZE.h);
+    }
+    useTool("select", true);
+    select(el);
+    // A new text box starts out typing, with its placeholder selected; it is saved when done.
+    if (done.tool === "text") startEditing(el);
+    else commit();
+  }
+
+  /** Fits the drawing's box around its line, so it moves, scales and rotates like any element. */
+  function finishDrawing(drawing) {
+    var xs = drawing.points.map(function (p) {
+      return p[0];
+    });
+    var ys = drawing.points.map(function (p) {
+      return p[1];
+    });
+    var pad = Math.ceil((parseFloat(drawing.path.getAttribute("stroke-width")) || 0) / 2);
+    var left = Math.min.apply(null, xs) - pad;
+    var top = Math.min.apply(null, ys) - pad;
+    var w = Math.max.apply(null, xs) - left + pad;
+    var h = Math.max.apply(null, ys) - top + pad;
+    place(drawing.svg, left, top, w, h);
+    drawing.svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+    drawing.path.setAttribute("d", pathData(drawing.points, left, top));
+    commit();
+  }
+
+  function cancelCreating() {
+    if (!create) return;
+    if (create.el && create.el.parentElement) create.el.parentElement.removeChild(create.el);
+    create = null;
+  }
+
+  /** Restyles the selection with the toolbar's `changes` and saves it. */
+  function applyStyle(changes) {
+    var el = selected;
+    if (!el || !slide.contains(el)) return;
+    var has = function (key) {
+      return Object.prototype.hasOwnProperty.call(changes, key);
+    };
+    if (has("color")) el.style.color = changes.color || "";
+    if (has("fontSize")) el.style.fontSize = changes.fontSize > 0 ? Math.round(changes.fontSize) + "px" : "";
+    if (has("bold")) el.style.fontWeight = changes.bold ? "700" : "400";
+    if (has("italic")) el.style.fontStyle = changes.italic ? "italic" : "normal";
+    if (has("align") && /^(left|center|right)$/.test(changes.align)) el.style.textAlign = changes.align;
+    if (has("valign") && JUSTIFY[changes.valign]) {
+      var computed = getComputedStyle(el);
+      if (/flex/.test(computed.display || "")) {
+        el.style[/column/.test(computed.flexDirection || "") ? "justifyContent" : "alignItems"] = JUSTIFY[changes.valign];
+      }
+    }
+    var vectors = vectorsOf(el);
+    if (vectors.length) {
+      vectors.forEach(function (vector) {
+        if (has("fill")) vector.setAttribute("fill", changes.fill || "none");
+        if (has("stroke")) vector.setAttribute("stroke", changes.stroke || "none");
+        if (has("strokeWidth")) vector.setAttribute("stroke-width", String(Math.max(0, changes.strokeWidth || 0)));
+      });
+    } else {
+      if (has("fill")) el.style.backgroundColor = changes.fill || "transparent";
+      if (has("stroke") || has("strokeWidth")) {
+        var now = describe(el);
+        var color = has("stroke") ? changes.stroke : now.stroke;
+        var width = has("strokeWidth") ? changes.strokeWidth : now.strokeWidth;
+        // Picking a border color shows a border; picking a width gives it a color.
+        if (has("stroke") && color && !width) width = BORDER_WIDTH;
+        if (has("strokeWidth") && width && !color) color = BORDER_COLOR;
+        el.style.border = borderCss(color, width);
+      }
+    }
+    if (!el.getAttribute("style")) el.removeAttribute("style");
+    placeHandles();
+    report();
+    commit();
+  }
+
+  function overlaps(a, b) {
+    var r = a.getBoundingClientRect();
+    var s = b.getBoundingClientRect();
+    return r.left <= s.right && s.left <= r.right && r.top <= s.bottom && s.top <= r.bottom;
+  }
+
+  /**
+   * Moves the selection up or down the stack among its siblings with an inline z-index, so the
+   * layout stays put: "forward" / "backward" past the next element it overlaps, "front" /
+   * "back" past all of them.
+   */
+  function restack(where) {
+    var el = selected;
+    if (!el || !slide.contains(el) || ["front", "forward", "backward", "back"].indexOf(where) < 0) return;
+    var parent = el.parentElement;
+    var siblings = Array.prototype.filter.call(parent.children, function (s) {
+      return !/^(script|style|template)$/i.test(s.tagName) && !s.classList.contains("notes") && !s.classList.contains("slop-review");
+    });
+    var layer = function (s) {
+      var style = getComputedStyle(s);
+      var z = parseInt(style.zIndex, 10);
+      var positioned = style.position && style.position !== "static";
+      return { el: s, i: siblings.indexOf(s), z: positioned ? (isNaN(z) ? 0 : z) : STATIC_Z };
+    };
+    var order = function (a, b) {
+      return a.z - b.z || a.i - b.i;
+    };
+    var mine = layer(el);
+    var up = where === "front" || where === "forward";
+    var past = siblings
+      .filter(function (s) {
+        return s !== el && (where === "front" || where === "back" || overlaps(s, el));
+      })
+      .map(layer)
+      .filter(function (o) {
+        return up ? order(o, mine) > 0 : order(o, mine) < 0;
+      })
+      .sort(order);
+    if (!past.length) return;
+    var target = where === "front" || where === "backward" ? past[past.length - 1] : past[0];
+    // Equal z-indexes paint in document order.
+    var z = up
+      ? target.z === STATIC_Z ? 0 : target.i < mine.i ? target.z : target.z + 1
+      : target.z === STATIC_Z ? -1 : target.i > mine.i ? target.z : target.z - 1;
+    var style = getComputedStyle(el);
+    if (!style.position || style.position === "static") el.style.position = "relative";
+    el.style.zIndex = String(z);
+    // Below zero it would drop behind its parent's background, unless the parent keeps it in.
+    if (z < 0 && parent !== slide) parent.style.isolation = "isolate";
     placeHandles();
     commit();
   }
@@ -542,6 +1061,11 @@
     if (editing && editing.contains(event.target)) return;
     finishEditing();
     if (nudgeTimer) commit();
+    if (tool !== "select") {
+      event.preventDefault();
+      startCreating(event);
+      return;
+    }
     var el = pickable(event.target, event.clientX, event.clientY);
     var now = Date.now();
     var double = el && el === lastDown.el && now - lastDown.at < DOUBLE_CLICK_MS;
@@ -570,9 +1094,13 @@
   });
 
   document.addEventListener("pointermove", function (event) {
+    if (create) {
+      createTo(event);
+      return;
+    }
     if (!drag) {
       var onHandle = ui.contains(event.target);
-      hover(editing || onHandle ? null : pickable(event.target, event.clientX, event.clientY));
+      hover(editing || onHandle || tool !== "select" ? null : pickable(event.target, event.clientX, event.clientY));
       return;
     }
     if (drag.mode !== "move") {
@@ -590,6 +1118,7 @@
   });
 
   function endDrag() {
+    if (create) finishCreating();
     if (!drag) return;
     var moved = drag.moved;
     drag = null;
@@ -608,6 +1137,7 @@
   // Clicking elsewhere in the app ends text editing, keeping the text.
   window.addEventListener("blur", finishEditing);
   document.addEventListener("dblclick", function (event) {
+    if (tool !== "select") return;
     var el = pickable(event.target, event.clientX, event.clientY);
     if (el && !editing) startEditing(el, event.clientX, event.clientY);
   });
@@ -636,6 +1166,13 @@
           event.preventDefault();
           document.execCommand("insertLineBreak");
         }
+        event.stopImmediatePropagation();
+        return;
+      }
+      if (tool !== "select" && event.key === "Escape") {
+        cancelCreating();
+        useTool("select", true);
+        event.preventDefault();
         event.stopImmediatePropagation();
         return;
       }
@@ -675,6 +1212,22 @@
       select(atPath(data.path));
       // Clearing the selection for a screenshot hides the wires too, until the next interaction.
       if (data.quiet) mark(wires, "data-quiet", true);
+    } else if (data.type === "slop:edit-tool") {
+      toolStyle = data.style && typeof data.style === "object" ? data.style : {};
+      if (data.tool !== tool) {
+        cancelCreating();
+        finishEditing();
+        useTool(String(data.tool));
+      }
+    } else if (data.type === "slop:edit-style" && data.style && typeof data.style === "object") {
+      finishEditing();
+      applyStyle(data.style);
+    } else if (data.type === "slop:edit-order") {
+      finishEditing();
+      restack(String(data.to));
+    } else if (data.type === "slop:edit-delete") {
+      finishEditing();
+      if (selected) removeSelected();
     }
   });
 })();

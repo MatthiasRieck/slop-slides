@@ -807,4 +807,388 @@ describe("slide editor", () => {
       expect(e.doc.querySelector("[data-slop-overflow]")!.hasAttribute("data-quiet")).toBe(false);
     });
   });
+
+  describe("toolbar tools", () => {
+    const SHAPE_STYLE = { color: "#ffffff", fontSize: 40, align: "center", valign: "middle", fill: "#3b82f6", stroke: null, strokeWidth: 0 };
+    const TEXT_STYLE = { color: "#111111", fontSize: 48, align: "left", valign: "top", fill: null, stroke: null, strokeWidth: 0 };
+    const DRAW_STYLE = { fill: null, stroke: "#ef4444", strokeWidth: 6 };
+    const at = (e: ReturnType<typeof editor>, type: string, x: number, y: number, init: PointerEventInit = {}) =>
+      e.$("#intro").dispatchEvent(new e.window.PointerEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true, ...init }));
+    const dragOut = (e: ReturnType<typeof editor>, from: [number, number], to: [number, number], init: PointerEventInit = {}) => {
+      at(e, "pointerdown", ...from);
+      at(e, "pointermove", ...to, init);
+      at(e, "pointerup", ...to);
+    };
+    const toolTold = (e: ReturnType<typeof editor>) =>
+      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-tool") as { slide: string; tool: string }[];
+    const reports = (e: ReturnType<typeof editor>) =>
+      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-selection") as { slide: string; selection: Record<string, unknown> | null }[];
+    const added = (e: ReturnType<typeof editor>) => [...e.doc.querySelectorAll<HTMLElement>("#intro [data-added]")];
+
+    it("drags out a shape with the app's style, then selects it and goes back to the select tool", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "rect", style: SHAPE_STYLE });
+      expect(e.doc.documentElement.getAttribute("data-slop-tool")).toBe("rect");
+      dragOut(e, [400, 300], [100, 100]);
+      const [shape] = added(e);
+      expect(shape!.getAttribute("data-added")).toBe("shape");
+      expect(shape!.style).toMatchObject({ position: "absolute", left: "100px", top: "100px", width: "300px", height: "200px", borderRadius: "0px" });
+      expect(shape!.style.display).toBe("flex");
+      expect(shape!.style.justifyContent).toBe("center");
+      expect(shape!.style.textAlign).toBe("center");
+      expect(shape!.style.fontSize).toBe("40px");
+      expect(e.selected()).toEqual([shape]);
+      expect(e.doc.documentElement.hasAttribute("data-slop-tool")).toBe(false);
+      expect(toolTold(e)).toEqual([{ type: "slop:edit-tool", slide: "intro", tool: "select" }]);
+      const [commit] = e.commits();
+      expect(commit!.select).toEqual([5]);
+      expect(commit!.markup).toMatch(/<div data-added="shape" style="position: absolute; left: 100px; top: 100px; width: 300px; height: 200px;[^"]*background-color: #3b82f6;[^"]*"><\/div><\/section>$/);
+      expect(commit!.markup).not.toMatch(/data-slop/);
+    });
+
+    it("adds a default-sized shape on a click, and keeps it even with Shift", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "ellipse", style: SHAPE_STYLE });
+      dragOut(e, [50, 60], [50, 60]);
+      expect(added(e)[0]!.style).toMatchObject({ left: "50px", top: "60px", width: "320px", height: "200px", borderRadius: "50%" });
+      e.fromParent({ type: "slop:edit-tool", tool: "rounded", style: SHAPE_STYLE });
+      dragOut(e, [100, 100], [300, 150], { shiftKey: true });
+      expect(added(e)[1]!.style).toMatchObject({ width: "200px", height: "200px", borderRadius: "24px" });
+    });
+
+    it("adds a text box that starts out typing, and drops it if left empty", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "text", style: { ...TEXT_STYLE, bold: true } });
+      dragOut(e, [200, 120], [200, 120]);
+      const [box] = added(e);
+      expect(box!.getAttribute("data-added")).toBe("text");
+      expect(box!.textContent).toBe("Text");
+      expect(box!.getAttribute("contenteditable")).toBe("true");
+      expect(box!.style).toMatchObject({ left: "200px", top: "120px", fontSize: "48px", fontWeight: "700", justifyContent: "flex-start" });
+      expect(box!.style.width).toBe("");
+      expect(e.commits()).toEqual([]);
+      box!.textContent = "Note to self";
+      e.key("Enter");
+      expect(e.commits()[0]!.markup).toContain(">Note to self</div></section>");
+      // A dragged-out text box wraps at the width it was given; one left empty goes away unsaved.
+      e.fromParent({ type: "slop:edit-tool", tool: "text", style: TEXT_STYLE });
+      dragOut(e, [300, 400], [700, 420]);
+      const wide = added(e)[1]!;
+      expect(wide.style.width).toBe("400px");
+      wide.textContent = "";
+      e.key("Escape");
+      expect(wide.isConnected).toBe(false);
+      expect(e.selected()).toEqual([]);
+      expect(e.commits()).toHaveLength(1);
+    });
+
+    it("types into a text box or shape already there with the text tool", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "rect", style: SHAPE_STYLE });
+      dragOut(e, [100, 100], [400, 300]);
+      const shape = added(e)[0]!;
+      e.fromParent({ type: "slop:edit-tool", tool: "text", style: TEXT_STYLE });
+      shape.dispatchEvent(new e.window.PointerEvent("pointerdown", { button: 0, bubbles: true, cancelable: true }));
+      expect(shape.getAttribute("contenteditable")).toBe("true");
+      expect(added(e)).toHaveLength(1);
+      expect(toolTold(e).at(-1)!.tool).toBe("select");
+      shape.textContent = "Inside";
+      e.key("Enter");
+      expect(e.commits().at(-1)!.markup).toContain(">Inside</div></section>");
+      // An empty shape can be typed into too.
+      const other = added(e)[0]!;
+      other.textContent = "";
+      e.down(other);
+      e.key("Enter");
+      expect(other.getAttribute("contenteditable")).toBe("true");
+    });
+
+    it("draws freehand, fitting the drawing's box around its line, and keeps drawing", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "draw", style: DRAW_STYLE });
+      at(e, "pointerdown", 10, 20);
+      at(e, "pointermove", 50, 40);
+      at(e, "pointermove", 51, 40);
+      at(e, "pointermove", 90, 20);
+      at(e, "pointerup", 90, 20);
+      const [svg] = added(e);
+      expect(svg!.tagName.toLowerCase()).toBe("svg");
+      expect(svg!.getAttribute("data-added")).toBe("drawing");
+      expect(svg!.style).toMatchObject({ left: "7px", top: "17px", width: "86px", height: "26px" });
+      expect(svg!.getAttribute("viewBox")).toBe("0 0 86 26");
+      const path = svg!.querySelector("path")!;
+      // Points closer than a couple of pixels are skipped.
+      expect(path.getAttribute("d")).toBe("M3 3 L43 23 L83 3");
+      expect(path.getAttribute("stroke")).toBe("#ef4444");
+      expect(path.getAttribute("stroke-width")).toBe("6");
+      expect(e.commits()[0]!.markup).toContain(`<path fill="none" stroke="#ef4444" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" d="M3 3 L43 23 L83 3"></path></svg></section>`);
+      expect(e.selected()).toEqual([]);
+      expect(e.doc.documentElement.getAttribute("data-slop-tool")).toBe("draw");
+      // A tap draws a dot.
+      at(e, "pointerdown", 200, 200);
+      at(e, "pointerup", 200, 200);
+      expect(added(e)[1]!.querySelector("path")!.getAttribute("d")).toBe("M3 3 L3 3");
+    });
+
+    it("puts the tool away with Escape, dropping a shape being dragged out", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "rect", style: SHAPE_STYLE });
+      at(e, "pointerdown", 100, 100);
+      at(e, "pointermove", 300, 300);
+      expect(added(e)).toHaveLength(1);
+      expect(e.key("Escape").defaultPrevented).toBe(true);
+      expect(added(e)).toEqual([]);
+      at(e, "pointerup", 300, 300);
+      expect(e.commits()).toEqual([]);
+      expect(e.keys()).toEqual([]);
+      expect(toolTold(e)).toEqual([{ type: "slop:edit-tool", slide: "intro", tool: "select" }]);
+      // The select tool selects again.
+      e.down(e.$("h1"));
+      expect(e.selected()).toEqual([e.$("h1")]);
+    });
+
+    it("does not select, hover or start typing while a tool is out", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "draw", style: DRAW_STYLE });
+      e.move(e.$("h1"), 10, 10);
+      expect(e.doc.querySelector("[data-slop-hover]")).toBeNull();
+      e.$("h1").dispatchEvent(new e.window.MouseEvent("dblclick", { bubbles: true }));
+      expect(e.$("h1").hasAttribute("contenteditable")).toBe(false);
+      expect(e.selected()).toEqual([]);
+    });
+
+    it("selects added elements even when they show nothing", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "rect", style: { ...SHAPE_STYLE, fill: null } });
+      dragOut(e, [100, 100], [400, 300]);
+      const shape = added(e)[0]!;
+      e.down(e.$("h1"));
+      e.down(shape);
+      expect(e.selected()).toEqual([shape]);
+    });
+
+    it("reports the selection for the toolbar", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "rect", style: { ...SHAPE_STYLE, stroke: "#ff0000", strokeWidth: 8, bold: true } });
+      dragOut(e, [100, 100], [400, 300]);
+      expect(reports(e).at(-1)).toEqual({
+        type: "slop:edit-selection",
+        slide: "intro",
+        selection: {
+          kind: "shape",
+          text: true,
+          vector: false,
+          color: "#ffffff",
+          fontSize: 40,
+          bold: true,
+          italic: false,
+          align: "center",
+          valign: "middle",
+          fill: "#3b82f6",
+          stroke: "#ff0000",
+          strokeWidth: 8,
+        },
+      });
+      e.down(e.$("svg"));
+      expect(reports(e).at(-1)!.selection).toMatchObject({ kind: "media", text: false, vector: false, valign: null });
+      e.down(e.$(".card p:nth-child(2)"));
+      expect(reports(e).at(-1)!.selection).toMatchObject({ kind: "element", text: true, color: "#ff0000", fill: null, stroke: null, strokeWidth: 0 });
+      e.down(e.$("#intro"));
+      expect(reports(e).at(-1)!.selection).toBeNull();
+    });
+
+    it("restyles the selected text and saves it", () => {
+      const e = editor();
+      const h1 = e.$("h1");
+      e.down(h1);
+      e.fromParent({ type: "slop:edit-style", style: { color: "#ff0000", fontSize: 72, bold: true, italic: true, align: "center" } });
+      expect(h1.style).toMatchObject({ fontSize: "72px", fontWeight: "700", fontStyle: "italic", textAlign: "center" });
+      expect(h1.style.color).toMatch(/#ff0000|rgb\(255, 0, 0\)/);
+      expect(e.commits()).toHaveLength(1);
+      expect(reports(e).at(-1)!.selection).toMatchObject({ color: "#ff0000", fontSize: 72, bold: true, italic: true, align: "center" });
+      // Text alignment is only vertical in a flex box.
+      e.fromParent({ type: "slop:edit-style", style: { valign: "bottom" } });
+      expect(h1.style.justifyContent).toBe("");
+      expect(e.commits()).toHaveLength(1);
+      e.fromParent({ type: "slop:edit-style", style: { bold: false, italic: false, color: null } });
+      expect(h1.style).toMatchObject({ fontWeight: "400", fontStyle: "normal", color: "" });
+    });
+
+    it("aligns a shape's text vertically", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "rect", style: SHAPE_STYLE });
+      dragOut(e, [100, 100], [400, 300]);
+      e.fromParent({ type: "slop:edit-style", style: { valign: "bottom", align: "right" } });
+      expect(added(e)[0]!.style).toMatchObject({ justifyContent: "flex-end", textAlign: "right" });
+      expect(reports(e).at(-1)!.selection).toMatchObject({ valign: "bottom", align: "right" });
+    });
+
+    it("fills and borders boxes, turning a border on and off", () => {
+      const e = editor();
+      const card = e.$(".card");
+      e.down(card);
+      e.fromParent({ type: "slop:edit-style", style: { fill: "#00ff00" } });
+      expect(reports(e).at(-1)!.selection).toMatchObject({ fill: "#00ff00" });
+      // A border color alone gets a width, a width alone a color.
+      e.fromParent({ type: "slop:edit-style", style: { stroke: "#0000ff" } });
+      expect(reports(e).at(-1)!.selection).toMatchObject({ stroke: "#0000ff", strokeWidth: 4 });
+      e.fromParent({ type: "slop:edit-style", style: { strokeWidth: 0 } });
+      expect(card.style.borderStyle).toBe("none");
+      expect(reports(e).at(-1)!.selection).toMatchObject({ stroke: null, strokeWidth: 0 });
+      e.fromParent({ type: "slop:edit-style", style: { strokeWidth: 2 } });
+      expect(reports(e).at(-1)!.selection).toMatchObject({ stroke: "#111111", strokeWidth: 2 });
+      e.fromParent({ type: "slop:edit-style", style: { fill: null } });
+      expect(reports(e).at(-1)!.selection).toMatchObject({ fill: null });
+      expect(e.commits()).toHaveLength(5);
+    });
+
+    it("restyles a drawing's line", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "draw", style: DRAW_STYLE });
+      dragOut(e, [10, 10], [80, 80]);
+      e.fromParent({ type: "slop:edit-tool", tool: "select" });
+      const svg = added(e)[0]!;
+      e.down(svg);
+      expect(reports(e).at(-1)!.selection).toMatchObject({ kind: "drawing", text: false, vector: true, stroke: "#ef4444", strokeWidth: 6, fill: null });
+      e.fromParent({ type: "slop:edit-style", style: { stroke: "#00ff00", strokeWidth: 12, fill: "#0000ff" } });
+      const path = svg.querySelector("path")!;
+      expect([path.getAttribute("stroke"), path.getAttribute("stroke-width"), path.getAttribute("fill")]).toEqual(["#00ff00", "12", "#0000ff"]);
+      expect(svg.hasAttribute("style") && svg.style.backgroundColor).toBe("");
+    });
+
+    describe("stretching what was added", () => {
+      const pullRight = (e: ReturnType<typeof editor>, by: number) => {
+        const handle = e.$(`[data-slop-ui] [data-dir="1 0"]`);
+        const pointer = (type: string, x: number) =>
+          handle.dispatchEvent(new e.window.PointerEvent(type, { clientX: x, clientY: 100, button: 0, bubbles: true, cancelable: true }));
+        pointer("pointerdown", 100);
+        pointer("pointermove", 100 + by);
+        pointer("pointerup", 100 + by);
+      };
+
+      it("resizes a shape instead of scaling it, so its border keeps its width", () => {
+        const e = editor();
+        e.fromParent({ type: "slop:edit-tool", tool: "rect", style: { ...SHAPE_STYLE, stroke: "#ffffff", strokeWidth: 8 } });
+        dragOut(e, [100, 100], [400, 300]);
+        const shape = added(e)[0]!;
+        pullRight(e, 100);
+        // The left edge stays put.
+        expect(shape.style).toMatchObject({ left: "100px", width: "400px", height: "200px", scale: "", translate: "" });
+        expect(shape.hasAttribute("data-moved")).toBe(false);
+        expect(e.commits().at(-1)!.markup).toContain("width: 400px; height: 200px;");
+      });
+
+      it("spreads a drawing's points instead of scaling it, so its line keeps its width", () => {
+        const e = editor();
+        e.fromParent({ type: "slop:edit-tool", tool: "draw", style: DRAW_STYLE });
+        at(e, "pointerdown", 10, 20);
+        at(e, "pointermove", 50, 40);
+        at(e, "pointermove", 90, 20);
+        at(e, "pointerup", 90, 20);
+        e.fromParent({ type: "slop:edit-tool", tool: "select" });
+        const svg = added(e)[0]!;
+        e.down(svg);
+        e.up(svg);
+        pullRight(e, 80);
+        expect(svg.style).toMatchObject({ left: "7px", width: "166px", height: "26px", scale: "", translate: "" });
+        expect(svg.getAttribute("viewBox")).toBe("0 0 166 26");
+        const path = svg.querySelector("path")!;
+        // Around the line's half-width padding: 3 stays, the rest twice as far from it.
+        expect(path.getAttribute("d")).toBe("M3 3 L83 23 L163 3");
+        expect(path.getAttribute("stroke-width")).toBe("6");
+      });
+
+      it("spreads any path, relative steps and arcs included", () => {
+        const e = editor();
+        e.$("#intro").insertAdjacentHTML(
+          "beforeend",
+          `<svg data-added="drawing" viewBox="0 0 86 26" style="position: absolute; left: 0px; top: 0px; width: 86px; height: 26px">` +
+            `<path d="m3 3 l40 20 h10 v-5 A5 5 0 0 1 83 3 z" stroke="#111111" stroke-width="6" fill="none"></path></svg>`,
+        );
+        const svg = added(e)[0]!;
+        e.down(svg);
+        e.up(svg);
+        pullRight(e, 80);
+        expect(svg.querySelector("path")!.getAttribute("d")).toBe("m3 3 l80 20 h20 v-5 A10 5 0 0 1 163 3 z");
+      });
+
+      it("still scales the deck's own elements and text boxes", () => {
+        const e = editor();
+        e.fromParent({ type: "slop:edit-tool", tool: "text", style: TEXT_STYLE });
+        dragOut(e, [100, 100], [400, 100]);
+        e.key("Escape");
+        const box = added(e)[0]!;
+        e.down(box);
+        e.up(box);
+        pullRight(e, 150);
+        expect(box.style.scale).toBe("1.5 1");
+        expect(box.style.width).toBe("300px");
+      });
+    });
+
+    it("deletes the selection when the toolbar asks", () => {
+      const e = editor();
+      e.down(e.$("h1"));
+      e.fromParent({ type: "slop:edit-delete" });
+      expect(e.doc.querySelector("h1")).toBeNull();
+      expect(e.commits()).toHaveLength(1);
+      e.fromParent({ type: "slop:edit-delete" });
+      expect(e.commits()).toHaveLength(1);
+    });
+
+    describe("stacking order", () => {
+      it("moves an element above or below the others with a z-index, keeping the layout", () => {
+        const e = editor();
+        const h1 = e.$("h1");
+        e.$(".card").setAttribute("style", "position: absolute; z-index: 3");
+        e.down(h1);
+        e.fromParent({ type: "slop:edit-order", to: "front" });
+        expect(h1.style).toMatchObject({ position: "relative", zIndex: "4" });
+        // Already on top.
+        e.fromParent({ type: "slop:edit-order", to: "forward" });
+        expect(h1.style.zIndex).toBe("4");
+        // Just below the card, which comes later in the document, but above the rest.
+        e.fromParent({ type: "slop:edit-order", to: "backward" });
+        expect(h1.style.zIndex).toBe("3");
+        e.fromParent({ type: "slop:edit-order", to: "back" });
+        expect(h1.style.zIndex).toBe("-1");
+        expect(e.commits()).toHaveLength(3);
+        expect(e.commits()[0]!.markup).toContain(`<h1 class="title" style="position: relative; z-index: 4;">`);
+        // DOM order (and so the path to select) stays.
+        expect(e.commits()[0]!.select).toEqual([0]);
+      });
+
+      it("steps forward only past elements it overlaps", () => {
+        const e = editor();
+        const boxes = { h1: [0, 0, 100, 100], ".card": [500, 500, 100, 100], svg: [50, 50, 100, 100] } as const;
+        for (const [sel, [x, y, w, h]] of Object.entries(boxes)) e.$(sel).getBoundingClientRect = () => new e.window.DOMRect(x, y, w, h);
+        e.$(".overlay").getBoundingClientRect = () => new e.window.DOMRect(900, 900, 10, 10);
+        e.$(".shape").getBoundingClientRect = () => new e.window.DOMRect(900, 900, 10, 10);
+        e.$(".card").setAttribute("style", "position: absolute; z-index: 5");
+        e.$("svg").setAttribute("style", "position: absolute; z-index: 2");
+        e.down(e.$("h1"));
+        e.fromParent({ type: "slop:edit-order", to: "forward" });
+        // Past the drawing it overlaps (z-index 2, later in the document), not the card far away.
+        expect(e.$("h1").style.zIndex).toBe("3");
+      });
+
+      it("keeps an element sent behind its siblings inside its parent", () => {
+        const e = editor();
+        // The first paragraph is at the back already.
+        e.down(e.$(".card p"));
+        e.fromParent({ type: "slop:edit-order", to: "back" });
+        expect(e.commits()).toEqual([]);
+        const second = e.$(".card p:nth-child(2)");
+        e.down(second);
+        e.fromParent({ type: "slop:edit-order", to: "back" });
+        e.fromParent({ type: "slop:edit-order", to: "back" });
+        expect(second.style.zIndex).toBe("-1");
+        expect(e.$(".card").style.isolation).toBe("isolate");
+        expect(e.commits()).toHaveLength(1);
+        e.down(e.$("h1"));
+        e.fromParent({ type: "slop:edit-order", to: "back" });
+        expect(e.$("#intro").style.isolation).toBe("");
+      });
+    });
+  });
 });

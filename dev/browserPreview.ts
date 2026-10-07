@@ -19,7 +19,7 @@ function readDeck(id: string) {
     const id = /\bid=["']([^"']+)["']/i.exec(match[0])?.[1] ?? `#${index + 1}`;
     const hidden = /\sdata-hidden\b/i.test(match[0]);
     const source = html.slice(match.index, html.indexOf("</section>", match.index));
-    return { id, hash: hash(source), hidden, moved: /<[^>]*\sdata-moved\b/i.test(source) };
+    return { id, hash: hash(source), hidden, moved: /<[^>]*\sdata-(moved|added)\b/i.test(source) };
   });
   const sections = [...html.matchAll(/<div\b[^>]*\bclass=["'][^"']*\bdeck-section\b[^"']*["'][^>]*>/gi)].map(
     (match, index) => ({

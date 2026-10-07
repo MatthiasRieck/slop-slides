@@ -12,6 +12,7 @@ import {
   type LintIssue,
 } from "./lib/api";
 import { latestContext, mergeContext, type ContextUsage } from "./lib/context";
+import { DEFAULT_EDIT_STYLES, type EditStyle, type EditTool, type ToolFamily } from "./lib/editTools";
 import { inkBounds, SLIDE_SIZE, type Stroke } from "./lib/ink";
 import {
   defaultModel,
@@ -195,6 +196,10 @@ interface AppState {
   editing: boolean;
   /** Bumped when a slide edit could not be saved, so the stage reloads the slide from disk. */
   editReload: number;
+  /** The edit toolbar's tool: select, or what a drag on the slide adds. */
+  editTool: EditTool;
+  /** What new text boxes, shapes and drawings look like; restyling one updates its family's. */
+  editStyles: Record<ToolFamily, EditStyle>;
   /** Slide edits that can be undone, newest last. */
   slideUndo: SlideUndo[];
   /** Undone slide edits that can be redone, newest last. */
@@ -227,6 +232,8 @@ interface AppState {
   endImageExport: () => void;
   /** Enters or leaves edit mode, keeping the edits made so far. */
   setEditing: (editing: boolean) => void;
+  setEditTool: (tool: EditTool) => void;
+  setEditStyle: (family: ToolFamily, changes: EditStyle) => void;
   /** Saves `markup` as the new version of `slide`, after any edits still being saved. */
   saveSlideEdit: (slide: string, markup: string) => Promise<void>;
   undoSlideEdit: () => Promise<void>;
@@ -257,7 +264,7 @@ interface SlideUndo {
 const UNDO_KEPT = 50;
 
 export const TIDY_PROMPT =
-  "Tidy up the layout of this slide. I edited it by hand: keep my text and keep things where I moved them, at the size and angle I gave them, but rebuild the layout cleanly and fix any overflow or clipping.";
+  "Tidy up the layout of this slide. I edited it by hand: keep my text, the styles I picked and what I added, and keep things where I moved them, at the size and angle I gave them, but rebuild the layout cleanly and fix any overflow or clipping.";
 
 export const tidyPrompt = (overflow: string[] = []) =>
   overflow.length ? `${TIDY_PROMPT}\n\nThe editor found overflow:\n${overflow.map((o) => `- ${o}`).join("\n")}` : TIDY_PROMPT;
@@ -290,6 +297,8 @@ export const useApp = create<AppState>((set, get) => ({
   imageExport: null,
   editing: false,
   editReload: 0,
+  editTool: "select",
+  editStyles: DEFAULT_EDIT_STYLES,
   slideUndo: [],
   slideRedo: [],
 
@@ -315,7 +324,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (get().codeDirty && !(await confirmDiscardEdits())) return;
     await flushReviewSave();
     await api.closeDeck();
-    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null, sketches: {}, sketchesSent: {}, imageExport: null, editing: false, slideUndo: [], slideRedo: [] });
+    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null, sketches: {}, sketchesSent: {}, imageExport: null, editing: false, editTool: "select", slideUndo: [], slideRedo: [] });
   },
 
   setDeck: (deck) => {
@@ -426,9 +435,13 @@ export const useApp = create<AppState>((set, get) => ({
 
   setEditing: (editing) => {
     if (editing === get().editing) return;
-    // Each edit session starts with fresh history; leaving keeps the edits.
-    set({ editing, slideUndo: [], slideRedo: [] });
+    // Each edit session starts with fresh history and the select tool; leaving keeps the edits.
+    set({ editing, editTool: "select", slideUndo: [], slideRedo: [] });
   },
+
+  setEditTool: (editTool) => set({ editTool }),
+
+  setEditStyle: (family, changes) => set((s) => ({ editStyles: { ...s.editStyles, [family]: { ...s.editStyles[family], ...changes } } })),
 
   saveSlideEdit: (slide, markup) => {
     const save = async () => {
@@ -633,6 +646,7 @@ async function loadDeckState(deck: Deck) {
     sketchesSent: {},
     imageExport: null,
     editing: false,
+    editTool: "select",
     slideUndo: [],
     slideRedo: [],
   });

@@ -74,13 +74,13 @@ const CASES = [
   ["resetChat", () => api.resetChat("talk"), "reset_chat", { id: "talk" }],
   [
     "sendMessage",
-    () => api.sendMessage("talk", "Hi", "opus"),
+    () => api.sendMessage("talk", "Hi", { provider: "codex", model: "gpt-6-astra", effort: "high" }),
     "send_message",
-    { args: { deckId: "talk", prompt: "Hi", model: "opus" } },
+    { args: { deckId: "talk", prompt: "Hi", provider: "codex", model: "gpt-6-astra", effort: "high" } },
   ],
   ["interruptAgent", () => api.interruptAgent("talk"), "interrupt_agent", { id: "talk" }],
   ["agentRunning", () => api.agentRunning("talk"), "agent_running", { id: "talk" }],
-  ["agentStatus", () => api.agentStatus(), "agent_status", undefined],
+  ["listProviders", () => api.listProviders(), "list_providers", undefined],
 ] as const;
 
 describe("api", () => {

@@ -1,5 +1,6 @@
 mod agent;
 mod capture;
+mod copilot;
 mod deck;
 mod env;
 mod error;
@@ -7,6 +8,7 @@ mod html;
 mod lint;
 mod mcp;
 mod protocol;
+mod providers;
 mod watcher;
 
 use serde::Serialize;
@@ -30,13 +32,6 @@ struct UpdatedSlide {
     deck: Deck,
     /// The slide's markup before the update, to undo it.
     previous: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AgentStatus {
-    claude_path: Option<String>,
-    library_path: String,
 }
 
 #[tauri::command]
@@ -234,7 +229,9 @@ fn save_chat(app: AppHandle, id: String, chat: serde_json::Value) -> Result<()> 
 fn reset_chat(app: AppHandle, agent: State<AgentManager>, id: String) -> Result<()> {
     agent.interrupt(&id);
     let dir = deck::deck_dir(&app, &id)?;
-    deck::write_session(&dir, None)?;
+    for provider in agent::Provider::ALL {
+        deck::write_session(&dir, provider.session_file(), None)?;
+    }
     deck::save_chat(&dir, &serde_json::Value::Null)
 }
 
@@ -254,11 +251,8 @@ fn agent_running(agent: State<AgentManager>, id: String) -> bool {
 }
 
 #[tauri::command]
-fn agent_status(app: AppHandle) -> Result<AgentStatus> {
-    Ok(AgentStatus {
-        claude_path: env::resolve_claude().map(|p| p.to_string_lossy().into_owned()),
-        library_path: deck::library_root(&app)?.to_string_lossy().into_owned(),
-    })
+async fn list_providers() -> Vec<providers::ProviderInfo> {
+    providers::list().await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -310,7 +304,7 @@ pub fn run() {
             send_message,
             interrupt_agent,
             agent_running,
-            agent_status,
+            list_providers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running SlopSlide");

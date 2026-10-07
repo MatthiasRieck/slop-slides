@@ -12,9 +12,11 @@ import {
   Paperclip,
   Pencil,
   PenLine,
+  Presentation,
   RotateCcw,
   Search,
   Square,
+  SquareTerminal,
   X,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -23,7 +25,9 @@ import remarkGfm from "remark-gfm";
 
 import { api, errorMessage } from "../lib/api";
 import { cn } from "../lib/utils";
-import { MODELS, useApp, type AssistantMessage, type ChatMessage, type ChatPart, type UserMessage } from "../store";
+import { PROVIDERS, type Provider } from "../lib/models";
+import { useApp, type AssistantMessage, type ChatMessage, type ChatPart, type UserMessage } from "../store";
+import { EffortPicker, ModelPicker } from "./ModelPicker";
 
 const SUGGESTIONS = [
   "A 6-slide pitch for a neighborhood tool-sharing app, bold and warm",
@@ -34,7 +38,10 @@ const SUGGESTIONS = [
 export function ChatPanel() {
   const messages = useApp((s) => s.messages);
   const running = useApp((s) => s.running);
-  const claudePath = useApp((s) => s.claudePath);
+  const provider = useApp((s) => s.selection.provider);
+  const cliMissing = useApp(
+    (s) => s.providers?.find((p) => p.id === s.selection.provider)?.installed === false,
+  );
   const deckEmpty = useApp((s) => (s.deck?.slides.length ?? 0) === 0);
   const composerFill = useApp((s) => s.composerFill);
   const [draft, setDraft] = useState("");
@@ -73,7 +80,7 @@ export function ChatPanel() {
           </button>
         </div>
       </div>
-      {claudePath === null && <MissingClaude />}
+      {cliMissing && <MissingCli provider={provider} />}
       <MessageList messages={messages} running={running}>
         {messages.length === 0 && (
           <EmptyChat deckEmpty={deckEmpty} onPick={(text) => setDraft(text)} />
@@ -84,13 +91,13 @@ export function ChatPanel() {
   );
 }
 
-function MissingClaude() {
+function MissingCli({ provider }: { provider: Provider }) {
+  const { cli, install } = PROVIDERS[provider];
   return (
     <div className="mx-3 mb-2 flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs leading-relaxed text-amber-800 dark:text-amber-200">
       <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
       <span>
-        Claude Code was not found. Install it and sign in (<code>claude</code> in a terminal), or
-        set <code>SLOPSLIDE_CLAUDE_PATH</code>, then restart SlopSlide.
+        {cli} is not installed. {install} Or pick another model below.
       </span>
     </div>
   );
@@ -281,6 +288,8 @@ function describeTool(part: Extract<ChatPart, { kind: "tool" }>, deckId: string)
       return { icon: Globe, label: "Searched the web for", target: str("query") };
     case "WebFetch":
       return { icon: Globe, label: "Fetched", target: str("url") };
+    case "Bash":
+      return { icon: SquareTerminal, label: "Ran", target: str("command") };
     default:
       return { icon: FileText, label: part.name, target: "" };
   }
@@ -291,7 +300,6 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const deck = useApp((s) => s.deck);
   const selected = useApp((s) => s.selected);
   const running = useApp((s) => s.running);
-  const model = useApp((s) => s.model);
   const [includeSlide, setIncludeSlide] = useState(true);
   const [attachments, setAttachments] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -369,30 +377,36 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   return (
     <div className="shrink-0 px-3 pb-3">
       <div
+        onClick={(e) => {
+          if (e.target === e.currentTarget) textareaRef.current?.focus();
+        }}
         className={cn(
-          "rounded-xl border bg-card shadow-composer transition-colors focus-within:border-input",
+          "rounded-2xl border bg-card shadow-composer transition-colors focus-within:border-input",
           dragging && "border-primary ring-2 ring-primary/30",
         )}
       >
         {(attachments.length > 0 || slideNumber > 0) && (
-          <div className="flex flex-wrap gap-1 px-2.5 pt-2.5">
+          <div className="flex flex-wrap gap-1 px-3.5 pt-3">
             {slideNumber > 0 && (
               <button
                 type="button"
                 onClick={() => setIncludeSlide((v) => !v)}
                 title={includeSlide ? "The agent will know which slide you are on" : "Not referencing the current slide"}
                 className={cn(
-                  "rounded-md border px-1.5 py-0.5 text-2xs",
-                  includeSlide ? "border-primary/30 bg-primary/10 text-primary" : "text-muted-foreground line-through",
+                  "flex h-5 items-center gap-1 rounded-md border px-1.5 text-xs",
+                  includeSlide
+                    ? "border-primary/30 bg-primary/10 text-primary"
+                    : "text-muted-foreground line-through",
                 )}
               >
+                <Presentation className="size-3" />
                 Slide {slideNumber}
               </button>
             )}
             {sendsSketch && (
               <span
                 title="A screenshot of the slide with your drawing is sent along"
-                className="flex items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-2xs text-primary"
+                className="flex h-5 items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 text-xs text-primary"
               >
                 <PenLine className="size-3" />
                 Sketch
@@ -407,7 +421,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
               </span>
             )}
             {attachments.map((a) => (
-              <span key={a} className="flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-2xs text-muted-foreground">
+              <span key={a} className="flex h-5 items-center gap-1 rounded-md border px-1.5 text-xs text-muted-foreground">
                 <ImageIcon className="size-3" />
                 {a.replace(/^assets\//, "")}
                 <button
@@ -433,36 +447,27 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
             }
           }}
           placeholder={running ? "The agent is working…" : "Ask for slides or changes…"}
-          className="block w-full resize-none bg-transparent px-3 pt-2.5 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/70"
+          className="block w-full resize-none bg-transparent px-3.5 pt-3 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/70"
         />
-        <div className="flex items-center gap-1 px-2 pb-2">
+        <div className="flex items-center gap-1 px-2 pt-1 pb-2">
+          <ModelPicker />
+          <div className="mx-0.5 h-4 w-px bg-border" />
+          <EffortPicker />
+          <div className="flex-1" />
           <button
             type="button"
             onClick={pickFiles}
             title="Attach images or files"
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <Paperclip className="size-4" />
           </button>
-          <select
-            value={model}
-            onChange={(e) => useApp.getState().setModel(e.target.value)}
-            title="Model"
-            className="rounded-md bg-transparent px-1 py-1 text-xs text-muted-foreground outline-none hover:bg-accent hover:text-foreground"
-          >
-            {MODELS.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-          <div className="flex-1" />
           {running ? (
             <button
               type="button"
               onClick={() => useApp.getState().interrupt()}
               title="Stop"
-              className="flex size-7 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80"
+              className="flex size-8 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80"
             >
               <Square className="size-3 fill-current" />
             </button>
@@ -472,7 +477,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
               onClick={submit}
               disabled={!draft.trim()}
               title="Send"
-              className="flex size-7 items-center justify-center rounded-full bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-30"
+              className="flex size-8 items-center justify-center rounded-full bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-30"
             >
               <ArrowUp className="size-4" />
             </button>

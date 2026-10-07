@@ -556,14 +556,15 @@ pub fn save_chat(dir: &Path, chat: &serde_json::Value) -> Result<()> {
     atomic_write(&path, serde_json::to_string(chat).expect("json").as_bytes())
 }
 
-pub fn read_session(dir: &Path) -> Option<String> {
-    fs::read_to_string(dir.join(INTERNAL_DIR).join("session"))
+/// Each agent provider keeps its own resumable session, stored under `name`.
+pub fn read_session(dir: &Path, name: &str) -> Option<String> {
+    fs::read_to_string(dir.join(INTERNAL_DIR).join(name))
         .ok()
         .map(|s| s.trim().to_string())
 }
 
-pub fn write_session(dir: &Path, session_id: Option<&str>) -> Result<()> {
-    let path = dir.join(INTERNAL_DIR).join("session");
+pub fn write_session(dir: &Path, name: &str, session_id: Option<&str>) -> Result<()> {
+    let path = dir.join(INTERNAL_DIR).join(name);
     match session_id {
         Some(id) => fs::write(path, id)?,
         None if path.exists() => fs::remove_file(path)?,
@@ -1326,14 +1327,30 @@ mod tests {
     fn session_is_stored_trimmed_and_cleared() {
         let deck = TempDeck::new(ORIGINAL);
         fs::create_dir_all(deck.0.join(INTERNAL_DIR)).unwrap();
-        assert_eq!(read_session(&deck.0), None);
-        write_session(&deck.0, Some("abc-123")).unwrap();
-        assert_eq!(read_session(&deck.0).as_deref(), Some("abc-123"));
+        assert_eq!(read_session(&deck.0, "session"), None);
+        write_session(&deck.0, "session", Some("abc-123")).unwrap();
+        assert_eq!(read_session(&deck.0, "session").as_deref(), Some("abc-123"));
         fs::write(deck.0.join(INTERNAL_DIR).join("session"), "  xyz\n").unwrap();
-        assert_eq!(read_session(&deck.0).as_deref(), Some("xyz"));
-        write_session(&deck.0, None).unwrap();
-        assert_eq!(read_session(&deck.0), None);
-        write_session(&deck.0, None).unwrap();
+        assert_eq!(read_session(&deck.0, "session").as_deref(), Some("xyz"));
+        write_session(&deck.0, "session", None).unwrap();
+        assert_eq!(read_session(&deck.0, "session"), None);
+        write_session(&deck.0, "session", None).unwrap();
+    }
+
+    #[test]
+    fn sessions_are_kept_per_provider() {
+        let deck = TempDeck::new(ORIGINAL);
+        fs::create_dir_all(deck.0.join(INTERNAL_DIR)).unwrap();
+        write_session(&deck.0, "session", Some("claude-1")).unwrap();
+        write_session(&deck.0, "codex-session", Some("codex-1")).unwrap();
+        assert_eq!(
+            read_session(&deck.0, "session").as_deref(),
+            Some("claude-1")
+        );
+        assert_eq!(
+            read_session(&deck.0, "codex-session").as_deref(),
+            Some("codex-1")
+        );
     }
 
     #[test]

@@ -64,6 +64,29 @@ pasteboard cap, which only matters for tiny slides.
 - Pinch-zoom and scrolling move the whole app UI, not just the slide.
 - The three-panel desktop layout does not fit a phone at all.
 
+## The device slide view (`DeviceDeck`)
+
+A first version of the proposed direction below. On a device, an open deck shows `DeviceDeck`
+instead of the editor:
+
+- Only the current slide, full screen, as one page sized to the fit slide (`SlideFrame`'s device
+  path). Bars float over it (deck list, chat, sketch tools, prev/next, slide list) and a tap
+  hides them. Swipe left/right or the arrow keys change slides.
+- Zoom and pan are the app's own (`src/lib/deviceView.ts`): pinch, double tap, one-finger pan when
+  zoomed. Safari's page zoom is blocked (`lockPageZoom`: viewport `maximum-scale=1` plus cancelled
+  `gesturestart`/`gesturechange`, `touch-action: none` on the slide). While pinching the page is
+  scaled with CSS; once the fingers lift it is redrawn at the zoomed size, capped at 1920 CSS px
+  wide (`MAX_PAGE_WIDTH`, the size that is known to work), and scaled up beyond that.
+- Pen, highlighter, eraser, undo and clear draw review marks, as in the editor; a second finger
+  turns a stroke into a pinch and drops it. Marks go to the agent from the chat sheet, through
+  `capture_remote_sketch` as before.
+- The slide list is a sheet with numbers and ids, no thumbnails.
+- Not on the device: edit mode, the HTML view, the presenter, lint. Edit mode still needs the
+  editor to work in a page that is not 1920×1080 (see below).
+
+None of this has been run on a real device yet; the memory estimates above say one page at most
+1920 px wide should stay well under the limit.
+
 ## Proposed direction: a device-only "slide" UI
 
 Instead of shipping the desktop editor to the device, give devices a dedicated view that shows

@@ -88,8 +88,11 @@ export function useAnnotations(slideKey: string, store?: InkStore): Annotations 
   return { tool, setTool, colors, setColor, strokes, addStroke, erase, undo, clear, handleKey, peek };
 }
 
-/** Transparent layer over the slide that draws ink and the laser dot. */
-export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
+/**
+ * Transparent layer over the slide that draws ink and the laser dot. While `suspended` (e.g. a
+ * second finger turned the stroke into a pinch), the stroke being drawn is dropped.
+ */
+export function AnnotationLayer({ annotations, suspended = false }: { annotations: Annotations; suspended?: boolean }) {
   const { tool, colors, strokes, addStroke, erase } = annotations;
   const layerRef = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState<Stroke | null>(null);
@@ -114,7 +117,7 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
   useEffect(() => {
     setDraft(null);
     setLaser(null);
-  }, [tool]);
+  }, [tool, suspended]);
 
   const at = (event: ReactPointerEvent) =>
     toFraction(event.clientX, event.clientY, layerRef.current!.getBoundingClientRect());
@@ -125,7 +128,7 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
   };
 
   const onPointerDown = (event: ReactPointerEvent) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || suspended) return;
     if (tool === "eraser") eraseUnder(event);
     if (tool !== "pen" && tool !== "highlighter") return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -133,6 +136,7 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
   };
 
   const onPointerMove = (event: ReactPointerEvent) => {
+    if (suspended) return;
     if (tool === "laser") {
       const el = layerRef.current!;
       const rect = el.getBoundingClientRect();
@@ -147,7 +151,7 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
   };
 
   const finish = () => {
-    if (draft) addStroke(draft);
+    if (draft && !suspended) addStroke(draft);
     setDraft(null);
   };
 

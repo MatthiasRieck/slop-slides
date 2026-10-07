@@ -139,3 +139,31 @@ export async function uploadAsset(deckId: string, file: File): Promise<string> {
 export function exportUrl(deckId: string): string {
   return `${remote?.base ?? ""}/export/${encodeURIComponent(deckId)}`;
 }
+
+/** Viewport of a device: no page zoom (the slide view zooms itself), and drawn under the notch. */
+export const DEVICE_VIEWPORT = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
+
+/**
+ * On a device, keeps Safari from zooming the page. Its page zoom scales up every slide page
+ * with it, until iOS kills the app's page (see findings.md); the slide view zooms the slide
+ * itself instead. Safari ignores `user-scalable=no` for pinches, so its gesture events are
+ * cancelled too. Returns a function that undoes it.
+ */
+export function lockPageZoom(doc: Document = document): () => void {
+  let meta = doc.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+  const previous = meta?.content ?? null;
+  if (!meta) {
+    meta = doc.createElement("meta");
+    meta.name = "viewport";
+    doc.head.appendChild(meta);
+  }
+  meta.content = DEVICE_VIEWPORT;
+  const cancel = (event: Event) => event.preventDefault();
+  const gestures = ["gesturestart", "gesturechange", "gestureend"];
+  for (const type of gestures) doc.addEventListener(type, cancel, { passive: false });
+  return () => {
+    for (const type of gestures) doc.removeEventListener(type, cancel);
+    if (previous === null) meta.remove();
+    else meta.content = previous;
+  };
+}

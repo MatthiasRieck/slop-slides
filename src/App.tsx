@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 
 import { ChatPanel } from "./components/ChatPanel";
+import { DeviceDeck } from "./components/DeviceDeck";
 import { CodeView } from "./components/CodeView";
 import { Home } from "./components/Home";
 import { Presenter } from "./components/Presenter";
@@ -11,6 +12,7 @@ import { SlideImageExport } from "./components/SlideImageExport";
 import { SlideRail } from "./components/SlideRail";
 import { Stage } from "./components/Stage";
 import { TopBar } from "./components/TopBar";
+import { isRemote } from "./lib/platform";
 import { useApp } from "./store";
 
 export function App() {
@@ -19,7 +21,8 @@ export function App() {
 
   return (
     <>
-      {deck ? <Editor /> : <Home />}
+      {/* A phone or tablet gets the slide alone: the editor's panels and previews don't fit it (see DeviceDeck). */}
+      {deck ? (isRemote ? <DeviceDeck /> : <Editor />) : <Home />}
       {presenting && <Presenter />}
       <SlideImageExport />
       <RemoteCapture />

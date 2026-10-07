@@ -185,3 +185,40 @@ describe("randomId", () => {
     expect(first).not.toBe(second);
   });
 });
+
+describe("lockPageZoom", () => {
+  it("turns off page zoom in the viewport and puts it back", async () => {
+    const { DEVICE_VIEWPORT, lockPageZoom } = await import("./platform");
+    const meta = document.createElement("meta");
+    meta.name = "viewport";
+    meta.content = "width=device-width, initial-scale=1.0";
+    document.head.appendChild(meta);
+    const unlock = lockPageZoom();
+    expect(meta.content).toBe(DEVICE_VIEWPORT);
+    expect(meta.content).toContain("maximum-scale=1");
+    unlock();
+    expect(meta.content).toBe("width=device-width, initial-scale=1.0");
+    meta.remove();
+  });
+
+  it("adds a viewport when the page has none, and removes it again", async () => {
+    const { lockPageZoom } = await import("./platform");
+    const unlock = lockPageZoom();
+    expect(document.querySelectorAll('meta[name="viewport"]')).toHaveLength(1);
+    unlock();
+    expect(document.querySelector('meta[name="viewport"]')).toBeNull();
+  });
+
+  it("cancels Safari's pinch gestures while locked", async () => {
+    const { lockPageZoom } = await import("./platform");
+    const pinch = () => {
+      const event = new Event("gesturestart", { cancelable: true });
+      document.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    const unlock = lockPageZoom();
+    expect(pinch()).toBe(true);
+    unlock();
+    expect(pinch()).toBe(false);
+  });
+});

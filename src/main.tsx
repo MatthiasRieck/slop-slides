@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 
 import { App } from "./App";
 import "./index.css";
-import { isRemote } from "./lib/platform";
+import { isRemote, lockPageZoom } from "./lib/platform";
 import { initEventBridge } from "./store";
 
 // Follow the OS appearance.
@@ -17,6 +17,7 @@ if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window) && !isRemote) {
   const { installBrowserMock } = await import("./lib/browserMock");
   installBrowserMock();
 }
+if (isRemote) lockPageZoom();
 void initEventBridge();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(

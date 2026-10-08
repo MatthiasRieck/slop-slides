@@ -374,9 +374,14 @@ pub fn delete_section(dir: &Path, id: &str, index: usize) -> Result<Deck> {
     Ok(edit(dir, id, |s| Ok((html::delete_section(s, index)?, ())))?.0)
 }
 
+/// Deletes a slide along with its review marks.
 pub fn delete_slide(dir: &Path, id: &str, slide: &str) -> Result<Deck> {
     snapshot(dir)?;
-    Ok(edit(dir, id, |s| Ok((html::delete(s, slide)?, ())))?.0)
+    Ok(edit(dir, id, |s| {
+        let updated = html::delete(s, slide)?;
+        Ok((prune_review(&updated).unwrap_or(updated), ()))
+    })?
+    .0)
 }
 
 /// Replaces one slide with markup edited on the stage. `base` is the slide's hash the edit
@@ -1304,6 +1309,21 @@ mod tests {
 
         assert!(duplicate(&deck.0, "three", "nope").is_err());
         assert!(delete_slide(&deck.0, "three", "nope").is_err());
+    }
+
+    #[test]
+    fn deleting_a_slide_drops_its_review_marks() {
+        let deck = TempDeck::new(THREE);
+        save_review(&deck.0, &marks(&["a", "b"])).unwrap();
+        let deleted = delete_slide(&deck.0, "three", "b").unwrap();
+        assert_eq!(deleted.review, marks(&["a"]));
+        assert_eq!(load(&deck.0, "three").unwrap().review, marks(&["a"]));
+
+        delete_slide(&deck.0, "three", "a").unwrap();
+        assert!(
+            !deck.html().contains(review::START),
+            "deleting the last marked slide removes the block"
+        );
     }
 
     #[test]

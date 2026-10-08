@@ -1,6 +1,9 @@
 /* SlopSlide player. Keys: ←/→, space, PageUp/PageDown, Home/End, F for full screen, R for review marks. */
 (function () {
   var root = document.documentElement;
+  // The runtime-css block sets this before the body renders; without it the stylesheet lists
+  // the slides for viewers that run no JavaScript.
+  root.setAttribute("data-slop-player", "");
   var params = new URLSearchParams(location.search);
   var embed = params.has("embed");
   var framed = window.parent !== window;

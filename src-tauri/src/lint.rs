@@ -697,6 +697,19 @@ mod tests {
     }
 
     #[test]
+    fn accepts_the_player_flag_script_in_the_runtime_css_block() {
+        let html = html::ensure_runtime(&deck(
+            r#"<section class="slide" id="intro"><p>Hi</p></section>"#,
+        ));
+        let head = &html[..html.find("</head>").unwrap()];
+        assert!(
+            head.contains(html::PLAYER_FLAG),
+            "flag script sits in <head>"
+        );
+        assert_eq!(rules(&html), Vec::<&str>::new());
+    }
+
+    #[test]
     fn reports_unclosed_and_stray_tags_with_lines() {
         let html =
             deck("<section class=\"slide\" id=\"a\">\n<div><span>x</div>\n</section>\n</em>");

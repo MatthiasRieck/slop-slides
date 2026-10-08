@@ -7,6 +7,12 @@ body {
   margin: 0;
   background: #000;
 }
+/* Slides are fixed canvases: stop mobile Safari enlarging text it finds too small, which
+   would overflow the slides when the stage is scaled down to a phone. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 html[data-slop-player],
 html[data-slop-player] body {
   width: 100%;
@@ -41,8 +47,22 @@ html[data-slop-player] .deck {
   margin: 0 0 24px !important;
   overflow: hidden;
 }
+/* Without the player, deck styles must not hide slides or stop the page scrolling. */
+html:not([data-slop-player]),
+html:not([data-slop-player]) body {
+  height: auto !important;
+  overflow: visible !important;
+}
+html:not([data-slop-player]) .deck > .slide {
+  visibility: visible !important;
+  opacity: 1 !important;
+}
 html:not([data-slop-player]) .deck > .slide[data-hidden] {
   display: none !important;
+}
+html:not([data-slop-player]) .slide .reveal {
+  opacity: 1 !important;
+  animation: none !important;
 }
 /* Without the player nothing scales the stage, so zoom it down to the window's width. */
 @media screen and (max-width: 1919.98px) { html:not([data-slop-player]) .deck { zoom: 0.95; } }

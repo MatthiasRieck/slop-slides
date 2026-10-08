@@ -484,6 +484,23 @@ describe("player: without JavaScript", () => {
     expect(style("body").overflow).not.toBe("hidden");
   });
 
+  it("keeps slides visible and the page scrolling despite the deck's own styles", () => {
+    const deckStyles =
+      "<style>html, body { height: 100%; overflow: hidden } .slide { opacity: 0; visibility: hidden } .reveal { opacity: 0 }</style>";
+    const html = DECK.replace("<html>", `<html><head><style>${CSS}</style>${deckStyles}</head>`).replace(
+      "<p>No id</p>",
+      '<p class="reveal">No id</p>',
+    );
+    const dom = new JSDOM(html, { pretendToBeVisual: true });
+    doms.push(dom);
+    const style = (selector: string) => dom.window.getComputedStyle(dom.window.document.querySelector(selector)!);
+    expect(style("#intro").visibility).toBe("visible");
+    expect(style("#intro").opacity).toBe("1");
+    expect(style(".reveal").opacity).toBe("1");
+    expect(style("body").overflow).toBe("visible");
+    expect(style("html").overflow).toBe("visible");
+  });
+
   it("hides all but the active slide once the player is flagged", () => {
     const { doc, style } = styled(true);
     expect(style("#intro").visibility).toBe("hidden");
@@ -491,6 +508,12 @@ describe("player: without JavaScript", () => {
     doc.getElementById("intro")!.classList.add("active");
     expect(style("#intro").visibility).toBe("visible");
     expect(style("[data-hidden] .reveal").opacity).toBe("0");
+  });
+
+  it("stops mobile browsers from enlarging slide text", () => {
+    // iOS inflates small text on narrow screens, which overflows the zoomed slides.
+    expect(CSS).toMatch(/html\s*\{[^}]*-webkit-text-size-adjust:\s*100%/);
+    expect(CSS).toMatch(/html\s*\{[^}]*[^-]text-size-adjust:\s*100%/);
   });
 
   it("zooms the stage down to narrow windows", () => {

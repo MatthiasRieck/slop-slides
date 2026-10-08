@@ -103,6 +103,24 @@ describe("SlideRail", () => {
     expect(items()).toHaveLength(2);
   });
 
+  it("deleting a slide drops its sketch", async () => {
+    const stroke = { tool: "pen" as const, color: "#ef4444", points: [[0.1, 0.2]] as [number, number][] };
+    useApp.setState({ sketches: { intro: [stroke], outro: [stroke] } });
+    invoke.mockResolvedValue(withSlides("intro", "#2"));
+    render(<SlideRail />);
+    await act(async () => fireEvent.click(item(2).getByTitle("Delete")));
+    expect(useApp.getState().sketches).toEqual({ intro: [stroke] });
+  });
+
+  it("keeps the sketch when deleting fails", async () => {
+    const stroke = { tool: "pen" as const, color: "#ef4444", points: [[0.1, 0.2]] as [number, number][] };
+    useApp.setState({ sketches: { outro: [stroke] } });
+    invoke.mockRejectedValue("Slide not found: outro");
+    render(<SlideRail />);
+    await act(async () => fireEvent.click(item(2).getByTitle("Delete")));
+    expect(useApp.getState().sketches).toEqual({ outro: [stroke] });
+  });
+
   it("deleting the last slide selects the one before it", async () => {
     useApp.setState({ selected: "outro" });
     invoke.mockResolvedValue(withSlides("intro", "#2"));

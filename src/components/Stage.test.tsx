@@ -229,6 +229,14 @@ describe("Stage", () => {
       expect(screen.queryByRole("button", { name: "Clear marks on this slide" })).toBeNull();
     });
 
+    it("puts the review toggle before the sketch tools", () => {
+      const mark = { tool: "pen" as const, color: "#ef4444", points: [[0.5, 0.5]] as [number, number][] };
+      act(() => useApp.setState({ sketches: { intro: [mark] } }));
+      render(<Stage />);
+      const toggle = tool("Hide review marks");
+      expect(toggle.compareDocumentPosition(tool("Draw on the slide")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
     it("shows and hides the review marks", () => {
       const mark = { tool: "pen" as const, color: "#ef4444", points: [[0.5, 0.5]] as [number, number][] };
       render(<Stage />);

@@ -1,11 +1,11 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Maximize } from "lucide-react";
+import { ChevronLeft, ChevronRight, Maximize } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { zoomBox } from "../lib/ink";
-import { deckFileUrl } from "../lib/utils";
+import { cn, deckFileUrl } from "../lib/utils";
 import { useApp } from "../store";
-import { AnnotationLayer, PresenterToolbar, useAnnotations } from "./PresenterTools";
+import { AnnotationLayer, PresenterToolbar, useAnnotations, useReveal } from "./PresenterTools";
 
 /**
  * Full-screen slideshow. Plays deck.html with its own embedded player (the same thing
@@ -26,6 +26,7 @@ export function Presenter() {
   handleKeyRef.current = annotations.handleKey;
   // How the slide is zoomed and panned; the ink goes along with it.
   const [zoom, setZoom] = useState({ x: 0, y: 0, k: 1 });
+  const nav = useReveal(annotations.peek);
   const moved = !(zoom.x === 0 && zoom.y === 0 && zoom.k === 1);
 
   useEffect(() => {
@@ -103,12 +104,37 @@ export function Presenter() {
           // Keep keyboard focus where it was, so Space still advances the slide.
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => fitSlide(frameRef.current)}
-          className="absolute right-4 bottom-4 z-10 flex items-center gap-1.5 rounded-xl border border-white/10 bg-neutral-900/85 px-2.5 py-1.5 text-xs text-white/80 tabular-nums shadow-lg backdrop-blur hover:text-white [&_svg]:size-3.5"
+          className="absolute right-32 bottom-4 z-10 flex items-center gap-1.5 rounded-xl border border-white/10 bg-neutral-900/85 px-2.5 py-1.5 text-xs text-white/80 tabular-nums shadow-lg backdrop-blur hover:text-white [&_svg]:size-3.5"
         >
           <Maximize />
           {Math.round(zoom.k * 100)}%
         </button>
       )}
+      <div data-testid="nav-zone" className="absolute right-0 bottom-0 z-10 flex gap-1 p-4" {...nav.zoneProps}>
+        {(
+          [
+            ["Previous slide", "ArrowLeft", ChevronLeft],
+            ["Next slide", "ArrowRight", ChevronRight],
+          ] as const
+        ).map(([label, key, Icon]) => (
+          <button
+            key={key}
+            type="button"
+            title={label}
+            aria-label={label}
+            // Keep keyboard focus where it was, so Space still advances the slide.
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => frameRef.current?.contentWindow?.postMessage({ type: "slop:go", key }, "*")}
+            data-visible={nav.visible}
+            className={cn(
+              "flex size-9 items-center justify-center rounded-xl border border-white/10 bg-neutral-900/85 text-white/80 shadow-lg backdrop-blur transition-opacity duration-200 hover:text-white [&_svg]:size-5",
+              nav.visible ? "opacity-100" : "opacity-0",
+            )}
+          >
+            <Icon />
+          </button>
+        ))}
+      </div>
       <PresenterToolbar annotations={annotations} onExit={() => useApp.getState().setPresenting(false)} />
     </div>
   );

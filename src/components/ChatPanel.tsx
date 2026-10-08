@@ -7,7 +7,6 @@ import {
   FileText,
   FoldVertical,
   Globe,
-  Image as ImageIcon,
   Loader2,
   PanelRightClose,
   Paperclip,
@@ -26,10 +25,11 @@ import remarkGfm from "remark-gfm";
 
 import { api, errorMessage } from "../lib/api";
 import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowTokens } from "../lib/context";
-import { cn } from "../lib/utils";
+import { cn, deckFileUrl } from "../lib/utils";
 import { PROVIDERS, type Provider } from "../lib/models";
 import { useApp, type AssistantMessage, type ChatMessage, type ChatPart, type UserMessage } from "../store";
-import { EffortPicker, ModelPicker } from "./ModelPicker";
+import { ApprovalCard, PermissionPicker, ApprovalReview } from "./Permissions";
+import { EffortPicker, ModelPicker, useDismiss } from "./ModelPicker";
 
 const SUGGESTIONS = [
   "A 6-slide pitch for a neighborhood tool-sharing app, bold and warm",
@@ -196,6 +196,10 @@ function AssistantBlock({ message }: { message: AssistantMessage }) {
               <Markdown remarkPlugins={[remarkGfm]}>{part.text}</Markdown>
             </div>
           )
+        ) : part.kind === "approval" ? (
+          <ApprovalCard key={part.approval.id} part={part} />
+        ) : part.kind === "approvalReview" ? (
+          <ApprovalReview key={part.id} part={part} />
         ) : (
           <ToolRow key={part.id} part={part} />
         ),
@@ -316,6 +320,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const [includeSlide, setIncludeSlide] = useState(true);
   const [attachments, setAttachments] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
+  const [gridOpen, setGridOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [inputHeight, setInputHeight] = useState<number | null>(null);
   const resizeStart = useRef<{ y: number; height: number } | null>(null);
@@ -323,6 +328,10 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const resizeInput = (height: number) => setInputHeight(Math.max(64, Math.min(maxInputHeight, height)));
 
   const slideNumber = selected && deck ? deck.slides.findIndex((s) => s.id === selected) + 1 : 0;
+  // Images show as previews in a fan behind the composer; other files stay chips.
+  const images = attachments.filter(isImage);
+  const files = attachments.filter((a) => !isImage(a));
+  const removeAttachment = (path: string) => setAttachments((prev) => prev.filter((p) => p !== path));
   // Marks go out once while on show (see `send`); they stay on the slide as a review.
   const unsentSketch = useApp((s) => {
     const marks = selected ? s.sketches[selected] : undefined;
@@ -358,6 +367,28 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     } catch (error) {
       useApp.getState().setError(errorMessage(error));
     }
+  };
+
+  // Images pasted into the composer are saved as assets and attached.
+  const pasteImages = async (files: File[]) => {
+    if (!deck) return;
+    try {
+      const saved: string[] = [];
+      for (const file of files) {
+        saved.push(await api.saveAsset(deck.id, pastedName(file), await readBase64(file)));
+      }
+      setAttachments((prev) => [...prev, ...saved.filter((a) => !prev.includes(a))]);
+    } catch (error) {
+      useApp.getState().setError(errorMessage(error));
+    }
+  };
+
+  const onPaste = (e: React.ClipboardEvent) => {
+    const images = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith("image/"));
+    if (images.length === 0) return;
+    // Keep any text that came along (e.g. an image copied from a web page has none worth pasting).
+    if (!e.clipboardData.getData("text/plain")) e.preventDefault();
+    void pasteImages(images);
   };
 
   // Files dropped anywhere on the window become attachments.
@@ -397,17 +428,33 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     void useApp.getState().send(text, { includeSlide: includeSlide && slideNumber > 0, attachments });
     setDraft("");
     setAttachments([]);
+    setGridOpen(false);
   };
 
   return (
-    <div className="shrink-0 px-3 pb-3">
+    <div className="relative shrink-0 px-3 pb-3">
+      {deck && images.length > 0 && (
+        gridOpen ? (
+          <ImageGrid
+            deckId={deck.id}
+            images={images}
+            onRemove={(path) => {
+              removeAttachment(path);
+              if (images.length === 1) setGridOpen(false);
+            }}
+            onClose={() => setGridOpen(false)}
+          />
+        ) : (
+          <ImageFan deckId={deck.id} images={images} onOpen={() => setGridOpen(true)} />
+        )
+      )}
       <ContextMeter />
       <div
         onClick={(e) => {
           if (e.target === e.currentTarget) textareaRef.current?.focus();
         }}
         className={cn(
-          "rounded-2xl border bg-card shadow-composer transition-colors focus-within:border-input",
+          "relative z-10 rounded-2xl border bg-card shadow-composer transition-colors focus-within:border-input",
           dragging && "border-primary ring-2 ring-primary/30",
         )}
       >
@@ -447,7 +494,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
         >
           <span className="h-1 w-8 rounded-full bg-border group-hover:bg-muted-foreground group-focus-visible:bg-primary" />
         </div>
-        {(attachments.length > 0 || slideNumber > 0) && (
+        {(files.length > 0 || slideNumber > 0) && (
           <div className="flex flex-wrap gap-1 px-3.5 pt-3">
             {slideNumber > 0 && (
               <button
@@ -483,13 +530,14 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
                 </button>
               </span>
             )}
-            {attachments.map((a) => (
+            {files.map((a) => (
               <span key={a} className="flex h-5 items-center gap-1 rounded-md border px-1.5 text-xs text-muted-foreground">
-                <ImageIcon className="size-3" />
+                <FileText className="size-3" />
                 {a.replace(/^assets\//, "")}
                 <button
                   type="button"
-                  onClick={() => setAttachments((prev) => prev.filter((p) => p !== a))}
+                  aria-label={`Remove ${a.replace(/^assets\//, "")}`}
+                  onClick={() => removeAttachment(a)}
                   className="hover:text-foreground"
                 >
                   <X className="size-3" />
@@ -503,6 +551,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           value={draft}
           rows={2}
           onChange={(e) => setDraft(e.target.value)}
+          onPaste={onPaste}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
@@ -512,10 +561,11 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           placeholder={running ? "The agent is working…" : "Ask for slides or changes…"}
           className="block max-h-[max(64px,min(240px,40vh))] min-h-16 w-full resize-none bg-transparent px-3.5 pt-3 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/70"
         />
-        <div className="flex items-center gap-1 px-2 pt-1 pb-2">
+        <div className="relative flex flex-wrap items-center gap-1 px-2 pt-1 pb-2">
           <ModelPicker />
           <div className="mx-0.5 h-4 w-px bg-border" />
           <EffortPicker />
+          <PermissionPicker />
           <div className="flex-1" />
           <button
             type="button"
@@ -551,6 +601,125 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   );
 }
 
+const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|svg|avif)$/i;
+const isImage = (path: string) => IMAGE_EXTENSIONS.test(path);
+const assetName = (path: string) => path.replace(/^assets\//, "");
+
+/** How many previews the fan shows; the rest are counted on a badge. */
+const FAN_SIZE = 4;
+
+/**
+ * Attached images as a fan of cards tucked behind the composer, peeking up above its top
+ * edge. Clicking it opens {@link ImageGrid}.
+ */
+function ImageFan(props: { deckId: string; images: string[]; onOpen: () => void }) {
+  const { deckId, images } = props;
+  const shown = images.slice(-FAN_SIZE);
+  const mid = (shown.length - 1) / 2;
+  const label = `${images.length} attached image${images.length === 1 ? "" : "s"}`;
+  return (
+    <div className="relative h-10">
+      <button
+        type="button"
+        onClick={props.onOpen}
+        title={`${label} · click to review`}
+        aria-label={`Show ${label}`}
+        className="group absolute right-10 top-0 h-16 w-32"
+      >
+        {shown.map((path, i) => {
+          const offset = i - mid;
+          return (
+            <img
+              key={path}
+              src={deckFileUrl(deckId, path)}
+              alt={assetName(path)}
+              draggable={false}
+              style={{ "--x": `${offset * 18}px`, "--r": `${offset * 8}deg` } as React.CSSProperties}
+              className={cn(
+                "absolute left-1/2 top-0 size-14 -ml-7 rounded-lg border-2 border-card bg-muted object-cover shadow-md transition-transform duration-200",
+                "origin-bottom [transform:translateX(var(--x))_rotate(var(--r))]",
+                "group-hover:[transform:translateX(calc(var(--x)*1.6))_translateY(-6px)_rotate(calc(var(--r)*1.5))]",
+              )}
+            />
+          );
+        })}
+        {images.length > shown.length && (
+          <span className="absolute -right-1 top-0 z-10 rounded-full bg-foreground px-1.5 text-2xs font-medium text-background tabular-nums">
+            +{images.length - shown.length}
+          </span>
+        )}
+      </button>
+    </div>
+  );
+}
+
+/** Every attached image as a preview, each with a way to remove it. */
+function ImageGrid(props: { deckId: string; images: string[]; onRemove: (path: string) => void; onClose: () => void }) {
+  const { deckId, images, onClose } = props;
+  const ref = useRef<HTMLDivElement>(null);
+  useDismiss(ref, true, onClose);
+  return (
+    <div
+      ref={ref}
+      role="dialog"
+      aria-label="Attached images"
+      className="absolute bottom-full left-3 right-3 z-20 mb-1 rounded-xl border bg-card p-2 shadow-composer"
+    >
+      <div className="flex items-center justify-between px-1 pb-2">
+        <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+          {images.length} image{images.length === 1 ? "" : "s"}
+        </span>
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={onClose}
+          className="rounded-md p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <X className="size-3.5" />
+        </button>
+      </div>
+      <div className="grid max-h-72 grid-cols-3 gap-2 overflow-y-auto">
+        {images.map((path) => (
+          <figure key={path} className="group relative m-0">
+            <img
+              src={deckFileUrl(deckId, path)}
+              alt={assetName(path)}
+              draggable={false}
+              className="aspect-square w-full rounded-lg border bg-muted object-cover"
+            />
+            <figcaption className="truncate pt-0.5 text-2xs text-muted-foreground">{assetName(path)}</figcaption>
+            <button
+              type="button"
+              aria-label={`Remove ${assetName(path)}`}
+              title="Remove"
+              onClick={() => props.onRemove(path)}
+              className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-black/60 text-white opacity-80 hover:opacity-100 group-hover:opacity-100"
+            >
+              <X className="size-3" />
+            </button>
+          </figure>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Clipboard images usually arrive as a generic "image.png"; name them after the paste. */
+function pastedName(file: File): string {
+  const ext = file.type.split("/")[1]?.split("+")[0] || "png";
+  const generic = !file.name || /^image\.\w+$/i.test(file.name);
+  return generic ? `pasted-image.${ext === "jpeg" ? "jpg" : ext}` : file.name;
+}
+
+function readBase64(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ""));
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read the pasted image"));
+    reader.readAsDataURL(file);
+  });
+}
+
 /**
  * How much of the agent's context window the conversation fills, with a way to compact it
  * once it gets large. Hidden until the selected provider reports its usage.
@@ -572,11 +741,11 @@ function ContextMeter() {
       : `The conversation holds ${tokens.toLocaleString("en-US")} tokens` +
         (window ? ` of the ${window.toLocaleString("en-US")}-token context window` : "");
 
-  // A tab resting on the composer's top edge.
+  // A tab resting on the composer's top edge, opaque so the image fan tucks behind it.
   return (
     <div
       title={title}
-      className="mx-3 flex h-8 items-center gap-2.5 rounded-t-xl border border-b-0 bg-muted px-3 text-xs"
+      className="relative z-10 mx-3 flex h-8 items-center gap-2.5 rounded-t-xl border border-b-0 bg-card bg-[linear-gradient(var(--muted),var(--muted))] px-3 text-xs"
     >
       <div
         role="progressbar"

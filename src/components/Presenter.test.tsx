@@ -74,6 +74,15 @@ describe("Presenter", () => {
     expect(useApp.getState().presenting).toBe(true);
   });
 
+  it("has previous and next buttons that drive the player", () => {
+    render(<Presenter />);
+    const post = vi.spyOn(frame().contentWindow!, "postMessage");
+    fireEvent.click(screen.getByLabelText("Next slide"));
+    expect(post).toHaveBeenLastCalledWith({ type: "slop:go", key: "ArrowRight" }, "*");
+    fireEvent.click(screen.getByLabelText("Previous slide"));
+    expect(post).toHaveBeenLastCalledWith({ type: "slop:go", key: "ArrowLeft" }, "*");
+  });
+
   it("ignores messages that are not from the show", () => {
     render(<Presenter />);
     fromFrame({ type: "slop:key", key: "Escape" }, window);
@@ -429,6 +438,28 @@ describe("Presenter tools", () => {
       expect(bar.dataset.visible).toBe("true");
       act(() => void vi.advanceTimersByTime(2000));
       expect(bar.dataset.visible).toBe("false");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the arrow buttons show at the start, on hover and briefly after shortcuts", () => {
+    vi.useFakeTimers();
+    try {
+      render(<Presenter />);
+      const next = screen.getByLabelText("Next slide");
+      const zone = screen.getByTestId("nav-zone");
+      expect(next.dataset.visible).toBe("true");
+      act(() => void vi.advanceTimersByTime(2000));
+      expect(next.dataset.visible).toBe("false");
+      fireEvent.mouseEnter(zone);
+      expect(next.dataset.visible).toBe("true");
+      fireEvent.mouseLeave(zone);
+      expect(next.dataset.visible).toBe("false");
+      fireEvent.keyDown(document.body, { key: "p" });
+      expect(next.dataset.visible).toBe("true");
+      act(() => void vi.advanceTimersByTime(2000));
+      expect(next.dataset.visible).toBe("false");
     } finally {
       vi.useRealTimers();
     }

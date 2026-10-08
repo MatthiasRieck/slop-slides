@@ -25,9 +25,10 @@ Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.
 
 ## Requirements
 
-- [Claude Code](https://claude.com/claude-code), installed and signed in (`claude` works in a
-  terminal). SlopSlide runs it headless for each chat turn. To use a binary outside your
-  PATH, set `SLOPSLIDE_CLAUDE_PATH`.
+- An installed, signed-in agent CLI: [Claude Code](https://claude.com/claude-code),
+  [OpenAI Codex](https://developers.openai.com/codex/cli), or GitHub Copilot. Select its
+  model in the chat composer. To use a binary outside your PATH, set
+  `SLOPSLIDE_CLAUDE_PATH`, `SLOPSLIDE_CODEX_PATH`, or `SLOPSLIDE_COPILOT_PATH`.
 - For development: Node 22+, pnpm, Rust (stable), and the
   [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS.
 
@@ -43,11 +44,74 @@ pnpm app:build      # installers for the current OS → src-tauri/target/release
 and read-only access to your deck library (`dev/browserPreview.ts`). This is handy for
 UI work. Chat and editing need the desktop app.
 
-Checks: `pnpm typecheck`, `cargo test --manifest-path src-tauri/Cargo.toml`.
+Run `./check.sh` for typechecking, frontend tests/build, Rust formatting, clippy, and Rust
+tests. Every tool comes from `package.json` or `src-tauri/Cargo.toml`; nothing else needs to
+be installed. CI runs this same script on macOS, Linux, and Windows, including approval
+routing and cancellation tests against a mock Codex app-server built into the Rust test
+binary. The full chat approval flow is tested through events, the store, UI, IPC
+responses, and transcript persistence.
+
+The Rust tests also validate every request and approval response we send to Codex against
+protocol schemas pinned from Codex **0.147.0** (the tested baseline) in
+`fixtures/codex-schemas/`. This catches protocol drift, including changes to MCP approval
+shapes, without an account, credentials, or model inference. To check a newer Codex
+release, run `scripts/update-codex-schemas.sh <version>` and then `./check.sh`. Live
+behavior tests below remain opt-in; schema validation cannot detect every behavioral
+change in an external CLI.
 
 The top bar shows whether `deck.html` passes the HTML lint. When it does not, clicking the
 status puts fix instructions into the chat composer; the agent then fixes the issues and
 re-checks with its `lint_deck` tool.
+
+## Codex permissions
+
+With a Codex model selected, the composer shows a permissions picker:
+
+- **Ask for approval** (default): Codex works inside the deck workspace and asks for extra access.
+- **Approve for me**: the same workspace boundary, with Codex's automatic reviewer handling
+  eligible approval requests. Automatic reviews can consume additional subscription usage.
+- **Full access**: no sandbox or approval prompts. Selecting it requires confirmation.
+- **Custom**: use the current Codex configuration, including sandbox, approval policy, and reviewer.
+
+The selection is remembered locally and cannot change during a turn. It is reapplied when
+resuming a conversation; it does not modify `~/.codex/config.toml`. Modes unavailable in the
+installed CLI or disallowed by managed requirements are omitted. Codex remains responsible
+for enforcing the effective policy; unsupported or restricted configurations produce an error.
+
+Requests appear in chat with the command, proposed file changes, network destination, or
+requested permissions. Choose **Allow once**, **Deny**, or **Stop**; session approval is
+shown when offered by Codex. Additional permission grants are limited to the current turn.
+Automatic reviews show their status and rationale. Requests close when their turn ends.
+Leaving a deck stops its active Codex turn and saves the interrupted transcript, so an
+approval cannot remain waiting in a hidden deck.
+MCP tool approval confirmations use the same cards, including session approval when offered
+by Codex. Structured input forms, URL authentication, and device verification are not supported
+yet and receive an explicit error instead of being automatically approved.
+
+Codex chat uses `codex app-server` with your existing CLI login. ChatGPT sign-in uses your
+subscription; API-key sign-in uses API billing. Update an older CLI with `codex update` if
+permission discovery fails. Claude and Copilot retain their existing permission behavior.
+
+Checks include an offline mock app-server. An optional live test makes two tiny inference
+requests, verifies streaming and resume, and requests no file changes:
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml real_codex_smoke_test -- --ignored
+```
+
+To inspect the installed server's effective permission presets without model inference:
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml real_codex_permission_modes_test -- --ignored
+```
+
+The live MCP regression test approves only `slopslide/lint_deck` on a temporary deck
+and makes one model request:
+
+```sh
+cargo build --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path src-tauri/Cargo.toml real_codex_lint_approval_test -- --ignored
+```
 
 ## Releases
 
@@ -67,8 +131,8 @@ src-tauri/src/
                         rules; shown as the status button in the top bar
   mcp.rs                stdio MCP server (`slopslide --lint-mcp <deck>`) exposing the
                         linter to the agent as its `lint_deck` tool
-  agent.rs              runs `claude -p --output-format stream-json` per turn, resumes the
-                        deck's session, normalizes the stream into `agent-event`s
+  agent.rs              manages turns and snapshots; normalizes provider events for the UI
+  codex.rs              Codex app-server transport, permissions, and approval responses
   protocol.rs           `slop://` scheme serving deck files to the slide iframes;
                         adds the slide editor (assets/editor.js) for edit mode
   watcher.rs            file watcher → `deck-changed` events, so edits stream into the UI
@@ -90,9 +154,11 @@ it in sandboxed iframes (`deck.html?embed&slide=<id>`), so the thumbnails, stage
 exported file all use the same player. Before every agent turn and slide deletion, a copy is
 saved to `.slopslide/snapshots/` (last 30 kept).
 
-The agent only gets file tools (Read/Write/Edit/Glob/Grep plus web search/fetch) and the
-app's own `lint_deck` tool. It has no shell access and loads no other MCP servers. You can also edit `deck.html` by hand in any editor;
-the app picks up the changes.
+Claude receives file tools (Read/Write/Edit/Glob/Grep plus web search/fetch) and the app's
+`lint_deck` tool, with no shell access or other MCP servers. Codex uses its configured tools
+and MCP servers, plus `lint_deck`, under the selected permission mode. Copilot uses its
+existing deck-scoped permission handler. You can also edit `deck.html` by hand in any
+editor; the app picks up the changes.
 
 The design guidance in the agent's prompt draws on
 [frontend-slides](https://github.com/zarazhangrui/frontend-slides) (MIT). See

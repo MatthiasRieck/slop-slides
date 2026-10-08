@@ -537,27 +537,48 @@ pub fn import_assets(dir: &Path, paths: Vec<String>) -> Result<Vec<String>> {
         if !source.is_file() {
             continue;
         }
-        let stem = html::slugify(&source.file_stem().unwrap_or_default().to_string_lossy());
-        let stem = if stem.is_empty() {
-            "asset".to_string()
-        } else {
-            stem
-        };
-        let ext = source
-            .extension()
-            .map(|e| format!(".{}", e.to_string_lossy().to_lowercase()))
-            .unwrap_or_default();
-        let dest = std::iter::once(assets.join(format!("{stem}{ext}")))
-            .chain((2..).map(|n| assets.join(format!("{stem}-{n}{ext}"))))
-            .find(|p| !p.exists())
-            .expect("unbounded");
+        let dest = free_asset_path(&assets, &source);
         fs::copy(&source, &dest)?;
-        imported.push(format!(
-            "assets/{}",
-            dest.file_name().unwrap().to_string_lossy()
-        ));
+        imported.push(asset_ref(&dest));
     }
     Ok(imported)
+}
+
+/// Writes pasted file contents (base64) into `assets/`, named after `name`; returns its ref.
+pub fn save_asset(dir: &Path, name: &str, data: &str) -> Result<String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.trim())
+        .map_err(|e| Error::msg(format!("invalid pasted data: {e}")))?;
+    let assets = dir.join("assets");
+    fs::create_dir_all(&assets)?;
+    // Only the file name counts; a pasted name must not reach outside `assets/`.
+    let name = Path::new(name).file_name().unwrap_or_default();
+    let dest = free_asset_path(&assets, Path::new(name));
+    fs::write(&dest, bytes)?;
+    Ok(asset_ref(&dest))
+}
+
+/// A path in `assets` for a file named like `source`: slugged, lowercase extension, unused.
+fn free_asset_path(assets: &Path, source: &Path) -> PathBuf {
+    let stem = html::slugify(&source.file_stem().unwrap_or_default().to_string_lossy());
+    let stem = if stem.is_empty() {
+        "asset".to_string()
+    } else {
+        stem
+    };
+    let ext = source
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy().to_lowercase()))
+        .unwrap_or_default();
+    std::iter::once(assets.join(format!("{stem}{ext}")))
+        .chain((2..).map(|n| assets.join(format!("{stem}-{n}{ext}"))))
+        .find(|p| !p.exists())
+        .expect("unbounded")
+}
+
+fn asset_ref(path: &Path) -> String {
+    format!("assets/{}", path.file_name().unwrap().to_string_lossy())
 }
 
 fn internal_file(dir: &Path, name: &str) -> Result<PathBuf> {
@@ -1399,6 +1420,31 @@ mod tests {
             "png"
         );
         assert!(import_assets(&deck.0, vec![]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn saves_pasted_assets_with_unique_names() {
+        let deck = TempDeck::new(ORIGINAL);
+        // "aGk=" is "hi".
+        assert_eq!(
+            save_asset(&deck.0, "Screen Shot.PNG", "aGk=").unwrap(),
+            "assets/screen-shot.png"
+        );
+        assert_eq!(
+            save_asset(&deck.0, "Screen Shot.PNG", "aGk=").unwrap(),
+            "assets/screen-shot-2.png"
+        );
+        assert_eq!(
+            fs::read_to_string(deck.0.join("assets/screen-shot-2.png")).unwrap(),
+            "hi"
+        );
+        assert_eq!(
+            save_asset(&deck.0, "../../evil.png", "aGk=").unwrap(),
+            "assets/evil.png"
+        );
+        assert_eq!(save_asset(&deck.0, "", "aGk=").unwrap(), "assets/asset");
+        assert!(save_asset(&deck.0, "x.png", "not base64!").is_err());
+        assert!(!deck.0.join("assets/x.png").exists());
     }
 
     #[test]

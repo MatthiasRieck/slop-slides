@@ -1,5 +1,6 @@
 mod agent;
 mod capture;
+mod codex;
 mod copilot;
 mod deck;
 mod env;
@@ -173,6 +174,11 @@ fn import_assets(app: AppHandle, id: String, paths: Vec<String>) -> Result<Vec<S
 }
 
 #[tauri::command]
+fn save_asset(app: AppHandle, id: String, name: String, data: String) -> Result<String> {
+    deck::save_asset(&deck::deck_dir(&app, &id)?, &name, &data)
+}
+
+#[tauri::command]
 fn export_deck(app: AppHandle, id: String, dest: String) -> Result<()> {
     deck::export(&deck::deck_dir(&app, &id)?, std::path::Path::new(&dest))
 }
@@ -247,6 +253,22 @@ fn send_message(app: AppHandle, agent: State<AgentManager>, args: SendArgs) -> R
 }
 
 #[tauri::command]
+async fn codex_permission_modes(app: AppHandle, id: String) -> Result<Vec<codex::PermissionMode>> {
+    let dir = deck::deck_dir(&app, &id)?;
+    codex::permission_modes(&dir).await
+}
+
+#[tauri::command]
+fn respond_approval(
+    agent: State<AgentManager>,
+    deck_id: String,
+    id: String,
+    decision: codex::Decision,
+) -> Result<()> {
+    agent.approvals.respond(&deck_id, &id, decision)
+}
+
+#[tauri::command]
 fn interrupt_agent(agent: State<AgentManager>, id: String) {
     agent.interrupt(&id);
 }
@@ -300,6 +322,7 @@ pub fn run() {
             update_slide,
             save_deck_source,
             import_assets,
+            save_asset,
             export_deck,
             lint_deck,
             capture_sketch,
@@ -310,6 +333,8 @@ pub fn run() {
             reset_chat,
             send_message,
             interrupt_agent,
+            codex_permission_modes,
+            respond_approval,
             agent_running,
             list_providers,
         ])

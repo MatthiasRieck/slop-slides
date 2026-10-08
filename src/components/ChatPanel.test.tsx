@@ -53,7 +53,7 @@ const compact = vi.fn(async () => {});
 afterEach(() => flushReviewSave());
 
 beforeEach(() => {
-  invoke.mockReset();
+  invoke.mockReset().mockResolvedValue([]);
   openDialog.mockReset();
   unlistenDragDrop.mockReset();
   dragDrop = null;
@@ -424,12 +424,14 @@ describe("ChatPanel: attachments", () => {
     render(<ChatPanel />);
     await act(async () => fireEvent.click(screen.getByTitle("Attach images or files")));
     expect(invoke).toHaveBeenCalledWith("import_assets", { id: "talk", paths: ["/Users/me/Photo.PNG", "/Users/me/data.csv"] });
-    expect(screen.getByText("photo.png")).toBeTruthy();
+    // Images go in the fan; other files stay chips.
+    expect(screen.getByAltText("photo.png")).toBeTruthy();
     expect(screen.getByText("data.csv")).toBeTruthy();
     type("Use these");
     fireEvent.keyDown(textarea(), { key: "Enter" });
     expect(send).toHaveBeenCalledWith("Use these", { includeSlide: true, attachments: ["assets/photo.png", "assets/data.csv"] });
-    expect(screen.queryByText("photo.png")).toBeNull();
+    expect(screen.queryByAltText("photo.png")).toBeNull();
+    expect(screen.queryByText("data.csv")).toBeNull();
   });
 
   it("does nothing when the picker is cancelled", async () => {
@@ -454,9 +456,11 @@ describe("ChatPanel: attachments", () => {
     const attach = screen.getByTitle("Attach images or files");
     await act(async () => fireEvent.click(attach));
     await act(async () => fireEvent.click(attach));
-    expect(screen.getAllByText("a.png")).toHaveLength(1);
-    fireEvent.click(screen.getByText("a.png").querySelector("button")!);
-    expect(screen.queryByText("a.png")).toBeNull();
+    expect(screen.getAllByAltText("a.png")).toHaveLength(1);
+    fireEvent.click(screen.getByLabelText("Show 1 attached image"));
+    fireEvent.click(screen.getByLabelText("Remove a.png"));
+    expect(screen.queryByAltText("a.png")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("imports files dropped on the window", async () => {
@@ -472,7 +476,7 @@ describe("ChatPanel: attachments", () => {
     await act(async () => dragDrop!({ payload: { type: "drop", paths: ["/tmp/drop.png"] } }));
     expect(composer().className).not.toContain("border-primary");
     expect(invoke).toHaveBeenCalledWith("import_assets", { id: "talk", paths: ["/tmp/drop.png"] });
-    expect(screen.getByText("drop.png")).toBeTruthy();
+    expect(screen.getByAltText("drop.png")).toBeTruthy();
   });
 
   it("stops listening for drops when unmounted", async () => {
@@ -480,6 +484,125 @@ describe("ChatPanel: attachments", () => {
     await waitFor(() => expect(dragDrop).not.toBeNull());
     unmount();
     expect(unlistenDragDrop).toHaveBeenCalled();
+  });
+
+  const paste = (files: File[], text = "") =>
+    fireEvent.paste(textarea(), {
+      clipboardData: { files, getData: (type: string) => (type === "text/plain" ? text : "") },
+    });
+
+  it("saves pasted images as assets and attaches them", async () => {
+    invoke.mockImplementation(async (_cmd: string, args: { name: string }) => `assets/${args.name}`);
+    render(<ChatPanel />);
+    const shot = new File(["hi"], "image.png", { type: "image/png" });
+    const photo = new File(["jpg"], "Holiday.jpeg", { type: "image/jpeg" });
+    await act(async () => paste([shot, photo]));
+    await waitFor(() => expect(screen.getByAltText("Holiday.jpeg")).toBeTruthy());
+    expect(invoke).toHaveBeenCalledWith("save_asset", { id: "talk", name: "pasted-image.png", data: "aGk=" });
+    expect(invoke).toHaveBeenCalledWith("save_asset", { id: "talk", name: "Holiday.jpeg", data: "anBn" });
+    expect(screen.getByAltText("pasted-image.png").getAttribute("src")).toMatch(/\/talk\/assets\/pasted-image\.png$/);
+    type("Use these");
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(send).toHaveBeenCalledWith("Use these", {
+      includeSlide: true,
+      attachments: ["assets/pasted-image.png", "assets/Holiday.jpeg"],
+    });
+  });
+
+  it("names a nameless pasted image after its type", async () => {
+    invoke.mockImplementation(async (_cmd: string, args: { name: string }) => `assets/${args.name}`);
+    render(<ChatPanel />);
+    await act(async () => paste([new File(["x"], "", { type: "image/jpeg" })]));
+    await waitFor(() => expect(screen.getByAltText("pasted-image.jpg")).toBeTruthy());
+  });
+
+  it("leaves text-only and non-image pastes alone", async () => {
+    render(<ChatPanel />);
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.assign(event, {
+      clipboardData: { files: [new File(["a,b"], "data.csv", { type: "text/csv" })], getData: () => "" },
+    });
+    await act(async () => textarea().dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(false);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("keeps text that came with a pasted image", async () => {
+    invoke.mockResolvedValue("assets/pasted-image.png");
+    render(<ChatPanel />);
+    const withText = new Event("paste", { bubbles: true, cancelable: true });
+    Object.assign(withText, {
+      clipboardData: { files: [new File(["hi"], "image.png", { type: "image/png" })], getData: () => "caption" },
+    });
+    await act(async () => textarea().dispatchEvent(withText));
+    expect(withText.defaultPrevented).toBe(false);
+    const imageOnly = new Event("paste", { bubbles: true, cancelable: true });
+    Object.assign(imageOnly, {
+      clipboardData: { files: [new File(["hi"], "image.png", { type: "image/png" })], getData: () => "" },
+    });
+    await act(async () => textarea().dispatchEvent(imageOnly));
+    expect(imageOnly.defaultPrevented).toBe(true);
+  });
+
+  it("reports a failed paste", async () => {
+    invoke.mockRejectedValue("disk full");
+    render(<ChatPanel />);
+    await act(async () => paste([new File(["hi"], "image.png", { type: "image/png" })]));
+    await waitFor(() => expect(useApp.getState().error).toBe("disk full"));
+  });
+
+  it("shows image previews in a fan that opens a grid to review and remove them", async () => {
+    const names = ["a.png", "b.jpg", "c.gif", "d.webp", "e.svg"];
+    openDialog.mockResolvedValue(names.map((n) => `/${n}`));
+    invoke.mockResolvedValue(names.map((n) => `assets/${n}`));
+    render(<ChatPanel />);
+    await act(async () => fireEvent.click(screen.getByTitle("Attach images or files")));
+
+    // The fan previews the latest four and counts the rest.
+    const fan = screen.getByLabelText("Show 5 attached images");
+    expect(Array.from(fan.querySelectorAll("img")).map((img) => img.alt)).toEqual(names.slice(1));
+    expect(fan.textContent).toBe("+1");
+
+    fireEvent.click(fan);
+    const grid = screen.getByRole("dialog", { name: "Attached images" });
+    expect(screen.queryByLabelText("Show 5 attached images")).toBeNull();
+    expect(Array.from(grid.querySelectorAll("img")).map((img) => img.alt)).toEqual(names);
+    expect(grid.textContent).toContain("5 images");
+
+    fireEvent.click(screen.getByLabelText("Remove c.gif"));
+    expect(screen.queryByAltText("c.gif")).toBeNull();
+    expect(screen.getByRole("dialog").textContent).toContain("4 images");
+
+    // Escape closes the grid back to the fan.
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByLabelText("Show 4 attached images")).toBeTruthy();
+
+    // So do the close button and a click outside.
+    fireEvent.click(screen.getByLabelText("Show 4 attached images"));
+    fireEvent.click(screen.getByLabelText("Close"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Show 4 attached images"));
+    fireEvent.pointerDown(textarea());
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    type("Use these");
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(send).toHaveBeenCalledWith("Use these", {
+      includeSlide: true,
+      attachments: ["assets/a.png", "assets/b.jpg", "assets/d.webp", "assets/e.svg"],
+    });
+    expect(screen.queryByLabelText(/attached image/)).toBeNull();
+  });
+
+  it("removes a non-image attachment chip", async () => {
+    openDialog.mockResolvedValue(["/notes.md"]);
+    invoke.mockResolvedValue(["assets/notes.md"]);
+    render(<ChatPanel />);
+    await act(async () => fireEvent.click(screen.getByTitle("Attach images or files")));
+    expect(screen.queryByLabelText(/attached image/)).toBeNull();
+    fireEvent.click(screen.getByLabelText("Remove notes.md"));
+    expect(screen.queryByText("notes.md")).toBeNull();
   });
 
   it("reports a failed import", async () => {

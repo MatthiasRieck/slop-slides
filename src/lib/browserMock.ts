@@ -61,10 +61,14 @@ export function installBrowserMock() {
           ];
         case "agent_running":
           return false;
+        case "codex_permission_modes":
+          throw new Error("Codex permissions require the desktop app.");
         case "lint_deck":
           return [];
         case "save_deck_source":
           throw new Error("Saving is not available in the browser preview.");
+        case "save_asset":
+          return `assets/${String(a.name)}`;
         case "load_chat":
           return JSON.parse(localStorage.getItem(`mock-chat-${String(a.id)}`) ?? "null");
         default:

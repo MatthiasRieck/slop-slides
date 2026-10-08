@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
+import type { Approval, ApprovalDecision, PermissionMode } from "./permissions";
 import type { Stroke } from "./ink";
 import type { Provider, ProviderInfo } from "./models";
 
@@ -65,6 +66,9 @@ export interface LintIssue {
 }
 
 export type AgentEvent =
+  | { type: "approvalRequested"; approval: Approval }
+  | { type: "approvalResolved"; id: string }
+  | { type: "approvalReview"; id: string; status: string; detail: string | null }
   | { type: "started"; sessionId: string | null }
   | { type: "thinking" }
   | { type: "textStart" }
@@ -155,10 +159,13 @@ export const api = {
   sendMessage: (
     deckId: string,
     prompt: string,
-    selection: { provider: Provider; model: string; effort: string; contextWindow: string | null },
+    selection: { provider: Provider; model: string; effort: string; contextWindow: string | null; permissionMode?: PermissionMode },
     /** Summarize the conversation so far instead of sending `prompt`. */
     compact = false,
   ) => invoke<void>("send_message", { args: { deckId, prompt, ...selection, compact } }),
+  codexPermissionModes: (id: string) => invoke<PermissionMode[]>("codex_permission_modes", { id }),
+  respondApproval: (deckId: string, id: string, decision: ApprovalDecision) =>
+    invoke<void>("respond_approval", { deckId, id, decision }),
   interruptAgent: (id: string) => invoke<void>("interrupt_agent", { id }),
   agentRunning: (id: string) => invoke<boolean>("agent_running", { id }),
   listProviders: () => invoke<ProviderInfo[]>("list_providers"),

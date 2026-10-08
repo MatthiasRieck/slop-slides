@@ -1,5 +1,6 @@
 mod agent;
 mod capture;
+mod codex;
 mod copilot;
 mod deck;
 mod env;
@@ -252,6 +253,22 @@ fn send_message(app: AppHandle, agent: State<AgentManager>, args: SendArgs) -> R
 }
 
 #[tauri::command]
+async fn codex_permission_modes(app: AppHandle, id: String) -> Result<Vec<codex::PermissionMode>> {
+    let dir = deck::deck_dir(&app, &id)?;
+    codex::permission_modes(&dir).await
+}
+
+#[tauri::command]
+fn respond_approval(
+    agent: State<AgentManager>,
+    deck_id: String,
+    id: String,
+    decision: codex::Decision,
+) -> Result<()> {
+    agent.approvals.respond(&deck_id, &id, decision)
+}
+
+#[tauri::command]
 fn interrupt_agent(agent: State<AgentManager>, id: String) {
     agent.interrupt(&id);
 }
@@ -316,6 +333,8 @@ pub fn run() {
             reset_chat,
             send_message,
             interrupt_agent,
+            codex_permission_modes,
+            respond_approval,
             agent_running,
             list_providers,
         ])

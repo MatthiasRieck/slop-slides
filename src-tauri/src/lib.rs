@@ -5,6 +5,7 @@ mod deck;
 mod env;
 mod error;
 mod html;
+mod images;
 mod lint;
 mod mcp;
 mod protocol;
@@ -13,7 +14,8 @@ mod review;
 mod watcher;
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
+use tauri_plugin_opener::OpenerExt;
 
 use agent::{AgentManager, SendArgs};
 use deck::{Deck, DeckSummary};
@@ -182,6 +184,30 @@ fn lint_deck(app: AppHandle, id: String) -> Result<Vec<lint::Issue>> {
     deck::lint(&deck::deck_dir(&app, &id)?)
 }
 
+#[tauri::command]
+fn save_deck_image(app: AppHandle, id: String, source: String, dest: String) -> Result<()> {
+    images::save(
+        &deck::deck_dir(&app, &id)?,
+        &source,
+        std::path::Path::new(&dest),
+    )
+}
+
+#[tauri::command]
+fn open_deck_image(app: AppHandle, id: String, source: String) -> Result<()> {
+    let path = images::open_path(
+        &deck::deck_dir(&app, &id)?,
+        &source,
+        &app.path()
+            .app_cache_dir()
+            .map_err(|e| error::Error::msg(e.to_string()))?
+            .join("images"),
+    )?;
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|e| error::Error::msg(e.to_string()))
+}
+
 /// Screenshots `rect` of the window (the sketched-on slide) into the deck's internals.
 /// Both are in CSS pixels; `viewport` is the window's size, to find the display scale.
 #[tauri::command]
@@ -300,6 +326,8 @@ pub fn run() {
             update_slide,
             save_deck_source,
             import_assets,
+            save_deck_image,
+            open_deck_image,
             export_deck,
             lint_deck,
             capture_sketch,

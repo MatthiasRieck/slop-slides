@@ -61,6 +61,7 @@ export function browserPreview(): Plugin {
           // slide editor on top of it.
           const { searchParams: q } = url;
           const names = [
+            "image-menu.js",
             ...(q.has("pan") || q.has("show") || q.has("edit") ? ["pasteboard.js"] : []),
             ...(q.has("edit") ? ["editor.js"] : []),
           ];

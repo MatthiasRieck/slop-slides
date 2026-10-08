@@ -161,6 +161,70 @@ describe("ChatPanel: empty chat", () => {
 });
 
 describe("ChatPanel: composing", () => {
+  const resizeHandle = () => screen.getByRole("separator", { name: "Resize message input" });
+  const dragInput = (from: number, to: number, finish = "pointerup") => {
+    const handle = resizeHandle();
+    handle.setPointerCapture = vi.fn();
+    handle.hasPointerCapture = () => true;
+    handle.releasePointerCapture = vi.fn();
+    for (const [event, y] of [["pointerdown", from], ["pointermove", to], [finish, to]] as const) {
+      fireEvent(handle, new MouseEvent(event, { bubbles: true, button: 0, clientY: y }));
+    }
+  };
+
+  it("allows vertical resizing and keeps the chosen height when editing or sending", () => {
+    render(<ChatPanel />);
+    const input = textarea();
+    vi.spyOn(input, "getBoundingClientRect").mockReturnValue({ height: 80 } as DOMRect);
+    dragInput(400, 300);
+    expect(input.style.height).toBe("180px");
+    type("Make it blue");
+    expect(input.style.height).toBe("180px");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input.style.height).toBe("180px");
+    expect(input.value).toBe("");
+  });
+
+  it("shrinks by dragging down and stops resizing after release or cancellation", () => {
+    render(<ChatPanel />);
+    const input = textarea();
+    vi.spyOn(input, "getBoundingClientRect").mockReturnValue({ height: 180 } as DOMRect);
+    dragInput(300, 360);
+    expect(input.style.height).toBe("120px");
+    fireEvent(resizeHandle(), new MouseEvent("pointermove", { bubbles: true, clientY: 100 }));
+    expect(input.style.height).toBe("120px");
+    dragInput(300, 380, "pointercancel");
+    fireEvent(resizeHandle(), new MouseEvent("pointermove", { bubbles: true, clientY: 100 }));
+    expect(input.style.height).toBe("100px");
+  });
+
+  it("limits resizing and supports the keyboard", () => {
+    render(<ChatPanel />);
+    const input = textarea();
+    vi.spyOn(input, "getBoundingClientRect").mockReturnValue({ height: 80 } as DOMRect);
+    dragInput(400, -1000);
+    expect(input.style.height).toBe("240px");
+    dragInput(400, 1000);
+    expect(input.style.height).toBe("64px");
+    fireEvent.keyDown(resizeHandle(), { key: "ArrowUp" });
+    expect(input.style.height).toBe("96px");
+    fireEvent.keyDown(resizeHandle(), { key: "End" });
+    expect(input.style.height).toBe("240px");
+    fireEvent.keyDown(resizeHandle(), { key: "Home" });
+    expect(input.style.height).toBe("64px");
+  });
+
+  it("still grows automatically with the draft until manually resized", () => {
+    render(<ChatPanel />);
+    const input = textarea();
+    Object.defineProperty(input, "scrollHeight", { configurable: true, value: 120 });
+    type("A longer draft");
+    expect(input.style.height).toBe("120px");
+    Object.defineProperty(input, "scrollHeight", { configurable: true, value: 300 });
+    type("An even longer draft");
+    expect(input.style.height).toBe("240px");
+  });
+
   it("sends on Enter with the current slide and clears the draft", () => {
     render(<ChatPanel />);
     type("  Make it blue  ");

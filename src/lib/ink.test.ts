@@ -1,6 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import { INK_STYLE, inkBounds, isDot, SLIDE_SIZE, strokePath, TOOL_KEYS, toFraction, toPixels, zoomBox, type Stroke } from "./ink";
+import {
+  INK_STYLE,
+  inkBounds,
+  isDot,
+  pruneTrails,
+  SLIDE_SIZE,
+  strokePath,
+  TOOL_KEYS,
+  toFraction,
+  toPixels,
+  TRAIL_FADE_MS,
+  TRAIL_HOLD_MS,
+  trailFade,
+  trailSegments,
+  zoomBox,
+  type Stroke,
+  type TrailPoint,
+} from "./ink";
 
 describe("strokePath", () => {
   it("draws a line through every point", () => {
@@ -127,5 +144,36 @@ describe("inkBounds", () => {
         ]),
       ]),
     ).toEqual({ left: 0, top: 0, right: SLIDE_SIZE.width, bottom: SLIDE_SIZE.height });
+  });
+});
+
+describe("laser trails", () => {
+  const life = TRAIL_HOLD_MS + TRAIL_FADE_MS;
+  const pt = (x: number, t: number): TrailPoint => ({ x, y: 0.5, t });
+
+  it("stay fully visible for a while, then fade out gradually", () => {
+    expect(trailFade(0)).toBe(1);
+    expect(trailFade(TRAIL_HOLD_MS)).toBe(1);
+    expect(trailFade(TRAIL_HOLD_MS + TRAIL_FADE_MS / 2)).toBeCloseTo(0.5);
+    expect(trailFade(life)).toBe(0);
+    expect(trailFade(life + 1000)).toBe(0);
+  });
+
+  it("draws each visible segment in pixels, faded by the age of its newer end", () => {
+    const trail = [pt(0, 0), pt(0.5, 0), pt(1, TRAIL_FADE_MS)];
+    expect(trailSegments(trail, TRAIL_HOLD_MS + TRAIL_FADE_MS / 2, 200, 100)).toEqual([
+      { x1: 0, y1: 50, x2: 100, y2: 50, fade: 0.5 },
+      { x1: 100, y1: 50, x2: 200, y2: 50, fade: 1 },
+    ]);
+    expect(trailSegments(trail, life, 200, 100)).toEqual([{ x1: 100, y1: 50, x2: 200, y2: 50, fade: 1 }]);
+    expect(trailSegments([pt(0, 0)], 0, 200, 100)).toEqual([]);
+  });
+
+  it("drop faded points and trails, keeping the start of the oldest visible segment", () => {
+    const trail = [pt(0, 0), pt(0.25, 100), pt(0.5, 200), pt(0.75, 300)];
+    const trails = [[pt(0, 0)], trail];
+    expect(pruneTrails(trails, 50)).toBe(trails);
+    expect(pruneTrails(trails, life + 150)).toEqual([[pt(0.25, 100), pt(0.5, 200), pt(0.75, 300)]]);
+    expect(pruneTrails(trails, life + 300)).toEqual([]);
   });
 });

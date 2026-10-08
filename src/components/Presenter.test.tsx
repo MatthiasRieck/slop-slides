@@ -9,6 +9,7 @@ vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setFullscr
 
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { TRAIL_FADE_MS, TRAIL_HOLD_MS } from "../lib/ink";
 import { Presenter } from "./Presenter";
 
 beforeEach(() => {
@@ -420,6 +421,57 @@ describe("Presenter tools", () => {
     expect(strokes()).toHaveLength(0);
     fireEvent.pointerLeave(layer());
     expect(screen.queryByTestId("laser")).toBeNull();
+  });
+
+  it("dragging the laser leaves a trail that lingers, then fades away", () => {
+    vi.useFakeTimers();
+    try {
+      render(<Presenter />);
+      const trail = () => screen.queryAllByTestId("laser-trail");
+      fireEvent.keyDown(document.body, { key: "l" });
+      // Just moving the laser leaves no trail.
+      fireEvent.pointerMove(layer(), { buttons: 0, clientX: 100, clientY: 100 });
+      expect(trail()).toHaveLength(0);
+      fireEvent.pointerDown(layer(), { button: 0, buttons: 1, clientX: 100, clientY: 100, pointerId: 1 });
+      fireEvent.pointerMove(layer(), { buttons: 1, clientX: 200, clientY: 100, pointerId: 1 });
+      fireEvent.pointerMove(layer(), { buttons: 1, clientX: 300, clientY: 150, pointerId: 1 });
+      fireEvent.pointerUp(layer(), { pointerId: 1 });
+      expect(trail()).toHaveLength(2);
+      expect(strokes()).toHaveLength(0);
+      const width = () => Number(trail()[0]!.getAttribute("stroke-width"));
+      const full = width();
+      act(() => void vi.advanceTimersByTime(TRAIL_HOLD_MS - 100));
+      expect(width()).toBe(full);
+      act(() => void vi.advanceTimersByTime(100 + TRAIL_FADE_MS / 2));
+      expect(width()).toBeGreaterThan(0);
+      expect(width()).toBeLessThan(full);
+      act(() => void vi.advanceTimersByTime(TRAIL_FADE_MS));
+      expect(trail()).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a fresh laser trail is as wide as the dot and glows like it", () => {
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "l" });
+    fireEvent.pointerDown(layer(), { button: 0, buttons: 1, clientX: 100, clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(layer(), { buttons: 1, clientX: 200, clientY: 100, pointerId: 1 });
+    const dot = screen.getByTestId("laser");
+    const segment = screen.getByTestId("laser-trail");
+    expect(segment.getAttribute("stroke-width")).toBe(dot.style.width.replace("px", ""));
+    const glow = (css: string) => css.match(/rgb\([^)]*\)/g);
+    expect(glow((segment.closest("svg") as SVGElement).style.filter)).toEqual(glow(dot.style.boxShadow));
+  });
+
+  it("putting the laser away clears its trail", () => {
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "l" });
+    fireEvent.pointerDown(layer(), { button: 0, buttons: 1, clientX: 100, clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(layer(), { buttons: 1, clientX: 200, clientY: 100, pointerId: 1 });
+    expect(screen.queryAllByTestId("laser-trail")).toHaveLength(1);
+    fireEvent.keyDown(document.body, { key: "l" });
+    expect(screen.queryAllByTestId("laser-trail")).toHaveLength(0);
   });
 
   it("the toolbar shows on hover and briefly after shortcuts", () => {

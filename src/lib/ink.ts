@@ -87,3 +87,64 @@ export function inkBounds(
     bottom: clamp(bottom, SLIDE_SIZE.height),
   };
 }
+
+/** A point of a laser trail, in fractions of the layer, with when it was drawn (ms). */
+export interface TrailPoint {
+  x: number;
+  y: number;
+  t: number;
+}
+
+/** How long a laser trail stays fully visible, then how long it takes to fade away (ms). */
+export const TRAIL_HOLD_MS = 1000;
+export const TRAIL_FADE_MS = 700;
+const TRAIL_LIFE_MS = TRAIL_HOLD_MS + TRAIL_FADE_MS;
+
+/** How much of a trail drawn `age` ms ago is left: 1 while held, falling to 0 as it fades. */
+export function trailFade(age: number): number {
+  if (age <= TRAIL_HOLD_MS) return 1;
+  return Math.max(0, 1 - (age - TRAIL_HOLD_MS) / TRAIL_FADE_MS);
+}
+
+/**
+ * Drops what has faded from laser trails. A point stays while the segment it starts is still
+ * visible; trails with no visible segment left go. Returns `trails` itself if nothing changed.
+ */
+export function pruneTrails(trails: readonly TrailPoint[][], now: number): TrailPoint[][] {
+  let changed = false;
+  const kept: TrailPoint[][] = [];
+  for (const trail of trails) {
+    let start = 0;
+    while (start < trail.length - 1 && now - trail[start + 1]!.t >= TRAIL_LIFE_MS) start++;
+    const alive = trail.length > 0 && now - trail[trail.length - 1]!.t < TRAIL_LIFE_MS;
+    if (!alive) {
+      changed = true;
+    } else if (start > 0) {
+      changed = true;
+      kept.push(trail.slice(start));
+    } else {
+      kept.push(trail);
+    }
+  }
+  return changed ? kept : (trails as TrailPoint[][]);
+}
+
+/**
+ * The visible segments of a laser trail in pixels on a layer of the given size, each with how
+ * much of it is left (its newer end's fade), oldest first.
+ */
+export function trailSegments(
+  trail: readonly TrailPoint[],
+  now: number,
+  width: number,
+  height: number,
+): { x1: number; y1: number; x2: number; y2: number; fade: number }[] {
+  const segments = [];
+  for (let i = 1; i < trail.length; i++) {
+    const [a, b] = [trail[i - 1]!, trail[i]!];
+    const fade = trailFade(now - b.t);
+    if (fade <= 0) continue;
+    segments.push({ x1: px(a.x * width), y1: px(a.y * height), x2: px(b.x * width), y2: px(b.y * height), fade });
+  }
+  return segments;
+}

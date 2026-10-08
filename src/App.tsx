@@ -4,6 +4,7 @@ import { Group, Panel, Separator } from "react-resizable-panels";
 
 import { ChatPanel } from "./components/ChatPanel";
 import { CodeView } from "./components/CodeView";
+import { ImageContextMenu } from "./components/ImageContextMenu";
 import { Home } from "./components/Home";
 import { Presenter } from "./components/Presenter";
 import { SlideImageExport } from "./components/SlideImageExport";
@@ -21,6 +22,7 @@ export function App() {
       {deck ? <Editor /> : <Home />}
       {presenting && <Presenter />}
       <SlideImageExport />
+      <ImageContextMenu />
       <ErrorToast />
     </>
   );

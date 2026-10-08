@@ -20,6 +20,7 @@ use tauri::AppHandle;
 use crate::deck;
 
 const PASTEBOARD_JS: &str = include_str!("../assets/pasteboard.js");
+const IMAGE_MENU_JS: &str = include_str!("../assets/image-menu.js");
 const EDITOR_JS: &str = include_str!("../assets/editor.js");
 
 pub fn handle(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
@@ -75,11 +76,11 @@ fn has_param(query: Option<&str>, name: &str) -> bool {
     })
 }
 
-/// The scripts the stage or the show asked for, in the order they run: the editor needs the
-/// pasteboard.
+/// App-only image actions in every preview, followed by optional stage/show scripts.
+/// The editor needs the pasteboard.
 fn stage_scripts(query: Option<&str>) -> Vec<&'static str> {
     let editor = has_param(query, "edit");
-    let mut scripts = Vec::new();
+    let mut scripts = vec![IMAGE_MENU_JS];
     if editor || has_param(query, "pan") || has_param(query, "show") {
         scripts.push(PASTEBOARD_JS);
     }
@@ -155,21 +156,33 @@ mod tests {
     }
 
     #[test]
-    fn scripts_only_on_request() {
+    fn image_actions_always_present_and_stage_scripts_only_on_request() {
         assert_eq!(
             stage_scripts(Some("embed&slide=a&edit=abc")),
-            [PASTEBOARD_JS, EDITOR_JS],
+            [IMAGE_MENU_JS, PASTEBOARD_JS, EDITOR_JS],
             "the editor builds on the pasteboard"
         );
-        assert_eq!(stage_scripts(Some("edit&pan")), [PASTEBOARD_JS, EDITOR_JS]);
-        assert_eq!(stage_scripts(Some("embed&slide=a&pan")), [PASTEBOARD_JS]);
-        assert_eq!(stage_scripts(Some("v=1&show")), [PASTEBOARD_JS]);
-        assert!(stage_scripts(Some("v=1&shown")).is_empty());
-        assert_eq!(stage_scripts(Some("pan=1")), [PASTEBOARD_JS]);
-        assert!(stage_scripts(Some("embed&slide=edit&static")).is_empty());
-        assert!(stage_scripts(Some("embed&slide=pan")).is_empty());
-        assert!(stage_scripts(Some("editor&panel")).is_empty());
-        assert!(stage_scripts(None).is_empty());
+        assert_eq!(
+            stage_scripts(Some("edit&pan")),
+            [IMAGE_MENU_JS, PASTEBOARD_JS, EDITOR_JS]
+        );
+        assert_eq!(
+            stage_scripts(Some("embed&slide=a&pan")),
+            [IMAGE_MENU_JS, PASTEBOARD_JS]
+        );
+        assert_eq!(
+            stage_scripts(Some("v=1&show")),
+            [IMAGE_MENU_JS, PASTEBOARD_JS]
+        );
+        assert_eq!(stage_scripts(Some("v=1&shown")), [IMAGE_MENU_JS]);
+        assert_eq!(stage_scripts(Some("pan=1")), [IMAGE_MENU_JS, PASTEBOARD_JS]);
+        assert_eq!(
+            stage_scripts(Some("embed&slide=edit&static")),
+            [IMAGE_MENU_JS]
+        );
+        assert_eq!(stage_scripts(Some("embed&slide=pan")), [IMAGE_MENU_JS]);
+        assert_eq!(stage_scripts(Some("editor&panel")), [IMAGE_MENU_JS]);
+        assert_eq!(stage_scripts(None), [IMAGE_MENU_JS]);
     }
 
     #[test]

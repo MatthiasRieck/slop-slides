@@ -24,14 +24,35 @@ import {
 import { fakeCanvas2D } from "../test/fakeCanvas";
 
 describe("strokePath", () => {
-  it("draws a line through every point", () => {
+  it("draws a straight line between two points", () => {
     expect(
       strokePath([
         [10, 20],
         [30, 40],
-        [50, 60],
       ]),
-    ).toBe("M10 20L30 40L50 60");
+    ).toBe("M10 20L30 40");
+  });
+
+  it("curves through far-apart points, bending at each one and meeting halfway between them", () => {
+    expect(
+      strokePath([
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ]),
+    ).toBe("M0 0L50 0Q100 0 100 50Q100 100 0 100");
+  });
+
+  it("rounds the halfway points to a tenth of a pixel", () => {
+    expect(
+      strokePath([
+        [0, 0],
+        [0.15, 0],
+        [0.15, 1],
+        [1, 1],
+      ]),
+    ).toBe("M0 0L0.1 0Q0.15 0 0.2 0.5Q0.15 1 1 1");
   });
 
   it("draws nothing without points", () => {
@@ -163,29 +184,50 @@ describe("laser trails", () => {
     expect(trailFade(life + 1000)).toBe(0);
   });
 
-  it("draws each visible segment in pixels, faded by the age of its newer end", () => {
-    const trail = [pt(0, 0), pt(0.5, 0), pt(1, TRAIL_FADE_MS)];
-    expect(trailSegments(trail, TRAIL_HOLD_MS + TRAIL_FADE_MS / 2, 200, 100)).toEqual([
-      { x1: 0, y1: 50, x2: 100, y2: 50, fade: 0.5 },
-      { x1: 100, y1: 50, x2: 200, y2: 50, fade: 1 },
+  it("draws a single segment straight, in pixels", () => {
+    expect(trailSegments([pt(0, 0), pt(1, 0)], 0, 200, 100)).toEqual([
+      { x1: 0, y1: 50, cx: 0, cy: 50, x2: 200, y2: 50, fade: 1 },
     ]);
-    expect(trailSegments(trail, life, 200, 100)).toEqual([{ x1: 100, y1: 50, x2: 200, y2: 50, fade: 1 }]);
     expect(trailSegments([pt(0, 0)], 0, 200, 100)).toEqual([]);
   });
 
-  it("drop faded points and trails, keeping the start of the oldest visible segment", () => {
+  it("cut the smooth curve at the halfway points, each piece faded by the age of the point after it", () => {
+    const at = (x: number, y: number, t: number): TrailPoint => ({ x, y, t });
+    const trail = [at(0, 0, 0), at(0.5, 0, 0), at(0.5, 1, TRAIL_FADE_MS), at(0, 1, TRAIL_FADE_MS)];
+    expect(trailSegments(trail, TRAIL_HOLD_MS + TRAIL_FADE_MS / 2, 200, 100)).toEqual([
+      { x1: 0, y1: 0, cx: 0, cy: 0, x2: 50, y2: 0, fade: 0.5 },
+      { x1: 50, y1: 0, cx: 100, cy: 0, x2: 100, y2: 50, fade: 1 },
+      { x1: 100, y1: 50, cx: 100, cy: 100, x2: 0, y2: 100, fade: 1 },
+    ]);
+    expect(trailSegments(trail, life, 200, 100)).toEqual([
+      { x1: 50, y1: 0, cx: 100, cy: 0, x2: 100, y2: 50, fade: 1 },
+      { x1: 100, y1: 50, cx: 100, cy: 100, x2: 0, y2: 100, fade: 1 },
+    ]);
+  });
+
+  it("drop faded points and trails, keeping every point that shapes a visible piece", () => {
     const trail = [pt(0, 0), pt(0.25, 100), pt(0.5, 200), pt(0.75, 300)];
     const trails = [[pt(0, 0)], trail];
     expect(pruneTrails(trails, 50)).toBe(trails);
-    expect(pruneTrails(trails, life + 150)).toEqual([[pt(0.25, 100), pt(0.5, 200), pt(0.75, 300)]]);
+    // The piece around the second point is fading out by the third point's age, so the first stays.
+    expect(pruneTrails(trails, life + 150)).toEqual([trail]);
+    expect(pruneTrails(trails, life + 250)).toEqual([[pt(0.25, 100), pt(0.5, 200), pt(0.75, 300)]]);
     expect(pruneTrails(trails, life + 300)).toEqual([]);
+  });
+
+  it("look the same just before and after a point is dropped", () => {
+    const trail = [pt(0, 0), pt(0.25, 100), pt(0.5, 200), pt(0.75, 300), pt(1, 400)];
+    const now = life + 200;
+    const [pruned] = pruneTrails([trail], now);
+    expect(pruned).toHaveLength(trail.length - 1);
+    expect(trailSegments(pruned!, now, 200, 100)).toEqual(trailSegments(trail, now, 200, 100));
   });
 });
 
 describe("paintTrails", () => {
   const pt = (x: number, t: number): TrailPoint => ({ x, y: 0.5, t });
 
-  it("strokes each visible segment as wide as the laser, thinning as it fades", () => {
+  it("strokes each visible piece as wide as the laser, thinning as it fades", () => {
     const [target, core] = [fakeCanvas2D(), fakeCanvas2D()];
     const trail = [pt(0, 0), pt(0.5, 0), pt(1, TRAIL_FADE_MS)];
     paintTrails(target, core, [trail], TRAIL_HOLD_MS + TRAIL_FADE_MS / 2, 200, 100, 2);

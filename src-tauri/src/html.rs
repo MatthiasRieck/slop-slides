@@ -1269,6 +1269,26 @@ mod tests {
     }
 
     #[test]
+    fn inlines_cropped_css_backgrounds() {
+        // Crops are CSS backgrounds with offsets; the same image can back several crops.
+        let html = r#"<style>
+#title .hero { background: url("assets/photo.png") 0 -1459px / 1920px auto no-repeat; }
+#closing .photo { background-image: url("assets/photo.png"); background-position: -619px -1032px; }
+</style>"#;
+        let out = inline_assets(html, |p| {
+            (p == "assets/photo.png").then(|| ("image/png".into(), b"ok".to_vec()))
+        });
+        assert_eq!(
+            out.matches(r#"url("data:image/png;base64,b2s=")"#).count(),
+            2,
+            "{out}"
+        );
+        assert!(out.contains(") 0 -1459px / 1920px auto no-repeat;"));
+        assert!(out.contains("background-position: -619px -1032px;"));
+        assert!(!out.contains("assets/"));
+    }
+
+    #[test]
     fn inline_assets_stops_at_query_and_fragment() {
         let html = r##"<img src="assets/a.png?v=2"><use href="assets/icons.svg#star"/>"##;
         let mut seen = Vec::new();

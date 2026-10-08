@@ -174,6 +174,11 @@ fn import_assets(app: AppHandle, id: String, paths: Vec<String>) -> Result<Vec<S
 }
 
 #[tauri::command]
+fn save_asset(app: AppHandle, id: String, name: String, data: String) -> Result<String> {
+    deck::save_asset(&deck::deck_dir(&app, &id)?, &name, &data)
+}
+
+#[tauri::command]
 fn export_deck(app: AppHandle, id: String, dest: String) -> Result<()> {
     deck::export(&deck::deck_dir(&app, &id)?, std::path::Path::new(&dest))
 }
@@ -317,6 +322,7 @@ pub fn run() {
             update_slide,
             save_deck_source,
             import_assets,
+            save_asset,
             export_deck,
             lint_deck,
             capture_sketch,

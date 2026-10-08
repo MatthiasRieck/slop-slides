@@ -218,12 +218,8 @@ export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annota
   );
 }
 
-/**
- * Tool palette in the bottom-left corner. Hidden while presenting; appears when the mouse
- * moves into the corner, and briefly after a keyboard shortcut.
- */
-export function PresenterToolbar({ annotations, onExit }: { annotations: Annotations; onExit: () => void }) {
-  const { tool, setTool, colors, setColor, strokes, undo, clear, peek } = annotations;
+/** Corner controls hide until the mouse enters their corner; they show at the start and briefly per `peek`. */
+export function useReveal(peek: number) {
   const [hovered, setHovered] = useState(false);
   const [peeking, setPeeking] = useState(true);
 
@@ -233,15 +229,26 @@ export function PresenterToolbar({ annotations, onExit }: { annotations: Annotat
     return () => clearTimeout(timer);
   }, [peek]);
 
-  const visible = hovered || peeking;
+  return {
+    visible: hovered || peeking,
+    zoneProps: { onMouseEnter: () => setHovered(true), onMouseLeave: () => setHovered(false) },
+  };
+}
+
+/**
+ * Tool palette in the bottom-left corner. Hidden while presenting; appears when the mouse
+ * moves into the corner, and briefly after a keyboard shortcut.
+ */
+export function PresenterToolbar({ annotations, onExit }: { annotations: Annotations; onExit: () => void }) {
+  const { tool, setTool, colors, setColor, strokes, undo, clear, peek } = annotations;
+  const { visible, zoneProps } = useReveal(peek);
   const inking = tool === "pen" || tool === "highlighter";
 
   return (
     <div
       data-testid="presenter-toolbar-zone"
       className="absolute bottom-0 left-0 z-10 p-4"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      {...zoneProps}
     >
       <div
         role="toolbar"

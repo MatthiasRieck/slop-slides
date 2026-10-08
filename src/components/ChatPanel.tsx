@@ -29,6 +29,7 @@ import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowT
 import { cn } from "../lib/utils";
 import { PROVIDERS, type Provider } from "../lib/models";
 import { useApp, type AssistantMessage, type ChatMessage, type ChatPart, type UserMessage } from "../store";
+import { ApprovalCard, PermissionPicker, ApprovalReview } from "./Permissions";
 import { EffortPicker, ModelPicker } from "./ModelPicker";
 
 const SUGGESTIONS = [
@@ -196,6 +197,10 @@ function AssistantBlock({ message }: { message: AssistantMessage }) {
               <Markdown remarkPlugins={[remarkGfm]}>{part.text}</Markdown>
             </div>
           )
+        ) : part.kind === "approval" ? (
+          <ApprovalCard key={part.approval.id} part={part} />
+        ) : part.kind === "approvalReview" ? (
+          <ApprovalReview key={part.id} part={part} />
         ) : (
           <ToolRow key={part.id} part={part} />
         ),
@@ -468,10 +473,11 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           placeholder={running ? "The agent is working…" : "Ask for slides or changes…"}
           className="block w-full resize-none bg-transparent px-3.5 pt-3 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/70"
         />
-        <div className="flex items-center gap-1 px-2 pt-1 pb-2">
+        <div className="relative flex flex-wrap items-center gap-1 px-2 pt-1 pb-2">
           <ModelPicker />
           <div className="mx-0.5 h-4 w-px bg-border" />
           <EffortPicker />
+          <PermissionPicker />
           <div className="flex-1" />
           <button
             type="button"

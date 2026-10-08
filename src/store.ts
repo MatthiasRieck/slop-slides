@@ -22,7 +22,11 @@ import {
   type ProviderInfo,
 } from "./lib/models";
 
+import { isPermissionMode, type Approval, type PermissionMode } from "./lib/permissions";
+
 export type ChatPart =
+  | { kind: "approval"; approval: Approval; status: "pending" | "resolved" | "expired" }
+  | { kind: "approvalReview"; id: string; status: string; detail: string | null }
   | { kind: "text"; text: string }
   | {
       kind: "tool";
@@ -85,6 +89,12 @@ export interface ModelSelection {
   effort: string;
   /** Claude only; `null` when the model has a single context window. */
   contextWindow: string | null;
+}
+
+const PERMISSION_KEY = "slopslide.codexPermissions";
+function loadPermissions(): PermissionMode {
+  const saved = localStorage.getItem(PERMISSION_KEY);
+  return isPermissionMode(saved) ? saved : "ask";
 }
 
 const SELECTION_KEY = "slopslide.selection";
@@ -170,6 +180,8 @@ interface AppState {
   messages: ChatMessage[];
   running: boolean;
   selection: ModelSelection;
+  permissionMode: PermissionMode;
+  setPermissionMode: (mode: PermissionMode) => void;
   /** `provider:model` keys starred in the model picker. */
   favoriteModels: string[];
   presenting: boolean;
@@ -278,6 +290,12 @@ export const useApp = create<AppState>((set, get) => ({
   messages: [],
   running: false,
   selection: loadSelection(),
+  permissionMode: loadPermissions(),
+  setPermissionMode: (permissionMode) => {
+    if (get().running || !isPermissionMode(permissionMode)) return;
+    localStorage.setItem(PERMISSION_KEY, permissionMode);
+    set({ permissionMode });
+  },
   favoriteModels: loadFavorites(),
   presenting: false,
   providers: undefined,
@@ -314,6 +332,15 @@ export const useApp = create<AppState>((set, get) => ({
   closeDeck: async () => {
     if (get().codeDirty && !(await confirmDiscardEdits())) return;
     await flushReviewSave();
+    const { deck, running, messages } = get();
+    const reply = messages.findLast((m) => m.role === "assistant");
+    // Codex can pause for an approval. Stop before leaving so no invisible request is stranded.
+    if (deck && running && reply?.role === "assistant" && replyProvider(reply) === "codex") {
+      await api.interruptAgent(deck.id);
+      const chat = get().messages.map(settleInterrupted);
+      set({ messages: chat });
+      await api.saveChat(deck.id, chat);
+    }
     await api.closeDeck();
     set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null, sketches: {}, sketchesSent: {}, imageExport: null, editing: false, slideUndo: [], slideRedo: [] });
   },
@@ -531,7 +558,10 @@ export const useApp = create<AppState>((set, get) => ({
 
   interrupt: () => {
     const { deck } = get();
-    if (deck) void api.interruptAgent(deck.id);
+    if (deck) {
+      updateLastAssistant((m) => ({ ...m, parts: expireApprovals(m.parts) }));
+      void api.interruptAgent(deck.id);
+    }
   },
 
   resetChat: async () => {
@@ -561,12 +591,12 @@ function newReply(provider: Provider): AssistantMessage {
 
 /** Hands `prompt` to the selected agent; a failure to start lands on reply `replyId`. */
 async function startTurn(deckId: string, replyId: string, prompt: string, compact: boolean) {
-  const { selection, providers } = useApp.getState();
+  const { selection, providers, permissionMode } = useApp.getState();
   try {
     const { provider, model, contextWindow } = selection;
     const info = providers?.find((p) => p.id === provider)?.models.find((m) => m.id === model);
     const effort = requestEffort(info, selection.effort);
-    await api.sendMessage(deckId, prompt, { provider, model, effort, contextWindow }, compact);
+    await api.sendMessage(deckId, prompt, { provider, model, effort, contextWindow, ...(provider === "codex" ? { permissionMode } : {}) }, compact);
   } catch (error) {
     updateAssistant(replyId, (m) => ({
       ...m,
@@ -731,8 +761,8 @@ export function lintFixPrompt(issues: LintIssue[]): string {
 
 /** A transcript saved mid-turn (app quit) cannot resume streaming. */
 function settleInterrupted(message: ChatMessage): ChatMessage {
-  if (message.role !== "assistant" || message.status !== "streaming") return message;
-  return { ...message, status: "interrupted", thinking: false, compacting: false };
+  if (message.role !== "assistant") return message;
+  return { ...message, ...(message.status === "streaming" ? { status: "interrupted" as const, thinking: false, compacting: false } : {}), parts: expireApprovals(message.parts) };
 }
 
 function buildPrompt(deck: Deck, message: UserMessage): string {
@@ -784,8 +814,22 @@ function persistChat() {
   if (deck) void api.saveChat(deck.id, messages);
 }
 
+function expireApprovals(parts: ChatPart[]): ChatPart[] {
+  return parts.map((p) => p.kind === "approval" && p.status === "pending" ? { ...p, status: "expired" } : p);
+}
+
 function applyAgentEvent(event: AgentEvent) {
   switch (event.type) {
+    case "approvalRequested":
+      return updateLastAssistant((m) => ({ ...m, thinking: false, parts: [...m.parts, { kind: "approval", approval: event.approval, status: "pending" }] }));
+    case "approvalResolved":
+      return updateLastAssistant((m) => ({ ...m, parts: m.parts.map((p) => p.kind === "approval" && p.approval.id === event.id ? { ...p, status: "resolved" } : p) }));
+    case "approvalReview":
+      return updateLastAssistant((m) => {
+        const part: ChatPart = { kind: "approvalReview", id: event.id, status: event.status, detail: event.detail };
+        const existing = m.parts.some((p) => p.kind === "approvalReview" && p.id === event.id);
+        return { ...m, thinking: false, parts: existing ? m.parts.map((p) => p.kind === "approvalReview" && p.id === event.id ? part : p) : [...m.parts, part] };
+      });
     case "started":
       return;
     case "thinking":
@@ -859,7 +903,7 @@ function applyAgentEvent(event: AgentEvent) {
         thinking: false,
         compacting: false,
         status: event.interrupted ? "interrupted" : m.error ? "error" : "done",
-        parts: m.parts.map((p) =>
+        parts: expireApprovals(m.parts).map((p) =>
           p.kind === "tool" && p.status === "running" ? { ...p, status: "done" } : p,
         ),
       }));

@@ -61,6 +61,8 @@ export function installBrowserMock() {
           ];
         case "agent_running":
           return false;
+        case "codex_permission_modes":
+          throw new Error("Codex permissions require the desktop app.");
         case "lint_deck":
           return [];
         case "save_deck_source":

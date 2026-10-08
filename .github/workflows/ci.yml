@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   check:
@@ -24,11 +25,23 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
-      - run: pnpm build
-      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Run all checks, including Codex subprocess regressions
+        shell: bash
+        run: ./check.sh
+      - name: Check supported and latest Codex protocol schemas (no login or inference)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          python -m pip install 'jsonschema>=4.22,<5'
+          for version in 0.147.0 latest; do
+            npm install --global "@openai/codex@$version"
+            bash ./check-codex.sh
+          done

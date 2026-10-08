@@ -489,6 +489,7 @@ describe("sending a message", () => {
       model: "gpt-6-astra",
       effort: "high",
       contextWindow: null,
+      permissionMode: "ask",
       compact: false,
     });
   });
@@ -830,6 +831,30 @@ describe("agent events", () => {
     const reply = () => store.useApp.getState().messages.findLast((m) => m.role === "assistant") as AssistantMessage;
     return { useApp: store.useApp, emit, reply };
   }
+
+  it("tracks approvals, resolves only the matching request, and expires unanswered requests", async () => {
+    const { emit, reply } = await bridged();
+    const approval = { id: "r1", title: "Run", reason: null, details: "ls", acceptLabel: "Allow once", decisions: ["accept", "decline"] as const };
+    emit({ type: "approvalRequested", approval: { ...approval, decisions: [...approval.decisions] } });
+    emit({ type: "approvalRequested", approval: { ...approval, id: "r2", decisions: [...approval.decisions] } });
+    emit({ type: "approvalResolved", id: "r1" });
+    expect(reply().parts).toMatchObject([{ status: "resolved" }, { status: "pending" }]);
+    emit({ type: "finished", interrupted: true });
+    expect(reply().parts).toMatchObject([{ status: "resolved" }, { status: "expired" }]);
+  });
+
+  it("updates automatic reviews rather than adding duplicate cards", async () => {
+    const { emit, reply } = await bridged();
+    emit({ type: "approvalReview", id: "review-1", status: "inProgress", detail: null });
+    emit({ type: "approvalReview", id: "review-1", status: "approved", detail: "Within scope" });
+    expect(reply().parts).toEqual([{ kind: "approvalReview", id: "review-1", status: "approved", detail: "Within scope" }]);
+  });
+
+  it("ignores approval events for other decks", async () => {
+    const { emit, reply } = await bridged();
+    emit({ type: "approvalRequested", approval: { id: "r", title: "Run", reason: null, details: "ls", acceptLabel: "Allow once", decisions: ["accept"] } }, "another-deck");
+    expect(reply().parts).toEqual([]);
+  });
 
   it("initEventBridge loads the installed providers, or none when the check fails", async () => {
     const store = await freshModule();
@@ -1436,5 +1461,63 @@ describe("editing slides on the stage", () => {
       });
       expect(useApp.getState().sketches).toEqual({ intro: ink });
     });
+  });
+});
+
+
+describe("Codex permissions", () => {
+  it("stops a Codex turn and saves a closed transcript before leaving the deck", async () => {
+    const store = await freshStore();
+    store.setState({ deck: deckFor(DECK_HTML), running: true, messages: [assistantMessage({ provider: "codex", status: "streaming", parts: [{ kind: "approval", status: "pending", approval: { id: "live", title: "Run", reason: null, details: "ls", acceptLabel: "Allow once", decisions: ["accept"] } }] })] });
+    await store.getState().closeDeck();
+    const order = invoke.mock.calls.map(([command]) => command);
+    expect(order.indexOf("interrupt_agent")).toBeLessThan(order.indexOf("save_chat"));
+    expect(order.indexOf("save_chat")).toBeLessThan(order.indexOf("close_deck"));
+    expect(calls("save_chat")[0]!.chat).toMatchObject([{ status: "interrupted", parts: [{ status: "expired" }] }]);
+    expect(store.getState().deck).toBeNull();
+  });
+
+  it("keeps the existing background behavior for other providers", async () => {
+    const store = await freshStore();
+    store.setState({ deck: deckFor(DECK_HTML), running: true, messages: [assistantMessage({ provider: "claude", status: "streaming" })] });
+    await store.getState().closeDeck();
+    expect(calls("interrupt_agent")).toHaveLength(0);
+  });
+
+  it("defaults to Ask, remembers valid choices, and rejects invalid saved values", async () => {
+    let store = await freshStore();
+    expect(store.getState().permissionMode).toBe("ask");
+    store.getState().setPermissionMode("autoReview");
+    expect(localStorage.getItem("slopslide.codexPermissions")).toBe("autoReview");
+    store = await freshStore();
+    expect(store.getState().permissionMode).toBe("autoReview");
+    localStorage.setItem("slopslide.codexPermissions", "__proto__");
+    expect((await freshStore()).getState().permissionMode).toBe("ask");
+  });
+
+  it("cannot change the mode during a turn", async () => {
+    const store = await freshStore();
+    store.setState({ running: true });
+    store.getState().setPermissionMode("fullAccess");
+    expect(store.getState().permissionMode).toBe("ask");
+    expect(localStorage.getItem("slopslide.codexPermissions")).toBeNull();
+  });
+
+  it("sends the selected mode only to Codex", async () => {
+    const store = await freshStore();
+    store.setState({ deck: deckFor(DECK_HTML), permissionMode: "autoReview", selection: { provider: "codex", model: "m", label: "M", effort: "high", contextWindow: null } });
+    await store.getState().send("slides", { includeSlide: false, attachments: [] });
+    expect(calls("send_message")[0]!.args).toMatchObject({ permissionMode: "autoReview" });
+    store.setState({ running: false, selection: { ...store.getState().selection, provider: "claude" } });
+    await store.getState().send("slides", { includeSlide: false, attachments: [] });
+    expect(calls("send_message")[1]!.args).not.toHaveProperty("permissionMode");
+  });
+
+  it("restored approvals are closed rather than reusable", async () => {
+    const store = await freshStore();
+    const message = assistantMessage({ status: "streaming", parts: [{ kind: "approval", status: "pending", approval: { id: "old", title: "Run", reason: null, details: "ls", acceptLabel: "Allow once", decisions: ["accept"] } }] });
+    backend({ open_deck: () => deckFor(DECK_HTML), load_chat: () => [message], agent_running: () => false });
+    await store.getState().openDeck("talk");
+    expect((store.getState().messages[0] as AssistantMessage).parts[0]).toMatchObject({ status: "expired" });
   });
 });

@@ -85,6 +85,8 @@ const CASES = [
     { args: { deckId: "talk", prompt: "Hi", provider: "claude", model: "claude-opus-5-5", effort: "high", contextWindow: "1m", compact: false } },
   ],
 
+  ["codexPermissionModes", () => api.codexPermissionModes("talk"), "codex_permission_modes", { id: "talk" }],
+  ["respondApproval", () => api.respondApproval("talk", "request-1", "decline"), "respond_approval", { deckId: "talk", id: "request-1", decision: "decline" }],
   ["interruptAgent", () => api.interruptAgent("talk"), "interrupt_agent", { id: "talk" }],
   ["agentRunning", () => api.agentRunning("talk"), "agent_running", { id: "talk" }],
   ["listProviders", () => api.listProviders(), "list_providers", undefined],

@@ -53,7 +53,7 @@ const compact = vi.fn(async () => {});
 afterEach(() => flushReviewSave());
 
 beforeEach(() => {
-  invoke.mockReset();
+  invoke.mockReset().mockResolvedValue([]);
   openDialog.mockReset();
   unlistenDragDrop.mockReset();
   dragDrop = null;

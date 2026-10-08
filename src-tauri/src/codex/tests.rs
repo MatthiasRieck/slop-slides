@@ -1,4 +1,7 @@
 use super::*;
+use std::collections::BTreeSet;
+
+mod fake_server;
 
 fn args(dir: &Path) -> TurnArgs<'_> {
     TurnArgs {
@@ -21,14 +24,144 @@ fn mcp_approval_params() -> Value {
         "_meta":{"codex_approval_kind":"mcp_tool_call","tool_params":{}}})
 }
 
-/// CI validates these production-generated payloads against the installed CLI's own schemas.
+/// Codex app-server schemas for the pinned release, from `scripts/update-codex-schemas.sh`.
+const SCHEMA_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/codex-schemas");
+
+fn pinned_schema(name: &str) -> Option<Value> {
+    let text = std::fs::read_to_string(format!("{SCHEMA_DIR}/{name}.json")).ok()?;
+    Some(serde_json::from_str(&text).expect("schema is JSON"))
+}
+
+fn property_names(schema: &Value, names: &mut BTreeSet<String>) {
+    if let Some(props) = schema["properties"].as_object() {
+        names.extend(props.keys().cloned());
+    }
+    for keyword in ["oneOf", "anyOf", "allOf"] {
+        for branch in schema[keyword].as_array().into_iter().flatten() {
+            property_names(branch, names);
+        }
+    }
+}
+
+/// Validate wire payloads against Codex's schemas, returning one message per problem.
+fn validate_cases(
+    schema: impl Fn(&str) -> Option<Value>,
+    cases: &[(String, Value)],
+) -> Vec<String> {
+    if cases.is_empty() {
+        return vec!["No contract cases were collected.".into()];
+    }
+    let mut failures = Vec::new();
+    for (index, (name, payload)) in cases.iter().enumerate() {
+        let label = format!("case {} ({name})", index + 1);
+        let Some(schema) = schema(name) else {
+            failures.push(format!(
+                "{label}: no pinned schema; add it to scripts/update-codex-schemas.sh"
+            ));
+            continue;
+        };
+        let validator = match jsonschema::validator_for(&schema) {
+            Ok(v) => v,
+            Err(e) => {
+                failures.push(format!("{label}: invalid schema: {e}"));
+                continue;
+            }
+        };
+        // Codex accepts unknown fields; reject typos and removed field names in our payloads.
+        let mut known = BTreeSet::new();
+        property_names(&schema, &mut known);
+        let unknown: Vec<_> = payload
+            .as_object()
+            .into_iter()
+            .flat_map(|o| o.keys())
+            .filter(|k| !known.contains(*k))
+            .collect();
+        if !unknown.is_empty() {
+            failures.push(format!("{label}: unknown fields: {unknown:?}"));
+        }
+        for error in validator.iter_errors(payload) {
+            let at = error.instance_path.to_string();
+            let at = if at.is_empty() { "<root>" } else { &at };
+            failures.push(format!("{label} at {at}: {error}"));
+        }
+    }
+    failures
+}
+
+mod contract_check {
+    use super::*;
+
+    fn check(payload: Value) -> Vec<String> {
+        let schema = |name: &str| {
+            (name == "Approval").then(|| {
+                json!({"type":"object","properties":{"action":{"enum":["accept","decline"]}},
+                    "required":["action"]})
+            })
+        };
+        validate_cases(schema, &[("Approval".into(), payload)])
+    }
+
+    #[test]
+    fn valid_response_passes() {
+        assert_eq!(check(json!({"action":"accept"})), Vec::<String>::new());
+    }
+
+    #[test]
+    fn wrong_response_shape_fails() {
+        assert!(!check(json!({"decision":"accept"})).is_empty());
+    }
+
+    #[test]
+    fn invalid_decision_fails() {
+        assert!(!check(json!({"action":"acceptForSession"})).is_empty());
+    }
+
+    #[test]
+    fn unknown_fields_fail_even_when_upstream_ignores_them() {
+        let failures = check(json!({"action":"accept","persist":"always"}));
+        assert!(
+            failures.iter().any(|f| f.contains("unknown fields")),
+            "{failures:?}"
+        );
+    }
+
+    #[test]
+    fn missing_schema_and_empty_case_list_fail() {
+        assert!(!validate_cases(pinned_schema, &[]).is_empty());
+        let failures = validate_cases(pinned_schema, &[("Removed".into(), json!({}))]);
+        assert!(failures[0].contains("no pinned schema"), "{failures:?}");
+    }
+
+    #[test]
+    fn unknown_field_check_sees_properties_inside_one_of_branches() {
+        let schema = |_: &str| {
+            Some(json!({"oneOf":[
+                {"type":"object","properties":{"a":{"type":"string"}},"required":["a"]},
+                {"type":"object","properties":{"b":{"type":"string"}},"required":["b"]}]}))
+        };
+        assert!(validate_cases(schema, &[("U".into(), json!({"b":"x"}))]).is_empty());
+        assert!(!validate_cases(schema, &[("U".into(), json!({"b":"x","c":1}))]).is_empty());
+    }
+
+    #[test]
+    fn pinned_schemas_reject_a_wrong_permission_value() {
+        let a = args(Path::new("/deck"));
+        let mut p = thread_params(&a, &json!({}));
+        let case = |p: &Value| vec![("ThreadStartParams".to_string(), p.clone())];
+        assert_eq!(
+            validate_cases(pinned_schema, &case(&p)),
+            Vec::<String>::new()
+        );
+        p["sandbox"] = json!("workspace");
+        assert!(!validate_cases(pinned_schema, &case(&p)).is_empty());
+    }
+}
+
+/// Every payload we send, or answer with, must match the pinned Codex protocol schemas.
 #[test]
-#[ignore = "run by the Codex protocol compatibility CI step"]
-fn export_codex_protocol_contracts() {
-    let mut cases = Vec::new();
-    let mut add = |schema: &str, payload: Value| {
-        cases.push(json!({"schema":schema,"payload":payload}));
-    };
+fn codex_payloads_match_pinned_protocol_schemas() {
+    let mut cases: Vec<(String, Value)> = Vec::new();
+    let mut add = |schema: &str, payload: Value| cases.push((schema.into(), payload));
     let dir = std::env::temp_dir();
     let mut a = args(&dir);
     let config = json!({"sandbox_mode":"read-only","approval_policy":"on-request","approvals_reviewer":"user"});
@@ -150,9 +283,14 @@ fn export_codex_protocol_contracts() {
                 add(schema, request["params"].clone());
             }
         });
-    let out = std::env::var("SLOPSLIDE_CONTRACT_OUT")
-        .expect("set SLOPSLIDE_CONTRACT_OUT to a temporary JSON file");
-    std::fs::write(out, serde_json::to_vec_pretty(&cases).unwrap()).unwrap();
+    let failures = validate_cases(pinned_schema, &cases);
+    let version = std::fs::read_to_string(format!("{SCHEMA_DIR}/VERSION")).unwrap();
+    assert!(
+        failures.is_empty(),
+        "Codex {} protocol mismatches:\n{}",
+        version.trim(),
+        failures.join("\n")
+    );
 }
 
 #[test]
@@ -389,8 +527,6 @@ fn mapper_streams_text_once_and_preserves_tools_usage_and_reviews() {
 
 mod process {
     use super::*;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
 
     pub(super) struct Fixture {
         dir: std::path::PathBuf,
@@ -401,23 +537,8 @@ mod process {
             let dir =
                 std::env::temp_dir().join(format!("slopslide codex test {}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&dir).unwrap();
-            #[cfg(unix)]
-            let bin = dir.join("codex");
-            #[cfg(unix)]
-            std::fs::write(&bin, include_str!("../../../fixtures/codex-server.py")).unwrap();
-            #[cfg(unix)]
-            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-            #[cfg(windows)]
-            let bin = {
-                std::fs::write(
-                    dir.join("codex-server.py"),
-                    include_str!("../../../fixtures/codex-server.py"),
-                )
-                .unwrap();
-                let bin = dir.join("codex.cmd");
-                std::fs::write(&bin, "@echo off\r\npython \"%~dp0codex-server.py\"\r\n").unwrap();
-                bin
-            };
+            // This test binary doubles as `codex app-server`; see fake_server.rs.
+            let bin = std::env::current_exe().unwrap();
             std::fs::write(dir.join("scenario.json"), scenario.to_string()).unwrap();
             Self { dir, bin }
         }

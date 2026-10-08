@@ -19,6 +19,10 @@ const CSS_END: &str = "<!-- /slopslide:runtime-css -->";
 pub(crate) const JS_START: &str =
     "<!-- slopslide:runtime-js (managed by SlopSlide, do not edit) -->";
 const JS_END: &str = "<!-- /slopslide:runtime-js -->";
+/// Runs in `<head>` so the player's stylesheet applies before the first paint. Viewers without
+/// JavaScript skip it and get the stylesheet's fallback: every slide, top to bottom.
+pub(crate) const PLAYER_FLAG: &str =
+    "<script>document.documentElement.setAttribute(\"data-slop-player\", \"\");</script>";
 
 #[derive(Debug, Clone)]
 pub struct SlideSpan {
@@ -348,7 +352,8 @@ fn insert_after_head(html: &str, snippet: &str) -> String {
 /// Installs (or refreshes) the player runtime: base CSS first in `<head>` so deck styles
 /// override it, and the script at the end of `<body>`.
 pub fn ensure_runtime(html: &str) -> String {
-    let css = format!("{CSS_START}\n  <style>\n{RUNTIME_CSS}  </style>\n  {CSS_END}");
+    let css =
+        format!("{CSS_START}\n  <style>\n{RUNTIME_CSS}  </style>\n  {PLAYER_FLAG}\n  {CSS_END}");
     let js = format!("{JS_START}\n  <script>\n{RUNTIME_JS}  </script>\n  {JS_END}");
     let html = match replace_block(html, CSS_START, CSS_END, &css) {
         Some(updated) => updated,
@@ -1259,6 +1264,24 @@ mod tests {
         // Refreshed in place: the block stays after the deck's own <style>.
         assert!(out.find(CSS_START).unwrap() > out.find(".slide { color: red }").unwrap());
         assert_eq!(out, ensure_runtime(&out));
+    }
+
+    #[test]
+    fn ensure_runtime_flags_the_player_inside_the_css_block() {
+        let out = ensure_runtime(DECK);
+        let flag = out.find(PLAYER_FLAG).expect("player flag installed");
+        assert!(out.find(CSS_START).unwrap() < flag && flag < out.find(CSS_END).unwrap());
+        assert!(
+            flag < out.find("<body").unwrap(),
+            "runs before the body renders"
+        );
+        assert_eq!(out.matches(PLAYER_FLAG).count(), 1);
+        // Decks saved before the flag existed get it on refresh.
+        let old = DECK.replace(
+            "</head>",
+            &format!("{CSS_START}<style>{RUNTIME_CSS}</style>{CSS_END}</head>"),
+        );
+        assert_eq!(ensure_runtime(&old).matches(PLAYER_FLAG).count(), 1);
     }
 
     #[test]

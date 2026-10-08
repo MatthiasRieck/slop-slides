@@ -456,3 +456,53 @@ describe("player: review marks", () => {
     expect(css).toMatch(/html\[data-slop-review\] \.slide > \.slop-review\s*\{[^}]*display:\s*block/);
   });
 });
+
+describe("player: without JavaScript", () => {
+  const CSS = readFileSync("src-tauri/assets/runtime.css", "utf8");
+  // Chat apps on iOS open decks in Quick Look, which renders HTML but runs no scripts.
+  function styled(flagged: boolean) {
+    const html = DECK.replace("<html>", `<html${flagged ? " data-slop-player" : ""}><head><style>${CSS}</style></head>`)
+      .replace('<section class="slide"><p>No id</p>', '<section class="slide" data-hidden><p class="reveal">No id</p>');
+    const dom = new JSDOM(html, { pretendToBeVisual: true });
+    doms.push(dom);
+    const doc = dom.window.document;
+    const style = (selector: string) => dom.window.getComputedStyle(doc.querySelector(selector)!);
+    return { doc, style };
+  }
+
+  it("is switched on by the player", () => {
+    expect(player().doc.documentElement.hasAttribute("data-slop-player")).toBe(true);
+  });
+
+  it("lists every shown slide, in the flow, when no script flags the player", () => {
+    const { style } = styled(false);
+    expect(style("#intro").visibility).toBe("visible");
+    expect(style("#intro").opacity).toBe("1");
+    expect(style("#intro").position).toBe("relative");
+    expect(style("#end").visibility).toBe("visible");
+    expect(style("[data-hidden]").display).toBe("none");
+    expect(style("body").overflow).not.toBe("hidden");
+  });
+
+  it("hides all but the active slide once the player is flagged", () => {
+    const { doc, style } = styled(true);
+    expect(style("#intro").visibility).toBe("hidden");
+    expect(style("#intro").position).toBe("absolute");
+    doc.getElementById("intro")!.classList.add("active");
+    expect(style("#intro").visibility).toBe("visible");
+    expect(style("[data-hidden] .reveal").opacity).toBe("0");
+  });
+
+  it("zooms the stage down to narrow windows", () => {
+    const zooms = [...CSS.matchAll(/@media screen and \(max-width: ([\d.]+)px\) \{[^{]*\{ zoom: ([\d.]+); \} \}/g)];
+    expect(zooms.length).toBeGreaterThan(10);
+    for (const [, width, zoom] of zooms) {
+      // The step applies to windows narrower than `width`; the zoomed stage still fits the
+      // narrowest of them.
+      const narrowest = Number(width) + 0.02 - 96;
+      expect(1920 * Number(zoom)).toBeLessThanOrEqual(narrowest);
+    }
+    // Phones (≈375–430 CSS px wide) get a step.
+    expect(zooms.some(([, width]) => Number(width) < 430)).toBe(true);
+  });
+});

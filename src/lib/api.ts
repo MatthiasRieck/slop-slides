@@ -124,6 +124,9 @@ export const api = {
   saveDeckSource: (id: string, source: string, base: string | null) =>
     invoke<Deck>("save_deck_source", { id, source, base }),
   importAssets: (id: string, paths: string[]) => invoke<string[]>("import_assets", { id, paths }),
+  /** Saves pasted file contents (base64) into the deck's assets; returns its `assets/…` ref. */
+  saveAsset: (id: string, name: string, data: string) =>
+    invoke<string>("save_asset", { id, name, data }),
   exportDeck: (id: string, dest: string) => invoke<void>("export_deck", { id, dest }),
   /** Creates a new folder named after the deck inside `parent`; returns its path. */
   createImageExportDir: (id: string, parent: string) =>

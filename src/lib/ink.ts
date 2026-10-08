@@ -148,3 +148,73 @@ export function trailSegments(
   }
   return segments;
 }
+
+/** Size of the laser dot, and so the width of a fresh laser trail, in screen pixels. */
+export const LASER_SIZE = 16;
+export const LASER_RGB = "239 68 68";
+/** The laser's red glow, as an inner and an outer halo: blur, spread and opacity. */
+export const LASER_GLOW = [
+  { blur: 8, spread: 4, opacity: 0.7 },
+  { blur: 24, spread: 10, opacity: 0.35 },
+] as const;
+
+/** The 2D canvas calls the trail painter makes, so tests can stand in for a canvas. */
+type Canvas2D = Pick<
+  CanvasRenderingContext2D,
+  | "setTransform"
+  | "clearRect"
+  | "beginPath"
+  | "moveTo"
+  | "lineTo"
+  | "stroke"
+  | "drawImage"
+  | "lineWidth"
+  | "lineCap"
+  | "strokeStyle"
+  | "shadowBlur"
+  | "shadowColor"
+> & { canvas: { width: number; height: number } };
+
+/**
+ * Paints laser trails onto `target`, a canvas `scale` device pixels per CSS pixel. The trails
+ * are first drawn solid onto `core`, a scratch canvas of the same size, which is then copied
+ * over once per halo with a shadow, so the glow is even along a trail instead of piling up
+ * where its segments overlap.
+ */
+export function paintTrails(
+  target: Canvas2D,
+  core: Canvas2D,
+  trails: readonly TrailPoint[][],
+  now: number,
+  width: number,
+  height: number,
+  scale: number,
+) {
+  for (const ctx of [target, core]) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.shadowBlur = 0;
+    ctx.shadowColor = "transparent";
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  }
+  core.setTransform(scale, 0, 0, scale, 0, 0);
+  core.strokeStyle = `rgb(${LASER_RGB})`;
+  core.lineCap = "round";
+  for (const trail of trails) {
+    for (const { x1, y1, x2, y2, fade } of trailSegments(trail, now, width, height)) {
+      core.lineWidth = LASER_SIZE * fade;
+      core.beginPath();
+      core.moveTo(x1, y1);
+      core.lineTo(x2, y2);
+      core.stroke();
+    }
+  }
+  // Canvas shadows have no spread, so the halos blur further instead.
+  for (const { blur, spread, opacity } of [...LASER_GLOW].reverse()) {
+    target.shadowColor = `rgb(${LASER_RGB} / ${opacity})`;
+    target.shadowBlur = (blur + spread) * scale;
+    target.drawImage(core.canvas as CanvasImageSource, 0, 0);
+  }
+  target.shadowBlur = 0;
+  target.shadowColor = "transparent";
+  target.drawImage(core.canvas as CanvasImageSource, 0, 0);
+}

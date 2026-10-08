@@ -9,7 +9,8 @@ vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setFullscr
 
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { TRAIL_FADE_MS, TRAIL_HOLD_MS } from "../lib/ink";
+import { LASER_SIZE, TRAIL_FADE_MS, TRAIL_HOLD_MS } from "../lib/ink";
+import { fakeCanvas2D } from "../test/fakeCanvas";
 import { Presenter } from "./Presenter";
 
 beforeEach(() => {
@@ -423,45 +424,75 @@ describe("Presenter tools", () => {
     expect(screen.queryByTestId("laser")).toBeNull();
   });
 
+  /** Records what is painted on the laser trail's canvas. */
+  function paintedTrail() {
+    const painted = { strokes: [] as number[], images: [] as { shadowBlur: number; shadowColor: string }[] };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
+      const ctx = fakeCanvas2D(this);
+      // The visible canvas is in the document; the scratch canvas the trail is drawn on first is not.
+      if (this.isConnected) {
+        const clear = ctx.clearRect;
+        ctx.clearRect = () => {
+          clear();
+          painted.strokes = ctx.strokes;
+          painted.images = ctx.images;
+        };
+      } else {
+        ctx.clearRect = () => {
+          ctx.strokes = [];
+          painted.strokes = ctx.strokes;
+        };
+      }
+      return ctx as unknown as CanvasRenderingContext2D;
+    } as unknown as typeof HTMLCanvasElement.prototype.getContext);
+    return painted;
+  }
+
+  function dragLaser() {
+    fireEvent.keyDown(document.body, { key: "l" });
+    // Just moving the laser leaves no trail.
+    fireEvent.pointerMove(layer(), { buttons: 0, clientX: 100, clientY: 100 });
+    expect(screen.queryByTestId("laser-trail")).toBeNull();
+    fireEvent.pointerDown(layer(), { button: 0, buttons: 1, clientX: 100, clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(layer(), { buttons: 1, clientX: 200, clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(layer(), { buttons: 1, clientX: 300, clientY: 150, pointerId: 1 });
+    fireEvent.pointerUp(layer(), { pointerId: 1 });
+  }
+
   it("dragging the laser leaves a trail that lingers, then fades away", () => {
     vi.useFakeTimers();
     try {
+      const painted = paintedTrail();
       render(<Presenter />);
-      const trail = () => screen.queryAllByTestId("laser-trail");
-      fireEvent.keyDown(document.body, { key: "l" });
-      // Just moving the laser leaves no trail.
-      fireEvent.pointerMove(layer(), { buttons: 0, clientX: 100, clientY: 100 });
-      expect(trail()).toHaveLength(0);
-      fireEvent.pointerDown(layer(), { button: 0, buttons: 1, clientX: 100, clientY: 100, pointerId: 1 });
-      fireEvent.pointerMove(layer(), { buttons: 1, clientX: 200, clientY: 100, pointerId: 1 });
-      fireEvent.pointerMove(layer(), { buttons: 1, clientX: 300, clientY: 150, pointerId: 1 });
-      fireEvent.pointerUp(layer(), { pointerId: 1 });
-      expect(trail()).toHaveLength(2);
+      dragLaser();
+      expect(screen.getByTestId("laser-trail")).toBeTruthy();
+      expect(painted.strokes).toEqual([LASER_SIZE, LASER_SIZE]);
       expect(strokes()).toHaveLength(0);
-      const width = () => Number(trail()[0]!.getAttribute("stroke-width"));
-      const full = width();
       act(() => void vi.advanceTimersByTime(TRAIL_HOLD_MS - 100));
-      expect(width()).toBe(full);
+      expect(painted.strokes).toEqual([LASER_SIZE, LASER_SIZE]);
       act(() => void vi.advanceTimersByTime(100 + TRAIL_FADE_MS / 2));
-      expect(width()).toBeGreaterThan(0);
-      expect(width()).toBeLessThan(full);
+      expect(painted.strokes).toHaveLength(2);
+      for (const width of painted.strokes) {
+        expect(width).toBeGreaterThan(0);
+        expect(width).toBeLessThan(LASER_SIZE);
+      }
       act(() => void vi.advanceTimersByTime(TRAIL_FADE_MS));
-      expect(trail()).toHaveLength(0);
+      expect(screen.queryByTestId("laser-trail")).toBeNull();
     } finally {
       vi.useRealTimers();
     }
   });
 
   it("a fresh laser trail is as wide as the dot and glows like it", () => {
+    const painted = paintedTrail();
     render(<Presenter />);
-    fireEvent.keyDown(document.body, { key: "l" });
-    fireEvent.pointerDown(layer(), { button: 0, buttons: 1, clientX: 100, clientY: 100, pointerId: 1 });
-    fireEvent.pointerMove(layer(), { buttons: 1, clientX: 200, clientY: 100, pointerId: 1 });
+    dragLaser();
+    fireEvent.pointerMove(layer(), { buttons: 0, clientX: 300, clientY: 150 });
     const dot = screen.getByTestId("laser");
-    const segment = screen.getByTestId("laser-trail");
-    expect(segment.getAttribute("stroke-width")).toBe(dot.style.width.replace("px", ""));
-    const glow = (css: string) => css.match(/rgb\([^)]*\)/g);
-    expect(glow((segment.closest("svg") as SVGElement).style.filter)).toEqual(glow(dot.style.boxShadow));
+    expect(`${painted.strokes[0]}px`).toBe(dot.style.width);
+    const colors = (css: string) => css.match(/rgb\([^)]*\)/g)!.map((c) => c.replace(/\s+/g, " "));
+    const glow = painted.images.filter((i) => i.shadowBlur > 0).map((i) => i.shadowColor);
+    expect(new Set(glow)).toEqual(new Set(colors(dot.style.boxShadow)));
   });
 
   it("putting the laser away clears its trail", () => {
@@ -469,9 +500,9 @@ describe("Presenter tools", () => {
     fireEvent.keyDown(document.body, { key: "l" });
     fireEvent.pointerDown(layer(), { button: 0, buttons: 1, clientX: 100, clientY: 100, pointerId: 1 });
     fireEvent.pointerMove(layer(), { buttons: 1, clientX: 200, clientY: 100, pointerId: 1 });
-    expect(screen.queryAllByTestId("laser-trail")).toHaveLength(1);
+    expect(screen.queryByTestId("laser-trail")).not.toBeNull();
     fireEvent.keyDown(document.body, { key: "l" });
-    expect(screen.queryAllByTestId("laser-trail")).toHaveLength(0);
+    expect(screen.queryByTestId("laser-trail")).toBeNull();
   });
 
   it("the toolbar shows on hover and briefly after shortcuts", () => {

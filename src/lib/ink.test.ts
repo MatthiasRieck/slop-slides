@@ -4,6 +4,9 @@ import {
   INK_STYLE,
   inkBounds,
   isDot,
+  LASER_GLOW,
+  LASER_SIZE,
+  paintTrails,
   pruneTrails,
   SLIDE_SIZE,
   strokePath,
@@ -18,6 +21,7 @@ import {
   type Stroke,
   type TrailPoint,
 } from "./ink";
+import { fakeCanvas2D } from "../test/fakeCanvas";
 
 describe("strokePath", () => {
   it("draws a line through every point", () => {
@@ -175,5 +179,35 @@ describe("laser trails", () => {
     expect(pruneTrails(trails, 50)).toBe(trails);
     expect(pruneTrails(trails, life + 150)).toEqual([[pt(0.25, 100), pt(0.5, 200), pt(0.75, 300)]]);
     expect(pruneTrails(trails, life + 300)).toEqual([]);
+  });
+});
+
+describe("paintTrails", () => {
+  const pt = (x: number, t: number): TrailPoint => ({ x, y: 0.5, t });
+
+  it("strokes each visible segment as wide as the laser, thinning as it fades", () => {
+    const [target, core] = [fakeCanvas2D(), fakeCanvas2D()];
+    const trail = [pt(0, 0), pt(0.5, 0), pt(1, TRAIL_FADE_MS)];
+    paintTrails(target, core, [trail], TRAIL_HOLD_MS + TRAIL_FADE_MS / 2, 200, 100, 2);
+    expect(core.strokes).toEqual([LASER_SIZE / 2, LASER_SIZE]);
+  });
+
+  it("glows with every halo of the laser, under one solid copy of the trail", () => {
+    const [target, core] = [fakeCanvas2D(), fakeCanvas2D()];
+    paintTrails(target, core, [[pt(0, 0), pt(1, 0)]], 0, 200, 100, 2);
+    expect(target.images).toEqual([
+      ...[...LASER_GLOW].reverse().map((g) => ({
+        shadowBlur: (g.blur + g.spread) * 2,
+        shadowColor: `rgb(239 68 68 / ${g.opacity})`,
+      })),
+      { shadowBlur: 0, shadowColor: "transparent" },
+    ]);
+  });
+
+  it("clears what was painted before", () => {
+    const [target, core] = [fakeCanvas2D(), fakeCanvas2D()];
+    paintTrails(target, core, [[pt(0, 0), pt(1, 0)]], 0, 200, 100, 1);
+    paintTrails(target, core, [], 0, 200, 100, 1);
+    expect(core.strokes).toEqual([]);
   });
 });

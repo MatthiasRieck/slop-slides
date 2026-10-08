@@ -7,12 +7,15 @@ import {
   INK_COLORS,
   INK_STYLE,
   isDot,
+  LASER_GLOW,
+  LASER_RGB,
+  LASER_SIZE,
+  paintTrails,
   pruneTrails,
   strokePath,
   TOOL_KEYS,
   toFraction,
   toPixels,
-  trailSegments,
   type InkTool,
   type Stroke,
   type Tool,
@@ -22,16 +25,7 @@ import { cn } from "../lib/utils";
 
 /** How long the toolbar stays visible after a keyboard shortcut changes something. */
 const PEEK_MS = 1500;
-/** Size of the laser dot, and so the width of a fresh laser trail, in screen pixels. */
-const LASER_SIZE = 16;
-/** The laser's red glow, as an inner and an outer halo: blur, spread and opacity. */
-const LASER_GLOW = [
-  { blur: 8, spread: 4, opacity: 0.7 },
-  { blur: 24, spread: 10, opacity: 0.35 },
-];
-const laserShadow = LASER_GLOW.map((g) => `0 0 ${g.blur}px ${g.spread}px rgb(239 68 68 / ${g.opacity})`).join(", ");
-// CSS drop-shadow has no spread, so the trail's halos blur further instead.
-const trailGlow = LASER_GLOW.map((g) => `drop-shadow(0 0 ${g.blur / 2 + g.spread}px rgb(239 68 68 / ${g.opacity}))`).join(" ");
+const laserShadow = LASER_GLOW.map((g) => `0 0 ${g.blur}px ${g.spread}px rgb(${LASER_RGB} / ${g.opacity})`).join(", ");
 
 export interface Annotations {
   tool: Tool;
@@ -116,6 +110,8 @@ export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annota
   const [trails, setTrails] = useState<TrailPoint[][]>([]);
   const [now, setNow] = useState(() => performance.now());
   const tracing = useRef(false);
+  const trailRef = useRef<HTMLCanvasElement>(null);
+  const trailCore = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const active = tool !== "pointer";
 
@@ -154,6 +150,24 @@ export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annota
     });
     return () => cancelAnimationFrame(frame);
   }, [fading]);
+
+  // The trail is painted on a canvas rather than drawn as glowing SVG: WebKit leaves stale,
+  // clipped pieces of a filtered SVG's glow behind as it changes.
+  useLayoutEffect(() => {
+    const canvas = trailRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+    const scale = window.devicePixelRatio || 1;
+    const core = (trailCore.current ??= document.createElement("canvas"));
+    const coreCtx = core.getContext("2d");
+    if (!coreCtx) return;
+    for (const c of [canvas, core]) {
+      const [w, h] = [Math.round(size.width * scale), Math.round(size.height * scale)];
+      if (c.width !== w) c.width = w;
+      if (c.height !== h) c.height = h;
+    }
+    paintTrails(ctx, coreCtx, trails, now, size.width, size.height, scale);
+  }, [trails, now, size]);
 
   const at = (event: ReactPointerEvent) =>
     toFraction(event.clientX, event.clientY, layerRef.current!.getBoundingClientRect());
@@ -256,23 +270,7 @@ export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annota
         })}
       </svg>
       {trails.length > 0 && (
-        <svg
-          className="pointer-events-none absolute inset-0 size-full"
-          style={{ filter: trailGlow }}
-        >
-          {trails.flatMap((trail, i) =>
-            trailSegments(trail, now, size.width, size.height).map(({ fade, ...line }, j) => (
-              <line
-                key={`${i}-${j}`}
-                data-testid="laser-trail"
-                {...line}
-                stroke="#ef4444"
-                strokeWidth={LASER_SIZE * fade}
-                strokeLinecap="round"
-              />
-            )),
-          )}
-        </svg>
+        <canvas ref={trailRef} data-testid="laser-trail" className="pointer-events-none absolute inset-0 size-full" />
       )}
       {laser && (
         <div

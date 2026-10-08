@@ -33,9 +33,22 @@ export function isDot(points: readonly [number, number][]): boolean {
   return !!first && points.every(([x, y]) => x === first[0] && y === first[1]);
 }
 
-/** SVG path data through pixel positions. */
+/**
+ * SVG path data for a smooth curve through pixel positions: the curve runs from the first point
+ * to halfway to the second, then on from halfway to halfway, bent by each point between as a
+ * quadratic Bézier control point, to the last point. Fast strokes, whose samples lie far apart,
+ * so come out round instead of as a polygon, at one curve per point.
+ */
 export function strokePath(points: readonly [number, number][]): string {
-  return points.map(([x, y], i) => `${i ? "L" : "M"}${x} ${y}`).join("");
+  if (points.length < 3) return points.map(([x, y], i) => `${i ? "L" : "M"}${x} ${y}`).join("");
+  const halfway = (i: number) => `${px((points[i]![0] + points[i + 1]![0]) / 2)} ${px((points[i]![1] + points[i + 1]![1]) / 2)}`;
+  const [[x0, y0], [xn, yn]] = [points[0]!, points[points.length - 1]!];
+  let d = `M${x0} ${y0}L${halfway(0)}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const [x, y] = points[i]!;
+    d += `Q${x} ${y} ${i === points.length - 2 ? `${xn} ${yn}` : halfway(i)}`;
+  }
+  return d;
 }
 
 /**
@@ -107,15 +120,16 @@ export function trailFade(age: number): number {
 }
 
 /**
- * Drops what has faded from laser trails. A point stays while the segment it starts is still
- * visible; trails with no visible segment left go. Returns `trails` itself if nothing changed.
+ * Drops what has faded from laser trails. A point stays while a piece of the curve it shapes
+ * (see `trailSegments`) is still visible, so dropping it never changes how the rest is drawn;
+ * trails with no visible piece left go. Returns `trails` itself if nothing changed.
  */
 export function pruneTrails(trails: readonly TrailPoint[][], now: number): TrailPoint[][] {
   let changed = false;
   const kept: TrailPoint[][] = [];
   for (const trail of trails) {
     let start = 0;
-    while (start < trail.length - 1 && now - trail[start + 1]!.t >= TRAIL_LIFE_MS) start++;
+    while (start < trail.length - 2 && now - trail[start + 2]!.t >= TRAIL_LIFE_MS) start++;
     const alive = trail.length > 0 && now - trail[trail.length - 1]!.t < TRAIL_LIFE_MS;
     if (!alive) {
       changed = true;
@@ -129,22 +143,39 @@ export function pruneTrails(trails: readonly TrailPoint[][], now: number): Trail
   return changed ? kept : (trails as TrailPoint[][]);
 }
 
+/** A piece of a laser trail: a quadratic Bézier from (x1, y1) bent by (cx, cy) to (x2, y2). */
+export interface TrailSegment {
+  x1: number;
+  y1: number;
+  cx: number;
+  cy: number;
+  x2: number;
+  y2: number;
+  fade: number;
+}
+
 /**
- * The visible segments of a laser trail in pixels on a layer of the given size, each with how
- * much of it is left (its newer end's fade), oldest first.
+ * The visible pieces of a laser trail in pixels on a layer of the given size, oldest first:
+ * the same smooth curve `strokePath` draws, cut where its curves meet so each piece can thin
+ * on its own, by how much is left of the newer point after it.
  */
-export function trailSegments(
-  trail: readonly TrailPoint[],
-  now: number,
-  width: number,
-  height: number,
-): { x1: number; y1: number; x2: number; y2: number; fade: number }[] {
-  const segments = [];
-  for (let i = 1; i < trail.length; i++) {
-    const [a, b] = [trail[i - 1]!, trail[i]!];
-    const fade = trailFade(now - b.t);
+export function trailSegments(trail: readonly TrailPoint[], now: number, width: number, height: number): TrailSegment[] {
+  const at = (i: number) => [trail[i]!.x * width, trail[i]!.y * height] as const;
+  const mid = (i: number) => {
+    const [[ax, ay], [bx, by]] = [at(i - 1), at(i)];
+    return [(ax + bx) / 2, (ay + by) / 2] as const;
+  };
+  const segments: TrailSegment[] = [];
+  const last = trail.length - 1;
+  for (let i = 0; i < last; i++) {
+    // Piece i runs around point i: from the trail's start or halfway from the point before,
+    // to halfway to the next point or the trail's end.
+    const fade = trailFade(now - trail[Math.min(i + 1, last)]!.t);
     if (fade <= 0) continue;
-    segments.push({ x1: px(a.x * width), y1: px(a.y * height), x2: px(b.x * width), y2: px(b.y * height), fade });
+    const [x1, y1] = i === 0 ? at(0) : mid(i);
+    const [cx, cy] = at(i);
+    const [x2, y2] = i + 1 === last ? at(last) : mid(i + 1);
+    segments.push({ x1: px(x1), y1: px(y1), cx: px(cx), cy: px(cy), x2: px(x2), y2: px(y2), fade });
   }
   return segments;
 }
@@ -165,7 +196,7 @@ type Canvas2D = Pick<
   | "clearRect"
   | "beginPath"
   | "moveTo"
-  | "lineTo"
+  | "quadraticCurveTo"
   | "stroke"
   | "drawImage"
   | "lineWidth"
@@ -200,11 +231,11 @@ export function paintTrails(
   core.strokeStyle = `rgb(${LASER_RGB})`;
   core.lineCap = "round";
   for (const trail of trails) {
-    for (const { x1, y1, x2, y2, fade } of trailSegments(trail, now, width, height)) {
+    for (const { x1, y1, cx, cy, x2, y2, fade } of trailSegments(trail, now, width, height)) {
       core.lineWidth = LASER_SIZE * fade;
       core.beginPath();
       core.moveTo(x1, y1);
-      core.lineTo(x2, y2);
+      core.quadraticCurveTo(cx, cy, x2, y2);
       core.stroke();
     }
   }

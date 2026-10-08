@@ -7,6 +7,7 @@ import { JSDOM, type DOMWindow } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import RUNTIME from "../../src-tauri/assets/runtime.js?raw";
+import { strokePath, toPixels } from "../lib/ink";
 
 const DECK = `<!DOCTYPE html><html><body>
 <main class="deck">
@@ -426,6 +427,18 @@ describe("player: review marks", () => {
     expect(pen!.getAttribute("vector-effect")).toBe("non-scaling-stroke");
     expect(dot!.getAttribute("d")).toBe("M480 270l0.01 0");
     expect(dot!.getAttribute("stroke-opacity")).toBe("0.4");
+  });
+
+  it("draws longer strokes as the same smooth curve the app draws", () => {
+    const points: [number, number][] = [[0, 0], [0.5, 0], [0.5, 0.5], [0, 0.5]];
+    const html = DECK.replace(
+      "</body>",
+      `<script type="application/json" id="slopslide-review">${JSON.stringify({ intro: [{ tool: "pen", color: "#000", points }] })}</script></body>`,
+    );
+    const p = player({ html, at: "?review" });
+    const path = p.doc.querySelector("#intro > svg.slop-review path")!;
+    expect(path.getAttribute("d")).toBe("M0 0L480 0Q960 0 960 270Q960 540 0 540");
+    expect(path.getAttribute("d")).toBe(strokePath(toPixels(points, 1920, 1080)));
   });
 
   it("leaves Cmd+R to the browser and decks without marks alone", () => {

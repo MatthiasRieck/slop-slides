@@ -18,7 +18,7 @@ export function fakeCanvas2D(canvas: { width: number; height: number } = { width
     },
     beginPath() {},
     moveTo() {},
-    lineTo() {},
+    quadraticCurveTo() {},
     stroke() {
       ctx.strokes.push(ctx.lineWidth);
     },

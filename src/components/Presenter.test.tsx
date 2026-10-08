@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setFullscreen = vi.fn(async () => {});
@@ -231,9 +231,31 @@ describe("Presenter tools", () => {
     ]);
     expect(strokes()).toHaveLength(1);
     const path = strokes()[0]!;
-    expect(path.getAttribute("d")).toBe("M100 100L200 150L300 250");
+    expect(path.getAttribute("d")).toBe("M100 100L150 125Q200 150 300 250");
     expect(path.getAttribute("stroke")).toBe("#ef4444");
     expect(path.getAttribute("stroke-width")).toBe("4");
+  });
+
+  /** A move that also carries the samples the browser coalesced into it, the event's own last. */
+  function moveThrough(samples: [number, number][]) {
+    const [x, y] = samples[samples.length - 1]!;
+    const event = createEvent.pointerMove(layer(), { buttons: 1, clientX: x, clientY: y, pointerId: 1 });
+    const coalesced = samples.map(([clientX, clientY]) => ({ clientX, clientY }));
+    Object.assign(event, { getCoalescedEvents: () => coalesced });
+    fireEvent(layer(), event);
+  }
+
+  it("the pen keeps every sample of a fast move, not just one per frame", () => {
+    render(<Presenter />);
+    fireEvent.click(tool(/^Pen/));
+    fireEvent.pointerDown(layer(), { button: 0, buttons: 1, clientX: 100, clientY: 100, pointerId: 1 });
+    moveThrough([
+      [200, 100],
+      [200, 200],
+      [100, 200],
+    ]);
+    fireEvent.pointerUp(layer(), { pointerId: 1 });
+    expect(strokes()[0]!.getAttribute("d")).toBe("M100 100L150 100Q200 100 200 150Q200 200 100 200");
   });
 
   it("draws ink as vectors at the zoomed size, thickening with the slide", () => {
@@ -481,6 +503,19 @@ describe("Presenter tools", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("the laser trail keeps every sample of a fast move", () => {
+    const painted = paintedTrail();
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "l" });
+    fireEvent.pointerDown(layer(), { button: 0, buttons: 1, clientX: 100, clientY: 100, pointerId: 1 });
+    moveThrough([
+      [200, 100],
+      [200, 200],
+      [100, 200],
+    ]);
+    expect(painted.strokes).toEqual([LASER_SIZE, LASER_SIZE, LASER_SIZE]);
   });
 
   it("a fresh laser trail is as wide as the dot and glows like it", () => {

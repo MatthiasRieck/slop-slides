@@ -182,6 +182,16 @@ export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annota
     return { x, y, t: performance.now() };
   };
 
+  /**
+   * Where the pointer went since the last move, as fractions of the layer: the browser hands
+   * out one move per frame, but keeps the samples in between, which a fast stroke needs.
+   */
+  const movedThrough = (event: ReactPointerEvent): [number, number][] => {
+    const rect = layerRef.current!.getBoundingClientRect();
+    const samples = event.nativeEvent.getCoalescedEvents?.() ?? [];
+    return (samples.length ? samples : [event]).map((e) => toFraction(e.clientX, e.clientY, rect));
+  };
+
   const onPointerDown = (event: ReactPointerEvent) => {
     if (event.button !== 0) return;
     if (tool === "laser") {
@@ -203,16 +213,17 @@ export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annota
       const rect = layerRef.current!.getBoundingClientRect();
       setLaser({ x: event.clientX - rect.left, y: event.clientY - rect.top });
       if (tracing.current && event.buttons & 1) {
-        const point = tracePoint(event);
-        setNow(point.t);
+        const t = performance.now();
+        const points = movedThrough(event).map(([x, y]) => ({ x, y, t }));
+        setNow(t);
         // The trail being drawn may have faded away entirely while the pointer rested.
-        setTrails((t) => (t.length ? [...t.slice(0, -1), [...t[t.length - 1]!, point]] : [[point]]));
+        setTrails((ts) => (ts.length ? [...ts.slice(0, -1), [...ts[ts.length - 1]!, ...points]] : [points]));
       }
     } else if (tool === "eraser" && event.buttons & 1) {
       eraseUnder(event);
     } else if (draft) {
-      const point = at(event);
-      setDraft((d) => d && { ...d, points: [...d.points, point] });
+      const points = movedThrough(event);
+      setDraft((d) => d && { ...d, points: [...d.points, ...points] });
     }
   };
 

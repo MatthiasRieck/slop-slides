@@ -352,6 +352,28 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     }
   };
 
+  // Images pasted into the composer are saved as assets and attached.
+  const pasteImages = async (files: File[]) => {
+    if (!deck) return;
+    try {
+      const saved: string[] = [];
+      for (const file of files) {
+        saved.push(await api.saveAsset(deck.id, pastedName(file), await readBase64(file)));
+      }
+      setAttachments((prev) => [...prev, ...saved.filter((a) => !prev.includes(a))]);
+    } catch (error) {
+      useApp.getState().setError(errorMessage(error));
+    }
+  };
+
+  const onPaste = (e: React.ClipboardEvent) => {
+    const images = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith("image/"));
+    if (images.length === 0) return;
+    // Keep any text that came along (e.g. an image copied from a web page has none worth pasting).
+    if (!e.clipboardData.getData("text/plain")) e.preventDefault();
+    void pasteImages(images);
+  };
+
   // Files dropped anywhere on the window become attachments.
   useEffect(() => {
     let disposed = false;
@@ -459,6 +481,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           value={draft}
           rows={2}
           onChange={(e) => setDraft(e.target.value)}
+          onPaste={onPaste}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
@@ -505,6 +528,22 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
       </div>
     </div>
   );
+}
+
+/** Clipboard images usually arrive as a generic "image.png"; name them after the paste. */
+function pastedName(file: File): string {
+  const ext = file.type.split("/")[1]?.split("+")[0] || "png";
+  const generic = !file.name || /^image\.\w+$/i.test(file.name);
+  return generic ? `pasted-image.${ext === "jpeg" ? "jpg" : ext}` : file.name;
+}
+
+function readBase64(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).replace(/^data:[^,]*,/, ""));
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read the pasted image"));
+    reader.readAsDataURL(file);
+  });
 }
 
 /**

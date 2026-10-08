@@ -418,6 +418,71 @@ describe("ChatPanel: attachments", () => {
     expect(unlistenDragDrop).toHaveBeenCalled();
   });
 
+  const paste = (files: File[], text = "") =>
+    fireEvent.paste(textarea(), {
+      clipboardData: { files, getData: (type: string) => (type === "text/plain" ? text : "") },
+    });
+
+  it("saves pasted images as assets and attaches them", async () => {
+    invoke.mockImplementation(async (_cmd: string, args: { name: string }) => `assets/${args.name}`);
+    render(<ChatPanel />);
+    const shot = new File(["hi"], "image.png", { type: "image/png" });
+    const photo = new File(["jpg"], "Holiday.jpeg", { type: "image/jpeg" });
+    await act(async () => paste([shot, photo]));
+    await waitFor(() => expect(screen.getByText("Holiday.jpeg")).toBeTruthy());
+    expect(invoke).toHaveBeenCalledWith("save_asset", { id: "talk", name: "pasted-image.png", data: "aGk=" });
+    expect(invoke).toHaveBeenCalledWith("save_asset", { id: "talk", name: "Holiday.jpeg", data: "anBn" });
+    expect(screen.getByText("pasted-image.png")).toBeTruthy();
+    type("Use these");
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(send).toHaveBeenCalledWith("Use these", {
+      includeSlide: true,
+      attachments: ["assets/pasted-image.png", "assets/Holiday.jpeg"],
+    });
+  });
+
+  it("names a nameless pasted image after its type", async () => {
+    invoke.mockImplementation(async (_cmd: string, args: { name: string }) => `assets/${args.name}`);
+    render(<ChatPanel />);
+    await act(async () => paste([new File(["x"], "", { type: "image/jpeg" })]));
+    await waitFor(() => expect(screen.getByText("pasted-image.jpg")).toBeTruthy());
+  });
+
+  it("leaves text-only and non-image pastes alone", async () => {
+    render(<ChatPanel />);
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.assign(event, {
+      clipboardData: { files: [new File(["a,b"], "data.csv", { type: "text/csv" })], getData: () => "" },
+    });
+    await act(async () => textarea().dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(false);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("keeps text that came with a pasted image", async () => {
+    invoke.mockResolvedValue("assets/pasted-image.png");
+    render(<ChatPanel />);
+    const withText = new Event("paste", { bubbles: true, cancelable: true });
+    Object.assign(withText, {
+      clipboardData: { files: [new File(["hi"], "image.png", { type: "image/png" })], getData: () => "caption" },
+    });
+    await act(async () => textarea().dispatchEvent(withText));
+    expect(withText.defaultPrevented).toBe(false);
+    const imageOnly = new Event("paste", { bubbles: true, cancelable: true });
+    Object.assign(imageOnly, {
+      clipboardData: { files: [new File(["hi"], "image.png", { type: "image/png" })], getData: () => "" },
+    });
+    await act(async () => textarea().dispatchEvent(imageOnly));
+    expect(imageOnly.defaultPrevented).toBe(true);
+  });
+
+  it("reports a failed paste", async () => {
+    invoke.mockRejectedValue("disk full");
+    render(<ChatPanel />);
+    await act(async () => paste([new File(["hi"], "image.png", { type: "image/png" })]));
+    await waitFor(() => expect(useApp.getState().error).toBe("disk full"));
+  });
+
   it("reports a failed import", async () => {
     openDialog.mockResolvedValue(["/locked.png"]);
     invoke.mockRejectedValue("permission denied");

@@ -322,6 +322,10 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const [dragging, setDragging] = useState(false);
   const [gridOpen, setGridOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [inputHeight, setInputHeight] = useState<number | null>(null);
+  const resizeStart = useRef<{ y: number; height: number } | null>(null);
+  const maxInputHeight = Math.max(64, Math.min(240, window.innerHeight * 0.4));
+  const resizeInput = (height: number) => setInputHeight(Math.max(64, Math.min(maxInputHeight, height)));
 
   const slideNumber = selected && deck ? deck.slides.findIndex((s) => s.id === selected) + 1 : 0;
   // Images show as previews in a fan behind the composer; other files stay chips.
@@ -338,9 +342,13 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
+    if (inputHeight !== null) {
+      el.style.height = `${inputHeight}px`;
+      return;
+    }
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
-  }, [draft]);
+  }, [draft, inputHeight]);
 
   useEffect(() => {
     textareaRef.current?.focus();
@@ -450,6 +458,42 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           dragging && "border-primary ring-2 ring-primary/30",
         )}
       >
+        <div
+          role="separator"
+          aria-label="Resize message input"
+          aria-orientation="horizontal"
+          aria-valuemin={64}
+          aria-valuemax={maxInputHeight}
+          aria-valuenow={inputHeight ?? 64}
+          tabIndex={0}
+          title="Drag up to make the message input taller"
+          className="group flex h-4 w-full cursor-ns-resize touch-none items-center justify-center rounded-t-2xl outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          onPointerDown={(e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            resizeStart.current = { y: e.clientY, height: textareaRef.current?.getBoundingClientRect().height ?? 64 };
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            const start = resizeStart.current;
+            if (start) resizeInput(start.height + start.y - e.clientY);
+          }}
+          onPointerUp={(e) => {
+            resizeStart.current = null;
+            if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+          }}
+          onPointerCancel={() => { resizeStart.current = null; }}
+          onLostPointerCapture={() => { resizeStart.current = null; }}
+          onKeyDown={(e) => {
+            const height = textareaRef.current?.getBoundingClientRect().height ?? 64;
+            if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "Home" || e.key === "End") {
+              e.preventDefault();
+              resizeInput(e.key === "Home" ? 64 : e.key === "End" ? maxInputHeight : height + (e.key === "ArrowUp" ? 16 : -16));
+            }
+          }}
+        >
+          <span className="h-1 w-8 rounded-full bg-border group-hover:bg-muted-foreground group-focus-visible:bg-primary" />
+        </div>
         {(files.length > 0 || slideNumber > 0) && (
           <div className="flex flex-wrap gap-1 px-3.5 pt-3">
             {slideNumber > 0 && (
@@ -515,7 +559,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
             }
           }}
           placeholder={running ? "The agent is working…" : "Ask for slides or changes…"}
-          className="block w-full resize-none bg-transparent px-3.5 pt-3 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/70"
+          className="block max-h-[max(64px,min(240px,40vh))] min-h-16 w-full resize-none bg-transparent px-3.5 pt-3 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/70"
         />
         <div className="relative flex flex-wrap items-center gap-1 px-2 pt-1 pb-2">
           <ModelPicker />

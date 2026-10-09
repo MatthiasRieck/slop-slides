@@ -460,15 +460,19 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
         useApp.getState().setError(errorMessage(error));
       }
     };
-    return catchDrops((paths, point) => {
+    const covers = (point: DropPoint) => {
       const { deck, editing, selected } = useApp.getState();
-      const images = paths.filter(isImage);
       const area = areaRef.current?.getBoundingClientRect();
       const inside = !!area && point.x >= area.left && point.x <= area.right && point.y >= area.top && point.y <= area.bottom;
-      if (!deck || !editing || !selected || !frame.current || images.length === 0 || !inside) return paths;
+      return !!deck && editing && !!selected && !!frame.current && inside;
+    };
+    return catchDrops((paths, point) => {
+      const { deck, selected } = useApp.getState();
+      const images = paths.filter(isImage);
+      if (!deck || !selected || images.length === 0 || !covers(point)) return paths;
       void insert(deck.id, selected, images, point);
       return paths.filter((p) => !isImage(p));
-    });
+    }, covers);
   }, [areaRef]);
 
   const current = useApp((s) => s.selected);

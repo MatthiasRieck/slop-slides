@@ -1,3 +1,5 @@
+import { isWindows } from "./utils";
+
 /**
  * Files dropped on the window. The chat attaches whatever lands anywhere; parts of the window
  * (like the slide being edited) can claim the files that land on them first.
@@ -12,31 +14,42 @@ export interface DropPoint {
 /** Takes the files it wants from a drop at `point`; returns the ones it leaves. */
 export type DropCatcher = (paths: string[], point: DropPoint) => string[];
 
-const catchers = new Set<DropCatcher>();
+const catchers = new Map<DropCatcher, (point: DropPoint) => boolean>();
 
-/** Lets `catcher` claim dropped files; returns a function that stops it. */
-export function catchDrops(catcher: DropCatcher): () => void {
-  catchers.add(catcher);
+/**
+ * Lets `catcher` claim dropped files; returns a function that stops it. `covers` tells whether
+ * it would take a drop at a point, so the chat does not invite drops it would not get.
+ */
+export function catchDrops(catcher: DropCatcher, covers: (point: DropPoint) => boolean = () => false): () => void {
+  catchers.set(catcher, covers);
   return () => {
     catchers.delete(catcher);
   };
+}
+
+/** Whether a catcher would take files dropped at `point`. */
+export function dropCovered(point: DropPoint | null): boolean {
+  return !!point && [...catchers.values()].some((covers) => covers(point));
 }
 
 /** Hands dropped files to the catchers in turn; returns the ones none of them took. */
 export function claimDrop(paths: string[], point: DropPoint | null): string[] {
   if (!point) return paths;
   let rest = paths;
-  for (const catcher of catchers) {
+  for (const catcher of catchers.keys()) {
     if (rest.length === 0) break;
     rest = catcher(rest, point);
   }
   return rest;
 }
 
-/** The drop position Tauri reports (physical pixels) in CSS pixels. */
-export function dropPoint(position: { x: number; y: number } | undefined): DropPoint | null {
+/**
+ * The drop position Tauri reports, in CSS pixels. Tauri calls it physical, but only on Windows
+ * is it: macOS and Linux report it in points, which are CSS pixels already.
+ */
+export function dropPoint(position: { x: number; y: number } | undefined, physical = isWindows): DropPoint | null {
   if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) return null;
-  const ratio = window.devicePixelRatio || 1;
+  const ratio = physical ? window.devicePixelRatio || 1 : 1;
   return { x: position.x / ratio, y: position.y / ratio };
 }
 

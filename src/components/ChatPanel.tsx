@@ -24,7 +24,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { api, errorMessage } from "../lib/api";
-import { claimDrop, dropPoint, isImage } from "../lib/drop";
+import { claimDrop, dropCovered, dropPoint, isImage } from "../lib/drop";
 import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowTokens } from "../lib/context";
 import { cn, deckFileUrl } from "../lib/utils";
 import { PROVIDERS, type Provider } from "../lib/models";
@@ -405,7 +405,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     let unlisten: (() => void) | undefined;
     void getCurrentWebview()
       .onDragDropEvent((event) => {
-        if (event.payload.type === "over" || event.payload.type === "enter") setDragging(true);
+        if (event.payload.type === "over" || event.payload.type === "enter") setDragging(!dropCovered(dropPoint(event.payload.position)));
         else if (event.payload.type === "leave") setDragging(false);
         else if (event.payload.type === "drop") {
           setDragging(false);

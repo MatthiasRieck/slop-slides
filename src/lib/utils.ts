@@ -6,7 +6,7 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export const isMac = navigator.userAgent.includes("Mac");
-const isWindows = navigator.userAgent.includes("Windows");
+export const isWindows = navigator.userAgent.includes("Windows");
 /** Dev-only: the UI is running in a plain browser via dev/browserPreview.ts. */
 const inBrowserPreview = import.meta.env.DEV && !("__TAURI_INTERNALS__" in window);
 

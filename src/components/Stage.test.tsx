@@ -12,7 +12,7 @@ vi.mock("../lib/drop", async (importOriginal) => ({
 
 import { invoke } from "@tauri-apps/api/core";
 
-import { claimDrop } from "../lib/drop";
+import { claimDrop, dropCovered } from "../lib/drop";
 import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Stage } from "./Stage";
@@ -472,6 +472,7 @@ describe("Stage", () => {
         const { container } = render(<Stage />);
         fireEvent.click(editButton());
         const { post } = laidOut(container);
+        expect(dropCovered({ x: 480, y: 290 })).toBe(true);
         let rest: string[] = [];
         await act(async () => {
           rest = claimDrop(["/tmp/photo.png", "/tmp/notes.md"], { x: 480, y: 290 });
@@ -490,11 +491,14 @@ describe("Stage", () => {
       it("leaves drops to the chat outside edit mode, outside the stage, or without images", () => {
         const { container, unmount } = render(<Stage />);
         expect(claimDrop(["/tmp/photo.png"], { x: 100, y: 100 })).toEqual(["/tmp/photo.png"]);
+        expect(dropCovered({ x: 100, y: 100 })).toBe(false);
         fireEvent.click(editButton());
         laidOut(container);
+        expect(dropCovered({ x: 1200, y: 100 })).toBe(false);
         expect(claimDrop(["/tmp/photo.png"], { x: 1200, y: 100 })).toEqual(["/tmp/photo.png"]);
         expect(claimDrop(["/tmp/notes.md"], { x: 100, y: 100 })).toEqual(["/tmp/notes.md"]);
         unmount();
+        expect(dropCovered({ x: 100, y: 100 })).toBe(false);
         expect(claimDrop(["/tmp/photo.png"], { x: 100, y: 100 })).toEqual(["/tmp/photo.png"]);
         expect(invoke).not.toHaveBeenCalledWith("import_assets", expect.anything());
       });

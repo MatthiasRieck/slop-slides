@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { catchDrops, claimDrop, dropPoint, imageSize, isImage } from "./drop";
+import { catchDrops, claimDrop, dropCovered, dropPoint, imageSize, isImage } from "./drop";
 
 const stops: (() => void)[] = [];
 afterEach(() => {
@@ -40,10 +40,25 @@ describe("dropped files", () => {
   });
 });
 
+describe("dropCovered", () => {
+  it("tells whether any catcher would take a drop at a point", () => {
+    expect(dropCovered({ x: 5, y: 5 })).toBe(false);
+    stops.push(catchDrops((paths) => paths), catchDrops((paths) => paths, (p) => p.x < 10));
+    expect(dropCovered({ x: 5, y: 5 })).toBe(true);
+    expect(dropCovered({ x: 50, y: 5 })).toBe(false);
+    expect(dropCovered(null)).toBe(false);
+  });
+});
+
 describe("dropPoint", () => {
-  it("turns Tauri's physical pixels into CSS pixels", () => {
+  it("turns Windows' physical pixels into CSS pixels", () => {
     vi.stubGlobal("devicePixelRatio", 2);
-    expect(dropPoint({ x: 300, y: 120 })).toEqual({ x: 150, y: 60 });
+    expect(dropPoint({ x: 300, y: 120 }, true)).toEqual({ x: 150, y: 60 });
+  });
+
+  it("keeps the points macOS and Linux report, which are CSS pixels already, even on a Retina screen", () => {
+    vi.stubGlobal("devicePixelRatio", 2);
+    expect(dropPoint({ x: 300, y: 120 }, false)).toEqual({ x: 300, y: 120 });
   });
 
   it("is null without a usable position", () => {

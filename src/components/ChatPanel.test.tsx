@@ -490,12 +490,29 @@ describe("ChatPanel: attachments", () => {
       await act(async () =>
         dragDrop!({ payload: { type: "drop", paths: ["/tmp/photo.png", "/tmp/notes.md"], position: { x: 200, y: 100 } } }),
       );
-      expect(catcher).toHaveBeenCalledWith(["/tmp/photo.png", "/tmp/notes.md"], { x: 200 / devicePixelRatio, y: 100 / devicePixelRatio });
+      expect(catcher).toHaveBeenCalledWith(["/tmp/photo.png", "/tmp/notes.md"], { x: 200, y: 100 });
       expect(invoke).toHaveBeenCalledWith("import_assets", { id: "talk", paths: ["/tmp/notes.md"] });
       // Nothing left over, nothing to import.
       invoke.mockClear();
       await act(async () => dragDrop!({ payload: { type: "drop", paths: ["/tmp/photo.png"], position: { x: 1, y: 1 } } }));
       expect(invoke).not.toHaveBeenCalledWith("import_assets", expect.anything());
+    } finally {
+      stop();
+    }
+  });
+
+  it("does not invite drops over what would take them instead", async () => {
+    const stop = catchDrops((paths) => paths, (point) => point.x > 500);
+    try {
+      const { container } = render(<ChatPanel />);
+      await waitFor(() => expect(dragDrop).not.toBeNull());
+      const composer = () => container.querySelector(".shadow-composer")!;
+      act(() => dragDrop!({ payload: { type: "enter", paths: ["/tmp/a.png"], position: { x: 600, y: 10 } } }));
+      expect(composer().className).not.toContain("border-primary");
+      act(() => dragDrop!({ payload: { type: "over", position: { x: 100, y: 10 } } }));
+      expect(composer().className).toContain("border-primary");
+      act(() => dragDrop!({ payload: { type: "over", position: { x: 700, y: 10 } } }));
+      expect(composer().className).not.toContain("border-primary");
     } finally {
       stop();
     }

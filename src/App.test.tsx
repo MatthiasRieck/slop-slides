@@ -20,7 +20,7 @@ import { useApp } from "./store";
 import { DECK_HTML, deckFor } from "./test/fixtures";
 
 beforeEach(() => {
-  useApp.setState({ deck: null, view: "slides", chatOpen: true, presenting: false, error: null });
+  useApp.setState({ deck: null, view: "slides", chatOpen: true, railOpen: true, presenting: false, error: null });
 });
 
 // Stub ids are prefixed: react-resizable-panels sets data-testid to each panel's id.
@@ -47,6 +47,16 @@ describe("App", () => {
     act(() => useApp.getState().setView("code"));
     expect(screen.getByTestId("stub-code").dataset.active).toBe("true");
     expect(shown("stage")).toBe(false);
+  });
+
+  it("collapses and reopens the slide rail", () => {
+    useApp.setState({ deck: deckFor(DECK_HTML) });
+    render(<App />);
+    act(() => useApp.getState().setRailOpen(false));
+    expect(shown("rail")).toBe(false);
+    expect(["stage", "chat"].map(shown)).toEqual([true, true]);
+    act(() => useApp.getState().setRailOpen(true));
+    expect(shown("rail")).toBe(true);
   });
 
   it("collapses and reopens the chat panel", () => {

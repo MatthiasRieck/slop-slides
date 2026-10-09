@@ -8,7 +8,6 @@ import {
   FoldVertical,
   Globe,
   Loader2,
-  PanelRightClose,
   Paperclip,
   Pencil,
   PenLine,
@@ -71,15 +70,6 @@ export function ChatPanel() {
               New chat
             </button>
           )}
-          <button
-            type="button"
-            title="Hide chat"
-            aria-label="Hide chat"
-            onClick={() => useApp.getState().setChatOpen(false)}
-            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-          >
-            <PanelRightClose className="size-3.5" />
-          </button>
         </div>
       </div>
       {cliMissing && <MissingCli provider={provider} />}

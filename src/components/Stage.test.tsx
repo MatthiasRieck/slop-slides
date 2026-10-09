@@ -52,6 +52,19 @@ describe("Stage", () => {
     expect(screen.queryByText(/\d+ \/ \d+/)).toBeNull();
   });
 
+  it("opens the template layouts to change the slide's layout", () => {
+    useApp.setState({ templates: [{ id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title", "quote"] }], running: false });
+    render(<Stage />);
+    const button = screen.getByRole("button", { name: /^Layout$/ });
+    fireEvent.click(button);
+    expect(screen.getByRole("dialog", { name: "Change layout" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Quote layout" })).toBeTruthy();
+    fireEvent.click(button);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    act(() => useApp.setState({ running: true }));
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("renders nothing without a deck", () => {
     useApp.setState({ deck: null });
     const { container } = render(<Stage />);

@@ -10,9 +10,11 @@ import {
   type Deck,
   type DeckChanged,
   type LintIssue,
+  type TemplateSummary,
 } from "./lib/api";
 import { latestContext, mergeContext, type ContextUsage } from "./lib/context";
 import { inkBounds, SLIDE_SIZE, type Stroke } from "./lib/ink";
+import { layoutLabel } from "./lib/utils";
 import {
   defaultModel,
   pickContextWindow,
@@ -209,11 +211,13 @@ interface AppState {
   editReload: number;
   /** Slide edits that can be undone, newest last. */
   slideUndo: SlideUndo[];
+  /** Templates for layouts and styles; `undefined` until loaded. */
+  templates: TemplateSummary[] | undefined;
   /** Undone slide edits that can be redone, newest last. */
   slideRedo: SlideUndo[];
 
   openDeck: (id: string) => Promise<void>;
-  createDeck: (title: string) => Promise<void>;
+  createDeck: (title: string, template?: string | null) => Promise<void>;
   closeDeck: () => Promise<void>;
   setDeck: (deck: Deck) => void;
   select: (slide: string | null) => void;
@@ -245,6 +249,21 @@ interface AppState {
   redoSlideEdit: () => Promise<void>;
   /** Undoes every edit made since entering edit mode, then leaves it. */
   discardSlideEdits: () => Promise<void>;
+  refreshTemplates: () => Promise<void>;
+  /**
+   * Restyles the deck like the template: an empty deck takes its styles directly; otherwise
+   * the composer gets a prompt asking the agent to.
+   */
+  applyStyle: (template: string) => Promise<void>;
+  /**
+   * Adds a slide on the template's layout `slide` after the selected one: a copy of it when
+   * the deck uses that template, else a prompt in the composer for the agent.
+   */
+  addLayoutSlide: (template: string, slide: string) => Promise<void>;
+  /** Puts a prompt in the composer to rebuild the selected slide on the template's layout. */
+  changeLayout: (template: string, slide: string) => Promise<void>;
+  /** Saves the deck as a user template with placeholder content; null when it failed. */
+  saveAsTemplate: (name: string) => Promise<TemplateSummary | null>;
   /** Asks the agent to rebuild the current slide's layout around the user's hand edits. */
   /** `overflow` lists elements the slide editor found running past the slide or cut off. */
   tidyLayout: (overflow?: string[]) => Promise<void>;
@@ -273,6 +292,19 @@ export const TIDY_PROMPT =
 
 export const tidyPrompt = (overflow: string[] = []) =>
   overflow.length ? `${TIDY_PROMPT}\n\nThe editor found overflow:\n${overflow.map((o) => `- ${o}`).join("\n")}` : TIDY_PROMPT;
+
+/** How a prompt names a template's layout: its readable name, the slide and file to read. */
+const layoutRef = (template: TemplateSummary, slide: string, path: string) =>
+  `the "${layoutLabel(slide)}" layout of the "${template.title}" template (slide \`${slide}\` in \`${path}\`)`;
+
+export const stylePrompt = (template: TemplateSummary, path: string) =>
+  `Restyle the whole deck in the "${template.title}" style. The template is at \`${path}\`: take over its design system (fonts, colors, styles, decorative elements) and rebuild every slide on its closest layout. Keep all content, slide ids, and sections, and set <meta name="slopslide-template" content="${template.id}">.`;
+
+export const addLayoutPrompt = (template: TemplateSummary, slide: string, path: string, after: string | null) =>
+  `Add a new slide ${after ? "after this one" : "at the end of the deck"} based on ${layoutRef(template, slide, path)}. Recreate the layout with this deck's design system and fill it with content that fits the deck.`;
+
+export const changeLayoutPrompt = (template: TemplateSummary, slide: string, path: string, sameTemplate: boolean) =>
+  `Change the layout of this slide to ${layoutRef(template, slide, path)}. Keep this slide's id and its content${sameTemplate ? "." : ", and use this deck's design system."}`;
 
 const newId = () => crypto.randomUUID();
 let lintRun = 0;
@@ -310,6 +342,7 @@ export const useApp = create<AppState>((set, get) => ({
   editReload: 0,
   slideUndo: [],
   slideRedo: [],
+  templates: undefined,
 
   openDeck: async (id) => {
     try {
@@ -320,9 +353,9 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
-  createDeck: async (title) => {
+  createDeck: async (title, template = null) => {
     try {
-      const deck = await api.createDeck(title);
+      const deck = await api.createDeck(title, template);
       await loadDeckState(deck);
     } catch (error) {
       set({ error: errorMessage(error) });
@@ -497,6 +530,74 @@ export const useApp = create<AppState>((set, get) => ({
     return editQueue;
   },
 
+  refreshTemplates: async () => {
+    try {
+      const templates = await api.listTemplates();
+      set({ templates: Array.isArray(templates) ? templates : [] });
+    } catch (error) {
+      set({ templates: [], error: errorMessage(error) });
+    }
+  },
+
+  applyStyle: async (id) => {
+    const { deck } = get();
+    const template = findTemplate(id);
+    if (!deck || !template) return;
+    try {
+      if (deck.slides.length === 0) {
+        get().setDeck(await api.applyTemplate(deck.id, id));
+        return;
+      }
+      const path = await api.stageTemplate(deck.id, id);
+      promptAgent(stylePrompt(template, path));
+    } catch (error) {
+      set({ error: errorMessage(error) });
+    }
+  },
+
+  addLayoutSlide: async (id, slide) => {
+    const { deck, selected } = get();
+    const template = findTemplate(id);
+    if (!deck || !template) return;
+    try {
+      if (deck.template === id) {
+        const created = await api.addTemplateSlide(deck.id, id, slide, selected);
+        get().setDeck(created.deck);
+        get().select(created.slide);
+        return;
+      }
+      const path = await api.stageTemplate(deck.id, id);
+      promptAgent(addLayoutPrompt(template, slide, path, selected));
+    } catch (error) {
+      set({ error: errorMessage(error) });
+    }
+  },
+
+  changeLayout: async (id, slide) => {
+    const { deck, selected } = get();
+    const template = findTemplate(id);
+    if (!deck || !template || !selected) return;
+    try {
+      const path = await api.stageTemplate(deck.id, id);
+      promptAgent(changeLayoutPrompt(template, slide, path, deck.template === id));
+    } catch (error) {
+      set({ error: errorMessage(error) });
+    }
+  },
+
+  saveAsTemplate: async (name) => {
+    const { deck } = get();
+    if (!deck) return null;
+    try {
+      const created = await api.createTemplate(deck.id, name);
+      await get().refreshTemplates();
+      return created;
+    } catch (error) {
+      set({ error: errorMessage(error) });
+      return null;
+    }
+  },
+
   tidyLayout: async (overflow = []) => {
     // Let any edit still being saved land first, so the agent sees the final version.
     await editQueue;
@@ -644,6 +745,17 @@ async function confirmDiscardEdits(): Promise<boolean> {
   } catch {
     return window.confirm(message);
   }
+}
+
+function findTemplate(id: string): TemplateSummary | undefined {
+  return useApp.getState().templates?.find((t) => t.id === id);
+}
+
+/** Hands the composer a prepared message, showing the chat if it is hidden. */
+function promptAgent(text: string) {
+  const { chatOpen, setChatOpen, fillComposer } = useApp.getState();
+  if (!chatOpen) setChatOpen(true);
+  fillComposer(text);
 }
 
 async function loadDeckState(deck: Deck) {

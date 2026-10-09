@@ -641,19 +641,271 @@ pub fn replace_slide(html: &str, id: &str, markup: &str) -> Result<(String, Stri
     Ok((out, previous))
 }
 
-pub fn duplicate(html: &str, id: &str) -> Result<(String, String), String> {
+/// Slide `id` of `html` with its id replaced by the `{{ID}}` placeholder [`insert`] fills in.
+fn slide_with_id_placeholder(html: &str, id: &str) -> Result<String, String> {
     let slides = find_slides(html);
     let span = span_of(&slides, id).ok_or_else(|| format!("Slide not found: {id}"))?;
     let range = span
         .id_value
         .clone()
         .expect("slides with ids have id ranges");
-    let copy = format!(
+    Ok(format!(
         "{}{{{{ID}}}}{}",
         &html[span.range.start..range.start],
         &html[range.end..span.range.end]
-    );
+    ))
+}
+
+pub fn duplicate(html: &str, id: &str) -> Result<(String, String), String> {
+    let copy = slide_with_id_placeholder(html, id)?;
     insert(html, Some(id), &copy, &format!("{id}-copy"))
+}
+
+/// Inserts a copy of slide `slide` of the document `source` (a template) after `after`,
+/// keeping its id when the deck does not use it yet. Returns the document and the new id.
+pub fn copy_slide(
+    html: &str,
+    after: Option<&str>,
+    source: &str,
+    slide: &str,
+) -> Result<(String, String), String> {
+    let copy = slide_with_id_placeholder(source, slide)?;
+    insert(html, after, &copy, slide)
+}
+
+/// Name of the `<meta>` naming the template a deck's design comes from:
+/// `<meta name="slopslide-template" content="<template id>">`.
+pub const TEMPLATE_META: &str = "slopslide-template";
+
+/// The template `<meta>` tag: where it starts and its parsed tag.
+fn template_meta(html: &str) -> Option<(usize, Tag)> {
+    tags(html).find(|(_, tag)| {
+        !tag.closing
+            && tag.name == "meta"
+            && tag
+                .attrs
+                .iter()
+                .any(|(n, v, _, _)| n == "name" && v.trim().eq_ignore_ascii_case(TEMPLATE_META))
+    })
+}
+
+/// Id of the template the deck's design comes from (see [`TEMPLATE_META`]).
+pub fn template(html: &str) -> Option<String> {
+    let (_, tag) = template_meta(html)?;
+    let content = tag.attrs.iter().find(|(n, _, _, _)| n == "content")?;
+    let id = decode_entities(content.1.trim());
+    (!id.is_empty()).then_some(id)
+}
+
+/// Names the deck's template in its `<meta>` (right after `<title>`), or removes it for None.
+pub fn set_template(html: &str, template: Option<&str>) -> String {
+    let tag = template.map(|id| {
+        format!(
+            "<meta name=\"{TEMPLATE_META}\" content=\"{}\">",
+            escape_attr(id)
+        )
+    });
+    match (template_meta(html), tag) {
+        (Some((at, old)), Some(tag)) => format!("{}{tag}{}", &html[..at], &html[old.end..]),
+        (Some((at, old)), None) => {
+            let start = html[..at].trim_end().len();
+            format!("{}{}", &html[..start], &html[old.end..])
+        }
+        (None, Some(tag)) => match find_ci(html, 0, "</title") {
+            Some(end) => {
+                let at = html[end..].find('>').map_or(html.len(), |e| end + e + 1);
+                format!("{}\n  {tag}{}", &html[..at], &html[at..])
+            }
+            None => insert_after_head(html, &format!("\n  {tag}")),
+        },
+        (None, None) => html.to_string(),
+    }
+}
+
+/// `html` without its slides and section markers: the deck's shell (styles, runtime).
+pub fn strip_slides(html: &str) -> String {
+    let mut ranges: Vec<Range<usize>> = find_slides(html)
+        .into_iter()
+        .map(|s| s.range)
+        .chain(find_sections(html).into_iter().map(|s| s.range))
+        .collect();
+    ranges.sort_by_key(|r| r.start);
+    let mut out = String::with_capacity(html.len());
+    let mut at = 0;
+    for range in ranges {
+        let start = html[at..range.start].trim_end().len() + at;
+        out.push_str(&html[at..start]);
+        at = range.end;
+    }
+    out.push_str(&html[at..]);
+    out
+}
+
+/// `html` without the player runtime blocks, e.g. for the agent to read a template.
+pub fn without_runtime(html: &str) -> String {
+    let mut out = html.to_string();
+    for (start, end) in [(CSS_START, CSS_END), (JS_START, JS_END)] {
+        if let Some(s) = out.find(start) {
+            if let Some(e) = out[s..].find(end) {
+                let from = out[..s].trim_end().len();
+                out = format!("{}{}", &out[..from], &out[s + e + end.len()..]);
+            }
+        }
+    }
+    out
+}
+
+/// Replaces every word of the slides' text with placeholder (lorem ipsum) words of about
+/// the same length and case, and every digit with another digit, keeping all markup,
+/// styles, and entities. Turns a deck into a template without its content.
+pub fn with_placeholder_text(html: &str) -> String {
+    let mut words = PlaceholderWords::default();
+    let mut out = String::with_capacity(html.len());
+    let mut at = 0;
+    for slide in find_slides(html) {
+        out.push_str(&html[at..slide.range.start]);
+        let s = &html[slide.range.clone()];
+        let mut i = 0;
+        while i < s.len() {
+            let next = s[i..].find('<').map_or(s.len(), |e| i + e);
+            out.push_str(&words.replace(&s[i..next]));
+            if next == s.len() {
+                break;
+            }
+            let end = if s[next..].starts_with("<!--") {
+                s[next..].find("-->").map_or(s.len(), |e| next + e + 3)
+            } else {
+                match parse_tag(s, next) {
+                    Some(tag)
+                        if !tag.closing
+                            && matches!(tag.name.as_str(), "script" | "style" | "textarea") =>
+                    {
+                        find_ci(s, tag.end, &format!("</{}", tag.name)).unwrap_or(s.len())
+                    }
+                    Some(tag) => tag.end,
+                    None => next + 1,
+                }
+            };
+            out.push_str(&s[next..end]);
+            i = end;
+        }
+        at = slide.range.end;
+    }
+    out.push_str(&html[at..]);
+    out
+}
+
+const LOREM: &[&str] = &[
+    "a",
+    "ad",
+    "et",
+    "in",
+    "ut",
+    "id",
+    "non",
+    "sed",
+    "est",
+    "sit",
+    "amet",
+    "elit",
+    "enim",
+    "quis",
+    "nisi",
+    "lorem",
+    "ipsum",
+    "dolor",
+    "magna",
+    "minim",
+    "culpa",
+    "labore",
+    "dolore",
+    "veniam",
+    "fugiat",
+    "tempor",
+    "aliqua",
+    "nostrud",
+    "officia",
+    "laboris",
+    "commodo",
+    "pariatur",
+    "voluptate",
+    "adipiscing",
+    "incididunt",
+    "consectetur",
+    "exercitation",
+    "reprehenderit",
+];
+const DIGITS: &[u8] = b"4827365190";
+
+#[derive(Default)]
+struct PlaceholderWords {
+    next: usize,
+}
+
+impl PlaceholderWords {
+    fn replace(&mut self, text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut chars = text.char_indices().peekable();
+        while let Some((i, c)) = chars.next() {
+            if c == '&' {
+                // Keep entities such as `&amp;` or `&#8212;` as they are.
+                let entity = text[i..].find(';').filter(|&e| {
+                    e > 1
+                        && e <= 10
+                        && text[i + 1..i + e]
+                            .chars()
+                            .all(|c| c.is_alphanumeric() || c == '#')
+                });
+                if let Some(e) = entity {
+                    out.push_str(&text[i..=i + e]);
+                    while chars.peek().is_some_and(|&(j, _)| j <= i + e) {
+                        chars.next();
+                    }
+                    continue;
+                }
+            }
+            if c.is_alphabetic() {
+                let mut word = String::from(c);
+                while let Some(&(_, next)) = chars.peek().filter(|(_, n)| n.is_alphabetic()) {
+                    word.push(next);
+                    chars.next();
+                }
+                out.push_str(&self.word(&word));
+            } else if c.is_ascii_digit() {
+                out.push(DIGITS[self.next % DIGITS.len()] as char);
+                self.next += 1;
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// A placeholder word as long as `original` as the list allows, in the same case.
+    fn word(&mut self, original: &str) -> String {
+        let len = original.chars().count();
+        let distance = |w: &&str| w.len().abs_diff(len);
+        let best = LOREM.iter().map(distance).min().unwrap_or(0);
+        let fits: Vec<&str> = LOREM
+            .iter()
+            .filter(|w| distance(w) == best)
+            .copied()
+            .collect();
+        let word = fits[self.next % fits.len()];
+        self.next += 1;
+        let mut letters = original.chars();
+        let first_upper = letters.next().is_some_and(char::is_uppercase);
+        if first_upper && len > 1 && original.chars().all(char::is_uppercase) {
+            word.to_uppercase()
+        } else if first_upper {
+            let mut w = word.chars();
+            w.next()
+                .map(|f| f.to_uppercase().chain(w).collect())
+                .unwrap_or_default()
+        } else {
+            word.to_string()
+        }
+    }
 }
 
 /// Quoted deck-relative `assets/…` references in document order: the byte range of each
@@ -1545,4 +1797,111 @@ mod tests {
     }
 
     const THREE_SLIDES: &str = "<html><body><main class=\"deck\">\n  <section class=\"slide\" id=\"a\">A</section>\n  <section class=\"slide\" id=\"b\">B</section>\n  <section class=\"slide\" id=\"c\">C</section>\n</main></body></html>";
+
+    const STYLED: &str = "<!DOCTYPE html><html><head>\n  <title>Talk</title>\n  <style>.x {}</style>\n</head><body>\n  <main class=\"deck\">\n    <section class=\"slide\" id=\"a\"><h1>Big &amp; bold</h1><p>Revenue grew 42% in Q3.</p></section>\n    <div class=\"deck-section\" data-title=\"Part\"></div>\n    <section class=\"slide\" id=\"b\"><style>.y { content: \"keep\" }</style><!-- note --><p>NASA said: hello</p></section>\n  </main>\n</body></html>";
+
+    #[test]
+    fn reads_and_writes_the_template_meta() {
+        assert_eq!(template(STYLED), None);
+        let named = set_template(STYLED, Some("swiss"));
+        assert!(
+            named.contains(
+                "<title>Talk</title>\n  <meta name=\"slopslide-template\" content=\"swiss\">"
+            ),
+            "{named}"
+        );
+        assert_eq!(template(&named).as_deref(), Some("swiss"));
+        let renamed = set_template(&named, Some("a\"b"));
+        assert_eq!(renamed.matches(TEMPLATE_META).count(), 1);
+        assert_eq!(template(&renamed).as_deref(), Some("a\"b"));
+        assert_eq!(set_template(&named, None), STYLED, "removing undoes adding");
+        assert_eq!(set_template(STYLED, None), STYLED);
+        assert_eq!(
+            template("<head><META NAME=\"SlopSlide-Template\" content=\" bento-grid \"></head>")
+                .as_deref(),
+            Some("bento-grid")
+        );
+        assert_eq!(
+            template("<meta name=\"slopslide-template\" content=\"\">"),
+            None
+        );
+        let untitled = set_template("<html><head></head></html>", Some("x"));
+        assert_eq!(
+            untitled,
+            "<html><head>\n  <meta name=\"slopslide-template\" content=\"x\"></head></html>"
+        );
+    }
+
+    #[test]
+    fn strips_slides_and_sections_but_keeps_the_shell() {
+        let shell = strip_slides(STYLED);
+        assert!(find_slides(&shell).is_empty());
+        assert!(find_sections(&shell).is_empty());
+        assert!(shell.contains("<style>.x {}</style>"));
+        assert!(
+            shell.contains("<main class=\"deck\">\n  </main>"),
+            "{shell}"
+        );
+    }
+
+    #[test]
+    fn removes_the_runtime_blocks() {
+        let with = ensure_runtime(STYLED);
+        assert!(with.contains(CSS_START) && with.contains(JS_START));
+        let without = without_runtime(&with);
+        assert!(!without.contains("slopslide:runtime"));
+        assert_eq!(without_runtime(STYLED), STYLED);
+        assert_eq!(find_slides(&without).len(), 2);
+    }
+
+    #[test]
+    fn copies_a_slide_from_another_document() {
+        let deck = "<main class=\"deck\">\n    <section class=\"slide\" id=\"a\">A</section>\n    <section class=\"slide\" id=\"z\">Z</section>\n</main>";
+        let (out, id) = copy_slide(deck, Some("a"), STYLED, "b").unwrap();
+        assert_eq!(id, "b", "keeps the template's id when free");
+        let ids: Vec<_> = find_slides(&out).into_iter().filter_map(|s| s.id).collect();
+        assert_eq!(ids, ["a", "b", "z"]);
+        assert!(out.contains("NASA said"));
+        let (again, second) = copy_slide(&out, None, STYLED, "b").unwrap();
+        assert_eq!(second, "b-2");
+        assert_eq!(
+            find_slides(&again).last().unwrap().id.as_deref(),
+            Some("b-2")
+        );
+        assert!(copy_slide(deck, None, STYLED, "missing").is_err());
+    }
+
+    #[test]
+    fn replaces_slide_text_with_placeholder_words() {
+        let out = with_placeholder_text(STYLED);
+        // Everything outside the slides, and all markup, styles and comments stay.
+        assert!(out.starts_with("<!DOCTYPE html><html><head>\n  <title>Talk</title>"));
+        assert!(out.contains("data-title=\"Part\""));
+        assert!(out.contains("<style>.y { content: \"keep\" }</style><!-- note -->"));
+        assert!(out.contains("<section class=\"slide\" id=\"a\"><h1>"));
+        assert!(out.contains(" &amp; "), "entities stay: {out}");
+        for word in ["Big", "bold", "Revenue", "grew", "NASA", "hello", "42"] {
+            assert!(!out.contains(word), "{word} left in {out}");
+        }
+        assert_eq!(find_slides(&out).len(), 2);
+        // Case and punctuation follow the original.
+        let slides = find_slides(&out);
+        let b = &out[slides[1].range.clone()];
+        let text = b.split("<p>").nth(1).unwrap().split("</p>").next().unwrap();
+        let words: Vec<&str> = text.split(' ').collect();
+        assert_eq!(words.len(), 3, "{text}");
+        assert!(
+            words[0].len() > 1 && words[0].chars().all(char::is_uppercase),
+            "{text}"
+        );
+        assert!(words[1].ends_with(':'), "{text}");
+        assert!(words[2].chars().all(char::is_lowercase), "{text}");
+        let a = &out[slides[0].range.clone()];
+        assert!(a.contains("% "), "digits and symbols keep their shape: {a}");
+        assert_eq!(
+            with_placeholder_text(&out).len(),
+            out.len(),
+            "same shape again"
+        );
+    }
 }

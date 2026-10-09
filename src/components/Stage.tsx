@@ -1,10 +1,11 @@
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, Maximize, Pencil, Redo2, Sparkles, Trash2, Undo2, Wand2, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, LayoutTemplate, Maximize, Pencil, Redo2, Sparkles, Trash2, Undo2, Wand2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { SKETCH_TARGET_ATTR, useApp } from "../store";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { SketchToolbar } from "./SketchToolbar";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
+import { LayoutPicker, Popover } from "./Templates";
 import type { Slide } from "../lib/api";
 import { zoomBox, type Stroke } from "../lib/ink";
 import { cn } from "../lib/utils";
@@ -177,6 +178,7 @@ export function Stage() {
                 Overflow
               </span>
             )}
+            {slide && <ChangeLayoutButton disabled={running} />}
             {slide && (
               <button
                 type="button"
@@ -200,6 +202,33 @@ export function Stage() {
         </div>
       )}
     </div>
+  );
+}
+
+/** Opens the template layouts, to have the agent rebuild the current slide on one. */
+function ChangeLayoutButton(props: { disabled: boolean }) {
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        title="Rebuild this slide on a template layout"
+        aria-expanded={open}
+        disabled={props.disabled}
+        onClick={() => setOpen((v) => !v)}
+        className="mr-1 flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+      >
+        <LayoutTemplate className="size-3.5" />
+        Layout
+      </button>
+      {open && (
+        <Popover anchor={buttonRef} placement="above" width={560} label="Change layout" onClose={() => setOpen(false)}>
+          <LayoutPicker mode="change" onDone={() => setOpen(false)} />
+        </Popover>
+      )}
+    </>
   );
 }
 

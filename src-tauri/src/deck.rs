@@ -22,6 +22,7 @@ use crate::error::{Error, Result};
 use crate::html;
 use crate::lint;
 use crate::review::{self, Review};
+use crate::templates;
 
 pub const INTERNAL_DIR: &str = ".slopslide";
 pub const DECK_FILE: &str = "deck.html";
@@ -85,6 +86,8 @@ pub struct Deck {
     pub shell_hash: String,
     /// What the user drew on slides, by slide id (see [`review`]).
     pub review: Review,
+    /// Id of the template the deck's design comes from (see [`crate::templates`]).
+    pub template: Option<String>,
 }
 
 pub fn library_root(app: &AppHandle) -> Result<PathBuf> {
@@ -215,7 +218,13 @@ fn prune_review(html: &str) -> Option<String> {
     review::prune(html, &ids)
 }
 
-pub fn create(root: &Path, title: &str) -> Result<Deck> {
+/// A template a new deck takes its design from: its id and deck.html.
+pub struct TemplateSource<'a> {
+    pub id: &'a str,
+    pub html: &'a str,
+}
+
+pub fn create(root: &Path, title: &str, template: Option<TemplateSource>) -> Result<Deck> {
     let title = title.trim();
     let title = if title.is_empty() {
         "Untitled deck"
@@ -224,7 +233,11 @@ pub fn create(root: &Path, title: &str) -> Result<Deck> {
     };
     let dir = unique_dir(root, &html::slugify(title));
     fs::create_dir_all(&dir)?;
-    write_html(&dir, &html::set_title(DECK_TEMPLATE, title))?;
+    let source = match template {
+        Some(t) => templates::deck_shell(t.html, t.id, title),
+        None => html::set_title(DECK_TEMPLATE, title),
+    };
+    write_html(&dir, &source)?;
     let id = dir.file_name().unwrap().to_string_lossy().into_owned();
     open(&dir, &id, true)
 }
@@ -259,6 +272,7 @@ pub fn load(dir: &Path, id: &str) -> Result<Deck> {
         path: dir.to_string_lossy().into_owned(),
         shell_hash: html::shell_hash(&source, &spans, &section_spans),
         review: review::read(&source),
+        template: html::template(&source),
         sections: section_spans
             .iter()
             .enumerate()
@@ -345,6 +359,34 @@ pub fn reorder(dir: &Path, id: &str, slides: Vec<String>) -> Result<Deck> {
 pub fn add_blank(dir: &Path, id: &str, after: Option<String>) -> Result<(Deck, String)> {
     edit(dir, id, |s| {
         html::insert(s, after.as_deref(), BLANK_SLIDE, "slide")
+    })
+}
+
+/// Gives a deck without slides the template's design (styles, fonts), keeping its title.
+pub fn apply_template(dir: &Path, id: &str, template: TemplateSource) -> Result<Deck> {
+    Ok(edit(dir, id, |s| {
+        if !html::find_slides(s).is_empty() {
+            return Err("Only a deck without slides takes a template's styles directly.".into());
+        }
+        let title = html::title(s).unwrap_or_else(|| fallback_title(id));
+        Ok((
+            templates::deck_shell(template.html, template.id, &title),
+            (),
+        ))
+    })?
+    .0)
+}
+
+/// Inserts a copy of the template's slide `slide` after `after` (or at the end).
+pub fn add_template_slide(
+    dir: &Path,
+    id: &str,
+    after: Option<String>,
+    template: &str,
+    slide: &str,
+) -> Result<(Deck, String)> {
+    edit(dir, id, |s| {
+        html::copy_slide(s, after.as_deref(), template, slide)
     })
 }
 
@@ -929,18 +971,18 @@ mod tests {
     #[test]
     fn creates_decks_in_unique_slugged_folders() {
         let lib = TempLib::new();
-        let first = create(&lib.0, "  Series A pitch!  ").unwrap();
+        let first = create(&lib.0, "  Series A pitch!  ", None).unwrap();
         assert_eq!(first.id, "series-a-pitch");
         assert_eq!(first.title, "Series A pitch!");
         assert!(first.slides.is_empty());
-        let second = create(&lib.0, "Series A Pitch").unwrap();
+        let second = create(&lib.0, "Series A Pitch", None).unwrap();
         assert_eq!(second.id, "series-a-pitch-2");
-        let untitled = create(&lib.0, "   ").unwrap();
+        let untitled = create(&lib.0, "   ", None).unwrap();
         assert_eq!(
             (untitled.id.as_str(), untitled.title.as_str()),
             ("untitled-deck", "Untitled deck")
         );
-        let symbols = create(&lib.0, "日本語").unwrap();
+        let symbols = create(&lib.0, "日本語", None).unwrap();
         assert_eq!(symbols.id, "untitled");
         assert_eq!(symbols.title, "日本語");
 
@@ -1594,5 +1636,67 @@ mod tests {
         let exported = fs::read_to_string(dest).unwrap();
         assert!(exported.contains("data-title=\"Part two\""));
         assert!(exported.contains(".deck > .deck-section"));
+    }
+
+    #[test]
+    fn creates_decks_from_a_template() {
+        let lib = TempLib::new();
+        let source = include_str!("../templates/swiss.html");
+        let deck = create(
+            &lib.0,
+            "Board update",
+            Some(TemplateSource {
+                id: "swiss",
+                html: source,
+            }),
+        )
+        .unwrap();
+        assert_eq!(deck.title, "Board update");
+        assert_eq!(deck.template.as_deref(), Some("swiss"));
+        assert!(deck.slides.is_empty());
+        let html = fs::read_to_string(lib.0.join(&deck.id).join(DECK_FILE)).unwrap();
+        assert!(
+            html.contains("Hanken Grotesk"),
+            "takes the template's styles"
+        );
+        assert_eq!(lint(&lib.0.join(&deck.id)).unwrap(), vec![]);
+        assert_eq!(create(&lib.0, "Plain", None).unwrap().template, None);
+    }
+
+    #[test]
+    fn applies_a_template_to_an_empty_deck_only() {
+        let lib = TempLib::new();
+        let deck = create(&lib.0, "Pitch", None).unwrap();
+        let dir = lib.0.join(&deck.id);
+        let source = include_str!("../templates/synthwave.html");
+        let template = || TemplateSource {
+            id: "synthwave",
+            html: source,
+        };
+        let styled = apply_template(&dir, &deck.id, template()).unwrap();
+        assert_eq!(styled.template.as_deref(), Some("synthwave"));
+        assert_eq!(styled.title, "Pitch", "keeps the deck's title");
+        assert!(read_html(&dir).unwrap().contains("Audiowide"));
+
+        let (with_slide, _) = add_blank(&dir, &deck.id, None).unwrap();
+        assert_eq!(with_slide.slides.len(), 1);
+        let before = read_html(&dir).unwrap();
+        assert!(apply_template(&dir, &deck.id, template()).is_err());
+        assert_eq!(read_html(&dir).unwrap(), before);
+    }
+
+    #[test]
+    fn adds_slides_from_a_template() {
+        let deck = TempDeck::new(THREE);
+        let source = include_str!("../templates/editorial.html");
+        let (after_a, id) =
+            add_template_slide(&deck.0, "three", Some("a".into()), source, "quote").unwrap();
+        assert_eq!(id, "quote");
+        assert_eq!(slide_ids(&after_a), ["a", "quote", "b", "c"]);
+        assert!(deck.html().contains("layout-quote"));
+        let (at_end, second) = add_template_slide(&deck.0, "three", None, source, "quote").unwrap();
+        assert_eq!(second, "quote-2");
+        assert_eq!(slide_ids(&at_end).last(), Some(&"quote-2"));
+        assert!(add_template_slide(&deck.0, "three", None, source, "nope").is_err());
     }
 }

@@ -16,7 +16,7 @@ const withSlides = (...ids: string[]): Deck => ({ ...DECK, slides: ids.map((id) 
 
 beforeEach(() => {
   invoke.mockReset();
-  useApp.setState({ deck: DECK, selected: "intro", error: null, revealRev: 0 });
+  useApp.setState({ deck: DECK, selected: "intro", error: null, revealRev: 0, templates: [{ id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title"] }] });
 });
 
 // dnd-kit gives sortable items role="button", so find them by tag.
@@ -70,7 +70,9 @@ describe("SlideRail", () => {
   it("adds a blank slide after the selected one and selects it", async () => {
     invoke.mockResolvedValue({ deck: withSlides("intro", "slide", "#2", "outro"), slide: "slide" });
     render(<SlideRail />);
+    await act(async () => fireEvent.click(screen.getByTitle("New slide")));
     await act(async () => fireEvent.click(screen.getByTitle("Add blank slide")));
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(invoke).toHaveBeenCalledWith("add_slide", { id: "talk", after: "intro" });
     expect(useApp.getState().selected).toBe("slide");
     expect(items()).toHaveLength(4);
@@ -80,6 +82,7 @@ describe("SlideRail", () => {
     useApp.setState({ deck: { ...DECK, slides: [] }, selected: null });
     invoke.mockResolvedValue({ deck: withSlides("slide"), slide: "slide" });
     render(<SlideRail />);
+    await act(async () => fireEvent.click(screen.getByTitle("New slide")));
     await act(async () => fireEvent.click(screen.getByTitle("Add blank slide")));
     expect(invoke).toHaveBeenCalledWith("add_slide", { id: "talk", after: null });
     expect(useApp.getState().selected).toBe("slide");
@@ -144,13 +147,20 @@ describe("SlideRail", () => {
   });
 
   it.each([
-    ["Add blank slide", () => screen.getByTitle("Add blank slide")],
+    [
+      "Add blank slide",
+      () => {
+        fireEvent.click(screen.getByTitle("New slide"));
+        return screen.getByTitle("Add blank slide");
+      },
+    ],
     ["Duplicate", () => item(0).getByTitle("Duplicate")],
     ["Delete", () => item(0).getByTitle("Delete")],
   ])("reports a failed %s", async (_, button) => {
     invoke.mockRejectedValue("Slide not found: intro");
     render(<SlideRail />);
-    await act(async () => fireEvent.click(button()));
+    const target = button();
+    await act(async () => fireEvent.click(target));
     await waitFor(() => expect(useApp.getState().error).toBe("Slide not found: intro"));
     expect(useApp.getState().deck).toEqual(DECK);
   });

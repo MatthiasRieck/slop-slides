@@ -266,7 +266,7 @@ describe("opening and creating decks", () => {
     const useApp = await freshStore();
     backend({ create_deck: () => DECK, load_chat: () => null, agent_running: () => false });
     await useApp.getState().createDeck("Talk");
-    expect(calls("create_deck")).toEqual([{ title: "Talk" }]);
+    expect(calls("create_deck")).toEqual([{ title: "Talk", template: null }]);
     expect(useApp.getState().deck).toEqual(DECK);
   });
 
@@ -1519,5 +1519,128 @@ describe("Codex permissions", () => {
     backend({ open_deck: () => deckFor(DECK_HTML), load_chat: () => [message], agent_running: () => false });
     await store.getState().openDeck("talk");
     expect((store.getState().messages[0] as AssistantMessage).parts[0]).toMatchObject({ status: "expired" });
+  });
+});
+
+describe("templates", () => {
+  const SWISS = { id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title", "split", "quote"] };
+  const MINE = { id: "mine", title: "Mine", builtin: false, path: "/t/mine", slides: ["cover"] };
+  const STAGED = ".slopslide/templates/swiss.html";
+
+  async function storeWith(deck: Deck, selected: string | null = "intro") {
+    const useApp = await freshStore();
+    useApp.setState({ deck, selected, templates: [MINE, SWISS], chatOpen: true });
+    return useApp;
+  }
+
+  it("loads the template list", async () => {
+    const useApp = await freshStore();
+    backend({ list_templates: () => [MINE, SWISS] });
+    await useApp.getState().refreshTemplates();
+    expect(useApp.getState().templates).toEqual([MINE, SWISS]);
+    backend({
+      list_templates: () => {
+        throw "cannot locate home folder";
+      },
+    });
+    await useApp.getState().refreshTemplates();
+    expect(useApp.getState()).toMatchObject({ templates: [], error: "cannot locate home folder" });
+  });
+
+  it("restyles a deck with slides through a prompt in the composer", async () => {
+    const useApp = await storeWith(DECK);
+    useApp.setState({ chatOpen: false });
+    backend({ stage_template: () => STAGED });
+    await useApp.getState().applyStyle("swiss");
+    expect(calls("stage_template")).toEqual([{ id: DECK.id, template: "swiss" }]);
+    expect(calls("apply_template")).toEqual([]);
+    const text = useApp.getState().composerFill?.text ?? "";
+    expect(text).toContain('"Swiss Design" style');
+    expect(text).toContain(STAGED);
+    expect(text).toContain('<meta name="slopslide-template" content="swiss">');
+    expect(useApp.getState().chatOpen).toBe(true);
+  });
+
+  it("gives an empty deck the style directly", async () => {
+    const empty = { ...DECK, slides: [] };
+    const useApp = await storeWith(empty, null);
+    const styled = { ...empty, template: "swiss", shellHash: "styled" };
+    backend({ apply_template: () => styled });
+    await useApp.getState().applyStyle("swiss");
+    expect(calls("apply_template")).toEqual([{ id: DECK.id, template: "swiss" }]);
+    expect(useApp.getState().deck).toEqual(styled);
+    expect(useApp.getState().composerFill).toBeNull();
+  });
+
+  it("ignores unknown templates and reports failures", async () => {
+    const useApp = await storeWith(DECK);
+    await useApp.getState().applyStyle("nope");
+    expect(invoke).not.toHaveBeenCalled();
+    backend({
+      stage_template: () => {
+        throw "template not found: swiss";
+      },
+    });
+    await useApp.getState().applyStyle("swiss");
+    expect(useApp.getState().error).toBe("template not found: swiss");
+    expect(useApp.getState().composerFill).toBeNull();
+  });
+
+  it("copies a layout into a deck that uses the template", async () => {
+    const useApp = await storeWith({ ...DECK, template: "swiss" });
+    const next = { ...DECK, template: "swiss", slides: [...DECK.slides, { id: "quote", hash: "q", hidden: false, moved: false }] };
+    backend({ add_template_slide: () => ({ deck: next, slide: "quote" }) });
+    await useApp.getState().addLayoutSlide("swiss", "quote");
+    expect(calls("add_template_slide")).toEqual([{ id: DECK.id, template: "swiss", slide: "quote", after: "intro" }]);
+    expect(useApp.getState()).toMatchObject({ deck: next, selected: "quote", composerFill: null });
+  });
+
+  it("asks the agent for a layout from another template", async () => {
+    const useApp = await storeWith({ ...DECK, template: "mine" });
+    backend({ stage_template: () => STAGED });
+    await useApp.getState().addLayoutSlide("swiss", "split");
+    expect(calls("add_template_slide")).toEqual([]);
+    const text = useApp.getState().composerFill?.text ?? "";
+    expect(text).toContain("after this one");
+    expect(text).toContain('the "Split" layout of the "Swiss Design" template (slide `split` in `.slopslide/templates/swiss.html`)');
+    expect(text).toContain("this deck's design system");
+
+    useApp.setState({ selected: null });
+    await useApp.getState().addLayoutSlide("swiss", "split");
+    expect(useApp.getState().composerFill?.text).toContain("at the end of the deck");
+  });
+
+  it("asks the agent to change the selected slide's layout", async () => {
+    const useApp = await storeWith({ ...DECK, template: "swiss" });
+    backend({ stage_template: () => STAGED });
+    await useApp.getState().changeLayout("swiss", "quote");
+    const same = useApp.getState().composerFill?.text ?? "";
+    expect(same).toMatch(/^Change the layout of this slide to the "Quote" layout/);
+    expect(same).toMatch(/Keep this slide's id and its content\.$/);
+
+    useApp.setState({ deck: { ...DECK, template: null } });
+    await useApp.getState().changeLayout("swiss", "quote");
+    expect(useApp.getState().composerFill?.text).toMatch(/and use this deck's design system\.$/);
+
+    useApp.setState({ selected: null, composerFill: null });
+    await useApp.getState().changeLayout("swiss", "quote");
+    expect(useApp.getState().composerFill).toBeNull();
+  });
+
+  it("saves the deck as a template and reloads the list", async () => {
+    const useApp = await storeWith(DECK);
+    const created = { id: "talk", title: "Talk", builtin: false, path: "/t/talk", slides: ["intro"] };
+    backend({ create_template: () => created, list_templates: () => [created, MINE, SWISS] });
+    expect(await useApp.getState().saveAsTemplate("Talk")).toEqual(created);
+    expect(calls("create_template")).toEqual([{ id: DECK.id, name: "Talk" }]);
+    expect(useApp.getState().templates).toEqual([created, MINE, SWISS]);
+
+    backend({
+      create_template: () => {
+        throw "The deck has no slides to make a template from.";
+      },
+    });
+    expect(await useApp.getState().saveAsTemplate("Talk")).toBeNull();
+    expect(useApp.getState().error).toBe("The deck has no slides to make a template from.");
   });
 });

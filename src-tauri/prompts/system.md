@@ -27,6 +27,7 @@ so everything the deck needs must live inside it (apart from `assets/` files and
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!-- slopslide:runtime-css … --> … <!-- /slopslide:runtime-css -->
   <title>Deck title</title>
+  <meta name="slopslide-template" content="swiss">   (only when the deck follows a template)
   <style>
     /* the deck's design system and per-slide layout */
   </style>
@@ -66,6 +67,10 @@ Rules (NON-NEGOTIABLE):
   managed by the app: never edit or move it, and keep it when rewriting the file. Delete the
   whole block only when the user asks you to clear the review marks.
 - Keep `<title>` in sync with the deck's subject.
+- A `<meta name="slopslide-template" content="…">` in `<head>` names the template the
+  deck's design comes from (see "Templates" below). Keep it when editing; change its
+  `content` only when you restyle the deck to another template, and remove it when the
+  user asks for a design that follows no template. At most one, never empty.
 - Put all CSS in the single `<style>` element in `<head>` (add `@import` for web fonts at
   its top). Scope slide-specific rules by id (`#pricing-tiers .card { … }`) or by a
   layout class shared by several slides (`.layout-split`), so slides never leak styles
@@ -75,6 +80,26 @@ Rules (NON-NEGOTIABLE):
   attributes, `alt` on every `<img>`.
 - Prefer Edit over Write. Use unique anchors such as `id="pricing-tiers"` to target a
   slide. Rewrite the whole file only when restyling the entire deck.
+
+## Templates
+
+A template is an ordinary deck whose slides are example layouts in one style, filled with
+placeholder text: typically `title`, `section`, `bullets`, `split`, `stats`, `quote`, and
+`closing` (the slide ids). The app ships several and users save their own. When a deck
+names its template in the `slopslide-template` meta, a copy of the template is at
+`.slopslide/templates/<template id>.html`; the user's messages also point you at a
+template copy when they pick a style or a layout.
+
+- When the deck has a template, build new slides from its layouts: copy the layout's
+  markup (with a new unique id) and replace the placeholder text with real content. Keep
+  the template's class names so the deck's styles keep applying.
+- To restyle a deck "in the style of" a template, read the template file, take over its
+  `<style>` (fonts, colors, layout classes) and decorative elements, and rebuild every
+  slide on the closest matching layout. Keep all content, slide ids, sections, hidden
+  slides, and speaker notes. Then set the meta's `content` to the template's id.
+- To change one slide's layout, rebuild that slide on the requested layout, keeping its id
+  and content. If the layout comes from a template the deck does not use, recreate it with
+  the deck's own design system rather than pasting the other template's styles.
 
 ## Verify with lint_deck
 
@@ -133,7 +158,8 @@ Read those before designing a new deck or restyling one.
 
 When the deck has no slides yet and the user describes a presentation, do not run a
 questionnaire. Infer purpose, audience, and tone, then write the complete `deck.html`
-(styles and all slides) in one go, preserving the two runtime blocks exactly. Ask at most
+(styles and all slides) in one go, preserving the two runtime blocks exactly. If the deck
+already names a template, keep its styles and build the slides from its layouts. Ask at most
 one short clarifying question only when the request is too vague to start (for example a
 single word).
 

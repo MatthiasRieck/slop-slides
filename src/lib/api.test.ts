@@ -12,7 +12,7 @@ beforeEach(() => {
 // Command names and argument keys must match the #[tauri::command]s in src-tauri/src/lib.rs.
 const CASES = [
   ["listDecks", () => api.listDecks(), "list_decks", undefined],
-  ["createDeck", () => api.createDeck("Talk"), "create_deck", { title: "Talk" }],
+  ["createDeck", () => api.createDeck("Talk"), "create_deck", { title: "Talk", template: null }],
   ["openDeck", () => api.openDeck("talk"), "open_deck", { id: "talk" }],
   ["closeDeck", () => api.closeDeck(), "close_deck", undefined],
   ["loadDeck", () => api.loadDeck("talk"), "load_deck", { id: "talk" }],
@@ -91,6 +91,16 @@ const CASES = [
   ["interruptAgent", () => api.interruptAgent("talk"), "interrupt_agent", { id: "talk" }],
   ["agentRunning", () => api.agentRunning("talk"), "agent_running", { id: "talk" }],
   ["listProviders", () => api.listProviders(), "list_providers", undefined],
+  ["listTemplates", () => api.listTemplates(), "list_templates", undefined],
+  ["stageTemplate", () => api.stageTemplate("talk", "swiss"), "stage_template", { id: "talk", template: "swiss" }],
+  ["applyTemplate", () => api.applyTemplate("talk", "swiss"), "apply_template", { id: "talk", template: "swiss" }],
+  [
+    "addTemplateSlide",
+    () => api.addTemplateSlide("talk", "swiss", "quote", "intro"),
+    "add_template_slide",
+    { id: "talk", template: "swiss", slide: "quote", after: "intro" },
+  ],
+  ["createTemplate", () => api.createTemplate("talk", "Mine"), "create_template", { id: "talk", name: "Mine" }],
 ] as const;
 
 describe("api", () => {
@@ -98,6 +108,11 @@ describe("api", () => {
     await expect(call()).resolves.toBe("result");
     expect(invoke).toHaveBeenCalledOnce();
     expect(invoke.mock.calls[0]).toEqual(args === undefined ? [command] : [command, args]);
+  });
+
+  it("createDeck passes the chosen template", async () => {
+    await api.createDeck("Talk", "synthwave");
+    expect(invoke).toHaveBeenLastCalledWith("create_deck", { title: "Talk", template: "synthwave" });
   });
 
   it("sendMessage can ask for a compaction instead of a prompt", async () => {

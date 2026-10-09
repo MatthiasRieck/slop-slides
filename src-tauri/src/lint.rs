@@ -102,6 +102,7 @@ pub fn lint(source: &str, asset_exists: impl Fn(&str) -> bool) -> Vec<Issue> {
     check_slides(&mut l);
     check_sections(&mut l);
     check_review(&mut l);
+    check_template(&mut l);
     check_assets(&mut l, asset_exists);
     l.issues.sort_by_key(|i| (i.line, i.severity));
     l.issues
@@ -496,6 +497,56 @@ fn check_review(l: &mut Linter) {
             at,
             "The slopslide:review block belongs at the end of <body>, outside the slides; move it back there unchanged.".into(),
         );
+    }
+}
+
+/// The template `<meta>`: at most one, in `<head>`, naming a template.
+fn check_template(l: &mut Linter) {
+    let html = l.html;
+    let body = find_ci(html, 0, "<body").unwrap_or(html.len());
+    let mut seen = 0;
+    let mut from = 0;
+    while let Some(at) = find_ci(html, from, "<meta") {
+        from = at + 1;
+        let Some(tag) = parse_tag(html, at) else {
+            continue;
+        };
+        let names_template = tag
+            .attrs
+            .iter()
+            .any(|(n, v, _, _)| n == "name" && v.trim().eq_ignore_ascii_case(html::TEMPLATE_META));
+        if tag.name != "meta" || !names_template || !in_markup(l, at) {
+            continue;
+        }
+        seen += 1;
+        let content = tag.attrs.iter().find(|(n, _, _, _)| n == "content");
+        if !content.is_some_and(|(_, v, _, _)| !v.trim().is_empty()) {
+            l.report(
+                "template-meta-empty",
+                Severity::Warning,
+                at,
+                format!(
+                    "<meta name=\"{}\"> needs the template's id in `content`; remove the tag if the deck follows no template.",
+                    html::TEMPLATE_META
+                ),
+            );
+        }
+        if seen > 1 {
+            l.report(
+                "template-meta-duplicate",
+                Severity::Warning,
+                at,
+                format!("Keep only one <meta name=\"{}\">.", html::TEMPLATE_META),
+            );
+        }
+        if at > body {
+            l.report(
+                "template-meta-misplaced",
+                Severity::Warning,
+                at,
+                format!("<meta name=\"{}\"> belongs in <head>.", html::TEMPLATE_META),
+            );
+        }
     }
 }
 
@@ -971,5 +1022,31 @@ mod tests {
         ));
         assert!(wrapped.contains(&"section-marker-misplaced"));
         assert!(wrapped.contains(&"deck-stray-content"));
+    }
+
+    #[test]
+    fn checks_the_template_meta() {
+        let named = html::set_template(
+            &deck(r#"<section class="slide" id="a"></section>"#),
+            Some("swiss"),
+        );
+        assert_eq!(rules(&named), Vec::<&str>::new());
+        let empty = named.replace("content=\"swiss\"", "content=\" \"");
+        assert_eq!(rules(&empty), ["template-meta-empty"]);
+        let no_content = named.replace(" content=\"swiss\"", "");
+        assert_eq!(rules(&no_content), ["template-meta-empty"]);
+        let twice = named.replace(
+            "<title>Talk</title>",
+            "<title>Talk</title><meta name=\"slopslide-template\" content=\"bohemian\">",
+        );
+        assert_eq!(rules(&twice), ["template-meta-duplicate"]);
+        let in_body = deck(
+            r#"<section class="slide" id="a"><meta name="slopslide-template" content="x"></section>"#,
+        );
+        assert_eq!(rules(&in_body), ["template-meta-misplaced"]);
+        let commented = deck(r#"<!-- <meta name="slopslide-template" content=""> -->"#);
+        assert_eq!(rules(&commented), Vec::<&str>::new());
+        let other = deck("").replace("<title>", "<meta name=\"description\" content=\"\"><title>");
+        assert_eq!(rules(&other), Vec::<&str>::new());
     }
 }

@@ -11,6 +11,7 @@ mod mcp;
 mod protocol;
 mod providers;
 mod review;
+mod templates;
 mod watcher;
 
 use serde::Serialize;
@@ -42,10 +43,87 @@ fn list_decks(app: AppHandle) -> Result<Vec<DeckSummary>> {
 }
 
 #[tauri::command]
-fn create_deck(app: AppHandle, watcher: State<DeckWatcher>, title: String) -> Result<Deck> {
-    let deck = deck::create(&deck::library_root(&app)?, &title)?;
+fn create_deck(
+    app: AppHandle,
+    watcher: State<DeckWatcher>,
+    title: String,
+    template: Option<String>,
+) -> Result<Deck> {
+    let root = templates::user_root(&app)?;
+    let source = template
+        .as_deref()
+        .map(|t| templates::source(&root, t))
+        .transpose()?;
+    let template = template
+        .as_deref()
+        .zip(source.as_deref())
+        .map(|(id, html)| deck::TemplateSource { id, html });
+    let deck = deck::create(&deck::library_root(&app)?, &title, template)?;
+    stage_deck_template(&app, &deck);
     watcher.watch(app, deck.id.clone(), deck.path.clone().into())?;
     Ok(deck)
+}
+
+/// Copies the deck's template into its internals, where the agent reads its layouts.
+/// Best effort: a template that is gone only means there are no layouts to read.
+fn stage_deck_template(app: &AppHandle, deck: &Deck) {
+    if let (Some(template), Ok(root)) = (&deck.template, templates::user_root(app)) {
+        let _ = templates::stage(std::path::Path::new(&deck.path), &root, template);
+    }
+}
+
+#[tauri::command]
+fn list_templates(app: AppHandle) -> Result<Vec<templates::TemplateSummary>> {
+    Ok(templates::list(&templates::user_root(&app)?))
+}
+
+/// Copies a template into the deck's internals for the agent; returns its deck-relative path.
+#[tauri::command]
+fn stage_template(app: AppHandle, id: String, template: String) -> Result<String> {
+    templates::stage(
+        &deck::deck_dir(&app, &id)?,
+        &templates::user_root(&app)?,
+        &template,
+    )
+}
+
+/// Gives a deck without slides the template's styles.
+#[tauri::command]
+fn apply_template(app: AppHandle, id: String, template: String) -> Result<Deck> {
+    let root = templates::user_root(&app)?;
+    let html = templates::source(&root, &template)?;
+    let source = deck::TemplateSource {
+        id: &template,
+        html: &html,
+    };
+    let deck = deck::apply_template(&deck::deck_dir(&app, &id)?, &id, source)?;
+    stage_deck_template(&app, &deck);
+    Ok(deck)
+}
+
+/// Adds a copy of one of the template's slides after `after`.
+#[tauri::command]
+fn add_template_slide(
+    app: AppHandle,
+    id: String,
+    template: String,
+    slide: String,
+    after: Option<String>,
+) -> Result<CreatedSlide> {
+    let html = templates::source(&templates::user_root(&app)?, &template)?;
+    let (deck, slide) =
+        deck::add_template_slide(&deck::deck_dir(&app, &id)?, &id, after, &html, &slide)?;
+    Ok(CreatedSlide { deck, slide })
+}
+
+/// Saves the deck as a new user template, with placeholder text in place of its content.
+#[tauri::command]
+fn create_template(app: AppHandle, id: String, name: String) -> Result<templates::TemplateSummary> {
+    templates::create_from_deck(
+        &deck::deck_dir(&app, &id)?,
+        &templates::user_root(&app)?,
+        &name,
+    )
 }
 
 #[tauri::command]
@@ -56,6 +134,7 @@ fn open_deck(
     id: String,
 ) -> Result<Deck> {
     let deck = deck::open(&deck::deck_dir(&app, &id)?, &id, !agent.is_running(&id))?;
+    stage_deck_template(&app, &deck);
     watcher.watch(app, deck.id.clone(), deck.path.clone().into())?;
     Ok(deck)
 }
@@ -337,6 +416,11 @@ pub fn run() {
             respond_approval,
             agent_running,
             list_providers,
+            list_templates,
+            stage_template,
+            apply_template,
+            add_template_slide,
+            create_template,
         ])
         .run(tauri::generate_context!())
         .expect("error while running SlopSlide");

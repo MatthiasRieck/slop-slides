@@ -42,6 +42,20 @@ export interface Deck {
   shellHash: string;
   /** Review marks the user drew, by slide id, stored in deck.html. */
   review?: Record<string, Stroke[]>;
+  /** Id of the template the deck's design comes from (its `slopslide-template` meta). */
+  template?: string | null;
+}
+
+/** A deck of example layouts in one style; each slide is a layout for new or changed slides. */
+export interface TemplateSummary {
+  id: string;
+  title: string;
+  /** Ships with the app; otherwise it is the user's, in `~/.slopslides/templates/<id>`. */
+  builtin: boolean;
+  /** Folder of a user template. */
+  path: string | null;
+  /** Slide ids, one per layout, in order. */
+  slides: string[];
 }
 
 export interface CreatedSlide {
@@ -101,7 +115,8 @@ export interface DeckChanged {
 
 export const api = {
   listDecks: () => invoke<DeckSummary[]>("list_decks"),
-  createDeck: (title: string) => invoke<Deck>("create_deck", { title }),
+  /** With a template, the new deck takes its styles (and names it). */
+  createDeck: (title: string, template: string | null = null) => invoke<Deck>("create_deck", { title, template }),
   openDeck: (id: string) => invoke<Deck>("open_deck", { id }),
   closeDeck: () => invoke<void>("close_deck"),
   loadDeck: (id: string) => invoke<Deck>("load_deck", { id }),
@@ -169,6 +184,17 @@ export const api = {
   interruptAgent: (id: string) => invoke<void>("interrupt_agent", { id }),
   agentRunning: (id: string) => invoke<boolean>("agent_running", { id }),
   listProviders: () => invoke<ProviderInfo[]>("list_providers"),
+  /** The user's templates first, then the built-in ones. */
+  listTemplates: () => invoke<TemplateSummary[]>("list_templates"),
+  /** Copies the template into the deck's internals for the agent; returns its deck-relative path. */
+  stageTemplate: (id: string, template: string) => invoke<string>("stage_template", { id, template }),
+  /** Gives a deck without slides the template's styles. */
+  applyTemplate: (id: string, template: string) => invoke<Deck>("apply_template", { id, template }),
+  /** Inserts a copy of the template's slide after `after` (or at the end). */
+  addTemplateSlide: (id: string, template: string, slide: string, after: string | null) =>
+    invoke<CreatedSlide>("add_template_slide", { id, template, slide, after }),
+  /** Saves the deck as a user template with placeholder text in place of its content. */
+  createTemplate: (id: string, name: string) => invoke<TemplateSummary>("create_template", { id, name }),
 };
 
 export function errorMessage(error: unknown): string {

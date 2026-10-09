@@ -3,7 +3,7 @@
 A desktop slide editor you drive by chatting. Describe a presentation, and an agent writes
 the slides. Keep talking to it to restyle, rewrite, split, or add slides while you watch them change.
 
-- **Left:** live thumbnails. Drag to reorder; hover to duplicate or delete; `+` adds a blank slide.
+- **Left:** live thumbnails. Drag to reorder; hover to duplicate or delete; `+` adds a slide.
   Sections group slides under a heading in this column (never in the presentation): the
   section button starts one at the selected slide; double-click a heading to rename it, drag
   it to move the boundary, hover to remove it.
@@ -16,6 +16,15 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   slide's layout around where you put things.
 - **Right:** chat with the agent. It knows which slide you're on, and you can attach images
   (paperclip, or drop files anywhere on the window).
+- **Styles and layouts:** decks can follow a template, a deck of example layouts (title,
+  section, bullets, split, stats, quote, closing) in one style. 22 come with the app
+  (Claymorphism, Swiss Design, Synthwave, Wabi-Sabi, …); add your own as folders in
+  `~/.slopslides/templates/<name>/deck.html`. Pick a style when creating a deck or with the
+  palette button above the slide rail (it puts a restyle request in the chat; an empty deck
+  takes it at once); the same menu has **Save deck as template**, which copies the deck there
+  with its text replaced by placeholder words. The rail's `+` shows a blank slide and every
+  layout of the deck's style as thumbnails and adds the one you click; **Layout** below the
+  slide asks the agent to rebuild the current slide on a layout.
 - **Present:** full-screen slideshow (arrows/space/click to advance, `Esc` to exit).
 - **Export:** saves the deck as **one self-contained HTML file** (attached images embedded)
   that plays in any browser: arrows/space/click to navigate, `F` for full screen, `#slide-id`
@@ -127,6 +136,8 @@ src-tauri/src/
   deck.rs               deck folders: load/normalize, slide operations, export, snapshots
   html.rs               finds the slide <section>s in deck.html and rewrites them;
                         installs the player runtime (assets/runtime.{css,js})
+  templates.rs          built-in and user templates (`~/.slopslides/templates`): listing,
+                        new decks in a template's style, saving a deck as a template
   lint.rs               HTML lint for deck.html: well-formed markup plus the deck format
                         rules; shown as the status button in the top bar
   mcp.rs                stdio MCP server (`slopslide --lint-mcp <deck>`) exposing the
@@ -137,6 +148,7 @@ src-tauri/src/
                         adds the slide editor (assets/editor.js) for edit mode
   watcher.rs            file watcher → `deck-changed` events, so edits stream into the UI
 src-tauri/prompts/      the agent's system prompt and design references
+src-tauri/templates/    the built-in templates, one deck.html each (served with the runtime)
 ```
 
 Each deck is a plain folder under `~/Documents/SlopSlide/<deck>/`:
@@ -144,7 +156,8 @@ Each deck is a plain folder under `~/Documents/SlopSlide/<deck>/`:
 ```
 deck.html        the whole presentation: <section class="slide" id="…"> per slide,
                  optional <div class="deck-section" data-title="…"> markers between them
-                 that start a section, shared styles, and the embedded player runtime
+                 that start a section, shared styles, the embedded player runtime, and
+                 optionally <meta name="slopslide-template" content="…"> naming its template
 assets/          attached images and media (inlined on export)
 .slopslide/      chat history, agent session, reference docs, snapshots (app-managed)
 ```

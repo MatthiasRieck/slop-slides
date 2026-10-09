@@ -9,7 +9,7 @@ import {
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Copy, Eye, EyeOff, Pencil, Plus, SquareSplitVertical, Trash2, X } from "lucide-react";
+import { Copy, Eye, EyeOff, Palette, Pencil, Plus, SquareSplitVertical, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { api, errorMessage, type Section, type Slide } from "../lib/api";
@@ -17,11 +17,17 @@ import { applyOrder, railItems, startsSection } from "../lib/sections";
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
+import { LayoutPicker, Popover, StylePicker } from "./Templates";
 
 export function SlideRail() {
   const deck = useApp((s) => s.deck);
   const selected = useApp((s) => s.selected);
   const [editingSection, setEditingSection] = useState<number | null>(null);
+  const [picker, setPicker] = useState<"style" | "slide" | null>(null);
+  const styleButton = useRef<HTMLButtonElement>(null);
+  const addButton = useRef<HTMLButtonElement>(null);
+  const templates = useApp((s) => s.templates);
+  const styleTitle = templates?.find((t) => t.id === deck?.template)?.title;
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   if (!deck) return null;
 
@@ -85,15 +91,37 @@ export function SlideRail() {
             <SquareSplitVertical className="size-4" />
           </button>
           <button
+            ref={styleButton}
             type="button"
-            onClick={addSlide}
-            title="Add blank slide"
+            onClick={() => setPicker((p) => (p === "style" ? null : "style"))}
+            aria-expanded={picker === "style"}
+            title={styleTitle ? `Style: ${styleTitle}. Pick another, or save the deck as a template` : "Pick a style for the deck, or save it as a template"}
+            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <Palette className="size-4" />
+          </button>
+          <button
+            ref={addButton}
+            type="button"
+            onClick={() => setPicker((p) => (p === "slide" ? null : "slide"))}
+            aria-expanded={picker === "slide"}
+            title="New slide"
             className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <Plus className="size-4" />
           </button>
         </div>
       </div>
+      {picker === "style" && (
+        <Popover anchor={styleButton} placement="below" width={600} label="Deck style" onClose={() => setPicker(null)}>
+          <StylePicker onDone={() => setPicker(null)} />
+        </Popover>
+      )}
+      {picker === "slide" && (
+        <Popover anchor={addButton} placement="below" width={560} label="New slide" onClose={() => setPicker(null)}>
+          <LayoutPicker mode="add" onBlank={() => void addSlide()} onDone={() => setPicker(null)} />
+        </Popover>
+      )}
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-1.5">
         {deck.slides.length === 0 ? (
           <p className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">

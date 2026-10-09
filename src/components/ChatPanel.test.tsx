@@ -212,6 +212,22 @@ describe("ChatPanel: composing", () => {
     expect(input.style.height).toBe("64px");
   });
 
+  it("opens at the smallest height even when the placeholder would wrap", () => {
+    const input = (() => {
+      const proto = HTMLTextAreaElement.prototype;
+      const spy = vi.spyOn(proto, "scrollHeight", "get").mockReturnValue(400);
+      render(<ChatPanel />);
+      spy.mockRestore();
+      return textarea();
+    })();
+    expect(input.style.height).toBe("64px");
+    Object.defineProperty(input, "scrollHeight", { configurable: true, value: 120 });
+    type("A longer draft");
+    expect(input.style.height).toBe("120px");
+    type("");
+    expect(input.style.height).toBe("64px");
+  });
+
   it("still grows automatically with the draft until manually resized", () => {
     render(<ChatPanel />);
     const input = textarea();

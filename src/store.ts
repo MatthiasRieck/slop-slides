@@ -14,7 +14,8 @@ import {
   type TemplateSummary,
 } from "./lib/api";
 import { latestContext, mergeContext, type ContextUsage } from "./lib/context";
-import { inkBounds, SLIDE_SIZE, type Stroke } from "./lib/ink";
+import { inkBounds, type Stroke } from "./lib/ink";
+import { DEFAULT_SIZE, pixelsOf, resizePrompt, sameSize, type SlideSize } from "./lib/slideSize";
 import { layoutLabel } from "./lib/utils";
 import {
   defaultModel,
@@ -277,6 +278,11 @@ interface AppState {
    * `overflow` lists elements the slide editor found running past the slide or cut off.
    */
   tidyLayout: (overflow?: string[]) => Promise<void>;
+  /**
+   * Gives every slide the canvas `size`, then (when the deck has slides) puts a prompt in the
+   * composer asking the agent to lay the slides out again for it.
+   */
+  resizeSlides: (size: SlideSize) => Promise<void>;
   send: (
     text: string,
     options: { includeSlide: boolean; attachments: string[]; screenshot?: string },
@@ -627,6 +633,21 @@ export const useApp = create<AppState>((set, get) => ({
     promptAgent(tidyPrompt(overflow), { screenshot });
   },
 
+  resizeSlides: async (size) => {
+    const { deck, running } = get();
+    if (!deck || running) return;
+    const from = deck.size ?? DEFAULT_SIZE;
+    if (sameSize(from, size)) return;
+    try {
+      const resized = await api.setSlideSize(deck.id, size);
+      if (get().deck?.id !== deck.id) return;
+      get().setDeck(resized);
+      if (resized.slides.length > 0) promptAgent(resizePrompt(from, resized.size ?? size));
+    } catch (error) {
+      set({ error: errorMessage(error) });
+    }
+  },
+
   send: async (text, { includeSlide, attachments, screenshot }) => {
     const { deck, selected, running, selection } = get();
     if (!deck || running) return;
@@ -636,7 +657,7 @@ export const useApp = create<AppState>((set, get) => ({
     const strokes = slide ? (get().sketches[slide] ?? []) : [];
     // Marks go out once, while they are on show; they stay on the slide as a review.
     const unsent = !!slide && get().reviewVisible && strokes !== get().sketchesSent[slide];
-    const bounds = unsent ? inkBounds(strokes) : null;
+    const bounds = unsent ? inkBounds(strokes, pixelsOf(deck)) : null;
     let user: UserMessage = {
       id: newId(),
       role: "user",
@@ -926,8 +947,9 @@ function buildPrompt(deck: Deck, message: UserMessage): string {
     if (image) {
       context.push(`Sketch: ${image} (screenshot of the current slide with the user's marks drawn on top)`);
     }
+    const size = pixelsOf(deck);
     context.push(
-      `Marked area: x ${bounds.left}–${bounds.right}, y ${bounds.top}–${bounds.bottom} of the ${SLIDE_SIZE.width}×${SLIDE_SIZE.height} slide`,
+      `Marked area: x ${bounds.left}–${bounds.right}, y ${bounds.top}–${bounds.bottom} of the ${size.width}×${size.height} slide`,
     );
   }
   if (message.screenshot) {

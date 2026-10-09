@@ -117,6 +117,23 @@ describe("SlideFrame", () => {
     expect(thumb.style.width).toBe("1920px");
   });
 
+  it("renders slides of another size in their own shape", () => {
+    const { container, rerender } = render(
+      <SlideFrame deckId="talk" slideId="intro" version="v1" size={{ width: 1080, height: 1350 }} />,
+    );
+    const box = () => container.firstElementChild as HTMLElement;
+    const [frame] = frames(container);
+    expect(box().style.aspectRatio).toBe("1080 / 1350");
+    expect(frame!.style.width).toBe("1080px");
+    expect(frame!.style.height).toBe("1350px");
+    // A 960 px wide box shows the 1080 px canvas at 960 / 1080.
+    expect(frame!.style.transform).toBe(`scale(${960 / 1080})`);
+    // Back to the default size: measured again against the new width.
+    rerender(<SlideFrame deckId="talk" slideId="intro" version="v1" />);
+    expect(box().style.aspectRatio).toBe("1920 / 1080");
+    expect(frames(container)[0]!.style.transform).toBe("scale(0.5)");
+  });
+
   it("waits for layout before loading anything", () => {
     globalThis.ResizeObserver = NoLayout;
     const { container } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" />);

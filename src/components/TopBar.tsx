@@ -24,6 +24,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../lib/api";
 import { cn, isMac } from "../lib/utils";
 import { lintFixPrompt, useApp, type StageView } from "../store";
+import { SlideSizeButton } from "./SlideSize";
 
 export function TopBar() {
   const deck = useApp((s) => s.deck);
@@ -108,6 +109,7 @@ export function TopBar() {
         className="min-w-0 max-w-md flex-1 truncate rounded-md bg-transparent px-1.5 py-1 text-sm font-medium outline-none hover:bg-accent focus:bg-accent"
       />
       <div data-tauri-drag-region className="flex-1 self-stretch" />
+      <SlideSizeButton />
       <LintStatus />
       <ViewToggle />
       <button

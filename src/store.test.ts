@@ -618,6 +618,22 @@ describe("sending a message", () => {
       });
     });
 
+    it("reports the marked area in pixels of the deck's slide size", async () => {
+      const useApp = await freshStore();
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      backend({
+        capture_sketch: () => {
+          throw "no screenshots here";
+        },
+      });
+      const square = { width: 1080, height: 1080, unit: "px" as const, pixelWidth: 1080, pixelHeight: 1080 };
+      useApp.setState({ deck: { ...DECK, size: square }, selected: "outro", sketches: { outro: [mark] } });
+      await useApp.getState().send("Fix", { includeSlide: true, attachments: [] });
+      // x 270–540, y 270–540, padded by 4px.
+      expect(prompt()).toContain("Marked area: x 266–544, y 266–544 of the 1080×1080 slide");
+      vi.restoreAllMocks();
+    });
+
     it("still describes the marked area when the screenshot fails", async () => {
       const useApp = await freshStore();
       vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1731,5 +1747,60 @@ describe("templates", () => {
     });
     expect(await useApp.getState().saveAsTemplate("Talk")).toBeNull();
     expect(useApp.getState().error).toBe("The deck has no slides to make a template from.");
+  });
+});
+
+describe("changing the slide size", () => {
+  const PORTRAIT = { width: 1080, height: 1350, unit: "px" as const };
+  const resized = (size = PORTRAIT) => ({ ...DECK, shellHash: "shell-2", size: { ...size, pixelWidth: 1080, pixelHeight: 1350 } });
+
+  it("resizes the slides, then prepares a message asking the agent to lay them out again", async () => {
+    const { useApp } = await freshModule();
+    backend({ set_slide_size: () => resized() });
+    useApp.setState({ deck: DECK, chatOpen: false, composerFill: null, running: false });
+    await useApp.getState().resizeSlides(PORTRAIT);
+    expect(calls("set_slide_size")).toEqual([{ id: "talk", size: PORTRAIT }]);
+    expect(useApp.getState().deck?.size).toMatchObject(PORTRAIT);
+    expect(calls("send_message")).toEqual([]);
+    const fill = useApp.getState().composerFill;
+    expect(useApp.getState().chatOpen).toBe(true);
+    expect(fill?.text).toContain("from landscape, 1920 × 1080 px to portrait, 1080 × 1350 px");
+    expect(fill?.text).toContain("Re-lay out every slide");
+  });
+
+  it("does not prompt for a deck without slides", async () => {
+    const { useApp } = await freshModule();
+    const empty = { ...DECK, slides: [] };
+    backend({ set_slide_size: () => ({ ...resized(), slides: [] }) });
+    useApp.setState({ deck: empty, composerFill: null });
+    await useApp.getState().resizeSlides(PORTRAIT);
+    expect(calls("set_slide_size")).toHaveLength(1);
+    expect(useApp.getState().deck?.size).toMatchObject(PORTRAIT);
+    expect(useApp.getState().composerFill).toBeNull();
+  });
+
+  it("leaves the deck alone for the same size, or while the agent works", async () => {
+    const { useApp } = await freshModule();
+    backend({ set_slide_size: () => resized() });
+    useApp.setState({ deck: DECK, composerFill: null, running: false });
+    await useApp.getState().resizeSlides({ width: 1920, height: 1080, unit: "px" });
+    useApp.setState({ running: true });
+    await useApp.getState().resizeSlides(PORTRAIT);
+    expect(calls("set_slide_size")).toEqual([]);
+    expect(useApp.getState().composerFill).toBeNull();
+  });
+
+  it("shows the backend's refusal", async () => {
+    const { useApp } = await freshModule();
+    backend({
+      set_slide_size: () => {
+        throw "A slide must be 100 to 10000 pixels on each side";
+      },
+    });
+    useApp.setState({ deck: DECK, composerFill: null, error: null, running: false });
+    await useApp.getState().resizeSlides({ width: 1, height: 1, unit: "in" });
+    expect(useApp.getState().error).toContain("100 to 10000");
+    expect(useApp.getState().deck).toBe(DECK);
+    expect(useApp.getState().composerFill).toBeNull();
   });
 });

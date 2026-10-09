@@ -8,11 +8,11 @@ import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { LayoutPicker, Popover } from "./Templates";
 import type { Slide } from "../lib/api";
 import { zoomBox, type Stroke } from "../lib/ink";
+import { pixelsOf, type Pixels } from "../lib/slideSize";
 import { cn } from "../lib/utils";
 
 /** The stage area's padding (Tailwind p-8), which the pasteboard covers too. */
 const AREA_PADDING = 32;
-const STAGE_W = 1920;
 
 /** The current slide, fit to the available space with letterboxing. */
 export function Stage() {
@@ -33,9 +33,13 @@ export function Stage() {
   const editFrames = useSlideEditing(areaRef, pasteboard.resetView);
   const overflow = editFrames.overflow;
   const view = pasteboard.view;
-  const [width, setWidth] = useState(0);
+  const canvas = pixelsOf(deck);
   // The preview fills the whole area around the slide: an endless pasteboard to pan and zoom on.
   const [arena, setArena] = useState<{ width: number; height: number } | undefined>();
+  // The slide as large as fits the area, in its own shape.
+  const width = arena
+    ? Math.max(0, Math.min(arena.width - 2 * AREA_PADDING, ((arena.height - 2 * AREA_PADDING) * canvas.width) / canvas.height))
+    : 0;
 
   useLayoutEffect(() => {
     const el = areaRef.current;
@@ -43,7 +47,6 @@ export function Stage() {
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return;
       const { width: w, height: h } = entry.contentRect;
-      setWidth(Math.max(0, Math.min(w, (h * 16) / 9)));
       setArena({ width: w + 2 * AREA_PADDING, height: h + 2 * AREA_PADDING });
     });
     observer.observe(el);
@@ -92,6 +95,7 @@ export function Stage() {
             <CurrentSlide
               deckId={deck.id}
               slide={slide}
+              size={canvas}
               editing={editing}
               arena={arena}
               canvas={areaRef}
@@ -104,7 +108,7 @@ export function Stage() {
             <div
               data-testid="annotation-view"
               className="pointer-events-none absolute"
-              style={inkBox(pasteboard.current, width / STAGE_W)}
+              style={inkBox(pasteboard.current, width / canvas.width)}
             >
               <AnnotationLayer annotations={annotations} zoom={pasteboard.current?.k} />
             </div>
@@ -300,6 +304,7 @@ function EditBar(props: { canUndo: boolean; canRedo: boolean; canDelete: boolean
 function CurrentSlide(props: {
   deckId: string;
   slide: Slide;
+  size: Pixels;
   editing: boolean;
   /** The panel around the slide; its colors frame the slide and dim what lies outside it in the editor. */
   canvas: React.RefObject<HTMLElement | null>;
@@ -314,6 +319,7 @@ function CurrentSlide(props: {
       version={useSlideVersion(props.slide)}
       editKey={props.editing ? String(editReload) : undefined}
       arena={props.arena}
+      size={props.size}
       onFrameReady={(frame) => {
         const canvas = props.canvas.current;
         if (canvas) frame.contentWindow?.postMessage({ type: "slop:canvas", ...canvasColors(canvas) }, "*");

@@ -11,6 +11,7 @@ mod mcp;
 mod protocol;
 mod providers;
 mod review;
+mod size;
 mod templates;
 mod watcher;
 
@@ -193,6 +194,12 @@ fn set_slide_hidden(app: AppHandle, id: String, slide: String, hidden: bool) -> 
     deck::set_slide_hidden(&deck::deck_dir(&app, &id)?, &id, &slide, hidden)
 }
 
+/// Gives every slide of the deck the canvas `size`.
+#[tauri::command]
+fn set_slide_size(app: AppHandle, id: String, size: size::SlideSize) -> Result<Deck> {
+    deck::set_slide_size(&deck::deck_dir(&app, &id)?, &id, size)
+}
+
 #[tauri::command]
 fn set_slide_locked(app: AppHandle, id: String, slide: String, locked: bool) -> Result<Deck> {
     deck::set_slide_locked(&deck::deck_dir(&app, &id)?, &id, &slide, locked)
@@ -295,7 +302,8 @@ fn create_image_export_dir(app: AppHandle, id: String, parent: String) -> Result
     Ok(dir.to_string_lossy().into_owned())
 }
 
-/// Screenshots `rect` of the window (one slide, shown full size) as `<dir>/<slide-NN>.png`.
+/// Screenshots `rect` of the window (one slide, shown full size) as `<dir>/<slide-NN>.png`, at
+/// most `width` pixels wide: the slides' canvas width.
 #[tauri::command]
 async fn export_slide_image(
     webview: tauri::Webview,
@@ -304,8 +312,10 @@ async fn export_slide_image(
     total: usize,
     rect: capture::Rect,
     viewport: capture::Size,
+    width: Option<u32>,
 ) -> Result<String> {
-    let png = capture::snapshot(&webview, rect, viewport, capture::SLIDE_WIDTH).await?;
+    let width = width.unwrap_or(capture::SLIDE_WIDTH).clamp(1, size::MAX_PX);
+    let png = capture::snapshot(&webview, rect, viewport, width).await?;
     let path = std::path::Path::new(&dir).join(deck::slide_image_name(index, total));
     std::fs::write(&path, png)?;
     Ok(path.to_string_lossy().into_owned())
@@ -400,6 +410,7 @@ pub fn run() {
             duplicate_slide,
             set_slide_hidden,
             set_slide_locked,
+            set_slide_size,
             add_section,
             rename_section,
             delete_section,

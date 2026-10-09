@@ -10,7 +10,8 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   Sections group slides under a heading in this column (never in the presentation): the
   section button starts one at the selected slide; double-click a heading to rename it, drag
   it to move the boundary, hover to remove it.
-- **Middle:** the current slide on a fixed 1920×1080 stage, scaled to fit. Arrow keys navigate.
+- **Middle:** the current slide on a fixed stage (1920×1080 unless the deck has another slide
+  size), scaled to fit. Arrow keys navigate.
   The move button below it turns on edit mode: click an element to select it, drag it (or
   use the arrow keys) to move it, double-click (or press Enter) to edit its text, Escape to
   select the parent, Delete (or the trash button in the edit bar) to remove
@@ -28,6 +29,11 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   with its text replaced by placeholder words. The rail's `+` shows a blank slide and every
   layout of the deck's style as thumbnails and adds the one you click; **Layout** below the
   slide asks the agent to rebuild the current slide on a layout.
+- **Slide size:** the size button in the top bar sets every slide's canvas: landscape,
+  portrait or square, a width and height in px, in or cm (96 px per inch), or a common size
+  (16:9, 4:3, 4:5, 9:16, A4, US Letter). It is stored in deck.html as
+  `<meta name="slopslide-size" content="1080x1350">`; for a deck with slides it puts a
+  message in the chat asking the agent to lay them out again for the new size.
 - **Present:** full-screen slideshow (arrows/space/click to advance, `Esc` to exit).
 - **Export:** saves the deck as **one self-contained HTML file** (attached images embedded)
   that plays in any browser: arrows/space/click to navigate, `F` for full screen, `#slide-id`
@@ -139,6 +145,7 @@ src-tauri/src/
   deck.rs               deck folders: load/normalize, slide operations, export, snapshots
   html.rs               finds the slide <section>s in deck.html and rewrites them;
                         installs the player runtime (assets/runtime.{css,js})
+  size.rs               the deck's slide size (`slopslide-size` meta) and the stage CSS for it
   templates.rs          built-in and user templates (`~/.slopslides/templates`): listing,
                         new decks in a template's style, saving a deck as a template
   lint.rs               HTML lint for deck.html: well-formed markup plus the deck format

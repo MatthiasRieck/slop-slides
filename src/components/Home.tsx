@@ -3,6 +3,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api, errorMessage, type DeckSummary } from "../lib/api";
+import { pixelsOf } from "../lib/slideSize";
 import { cn, isMac, relativeTime } from "../lib/utils";
 import { useApp } from "../store";
 import { SlideFrame } from "./SlideFrame";
@@ -88,7 +89,7 @@ export function Home() {
                     >
                       <div className="w-full overflow-hidden rounded-lg ring-1 ring-border transition group-hover:ring-input group-hover:shadow-md">
                         {deck.firstSlide ? (
-                          <SlideFrame deckId={deck.id} slideId={deck.firstSlide} version={String(deck.updatedMs)} thumbnail />
+                          <SlideFrame deckId={deck.id} slideId={deck.firstSlide} version={String(deck.updatedMs)} size={pixelsOf(deck)} thumbnail />
                         ) : (
                           <div className="flex aspect-video items-center justify-center bg-muted text-xs text-muted-foreground">
                             Empty deck

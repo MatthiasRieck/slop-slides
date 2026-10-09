@@ -11,6 +11,7 @@ use crate::html::{
     SECTION_CLASS, SECTION_TITLE_ATTR,
 };
 use crate::review;
+use crate::size::{self, SlideSize};
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
@@ -108,6 +109,7 @@ pub fn lint(
     check_sections(&mut l);
     check_review(&mut l);
     check_template(&mut l);
+    check_slide_size(&mut l);
     check_assets(&mut l, asset_exists);
     check_locked(&mut l, locked);
     l.issues.sort_by_key(|i| (i.line, i.severity));
@@ -541,6 +543,64 @@ fn check_review(l: &mut Linter) {
 
 /// The template `<meta>`: at most one, in `<head>`, naming a template.
 fn check_template(l: &mut Linter) {
+    check_app_meta(
+        l,
+        html::TEMPLATE_META,
+        [
+            "template-meta-empty",
+            "template-meta-duplicate",
+            "template-meta-misplaced",
+        ],
+        |content| {
+            content.is_empty().then(|| {
+                format!(
+                    "<meta name=\"{}\"> needs the template's id in `content`; remove the tag if the deck follows no template.",
+                    html::TEMPLATE_META
+                )
+            })
+        },
+    );
+}
+
+/// The slide size meta must name a size the app can use (see [`size::SlideSize::parse`]).
+fn check_slide_size(l: &mut Linter) {
+    check_app_meta(
+        l,
+        size::SIZE_META,
+        [
+            "slide-size-invalid",
+            "slide-size-duplicate",
+            "slide-size-misplaced",
+        ],
+        |content| {
+            if SlideSize::parse(content).is_some() {
+                return None;
+            }
+            let problem = if content.is_empty() {
+                "is empty".to_string()
+            } else {
+                format!("\"{}\" is not a usable size", truncate(content, 40))
+            };
+            Some(format!(
+                "<meta name=\"{}\"> {problem}: use WIDTHxHEIGHT in px, in or cm (e.g. 1920x1080, 8.5x11in, 21x29.7cm), {}–{} px a side. Remove it for the default 1920x1080.",
+                size::SIZE_META,
+                size::MIN_PX,
+                size::MAX_PX
+            ))
+        },
+    );
+}
+
+/// An app setting in `<meta name="<name>">`: at most one, in `<head>`, with a `content`
+/// that `invalid` accepts (it returns the message for one it rejects). `rules` names the
+/// invalid, duplicate and misplaced issues.
+fn check_app_meta(
+    l: &mut Linter,
+    name: &str,
+    rules: [&'static str; 3],
+    invalid: impl Fn(&str) -> Option<String>,
+) {
+    let [invalid_rule, duplicate_rule, misplaced_rule] = rules;
     let html = l.html;
     let body = find_ci(html, 0, "<body").unwrap_or(html.len());
     let mut seen = 0;
@@ -550,40 +610,36 @@ fn check_template(l: &mut Linter) {
         let Some(tag) = parse_tag(html, at) else {
             continue;
         };
-        let names_template = tag
+        let named = tag
             .attrs
             .iter()
-            .any(|(n, v, _, _)| n == "name" && v.trim().eq_ignore_ascii_case(html::TEMPLATE_META));
-        if tag.name != "meta" || !names_template || !in_markup(l, at) {
+            .any(|(n, v, _, _)| n == "name" && v.trim().eq_ignore_ascii_case(name));
+        if tag.name != "meta" || !named || !in_markup(l, at) {
             continue;
         }
         seen += 1;
-        let content = tag.attrs.iter().find(|(n, _, _, _)| n == "content");
-        if !content.is_some_and(|(_, v, _, _)| !v.trim().is_empty()) {
-            l.report(
-                "template-meta-empty",
-                Severity::Warning,
-                at,
-                format!(
-                    "<meta name=\"{}\"> needs the template's id in `content`; remove the tag if the deck follows no template.",
-                    html::TEMPLATE_META
-                ),
-            );
+        let content = tag
+            .attrs
+            .iter()
+            .find(|(n, _, _, _)| n == "content")
+            .map_or("", |(_, v, _, _)| v.trim());
+        if let Some(message) = invalid(content) {
+            l.report(invalid_rule, Severity::Warning, at, message);
         }
         if seen > 1 {
             l.report(
-                "template-meta-duplicate",
+                duplicate_rule,
                 Severity::Warning,
                 at,
-                format!("Keep only one <meta name=\"{}\">.", html::TEMPLATE_META),
+                format!("Keep only one <meta name=\"{name}\">."),
             );
         }
         if at > body {
             l.report(
-                "template-meta-misplaced",
+                misplaced_rule,
                 Severity::Warning,
                 at,
-                format!("<meta name=\"{}\"> belongs in <head>.", html::TEMPLATE_META),
+                format!("<meta name=\"{name}\"> belongs in <head>."),
             );
         }
     }
@@ -1137,5 +1193,37 @@ mod tests {
         assert_eq!(rules(&commented), Vec::<&str>::new());
         let other = deck("").replace("<title>", "<meta name=\"description\" content=\"\"><title>");
         assert_eq!(rules(&other), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn checks_the_slide_size_meta() {
+        let sized = html::set_slide_size(
+            &deck(r#"<section class="slide" id="a"></section>"#),
+            SlideSize::parse("8.5x11in").unwrap(),
+        );
+        assert_eq!(rules(&sized), Vec::<&str>::new());
+        assert_eq!(rules(&html::ensure_runtime(&sized)), Vec::<&str>::new());
+        for bad in ["", " ", "portrait", "1920", "50x50", "1920x1080mm"] {
+            let html = sized.replace("8.5x11in", bad);
+            assert_eq!(rules(&html), ["slide-size-invalid"], "{bad}");
+        }
+        let no_content = sized.replace(" content=\"8.5x11in\"", "");
+        assert_eq!(rules(&no_content), ["slide-size-invalid"]);
+        let message = &lint(&sized.replace("8.5x11in", "big"), |_| true, &[])[0].message;
+        assert!(
+            message.contains("\"big\" is not a usable size"),
+            "{message}"
+        );
+        let twice = sized.replace(
+            "<title>Talk</title>",
+            "<title>Talk</title><meta name=\"slopslide-size\" content=\"1080x1080\">",
+        );
+        assert_eq!(rules(&twice), ["slide-size-duplicate"]);
+        let in_body = deck(
+            r#"<section class="slide" id="a"><meta name="slopslide-size" content="1080x1080"></section>"#,
+        );
+        assert_eq!(rules(&in_body), ["slide-size-misplaced"]);
+        let commented = deck(r#"<!-- <meta name="slopslide-size" content="nope"> -->"#);
+        assert_eq!(rules(&commented), Vec::<&str>::new());
     }
 }

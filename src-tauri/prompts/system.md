@@ -27,6 +27,7 @@ so everything the deck needs must live inside it (apart from `assets/` files and
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!-- slopslide:runtime-css … --> … <!-- /slopslide:runtime-css -->
   <title>Deck title</title>
+  <meta name="slopslide-size" content="1080x1350">   (only when the slides are not 1920×1080)
   <meta name="slopslide-template" content="swiss">   (only when the deck follows a template)
   <style>
     /* the deck's design system and per-slide layout */
@@ -59,7 +60,7 @@ Rules (NON-NEGOTIABLE):
 - Every slide has a unique, descriptive kebab-case `id` (`problem`, `pricing-tiers`). Keep
   existing ids when editing a slide; the app tracks slides by id.
 - Never edit or remove the `slopslide:runtime-css` / `slopslide:runtime-js` blocks. They
-  scale the 1920×1080 stage, switch slides, and provide keyboard navigation; the app
+  scale the stage, switch slides, and provide keyboard navigation; the app
   restores them if they are changed. Do not add your own navigation, scaling, or
   slide-switching code.
 - A `slopslide:review` block may sit just before the runtime-js block. It holds the
@@ -67,6 +68,9 @@ Rules (NON-NEGOTIABLE):
   managed by the app: never edit or move it, and keep it when rewriting the file. Delete the
   whole block only when the user asks you to clear the review marks.
 - Keep `<title>` in sync with the deck's subject.
+- A `<meta name="slopslide-size" content="…">` in `<head>` sets the slide size (see "Slide
+  canvas"). The user picks it in the editor; keep it as it is. Change it only when the user
+  asks you for another slide size or orientation, and then re-lay out every slide for it.
 - A `<meta name="slopslide-template" content="…">` in `<head>` names the template the
   deck's design comes from (see "Templates" below). Keep it when editing; change its
   `content` only when you restyle the deck to another template, and remove it when the
@@ -110,14 +114,23 @@ The user sees the same lint status in the app.
 
 ## Slide canvas
 
-Each slide is a fixed 1920×1080 canvas. The runtime scales it uniformly to fit; content
-must never reflow, scroll, or overflow.
+Each slide is a fixed canvas: 1920×1080 pixels (16:9 landscape) unless the deck's
+`slopslide-size` meta names another size. Its `content` is `WIDTHxHEIGHT` in pixels
+(`1080x1350`, portrait), or in inches or centimetres (`8.5x11in`, `21x29.7cm`), which are CSS
+units at 96 px per inch (`8.5x11in` is an 816×1056 px canvas). Every slide has the same
+size; the runtime scales it uniformly to fit, and content must never reflow, scroll, or
+overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` and
+`var(--slop-h)`.
 
 - The runtime owns each slide's box: size, `position`, `inset`, `margin`, `visibility`,
   `opacity`. Never set those on `.slide` itself (they are overridden anyway); lay out the
   inside of each slide (display flex/grid, padding, background) in your styles.
-- Use pixel units sized for 1920×1080 (body text 28–36px, titles 72–140px, padding
-  72–120px). No responsive breakpoints, no `vw`/`vh`.
+- Use pixel units sized for the canvas. For 1920×1080: body text 28–36px, titles 72–140px,
+  padding 72–120px. For other sizes, scale those by the canvas's shorter side relative to
+  1080 (a 1080×1350 portrait keeps them; an 816×1056 letter page takes about 0.75 of them).
+  No responsive breakpoints, no `vw`/`vh`.
+- Design for the canvas's shape: portrait and square slides stack content vertically
+  (title over body, images above or below text) rather than in wide side-by-side columns.
 - Reference images as `assets/<file>`. Do not hotlink remote images.
 - Entrance animations: the runtime gives elements with class `reveal` a fade-up each time
   their slide is shown (stagger with `reveal-delay-1` … `reveal-delay-4`). To restyle the
@@ -159,7 +172,7 @@ Read those before designing a new deck or restyling one.
 
 - One idea per slide by default. 1–5 bullets, or 4–6 cards for reading-heavy decks.
 - If content does not fit comfortably, split it across slides instead of shrinking text.
-- After editing, sanity-check each changed slide mentally at 1920×1080: nothing clipped,
+- After editing, sanity-check each changed slide mentally at the canvas size: nothing clipped,
   nothing overlapping, text readable from the back of a room.
 
 ## New decks
@@ -178,11 +191,21 @@ Each user message may start with a `[context]` block naming the slide they are l
 
 The user can draw on the current slide to point at what they mean. The context block then
 names a sketch: a screenshot of that slide with their pen and highlighter marks on top, and
-the area they marked in slide pixels (1920×1080). Read the screenshot before editing. The
+the area they marked in slide pixels. Read the screenshot before editing. The
 marks only show where and what to change; never reproduce them on the slide. "This",
 "here", "the circled part" and similar refer to what they marked. The marks stay saved in
 the deck's `slopslide:review` block as a review after you act on them; leave them there, the
 user clears them when they are done.
+
+## Slide size changes
+
+When the user changes the slide size in the editor, the app rewrites the `slopslide-size`
+meta (and the runtime) and asks you to adapt the deck. Then re-lay out every slide that is
+not locked for the new canvas: rework each layout for the new shape and scale type, spacing,
+and fixed pixel sizes and positions so everything fits with no clipping or overflow. Keep all
+content, slide ids, sections, hidden slides, speaker notes, and the design system. Elements
+the user moved by hand (`data-moved`) keep their inline styles, but move or scale them so they
+still sit where the user meant them on the new canvas.
 
 ## Hand edits
 

@@ -30,9 +30,11 @@ interface PlayerOptions {
   /** Pretend to be inside an iframe; receives the player's postMessages. */
   parent?: { postMessage: (data: unknown, origin: string) => void };
   size?: [number, number];
+  /** The stage's laid-out size (the deck's slide size); jsdom lays nothing out, so it is 0×0 without. */
+  stage?: [number, number];
 }
 
-function player({ at = "", html = DECK, parent, size = [1920, 1080] }: PlayerOptions = {}) {
+function player({ at = "", html = DECK, parent, size = [1920, 1080], stage }: PlayerOptions = {}) {
   const dom = new JSDOM(html, {
     url: `https://example.test/deck.html${at}`,
     runScripts: "outside-only",
@@ -44,6 +46,11 @@ function player({ at = "", html = DECK, parent, size = [1920, 1080] }: PlayerOpt
     },
   });
   doms.push(dom);
+  const stageEl = dom.window.document.querySelector(".deck");
+  if (stage && stageEl) {
+    Object.defineProperty(stageEl, "offsetWidth", { value: stage[0], configurable: true });
+    Object.defineProperty(stageEl, "offsetHeight", { value: stage[1], configurable: true });
+  }
   dom.window.eval(RUNTIME);
   const { window } = dom;
   const doc = window.document;
@@ -191,6 +198,17 @@ describe("player: standalone", () => {
     Object.defineProperty(p.window, "innerHeight", { value: 1080 });
     p.window.dispatchEvent(new p.window.Event("resize"));
     expect(deck.style.transform).toBe("translate(960px,0px) scale(1)");
+  });
+
+  it("scales a stage of another slide size, as laid out by the runtime CSS", () => {
+    // A 1080×1350 portrait slide in a 1920×1080 window: fit to the height.
+    const p = player({ stage: [1080, 1350] });
+    const deck = p.doc.querySelector<HTMLElement>(".deck")!;
+    expect(deck.style.transform).toBe("translate(528px,0px) scale(0.8)");
+    Object.defineProperty(p.window, "innerWidth", { value: 540 });
+    Object.defineProperty(p.window, "innerHeight", { value: 1350 });
+    p.window.dispatchEvent(new p.window.Event("resize"));
+    expect(deck.style.transform).toBe("translate(0px,337.5px) scale(0.5)");
   });
 
   it("ignores slides nested inside slides", () => {
@@ -429,6 +447,13 @@ describe("player: review marks", () => {
     expect(dot!.getAttribute("stroke-opacity")).toBe("0.4");
   });
 
+  it("draws marks in the pixels of the deck's slide size", () => {
+    const p = player({ html: REVIEWED, at: "?review", stage: [1080, 1080] });
+    const svg = p.doc.querySelector("#intro > svg.slop-review")!;
+    expect(svg.getAttribute("viewBox")).toBe("0 0 1080 1080");
+    expect(svg.querySelector("path")!.getAttribute("d")).toBe("M108 216L540 540");
+  });
+
   it("draws longer strokes as the same smooth curve the app draws", () => {
     const points: [number, number][] = [[0, 0], [0.5, 0], [0.5, 0.5], [0, 0.5]];
     const html = DECK.replace(
@@ -529,16 +554,12 @@ describe("player: without JavaScript", () => {
     expect(CSS).toMatch(/html\s*\{[^}]*[^-]text-size-adjust:\s*100%/);
   });
 
-  it("zooms the stage down to narrow windows", () => {
-    const zooms = [...CSS.matchAll(/@media screen and \(max-width: ([\d.]+)px\) \{[^{]*\{ zoom: ([\d.]+); \} \}/g)];
-    expect(zooms.length).toBeGreaterThan(10);
-    for (const [, width, zoom] of zooms) {
-      // The step applies to windows narrower than `width`; the zoomed stage still fits the
-      // narrowest of them.
-      const narrowest = Number(width) + 0.02 - 96;
-      expect(1920 * Number(zoom)).toBeLessThanOrEqual(narrowest);
-    }
-    // Phones (≈375–430 CSS px wide) get a step.
-    expect(zooms.some(([, width]) => Number(width) < 430)).toBe(true);
+  it("sizes the stage from the slide size variables the app sets", () => {
+    // The app appends the size rules (--slop-w / --slop-h, the printed page, the zoom steps for
+    // narrow windows) for the deck's slide size; see src-tauri/src/size.rs.
+    expect(CSS).toMatch(/\.deck \{[^}]*width: var\(--slop-w, 1920px\)/);
+    expect(CSS).toMatch(/\.deck > \.slide \{[^}]*height: var\(--slop-h, 1080px\) !important/);
+    expect(CSS).not.toContain("zoom:");
+    expect(CSS).not.toContain("@page");
   });
 });

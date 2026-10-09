@@ -1,11 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { Slide } from "../lib/api";
+import { pixelsOf, type Pixels } from "../lib/slideSize";
 import { isPasteboardUrl, slideUrl } from "../lib/utils";
 import { useApp } from "../store";
-
-const STAGE_W = 1920;
-const STAGE_H = 1080;
 
 interface SlideFrameProps {
   deckId: string;
@@ -25,14 +23,17 @@ interface SlideFrameProps {
   onFrameReady?: (frame: HTMLIFrameElement) => void;
   /** Loads this URL instead of the deck's slide (e.g. a template's, see `templateSlideUrl`). */
   url?: string;
+  /** The slide's canvas in CSS pixels (see `pixelsOf`); 1920×1080 when not given. */
+  size?: Pixels;
 }
 
 /**
- * One slide of deck.html, rendered by the deck's own player in a 1920×1080 iframe scaled to
- * fill its (16:9) container. When the slide changes, the new version loads behind the
+ * One slide of deck.html, rendered by the deck's own player in an iframe the size of the
+ * slide's canvas, scaled to fill its container (which takes the slide's shape). When the slide changes, the new version loads behind the
  * current one and swaps in once painted, so edits stream in without white flashes.
  */
-export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena, className, onFrameReady, url }: SlideFrameProps) {
+export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena, className, onFrameReady, url, size: canvas = pixelsOf(null) }: SlideFrameProps) {
+  const { width: stageW, height: stageH } = canvas;
   const src = url ?? slideUrl(deckId, slideId, version, thumbnail || editKey !== undefined, editKey, arena !== undefined && !thumbnail);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -44,11 +45,11 @@ export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena
     const el = containerRef.current;
     if (!el) return;
     const observer = new ResizeObserver(([entry]) => {
-      if (entry) setScale(entry.contentRect.width / STAGE_W);
+      if (entry) setScale(entry.contentRect.width / stageW);
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [stageW]);
 
   // Until the first layout nothing is shown, so there is nothing to keep while a new version
   // loads: the preview starts with whatever is current then (e.g. once the stage's arena is known).
@@ -63,8 +64,8 @@ export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena
   const frames = pending ? [shown, pending] : [shown];
   // Only a pasteboard preview fills the arena, with the slide in its middle. A plain preview given
   // the same room would scale the slide up to fill it.
-  const slideW = STAGE_W * scale;
-  const slideH = STAGE_H * scale;
+  const slideW = stageW * scale;
+  const slideH = stageH * scale;
   const sizeFor = (url: string) =>
     isPasteboardUrl(url) && arena ? { w: Math.max(arena.width, slideW), h: Math.max(arena.height, slideH) } : { w: slideW, h: slideH };
   const bleeds = frames.some(isPasteboardUrl);
@@ -75,7 +76,7 @@ export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena
       className={className}
       style={{
         position: "relative",
-        aspectRatio: "16 / 9",
+        aspectRatio: `${stageW} / ${stageH}`,
         overflow: bleeds ? "visible" : "hidden",
         // The pasteboard paints the slide wherever it is panned to, and nothing around it.
         background: bleeds ? "transparent" : "#000",

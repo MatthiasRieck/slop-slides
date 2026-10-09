@@ -40,6 +40,12 @@ const CASES = [
     { id: "talk", slide: "a", locked: true },
   ],
   [
+    "setSlideSize",
+    () => api.setSlideSize("talk", { width: 21, height: 29.7, unit: "cm" }),
+    "set_slide_size",
+    { id: "talk", size: { width: 21, height: 29.7, unit: "cm" } },
+  ],
+  [
     "addSection",
     () => api.addSection("talk", "b", "Part two"),
     "add_section",
@@ -72,9 +78,9 @@ const CASES = [
   ["createImageExportDir", () => api.createImageExportDir("talk", "/out"), "create_image_export_dir", { id: "talk", parent: "/out" }],
   [
     "exportSlideImage",
-    () => api.exportSlideImage("/out/Talk", 2, 9, { x: 0, y: 10, width: 640, height: 360 }, { width: 640, height: 400 }),
+    () => api.exportSlideImage("/out/Talk", 2, 9, { x: 0, y: 10, width: 640, height: 360 }, { width: 640, height: 400 }, 1080),
     "export_slide_image",
-    { dir: "/out/Talk", index: 2, total: 9, rect: { x: 0, y: 10, width: 640, height: 360 }, viewport: { width: 640, height: 400 } },
+    { dir: "/out/Talk", index: 2, total: 9, rect: { x: 0, y: 10, width: 640, height: 360 }, viewport: { width: 640, height: 400 }, width: 1080 },
   ],
   [
     "captureSketch",

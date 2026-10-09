@@ -22,6 +22,7 @@ use crate::error::{Error, Result};
 use crate::html;
 use crate::lint;
 use crate::review::{self, Review};
+use crate::size::{SizeInfo, SlideSize, SIZE_META};
 use crate::templates;
 
 pub const INTERNAL_DIR: &str = ".slopslide";
@@ -51,6 +52,8 @@ pub struct DeckSummary {
     pub slide_count: usize,
     pub first_slide: Option<String>,
     pub updated_ms: u64,
+    /// The slide size, so thumbnails get its shape.
+    pub size: SizeInfo,
 }
 
 #[derive(Debug, Serialize)]
@@ -92,6 +95,8 @@ pub struct Deck {
     pub review: Review,
     /// Id of the template the deck's design comes from (see [`crate::templates`]).
     pub template: Option<String>,
+    /// Every slide's canvas (see [`crate::size`]).
+    pub size: SizeInfo,
 }
 
 pub fn library_root(app: &AppHandle) -> Result<PathBuf> {
@@ -181,6 +186,7 @@ pub fn list(root: &Path) -> Result<Vec<DeckSummary>> {
             slide_count: slides.len(),
             first_slide: slides.first().and_then(|s| s.id.clone()),
             updated_ms: modified_ms(&dir.join(DECK_FILE)),
+            size: html::slide_size(&source).into(),
             id,
         });
     }
@@ -280,6 +286,7 @@ pub fn load(dir: &Path, id: &str) -> Result<Deck> {
         shell_hash: html::shell_hash(&source, &spans, &section_spans),
         review: review::read(&source),
         template: html::template(&source),
+        size: html::slide_size(&source).into(),
         sections: section_spans
             .iter()
             .enumerate()
@@ -376,10 +383,13 @@ pub fn apply_template(dir: &Path, id: &str, template: TemplateSource) -> Result<
             return Err("Only a deck without slides takes a template's styles directly.".into());
         }
         let title = html::title(s).unwrap_or_else(|| fallback_title(id));
-        Ok((
-            templates::deck_shell(template.html, template.id, &title),
-            (),
-        ))
+        let shell = templates::deck_shell(template.html, template.id, &title);
+        // A size the user picked for the deck wins over the template's.
+        let shell = match html::app_meta_content(s, SIZE_META) {
+            Some(_) => html::ensure_runtime(&html::set_slide_size(&shell, html::slide_size(s))),
+            None => shell,
+        };
+        Ok((shell, ()))
     })?
     .0)
 }
@@ -405,6 +415,16 @@ pub fn set_slide_hidden(dir: &Path, id: &str, slide: &str, hidden: bool) -> Resu
     let deck = edit(dir, id, |s| Ok((html::set_hidden(s, slide, hidden)?, ())))?.0;
     refresh_guard(dir, slide)?;
     Ok(deck)
+}
+
+/// Gives every slide the canvas `size` and refreshes the player runtime to match. The slides'
+/// content stays as it is; the agent lays it out again for the new size.
+pub fn set_slide_size(dir: &Path, id: &str, size: SlideSize) -> Result<Deck> {
+    size.check().map_err(Error::Message)?;
+    Ok(edit(dir, id, |s| {
+        Ok((html::ensure_runtime(&html::set_slide_size(s, size)), ()))
+    })?
+    .0)
 }
 
 /// Locks or unlocks a slide. Neither the user nor the agent can change a locked slide.
@@ -1325,17 +1345,23 @@ mod tests {
         assert!(json["shellHash"].is_string());
         assert_eq!(json["slides"][0]["id"], "a");
         assert!(json["slides"][0]["hash"].is_string());
+        assert_eq!(
+            json["size"],
+            serde_json::json!({"width":1920.0,"height":1080.0,"unit":"px","pixelWidth":1920,"pixelHeight":1080})
+        );
         let summary = serde_json::to_value(DeckSummary {
             id: "x".into(),
             title: "X".into(),
             slide_count: 2,
             first_slide: None,
             updated_ms: 5,
+            size: SlideSize::parse("1080x1080").unwrap().into(),
         })
         .unwrap();
         assert_eq!(
             summary,
-            serde_json::json!({"id":"x","title":"X","slideCount":2,"firstSlide":null,"updatedMs":5})
+            serde_json::json!({"id":"x","title":"X","slideCount":2,"firstSlide":null,"updatedMs":5,
+                "size":{"width":1080.0,"height":1080.0,"unit":"px","pixelWidth":1080,"pixelHeight":1080}})
         );
     }
 
@@ -1923,6 +1949,84 @@ mod tests {
         let before = read_html(&dir).unwrap();
         assert!(apply_template(&dir, &deck.id, template()).is_err());
         assert_eq!(read_html(&dir).unwrap(), before);
+    }
+
+    #[test]
+    fn sets_the_slide_size_and_refreshes_the_runtime() {
+        let lib = TempLib::new();
+        let deck = create(&lib.0, "Poster", None).unwrap();
+        assert_eq!(deck.size, SizeInfo::from(SlideSize::default()));
+        let dir = lib.0.join(&deck.id);
+        add_blank(&dir, &deck.id, None).unwrap();
+
+        let a4 = SlideSize::parse("21x29.7cm").unwrap();
+        let resized = set_slide_size(&dir, &deck.id, a4).unwrap();
+        assert_eq!(resized.size.size, a4);
+        assert_eq!(
+            (resized.size.pixel_width, resized.size.pixel_height),
+            (794, 1123)
+        );
+        assert_eq!(resized.slides.len(), 1, "keeps the slides");
+        let html = read_html(&dir).unwrap();
+        assert!(html.contains("<meta name=\"slopslide-size\" content=\"21x29.7cm\">"));
+        assert!(
+            html.contains("--slop-w: 794px;"),
+            "the stage takes the new size"
+        );
+        assert!(!html.contains("--slop-w: 1920px;"));
+        assert_eq!(lint(&dir).unwrap(), vec![]);
+        assert_eq!(list(&lib.0).unwrap()[0].size, resized.size);
+
+        // Back to the default: the meta goes away again.
+        let back = set_slide_size(&dir, &deck.id, SlideSize::default()).unwrap();
+        assert_eq!(back.size, SizeInfo::from(SlideSize::default()));
+        let html = read_html(&dir).unwrap();
+        assert!(!html.contains("<meta name=\"slopslide-size\""));
+        assert!(html.contains("--slop-w: 1920px;"));
+
+        let tiny = SlideSize {
+            width: 10.0,
+            ..SlideSize::default()
+        };
+        assert!(set_slide_size(&dir, &deck.id, tiny).is_err());
+        assert_eq!(read_html(&dir).unwrap(), html, "a bad size changes nothing");
+    }
+
+    #[test]
+    fn applying_a_template_keeps_a_chosen_slide_size() {
+        let lib = TempLib::new();
+        let source = include_str!("../templates/swiss.html");
+        let template = || TemplateSource {
+            id: "swiss",
+            html: source,
+        };
+        let deck = create(&lib.0, "Square", None).unwrap();
+        let dir = lib.0.join(&deck.id);
+        let square = SlideSize::parse("1080x1080").unwrap();
+        set_slide_size(&dir, &deck.id, square).unwrap();
+        let styled = apply_template(&dir, &deck.id, template()).unwrap();
+        assert_eq!(styled.template.as_deref(), Some("swiss"));
+        assert_eq!(styled.size.size, square);
+        assert!(read_html(&dir).unwrap().contains("--slop-h: 1080px;"));
+        assert!(read_html(&dir).unwrap().contains("--slop-w: 1080px;"));
+        assert_eq!(lint(&dir).unwrap(), vec![]);
+
+        // A portrait template gives its size to a deck that never picked one.
+        let portrait = html::set_slide_size(source, SlideSize::parse("1080x1350").unwrap());
+        let plain = create(&lib.0, "Plain", None).unwrap();
+        let styled = apply_template(
+            &lib.0.join(&plain.id),
+            &plain.id,
+            TemplateSource {
+                id: "swiss",
+                html: &portrait,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (styled.size.pixel_width, styled.size.pixel_height),
+            (1080, 1350)
+        );
     }
 
     #[test]

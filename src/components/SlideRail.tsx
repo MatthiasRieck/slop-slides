@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { api, errorMessage, type Section, type Slide } from "../lib/api";
 import { applyOrder, railItems, startsSection } from "../lib/sections";
+import { pixelsOf } from "../lib/slideSize";
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
@@ -293,6 +294,8 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
     }
   };
 
+  const deckSize = useApp((s) => s.deck?.size);
+
   const toggleLocked = async () => {
     try {
       useApp.getState().setDeck(await api.setSlideLocked(deckId, slide.id, !slide.locked));
@@ -348,6 +351,7 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
             deckId={deckId}
             slideId={slide.id}
             version={version}
+            size={pixelsOf({ size: deckSize })}
             thumbnail
             className={cn(slide.hidden && "opacity-35 grayscale")}
           />

@@ -564,12 +564,13 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           placeholder={running ? "The agent is working…" : "Ask for slides or changes…"}
           className="block max-h-[max(64px,min(240px,40vh))] min-h-16 w-full resize-none bg-transparent px-3.5 pt-3 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/70"
         />
-        <div className="relative flex flex-wrap items-center gap-1 px-2 pt-1 pb-2">
+        <div className="@container px-2 pt-1 pb-2">
+        <div className="relative flex flex-nowrap items-center gap-1">
           <ModelPicker />
           <div className="mx-0.5 h-4 w-px bg-border" />
           <EffortPicker />
           <PermissionPicker />
-          <div className="flex-1" />
+          <div className="min-w-0 flex-1" />
           <button
             type="button"
             onClick={pickFiles}
@@ -598,6 +599,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
               <ArrowUp className="size-4" />
             </button>
           )}
+          </div>
         </div>
       </div>
     </div>

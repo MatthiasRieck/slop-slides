@@ -43,10 +43,10 @@ export function PermissionPicker() {
     useApp.getState().setPermissionMode(next);
     setOpen(false);
   };
-  return <div ref={root} className="min-w-0">
-    <button type="button" disabled={running} aria-label="Codex permissions" aria-expanded={open} onClick={() => setOpen(!open)}
+  return <div ref={root} className="min-w-0 shrink-0">
+    <button type="button" disabled={running} aria-label="Codex permissions" title={`Codex permissions: ${PERMISSION_MODES[mode].label}`} aria-expanded={open} onClick={() => setOpen(!open)}
       className="flex h-7 items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50">
-      <Shield className="size-3.5 shrink-0" /><span>{PERMISSION_MODES[mode].label}</span><ChevronDown className="size-3" />
+      <Shield className="size-3.5 shrink-0" /><span className="hidden @[26rem]:inline">{PERMISSION_MODES[mode].label}</span><ChevronDown className="size-3" />
     </button>
     {open && <div role="group" aria-label="Permission modes" className="absolute bottom-full left-2 z-50 mb-2 w-64 max-w-[calc(100vw-2rem)] rounded-xl border bg-card p-1.5 text-foreground shadow-lg">
       {error ? <p role="alert" className="p-2 text-xs text-destructive">{error}</p> : modes.length === 0 ? <p className="p-2 text-xs text-muted-foreground">Checking Codex permissions…</p> : modes.map((m) => <button key={m} type="button" aria-pressed={mode === m} onClick={() => void choose(m)} className="block w-full rounded-lg px-2.5 py-2 text-left text-xs hover:bg-accent aria-pressed:bg-accent">

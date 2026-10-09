@@ -3,7 +3,10 @@
 A desktop slide editor you drive by chatting. Describe a presentation, and an agent writes
 the slides. Keep talking to it to restyle, rewrite, split, or add slides while you watch them change.
 
-- **Left:** live thumbnails. Drag to reorder; hover to duplicate or delete; `+` adds a slide.
+- **Left:** live thumbnails. Drag to reorder; hover to lock, hide, duplicate, or delete; `+`
+  adds a slide. A locked slide (lock icon) can be changed by neither you nor the agent: it
+  cannot be edited on the stage, deleted, or saved changed from the code view, and if the
+  agent changes it anyway the app puts it back after the turn. Unlock it to change it.
   Sections group slides under a heading in this column (never in the presentation): the
   section button starts one at the selected slide; double-click a heading to rename it, drag
   it to move the boundary, hover to remove it.

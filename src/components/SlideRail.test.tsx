@@ -12,7 +12,7 @@ import { DECK_HTML, deckFor } from "../test/fixtures";
 import { SlideRail } from "./SlideRail";
 
 const DECK = deckFor(DECK_HTML);
-const withSlides = (...ids: string[]): Deck => ({ ...DECK, slides: ids.map((id) => ({ id, hash: id, hidden: false, moved: false })) });
+const withSlides = (...ids: string[]): Deck => ({ ...DECK, slides: ids.map((id) => ({ id, hash: id, hidden: false, locked: false, moved: false })) });
 
 beforeEach(() => {
   invoke.mockReset();
@@ -215,6 +215,57 @@ describe("hidden slides in the rail", () => {
     await act(async () => fireEvent.click(within(items()[0]!).getByTitle("Hide slide")));
     expect(useApp.getState().error).toBe("disk full");
     expect(useApp.getState().deck?.slides[0]?.hidden).toBe(false);
+  });
+});
+
+const LOCKED_HTML = DECK_HTML.replace(`id="outro"`, `id="outro" data-locked`);
+
+describe("locked slides in the rail", () => {
+  beforeEach(() => {
+    useApp.setState({ deck: deckFor(LOCKED_HTML) });
+  });
+
+  it("marks locked slides and offers to unlock them", () => {
+    render(<SlideRail />);
+    expect(item(2).getByTestId("locked-mark")).toBeTruthy();
+    expect(item(2).getByTitle("Unlock slide")).toBeTruthy();
+    expect(item(0).queryByTestId("locked-mark")).toBeNull();
+    expect(item(0).getByTitle("Lock slide")).toBeTruthy();
+  });
+
+  it("cannot delete a locked slide, but can still duplicate and hide it", () => {
+    render(<SlideRail />);
+    expect(item(2).queryByTitle("Delete")).toBeNull();
+    expect(item(2).getByTitle("Duplicate")).toBeTruthy();
+    expect(item(2).getByTitle("Hide slide")).toBeTruthy();
+    expect(item(0).getByTitle("Delete")).toBeTruthy();
+  });
+
+  it("locks a slide", async () => {
+    const next = deckFor(LOCKED_HTML.replace(`id="intro"`, `id="intro" data-locked`), "2");
+    invoke.mockResolvedValue(next);
+    render(<SlideRail />);
+    await act(async () => fireEvent.click(item(0).getByTitle("Lock slide")));
+    expect(invoke).toHaveBeenCalledWith("set_slide_locked", { id: "talk", slide: "intro", locked: true });
+    expect(useApp.getState().deck).toBe(next);
+    expect(item(0).getByTestId("locked-mark")).toBeTruthy();
+    expect(item(0).queryByTitle("Delete")).toBeNull();
+  });
+
+  it("unlocks a slide", async () => {
+    invoke.mockResolvedValue(deckFor(DECK_HTML, "2"));
+    render(<SlideRail />);
+    await act(async () => fireEvent.click(item(2).getByTitle("Unlock slide")));
+    expect(invoke).toHaveBeenCalledWith("set_slide_locked", { id: "talk", slide: "outro", locked: false });
+    expect(screen.queryByTestId("locked-mark")).toBeNull();
+    expect(item(2).getByTitle("Delete")).toBeTruthy();
+  });
+
+  it("reports a failed lock", async () => {
+    invoke.mockRejectedValue("disk full");
+    render(<SlideRail />);
+    await act(async () => fireEvent.click(item(0).getByTitle("Lock slide")));
+    expect(useApp.getState().error).toBe("disk full");
   });
 });
 

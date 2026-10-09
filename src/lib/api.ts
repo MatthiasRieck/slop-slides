@@ -19,6 +19,8 @@ export interface Slide {
   hash: string;
   /** Has `data-hidden`: skipped when presenting, shown muted in the editor. */
   hidden: boolean;
+  /** Has `data-locked`: neither the user nor the agent can change it until it is unlocked. */
+  locked: boolean;
   /** Has elements moved by hand (`data-moved`) that the agent has not tidied up yet. */
   moved: boolean;
 }
@@ -131,6 +133,8 @@ export const api = {
     invoke<CreatedSlide>("duplicate_slide", { id, slide }),
   setSlideHidden: (id: string, slide: string, hidden: boolean) =>
     invoke<Deck>("set_slide_hidden", { id, slide, hidden }),
+  setSlideLocked: (id: string, slide: string, locked: boolean) =>
+    invoke<Deck>("set_slide_locked", { id, slide, locked }),
   addSection: (id: string, before: string | null, title: string) =>
     invoke<Deck>("add_section", { id, before, title }),
   renameSection: (id: string, index: number, title: string) =>

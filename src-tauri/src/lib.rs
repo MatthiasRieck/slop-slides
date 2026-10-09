@@ -194,6 +194,11 @@ fn set_slide_hidden(app: AppHandle, id: String, slide: String, hidden: bool) -> 
 }
 
 #[tauri::command]
+fn set_slide_locked(app: AppHandle, id: String, slide: String, locked: bool) -> Result<Deck> {
+    deck::set_slide_locked(&deck::deck_dir(&app, &id)?, &id, &slide, locked)
+}
+
+#[tauri::command]
 fn add_section(app: AppHandle, id: String, before: Option<String>, title: String) -> Result<Deck> {
     deck::add_section(&deck::deck_dir(&app, &id)?, &id, before, &title)
 }
@@ -394,6 +399,7 @@ pub fn run() {
             add_slide,
             duplicate_slide,
             set_slide_hidden,
+            set_slide_locked,
             add_section,
             rename_section,
             delete_section,

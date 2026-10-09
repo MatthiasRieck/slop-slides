@@ -34,6 +34,12 @@ const CASES = [
     { id: "talk", slide: "a", hidden: true },
   ],
   [
+    "setSlideLocked",
+    () => api.setSlideLocked("talk", "a", true),
+    "set_slide_locked",
+    { id: "talk", slide: "a", locked: true },
+  ],
+  [
     "addSection",
     () => api.addSection("talk", "b", "Part two"),
     "add_section",

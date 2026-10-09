@@ -330,6 +330,23 @@ describe("Stage", () => {
       vi.restoreAllMocks();
     });
 
+    it("locks the edit button, Layout and Tidy layout on a locked slide, and leaves edit mode for one", () => {
+      const locked = deckFor(DECK_HTML.replace(`id="outro"`, `id="outro" data-locked`));
+      useApp.setState({ deck: locked, templates: [] });
+      render(<Stage />);
+      fireEvent.click(editButton());
+      expect(useApp.getState().editing).toBe(true);
+      expect(screen.queryByText("Locked")).toBeNull();
+
+      act(() => useApp.getState().select("outro"));
+      expect(useApp.getState().editing).toBe(false);
+      expect((editButton() as HTMLButtonElement).disabled).toBe(true);
+      expect(editButton().title).toContain("locked");
+      expect(screen.getByText("Locked")).toBeTruthy();
+      expect((screen.getByRole("button", { name: /^Layout$/ }) as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByRole("button", { name: /Tidy layout/ }) as HTMLButtonElement).disabled).toBe(true);
+    });
+
     it("shows a pencil icon on the edit button", () => {
       render(<Stage />);
       expect(editButton().querySelector("svg.lucide-pencil")).not.toBeNull();

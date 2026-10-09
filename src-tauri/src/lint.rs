@@ -7,8 +7,8 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 use crate::html::{
-    self, find_ci, has_class, parse_tag, EDITOR_ATTRS, HIDDEN_ATTR, MOVED_ATTR, SECTION_CLASS,
-    SECTION_TITLE_ATTR,
+    self, find_ci, has_class, parse_tag, EDITOR_ATTRS, HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR,
+    SECTION_CLASS, SECTION_TITLE_ATTR,
 };
 use crate::review;
 
@@ -93,9 +93,14 @@ impl<'a> Linter<'a> {
     }
 }
 
-/// Lints a deck. `asset_exists` answers whether a deck-relative `assets/…` path exists.
-/// Issues come back sorted by line.
-pub fn lint(source: &str, asset_exists: impl Fn(&str) -> bool) -> Vec<Issue> {
+/// Lints a deck. `asset_exists` answers whether a deck-relative `assets/…` path exists;
+/// `locked` lists the locked slides as an agent turn started (empty outside a turn), and every
+/// one the deck changed or removed is reported. Issues come back sorted by line.
+pub fn lint(
+    source: &str,
+    asset_exists: impl Fn(&str) -> bool,
+    locked: &[html::LockedSlide],
+) -> Vec<Issue> {
     let mut l = Linter::new(source);
     check_markup(&mut l);
     check_document(&mut l);
@@ -104,6 +109,7 @@ pub fn lint(source: &str, asset_exists: impl Fn(&str) -> bool) -> Vec<Issue> {
     check_review(&mut l);
     check_template(&mut l);
     check_assets(&mut l, asset_exists);
+    check_locked(&mut l, locked);
     l.issues.sort_by_key(|i| (i.line, i.severity));
     l.issues
 }
@@ -431,19 +437,52 @@ fn check_slides(l: &mut Linter) {
             ),
             Some(_) => {}
         }
-        if let Some(attr) = &slide.hidden {
-            let attr = &l.html[attr.clone()];
-            if attr.contains('=') && !attr.ends_with("\"\"") && !attr.ends_with("''") {
-                l.report(
-                    "hidden-value",
-                    Severity::Warning,
-                    at,
-                    format!(
-                        "Write `{HIDDEN_ATTR}` without a value; any value still hides the slide."
-                    ),
-                );
-            }
+        let valued = |range: &Option<std::ops::Range<usize>>| {
+            range.as_ref().is_some_and(|r| {
+                let attr = &l.html[r.clone()];
+                attr.contains('=') && !attr.ends_with("\"\"") && !attr.ends_with("''")
+            })
+        };
+        if valued(&slide.hidden) {
+            l.report(
+                "hidden-value",
+                Severity::Warning,
+                at,
+                format!("Write `{HIDDEN_ATTR}` without a value; any value still hides the slide."),
+            );
         }
+        if valued(&slide.locked) {
+            l.report(
+                "locked-value",
+                Severity::Warning,
+                at,
+                format!("Write `{LOCKED_ATTR}` without a value; any value still locks the slide."),
+            );
+        }
+    }
+}
+
+/// Locked slides the agent changed or removed this turn; the app puts them back after it.
+fn check_locked(l: &mut Linter, locked: &[html::LockedSlide]) {
+    for id in html::changed_locked(l.html, locked) {
+        let span = l.slides.iter().find(|s| s.id.as_deref() == Some(&id));
+        let (at, message) = match span {
+            Some(span) => (
+                span.range.start,
+                format!(
+                    "The slide `{id}` is locked ({LOCKED_ATTR}) but was changed. Undo every \
+                     change to it: the user locked it, and the app restores it after your turn."
+                ),
+            ),
+            None => (
+                0,
+                format!(
+                    "The locked slide `{id}` was removed or renamed. Put it back unchanged: \
+                     the user locked it, and the app restores it after your turn."
+                ),
+            ),
+        };
+        l.report("locked-slide-changed", Severity::Error, at, message);
     }
 }
 
@@ -671,7 +710,7 @@ mod tests {
     }
 
     fn rules(html: &str) -> Vec<&'static str> {
-        lint(html, |p| p == "assets/logo.png")
+        lint(html, |p| p == "assets/logo.png", &[])
             .into_iter()
             .map(|i| i.rule)
             .collect()
@@ -691,7 +730,7 @@ mod tests {
 <!-- <div> commented out -->
 <section class="slide" id="plan-2025" data-hidden><p>Plan</p></section>"#,
         );
-        assert_eq!(lint(&html, |p| p == "assets/logo.png"), vec![]);
+        assert_eq!(lint(&html, |p| p == "assets/logo.png", &[]), vec![]);
     }
 
     fn stroke() -> review::Stroke {
@@ -728,7 +767,7 @@ mod tests {
         ));
         let found = rules(&inside);
         assert!(found.contains(&"review-misplaced"), "{found:?}");
-        let issue = lint(&html.replace("[[", "["), |_| true).remove(0);
+        let issue = lint(&html.replace("[[", "["), |_| true, &[]).remove(0);
         assert_eq!(
             issue.line,
             html[..html.find(review::START).unwrap()].lines().count()
@@ -764,7 +803,7 @@ mod tests {
     fn reports_unclosed_and_stray_tags_with_lines() {
         let html =
             deck("<section class=\"slide\" id=\"a\">\n<div><span>x</div>\n</section>\n</em>");
-        let issues = lint(&html, |_| true);
+        let issues = lint(&html, |_| true, &[]);
         let unclosed = issues.iter().find(|i| i.rule == "unclosed-tag").unwrap();
         assert!(unclosed.message.contains("<span>"));
         assert_eq!(unclosed.line, 11);
@@ -877,6 +916,53 @@ mod tests {
     }
 
     #[test]
+    fn flags_valued_locked_attributes() {
+        assert_eq!(
+            rules(&deck(
+                "<section class=\"slide\" id=\"a\" data-locked></section>"
+            )),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            rules(&deck(
+                "<section class=\"slide\" id=\"a\" data-locked=\"false\"></section>"
+            )),
+            ["locked-value"]
+        );
+    }
+
+    #[test]
+    fn flags_locked_slides_changed_during_a_turn() {
+        let before = deck(
+            "<section class=\"slide\" id=\"a\" data-locked>A</section>\n<section class=\"slide\" id=\"b\" data-locked>B</section>\n<section class=\"slide\" id=\"c\">C</section>",
+        );
+        let locked = html::locked_slides(&before);
+        assert_eq!(lint(&before, |_| true, &locked), vec![]);
+        let edited = before.replace(">C<", ">C!<");
+        assert_eq!(
+            lint(&edited, |_| true, &locked),
+            vec![],
+            "other slides are free"
+        );
+
+        let changed = html::delete(&before.replace(">A<", ">A!<"), "b").unwrap();
+        let issues = lint(&changed, |_| true, &locked);
+        let found: Vec<_> = issues
+            .iter()
+            .map(|i| (i.rule, i.severity, i.slide.as_deref(), i.line))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("locked-slide-changed", Severity::Error, None, 1),
+                ("locked-slide-changed", Severity::Error, Some("a"), 10),
+            ]
+        );
+        assert!(issues[0].message.contains("`b` was removed"));
+        assert!(issues[1].message.contains("`a` is locked"));
+    }
+
+    #[test]
     fn flags_content_outside_slides_in_the_deck() {
         let found = rules(&deck("<div>loose</div>\nloose text\n<section class=\"slide\" id=\"a\"><div>fine</div></section>"));
         assert_eq!(found, ["deck-stray-content", "deck-stray-content"]);
@@ -898,6 +984,7 @@ mod tests {
                 "<section class=\"slide\" id=\"a\">\n<h2 data-moved style=\"translate: 40px -12px\">Moved</h2>\n<img data-moved style=\"translate: 0px 12px; rotate: 15deg; scale: 1.5 0.8\" src=\"a.png\" alt=\"\">\n<div data-moved style=\"transform: perspective(1000px) rotateX(10deg) rotateY(30deg) !important\">Tilted</div>\n<p contenteditable=\"true\" data-slop-selected>Left over</p>\n</section>",
             ),
             |_| true,
+            &[],
         );
         let found: Vec<_> = found.iter().map(|i| (i.rule, i.slide.as_deref())).collect();
         assert_eq!(
@@ -947,7 +1034,7 @@ mod tests {
     #[test]
     fn sorts_by_line_and_formats_a_report() {
         let html = deck("<section class=\"slide\" id=\"Bad\"><span></section>");
-        let issues = lint(&html, |_| true);
+        let issues = lint(&html, |_| true, &[]);
         assert!(issues.windows(2).all(|w| w[0].line <= w[1].line));
         let report = format_report(&issues);
         assert!(
@@ -1006,6 +1093,7 @@ mod tests {
                 "<div class=\"deck-section\"></div>\n<section class=\"slide\" id=\"a\">A</section>",
             ),
             |_| true,
+            &[],
         );
         assert_eq!(issues[0].line, 10);
         assert!(issues[0].message.contains("Section 1"));

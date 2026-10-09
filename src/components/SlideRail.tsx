@@ -9,7 +9,7 @@ import {
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Copy, Eye, EyeOff, Palette, Pencil, Plus, SquareSplitVertical, Trash2, X } from "lucide-react";
+import { Copy, Eye, EyeOff, Lock, LockOpen, Palette, Pencil, Plus, SquareSplitVertical, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { api, errorMessage, type Section, type Slide } from "../lib/api";
@@ -293,6 +293,14 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
     }
   };
 
+  const toggleLocked = async () => {
+    try {
+      useApp.getState().setDeck(await api.setSlideLocked(deckId, slide.id, !slide.locked));
+    } catch (error) {
+      useApp.getState().setError(errorMessage(error));
+    }
+  };
+
   const remove = async () => {
     try {
       const before = useApp.getState().deck?.slides ?? [];
@@ -345,16 +353,30 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
           />
         </button>
         {slide.hidden && <HiddenMark />}
+        {slide.locked && (
+          <span
+            data-testid="locked-mark"
+            title="Locked: neither you nor the agent can change it"
+            className="pointer-events-none absolute bottom-1 left-1 rounded bg-black/60 p-1 text-white backdrop-blur"
+          >
+            <Lock className="size-3" aria-label="Locked slide" />
+          </span>
+        )}
         <div className="absolute right-1 top-1 hidden gap-0.5 group-hover:flex">
+          <RailAction title={slide.locked ? "Unlock slide" : "Lock slide"} onClick={toggleLocked}>
+            {slide.locked ? <LockOpen className="size-3" /> : <Lock className="size-3" />}
+          </RailAction>
           <RailAction title={slide.hidden ? "Show slide" : "Hide slide"} onClick={toggleHidden}>
             {slide.hidden ? <Eye className="size-3" /> : <EyeOff className="size-3" />}
           </RailAction>
           <RailAction title="Duplicate" onClick={duplicate}>
             <Copy className="size-3" />
           </RailAction>
-          <RailAction title="Delete" onClick={remove}>
-            <Trash2 className="size-3" />
-          </RailAction>
+          {!slide.locked && (
+            <RailAction title="Delete" onClick={remove}>
+              <Trash2 className="size-3" />
+            </RailAction>
+          )}
         </div>
       </div>
     </li>

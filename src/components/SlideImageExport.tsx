@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { api, errorMessage, type Deck, type Slide } from "../lib/api";
+import { pixelsOf, type Pixels } from "../lib/slideSize";
 import { useApp } from "../store";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
@@ -25,7 +26,10 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
   const [index, setIndex] = useState(0);
   const areaRef = useRef<HTMLDivElement>(null);
   const slideRef = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
+  const [area, setArea] = useState({ width: 0, height: 0 });
+  const canvas = pixelsOf(deck);
+  // The slide as large as the window allows, in its own shape.
+  const width = Math.max(0, Math.min(area.width, (area.height * canvas.width) / canvas.height));
   const stopped = useRef(false);
   const captured = useRef(-1);
   const total = slides.length;
@@ -36,7 +40,7 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return;
       const { width: w, height: h } = entry.contentRect;
-      setWidth(Math.max(0, Math.min(w, (h * 16) / 9)));
+      setArea({ width: w, height: h });
     });
     observer.observe(el);
     return () => observer.disconnect();
@@ -83,7 +87,7 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
     const { x, y, width: w, height: h } = slideRef.current.getBoundingClientRect();
     const viewport = { width: window.innerWidth, height: window.innerHeight };
     try {
-      await api.exportSlideImage(dir, index, total, { x, y, width: w, height: h }, viewport);
+      await api.exportSlideImage(dir, index, total, { x, y, width: w, height: h }, viewport, canvas.width);
     } catch (error) {
       useApp.getState().setError(`Could not save slide ${index + 1} as an image: ${errorMessage(error)}`);
       useApp.getState().endImageExport();
@@ -101,7 +105,7 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
       <div ref={areaRef} className="flex min-h-0 flex-1 items-center justify-center p-6">
         {slide && (
           <div ref={slideRef} style={{ width }}>
-            <ExportSlide key={`${index}:${slide.id}`} deckId={deck.id} slide={slide} onReady={() => void capture()} />
+            <ExportSlide key={`${index}:${slide.id}`} deckId={deck.id} slide={slide} size={canvas} onReady={() => void capture()} />
           </div>
         )}
       </div>
@@ -122,6 +126,6 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
   );
 }
 
-function ExportSlide({ deckId, slide, onReady }: { deckId: string; slide: Slide; onReady: () => void }) {
-  return <SlideFrame deckId={deckId} slideId={slide.id} version={useSlideVersion(slide)} thumbnail onFrameReady={onReady} />;
+function ExportSlide({ deckId, slide, size, onReady }: { deckId: string; slide: Slide; size: Pixels; onReady: () => void }) {
+  return <SlideFrame deckId={deckId} slideId={slide.id} version={useSlideVersion(slide)} size={size} thumbnail onFrameReady={onReady} />;
 }

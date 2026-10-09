@@ -513,6 +513,17 @@ describe("Stage", () => {
       expect(slideBox().style.width).toBe("960px");
     });
 
+    it("fits a slide of another size into the area in its own shape", () => {
+      const deck = deckFor(DECK_HTML);
+      useApp.setState({ deck: { ...deck, size: { width: 1080, height: 1350, unit: "px", pixelWidth: 1080, pixelHeight: 1350 } } });
+      const { container } = render(<Stage />);
+      const slideBox = container.querySelector<HTMLElement>("[data-sketch-target]")!;
+      // The 960x540 area fits a 4:5 slide 432 px wide (540 px tall).
+      expect(slideBox.style.width).toBe("432px");
+      const viewer = stageFrame(container);
+      expect(viewer.parentElement!.style.aspectRatio).toBe("1080 / 1350");
+    });
+
     describe("pasteboard view", () => {
       const resetButton = () => screen.queryByRole("button", { name: /^\d+%$/ });
       const enterEditing = () => {

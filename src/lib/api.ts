@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Approval, ApprovalDecision, PermissionMode } from "./permissions";
 import type { Stroke } from "./ink";
 import type { Provider, ProviderInfo } from "./models";
+import type { SizeInfo, SlideSize } from "./slideSize";
 
 export interface DeckSummary {
   id: string;
@@ -10,6 +11,8 @@ export interface DeckSummary {
   slideCount: number;
   firstSlide: string | null;
   updatedMs: number;
+  /** The slide size, for the thumbnail's shape. */
+  size?: SizeInfo;
 }
 
 export interface Slide {
@@ -46,6 +49,8 @@ export interface Deck {
   review?: Record<string, Stroke[]>;
   /** Id of the template the deck's design comes from (its `slopslide-template` meta). */
   template?: string | null;
+  /** Every slide's canvas (its `slopslide-size` meta); 1920×1080 px when missing. */
+  size?: SizeInfo;
 }
 
 /** A deck of example layouts in one style; each slide is a layout for new or changed slides. */
@@ -58,6 +63,8 @@ export interface TemplateSummary {
   path: string | null;
   /** Slide ids, one per layout, in order. */
   slides: string[];
+  /** The template's slide size, which a deck made from it takes. */
+  size?: SizeInfo;
 }
 
 export interface CreatedSlide {
@@ -135,6 +142,8 @@ export const api = {
     invoke<Deck>("set_slide_hidden", { id, slide, hidden }),
   setSlideLocked: (id: string, slide: string, locked: boolean) =>
     invoke<Deck>("set_slide_locked", { id, slide, locked }),
+  /** Gives every slide the canvas `size` (the slides' content stays as it is). */
+  setSlideSize: (id: string, size: SlideSize) => invoke<Deck>("set_slide_size", { id, size }),
   addSection: (id: string, before: string | null, title: string) =>
     invoke<Deck>("add_section", { id, before, title }),
   renameSection: (id: string, index: number, title: string) =>
@@ -154,14 +163,18 @@ export const api = {
   /** Creates a new folder named after the deck inside `parent`; returns its path. */
   createImageExportDir: (id: string, parent: string) =>
     invoke<string>("create_image_export_dir", { id, parent }),
-  /** Screenshots `rect` (one slide, CSS pixels) as `<dir>/slide-NN.png`; returns its path. */
+  /**
+   * Screenshots `rect` (one slide, CSS pixels) as `<dir>/slide-NN.png`, at most `width` (the
+   * slides' canvas width) pixels wide; returns its path.
+   */
   exportSlideImage: (
     dir: string,
     index: number,
     total: number,
     rect: { x: number; y: number; width: number; height: number },
     viewport: { width: number; height: number },
-  ) => invoke<string>("export_slide_image", { dir, index, total, rect, viewport }),
+    width: number,
+  ) => invoke<string>("export_slide_image", { dir, index, total, rect, viewport, width }),
   lintDeck: (id: string) => invoke<LintIssue[]>("lint_deck", { id }),
   /**
    * Screenshots `rect` of the window; returns the deck-relative image path. Both are in CSS

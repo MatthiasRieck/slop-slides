@@ -10,6 +10,7 @@ import {
   type Deck,
   type DeckChanged,
   type LintIssue,
+  type Slide,
   type TemplateSummary,
 } from "./lib/api";
 import { latestContext, mergeContext, type ContextUsage } from "./lib/context";
@@ -493,6 +494,7 @@ export const useApp = create<AppState>((set, get) => ({
 
   setEditing: (editing) => {
     if (editing === get().editing) return;
+    if (editing && selectedSlide()?.locked) return;
     // Each edit session starts with fresh history; leaving keeps the edits.
     set({ editing, slideUndo: [], slideRedo: [] });
   },
@@ -583,7 +585,7 @@ export const useApp = create<AppState>((set, get) => ({
   changeLayout: async (id, slide) => {
     const { deck, selected } = get();
     const template = findTemplate(id);
-    if (!deck || !template || !selected) return;
+    if (!deck || !template || !selected || selectedSlide()?.locked) return;
     try {
       const path = await api.stageTemplate(deck.id, id);
       promptAgent(changeLayoutPrompt(template, slide, path, deck.template === id));
@@ -607,7 +609,7 @@ export const useApp = create<AppState>((set, get) => ({
 
   tidyLayout: async (overflow = []) => {
     const { deck } = get();
-    if (!deck) return;
+    if (!deck || selectedSlide()?.locked) return;
     // Let any edit still being saved land first, so the screenshot shows the final version.
     await editQueue;
     const screenshot = await captureSlide(deck.id);
@@ -888,6 +890,12 @@ function settleInterrupted(message: ChatMessage): ChatMessage {
   return { ...message, ...(message.status === "streaming" ? { status: "interrupted" as const, thinking: false, compacting: false } : {}), parts: expireApprovals(message.parts) };
 }
 
+/** The slide shown on the stage, if any. */
+function selectedSlide(): Slide | undefined {
+  const { deck, selected } = useApp.getState();
+  return deck?.slides.find((s) => s.id === selected);
+}
+
 function buildPrompt(deck: Deck, message: UserMessage): string {
   const context: string[] = [];
   if (message.slide) {
@@ -895,6 +903,9 @@ function buildPrompt(deck: Deck, message: UserMessage): string {
     context.push(
       `Current slide: <section id="${message.slide}"> in deck.html (slide ${index + 1} of ${deck.slides.length})`,
     );
+    if (deck.slides[index]?.locked) {
+      context.push("The current slide is locked (data-locked): do not change it.");
+    }
   } else if (deck.slides.length === 0) {
     context.push("The deck has no slides yet.");
   }

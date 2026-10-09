@@ -220,7 +220,20 @@ impl AgentManager {
             if let Err(e) = deck::snapshot(&turn.dir) {
                 log::warn!("snapshot failed: {e}");
             }
+            // Remember the locked slides, to put back any the agent changes.
+            if let Err(e) = deck::guard_locked(&turn.dir) {
+                log::warn!("could not record locked slides: {e}");
+            }
             let interrupted = turn.run(&args.prompt, cancel_rx).await;
+            match deck::release_guard(&turn.dir) {
+                Ok(restored) if !restored.is_empty() => turn.emit(&AgentEvent::Error {
+                    message: locked_restored_message(&restored),
+                }),
+                Ok(_) => {}
+                Err(e) => turn.emit(&AgentEvent::Error {
+                    message: format!("Could not check the locked slides after this turn: {e}"),
+                }),
+            }
             // Give new slides ids and restore the player runtime if the agent touched it.
             if let Err(e) = deck::normalize(&turn.dir) {
                 turn.emit(&AgentEvent::Error {
@@ -243,6 +256,16 @@ impl AgentManager {
             let _ = tx.send(true);
         }
     }
+}
+
+/// Tells the user which locked slides the agent changed and the app put back.
+fn locked_restored_message(ids: &[String]) -> String {
+    let list = ids
+        .iter()
+        .map(|id| format!("`{id}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("The agent changed locked slides; they were put back as they were: {list}.")
 }
 
 struct Turn {
@@ -776,6 +799,14 @@ mod tests {
         assert!(compact_refusal(Provider::Codex, Some("s"))
             .unwrap()
             .starts_with("Codex cannot compact"));
+    }
+
+    #[test]
+    fn names_the_locked_slides_it_put_back() {
+        assert_eq!(
+            locked_restored_message(&["intro".into(), "plan".into()]),
+            "The agent changed locked slides; they were put back as they were: `intro`, `plan`."
+        );
     }
 
     #[test]

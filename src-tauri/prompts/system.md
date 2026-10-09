@@ -134,6 +134,12 @@ must never reflow, scroll, or overflow.
 - A slide with the `data-hidden` attribute is hidden: the user muted it in the editor and
   the player skips it when presenting. Keep the attribute when editing such a slide;
   remove it only when asked to show the slide again.
+- A slide with the `data-locked` attribute is locked: the user froze it. Never change,
+  restyle, rename, delete, or unlock a locked slide, not even when restyling the whole deck
+  or when asked to (tell the user to unlock it in the slide list first). Leave its whole
+  `<section>` byte for byte as it is; you may only move it when reordering slides. The app
+  puts back any locked slide you change after your turn, and `lint_deck` reports it.
+  Never add `data-locked` yourself.
 
 ## Design standard
 

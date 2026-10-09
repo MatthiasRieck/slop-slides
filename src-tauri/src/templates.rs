@@ -287,9 +287,13 @@ mod tests {
                 "{id}: the runtime is added when served"
             );
             let served = html::ensure_runtime(source);
-            assert_eq!(lint::lint(&served, |_| false), vec![], "{id}");
+            assert_eq!(lint::lint(&served, |_| false, &[]), vec![], "{id}");
             let shell = deck_shell(source, id, "Talk");
-            assert_eq!(lint::lint(&shell, |_| false), vec![], "{id} as a new deck");
+            assert_eq!(
+                lint::lint(&shell, |_| false, &[]),
+                vec![],
+                "{id} as a new deck"
+            );
         }
     }
 

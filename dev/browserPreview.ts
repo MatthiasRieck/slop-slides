@@ -61,8 +61,9 @@ function readDeck(id: string) {
   const slides = slideTags.map((match, index) => {
     const id = /\bid=["']([^"']+)["']/i.exec(match[0])?.[1] ?? `#${index + 1}`;
     const hidden = /\sdata-hidden\b/i.test(match[0]);
+    const locked = /\sdata-locked\b/i.test(match[0]);
     const source = html.slice(match.index, html.indexOf("</section>", match.index));
-    return { id, hash: hash(source), hidden, moved: /<[^>]*\sdata-moved\b/i.test(source) };
+    return { id, hash: hash(source), hidden, locked, moved: /<[^>]*\sdata-moved\b/i.test(source) };
   });
   const sections = [...html.matchAll(/<div\b[^>]*\bclass=["'][^"']*\bdeck-section\b[^"']*["'][^>]*>/gi)].map(
     (match, index) => ({

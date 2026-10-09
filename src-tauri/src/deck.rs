@@ -30,6 +30,8 @@ const DECK_TEMPLATE: &str = include_str!("../assets/deck-template.html");
 const BLANK_SLIDE: &str = include_str!("../assets/blank-slide.html");
 const SNAPSHOTS_KEPT: usize = 30;
 const SKETCHES_KEPT: usize = 30;
+/// The locked slides as they were when the agent's turn started (see [`guard_locked`]).
+const LOCKS_FILE: &str = "locked.json";
 const REFERENCE_DOCS: &[(&str, &str)] = &[
     (
         "STYLE_PRESETS.md",
@@ -61,6 +63,8 @@ pub struct Slide {
     pub hidden: bool,
     /// Has elements the user moved by hand, waiting for the agent to tidy the layout.
     pub moved: bool,
+    /// Can be changed by neither the user nor the agent until it is unlocked.
+    pub locked: bool,
 }
 
 /// A named group of slides, started by a marker between slides in deck.html.
@@ -246,6 +250,8 @@ pub fn create(root: &Path, title: &str, template: Option<TemplateSource>) -> Res
 pub fn open(dir: &Path, id: &str, normalize_first: bool) -> Result<Deck> {
     if normalize_first {
         normalize(dir)?;
+        // No turn is running: a guard left behind (say, the app quit mid-turn) is stale.
+        let _ = fs::remove_file(locks_path(dir));
     }
     load(dir, id)
 }
@@ -263,6 +269,7 @@ pub fn load(dir: &Path, id: &str) -> Result<Deck> {
             id: span.id.clone().unwrap_or_else(|| format!("#{}", index + 1)),
             hash: html::content_hash(&source[span.range.clone()]),
             hidden: span.hidden.is_some(),
+            locked: span.locked.is_some(),
             moved: html::has_moved(&source[span.range.clone()]),
         })
         .collect();
@@ -395,7 +402,80 @@ pub fn duplicate(dir: &Path, id: &str, slide: &str) -> Result<(Deck, String)> {
 }
 
 pub fn set_slide_hidden(dir: &Path, id: &str, slide: &str, hidden: bool) -> Result<Deck> {
-    Ok(edit(dir, id, |s| Ok((html::set_hidden(s, slide, hidden)?, ())))?.0)
+    let deck = edit(dir, id, |s| Ok((html::set_hidden(s, slide, hidden)?, ())))?.0;
+    refresh_guard(dir, slide)?;
+    Ok(deck)
+}
+
+/// Locks or unlocks a slide. Neither the user nor the agent can change a locked slide.
+pub fn set_slide_locked(dir: &Path, id: &str, slide: &str, locked: bool) -> Result<Deck> {
+    let deck = edit(dir, id, |s| Ok((html::set_locked(s, slide, locked)?, ())))?.0;
+    refresh_guard(dir, slide)?;
+    Ok(deck)
+}
+
+fn ensure_unlocked(source: &str, slide: &str) -> std::result::Result<(), String> {
+    if html::is_locked(source, slide) {
+        return Err(format!(
+            "The slide `{slide}` is locked; unlock it to change it."
+        ));
+    }
+    Ok(())
+}
+
+fn locks_path(dir: &Path) -> PathBuf {
+    dir.join(INTERNAL_DIR).join(LOCKS_FILE)
+}
+
+/// The locked slides an agent turn must leave alone; empty when no turn is guarded.
+pub fn read_guard(dir: &Path) -> Vec<html::LockedSlide> {
+    fs::read_to_string(locks_path(dir))
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn write_guard(dir: &Path, locked: &[html::LockedSlide]) -> Result<()> {
+    let path = internal_file(dir, LOCKS_FILE)?;
+    atomic_write(
+        &path,
+        serde_json::to_string(locked).expect("json").as_bytes(),
+    )
+}
+
+/// Records the locked slides before an agent turn, so [`release_guard`] can put back any the
+/// agent changes and the lint tool can tell it about them.
+pub fn guard_locked(dir: &Path) -> Result<()> {
+    write_guard(dir, &html::locked_slides(&read_html(dir)?))
+}
+
+/// Keeps a running turn's guard in step with what the user did to `slide`: locking,
+/// unlocking or hiding it mid-turn is theirs to do, and must not be undone after the turn.
+fn refresh_guard(dir: &Path, slide: &str) -> Result<()> {
+    if !locks_path(dir).is_file() {
+        return Ok(());
+    }
+    let mut guard = read_guard(dir);
+    let now = html::locked_slides(&read_html(dir)?);
+    guard.retain(|l| l.id != slide);
+    guard.extend(now.into_iter().filter(|l| l.id == slide));
+    write_guard(dir, &guard)
+}
+
+/// Ends an agent turn's guard: puts back every locked slide the agent changed or removed.
+/// Returns their ids.
+pub fn release_guard(dir: &Path) -> Result<Vec<String>> {
+    let guard = read_guard(dir);
+    let _ = fs::remove_file(locks_path(dir));
+    if guard.is_empty() {
+        return Ok(Vec::new());
+    }
+    let source = read_html(dir)?;
+    let (restored, ids) = html::restore_locked(&source, &guard);
+    if !ids.is_empty() {
+        write_html(dir, &restored)?;
+    }
+    Ok(ids)
 }
 
 pub fn add_section(dir: &Path, id: &str, before: Option<String>, title: &str) -> Result<Deck> {
@@ -418,6 +498,7 @@ pub fn delete_section(dir: &Path, id: &str, index: usize) -> Result<Deck> {
 
 /// Deletes a slide along with its review marks.
 pub fn delete_slide(dir: &Path, id: &str, slide: &str) -> Result<Deck> {
+    ensure_unlocked(&read_html(dir)?, slide).map_err(Error::Message)?;
     snapshot(dir)?;
     Ok(edit(dir, id, |s| {
         let updated = html::delete(s, slide)?;
@@ -442,6 +523,7 @@ pub fn update_slide(
         .find(|s| s.id.as_deref() == Some(slide))
         .map(|s| html::content_hash(&source[s.range]))
         .ok_or_else(|| Error::msg(format!("Slide not found: {slide}")))?;
+    ensure_unlocked(&source, slide).map_err(Error::Message)?;
     if current != base {
         return Err(Error::msg(
             "The slide changed while you were editing it; your last change was not saved.",
@@ -461,12 +543,23 @@ pub fn save_source(
     base: Option<&str>,
     normalize_after: bool,
 ) -> Result<Deck> {
+    let current = read_html(dir)?;
     if let Some(base) = base {
-        if !same_text(&read_html(dir)?, base) {
+        if !same_text(&current, base) {
             return Err(Error::msg(
                 "deck.html changed on disk since you started editing",
             ));
         }
+    }
+    let changed = html::changed_locked(
+        &source.replace("\r\n", "\n"),
+        &html::locked_slides(&current.replace("\r\n", "\n")),
+    );
+    if !changed.is_empty() {
+        return Err(Error::msg(format!(
+            "Locked slides cannot be changed: {}. Unlock them in the slide rail first.",
+            changed.join(", ")
+        )));
     }
     snapshot(dir)?;
     write_html(dir, source)?;
@@ -540,13 +633,15 @@ pub fn slide_image_name(index: usize, total: usize) -> String {
     format!("slide-{:0digits$}.png", index + 1)
 }
 
-/// Lints deck.html; asset references are checked against the deck's own files.
+/// Lints deck.html; asset references are checked against the deck's own files, and during
+/// an agent turn, locked slides against how they were when it started.
 pub fn lint(dir: &Path) -> Result<Vec<lint::Issue>> {
     let source = read_html(dir)?;
-    Ok(lint::lint(&source, |rel| {
+    let asset_exists = |rel: &str| {
         let rel = percent_encoding::percent_decode_str(rel).decode_utf8_lossy();
         resolve_in_deck(dir, &rel).is_ok_and(|path| path.is_file())
-    }))
+    };
+    Ok(lint::lint(&source, asset_exists, &read_guard(dir)))
 }
 
 pub fn mime_for(path: &str) -> &'static str {
@@ -834,6 +929,148 @@ mod tests {
         let loaded = load(&deck.0, "talk").unwrap();
         let hidden: Vec<_> = loaded.slides.iter().map(|s| s.hidden).collect();
         assert_eq!(hidden, [false, true]);
+    }
+
+    #[test]
+    fn load_reports_locked_slides() {
+        let deck = TempDeck::new(&EDITED.replace(" id=\"a\"", " id=\"a\" data-locked"));
+        assert_eq!(locked_flags(&load(&deck.0, "talk").unwrap()), [true, false]);
+    }
+
+    const LOCKED: &str = "<html><head><title>Talk</title></head><body><main>\n<section class=\"slide\" id=\"a\" data-locked>A</section>\n<section class=\"slide\" id=\"b\">B</section>\n</main></body></html>";
+
+    fn locked_flags(deck: &Deck) -> Vec<bool> {
+        deck.slides.iter().map(|s| s.locked).collect()
+    }
+
+    #[test]
+    fn locks_and_unlocks_slides_on_disk() {
+        let deck = TempDeck::new(EDITED);
+        let locked = set_slide_locked(&deck.0, "talk", "b", true).unwrap();
+        assert_eq!(locked_flags(&locked), [false, true]);
+        assert!(deck
+            .html()
+            .contains("<section data-locked class=\"slide\" id=\"b\">B<"));
+        let unlocked = set_slide_locked(&deck.0, "talk", "b", false).unwrap();
+        assert_eq!(locked_flags(&unlocked), [false, false]);
+        assert_eq!(deck.html(), EDITED);
+        assert!(set_slide_locked(&deck.0, "talk", "zz", true).is_err());
+    }
+
+    #[test]
+    fn the_editor_cannot_change_or_delete_a_locked_slide() {
+        let deck = TempDeck::new(LOCKED);
+        let base = load(&deck.0, "talk").unwrap().slides[0].hash.clone();
+        let markup = "<section class=\"slide\" id=\"a\" data-locked>mine</section>";
+        let err = update_slide(&deck.0, "talk", "a", markup, &base).unwrap_err();
+        assert!(err.to_string().contains("locked"), "{err}");
+        let err = delete_slide(&deck.0, "talk", "a").unwrap_err();
+        assert!(err.to_string().contains("locked"), "{err}");
+        assert_eq!(deck.html(), LOCKED);
+        assert!(deck.snapshots().is_empty());
+
+        // Other slides, hiding, and moving it stay open.
+        let base = load(&deck.0, "talk").unwrap().slides[1].hash.clone();
+        let other = "<section class=\"slide\" id=\"b\">B!</section>";
+        update_slide(&deck.0, "talk", "b", other, &base).unwrap();
+        set_slide_hidden(&deck.0, "talk", "a", true).unwrap();
+        let moved = reorder(&deck.0, "talk", vec!["b".into(), "a".into()]).unwrap();
+        assert_eq!(slide_ids(&moved), ["b", "a"]);
+        delete_slide(&deck.0, "talk", "b").unwrap();
+    }
+
+    #[test]
+    fn source_edits_cannot_change_a_locked_slide() {
+        let deck = TempDeck::new(LOCKED);
+        let changed = LOCKED.replace(">A<", ">mine<");
+        let err = save_source(&deck.0, "talk", &changed, Some(LOCKED), false).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Locked slides cannot be changed: a"),
+            "{err}"
+        );
+        let unlocked = LOCKED.replace(" data-locked", "");
+        assert!(save_source(&deck.0, "talk", &unlocked, Some(LOCKED), false).is_err());
+        assert_eq!(deck.html(), LOCKED);
+
+        // Changing the rest of the deck, or locking another slide, is fine.
+        let other = LOCKED
+            .replace(">B<", ">B!<")
+            .replace("id=\"b\"", "id=\"b\" data-locked");
+        save_source(&deck.0, "talk", &other, Some(LOCKED), false).unwrap();
+        assert_eq!(deck.html(), other);
+        let crlf = other.replace('\n', "\r\n").replace(">B!<", ">B<");
+        assert!(
+            save_source(&deck.0, "talk", &crlf, Some(&other), false).is_err(),
+            "line endings alone are not a change, the text is"
+        );
+        let crlf = other.replace('\n', "\r\n");
+        save_source(&deck.0, "talk", &crlf, Some(&other), false).unwrap();
+    }
+
+    #[test]
+    fn a_guarded_turn_puts_back_the_locked_slides() {
+        let deck = TempDeck::new(LOCKED);
+        guard_locked(&deck.0).unwrap();
+        assert_eq!(read_guard(&deck.0).len(), 1);
+        // The agent rewrites everything, dropping the locked slide.
+        let agent = "<html><head><title>Talk</title></head><body><main>\n<section class=\"slide\" id=\"b\">New B</section>\n</main></body></html>";
+        fs::write(deck.0.join(DECK_FILE), agent).unwrap();
+        let issues = lint(&deck.0).unwrap();
+        assert!(
+            issues.iter().any(|i| i.rule == "locked-slide-changed"),
+            "{issues:?}"
+        );
+
+        assert_eq!(release_guard(&deck.0).unwrap(), ["a"]);
+        assert_eq!(
+            deck.html(),
+            "<html><head><title>Talk</title></head><body><main>\n<section class=\"slide\" id=\"a\" data-locked>A</section>\n<section class=\"slide\" id=\"b\">New B</section>\n</main></body></html>"
+        );
+        assert!(
+            read_guard(&deck.0).is_empty(),
+            "the guard ends with the turn"
+        );
+        assert!(!lint(&deck.0)
+            .unwrap()
+            .iter()
+            .any(|i| i.rule == "locked-slide-changed"));
+        assert!(release_guard(&deck.0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn locking_mid_turn_updates_the_guard() {
+        let deck = TempDeck::new(LOCKED);
+        guard_locked(&deck.0).unwrap();
+        // The user unlocks `a`, locks `b` and hides it while the agent works.
+        set_slide_locked(&deck.0, "talk", "a", false).unwrap();
+        set_slide_locked(&deck.0, "talk", "b", true).unwrap();
+        set_slide_hidden(&deck.0, "talk", "b", true).unwrap();
+        let ids: Vec<_> = read_guard(&deck.0).into_iter().map(|l| l.id).collect();
+        assert_eq!(ids, ["b"]);
+        let mine = deck.html();
+        let agent = mine.replace(">A<", ">Agent A<");
+        fs::write(deck.0.join(DECK_FILE), &agent).unwrap();
+        assert!(release_guard(&deck.0).unwrap().is_empty());
+        assert_eq!(
+            deck.html(),
+            agent,
+            "unlocked `a` keeps the agent's edit, `b` stays hidden"
+        );
+    }
+
+    #[test]
+    fn opening_a_deck_drops_a_stale_guard() {
+        let deck = TempDeck::new(LOCKED);
+        guard_locked(&deck.0).unwrap();
+        open(&deck.0, "talk", false).unwrap();
+        assert_eq!(
+            read_guard(&deck.0).len(),
+            1,
+            "a running turn keeps its guard"
+        );
+        open(&deck.0, "talk", true).unwrap();
+        assert!(read_guard(&deck.0).is_empty());
     }
 
     #[test]

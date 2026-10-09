@@ -458,6 +458,15 @@ describe("sending a message", () => {
     );
   });
 
+  it("tells the agent when the selected slide is locked", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML.replace(`id="outro"`, `id="outro" data-locked`)), selected: "outro" });
+    await useApp.getState().send("Make it blue", { includeSlide: true, attachments: [] });
+    expect(prompt()).toBe(
+      `[context]\nCurrent slide: <section id="outro"> in deck.html (slide 3 of 3)\nThe current slide is locked (data-locked): do not change it.\n[/context]\n\nMake it blue`,
+    );
+  });
+
   it("sends the bare text when there is no context to add", async () => {
     const useApp = await freshStore();
     useApp.setState({ deck: DECK, selected: "intro" });
@@ -1107,7 +1116,7 @@ describe("deck file changes", () => {
   });
 
   it("follows the agent to a newly added slide", async () => {
-    const added = { ...DECK, slides: [...DECK.slides, { id: "fresh", hash: "f", hidden: false, moved: false }] };
+    const added = { ...DECK, slides: [...DECK.slides, { id: "fresh", hash: "f", hidden: false, locked: false, moved: false }] };
     const { useApp, changed } = await watching(() => added);
     useApp.setState({ running: true });
     changed(["deck.html"]);
@@ -1404,6 +1413,16 @@ describe("editing slides on the stage", () => {
     expect(useApp.getState()).toMatchObject({ editing: false, slideUndo: [], slideRedo: [] });
   });
 
+  it("does not enter edit mode on a locked slide", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)), selected: "intro", editing: false });
+    useApp.getState().setEditing(true);
+    expect(useApp.getState().editing).toBe(false);
+    useApp.getState().select("outro");
+    useApp.getState().setEditing(true);
+    expect(useApp.getState().editing).toBe(true);
+  });
+
   describe("tidying the layout", () => {
     let target: HTMLElement;
     beforeEach(() => {
@@ -1427,6 +1446,14 @@ describe("editing slides on the stage", () => {
         editing: false,
         composerFill: { text: TIDY_PROMPT, screenshot: ".slopslide/sketches/2-cd.png" },
       });
+    });
+
+    it("does not tidy a locked slide", async () => {
+      const { useApp } = await freshModule();
+      useApp.setState({ deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)), selected: "intro", composerFill: null });
+      await useApp.getState().tidyLayout();
+      expect(calls("capture_sketch")).toEqual([]);
+      expect(useApp.getState().composerFill).toBeNull();
     });
 
     it("still prepares the request when the screenshot fails", async () => {
@@ -1615,7 +1642,7 @@ describe("templates", () => {
 
   it("copies a layout into a deck that uses the template", async () => {
     const useApp = await storeWith({ ...DECK, template: "swiss" });
-    const next = { ...DECK, template: "swiss", slides: [...DECK.slides, { id: "quote", hash: "q", hidden: false, moved: false }] };
+    const next = { ...DECK, template: "swiss", slides: [...DECK.slides, { id: "quote", hash: "q", hidden: false, locked: false, moved: false }] };
     backend({ add_template_slide: () => ({ deck: next, slide: "quote" }) });
     await useApp.getState().addLayoutSlide("swiss", "quote");
     expect(calls("add_template_slide")).toEqual([{ id: DECK.id, template: "swiss", slide: "quote", after: "intro" }]);
@@ -1652,6 +1679,15 @@ describe("templates", () => {
     useApp.setState({ selected: null, composerFill: null });
     await useApp.getState().changeLayout("swiss", "quote");
     expect(useApp.getState().composerFill).toBeNull();
+  });
+
+  it("does not change the layout of a locked slide", async () => {
+    const useApp = await storeWith(deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)));
+    backend({ stage_template: () => STAGED });
+    useApp.setState({ selected: "intro", composerFill: null });
+    await useApp.getState().changeLayout("swiss", "quote");
+    expect(useApp.getState().composerFill).toBeNull();
+    expect(calls("stage_template")).toEqual([]);
   });
 
   it("saves the deck as a template and reloads the list", async () => {

@@ -35,10 +35,16 @@ pub struct SlideSpan {
     pub tag_name_end: usize,
     /// Byte range of the whole `data-hidden` attribute, when the slide is hidden.
     pub hidden: Option<Range<usize>>,
+    /// Byte range of the whole `data-locked` attribute, when the slide is locked.
+    pub locked: Option<Range<usize>>,
 }
 
 /// Marks a slide the player skips. The editor still shows it, muted.
 pub const HIDDEN_ATTR: &str = "data-hidden";
+
+/// Marks a slide neither the user nor the agent may change. The editor refuses edits to it,
+/// and the app puts it back as it was if the agent changes or removes it in a turn.
+pub const LOCKED_ATTR: &str = "data-locked";
 
 /// Marks an element the user moved, rotated or scaled by hand in the editor; it carries inline
 /// `translate` / `rotate` / `scale` styles until the agent tidies the slide's layout.
@@ -135,14 +141,20 @@ pub fn find_slides(html: &str) -> Vec<SlideSpan> {
             }
             (None, false) if has_class(&tag, "slide") => {
                 let id = tag.attrs.iter().find(|(n, _, _, _)| n == "id");
-                let hidden = tag.attrs.iter().find(|(n, _, _, _)| n == HIDDEN_ATTR);
+                let flag = |attr: &str| {
+                    tag.attrs
+                        .iter()
+                        .find(|(n, _, _, _)| n == attr)
+                        .map(|(_, _, _, r)| r.clone())
+                };
                 open = Some((
                     SlideSpan {
                         range: i..i,
                         id: id.map(|(_, v, _, _)| v.clone()).filter(|v| !v.is_empty()),
                         id_value: id.map(|(_, _, r, _)| r.clone()),
                         tag_name_end: tag.name_end,
-                        hidden: hidden.map(|(_, _, _, r)| r.clone()),
+                        hidden: flag(HIDDEN_ATTR),
+                        locked: flag(LOCKED_ATTR),
                     },
                     0,
                 ));
@@ -543,20 +555,115 @@ pub fn insert(
 /// Adds or removes the slide's `data-hidden` attribute. Leaves the markup untouched when
 /// the slide is already in the requested state.
 pub fn set_hidden(html: &str, id: &str, hidden: bool) -> Result<String, String> {
+    set_flag(html, id, HIDDEN_ATTR, hidden, |s| s.hidden.clone())
+}
+
+/// Adds or removes the slide's `data-locked` attribute, like [`set_hidden`].
+pub fn set_locked(html: &str, id: &str, locked: bool) -> Result<String, String> {
+    set_flag(html, id, LOCKED_ATTR, locked, |s| s.locked.clone())
+}
+
+fn set_flag(
+    html: &str,
+    id: &str,
+    attr: &str,
+    on: bool,
+    current: impl Fn(&SlideSpan) -> Option<Range<usize>>,
+) -> Result<String, String> {
     let slides = find_slides(html);
     let span = span_of(&slides, id).ok_or_else(|| format!("Slide not found: {id}"))?;
-    Ok(match (&span.hidden, hidden) {
+    Ok(match (current(span), on) {
         (None, true) => format!(
-            "{} {HIDDEN_ATTR}{}",
+            "{} {attr}{}",
             &html[..span.tag_name_end],
             &html[span.tag_name_end..]
         ),
-        (Some(attr), false) => {
-            let start = html[..attr.start].trim_end().len();
-            format!("{}{}", &html[..start], &html[attr.end..])
+        (Some(range), false) => {
+            let start = html[..range.start].trim_end().len();
+            format!("{}{}", &html[..start], &html[range.end..])
         }
         _ => html.to_string(),
     })
+}
+
+/// Whether slide `id` exists and is locked.
+pub fn is_locked(html: &str, id: &str) -> bool {
+    span_of(&find_slides(html), id).is_some_and(|s| s.locked.is_some())
+}
+
+/// A locked slide as it was when a guard was set up: what it must stay like.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LockedSlide {
+    pub id: String,
+    pub markup: String,
+    /// Id of the slide before it, where it goes back if it is removed; None when it was first.
+    pub after: Option<String>,
+}
+
+/// Every locked slide of `html`, in order.
+pub fn locked_slides(html: &str) -> Vec<LockedSlide> {
+    let slides = find_slides(html);
+    slides
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.locked.is_some())
+        .filter_map(|(i, s)| {
+            Some(LockedSlide {
+                id: s.id.clone()?,
+                markup: html[s.range.clone()].to_string(),
+                after: i.checked_sub(1).and_then(|p| slides[p].id.clone()),
+            })
+        })
+        .collect()
+}
+
+/// Ids of the `locked` slides that `html` changed or removed. Moving one is not a change.
+pub fn changed_locked(html: &str, locked: &[LockedSlide]) -> Vec<String> {
+    let slides = find_slides(html);
+    locked
+        .iter()
+        .filter(|l| {
+            span_of(&slides, &l.id).map(|s| &html[s.range.clone()]) != Some(l.markup.as_str())
+        })
+        .map(|l| l.id.clone())
+        .collect()
+}
+
+/// `html` with every `locked` slide as it was: changed ones get their markup back, removed
+/// ones go back after the slide they followed (or first). Returns the ids it put back.
+pub fn restore_locked(html: &str, locked: &[LockedSlide]) -> (String, Vec<String>) {
+    let mut out = html.to_string();
+    let mut restored = Vec::new();
+    for slide in locked {
+        let slides = find_slides(&out);
+        match span_of(&slides, &slide.id) {
+            Some(span) if out[span.range.clone()] == slide.markup => continue,
+            Some(span) => out.replace_range(span.range.clone(), &slide.markup),
+            None => {
+                let anchor = match &slide.after {
+                    Some(after) => span_of(&slides, after).or(slides.last()),
+                    None => None,
+                };
+                let first = slides.first().filter(|_| anchor.is_none());
+                let (at, indent, before) = match (anchor, first) {
+                    (Some(a), _) => (a.range.end, indent_before(&out, a.range.start), false),
+                    (None, Some(f)) => (f.range.start, indent_before(&out, f.range.start), true),
+                    (None, None) => match end_of_deck(&out) {
+                        Ok(at) => (at, "    ", false),
+                        Err(_) => continue,
+                    },
+                };
+                let insert = if before {
+                    format!("{}\n{indent}", slide.markup)
+                } else {
+                    format!("\n{indent}{}", slide.markup)
+                };
+                out.insert_str(at, &insert);
+            }
+        }
+        restored.push(slide.id.clone());
+    }
+    (out, restored)
 }
 
 fn section_span(sections: &[SectionSpan], index: usize) -> Result<&SectionSpan, String> {
@@ -656,9 +763,11 @@ fn slide_with_id_placeholder(html: &str, id: &str) -> Result<String, String> {
     ))
 }
 
+/// Inserts a copy of slide `id` right after it. The copy is not locked, so it can be changed.
 pub fn duplicate(html: &str, id: &str) -> Result<(String, String), String> {
     let copy = slide_with_id_placeholder(html, id)?;
-    insert(html, Some(id), &copy, &format!("{id}-copy"))
+    let (out, new_id) = insert(html, Some(id), &copy, &format!("{id}-copy"))?;
+    Ok((set_locked(&out, &new_id, false)?, new_id))
 }
 
 /// Inserts a copy of slide `slide` of the document `source` (a template) after `after`,
@@ -670,7 +779,8 @@ pub fn copy_slide(
     slide: &str,
 ) -> Result<(String, String), String> {
     let copy = slide_with_id_placeholder(source, slide)?;
-    insert(html, after, &copy, slide)
+    let (out, id) = insert(html, after, &copy, slide)?;
+    Ok((set_locked(&out, &id, false)?, id))
 }
 
 /// Name of the `<meta>` naming the template a deck's design comes from:
@@ -1099,6 +1209,146 @@ mod tests {
         .unwrap();
         assert_eq!(id, "slide");
         assert_eq!(ids(&added), ["intro", "slide", "plan", "slide-3"]);
+    }
+
+    fn locked(html: &str) -> Vec<bool> {
+        find_slides(html)
+            .into_iter()
+            .map(|s| s.locked.is_some())
+            .collect()
+    }
+
+    const LOCKED_DECK: &str = "<main class=\"deck\">\n    <section class=\"slide\" id=\"a\">A</section>\n    <section class=\"slide\" id=\"b\" data-locked>B</section>\n    <section class=\"slide\" id=\"c\">C</section>\n    <section class=\"slide\" id=\"d\" data-locked>D</section>\n  </main>";
+
+    #[test]
+    fn locks_and_unlocks_slides() {
+        let deck = normalize_ids(DECK).unwrap();
+        let locked_deck = set_locked(&deck, "plan", true).unwrap();
+        assert_eq!(locked(&locked_deck), [false, true, false]);
+        assert!(locked_deck.contains("<section data-locked class='slide' id=plan>"));
+        assert!(is_locked(&locked_deck, "plan") && !is_locked(&locked_deck, "intro"));
+        assert!(!is_locked(&locked_deck, "missing"));
+        assert_eq!(set_locked(&locked_deck, "plan", true).unwrap(), locked_deck);
+        assert_eq!(set_locked(&locked_deck, "plan", false).unwrap(), deck);
+        assert!(set_locked(&deck, "missing", true).is_err());
+
+        let both = set_hidden(&locked_deck, "plan", true).unwrap();
+        assert_eq!(
+            (hidden(&both), locked(&both)),
+            (vec![false, true, false], vec![false, true, false])
+        );
+        let unlocked = set_locked(&both, "plan", false).unwrap();
+        assert_eq!(locked(&unlocked), [false, false, false]);
+        assert_eq!(
+            hidden(&unlocked),
+            [false, true, false],
+            "unlocking keeps it hidden"
+        );
+    }
+
+    #[test]
+    fn copies_of_locked_slides_are_unlocked() {
+        let deck = set_locked(&normalize_ids(DECK).unwrap(), "intro", true).unwrap();
+        let (copied, id) = duplicate(&deck, "intro").unwrap();
+        assert_eq!(id, "intro-copy");
+        assert_eq!(locked(&copied), [true, false, false, false]);
+
+        let (copied, id) = copy_slide(&normalize_ids(DECK).unwrap(), None, &deck, "intro").unwrap();
+        assert_eq!(id, "intro-2");
+        assert_eq!(locked(&copied), [false, false, false, false]);
+    }
+
+    #[test]
+    fn lists_locked_slides_with_their_predecessor() {
+        let locked = locked_slides(LOCKED_DECK);
+        assert_eq!(
+            locked,
+            [
+                LockedSlide {
+                    id: "b".into(),
+                    markup: "<section class=\"slide\" id=\"b\" data-locked>B</section>".into(),
+                    after: Some("a".into()),
+                },
+                LockedSlide {
+                    id: "d".into(),
+                    markup: "<section class=\"slide\" id=\"d\" data-locked>D</section>".into(),
+                    after: Some("c".into()),
+                },
+            ]
+        );
+        let first = LOCKED_DECK.replace("id=\"a\">", "id=\"a\" data-locked>");
+        assert_eq!(locked_slides(&first)[0].after, None);
+        assert!(locked_slides(DECK).is_empty());
+    }
+
+    #[test]
+    fn detects_changed_locked_slides() {
+        let locked = locked_slides(LOCKED_DECK);
+        assert!(changed_locked(LOCKED_DECK, &locked).is_empty());
+        let edited_others = LOCKED_DECK.replace(">A<", ">A!<").replace(">C<", ">C!<");
+        assert!(changed_locked(&edited_others, &locked).is_empty());
+        let moved = reorder(LOCKED_DECK, &["d", "c", "b", "a"].map(String::from)).unwrap();
+        assert!(
+            changed_locked(&moved, &locked).is_empty(),
+            "moving is no change"
+        );
+
+        assert_eq!(
+            changed_locked(&LOCKED_DECK.replace(">B<", ">B!<"), &locked),
+            ["b"]
+        );
+        assert_eq!(
+            changed_locked(
+                &LOCKED_DECK.replace(" id=\"d\" data-locked", " id=\"d\""),
+                &locked
+            ),
+            ["d"],
+            "unlocking is a change"
+        );
+        assert_eq!(
+            changed_locked(&delete(LOCKED_DECK, "b").unwrap(), &locked),
+            ["b"]
+        );
+    }
+
+    #[test]
+    fn restores_changed_and_removed_locked_slides() {
+        let locked = locked_slides(LOCKED_DECK);
+        let (same, restored) = restore_locked(LOCKED_DECK, &locked);
+        assert_eq!((same.as_str(), restored.len()), (LOCKED_DECK, 0));
+
+        let edited = LOCKED_DECK
+            .replace(">A<", ">A!<")
+            .replace(">B<", ">B!<")
+            .replace(" id=\"d\" data-locked", " id=\"d\"");
+        let (out, restored) = restore_locked(&edited, &locked);
+        assert_eq!(restored, ["b", "d"]);
+        assert_eq!(out, LOCKED_DECK.replace(">A<", ">A!<"), "other edits stay");
+
+        let removed = delete(&delete(LOCKED_DECK, "b").unwrap(), "d").unwrap();
+        let (out, restored) = restore_locked(&removed, &locked);
+        assert_eq!(restored, ["b", "d"]);
+        assert_eq!(
+            out, LOCKED_DECK,
+            "back in place, indented like its neighbors"
+        );
+
+        // Its predecessor is gone too: it goes to the end.
+        let gone = delete(&delete(LOCKED_DECK, "a").unwrap(), "b").unwrap();
+        let (out, _) = restore_locked(&gone, &locked);
+        assert_eq!(ids(&out), ["c", "d", "b"]);
+
+        // A locked first slide goes back first.
+        let first = LOCKED_DECK.replace("id=\"a\">", "id=\"a\" data-locked>");
+        let locked = locked_slides(&first);
+        let (out, _) = restore_locked(&delete(&first, "a").unwrap(), &locked);
+        assert_eq!(out, first);
+
+        // Into a deck the agent emptied.
+        let empty = "<main class=\"deck\">\n  </main>";
+        let (out, restored) = restore_locked(empty, &locked);
+        assert_eq!(restored, ["a", "b", "d"]);
+        assert_eq!(ids(&out), ["a", "b", "d"]);
     }
 
     fn hidden(html: &str) -> Vec<bool> {

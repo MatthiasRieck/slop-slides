@@ -19,7 +19,7 @@ vi.mock("@tauri-apps/api/webview", () => ({
 }));
 
 import type { ProviderInfo } from "../lib/models";
-import { flushReviewSave, useApp, type AssistantMessage, type ChatMessage, type ChatPart } from "../store";
+import { flushReviewSave, TIDY_PROMPT, useApp, type AssistantMessage, type ChatMessage, type ChatPart } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ChatPanel } from "./ChatPanel";
 
@@ -828,5 +828,54 @@ describe("composer fill", () => {
     type("something else");
     act(() => useApp.getState().fillComposer("Fix it"));
     expect(textarea().value).toBe("Fix it");
+  });
+
+  it("does not send a prepared message until the user does", async () => {
+    useApp.setState({ composerFill: null });
+    invoke.mockImplementation(async (cmd: string) => (cmd === "capture_sketch" ? ".slopslide/sketches/1-ab.png" : []));
+    document.body.setAttribute("data-sketch-target", "");
+    try {
+      render(<ChatPanel />);
+      await act(() => useApp.getState().tidyLayout());
+      expect(send).not.toHaveBeenCalled();
+      expect(textarea().value).toBe(TIDY_PROMPT);
+      expect(screen.getByRole("button", { name: "Show 1 attached image" })).toBeTruthy();
+    } finally {
+      document.body.removeAttribute("data-sketch-target");
+    }
+  });
+
+  it("shows a handed-over screenshot with the images and sends it with the message", () => {
+    useApp.setState({ composerFill: null });
+    render(<ChatPanel />);
+    act(() => useApp.getState().fillComposer("Tidy it", { screenshot: ".slopslide/sketches/1-ab.png" }));
+    const fan = screen.getByRole("button", { name: "Show 1 attached image" });
+    const img = fan.querySelector("img")!;
+    expect(img.getAttribute("src")).toContain("/.slopslide/sketches/1-ab.png");
+    expect(img.getAttribute("alt")).toBe("Slide screenshot");
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(send).toHaveBeenCalledWith("Tidy it", {
+      includeSlide: true,
+      attachments: [],
+      screenshot: ".slopslide/sketches/1-ab.png",
+    });
+    expect(screen.queryByRole("button", { name: /attached image/ })).toBeNull();
+    type("Next");
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(send).toHaveBeenLastCalledWith("Next", { includeSlide: true, attachments: [] });
+  });
+
+  it("lets the user remove the screenshot, and a plain fill clears it", () => {
+    useApp.setState({ composerFill: null });
+    render(<ChatPanel />);
+    act(() => useApp.getState().fillComposer("Tidy it", { screenshot: ".slopslide/sketches/1-ab.png" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show 1 attached image" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove Slide screenshot" }));
+    expect(screen.queryByRole("button", { name: /attached image/ })).toBeNull();
+    act(() => useApp.getState().fillComposer("Tidy it", { screenshot: ".slopslide/sketches/1-ab.png" }));
+    act(() => useApp.getState().fillComposer("Fix it"));
+    expect(screen.queryByRole("button", { name: /attached image/ })).toBeNull();
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(send).toHaveBeenCalledWith("Fix it", { includeSlide: true, attachments: [] });
   });
 });

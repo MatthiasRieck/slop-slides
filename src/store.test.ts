@@ -1220,6 +1220,8 @@ describe("lint", () => {
     useApp.getState().fillComposer("fix it");
     useApp.getState().fillComposer("fix it");
     expect(useApp.getState().composerFill).toEqual({ text: "fix it", rev: 2 });
+    useApp.getState().fillComposer("tidy it", { screenshot: ".slopslide/sketches/1.png" });
+    expect(useApp.getState().composerFill).toEqual({ text: "tidy it", rev: 3, screenshot: ".slopslide/sketches/1.png" });
   });
 
   it("lintFixPrompt lists every issue and asks the agent to verify with its tool", async () => {
@@ -1412,17 +1414,54 @@ describe("editing slides on the stage", () => {
     });
     afterEach(() => target.remove());
 
-    it("sends the agent a screenshot of the slide with tidy-up instructions", async () => {
+    it("screenshots the slide, leaves edit mode, and prepares the request in the composer", async () => {
       const { useApp, TIDY_PROMPT } = await freshModule();
       backend({ capture_sketch: () => ".slopslide/sketches/2-cd.png" });
-      useApp.setState({ deck: DECK, selected: "intro" });
+      useApp.setState({ deck: DECK, selected: "intro", chatOpen: false, composerFill: null, editing: true });
       await useApp.getState().tidyLayout();
       expect(calls("capture_sketch")).toHaveLength(1);
+      expect(calls("send_message")).toHaveLength(0);
+      expect(useApp.getState().messages).toEqual([]);
+      expect(useApp.getState()).toMatchObject({
+        chatOpen: true,
+        editing: false,
+        composerFill: { text: TIDY_PROMPT, screenshot: ".slopslide/sketches/2-cd.png" },
+      });
+    });
+
+    it("still prepares the request when the screenshot fails", async () => {
+      const { useApp, TIDY_PROMPT } = await freshModule();
+      backend({
+        capture_sketch: () => {
+          throw "slide screenshots are not supported on this platform yet";
+        },
+      });
+      useApp.setState({ deck: DECK, selected: "intro", composerFill: null });
+      await useApp.getState().tidyLayout();
+      expect(useApp.getState().composerFill).toEqual({ text: TIDY_PROMPT, rev: 1 });
+    });
+
+    it("lists the overflow the editor found in the request", async () => {
+      const { useApp, tidyPrompt } = await freshModule();
+      backend({ capture_sketch: () => ".slopslide/sketches/4.png" });
+      useApp.setState({ deck: DECK, selected: "intro" });
+      const overflow = ['<p> "Long" runs past the bottom edge by 80px', "<h1> is cut off by its own box"];
+      await useApp.getState().tidyLayout(overflow);
+      expect(useApp.getState().composerFill?.text).toBe(tidyPrompt(overflow));
+      expect(tidyPrompt(overflow)).toContain(`The editor found overflow:\n- ${overflow[0]}\n- ${overflow[1]}`);
+      expect(tidyPrompt()).toBe(tidyPrompt([]));
+    });
+
+    it("sends the screenshot handed over with the message", async () => {
+      const { useApp, TIDY_PROMPT } = await freshModule();
+      useApp.setState({ deck: DECK, selected: "intro" });
+      await useApp.getState().send(TIDY_PROMPT, { includeSlide: true, attachments: [], screenshot: ".slopslide/sketches/2-cd.png" });
+      expect(calls("capture_sketch")).toHaveLength(0);
       expect((calls("send_message")[0]!.args as { prompt: string }).prompt).toBe(
         [
           "[context]",
           'Current slide: <section id="intro"> in deck.html (slide 1 of 3)',
-          "Screenshot: .slopslide/sketches/2-cd.png (the current slide as it looks now, with the user's hand edits)",
+          "Screenshot: .slopslide/sketches/2-cd.png (screenshot of the slide with the user's hand edits)",
           "[/context]",
           "",
           TIDY_PROMPT,
@@ -1436,28 +1475,16 @@ describe("editing slides on the stage", () => {
       });
     });
 
-    it("lists the overflow the editor found in the request", async () => {
-      const { useApp, tidyPrompt } = await freshModule();
-      backend({ capture_sketch: () => ".slopslide/sketches/4.png" });
-      useApp.setState({ deck: DECK, selected: "intro" });
-      const overflow = ['<p> "Long" runs past the bottom edge by 80px', "<h1> is cut off by its own box"];
-      await useApp.getState().tidyLayout(overflow);
-      const prompt = (calls("send_message")[0]!.args as { prompt: string }).prompt;
-      expect(prompt.endsWith(tidyPrompt(overflow))).toBe(true);
-      expect(prompt).toContain(`The editor found overflow:\n- ${overflow[0]}\n- ${overflow[1]}`);
-      expect(tidyPrompt()).toBe(tidyPrompt([]));
-    });
-
-    it("keeps any sketch on the slide with the message", async () => {
+    it("captures any sketch alongside the handed-over screenshot", async () => {
       const useApp = await freshStore();
       backend({ capture_sketch: () => ".slopslide/sketches/3.png" });
       const ink = [{ tool: "pen" as const, color: "#f00", points: [[0.5, 0.5]] as [number, number][] }];
       useApp.setState({ deck: DECK, selected: "intro", sketches: { intro: ink } });
-      await useApp.getState().tidyLayout();
+      await useApp.getState().send("Tidy", { includeSlide: true, attachments: [], screenshot: ".slopslide/sketches/2.png" });
       expect(calls("capture_sketch")).toHaveLength(1);
       expect(useApp.getState().messages[0]).toMatchObject({
         sketch: { image: ".slopslide/sketches/3.png" },
-        screenshot: ".slopslide/sketches/3.png",
+        screenshot: ".slopslide/sketches/2.png",
       });
       expect(useApp.getState().sketches).toEqual({ intro: ink });
     });

@@ -192,8 +192,11 @@ interface AppState {
   error: string | null;
   /** Lint result for the saved deck.html; null until the first check finishes. */
   lint: LintIssue[] | null;
-  /** Text to put in the chat composer, with a counter so the same text can be sent twice. */
-  composerFill: { text: string; rev: number } | null;
+  /**
+   * Text to put in the chat composer, with a counter so the same text can be sent twice.
+   * `screenshot` is a slide screenshot shown with the text and sent along with the message.
+   */
+  composerFill: { text: string; rev: number; screenshot?: string } | null;
   /**
    * Ink drawn on slides in the editor, by slide id. Saved in deck.html as review marks, and
    * sent along with the next message about the slide while it has changed since last sent.
@@ -233,7 +236,7 @@ interface AppState {
   setPresenting: (presenting: boolean) => void;
   setError: (error: string | null) => void;
   refreshLint: () => Promise<void>;
-  fillComposer: (text: string) => void;
+  fillComposer: (text: string, options?: { screenshot?: string | null }) => void;
   setSketches: (update: (all: Record<string, Stroke[]>) => Record<string, Stroke[]>) => void;
   clearSketch: (slide: string) => void;
   /** Keeps the slide's current marks out of the next message. */
@@ -264,12 +267,15 @@ interface AppState {
   changeLayout: (template: string, slide: string) => Promise<void>;
   /** Saves the deck as a user template with placeholder content; null when it failed. */
   saveAsTemplate: (name: string) => Promise<TemplateSummary | null>;
-  /** Asks the agent to rebuild the current slide's layout around the user's hand edits. */
-  /** `overflow` lists elements the slide editor found running past the slide or cut off. */
+  /**
+   * Screenshots the slide, leaves edit mode, and puts a prompt in the composer asking the agent
+   * to rebuild the slide's layout around the user's hand edits, with the screenshot attached.
+   * `overflow` lists elements the slide editor found running past the slide or cut off.
+   */
   tidyLayout: (overflow?: string[]) => Promise<void>;
   send: (
     text: string,
-    options: { includeSlide: boolean; attachments: string[]; screenshot?: boolean },
+    options: { includeSlide: boolean; attachments: string[]; screenshot?: string },
   ) => Promise<void>;
   /** Has the agent summarize the conversation so far, freeing up its context. */
   compact: () => Promise<void>;
@@ -455,7 +461,8 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
-  fillComposer: (text) => set((s) => ({ composerFill: { text, rev: (s.composerFill?.rev ?? 0) + 1 } })),
+  fillComposer: (text, { screenshot } = {}) =>
+    set((s) => ({ composerFill: { text, rev: (s.composerFill?.rev ?? 0) + 1, ...(screenshot && { screenshot }) } })),
 
   setSketches: (update) => {
     set((s) => ({ sketches: update(s.sketches) }));
@@ -599,12 +606,17 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   tidyLayout: async (overflow = []) => {
-    // Let any edit still being saved land first, so the agent sees the final version.
+    const { deck } = get();
+    if (!deck) return;
+    // Let any edit still being saved land first, so the screenshot shows the final version.
     await editQueue;
-    await get().send(tidyPrompt(overflow), { includeSlide: true, attachments: [], screenshot: true });
+    const screenshot = await captureSlide(deck.id);
+    if (get().deck?.id !== deck.id) return;
+    get().setEditing(false);
+    promptAgent(tidyPrompt(overflow), { screenshot });
   },
 
-  send: async (text, { includeSlide, attachments, screenshot = false }) => {
+  send: async (text, { includeSlide, attachments, screenshot }) => {
     const { deck, selected, running, selection } = get();
     if (!deck || running) return;
     // Typed as a message, the command still compacts rather than reaching the agent as text.
@@ -621,21 +633,20 @@ export const useApp = create<AppState>((set, get) => ({
       slide,
       attachments,
       sketch: bounds ? { image: null, bounds } : null,
+      ...(screenshot && { screenshot }),
       createdAt: Date.now(),
     };
     const assistant = newReply(selection.provider);
     set((s) => ({ messages: [...s.messages, user, assistant], running: true }));
-    if (slide && (user.sketch || screenshot)) {
+    // Let any edit still being saved land first, so the agent sees the final version.
+    await editQueue;
+    if (slide && user.sketch) {
       // Screenshot the slide with the ink on it.
       const image = await captureSlide(deck.id);
-      const captured: UserMessage = {
-        ...user,
-        ...(user.sketch && { sketch: { ...user.sketch, image } }),
-        ...(screenshot && { screenshot: image }),
-      };
+      const captured: UserMessage = { ...user, sketch: { ...user.sketch, image } };
       user = captured;
       set((s) => ({ messages: s.messages.map((m) => (m.id === captured.id ? captured : m)) }));
-      if (user.sketch) set((s) => ({ sketchesSent: { ...s.sketchesSent, [slide]: strokes } }));
+      set((s) => ({ sketchesSent: { ...s.sketchesSent, [slide]: strokes } }));
     }
     await startTurn(deck.id, assistant.id, buildPrompt(deck, user), false);
   },
@@ -752,10 +763,10 @@ function findTemplate(id: string): TemplateSummary | undefined {
 }
 
 /** Hands the composer a prepared message, showing the chat if it is hidden. */
-function promptAgent(text: string) {
+function promptAgent(text: string, options?: { screenshot?: string | null }) {
   const { chatOpen, setChatOpen, fillComposer } = useApp.getState();
   if (!chatOpen) setChatOpen(true);
-  fillComposer(text);
+  fillComposer(text, options);
 }
 
 async function loadDeckState(deck: Deck) {
@@ -900,7 +911,7 @@ function buildPrompt(deck: Deck, message: UserMessage): string {
     );
   }
   if (message.screenshot) {
-    context.push(`Screenshot: ${message.screenshot} (the current slide as it looks now, with the user's hand edits)`);
+    context.push(`Screenshot: ${message.screenshot} (screenshot of the slide with the user's hand edits)`);
   }
   if (context.length === 0) return message.text;
   return `[context]\n${context.join("\n")}\n[/context]\n\n${message.text}`;

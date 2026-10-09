@@ -719,8 +719,6 @@ fn content_blocks(value: &Value) -> impl Iterator<Item = &Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    /// Where the fake `claude` logs its arguments and input, inside the test deck.
-    const LOG_DIR: &str = ".test-log";
     use serde_json::json;
 
     #[test]
@@ -1219,6 +1217,9 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         use std::sync::Arc;
         use std::time::Duration;
+
+        /// Where the fake `claude` logs its arguments and input, inside the test deck.
+        const LOG_DIR: &str = ".test-log";
 
         struct Fixture {
             dir: PathBuf,

@@ -3,6 +3,7 @@ import { Check, FolderOpen, Loader2, Plus, Save } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import type { TemplateSummary } from "../lib/api";
+import { pixelsOf, type Pixels } from "../lib/slideSize";
 import { cn, layoutLabel, templateSlideUrl } from "../lib/utils";
 import { useApp } from "../store";
 import { SlideFrame } from "./SlideFrame";
@@ -19,13 +20,14 @@ export function useTemplates(): TemplateSummary[] | undefined {
 }
 
 /** A still preview of one of a template's slides. */
-export function TemplateSlide(props: { template: string; slide: string; className?: string }) {
+export function TemplateSlide(props: { template: string; slide: string; size?: Pixels; className?: string }) {
   return (
     <SlideFrame
       deckId={props.template}
       slideId={props.slide}
       version=""
       thumbnail
+      size={props.size}
       url={templateSlideUrl(props.template, props.slide)}
       className={props.className}
     />
@@ -161,7 +163,7 @@ export function LayoutPicker(props: { mode: "add" | "change"; onDone: () => void
                   className="group flex w-full flex-col gap-1 text-left"
                 >
                   <div className="w-full overflow-hidden rounded-md ring-1 ring-border transition group-hover:ring-2 group-hover:ring-primary">
-                    <TemplateSlide template={template.id} slide={slide} />
+                    <TemplateSlide template={template.id} slide={slide} size={pixelsOf(template)} />
                   </div>
                   <span className="truncate text-2xs text-muted-foreground group-hover:text-foreground">{layoutLabel(slide)}</span>
                 </button>
@@ -236,7 +238,7 @@ function StylePanel(props: {
                       t.id === current && "ring-2 ring-primary group-hover:ring-primary",
                     )}
                   >
-                    {t.slides[0] && <TemplateSlide template={t.id} slide={t.slides[0]} />}
+                    {t.slides[0] && <TemplateSlide template={t.id} slide={t.slides[0]} size={pixelsOf(t)} />}
                   </div>
                   <span className="flex items-center gap-1 text-2xs">
                     <span className="truncate">{t.title}</span>

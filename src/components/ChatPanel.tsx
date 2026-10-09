@@ -8,7 +8,6 @@ import {
   FoldVertical,
   Globe,
   Loader2,
-  PanelRightClose,
   Paperclip,
   Pencil,
   PenLine,
@@ -72,15 +71,6 @@ export function ChatPanel() {
               New chat
             </button>
           )}
-          <button
-            type="button"
-            title="Hide chat"
-            aria-label="Hide chat"
-            onClick={() => useApp.getState().setChatOpen(false)}
-            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-          >
-            <PanelRightClose className="size-3.5" />
-          </button>
         </div>
       </div>
       {cliMissing && <MissingCli provider={provider} />}
@@ -352,8 +342,14 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
       el.style.height = `${inputHeight}px`;
       return;
     }
+    // An empty composer stays at its smallest; measuring the placeholder while the panel
+    // is still opening (and narrow) would otherwise make it start out tall.
+    if (!draft) {
+      el.style.height = "64px";
+      return;
+    }
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 64), 240)}px`;
   }, [draft, inputHeight]);
 
   useEffect(() => {
@@ -558,7 +554,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
         <textarea
           ref={textareaRef}
           value={draft}
-          rows={2}
+          rows={1}
           onChange={(e) => setDraft(e.target.value)}
           onPaste={onPaste}
           onKeyDown={(e) => {

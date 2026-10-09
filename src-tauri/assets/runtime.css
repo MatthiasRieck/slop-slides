@@ -1,4 +1,5 @@
-/* SlopSlide player: fixed 1920×1080 stage scaled to the window, one slide at a time.
+/* SlopSlide player: fixed stage (--slop-w × --slop-h, 1920×1080 unless the deck names another
+   size) scaled to the window, one slide at a time. The app appends the size-dependent rules.
    The player sets data-slop-player on <html> from a script in <head>, before the body
    renders. Viewers without JavaScript (iOS Quick Look, e.g. decks opened from chat apps)
    never get it and show every slide top to bottom instead. */
@@ -25,7 +26,7 @@ html[data-slop-player] body {
   box-sizing: border-box;
 }
 .deck {
-  width: 1920px;
+  width: var(--slop-w, 1920px);
   margin: 0 auto;
   overflow: hidden;
 }
@@ -33,7 +34,7 @@ html[data-slop-player] .deck {
   position: absolute;
   left: 0;
   top: 0;
-  height: 1080px;
+  height: var(--slop-h, 1080px);
   margin: 0;
   transform-origin: 0 0;
 }
@@ -42,8 +43,8 @@ html[data-slop-player] .deck {
 .deck > .slide {
   position: relative !important;
   inset: auto !important;
-  width: 1920px !important;
-  height: 1080px !important;
+  width: var(--slop-w, 1920px) !important;
+  height: var(--slop-h, 1080px) !important;
   margin: 0 0 24px !important;
   overflow: hidden;
 }
@@ -64,25 +65,6 @@ html:not([data-slop-player]) .slide .reveal {
   opacity: 1 !important;
   animation: none !important;
 }
-/* Without the player nothing scales the stage, so zoom it down to the window's width. */
-@media screen and (max-width: 1919.98px) { html:not([data-slop-player]) .deck { zoom: 0.95; } }
-@media screen and (max-width: 1823.98px) { html:not([data-slop-player]) .deck { zoom: 0.9; } }
-@media screen and (max-width: 1727.98px) { html:not([data-slop-player]) .deck { zoom: 0.85; } }
-@media screen and (max-width: 1631.98px) { html:not([data-slop-player]) .deck { zoom: 0.8; } }
-@media screen and (max-width: 1535.98px) { html:not([data-slop-player]) .deck { zoom: 0.75; } }
-@media screen and (max-width: 1439.98px) { html:not([data-slop-player]) .deck { zoom: 0.7; } }
-@media screen and (max-width: 1343.98px) { html:not([data-slop-player]) .deck { zoom: 0.65; } }
-@media screen and (max-width: 1247.98px) { html:not([data-slop-player]) .deck { zoom: 0.6; } }
-@media screen and (max-width: 1151.98px) { html:not([data-slop-player]) .deck { zoom: 0.55; } }
-@media screen and (max-width: 1055.98px) { html:not([data-slop-player]) .deck { zoom: 0.5; } }
-@media screen and (max-width: 959.98px) { html:not([data-slop-player]) .deck { zoom: 0.45; } }
-@media screen and (max-width: 863.98px) { html:not([data-slop-player]) .deck { zoom: 0.4; } }
-@media screen and (max-width: 767.98px) { html:not([data-slop-player]) .deck { zoom: 0.35; } }
-@media screen and (max-width: 671.98px) { html:not([data-slop-player]) .deck { zoom: 0.3; } }
-@media screen and (max-width: 575.98px) { html:not([data-slop-player]) .deck { zoom: 0.25; } }
-@media screen and (max-width: 479.98px) { html:not([data-slop-player]) .deck { zoom: 0.2; } }
-@media screen and (max-width: 383.98px) { html:not([data-slop-player]) .deck { zoom: 0.15; } }
-@media screen and (max-width: 287.98px) { html:not([data-slop-player]) .deck { zoom: 0.1; } }
 html[data-slop-player] .deck > .slide {
   position: absolute !important;
   inset: 0 !important;
@@ -165,12 +147,8 @@ html[data-slop-static] *::after {
     transition-duration: 0.01ms !important;
   }
 }
-/* Print / save as PDF: one slide per page. */
+/* Print / save as PDF: one slide per page (the app's size rules set the page size). */
 @media print {
-  @page {
-    size: 1920px 1080px;
-    margin: 0;
-  }
   html,
   body,
   html[data-slop-player],

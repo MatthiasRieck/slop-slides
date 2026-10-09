@@ -10,6 +10,8 @@ import {
   FolderOpen,
   Images,
   Loader2,
+  PanelLeftClose,
+  PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
   Play,
@@ -22,6 +24,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../lib/api";
 import { cn, isMac } from "../lib/utils";
 import { lintFixPrompt, useApp, type StageView } from "../store";
+import { SlideSizeButton } from "./SlideSize";
 
 export function TopBar() {
   const deck = useApp((s) => s.deck);
@@ -89,6 +92,7 @@ export function TopBar() {
         <ChevronLeft className="size-4" />
         Decks
       </button>
+      <RailToggle />
       <span className="text-muted-foreground/40">/</span>
       <input
         value={title}
@@ -105,6 +109,7 @@ export function TopBar() {
         className="min-w-0 max-w-md flex-1 truncate rounded-md bg-transparent px-1.5 py-1 text-sm font-medium outline-none hover:bg-accent focus:bg-accent"
       />
       <div data-tauri-drag-region className="flex-1 self-stretch" />
+      <SlideSizeButton />
       <LintStatus />
       <ViewToggle />
       <button
@@ -131,6 +136,25 @@ export function TopBar() {
       </button>
       <ChatToggle />
     </header>
+  );
+}
+
+/** Shows or hides the slide rail on the left. */
+function RailToggle() {
+  const railOpen = useApp((s) => s.railOpen);
+  const Icon = railOpen ? PanelLeftClose : PanelLeftOpen;
+  const label = railOpen ? "Hide slides" : "Show slides";
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={railOpen}
+      onClick={() => useApp.getState().setRailOpen(!railOpen)}
+      className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+    >
+      <Icon className="size-4" />
+    </button>
   );
 }
 

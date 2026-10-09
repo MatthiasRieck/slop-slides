@@ -29,6 +29,7 @@ export function App() {
 function Editor() {
   const view = useApp((s) => s.view);
   const chatOpen = useApp((s) => s.chatOpen);
+  const railOpen = useApp((s) => s.railOpen);
   // Re-lint whenever deck.html changes on disk (agent, HTML view, slide operations).
   const deckVersion = useApp((s) =>
     s.deck ? [s.deck.id, s.deck.shellHash, ...s.deck.slides.map((x) => `${x.id}:${x.hash}`)].join("|") : "",
@@ -40,10 +41,14 @@ function Editor() {
     <div className="flex h-full flex-col">
       <TopBar />
       <Group orientation="horizontal" className="min-h-0 flex-1">
-        <Panel id="rail" defaultSize={220} minSize={150} maxSize={360}>
-          <SlideRail />
-        </Panel>
-        <ResizeHandle />
+        {railOpen && (
+          <>
+            <Panel id="rail" defaultSize={220} minSize={150} maxSize={360}>
+              <SlideRail />
+            </Panel>
+            <ResizeHandle />
+          </>
+        )}
         <Panel id="stage" minSize={360}>
           {/* The HTML view stays mounted so unsaved edits survive switching to the slides. */}
           <CodeView active={view === "code"} />

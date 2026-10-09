@@ -17,6 +17,7 @@ use crate::deck::{self, DECK_FILE, INTERNAL_DIR};
 use crate::error::{Error, Result};
 use crate::html;
 use crate::review;
+use crate::size::SizeInfo;
 
 const BUILTIN: &[(&str, &str)] = &[
     (
@@ -72,6 +73,8 @@ pub struct TemplateSummary {
     pub path: Option<String>,
     /// Ids of the template's slides: one per layout, in order.
     pub slides: Vec<String>,
+    /// The template's slide size, which a new deck made from it takes.
+    pub size: SizeInfo,
 }
 
 /// `~/.slopslides/templates`, created on first use.
@@ -128,6 +131,7 @@ fn summary(id: &str, source: &str, path: Option<&Path>) -> TemplateSummary {
             .into_iter()
             .filter_map(|s| s.id)
             .collect(),
+        size: html::slide_size(source).into(),
     }
 }
 

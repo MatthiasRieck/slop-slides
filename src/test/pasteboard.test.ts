@@ -31,7 +31,7 @@ interface View {
   k: number;
 }
 
-function pasteboard({ framed = true, bodyStyle = "", show = false } = {}) {
+function pasteboard({ framed = true, bodyStyle = "", show = false, stage }: { framed?: boolean; bodyStyle?: string; show?: boolean; stage?: [number, number] } = {}) {
   const posted: unknown[] = [];
   const parent = { postMessage: (data: unknown) => posted.push(data) };
   const dom = new JSDOM(DECK(bodyStyle), {
@@ -45,6 +45,12 @@ function pasteboard({ framed = true, bodyStyle = "", show = false } = {}) {
     },
   });
   doms.push(dom);
+  // The runtime CSS lays the stage out at the deck's slide size; jsdom lays nothing out.
+  const stageEl = dom.window.document.querySelector(".deck");
+  if (stage && stageEl) {
+    Object.defineProperty(stageEl, "offsetWidth", { value: stage[0], configurable: true });
+    Object.defineProperty(stageEl, "offsetHeight", { value: stage[1], configurable: true });
+  }
   dom.window.eval(RUNTIME);
   dom.window.eval(PASTEBOARD);
   const { window } = dom;
@@ -104,6 +110,21 @@ describe("pasteboard", () => {
     expect(css).toMatch(/\[data-slop-frame\] \{[^}]*box-shadow:[^}]*outline: 1px solid var\(--slop-border/);
     // Only the editor lets the slide show what runs past its edge.
     expect(css).not.toContain("overflow: visible");
+  });
+
+  it("centers and frames a slide of another size", () => {
+    const p = pasteboard({ stage: [1080, 1350] });
+    // (2560 - 1080) / 2, and 1440 - 1350 leaves 45px above.
+    expect(p.transform()).toBe("translate(740px,45px) scale(1)");
+    const frame = p.$("[data-slop-frame]");
+    expect(frame.style.cssText).toContain("width: 1080px");
+    expect(frame.style.cssText).toContain("height: 1350px");
+  });
+
+  it("fits a slide of another size to the window in a show", () => {
+    const p = pasteboard({ show: true, stage: [1080, 1080] });
+    // A square slide in a 2560×1440 window: fit to the height, centered across.
+    expect(p.transform()).toBe(`translate(560px,0px) scale(${4 / 3})`);
   });
 
   it("keeps the color the deck painted behind its slides, now that the page is transparent", () => {

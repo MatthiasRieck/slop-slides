@@ -119,11 +119,9 @@ function showMessages(...messages: ChatMessage[]) {
 }
 
 describe("ChatPanel: header", () => {
-  it("collapses the chat panel", () => {
-    useApp.setState({ chatOpen: true });
+  it("leaves hiding the chat to the top bar", () => {
     render(<ChatPanel />);
-    fireEvent.click(screen.getByRole("button", { name: "Hide chat" }));
-    expect(useApp.getState().chatOpen).toBe(false);
+    expect(screen.queryByRole("button", { name: "Hide chat" })).toBeNull();
   });
 });
 
@@ -212,6 +210,22 @@ describe("ChatPanel: composing", () => {
     fireEvent.keyDown(resizeHandle(), { key: "End" });
     expect(input.style.height).toBe("240px");
     fireEvent.keyDown(resizeHandle(), { key: "Home" });
+    expect(input.style.height).toBe("64px");
+  });
+
+  it("opens at the smallest height even when the placeholder would wrap", () => {
+    const input = (() => {
+      const proto = HTMLTextAreaElement.prototype;
+      const spy = vi.spyOn(proto, "scrollHeight", "get").mockReturnValue(400);
+      render(<ChatPanel />);
+      spy.mockRestore();
+      return textarea();
+    })();
+    expect(input.style.height).toBe("64px");
+    Object.defineProperty(input, "scrollHeight", { configurable: true, value: 120 });
+    type("A longer draft");
+    expect(input.style.height).toBe("120px");
+    type("");
     expect(input.style.height).toBe("64px");
   });
 

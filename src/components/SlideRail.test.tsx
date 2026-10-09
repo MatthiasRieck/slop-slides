@@ -39,6 +39,11 @@ describe("SlideRail", () => {
     expect(scroller?.classList.contains("pt-1.5")).toBe(true);
   });
 
+  it("leaves hiding the rail to the top bar", () => {
+    render(<SlideRail />);
+    expect(screen.queryByRole("button", { name: "Hide slides" })).toBeNull();
+  });
+
   it("explains what to do in an empty deck", () => {
     useApp.setState({ deck: { ...DECK, slides: [] }, selected: null });
     render(<SlideRail />);

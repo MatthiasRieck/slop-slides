@@ -261,7 +261,7 @@ fn check_markup(l: &mut Linter) {
                         Severity::Warning,
                         i,
                         format!(
-                            "<{}> was moved, rotated or scaled by hand ({MOVED_ATTR} with an inline `translate`, `rotate` or `scale`). Rework the slide's layout so it sits where it appears now without the offset, turn a scale into real sizes, keep an intended rotation in the slide's styles, then remove the attribute and the inline transforms.",
+                            "<{}> was moved, rotated, tilted or scaled by hand ({MOVED_ATTR} with an inline `translate`, `rotate`, `scale` or tilt `transform`). Rework the slide's layout so it sits where it appears now without the offset, turn a scale into real sizes, keep an intended rotation or tilt in the slide's styles, then remove the attribute and the inline transforms.",
                             tag.name
                         ),
                     );
@@ -895,7 +895,7 @@ mod tests {
     fn flags_hand_edits_awaiting_cleanup() {
         let found = lint(
             &deck(
-                "<section class=\"slide\" id=\"a\">\n<h2 data-moved style=\"translate: 40px -12px\">Moved</h2>\n<img data-moved style=\"translate: 0px 12px; rotate: 15deg; scale: 1.5 0.8\" src=\"a.png\" alt=\"\">\n<p contenteditable=\"true\" data-slop-selected>Left over</p>\n</section>",
+                "<section class=\"slide\" id=\"a\">\n<h2 data-moved style=\"translate: 40px -12px\">Moved</h2>\n<img data-moved style=\"translate: 0px 12px; rotate: 15deg; scale: 1.5 0.8\" src=\"a.png\" alt=\"\">\n<div data-moved style=\"transform: perspective(1000px) rotateX(10deg) rotateY(30deg) !important\">Tilted</div>\n<p contenteditable=\"true\" data-slop-selected>Left over</p>\n</section>",
             ),
             |_| true,
         );
@@ -903,6 +903,7 @@ mod tests {
         assert_eq!(
             found,
             [
+                ("moved-element", Some("a")),
                 ("moved-element", Some("a")),
                 ("moved-element", Some("a")),
                 ("editor-leftover", Some("a"))

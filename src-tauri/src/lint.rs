@@ -7,8 +7,8 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 use crate::html::{
-    self, find_ci, has_class, parse_tag, EDITOR_ATTRS, HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR,
-    SECTION_CLASS, SECTION_TITLE_ATTR,
+    self, find_ci, has_class, parse_tag, DROPPED_ATTR, EDITOR_ATTRS, HIDDEN_ATTR, LOCKED_ATTR,
+    MOVED_ATTR, SECTION_CLASS, SECTION_TITLE_ATTR,
 };
 use crate::review;
 
@@ -261,7 +261,17 @@ fn check_markup(l: &mut Linter) {
                         ),
                     );
                 }
-                if tag.attrs.iter().any(|(n, ..)| n == MOVED_ATTR) {
+                if tag.attrs.iter().any(|(n, ..)| n == DROPPED_ATTR) {
+                    l.report(
+                        "dropped-image",
+                        Severity::Warning,
+                        i,
+                        format!(
+                            "<{}> was dropped onto the slide by hand ({DROPPED_ATTR}, placed on top with inline `position: absolute`, `left`, `top`, `width` and `translate`). Give it a place in the slide's layout where it appears now, sized with the slide's styles, and a fitting alt text, then remove {DROPPED_ATTR}, {MOVED_ATTR} and the inline styles.",
+                            tag.name
+                        ),
+                    );
+                } else if tag.attrs.iter().any(|(n, ..)| n == MOVED_ATTR) {
                     l.report(
                         "moved-element",
                         Severity::Warning,
@@ -1012,6 +1022,31 @@ mod tests {
         assert_eq!(
             rules(&format!(
                 "{}<div data-moved contenteditable></div>",
+                deck("<section class=\"slide\" id=\"a\"></section>")
+            )),
+            Vec::<&str>::new()
+        );
+    }
+
+    #[test]
+    fn flags_dropped_images_awaiting_a_place() {
+        let found = rules(&deck(
+            "<section class=\"slide\" id=\"a\">\n<img src=\"assets/logo.png\" alt=\"\" data-dropped data-moved style=\"position: absolute; left: 0px; top: 0px; width: 640px; translate: 640px 300px\">\n</section>",
+        ));
+        // One warning covers both markers.
+        assert_eq!(found, ["dropped-image"]);
+        let issues = lint(
+            &deck("<section class=\"slide\" id=\"a\"><img src=\"assets/logo.png\" alt=\"\" data-dropped></section>"),
+            |_| true,
+            &[],
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].slide.as_deref(), Some("a"));
+        assert_eq!(issues[0].severity, Severity::Warning);
+        // Outside slides the attribute means nothing to the editor.
+        assert_eq!(
+            rules(&format!(
+                "{}<img src=\"assets/logo.png\" alt=\"\" data-dropped>",
                 deck("<section class=\"slide\" id=\"a\"></section>")
             )),
             Vec::<&str>::new()

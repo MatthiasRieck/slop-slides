@@ -6,9 +6,10 @@ import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { SketchToolbar } from "./SketchToolbar";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { LayoutPicker, Popover } from "./Templates";
-import type { Slide } from "../lib/api";
+import { api, errorMessage, type Slide } from "../lib/api";
+import { catchDrops, imageSize, isImage, type DropPoint } from "../lib/drop";
 import { zoomBox, type Stroke } from "../lib/ink";
-import { cn } from "../lib/utils";
+import { cn, deckFileUrl } from "../lib/utils";
 
 /** The stage area's padding (Tailwind p-8), which the pasteboard covers too. */
 const AREA_PADDING = 32;
@@ -124,7 +125,7 @@ export function Stage() {
                   title={
                     locked
                       ? "This slide is locked; unlock it in the slide list to edit it"
-                      : "Edit the slide: click to select, drag to move, drag the handles to scale or rotate, double-click to edit text"
+                      : "Edit the slide: click to select, drag to move, drag the handles to scale or rotate, double-click to edit text, drop images onto it to add them"
                   }
                   aria-pressed={editing}
                   disabled={locked}
@@ -396,7 +397,7 @@ interface PasteboardView {
 /**
  * Connects the stage to the slide editor running in its preview (src-tauri/assets/editor.js):
  * saves the markup it posts, keeps the selection across the reload that follows, and
- * handles undo and leaving edit mode.
+ * handles undo and leaving edit mode. Images dropped on the stage go onto the slide.
  */
 function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetView: () => void) {
   // What to select again once the edited slide reloads.
@@ -436,6 +437,38 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
       window.removeEventListener("message", onMessage);
       window.removeEventListener("keydown", onKey);
     };
+  }, [areaRef]);
+
+  // Images dropped on the stage while editing are saved as assets and put on the slide where
+  // they landed; anything else dropped there goes on to the chat.
+  useEffect(() => {
+    const insert = async (deckId: string, slide: string, paths: string[], point: DropPoint) => {
+      try {
+        const refs = await api.importAssets(deckId, paths);
+        const images = await Promise.all(refs.map(async (src) => ({ src, ...(await imageSize(deckFileUrl(deckId, src))) })));
+        const { editing, selected } = useApp.getState();
+        const loaded = frame.current;
+        if (!editing || selected !== slide || !loaded?.contentWindow || images.length === 0) return;
+        // The preview is scaled down to fit; the editor wants the point in its own pixels.
+        const rect = loaded.getBoundingClientRect();
+        const k = loaded.clientWidth ? rect.width / loaded.clientWidth : 1;
+        loaded.contentWindow.postMessage(
+          { type: "slop:edit-insert-images", images, x: (point.x - rect.left) / k, y: (point.y - rect.top) / k },
+          "*",
+        );
+      } catch (error) {
+        useApp.getState().setError(errorMessage(error));
+      }
+    };
+    return catchDrops((paths, point) => {
+      const { deck, editing, selected } = useApp.getState();
+      const images = paths.filter(isImage);
+      const area = areaRef.current?.getBoundingClientRect();
+      const inside = !!area && point.x >= area.left && point.x <= area.right && point.y >= area.top && point.y <= area.bottom;
+      if (!deck || !editing || !selected || !frame.current || images.length === 0 || !inside) return paths;
+      void insert(deck.id, selected, images, point);
+      return paths.filter((p) => !isImage(p));
+    });
   }, [areaRef]);
 
   const current = useApp((s) => s.selected);

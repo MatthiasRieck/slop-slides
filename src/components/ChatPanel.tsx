@@ -24,6 +24,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { api, errorMessage } from "../lib/api";
+import { claimDrop, dropPoint, isImage } from "../lib/drop";
 import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowTokens } from "../lib/context";
 import { cn, deckFileUrl } from "../lib/utils";
 import { PROVIDERS, type Provider } from "../lib/models";
@@ -397,7 +398,8 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     void pasteImages(images);
   };
 
-  // Files dropped anywhere on the window become attachments.
+  // Files dropped anywhere on the window become attachments, unless something there (like the
+  // slide being edited) takes them.
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
@@ -407,7 +409,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
         else if (event.payload.type === "leave") setDragging(false);
         else if (event.payload.type === "drop") {
           setDragging(false);
-          void importPaths(event.payload.paths);
+          void importPaths(claimDrop(event.payload.paths, dropPoint(event.payload.position)));
         }
       })
       .then((fn) => {
@@ -608,8 +610,6 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   );
 }
 
-const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|svg|avif)$/i;
-const isImage = (path: string) => IMAGE_EXTENSIONS.test(path);
 const assetName = (path: string) => (path.startsWith(".slopslide/") ? "Slide screenshot" : path.replace(/^assets\//, ""));
 
 /** How many previews the fan shows; the rest are counted on a badge. */

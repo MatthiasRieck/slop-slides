@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
 const openDialog = vi.fn();
-type DragDrop = { payload: { type: "enter" | "over" | "leave" | "drop"; paths?: string[] } };
+type DragDrop = { payload: { type: "enter" | "over" | "leave" | "drop"; paths?: string[]; position?: { x: number; y: number } } };
 let dragDrop: ((event: DragDrop) => void) | null = null;
 const unlistenDragDrop = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
@@ -21,6 +21,7 @@ vi.mock("@tauri-apps/api/webview", () => ({
 import type { ProviderInfo } from "../lib/models";
 import { flushReviewSave, TIDY_PROMPT, useApp, type AssistantMessage, type ChatMessage, type ChatPart } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { catchDrops } from "../lib/drop";
 import { ChatPanel } from "./ChatPanel";
 
 const PROVIDERS: ProviderInfo[] = [
@@ -477,6 +478,27 @@ describe("ChatPanel: attachments", () => {
     expect(composer().className).not.toContain("border-primary");
     expect(invoke).toHaveBeenCalledWith("import_assets", { id: "talk", paths: ["/tmp/drop.png"] });
     expect(screen.getByAltText("drop.png")).toBeTruthy();
+  });
+
+  it("leaves dropped files to what lies where they landed, attaching the rest", async () => {
+    invoke.mockResolvedValue(["assets/notes.md"]);
+    const catcher = vi.fn((paths: string[]) => paths.filter((p) => !p.endsWith(".png")));
+    const stop = catchDrops(catcher);
+    try {
+      render(<ChatPanel />);
+      await waitFor(() => expect(dragDrop).not.toBeNull());
+      await act(async () =>
+        dragDrop!({ payload: { type: "drop", paths: ["/tmp/photo.png", "/tmp/notes.md"], position: { x: 200, y: 100 } } }),
+      );
+      expect(catcher).toHaveBeenCalledWith(["/tmp/photo.png", "/tmp/notes.md"], { x: 200 / devicePixelRatio, y: 100 / devicePixelRatio });
+      expect(invoke).toHaveBeenCalledWith("import_assets", { id: "talk", paths: ["/tmp/notes.md"] });
+      // Nothing left over, nothing to import.
+      invoke.mockClear();
+      await act(async () => dragDrop!({ payload: { type: "drop", paths: ["/tmp/photo.png"], position: { x: 1, y: 1 } } }));
+      expect(invoke).not.toHaveBeenCalledWith("import_assets", expect.anything());
+    } finally {
+      stop();
+    }
   });
 
   it("stops listening for drops when unmounted", async () => {

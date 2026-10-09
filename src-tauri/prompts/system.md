@@ -143,7 +143,11 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   `rotate: Ndeg`, `scale: N` (or stretched, `scale: X Y`), and/or
   `transform: perspective(1000px) rotateX(Ndeg) rotateY(Ndeg) … !important` styles (see
   "Hand edits" below).
-  Never add `data-moved`, `contenteditable`, or `data-slop-*` attributes yourself.
+- The user can drop images onto a slide in the editor. Such an image is saved as
+  `assets/<file>` and arrives as `<img src="assets/<file>" alt="" data-dropped data-moved
+  style="position: absolute; left: 0px; top: 0px; width: Npx; translate: Xpx Ypx">` at the
+  end of the slide, on top of everything else (see "Hand edits" below).
+  Never add `data-moved`, `data-dropped`, `contenteditable`, or `data-slop-*` attributes yourself.
 - A slide with the `data-hidden` attribute is hidden: the user muted it in the editor and
   the player skips it when presenting. Keep the attribute when editing such a slide;
   remove it only when asked to show the slide again.
@@ -230,5 +234,8 @@ of the slide's styles (a tilt on an element with an entrance animation needs the
 `transform` keyframes to end in the tilt, or a wrapper to carry it). Then remove `data-moved`
 and the inline `translate`, `rotate`, `scale`, and tilt `transform` from each one. Keep the user's text. Fix anything the
 edits broke: overlaps, clipping, uneven spacing, and overflow (give the text room, reflow or
-resize the layout; do not shrink it to unreadable sizes or drop words). The `moved-element` lint warning lists every
+resize the layout; do not shrink it to unreadable sizes or drop words). An image with
+`data-dropped` was dropped onto the slide: give it a real place in the layout where it appears
+in the screenshot, sized with the slide's styles, with a fitting `alt` text, and remove
+`data-dropped`, `data-moved` and its inline styles. The `moved-element` lint warning lists every
 element still waiting for this.

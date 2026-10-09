@@ -52,6 +52,11 @@ pub const LOCKED_ATTR: &str = "data-locked";
 /// `translate` / `rotate` / `scale` styles until the agent tidies the slide's layout.
 pub const MOVED_ATTR: &str = "data-moved";
 
+/// Marks an image the user dropped onto a slide in the editor. It sits on top of the slide,
+/// placed with inline `position: absolute; left: 0; top: 0; width` (and moved with
+/// [`MOVED_ATTR`]'s `translate`) until the agent gives it a place in the layout.
+pub const DROPPED_ATTR: &str = "data-dropped";
+
 /// Attributes the in-editor slide editor puts on elements while it works. They never belong
 /// in deck.html; the editor strips them before saving.
 pub const EDITOR_ATTRS: &[&str] = &[

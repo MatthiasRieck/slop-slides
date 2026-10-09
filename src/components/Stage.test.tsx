@@ -1,10 +1,18 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
+// jsdom loads no images; dropped ones measure as 1200×800.
+vi.mock("../lib/drop", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/drop")>()),
+  imageSize: vi.fn(async () => ({ w: 1200, h: 800 })),
+}));
 
+import { invoke } from "@tauri-apps/api/core";
+
+import { claimDrop, dropCovered } from "../lib/drop";
 import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Stage } from "./Stage";
@@ -444,6 +452,74 @@ describe("Stage", () => {
       fromFrame(frame, { type: "slop:edit-selection", slide: "intro", selected: true });
       fireEvent.load(frame);
       expect(remove().disabled).toBe(true);
+    });
+
+    describe("dropping images", () => {
+      beforeEach(() => void vi.mocked(invoke).mockReset());
+
+      /** The stage area at (0, 0, 1000×600); the editing preview 2000px wide, scaled to half, at (-20, -10). */
+      function laidOut(container: HTMLElement) {
+        const frame = [...container.querySelectorAll("iframe")].at(-1)!;
+        fireEvent.load(frame);
+        vi.spyOn(screen.getByTestId("stage-area"), "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 600));
+        vi.spyOn(frame, "getBoundingClientRect").mockReturnValue(new DOMRect(-20, -10, 1000, 600));
+        Object.defineProperty(frame, "clientWidth", { value: 2000, configurable: true });
+        return { frame, post: vi.spyOn(frame.contentWindow!, "postMessage") };
+      }
+
+      it("puts images dropped on the slide while editing onto it, where they landed", async () => {
+        vi.mocked(invoke).mockResolvedValue(["assets/photo.png"]);
+        const { container } = render(<Stage />);
+        fireEvent.click(editButton());
+        const { post } = laidOut(container);
+        expect(dropCovered({ x: 480, y: 290 })).toBe(true);
+        let rest: string[] = [];
+        await act(async () => {
+          rest = claimDrop(["/tmp/photo.png", "/tmp/notes.md"], { x: 480, y: 290 });
+        });
+        // Anything that is not an image goes on to the chat.
+        expect(rest).toEqual(["/tmp/notes.md"]);
+        expect(invoke).toHaveBeenCalledWith("import_assets", { id: useApp.getState().deck!.id, paths: ["/tmp/photo.png"] });
+        await waitFor(() =>
+          expect(post).toHaveBeenCalledWith(
+            { type: "slop:edit-insert-images", images: [{ src: "assets/photo.png", w: 1200, h: 800 }], x: 1000, y: 600 },
+            "*",
+          ),
+        );
+      });
+
+      it("leaves drops to the chat outside edit mode, outside the stage, or without images", () => {
+        const { container, unmount } = render(<Stage />);
+        expect(claimDrop(["/tmp/photo.png"], { x: 100, y: 100 })).toEqual(["/tmp/photo.png"]);
+        expect(dropCovered({ x: 100, y: 100 })).toBe(false);
+        fireEvent.click(editButton());
+        laidOut(container);
+        expect(dropCovered({ x: 1200, y: 100 })).toBe(false);
+        expect(claimDrop(["/tmp/photo.png"], { x: 1200, y: 100 })).toEqual(["/tmp/photo.png"]);
+        expect(claimDrop(["/tmp/notes.md"], { x: 100, y: 100 })).toEqual(["/tmp/notes.md"]);
+        unmount();
+        expect(dropCovered({ x: 100, y: 100 })).toBe(false);
+        expect(claimDrop(["/tmp/photo.png"], { x: 100, y: 100 })).toEqual(["/tmp/photo.png"]);
+        expect(invoke).not.toHaveBeenCalledWith("import_assets", expect.anything());
+      });
+
+      it("does not insert into a slide that is no longer being edited, and reports failed imports", async () => {
+        let finish: (refs: string[]) => void = () => {};
+        vi.mocked(invoke).mockImplementation(() => new Promise((resolve) => (finish = resolve)));
+        const { container } = render(<Stage />);
+        fireEvent.click(editButton());
+        const { post } = laidOut(container);
+        act(() => void claimDrop(["/tmp/photo.png"], { x: 100, y: 100 }));
+        fireEvent.click(editButton());
+        await act(async () => finish(["assets/photo.png"]));
+        expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-insert-images" }), "*");
+
+        vi.mocked(invoke).mockRejectedValue("disk full");
+        fireEvent.click(editButton());
+        laidOut(container);
+        await act(async () => void claimDrop(["/tmp/photo.png"], { x: 100, y: 100 }));
+        await waitFor(() => expect(useApp.getState().error).toBe("disk full"));
+      });
     });
 
     it("selects the edited element again once the slide reloads", () => {

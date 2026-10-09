@@ -143,6 +143,7 @@ draft GitHub release. Code signing and notarization secrets are listed in the wo
 src/                    React UI (Zustand store, Tailwind)
 src-tauri/src/
   deck.rs               deck folders: load/normalize, slide operations, export, snapshots
+  sessions.rs           chat sessions in `~/.slopslides/sessions`, each tied to one deck
   html.rs               finds the slide <section>s in deck.html and rewrites them;
                         installs the player runtime (assets/runtime.{css,js})
   size.rs               the deck's slide size (`slopslide-size` meta) and the stage CSS for it
@@ -150,14 +151,15 @@ src-tauri/src/
                         new decks in a template's style, saving a deck as a template
   lint.rs               HTML lint for deck.html: well-formed markup plus the deck format
                         rules; shown as the status button in the top bar
-  mcp.rs                stdio MCP server (`slopslide --lint-mcp <deck>`) exposing the
+  mcp.rs                stdio MCP server (`slopslide --lint-mcp [deck]`) exposing the
                         linter to the agent as its `lint_deck` tool
   agent.rs              manages turns and snapshots; normalizes provider events for the UI
   codex.rs              Codex app-server transport, permissions, and approval responses
   protocol.rs           `slop://` scheme serving deck files to the slide iframes;
                         adds the slide editor (assets/editor.js) for edit mode
   watcher.rs            file watcher → `deck-changed` events, so edits stream into the UI
-src-tauri/prompts/      the agent's system prompt and design references
+src-tauri/prompts/      the agent's system prompt and design references, compiled into the
+                        app and injected into every session
 src-tauri/templates/    the built-in templates, one deck.html each (served with the runtime)
 ```
 
@@ -169,13 +171,28 @@ deck.html        the whole presentation: <section class="slide" id="…"> per sl
                  that start a section, shared styles, the embedded player runtime, and
                  optionally <meta name="slopslide-template" content="…"> naming its template
 assets/          attached images and media (inlined on export)
-.slopslide/      chat history, agent session, reference docs, snapshots (app-managed)
 ```
+
+Nothing else, so a deck folder can be shared or committed as it is. The app keeps
+everything else in `~/.slopslides/`:
+
+```
+templates/<name>/          user templates
+sessions/<session id>/     one chat with the agent about one deck: meta.json (the deck
+                           folder it belongs to), chat.json, each provider's session id,
+                           snapshots/, sketches/, and templates staged for the agent
+mcp.json                   the agent's MCP config: this app as the `lint_deck` server,
+                           linting the deck in its working directory
+system-prompt.md           the system prompt file Claude Code reads
+```
+
+A deck's newest session is its current chat; New chat starts another and keeps the old
+one. `mcp.json` and `system-prompt.md` are rewritten by the app when they change.
 
 `deck.html` already plays standalone in a browser. The editor renders individual slides of
 it in sandboxed iframes (`deck.html?embed&slide=<id>`), so the thumbnails, stage, and
 exported file all use the same player. Before every agent turn and slide deletion, a copy is
-saved to `.slopslide/snapshots/` (last 30 kept).
+saved to the session's `snapshots/` (last 30 kept).
 
 Claude receives file tools (Read/Write/Edit/Glob/Grep plus web search/fetch) and the app's
 `lint_deck` tool, with no shell access or other MCP servers. Codex uses its configured tools

@@ -588,7 +588,7 @@ describe("sending a message", () => {
       backend({
         capture_sketch: () => {
           inkWhenCaptured = useApp.getState().sketches.outro;
-          return ".slopslide/sketches/1-ab.png";
+          return "/home/.slopslides/sessions/1-ab/sketches/1-ab.png";
         },
       });
       useApp.setState({ deck: DECK, selected: "outro", sketches: { outro: [mark], intro: [mark] } });
@@ -606,7 +606,7 @@ describe("sending a message", () => {
         [
           "[context]",
           'Current slide: <section id="outro"> in deck.html (slide 3 of 3)',
-          "Sketch: .slopslide/sketches/1-ab.png (screenshot of the current slide with the user's marks drawn on top)",
+          "Sketch: /home/.slopslides/sessions/1-ab/sketches/1-ab.png (screenshot of the current slide with the user's marks drawn on top)",
           "Marked area: x 476–964, y 266–544 of the 1920×1080 slide",
           "[/context]",
           "",
@@ -614,7 +614,7 @@ describe("sending a message", () => {
         ].join("\n"),
       );
       expect(useApp.getState().messages[0]).toMatchObject({
-        sketch: { image: ".slopslide/sketches/1-ab.png", bounds: { left: 476, top: 266, right: 964, bottom: 544 } },
+        sketch: { image: "/home/.slopslides/sessions/1-ab/sketches/1-ab.png", bounds: { left: 476, top: 266, right: 964, bottom: 544 } },
       });
     });
 
@@ -673,7 +673,7 @@ describe("sending a message", () => {
 
     it("sends the marks once, and again after they change", async () => {
       const useApp = await freshStore();
-      backend({ capture_sketch: () => ".slopslide/sketches/1.png" });
+      backend({ capture_sketch: () => "/home/.slopslides/sessions/1-ab/sketches/1.png" });
       useApp.setState({ deck: DECK, selected: "outro", sketches: { outro: [mark] } });
       const send = async (text: string) => {
         await useApp.getState().send(text, { includeSlide: true, attachments: [] });
@@ -1268,8 +1268,8 @@ describe("lint", () => {
     useApp.getState().fillComposer("fix it");
     useApp.getState().fillComposer("fix it");
     expect(useApp.getState().composerFill).toEqual({ text: "fix it", rev: 2 });
-    useApp.getState().fillComposer("tidy it", { screenshot: ".slopslide/sketches/1.png" });
-    expect(useApp.getState().composerFill).toEqual({ text: "tidy it", rev: 3, screenshot: ".slopslide/sketches/1.png" });
+    useApp.getState().fillComposer("tidy it", { screenshot: "/home/.slopslides/sessions/1-ab/sketches/1.png" });
+    expect(useApp.getState().composerFill).toEqual({ text: "tidy it", rev: 3, screenshot: "/home/.slopslides/sessions/1-ab/sketches/1.png" });
   });
 
   it("lintFixPrompt lists every issue and asks the agent to verify with its tool", async () => {
@@ -1474,7 +1474,7 @@ describe("editing slides on the stage", () => {
 
     it("screenshots the slide, leaves edit mode, and prepares the request in the composer", async () => {
       const { useApp, TIDY_PROMPT } = await freshModule();
-      backend({ capture_sketch: () => ".slopslide/sketches/2-cd.png" });
+      backend({ capture_sketch: () => "/home/.slopslides/sessions/1-ab/sketches/2-cd.png" });
       useApp.setState({ deck: DECK, selected: "intro", chatOpen: false, composerFill: null, editing: true });
       await useApp.getState().tidyLayout();
       expect(calls("capture_sketch")).toHaveLength(1);
@@ -1483,7 +1483,7 @@ describe("editing slides on the stage", () => {
       expect(useApp.getState()).toMatchObject({
         chatOpen: true,
         editing: false,
-        composerFill: { text: TIDY_PROMPT, screenshot: ".slopslide/sketches/2-cd.png" },
+        composerFill: { text: TIDY_PROMPT, screenshot: "/home/.slopslides/sessions/1-ab/sketches/2-cd.png" },
       });
     });
 
@@ -1509,7 +1509,7 @@ describe("editing slides on the stage", () => {
 
     it("lists the overflow the editor found in the request", async () => {
       const { useApp, tidyPrompt } = await freshModule();
-      backend({ capture_sketch: () => ".slopslide/sketches/4.png" });
+      backend({ capture_sketch: () => "/home/.slopslides/sessions/1-ab/sketches/4.png" });
       useApp.setState({ deck: DECK, selected: "intro" });
       const overflow = ['<p> "Long" runs past the bottom edge by 80px', "<h1> is cut off by its own box"];
       await useApp.getState().tidyLayout(overflow);
@@ -1521,13 +1521,13 @@ describe("editing slides on the stage", () => {
     it("sends the screenshot handed over with the message", async () => {
       const { useApp, TIDY_PROMPT } = await freshModule();
       useApp.setState({ deck: DECK, selected: "intro" });
-      await useApp.getState().send(TIDY_PROMPT, { includeSlide: true, attachments: [], screenshot: ".slopslide/sketches/2-cd.png" });
+      await useApp.getState().send(TIDY_PROMPT, { includeSlide: true, attachments: [], screenshot: "/home/.slopslides/sessions/1-ab/sketches/2-cd.png" });
       expect(calls("capture_sketch")).toHaveLength(0);
       expect((calls("send_message")[0]!.args as { prompt: string }).prompt).toBe(
         [
           "[context]",
           'Current slide: <section id="intro"> in deck.html (slide 1 of 3)',
-          "Screenshot: .slopslide/sketches/2-cd.png (screenshot of the slide with the user's hand edits)",
+          "Screenshot: /home/.slopslides/sessions/1-ab/sketches/2-cd.png (screenshot of the slide with the user's hand edits)",
           "[/context]",
           "",
           TIDY_PROMPT,
@@ -1537,20 +1537,20 @@ describe("editing slides on the stage", () => {
         text: TIDY_PROMPT,
         slide: "intro",
         sketch: null,
-        screenshot: ".slopslide/sketches/2-cd.png",
+        screenshot: "/home/.slopslides/sessions/1-ab/sketches/2-cd.png",
       });
     });
 
     it("captures any sketch alongside the handed-over screenshot", async () => {
       const useApp = await freshStore();
-      backend({ capture_sketch: () => ".slopslide/sketches/3.png" });
+      backend({ capture_sketch: () => "/home/.slopslides/sessions/1-ab/sketches/3.png" });
       const ink = [{ tool: "pen" as const, color: "#f00", points: [[0.5, 0.5]] as [number, number][] }];
       useApp.setState({ deck: DECK, selected: "intro", sketches: { intro: ink } });
-      await useApp.getState().send("Tidy", { includeSlide: true, attachments: [], screenshot: ".slopslide/sketches/2.png" });
+      await useApp.getState().send("Tidy", { includeSlide: true, attachments: [], screenshot: "/home/.slopslides/sessions/1-ab/sketches/2.png" });
       expect(calls("capture_sketch")).toHaveLength(1);
       expect(useApp.getState().messages[0]).toMatchObject({
-        sketch: { image: ".slopslide/sketches/3.png" },
-        screenshot: ".slopslide/sketches/2.png",
+        sketch: { image: "/home/.slopslides/sessions/1-ab/sketches/3.png" },
+        screenshot: "/home/.slopslides/sessions/1-ab/sketches/2.png",
       });
       expect(useApp.getState().sketches).toEqual({ intro: ink });
     });
@@ -1618,13 +1618,40 @@ describe("Codex permissions", () => {
 describe("templates", () => {
   const SWISS = { id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title", "split", "quote"] };
   const MINE = { id: "mine", title: "Mine", builtin: false, path: "/t/mine", slides: ["cover"] };
-  const STAGED = ".slopslide/templates/swiss.html";
+  const STAGED = "/home/.slopslides/sessions/1-ab/templates/swiss.html";
 
   async function storeWith(deck: Deck, selected: string | null = "intro") {
     const useApp = await freshStore();
     useApp.setState({ deck, selected, templates: [MINE, SWISS], chatOpen: true });
     return useApp;
   }
+
+  it("points every message at a copy of the deck's template", async () => {
+    const useApp = await storeWith({ ...DECK, template: "swiss" }, null);
+    backend({ stage_template: () => STAGED });
+    await useApp.getState().send("Add a slide", { includeSlide: false, attachments: [] });
+    expect(calls("stage_template")).toEqual([{ id: DECK.id, template: "swiss" }]);
+    expect(calls("send_message")[0]!.args).toMatchObject({
+      prompt: `[context]\nDeck template: ${STAGED} (copy of the deck's template, for its layouts)\n[/context]\n\nAdd a slide`,
+    });
+  });
+
+  it("sends without a template copy when the deck has none or it is gone", async () => {
+    const useApp = await storeWith(DECK, null);
+    await useApp.getState().send("Hi", { includeSlide: false, attachments: [] });
+    expect(calls("stage_template")).toEqual([]);
+    expect(calls("send_message")[0]!.args).toMatchObject({ prompt: "Hi" });
+
+    useApp.setState({ deck: { ...DECK, template: "gone" }, running: false, messages: [] });
+    backend({
+      stage_template: () => {
+        throw "template not found: gone";
+      },
+    });
+    await useApp.getState().send("Hi again", { includeSlide: false, attachments: [] });
+    expect(calls("stage_template")).toEqual([{ id: DECK.id, template: "gone" }]);
+    expect(calls("send_message").at(-1)!.args).toMatchObject({ prompt: "Hi again" });
+  });
 
   it("loads the template list", async () => {
     const useApp = await freshStore();
@@ -1695,7 +1722,7 @@ describe("templates", () => {
     expect(calls("add_template_slide")).toEqual([]);
     const text = useApp.getState().composerFill?.text ?? "";
     expect(text).toContain("after this one");
-    expect(text).toContain('the "Split" layout of the "Swiss Design" template (slide `split` in `.slopslide/templates/swiss.html`)');
+    expect(text).toContain(`the "Split" layout of the "Swiss Design" template (slide \`split\` in \`${STAGED}\`)`);
     expect(text).toContain("this deck's design system");
 
     useApp.setState({ selected: null });

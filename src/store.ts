@@ -48,7 +48,7 @@ export interface UserMessage {
   attachments: string[];
   /** The user drew on the slide before sending; absent in chats saved before sketches. */
   sketch?: Sketch | null;
-  /** Deck-relative path of a screenshot of the slide sent along (for tidying hand edits). */
+  /** Absolute path of a screenshot of the slide sent along (for tidying hand edits). */
   screenshot?: string | null;
   /** Set when the message ran a command instead of prompting the agent. */
   command?: "compact";
@@ -57,7 +57,7 @@ export interface UserMessage {
 
 /** What the agent is told about a drawing on the current slide. */
 export interface Sketch {
-  /** Deck-relative path of the slide screenshot with the drawing; null if it failed. */
+  /** Absolute path of the slide screenshot with the drawing (in the deck's session); null if it failed. */
   image: string | null;
   /** The marked area in slide pixels. */
   bounds: { left: number; top: number; right: number; bottom: number };
@@ -680,7 +680,8 @@ export const useApp = create<AppState>((set, get) => ({
       set((s) => ({ messages: s.messages.map((m) => (m.id === captured.id ? captured : m)) }));
       set((s) => ({ sketchesSent: { ...s.sketchesSent, [slide]: strokes } }));
     }
-    await startTurn(deck.id, assistant.id, buildPrompt(deck, user), false);
+    const template = await stageDeckTemplate(deck);
+    await startTurn(deck.id, assistant.id, buildPrompt(deck, user, template), false);
   },
 
   compact: async () => {
@@ -926,7 +927,20 @@ function selectedSlide(): Slide | undefined {
   return deck?.slides.find((s) => s.id === selected);
 }
 
-function buildPrompt(deck: Deck, message: UserMessage): string {
+/**
+ * A copy of the deck's template for the agent to take layouts from; null when the deck has
+ * none or it is gone (there are just no layouts to read then).
+ */
+async function stageDeckTemplate(deck: Deck): Promise<string | null> {
+  if (!deck.template) return null;
+  try {
+    return await api.stageTemplate(deck.id, deck.template);
+  } catch {
+    return null;
+  }
+}
+
+function buildPrompt(deck: Deck, message: UserMessage, template: string | null = null): string {
   const context: string[] = [];
   if (message.slide) {
     const index = deck.slides.findIndex((s) => s.id === message.slide);
@@ -954,6 +968,9 @@ function buildPrompt(deck: Deck, message: UserMessage): string {
   }
   if (message.screenshot) {
     context.push(`Screenshot: ${message.screenshot} (screenshot of the slide with the user's hand edits)`);
+  }
+  if (template) {
+    context.push(`Deck template: ${template} (copy of the deck's template, for its layouts)`);
   }
   if (context.length === 0) return message.text;
   return `[context]\n${context.join("\n")}\n[/context]\n\n${message.text}`;

@@ -25,7 +25,7 @@ import remarkGfm from "remark-gfm";
 import { api, errorMessage } from "../lib/api";
 import { claimDrop, dropCovered, dropPoint, isImage } from "../lib/drop";
 import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowTokens } from "../lib/context";
-import { cn, deckFileUrl } from "../lib/utils";
+import { chatFileUrl, cn, isSessionFile } from "../lib/utils";
 import { PROVIDERS, type Provider } from "../lib/models";
 import { useApp, type AssistantMessage, type ChatMessage, type ChatPart, type UserMessage } from "../store";
 import { ApprovalCard, PermissionPicker, ApprovalReview } from "./Permissions";
@@ -608,7 +608,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   );
 }
 
-const assetName = (path: string) => (path.startsWith(".slopslide/") ? "Slide screenshot" : path.replace(/^assets\//, ""));
+const assetName = (path: string) => (isSessionFile(path) ? "Slide screenshot" : path.replace(/^assets\//, ""));
 
 /** How many previews the fan shows; the rest are counted on a badge. */
 const FAN_SIZE = 4;
@@ -636,7 +636,7 @@ function ImageFan(props: { deckId: string; images: string[]; onOpen: () => void 
           return (
             <img
               key={path}
-              src={deckFileUrl(deckId, path)}
+              src={chatFileUrl(deckId, path)}
               alt={assetName(path)}
               draggable={false}
               style={{ "--x": `${offset * 18}px`, "--r": `${offset * 8}deg` } as React.CSSProperties}
@@ -687,7 +687,7 @@ function ImageGrid(props: { deckId: string; images: string[]; onRemove: (path: s
         {images.map((path) => (
           <figure key={path} className="group relative m-0">
             <img
-              src={deckFileUrl(deckId, path)}
+              src={chatFileUrl(deckId, path)}
               alt={assetName(path)}
               draggable={false}
               className="aspect-square w-full rounded-lg border bg-muted object-cover"

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { cn, deckFileUrl, layoutLabel, relativeTime, slideUrl, templateSlideUrl } from "./utils";
+import { chatFileUrl, cn, isSessionFile, deckFileUrl, layoutLabel, relativeTime, slideUrl, templateSlideUrl } from "./utils";
 
 describe("cn", () => {
   it("joins truthy classes and lets later Tailwind classes win", () => {
@@ -37,6 +37,19 @@ describe("deck URLs (browser preview)", () => {
   it("appends a query when given", () => {
     expect(deckFileUrl("talk", "deck.html", "v=1")).toBe("/__deck/talk/deck.html?v=1");
     expect(deckFileUrl("talk", "deck.html", "")).toBe("/__deck/talk/deck.html");
+  });
+
+  it("serves chat files from the deck, or from its session when absolute", () => {
+    expect(isSessionFile("assets/a.png")).toBe(false);
+    expect(isSessionFile("/Users/me/x.png")).toBe(true);
+    expect(isSessionFile("C:\\Users\\x.png")).toBe(true);
+    expect(chatFileUrl("talk", "assets/a.png")).toBe("/__deck/talk/assets/a.png");
+    expect(chatFileUrl("talk", "/Users/me/.slopslides/sessions/1-ab/sketches/2.png")).toBe(
+      "/__deck/.session/Users/me/.slopslides/sessions/1-ab/sketches/2.png",
+    );
+    expect(chatFileUrl("talk", "C:\\Users\\me\\.slopslides\\sessions\\1-ab\\s 1.png")).toBe(
+      "/__deck/.session/C%3A/Users/me/.slopslides/sessions/1-ab/s%201.png",
+    );
   });
 
   it("builds embedded single-slide URLs", () => {

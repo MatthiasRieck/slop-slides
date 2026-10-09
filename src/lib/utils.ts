@@ -18,6 +18,23 @@ export function deckFileUrl(deckId: string, path: string, query?: string): strin
   return `${base}/${encoded}${query ? `?${query}` : ""}`;
 }
 
+/** First path segment the backend serves session files under (see src-tauri/src/protocol.rs). */
+const SESSION_PREFIX = ".session";
+
+/** Files the app keeps in the deck's session (screenshots) come as absolute paths. */
+export function isSessionFile(path: string): boolean {
+  return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
+}
+
+/**
+ * URL of a file shown in the chat: deck files (attached assets) are deck-relative, while
+ * screenshots live in the deck's session outside it and come as absolute paths.
+ */
+export function chatFileUrl(deckId: string, path: string): string {
+  if (!isSessionFile(path)) return deckFileUrl(deckId, path);
+  return deckFileUrl(SESSION_PREFIX, path.replaceAll("\\", "/").replace(/^\//, ""));
+}
+
 /**
  * One slide of a deck rendered by the embedded player, for editor previews. With `pan`, the
  * backend adds the pasteboard to pan and zoom around the slide; with `edit` (any value; changing

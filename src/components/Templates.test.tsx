@@ -26,7 +26,7 @@ beforeEach(() => {
       case "list_templates":
         return [MINE, SWISS, BENTO];
       case "stage_template":
-        return ".slopslide/templates/x.html";
+        return "/home/.slopslides/sessions/1-ab/templates/x.html";
     }
   });
   useApp.setState({ deck: DECK, selected: "intro", templates: [MINE, SWISS, BENTO], composerFill: null, error: null, running: false, chatOpen: true });

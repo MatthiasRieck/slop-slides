@@ -16,13 +16,21 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::watch;
 
-use crate::deck::{self, INTERNAL_DIR};
+use crate::deck;
 use crate::env;
 use crate::error::{Error, Result};
 use crate::mcp;
+use crate::sessions::Sessions;
 use crate::{codex, copilot};
 
-pub(crate) const SYSTEM_PROMPT: &str = include_str!("../prompts/system.md");
+/// The agent's instructions, with the design references it consults appended.
+pub(crate) const SYSTEM_PROMPT: &str = concat!(
+    include_str!("../prompts/system.md"),
+    "\n\n",
+    include_str!("../prompts/STYLE_PRESETS.md"),
+    "\n\n",
+    include_str!("../prompts/animation-patterns.md"),
+);
 /// The agent edits files only: no shell, no MCP servers.
 const TOOLS: &str = "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch";
 const STDERR_LIMIT: usize = 16 * 1024;
@@ -39,10 +47,11 @@ pub enum Provider {
 impl Provider {
     pub const ALL: [Provider; 3] = [Provider::Claude, Provider::Codex, Provider::Copilot];
 
-    /// File under `.slopslide/` holding this provider's resumable session id.
+    /// File in the deck's session (see [`crate::sessions`]) holding this provider's
+    /// resumable session id.
     pub fn session_file(self) -> &'static str {
         match self {
-            Provider::Claude => "session",
+            Provider::Claude => "claude-session",
             Provider::Codex => "codex-session",
             Provider::Copilot => "copilot-session",
         }
@@ -178,6 +187,8 @@ impl AgentManager {
 
     pub fn send(&self, app: AppHandle, args: SendArgs) -> Result<()> {
         let dir = deck::deck_dir(&app, &args.deck_id)?;
+        let app_home = deck::app_home()?;
+        let session_dir = Sessions::new(&app_home).current_or_start(&dir)?;
         let bin = args.provider.resolve()?;
         let (cancel_tx, cancel_rx) = watch::channel(false);
         {
@@ -201,6 +212,8 @@ impl AgentManager {
                     );
                 }),
                 dir,
+                app_home,
+                session_dir,
                 provider: args.provider,
                 bin,
                 model: args
@@ -217,15 +230,15 @@ impl AgentManager {
                 approvals,
             };
             // The whole deck is one file: keep a copy to fall back on before every turn.
-            if let Err(e) = deck::snapshot(&turn.dir) {
+            if let Err(e) = deck::snapshot(&turn.dir, &turn.session_dir) {
                 log::warn!("snapshot failed: {e}");
             }
             // Remember the locked slides, to put back any the agent changes.
-            if let Err(e) = deck::guard_locked(&turn.dir) {
+            if let Err(e) = deck::guard_locked(&turn.dir, &turn.session_dir) {
                 log::warn!("could not record locked slides: {e}");
             }
             let interrupted = turn.run(&args.prompt, cancel_rx).await;
-            match deck::release_guard(&turn.dir) {
+            match deck::release_guard(&turn.dir, &turn.session_dir) {
                 Ok(restored) if !restored.is_empty() => turn.emit(&AgentEvent::Error {
                     message: locked_restored_message(&restored),
                 }),
@@ -271,6 +284,10 @@ fn locked_restored_message(ids: &[String]) -> String {
 struct Turn {
     emit: Box<dyn Fn(&AgentEvent) + Send + Sync>,
     dir: PathBuf,
+    /// Where the files every deck's agent shares are written (see [`deck::app_home`]).
+    app_home: PathBuf,
+    /// The deck's session this turn belongs to: chat state, snapshots, provider session ids.
+    session_dir: PathBuf,
     provider: Provider,
     bin: PathBuf,
     model: Option<String>,
@@ -298,7 +315,7 @@ impl Turn {
     /// Returns whether the turn was interrupted.
     async fn run(&self, prompt: &str, mut cancel: watch::Receiver<bool>) -> bool {
         let session_file = self.provider.session_file();
-        let session = deck::read_session(&self.dir, session_file);
+        let session = deck::read_session(&self.session_dir, session_file);
         if self.compact {
             if let Some(message) = compact_refusal(self.provider, session.as_deref()) {
                 self.emit(&AgentEvent::Error {
@@ -310,7 +327,7 @@ impl Turn {
         let mut outcome = self.run_once(prompt, session.as_deref(), &mut cancel).await;
         if self.compact && matches!(outcome, Ok(Outcome::ResumeFailed)) {
             // Starting fresh would leave nothing to compact.
-            let _ = deck::write_session(&self.dir, session_file, None);
+            let _ = deck::write_session(&self.session_dir, session_file, None);
             self.emit(&AgentEvent::Error {
                 message: "The conversation could not be resumed, so there is nothing to compact."
                     .into(),
@@ -319,7 +336,7 @@ impl Turn {
         }
         if matches!(outcome, Ok(Outcome::ResumeFailed)) {
             // The stored session is gone (other machine, cleared history): start fresh.
-            let _ = deck::write_session(&self.dir, session_file, None);
+            let _ = deck::write_session(&self.session_dir, session_file, None);
             outcome = self.run_once(prompt, None, &mut cancel).await;
         }
         match outcome {
@@ -353,8 +370,9 @@ impl Turn {
                 session,
                 compact: self.compact,
             };
-            let on_session =
-                |id: &str| deck::write_session(&self.dir, self.provider.session_file(), Some(id));
+            let on_session = |id: &str| {
+                deck::write_session(&self.session_dir, self.provider.session_file(), Some(id))
+            };
             return copilot::run_turn(args, cancel, &|event| self.emit(event), &on_session).await;
         }
         if self.provider == Provider::Codex {
@@ -373,18 +391,25 @@ impl Turn {
                 },
                 cancel,
                 &|event| self.emit(event),
-                &|id| deck::write_session(&self.dir, self.provider.session_file(), Some(id)),
+                &|id| {
+                    deck::write_session(&self.session_dir, self.provider.session_file(), Some(id))
+                },
             )
             .await;
         }
-        let system_prompt = self.dir.join(INTERNAL_DIR).join("system-prompt.md");
-        std::fs::write(&system_prompt, SYSTEM_PROMPT)?;
-        let mcp_config = self.dir.join(INTERNAL_DIR).join("mcp.json");
-        std::fs::write(
+        // A file rather than an argument: the prompt outgrows Windows command lines.
+        let system_prompt = self.app_home.join("system-prompt.md");
+        write_if_changed(&system_prompt, SYSTEM_PROMPT)?;
+        let mcp_config = self.app_home.join("mcp.json");
+        write_if_changed(&mcp_config, &lint_server_config(&std::env::current_exe()?))?;
+        let args = build_claude_args(
+            &system_prompt,
             &mcp_config,
-            lint_server_config(&std::env::current_exe()?, &self.dir),
-        )?;
-        let args = build_claude_args(&system_prompt, &mcp_config, model, effort, session);
+            &self.session_dir,
+            model,
+            effort,
+            session,
+        );
         let started = Instant::now();
 
         let mut cmd = Command::new(&self.bin);
@@ -435,7 +460,7 @@ impl Turn {
                     let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
                     if let Some(id) = session_id_of_init(&value) {
                         saw_init = true;
-                        deck::write_session(&self.dir, self.provider.session_file(), Some(&id))?;
+                        deck::write_session(&self.session_dir, self.provider.session_file(), Some(&id))?;
                         self.emit(&AgentEvent::Started { session_id: Some(id) });
                     }
                     if session.is_some() && !saw_init && is_missing_session(&value) {
@@ -490,18 +515,34 @@ fn compact_refusal(provider: Provider, session: Option<&str>) -> Option<&'static
     }
 }
 
-/// MCP config running this app binary as the agent's lint tool server (`mcp.rs`).
-fn lint_server_config(exe: &Path, dir: &Path) -> String {
+/// MCP config running this app binary as the agent's lint tool server (`mcp.rs`). Shared by
+/// every deck: the server lints the deck in its working directory, which Claude Code sets
+/// to its own (the deck folder).
+fn lint_server_config(exe: &Path) -> String {
     serde_json::json!({
         "mcpServers": {
             mcp::SERVER: {
                 "type": "stdio",
                 "command": exe,
-                "args": [mcp::FLAG, dir],
+                "args": [mcp::FLAG],
             }
         }
     })
     .to_string()
+}
+
+/// Writes `path` unless it already holds `contents`. Turns in other decks may be reading
+/// it, so it is replaced whole rather than rewritten in place.
+fn write_if_changed(path: &Path, contents: &str) -> Result<()> {
+    if std::fs::read_to_string(path).ok().as_deref() == Some(contents) {
+        return Ok(());
+    }
+    let temp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    std::fs::write(&temp, contents)?;
+    std::fs::rename(&temp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temp);
+    })?;
+    Ok(())
 }
 
 /// Claude Code selects the 1M-token context window with a `[1m]` model suffix.
@@ -515,6 +556,7 @@ fn claude_model(model: String, context_window: Option<&str>) -> String {
 fn build_claude_args(
     system_prompt: &Path,
     mcp_config: &Path,
+    session_dir: &Path,
     model: Option<&str>,
     effort: Option<&str>,
     session: Option<&str>,
@@ -541,6 +583,9 @@ fn build_claude_args(
         mcp_config.to_string_lossy().into_owned(),
         "--append-system-prompt-file".into(),
         system_prompt.to_string_lossy().into_owned(),
+        // Sketches and staged templates are in the session, outside the deck.
+        "--add-dir".into(),
+        session_dir.to_string_lossy().into_owned(),
     ]);
     if let Some(model) = model {
         args.extend(["--model".into(), model.into()]);
@@ -975,9 +1020,10 @@ mod tests {
 
     #[test]
     fn builds_cli_arguments() {
-        let prompt = Path::new("/deck/.slopslide/system-prompt.md");
-        let mcp = Path::new("/deck/.slopslide/mcp.json");
-        let base = build_claude_args(prompt, mcp, None, None, None);
+        let prompt = Path::new("/home/.slopslides/system-prompt.md");
+        let mcp = Path::new("/home/.slopslides/mcp.json");
+        let session = Path::new("/home/.slopslides/sessions/1-ab");
+        let base = build_claude_args(prompt, mcp, session, None, None, None);
         assert_eq!(base[..3], ["-p", "--output-format", "stream-json"]);
         let after = |args: &[String], flag: &str| {
             args.iter()
@@ -995,11 +1041,16 @@ mod tests {
         );
         assert_eq!(
             after(&base, "--mcp-config").as_deref(),
-            Some("/deck/.slopslide/mcp.json")
+            Some("/home/.slopslides/mcp.json")
         );
         assert_eq!(
             after(&base, "--append-system-prompt-file").as_deref(),
-            Some("/deck/.slopslide/system-prompt.md")
+            Some("/home/.slopslides/system-prompt.md")
+        );
+        assert_eq!(
+            after(&base, "--add-dir").as_deref(),
+            Some("/home/.slopslides/sessions/1-ab"),
+            "the agent reads sketches and templates in the session"
         );
         assert!(base.contains(&"--strict-mcp-config".to_string()));
         assert!(!base.contains(&"--model".to_string()));
@@ -1007,23 +1058,64 @@ mod tests {
         assert!(!base.contains(&"--effort".to_string()));
         assert!(!TOOLS.contains("Bash"), "the agent must not get a shell");
 
-        let full = build_claude_args(prompt, mcp, Some("opus"), Some("high"), Some("s-1"));
+        let full = build_claude_args(
+            prompt,
+            mcp,
+            session,
+            Some("opus"),
+            Some("high"),
+            Some("s-1"),
+        );
         assert_eq!(after(&full, "--model").as_deref(), Some("opus"));
         assert_eq!(after(&full, "--effort").as_deref(), Some("high"));
         assert_eq!(after(&full, "--resume").as_deref(), Some("s-1"));
     }
 
     #[test]
-    fn lint_server_config_runs_this_binary_for_the_deck() {
-        let config: Value = serde_json::from_str(&lint_server_config(
-            Path::new("/Apps/SlopSlide"),
-            Path::new("/decks/my deck"),
-        ))
-        .unwrap();
+    fn lint_server_config_runs_this_binary_in_the_working_directory() {
+        let config: Value =
+            serde_json::from_str(&lint_server_config(Path::new("/Apps/SlopSlide"))).unwrap();
         let server = &config["mcpServers"]["slopslide"];
         assert_eq!(server["type"], "stdio");
         assert_eq!(server["command"], "/Apps/SlopSlide");
-        assert_eq!(server["args"], json!(["--lint-mcp", "/decks/my deck"]));
+        assert_eq!(
+            server["args"],
+            json!(["--lint-mcp"]),
+            "no deck: shared by all"
+        );
+    }
+
+    #[test]
+    fn system_prompt_includes_the_design_references() {
+        assert!(SYSTEM_PROMPT.starts_with(include_str!("../prompts/system.md")));
+        assert!(SYSTEM_PROMPT.contains(include_str!("../prompts/STYLE_PRESETS.md")));
+        assert!(SYSTEM_PROMPT.contains(include_str!("../prompts/animation-patterns.md")));
+        assert!(
+            !SYSTEM_PROMPT.contains(".slopslide/reference"),
+            "the references are not files in the deck"
+        );
+    }
+
+    #[test]
+    fn write_if_changed_replaces_only_different_contents() {
+        let dir = std::env::temp_dir().join(format!("slopslide-write-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mcp.json");
+        write_if_changed(&path, "one").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "one");
+        let written = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_if_changed(&path, "one").unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            written,
+            "unchanged contents are not rewritten"
+        );
+        write_if_changed(&path, "two").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "two");
+        let leftovers = std::fs::read_dir(&dir).unwrap().count();
+        assert_eq!(leftovers, 1, "no temporary files left behind");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1126,6 +1218,9 @@ mod tests {
         use std::sync::Arc;
         use std::time::Duration;
 
+        /// Where the fake `claude` logs its arguments and input, inside the test deck.
+        const LOG_DIR: &str = ".test-log";
+
         struct Fixture {
             dir: PathBuf,
             events: Arc<Mutex<Vec<AgentEvent>>>,
@@ -1137,10 +1232,11 @@ mod tests {
             fn new(body: &str) -> Self {
                 let dir =
                     std::env::temp_dir().join(format!("slopslide-agent-{}", uuid::Uuid::new_v4()));
-                fs::create_dir_all(dir.join(INTERNAL_DIR)).unwrap();
+                fs::create_dir_all(dir.join(LOG_DIR)).unwrap();
+                fs::create_dir_all(dir.join("home")).unwrap();
                 let script = format!(
                     "#!/bin/sh\n\
-                     LOG=\"$PWD/{INTERNAL_DIR}\"\n\
+                     LOG=\"$PWD/{LOG_DIR}\"\n\
                      RESUME=\n\
                      prev=\n\
                      for a in \"$@\"; do [ \"$prev\" = --resume ] && RESUME=\"$a\"; prev=\"$a\"; done\n\
@@ -1167,6 +1263,8 @@ mod tests {
                 Turn {
                     emit: Box::new(move |e| events.lock().unwrap().push(e.clone())),
                     dir: self.dir.clone(),
+                    app_home: self.dir.join("home"),
+                    session_dir: self.session_dir(),
                     provider: Provider::Claude,
                     bin: claude,
                     model: model.map(str::to_string),
@@ -1214,7 +1312,7 @@ mod tests {
 
             /// Arguments of each invocation, in order.
             fn invocations(&self) -> Vec<Vec<String>> {
-                let log = self.dir.join(INTERNAL_DIR);
+                let log = self.dir.join(LOG_DIR);
                 let runs = fs::read_to_string(log.join("runs")).unwrap_or_default();
                 runs.lines()
                     .map(|pid| {
@@ -1227,8 +1325,13 @@ mod tests {
                     .collect()
             }
 
+            /// The deck's session folder, outside the deck.
+            fn session_dir(&self) -> PathBuf {
+                self.dir.join("home").join("sessions").join("1-test")
+            }
+
             fn session(&self) -> Option<String> {
-                deck::read_session(&self.dir, Provider::Claude.session_file())
+                deck::read_session(&self.session_dir(), Provider::Claude.session_file())
             }
         }
 
@@ -1288,16 +1391,43 @@ echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id
                 ]
             );
             assert_eq!(fx.session().as_deref(), Some("new-session"));
-            let log = fx.dir.join(INTERNAL_DIR);
+            let log = fx.dir.join(LOG_DIR);
             assert_eq!(
                 fs::read_to_string(log.join("stdin.log")).unwrap(),
                 "Make it pop"
             );
-            let prompt_file = log.join("system-prompt.md");
+            let home = fx.dir.join("home");
+            let prompt_file = home.join("system-prompt.md");
             assert_eq!(fs::read_to_string(&prompt_file).unwrap(), SYSTEM_PROMPT);
+            let mcp_file = home.join("mcp.json");
+            let mcp: Value = serde_json::from_str(&fs::read_to_string(&mcp_file).unwrap()).unwrap();
+            assert_eq!(
+                mcp["mcpServers"]["slopslide"]["args"],
+                json!(["--lint-mcp"])
+            );
+            let mut written: Vec<_> = fs::read_dir(&fx.dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            written.sort();
+            assert_eq!(
+                written,
+                [LOG_DIR, "claude", "home"],
+                "nothing of the app's is written into the deck"
+            );
+            assert!(has_flag(
+                &fx.invocations()[0],
+                "--add-dir",
+                &fx.session_dir().to_string_lossy()
+            ));
             let runs = fx.invocations();
             assert_eq!(runs.len(), 1);
             assert!(has_flag(&runs[0], "--model", "sonnet"));
+            assert!(has_flag(
+                &runs[0],
+                "--mcp-config",
+                &mcp_file.to_string_lossy()
+            ));
             assert!(has_flag(
                 &runs[0],
                 "--append-system-prompt-file",
@@ -1312,7 +1442,7 @@ echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id
                 r#"echo "{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$RESUME\"}}"
 {OK}"#
             ));
-            deck::write_session(&fx.dir, "session", Some("old-session")).unwrap();
+            deck::write_session(&fx.session_dir(), "claude-session", Some("old-session")).unwrap();
             assert!(!fx.run("Again", None).await);
             let runs = fx.invocations();
             assert_eq!(runs.len(), 1);
@@ -1338,7 +1468,7 @@ fi
 {INIT}
 {OK}"#
             ));
-            deck::write_session(&fx.dir, "session", Some("gone")).unwrap();
+            deck::write_session(&fx.session_dir(), "claude-session", Some("gone")).unwrap();
             assert!(!fx.run("Hi", None).await);
             let runs = fx.invocations();
             assert_eq!(runs.len(), 2, "retried once");
@@ -1371,7 +1501,7 @@ fi
 {INIT}
 {OK}"#
             ));
-            deck::write_session(&fx.dir, "session", Some("gone")).unwrap();
+            deck::write_session(&fx.session_dir(), "claude-session", Some("gone")).unwrap();
             assert!(!fx.run("Hi", None).await);
             assert_eq!(fx.invocations().len(), 2);
             assert_eq!(fx.session().as_deref(), Some("new-session"));
@@ -1386,13 +1516,13 @@ echo "{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$RESUME\"}}"
 echo '{{"type":"system","subtype":"compact_boundary","compact_metadata":{{"trigger":"manual"}}}}'
 {OK}"#
             ));
-            deck::write_session(&fx.dir, "session", Some("old-session")).unwrap();
+            deck::write_session(&fx.session_dir(), "claude-session", Some("old-session")).unwrap();
             assert!(!fx.run_compact().await);
             let runs = fx.invocations();
             assert_eq!(runs.len(), 1);
             assert!(has_flag(&runs[0], "--resume", "old-session"));
             assert_eq!(
-                fs::read_to_string(fx.dir.join(INTERNAL_DIR).join("stdin.log")).unwrap(),
+                fs::read_to_string(fx.dir.join(LOG_DIR).join("stdin.log")).unwrap(),
                 "/compact"
             );
             let events = fx.events();
@@ -1420,7 +1550,7 @@ fi
 {INIT}
 {OK}"#
             ));
-            deck::write_session(&fx.dir, "session", Some("gone")).unwrap();
+            deck::write_session(&fx.session_dir(), "claude-session", Some("gone")).unwrap();
             assert!(!fx.run_compact().await);
             assert_eq!(fx.invocations().len(), 1, "not retried without the session");
             assert_eq!(fx.session(), None, "the stale session is forgotten");

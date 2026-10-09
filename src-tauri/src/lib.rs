@@ -11,9 +11,12 @@ mod mcp;
 mod protocol;
 mod providers;
 mod review;
+mod sessions;
 mod size;
 mod templates;
 mod watcher;
+
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use tauri::{AppHandle, State};
@@ -21,7 +24,22 @@ use tauri::{AppHandle, State};
 use agent::{AgentManager, SendArgs};
 use deck::{Deck, DeckSummary};
 use error::Result;
+use sessions::Sessions;
 use watcher::DeckWatcher;
+
+fn sessions() -> Result<Sessions> {
+    Ok(Sessions::new(&deck::app_home()?))
+}
+
+/// The deck's current session, starting one if it has none.
+fn session(dir: &Path) -> Result<PathBuf> {
+    sessions()?.current_or_start(dir)
+}
+
+/// The deck's current session, if it has one.
+fn current_session(dir: &Path) -> Result<Option<PathBuf>> {
+    Ok(sessions()?.current(dir))
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,7 +68,7 @@ fn create_deck(
     title: String,
     template: Option<String>,
 ) -> Result<Deck> {
-    let root = templates::user_root(&app)?;
+    let root = templates::user_root()?;
     let source = template
         .as_deref()
         .map(|t| templates::source(&root, t))
@@ -60,30 +78,21 @@ fn create_deck(
         .zip(source.as_deref())
         .map(|(id, html)| deck::TemplateSource { id, html });
     let deck = deck::create(&deck::library_root(&app)?, &title, template)?;
-    stage_deck_template(&app, &deck);
     watcher.watch(app, deck.id.clone(), deck.path.clone().into())?;
     Ok(deck)
 }
 
-/// Copies the deck's template into its internals, where the agent reads its layouts.
-/// Best effort: a template that is gone only means there are no layouts to read.
-fn stage_deck_template(app: &AppHandle, deck: &Deck) {
-    if let (Some(template), Ok(root)) = (&deck.template, templates::user_root(app)) {
-        let _ = templates::stage(std::path::Path::new(&deck.path), &root, template);
-    }
-}
-
 #[tauri::command]
-fn list_templates(app: AppHandle) -> Result<Vec<templates::TemplateSummary>> {
-    Ok(templates::list(&templates::user_root(&app)?))
+fn list_templates() -> Result<Vec<templates::TemplateSummary>> {
+    Ok(templates::list(&templates::user_root()?))
 }
 
-/// Copies a template into the deck's internals for the agent; returns its deck-relative path.
+/// Copies a template into the deck's session for the agent; returns its absolute path.
 #[tauri::command]
 fn stage_template(app: AppHandle, id: String, template: String) -> Result<String> {
     templates::stage(
-        &deck::deck_dir(&app, &id)?,
-        &templates::user_root(&app)?,
+        &session(&deck::deck_dir(&app, &id)?)?,
+        &templates::user_root()?,
         &template,
     )
 }
@@ -91,15 +100,13 @@ fn stage_template(app: AppHandle, id: String, template: String) -> Result<String
 /// Gives a deck without slides the template's styles.
 #[tauri::command]
 fn apply_template(app: AppHandle, id: String, template: String) -> Result<Deck> {
-    let root = templates::user_root(&app)?;
+    let root = templates::user_root()?;
     let html = templates::source(&root, &template)?;
     let source = deck::TemplateSource {
         id: &template,
         html: &html,
     };
-    let deck = deck::apply_template(&deck::deck_dir(&app, &id)?, &id, source)?;
-    stage_deck_template(&app, &deck);
-    Ok(deck)
+    deck::apply_template(&deck::deck_dir(&app, &id)?, &id, source)
 }
 
 /// Adds a copy of one of the template's slides after `after`.
@@ -111,7 +118,7 @@ fn add_template_slide(
     slide: String,
     after: Option<String>,
 ) -> Result<CreatedSlide> {
-    let html = templates::source(&templates::user_root(&app)?, &template)?;
+    let html = templates::source(&templates::user_root()?, &template)?;
     let (deck, slide) =
         deck::add_template_slide(&deck::deck_dir(&app, &id)?, &id, after, &html, &slide)?;
     Ok(CreatedSlide { deck, slide })
@@ -120,11 +127,7 @@ fn add_template_slide(
 /// Saves the deck as a new user template, with placeholder text in place of its content.
 #[tauri::command]
 fn create_template(app: AppHandle, id: String, name: String) -> Result<templates::TemplateSummary> {
-    templates::create_from_deck(
-        &deck::deck_dir(&app, &id)?,
-        &templates::user_root(&app)?,
-        &name,
-    )
+    templates::create_from_deck(&deck::deck_dir(&app, &id)?, &templates::user_root()?, &name)
 }
 
 #[tauri::command]
@@ -134,8 +137,9 @@ fn open_deck(
     watcher: State<DeckWatcher>,
     id: String,
 ) -> Result<Deck> {
-    let deck = deck::open(&deck::deck_dir(&app, &id)?, &id, !agent.is_running(&id))?;
-    stage_deck_template(&app, &deck);
+    let dir = deck::deck_dir(&app, &id)?;
+    let session = current_session(&dir)?;
+    let deck = deck::open(&dir, session.as_deref(), &id, !agent.is_running(&id))?;
     watcher.watch(app, deck.id.clone(), deck.path.clone().into())?;
     Ok(deck)
 }
@@ -169,7 +173,9 @@ fn delete_deck(
 ) -> Result<()> {
     agent.interrupt(&id);
     watcher.stop();
-    deck::delete_deck(&deck::deck_dir(&app, &id)?)
+    let dir = deck::deck_dir(&app, &id)?;
+    sessions()?.remove_all(&dir)?;
+    deck::delete_deck(&dir)
 }
 
 #[tauri::command]
@@ -191,7 +197,8 @@ fn duplicate_slide(app: AppHandle, id: String, slide: String) -> Result<CreatedS
 
 #[tauri::command]
 fn set_slide_hidden(app: AppHandle, id: String, slide: String, hidden: bool) -> Result<Deck> {
-    deck::set_slide_hidden(&deck::deck_dir(&app, &id)?, &id, &slide, hidden)
+    let dir = deck::deck_dir(&app, &id)?;
+    deck::set_slide_hidden(&dir, current_session(&dir)?.as_deref(), &id, &slide, hidden)
 }
 
 /// Gives every slide of the deck the canvas `size`.
@@ -202,7 +209,8 @@ fn set_slide_size(app: AppHandle, id: String, size: size::SlideSize) -> Result<D
 
 #[tauri::command]
 fn set_slide_locked(app: AppHandle, id: String, slide: String, locked: bool) -> Result<Deck> {
-    deck::set_slide_locked(&deck::deck_dir(&app, &id)?, &id, &slide, locked)
+    let dir = deck::deck_dir(&app, &id)?;
+    deck::set_slide_locked(&dir, current_session(&dir)?.as_deref(), &id, &slide, locked)
 }
 
 #[tauri::command]
@@ -222,7 +230,8 @@ fn delete_section(app: AppHandle, id: String, index: usize) -> Result<Deck> {
 
 #[tauri::command]
 fn delete_slide(app: AppHandle, id: String, slide: String) -> Result<Deck> {
-    deck::delete_slide(&deck::deck_dir(&app, &id)?, &id, &slide)
+    let dir = deck::deck_dir(&app, &id)?;
+    deck::delete_slide(&dir, &session(&dir)?, &id, &slide)
 }
 
 /// Saves a slide edited on the stage (text edits, moved elements). `base` is its hash when
@@ -235,8 +244,8 @@ fn update_slide(
     markup: String,
     base: String,
 ) -> Result<UpdatedSlide> {
-    let (deck, previous) =
-        deck::update_slide(&deck::deck_dir(&app, &id)?, &id, &slide, &markup, &base)?;
+    let dir = deck::deck_dir(&app, &id)?;
+    let (deck, previous) = deck::update_slide(&dir, &session(&dir)?, &id, &slide, &markup, &base)?;
     Ok(UpdatedSlide { deck, previous })
 }
 
@@ -250,8 +259,10 @@ fn save_deck_source(
 ) -> Result<Deck> {
     // Normalizing mid-turn could rewrite ids the agent is about to reference.
     let normalize = !agent.is_running(&id);
+    let dir = deck::deck_dir(&app, &id)?;
     deck::save_source(
-        &deck::deck_dir(&app, &id)?,
+        &dir,
+        &session(&dir)?,
         &id,
         &source,
         base.as_deref(),
@@ -276,10 +287,11 @@ fn export_deck(app: AppHandle, id: String, dest: String) -> Result<()> {
 
 #[tauri::command]
 fn lint_deck(app: AppHandle, id: String) -> Result<Vec<lint::Issue>> {
-    deck::lint(&deck::deck_dir(&app, &id)?)
+    let dir = deck::deck_dir(&app, &id)?;
+    deck::lint(&dir, current_session(&dir)?.as_deref())
 }
 
-/// Screenshots `rect` of the window (the sketched-on slide) into the deck's internals.
+/// Screenshots `rect` of the window (the sketched-on slide) into the deck's session.
 /// Both are in CSS pixels; `viewport` is the window's size, to find the display scale.
 #[tauri::command]
 async fn capture_sketch(
@@ -291,7 +303,7 @@ async fn capture_sketch(
 ) -> Result<String> {
     let dir = deck::deck_dir(&app, &id)?;
     let png = capture::snapshot(&webview, rect, viewport, capture::SKETCH_WIDTH).await?;
-    deck::save_sketch(&dir, &png)
+    deck::save_sketch(&session(&dir)?, &png)
 }
 
 /// Creates `<parent>/<deck title>` (or `<deck title> 2`, …) for exported slide images.
@@ -323,22 +335,32 @@ async fn export_slide_image(
 
 #[tauri::command]
 fn load_chat(app: AppHandle, id: String) -> Result<serde_json::Value> {
-    deck::load_chat(&deck::deck_dir(&app, &id)?)
+    deck::load_chat(current_session(&deck::deck_dir(&app, &id)?)?.as_deref())
 }
 
 #[tauri::command]
 fn save_chat(app: AppHandle, id: String, chat: serde_json::Value) -> Result<()> {
-    deck::save_chat(&deck::deck_dir(&app, &id)?, &chat)
+    deck::save_chat(&session(&deck::deck_dir(&app, &id)?)?, &chat)
 }
 
+/// Starts a new chat in a new session; the old conversation stays in its own.
 #[tauri::command]
 fn reset_chat(app: AppHandle, agent: State<AgentManager>, id: String) -> Result<()> {
     agent.interrupt(&id);
-    let dir = deck::deck_dir(&app, &id)?;
-    for provider in agent::Provider::ALL {
-        deck::write_session(&dir, provider.session_file(), None)?;
+    new_chat(&sessions()?, &deck::deck_dir(&app, &id)?).map(|_| ())
+}
+
+/// A session for a new chat: the current one while it has no conversation yet, else a new one.
+fn new_chat(sessions: &Sessions, dir: &Path) -> Result<PathBuf> {
+    if let Some(current) = sessions.current(dir) {
+        if deck::load_chat(Some(&current))?.is_null() {
+            for provider in agent::Provider::ALL {
+                deck::write_session(&current, provider.session_file(), None)?;
+            }
+            return Ok(current);
+        }
     }
-    deck::save_chat(&dir, &serde_json::Value::Null)
+    sessions.start(dir)
 }
 
 #[tauri::command]
@@ -379,7 +401,8 @@ async fn list_providers() -> Vec<providers::ProviderInfo> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // `slopslide --lint-mcp <deck dir>`: the agent's lint tool, started by Claude Code.
+    // `slopslide --lint-mcp [deck dir]`: the agent's lint tool, started by the agent CLI in
+    // the deck folder.
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some(mcp::FLAG) {
         let dir = args

@@ -125,9 +125,11 @@ must never reflow, scroll, or overflow.
   JavaScript, for slide visuals.
 - Speaker notes, if requested, go in `<aside class="notes">…</aside>` inside the slide
   (hidden by the runtime).
-- The user can edit text and move, rotate, and scale elements on the slide by hand. Such an
-  element gets a `data-moved` attribute and inline `translate: Xpx Ypx`, `rotate: Ndeg`,
-  and/or `scale: N` (or stretched, `scale: X Y`) styles (see "Hand edits" below).
+- The user can edit text and move, rotate, tilt (in 3D), and scale elements on the slide by
+  hand. Such an element gets a `data-moved` attribute and inline `translate: Xpx Ypx`,
+  `rotate: Ndeg`, `scale: N` (or stretched, `scale: X Y`), and/or
+  `transform: perspective(1000px) rotateX(Ndeg) rotateY(Ndeg) … !important` styles (see
+  "Hand edits" below).
   Never add `data-moved`, `contenteditable`, or `data-slop-*` attributes yourself.
 - A slide with the `data-hidden` attribute is hidden: the user muted it in the editor and
   the player skips it when presenting. Keep the attribute when editing such a slide;
@@ -178,11 +180,13 @@ user clears them when they are done.
 
 ## Hand edits
 
-The user can edit text and move, rotate, and scale elements directly on the slide. Text
+The user can edit text and move, rotate, tilt, and scale elements directly on the slide. Text
 edits change the markup in place; keep them. A hand-transformed element carries `data-moved`
 and inline styles: `translate: Xpx Ypx` (slide pixels), `rotate: Ndeg`, and/or `scale: N`
 or `scale: X Y` (around its center; the `translate` already accounts for which side the
-user dragged). How it looks on screen now is what the user wants, but these are quick
+user dragged). A 3D tilt is an inline `transform: perspective(1000px) rotateX(Ndeg)
+rotateY(Ndeg) !important`, followed by any `transform` the element had before (it is
+`!important` so entrance animations cannot undo it). How it looks on screen now is what the user wants, but these are quick
 fixes that ignore the layout, so things may overlap, clip, or sit slightly off the grid. Text
 edits can also overflow (a longer text or extra lines push past the slide edge or out of
 their box); the editor outlines that in red and the user can ask for a tidy at any time, even
@@ -192,9 +196,10 @@ When asked to tidy a slide (the context then includes a screenshot of it, and ma
 elements the editor found running past the slide or cut off), read the screenshot first.
 Rebuild that slide's layout so every moved element sits where it appears in the screenshot (snap to the slide's grid and alignments where it is close) using the
 deck's normal layout tools (flex, grid, padding, gaps, a slide-scoped rule). Turn a `scale`
-into real sizes (width, height, font-size) and keep a `rotate` the user set as part of the
-slide's styles. Then remove `data-moved` and the inline `translate`, `rotate`, and `scale`
-from each one. Keep the user's text. Fix anything the
+into real sizes (width, height, font-size) and keep a `rotate` or 3D tilt the user set as part
+of the slide's styles (a tilt on an element with an entrance animation needs the animation's
+`transform` keyframes to end in the tilt, or a wrapper to carry it). Then remove `data-moved`
+and the inline `translate`, `rotate`, `scale`, and tilt `transform` from each one. Keep the user's text. Fix anything the
 edits broke: overlaps, clipping, uneven spacing, and overflow (give the text room, reflow or
 resize the layout; do not shrink it to unreadable sizes or drop words). The `moved-element` lint warning lists every
 element still waiting for this.

@@ -310,8 +310,8 @@ export const stylePrompt = (template: TemplateSummary, path: string) =>
 export const addLayoutPrompt = (template: TemplateSummary, slide: string, path: string, after: string | null) =>
   `Add a new slide ${after ? "after this one" : "at the end of the deck"} based on ${layoutRef(template, slide, path)}. Recreate the layout with this deck's design system and fill it with content that fits the deck.`;
 
-export const changeLayoutPrompt = (template: TemplateSummary, slide: string, path: string, sameTemplate: boolean) =>
-  `Change the layout of this slide to ${layoutRef(template, slide, path)}. Keep this slide's id and its content${sameTemplate ? "." : ", and use this deck's design system."}`;
+export const changeLayoutPrompt = (template: TemplateSummary, slide: string, path: string) =>
+  `Change the layout of this slide to ${layoutRef(template, slide, path)}. Only change the arrangement: keep this slide's id, its content, and its style (this deck's fonts, colors, and decorative elements), and do not take over the template's style.`;
 
 const newId = () => crypto.randomUUID();
 let lintRun = 0;
@@ -588,7 +588,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (!deck || !template || !selected || selectedSlide()?.locked) return;
     try {
       const path = await api.stageTemplate(deck.id, id);
-      promptAgent(changeLayoutPrompt(template, slide, path, deck.template === id));
+      promptAgent(changeLayoutPrompt(template, slide, path));
     } catch (error) {
       set({ error: errorMessage(error) });
     }

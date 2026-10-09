@@ -1670,11 +1670,14 @@ describe("templates", () => {
     await useApp.getState().changeLayout("swiss", "quote");
     const same = useApp.getState().composerFill?.text ?? "";
     expect(same).toMatch(/^Change the layout of this slide to the "Quote" layout/);
-    expect(same).toMatch(/Keep this slide's id and its content\.$/);
+    expect(same).toMatch(/keep this slide's id, its content, and its style/);
+    expect(same).toMatch(/do not take over the template's style\.$/);
 
+    // Another template's layout still keeps the slide's style.
     useApp.setState({ deck: { ...DECK, template: null } });
     await useApp.getState().changeLayout("swiss", "quote");
-    expect(useApp.getState().composerFill?.text).toMatch(/and use this deck's design system\.$/);
+    expect(useApp.getState().composerFill?.text).toMatch(/keep this slide's id, its content, and its style/);
+    expect(useApp.getState().composerFill?.text).toMatch(/do not take over the template's style\.$/);
 
     useApp.setState({ selected: null, composerFill: null });
     await useApp.getState().changeLayout("swiss", "quote");

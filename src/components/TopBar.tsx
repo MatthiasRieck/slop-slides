@@ -10,6 +10,8 @@ import {
   FolderOpen,
   Images,
   Loader2,
+  PanelLeftClose,
+  PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
   Play,
@@ -89,6 +91,7 @@ export function TopBar() {
         <ChevronLeft className="size-4" />
         Decks
       </button>
+      <RailToggle />
       <span className="text-muted-foreground/40">/</span>
       <input
         value={title}
@@ -131,6 +134,25 @@ export function TopBar() {
       </button>
       <ChatToggle />
     </header>
+  );
+}
+
+/** Shows or hides the slide rail on the left. */
+function RailToggle() {
+  const railOpen = useApp((s) => s.railOpen);
+  const Icon = railOpen ? PanelLeftClose : PanelLeftOpen;
+  const label = railOpen ? "Hide slides" : "Show slides";
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={railOpen}
+      onClick={() => useApp.getState().setRailOpen(!railOpen)}
+      className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+    >
+      <Icon className="size-4" />
+    </button>
   );
 }
 

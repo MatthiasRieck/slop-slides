@@ -118,11 +118,9 @@ function showMessages(...messages: ChatMessage[]) {
 }
 
 describe("ChatPanel: header", () => {
-  it("collapses the chat panel", () => {
-    useApp.setState({ chatOpen: true });
+  it("leaves hiding the chat to the top bar", () => {
     render(<ChatPanel />);
-    fireEvent.click(screen.getByRole("button", { name: "Hide chat" }));
-    expect(useApp.getState().chatOpen).toBe(false);
+    expect(screen.queryByRole("button", { name: "Hide chat" })).toBeNull();
   });
 });
 

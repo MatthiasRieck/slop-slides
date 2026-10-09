@@ -178,6 +178,8 @@ interface AppState {
   codeDirty: boolean;
   /** The chat panel is shown; the user can collapse it to give the stage more room. */
   chatOpen: boolean;
+  /** The slide rail is shown; the user can collapse it to give the stage more room. */
+  railOpen: boolean;
   /** Bumped when attached assets change, reloading every slide preview. */
   assetsRev: number;
   messages: ChatMessage[];
@@ -229,6 +231,7 @@ interface AppState {
   setView: (view: StageView) => void;
   setCodeDirty: (dirty: boolean) => void;
   setChatOpen: (open: boolean) => void;
+  setRailOpen: (open: boolean) => void;
   setModel: (provider: Provider, model: string) => void;
   setEffort: (effort: string) => void;
   setContextWindow: (contextWindow: string) => void;
@@ -325,6 +328,7 @@ export const useApp = create<AppState>((set, get) => ({
   view: localStorage.getItem("slopslide.view") === "code" ? "code" : "slides",
   codeDirty: false,
   chatOpen: localStorage.getItem("slopslide.chatOpen") !== "false",
+  railOpen: localStorage.getItem("slopslide.railOpen") !== "false",
   assetsRev: 0,
   messages: [],
   running: false,
@@ -411,6 +415,11 @@ export const useApp = create<AppState>((set, get) => ({
   setChatOpen: (chatOpen) => {
     localStorage.setItem("slopslide.chatOpen", String(chatOpen));
     set({ chatOpen });
+  },
+
+  setRailOpen: (railOpen) => {
+    localStorage.setItem("slopslide.railOpen", String(railOpen));
+    set({ railOpen });
   },
 
   setModel: (provider, id) => {

@@ -109,6 +109,29 @@ describe("chat panel", () => {
   });
 });
 
+describe("slide rail", () => {
+  it("is open by default", async () => {
+    const useApp = await freshStore();
+    expect(useApp.getState().railOpen).toBe(true);
+  });
+
+  it("restores a collapsed rail from localStorage", async () => {
+    localStorage.setItem("slopslide.railOpen", "false");
+    const useApp = await freshStore();
+    expect(useApp.getState().railOpen).toBe(false);
+  });
+
+  it("setRailOpen switches and persists", async () => {
+    const useApp = await freshStore();
+    useApp.getState().setRailOpen(false);
+    expect(useApp.getState().railOpen).toBe(false);
+    expect(localStorage.getItem("slopslide.railOpen")).toBe("false");
+    useApp.getState().setRailOpen(true);
+    expect(useApp.getState().railOpen).toBe(true);
+    expect(localStorage.getItem("slopslide.railOpen")).toBe("true");
+  });
+});
+
 describe("stage view", () => {
   it("defaults to slides", async () => {
     const useApp = await freshStore();

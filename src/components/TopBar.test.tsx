@@ -25,7 +25,21 @@ beforeEach(() => {
   save.mockReset();
   openDialog.mockReset();
   revealItemInDir.mockReset();
-  useApp.setState({ deck: deckFor(DECK_HTML), view: "slides", chatOpen: true, codeDirty: false, presenting: false, error: null, imageExport: null });
+  useApp.setState({ deck: deckFor(DECK_HTML), view: "slides", chatOpen: true, railOpen: true, codeDirty: false, presenting: false, error: null, imageExport: null });
+});
+
+describe("slide rail toggle", () => {
+  it("hides and shows the slide rail", () => {
+    render(<TopBar />);
+    const hide = screen.getByRole("button", { name: "Hide slides" });
+    expect(hide.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(hide);
+    expect(useApp.getState().railOpen).toBe(false);
+    const show = screen.getByRole("button", { name: "Show slides" });
+    expect(show.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(show);
+    expect(useApp.getState().railOpen).toBe(true);
+  });
 });
 
 describe("chat toggle", () => {

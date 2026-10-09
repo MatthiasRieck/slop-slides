@@ -240,6 +240,18 @@ describe("ChatPanel: composing", () => {
     expect(input.style.height).toBe("240px");
   });
 
+  it("keeps the toolbar on one line, collapsing labels to icons in narrow panels", () => {
+    render(<ChatPanel />);
+    const send = screen.getByTitle("Send");
+    const toolbar = send.parentElement!;
+    expect(toolbar.className).toContain("flex-nowrap");
+    expect(toolbar.className).not.toContain("flex-wrap");
+    expect(toolbar.parentElement!.className).toContain("@container");
+    const label = screen.getByText(useApp.getState().selection.label);
+    expect(label.className).toContain("hidden");
+    expect(label.className).toContain("@[26rem]:inline");
+  });
+
   it("sends on Enter with the current slide and clears the draft", () => {
     render(<ChatPanel />);
     type("  Make it blue  ");

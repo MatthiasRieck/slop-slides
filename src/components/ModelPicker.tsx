@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, ChevronDown, Loader2, RotateCw, Search, Star } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, Gauge, Loader2, RotateCw, Search, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import {
@@ -57,10 +57,12 @@ export function ModelPicker() {
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className={triggerClass}
+        title={selection.label}
+        aria-label={selection.label}
+        className={cn(triggerClass, "shrink-0")}
       >
         <ProviderIcon provider={selection.provider} className="size-3.5" />
-        <span className="font-medium text-foreground/90">{selection.label}</span>
+        <span className="hidden font-medium text-foreground/90 @[26rem]:inline">{selection.label}</span>
         <ChevronDown className="size-3 opacity-60" />
       </button>
       {open && <ModelMenu onClose={close} />}
@@ -343,10 +345,12 @@ export function EffortPicker() {
         type="button"
         aria-expanded={open}
         title={showContextWindow ? "Reasoning effort and context window" : "Reasoning effort"}
+        aria-label={label}
         onClick={() => setOpen((v) => !v)}
-        className={triggerClass}
+        className={cn(triggerClass, "shrink-0")}
       >
-        <span>{label}</span>
+        <Gauge className="size-3.5 @[26rem]:hidden" />
+        <span className="hidden @[26rem]:inline">{label}</span>
         <ChevronDown className="size-3 opacity-60" />
       </button>
       {open && (

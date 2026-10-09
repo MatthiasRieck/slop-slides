@@ -20,6 +20,7 @@ import {
   type Stroke,
   type Tool,
   type TrailPoint,
+  visibleArea,
 } from "../lib/ink";
 import { cn } from "../lib/utils";
 
@@ -161,12 +162,25 @@ export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annota
     const core = (trailCore.current ??= document.createElement("canvas"));
     const coreCtx = core.getContext("2d");
     if (!coreCtx) return;
+    // Only the part of the layer on screen gets a canvas: zoomed in, the layer is many times
+    // the screen's size, and glowing a canvas that big every frame makes the trail crawl.
+    const { left, top } = layerRef.current!.getBoundingClientRect();
+    const area = visibleArea(
+      { left, top, width: size.width, height: size.height },
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    Object.assign(canvas.style, {
+      left: `${area.x}px`,
+      top: `${area.y}px`,
+      width: `${area.width}px`,
+      height: `${area.height}px`,
+    });
     for (const c of [canvas, core]) {
-      const [w, h] = [Math.round(size.width * scale), Math.round(size.height * scale)];
+      const [w, h] = [Math.round(area.width * scale), Math.round(area.height * scale)];
       if (c.width !== w) c.width = w;
       if (c.height !== h) c.height = h;
     }
-    paintTrails(ctx, coreCtx, trails, now, size.width, size.height, scale);
+    paintTrails(ctx, coreCtx, trails, now, size.width, size.height, scale, area);
   }, [trails, now, size]);
 
   const at = (event: ReactPointerEvent) =>
@@ -281,7 +295,7 @@ export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annota
         })}
       </svg>
       {trails.length > 0 && (
-        <canvas ref={trailRef} data-testid="laser-trail" className="pointer-events-none absolute inset-0 size-full" />
+        <canvas ref={trailRef} data-testid="laser-trail" className="pointer-events-none absolute" />
       )}
       {laser && (
         <div

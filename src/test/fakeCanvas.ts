@@ -11,7 +11,11 @@ export function fakeCanvas2D(canvas: { width: number; height: number } = { width
     strokes: [] as number[],
     /** Shadow of each image copied in since the last clear. */
     images: [] as { shadowBlur: number; shadowColor: string }[],
-    setTransform() {},
+    /** The last transform set, as [a, b, c, d, e, f]. */
+    transform: [1, 0, 0, 1, 0, 0] as number[],
+    setTransform(...matrix: unknown[]) {
+      ctx.transform = matrix as number[];
+    },
     clearRect() {
       ctx.strokes = [];
       ctx.images = [];

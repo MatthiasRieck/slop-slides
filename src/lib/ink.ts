@@ -189,6 +189,22 @@ export const LASER_GLOW = [
   { blur: 24, spread: 10, opacity: 0.35 },
 ] as const;
 
+/**
+ * The part of a layer at `rect` (on screen, in CSS px) that lies inside a viewport of the given
+ * size, in the layer's own pixels and widened to whole ones. A zoomed layer can be many times
+ * the screen's size; a canvas over only this part keeps painting it as cheap as unzoomed.
+ */
+export function visibleArea(
+  rect: { left: number; top: number; width: number; height: number },
+  viewport: { width: number; height: number },
+): { x: number; y: number; width: number; height: number } {
+  const x = Math.max(0, Math.floor(-rect.left));
+  const y = Math.max(0, Math.floor(-rect.top));
+  const right = Math.min(rect.width, Math.ceil(viewport.width - rect.left));
+  const bottom = Math.min(rect.height, Math.ceil(viewport.height - rect.top));
+  return { x, y, width: Math.max(0, right - x), height: Math.max(0, bottom - y) };
+}
+
 /** The 2D canvas calls the trail painter makes, so tests can stand in for a canvas. */
 type Canvas2D = Pick<
   CanvasRenderingContext2D,
@@ -207,7 +223,8 @@ type Canvas2D = Pick<
 > & { canvas: { width: number; height: number } };
 
 /**
- * Paints laser trails onto `target`, a canvas `scale` device pixels per CSS pixel. The trails
+ * Paints laser trails, on a layer `width` by `height` CSS px, onto `target`, a canvas `scale`
+ * device pixels per CSS pixel that covers the layer from `origin` on. The trails
  * are first drawn solid onto `core`, a scratch canvas of the same size, which is then copied
  * over once per halo with a shadow, so the glow is even along a trail instead of piling up
  * where its segments overlap.
@@ -220,6 +237,7 @@ export function paintTrails(
   width: number,
   height: number,
   scale: number,
+  origin: { x: number; y: number } = { x: 0, y: 0 },
 ) {
   for (const ctx of [target, core]) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -227,7 +245,7 @@ export function paintTrails(
     ctx.shadowColor = "transparent";
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   }
-  core.setTransform(scale, 0, 0, scale, 0, 0);
+  core.setTransform(scale, 0, 0, scale, -origin.x * scale, -origin.y * scale);
   core.strokeStyle = `rgb(${LASER_RGB})`;
   core.lineCap = "round";
   for (const trail of trails) {

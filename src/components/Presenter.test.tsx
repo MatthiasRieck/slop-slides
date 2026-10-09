@@ -530,6 +530,21 @@ describe("Presenter tools", () => {
     expect(new Set(glow)).toEqual(new Set(colors(dot.style.boxShadow)));
   });
 
+  it("a zoomed-in laser trail only gets a canvas the size of the screen", () => {
+    paintedTrail();
+    const zoomed = { left: -1000, top: -500, width: window.innerWidth * 4, height: window.innerHeight * 4 };
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ ...zoomed, x: zoomed.left, y: zoomed.top } as DOMRect);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(zoomed.width);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(zoomed.height);
+    render(<Presenter />);
+    dragLaser();
+    const canvas = screen.getByTestId("laser-trail") as HTMLCanvasElement;
+    expect([canvas.style.left, canvas.style.top]).toEqual(["1000px", "500px"]);
+    expect([canvas.style.width, canvas.style.height]).toEqual([`${window.innerWidth}px`, `${window.innerHeight}px`]);
+    const scale = window.devicePixelRatio || 1;
+    expect([canvas.width, canvas.height]).toEqual([window.innerWidth * scale, window.innerHeight * scale]);
+  });
+
   it("putting the laser away clears its trail", () => {
     render(<Presenter />);
     fireEvent.keyDown(document.body, { key: "l" });

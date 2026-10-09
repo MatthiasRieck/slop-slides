@@ -17,6 +17,7 @@ import {
   TRAIL_HOLD_MS,
   trailFade,
   trailSegments,
+  visibleArea,
   zoomBox,
   type Stroke,
   type TrailPoint,
@@ -246,10 +247,48 @@ describe("paintTrails", () => {
     ]);
   });
 
+  it("draws a layer's trails shifted so the canvas starts at the given origin", () => {
+    const [target, core] = [fakeCanvas2D(), fakeCanvas2D()];
+    paintTrails(target, core, [[pt(0, 0), pt(1, 0)]], 0, 200, 100, 2, { x: 30, y: 10 });
+    expect(core.transform).toEqual([2, 0, 0, 2, -60, -20]);
+  });
+
   it("clears what was painted before", () => {
     const [target, core] = [fakeCanvas2D(), fakeCanvas2D()];
     paintTrails(target, core, [[pt(0, 0), pt(1, 0)]], 0, 200, 100, 1);
     paintTrails(target, core, [], 0, 200, 100, 1);
     expect(core.strokes).toEqual([]);
+  });
+});
+
+describe("visibleArea", () => {
+  const viewport = { width: 800, height: 600 };
+
+  it("is the whole layer when it fits on screen", () => {
+    expect(visibleArea({ left: 50, top: 20, width: 400, height: 300 }, viewport)).toEqual({ x: 0, y: 0, width: 400, height: 300 });
+  });
+
+  it("is only the on-screen part of a zoomed layer, in the layer's pixels", () => {
+    // A 4x zoom: the layer is 3200x2400, shifted so its middle is on screen.
+    expect(visibleArea({ left: -1200, top: -900, width: 3200, height: 2400 }, viewport)).toEqual({
+      x: 1200,
+      y: 900,
+      width: 800,
+      height: 600,
+    });
+  });
+
+  it("widens to whole pixels", () => {
+    expect(visibleArea({ left: -10.5, top: -0.25, width: 2000, height: 2000 }, viewport)).toEqual({
+      x: 10,
+      y: 0,
+      width: 801,
+      height: 601,
+    });
+  });
+
+  it("is empty for a layer off screen", () => {
+    expect(visibleArea({ left: 900, top: 0, width: 400, height: 300 }, viewport)).toMatchObject({ width: 0 });
+    expect(visibleArea({ left: -500, top: 0, width: 400, height: 300 }, viewport)).toMatchObject({ width: 0 });
   });
 });

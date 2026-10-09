@@ -203,7 +203,7 @@ export const api = {
   listProviders: () => invoke<ProviderInfo[]>("list_providers"),
   /** The user's templates first, then the built-in ones. */
   listTemplates: () => invoke<TemplateSummary[]>("list_templates"),
-  /** Copies the template into the deck's internals for the agent; returns its deck-relative path. */
+  /** Copies the template into the deck's session for the agent; returns its absolute path. */
   stageTemplate: (id: string, template: string) => invoke<string>("stage_template", { id, template }),
   /** Gives a deck without slides the template's styles. */
   applyTemplate: (id: string, template: string) => invoke<Deck>("apply_template", { id, template }),

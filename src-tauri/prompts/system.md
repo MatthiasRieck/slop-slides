@@ -13,7 +13,6 @@ Your working directory contains:
 ```
 deck.html        THE deck: every slide, all styles, and the player runtime
 assets/          images and media the user attached (reference as assets/<file>)
-.slopslide/      app internals and reference docs; never edit, only read
 ```
 
 `deck.html` is a single shareable presentation. It opens in any browser as a slideshow,
@@ -90,9 +89,10 @@ Rules (NON-NEGOTIABLE):
 A template is an ordinary deck whose slides are example layouts in one style, filled with
 placeholder text: typically `title`, `section`, `bullets`, `split`, `stats`, `quote`, and
 `closing` (the slide ids). The app ships several and users save their own. When a deck
-names its template in the `slopslide-template` meta, a copy of the template is at
-`.slopslide/templates/<template id>.html`; the user's messages also point you at a
-template copy when they pick a style or a layout.
+names its template in the `slopslide-template` meta, the `[context]` block of each message
+names a copy of it (`Deck template: <path>`); the user's messages also point you at a
+template copy when they pick a style or a layout. Those copies, sketches, and screenshots
+live in the app's own folder outside the deck: read them, never edit them.
 
 - When the deck has a template, build new slides from its layouts: copy the layout's
   markup (with a new unique id) and replace the placeholder text with real content. Keep
@@ -167,10 +167,9 @@ atmospheric device (texture, gradient field, geometric motif). Vary layouts acro
 (title, section break, statement, split, comparison, data, quote, closing) while keeping
 one design system.
 
-- Curated style presets: `.slopslide/reference/STYLE_PRESETS.md`
-- Animation recipes: `.slopslide/reference/animation-patterns.md`
-
-Read those before designing a new deck or restyling one.
+Curated style presets ("Style Presets Reference") and animation recipes ("Animation
+Patterns Reference") follow at the end of these instructions. Consult them before designing
+a new deck or restyling one.
 
 ## Content density
 

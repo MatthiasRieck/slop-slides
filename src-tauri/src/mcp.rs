@@ -1,6 +1,7 @@
 //! A tiny MCP server (JSON-RPC over stdio) that gives the agent one tool, `lint_deck`, so
-//! it can verify deck.html after editing. Claude Code starts it as
-//! `slopslide --lint-mcp <deck dir>` (see `agent.rs`).
+//! it can verify deck.html after editing. The agent starts it as
+//! `slopslide --lint-mcp [deck dir]`, the deck defaulting to the working directory
+//! (see `agent.rs`).
 
 use std::io::{BufRead, Write};
 use std::path::Path;
@@ -9,6 +10,7 @@ use serde_json::{json, Value};
 
 use crate::deck;
 use crate::lint;
+use crate::sessions::Sessions;
 
 pub const FLAG: &str = "--lint-mcp";
 pub const SERVER: &str = "slopslide";
@@ -18,8 +20,12 @@ pub const QUALIFIED_TOOL: &str = "mcp__slopslide__lint_deck";
 
 const DEFAULT_PROTOCOL: &str = "2024-11-05";
 
-/// Serves requests from stdin until it closes.
+/// Serves requests from stdin until it closes. Locked slides are checked against the deck's
+/// current session, where the app records them for the running turn.
 pub fn serve(dir: &Path) {
+    let session = deck::app_home()
+        .ok()
+        .and_then(|home| Sessions::new(&home).current(dir));
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
@@ -28,7 +34,7 @@ pub fn serve(dir: &Path) {
             continue;
         }
         let response = match serde_json::from_str::<Value>(&line) {
-            Ok(request) => handle(&request, dir),
+            Ok(request) => handle(&request, dir, session.as_deref()),
             Err(e) => Some(error(Value::Null, -32700, &format!("parse error: {e}"))),
         };
         if let Some(response) = response {
@@ -43,7 +49,7 @@ pub fn serve(dir: &Path) {
 }
 
 /// Answers one JSON-RPC message; notifications get no response.
-pub fn handle(request: &Value, dir: &Path) -> Option<Value> {
+pub fn handle(request: &Value, dir: &Path, session: Option<&Path>) -> Option<Value> {
     let id = request.get("id")?.clone();
     let result = match request["method"].as_str().unwrap_or("") {
         "initialize" => json!({
@@ -65,7 +71,7 @@ pub fn handle(request: &Value, dir: &Path) -> Option<Value> {
             "inputSchema": { "type": "object", "properties": {} },
         }]}),
         "tools/call" if request["params"]["name"] == TOOL => {
-            let (text, failed) = match deck::lint(dir) {
+            let (text, failed) = match deck::lint(dir, session) {
                 Ok(issues) => (lint::format_report(&issues), false),
                 Err(e) => (format!("Could not lint deck.html: {e}"), true),
             };
@@ -96,6 +102,7 @@ mod tests {
         handle(
             &json!({"jsonrpc":"2.0","id":7,"method":method,"params":params}),
             dir,
+            Some(&dir.join("session")),
         )
         .unwrap()
     }
@@ -117,7 +124,8 @@ mod tests {
         let dir = Path::new("/nonexistent");
         assert!(handle(
             &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
-            dir
+            dir,
+            None
         )
         .is_none());
         assert_eq!(
@@ -154,7 +162,7 @@ mod tests {
     fn lint_tool_reports_locked_slides_changed_during_a_turn() {
         let html = "<html><body><main class=\"deck\"><section class=\"slide\" id=\"a\" data-locked>A</section></main></body></html>";
         let dir = temp_deck(html);
-        deck::guard_locked(&dir).unwrap();
+        deck::guard_locked(&dir, &dir.join("session")).unwrap();
         std::fs::write(dir.join(deck::DECK_FILE), html.replace(">A<", ">B<")).unwrap();
         let res = call(&dir, "tools/call", json!({"name": TOOL, "arguments": {}}));
         let text = res["result"]["content"][0]["text"].as_str().unwrap();

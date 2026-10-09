@@ -708,7 +708,7 @@ describe("ChatPanel: transcript", () => {
     ["Write", { file_path: "/Users/me/Documents/SlopSlide/talk/deck.html" }, "Wrote deck.html"],
     ["Edit", { file_path: "C:\\Users\\me\\SlopSlide\\talk\\assets\\x.css" }, "Edited assets/x.css"],
     ["MultiEdit", { file_path: "/elsewhere/file.txt" }, "Edited /elsewhere/file.txt"],
-    ["Read", { file_path: "/lib/talk/.slopslide/reference/STYLE_PRESETS.md" }, "Read .slopslide/reference/STYLE_PRESETS.md"],
+    ["Read", { file_path: "/lib/talk/assets/notes.md" }, "Read assets/notes.md"],
     ["Grep", { pattern: "class=\"slide\"" }, 'Searched class="slide"'],
     ["Glob", { pattern: "assets/*" }, "Searched assets/*"],
     ["WebSearch", { query: "pitch deck tips" }, "Searched the web for pitch deck tips"],
@@ -897,7 +897,7 @@ describe("composer fill", () => {
 
   it("does not send a prepared message until the user does", async () => {
     useApp.setState({ composerFill: null });
-    invoke.mockImplementation(async (cmd: string) => (cmd === "capture_sketch" ? ".slopslide/sketches/1-ab.png" : []));
+    invoke.mockImplementation(async (cmd: string) => (cmd === "capture_sketch" ? "/home/.slopslides/sessions/1-ab/sketches/1-ab.png" : []));
     document.body.setAttribute("data-sketch-target", "");
     try {
       render(<ChatPanel />);
@@ -913,16 +913,16 @@ describe("composer fill", () => {
   it("shows a handed-over screenshot with the images and sends it with the message", () => {
     useApp.setState({ composerFill: null });
     render(<ChatPanel />);
-    act(() => useApp.getState().fillComposer("Tidy it", { screenshot: ".slopslide/sketches/1-ab.png" }));
+    act(() => useApp.getState().fillComposer("Tidy it", { screenshot: "/home/.slopslides/sessions/1-ab/sketches/1-ab.png" }));
     const fan = screen.getByRole("button", { name: "Show 1 attached image" });
     const img = fan.querySelector("img")!;
-    expect(img.getAttribute("src")).toContain("/.slopslide/sketches/1-ab.png");
+    expect(img.getAttribute("src")).toContain("/.session/home/.slopslides/sessions/1-ab/sketches/1-ab.png");
     expect(img.getAttribute("alt")).toBe("Slide screenshot");
     fireEvent.keyDown(textarea(), { key: "Enter" });
     expect(send).toHaveBeenCalledWith("Tidy it", {
       includeSlide: true,
       attachments: [],
-      screenshot: ".slopslide/sketches/1-ab.png",
+      screenshot: "/home/.slopslides/sessions/1-ab/sketches/1-ab.png",
     });
     expect(screen.queryByRole("button", { name: /attached image/ })).toBeNull();
     type("Next");
@@ -933,11 +933,11 @@ describe("composer fill", () => {
   it("lets the user remove the screenshot, and a plain fill clears it", () => {
     useApp.setState({ composerFill: null });
     render(<ChatPanel />);
-    act(() => useApp.getState().fillComposer("Tidy it", { screenshot: ".slopslide/sketches/1-ab.png" }));
+    act(() => useApp.getState().fillComposer("Tidy it", { screenshot: "/home/.slopslides/sessions/1-ab/sketches/1-ab.png" }));
     fireEvent.click(screen.getByRole("button", { name: "Show 1 attached image" }));
     fireEvent.click(screen.getByRole("button", { name: "Remove Slide screenshot" }));
     expect(screen.queryByRole("button", { name: /attached image/ })).toBeNull();
-    act(() => useApp.getState().fillComposer("Tidy it", { screenshot: ".slopslide/sketches/1-ab.png" }));
+    act(() => useApp.getState().fillComposer("Tidy it", { screenshot: "/home/.slopslides/sessions/1-ab/sketches/1-ab.png" }));
     act(() => useApp.getState().fillComposer("Fix it"));
     expect(screen.queryByRole("button", { name: /attached image/ })).toBeNull();
     fireEvent.keyDown(textarea(), { key: "Enter" });

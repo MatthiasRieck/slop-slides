@@ -11,9 +11,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
 
-use crate::deck::{self, DECK_FILE, INTERNAL_DIR};
+use crate::deck::{self, DECK_FILE};
 use crate::error::{Error, Result};
 use crate::html;
 use crate::review;
@@ -78,12 +77,8 @@ pub struct TemplateSummary {
 }
 
 /// `~/.slopslides/templates`, created on first use.
-pub fn user_root(app: &AppHandle) -> Result<PathBuf> {
-    let home = app
-        .path()
-        .home_dir()
-        .map_err(|e| Error::msg(format!("cannot locate home folder: {e}")))?;
-    let root = home.join(".slopslides").join("templates");
+pub fn user_root() -> Result<PathBuf> {
+    let root = deck::app_home()?.join("templates");
     fs::create_dir_all(&root)?;
     Ok(root)
 }
@@ -158,20 +153,20 @@ pub fn list(root: &Path) -> Vec<TemplateSummary> {
     own
 }
 
-/// Copies the template into the deck's internals for the agent to read; returns its
-/// deck-relative path.
-pub fn stage(deck_dir: &Path, root: &Path, id: &str) -> Result<String> {
+/// Copies the template into the deck's session for the agent to read; returns its absolute
+/// path.
+pub fn stage(session: &Path, root: &Path, id: &str) -> Result<String> {
     if !is_valid_id(id) {
         return Err(Error::msg(format!("invalid template id: {id}")));
     }
     let source = html::without_runtime(&source(root, id)?);
-    let dir = deck_dir.join(INTERNAL_DIR).join(STAGED_DIR);
+    let dir = session.join(STAGED_DIR);
     fs::create_dir_all(&dir)?;
     let name = format!("{id}.html");
     if fs::read_to_string(dir.join(&name)).ok().as_deref() != Some(source.as_str()) {
         fs::write(dir.join(&name), source)?;
     }
-    Ok(format!("{INTERNAL_DIR}/{STAGED_DIR}/{name}"))
+    Ok(dir.join(name).to_string_lossy().into_owned())
 }
 
 /// A new deck.html in the template's style: its styles (and fonts) without its slides,
@@ -375,16 +370,20 @@ mod tests {
     fn stages_a_copy_without_the_runtime_for_the_agent() {
         let root = TempDir::new();
         root.add("mine", &html::ensure_runtime(MINE));
-        let deck = TempDir::new();
-        let rel = stage(&deck.0, &root.0, "mine").unwrap();
-        assert_eq!(rel, ".slopslide/templates/mine.html");
-        let staged = fs::read_to_string(deck.0.join(&rel)).unwrap();
+        let session = TempDir::new();
+        let path = stage(&session.0, &root.0, "mine").unwrap();
+        assert_eq!(Path::new(&path), session.0.join("templates/mine.html"));
+        let staged = fs::read_to_string(&path).unwrap();
         assert!(!staged.contains("slopslide:runtime"));
         assert_eq!(html::find_slides(&staged).len(), 2);
-        assert_eq!(stage(&deck.0, &root.0, "mine").unwrap(), rel, "idempotent");
-        assert!(stage(&deck.0, &root.0, "bento-grid").is_ok());
-        assert!(stage(&deck.0, &root.0, "../x").is_err());
-        assert!(stage(&deck.0, &root.0, "nope").is_err());
+        assert_eq!(
+            stage(&session.0, &root.0, "mine").unwrap(),
+            path,
+            "idempotent"
+        );
+        assert!(stage(&session.0, &root.0, "bento-grid").is_ok());
+        assert!(stage(&session.0, &root.0, "../x").is_err());
+        assert!(stage(&session.0, &root.0, "nope").is_err());
     }
 
     #[test]
@@ -419,8 +418,7 @@ mod tests {
         fs::write(deck.0.join(DECK_FILE), &source).unwrap();
         fs::create_dir_all(deck.0.join("assets/icons")).unwrap();
         fs::write(deck.0.join("assets/icons/a.svg"), "<svg/>").unwrap();
-        fs::create_dir_all(deck.0.join(INTERNAL_DIR)).unwrap();
-        fs::write(deck.0.join(INTERNAL_DIR).join("chat.json"), "[]").unwrap();
+        fs::write(deck.0.join("notes.txt"), "draft").unwrap();
 
         let created = create_from_deck(&deck.0, &root.0, "  Quarterly Review ").unwrap();
         assert_eq!(created.id, "quarterly-review");
@@ -440,8 +438,8 @@ mod tests {
             "<svg/>"
         );
         assert!(
-            !dir.join(INTERNAL_DIR).exists(),
-            "app internals are not copied"
+            !dir.join("notes.txt").exists(),
+            "only deck.html and assets/ are copied"
         );
         assert_eq!(
             fs::read_to_string(deck.0.join(DECK_FILE)).unwrap(),

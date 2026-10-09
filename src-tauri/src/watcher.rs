@@ -10,7 +10,6 @@ use notify_debouncer_mini::{new_debouncer, DebounceEventResult, Debouncer};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::deck::INTERNAL_DIR;
 use crate::error::{Error, Result};
 
 #[derive(Default)]
@@ -64,7 +63,7 @@ impl DeckWatcher {
 fn changed_paths<'a>(roots: &[PathBuf], events: impl Iterator<Item = &'a Path>) -> Vec<String> {
     let mut paths: Vec<String> = events
         .filter_map(|path| roots.iter().find_map(|root| relative(root, path)))
-        .filter(|rel| !rel.starts_with(INTERNAL_DIR) && !is_temp_file(rel))
+        .filter(|rel| !is_temp_file(rel))
         .collect();
     paths.sort();
     paths.dedup();
@@ -152,8 +151,6 @@ mod tests {
         let events = [
             deck.clone(),
             root.0.join("assets/b.png"),
-            root.0.join(INTERNAL_DIR).join("chat.json"),
-            root.0.join(INTERNAL_DIR).join("snapshots/1.html"),
             root.0.join("deck.tmp-0a1b2c"),
             root.0.join("assets/a.png"),
             deck.clone(),

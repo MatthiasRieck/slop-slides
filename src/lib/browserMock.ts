@@ -64,7 +64,7 @@ export function installBrowserMock() {
         case "list_templates":
           return (await fetch("/__api/templates")).json();
         case "stage_template":
-          return `.slopslide/templates/${String(a.template)}.html`;
+          return `/home/.slopslides/sessions/preview/templates/${String(a.template)}.html`;
         case "codex_permission_modes":
           throw new Error("Codex permissions require the desktop app.");
         case "lint_deck":

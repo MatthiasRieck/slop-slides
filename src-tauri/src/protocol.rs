@@ -2,7 +2,9 @@
 //! `slop://localhost/<deck-id>/<path>` (`http://slop.localhost/...` on Windows), so the
 //! deck's relative `assets/…` references resolve exactly as they do when the file is opened
 //! in a browser. Templates (see [`templates`]) are served the same way, as
-//! `slop://localhost/.template/<template-id>/<path>`, for the layout and style previews.
+//! `slop://localhost/.template/<template-id>/<path>`, for the layout and style previews, and
+//! files in a deck's session (sketches the chat shows) by their absolute path, as
+//! `slop://localhost/.session/<absolute path>`.
 //!
 //! With `?pan` in the query, deck.html is served with the pasteboard (`assets/pasteboard.js`)
 //! added, so the stage can pan and zoom around the slide. With `?edit`, it also gets the slide
@@ -12,18 +14,21 @@
 //! export.
 
 use std::borrow::Cow;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use percent_encoding::percent_decode_str;
 use tauri::http::{header, Request, Response, StatusCode};
 use tauri::AppHandle;
 
 use crate::deck;
+use crate::sessions::Sessions;
 use crate::templates;
 
 /// First path segment of template files: `/.template/<template-id>/deck.html`. The app never
 /// names a deck folder like this (deck ids are slugs).
 const TEMPLATE_PREFIX: &str = ".template";
+/// First path segment of session files, followed by their absolute path.
+const SESSION_PREFIX: &str = ".session";
 
 const PASTEBOARD_JS: &str = include_str!("../assets/pasteboard.js");
 const EDITOR_JS: &str = include_str!("../assets/editor.js");
@@ -59,8 +64,12 @@ fn serve(app: &AppHandle, raw_path: &str) -> Result<(&'static str, Vec<u8>), Sta
     let (deck_id, rel) = split_path(raw_path)?;
     if deck_id == TEMPLATE_PREFIX {
         let (template, rel) = rel.split_once('/').ok_or(StatusCode::NOT_FOUND)?;
-        let root = templates::user_root(app).map_err(|_| StatusCode::NOT_FOUND)?;
+        let root = templates::user_root().map_err(|_| StatusCode::NOT_FOUND)?;
         return templates::read_file(&root, template, rel).ok_or(StatusCode::NOT_FOUND);
+    }
+    if deck_id == SESSION_PREFIX {
+        let home = deck::app_home().map_err(|_| StatusCode::NOT_FOUND)?;
+        return read_in_session(&Sessions::new(&home), &rel);
     }
     let dir = deck::deck_dir(app, &deck_id).map_err(|_| StatusCode::NOT_FOUND)?;
     read_in_deck(&dir, &rel)
@@ -111,6 +120,19 @@ fn with_scripts(html: &str, scripts: &[&str]) -> String {
         .rfind("</body")
         .unwrap_or(html.len());
     format!("{}{tags}{}", &html[..at], &html[at..])
+}
+
+/// A session file, by its absolute path without the leading `/` (`C:/…` on Windows).
+fn read_in_session(sessions: &Sessions, path: &str) -> Result<(&'static str, Vec<u8>), StatusCode> {
+    let file = match cfg!(windows) {
+        true => PathBuf::from(path),
+        false => Path::new("/").join(path),
+    };
+    if !sessions.contains(&file) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let bytes = std::fs::read(&file).map_err(|_| StatusCode::NOT_FOUND)?;
+    Ok((deck::mime_for(path), bytes))
 }
 
 fn read_in_deck(dir: &Path, rel: &str) -> Result<(&'static str, Vec<u8>), StatusCode> {
@@ -223,5 +245,43 @@ mod tests {
         assert_eq!(read_in_deck(&dir, ""), Err(StatusCode::FORBIDDEN));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn serves_files_inside_sessions_only() {
+        let root = std::env::temp_dir().join(format!("slopslide-proto-{}", uuid::Uuid::new_v4()));
+        let deck = root.join("deck");
+        std::fs::create_dir_all(&deck).unwrap();
+        std::fs::write(deck.join("deck.html"), "<html>").unwrap();
+        let sessions = Sessions::new(&root.join("home"));
+        let session = sessions.start(&deck).unwrap();
+        std::fs::create_dir_all(session.join("sketches")).unwrap();
+        std::fs::write(session.join("sketches/1.png"), "png").unwrap();
+        // As the frontend sends it: the absolute path without its leading slash.
+        let url_path = |path: &Path| {
+            let path = path.to_string_lossy().replace('\\', "/");
+            path.trim_start_matches('/').to_string()
+        };
+
+        assert_eq!(
+            read_in_session(&sessions, &url_path(&session.join("sketches/1.png"))),
+            Ok(("image/png", b"png".to_vec()))
+        );
+        assert_eq!(
+            read_in_session(&sessions, &url_path(&deck.join("deck.html"))),
+            Err(StatusCode::FORBIDDEN),
+            "only session files"
+        );
+        assert_eq!(
+            read_in_session(&sessions, &url_path(&session.join("../../deck/deck.html"))),
+            Err(StatusCode::FORBIDDEN)
+        );
+        assert_eq!(
+            read_in_session(&sessions, &url_path(&session.join("sketches/missing.png"))),
+            Err(StatusCode::FORBIDDEN),
+            "a missing file is not known to be inside"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

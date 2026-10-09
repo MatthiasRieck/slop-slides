@@ -101,12 +101,9 @@ function initialTemplate(templates: TemplateSummary[], deckTemplate: string | nu
 export function LayoutPicker(props: { mode: "add" | "change"; onDone: () => void; onBlank?: () => void }) {
   const templates = useTemplates();
   const deckTemplate = useApp((s) => s.deck?.template);
-  const [picked, setPicked] = useState<string | null>(null);
-  const current = picked ?? (templates ? initialTemplate(templates, deckTemplate) : null);
-  const switchable = props.mode === "change";
+  // Both modes stay on one template: picking a layout must not change the deck's style.
+  const current = templates ? initialTemplate(templates, deckTemplate) : null;
   const template = templates?.find((t) => t.id === current);
-  const own = templates?.filter((t) => !t.builtin) ?? [];
-  const builtin = templates?.filter((t) => t.builtin) ?? [];
   const sameStyle = !!template && template.id === deckTemplate;
 
   const choose = (slide: string) => {
@@ -122,39 +119,12 @@ export function LayoutPicker(props: { mode: "add" | "change"; onDone: () => void
       ? sameStyle
         ? "Adds a copy of the layout with placeholder text after the selected slide."
         : "This deck has another style: the chat gets a request for the agent to recreate the layout in it."
-      : "The chat gets a request for the agent to rebuild this slide on the layout, keeping its content.";
+      : "The chat gets a request for the agent to rebuild this slide on the layout, keeping its content and this deck's style.";
 
   return (
     <div className="flex min-h-0 flex-col">
       <div className="flex items-center gap-2 border-b px-3 py-2">
         <span className="text-xs font-medium">{props.mode === "add" ? "New slide" : "Change layout"}</span>
-        <div className="flex-1" />
-        {switchable && templates && templates.length > 0 && (
-          <select
-            aria-label="Template"
-            value={current ?? ""}
-            onChange={(e) => setPicked(e.target.value)}
-            className="max-w-56 rounded-md border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
-          >
-            {own.length > 0 && (
-              <optgroup label="Your templates">
-                {own.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.title}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            <optgroup label="Built-in">
-              {builtin.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.title}
-                  {t.id === deckTemplate ? " (this deck)" : ""}
-                </option>
-              ))}
-            </optgroup>
-          </select>
-        )}
       </div>
       <div className="min-h-0 overflow-y-auto p-3">
         {templates === undefined ? (

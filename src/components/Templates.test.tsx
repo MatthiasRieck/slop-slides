@@ -51,29 +51,24 @@ describe("LayoutPicker", () => {
     expect(screen.getByText(/Adds a copy of the layout/)).toBeTruthy();
   });
 
-  it("starts on the deck's template and lists the others by group when changing", () => {
+  it("stays on the deck's template without a style switcher when changing", async () => {
     useApp.setState({ deck: { ...DECK, template: "swiss" } });
+    localStorage.setItem("slopslide.layoutTemplate", "bento-grid");
     render(<LayoutPicker mode="change" onDone={() => {}} />);
-    const select = screen.getByLabelText("Template") as HTMLSelectElement;
-    expect(select.value).toBe("swiss");
-    expect([...select.querySelectorAll("optgroup")].map((g) => g.label)).toEqual(["Your templates", "Built-in"]);
-    expect(screen.getByRole("option", { name: "Swiss Design (this deck)" })).toBeTruthy();
+    expect(screen.queryByLabelText("Template")).toBeNull();
+    expect(screen.queryByRole("option")).toBeNull();
     expect(layoutNames()).toEqual(["Title layout", "Split layout", "Quote layout"]);
+    expect(screen.getByText(/keeping its content and this deck's style/)).toBeTruthy();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Quote layout" })));
+    await waitFor(() => expect(useApp.getState().composerFill?.text).toContain('"Quote" layout of the "Swiss Design" template'));
+    expect(useApp.getState().composerFill?.text).toContain("do not take over the template's style");
   });
 
-  it("switches templates and remembers the last one picked", async () => {
-    const done = vi.fn();
-    render(<LayoutPicker mode="change" onDone={done} />);
-    fireEvent.change(screen.getByLabelText("Template"), { target: { value: "bento-grid" } });
-    expect(layoutNames()).toEqual(["Title layout", "Stats layout"]);
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Stats layout" })));
-    expect(done).toHaveBeenCalled();
-    expect(localStorage.getItem("slopslide.layoutTemplate")).toBe("bento-grid");
-    await waitFor(() => expect(useApp.getState().composerFill?.text).toContain('"Stats" layout of the "Bento Grid" template'));
-
-    // Next time it opens on the template picked last (the deck has none).
+  it("opens on the template picked last when the deck has none", () => {
+    localStorage.setItem("slopslide.layoutTemplate", "bento-grid");
     render(<LayoutPicker mode="change" onDone={() => {}} />);
-    expect((screen.getAllByLabelText("Template")[1] as HTMLSelectElement).value).toBe("bento-grid");
+    expect(screen.queryByLabelText("Template")).toBeNull();
+    expect(layoutNames()).toEqual(["Title layout", "Stats layout"]);
   });
 
   it("adds a copy when the layout comes from the deck's template", async () => {

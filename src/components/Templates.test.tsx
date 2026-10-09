@@ -43,23 +43,29 @@ describe("LayoutPicker", () => {
     expect(invoke).toHaveBeenCalledWith("list_templates");
   });
 
-  it("starts on the deck's template and lists the others by group", () => {
+  it("starts on the deck's template without a style switcher when adding", () => {
     useApp.setState({ deck: { ...DECK, template: "swiss" } });
     render(<LayoutPicker mode="add" onDone={() => {}} />);
+    expect(screen.queryByLabelText("Template")).toBeNull();
+    expect(layoutNames()).toEqual(["Title layout", "Split layout", "Quote layout"]);
+    expect(screen.getByText(/Adds a copy of the layout/)).toBeTruthy();
+  });
+
+  it("starts on the deck's template and lists the others by group when changing", () => {
+    useApp.setState({ deck: { ...DECK, template: "swiss" } });
+    render(<LayoutPicker mode="change" onDone={() => {}} />);
     const select = screen.getByLabelText("Template") as HTMLSelectElement;
     expect(select.value).toBe("swiss");
     expect([...select.querySelectorAll("optgroup")].map((g) => g.label)).toEqual(["Your templates", "Built-in"]);
     expect(screen.getByRole("option", { name: "Swiss Design (this deck)" })).toBeTruthy();
     expect(layoutNames()).toEqual(["Title layout", "Split layout", "Quote layout"]);
-    expect(screen.getByText(/Adds a copy of the layout/)).toBeTruthy();
   });
 
   it("switches templates and remembers the last one picked", async () => {
     const done = vi.fn();
-    render(<LayoutPicker mode="add" onDone={done} />);
+    render(<LayoutPicker mode="change" onDone={done} />);
     fireEvent.change(screen.getByLabelText("Template"), { target: { value: "bento-grid" } });
     expect(layoutNames()).toEqual(["Title layout", "Stats layout"]);
-    expect(screen.getByText(/another style/)).toBeTruthy();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Stats layout" })));
     expect(done).toHaveBeenCalled();
     expect(localStorage.getItem("slopslide.layoutTemplate")).toBe("bento-grid");

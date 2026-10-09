@@ -103,6 +103,7 @@ export function LayoutPicker(props: { mode: "add" | "change"; onDone: () => void
   const deckTemplate = useApp((s) => s.deck?.template);
   const [picked, setPicked] = useState<string | null>(null);
   const current = picked ?? (templates ? initialTemplate(templates, deckTemplate) : null);
+  const switchable = props.mode === "change";
   const template = templates?.find((t) => t.id === current);
   const own = templates?.filter((t) => !t.builtin) ?? [];
   const builtin = templates?.filter((t) => t.builtin) ?? [];
@@ -128,7 +129,7 @@ export function LayoutPicker(props: { mode: "add" | "change"; onDone: () => void
       <div className="flex items-center gap-2 border-b px-3 py-2">
         <span className="text-xs font-medium">{props.mode === "add" ? "New slide" : "Change layout"}</span>
         <div className="flex-1" />
-        {templates && templates.length > 0 && (
+        {switchable && templates && templates.length > 0 && (
           <select
             aria-label="Template"
             value={current ?? ""}

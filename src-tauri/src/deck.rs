@@ -1329,7 +1329,10 @@ mod tests {
         let (at_end, id) = add_blank(&deck.0, "three", None).unwrap();
         assert_eq!(id, "slide-2");
         assert_eq!(slide_ids(&at_end), ["a", "slide", "b", "c", "slide-2"]);
-        assert!(deck.html().contains("Untitled slide"));
+        assert!(deck
+            .html()
+            .contains("<section class=\"slide layout-blank\" id=\"slide\"></section>"));
+        assert!(!deck.html().contains("Untitled slide"));
     }
 
     #[test]

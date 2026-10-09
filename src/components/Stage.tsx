@@ -182,7 +182,7 @@ export function Stage() {
             {slide && (
               <button
                 type="button"
-                title="Ask the agent to rebuild this slide's layout, fixing overflow and clipping and keeping the elements you moved, rotated or scaled, using a screenshot"
+                title="Prepare a message, with a screenshot, asking the agent to rebuild this slide's layout, fixing overflow and clipping and keeping the elements you moved, rotated or scaled"
                 disabled={running}
                 onClick={() => {
                   editFrames.clearSelection();

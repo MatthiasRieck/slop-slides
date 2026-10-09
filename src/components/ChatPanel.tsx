@@ -171,7 +171,7 @@ function UserBubble({ message }: { message: UserMessage }) {
       <div className="selectable max-w-[90%] whitespace-pre-wrap rounded-xl rounded-br-sm bg-accent px-3 py-2 text-sm leading-relaxed">
         {message.text}
       </div>
-      {(slideNumber > 0 || message.attachments.length > 0) && (
+      {(slideNumber > 0 || message.attachments.length > 0 || message.screenshot) && (
         <div className="flex flex-wrap justify-end gap-1 text-2xs text-muted-foreground">
           {slideNumber > 0 && <span>on slide {slideNumber}</span>}
           {message.sketch && <span>· with sketch</span>}
@@ -319,6 +319,8 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const running = useApp((s) => s.running);
   const [includeSlide, setIncludeSlide] = useState(true);
   const [attachments, setAttachments] = useState<string[]>([]);
+  // A slide screenshot handed over with a prepared message (Tidy layout), shown with the images.
+  const [screenshot, setScreenshot] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [gridOpen, setGridOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -329,9 +331,12 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
 
   const slideNumber = selected && deck ? deck.slides.findIndex((s) => s.id === selected) + 1 : 0;
   // Images show as previews in a fan behind the composer; other files stay chips.
-  const images = attachments.filter(isImage);
+  const images = [...(screenshot ? [screenshot] : []), ...attachments.filter(isImage)];
   const files = attachments.filter((a) => !isImage(a));
-  const removeAttachment = (path: string) => setAttachments((prev) => prev.filter((p) => p !== path));
+  const removeAttachment = (path: string) => {
+    if (path === screenshot) setScreenshot(null);
+    else setAttachments((prev) => prev.filter((p) => p !== path));
+  };
   // Marks go out once while on show (see `send`); they stay on the slide as a review.
   const unsentSketch = useApp((s) => {
     const marks = selected ? s.sketches[selected] : undefined;
@@ -356,6 +361,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
 
   const composerFill = useApp((s) => s.composerFill);
   useEffect(() => {
+    if (composerFill) setScreenshot(composerFill.screenshot ?? null);
     textareaRef.current?.focus();
   }, [composerFill]);
 
@@ -425,9 +431,10 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const submit = () => {
     const text = draft.trim();
     if (!text || running) return;
-    void useApp.getState().send(text, { includeSlide: includeSlide && slideNumber > 0, attachments });
+    void useApp.getState().send(text, { includeSlide: includeSlide && slideNumber > 0, attachments, ...(screenshot && { screenshot }) });
     setDraft("");
     setAttachments([]);
+    setScreenshot(null);
     setGridOpen(false);
   };
 
@@ -603,7 +610,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
 
 const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|svg|avif)$/i;
 const isImage = (path: string) => IMAGE_EXTENSIONS.test(path);
-const assetName = (path: string) => path.replace(/^assets\//, "");
+const assetName = (path: string) => (path.startsWith(".slopslide/") ? "Slide screenshot" : path.replace(/^assets\//, ""));
 
 /** How many previews the fan shows; the rest are counted on a badge. */
 const FAN_SIZE = 4;

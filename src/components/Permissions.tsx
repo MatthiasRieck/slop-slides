@@ -1,9 +1,10 @@
 import { ask } from "@tauri-apps/plugin-dialog";
 import { ChevronDown, Shield } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../lib/api";
 import { PERMISSION_MODES, type ApprovalDecision, type PermissionMode } from "../lib/permissions";
 import { useApp, type ChatPart } from "../store";
+import { ComposerPopover } from "./ComposerPopover";
 
 export function PermissionPicker() {
   const provider = useApp((s) => s.selection.provider);
@@ -14,6 +15,7 @@ export function PermissionPicker() {
   const [modes, setModes] = useState<PermissionMode[]>([]);
   const [error, setError] = useState<string | null>(null);
   const root = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
   useEffect(() => {
     if (provider !== "codex" || !deckId) return;
     let active = true;
@@ -22,14 +24,6 @@ export function PermissionPicker() {
     void api.codexPermissionModes(deckId).then((next) => { if (active) setModes(next); }).catch((e) => { if (active) setError(errorMessage(e)); });
     return () => { active = false; };
   }, [provider, deckId]);
-  useEffect(() => {
-    if (!open) return;
-    const dismiss = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
-    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("pointerdown", dismiss);
-    document.addEventListener("keydown", escape);
-    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape); };
-  }, [open]);
   useEffect(() => { if (running || provider !== "codex") setOpen(false); }, [running, provider]);
   if (provider !== "codex") return null;
   const choose = async (next: PermissionMode) => {
@@ -48,12 +42,12 @@ export function PermissionPicker() {
       className="flex h-7 items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50">
       <Shield className="size-3.5 shrink-0" /><span className="hidden @[26rem]:inline">{PERMISSION_MODES[mode].label}</span><ChevronDown className="size-3" />
     </button>
-    {open && <div role="group" aria-label="Permission modes" className="absolute bottom-full left-2 z-50 mb-2 w-64 max-w-[calc(100vw-2rem)] rounded-xl border bg-card p-1.5 text-foreground shadow-lg">
+    {open && <ComposerPopover anchor={root} onClose={close} width={256} className="p-1.5"><div role="group" aria-label="Permission modes">
       {error ? <p role="alert" className="p-2 text-xs text-destructive">{error}</p> : modes.length === 0 ? <p className="p-2 text-xs text-muted-foreground">Checking Codex permissions…</p> : modes.map((m) => <button key={m} type="button" aria-pressed={mode === m} onClick={() => void choose(m)} className="block w-full rounded-lg px-2.5 py-2 text-left text-xs hover:bg-accent aria-pressed:bg-accent">
         <span className="font-medium">{PERMISSION_MODES[m].label}</span><span className="mt-0.5 block text-muted-foreground">{PERMISSION_MODES[m].description}</span>
       </button>)}
       {modes.length > 0 && !modes.includes(mode) && <p role="alert" className="p-2 text-xs text-destructive">The saved mode is unavailable. Select another mode.</p>}
-    </div>}
+    </div></ComposerPopover>}
   </div>;
 }
 

@@ -33,7 +33,7 @@ pub(crate) const SYSTEM_PROMPT: &str = concat!(
 const TOOLS: &str = "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch";
 const STDERR_LIMIT: usize = 16 * 1024;
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum Provider {
     #[default]
@@ -205,6 +205,7 @@ impl AgentManager {
             if running.contains_key(&args.workspace) {
                 return Err(Error::msg("The agent is still working in this workspace."));
             }
+            crate::sessions::claim_provider(&session_dir, args.provider)?;
             running.insert(args.workspace.clone(), cancel_tx);
         }
         let approvals = self.approvals.clone();

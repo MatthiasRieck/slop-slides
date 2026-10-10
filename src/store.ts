@@ -21,6 +21,7 @@ import { DEFAULT_SIZE, pixelsOf, resizePrompt, sameSize, type SlideSize } from "
 import { basename, dirname, layoutLabel } from "./lib/utils";
 import {
   defaultModel,
+  PROVIDERS,
   pickContextWindow,
   pickEffort,
   requestEffort,
@@ -133,7 +134,7 @@ function saveSelection(selection: ModelSelection) {
 }
 
 /** Moves a selection that is no longer offered onto an installed provider's default model. */
-function reconcileSelection(selection: ModelSelection, providers: ProviderInfo[]): ModelSelection {
+function reconcileSelection(selection: ModelSelection, providers: ProviderInfo[], locked = false): ModelSelection {
   const current = providers.find((p) => p.id === selection.provider);
   const model = current?.models.find((m) => m.id === selection.model);
   if (model) {
@@ -146,7 +147,7 @@ function reconcileSelection(selection: ModelSelection, providers: ProviderInfo[]
   }
   // A provider whose models could not be listed keeps the saved choice rather than losing it.
   if (current?.installed && current.error) return selection;
-  const fallback = [current, ...providers].find((p) => p?.installed && p.models.length > 0);
+  const fallback = (locked ? [current] : [current, ...providers]).find((p) => p?.installed && p.models.length > 0);
   const next = fallback && defaultModel(fallback);
   if (!fallback || !next) return selection;
   return {
@@ -213,6 +214,7 @@ interface AppState {
   /** Bumped when attached assets change, reloading every slide preview. */
   assetsRev: number;
   messages: ChatMessage[];
+  sessionProvider: Provider | null;
   running: boolean;
   selection: ModelSelection;
   permissionMode: PermissionMode;
@@ -382,6 +384,7 @@ export const useApp = create<AppState>((set, get) => ({
   railOpen: localStorage.getItem("slopslide.railOpen") !== "false",
   assetsRev: 0,
   messages: [],
+  sessionProvider: null,
   running: false,
   selection: loadSelection(),
   permissionMode: loadPermissions(),
@@ -438,7 +441,7 @@ export const useApp = create<AppState>((set, get) => ({
       await api.saveChat(workspace.path, messages.map(settleInterrupted));
     }
     await api.closeWorkspace();
-    set({ workspace: null, openedFile: null, workspaceChange: null, messages: [], running: false });
+    set({ workspace: null, openedFile: null, workspaceChange: null, messages: [], running: false, sessionProvider: null });
     return true;
   },
 
@@ -530,6 +533,8 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setModel: (provider, id) => {
+    const locked = chatProvider(get());
+    if (locked && provider !== locked) return;
     const model = get()
       .providers?.find((p) => p.id === provider)
       ?.models.find((m) => m.id === id);
@@ -549,7 +554,7 @@ export const useApp = create<AppState>((set, get) => ({
     const result = await api.listProviders().catch(() => null);
     const providers = Array.isArray(result) ? result : [];
     set({ providers });
-    if (providers.length > 0) saveSelection(reconcileSelection(get().selection, providers));
+    if (providers.length > 0) saveSelection(reconcileSelection(get().selection, providers, chatProvider(get()) !== null));
   },
 
   toggleFavoriteModel: (key) => {
@@ -815,9 +820,17 @@ export const useApp = create<AppState>((set, get) => ({
     const { workspace, running } = get();
     if (!workspace || running) return;
     await api.resetChat(workspace.path);
-    set({ messages: [], running: false });
+    set({ messages: [], running: false, sessionProvider: null });
   },
 }));
+
+/** Existing chats use their last provider; pre-provider histories were Claude chats. */
+export function chatProvider(state: Pick<AppState, "messages" | "sessionProvider" | "selection">): Provider | null {
+  if (state.sessionProvider) return state.sessionProvider;
+  const reply = state.messages.findLast((m) => m.role === "assistant");
+  if (reply?.role === "assistant") return reply.provider ?? "claude";
+  return state.messages.length > 0 ? state.selection.provider : null;
+}
 
 export const COMPACT_COMMAND = "/compact";
 
@@ -934,10 +947,15 @@ async function openFileAt(path: string, file: OpenedFile) {
 }
 
 async function loadWorkspaceChat(path: string) {
-  const [chat, running] = await Promise.all([api.loadChat(path), api.agentRunning(path)]);
+  const [chat, running, provider] = await Promise.all([api.loadChat(path), api.agentRunning(path), api.sessionProvider(path)]);
   if (useApp.getState().workspace?.path !== path) return;
   const messages = Array.isArray(chat) ? (chat as ChatMessage[]) : [];
-  useApp.setState({ messages: running ? messages : messages.map(settleInterrupted), running });
+  useApp.setState({ messages: running ? messages : messages.map(settleInterrupted), running, sessionProvider: provider === "claude" || provider === "codex" || provider === "copilot" ? provider : null });
+  const locked = chatProvider(useApp.getState());
+  const { selection, providers } = useApp.getState();
+  if (locked && locked !== selection.provider) {
+    saveSelection(reconcileSelection({ ...selection, provider: locked, model: "", label: PROVIDERS[locked].label, contextWindow: null }, providers ?? [], true));
+  }
 }
 
 async function loadDeckState(deck: Deck) {

@@ -66,6 +66,7 @@ beforeEach(() => {
     deck: deckFor(DECK_HTML),
     selected: "intro",
     messages: [],
+    sessionProvider: null,
     running: false,
     selection: { provider: "claude", model: "claude-opus-5-5", label: "Claude Opus 5.5", effort: "medium", contextWindow: "1m" },
     providers: PROVIDERS,
@@ -367,6 +368,20 @@ describe("ChatPanel: composing", () => {
     expect(useApp.getState().selection).toMatchObject({ provider: "claude", model: "claude-sonnet-5" });
     expect(JSON.parse(localStorage.getItem("slopslide.selection")!)).toMatchObject({ model: "claude-sonnet-5" });
     expect(screen.queryByRole("option")).toBeNull();
+  });
+
+  it("limits provider tabs, search, and favorites to the current chat's provider", () => {
+    useApp.setState({ sessionProvider: "claude", favoriteModels: ["codex:gpt-6-astra", "claude:claude-sonnet-5"] });
+    render(<ChatPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
+    expect(screen.getAllByTitle("Start a new chat to change provider").every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+    fireEvent.click(screen.getByTitle("Favorites"));
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByRole("option", { name: /Claude Sonnet 5/ })).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText("Search models..."), { target: { value: "astra" } });
+    expect(screen.queryByRole("option")).toBeNull();
+    fireEvent.keyDown(screen.getByPlaceholderText("Search models..."), { key: "Enter" });
+    expect(useApp.getState().selection.provider).toBe("claude");
   });
 
   it("searches across providers", () => {

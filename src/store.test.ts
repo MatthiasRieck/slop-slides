@@ -550,6 +550,50 @@ describe("model choice", () => {
     expect(useApp.getState().selection).toMatchObject({ provider: "codex", model: "gpt-6-astra", effort: "low" });
   });
 
+  it("locks a started chat to its provider while allowing model changes", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, providers: PROVIDERS });
+    await useApp.getState().send("hello", { includeSlide: false, attachments: [] });
+    useApp.getState().setModel("codex", "gpt-6-astra");
+    expect(useApp.getState().selection.provider).toBe("claude");
+    useApp.getState().setModel("claude", "claude-sonnet-5");
+    expect(useApp.getState().selection.model).toBe("claude-sonnet-5");
+    useApp.setState({ running: false });
+    await useApp.getState().resetChat();
+    useApp.getState().setModel("codex", "gpt-6-astra");
+    expect(useApp.getState().selection.provider).toBe("codex");
+  });
+
+  it("keeps a chat's provider when its CLI becomes unavailable", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ sessionProvider: "claude" });
+    backend({ list_providers: () => PROVIDERS.map((p) => p.id === "claude" ? { ...p, installed: false, models: [] } : p) });
+    await useApp.getState().refreshProviders();
+    expect(useApp.getState().selection.provider).toBe("claude");
+  });
+
+  it("restores the workspace provider and keeps it across file switches", async () => {
+    const useApp = await freshStore(false);
+    useApp.setState({ providers: PROVIDERS });
+    useApp.getState().setModel("codex", "gpt-6-astra");
+    backend({ open_workspace: () => ({ path: "/decks/talk", name: "talk" }), open_deck: () => DECK, session_provider: () => "claude", load_chat: () => [] });
+    await useApp.getState().openWorkspace("/decks/talk");
+    expect(calls("session_provider")).toEqual([{ id: "/decks/talk" }]);
+    expect(useApp.getState().selection).toMatchObject({ provider: "claude", model: "claude-opus-5-5" });
+    await useApp.getState().openDeck(DECK.id);
+    await useApp.getState().closeDeck();
+    expect(useApp.getState().sessionProvider).toBe("claude");
+    useApp.getState().setModel("codex", "gpt-6-astra");
+    expect(useApp.getState().selection.provider).toBe("claude");
+    await useApp.getState().resetChat();
+    expect(useApp.getState().sessionProvider).toBeNull();
+    useApp.getState().setModel("codex", "gpt-6-astra");
+    expect(useApp.getState().selection.provider).toBe("codex");
+    useApp.setState({ sessionProvider: "codex" });
+    await useApp.getState().closeWorkspace();
+    expect(useApp.getState().sessionProvider).toBeNull();
+  });
+
   it("ignores models that are not offered", async () => {
     const useApp = await freshStore();
     useApp.setState({ providers: PROVIDERS });

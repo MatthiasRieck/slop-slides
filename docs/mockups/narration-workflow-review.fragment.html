@@ -1,8 +1,8 @@
 <div id="narration-workflow" class="viz-carousel" aria-label="Narration workflow alternatives">
-  <section data-variant="Slide first" aria-label="Slide first narration design">
+  <section data-variant="Slide first" aria-label="Slide first narration design" hidden>
     <div class="ss-app" data-design="slide-first"></div>
   </section>
-  <section data-variant="Separate workspace" aria-label="Separate workspace narration design" hidden>
+  <section data-variant="Separate workspace" aria-label="Separate workspace narration design">
     <div class="ss-app" data-design="workspace"></div>
   </section>
 </div>
@@ -45,7 +45,7 @@
 #narration-workflow .ss-app .ss-track span{display:block;background:var(--ss-orange);width:0;height:100%}
 #narration-workflow .ss-app .ss-slide-meta{text-align:center;color:var(--ss-muted);font-size:12px}
 #narration-workflow .ss-app .ss-sidebar{border-left:1px solid var(--ss-line);background:var(--ss-panel);min-width:0}
-#narration-workflow .ss-app .ss-tabs{display:flex;border-bottom:1px solid var(--ss-line);padding:0 16px;gap:20px}
+#narration-workflow .ss-app .ss-tabs{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--ss-line);padding:0 16px;gap:20px}
 #narration-workflow .ss-app .ss-tab{border:0;border-radius:0;padding:13px 0;background:none;color:var(--ss-muted)}
 #narration-workflow .ss-app .ss-tab[aria-selected="true"]{color:var(--ss-text);border-bottom:2px solid var(--ss-orange)}
 #narration-workflow .ss-app .ss-content{padding:18px 16px;display:grid;gap:16px}
@@ -77,7 +77,7 @@
 @media(max-width:620px){#narration-workflow .ss-app .ss-layout{grid-template-columns:1fr}#narration-workflow .ss-app .ss-thumbs{flex-direction:row;flex-wrap:wrap;border-right:0;padding:10px;gap:6px}#narration-workflow .ss-app .ss-thumb{width:calc(33.33% - 4px);min-height:55px}#narration-workflow .ss-app .ss-center{padding:12px}#narration-workflow .ss-app .ss-slide{margin-top:0;aspect-ratio:16/9;padding:20px}#narration-workflow .ss-app .ss-diagram{grid-template-columns:1fr 1fr}#narration-workflow .ss-app .ss-sidebar{border-left:0;border-top:1px solid var(--ss-line)}#narration-workflow .ss-app .ss-overlay{padding:15px 10px}#narration-workflow .ss-app .ss-bar{padding:8px}#narration-workflow .ss-app .ss-bar button{font-size:12px}#narration-workflow .ss-app .ss-dialog{padding:16px}#narration-workflow .ss-app .ss-inline-fields{grid-template-columns:1fr}}
 </style>
 <template id="ss-shell">
-  <header class="ss-bar"><span class="ss-brand">SlopSlide</span><span class="ss-deck-name">From ideas to impact</span><button class="cursor-interaction" data-action="home"><i data-lucide="arrow-left" aria-hidden="true"></i>Library</button><button class="cursor-interaction" data-action="narration"><i data-lucide="audio-lines" aria-hidden="true"></i>Narration</button><button class="cursor-interaction" data-action="present">Present</button></header>
+  <header class="ss-bar"><span class="ss-brand">SlopSlide</span><span class="ss-deck-name">From ideas to impact</span><button class="cursor-interaction" data-action="home"><i data-lucide="arrow-left" aria-hidden="true"></i>Library</button><button class="cursor-interaction" data-action="narration"><i data-lucide="audio-lines" aria-hidden="true"></i>Narration</button><button class="cursor-interaction" data-action="preview">Preview deck</button><button class="cursor-interaction" data-action="export">Export…</button><button class="cursor-interaction" data-action="present">Present</button></header>
   <div class="ss-layout">
     <nav class="ss-thumbs" aria-label="Slides"></nav>
     <main class="ss-center">
@@ -87,20 +87,20 @@
       <p class="ss-notice" data-notice aria-live="polite"></p>
     </main>
     <aside class="ss-sidebar" aria-label="Right sidebar">
-      <div class="ss-tabs" role="tablist" aria-label="Sidebar"><button class="ss-tab cursor-interaction" data-tab="chat" role="tab" aria-selected="false">Chat</button><button class="ss-tab cursor-interaction" data-tab="narration" role="tab" aria-selected="true">Narration</button></div>
+      <div class="ss-tabs" role="tablist" aria-label="Sidebar"><button class="ss-tab cursor-interaction" data-tab="chat" role="tab" aria-selected="false">Chat</button><button class="ss-tab cursor-interaction" data-tab="narration" role="tab" aria-selected="true">Narration</button><button class="ss-tab cursor-interaction" data-tab="presets" role="tab" aria-selected="false">Presentation presets</button></div>
       <div class="ss-content" data-chat hidden><div class="ss-row ss-between"><h3>Chat</h3><span class="ss-muted">Codex</span></div><p class="ss-chat-message">How would you like to improve this presentation?</p><textarea aria-label="Chat message" placeholder="Ask for changes to your slides…"></textarea><button class="ss-primary cursor-interaction" data-action="chat-send">Send</button></div>
       <div class="ss-content" data-narration>
         <div class="ss-subtabs" data-subtabs hidden role="tablist" aria-label="Narration scope"><button class="cursor-interaction" data-scope="slide" role="tab" aria-selected="true">This slide</button><button class="cursor-interaction" data-scope="deck" role="tab" aria-selected="false">Presentation</button></div>
-        <div data-slide-panel class="ss-stack">
+        <div data-slide-panel class="ss-stack"><div class="ss-callout"><h3>Presentation progress</h3><span class="ss-muted">Scripts: <span data-progress-scripts>6</span> of 6 · Audio: <span data-progress-audio>2</span> of 6</span><button class="cursor-interaction" data-action="draft-deck">Draft missing scripts…</button><button class="cursor-interaction" data-action="generate-deck">Generate missing audio</button></div>
           <div><span class="ss-muted" data-slide-caption>Slide 2</span><h2 data-panel-title>Knowledge that stays</h2></div>
           <div data-presenter-group><label class="ss-label">Presenter<select data-presenter aria-label="Presenter for this slide"><option>Ryan · English</option><option>Vivian · English</option></select></label><div class="ss-row ss-between"><button class="cursor-interaction" data-action="voice"><i data-lucide="mic" aria-hidden="true"></i>Create voice…</button><button class="ss-quiet cursor-interaction" data-action="manage">Manage</button></div></div>
           <div data-script-group><div class="ss-row ss-between"><label class="ss-label">What the presenter says</label><button class="ss-quiet cursor-interaction" data-action="draft"><i data-lucide="sparkles" aria-hidden="true"></i>Draft</button></div><textarea data-script aria-label="Narration script for this slide">Good ideas often get lost between projects. Shared knowledge gives the next team a starting point, so they can spend less time searching and more time making progress.</textarea><p class="ss-status" data-script-status>Saved · approximately 24 seconds</p></div>
           <button class="ss-primary ss-full cursor-interaction" data-action="generate"><i data-lucide="audio-lines" aria-hidden="true"></i><span data-generate-label>Generate another take</span></button>
           <div class="ss-row ss-between"><span class="ss-status" data-audio-status>✓ Audio ready for video · 0:24</span><button class="ss-quiet cursor-interaction" data-action="listen">Listen</button></div>
           <details data-history><summary>Recordings <span data-take-count>(2)</span></summary><div data-takes></div></details>
-          <details><summary>Voice &amp; timing</summary><div class="ss-stack"><span class="ss-muted">Applies to this slide only</span><div class="ss-inline-fields"><label class="ss-label">Language<select data-language><option>English</option><option>German</option></select></label><label class="ss-label">Pace<select data-pace><option>1.1× · Natural</option><option>1.0×</option><option>1.2×</option></select></label></div><label class="ss-label">Speech provider<select><option>Local Qwen · On device</option></select></label><label class="ss-label" data-silent-control hidden>Silent slide duration<input type="number" min="1" value="5" aria-label="Silent slide duration in seconds"></label><span class="ss-muted">For pauses, insert [pause:800ms] into the script.</span><button class="cursor-interaction" data-action="defaults">Use presentation defaults</button></div></details>
+          <details><summary>Voice &amp; timing</summary><div class="ss-stack"><span class="ss-muted">Applies to this slide only</span><div class="ss-inline-fields"><label class="ss-label">Language<select data-language><option>English</option><option>German</option></select></label><label class="ss-label">Pace<select data-pace><option>1.1× · Natural</option><option>1.0×</option><option>1.2×</option></select></label></div><span class="ss-muted">Speech provider: Local Qwen · using presentation preset. A slide override will appear when another provider is connected.</span><label class="ss-label" data-silent-control hidden>Silent slide duration<input type="number" min="1" value="5" aria-label="Silent slide duration in seconds"></label><span class="ss-muted">For pauses, insert [pause:800ms] into the script.</span><button class="cursor-interaction" data-action="defaults">Use presentation defaults</button></div></details>
         </div>
-        <div data-deck-panel hidden class="ss-stack"><div><h2>Finish narration</h2><p class="ss-muted">Applies to the whole presentation</p></div><div class="ss-callout"><h3 data-deck-summary>2 of 6 slides ready</h3><p data-missing-summary>4 slides need audio.</p><span class="ss-muted">Use the thumbnails on the left to edit individual slides.</span></div><button class="ss-primary ss-full cursor-interaction" data-action="generate-deck">Generate missing audio</button><p class="ss-muted">Existing selected recordings are kept.</p><details><summary>Presentation defaults</summary><div class="ss-stack"><label class="ss-label">Presenter for slides using defaults<select data-default-presenter><option>Ryan · English</option><option>Vivian · English</option></select></label><span class="ss-muted">Individual slide choices stay unchanged.</span><button class="cursor-interaction" data-action="draft-deck">Draft missing scripts</button></div></details></div>
+        <div data-deck-panel hidden class="ss-stack"><div><h2>Presentation presets</h2><p class="ss-muted">Defaults for this presentation. Individual slide choices are kept.</p></div><div hidden class="ss-callout"><h3 data-deck-summary>2 of 6 slides ready</h3><p data-missing-summary>4 slides need audio.</p><span class="ss-muted">Use the thumbnails on the left to edit individual slides.</span></div><div class="ss-stack"><label class="ss-label">Speech provider<select data-default-provider aria-label="Presentation speech provider"><option>Local Qwen · On device</option></select></label><p class="ss-muted">Only Local Qwen is connected. Other providers will appear here when available.</p><label class="ss-label">Default presenter<select data-default-presenter><option>Ryan · English</option><option>Vivian · English</option></select></label><div class="ss-inline-fields"><label class="ss-label">Default language<select data-default-language><option>English</option><option>German</option></select></label><label class="ss-label">Default pace<select data-default-pace><option>1.1× · Natural</option><option>1.0×</option><option>1.2×</option></select></label></div><p class="ss-muted">Changing a preset affects only slides that use it. Their audio may need to be regenerated.</p></div></div>
         <footer class="ss-footer" data-footer><div class="ss-row ss-between"><h3 data-footer-heading>Presentation</h3><span class="ss-muted" data-ready>2 of 6 ready</span></div><div class="ss-row"><button class="cursor-interaction" data-action="preview"><i data-lucide="play" aria-hidden="true"></i>Preview deck</button><button class="cursor-interaction" data-action="export"><i data-lucide="download" aria-hidden="true"></i>Export video…</button></div><button class="ss-quiet cursor-interaction" data-action="overview" data-overview>Prepare presentation audio…</button></footer>
       </div>
     </aside>
@@ -129,8 +129,8 @@
       globalThis.openai.setWidgetState({modelContent:{mockup:design,view:state.scope},privateContent:{...previous.privateContent,[design]:{tab:state.tab}}}).catch(()=>{});
     }
     function notice(message){q('[data-notice]').textContent=message;}
-    function setTab(tab){state.tab=tab;all('[data-tab]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.tab===tab)));q('[data-chat]').hidden=tab!=='chat';q('[data-narration]').hidden=tab!=='narration';}
-    function setScope(scope){state.scope=scope;all('[data-scope]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.scope===scope)));q('[data-slide-panel]').hidden=scope!=='slide';q('[data-deck-panel]').hidden=scope!=='deck';q('[data-footer]').hidden=design==='workspace'&&scope==='slide';}
+    function setTab(tab){state.tab=tab;all('[data-tab]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.tab===tab)));q('[data-chat]').hidden=tab!=='chat';q('[data-narration]').hidden=tab==='chat';setScope(tab==='presets'?'deck':'slide');}
+    function setScope(scope){state.scope=scope;all('[data-scope]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.scope===scope)));q('[data-slide-panel]').hidden=scope!=='slide';q('[data-deck-panel]').hidden=scope!=='deck';q('[data-footer]').hidden=true;}
     function refresh(){
       q('[data-slide-title]').textContent=titles[state.slide];q('[data-panel-title]').textContent=titles[state.slide];q('[data-slide-number]').textContent=state.slide+1;q('[data-slide-caption]').textContent=`Slide ${state.slide+1}`;
       q('[data-script]').value=state.scripts[state.slide];
@@ -139,14 +139,14 @@
       q('[data-silent-control]').hidden=!!state.scripts[state.slide].trim();
       q('[data-audio-status]').textContent=state.ready[state.slide]?'✓ Audio ready for video · 0:24':state.scripts[state.slide].trim()?'Audio needs to be generated':'Silent slide · 5 seconds';
       q('[data-generate-label]').textContent=state.ready[state.slide]?'Generate another take':'Generate audio';
-      const count=state.ready.filter((ready,i)=>ready||!state.scripts[i].trim()).length;q('[data-ready]').textContent=`${count} of 6 ready`;q('[data-deck-summary]').textContent=`${count} of 6 slides ready`;q('[data-missing-summary]').textContent=count===6?'All slides are ready to preview and export.':`${6-count} slides need audio.`;
+      const count=state.ready.filter((ready,i)=>ready||!state.scripts[i].trim()).length;q('[data-progress-scripts]').textContent=state.scripts.filter(x=>x.trim()).length;q('[data-progress-audio]').textContent=count;q('[data-ready]').textContent=`${count} of 6 ready`;q('[data-deck-summary]').textContent=`${count} of 6 slides ready`;q('[data-missing-summary]').textContent=count===6?'All slides are ready to preview and export.':`${6-count} slides need audio.`;
       all('.ss-thumb').forEach(b=>{const i=Number(b.dataset.slide);b.setAttribute('aria-pressed',String(i===state.slide));b.querySelector('[data-thumb-status]').textContent=state.ready[i]?'✓ Audio ready':state.scripts[i].trim()?'Needs audio':'Silent · 5s';});
       q('[data-take-count]').textContent=`(${state.slide===1?state.takes.length:state.ready[state.slide]?1:0})`;
       q('[data-takes]').innerHTML=state.slide===1?state.takes.map((t,i)=>`<div class="ss-history-row"><span>${escape(t.name)} · ${escape(t.time)}<br><span class="ss-muted">${escape(t.voice)}${t.used?' · Used in video':''}</span></span><div class="ss-row"><button class="ss-quiet cursor-interaction" data-audition="${i}">Listen</button><button class="cursor-interaction" data-use="${i}" ${t.used&&t.script===state.scripts[state.slide]?'disabled':''}>${t.script===state.scripts[state.slide]?'Use':'Use &amp; script'}</button></div></div>`).join(''):'<p class="ss-muted">Recordings belong to this slide.</p>';
     }
     q('.ss-thumbs').innerHTML=titles.map((t,i)=>`<button class="ss-thumb cursor-interaction" data-slide="${i}" aria-pressed="${i===1}"><span>${i+1}</span>${escape(t)}<span class="ss-thumb-status" data-thumb-status></span></button>`).join('');
     if(design==='workspace'){
-      q('[data-subtabs]').hidden=false;q('[data-overview]').hidden=true;q('[data-footer-heading]').textContent='Video';
+      q('[data-subtabs]').hidden=true;q('[data-overview]').hidden=true;q('[data-footer-heading]').textContent='Video';
       q('[data-script-group]').after(q('[data-presenter-group]'));
     }
     function close(){q('[data-overlay]').hidden=true;if(state.focus?.isConnected)state.focus.focus();}
@@ -176,7 +176,7 @@
       const b=event.target.closest('button');if(!b||!app.contains(b)||b.disabled)return;
       if(b.dataset.tab){setTab(b.dataset.tab);remember();return;}
       if(b.dataset.scope){setScope(b.dataset.scope);refresh();remember();return;}
-      if(b.dataset.slide!==undefined){state.slide=Number(b.dataset.slide);setScope('slide');refresh();return;}
+      if(b.dataset.slide!==undefined){state.slide=Number(b.dataset.slide);if(state.tab!=='chat')setTab('narration');setScope('slide');refresh();return;}
       if(b.dataset.use!==undefined){const take=state.takes[Number(b.dataset.use)];state.takes.forEach((t,i)=>t.used=i===Number(b.dataset.use));state.scripts[state.slide]=take.script;state.presenters[state.slide]=take.presenter;state.ready[state.slide]=true;refresh();notice(`${take.name} and its original script are now selected for the video.`);return;}
       if(b.dataset.audition!==undefined){notice(`Auditioning ${state.takes[Number(b.dataset.audition)].name} · simulated playback; video selection stays unchanged.`);return;}
       const action=b.dataset.action;
@@ -202,7 +202,7 @@
       if(action==='rename-voice'){state.renameOriginal=b.dataset.name;dialog(`<h2>Rename presenter</h2><label class="ss-label">Name<input data-rename value="${escape(state.renameOriginal)}"></label><div class="ss-row"><button class="ss-primary cursor-interaction" data-action="save-rename">Save name</button><button class="cursor-interaction" data-action="close">Cancel</button></div>`,'Rename presenter');}
       if(action==='save-rename'){const name=q('[data-rename]').value.trim();if(!name)return;state.voices=state.voices.map(n=>n===state.renameOriginal?name:n);state.presenters=state.presenters.map(n=>n===state.renameOriginal?name:n);all('[data-presenter] option').forEach(o=>{if(o.textContent===state.renameOriginal)o.textContent=name;});refresh();close();notice('Presenter renamed in this mockup.');}
       if(action==='defaults'){state.presenters[state.slide]='Ryan · English';state.ready[state.slide]=false;refresh();notice('This slide uses presentation defaults. Other slides are unchanged.');}
-      if(action==='draft-deck')notice('Slides without scripts would be drafted for review. Existing scripts are kept.');
+      if(action==='draft-deck')notice('Draft missing scripts for the presentation, then review each slide before generating audio. Existing scripts are kept.');
       if(action==='home'||action==='present'||action==='chat-send')notice('This prototype focuses on narration; this action is not simulated.');
       if(action==='close')close();
     });

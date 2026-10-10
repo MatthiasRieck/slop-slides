@@ -112,13 +112,19 @@ for (const design of ['slide-first', 'workspace']) {
 
 test('Separate workspace has distinct slide and presentation tasks', t => {
   const { q } = mount(t, 'workspace');
-  assert.equal(q('[data-subtabs]').hidden, false);
+  assert.equal(q('[data-subtabs]').hidden, true);
   assert.equal(q('[data-footer]').hidden, true);
-  q('[data-scope="deck"]').click();
+  q('[data-tab="presets"]').click();
   assert.equal(q('[data-slide-panel]').hidden, true);
   assert.equal(q('[data-deck-panel]').hidden, false);
-  assert.equal(q('[data-footer]').hidden, false);
+  assert.equal(q('[data-footer]').hidden, true);
   assert.equal(q('[data-deck-panel]').querySelectorAll('[data-jump], .ss-deck-row').length, 0);
+  assert.equal(q('[data-deck-panel]').querySelectorAll('[data-action="draft-deck"]').length, 0);
+  assert.equal(q('[data-default-provider]').value, 'Local Qwen · On device');
+  assert.equal(q('[data-default-language]').value, 'English');
+  assert.equal(q('[data-default-pace]').value, '1.1× · Natural');
+  assert.ok(q('[data-slide-panel] [data-action="draft-deck"]'));
+  assert.equal(q('[data-slide-panel]').querySelectorAll('[data-default-provider]').length, 0);
   assert.equal(q('.ss-thumbs').querySelectorAll('[data-slide]').length, 6);
   q('[data-slide="3"]').click();
   assert.equal(q('[data-slide-panel]').hidden, false);

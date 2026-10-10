@@ -14,6 +14,7 @@ import {
 import { cn, isMac } from "../lib/utils";
 import { useApp } from "../store";
 import { ProviderIcon } from "./ProviderIcon";
+import { ComposerPopover } from "./ComposerPopover";
 
 type Filter = "favorites" | Provider;
 
@@ -49,7 +50,6 @@ export function ModelPicker() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const close = useMemo(() => () => setOpen(false), []);
-  useDismiss(rootRef, open, close);
 
   return (
     <div ref={rootRef} className="relative">
@@ -65,7 +65,7 @@ export function ModelPicker() {
         <span className="hidden font-medium text-foreground/90 @[26rem]:inline">{selection.label}</span>
         <ChevronDown className="size-3 opacity-60" />
       </button>
-      {open && <ModelMenu onClose={close} />}
+      {open && <ComposerPopover anchor={rootRef} onClose={close} width={352} className="flex overflow-hidden"><ModelMenu onClose={close} /></ComposerPopover>}
     </div>
   );
 }
@@ -154,7 +154,7 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
   return (
     <div
       onKeyDown={onKeyDown}
-      className="absolute bottom-full left-0 z-50 mb-2 flex w-[22rem] overflow-hidden rounded-xl border bg-card shadow-xl shadow-black/20"
+      className="flex min-h-0 w-full"
     >
       <div className="flex w-12 shrink-0 flex-col items-center gap-1 border-r py-2">
         {rail.map((item) => {
@@ -181,8 +181,8 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
           );
         })}
       </div>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <label className="flex items-center gap-2 border-b px-3 focus-within:border-primary">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <label className="flex shrink-0 items-center gap-2 border-b px-3 focus-within:border-primary">
           <Search className="size-3.5 shrink-0 text-muted-foreground" />
           <input
             autoFocus
@@ -192,7 +192,7 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
             className="h-10 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
           />
         </label>
-        <div ref={listRef} className="max-h-72 min-h-32 overflow-y-auto p-1.5">
+        <div ref={listRef} className="max-h-72 min-h-0 overflow-y-auto p-1.5">
           {providers === undefined ? (
             <p className="flex items-center justify-center gap-2 px-2 py-8 text-xs text-muted-foreground">
               <Loader2 className="size-3.5 animate-spin" />
@@ -305,7 +305,6 @@ export function EffortPicker() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const close = useMemo(() => () => setOpen(false), []);
-  useDismiss(rootRef, open, close);
 
   const model = useApp((s) =>
     s.providers
@@ -354,7 +353,7 @@ export function EffortPicker() {
         <ChevronDown className="size-3 opacity-60" />
       </button>
       {open && (
-        <div className="absolute bottom-full left-0 z-50 mb-2 w-40 rounded-xl border bg-card p-1.5 shadow-xl shadow-black/20">
+        <ComposerPopover anchor={rootRef} onClose={close} width={160} className="p-1.5">
           {sections.map((section, index) => (
             <div key={section.title} className={cn(index > 0 && "mt-1.5 border-t pt-1.5")}>
               <div className="px-2 pt-1 pb-1.5 text-2xs font-medium text-muted-foreground">
@@ -376,7 +375,7 @@ export function EffortPicker() {
               ))}
             </div>
           ))}
-        </div>
+        </ComposerPopover>
       )}
     </div>
   );

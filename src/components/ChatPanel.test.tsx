@@ -377,6 +377,17 @@ describe("ChatPanel: composing", () => {
     expect(useApp.getState().selection).toMatchObject({ provider: "codex", model: "gpt-6-astra", effort: "high" });
   });
 
+  it("keeps the model menu open for favorite clicks and dismisses it on an outside pointer", () => {
+    render(<ChatPanel />);
+    fireEvent.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
+    fireEvent.pointerDown(screen.getAllByTitle("Add to favorites")[0]!);
+    fireEvent.click(screen.getAllByTitle("Add to favorites")[0]!);
+    expect(useApp.getState().favoriteModels).toContain("claude:claude-opus-5-5");
+    expect(screen.getAllByRole("option")).toHaveLength(2);
+    fireEvent.pointerDown(screen.getByPlaceholderText("Ask for slides or changes…"));
+    expect(screen.queryByRole("option")).toBeNull();
+  });
+
   it("explains a provider that is not installed", () => {
     useApp.setState({ providers: PROVIDERS.map((p) => (p.id === "codex" ? { ...p, installed: false, models: [] } : p)) });
     render(<ChatPanel />);

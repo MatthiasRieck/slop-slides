@@ -211,9 +211,9 @@ pub fn deck_shell(source: &str, id: &str, title: &str) -> String {
     html::ensure_runtime(&html::set_template(&shell, Some(id)))
 }
 
-/// Saves the deck in `deck_dir` as the user template `name`: a copy of its deck.html with
+/// Saves the deck file `deck_file` as the user template `name`: a copy of it with
 /// placeholder text in place of its content, and its assets. Returns the new template.
-pub fn create_from_deck(deck_dir: &Path, root: &Path, name: &str) -> Result<TemplateSummary> {
+pub fn create_from_deck(deck_file: &Path, root: &Path, name: &str) -> Result<TemplateSummary> {
     let name = name.trim();
     let name = if name.is_empty() { "My template" } else { name };
     let stem = html::slugify(name);
@@ -222,7 +222,7 @@ pub fn create_from_deck(deck_dir: &Path, root: &Path, name: &str) -> Result<Temp
         .chain((2..).map(|n| format!("{stem}-{n}")))
         .find(|id| !root.join(id).exists() && builtin(id).is_none())
         .expect("unbounded");
-    let source = fs::read_to_string(deck_dir.join(DECK_FILE))?;
+    let source = fs::read_to_string(deck_file)?;
     if html::find_slides(&source).is_empty() {
         return Err(Error::msg(
             "The deck has no slides to make a template from.",
@@ -234,7 +234,7 @@ pub fn create_from_deck(deck_dir: &Path, root: &Path, name: &str) -> Result<Temp
     let dir = root.join(&id);
     fs::create_dir_all(&dir)?;
     fs::write(dir.join(DECK_FILE), &cleaned)?;
-    let assets = deck_dir.join("assets");
+    let assets = deck::folder(deck_file).join("assets");
     if assets.is_dir() {
         copy_dir(&assets, &dir.join("assets"))?;
     }
@@ -485,7 +485,8 @@ mod tests {
         fs::write(deck.0.join("assets/icons/a.svg"), "<svg/>").unwrap();
         fs::write(deck.0.join("notes.txt"), "draft").unwrap();
 
-        let created = create_from_deck(&deck.0, &root.0, "  Quarterly Review ").unwrap();
+        let created =
+            create_from_deck(&deck.0.join(DECK_FILE), &root.0, "  Quarterly Review ").unwrap();
         assert_eq!(created.id, "quarterly-review");
         assert_eq!(created.title, "Quarterly Review");
         assert!(!created.builtin);
@@ -512,15 +513,19 @@ mod tests {
             "the deck is untouched"
         );
 
-        let again = create_from_deck(&deck.0, &root.0, "Quarterly review").unwrap();
+        let again = create_from_deck(&deck.0.join(DECK_FILE), &root.0, "Quarterly review").unwrap();
         assert_eq!(again.id, "quarterly-review-2");
         assert_eq!(
-            create_from_deck(&deck.0, &root.0, "Swiss").unwrap().id,
+            create_from_deck(&deck.0.join(DECK_FILE), &root.0, "Swiss")
+                .unwrap()
+                .id,
             "swiss-2",
             "never shadows a built-in"
         );
         assert_eq!(
-            create_from_deck(&deck.0, &root.0, " ").unwrap().id,
+            create_from_deck(&deck.0.join(DECK_FILE), &root.0, " ")
+                .unwrap()
+                .id,
             "my-template"
         );
         assert_eq!(list(&root.0).iter().filter(|t| !t.builtin).count(), 4);
@@ -530,6 +535,6 @@ mod tests {
             "<html><body><main class=\"deck\"></main></body></html>",
         )
         .unwrap();
-        assert!(create_from_deck(&deck.0, &root.0, "Empty").is_err());
+        assert!(create_from_deck(&deck.0.join(DECK_FILE), &root.0, "Empty").is_err());
     }
 }

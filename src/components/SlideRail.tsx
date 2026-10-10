@@ -309,7 +309,7 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
       const before = useApp.getState().deck?.slides ?? [];
       const neighbor = (before[index + 1] ?? before[index - 1])?.id ?? null;
       const next = await api.deleteSlide(deckId, slide.id);
-      // deck.html drops the slide's review marks with it; forget them here too.
+      // The deck file drops the slide's review marks with it; forget them here too.
       useApp.getState().clearSketch(slide.id);
       if (selected) useApp.getState().select(neighbor);
       useApp.getState().setDeck(next);

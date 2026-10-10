@@ -9,7 +9,8 @@ vi.mock("./components/Home", () => ({ Home: () => <div data-testid="stub-home" /
 vi.mock("./components/TopBar", () => ({ TopBar: () => <div data-testid="stub-top-bar" /> }));
 vi.mock("./components/SlideRail", () => ({ SlideRail: () => <div data-testid="stub-rail" /> }));
 vi.mock("./components/Stage", () => ({ Stage: () => <div data-testid="stub-stage" /> }));
-vi.mock("./components/ChatPanel", () => ({ ChatPanel: () => <div data-testid="stub-chat" /> }));
+vi.mock("./components/Sidebar", () => ({ Sidebar: () => <div data-testid="stub-sidebar-tabs" /> }));
+vi.mock("./components/FileViewer", () => ({ FileViewer: () => <div data-testid="stub-viewer" /> }));
 vi.mock("./components/Presenter", () => ({ Presenter: () => <div data-testid="stub-presenter" /> }));
 vi.mock("./components/CodeView", () => ({
   CodeView: ({ active }: { active: boolean }) => <div data-testid="stub-code" data-active={String(active)} />,
@@ -19,29 +20,38 @@ import { App } from "./App";
 import { useApp } from "./store";
 import { DECK_HTML, deckFor } from "./test/fixtures";
 
+const WORKSPACE = { path: "/decks", name: "decks" };
+
 beforeEach(() => {
-  useApp.setState({ deck: null, view: "slides", chatOpen: true, railOpen: true, presenting: false, error: null });
+  useApp.setState({ workspace: null, openedFile: null, deck: null, view: "slides", sidebarOpen: true, railOpen: true, presenting: false, error: null });
 });
 
 // Stub ids are prefixed: react-resizable-panels sets data-testid to each panel's id.
 const shown = (id: string) => screen.queryByTestId(`stub-${id}`) !== null;
 
 describe("App", () => {
-  it("shows the deck library until a deck is open", () => {
+  it("shows the start screen until a folder is open", () => {
     render(<App />);
     expect(shown("home")).toBe(true);
     expect(shown("top-bar")).toBe(false);
   });
 
-  it("shows the editor for an open deck", () => {
-    useApp.setState({ deck: deckFor(DECK_HTML) });
+  it("shows the file viewer and the sidebar in a folder without an open deck", () => {
+    useApp.setState({ workspace: WORKSPACE });
     render(<App />);
-    expect(["top-bar", "rail", "stage", "chat"].map(shown)).toEqual([true, true, true, true]);
-    expect(shown("home")).toBe(false);
+    expect(["top-bar", "viewer", "sidebar-tabs"].map(shown)).toEqual([true, true, true]);
+    expect(["home", "rail", "stage", "code"].map(shown)).toEqual([false, false, false, false]);
+  });
+
+  it("shows the editor for an open deck", () => {
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) });
+    render(<App />);
+    expect(["top-bar", "rail", "stage", "sidebar-tabs"].map(shown)).toEqual([true, true, true, true]);
+    expect(["home", "viewer"].map(shown)).toEqual([false, false]);
   });
 
   it("keeps the HTML view mounted while showing slides, so unsaved edits survive", () => {
-    useApp.setState({ deck: deckFor(DECK_HTML) });
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) });
     render(<App />);
     expect(screen.getByTestId("stub-code").dataset.active).toBe("false");
     act(() => useApp.getState().setView("code"));
@@ -49,28 +59,41 @@ describe("App", () => {
     expect(shown("stage")).toBe(false);
   });
 
-  it("collapses and reopens the slide rail", () => {
-    useApp.setState({ deck: deckFor(DECK_HTML) });
+  // Closed panels stay mounted (collapsed), so reopening them does not reload their contents.
+  const hidden = (panel: string) => screen.getByTestId(panel).getAttribute("aria-hidden") === "true";
+
+  it("collapses and reopens the slide rail, keeping it mounted", () => {
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) });
     render(<App />);
+    expect(hidden("rail")).toBe(false);
     act(() => useApp.getState().setRailOpen(false));
-    expect(shown("rail")).toBe(false);
-    expect(["stage", "chat"].map(shown)).toEqual([true, true]);
+    expect(hidden("rail")).toBe(true);
+    expect(screen.getByTestId("rail").hasAttribute("inert")).toBe(true);
+    expect(["rail", "stage", "sidebar-tabs"].map(shown)).toEqual([true, true, true]);
     act(() => useApp.getState().setRailOpen(true));
-    expect(shown("rail")).toBe(true);
+    expect(hidden("rail")).toBe(false);
+    expect(useApp.getState().railOpen).toBe(true);
   });
 
-  it("collapses and reopens the chat panel", () => {
-    useApp.setState({ deck: deckFor(DECK_HTML) });
+  it("collapses and reopens the sidebar, keeping it mounted", () => {
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) });
     render(<App />);
-    act(() => useApp.getState().setChatOpen(false));
-    expect(shown("chat")).toBe(false);
-    expect(["rail", "stage"].map(shown)).toEqual([true, true]);
-    act(() => useApp.getState().setChatOpen(true));
-    expect(shown("chat")).toBe(true);
+    act(() => useApp.getState().setSidebarOpen(false));
+    expect(hidden("sidebar")).toBe(true);
+    expect(["rail", "stage", "sidebar-tabs"].map(shown)).toEqual([true, true, true]);
+    act(() => useApp.getState().setSidebarOpen(true));
+    expect(hidden("sidebar")).toBe(false);
+  });
+
+  it("starts with a closed panel collapsed", () => {
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML), railOpen: false });
+    render(<App />);
+    expect(hidden("rail")).toBe(true);
+    expect(useApp.getState().railOpen).toBe(false);
   });
 
   it("overlays the presenter", () => {
-    useApp.setState({ deck: deckFor(DECK_HTML), presenting: true });
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML), presenting: true });
     render(<App />);
     expect(shown("presenter")).toBe(true);
     expect(shown("stage")).toBe(true);
@@ -88,9 +111,9 @@ describe("App", () => {
 });
 
 describe("lint status", () => {
-  it("re-lints the open deck whenever deck.html changes", async () => {
+  it("re-lints the open deck whenever the deck file changes", async () => {
     const refreshLint = vi.fn(async () => {});
-    useApp.setState({ deck: deckFor(DECK_HTML), refreshLint });
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML), refreshLint });
     render(<App />);
     expect(refreshLint).toHaveBeenCalledTimes(1);
     act(() => useApp.setState({ deck: deckFor(DECK_HTML) }));

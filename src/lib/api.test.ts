@@ -11,10 +11,15 @@ beforeEach(() => {
 
 // Command names and argument keys must match the #[tauri::command]s in src-tauri/src/lib.rs.
 const CASES = [
-  ["listDecks", () => api.listDecks(), "list_decks", undefined],
+  ["openWorkspace", () => api.openWorkspace("/ws"), "open_workspace", { path: "/ws" }],
+  ["closeWorkspace", () => api.closeWorkspace(), "close_workspace", undefined],
+  ["recentWorkspaces", () => api.recentWorkspaces(), "recent_workspaces", undefined],
+  ["forgetWorkspace", () => api.forgetWorkspace("/ws"), "forget_workspace", { path: "/ws" }],
+  ["libraryFolder", () => api.libraryFolder(), "library_folder", undefined],
+  ["listDir", () => api.listDir("talks"), "list_dir", { path: "talks" }],
+  ["openFile", () => api.openFile("talks/q3.html"), "open_file", { path: "talks/q3.html" }],
   ["createDeck", () => api.createDeck("Talk"), "create_deck", { title: "Talk", template: null }],
   ["openDeck", () => api.openDeck("talk"), "open_deck", { id: "talk" }],
-  ["closeDeck", () => api.closeDeck(), "close_deck", undefined],
   ["loadDeck", () => api.loadDeck("talk"), "load_deck", { id: "talk" }],
   ["renameDeck", () => api.renameDeck("talk", "New"), "rename_deck", { id: "talk", title: "New" }],
   [
@@ -23,7 +28,6 @@ const CASES = [
     "save_review",
     { id: "talk", review: { intro: [{ tool: "pen", color: "#fff", points: [[0.5, 0.5]] }] } },
   ],
-  ["deleteDeck", () => api.deleteDeck("talk"), "delete_deck", { id: "talk" }],
   ["reorderSlides", () => api.reorderSlides("talk", ["b", "a"]), "reorder_slides", { id: "talk", slides: ["b", "a"] }],
   ["addSlide", () => api.addSlide("talk", null), "add_slide", { id: "talk", after: null }],
   ["duplicateSlide", () => api.duplicateSlide("talk", "a"), "duplicate_slide", { id: "talk", slide: "a" }],

@@ -8,15 +8,17 @@ import {
   type AgentEvent,
   type AgentEventEnvelope,
   type Deck,
-  type DeckChanged,
   type LintIssue,
+  type OpenedFile,
   type Slide,
   type TemplateSummary,
+  type WorkspaceChanged,
+  type WorkspaceInfo,
 } from "./lib/api";
 import { latestContext, mergeContext, type ContextUsage } from "./lib/context";
 import { inkBounds, type Stroke } from "./lib/ink";
 import { DEFAULT_SIZE, pixelsOf, resizePrompt, sameSize, type SlideSize } from "./lib/slideSize";
-import { layoutLabel } from "./lib/utils";
+import { basename, dirname, layoutLabel } from "./lib/utils";
 import {
   defaultModel,
   pickContextWindow,
@@ -167,18 +169,45 @@ function loadFavorites(): string[] {
 
 export type StageView = "slides" | "code";
 
+/** The right sidebar's tabs, in order (see components/Sidebar.tsx). */
+export const SIDEBAR_TABS = ["chat", "files"] as const;
+export type SidebarTab = (typeof SIDEBAR_TABS)[number];
+const isSidebarTab = (value: unknown): value is SidebarTab => SIDEBAR_TABS.includes(value as SidebarTab);
+
+const SIDEBAR_OPEN_KEY = "slopslide.sidebarOpen";
+const SIDEBAR_TAB_KEY = "slopslide.sidebarTab";
+/** The file last open in each workspace, reopened with it: `slopslide.lastFile:<root>`. */
+const LAST_FILE_KEY = "slopslide.lastFile:";
+
+/** Files changed on disk in the open workspace, as the watcher reported them last. */
+export interface WorkspaceChange {
+  /** Workspace-relative, `/`-separated. */
+  paths: string[];
+  rev: number;
+}
+
 interface AppState {
+  /** The folder open in the file tree; null on the start screen. */
+  workspace: WorkspaceInfo | null;
+  /** The workspace file shown in the main area: a deck (also in `deck`) or another page. */
+  openedFile: OpenedFile | null;
+  /** Bumped when the open file (not a deck) changes on disk, so its viewer reloads. */
+  fileRev: number;
+  /** What changed on disk last, for the file tree to reload those folders. */
+  workspaceChange: WorkspaceChange | null;
   deck: Deck | null;
   /** Id of the selected slide. */
   selected: string | null;
   /** Bumped whenever the user picks a slide, so views can reveal it even if unchanged. */
   revealRev: number;
-  /** Whether the stage shows the rendered slide or deck.html's source. */
+  /** Whether the stage shows the rendered slide or the deck file's source. */
   view: StageView;
-  /** The HTML view holds edits that are not saved to deck.html yet. */
+  /** The HTML view holds edits that are not saved to the deck file yet. */
   codeDirty: boolean;
-  /** The chat panel is shown; the user can collapse it to give the stage more room. */
-  chatOpen: boolean;
+  /** The right sidebar is shown; the user can collapse it to give the stage more room. */
+  sidebarOpen: boolean;
+  /** The sidebar tab shown. */
+  sidebarTab: SidebarTab;
   /** The slide rail is shown; the user can collapse it to give the stage more room. */
   railOpen: boolean;
   /** Bumped when attached assets change, reloading every slide preview. */
@@ -194,7 +223,7 @@ interface AppState {
   /** Installed agent CLIs and their models; `undefined` while loading. */
   providers: ProviderInfo[] | undefined;
   error: string | null;
-  /** Lint result for the saved deck.html; null until the first check finishes. */
+  /** Lint result for the saved deck file; null until the first check finishes. */
   lint: LintIssue[] | null;
   /**
    * Text to put in the chat composer, with a counter so the same text can be sent twice.
@@ -202,7 +231,7 @@ interface AppState {
    */
   composerFill: { text: string; rev: number; screenshot?: string } | null;
   /**
-   * Ink drawn on slides in the editor, by slide id. Saved in deck.html as review marks, and
+   * Ink drawn on slides in the editor, by slide id. Saved in the deck file as review marks, and
    * sent along with the next message about the slide while it has changed since last sent.
    */
   sketches: Record<string, Stroke[]>;
@@ -223,15 +252,26 @@ interface AppState {
   /** Undone slide edits that can be redone, newest last. */
   slideRedo: SlideUndo[];
 
+  /** Opens a folder in the file tree, reopening the file last open in it. */
+  openWorkspace: (path: string) => Promise<void>;
+  /** Back to the start screen; false when the user kept unsaved edits instead. */
+  closeWorkspace: () => Promise<boolean>;
+  /** Opens a workspace file (by its workspace-relative path) in the viewer for its kind. */
+  openPath: (path: string) => Promise<void>;
+  /** Opens a deck by its id (the deck file's absolute path). */
   openDeck: (id: string) => Promise<void>;
+  /** Creates a deck at the root of the open workspace and opens it. */
   createDeck: (title: string, template?: string | null) => Promise<void>;
-  closeDeck: () => Promise<void>;
+  /** Closes the open file; false when the user kept unsaved edits instead. */
+  closeDeck: () => Promise<boolean>;
   setDeck: (deck: Deck) => void;
   select: (slide: string | null) => void;
   selectRelative: (delta: number) => void;
   setView: (view: StageView) => void;
   setCodeDirty: (dirty: boolean) => void;
-  setChatOpen: (open: boolean) => void;
+  setSidebarOpen: (open: boolean) => void;
+  /** Shows the sidebar on `tab`. */
+  setSidebarTab: (tab: SidebarTab) => void;
   setRailOpen: (open: boolean) => void;
   setModel: (provider: Provider, model: string) => void;
   setEffort: (effort: string) => void;
@@ -328,12 +368,17 @@ let lintRun = 0;
 let editQueue: Promise<void> = Promise.resolve();
 
 export const useApp = create<AppState>((set, get) => ({
+  workspace: null,
+  openedFile: null,
+  fileRev: 0,
+  workspaceChange: null,
   deck: null,
   selected: null,
   revealRev: 0,
   view: localStorage.getItem("slopslide.view") === "code" ? "code" : "slides",
   codeDirty: false,
-  chatOpen: localStorage.getItem("slopslide.chatOpen") !== "false",
+  sidebarOpen: localStorage.getItem(SIDEBAR_OPEN_KEY) !== "false",
+  sidebarTab: loadSidebarTab(),
   railOpen: localStorage.getItem("slopslide.railOpen") !== "false",
   assetsRev: 0,
   messages: [],
@@ -361,18 +406,66 @@ export const useApp = create<AppState>((set, get) => ({
   slideRedo: [],
   templates: undefined,
 
-  openDeck: async (id) => {
+  openWorkspace: async (path) => {
+    if (get().workspace?.path === path) return;
+    if (!(await get().closeWorkspace())) return;
     try {
-      const deck = await api.openDeck(id);
-      await loadDeckState(deck);
+      const workspace = await api.openWorkspace(path);
+      set({ workspace, openedFile: null, workspaceChange: null });
+    } catch (error) {
+      set({ error: errorMessage(error) });
+      return;
+    }
+    const last = localStorage.getItem(LAST_FILE_KEY + path);
+    if (last === null) return get().setSidebarTab("files");
+    // A file that is gone since just leaves the viewer empty.
+    try {
+      await openFileAt(last, await api.openFile(last));
+    } catch {
+      localStorage.removeItem(LAST_FILE_KEY + path);
+      get().setSidebarTab("files");
+    }
+  },
+
+  closeWorkspace: async () => {
+    if (!get().workspace) return true;
+    if (!(await get().closeDeck())) return false;
+    await api.closeWorkspace();
+    set({ workspace: null, openedFile: null, workspaceChange: null });
+    return true;
+  },
+
+  openPath: async (path) => {
+    const { workspace, openedFile } = get();
+    if (!workspace || openedFile?.path === path) return;
+    try {
+      await openFileAt(path, await api.openFile(path));
     } catch (error) {
       set({ error: errorMessage(error) });
     }
   },
 
+  openDeck: async (id) => {
+    if (get().deck?.id === id) return;
+    if (!(await get().closeDeck())) return;
+    try {
+      const deck = await api.openDeck(id);
+      const path = relativePath(get().workspace, id);
+      if (path !== null) rememberFile(path);
+      set({ openedFile: { path: path ?? basename(id), absolute: id, kind: "deck" } });
+      await loadDeckState(deck);
+    } catch (error) {
+      set({ openedFile: null, error: errorMessage(error) });
+    }
+  },
+
   createDeck: async (title, template = null) => {
+    if (!(await get().closeDeck())) return;
     try {
       const deck = await api.createDeck(title, template);
+      const path = relativePath(get().workspace, deck.id) ?? basename(deck.id);
+      rememberFile(path);
+      set({ openedFile: { path, absolute: deck.id, kind: "deck" } });
       await loadDeckState(deck);
     } catch (error) {
       set({ error: errorMessage(error) });
@@ -380,7 +473,11 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   closeDeck: async () => {
-    if (get().codeDirty && !(await confirmDiscardEdits())) return;
+    if (!get().deck) {
+      set({ openedFile: null });
+      return true;
+    }
+    if (get().codeDirty && !(await confirmDiscardEdits())) return false;
     await flushReviewSave();
     const { deck, running, messages } = get();
     const reply = messages.findLast((m) => m.role === "assistant");
@@ -391,8 +488,8 @@ export const useApp = create<AppState>((set, get) => ({
       set({ messages: chat });
       await api.saveChat(deck.id, chat);
     }
-    await api.closeDeck();
-    set({ codeDirty: false, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null, sketches: {}, sketchesSent: {}, imageExport: null, editing: false, slideUndo: [], slideRedo: [] });
+    set({ codeDirty: false, openedFile: null, deck: null, selected: null, messages: [], running: false, presenting: false, lint: null, composerFill: null, sketches: {}, sketchesSent: {}, imageExport: null, editing: false, slideUndo: [], slideRedo: [] });
+    return true;
   },
 
   setDeck: (deck) => {
@@ -418,9 +515,15 @@ export const useApp = create<AppState>((set, get) => ({
 
   setCodeDirty: (codeDirty) => set({ codeDirty }),
 
-  setChatOpen: (chatOpen) => {
-    localStorage.setItem("slopslide.chatOpen", String(chatOpen));
-    set({ chatOpen });
+  setSidebarOpen: (sidebarOpen) => {
+    localStorage.setItem(SIDEBAR_OPEN_KEY, String(sidebarOpen));
+    set({ sidebarOpen });
+  },
+
+  setSidebarTab: (sidebarTab) => {
+    localStorage.setItem(SIDEBAR_TAB_KEY, sidebarTab);
+    if (!get().sidebarOpen) get().setSidebarOpen(true);
+    set({ sidebarTab });
   },
 
   setRailOpen: (railOpen) => {
@@ -783,7 +886,8 @@ async function stepSlideHistory(from: "slideUndo" | "slideRedo", to: "slideUndo"
 }
 
 async function confirmDiscardEdits(): Promise<boolean> {
-  const message = "You have unsaved changes to deck.html. Discard them?";
+  const name = basename(useApp.getState().deck?.id ?? "") || "the deck";
+  const message = `You have unsaved changes to ${name}. Discard them?`;
   try {
     return await ask(message, { title: "Unsaved changes", kind: "warning", okLabel: "Discard" });
   } catch {
@@ -797,9 +901,37 @@ function findTemplate(id: string): TemplateSummary | undefined {
 
 /** Hands the composer a prepared message, showing the chat if it is hidden. */
 function promptAgent(text: string, options?: { screenshot?: string | null }) {
-  const { chatOpen, setChatOpen, fillComposer } = useApp.getState();
-  if (!chatOpen) setChatOpen(true);
+  const { sidebarOpen, sidebarTab, setSidebarTab, fillComposer } = useApp.getState();
+  if (!sidebarOpen || sidebarTab !== "chat") setSidebarTab("chat");
   fillComposer(text, options);
+}
+
+function loadSidebarTab(): SidebarTab {
+  const saved = localStorage.getItem(SIDEBAR_TAB_KEY);
+  return isSidebarTab(saved) ? saved : "chat";
+}
+
+/** `absolute` relative to the workspace folder, `/`-separated; null when outside it. */
+export function relativePath(workspace: WorkspaceInfo | null, absolute: string): string | null {
+  if (!workspace) return null;
+  const root = workspace.path.replaceAll("\\", "/").replace(/\/$/, "");
+  const path = absolute.replaceAll("\\", "/");
+  return path.startsWith(`${root}/`) ? path.slice(root.length + 1) : null;
+}
+
+/** Reopens `path` the next time its workspace opens. */
+function rememberFile(path: string) {
+  const { workspace } = useApp.getState();
+  if (workspace) localStorage.setItem(LAST_FILE_KEY + workspace.path, path);
+}
+
+/** Shows the workspace file `path` in the viewer its kind calls for: a deck in the editor. */
+async function openFileAt(path: string, file: OpenedFile) {
+  const { closeDeck, openDeck } = useApp.getState();
+  if (file.kind === "deck") return openDeck(file.absolute);
+  if (!(await closeDeck())) return;
+  rememberFile(path);
+  useApp.setState((s) => ({ openedFile: file, fileRev: s.fileRev + 1 }));
 }
 
 async function loadDeckState(deck: Deck) {
@@ -828,7 +960,7 @@ const REVIEW_SAVE_DELAY = 400;
 let reviewSave: { deckId: string; timer: ReturnType<typeof setTimeout> } | null = null;
 /** Review saves still on their way to disk. */
 let reviewSaving = 0;
-/** The review marks as deck.html holds them, as far as the app knows (see `reviewKey`). */
+/** The review marks as the deck file holds them, as far as the app knows (see `reviewKey`). */
 let savedReview = reviewKey({});
 
 /** Compares review marks independent of slide order; slides without marks don't count. */
@@ -852,7 +984,7 @@ function adoptReview(deck: Deck) {
   if (key !== reviewKey(useApp.getState().sketches)) useApp.setState({ sketches: review, sketchesSent: {} });
 }
 
-/** Saves the review marks to deck.html once drawing pauses. */
+/** Saves the review marks to the deck file once drawing pauses. */
 function scheduleReviewSave() {
   const deck = useApp.getState().deck;
   if (!deck) return;
@@ -901,13 +1033,13 @@ async function captureSlide(deckId: string): Promise<string | null> {
   }
 }
 
-/** Chat instructions asking the agent to fix `issues` and verify with its lint tool. */
-export function lintFixPrompt(issues: LintIssue[]): string {
+/** Chat instructions asking the agent to fix `issues` in the deck file `file` and verify with its lint tool. */
+export function lintFixPrompt(issues: LintIssue[], file = "deck.html"): string {
   const lines = issues.map(
     (i) => `- line ${i.line} ${i.severity} [${i.rule}]${i.slide ? ` (slide \`${i.slide}\`)` : ""}: ${i.message}`,
   );
   return [
-    "deck.html does not pass the HTML lint. Fix these issues without changing how the slides look:",
+    `${file} does not pass the HTML lint. Fix these issues without changing how the slides look:`,
     "",
     ...lines,
     "",
@@ -942,10 +1074,14 @@ async function stageDeckTemplate(deck: Deck): Promise<string | null> {
 
 function buildPrompt(deck: Deck, message: UserMessage, template: string | null = null): string {
   const context: string[] = [];
+  const file = basename(deck.id);
+  if (file !== "deck.html") {
+    context.push(`Deck file: ${file} (the deck the instructions call deck.html; pass it as lint_deck's path)`);
+  }
   if (message.slide) {
     const index = deck.slides.findIndex((s) => s.id === message.slide);
     context.push(
-      `Current slide: <section id="${message.slide}"> in deck.html (slide ${index + 1} of ${deck.slides.length})`,
+      `Current slide: <section id="${message.slide}"> in ${basename(deck.id)} (slide ${index + 1} of ${deck.slides.length})`,
     );
     if (deck.slides[index]?.locked) {
       context.push("The current slide is locked (data-locked): do not change it.");
@@ -1097,11 +1233,26 @@ function applyAgentEvent(event: AgentEvent) {
 
 let reloadTimer: ReturnType<typeof setTimeout> | undefined;
 
-function applyDeckChanged(paths: string[]) {
+/** Follows changes in the open workspace: the file tree, the open deck, the open page. */
+function applyWorkspaceChanged(paths: string[]) {
+  const { openedFile, deck } = useApp.getState();
+  useApp.setState((s) => ({ workspaceChange: { paths, rev: (s.workspaceChange?.rev ?? 0) + 1 } }));
+  if (!openedFile) return;
+  if (deck) {
+    // The deck's own files, relative to its folder.
+    const folder = dirname(openedFile.path);
+    const inFolder = folder ? paths.filter((p) => p.startsWith(`${folder}/`)).map((p) => p.slice(folder.length + 1)) : paths;
+    return applyDeckChanged(inFolder, basename(openedFile.path));
+  }
+  if (paths.includes(openedFile.path)) useApp.setState((s) => ({ fileRev: s.fileRev + 1 }));
+}
+
+/** `paths` are relative to the deck's folder; `file` is the deck file's name. */
+function applyDeckChanged(paths: string[], file: string) {
   if (paths.some((p) => p.startsWith("assets/"))) {
     useApp.setState((s) => ({ assetsRev: s.assetsRev + 1 }));
   }
-  if (!paths.includes("deck.html")) return;
+  if (!paths.includes(file)) return;
   // Edits arrive in bursts while the agent works; reload once they settle.
   clearTimeout(reloadTimer);
   reloadTimer = setTimeout(async () => {
@@ -1116,7 +1267,7 @@ function applyDeckChanged(paths: string[]) {
       // Follow the agent to the slide it is working on.
       if (changed && useApp.getState().running) useApp.setState({ selected: changed.id });
     } catch {
-      // deck.html is mid-write; the next change event retries.
+      // The deck file is mid-write; the next change event retries.
     }
   }, 120);
 }
@@ -1127,7 +1278,7 @@ export async function initEventBridge() {
   await listen<AgentEventEnvelope>("agent-event", ({ payload }) => {
     if (payload.deckId === useApp.getState().deck?.id) applyAgentEvent(payload.event);
   });
-  await listen<DeckChanged>("deck-changed", ({ payload }) => {
-    if (payload.deckId === useApp.getState().deck?.id) applyDeckChanged(payload.paths);
+  await listen<WorkspaceChanged>("workspace-changed", ({ payload }) => {
+    if (payload.root === useApp.getState().workspace?.path) applyWorkspaceChanged(payload.paths);
   });
 }

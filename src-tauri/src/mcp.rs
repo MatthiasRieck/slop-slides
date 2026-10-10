@@ -1,10 +1,11 @@
 //! A tiny MCP server (JSON-RPC over stdio) that gives the agent one tool, `lint_deck`, so
-//! it can verify deck.html after editing. The agent starts it as
-//! `slopslide --lint-mcp [deck dir]`, the deck defaulting to the working directory
-//! (see `agent.rs`).
+//! it can verify a deck after editing. The agent starts it as
+//! `slopslide --lint-mcp [deck dir]`, the folder defaulting to the working directory
+//! (see `agent.rs`); the tool lints the folder's deck.html unless its `path` argument names
+//! another deck file.
 
 use std::io::{BufRead, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
@@ -23,9 +24,8 @@ const DEFAULT_PROTOCOL: &str = "2024-11-05";
 /// Serves requests from stdin until it closes. Locked slides are checked against the deck's
 /// current session, where the app records them for the running turn.
 pub fn serve(dir: &Path) {
-    let session = deck::app_home()
-        .ok()
-        .and_then(|home| Sessions::new(&home).current(dir));
+    let sessions = deck::app_home().ok().map(|home| Sessions::new(&home));
+    let session = |file: &Path| sessions.as_ref().and_then(|s| s.current(file));
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
@@ -34,7 +34,7 @@ pub fn serve(dir: &Path) {
             continue;
         }
         let response = match serde_json::from_str::<Value>(&line) {
-            Ok(request) => handle(&request, dir, session.as_deref()),
+            Ok(request) => handle(&request, dir, &session),
             Err(e) => Some(error(Value::Null, -32700, &format!("parse error: {e}"))),
         };
         if let Some(response) = response {
@@ -48,8 +48,13 @@ pub fn serve(dir: &Path) {
     }
 }
 
-/// Answers one JSON-RPC message; notifications get no response.
-pub fn handle(request: &Value, dir: &Path, session: Option<&Path>) -> Option<Value> {
+/// Answers one JSON-RPC message; notifications get no response. `session` finds a deck
+/// file's current session.
+pub fn handle(
+    request: &Value,
+    dir: &Path,
+    session: &dyn Fn(&Path) -> Option<PathBuf>,
+) -> Option<Value> {
     let id = request.get("id")?.clone();
     let result = match request["method"].as_str().unwrap_or("") {
         "initialize" => json!({
@@ -62,18 +67,32 @@ pub fn handle(request: &Value, dir: &Path, session: Option<&Path>) -> Option<Val
         "ping" => json!({}),
         "tools/list" => json!({ "tools": [{
             "name": TOOL,
-            "description": "Lint deck.html: checks that the HTML is well formed (all elements \
+            "description": "Lint the deck file (deck.html unless `path` names another): \
+                checks that the HTML is well formed (all elements \
                 closed, no stray end tags) and follows the deck format (slides are \
                 <section class=\"slide\" id=\"…\"> in <main class=\"deck\">, unique kebab-case \
                 ids, attached assets exist, images have alt text) and that locked slides \
-                (data-locked) are unchanged. Run it after editing deck.html and fix every \
+                (data-locked) are unchanged. Run it after editing the deck and fix every \
                 issue it reports.",
-            "inputSchema": { "type": "object", "properties": {} },
+            "inputSchema": { "type": "object", "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The deck file, relative to the working directory; deck.html when left out.",
+                },
+            } },
         }]}),
         "tools/call" if request["params"]["name"] == TOOL => {
-            let (text, failed) = match deck::lint(dir, session) {
+            let rel = request["params"]["arguments"]["path"]
+                .as_str()
+                .filter(|p| !p.is_empty())
+                .unwrap_or(deck::DECK_FILE);
+            let linted = deck::resolve_in_deck(dir, rel).and_then(|file| {
+                let session = session(&file);
+                deck::lint(&file, session.as_deref())
+            });
+            let (text, failed) = match linted {
                 Ok(issues) => (lint::format_report(&issues), false),
-                Err(e) => (format!("Could not lint deck.html: {e}"), true),
+                Err(e) => (format!("Could not lint {rel}: {e}"), true),
             };
             json!({ "content": [{ "type": "text", "text": text }], "isError": failed })
         }
@@ -90,6 +109,7 @@ fn error(id: Value, code: i64, message: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::html;
 
     fn temp_deck(html: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("slopslide-mcp-{}", uuid::Uuid::new_v4()));
@@ -99,10 +119,11 @@ mod tests {
     }
 
     fn call(dir: &Path, method: &str, params: Value) -> Value {
+        let session = dir.join("session");
         handle(
             &json!({"jsonrpc":"2.0","id":7,"method":method,"params":params}),
             dir,
-            Some(&dir.join("session")),
+            &|_| Some(session.clone()),
         )
         .unwrap()
     }
@@ -125,7 +146,7 @@ mod tests {
         assert!(handle(
             &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
             dir,
-            None
+            &|_| None
         )
         .is_none());
         assert_eq!(
@@ -162,7 +183,7 @@ mod tests {
     fn lint_tool_reports_locked_slides_changed_during_a_turn() {
         let html = "<html><body><main class=\"deck\"><section class=\"slide\" id=\"a\" data-locked>A</section></main></body></html>";
         let dir = temp_deck(html);
-        deck::guard_locked(&dir, &dir.join("session")).unwrap();
+        deck::guard_locked(&dir.join(deck::DECK_FILE), &dir.join("session")).unwrap();
         std::fs::write(dir.join(deck::DECK_FILE), html.replace(">A<", ">B<")).unwrap();
         let res = call(&dir, "tools/call", json!({"name": TOOL, "arguments": {}}));
         let text = res["result"]["content"][0]["text"].as_str().unwrap();
@@ -170,6 +191,33 @@ mod tests {
             text.contains("[locked-slide-changed] (slide `a`)"),
             "{text}"
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn lint_tool_lints_the_deck_file_named_by_path() {
+        let dir = temp_deck(&html::ensure_runtime(
+            "<html><body><main class=\"deck\"></main></body></html>",
+        ));
+        std::fs::write(dir.join("q3.html"), "<html><body><main class=\"deck\"><section class=\"slide\" id=\"a\"><div></section></main></body></html>").unwrap();
+        let text = |args: Value| {
+            let res = call(&dir, "tools/call", json!({"name": TOOL, "arguments": args}));
+            res["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert!(
+            !text(json!({})).contains("[unclosed-tag]"),
+            "deck.html by default"
+        );
+        assert!(text(json!({"path": "q3.html"})).contains("[unclosed-tag]"));
+        let res = call(
+            &dir,
+            "tools/call",
+            json!({"name": TOOL, "arguments": {"path": "../x.html"}}),
+        );
+        assert_eq!(res["result"]["isError"], true, "only files in the folder");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

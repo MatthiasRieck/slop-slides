@@ -29,7 +29,7 @@ beforeEach(() => {
         return "/home/.slopslides/sessions/1-ab/templates/x.html";
     }
   });
-  useApp.setState({ deck: DECK, selected: "intro", templates: [MINE, SWISS, BENTO], composerFill: null, error: null, running: false, chatOpen: true });
+  useApp.setState({ deck: DECK, selected: "intro", templates: [MINE, SWISS, BENTO], composerFill: null, error: null, running: false, sidebarOpen: true });
 });
 
 const layoutNames = () => screen.getAllByRole("button", { name: / layout$/ }).map((b) => b.getAttribute("aria-label"));

@@ -450,7 +450,7 @@ describe("ChatPanel: attachments", () => {
     invoke.mockResolvedValue(["assets/photo.png", "assets/data.csv"]);
     render(<ChatPanel />);
     await act(async () => fireEvent.click(screen.getByTitle("Attach images or files")));
-    expect(invoke).toHaveBeenCalledWith("import_assets", { id: "talk", paths: ["/Users/me/Photo.PNG", "/Users/me/data.csv"] });
+    expect(invoke).toHaveBeenCalledWith("import_assets", { id: "/decks/talk/deck.html", paths: ["/Users/me/Photo.PNG", "/Users/me/data.csv"] });
     // Images go in the fan; other files stay chips.
     expect(screen.getByAltText("photo.png")).toBeTruthy();
     expect(screen.getByText("data.csv")).toBeTruthy();
@@ -473,7 +473,7 @@ describe("ChatPanel: attachments", () => {
     invoke.mockResolvedValue(["assets/a.png"]);
     render(<ChatPanel />);
     await act(async () => fireEvent.click(screen.getByTitle("Attach images or files")));
-    expect(invoke).toHaveBeenCalledWith("import_assets", { id: "talk", paths: ["/a.png"] });
+    expect(invoke).toHaveBeenCalledWith("import_assets", { id: "/decks/talk/deck.html", paths: ["/a.png"] });
   });
 
   it("removes an attachment and does not list one twice", async () => {
@@ -502,7 +502,7 @@ describe("ChatPanel: attachments", () => {
     act(() => dragDrop!({ payload: { type: "over" } }));
     await act(async () => dragDrop!({ payload: { type: "drop", paths: ["/tmp/drop.png"] } }));
     expect(composer().className).not.toContain("border-primary");
-    expect(invoke).toHaveBeenCalledWith("import_assets", { id: "talk", paths: ["/tmp/drop.png"] });
+    expect(invoke).toHaveBeenCalledWith("import_assets", { id: "/decks/talk/deck.html", paths: ["/tmp/drop.png"] });
     expect(screen.getByAltText("drop.png")).toBeTruthy();
   });
 
@@ -517,7 +517,7 @@ describe("ChatPanel: attachments", () => {
         dragDrop!({ payload: { type: "drop", paths: ["/tmp/photo.png", "/tmp/notes.md"], position: { x: 200, y: 100 } } }),
       );
       expect(catcher).toHaveBeenCalledWith(["/tmp/photo.png", "/tmp/notes.md"], { x: 200, y: 100 });
-      expect(invoke).toHaveBeenCalledWith("import_assets", { id: "talk", paths: ["/tmp/notes.md"] });
+      expect(invoke).toHaveBeenCalledWith("import_assets", { id: "/decks/talk/deck.html", paths: ["/tmp/notes.md"] });
       // Nothing left over, nothing to import.
       invoke.mockClear();
       await act(async () => dragDrop!({ payload: { type: "drop", paths: ["/tmp/photo.png"], position: { x: 1, y: 1 } } }));
@@ -563,8 +563,8 @@ describe("ChatPanel: attachments", () => {
     const photo = new File(["jpg"], "Holiday.jpeg", { type: "image/jpeg" });
     await act(async () => paste([shot, photo]));
     await waitFor(() => expect(screen.getByAltText("Holiday.jpeg")).toBeTruthy());
-    expect(invoke).toHaveBeenCalledWith("save_asset", { id: "talk", name: "pasted-image.png", data: "aGk=" });
-    expect(invoke).toHaveBeenCalledWith("save_asset", { id: "talk", name: "Holiday.jpeg", data: "anBn" });
+    expect(invoke).toHaveBeenCalledWith("save_asset", { id: "/decks/talk/deck.html", name: "pasted-image.png", data: "aGk=" });
+    expect(invoke).toHaveBeenCalledWith("save_asset", { id: "/decks/talk/deck.html", name: "Holiday.jpeg", data: "anBn" });
     expect(screen.getByAltText("pasted-image.png").getAttribute("src")).toMatch(/\/talk\/assets\/pasted-image\.png$/);
     type("Use these");
     fireEvent.keyDown(textarea(), { key: "Enter" });
@@ -705,10 +705,11 @@ describe("ChatPanel: transcript", () => {
   });
 
   it.each([
-    ["Write", { file_path: "/Users/me/Documents/SlopSlide/talk/deck.html" }, "Wrote deck.html"],
-    ["Edit", { file_path: "C:\\Users\\me\\SlopSlide\\talk\\assets\\x.css" }, "Edited assets/x.css"],
+    ["Write", { file_path: "/decks/talk/deck.html" }, "Wrote deck.html"],
+    ["Edit", { file_path: "\\decks\\talk\\assets\\x.css" }, "Edited assets/x.css"],
+    ["Edit", { file_path: "/decks/talk-old/deck.html" }, "Edited /decks/talk-old/deck.html"],
     ["MultiEdit", { file_path: "/elsewhere/file.txt" }, "Edited /elsewhere/file.txt"],
-    ["Read", { file_path: "/lib/talk/assets/notes.md" }, "Read assets/notes.md"],
+    ["Read", { file_path: "/decks/talk/assets/notes.md" }, "Read assets/notes.md"],
     ["Grep", { pattern: "class=\"slide\"" }, 'Searched class="slide"'],
     ["Glob", { pattern: "assets/*" }, "Searched assets/*"],
     ["WebSearch", { query: "pitch deck tips" }, "Searched the web for pitch deck tips"],
@@ -722,7 +723,7 @@ describe("ChatPanel: transcript", () => {
 
   it("links an edit of deck.html to the slide it touched", () => {
     const edit = tool("Edit", {
-      file_path: "/lib/talk/deck.html",
+      file_path: "/decks/talk/deck.html",
       old_string: `<section class="slide" id="outro">`,
       new_string: `<section class="slide" id='outro'><h1>New</h1>`,
     });
@@ -733,12 +734,20 @@ describe("ChatPanel: transcript", () => {
     expect(useApp.getState().selected).toBe("outro");
   });
 
+  it("links edits of a deck file with another name", () => {
+    useApp.setState({ deck: { ...deckFor(DECK_HTML), id: "/decks/talk/q3.html", path: "/decks/talk/q3.html" } });
+    const edit = tool("Edit", { file_path: "/decks/talk/q3.html", new_string: `<section class="slide" id="outro">` });
+    showMessages(reply({ parts: [edit, tool("Edit", { file_path: "/decks/talk/deck.html", new_string: `<section id="outro">` })] }));
+    expect(toolRow("Edited q3.html · #outro").disabled).toBe(false);
+    expect(toolRow("Edited deck.html").disabled).toBe(true);
+  });
+
   it("does not link edits of unknown slides or other files", () => {
     showMessages(
       reply({
         parts: [
-          tool("Edit", { file_path: "/lib/talk/deck.html", new_string: `<div id="not-a-slide">` }),
-          tool("Edit", { file_path: "/lib/talk/notes.html", new_string: `<section id="intro">` }),
+          tool("Edit", { file_path: "/decks/talk/deck.html", new_string: `<div id="not-a-slide">` }),
+          tool("Edit", { file_path: "/decks/talk/notes.html", new_string: `<section id="intro">` }),
         ],
       }),
     );
@@ -753,7 +762,7 @@ describe("ChatPanel: transcript", () => {
   });
 
   it("shows that a tool is working", () => {
-    showMessages(reply({ status: "streaming", parts: [tool("Write", { file_path: "/lib/talk/deck.html" }, "running")] }));
+    showMessages(reply({ status: "streaming", parts: [tool("Write", { file_path: "/decks/talk/deck.html" }, "running")] }));
     expect(screen.getByText("Working…")).toBeTruthy();
     expect(screen.queryByText("Thinking…")).toBeNull();
   });

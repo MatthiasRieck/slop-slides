@@ -3,12 +3,12 @@ import { ChevronLeft, ChevronRight, Maximize } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { zoomBox } from "../lib/ink";
-import { cn, deckFileUrl } from "../lib/utils";
+import { cn, fileUrl } from "../lib/utils";
 import { useApp } from "../store";
 import { AnnotationLayer, PresenterToolbar, useAnnotations, useReveal } from "./PresenterTools";
 
 /**
- * Full-screen slideshow. Plays deck.html with its own embedded player (the same thing
+ * Full-screen slideshow. Plays the deck file with its own embedded player (the same thing
  * anyone you share the file with sees), starting at the selected slide. On top sit the
  * presenter's tools: laser pointer, pen, highlighter and eraser. With `show`, the backend adds
  * the pasteboard (src-tauri/assets/pasteboard.js), so the slide can be zoomed with the mouse
@@ -85,7 +85,7 @@ export function Presenter() {
       <iframe
         ref={frameRef}
         title="Presentation"
-        src={`${deckFileUrl(deck.id, "deck.html", `v=${deck.shellHash}&show`)}${hash}`}
+        src={`${fileUrl(deck.id, `v=${deck.shellHash}&show`)}${hash}`}
         sandbox="allow-scripts"
         onLoad={(event) => event.currentTarget.focus()}
         className="size-full border-0"

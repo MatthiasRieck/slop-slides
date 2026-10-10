@@ -1,5 +1,5 @@
-//! Watches the open deck folder and tells the frontend which files changed, so slide
-//! iframes refresh while the agent (or any editor) writes to disk.
+//! Watches the open workspace and tells the frontend which files changed, so the file tree
+//! and slide iframes refresh while the agent (or any editor) writes to disk.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -13,17 +13,20 @@ use tauri::{AppHandle, Emitter};
 use crate::error::{Error, Result};
 
 #[derive(Default)]
-pub struct DeckWatcher(Mutex<Option<Debouncer<notify::RecommendedWatcher>>>);
+pub struct WorkspaceWatcher(Mutex<Option<Debouncer<notify::RecommendedWatcher>>>);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DeckChanged {
-    deck_id: String,
+struct WorkspaceChanged {
+    /// The workspace folder, as the frontend opened it.
+    root: String,
+    /// Workspace-relative, `/`-separated.
     paths: Vec<String>,
 }
 
-impl DeckWatcher {
-    pub fn watch(&self, app: AppHandle, deck_id: String, dir: PathBuf) -> Result<()> {
+impl WorkspaceWatcher {
+    pub fn watch(&self, app: AppHandle, dir: PathBuf) -> Result<()> {
+        let root = dir.to_string_lossy().into_owned();
         // Deleted files cannot be canonicalized, so match against both spellings of the root.
         let roots = [
             dir.canonicalize().unwrap_or_else(|_| dir.clone()),
@@ -36,20 +39,20 @@ impl DeckWatcher {
                 let paths = changed_paths(&roots, events.iter().map(|e| e.path.as_path()));
                 if !paths.is_empty() {
                     let _ = app.emit(
-                        "deck-changed",
-                        DeckChanged {
-                            deck_id: deck_id.clone(),
+                        "workspace-changed",
+                        WorkspaceChanged {
+                            root: root.clone(),
                             paths,
                         },
                     );
                 }
             },
         )
-        .map_err(|e| Error::msg(format!("cannot watch deck: {e}")))?;
+        .map_err(|e| Error::msg(format!("cannot watch the folder: {e}")))?;
         debouncer
             .watcher()
             .watch(&dir, RecursiveMode::Recursive)
-            .map_err(|e| Error::msg(format!("cannot watch deck: {e}")))?;
+            .map_err(|e| Error::msg(format!("cannot watch the folder: {e}")))?;
         *self.0.lock().unwrap() = Some(debouncer);
         Ok(())
     }
@@ -59,11 +62,11 @@ impl DeckWatcher {
     }
 }
 
-/// Deck-relative paths worth telling the frontend about, sorted and deduplicated.
+/// Workspace-relative paths worth telling the frontend about, sorted and deduplicated.
 fn changed_paths<'a>(roots: &[PathBuf], events: impl Iterator<Item = &'a Path>) -> Vec<String> {
     let mut paths: Vec<String> = events
         .filter_map(|path| roots.iter().find_map(|root| relative(root, path)))
-        .filter(|rel| !is_temp_file(rel))
+        .filter(|rel| !is_temp_file(rel) && !in_hidden_folder(rel))
         .collect();
     paths.sort();
     paths.dedup();
@@ -84,6 +87,14 @@ fn relative(root: &Path, path: &Path) -> Option<String> {
 fn is_temp_file(rel: &str) -> bool {
     let name = rel.rsplit('/').next().unwrap_or(rel);
     name.contains(".tmp-") || name.contains(".tmp.")
+}
+
+/// Inside a dot folder (`.git/…`), which the file tree does not show either.
+fn in_hidden_folder(rel: &str) -> bool {
+    rel.split('/')
+        .rev()
+        .skip(1)
+        .any(|part| part.starts_with('.'))
 }
 
 #[cfg(test)]
@@ -162,6 +173,17 @@ mod tests {
             ["assets/a.png", "assets/b.png", "deck.html"]
         );
         assert!(changed_paths(&roots, std::iter::empty()).is_empty());
+    }
+
+    #[test]
+    fn ignores_changes_inside_dot_folders() {
+        assert!(in_hidden_folder(".git/index"));
+        assert!(in_hidden_folder("talk/.cache/x.png"));
+        assert!(
+            !in_hidden_folder(".gitignore"),
+            "dot files themselves still count"
+        );
+        assert!(!in_hidden_folder("talk/deck.html"));
     }
 
     #[test]

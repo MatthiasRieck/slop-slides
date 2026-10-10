@@ -31,7 +31,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../lib/api";
 import { changedRange, normalizeNewlines, onDiskRead } from "../lib/codeSync";
 import { findSlideSpans, type SlideSpan } from "../lib/slideSpans";
-import { cn, deckFileUrl, isMac } from "../lib/utils";
+import { basename, cn, fileUrl, isMac } from "../lib/utils";
 import { useApp } from "../store";
 
 interface SlideMarks {
@@ -209,7 +209,7 @@ const extensions: Extension[] = [
 ];
 
 /**
- * deck.html's source with the selected slide highlighted and kept in view. Edits are saved
+ * The deck file's source with the selected slide highlighted and kept in view. Edits are saved
  * with ⌘S; if the file changes on disk meanwhile (the agent), the user picks which wins.
  */
 export function CodeView({ active }: { active: boolean }) {
@@ -219,11 +219,11 @@ export function CodeView({ active }: { active: boolean }) {
   const dirty = useApp((s) => s.codeDirty);
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  /** deck.html as last read from disk. */
+  /** The deck file as last read from disk. */
   const [source, setSource] = useState<string | null>(null);
   const [marks, setMarks] = useState<SlideMarks>({ spans: [], active: null });
   const [error, setError] = useState<string | null>(null);
-  /** deck.html changed on disk while the editor held unsaved edits. */
+  /** The deck file changed on disk while the editor held unsaved edits. */
   const [conflict, setConflict] = useState(false);
   const [saving, setSaving] = useState(false);
   /** The disk text the editor's unedited state corresponds to. */
@@ -235,6 +235,7 @@ export function CodeView({ active }: { active: boolean }) {
   const saveRef = useRef<(force?: boolean) => void>(() => {});
 
   const deckId = deck?.id;
+  const fileName = basename(deckId ?? "") || "deck.html";
   // Any change to the document's markup changes one of these. Section markers are not part of
   // the shell or slide hashes (so renaming one does not reload previews); they count here.
   const version = deck
@@ -244,9 +245,9 @@ export function CodeView({ active }: { active: boolean }) {
   useEffect(() => {
     if (!deckId) return;
     let cancelled = false;
-    fetch(deckFileUrl(deckId, "deck.html", `v=${encodeURIComponent(version)}`), { cache: "no-store" })
+    fetch(fileUrl(deckId, `v=${encodeURIComponent(version)}`), { cache: "no-store" })
       .then((res) => {
-        if (!res.ok) throw new Error(`Could not read deck.html (${res.status})`);
+        if (!res.ok) throw new Error(`Could not read ${basename(deckId)} (${res.status})`);
         return res.text();
       })
       .then((text) => {
@@ -317,7 +318,7 @@ export function CodeView({ active }: { active: boolean }) {
     useApp.getState().setCodeDirty(false);
   };
 
-  // Follow deck.html on disk, unless that would throw away unsaved edits.
+  // Follow the deck file on disk, unless that would throw away unsaved edits.
   useEffect(() => {
     const view = viewRef.current;
     if (!view || source === null) return;
@@ -381,7 +382,7 @@ export function CodeView({ active }: { active: boolean }) {
     <div className={cn("h-full flex-col bg-background", active ? "flex" : "hidden")}>
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 text-xs text-muted-foreground">
         <FileCode2 className="size-3.5" />
-        <span className="font-medium text-foreground">deck.html</span>
+        <span className="font-medium text-foreground">{fileName}</span>
         {dirty && <span title="Unsaved changes" className="size-1.5 rounded-full bg-primary" />}
         {span && (
           <>
@@ -413,7 +414,7 @@ export function CodeView({ active }: { active: boolean }) {
           type="button"
           disabled={!dirty || saving}
           onClick={() => saveRef.current()}
-          title={`Save deck.html (${mod}S)`}
+          title={`Save ${fileName} (${mod}S)`}
           className="flex items-center gap-1 rounded-md bg-primary px-2 py-1 font-medium text-primary-foreground shadow-sm hover:opacity-90 disabled:opacity-40"
         >
           <Save className="size-3.5" />
@@ -423,7 +424,7 @@ export function CodeView({ active }: { active: boolean }) {
       {conflict && (
         <div className="flex shrink-0 items-center gap-2 border-b bg-amber-500/10 px-3 py-1.5 text-xs">
           <AlertTriangle className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
-          <span className="flex-1">deck.html changed on disk while you were editing.</span>
+          <span className="flex-1">{fileName} changed on disk while you were editing.</span>
           <button
             type="button"
             onClick={() => source !== null && loadText(source)}

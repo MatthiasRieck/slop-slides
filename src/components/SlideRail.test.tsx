@@ -78,7 +78,7 @@ describe("SlideRail", () => {
     await act(async () => fireEvent.click(screen.getByTitle("New slide")));
     await act(async () => fireEvent.click(screen.getByTitle("Add blank slide")));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(invoke).toHaveBeenCalledWith("add_slide", { id: "talk", after: "intro" });
+    expect(invoke).toHaveBeenCalledWith("add_slide", { id: "/decks/talk/deck.html", after: "intro" });
     expect(useApp.getState().selected).toBe("slide");
     expect(items()).toHaveLength(4);
   });
@@ -89,7 +89,7 @@ describe("SlideRail", () => {
     render(<SlideRail />);
     await act(async () => fireEvent.click(screen.getByTitle("New slide")));
     await act(async () => fireEvent.click(screen.getByTitle("Add blank slide")));
-    expect(invoke).toHaveBeenCalledWith("add_slide", { id: "talk", after: null });
+    expect(invoke).toHaveBeenCalledWith("add_slide", { id: "/decks/talk/deck.html", after: null });
     expect(useApp.getState().selected).toBe("slide");
   });
 
@@ -97,7 +97,7 @@ describe("SlideRail", () => {
     invoke.mockResolvedValue({ deck: withSlides("intro", "#2", "outro", "outro-copy"), slide: "outro-copy" });
     render(<SlideRail />);
     await act(async () => fireEvent.click(item(2).getByTitle("Duplicate")));
-    expect(invoke).toHaveBeenCalledWith("duplicate_slide", { id: "talk", slide: "outro" });
+    expect(invoke).toHaveBeenCalledWith("duplicate_slide", { id: "/decks/talk/deck.html", slide: "outro" });
     expect(useApp.getState().selected).toBe("outro-copy");
   });
 
@@ -106,7 +106,7 @@ describe("SlideRail", () => {
     invoke.mockResolvedValue(withSlides("intro", "outro"));
     render(<SlideRail />);
     await act(async () => fireEvent.click(item(1).getByTitle("Delete")));
-    expect(invoke).toHaveBeenCalledWith("delete_slide", { id: "talk", slide: "#2" });
+    expect(invoke).toHaveBeenCalledWith("delete_slide", { id: "/decks/talk/deck.html", slide: "#2" });
     expect(useApp.getState().selected).toBe("outro");
     expect(items()).toHaveLength(2);
   });
@@ -201,7 +201,7 @@ describe("hidden slides in the rail", () => {
     invoke.mockResolvedValue(next);
     render(<SlideRail />);
     await act(async () => fireEvent.click(within(items()[0]!).getByTitle("Hide slide")));
-    expect(invoke).toHaveBeenCalledWith("set_slide_hidden", { id: "talk", slide: "intro", hidden: true });
+    expect(invoke).toHaveBeenCalledWith("set_slide_hidden", { id: "/decks/talk/deck.html", slide: "intro", hidden: true });
     expect(useApp.getState().deck).toBe(next);
     expect(within(items()[0]!).getByTestId("hidden-mark")).toBeTruthy();
   });
@@ -210,7 +210,7 @@ describe("hidden slides in the rail", () => {
     invoke.mockResolvedValue(deckFor(DECK_HTML, "2"));
     render(<SlideRail />);
     await act(async () => fireEvent.click(within(items()[2]!).getByTitle("Show slide")));
-    expect(invoke).toHaveBeenCalledWith("set_slide_hidden", { id: "talk", slide: "outro", hidden: false });
+    expect(invoke).toHaveBeenCalledWith("set_slide_hidden", { id: "/decks/talk/deck.html", slide: "outro", hidden: false });
     expect(screen.queryByTestId("hidden-mark")).toBeNull();
   });
 
@@ -251,7 +251,7 @@ describe("locked slides in the rail", () => {
     invoke.mockResolvedValue(next);
     render(<SlideRail />);
     await act(async () => fireEvent.click(item(0).getByTitle("Lock slide")));
-    expect(invoke).toHaveBeenCalledWith("set_slide_locked", { id: "talk", slide: "intro", locked: true });
+    expect(invoke).toHaveBeenCalledWith("set_slide_locked", { id: "/decks/talk/deck.html", slide: "intro", locked: true });
     expect(useApp.getState().deck).toBe(next);
     expect(item(0).getByTestId("locked-mark")).toBeTruthy();
     expect(item(0).queryByTitle("Delete")).toBeNull();
@@ -261,7 +261,7 @@ describe("locked slides in the rail", () => {
     invoke.mockResolvedValue(deckFor(DECK_HTML, "2"));
     render(<SlideRail />);
     await act(async () => fireEvent.click(item(2).getByTitle("Unlock slide")));
-    expect(invoke).toHaveBeenCalledWith("set_slide_locked", { id: "talk", slide: "outro", locked: false });
+    expect(invoke).toHaveBeenCalledWith("set_slide_locked", { id: "/decks/talk/deck.html", slide: "outro", locked: false });
     expect(screen.queryByTestId("locked-mark")).toBeNull();
     expect(item(2).getByTitle("Delete")).toBeTruthy();
   });
@@ -307,7 +307,7 @@ describe("sections in the rail", () => {
     invoke.mockResolvedValue(deckFor(DECK_HTML.replace(`<section class="slide" id="outro">`, `<div class="deck-section" data-title="New section"></div>\n<section class="slide" id="outro">`)));
     render(<SlideRail />);
     await act(async () => fireEvent.click(screen.getByTitle("Start a section at this slide")));
-    expect(invoke).toHaveBeenCalledWith("add_section", { id: "talk", before: "outro", title: "New section" });
+    expect(invoke).toHaveBeenCalledWith("add_section", { id: "/decks/talk/deck.html", before: "outro", title: "New section" });
     expect(headers()).toHaveLength(1);
     const input = screen.getByLabelText("Section title") as HTMLInputElement;
     expect(input.value).toBe("New section");
@@ -335,7 +335,7 @@ describe("sections in the rail", () => {
     fireEvent.change(input, { target: { value: "  Core  " } });
     await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
     await act(async () => fireEvent.blur(input));
-    expect(invoke).toHaveBeenCalledWith("rename_section", { id: "talk", index: 0, title: "Core" });
+    expect(invoke).toHaveBeenCalledWith("rename_section", { id: "/decks/talk/deck.html", index: 0, title: "Core" });
     expect(useApp.getState().deck).toBe(renamed);
     expect(screen.queryByLabelText("Section title")).toBeNull();
   });
@@ -367,7 +367,7 @@ describe("sections in the rail", () => {
     invoke.mockResolvedValue(deckFor(DECK_HTML, "2"));
     render(<SlideRail />);
     await act(async () => fireEvent.click(within(headers()[0]!).getByTitle("Remove section")));
-    expect(invoke).toHaveBeenCalledWith("delete_section", { id: "talk", index: 0 });
+    expect(invoke).toHaveBeenCalledWith("delete_section", { id: "/decks/talk/deck.html", index: 0 });
     expect(headers()).toHaveLength(0);
     expect(items()).toHaveLength(3);
   });

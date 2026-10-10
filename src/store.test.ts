@@ -86,26 +86,184 @@ describe("slide selection", () => {
   });
 });
 
-describe("chat panel", () => {
+describe("sidebar", () => {
   it("is open by default", async () => {
     const useApp = await freshStore();
-    expect(useApp.getState().chatOpen).toBe(true);
+    expect(useApp.getState().sidebarOpen).toBe(true);
   });
 
-  it("restores a collapsed chat from localStorage", async () => {
-    localStorage.setItem("slopslide.chatOpen", "false");
+  it("restores a collapsed sidebar from localStorage", async () => {
+    localStorage.setItem("slopslide.sidebarOpen", "false");
     const useApp = await freshStore();
-    expect(useApp.getState().chatOpen).toBe(false);
+    expect(useApp.getState().sidebarOpen).toBe(false);
   });
 
-  it("setChatOpen switches and persists", async () => {
+  it("setSidebarOpen switches and persists", async () => {
     const useApp = await freshStore();
-    useApp.getState().setChatOpen(false);
-    expect(useApp.getState().chatOpen).toBe(false);
-    expect(localStorage.getItem("slopslide.chatOpen")).toBe("false");
-    useApp.getState().setChatOpen(true);
-    expect(useApp.getState().chatOpen).toBe(true);
-    expect(localStorage.getItem("slopslide.chatOpen")).toBe("true");
+    useApp.getState().setSidebarOpen(false);
+    expect(useApp.getState().sidebarOpen).toBe(false);
+    expect(localStorage.getItem("slopslide.sidebarOpen")).toBe("false");
+    useApp.getState().setSidebarOpen(true);
+    expect(useApp.getState().sidebarOpen).toBe(true);
+    expect(localStorage.getItem("slopslide.sidebarOpen")).toBe("true");
+  });
+
+  it("shows the chat tab first, and opens on the tab picked", async () => {
+    localStorage.clear();
+    let useApp = await freshStore();
+    expect(useApp.getState().sidebarTab).toBe("chat");
+    useApp.getState().setSidebarOpen(false);
+    useApp.getState().setSidebarTab("files");
+    expect(useApp.getState()).toMatchObject({ sidebarTab: "files", sidebarOpen: true });
+    useApp = await freshStore();
+    expect(useApp.getState().sidebarTab).toBe("files");
+    localStorage.setItem("slopslide.sidebarTab", "bogus");
+    useApp = await freshStore();
+    expect(useApp.getState().sidebarTab).toBe("chat");
+  });
+});
+
+describe("workspaces", () => {
+  const WS = { path: "/ws", name: "ws" };
+  const TALK = { ...deckFor(DECK_HTML), id: "/ws/talks/q3.html", path: "/ws/talks/q3.html" };
+  const opened = (path: string, kind: string) => ({ path, absolute: `/ws/${path}`, kind });
+
+  beforeEach(() => localStorage.clear());
+
+  function workspaceBackend(extra: Record<string, Handler> = {}) {
+    backend({
+      open_workspace: ({ path }) => ({ path, name: String(path).split("/").pop() }),
+      open_deck: () => TALK,
+      create_deck: () => ({ ...TALK, id: "/ws/new-deck/deck.html", path: "/ws/new-deck/deck.html" }),
+      open_file: ({ path }) => {
+        const kinds: Record<string, string> = { "talks/q3.html": "deck", "site/index.html": "webpage", "notes.md": "file" };
+        if (!kinds[String(path)]) throw `file not found: ${String(path)}`;
+        return opened(String(path), kinds[String(path)]!);
+      },
+      load_chat: () => null,
+      agent_running: () => false,
+      ...extra,
+    });
+  }
+
+  it("opens a folder on the files tab when nothing was open in it before", async () => {
+    const useApp = await freshStore();
+    workspaceBackend();
+    useApp.setState({ sidebarTab: "chat" });
+    await useApp.getState().openWorkspace("/ws");
+    expect(useApp.getState().workspace).toEqual(WS);
+    expect(useApp.getState().openedFile).toBeNull();
+    expect(useApp.getState().sidebarTab).toBe("files");
+  });
+
+  it("opens a deck in the editor and other pages as they are", async () => {
+    const useApp = await freshStore();
+    workspaceBackend();
+    await useApp.getState().openWorkspace("/ws");
+    await useApp.getState().openPath("talks/q3.html");
+    expect(calls("open_deck")).toEqual([{ id: "/ws/talks/q3.html" }]);
+    expect(useApp.getState().deck).toEqual(TALK);
+    expect(useApp.getState().openedFile).toEqual({ path: "talks/q3.html", absolute: "/ws/talks/q3.html", kind: "deck" });
+
+    await useApp.getState().openPath("site/index.html");
+    expect(useApp.getState().deck).toBeNull();
+    expect(useApp.getState().openedFile).toEqual(opened("site/index.html", "webpage"));
+    expect(calls("open_deck")).toHaveLength(1);
+
+    await useApp.getState().openPath("site/index.html");
+    expect(calls("open_file")).toHaveLength(2);
+  });
+
+  it("reports a file that cannot be opened and keeps the open one", async () => {
+    const useApp = await freshStore();
+    workspaceBackend();
+    await useApp.getState().openWorkspace("/ws");
+    await useApp.getState().openPath("notes.md");
+    await useApp.getState().openPath("gone.html");
+    expect(useApp.getState().error).toBe("file not found: gone.html");
+    expect(useApp.getState().openedFile).toEqual(opened("notes.md", "file"));
+  });
+
+  it("keeps the deck open when the user keeps unsaved HTML edits", async () => {
+    const useApp = await freshStore();
+    workspaceBackend();
+    await useApp.getState().openWorkspace("/ws");
+    await useApp.getState().openPath("talks/q3.html");
+    useApp.setState({ codeDirty: true });
+    ask.mockResolvedValue(false);
+    await useApp.getState().openPath("site/index.html");
+    expect(useApp.getState().deck).toEqual(TALK);
+    expect(await useApp.getState().closeWorkspace()).toBe(false);
+    expect(useApp.getState().workspace).toEqual(WS);
+    expect(calls("close_workspace")).toEqual([]);
+  });
+
+  it("reopens the file last open in a folder", async () => {
+    let useApp = await freshStore();
+    workspaceBackend();
+    await useApp.getState().openWorkspace("/ws");
+    await useApp.getState().openPath("site/index.html");
+    expect(await useApp.getState().closeWorkspace()).toBe(true);
+    expect(calls("close_workspace")).toHaveLength(1);
+    expect(useApp.getState()).toMatchObject({ workspace: null, openedFile: null, deck: null });
+
+    useApp = await freshStore();
+    await useApp.getState().openWorkspace("/ws");
+    expect(useApp.getState().openedFile).toEqual(opened("site/index.html", "webpage"));
+    await useApp.getState().openPath("talks/q3.html");
+
+    useApp = await freshStore();
+    await useApp.getState().openWorkspace("/ws");
+    expect(useApp.getState().deck).toEqual(TALK);
+  });
+
+  it("forgets a last file that is gone", async () => {
+    localStorage.setItem("slopslide.lastFile:/ws", "gone.html");
+    const useApp = await freshStore();
+    workspaceBackend();
+    await useApp.getState().openWorkspace("/ws");
+    expect(useApp.getState().openedFile).toBeNull();
+    expect(useApp.getState().error).toBeNull();
+    expect(localStorage.getItem("slopslide.lastFile:/ws")).toBeNull();
+  });
+
+  it("switches folders, closing the open one first", async () => {
+    const useApp = await freshStore();
+    workspaceBackend();
+    await useApp.getState().openWorkspace("/ws");
+    await useApp.getState().openPath("talks/q3.html");
+    await useApp.getState().openWorkspace("/other");
+    expect(calls("close_workspace")).toHaveLength(1);
+    expect(useApp.getState()).toMatchObject({ workspace: { path: "/other", name: "other" }, deck: null, openedFile: null });
+    await useApp.getState().openWorkspace("/other");
+    expect(calls("open_workspace")).toHaveLength(2);
+  });
+
+  it("reports a folder that cannot be opened", async () => {
+    const useApp = await freshStore();
+    backend({ open_workspace: () => Promise.reject("not a folder: /nope") });
+    await useApp.getState().openWorkspace("/nope");
+    expect(useApp.getState().workspace).toBeNull();
+    expect(useApp.getState().error).toBe("not a folder: /nope");
+  });
+
+  it("creates decks in the open folder and opens them", async () => {
+    const useApp = await freshStore();
+    workspaceBackend();
+    await useApp.getState().openWorkspace("/ws");
+    await useApp.getState().createDeck("New deck");
+    expect(calls("create_deck")).toEqual([{ title: "New deck", template: null }]);
+    expect(useApp.getState().openedFile).toEqual({ path: "new-deck/deck.html", absolute: "/ws/new-deck/deck.html", kind: "deck" });
+    expect(localStorage.getItem("slopslide.lastFile:/ws")).toBe("new-deck/deck.html");
+  });
+
+  it("names paths relative to the workspace folder", async () => {
+    const { relativePath } = await freshModule();
+    expect(relativePath(WS, "/ws/talks/q3.html")).toBe("talks/q3.html");
+    expect(relativePath({ path: "/ws/", name: "ws" }, "/ws/a.html")).toBe("a.html");
+    expect(relativePath({ path: "C:\\ws", name: "ws" }, "C:\\ws\\talks\\q3.html")).toBe("talks/q3.html");
+    expect(relativePath(WS, "/wsx/a.html")).toBeNull();
+    expect(relativePath(null, "/ws/a.html")).toBeNull();
   });
 });
 
@@ -164,10 +322,11 @@ describe("closing a deck with unsaved HTML edits", () => {
   it("closes immediately when there are no edits", async () => {
     const useApp = await freshStore();
     useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: false, sketches: { intro: [{ tool: "pen", color: "#fff", points: [[0, 0]] }] } });
-    await useApp.getState().closeDeck();
+    useApp.setState({ openedFile: { path: "talk/deck.html", absolute: DECK_HTML_PATH, kind: "deck" } });
+    expect(await useApp.getState().closeDeck()).toBe(true);
     expect(ask).not.toHaveBeenCalled();
-    expect(invoke).toHaveBeenCalledWith("close_deck");
     expect(useApp.getState().deck).toBeNull();
+    expect(useApp.getState().openedFile).toBeNull();
     expect(useApp.getState().sketches).toEqual({});
   });
 
@@ -175,9 +334,8 @@ describe("closing a deck with unsaved HTML edits", () => {
     const useApp = await freshStore();
     ask.mockResolvedValue(false);
     useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: true });
-    await useApp.getState().closeDeck();
+    expect(await useApp.getState().closeDeck()).toBe(false);
     expect(ask).toHaveBeenCalledOnce();
-    expect(invoke).not.toHaveBeenCalledWith("close_deck");
     expect(useApp.getState().deck).not.toBeNull();
     expect(useApp.getState().codeDirty).toBe(true);
   });
@@ -186,8 +344,7 @@ describe("closing a deck with unsaved HTML edits", () => {
     const useApp = await freshStore();
     ask.mockResolvedValue(true);
     useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: true });
-    await useApp.getState().closeDeck();
-    expect(invoke).toHaveBeenCalledWith("close_deck");
+    expect(await useApp.getState().closeDeck()).toBe(true);
     expect(useApp.getState().deck).toBeNull();
     expect(useApp.getState().codeDirty).toBe(false);
   });
@@ -205,6 +362,7 @@ describe("closing a deck with unsaved HTML edits", () => {
 });
 
 const DECK = deckFor(DECK_HTML);
+const DECK_HTML_PATH = DECK.id;
 
 const userMessage = (text: string): UserMessage => ({
   id: `u-${text}`,
@@ -234,9 +392,9 @@ describe("opening and creating decks", () => {
     const chat: ChatMessage[] = [userMessage("hi"), assistantMessage()];
     backend({ open_deck: () => DECK, load_chat: () => chat, agent_running: () => true });
     useApp.setState({ assetsRev: 4, presenting: true, selected: "stale", sketches: { intro: [{ tool: "pen", color: "#fff", points: [[0, 0]] }] } });
-    await useApp.getState().openDeck("talk");
-    expect(calls("open_deck")).toEqual([{ id: "talk" }]);
-    expect(calls("load_chat")).toEqual([{ id: "talk" }]);
+    await useApp.getState().openDeck("/decks/talk/deck.html");
+    expect(calls("open_deck")).toEqual([{ id: "/decks/talk/deck.html" }]);
+    expect(calls("load_chat")).toEqual([{ id: "/decks/talk/deck.html" }]);
     const state = useApp.getState();
     expect(state.deck).toEqual(DECK);
     expect(state.selected).toBe("intro");
@@ -251,7 +409,7 @@ describe("opening and creating decks", () => {
     const useApp = await freshStore();
     const streaming = assistantMessage({ status: "streaming", thinking: true, compacting: true });
     backend({ open_deck: () => DECK, load_chat: () => [userMessage("hi"), streaming], agent_running: () => false });
-    await useApp.getState().openDeck("talk");
+    await useApp.getState().openDeck("/decks/talk/deck.html");
     expect(useApp.getState().messages[1]).toEqual({ ...streaming, status: "interrupted", thinking: false, compacting: false });
   });
 
@@ -259,17 +417,17 @@ describe("opening and creating decks", () => {
     const useApp = await freshStore();
     backend({ open_deck: () => DECK, load_chat: () => null, agent_running: () => false });
     useApp.setState({ messages: [userMessage("old deck")] });
-    await useApp.getState().openDeck("talk");
+    await useApp.getState().openDeck("/decks/talk/deck.html");
     expect(useApp.getState().messages).toEqual([]);
     backend({ open_deck: () => DECK, load_chat: () => ({ bogus: true }), agent_running: () => false });
-    await useApp.getState().openDeck("talk");
+    await useApp.getState().openDeck("/decks/talk/deck.html");
     expect(useApp.getState().messages).toEqual([]);
   });
 
   it("selects nothing in an empty deck", async () => {
     const useApp = await freshStore();
     backend({ open_deck: () => ({ ...DECK, slides: [] }), load_chat: () => null, agent_running: () => false });
-    await useApp.getState().openDeck("talk");
+    await useApp.getState().openDeck("/decks/talk/deck.html");
     expect(useApp.getState().selected).toBeNull();
   });
 
@@ -280,7 +438,7 @@ describe("opening and creating decks", () => {
         throw "deck not found: talk";
       },
     });
-    await useApp.getState().openDeck("talk");
+    await useApp.getState().openDeck("/decks/talk/deck.html");
     expect(useApp.getState().error).toBe("deck not found: talk");
     expect(useApp.getState().deck).toBeNull();
   });
@@ -337,7 +495,7 @@ describe("slide image export", () => {
     expect(useApp.getState().imageExport).toBeNull();
     backend({ open_deck: () => DECK, load_chat: () => [], agent_running: () => false });
     useApp.setState({ imageExport: { dir: "/out", slides: ["intro"] } });
-    await useApp.getState().openDeck("talk");
+    await useApp.getState().openDeck("/decks/talk/deck.html");
     expect(useApp.getState().imageExport).toBeNull();
   });
 });
@@ -481,6 +639,15 @@ describe("sending a message", () => {
     );
   });
 
+  it("names a deck file that is not deck.html for the agent", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: { ...DECK, id: "/ws/talks/q3.html", path: "/ws/talks/q3.html" }, selected: "#2" });
+    await useApp.getState().send("Make it blue", { includeSlide: true, attachments: [] });
+    expect(prompt()).toBe(
+      `[context]\nDeck file: q3.html (the deck the instructions call deck.html; pass it as lint_deck's path)\nCurrent slide: <section id="#2"> in q3.html (slide 2 of 3)\n[/context]\n\nMake it blue`,
+    );
+  });
+
   it("tells the agent when the selected slide is locked", async () => {
     const useApp = await freshStore();
     useApp.setState({ deck: deckFor(DECK_HTML.replace(`id="outro"`, `id="outro" data-locked`)), selected: "outro" });
@@ -515,7 +682,7 @@ describe("sending a message", () => {
     });
     await useApp.getState().send("a", { includeSlide: false, attachments: [] });
     expect(calls("send_message")[0]!.args).toEqual({
-      deckId: "talk",
+      deckId: "/decks/talk/deck.html",
       prompt: "a",
       provider: "codex",
       model: "gpt-6-astra",
@@ -559,7 +726,7 @@ describe("sending a message", () => {
     const reply = useApp.getState().messages[1] as AssistantMessage;
     expect(reply).toMatchObject({ status: "error", thinking: false, error: "Claude Code was not found." });
     expect(useApp.getState().running).toBe(false);
-    expect(calls("save_chat")).toEqual([{ id: "talk", chat: useApp.getState().messages }]);
+    expect(calls("save_chat")).toEqual([{ id: "/decks/talk/deck.html", chat: useApp.getState().messages }]);
   });
 
   describe("with a sketch on the slide", () => {
@@ -595,7 +762,7 @@ describe("sending a message", () => {
       await useApp.getState().send("Move this up", { includeSlide: true, attachments: [] });
       expect(calls("capture_sketch")).toEqual([
         {
-          id: "talk",
+          id: "/decks/talk/deck.html",
           rect: { x: 40, y: 60, width: 800, height: 450 },
           viewport: { width: window.innerWidth, height: window.innerHeight },
         },
@@ -744,17 +911,21 @@ describe("sending a message", () => {
       await vi.advanceTimersByTimeAsync(300);
       expect(calls("save_review")).toEqual([]);
       await vi.advanceTimersByTimeAsync(200);
-      expect(calls("save_review")).toEqual([{ id: "talk", review: { intro: ink } }]);
+      expect(calls("save_review")).toEqual([{ id: "/decks/talk/deck.html", review: { intro: ink } }]);
     });
 
     it("are saved right away when the deck closes", async () => {
       const useApp = await freshStore();
       useApp.setState({ deck: DECK });
       useApp.getState().setSketches(() => ({ intro: ink }));
+      let deckWhenSaved: unknown = "not saved";
+      invoke.mockImplementation(async (command: string) => {
+        if (command === "save_review") deckWhenSaved = useApp.getState().deck;
+      });
       await useApp.getState().closeDeck();
-      expect(calls("save_review")).toEqual([{ id: "talk", review: { intro: ink } }]);
-      const order = invoke.mock.calls.map(([c]) => c);
-      expect(order.indexOf("save_review")).toBeLessThan(order.indexOf("close_deck"));
+      expect(calls("save_review")).toEqual([{ id: "/decks/talk/deck.html", review: { intro: ink } }]);
+      expect(deckWhenSaved).toBe(DECK);
+      expect(useApp.getState().deck).toBeNull();
     });
 
     it("are not saved when they end up as the file has them", async () => {
@@ -782,7 +953,7 @@ describe("sending a message", () => {
     it("are loaded with the deck", async () => {
       const useApp = await freshStore();
       backend({ open_deck: () => ({ ...DECK, review: { intro: ink } }), load_chat: () => [], agent_running: () => false });
-      await useApp.getState().openDeck("talk");
+      await useApp.getState().openDeck("/decks/talk/deck.html");
       expect(useApp.getState().sketches).toEqual({ intro: ink });
     });
 
@@ -803,7 +974,7 @@ describe("sending a message", () => {
     expect(calls("interrupt_agent")).toEqual([]);
     useApp.setState({ deck: DECK });
     useApp.getState().interrupt();
-    expect(calls("interrupt_agent")).toEqual([{ id: "talk" }]);
+    expect(calls("interrupt_agent")).toEqual([{ id: "/decks/talk/deck.html" }]);
   });
 
   it("records which provider writes the reply", async () => {
@@ -863,7 +1034,7 @@ describe("sending a message", () => {
     expect(calls("reset_chat")).toEqual([]);
     useApp.setState({ deck: DECK, messages: [userMessage("x")], running: true });
     await useApp.getState().resetChat();
-    expect(calls("reset_chat")).toEqual([{ id: "talk" }]);
+    expect(calls("reset_chat")).toEqual([{ id: "/decks/talk/deck.html" }]);
     expect(useApp.getState().messages).toEqual([]);
     expect(useApp.getState().running).toBe(false);
   });
@@ -875,7 +1046,7 @@ describe("agent events", () => {
     backend({ list_providers: () => [] });
     await store.initEventBridge();
     store.useApp.setState({ deck: DECK, messages, running: true });
-    const emit = (event: AgentEvent, deckId = "talk") => listeners.get("agent-event")!({ payload: { deckId, event } });
+    const emit = (event: AgentEvent, deckId = "/decks/talk/deck.html") => listeners.get("agent-event")!({ payload: { deckId, event } });
     const reply = () => store.useApp.getState().messages.findLast((m) => m.role === "assistant") as AssistantMessage;
     return { useApp: store.useApp, emit, reply };
   }
@@ -1006,7 +1177,7 @@ describe("agent events", () => {
     expect(reply()).toMatchObject({ status, thinking: false });
     expect(reply().parts[0]).toMatchObject({ status: "done" });
     expect(useApp.getState().running).toBe(false);
-    expect(calls("save_chat")).toEqual([{ id: "talk", chat: useApp.getState().messages }]);
+    expect(calls("save_chat")).toEqual([{ id: "/decks/talk/deck.html", chat: useApp.getState().messages }]);
   });
 
   it("only updates the last reply", async () => {
@@ -1074,14 +1245,23 @@ describe("agent events", () => {
 });
 
 describe("deck file changes", () => {
+  /** The deck is `talk/deck.html` in the workspace `/decks`; `changed` takes deck-relative paths. */
   async function watching(next: () => Deck | Promise<Deck>) {
     vi.useFakeTimers();
     const store = await freshModule();
     backend({ agent_status: () => null, load_deck: () => next() });
     await store.initEventBridge();
-    store.useApp.setState({ deck: DECK, selected: "intro", running: false, assetsRev: 0 });
-    const changed = (paths: string[], deckId = "talk") => listeners.get("deck-changed")!({ payload: { deckId, paths } });
-    return { useApp: store.useApp, changed };
+    store.useApp.setState({
+      workspace: { path: "/decks", name: "decks" },
+      openedFile: { path: "talk/deck.html", absolute: DECK_HTML_PATH, kind: "deck" },
+      deck: DECK,
+      selected: "intro",
+      running: false,
+      assetsRev: 0,
+    });
+    const changedIn = (root: string, paths: string[]) => listeners.get("workspace-changed")!({ payload: { root, paths } });
+    const changed = (paths: string[]) => changedIn("/decks", paths.map((p) => `talk/${p}`));
+    return { useApp: store.useApp, changed, changedIn };
   }
 
   afterEach(() => {
@@ -1132,7 +1312,7 @@ describe("deck file changes", () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(calls("load_deck")).toEqual([]);
     await vi.advanceTimersByTimeAsync(20);
-    expect(calls("load_deck")).toEqual([{ id: "talk" }]);
+    expect(calls("load_deck")).toEqual([{ id: "/decks/talk/deck.html" }]);
     expect(useApp.getState().deck).toEqual(edited);
     expect(useApp.getState().assetsRev).toBe(1);
   });
@@ -1163,7 +1343,7 @@ describe("deck file changes", () => {
     expect(useApp.getState().selected).toBe("fresh");
   });
 
-  it("ignores a deck.html that cannot be read mid-write", async () => {
+  it("ignores a deck file that cannot be read mid-write", async () => {
     const { useApp, changed } = await watching(() => {
       throw "stream did not contain valid UTF-8";
     });
@@ -1181,13 +1361,46 @@ describe("deck file changes", () => {
     expect(calls("load_deck")).toEqual([]);
   });
 
-  it("ignores other decks and unrelated files", async () => {
-    const { useApp, changed } = await watching(() => DECK);
-    changed(["deck.html", "assets/a.png"], "other-deck");
-    changed(["notes.md"]);
+  it("ignores other workspaces, other decks' folders and unrelated files", async () => {
+    const { useApp, changed, changedIn } = await watching(() => DECK);
+    changedIn("/elsewhere", ["talk/deck.html", "talk/assets/a.png"]);
+    changedIn("/decks", ["other/deck.html", "other/assets/a.png", "deck.html", "talk-old/deck.html"]);
+    changed(["notes.md", "q3.html"]);
     await vi.advanceTimersByTimeAsync(500);
     expect(calls("load_deck")).toEqual([]);
     expect(useApp.getState().assetsRev).toBe(0);
+  });
+
+  it("tells the file tree what changed", async () => {
+    const { useApp, changed, changedIn } = await watching(() => DECK);
+    changed(["notes.md"]);
+    expect(useApp.getState().workspaceChange).toEqual({ paths: ["talk/notes.md"], rev: 1 });
+    changedIn("/elsewhere", ["x.md"]);
+    expect(useApp.getState().workspaceChange?.rev).toBe(1);
+  });
+
+  it("follows a deck with another file name at the workspace root", async () => {
+    const edited = deckFor(DECK_HTML, "2");
+    const { useApp, changedIn } = await watching(() => edited);
+    useApp.setState({ openedFile: { path: "q3.html", absolute: "/decks/q3.html", kind: "deck" }, deck: { ...DECK, id: "/decks/q3.html" } });
+    changedIn("/decks", ["talk/deck.html"]);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(calls("load_deck")).toEqual([]);
+    changedIn("/decks", ["q3.html", "assets/a.png"]);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(calls("load_deck")).toEqual([{ id: "/decks/q3.html" }]);
+    expect(useApp.getState().assetsRev).toBe(1);
+  });
+
+  it("reloads an open page (not a deck) when it changes", async () => {
+    const { useApp, changedIn } = await watching(() => DECK);
+    useApp.setState({ deck: null, openedFile: { path: "site/index.html", absolute: "/decks/site/index.html", kind: "webpage" }, fileRev: 0 });
+    changedIn("/decks", ["site/style.css"]);
+    expect(useApp.getState().fileRev).toBe(0);
+    changedIn("/decks", ["site/index.html"]);
+    expect(useApp.getState().fileRev).toBe(1);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(calls("load_deck")).toEqual([]);
   });
 });
 
@@ -1206,7 +1419,7 @@ describe("lint", () => {
     backend({ lint_deck: () => [issue()] });
     useApp.setState({ deck: deckFor(DECK_HTML) });
     await useApp.getState().refreshLint();
-    expect(calls("lint_deck")).toEqual([{ id: "talk" }]);
+    expect(calls("lint_deck")).toEqual([{ id: "/decks/talk/deck.html" }]);
     expect(useApp.getState().lint).toEqual([issue()]);
   });
 
@@ -1281,6 +1494,8 @@ describe("lint", () => {
     expect(prompt).toContain("- line 12 error [unclosed-tag] (slide `intro`): <div> is never closed.");
     expect(prompt).toContain("- line 1 warning [title]: Needs a title.");
     expect(prompt).toMatch(/run the lint_deck tool to verify/);
+    expect(prompt).toMatch(/^deck\.html does not pass/);
+    expect(lintFixPrompt([], "q3.html")).toMatch(/^q3\.html does not pass/);
   });
 });
 
@@ -1311,7 +1526,7 @@ describe("editing slides on the stage", () => {
     slideBackend();
     useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
     await useApp.getState().saveSlideEdit("intro", MOVED);
-    expect(calls("update_slide")).toEqual([{ id: "talk", slide: "intro", markup: MOVED, base: "intro-1" }]);
+    expect(calls("update_slide")).toEqual([{ id: "/decks/talk/deck.html", slide: "intro", markup: MOVED, base: "intro-1" }]);
     const deck = useApp.getState().deck!;
     expect(deck.slides[0]).toMatchObject({ hash: "intro-2", moved: true });
     expect(useApp.getState().slideUndo).toEqual([{ slide: "intro", markup: ORIGINAL, after: "intro-2" }]);
@@ -1354,7 +1569,7 @@ describe("editing slides on the stage", () => {
     useApp.getState().select("outro");
     await useApp.getState().undoSlideEdit();
     expect(disk.markup()).toBe(ORIGINAL);
-    expect(calls("update_slide")[1]).toEqual({ id: "talk", slide: "intro", markup: ORIGINAL, base: "intro-2" });
+    expect(calls("update_slide")[1]).toEqual({ id: "/decks/talk/deck.html", slide: "intro", markup: ORIGINAL, base: "intro-2" });
     expect(useApp.getState().selected).toBe("intro");
     expect(useApp.getState().slideUndo).toEqual([]);
     await useApp.getState().undoSlideEdit();
@@ -1382,7 +1597,7 @@ describe("editing slides on the stage", () => {
     expect(useApp.getState().slideRedo).toEqual([{ slide: "intro", markup: MOVED, after: "intro-1" }]);
     await useApp.getState().redoSlideEdit();
     expect(disk.markup()).toBe(MOVED);
-    expect(calls("update_slide")[2]).toEqual({ id: "talk", slide: "intro", markup: MOVED, base: "intro-1" });
+    expect(calls("update_slide")[2]).toEqual({ id: "/decks/talk/deck.html", slide: "intro", markup: MOVED, base: "intro-1" });
     expect(useApp.getState().slideRedo).toEqual([]);
     expect(useApp.getState().slideUndo).toEqual([{ slide: "intro", markup: ORIGINAL, after: "intro-2" }]);
     await useApp.getState().undoSlideEdit();
@@ -1475,13 +1690,13 @@ describe("editing slides on the stage", () => {
     it("screenshots the slide, leaves edit mode, and prepares the request in the composer", async () => {
       const { useApp, TIDY_PROMPT } = await freshModule();
       backend({ capture_sketch: () => "/home/.slopslides/sessions/1-ab/sketches/2-cd.png" });
-      useApp.setState({ deck: DECK, selected: "intro", chatOpen: false, composerFill: null, editing: true });
+      useApp.setState({ deck: DECK, selected: "intro", sidebarOpen: false, composerFill: null, editing: true });
       await useApp.getState().tidyLayout();
       expect(calls("capture_sketch")).toHaveLength(1);
       expect(calls("send_message")).toHaveLength(0);
       expect(useApp.getState().messages).toEqual([]);
       expect(useApp.getState()).toMatchObject({
-        chatOpen: true,
+        sidebarOpen: true,
         editing: false,
         composerFill: { text: TIDY_PROMPT, screenshot: "/home/.slopslides/sessions/1-ab/sketches/2-cd.png" },
       });
@@ -1565,7 +1780,6 @@ describe("Codex permissions", () => {
     await store.getState().closeDeck();
     const order = invoke.mock.calls.map(([command]) => command);
     expect(order.indexOf("interrupt_agent")).toBeLessThan(order.indexOf("save_chat"));
-    expect(order.indexOf("save_chat")).toBeLessThan(order.indexOf("close_deck"));
     expect(calls("save_chat")[0]!.chat).toMatchObject([{ status: "interrupted", parts: [{ status: "expired" }] }]);
     expect(store.getState().deck).toBeNull();
   });
@@ -1610,7 +1824,7 @@ describe("Codex permissions", () => {
     const store = await freshStore();
     const message = assistantMessage({ status: "streaming", parts: [{ kind: "approval", status: "pending", approval: { id: "old", title: "Run", reason: null, details: "ls", acceptLabel: "Allow once", decisions: ["accept"] } }] });
     backend({ open_deck: () => deckFor(DECK_HTML), load_chat: () => [message], agent_running: () => false });
-    await store.getState().openDeck("talk");
+    await store.getState().openDeck("/decks/talk/deck.html");
     expect((store.getState().messages[0] as AssistantMessage).parts[0]).toMatchObject({ status: "expired" });
   });
 });
@@ -1622,7 +1836,7 @@ describe("templates", () => {
 
   async function storeWith(deck: Deck, selected: string | null = "intro") {
     const useApp = await freshStore();
-    useApp.setState({ deck, selected, templates: [MINE, SWISS], chatOpen: true });
+    useApp.setState({ deck, selected, templates: [MINE, SWISS], sidebarOpen: true });
     return useApp;
   }
 
@@ -1669,7 +1883,7 @@ describe("templates", () => {
 
   it("restyles a deck with slides through a prompt in the composer", async () => {
     const useApp = await storeWith(DECK);
-    useApp.setState({ chatOpen: false });
+    useApp.setState({ sidebarOpen: false, sidebarTab: "files" });
     backend({ stage_template: () => STAGED });
     await useApp.getState().applyStyle("swiss");
     expect(calls("stage_template")).toEqual([{ id: DECK.id, template: "swiss" }]);
@@ -1678,7 +1892,8 @@ describe("templates", () => {
     expect(text).toContain('"Swiss Design" style');
     expect(text).toContain(STAGED);
     expect(text).toContain('<meta name="slopslide-template" content="swiss">');
-    expect(useApp.getState().chatOpen).toBe(true);
+    expect(useApp.getState().sidebarOpen).toBe(true);
+    expect(useApp.getState().sidebarTab).toBe("chat");
   });
 
   it("gives an empty deck the style directly", async () => {
@@ -1761,7 +1976,7 @@ describe("templates", () => {
 
   it("saves the deck as a template and reloads the list", async () => {
     const useApp = await storeWith(DECK);
-    const created = { id: "talk", title: "Talk", builtin: false, path: "/t/talk", slides: ["intro"] };
+    const created = { id: "/decks/talk/deck.html", title: "Talk", builtin: false, path: "/t/talk", slides: ["intro"] };
     backend({ create_template: () => created, list_templates: () => [created, MINE, SWISS] });
     expect(await useApp.getState().saveAsTemplate("Talk")).toEqual(created);
     expect(calls("create_template")).toEqual([{ id: DECK.id, name: "Talk" }]);
@@ -1784,13 +1999,13 @@ describe("changing the slide size", () => {
   it("resizes the slides, then prepares a message asking the agent to lay them out again", async () => {
     const { useApp } = await freshModule();
     backend({ set_slide_size: () => resized() });
-    useApp.setState({ deck: DECK, chatOpen: false, composerFill: null, running: false });
+    useApp.setState({ deck: DECK, sidebarOpen: false, composerFill: null, running: false });
     await useApp.getState().resizeSlides(PORTRAIT);
-    expect(calls("set_slide_size")).toEqual([{ id: "talk", size: PORTRAIT }]);
+    expect(calls("set_slide_size")).toEqual([{ id: "/decks/talk/deck.html", size: PORTRAIT }]);
     expect(useApp.getState().deck?.size).toMatchObject(PORTRAIT);
     expect(calls("send_message")).toEqual([]);
     const fill = useApp.getState().composerFill;
-    expect(useApp.getState().chatOpen).toBe(true);
+    expect(useApp.getState().sidebarOpen).toBe(true);
     expect(fill?.text).toContain("from landscape, 1920 × 1080 px to portrait, 1080 × 1350 px");
     expect(fill?.text).toContain("Re-lay out every slide");
   });

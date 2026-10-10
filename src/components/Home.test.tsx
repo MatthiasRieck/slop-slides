@@ -2,35 +2,39 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
-const ask = vi.fn();
+const openDialog = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: (...args: unknown[]) => ask(...args) }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(), open: (...args: unknown[]) => openDialog(...args) }));
 
-import type { DeckSummary } from "../lib/api";
+import type { RecentWorkspace } from "../lib/api";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Home } from "./Home";
 
 const NOW = Date.now();
-let decks: DeckSummary[];
+const LIBRARY = "/Users/me/Documents/SlopSlide";
+let recent: RecentWorkspace[];
 
 beforeEach(() => {
-  decks = [
-    { id: "pitch", title: "Series A pitch", slideCount: 6, firstSlide: "title", updatedMs: NOW - 5 * 60_000 },
-    { id: "one", title: "One-pager", slideCount: 1, firstSlide: "only", updatedMs: NOW - 3 * 3_600_000 },
-    { id: "blank", title: "Blank", slideCount: 0, firstSlide: null, updatedMs: NOW },
+  localStorage.clear();
+  recent = [
+    { path: "/Users/me/talks", name: "talks", openedMs: NOW - 5 * 60_000 },
+    { path: "/Users/me/work/q3", name: "q3", openedMs: NOW - 3 * 3_600_000 },
   ];
-  invoke.mockReset().mockImplementation(async (command: string, args?: { id?: string; title?: string }) => {
+  invoke.mockReset().mockImplementation(async (command: string, args?: { path?: string }) => {
     switch (command) {
-      case "list_decks":
-        return decks;
-      case "delete_deck":
-        decks = decks.filter((d) => d.id !== args?.id);
+      case "recent_workspaces":
+        return recent;
+      case "forget_workspace":
+        recent = recent.filter((w) => w.path !== args?.path);
         return;
-      case "open_deck":
+      case "library_folder":
+        return LIBRARY;
+      case "open_workspace":
+        return { path: args?.path, name: args?.path?.split("/").pop() };
       case "create_deck":
-        return deckFor(DECK_HTML);
+        return { ...deckFor(DECK_HTML), id: `${LIBRARY}/talk/deck.html`, path: `${LIBRARY}/talk/deck.html` };
       case "load_chat":
         return null;
       case "list_templates":
@@ -42,55 +46,100 @@ beforeEach(() => {
         return false;
     }
   });
-  ask.mockReset();
-  useApp.setState({ deck: null, error: null });
+  openDialog.mockReset();
+  useApp.setState({ workspace: null, openedFile: null, deck: null, error: null });
 });
 
-const cards = () => screen.queryAllByRole("listitem");
+const rows = () => screen.queryAllByRole("listitem");
 
 describe("Home", () => {
-  it("lists recent decks with slide counts and ages", async () => {
+  it("lists the folders opened before, newest first, with their ages", async () => {
     render(<Home />);
-    await waitFor(() => expect(cards()).toHaveLength(3));
-    expect(cards()[0]!.textContent).toContain("Series A pitch");
-    expect(cards()[0]!.textContent).toContain("6 slides · 5m ago");
-    expect(cards()[1]!.textContent).toContain("1 slide · 3h ago");
-    expect(cards()[2]!.textContent).toContain("0 slides · just now");
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    expect(rows()[0]!.textContent).toContain("talks");
+    expect(rows()[0]!.textContent).toContain("/Users/me/talks");
+    expect(rows()[0]!.textContent).toContain("5m ago");
+    expect(rows()[1]!.textContent).toContain("3h ago");
   });
 
-  it("shows a placeholder for decks without slides", async () => {
+  it("hides the recent list when no folder was opened before", async () => {
+    recent = [];
     render(<Home />);
-    await waitFor(() => expect(cards()).toHaveLength(3));
-    expect(cards()[2]!.textContent).toContain("Empty deck");
-    expect(cards()[0]!.textContent).not.toContain("Empty deck");
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("recent_workspaces"));
+    expect(screen.queryByText("Recent folders")).toBeNull();
   });
 
-  it("hides the recent list when there are no decks", async () => {
-    decks = [];
+  it("reports a recent list that cannot be read", async () => {
+    invoke.mockRejectedValue("cannot locate home folder");
     render(<Home />);
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("list_decks"));
-    expect(screen.queryByText("Recent decks")).toBeNull();
+    await waitFor(() => expect(useApp.getState().error).toBe("cannot locate home folder"));
   });
 
-  it("reports a library that cannot be read", async () => {
-    invoke.mockRejectedValue("cannot locate documents folder");
+  it("opens a recent folder when it is clicked", async () => {
     render(<Home />);
-    await waitFor(() => expect(useApp.getState().error).toBe("cannot locate documents folder"));
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    await act(async () => fireEvent.click(screen.getByText("q3")));
+    expect(invoke).toHaveBeenCalledWith("open_workspace", { path: "/Users/me/work/q3" });
+    expect(useApp.getState().workspace).toEqual({ path: "/Users/me/work/q3", name: "q3" });
   });
 
-  it("creates a deck with the typed title", async () => {
+  it("removes a folder from the recent list", async () => {
+    render(<Home />);
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    await act(async () => fireEvent.click(screen.getByLabelText("Remove talks from recent folders")));
+    expect(invoke).toHaveBeenCalledWith("forget_workspace", { path: "/Users/me/talks" });
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    expect(invoke).not.toHaveBeenCalledWith("open_workspace", expect.anything());
+  });
+
+  it("opens the folder picked in the dialog", async () => {
+    openDialog.mockResolvedValue("/Users/me/new");
+    render(<Home />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Open folder/ })));
+    expect(openDialog).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
+    expect(invoke).toHaveBeenCalledWith("open_workspace", { path: "/Users/me/new" });
+  });
+
+  it("does nothing when the folder dialog is cancelled", async () => {
+    openDialog.mockResolvedValue(null);
+    render(<Home />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Open folder/ })));
+    expect(invoke).not.toHaveBeenCalledWith("open_workspace", expect.anything());
+  });
+
+  it("opens the SlopSlide library", async () => {
+    render(<Home />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /SlopSlide library/ })));
+    expect(invoke).toHaveBeenCalledWith("open_workspace", { path: LIBRARY });
+  });
+
+  it("creates a deck with the typed title in the library", async () => {
     render(<Home />);
     const input = screen.getByPlaceholderText(/Deck title/);
     fireEvent.change(input, { target: { value: "  Quarterly update  " } });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: /New deck/ })));
+    expect(invoke).toHaveBeenCalledWith("open_workspace", { path: LIBRARY });
     expect(invoke).toHaveBeenCalledWith("create_deck", { title: "Quarterly update", template: null });
     await waitFor(() => expect(useApp.getState().deck).not.toBeNull());
+    expect(useApp.getState().openedFile).toEqual({ path: "talk/deck.html", absolute: `${LIBRARY}/talk/deck.html`, kind: "deck" });
   });
 
   it("creates an untitled deck when no title is given", async () => {
     render(<Home />);
     await act(async () => fireEvent.submit(screen.getByPlaceholderText(/Deck title/)));
     expect(invoke).toHaveBeenCalledWith("create_deck", { title: "Untitled deck", template: null });
+  });
+
+  it("does not create a deck when the library cannot be opened", async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "library_folder") return LIBRARY;
+      if (command === "open_workspace") throw "not a folder";
+      return [];
+    });
+    render(<Home />);
+    await act(async () => fireEvent.submit(screen.getByPlaceholderText(/Deck title/)));
+    expect(useApp.getState().error).toBe("not a folder");
+    expect(invoke).not.toHaveBeenCalledWith("create_deck", expect.anything());
   });
 
   it("offers the templates as styles for a new deck", async () => {
@@ -103,42 +152,5 @@ describe("Home", () => {
     fireEvent.change(screen.getByPlaceholderText(/Deck title/), { target: { value: "Board" } });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: /New deck/ })));
     expect(invoke).toHaveBeenCalledWith("create_deck", { title: "Board", template: "swiss" });
-  });
-
-  it("opens a deck when its card is clicked", async () => {
-    render(<Home />);
-    await waitFor(() => expect(cards()).toHaveLength(3));
-    await act(async () => fireEvent.click(screen.getByText("One-pager")));
-    expect(invoke).toHaveBeenCalledWith("open_deck", { id: "one" });
-  });
-
-  it("deletes a deck after confirmation and refreshes the list", async () => {
-    ask.mockResolvedValue(true);
-    render(<Home />);
-    await waitFor(() => expect(cards()).toHaveLength(3));
-    await act(async () => fireEvent.click(screen.getAllByTitle("Delete deck")[1]!));
-    expect(ask).toHaveBeenCalledWith(expect.stringContaining("“One-pager”"), expect.objectContaining({ kind: "warning" }));
-    expect(invoke).toHaveBeenCalledWith("delete_deck", { id: "one" });
-    await waitFor(() => expect(cards()).toHaveLength(2));
-    expect(screen.queryByText("One-pager")).toBeNull();
-    expect(invoke).not.toHaveBeenCalledWith("open_deck", expect.anything());
-  });
-
-  it("keeps the deck when deletion is cancelled", async () => {
-    ask.mockResolvedValue(false);
-    render(<Home />);
-    await waitFor(() => expect(cards()).toHaveLength(3));
-    await act(async () => fireEvent.click(screen.getAllByTitle("Delete deck")[0]!));
-    expect(invoke).not.toHaveBeenCalledWith("delete_deck", expect.anything());
-    expect(cards()).toHaveLength(3);
-  });
-
-  it("reports a failed deletion", async () => {
-    ask.mockResolvedValue(true);
-    render(<Home />);
-    await waitFor(() => expect(cards()).toHaveLength(3));
-    invoke.mockRejectedValueOnce("permission denied");
-    await act(async () => fireEvent.click(screen.getAllByTitle("Delete deck")[0]!));
-    expect(useApp.getState().error).toBe("permission denied");
   });
 });

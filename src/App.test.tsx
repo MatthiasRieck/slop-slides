@@ -7,6 +7,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 // The panels have their own tests; here only the layout matters.
 vi.mock("./components/Home", () => ({ Home: () => <div data-testid="stub-home" /> }));
 vi.mock("./components/TopBar", () => ({ TopBar: () => <div data-testid="stub-top-bar" /> }));
+vi.mock("./components/DeckToolbar", () => ({ DeckToolbar: () => <div data-testid="stub-deck-toolbar" /> }));
 vi.mock("./components/SlideRail", () => ({ SlideRail: () => <div data-testid="stub-rail" /> }));
 vi.mock("./components/Stage", () => ({ Stage: () => <div data-testid="stub-stage" /> }));
 vi.mock("./components/Sidebar", () => ({ Sidebar: () => <div data-testid="stub-sidebar-tabs" /> }));

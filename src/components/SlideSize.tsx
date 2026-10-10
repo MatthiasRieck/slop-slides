@@ -32,7 +32,7 @@ const UNITS: { id: SizeUnit; label: string }[] = [
   { id: "cm", label: "cm" },
 ];
 
-/** The deck's slide size in the top bar; opens a panel to change it. */
+/** The deck's slide size in the deck toolbar; opens a panel to change it. */
 export function SlideSizeButton() {
   const size = useApp((s) => s.deck?.size) ?? DEFAULT_SIZE;
   const running = useApp((s) => s.running);

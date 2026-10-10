@@ -3,6 +3,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { Group, Panel, Separator, usePanelRef, type PanelSize } from "react-resizable-panels";
 
 import { CodeView } from "./components/CodeView";
+import { DeckToolbar } from "./components/DeckToolbar";
 import { FileViewer } from "./components/FileViewer";
 import { Home } from "./components/Home";
 import { Presenter } from "./components/Presenter";
@@ -57,11 +58,14 @@ function Workbench() {
         )}
         <Panel id="stage" minSize={360}>
           {hasDeck ? (
-            <>
-              {/* The HTML view stays mounted so unsaved edits survive switching to the slides. */}
-              <CodeView active={view === "code"} />
-              {view === "slides" && <Stage />}
-            </>
+            <div className="flex h-full flex-col">
+              <DeckToolbar />
+              <div className="min-h-0 flex-1">
+                {/* The HTML view stays mounted so unsaved edits survive switching to the slides. */}
+                <CodeView active={view === "code"} />
+                {view === "slides" && <Stage />}
+              </div>
+            </div>
           ) : (
             <FileViewer />
           )}

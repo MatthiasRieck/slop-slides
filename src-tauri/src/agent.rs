@@ -19,6 +19,7 @@ use tokio::sync::watch;
 use crate::deck;
 use crate::env;
 use crate::error::{Error, Result};
+use crate::extensions::Extensions;
 use crate::mcp;
 use crate::permissions::{Approval, Approvals, Choices, Decision, PermissionMode};
 use crate::sessions::Sessions;
@@ -30,12 +31,13 @@ pub(crate) const SYSTEM_PROMPT: &str = concat!(
     "\n\n",
     include_str!("../prompts/design-reference.md"),
 );
-/// The agent's tools; no MCP servers but the app's. What runs without asking depends on the
-/// permission mode (see [`build_claude_args`]).
-const TOOLS: &str = "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch";
+/// The agent's built-in tools, besides MCP servers (see [`crate::extensions`]). What runs
+/// without asking depends on the permission mode (see [`build_claude_args`]).
+const TOOLS: &str = "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Skill";
 /// Tools that never ask in Ask mode, besides the app's MCP tools. Claude Code itself lets
-/// file tools work inside the workspace and asks outside it; the shell always asks.
-const ALLOWED_TOOLS: &str = "WebSearch,WebFetch";
+/// file tools work inside the workspace and asks outside it; the shell always asks. Loading
+/// a skill only reads its instructions.
+const ALLOWED_TOOLS: &str = "WebSearch,WebFetch,Skill";
 const STDERR_LIMIT: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq)]
@@ -204,6 +206,7 @@ impl AgentManager {
         let app_home = deck::app_home()?;
         let session_dir = Sessions::new(&app_home).current_or_start(&dir)?;
         let bin = args.provider.resolve()?;
+        let extensions = Extensions::load(&app_home, &dir);
         let (cancel_tx, cancel_rx) = watch::channel(false);
         {
             let mut running = self.running.lock().unwrap();
@@ -243,7 +246,13 @@ impl AgentManager {
                 workspace: args.workspace.clone(),
                 permission_mode: args.permission_mode,
                 approvals,
+                extensions,
             };
+            for message in &turn.extensions.warnings {
+                turn.emit(&AgentEvent::Error {
+                    message: message.clone(),
+                });
+            }
             let interrupted = match crate::safety::Guard::start(&turn.dir, &turn.session_dir) {
                 Ok(guard) => {
                     let interrupted = turn.run_with_open_requests(&args.prompt, cancel_rx).await;
@@ -314,6 +323,8 @@ struct Turn {
     workspace: String,
     permission_mode: PermissionMode,
     approvals: Arc<Approvals>,
+    /// The user's MCP servers, skills, plugins and instructions.
+    extensions: Extensions,
 }
 
 /// The prompt Claude Code runs as its built-in compaction command.
@@ -409,6 +420,7 @@ impl Turn {
                 workspace: &self.workspace,
                 mode: self.permission_mode,
                 approvals: self.approvals.clone(),
+                extensions: &self.extensions,
             };
             let on_session = |id: &str| {
                 deck::write_session(&self.session_dir, self.provider.session_file(), Some(id))
@@ -428,6 +440,7 @@ impl Turn {
                     session,
                     mode: self.permission_mode,
                     approvals: self.approvals.clone(),
+                    extensions: &self.extensions,
                 },
                 cancel,
                 &|event| self.emit(event),
@@ -439,10 +452,26 @@ impl Turn {
         }
         // A file rather than an argument: the prompt outgrows Windows command lines.
         let system_prompt = self.app_home.join("system-prompt.md");
-        write_if_changed(&system_prompt, SYSTEM_PROMPT)?;
-        let mcp_config = self.app_home.join("mcp.json");
-        write_if_changed(&mcp_config, &lint_server_config(&std::env::current_exe()?))?;
-        let args = build_claude_args(
+        write_if_changed(
+            &system_prompt,
+            &self.extensions.system_prompt(SYSTEM_PROMPT),
+        )?;
+        // Per workspace, as it holds the workspace's servers. Claude Code leaves out the
+        // servers of the plugins it loads (`--strict-mcp-config`), so they are added here.
+        let mcp_config = self.session_dir.join(CLAUDE_MCP_CONFIG);
+        write_if_changed(
+            &mcp_config,
+            &mcp_config_json(
+                &std::env::current_exe()?,
+                &self.extensions.all_mcp_servers(),
+            ),
+        )?;
+        let mut plugins = self.extensions.plugins.clone();
+        plugins.extend(
+            self.extensions
+                .claude_skills_plugin(&self.session_dir.join(CLAUDE_PLUGINS))?,
+        );
+        let mut args = build_claude_args(
             &system_prompt,
             &mcp_config,
             &self.session_dir,
@@ -451,6 +480,7 @@ impl Turn {
             session,
             self.permission_mode,
         );
+        args.extend(plugin_args(&plugins));
         let started = Instant::now();
 
         let mut cmd = Command::new(&self.bin);
@@ -587,20 +617,32 @@ fn compact_refusal(provider: Provider, session: Option<&str>) -> Option<&'static
     }
 }
 
-/// MCP config running this app binary as the agent's lint tool server (`mcp.rs`). Shared by
-/// every deck: the server lints the deck in its working directory, which Claude Code sets
-/// to its own (the deck folder).
-fn lint_server_config(exe: &Path) -> String {
-    serde_json::json!({
-        "mcpServers": {
-            mcp::SERVER: {
-                "type": "stdio",
-                "command": exe,
-                "args": [mcp::FLAG],
-            }
-        }
-    })
-    .to_string()
+/// Claude Code's MCP config in the session: the user's `servers` and this app binary as the
+/// agent's lint tool server (`mcp.rs`), which lints the deck in its working directory, which
+/// Claude Code sets to its own (the workspace).
+const CLAUDE_MCP_CONFIG: &str = "mcp.json";
+/// Where the session's generated Claude Code plugins go (see [`Extensions::claude_skills_plugin`]).
+const CLAUDE_PLUGINS: &str = "claude-plugins";
+
+fn mcp_config_json(exe: &Path, servers: &serde_json::Map<String, Value>) -> String {
+    let mut servers = servers.clone();
+    servers.insert(
+        mcp::SERVER.into(),
+        json!({
+            "type": "stdio",
+            "command": exe,
+            "args": [mcp::FLAG],
+        }),
+    );
+    json!({ "mcpServers": servers }).to_string()
+}
+
+/// `--plugin-dir` for each plugin folder.
+fn plugin_args(plugins: &[PathBuf]) -> Vec<String> {
+    plugins
+        .iter()
+        .flat_map(|p| ["--plugin-dir".into(), p.to_string_lossy().into_owned()])
+        .collect()
 }
 
 /// Writes `path` unless it already holds `contents`. Turns in other decks may be reading
@@ -608,6 +650,9 @@ fn lint_server_config(exe: &Path) -> String {
 fn write_if_changed(path: &Path, contents: &str) -> Result<()> {
     if std::fs::read_to_string(path).ok().as_deref() == Some(contents) {
         return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
     }
     let temp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
     std::fs::write(&temp, contents)?;
@@ -1195,7 +1240,7 @@ mod tests {
     #[test]
     fn builds_cli_arguments() {
         let prompt = Path::new("/home/.slopslides/system-prompt.md");
-        let mcp = Path::new("/home/.slopslides/mcp.json");
+        let mcp = Path::new("/home/.slopslides/sessions/1-ab/mcp.json");
         let session = Path::new("/home/.slopslides/sessions/1-ab");
         let base = build_claude_args(prompt, mcp, session, None, None, None, PermissionMode::Ask);
         assert_eq!(
@@ -1220,8 +1265,8 @@ mod tests {
         assert_eq!(after(&base, "--tools").as_deref(), Some(TOOLS));
         assert_eq!(
             after(&base, "--allowedTools").as_deref(),
-            Some("WebSearch,WebFetch,mcp__slopslide"),
-            "the shell and files outside the workspace ask; the app's tools never do"
+            Some("WebSearch,WebFetch,Skill,mcp__slopslide"),
+            "the shell and files outside the workspace ask; the app's tools and skills never do"
         );
         assert_eq!(
             after(&base, "--permission-prompt-tool").as_deref(),
@@ -1229,7 +1274,7 @@ mod tests {
         );
         assert_eq!(
             after(&base, "--mcp-config").as_deref(),
-            Some("/home/.slopslides/mcp.json")
+            Some("/home/.slopslides/sessions/1-ab/mcp.json")
         );
         assert_eq!(
             after(&base, "--append-system-prompt-file").as_deref(),
@@ -1379,17 +1424,45 @@ mod tests {
     }
 
     #[test]
-    fn lint_server_config_runs_this_binary_in_the_working_directory() {
-        let config: Value =
-            serde_json::from_str(&lint_server_config(Path::new("/Apps/SlopSlide"))).unwrap();
+    fn mcp_config_runs_this_binary_in_the_working_directory() {
+        let config: Value = serde_json::from_str(&mcp_config_json(
+            Path::new("/Apps/SlopSlide"),
+            &serde_json::Map::new(),
+        ))
+        .unwrap();
         let server = &config["mcpServers"]["slopslide"];
         assert_eq!(server["type"], "stdio");
         assert_eq!(server["command"], "/Apps/SlopSlide");
         assert_eq!(
             server["args"],
             json!(["--lint-mcp"]),
-            "no deck: shared by all"
+            "no deck: Claude Code runs it in the workspace"
         );
+    }
+
+    #[test]
+    fn mcp_config_adds_the_users_servers_but_keeps_the_apps() {
+        let servers = json!({"docs": {"url": "https://x/mcp"}, "slopslide": {"command": "evil"}});
+        let config: Value = serde_json::from_str(&mcp_config_json(
+            Path::new("/Apps/SlopSlide"),
+            servers.as_object().unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(config["mcpServers"]["docs"]["url"], "https://x/mcp");
+        assert_eq!(
+            config["mcpServers"]["slopslide"]["command"],
+            "/Apps/SlopSlide"
+        );
+    }
+
+    #[test]
+    fn plugins_are_passed_as_plugin_dirs() {
+        let plugins = [PathBuf::from("/p/a"), PathBuf::from("/p/b")];
+        assert_eq!(
+            plugin_args(&plugins),
+            ["--plugin-dir", "/p/a", "--plugin-dir", "/p/b"]
+        );
+        assert!(plugin_args(&[]).is_empty());
     }
 
     #[test]
@@ -1602,6 +1675,7 @@ mod tests {
                     workspace: "test".into(),
                     permission_mode: self.mode,
                     approvals,
+                    extensions: Extensions::default(),
                 }
             }
 
@@ -1732,7 +1806,7 @@ echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id
             let home = fx.dir.join("home");
             let prompt_file = home.join("system-prompt.md");
             assert_eq!(fs::read_to_string(&prompt_file).unwrap(), SYSTEM_PROMPT);
-            let mcp_file = home.join("mcp.json");
+            let mcp_file = fx.session_dir().join("mcp.json");
             let mcp: Value = serde_json::from_str(&fs::read_to_string(&mcp_file).unwrap()).unwrap();
             assert_eq!(
                 mcp["mcpServers"]["slopslide"]["args"],
@@ -1767,6 +1841,56 @@ echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id
                 &prompt_file.to_string_lossy()
             ));
             assert!(!runs[0].contains(&"--resume".to_string()));
+        }
+
+        #[tokio::test]
+        async fn loads_the_users_extensions() {
+            let fx = Fixture::new(&format!("{INIT}\n{OK}"));
+            let home = fx.dir.join("home");
+            let skill = home.join("skills/tone");
+            fs::create_dir_all(&skill).unwrap();
+            fs::write(skill.join("SKILL.md"), "---\nname: tone\n---\n").unwrap();
+            let plugin = home.join("plugins/p");
+            fs::create_dir_all(&plugin).unwrap();
+            fs::write(plugin.join(".mcp.json"), r#"{"ps":{"command":"p"}}"#).unwrap();
+            fs::write(
+                home.join("mcp.json"),
+                r#"{"mcpServers":{"docs":{"url":"https://x"}}}"#,
+            )
+            .unwrap();
+            fs::write(home.join("AGENTS.md"), "Be brief.").unwrap();
+
+            let (_tx, rx) = watch::channel(false);
+            let mut turn = fx.turn();
+            turn.extensions = Extensions::load(&home, &fx.dir);
+            assert!(
+                !tokio::time::timeout(Duration::from_secs(20), turn.run("Hi", rx))
+                    .await
+                    .unwrap()
+            );
+            assert!(fx.errors().is_empty(), "{:?}", fx.errors());
+
+            let run = &fx.invocations()[0];
+            let skills_plugin = fx.session_dir().join("claude-plugins/slopslides");
+            assert!(has_flag(run, "--plugin-dir", &plugin.to_string_lossy()));
+            assert!(has_flag(
+                run,
+                "--plugin-dir",
+                &skills_plugin.to_string_lossy()
+            ));
+            assert!(skills_plugin.join("skills/tone/SKILL.md").is_file());
+            let mcp: Value = serde_json::from_str(
+                &fs::read_to_string(fx.session_dir().join("mcp.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(mcp["mcpServers"]["docs"]["url"], "https://x");
+            assert_eq!(
+                mcp["mcpServers"]["ps"]["command"], "p",
+                "--strict-mcp-config drops plugins' servers, so the app adds them"
+            );
+            assert!(mcp["mcpServers"]["slopslide"].is_object());
+            let prompt = fs::read_to_string(home.join("system-prompt.md")).unwrap();
+            assert!(prompt.starts_with(SYSTEM_PROMPT) && prompt.ends_with("Be brief."));
         }
 
         #[tokio::test]

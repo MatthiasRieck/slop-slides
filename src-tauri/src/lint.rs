@@ -110,6 +110,7 @@ pub fn lint(
     check_review(&mut l);
     check_template(&mut l);
     check_slide_size(&mut l);
+    check_entrances(&mut l);
     check_assets(&mut l, asset_exists);
     check_locked(&mut l, locked);
     l.issues.sort_by_key(|i| (i.line, i.severity));
@@ -711,6 +712,91 @@ fn check_assets(l: &mut Linter, asset_exists: impl Fn(&str) -> bool) {
     }
 }
 
+/// Entrance keyframes (those a `.reveal` rule animates with) must not animate `transform`:
+/// held by `both` fill, it would replace each element's own transform and tilt.
+fn check_entrances(l: &mut Linter) {
+    let mut from = 0;
+    while let Some(open) = find_ci(l.html, from, "<style") {
+        let Some(start) = l.html[open..].find('>').map(|i| open + i + 1) else {
+            break;
+        };
+        let end = find_ci(l.html, start, "</style").unwrap_or(l.html.len());
+        from = end;
+        if !in_markup(l, open) {
+            continue;
+        }
+        let css = &l.html[start..end];
+        for (at, name) in transform_keyframes(css) {
+            if animates_reveal(css, name) {
+                l.report(
+                    "entrance-transform",
+                    Severity::Warning,
+                    start + at,
+                    format!(
+                        "@keyframes {name} animates `transform` for a `.reveal` entrance, which overrides the elements' own transforms and hand edits. Animate `translate`, `scale`, or `rotate` instead and leave them out of the last frame."
+                    ),
+                );
+            }
+        }
+    }
+}
+
+/// `@keyframes` blocks in `css` that set `transform`: where each starts, and its name.
+fn transform_keyframes(css: &str) -> Vec<(usize, &str)> {
+    let mut found = Vec::new();
+    for (at, _) in css.match_indices("@keyframes") {
+        let rest = &css[at + "@keyframes".len()..];
+        let Some(brace) = rest.find('{') else {
+            continue;
+        };
+        let name = rest[..brace].trim();
+        let mut depth = 0;
+        let body_end = rest[brace..]
+            .char_indices()
+            .find_map(|(i, c)| {
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+                (depth == 0).then_some(brace + i)
+            })
+            .unwrap_or(rest.len());
+        if !name.is_empty() && sets_property(&rest[brace..body_end], "transform") {
+            found.push((at, name));
+        }
+    }
+    found
+}
+
+/// Whether `css` declares `property` itself (not, say, `text-transform` or `transform-origin`).
+fn sets_property(css: &str, property: &str) -> bool {
+    css.match_indices(property).any(|(i, _)| {
+        let before = css[..i].chars().next_back();
+        let after = css[i + property.len()..].trim_start();
+        !before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-') && after.starts_with(':')
+    })
+}
+
+/// Whether a rule whose selector mentions `.reveal` uses the keyframes `name`.
+fn animates_reveal(css: &str, name: &str) -> bool {
+    css.match_indices(name).any(|(i, _)| {
+        let word =
+            |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        if word(css[..i].chars().next_back()) || word(css[i + name.len()..].chars().next()) {
+            return false;
+        }
+        let Some(open) = css[..i].rfind('{') else {
+            return false;
+        };
+        let selector_start = css[..open].rfind('}').map_or(0, |b| b + 1);
+        let selector = &css[selector_start..open];
+        !selector.contains("@keyframes")
+            && selector.contains(".reveal")
+            && css[open..i].find('}').is_none()
+    })
+}
+
 /// Whether `at` is in markup rather than inside a comment, script, or style.
 fn in_markup(l: &Linter, at: usize) -> bool {
     let before = &l.html[..at];
@@ -1202,6 +1288,39 @@ mod tests {
         ));
         assert!(wrapped.contains(&"section-marker-misplaced"));
         assert!(wrapped.contains(&"deck-stray-content"));
+    }
+
+    #[test]
+    fn warns_about_entrances_that_animate_transform() {
+        let styled = |css: &str| {
+            deck(r#"<section class="slide" id="a"><h1 class="reveal">Hi</h1></section>"#)
+                .replace("<style>.slide {}</style>", &format!("<style>{css}</style>"))
+        };
+        let own =
+            "@keyframes rise { from { opacity: 0; translate: 0 20px; } to { opacity: 1; } }\n\
+            .slide.active .reveal { animation: rise 0.6s ease both; }";
+        assert_eq!(rules(&styled(own)), Vec::<&str>::new());
+        let transform = "@keyframes rise { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: none; } }\n\
+            .slide.active .reveal { animation: rise 0.6s ease both; }";
+        assert_eq!(rules(&styled(transform)), ["entrance-transform"]);
+        let issue = &lint(&styled(transform), |_| false, &[])[0];
+        assert_eq!(issue.line, 6, "reported at the keyframes");
+        assert!(issue.message.contains("@keyframes rise"));
+        let in_media = "@keyframes rise { from { transform: scale(0.9); } }\n\
+            @media (min-width: 1px) { .slide.active .reveal { animation-name: rise; } }";
+        assert_eq!(rules(&styled(in_media)), ["entrance-transform"]);
+        let not_an_entrance = "@keyframes spin { to { transform: rotate(1turn); } }\n\
+            .slide .logo { animation: spin 4s linear infinite; }\n\
+            .slide.active .reveal { animation: spinner 1s both; }";
+        assert_eq!(rules(&styled(not_an_entrance)), Vec::<&str>::new());
+        let lookalikes =
+            "@keyframes rise { from { text-transform: none; transform-origin: 0 0; } }\n\
+            .slide.active .reveal { animation: rise 1s both; }";
+        assert_eq!(rules(&styled(lookalikes)), Vec::<&str>::new());
+        let commented = deck(&format!(
+            "<!-- <style>{transform}</style> -->\n<section class=\"slide\" id=\"a\"></section>"
+        ));
+        assert_eq!(rules(&commented), Vec::<&str>::new());
     }
 
     #[test]

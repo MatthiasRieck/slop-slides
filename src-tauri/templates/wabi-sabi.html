@@ -97,6 +97,12 @@
     .layout-quote blockquote { font-weight: 500; font-size: 68px; line-height: 1.45; }
     .slide .cite { letter-spacing: 0.16em; }
     .slide .cite::before { content: "— "; color: var(--accent); }
+    /* Entrance: a long, still fade. */
+    @keyframes wabi-sabi-reveal {
+      from { opacity: 0; translate: 0 8px; filter: blur(3px); }
+      to { opacity: 1; }
+    }
+    .slide.active .reveal { animation: wabi-sabi-reveal 2.2s cubic-bezier(0.33, 0, 0.2, 1) both; }
   </style>
 </head>
 <body>

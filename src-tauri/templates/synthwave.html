@@ -96,6 +96,16 @@
     .slide .value { font-weight: 400; font-size: 120px; color: #fff; text-shadow: 0 0 20px var(--accent), 0 0 50px var(--accent); }
     .layout-quote blockquote { font-family: var(--font-body); font-weight: 600; font-style: italic; font-size: 72px; color: #fff; text-shadow: 0 0 24px rgba(255, 42, 109, 0.8); }
     .slide .cite { color: var(--cyan); }
+    /* Entrance: a rise with a neon flicker. */
+    @keyframes synthwave-reveal {
+      from { opacity: 0; translate: 0 36px; }
+      40% { opacity: 1; }
+      50% { opacity: 0.25; }
+      60% { opacity: 1; }
+      70% { opacity: 0.6; }
+      to { opacity: 1; }
+    }
+    .slide.active .reveal { animation: synthwave-reveal 1s ease-out both; }
   </style>
 </head>
 <body>

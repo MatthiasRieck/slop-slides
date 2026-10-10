@@ -21,8 +21,8 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
 - **Right:** chat with the agent. It knows which slide you're on, and you can attach images
   (paperclip, or drop files anywhere on the window).
 - **Styles and layouts:** decks can follow a template, a deck of example layouts (title,
-  section, bullets, split, stats, quote, closing) in one style. 22 come with the app
-  (Claymorphism, Swiss Design, Synthwave, Wabi-Sabi, …); add your own as folders in
+  section, bullets, split, stats, quote, closing) in one style, with its own entrance animation. 31 come
+  with the app (Claymorphism, Swiss Design, Synthwave, Terminal Green, Wabi-Sabi, …); add your own as folders in
   `~/.slopslides/templates/<name>/deck.html`. Pick a style when creating a deck or with the
   palette button above the slide rail (it puts a restyle request in the chat; an empty deck
   takes it at once); the same menu has **Save deck as template**, which copies the deck there

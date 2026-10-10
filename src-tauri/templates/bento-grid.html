@@ -101,6 +101,12 @@
     .layout-quote blockquote { flex: 1; display: flex; align-items: flex-end; max-width: none; width: 100%; padding: 88px; border-radius: var(--tile-radius); background: var(--ink); color: #fff; font-size: 76px; letter-spacing: -0.02em; }
     .layout-quote .cite { width: 100%; padding: 36px 88px; border-radius: var(--tile-radius); background: var(--panel); color: var(--ink); }
     .layout-closing h2 { font-size: 150px; letter-spacing: -0.05em; }
+    /* Entrance: tiles pop into place. */
+    @keyframes bento-grid-reveal {
+      from { opacity: 0; scale: 0.92; translate: 0 24px; }
+      to { opacity: 1; }
+    }
+    .slide.active .reveal { animation: bento-grid-reveal 0.65s cubic-bezier(0.34, 1.56, 0.64, 1) both; }
   </style>
 </head>
 <body>

@@ -56,6 +56,39 @@ const BUILTIN: &[(&str, &str)] = &[
     ("victorian", include_str!("../templates/victorian.html")),
     ("cyberpunk", include_str!("../templates/cyberpunk.html")),
     ("wabi-sabi", include_str!("../templates/wabi-sabi.html")),
+    ("bold-signal", include_str!("../templates/bold-signal.html")),
+    (
+        "electric-studio",
+        include_str!("../templates/electric-studio.html"),
+    ),
+    (
+        "creative-voltage",
+        include_str!("../templates/creative-voltage.html"),
+    ),
+    (
+        "dark-botanical",
+        include_str!("../templates/dark-botanical.html"),
+    ),
+    (
+        "notebook-tabs",
+        include_str!("../templates/notebook-tabs.html"),
+    ),
+    (
+        "pastel-geometry",
+        include_str!("../templates/pastel-geometry.html"),
+    ),
+    (
+        "split-pastel",
+        include_str!("../templates/split-pastel.html"),
+    ),
+    (
+        "vintage-editorial",
+        include_str!("../templates/vintage-editorial.html"),
+    ),
+    (
+        "terminal-green",
+        include_str!("../templates/terminal-green.html"),
+    ),
 ];
 
 /// Where staged copies of templates go inside a deck, for the agent to read.
@@ -272,7 +305,7 @@ mod tests {
 
     #[test]
     fn every_builtin_template_has_the_shared_layouts_and_passes_lint() {
-        assert_eq!(BUILTIN.len(), 22);
+        assert_eq!(BUILTIN.len(), 31);
         for (id, source) in BUILTIN {
             assert!(is_valid_id(id) && html::slugify(id) == *id, "{id}");
             let ids: Vec<_> = html::find_slides(source)
@@ -292,6 +325,38 @@ mod tests {
                 lint::lint(&shell, |_| false, &[]),
                 vec![],
                 "{id} as a new deck"
+            );
+        }
+    }
+
+    #[test]
+    fn every_builtin_template_has_its_own_entrance() {
+        for (id, source) in BUILTIN {
+            let keyframes = format!("@keyframes {id}-reveal {{");
+            let start = source
+                .find(&keyframes)
+                .unwrap_or_else(|| panic!("{id}: {keyframes}"));
+            let frames = &source[start..start + source[start..].find("\n    }").unwrap()];
+            let last = frames.lines().last().unwrap().trim();
+            assert!(
+                last.starts_with("to { opacity: 1;"),
+                "{id}: the last frame shows the element ({last})"
+            );
+            assert!(
+                !last.contains("translate") && !last.contains("scale") && !last.contains("rotate"),
+                "{id}: elements land on their own styles ({last})"
+            );
+            assert!(
+                source.contains(&format!(".slide.active .reveal {{ animation: {id}-reveal ")),
+                "{id} plays its entrance"
+            );
+            assert!(
+                source[source.find(&format!("animation: {id}-reveal")).unwrap()..]
+                    .split(';')
+                    .next()
+                    .unwrap()
+                    .ends_with(" both"),
+                "{id}: elements stay hidden until their turn"
             );
         }
     }

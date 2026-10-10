@@ -1,5 +1,8 @@
-The files STYLE_PRESETS.md and animation-patterns.md in this folder come from
-frontend-slides (https://github.com/zarazhangrui/frontend-slides), used under the MIT License:
+design-reference.md in this folder, and the templates bold-signal, electric-studio,
+creative-voltage, dark-botanical, notebook-tabs, pastel-geometry, split-pastel,
+vintage-editorial, and terminal-green in ../templates, are adapted from the style presets and
+animation patterns of frontend-slides (https://github.com/zarazhangrui/frontend-slides), used
+under the MIT License:
 
 MIT License
 

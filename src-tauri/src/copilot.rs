@@ -16,6 +16,7 @@ use tokio::sync::watch;
 
 use crate::agent::{AgentEvent, Outcome, SYSTEM_PROMPT};
 use crate::error::{Error, Result};
+use crate::extensions::{self, Extensions};
 use crate::mcp;
 use crate::permissions::{Approval, Approvals, Choices, Decision, PermissionMode};
 use crate::providers::ModelInfo;
@@ -242,6 +243,38 @@ pub struct TurnArgs<'a> {
     pub workspace: &'a str,
     pub mode: PermissionMode,
     pub approvals: Arc<Approvals>,
+    pub extensions: &'a Extensions,
+}
+
+/// The `session.create`/`session.resume` parameters. Copilot discovers no configuration of
+/// its own here (`enableConfigDiscovery` is off) but the workspace's `AGENTS.md`, so the
+/// user's extensions are passed in full; it loads plugins' MCP servers itself.
+fn session_config(args: &TurnArgs<'_>) -> Value {
+    let ext = args.extensions;
+    let mut servers: serde_json::Map<String, Value> = ext
+        .mcp_servers
+        .iter()
+        .map(|(name, server)| (name.clone(), extensions::copilot_server(server)))
+        .collect();
+    servers.insert(
+        mcp::SERVER.into(),
+        json!({
+            "type": "stdio",
+            "command": args.lint_server,
+            "args": [mcp::FLAG, args.dir],
+            "tools": ["*"],
+        }),
+    );
+    json!({
+        "workingDirectory": args.dir,
+        "systemMessage": { "mode": "append", "content": ext.system_prompt(SYSTEM_PROMPT) },
+        "requestPermission": true,
+        "streaming": true,
+        "clientName": "SlopSlide",
+        "mcpServers": servers,
+        "skillDirectories": ext.skill_folders(),
+        "pluginDirectories": ext.plugins,
+    })
 }
 
 /// Runs one turn. `on_session` persists the session id as soon as it is known.
@@ -255,21 +288,7 @@ pub async fn run_turn(
     let (mut child, mut conn) = spawn(args.bin, Some(args.dir))?;
     conn.handshake().await?;
 
-    let mut config = json!({
-        "workingDirectory": args.dir,
-        "systemMessage": { "mode": "append", "content": SYSTEM_PROMPT },
-        "requestPermission": true,
-        "streaming": true,
-        "clientName": "SlopSlide",
-        "mcpServers": {
-            mcp::SERVER: {
-                "type": "stdio",
-                "command": args.lint_server,
-                "args": [mcp::FLAG, args.dir],
-                "tools": ["*"],
-            }
-        },
-    });
+    let mut config = session_config(&args);
     if let Some(model) = args.model {
         config["model"] = json!(model);
     }
@@ -710,6 +729,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn session_config_passes_the_users_extensions() {
+        let ext = Extensions {
+            mcp_servers: json!({
+                "docs": {"url": "https://x/mcp"},
+                "slopslide": {"command": "evil"},
+            })
+            .as_object()
+            .cloned()
+            .unwrap(),
+            plugin_mcp_servers: json!({"from-plugin": {"command": "p"}})
+                .as_object()
+                .cloned()
+                .unwrap(),
+            user_skills: Some("/home/.slopslides/skills".into()),
+            workspace_skills: Some("/talk/.agents/skills".into()),
+            plugins: vec!["/home/.slopslides/plugins/p".into()],
+            instructions: Some("Be brief.".into()),
+            warnings: Vec::new(),
+        };
+        let args = TurnArgs {
+            bin: Path::new("copilot"),
+            dir: Path::new("/talk"),
+            lint_server: Path::new("/Apps/SlopSlide"),
+            prompt: "hi",
+            model: None,
+            effort: None,
+            session: None,
+            compact: false,
+            workspace: "talk",
+            mode: PermissionMode::Ask,
+            approvals: Arc::default(),
+            extensions: &ext,
+        };
+        let config = session_config(&args);
+        let servers = &config["mcpServers"];
+        assert_eq!(
+            servers["docs"],
+            json!({"type": "http", "url": "https://x/mcp", "tools": ["*"]})
+        );
+        assert_eq!(servers["slopslide"]["command"], "/Apps/SlopSlide");
+        assert!(
+            servers.get("from-plugin").is_none(),
+            "Copilot starts plugins' servers itself"
+        );
+        assert_eq!(
+            config["skillDirectories"],
+            json!(["/talk/.agents/skills", "/home/.slopslides/skills"])
+        );
+        assert_eq!(
+            config["pluginDirectories"],
+            json!(["/home/.slopslides/plugins/p"])
+        );
+        assert_eq!(
+            config["systemMessage"]["content"],
+            ext.system_prompt(SYSTEM_PROMPT)
+        );
+    }
+
+    #[test]
     fn shows_the_apps_tools_by_their_own_names() {
         let (name, input) = tool_presentation("slopslide-lint_deck", &json!({"path":"deck.html"}));
         assert_eq!(
@@ -1033,6 +1111,7 @@ while True:
             workspace: "deck-1",
             mode: PermissionMode::Ask,
             approvals: approvals.clone(),
+            extensions: &Extensions::default(),
         };
         let outcome = runtime.block_on(async {
             tokio::time::timeout(
@@ -1118,6 +1197,7 @@ while True:
             workspace: "deck-1",
             mode: PermissionMode::Ask,
             approvals: approvals.clone(),
+            extensions: &Extensions::default(),
         };
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1233,6 +1313,7 @@ while True:
             workspace: "deck-1",
             mode: PermissionMode::Ask,
             approvals: Arc::default(),
+            extensions: &Extensions::default(),
         };
         let outcome = runtime.block_on(run_turn(
             args,

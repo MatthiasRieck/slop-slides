@@ -1,6 +1,6 @@
 //! Codex app-server transport. Provider policy and JSON-RPC stay out of the shared agent loop.
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -12,6 +12,7 @@ use tokio::sync::{mpsc, watch};
 
 use crate::agent::{AgentEvent, Outcome, SYSTEM_PROMPT};
 use crate::error::{Error, Result};
+use crate::extensions::{self, Extensions};
 use crate::permissions::{Answer, Approval, Approvals, Choices, Decision, PermissionMode, Run};
 use crate::{env, mcp};
 
@@ -24,14 +25,12 @@ struct Server {
     active_turn: Option<(String, String)>,
 }
 impl Server {
-    fn spawn(bin: &Path, cwd: Option<&Path>, lint_server: Option<&Path>) -> Result<Self> {
+    /// `config` holds `-c` overrides.
+    fn spawn(bin: &Path, cwd: Option<&Path>, config: &[String]) -> Result<Self> {
         let mut cmd = Command::new(bin);
-        cmd.arg("app-server");
+        cmd.arg("app-server").args(config);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
-        }
-        if let (Some(exe), Some(dir)) = (lint_server, cwd) {
-            cmd.args(mcp_config_args(exe, dir));
         }
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -134,6 +133,16 @@ fn mcp_config_args(exe: &Path, dir: &Path) -> Vec<String> {
     .collect()
 }
 
+/// The skill folders Codex does not find itself: it reads the workspace's `.agents/skills`
+/// but not the app home's or the plugins'.
+fn skill_roots(ext: &Extensions) -> Vec<PathBuf> {
+    ext.user_skills
+        .iter()
+        .cloned()
+        .chain(ext.plugin_skill_folders())
+        .collect()
+}
+
 fn allowed(requirements: &Value, key: &str, value: &str) -> bool {
     requirements[key]
         .as_array()
@@ -164,14 +173,15 @@ fn supported_modes(config: &Value, requirements: &Value) -> Vec<PermissionMode> 
 
 pub async fn permission_modes(dir: &Path) -> Result<Vec<PermissionMode>> {
     let bin = env::resolve_codex().ok_or_else(|| Error::msg("Codex is not installed."))?;
-    let mut server = Server::spawn(&bin, Some(dir), None)?;
+    let mut server = Server::spawn(&bin, Some(dir), &[])?;
     server.initialize().await?;
     let (config, requirements) = server.configuration(dir).await?;
     Ok(supported_modes(&config, &requirements))
 }
 
 fn thread_params(args: &TurnArgs<'_>, config: &Value) -> Value {
-    let mut p = json!({"cwd":args.dir,"developerInstructions":SYSTEM_PROMPT});
+    let instructions = args.extensions.system_prompt(SYSTEM_PROMPT);
+    let mut p = json!({"cwd":args.dir,"developerInstructions":instructions});
     if let Some(model) = args.model {
         p["model"] = json!(model);
     }
@@ -222,6 +232,7 @@ pub struct TurnArgs<'a> {
     pub session: Option<&'a str>,
     pub mode: PermissionMode,
     pub approvals: Arc<Approvals>,
+    pub extensions: &'a Extensions,
 }
 
 pub async fn run_turn(
@@ -230,7 +241,16 @@ pub async fn run_turn(
     emit: &(dyn Fn(&AgentEvent) + Sync),
     on_session: &(dyn Fn(&str) -> Result<()> + Sync),
 ) -> Result<Outcome> {
-    let mut server = Server::spawn(args.bin, Some(args.dir), Some(args.lint_server))?;
+    let mut warnings = Vec::new();
+    let mut config = mcp_config_args(args.lint_server, args.dir);
+    config.extend(extensions::codex_config_args(
+        &args.extensions.all_mcp_servers(),
+        &mut warnings,
+    ));
+    for message in warnings {
+        emit(&AgentEvent::Error { message });
+    }
+    let mut server = Server::spawn(args.bin, Some(args.dir), &config)?;
     let (run, mut answers) = args.approvals.start(args.workspace);
     // Cancellation covers initialization/resume as well as generation and approval waits.
     if *cancel.borrow() {
@@ -267,6 +287,17 @@ async fn connected_turn(
     on_session: &(dyn Fn(&str) -> Result<()> + Sync),
 ) -> Result<Outcome> {
     server.initialize().await?;
+    let roots = skill_roots(args.extensions);
+    if !roots.is_empty() {
+        if let Err(e) = server
+            .request("skills/extraRoots/set", json!({"extraRoots": roots}))
+            .await
+        {
+            emit(&AgentEvent::Error {
+                message: format!("Codex could not load the skills from ~/.slopslides: {e}"),
+            });
+        }
+    }
     let (config, requirements) = server.configuration(args.dir).await?;
     if !supported_modes(&config, &requirements).contains(&args.mode) {
         return Err(Error::msg(

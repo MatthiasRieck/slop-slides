@@ -2,6 +2,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { ChevronDown, Shield } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../lib/api";
+import { PROVIDERS } from "../lib/models";
 import { PERMISSION_MODES, type ApprovalDecision, type PermissionMode } from "../lib/permissions";
 import { useApp, type ChatPart } from "../store";
 import { ComposerPopover } from "./ComposerPopover";
@@ -10,26 +11,28 @@ export function PermissionPicker() {
   const provider = useApp((s) => s.selection.provider);
   const deckId = useApp((s) => s.workspace?.path);
   const running = useApp((s) => s.running);
-  const mode = useApp((s) => s.permissionMode);
+  const mode = useApp((s) => s.permissionModes[s.selection.provider]);
   const [open, setOpen] = useState(false);
   const [modes, setModes] = useState<PermissionMode[]>([]);
   const [error, setError] = useState<string | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
   useEffect(() => {
-    if (provider !== "codex" || !deckId) return;
+    // Asked when opened: Codex answers by starting its app-server.
+    if (!open || !deckId) return;
     let active = true;
     setModes([]);
     setError(null);
-    void api.codexPermissionModes(deckId).then((next) => { if (active) setModes(next); }).catch((e) => { if (active) setError(errorMessage(e)); });
+    void api.permissionModes(provider, deckId).then((next) => { if (active) setModes(next); }).catch((e) => { if (active) setError(errorMessage(e)); });
     return () => { active = false; };
-  }, [provider, deckId]);
-  useEffect(() => { if (running || provider !== "codex") setOpen(false); }, [running, provider]);
-  if (provider !== "codex") return null;
+  }, [open, provider, deckId]);
+  useEffect(() => { if (running) setOpen(false); }, [running]);
+  useEffect(() => setOpen(false), [provider]);
+  const name = PROVIDERS[provider].cli;
   const choose = async (next: PermissionMode) => {
     try {
       if (next === "fullAccess" && mode !== next && !(await ask(
-        "Codex will be able to change files and run commands beyond the workspace without asking for approval.",
+        `${name} will be able to change files and run commands beyond the workspace without asking for approval.`,
         { title: "Enable Full access?", kind: "warning", okLabel: "Enable Full access", cancelLabel: "Cancel" },
       ))) return;
     } catch (e) { setError(errorMessage(e)); return; }
@@ -38,12 +41,12 @@ export function PermissionPicker() {
     setOpen(false);
   };
   return <div ref={root} className="min-w-0 shrink-0">
-    <button type="button" disabled={running} aria-label="Codex permissions" title={`Codex permissions: ${PERMISSION_MODES[mode].label}`} aria-expanded={open} onClick={() => setOpen(!open)}
+    <button type="button" disabled={running} aria-label="Permissions" title={`${name} permissions: ${PERMISSION_MODES[mode].label}`} aria-expanded={open} onClick={() => setOpen(!open)}
       className="flex h-7 items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50">
       <Shield className="size-3.5 shrink-0" /><span className="hidden @[26rem]:inline">{PERMISSION_MODES[mode].label}</span><ChevronDown className="size-3" />
     </button>
     {open && <ComposerPopover anchor={root} onClose={close} width={256} className="p-1.5"><div role="group" aria-label="Permission modes">
-      {error ? <p role="alert" className="p-2 text-xs text-destructive">{error}</p> : modes.length === 0 ? <p className="p-2 text-xs text-muted-foreground">Checking Codex permissions…</p> : modes.map((m) => <button key={m} type="button" aria-pressed={mode === m} onClick={() => void choose(m)} className="block w-full rounded-lg px-2.5 py-2 text-left text-xs hover:bg-accent aria-pressed:bg-accent">
+      {error ? <p role="alert" className="p-2 text-xs text-destructive">{error}</p> : modes.length === 0 ? <p className="p-2 text-xs text-muted-foreground">Checking {name} permissions…</p> : modes.map((m) => <button key={m} type="button" aria-pressed={mode === m} onClick={() => void choose(m)} className="block w-full rounded-lg px-2.5 py-2 text-left text-xs hover:bg-accent aria-pressed:bg-accent">
         <span className="font-medium">{PERMISSION_MODES[m].label}</span><span className="mt-0.5 block text-muted-foreground">{PERMISSION_MODES[m].description}</span>
       </button>)}
       {modes.length > 0 && !modes.includes(mode) && <p role="alert" className="p-2 text-xs text-destructive">The saved mode is unavailable. Select another mode.</p>}
@@ -68,7 +71,7 @@ export function ApprovalCard({ part }: { part: Extract<ChatPart, { kind: "approv
     finally { sending.current = false; }
   };
   const labels: Record<ApprovalDecision, string> = { accept: part.approval.acceptLabel, acceptForSession: "Allow for session", decline: "Deny" };
-  return <div className="rounded-lg border p-3 text-xs" aria-label="Codex approval request">
+  return <div className="rounded-lg border p-3 text-xs" aria-label="Approval request">
     <p className="flex items-center gap-1.5 font-medium"><Shield className="size-3.5" />{part.approval.title}</p>
     {part.approval.reason && <p className="mt-2 whitespace-pre-wrap text-muted-foreground">{part.approval.reason}</p>}
     <pre className="selectable my-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-2 font-mono text-xs">{part.approval.details}</pre>

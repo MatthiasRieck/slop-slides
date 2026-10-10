@@ -1826,7 +1826,7 @@ describe("editing slides on the stage", () => {
 });
 
 
-describe("Codex permissions", () => {
+describe("permissions", () => {
   it("stops a Codex turn and saves a closed transcript before leaving the workspace", async () => {
     const store = await freshStore();
     store.setState({ deck: deckFor(DECK_HTML), running: true, messages: [assistantMessage({ provider: "codex", status: "streaming", parts: [{ kind: "approval", status: "pending", approval: { id: "live", title: "Run", reason: null, details: "ls", acceptLabel: "Allow once", decisions: ["accept"] } }] })] });
@@ -1844,33 +1844,46 @@ describe("Codex permissions", () => {
     expect(calls("interrupt_agent")).toHaveLength(0);
   });
 
-  it("defaults to Ask, remembers valid choices, and rejects invalid saved values", async () => {
+  const codex = { provider: "codex" as const, model: "m", label: "M", effort: "high", contextWindow: null };
+  const claude = { ...codex, provider: "claude" as const };
+
+  it("defaults to Ask, remembers each provider's choice, and rejects invalid saved values", async () => {
     let store = await freshStore();
-    expect(store.getState().permissionMode).toBe("ask");
+    expect(store.getState().permissionModes).toEqual({ claude: "ask", codex: "ask", copilot: "ask" });
+    store.setState({ selection: codex });
     store.getState().setPermissionMode("autoReview");
-    expect(localStorage.getItem("slopslide.codexPermissions")).toBe("autoReview");
+    store.setState({ selection: claude });
+    store.getState().setPermissionMode("fullAccess");
+    expect(JSON.parse(localStorage.getItem("slopslide.permissions")!)).toEqual({ claude: "fullAccess", codex: "autoReview", copilot: "ask" });
     store = await freshStore();
-    expect(store.getState().permissionMode).toBe("autoReview");
-    localStorage.setItem("slopslide.codexPermissions", "__proto__");
-    expect((await freshStore()).getState().permissionMode).toBe("ask");
+    expect(store.getState().permissionModes).toEqual({ claude: "fullAccess", codex: "autoReview", copilot: "ask" });
+    localStorage.setItem("slopslide.permissions", '{"claude":"__proto__","codex":3,"__proto__":{"copilot":"custom"}}');
+    expect((await freshStore()).getState().permissionModes).toEqual({ claude: "ask", codex: "ask", copilot: "ask" });
+    localStorage.setItem("slopslide.permissions", "not json");
+    expect((await freshStore()).getState().permissionModes.claude).toBe("ask");
+  });
+
+  it("keeps the Codex mode saved before every provider had one", async () => {
+    localStorage.setItem("slopslide.codexPermissions", "custom");
+    expect((await freshStore()).getState().permissionModes).toEqual({ claude: "ask", codex: "custom", copilot: "ask" });
   });
 
   it("cannot change the mode during a turn", async () => {
     const store = await freshStore();
     store.setState({ running: true });
     store.getState().setPermissionMode("fullAccess");
-    expect(store.getState().permissionMode).toBe("ask");
-    expect(localStorage.getItem("slopslide.codexPermissions")).toBeNull();
+    expect(store.getState().permissionModes.claude).toBe("ask");
+    expect(localStorage.getItem("slopslide.permissions")).toBeNull();
   });
 
-  it("sends the selected mode only to Codex", async () => {
+  it("sends each provider its own mode", async () => {
     const store = await freshStore();
-    store.setState({ deck: deckFor(DECK_HTML), permissionMode: "autoReview", selection: { provider: "codex", model: "m", label: "M", effort: "high", contextWindow: null } });
+    store.setState({ deck: deckFor(DECK_HTML), permissionModes: { claude: "fullAccess", codex: "autoReview", copilot: "ask" }, selection: codex });
     await store.getState().send("slides", { includeSlide: false, attachments: [] });
-    expect(calls("send_message")[0]!.args).toMatchObject({ permissionMode: "autoReview" });
-    store.setState({ running: false, selection: { ...store.getState().selection, provider: "claude" } });
+    expect(calls("send_message")[0]!.args).toMatchObject({ provider: "codex", permissionMode: "autoReview" });
+    store.setState({ running: false, selection: claude });
     await store.getState().send("slides", { includeSlide: false, attachments: [] });
-    expect(calls("send_message")[1]!.args).not.toHaveProperty("permissionMode");
+    expect(calls("send_message")[1]!.args).toMatchObject({ provider: "claude", permissionMode: "fullAccess" });
   });
 
   it("restored approvals are closed rather than reusable", async () => {

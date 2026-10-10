@@ -81,30 +81,37 @@ The top bar shows whether the open deck file passes the HTML lint. When it does 
 status puts fix instructions into the chat composer; the agent then fixes the issues and
 re-checks with its `lint_deck` tool.
 
-## Codex permissions
+## Permissions
 
-With a Codex model selected, the composer shows a permissions picker:
+The composer shows a permissions picker for every agent. Each agent remembers its own mode:
 
-- **Ask for approval** (default): Codex works inside the deck workspace and asks for extra access.
-- **Approve for me**: the same workspace boundary, with Codex's automatic reviewer handling
-  eligible approval requests. Automatic reviews can consume additional subscription usage.
+- **Ask for approval** (default): the agent reads and edits files in the workspace, fetches
+  web pages, and uses SlopSlide's own tools (`lint_deck`, `open_file`) without asking.
+  Shell commands, files outside the workspace, and other tools ask first. (Codex runs
+  commands inside its workspace sandbox and asks for anything beyond it.)
+- **Approve for me** (Codex only): the same workspace boundary, with Codex's automatic
+  reviewer handling eligible approval requests. Automatic reviews can consume additional
+  subscription usage.
 - **Full access**: no sandbox or approval prompts. Selecting it requires confirmation.
-- **Custom**: use the current Codex configuration, including sandbox, approval policy, and reviewer.
+- **Custom** (Codex only): use the current Codex configuration, including sandbox, approval
+  policy, and reviewer.
 
-The selection is remembered locally and cannot change during a turn. It is reapplied when
-resuming a conversation; it does not modify `~/.codex/config.toml`. Modes unavailable in the
-installed CLI or disallowed by managed requirements are omitted. Codex remains responsible
-for enforcing the effective policy; unsupported or restricted configurations produce an error.
+SlopSlide's own MCP tools never ask in any mode. The selection is remembered locally and
+cannot change during a turn. It is reapplied when resuming a conversation and never modifies
+the agent's own configuration (`~/.codex/config.toml`, Claude Code settings). Codex modes
+unavailable in the installed CLI or disallowed by managed requirements are omitted; Codex
+remains responsible for enforcing the effective policy.
 
 Requests appear in chat with the command, proposed file changes, network destination, or
-requested permissions. Choose **Allow once**, **Deny**, or **Stop**; session approval is
-shown when offered by Codex. Additional permission grants are limited to the current turn.
-Automatic reviews show their status and rationale. Requests close when their turn ends.
-Leaving a deck stops its active Codex turn and saves the interrupted transcript, so an
-approval cannot remain waiting in a hidden deck.
-MCP tool approval confirmations use the same cards, including session approval when offered
-by Codex. Structured input forms, URL authentication, and device verification are not supported
-yet and receive an explicit error instead of being automatically approved.
+requested permissions. Choose **Allow once**, **Deny**, or **Stop**; **Allow for session** is
+shown when the agent offers it (Claude Code's session rules are kept for the session only,
+never saved to settings). Codex's additional permission grants are limited to the current
+turn. Automatic reviews show their status and rationale. Requests close when their turn ends.
+Leaving a deck stops its active turn and saves the interrupted transcript, so an approval
+cannot remain waiting in a hidden deck.
+Codex MCP tool approval confirmations use the same cards. Structured input forms, URL
+authentication, and device verification are not supported yet and receive an explicit error
+instead of being automatically approved.
 
 Codex chat uses `codex app-server` with your existing CLI login. ChatGPT sign-in uses your
 subscription; API-key sign-in uses API billing. Update an older CLI with `codex update` if

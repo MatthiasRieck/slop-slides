@@ -231,7 +231,8 @@ export const api = {
     /** Summarize the conversation so far instead of sending `prompt`. */
     compact = false,
   ) => invoke<void>("send_message", { args: { workspace, prompt, ...selection, compact } }),
-  codexPermissionModes: (id: string) => invoke<PermissionMode[]>("codex_permission_modes", { id }),
+  /** The modes `provider` offers in workspace `id` (Codex: per its configuration). */
+  permissionModes: (provider: Provider, id: string) => invoke<PermissionMode[]>("permission_modes", { provider, id }),
   respondApproval: (workspace: string, id: string, decision: ApprovalDecision) =>
     invoke<void>("respond_approval", { workspace, id, decision }),
   interruptAgent: (id: string) => invoke<void>("interrupt_agent", { id }),

@@ -8,6 +8,7 @@ mod error;
 mod html;
 mod lint;
 mod mcp;
+mod permissions;
 mod protocol;
 mod providers;
 mod review;
@@ -445,8 +446,14 @@ fn send_message(app: AppHandle, agent: State<AgentManager>, args: SendArgs) -> R
 }
 
 #[tauri::command]
-async fn codex_permission_modes(id: String) -> Result<Vec<codex::PermissionMode>> {
-    codex::permission_modes(&workspace::root(&id)?).await
+async fn permission_modes(
+    provider: agent::Provider,
+    id: String,
+) -> Result<Vec<permissions::PermissionMode>> {
+    match provider {
+        agent::Provider::Codex => codex::permission_modes(&workspace::root(&id)?).await,
+        _ => Ok(permissions::fixed_modes(provider)),
+    }
 }
 
 #[tauri::command]
@@ -454,7 +461,7 @@ fn respond_approval(
     agent: State<AgentManager>,
     workspace: String,
     id: String,
-    decision: codex::Decision,
+    decision: permissions::Decision,
 ) -> Result<()> {
     agent.approvals.respond(&workspace, &id, decision)
 }
@@ -533,7 +540,7 @@ pub fn run() {
             reset_chat,
             send_message,
             interrupt_agent,
-            codex_permission_modes,
+            permission_modes,
             respond_approval,
             agent_running,
             list_providers,

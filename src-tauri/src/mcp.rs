@@ -15,10 +15,34 @@ pub const FLAG: &str = "--lint-mcp";
 pub const SERVER: &str = "slopslide";
 pub const TOOL: &str = "lint_deck";
 pub const OPEN_TOOL: &str = "open_file";
-pub const QUALIFIED_OPEN_TOOL: &str = "mcp__slopslide__open_file";
 const OPEN_REQUESTS: &str = "open-requests";
-/// The name Claude Code gives the tool, for `--allowedTools`.
-pub const QUALIFIED_TOOL: &str = "mcp__slopslide__lint_deck";
+/// Claude Code's rule for every tool of this server, for `--allowedTools`; its tools are
+/// named `mcp__slopslide__<tool>`.
+pub const CLAUDE_TOOLS: &str = "mcp__slopslide";
+
+/// Whether Claude Code tool `name` is one of this server's. The agent may always use them.
+pub fn is_claude_tool(name: &str) -> bool {
+    claude_tool(name).is_some()
+}
+
+fn claude_tool(name: &str) -> Option<&str> {
+    name.strip_prefix(CLAUDE_TOOLS)?
+        .strip_prefix("__")
+        .filter(|tool| !tool.is_empty())
+}
+
+/// The name the chat shows for a tool: this server's tools without the prefix each
+/// provider adds (Claude Code's `mcp__slopslide__`, Copilot's `slopslide-`), so they read
+/// alike for every provider; other tools as named.
+pub fn display_name(name: &str) -> &str {
+    claude_tool(name)
+        .or_else(|| {
+            name.strip_prefix(SERVER)?
+                .strip_prefix('-')
+                .filter(|tool| !tool.is_empty())
+        })
+        .unwrap_or(name)
+}
 
 const DEFAULT_PROTOCOL: &str = "2024-11-05";
 
@@ -231,7 +255,28 @@ mod tests {
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[1]["name"], OPEN_TOOL);
         assert_eq!(tools[0]["name"], TOOL);
-        assert_eq!(QUALIFIED_TOOL, format!("mcp__{SERVER}__{TOOL}"));
+        assert_eq!(CLAUDE_TOOLS, format!("mcp__{SERVER}"));
+    }
+
+    #[test]
+    fn recognizes_its_claude_tool_names() {
+        assert!(is_claude_tool("mcp__slopslide__lint_deck"));
+        assert!(is_claude_tool("mcp__slopslide__open_file"));
+        assert!(!is_claude_tool("mcp__slopslide__"));
+        assert!(!is_claude_tool("mcp__slopslides__lint_deck"));
+        assert!(!is_claude_tool("mcp__github__push"));
+        assert!(!is_claude_tool("Bash"));
+    }
+
+    #[test]
+    fn shows_its_tools_alike_for_every_provider() {
+        assert_eq!(display_name("mcp__slopslide__lint_deck"), TOOL);
+        assert_eq!(display_name("slopslide-lint_deck"), TOOL);
+        assert_eq!(display_name("slopslide-open_file"), OPEN_TOOL);
+        assert_eq!(display_name("lint_deck"), TOOL);
+        assert_eq!(display_name("mcp__github__push"), "mcp__github__push");
+        assert_eq!(display_name("github-push"), "github-push");
+        assert_eq!(display_name("slopslide-"), "slopslide-");
     }
 
     #[test]

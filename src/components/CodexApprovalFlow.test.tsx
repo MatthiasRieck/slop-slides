@@ -28,10 +28,10 @@ beforeEach(async () => {
   listeners.clear();
   invoke.mockReset().mockImplementation(async (command: string) => {
     if (command === "list_providers") return providers;
-    if (command === "codex_permission_modes") return ["ask", "fullAccess", "custom"];
+    if (command === "permission_modes") return ["ask", "fullAccess", "custom"];
   });
   useApp.setState({ workspace: { path: "/decks/talk", name: "talk" }, deck: deckFor(DECK_HTML), selected: "intro", messages: [], running: false,
-    permissionMode: "ask", providers, selection: { provider: "codex", model: "test", label: "Test model", effort: "low", contextWindow: null },
+    permissionModes: { claude: "ask", codex: "ask", copilot: "ask" }, providers, selection: { provider: "codex", model: "test", label: "Test model", effort: "low", contextWindow: null },
     sketches: {}, sketchesSent: {}, favoriteModels: [], error: null });
   await initEventBridge();
   render(<ChatPanel />);

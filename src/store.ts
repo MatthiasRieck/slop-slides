@@ -21,6 +21,7 @@ import { DEFAULT_SIZE, pixelsOf, resizePrompt, sameSize, type SlideSize } from "
 import { basename, dirname, layoutLabel } from "./lib/utils";
 import {
   defaultModel,
+  PROVIDER_IDS,
   PROVIDERS,
   pickContextWindow,
   pickEffort,
@@ -29,7 +30,7 @@ import {
   type ProviderInfo,
 } from "./lib/models";
 
-import { isPermissionMode, type Approval, type PermissionMode } from "./lib/permissions";
+import { DEFAULT_PERMISSION_MODES, isPermissionMode, type Approval, type PermissionMode, type PermissionModes } from "./lib/permissions";
 
 export type ChatPart =
   | { kind: "approval"; approval: Approval; status: "pending" | "resolved" | "expired" }
@@ -98,10 +99,22 @@ export interface ModelSelection {
   contextWindow: string | null;
 }
 
-const PERMISSION_KEY = "slopslide.codexPermissions";
-function loadPermissions(): PermissionMode {
-  const saved = localStorage.getItem(PERMISSION_KEY);
-  return isPermissionMode(saved) ? saved : "ask";
+const PERMISSIONS_KEY = "slopslide.permissions";
+/** Before every provider had permission modes, only Codex's was saved. */
+const CODEX_PERMISSION_KEY = "slopslide.codexPermissions";
+function loadPermissions(): PermissionModes {
+  const modes = { ...DEFAULT_PERMISSION_MODES };
+  const legacy = localStorage.getItem(CODEX_PERMISSION_KEY);
+  if (isPermissionMode(legacy)) modes.codex = legacy;
+  let saved: unknown;
+  try { saved = JSON.parse(localStorage.getItem(PERMISSIONS_KEY) ?? "null"); } catch { saved = null; }
+  if (saved && typeof saved === "object") {
+    for (const provider of PROVIDER_IDS) {
+      const mode = (saved as Record<string, unknown>)[provider];
+      if (Object.hasOwn(saved, provider) && isPermissionMode(mode)) modes[provider] = mode;
+    }
+  }
+  return modes;
 }
 
 const SELECTION_KEY = "slopslide.selection";
@@ -217,7 +230,9 @@ interface AppState {
   sessionProvider: Provider | null;
   running: boolean;
   selection: ModelSelection;
-  permissionMode: PermissionMode;
+  /** Each provider's permission mode; the selected provider's applies to the next turn. */
+  permissionModes: PermissionModes;
+  /** Sets the selected provider's mode. */
   setPermissionMode: (mode: PermissionMode) => void;
   /** `provider:model` keys starred in the model picker. */
   favoriteModels: string[];
@@ -387,11 +402,12 @@ export const useApp = create<AppState>((set, get) => ({
   sessionProvider: null,
   running: false,
   selection: loadSelection(),
-  permissionMode: loadPermissions(),
-  setPermissionMode: (permissionMode) => {
-    if (get().running || !isPermissionMode(permissionMode)) return;
-    localStorage.setItem(PERMISSION_KEY, permissionMode);
-    set({ permissionMode });
+  permissionModes: loadPermissions(),
+  setPermissionMode: (mode) => {
+    if (get().running || !isPermissionMode(mode)) return;
+    const permissionModes = { ...get().permissionModes, [get().selection.provider]: mode };
+    localStorage.setItem(PERMISSIONS_KEY, JSON.stringify(permissionModes));
+    set({ permissionModes });
   },
   favoriteModels: loadFavorites(),
   presenting: false,
@@ -851,12 +867,12 @@ function newReply(provider: Provider): AssistantMessage {
 
 /** Hands `prompt` to the selected agent; a failure to start lands on reply `replyId`. */
 async function startTurn(deckId: string, replyId: string, prompt: string, compact: boolean) {
-  const { selection, providers, permissionMode } = useApp.getState();
+  const { selection, providers, permissionModes } = useApp.getState();
   try {
     const { provider, model, contextWindow } = selection;
     const info = providers?.find((p) => p.id === provider)?.models.find((m) => m.id === model);
     const effort = requestEffort(info, selection.effort);
-    await api.sendMessage(deckId, prompt, { provider, model, effort, contextWindow, ...(provider === "codex" ? { permissionMode } : {}) }, compact);
+    await api.sendMessage(deckId, prompt, { provider, model, effort, contextWindow, permissionMode: permissionModes[provider] }, compact);
   } catch (error) {
     updateAssistant(replyId, (m) => ({
       ...m,

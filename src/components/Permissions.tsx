@@ -8,7 +8,7 @@ import { ComposerPopover } from "./ComposerPopover";
 
 export function PermissionPicker() {
   const provider = useApp((s) => s.selection.provider);
-  const deckId = useApp((s) => s.deck?.id);
+  const deckId = useApp((s) => s.workspace?.path);
   const running = useApp((s) => s.running);
   const mode = useApp((s) => s.permissionMode);
   const [open, setOpen] = useState(false);
@@ -29,7 +29,7 @@ export function PermissionPicker() {
   const choose = async (next: PermissionMode) => {
     try {
       if (next === "fullAccess" && mode !== next && !(await ask(
-        "Codex will be able to change files and run commands beyond the deck workspace without asking for approval.",
+        "Codex will be able to change files and run commands beyond the workspace without asking for approval.",
         { title: "Enable Full access?", kind: "warning", okLabel: "Enable Full access", cancelLabel: "Cancel" },
       ))) return;
     } catch (e) { setError(errorMessage(e)); return; }
@@ -52,7 +52,7 @@ export function PermissionPicker() {
 }
 
 export function ApprovalCard({ part }: { part: Extract<ChatPart, { kind: "approval" }> }) {
-  const deckId = useApp((s) => s.deck?.id);
+  const deckId = useApp((s) => s.workspace?.path);
   const running = useApp((s) => s.running);
   const [submitted, setSubmitted] = useState<ApprovalDecision | null>(null);
   const [error, setError] = useState<string | null>(null);

@@ -18,13 +18,15 @@ import type { ProviderInfo } from "./lib/models";
 import type { AssistantMessage, ChatMessage, UserMessage } from "./store";
 import { DECK_HTML, deckFor } from "./test/fixtures";
 
-async function freshStore() {
-  return (await freshModule()).useApp;
+async function freshStore(withWorkspace = true) {
+  return (await freshModule(withWorkspace)).useApp;
 }
 
-async function freshModule() {
+async function freshModule(withWorkspace = true) {
   vi.resetModules();
-  return import("./store");
+  const module = await import("./store");
+  if (withWorkspace) module.useApp.setState({ workspace: { path: "/decks/talk", name: "talk" } });
+  return module;
 }
 
 type Handler = (args: Record<string, unknown>) => unknown;
@@ -147,7 +149,7 @@ describe("workspaces", () => {
   }
 
   it("opens a folder on the files tab when nothing was open in it before", async () => {
-    const useApp = await freshStore();
+    const useApp = await freshStore(false);
     workspaceBackend();
     useApp.setState({ sidebarTab: "chat" });
     await useApp.getState().openWorkspace("/ws");
@@ -157,7 +159,7 @@ describe("workspaces", () => {
   });
 
   it("opens a deck in the editor and other pages as they are", async () => {
-    const useApp = await freshStore();
+    const useApp = await freshStore(false);
     workspaceBackend();
     await useApp.getState().openWorkspace("/ws");
     await useApp.getState().openPath("talks/q3.html");
@@ -175,7 +177,7 @@ describe("workspaces", () => {
   });
 
   it("reports a file that cannot be opened and keeps the open one", async () => {
-    const useApp = await freshStore();
+    const useApp = await freshStore(false);
     workspaceBackend();
     await useApp.getState().openWorkspace("/ws");
     await useApp.getState().openPath("notes.md");
@@ -185,7 +187,7 @@ describe("workspaces", () => {
   });
 
   it("keeps the deck open when the user keeps unsaved HTML edits", async () => {
-    const useApp = await freshStore();
+    const useApp = await freshStore(false);
     workspaceBackend();
     await useApp.getState().openWorkspace("/ws");
     await useApp.getState().openPath("talks/q3.html");
@@ -199,7 +201,7 @@ describe("workspaces", () => {
   });
 
   it("reopens the file last open in a folder", async () => {
-    let useApp = await freshStore();
+    let useApp = await freshStore(false);
     workspaceBackend();
     await useApp.getState().openWorkspace("/ws");
     await useApp.getState().openPath("site/index.html");
@@ -207,19 +209,19 @@ describe("workspaces", () => {
     expect(calls("close_workspace")).toHaveLength(1);
     expect(useApp.getState()).toMatchObject({ workspace: null, openedFile: null, deck: null });
 
-    useApp = await freshStore();
+    useApp = await freshStore(false);
     await useApp.getState().openWorkspace("/ws");
     expect(useApp.getState().openedFile).toEqual(opened("site/index.html", "webpage"));
     await useApp.getState().openPath("talks/q3.html");
 
-    useApp = await freshStore();
+    useApp = await freshStore(false);
     await useApp.getState().openWorkspace("/ws");
     expect(useApp.getState().deck).toEqual(TALK);
   });
 
   it("forgets a last file that is gone", async () => {
     localStorage.setItem("slopslide.lastFile:/ws", "gone.html");
-    const useApp = await freshStore();
+    const useApp = await freshStore(false);
     workspaceBackend();
     await useApp.getState().openWorkspace("/ws");
     expect(useApp.getState().openedFile).toBeNull();
@@ -228,7 +230,7 @@ describe("workspaces", () => {
   });
 
   it("switches folders, closing the open one first", async () => {
-    const useApp = await freshStore();
+    const useApp = await freshStore(false);
     workspaceBackend();
     await useApp.getState().openWorkspace("/ws");
     await useApp.getState().openPath("talks/q3.html");
@@ -240,7 +242,7 @@ describe("workspaces", () => {
   });
 
   it("reports a folder that cannot be opened", async () => {
-    const useApp = await freshStore();
+    const useApp = await freshStore(false);
     backend({ open_workspace: () => Promise.reject("not a folder: /nope") });
     await useApp.getState().openWorkspace("/nope");
     expect(useApp.getState().workspace).toBeNull();
@@ -248,7 +250,7 @@ describe("workspaces", () => {
   });
 
   it("creates decks in the open folder and opens them", async () => {
-    const useApp = await freshStore();
+    const useApp = await freshStore(false);
     workspaceBackend();
     await useApp.getState().openWorkspace("/ws");
     await useApp.getState().createDeck("New deck");
@@ -258,7 +260,7 @@ describe("workspaces", () => {
   });
 
   it("names paths relative to the workspace folder", async () => {
-    const { relativePath } = await freshModule();
+    const { relativePath } = await freshModule(false);
     expect(relativePath(WS, "/ws/talks/q3.html")).toBe("talks/q3.html");
     expect(relativePath({ path: "/ws/", name: "ws" }, "/ws/a.html")).toBe("a.html");
     expect(relativePath({ path: "C:\\ws", name: "ws" }, "C:\\ws\\talks\\q3.html")).toBe("talks/q3.html");
@@ -388,13 +390,14 @@ const assistantMessage = (patch: Partial<AssistantMessage> = {}): AssistantMessa
 
 describe("opening and creating decks", () => {
   it("openDeck loads the deck, its chat and whether the agent is running", async () => {
-    const useApp = await freshStore();
+    const useApp = await freshStore(false);
     const chat: ChatMessage[] = [userMessage("hi"), assistantMessage()];
-    backend({ open_deck: () => DECK, load_chat: () => chat, agent_running: () => true });
+    backend({ open_workspace: () => ({ path: "/decks/talk", name: "talk" }), open_deck: () => DECK, load_chat: () => chat, agent_running: () => true });
     useApp.setState({ assetsRev: 4, presenting: true, selected: "stale", sketches: { intro: [{ tool: "pen", color: "#fff", points: [[0, 0]] }] } });
+    await useApp.getState().openWorkspace("/decks/talk");
     await useApp.getState().openDeck("/decks/talk/deck.html");
     expect(calls("open_deck")).toEqual([{ id: "/decks/talk/deck.html" }]);
-    expect(calls("load_chat")).toEqual([{ id: "/decks/talk/deck.html" }]);
+    expect(calls("load_chat")).toEqual([{ id: "/decks/talk" }]);
     const state = useApp.getState();
     expect(state.deck).toEqual(DECK);
     expect(state.selected).toBe("intro");
@@ -406,20 +409,24 @@ describe("opening and creating decks", () => {
   });
 
   it("settles a transcript that was saved mid-turn", async () => {
-    const useApp = await freshStore();
+    const useApp = await freshStore(false);
     const streaming = assistantMessage({ status: "streaming", thinking: true, compacting: true });
-    backend({ open_deck: () => DECK, load_chat: () => [userMessage("hi"), streaming], agent_running: () => false });
+    backend({ open_workspace: () => ({ path: "/decks/talk", name: "talk" }), open_deck: () => DECK, load_chat: () => [userMessage("hi"), streaming], agent_running: () => false });
+    await useApp.getState().openWorkspace("/decks/talk");
     await useApp.getState().openDeck("/decks/talk/deck.html");
     expect(useApp.getState().messages[1]).toEqual({ ...streaming, status: "interrupted", thinking: false, compacting: false });
   });
 
   it("starts with an empty transcript when the chat file is missing or not a list", async () => {
-    const useApp = await freshStore();
-    backend({ open_deck: () => DECK, load_chat: () => null, agent_running: () => false });
+    const useApp = await freshStore(false);
+    backend({ open_workspace: () => ({ path: "/decks/talk", name: "talk" }), open_deck: () => DECK, load_chat: () => null, agent_running: () => false });
     useApp.setState({ messages: [userMessage("old deck")] });
+    await useApp.getState().openWorkspace("/decks/talk");
     await useApp.getState().openDeck("/decks/talk/deck.html");
     expect(useApp.getState().messages).toEqual([]);
-    backend({ open_deck: () => DECK, load_chat: () => ({ bogus: true }), agent_running: () => false });
+    await useApp.getState().closeWorkspace();
+    backend({ open_workspace: () => ({ path: "/decks/talk", name: "talk" }), open_deck: () => DECK, load_chat: () => ({ bogus: true }), agent_running: () => false });
+    await useApp.getState().openWorkspace("/decks/talk");
     await useApp.getState().openDeck("/decks/talk/deck.html");
     expect(useApp.getState().messages).toEqual([]);
   });
@@ -466,7 +473,7 @@ describe("opening and creating decks", () => {
     const useApp = await freshStore();
     useApp.setState({ deck: DECK, selected: "intro", messages: [userMessage("x")], running: true, presenting: true });
     await useApp.getState().closeDeck();
-    expect(useApp.getState()).toMatchObject({ deck: null, selected: null, messages: [], running: false, presenting: false });
+    expect(useApp.getState()).toMatchObject({ deck: null, selected: null, messages: [userMessage("x")], running: true, presenting: false });
   });
 });
 
@@ -493,7 +500,7 @@ describe("slide image export", () => {
     useApp.setState({ deck: DECK, imageExport: { dir: "/out", slides: ["intro"] } });
     await useApp.getState().closeDeck();
     expect(useApp.getState().imageExport).toBeNull();
-    backend({ open_deck: () => DECK, load_chat: () => [], agent_running: () => false });
+    backend({ open_workspace: () => ({ path: "/decks/talk", name: "talk" }), open_deck: () => DECK, load_chat: () => [], agent_running: () => false });
     useApp.setState({ imageExport: { dir: "/out", slides: ["intro"] } });
     await useApp.getState().openDeck("/decks/talk/deck.html");
     expect(useApp.getState().imageExport).toBeNull();
@@ -610,8 +617,8 @@ describe("model choice", () => {
 describe("sending a message", () => {
   const prompt = () => (calls("send_message")[0]!.args as { prompt: string }).prompt;
 
-  it("does nothing without a deck or while the agent runs", async () => {
-    const useApp = await freshStore();
+  it("does nothing without a workspace or while the agent runs", async () => {
+    const useApp = await freshStore(false);
     await useApp.getState().send("hi", { includeSlide: true, attachments: [] });
     useApp.setState({ deck: DECK, running: true });
     await useApp.getState().send("hi", { includeSlide: true, attachments: [] });
@@ -635,16 +642,16 @@ describe("sending a message", () => {
     useApp.setState({ deck: DECK, selected: "#2" });
     await useApp.getState().send("Make it blue", { includeSlide: true, attachments: [] });
     expect(prompt()).toBe(
-      `[context]\nCurrent slide: <section id="#2"> in deck.html (slide 2 of 3)\n[/context]\n\nMake it blue`,
+      `[context]\nOpen file: deck.html (deck)\nCurrent slide: <section id="#2"> in deck.html (slide 2 of 3)\n[/context]\n\nMake it blue`,
     );
   });
 
   it("names a deck file that is not deck.html for the agent", async () => {
     const useApp = await freshStore();
-    useApp.setState({ deck: { ...DECK, id: "/ws/talks/q3.html", path: "/ws/talks/q3.html" }, selected: "#2" });
+    useApp.setState({ workspace: { path: "/ws", name: "ws" }, deck: { ...DECK, id: "/ws/talks/q3.html", path: "/ws/talks/q3.html" }, selected: "#2" });
     await useApp.getState().send("Make it blue", { includeSlide: true, attachments: [] });
     expect(prompt()).toBe(
-      `[context]\nDeck file: q3.html (the deck the instructions call deck.html; pass it as lint_deck's path)\nCurrent slide: <section id="#2"> in q3.html (slide 2 of 3)\n[/context]\n\nMake it blue`,
+      `[context]\nOpen file: talks/q3.html (deck)\nCurrent slide: <section id="#2"> in talks/q3.html (slide 2 of 3)\n[/context]\n\nMake it blue`,
     );
   });
 
@@ -653,7 +660,7 @@ describe("sending a message", () => {
     useApp.setState({ deck: deckFor(DECK_HTML.replace(`id="outro"`, `id="outro" data-locked`)), selected: "outro" });
     await useApp.getState().send("Make it blue", { includeSlide: true, attachments: [] });
     expect(prompt()).toBe(
-      `[context]\nCurrent slide: <section id="outro"> in deck.html (slide 3 of 3)\nThe current slide is locked (data-locked): do not change it.\n[/context]\n\nMake it blue`,
+      `[context]\nOpen file: deck.html (deck)\nCurrent slide: <section id="outro"> in deck.html (slide 3 of 3)\nThe current slide is locked (data-locked): do not change it.\n[/context]\n\nMake it blue`,
     );
   });
 
@@ -661,7 +668,7 @@ describe("sending a message", () => {
     const useApp = await freshStore();
     useApp.setState({ deck: DECK, selected: "intro" });
     await useApp.getState().send("Whole deck please", { includeSlide: false, attachments: [] });
-    expect(prompt()).toBe("Whole deck please");
+    expect(prompt()).toBe("[context]\nOpen file: deck.html (deck)\n[/context]\n\nWhole deck please");
     expect(useApp.getState().messages[0]).toMatchObject({ slide: null });
   });
 
@@ -670,7 +677,7 @@ describe("sending a message", () => {
     useApp.setState({ deck: { ...DECK, slides: [] }, selected: null });
     await useApp.getState().send("Start", { includeSlide: true, attachments: ["assets/a.png", "assets/b.csv"] });
     expect(prompt()).toBe(
-      "[context]\nThe deck has no slides yet.\nAttached files: assets/a.png, assets/b.csv\n[/context]\n\nStart",
+      "[context]\nOpen file: deck.html (deck)\nThe deck has no slides yet.\nAttached files: assets/a.png, assets/b.csv\n[/context]\n\nStart",
     );
   });
 
@@ -682,8 +689,8 @@ describe("sending a message", () => {
     });
     await useApp.getState().send("a", { includeSlide: false, attachments: [] });
     expect(calls("send_message")[0]!.args).toEqual({
-      deckId: "/decks/talk/deck.html",
-      prompt: "a",
+      workspace: "/decks/talk",
+      prompt: "[context]\nOpen file: deck.html (deck)\n[/context]\n\na",
       provider: "codex",
       model: "gpt-6-astra",
       effort: "high",
@@ -726,7 +733,7 @@ describe("sending a message", () => {
     const reply = useApp.getState().messages[1] as AssistantMessage;
     expect(reply).toMatchObject({ status: "error", thinking: false, error: "Claude Code was not found." });
     expect(useApp.getState().running).toBe(false);
-    expect(calls("save_chat")).toEqual([{ id: "/decks/talk/deck.html", chat: useApp.getState().messages }]);
+    expect(calls("save_chat")).toEqual([{ id: "/decks/talk", chat: useApp.getState().messages }]);
   });
 
   describe("with a sketch on the slide", () => {
@@ -772,6 +779,7 @@ describe("sending a message", () => {
       expect(prompt()).toBe(
         [
           "[context]",
+        "Open file: deck.html (deck)",
           'Current slide: <section id="outro"> in deck.html (slide 3 of 3)',
           "Sketch: /home/.slopslides/sessions/1-ab/sketches/1-ab.png (screenshot of the current slide with the user's marks drawn on top)",
           "Marked area: x 476–964, y 266–544 of the 1920×1080 slide",
@@ -833,7 +841,7 @@ describe("sending a message", () => {
       useApp.setState({ deck: DECK, selected: "outro", sketches: { outro: [mark] } });
       await useApp.getState().send("Whole deck", { includeSlide: false, attachments: [] });
       expect(calls("capture_sketch")).toEqual([]);
-      expect(prompt()).toBe("Whole deck");
+      expect(prompt()).toBe("[context]\nOpen file: deck.html (deck)\n[/context]\n\nWhole deck");
       expect(useApp.getState().messages[0]).toMatchObject({ sketch: null });
       expect(useApp.getState().sketches).toEqual({ outro: [mark] });
     });
@@ -968,13 +976,13 @@ describe("sending a message", () => {
     });
   });
 
-  it("interrupt asks the backend to stop this deck's agent", async () => {
-    const useApp = await freshStore();
+  it("interrupt asks the backend to stop the workspace agent", async () => {
+    const useApp = await freshStore(false);
     useApp.getState().interrupt();
     expect(calls("interrupt_agent")).toEqual([]);
-    useApp.setState({ deck: DECK });
+    useApp.setState({ workspace: { path: "/decks/talk", name: "talk" } });
     useApp.getState().interrupt();
-    expect(calls("interrupt_agent")).toEqual([{ id: "/decks/talk/deck.html" }]);
+    expect(calls("interrupt_agent")).toEqual([{ id: "/decks/talk" }]);
   });
 
   it("records which provider writes the reply", async () => {
@@ -997,8 +1005,8 @@ describe("sending a message", () => {
       expect(useApp.getState().running).toBe(true);
     });
 
-    it("does nothing without a deck or while the agent runs", async () => {
-      const useApp = await freshStore();
+    it("does nothing without a workspace or while the agent runs", async () => {
+      const useApp = await freshStore(false);
       await useApp.getState().compact();
       useApp.setState({ deck: DECK, running: true });
       await useApp.getState().compact();
@@ -1028,13 +1036,13 @@ describe("sending a message", () => {
     });
   });
 
-  it("resetChat clears the transcript", async () => {
-    const useApp = await freshStore();
+  it("resetChat clears the workspace transcript", async () => {
+    const useApp = await freshStore(false);
     await useApp.getState().resetChat();
     expect(calls("reset_chat")).toEqual([]);
-    useApp.setState({ deck: DECK, messages: [userMessage("x")], running: true });
+    useApp.setState({ workspace: { path: "/decks/talk", name: "talk" }, messages: [userMessage("x")], running: false });
     await useApp.getState().resetChat();
-    expect(calls("reset_chat")).toEqual([{ id: "/decks/talk/deck.html" }]);
+    expect(calls("reset_chat")).toEqual([{ id: "/decks/talk" }]);
     expect(useApp.getState().messages).toEqual([]);
     expect(useApp.getState().running).toBe(false);
   });
@@ -1046,7 +1054,7 @@ describe("agent events", () => {
     backend({ list_providers: () => [] });
     await store.initEventBridge();
     store.useApp.setState({ deck: DECK, messages, running: true });
-    const emit = (event: AgentEvent, deckId = "/decks/talk/deck.html") => listeners.get("agent-event")!({ payload: { deckId, event } });
+    const emit = (event: AgentEvent, workspace = "/decks/talk") => listeners.get("agent-event")!({ payload: { workspace, event } });
     const reply = () => store.useApp.getState().messages.findLast((m) => m.role === "assistant") as AssistantMessage;
     return { useApp: store.useApp, emit, reply };
   }
@@ -1177,7 +1185,7 @@ describe("agent events", () => {
     expect(reply()).toMatchObject({ status, thinking: false });
     expect(reply().parts[0]).toMatchObject({ status: "done" });
     expect(useApp.getState().running).toBe(false);
-    expect(calls("save_chat")).toEqual([{ id: "/decks/talk/deck.html", chat: useApp.getState().messages }]);
+    expect(calls("save_chat")).toEqual([{ id: "/decks/talk", chat: useApp.getState().messages }]);
   });
 
   it("only updates the last reply", async () => {
@@ -1741,6 +1749,7 @@ describe("editing slides on the stage", () => {
       expect((calls("send_message")[0]!.args as { prompt: string }).prompt).toBe(
         [
           "[context]",
+        "Open file: deck.html (deck)",
           'Current slide: <section id="intro"> in deck.html (slide 1 of 3)',
           "Screenshot: /home/.slopslides/sessions/1-ab/sketches/2-cd.png (screenshot of the slide with the user's hand edits)",
           "[/context]",
@@ -1774,10 +1783,10 @@ describe("editing slides on the stage", () => {
 
 
 describe("Codex permissions", () => {
-  it("stops a Codex turn and saves a closed transcript before leaving the deck", async () => {
+  it("stops a Codex turn and saves a closed transcript before leaving the workspace", async () => {
     const store = await freshStore();
     store.setState({ deck: deckFor(DECK_HTML), running: true, messages: [assistantMessage({ provider: "codex", status: "streaming", parts: [{ kind: "approval", status: "pending", approval: { id: "live", title: "Run", reason: null, details: "ls", acceptLabel: "Allow once", decisions: ["accept"] } }] })] });
-    await store.getState().closeDeck();
+    await store.getState().closeWorkspace();
     const order = invoke.mock.calls.map(([command]) => command);
     expect(order.indexOf("interrupt_agent")).toBeLessThan(order.indexOf("save_chat"));
     expect(calls("save_chat")[0]!.chat).toMatchObject([{ status: "interrupted", parts: [{ status: "expired" }] }]);
@@ -1821,9 +1830,10 @@ describe("Codex permissions", () => {
   });
 
   it("restored approvals are closed rather than reusable", async () => {
-    const store = await freshStore();
+    const store = await freshStore(false);
     const message = assistantMessage({ status: "streaming", parts: [{ kind: "approval", status: "pending", approval: { id: "old", title: "Run", reason: null, details: "ls", acceptLabel: "Allow once", decisions: ["accept"] } }] });
-    backend({ open_deck: () => deckFor(DECK_HTML), load_chat: () => [message], agent_running: () => false });
+    backend({ open_workspace: () => ({ path: "/decks/talk", name: "talk" }), open_deck: () => deckFor(DECK_HTML), load_chat: () => [message], agent_running: () => false });
+    await store.getState().openWorkspace("/decks/talk");
     await store.getState().openDeck("/decks/talk/deck.html");
     expect((store.getState().messages[0] as AssistantMessage).parts[0]).toMatchObject({ status: "expired" });
   });
@@ -1846,7 +1856,7 @@ describe("templates", () => {
     await useApp.getState().send("Add a slide", { includeSlide: false, attachments: [] });
     expect(calls("stage_template")).toEqual([{ id: DECK.id, template: "swiss" }]);
     expect(calls("send_message")[0]!.args).toMatchObject({
-      prompt: `[context]\nDeck template: ${STAGED} (copy of the deck's template, for its layouts)\n[/context]\n\nAdd a slide`,
+      prompt: `[context]\nOpen file: deck.html (deck)\nDeck template: ${STAGED} (copy of the deck's template, for its layouts)\n[/context]\n\nAdd a slide`,
     });
   });
 
@@ -1854,7 +1864,7 @@ describe("templates", () => {
     const useApp = await storeWith(DECK, null);
     await useApp.getState().send("Hi", { includeSlide: false, attachments: [] });
     expect(calls("stage_template")).toEqual([]);
-    expect(calls("send_message")[0]!.args).toMatchObject({ prompt: "Hi" });
+    expect(calls("send_message")[0]!.args).toMatchObject({ prompt: "[context]\nOpen file: deck.html (deck)\n[/context]\n\nHi" });
 
     useApp.setState({ deck: { ...DECK, template: "gone" }, running: false, messages: [] });
     backend({
@@ -1864,7 +1874,7 @@ describe("templates", () => {
     });
     await useApp.getState().send("Hi again", { includeSlide: false, attachments: [] });
     expect(calls("stage_template")).toEqual([{ id: DECK.id, template: "gone" }]);
-    expect(calls("send_message").at(-1)!.args).toMatchObject({ prompt: "Hi again" });
+    expect(calls("send_message").at(-1)!.args).toMatchObject({ prompt: "[context]\nOpen file: deck.html (deck)\n[/context]\n\nHi again" });
   });
 
   it("loads the template list", async () => {
@@ -2044,5 +2054,35 @@ describe("changing the slide size", () => {
     expect(useApp.getState().error).toContain("100 to 10000");
     expect(useApp.getState().deck).toBe(DECK);
     expect(useApp.getState().composerFill).toBeNull();
+  });
+});
+
+describe("workspace conversations", () => {
+  it.each([
+    [null, "No file open"],
+    [{ path: "site/index.html", absolute: "/decks/talk/site/index.html", kind: "webpage" as const }, "Open file: site/index.html (web page)"],
+    [{ path: "notes.md", absolute: "/decks/talk/notes.md", kind: "file" as const }, "Open file: notes.md (file)"],
+  ])("sends without a deck and describes the open file %j", async (openedFile, context) => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: null, openedFile });
+    await useApp.getState().send("Make a deck from notes.md", { includeSlide: true, attachments: ["assets/notes.md"] });
+    expect(calls("send_message")[0]!.args).toMatchObject({ workspace: "/decks/talk", prompt: `[context]\n${context}\nAttached files: assets/notes.md\n[/context]\n\nMake a deck from notes.md` });
+    expect(useApp.getState().messages[0]).toMatchObject({ slide: null, sketch: null });
+  });
+
+  it("keeps a running conversation and approvals when switching files, and routes openFile through openPath", async () => {
+    const { useApp, initEventBridge } = await freshModule();
+    backend({ open_file: ({ path }) => ({ path, absolute: `/decks/talk/${path}`, kind: "webpage" }) });
+    useApp.setState({ deck: DECK, messages: [userMessage("hi"), assistantMessage({ status: "streaming" })], running: true });
+    await initEventBridge();
+    listeners.get("agent-event")!({ payload: { workspace: "/other", event: { type: "openFile", path: "outside.html" } } });
+    expect(calls("open_file")).toEqual([]);
+    listeners.get("agent-event")!({ payload: { workspace: "/decks/talk", event: { type: "openFile", path: "site/index.html" } } });
+    await vi.waitFor(() => expect(useApp.getState().openedFile?.path).toBe("site/index.html"));
+    expect(useApp.getState()).toMatchObject({ deck: null, running: true });
+    expect(useApp.getState().messages).toHaveLength(2);
+    expect(calls("interrupt_agent")).toEqual([]);
+    listeners.get("agent-event")!({ payload: { workspace: "/decks/talk", event: { type: "textDelta", text: "Still here" } } });
+    expect((useApp.getState().messages[1] as AssistantMessage).parts).toEqual([{ kind: "text", text: "Still here" }]);
   });
 });

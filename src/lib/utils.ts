@@ -63,6 +63,12 @@ export function chatFileUrl(deckId: string, path: string): string {
   return servedUrl(SESSION_PREFIX, urlPath(path));
 }
 
+/** Chat attachments are workspace-relative; screenshots are absolute session paths. */
+export function workspaceChatFileUrl(workspace: string, path: string): string {
+  if (isSessionFile(path)) return servedUrl(SESSION_PREFIX, urlPath(path));
+  return fileUrl(`${workspace}/${path}`);
+}
+
 /**
  * One slide of a deck rendered by the embedded player, for editor previews. With `pan`, the
  * backend adds the pasteboard to pan and zoom around the slide; with `edit` (any value; changing

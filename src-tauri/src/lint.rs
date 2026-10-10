@@ -663,7 +663,7 @@ fn check_assets(l: &mut Linter, asset_exists: impl Fn(&str) -> bool) {
                 "missing-asset",
                 Severity::Error,
                 range.start,
-                format!("`{path}` does not exist in the deck's assets folder."),
+                format!("`{path}` does not exist relative to the deck file."),
             );
         }
     }
@@ -689,6 +689,13 @@ fn check_assets(l: &mut Linter, asset_exists: impl Fn(&str) -> bool) {
                 at,
                 "Images should be attached files (assets/…), not hotlinked URLs.".into(),
             );
+        }
+        if attr("src").is_some_and(|s| {
+            let decoded = percent_encoding::percent_decode_str(s).decode_utf8_lossy();
+            decoded.split('/').any(|part| part == "..") || decoded.starts_with('/')
+        }) {
+            l.report("asset-outside-deck", Severity::Error, at,
+                "Keep images in assets/ next to the deck file; references outside its folder are not supported.".into());
         }
         if attr("alt").is_none() {
             l.report(
@@ -1181,6 +1188,18 @@ mod tests {
                 deck("<section class=\"slide\" id=\"a\"></section>")
             )),
             Vec::<&str>::new()
+        );
+    }
+
+    #[test]
+    fn rejects_image_references_outside_the_deck_folder() {
+        let html = deck("<section class=\"slide\" id=\"a\"><img src=\"../shared/x.png\" alt=\"X\"><img src=\"%2e%2e/shared/x.png\" alt=\"X\"></section>");
+        assert_eq!(
+            lint(&html, |_| true, &[])
+                .iter()
+                .filter(|i| i.rule == "asset-outside-deck")
+                .count(),
+            2
         );
     }
 

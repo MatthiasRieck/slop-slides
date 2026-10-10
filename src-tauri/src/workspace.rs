@@ -107,7 +107,7 @@ pub fn root(path: &str) -> Result<PathBuf> {
     if !root.is_absolute() || !root.is_dir() {
         return Err(Error::msg(format!("not a folder: {path}")));
     }
-    Ok(root)
+    Ok(root.canonicalize()?)
 }
 
 /// Resolves a workspace-relative path (`""` is the root), refusing anything outside it.
@@ -118,11 +118,17 @@ pub fn resolve(root: &Path, rel: &str) -> Result<PathBuf> {
     if !safe {
         return Err(Error::msg(format!("invalid path: {rel}")));
     }
-    Ok(if rel.is_empty() {
+    let path = if rel.is_empty() {
         root.to_path_buf()
     } else {
         root.join(rel)
-    })
+    };
+    if !inside(root, &path) {
+        return Err(Error::msg(format!(
+            "path outside workspace or missing: {rel}"
+        )));
+    }
+    Ok(path)
 }
 
 /// Files and folders hidden from the tree: dotfiles (`.git`, `.DS_Store`, …) and the app's
@@ -420,7 +426,10 @@ mod tests {
         assert!(open_file(&t.0, "missing.html").is_err());
         assert!(root("relative/path").is_err());
         assert!(root(&t.0.join("a/b.txt").to_string_lossy()).is_err());
-        assert_eq!(root(&t.0.to_string_lossy()).unwrap(), t.0);
+        assert_eq!(
+            root(&t.0.to_string_lossy()).unwrap(),
+            t.0.canonicalize().unwrap()
+        );
     }
 
     #[test]

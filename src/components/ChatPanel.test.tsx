@@ -62,7 +62,7 @@ beforeEach(() => {
   resetChat.mockClear();
   interrupt.mockClear();
   compact.mockClear();
-  useApp.setState({
+  useApp.setState({ workspace: { path: "/decks/talk", name: "talk" },
     deck: deckFor(DECK_HTML),
     selected: "intro",
     messages: [],
@@ -129,7 +129,7 @@ describe("ChatPanel: empty chat", () => {
   it("offers starter prompts for an empty deck, which fill the composer", () => {
     useApp.setState({ deck: { ...deckFor(DECK_HTML), slides: [] }, selected: null });
     render(<ChatPanel />);
-    expect(screen.getByText(/Describe the presentation you want/)).toBeTruthy();
+    expect(screen.getByText(/Ask the agent to create a presentation/)).toBeTruthy();
     fireEvent.click(screen.getByText(/neighborhood tool-sharing app/));
     expect(textarea().value).toMatch(/^A 6-slide pitch/);
     expect(send).not.toHaveBeenCalled();
@@ -962,5 +962,24 @@ describe("composer fill", () => {
     expect(screen.queryByRole("button", { name: /attached image/ })).toBeNull();
     fireEvent.keyDown(textarea(), { key: "Enter" });
     expect(send).toHaveBeenCalledWith("Fix it", { includeSlide: true, attachments: [] });
+  });
+});
+
+describe("workspace attachments", () => {
+  it.each([
+    [true, "talk/assets/photo.png", "/decks/talk/deck.html"],
+    [false, "assets/photo.png", "/decks"],
+  ])("attaches images with workspace-relative context when a deck is open: %s", async (hasDeck, reference, target) => {
+    useApp.setState({ workspace: { path: "/decks", name: "decks" }, deck: hasDeck ? deckFor(DECK_HTML) : null, selected: hasDeck ? "intro" : null });
+    openDialog.mockResolvedValue(["/Users/me/photo.png"]);
+    invoke.mockResolvedValue(["assets/photo.png"]);
+    render(<ChatPanel />);
+    await act(async () => fireEvent.click(screen.getByTitle("Attach images or files")));
+    expect(invoke).toHaveBeenCalledWith("import_assets", { id: target, paths: ["/Users/me/photo.png"] });
+    expect(screen.getByAltText("photo.png").getAttribute("src")).toContain(`/decks/${reference}`);
+    type("Use this");
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(send).toHaveBeenCalledWith("Use this", { includeSlide: hasDeck, attachments: [reference] });
+    if (!hasDeck) expect(screen.queryByRole("button", { name: /^Slide \d/ })).toBeNull();
   });
 });

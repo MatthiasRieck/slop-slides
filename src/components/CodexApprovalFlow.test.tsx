@@ -21,7 +21,7 @@ const providers: ProviderInfo[] = [{ id: "codex", installed: true, path: "/mock/
   models: [{ id: "test", label: "Test model", isDefault: true, efforts: ["low"], defaultEffort: "low", contextWindows: [], defaultContextWindow: null }] }];
 const approval = { id: "mcp-approval", title: "Use an MCP tool", reason: "Allow lint_deck?",
   details: '{"server":"slopslide"}', acceptLabel: "Allow once", decisions: ["accept", "acceptForSession", "decline"] as ApprovalDecision[] };
-const emit = (event: AgentEvent, deckId = "/decks/talk/deck.html") => act(() => listeners.get("agent-event")!({ payload: { deckId, event } }));
+const emit = (event: AgentEvent, workspace = "/decks/talk") => act(() => listeners.get("agent-event")!({ payload: { workspace, event } }));
 const calls = (command: string) => invoke.mock.calls.filter(([name]) => name === command);
 
 beforeEach(async () => {
@@ -30,7 +30,7 @@ beforeEach(async () => {
     if (command === "list_providers") return providers;
     if (command === "codex_permission_modes") return ["ask", "fullAccess", "custom"];
   });
-  useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", messages: [], running: false,
+  useApp.setState({ workspace: { path: "/decks/talk", name: "talk" }, deck: deckFor(DECK_HTML), selected: "intro", messages: [], running: false,
     permissionMode: "ask", providers, selection: { provider: "codex", model: "test", label: "Test model", effort: "low", contextWindow: null },
     sketches: {}, sketchesSent: {}, favoriteModels: [], error: null });
   await initEventBridge();
@@ -48,7 +48,7 @@ describe("Codex approval event → store → chat → IPC", () => {
     emit({ type: "approvalRequested", approval });
     fireEvent.click(screen.getByRole("button", { name: label }));
     await waitFor(() => expect(calls("respond_approval")).toHaveLength(1));
-    expect(calls("respond_approval")[0]![1]).toEqual({ deckId: "/decks/talk/deck.html", id: "mcp-approval", decision });
+    expect(calls("respond_approval")[0]![1]).toEqual({ workspace: "/decks/talk", id: "mcp-approval", decision });
     emit({ type: "approvalResolved", id: approval.id });
     emit({ type: "finished", interrupted: false });
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();

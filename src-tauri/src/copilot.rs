@@ -261,7 +261,7 @@ pub async fn run_turn(
                 "type": "stdio",
                 "command": args.lint_server,
                 "args": [mcp::FLAG, args.dir],
-                "tools": [mcp::TOOL],
+                "tools": [mcp::TOOL, mcp::OPEN_TOOL],
             }
         },
     });
@@ -405,8 +405,7 @@ async fn detach(conn: &mut Conn, session_id: &str) {
     .await;
 }
 
-/// Like the Claude provider's tool allowlist: read anything, write only inside the deck
-/// folder, fetch URLs, lint the deck; no shell, other MCP servers, or extensions.
+/// Read and write within the workspace, fetch URLs, and use the app's MCP tools; no shell, other MCP servers, or extensions.
 fn permission_decision(data: &Value, dir: &Path) -> Option<(String, Value)> {
     if data["resolvedByHook"].as_bool().unwrap_or(false) {
         return None;
@@ -414,11 +413,11 @@ fn permission_decision(data: &Value, dir: &Path) -> Option<(String, Value)> {
     let request_id = data["requestId"].as_str()?.to_string();
     let request = &data["permissionRequest"];
     let allowed = match request["kind"].as_str() {
-        Some("read" | "url") => true,
-        Some("mcp") => request["serverName"] == mcp::SERVER,
-        Some("write") => request["fileName"]
+        Some("url") => true,
+        Some("read" | "write") => request["fileName"]
             .as_str()
             .is_some_and(|file| is_inside(dir, Path::new(file))),
+        Some("mcp") => request["serverName"] == mcp::SERVER,
         _ => false,
     };
     let result = if allowed {
@@ -426,7 +425,7 @@ fn permission_decision(data: &Value, dir: &Path) -> Option<(String, Value)> {
     } else {
         json!({
             "kind": "reject",
-            "feedback": "SlopSlide only allows reading files, editing files inside the deck folder, and fetching URLs, and lint_deck.",
+            "feedback": "SlopSlide only allows reading files, reading and editing files inside the workspace, and fetching URLs, and lint_deck/open_file.",
         })
     };
     Some((request_id, result))
@@ -450,7 +449,20 @@ fn is_inside(dir: &Path, file: &Path) -> bool {
             other => normalized.push(other),
         }
     }
-    normalized.starts_with(dir)
+    if !normalized.starts_with(dir) {
+        return false;
+    }
+    let mut ancestor = normalized.as_path();
+    while !ancestor.exists() {
+        let Some(parent) = ancestor.parent() else {
+            return false;
+        };
+        ancestor = parent;
+    }
+    match (ancestor.canonicalize(), dir.canonicalize()) {
+        (Ok(path), Ok(root)) => path.starts_with(root),
+        _ => normalized.starts_with(dir), // Nonexistent fixture paths; real cwd always exists.
+    }
 }
 
 /// Maps `session.event` payloads to UI events, using the Claude tool names the chat knows.
@@ -664,7 +676,10 @@ mod tests {
                 .1["kind"]
                 .clone()
         };
-        assert_eq!(decide(json!({"kind":"read"})), "approve-once");
+        assert_eq!(
+            decide(json!({"kind":"read","fileName":"notes.md"})),
+            "approve-once"
+        );
         assert_eq!(
             decide(json!({"kind":"write","fileName":"/decks/pitch/deck.html"})),
             "approve-once"
@@ -676,6 +691,18 @@ mod tests {
         assert_eq!(
             decide(json!({"kind":"write","fileName":"../other/deck.html"})),
             "reject"
+        );
+        assert_eq!(
+            decide(json!({"kind":"read","fileName":"../secret.txt"})),
+            "reject"
+        );
+        assert_eq!(
+            decide(json!({"kind":"write","fileName":"talks/q3.html"})),
+            "approve-once"
+        );
+        assert_eq!(
+            decide(json!({"kind":"mcp","serverName":"slopslide","toolName":"open_file"})),
+            "approve-once"
         );
         assert_eq!(
             decide(json!({"kind":"shell","fullCommandText":"rm -rf /"})),

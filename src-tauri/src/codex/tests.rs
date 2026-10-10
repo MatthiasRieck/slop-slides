@@ -8,7 +8,7 @@ fn args(dir: &Path) -> TurnArgs<'_> {
         bin: dir,
         dir,
         lint_server: dir,
-        deck_id: "deck-1",
+        workspace: "deck-1",
         prompt: "Make slides",
         model: Some("test-model"),
         effort: Some("high"),

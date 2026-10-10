@@ -11,6 +11,7 @@ mod mcp;
 mod protocol;
 mod providers;
 mod review;
+mod safety;
 mod sessions;
 mod size;
 mod templates;
@@ -34,13 +35,13 @@ fn sessions() -> Result<Sessions> {
 }
 
 /// The deck's current session, starting one if it has none.
-fn session(file: &Path) -> Result<PathBuf> {
-    sessions()?.current_or_start(file)
+fn session(open: &OpenWorkspace) -> Result<PathBuf> {
+    sessions()?.current_or_start(&workspace_root(open)?)
 }
 
 /// The deck's current session, if it has one.
-fn current_session(file: &Path) -> Result<Option<PathBuf>> {
-    Ok(sessions()?.current(file))
+fn current_session(open: &OpenWorkspace) -> Result<Option<PathBuf>> {
+    Ok(sessions()?.current(&workspace_root(open)?))
 }
 
 /// The open workspace's folder.
@@ -81,12 +82,13 @@ fn open_workspace(
     path: String,
 ) -> Result<WorkspaceInfo> {
     let root = workspace::root(&path)?;
+    sessions()?.current_or_start(&root)?;
     open.set(Some(root.clone()));
     watcher.watch(app, root.clone())?;
     workspace::remember(&deck::app_home()?, &root)?;
     Ok(WorkspaceInfo {
         name: workspace::display_name(&root),
-        path,
+        path: root.to_string_lossy().into_owned(),
     })
 }
 
@@ -150,12 +152,9 @@ fn list_templates() -> Result<Vec<templates::TemplateSummary>> {
 
 /// Copies a template into the deck's session for the agent; returns its absolute path.
 #[tauri::command]
-fn stage_template(id: String, template: String) -> Result<String> {
-    templates::stage(
-        &session(&deck::deck_file(&id)?)?,
-        &templates::user_root()?,
-        &template,
-    )
+fn stage_template(open: State<OpenWorkspace>, id: String, template: String) -> Result<String> {
+    deck::deck_file(&id)?;
+    templates::stage(&session(&open)?, &templates::user_root()?, &template)
 }
 
 /// Gives a deck without slides the template's styles.
@@ -190,10 +189,14 @@ fn create_template(id: String, name: String) -> Result<templates::TemplateSummar
 }
 
 #[tauri::command]
-fn open_deck(agent: State<AgentManager>, id: String) -> Result<Deck> {
+fn open_deck(open: State<OpenWorkspace>, agent: State<AgentManager>, id: String) -> Result<Deck> {
     let file = deck::deck_file(&id)?;
-    let session = current_session(&file)?;
-    deck::open(&file, session.as_deref(), !agent.is_running(&id))
+    let session = current_session(&open)?;
+    deck::open(
+        &file,
+        session.as_deref(),
+        !agent.is_running(&workspace_root(&open)?.to_string_lossy()),
+    )
 }
 
 #[tauri::command]
@@ -229,9 +232,14 @@ fn duplicate_slide(id: String, slide: String) -> Result<CreatedSlide> {
 }
 
 #[tauri::command]
-fn set_slide_hidden(id: String, slide: String, hidden: bool) -> Result<Deck> {
+fn set_slide_hidden(
+    open: State<OpenWorkspace>,
+    id: String,
+    slide: String,
+    hidden: bool,
+) -> Result<Deck> {
     let file = deck::deck_file(&id)?;
-    deck::set_slide_hidden(&file, current_session(&file)?.as_deref(), &slide, hidden)
+    deck::set_slide_hidden(&file, current_session(&open)?.as_deref(), &slide, hidden)
 }
 
 /// Gives every slide of the deck the canvas `size`.
@@ -241,9 +249,14 @@ fn set_slide_size(id: String, size: size::SlideSize) -> Result<Deck> {
 }
 
 #[tauri::command]
-fn set_slide_locked(id: String, slide: String, locked: bool) -> Result<Deck> {
+fn set_slide_locked(
+    open: State<OpenWorkspace>,
+    id: String,
+    slide: String,
+    locked: bool,
+) -> Result<Deck> {
     let file = deck::deck_file(&id)?;
-    deck::set_slide_locked(&file, current_session(&file)?.as_deref(), &slide, locked)
+    deck::set_slide_locked(&file, current_session(&open)?.as_deref(), &slide, locked)
 }
 
 #[tauri::command]
@@ -262,41 +275,73 @@ fn delete_section(id: String, index: usize) -> Result<Deck> {
 }
 
 #[tauri::command]
-fn delete_slide(id: String, slide: String) -> Result<Deck> {
+fn delete_slide(open: State<OpenWorkspace>, id: String, slide: String) -> Result<Deck> {
     let file = deck::deck_file(&id)?;
-    deck::delete_slide(&file, &session(&file)?, &slide)
+    deck::delete_slide(&file, &session(&open)?, &slide)
 }
 
 /// Saves a slide edited on the stage (text edits, moved elements). `base` is its hash when
 /// the edit started.
 #[tauri::command]
-fn update_slide(id: String, slide: String, markup: String, base: String) -> Result<UpdatedSlide> {
+fn update_slide(
+    open: State<OpenWorkspace>,
+    id: String,
+    slide: String,
+    markup: String,
+    base: String,
+) -> Result<UpdatedSlide> {
     let file = deck::deck_file(&id)?;
-    let (deck, previous) = deck::update_slide(&file, &session(&file)?, &slide, &markup, &base)?;
+    let (deck, previous) = deck::update_slide(&file, &session(&open)?, &slide, &markup, &base)?;
     Ok(UpdatedSlide { deck, previous })
 }
 
 #[tauri::command]
 fn save_deck_source(
+    open: State<OpenWorkspace>,
     agent: State<AgentManager>,
     id: String,
     source: String,
     base: Option<String>,
 ) -> Result<Deck> {
     // Normalizing mid-turn could rewrite ids the agent is about to reference.
-    let normalize = !agent.is_running(&id);
+    let normalize = !agent.is_running(&workspace_root(&open)?.to_string_lossy());
     let file = deck::deck_file(&id)?;
-    deck::save_source(&file, &session(&file)?, &source, base.as_deref(), normalize)
+    deck::save_source(&file, &session(&open)?, &source, base.as_deref(), normalize)
+}
+
+fn asset_target(root: &Path, id: &str) -> Result<PathBuf> {
+    let path = PathBuf::from(id);
+    if !workspace::inside(root, &path) {
+        return Err(error::Error::msg("asset target outside workspace"));
+    }
+    if path == root || path.canonicalize()? == root.canonicalize()? {
+        Ok(root.into())
+    } else {
+        deck::deck_file(id)
+    }
 }
 
 #[tauri::command]
-fn import_assets(id: String, paths: Vec<String>) -> Result<Vec<String>> {
-    deck::import_assets(&deck::deck_file(&id)?, paths)
+fn import_assets(
+    open: State<OpenWorkspace>,
+    id: String,
+    paths: Vec<String>,
+) -> Result<Vec<String>> {
+    let root = workspace_root(&open)?;
+    let target = asset_target(&root, &id)?;
+    deck::import_assets(&target, paths)
 }
 
 #[tauri::command]
-fn save_asset(id: String, name: String, data: String) -> Result<String> {
-    deck::save_asset(&deck::deck_file(&id)?, &name, &data)
+fn save_asset(
+    open: State<OpenWorkspace>,
+    id: String,
+    name: String,
+    data: String,
+) -> Result<String> {
+    let root = workspace_root(&open)?;
+    let target = asset_target(&root, &id)?;
+    deck::save_asset(&target, &name, &data)
 }
 
 #[tauri::command]
@@ -305,23 +350,24 @@ fn export_deck(id: String, dest: String) -> Result<()> {
 }
 
 #[tauri::command]
-fn lint_deck(id: String) -> Result<Vec<lint::Issue>> {
+fn lint_deck(open: State<OpenWorkspace>, id: String) -> Result<Vec<lint::Issue>> {
     let file = deck::deck_file(&id)?;
-    deck::lint(&file, current_session(&file)?.as_deref())
+    deck::lint(&file, current_session(&open)?.as_deref())
 }
 
 /// Screenshots `rect` of the window (the sketched-on slide) into the deck's session.
 /// Both are in CSS pixels; `viewport` is the window's size, to find the display scale.
 #[tauri::command]
 async fn capture_sketch(
+    open: State<'_, OpenWorkspace>,
     webview: tauri::Webview,
     id: String,
     rect: capture::Rect,
     viewport: capture::Size,
 ) -> Result<String> {
-    let file = deck::deck_file(&id)?;
+    deck::deck_file(&id)?;
     let png = capture::snapshot(&webview, rect, viewport, capture::SKETCH_WIDTH).await?;
-    deck::save_sketch(&session(&file)?, &png)
+    deck::save_sketch(&session(&open)?, &png)
 }
 
 /// Creates `<parent>/<deck title>` (or `<deck title> 2`, …) for exported slide images.
@@ -353,19 +399,22 @@ async fn export_slide_image(
 
 #[tauri::command]
 fn load_chat(id: String) -> Result<serde_json::Value> {
-    deck::load_chat(current_session(&deck::deck_file(&id)?)?.as_deref())
+    deck::load_chat(sessions()?.current(&workspace::root(&id)?).as_deref())
 }
 
 #[tauri::command]
 fn save_chat(id: String, chat: serde_json::Value) -> Result<()> {
-    deck::save_chat(&session(&deck::deck_file(&id)?)?, &chat)
+    deck::save_chat(
+        &sessions()?.current_or_start(&workspace::root(&id)?)?,
+        &chat,
+    )
 }
 
 /// Starts a new chat in a new session; the old conversation stays in its own.
 #[tauri::command]
 fn reset_chat(agent: State<AgentManager>, id: String) -> Result<()> {
     agent.interrupt(&id);
-    new_chat(&sessions()?, &deck::deck_file(&id)?).map(|_| ())
+    new_chat(&sessions()?, &workspace::root(&id)?).map(|_| ())
 }
 
 /// A session for a new chat: the current one while it has no conversation yet, else a new one.
@@ -388,18 +437,17 @@ fn send_message(app: AppHandle, agent: State<AgentManager>, args: SendArgs) -> R
 
 #[tauri::command]
 async fn codex_permission_modes(id: String) -> Result<Vec<codex::PermissionMode>> {
-    let file = deck::deck_file(&id)?;
-    codex::permission_modes(deck::folder(&file)).await
+    codex::permission_modes(&workspace::root(&id)?).await
 }
 
 #[tauri::command]
 fn respond_approval(
     agent: State<AgentManager>,
-    deck_id: String,
+    workspace: String,
     id: String,
     decision: codex::Decision,
 ) -> Result<()> {
-    agent.approvals.respond(&deck_id, &id, decision)
+    agent.approvals.respond(&workspace, &id, decision)
 }
 
 #[tauri::command]

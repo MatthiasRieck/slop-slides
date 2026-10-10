@@ -33,12 +33,9 @@ describe("Sidebar", () => {
     expect(screen.queryByTestId("chat")).toBeNull();
   });
 
-  it("explains the chat needs a deck, and points to the files", () => {
+  it("shows workspace chat without an open deck", () => {
     useApp.setState({ deck: null });
     render(<Sidebar />);
-    expect(screen.queryByTestId("chat")).toBeNull();
-    expect(screen.getByText("No presentation open")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Show files" }));
-    expect(useApp.getState().sidebarTab).toBe("files");
+    expect(screen.queryByTestId("chat")).not.toBeNull();
   });
 });

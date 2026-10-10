@@ -363,6 +363,32 @@ describe("closing a deck with unsaved HTML edits", () => {
   });
 });
 
+describe("closing a file", () => {
+  it("clears the open file and forgets it for the workspace", async () => {
+    const useApp = await freshStore();
+    localStorage.setItem("slopslide.lastFile:/ws", "notes.md");
+    useApp.setState({
+      workspace: { path: "/ws", name: "ws" },
+      openedFile: { path: "notes.md", absolute: "/ws/notes.md", kind: "file" },
+    });
+
+    expect(await useApp.getState().closeFile()).toBe(true);
+    expect(useApp.getState().openedFile).toBeNull();
+    expect(localStorage.getItem("slopslide.lastFile:/ws")).toBeNull();
+  });
+
+  it("keeps a dirty deck and its remembered file when cancelling the close", async () => {
+    const useApp = await freshStore();
+    ask.mockResolvedValue(false);
+    localStorage.setItem("slopslide.lastFile:/ws", "talk/deck.html");
+    useApp.setState({ workspace: { path: "/ws", name: "ws" }, deck: deckFor(DECK_HTML), codeDirty: true });
+
+    expect(await useApp.getState().closeFile()).toBe(false);
+    expect(useApp.getState().deck).not.toBeNull();
+    expect(localStorage.getItem("slopslide.lastFile:/ws")).toBe("talk/deck.html");
+  });
+});
+
 const DECK = deckFor(DECK_HTML);
 const DECK_HTML_PATH = DECK.id;
 

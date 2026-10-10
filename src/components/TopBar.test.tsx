@@ -59,6 +59,21 @@ describe("sidebar toggle", () => {
   });
 });
 
+describe("close file", () => {
+  it("closes the open deck from the toolbar", async () => {
+    render(<TopBar />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Close file" })));
+    expect(useApp.getState().deck).toBeNull();
+    expect(useApp.getState().openedFile).toBeNull();
+  });
+
+  it("shows the close control for a non-deck file", () => {
+    useApp.setState({ deck: null, openedFile: { path: "notes.md", absolute: "/decks/notes.md", kind: "file" } });
+    render(<TopBar />);
+    expect(screen.getByRole("button", { name: "Close file" })).toBeVisible();
+  });
+});
+
 describe("Slides / HTML toggle", () => {
   it("marks the current view as pressed", () => {
     render(<TopBar />);

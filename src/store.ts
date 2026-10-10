@@ -266,6 +266,8 @@ interface AppState {
   createDeck: (title: string, template?: string | null) => Promise<void>;
   /** Closes the open file; false when the user kept unsaved edits instead. */
   closeDeck: () => Promise<boolean>;
+  /** Closes the open file and prevents it reopening automatically with this workspace. */
+  closeFile: () => Promise<boolean>;
   setDeck: (deck: Deck) => void;
   select: (slide: string | null) => void;
   selectRelative: (delta: number) => void;
@@ -490,6 +492,13 @@ export const useApp = create<AppState>((set, get) => ({
     if (get().codeDirty && !(await confirmDiscardEdits())) return false;
     await flushReviewSave();
     set({ codeDirty: false, openedFile: null, deck: null, selected: null, presenting: false, lint: null, composerFill: null, sketches: {}, sketchesSent: {}, imageExport: null, editing: false, slideUndo: [], slideRedo: [] });
+    return true;
+  },
+
+  closeFile: async () => {
+    if (!(await get().closeDeck())) return false;
+    const { workspace } = get();
+    if (workspace) localStorage.removeItem(LAST_FILE_KEY + workspace.path);
     return true;
   },
 

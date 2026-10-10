@@ -17,6 +17,7 @@ import {
   Play,
   Presentation,
   Share,
+  X,
   XCircle,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -60,6 +61,7 @@ export function TopBar() {
               <span title={openedFile.path} className="min-w-0 truncate px-1.5 text-sm font-medium">
                 {openedFile.path}
               </span>
+              <CloseFileButton />
             </>
           )}
           <div data-tauri-drag-region className="flex-1 self-stretch" />
@@ -150,6 +152,7 @@ function DeckTools({ deck }: { deck: Deck }) {
         title={deck.path}
         className="min-w-0 max-w-md flex-1 truncate rounded-md bg-transparent px-1.5 py-1 text-sm font-medium outline-none hover:bg-accent focus:bg-accent"
       />
+      <CloseFileButton />
       <div data-tauri-drag-region className="flex-1 self-stretch" />
       <SlideSizeButton />
       <LintStatus />
@@ -170,6 +173,20 @@ function DeckTools({ deck }: { deck: Deck }) {
         Present
       </button>
     </>
+  );
+}
+
+function CloseFileButton() {
+  return (
+    <button
+      type="button"
+      onClick={() => void useApp.getState().closeFile()}
+      title="Close file"
+      aria-label="Close file"
+      className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+    >
+      <X className="size-4" />
+    </button>
   );
 }
 

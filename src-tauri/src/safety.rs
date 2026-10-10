@@ -106,8 +106,10 @@ impl Guard {
                 Ok(ids) if !ids.is_empty() => restored.push((
                     file.strip_prefix(&self.root)
                         .unwrap()
-                        .to_string_lossy()
-                        .into_owned(),
+                        .components()
+                        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                        .join("/"),
                     ids,
                 )),
                 Ok(_) => {}
@@ -150,9 +152,9 @@ mod tests {
     fn protects_other_decks_snapshots_per_file_and_normalizes_new_decks() {
         let temp = std::env::temp_dir().join(format!("slopslide-guard-{}", uuid::Uuid::new_v4()));
         let root = temp.join("work");
-        fs::create_dir_all(root.join("talks")).unwrap();
+        fs::create_dir_all(root.join("talks").join("quarterly")).unwrap();
         let a = root.join("deck.html");
-        let b = root.join("talks/q3.html");
+        let b = root.join("talks").join("quarterly").join("q3.html");
         let source = "<html><body><main class=\"deck\"><section class=\"slide\" id=\"a\" data-locked>A</section><section class=\"slide\" id=\"b\">B</section></main></body></html>";
         fs::write(&a, source).unwrap();
         fs::write(&b, source).unwrap();
@@ -175,7 +177,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             guard.finish().unwrap(),
-            [("talks/q3.html".into(), vec!["a".into()])]
+            [("talks/quarterly/q3.html".into(), vec!["a".into()])]
         );
         let out = fs::read_to_string(&b).unwrap();
         assert!(out.contains(">A</section>"));
@@ -184,7 +186,7 @@ mod tests {
         assert!(fs::read_to_string(new)
             .unwrap()
             .contains("slopslide:runtime-js"));
-        for path in ["deck.html", "talks/q3.html"] {
+        for path in ["deck.html", "talks/quarterly/q3.html"] {
             let files: Vec<_> = fs::read_dir(session.join("snapshots").join(path))
                 .unwrap()
                 .collect();

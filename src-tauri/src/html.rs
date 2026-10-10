@@ -1821,6 +1821,25 @@ mod tests {
     }
 
     #[test]
+    fn the_runtime_entrance_keeps_transforms_and_its_stagger() {
+        let start = RUNTIME_CSS.find("@keyframes slop-reveal").unwrap();
+        let keyframes = &RUNTIME_CSS[start..start + RUNTIME_CSS[start..].find("\n}").unwrap()];
+        assert!(
+            !keyframes.contains("transform"),
+            "an entrance leaves the elements' own transforms alone"
+        );
+        for n in 1..=4 {
+            // Outranks a deck's `.slide.active .reveal { animation: … }`, which resets the delay.
+            assert!(
+                RUNTIME_CSS.contains(&format!(
+                    ".slide.active .reveal.reveal-delay-{n} {{ animation-delay:"
+                )),
+                "reveal-delay-{n}"
+            );
+        }
+    }
+
+    #[test]
     fn ensure_runtime_embeds_the_current_assets() {
         let out = ensure_runtime(DECK);
         assert!(out.contains(RUNTIME_CSS));

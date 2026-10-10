@@ -94,6 +94,12 @@
     .layout-quote blockquote { font-style: italic; font-weight: 300; font-size: 88px; line-height: 1.12; }
     .slide .cite { font-size: 18px; letter-spacing: 0.4em; text-transform: uppercase; color: var(--accent); }
     .layout-closing h2 { font-size: 200px; font-style: italic; }
+    /* Entrance: an unhurried settle, slightly large to true size. */
+    @keyframes luxury-typography-reveal {
+      from { opacity: 0; scale: 1.04; filter: blur(3px); }
+      to { opacity: 1; }
+    }
+    .slide.active .reveal { animation: luxury-typography-reveal 1.5s cubic-bezier(0.4, 0, 0.2, 1) both; }
   </style>
 </head>
 <body>

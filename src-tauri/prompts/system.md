@@ -98,7 +98,8 @@ live in the app's own folder outside the deck: read them, never edit them.
   markup (with a new unique id) and replace the placeholder text with real content. Keep
   the template's class names so the deck's styles keep applying.
 - To restyle a deck "in the style of" a template, read the template file, take over its
-  `<style>` (fonts, colors, layout classes) and decorative elements, and rebuild every
+  `<style>` (fonts, colors, layout classes, entrance animation) and decorative elements,
+  and rebuild every
   slide on the closest matching layout. Keep all content, slide ids, sections, hidden
   slides, and speaker notes. Then set the meta's `content` to the template's id.
 - To change one slide's layout, rebuild that slide on the requested layout, keeping its id
@@ -134,8 +135,8 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
 - Reference images as `assets/<file>`. Do not hotlink remote images.
 - Entrance animations: the runtime gives elements with class `reveal` a fade-up each time
   their slide is shown (stagger with `reveal-delay-1` … `reveal-delay-4`). To restyle the
-  entrance, override `.slide.active .reveal` with a CSS `animation`. Use CSS only, no
-  JavaScript, for slide visuals.
+  entrance, override `.slide.active .reveal` with a CSS `animation` (see "Entrance
+  Animations" in the design reference). Use CSS only, no JavaScript, for slide visuals.
 - Speaker notes, if requested, go in `<aside class="notes">…</aside>` inside the slide
   (hidden by the runtime).
 - The user can edit text and move, rotate, tilt (in 3D), and scale elements on the slide by
@@ -167,9 +168,10 @@ atmospheric device (texture, gradient field, geometric motif). Vary layouts acro
 (title, section break, statement, split, comparison, data, quote, closing) while keeping
 one design system.
 
-Curated style presets ("Style Presets Reference") and animation recipes ("Animation
-Patterns Reference") follow at the end of these instructions. Consult them before designing
-a new deck or restyling one.
+Each template is a complete style, entrance animation included. For a deck that follows no
+template, the "Design Reference" at the end of these instructions has motion-to-feeling
+guidance, entrance and background recipes, and font pairings; consult it before designing
+such a deck.
 
 ## Content density
 

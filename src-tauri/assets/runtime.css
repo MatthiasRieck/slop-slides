@@ -110,14 +110,18 @@ html[data-slop-review] .slide > .slop-review {
   max-width: 100%;
   max-height: 100%;
 }
+/* Entrances only say where an element comes from: animating `translate`, `scale`, and
+   `rotate` (not `transform`) and leaving them out of the last frame lands each element on
+   its own styles, rotations and hand edits included. A deck restyles the entrance by
+   setting `animation` on `.slide.active .reveal`; the stagger below outranks that rule, so
+   the shorthand does not reset it. */
 @keyframes slop-reveal {
   from {
     opacity: 0;
-    transform: translateY(28px);
+    translate: 0 28px;
   }
   to {
     opacity: 1;
-    transform: none;
   }
 }
 html[data-slop-player] .slide .reveal {
@@ -126,10 +130,10 @@ html[data-slop-player] .slide .reveal {
 .slide.active .reveal {
   animation: slop-reveal 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
-.slide.active .reveal-delay-1 { animation-delay: 0.12s; }
-.slide.active .reveal-delay-2 { animation-delay: 0.24s; }
-.slide.active .reveal-delay-3 { animation-delay: 0.36s; }
-.slide.active .reveal-delay-4 { animation-delay: 0.48s; }
+.slide.active .reveal.reveal-delay-1 { animation-delay: 0.12s; }
+.slide.active .reveal.reveal-delay-2 { animation-delay: 0.24s; }
+.slide.active .reveal.reveal-delay-3 { animation-delay: 0.36s; }
+.slide.active .reveal.reveal-delay-4 { animation-delay: 0.48s; }
 /* Editor thumbnails render the final frame of every animation. */
 html[data-slop-static] *,
 html[data-slop-static] *::before,

@@ -96,6 +96,12 @@
     .layout-quote blockquote { font-style: italic; font-weight: 400; font-size: 84px; }
     .slide .cite { letter-spacing: 0.2em; text-transform: uppercase; font-size: 22px; color: var(--accent); }
     .layout-closing h2 { font-style: italic; }
+    /* Entrance: a slow focus out of a haze. */
+    @keyframes ethereal-reveal {
+      from { opacity: 0; translate: 0 12px; filter: blur(16px); }
+      to { opacity: 1; }
+    }
+    .slide.active .reveal { animation: ethereal-reveal 1.8s cubic-bezier(0.25, 0.1, 0.25, 1) both; }
   </style>
 </head>
 <body>

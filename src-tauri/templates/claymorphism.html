@@ -85,6 +85,15 @@
     .slide .value { font-size: 130px; }
     .layout-quote blockquote { padding: 72px 88px; border-radius: 64px; background: var(--panel); box-shadow: var(--clay); font-size: 68px; }
     .slide .cite { margin-left: 88px; }
+    /* Entrance: a squishy bounce. */
+    @keyframes claymorphism-reveal {
+      from { opacity: 0; scale: 0.6; }
+      55% { opacity: 1; scale: 1.08; }
+      75% { scale: 0.96; }
+      90% { scale: 1.02; }
+      to { opacity: 1; }
+    }
+    .slide.active .reveal { animation: claymorphism-reveal 0.9s ease-out both; }
   </style>
 </head>
 <body>

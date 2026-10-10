@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Maximalism</title>
+  <title>Vintage Editorial</title>
   <style>
-    @import url("https://fonts.googleapis.com/css2?family=Abril+Fatface&family=Rubik:wght@400;700&display=swap");
+    @import url("https://fonts.googleapis.com/css2?family=Fraunces:wght@700;900&family=Work+Sans:wght@400;500;700&display=swap");
 
     /* Layouts shared by every SlopSlide template: title, section, bullets, split, stats,
        quote, closing. The style below this block gives them their look. */
@@ -51,66 +51,42 @@
     .slide .cite { position: relative; font-size: 30px; color: var(--muted); }
     .layout-closing h2 { font-size: 160px; }
 
-    /* Maximalism */
+    /* Vintage Editorial */
     :root {
-      --bg: #ff3d7f;
-      --ink: #1a0b3d;
-      --muted: #2e1660;
-      --accent: #ffd400;
-      --teal: #00b3a4;
-      --violet: #3d2bff;
-      --orange: #ff8a00;
-      --panel: #fff4e0;
-      --font-display: "Abril Fatface", "Bodoni 72", serif;
-      --font-body: "Rubik", "Trebuchet MS", sans-serif;
+      --bg: #f5f3ee;
+      --ink: #1a1a1a;
+      --muted: #555555;
+      --accent: #b4562f;
+      --panel: #e8d4c0;
+      --font-display: "Fraunces", Georgia, serif;
+      --font-body: "Work Sans", "Helvetica Neue", sans-serif;
     }
-    .slide {
-      background:
-        radial-gradient(circle, rgba(26, 11, 61, 0.22) 6px, transparent 7px) 0 0 / 48px 48px,
-        var(--bg);
-    }
-    .slide h1, .slide h2 { font-weight: 400; line-height: 0.98; color: var(--panel); text-shadow: 6px 6px 0 var(--ink), 12px 12px 0 var(--accent); }
-    .slide h1 { font-size: 150px; }
-    .slide h2 { font-size: 96px; }
-    .slide .deco span:nth-child(1) { right: -120px; top: -120px; width: 620px; height: 620px; border-radius: 50%; background: repeating-conic-gradient(var(--accent) 0 15deg, var(--orange) 15deg 30deg); border: 18px solid var(--ink); }
-    .slide .deco span:nth-child(2) { right: 300px; bottom: -80px; width: 380px; height: 380px; background: var(--teal); border: 18px solid var(--ink); transform: rotate(18deg); background-image: repeating-linear-gradient(-45deg, transparent 0 20px, rgba(26, 11, 61, 0.35) 20px 30px); }
-    .slide .deco span:nth-child(3) { left: 0; right: 0; top: 0; height: 40px; background: linear-gradient(135deg, var(--ink) 25%, transparent 25%) -20px 0 / 40px 40px, linear-gradient(225deg, var(--ink) 25%, transparent 25%) -20px 0 / 40px 40px, var(--accent); }
-    .slide .deco span:nth-child(4) { right: 90px; bottom: 120px; width: 180px; height: 180px; border-radius: 50%; background: var(--violet); border: 14px solid var(--accent); }
-    .layout-bullets .deco span:nth-child(1), .layout-stats .deco span:nth-child(1), .layout-split .deco span:nth-child(1), .layout-split .deco span:nth-child(2), .layout-stats .deco span:nth-child(2), .layout-bullets .deco span:nth-child(2) { display: none; }
-    .slide .eyebrow { padding: 10px 26px; background: var(--ink); color: var(--accent); transform: rotate(-3deg); }
-    .slide .lede { padding: 20px 32px; background: var(--panel); color: var(--ink); border: 6px solid var(--ink); box-shadow: 12px 12px 0 var(--violet); }
-    .slide .byline { color: var(--panel); font-weight: 700; }
-    .slide .number { font-size: 260px; color: var(--accent); text-shadow: 10px 10px 0 var(--ink); }
-    .slide .points li { padding: 24px 32px 24px 100px; background: var(--panel); border: 6px solid var(--ink); color: var(--muted); }
-    .slide .points li:nth-child(1) { box-shadow: 12px 12px 0 var(--accent); transform: rotate(-1deg); }
-    .slide .points li:nth-child(2) { box-shadow: 12px 12px 0 var(--teal); transform: rotate(0.8deg); margin-left: 60px; }
-    .slide .points li:nth-child(3) { box-shadow: 12px 12px 0 var(--violet); transform: rotate(-0.5deg); }
-    .slide .points li::before { left: 28px; top: 50%; width: 44px; height: 44px; margin-top: -22px; border-radius: 50%; background: var(--bg); border: 6px solid var(--ink); }
-    .slide .text .body { color: var(--panel); font-weight: 700; }
-    .slide .visual .placeholder { border: 16px solid var(--ink); background: repeating-linear-gradient(45deg, var(--accent) 0 30px, var(--orange) 30px 60px); color: var(--ink); font-weight: 700; box-shadow: 24px 24px 0 var(--violet); }
-    .slide .stat { padding: 40px; border: 8px solid var(--ink); }
-    .slide .stat:nth-child(1) { background: var(--accent); transform: rotate(-2deg); }
-    .slide .stat:nth-child(2) { background: var(--teal); transform: rotate(1.5deg); }
-    .slide .stat:nth-child(3) { background: var(--panel); transform: rotate(-1deg); }
-    .slide .value { color: var(--ink); font-weight: 400; font-size: 140px; }
-    .slide .label { color: var(--ink); font-weight: 700; }
-    .layout-quote blockquote { padding: 64px; background: var(--violet); color: var(--panel); border: 10px solid var(--ink); box-shadow: 20px 20px 0 var(--accent); font-size: 72px; }
-    .slide .cite { padding: 8px 20px; background: var(--accent); color: var(--ink); font-weight: 700; }
-    .layout-closing h2 { font-size: 220px; }
-    /* Entrance: slammed down, oversized and spinning. */
-    @keyframes maximalism-reveal {
-      from { opacity: 0; scale: 1.5; rotate: -8deg; }
-      60% { opacity: 1; scale: 0.94; rotate: 3deg; }
-      80% { scale: 1.03; rotate: -1deg; }
+    .slide h1, .slide h2 { font-weight: 900; letter-spacing: -0.03em; }
+    .slide h1 { font-size: 140px; max-width: 1050px; }
+    .slide .deco span:nth-child(1) { right: 200px; top: 140px; width: 360px; height: 360px; border: 3px solid var(--ink); border-radius: 50%; }
+    .slide .deco span:nth-child(2) { right: 110px; top: 330px; width: 560px; height: 3px; background: var(--ink); transform: rotate(-24deg); }
+    .slide .deco span:nth-child(3) { right: 470px; top: 430px; width: 40px; height: 40px; border-radius: 50%; background: var(--accent); }
+    .layout-bullets .deco span, .layout-stats .deco span, .layout-split .deco span, .layout-quote .deco span { display: none; }
+    .slide .eyebrow { color: var(--ink); font-weight: 700; letter-spacing: 0.2em; }
+    .slide .number { font-weight: 900; }
+    .slide .points li::before { width: 20px; height: 20px; border-radius: 50%; }
+    .slide .visual .placeholder { border: 3px solid var(--ink); background: var(--panel); }
+    .slide .stat { padding: 32px; border: 3px solid var(--ink); }
+    .slide .value { font-weight: 900; }
+    .layout-quote blockquote { font-weight: 900; font-style: italic; }
+    .layout-closing .byline { padding: 20px 36px; border: 3px solid var(--ink); color: var(--ink); font-weight: 700; }
+    /* Entrance: a witty little tip into place. */
+    @keyframes vintage-editorial-reveal {
+      from { opacity: 0; rotate: -3deg; translate: 0 30px; }
       to { opacity: 1; }
     }
-    .slide.active .reveal { animation: maximalism-reveal 0.75s ease-out both; }
+    .slide.active .reveal { animation: vintage-editorial-reveal 0.8s cubic-bezier(0.34, 1.3, 0.64, 1) both; }
   </style>
 </head>
 <body>
   <main class="deck">
     <section class="slide layout-title" id="title">
-      <div class="deco" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+      <div class="deco" aria-hidden="true"><span></span><span></span><span></span></div>
       <div class="frame">
         <p class="eyebrow reveal">Category · 2026</p>
         <h1 class="reveal reveal-delay-1">Presentation title</h1>
@@ -119,7 +95,7 @@
       </div>
     </section>
     <section class="slide layout-section" id="section">
-      <div class="deco" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+      <div class="deco" aria-hidden="true"><span></span><span></span><span></span></div>
       <div class="frame">
         <p class="number reveal">01</p>
         <h2 class="reveal reveal-delay-1">Section title</h2>
@@ -127,7 +103,7 @@
       </div>
     </section>
     <section class="slide layout-bullets" id="bullets">
-      <div class="deco" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+      <div class="deco" aria-hidden="true"><span></span><span></span><span></span></div>
       <header class="frame-head">
         <p class="eyebrow reveal">Key points</p>
         <h2 class="reveal reveal-delay-1">A headline that states the point</h2>
@@ -139,7 +115,7 @@
       </ul>
     </section>
     <section class="slide layout-split" id="split">
-      <div class="deco" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+      <div class="deco" aria-hidden="true"><span></span><span></span><span></span></div>
       <div class="text">
         <p class="eyebrow reveal">Context</p>
         <h2 class="reveal reveal-delay-1">Words on one side, a visual on the other</h2>
@@ -150,7 +126,7 @@
       </figure>
     </section>
     <section class="slide layout-stats" id="stats">
-      <div class="deco" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+      <div class="deco" aria-hidden="true"><span></span><span></span><span></span></div>
       <header class="frame-head">
         <p class="eyebrow reveal">By the numbers</p>
         <h2 class="reveal reveal-delay-1">Three figures that tell the story</h2>
@@ -162,12 +138,12 @@
       </div>
     </section>
     <section class="slide layout-quote" id="quote">
-      <div class="deco" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+      <div class="deco" aria-hidden="true"><span></span><span></span><span></span></div>
       <blockquote class="reveal">“A memorable line from a customer, an expert, or the team that makes the point land.”</blockquote>
       <p class="cite reveal reveal-delay-1">Name Surname, Role at Company</p>
     </section>
     <section class="slide layout-closing" id="closing">
-      <div class="deco" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+      <div class="deco" aria-hidden="true"><span></span><span></span><span></span></div>
       <div class="frame">
         <h2 class="reveal">Thank you</h2>
         <p class="lede reveal reveal-delay-1">Questions, next steps, or a call to action.</p>

@@ -23,13 +23,11 @@ use crate::mcp;
 use crate::sessions::Sessions;
 use crate::{codex, copilot};
 
-/// The agent's instructions, with the design references it consults appended.
+/// The agent's instructions, with the design reference it consults appended.
 pub(crate) const SYSTEM_PROMPT: &str = concat!(
     include_str!("../prompts/system.md"),
     "\n\n",
-    include_str!("../prompts/STYLE_PRESETS.md"),
-    "\n\n",
-    include_str!("../prompts/animation-patterns.md"),
+    include_str!("../prompts/design-reference.md"),
 );
 /// The agent edits files only: no shell, no MCP servers.
 const TOOLS: &str = "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch";
@@ -1086,10 +1084,18 @@ mod tests {
     }
 
     #[test]
-    fn system_prompt_includes_the_design_references() {
+    fn system_prompt_includes_the_design_reference() {
         assert!(SYSTEM_PROMPT.starts_with(include_str!("../prompts/system.md")));
-        assert!(SYSTEM_PROMPT.contains(include_str!("../prompts/STYLE_PRESETS.md")));
-        assert!(SYSTEM_PROMPT.contains(include_str!("../prompts/animation-patterns.md")));
+        assert!(SYSTEM_PROMPT.ends_with(include_str!("../prompts/design-reference.md")));
+        assert!(
+            SYSTEM_PROMPT.contains("\"Design Reference\""),
+            "system.md points at the reference by its title"
+        );
+        assert!(
+            !SYSTEM_PROMPT.contains("Style Presets")
+                && !SYSTEM_PROMPT.contains("Animation Patterns"),
+            "styles live in the templates, not in the prompt"
+        );
         assert!(
             !SYSTEM_PROMPT.contains(".slopslide/reference"),
             "the references are not files in the deck"

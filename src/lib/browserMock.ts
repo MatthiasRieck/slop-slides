@@ -2,39 +2,34 @@
 // served by dev/browserPreview.ts. Never loaded inside the desktop app.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 
-interface RawDeck {
-  id: string;
-  title: string;
-  path: string;
-  slides: { id: string; hash: string; hidden: boolean; locked: boolean; moved: boolean }[];
-  sections: { index: number; title: string; before: number }[];
-  shellHash: string;
-  updatedMs: number;
-}
-
 export function installBrowserMock() {
   mockWindows("main");
-  const decks = async () => (await (await fetch("/__api/decks")).json()) as RawDeck[];
-  const deck = async (id: unknown) => {
-    const found = (await decks()).find((d) => d.id === id);
-    if (!found) throw new Error(`deck not found: ${String(id)}`);
-    return { id: found.id, title: found.title, path: found.path, slides: found.slides, sections: found.sections, shellHash: found.shellHash };
+  /** The dev server's answer to `/__api/<route>?<query>`; a 404 is an error. */
+  const fromServer = async (route: string, query: Record<string, string> = {}) => {
+    const res = await fetch(`/__api/${route}?${new URLSearchParams(query)}`);
+    if (!res.ok) throw new Error(`not found: ${Object.values(query).join(" ") || route}`);
+    return res.json();
   };
   mockIPC(
     async (cmd, args) => {
       const a = (args ?? {}) as Record<string, unknown>;
       switch (cmd) {
-        case "list_decks":
-          return (await decks()).map((d) => ({
-            id: d.id,
-            title: d.title,
-            slideCount: d.slides.length,
-            firstSlide: d.slides[0]?.id ?? null,
-            updatedMs: d.updatedMs,
-          }));
+        // The library is the only folder the preview can open.
+        case "library_folder":
+          return fromServer("library");
+        case "recent_workspaces":
+          return [];
+        case "open_workspace": {
+          const path = String(a.path);
+          return { path, name: path.split("/").pop() };
+        }
+        case "list_dir":
+          return fromServer("dir", { path: String(a.path) });
+        case "open_file":
+          return fromServer("open", { path: String(a.path) });
         case "open_deck":
         case "load_deck":
-          return deck(a.id);
+          return fromServer("deck", { id: String(a.id) });
         case "list_providers":
           return [
             {

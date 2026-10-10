@@ -25,7 +25,7 @@ import remarkGfm from "remark-gfm";
 import { api, errorMessage } from "../lib/api";
 import { claimDrop, dropCovered, dropPoint, isImage } from "../lib/drop";
 import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowTokens } from "../lib/context";
-import { chatFileUrl, cn, isSessionFile } from "../lib/utils";
+import { basename, chatFileUrl, cn, dirname, isSessionFile } from "../lib/utils";
 import { PROVIDERS, type Provider } from "../lib/models";
 import { useApp, type AssistantMessage, type ChatMessage, type ChatPart, type UserMessage } from "../store";
 import { ApprovalCard, PermissionPicker, ApprovalReview } from "./Permissions";
@@ -55,24 +55,19 @@ export function ChatPanel() {
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <div className="flex h-10 shrink-0 items-center justify-between px-3">
-        <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
-          Chat
-        </span>
-        <div className="flex items-center gap-1">
-          {messages.length > 0 && (
-            <button
-              type="button"
-              title="New conversation (slides are kept)"
-              onClick={() => void useApp.getState().resetChat()}
-              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-2xs text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              <RotateCcw className="size-3" />
-              New chat
-            </button>
-          )}
+      {messages.length > 0 && (
+        <div className="flex h-8 shrink-0 items-center justify-end px-3">
+          <button
+            type="button"
+            title="New conversation (slides are kept)"
+            onClick={() => void useApp.getState().resetChat()}
+            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-2xs text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <RotateCcw className="size-3" />
+            New chat
+          </button>
         </div>
-      </div>
+      )}
       {cliMissing && <MissingCli provider={provider} />}
       <MessageList messages={messages} running={running}>
         {messages.length === 0 && (
@@ -234,7 +229,7 @@ function AssistantBlock({ message }: { message: AssistantMessage }) {
 function ToolRow({ part }: { part: Extract<ChatPart, { kind: "tool" }> }) {
   const deck = useApp((s) => s.deck);
   const { icon: Icon, label, target } = describeTool(part, deck?.id ?? "");
-  const slide = target === "deck.html" ? editedSlide(part, deck?.slides.map((s) => s.id) ?? []) : null;
+  const slide = deck && target === basename(deck.id) ? editedSlide(part, deck?.slides.map((s) => s.id) ?? []) : null;
   return (
     <button
       type="button"
@@ -259,7 +254,7 @@ function ToolRow({ part }: { part: Extract<ChatPart, { kind: "tool" }> }) {
   );
 }
 
-/** The slide an Edit of deck.html touched, found via an `id="…"` in the edited text. */
+/** The slide an Edit of the deck file touched, found via an `id="…"` in the edited text. */
 function editedSlide(part: Extract<ChatPart, { kind: "tool" }>, slideIds: string[]): string | null {
   for (const key of ["new_string", "old_string"]) {
     const text = part.input[key];
@@ -275,11 +270,10 @@ function describeTool(part: Extract<ChatPart, { kind: "tool" }>, deckId: string)
   const input = part.input;
   const str = (key: string) => (typeof input[key] === "string" ? (input[key] as string) : "");
   // Tool paths are absolute inside the deck folder; show them deck-relative.
+  const folder = dirname(deckId).replaceAll("\\", "/");
   const relative = (path: string) => {
     const normalized = path.replaceAll("\\", "/");
-    const marker = `/${deckId}/`;
-    const index = normalized.lastIndexOf(marker);
-    return index >= 0 ? normalized.slice(index + marker.length) : normalized;
+    return folder && normalized.startsWith(`${folder}/`) ? normalized.slice(folder.length + 1) : normalized;
   };
   switch (part.name) {
     case "Write":

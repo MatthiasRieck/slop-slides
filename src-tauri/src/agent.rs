@@ -184,9 +184,10 @@ impl AgentManager {
     }
 
     pub fn send(&self, app: AppHandle, args: SendArgs) -> Result<()> {
-        let dir = deck::deck_dir(&app, &args.deck_id)?;
+        let file = deck::deck_file(&args.deck_id)?;
+        let dir = deck::folder(&file).to_path_buf();
         let app_home = deck::app_home()?;
-        let session_dir = Sessions::new(&app_home).current_or_start(&dir)?;
+        let session_dir = Sessions::new(&app_home).current_or_start(&file)?;
         let bin = args.provider.resolve()?;
         let (cancel_tx, cancel_rx) = watch::channel(false);
         {
@@ -209,6 +210,7 @@ impl AgentManager {
                         },
                     );
                 }),
+                file,
                 dir,
                 app_home,
                 session_dir,
@@ -228,15 +230,15 @@ impl AgentManager {
                 approvals,
             };
             // The whole deck is one file: keep a copy to fall back on before every turn.
-            if let Err(e) = deck::snapshot(&turn.dir, &turn.session_dir) {
+            if let Err(e) = deck::snapshot(&turn.file, &turn.session_dir) {
                 log::warn!("snapshot failed: {e}");
             }
             // Remember the locked slides, to put back any the agent changes.
-            if let Err(e) = deck::guard_locked(&turn.dir, &turn.session_dir) {
+            if let Err(e) = deck::guard_locked(&turn.file, &turn.session_dir) {
                 log::warn!("could not record locked slides: {e}");
             }
             let interrupted = turn.run(&args.prompt, cancel_rx).await;
-            match deck::release_guard(&turn.dir, &turn.session_dir) {
+            match deck::release_guard(&turn.file, &turn.session_dir) {
                 Ok(restored) if !restored.is_empty() => turn.emit(&AgentEvent::Error {
                     message: locked_restored_message(&restored),
                 }),
@@ -246,9 +248,9 @@ impl AgentManager {
                 }),
             }
             // Give new slides ids and restore the player runtime if the agent touched it.
-            if let Err(e) = deck::normalize(&turn.dir) {
+            if let Err(e) = deck::normalize(&turn.file) {
                 turn.emit(&AgentEvent::Error {
-                    message: format!("Could not tidy deck.html after this turn: {e}"),
+                    message: format!("Could not tidy the deck after this turn: {e}"),
                 });
             }
             app.state::<AgentManager>()
@@ -281,6 +283,9 @@ fn locked_restored_message(ids: &[String]) -> String {
 
 struct Turn {
     emit: Box<dyn Fn(&AgentEvent) + Send + Sync>,
+    /// The deck file.
+    file: PathBuf,
+    /// The deck's folder, where the agent works.
     dir: PathBuf,
     /// Where the files every deck's agent shares are written (see [`deck::app_home`]).
     app_home: PathBuf,
@@ -1268,6 +1273,7 @@ mod tests {
                 let events = self.events.clone();
                 Turn {
                     emit: Box::new(move |e| events.lock().unwrap().push(e.clone())),
+                    file: self.dir.join(deck::DECK_FILE),
                     dir: self.dir.clone(),
                     app_home: self.dir.join("home"),
                     session_dir: self.session_dir(),

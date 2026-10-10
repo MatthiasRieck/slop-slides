@@ -1,4 +1,4 @@
-//! Lints deck.html: checks that the markup is well formed (every element closed, no stray
+//! Lints a deck file: checks that the markup is well formed (every element closed, no stray
 //! end tags) and that it follows the deck format the app and player rely on (see
 //! `prompts/system.md`). Keep these rules in sync whenever the deck structure changes.
 
@@ -26,7 +26,7 @@ pub struct Issue {
     pub rule: &'static str,
     pub severity: Severity,
     pub message: String,
-    /// 1-based line in deck.html.
+    /// 1-based line in the deck file.
     pub line: usize,
     /// Id of the slide the issue is in, if any.
     pub slide: Option<String>,
@@ -383,7 +383,7 @@ fn check_document(l: &mut Linter) {
             "doctype",
             Severity::Warning,
             0,
-            "deck.html should start with <!DOCTYPE html>.".into(),
+            "The deck should start with <!DOCTYPE html>.".into(),
         );
     }
     if html::title(html).is_none() {
@@ -394,7 +394,7 @@ fn check_document(l: &mut Linter) {
             "The deck needs a non-empty <title> in <head>.".into(),
         );
     }
-    if !has_deck_container(html) {
+    if !html::has_deck_container(html) {
         l.report(
             "deck-container",
             Severity::Error,
@@ -410,17 +410,6 @@ fn check_document(l: &mut Linter) {
             "The slopslide:runtime-css / runtime-js blocks are missing; keep them intact.".into(),
         );
     }
-}
-
-fn has_deck_container(html: &str) -> bool {
-    let mut from = 0;
-    while let Some(at) = find_ci(html, from, "<main") {
-        if parse_tag(html, at).is_some_and(|t| t.name == "main" && has_class(&t, "deck")) {
-            return true;
-        }
-        from = at + 1;
-    }
-    false
 }
 
 /// Slide ids: present, unique, kebab-case.
@@ -822,14 +811,14 @@ fn truncate(text: &str, max: usize) -> String {
 /// Plain-text report for the agent's lint tool.
 pub fn format_report(issues: &[Issue]) -> String {
     if issues.is_empty() {
-        return "deck.html passes lint: no issues.".into();
+        return "The deck passes lint: no issues.".into();
     }
     let errors = issues
         .iter()
         .filter(|i| i.severity == Severity::Error)
         .count();
     let warnings = issues.len() - errors;
-    let mut out = format!("deck.html has {errors} error(s) and {warnings} warning(s):\n");
+    let mut out = format!("The deck has {errors} error(s) and {warnings} warning(s):\n");
     for issue in issues {
         let severity = match issue.severity {
             Severity::Error => "error",
@@ -1215,13 +1204,13 @@ mod tests {
         assert!(issues.windows(2).all(|w| w[0].line <= w[1].line));
         let report = format_report(&issues);
         assert!(
-            report.starts_with("deck.html has 1 error(s) and 1 warning(s):"),
+            report.starts_with("The deck has 1 error(s) and 1 warning(s):"),
             "{report}"
         );
         assert!(
             report.contains("line 10 error [unclosed-tag] (slide `Bad`): <span> is never closed")
         );
-        assert_eq!(format_report(&[]), "deck.html passes lint: no issues.");
+        assert_eq!(format_report(&[]), "The deck passes lint: no issues.");
     }
 
     #[test]

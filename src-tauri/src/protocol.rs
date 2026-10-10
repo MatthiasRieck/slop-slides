@@ -1,31 +1,34 @@
-//! `slop://` URI scheme. Serves deck files to the editor's slide iframes as
-//! `slop://localhost/<deck-id>/<path>` (`http://slop.localhost/...` on Windows), so the
-//! deck's relative `assets/…` references resolve exactly as they do when the file is opened
-//! in a browser. Templates (see [`templates`]) are served the same way, as
+//! `slop://` URI scheme. Serves files of the open workspace (decks, the pages the viewer
+//! shows, their assets) by their absolute path, as `slop://localhost/.file/<absolute path>`
+//! (`http://slop.localhost/...` on Windows), so a deck's relative `assets/…` references
+//! resolve exactly as they do when the file is opened in a browser. Files outside the open
+//! workspace are refused. Templates (see [`templates`]) are served as
 //! `slop://localhost/.template/<template-id>/<path>`, for the layout and style previews, and
 //! files in a deck's session (sketches the chat shows) by their absolute path, as
 //! `slop://localhost/.session/<absolute path>`.
 //!
-//! With `?pan` in the query, deck.html is served with the pasteboard (`assets/pasteboard.js`)
+//! With `?pan` in the query, a deck is served with the pasteboard (`assets/pasteboard.js`)
 //! added, so the stage can pan and zoom around the slide. With `?edit`, it also gets the slide
 //! editor (`assets/editor.js`), which builds on the pasteboard, so the stage can edit text and
 //! move elements in place. With `?show`, the presenter's whole-deck player gets the pasteboard
-//! too, to zoom and pan the slide being shown. None of them ever becomes part of deck.html or an
-//! export.
+//! too, to zoom and pan the slide being shown. None of them ever becomes part of the deck file
+//! or an export.
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use percent_encoding::percent_decode_str;
 use tauri::http::{header, Request, Response, StatusCode};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::deck;
 use crate::sessions::Sessions;
 use crate::templates;
+use crate::workspace::OpenWorkspace;
 
-/// First path segment of template files: `/.template/<template-id>/deck.html`. The app never
-/// names a deck folder like this (deck ids are slugs).
+/// First path segment of workspace files, followed by their absolute path.
+const FILE_PREFIX: &str = ".file";
+/// First path segment of template files: `/.template/<template-id>/deck.html`.
 const TEMPLATE_PREFIX: &str = ".template";
 /// First path segment of session files, followed by their absolute path.
 const SESSION_PREFIX: &str = ".session";
@@ -61,30 +64,32 @@ pub fn handle(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Cow<'stati
 }
 
 fn serve(app: &AppHandle, raw_path: &str) -> Result<(&'static str, Vec<u8>), StatusCode> {
-    let (deck_id, rel) = split_path(raw_path)?;
-    if deck_id == TEMPLATE_PREFIX {
+    let (prefix, rel) = split_path(raw_path)?;
+    if prefix == FILE_PREFIX {
+        return read_in_workspace(&app.state::<OpenWorkspace>(), &rel);
+    }
+    if prefix == TEMPLATE_PREFIX {
         let (template, rel) = rel.split_once('/').ok_or(StatusCode::NOT_FOUND)?;
         let root = templates::user_root().map_err(|_| StatusCode::NOT_FOUND)?;
         return templates::read_file(&root, template, rel).ok_or(StatusCode::NOT_FOUND);
     }
-    if deck_id == SESSION_PREFIX {
+    if prefix == SESSION_PREFIX {
         let home = deck::app_home().map_err(|_| StatusCode::NOT_FOUND)?;
         return read_in_session(&Sessions::new(&home), &rel);
     }
-    let dir = deck::deck_dir(app, &deck_id).map_err(|_| StatusCode::NOT_FOUND)?;
-    read_in_deck(&dir, &rel)
+    Err(StatusCode::NOT_FOUND)
 }
 
-/// `/<deck-id>/<path>`, percent-decoded.
+/// `/<prefix>/<path>`, percent-decoded.
 fn split_path(raw_path: &str) -> Result<(String, String), StatusCode> {
     let path = percent_decode_str(raw_path)
         .decode_utf8()
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    let (deck_id, rel) = path
+    let (prefix, rel) = path
         .trim_start_matches('/')
         .split_once('/')
         .ok_or(StatusCode::NOT_FOUND)?;
-    Ok((deck_id.to_string(), rel.to_string()))
+    Ok((prefix.to_string(), rel.to_string()))
 }
 
 /// Whether the query string has the parameter `name` (`name` or `name=<value>`).
@@ -122,23 +127,38 @@ fn with_scripts(html: &str, scripts: &[&str]) -> String {
     format!("{}{tags}{}", &html[..at], &html[at..])
 }
 
-/// A session file, by its absolute path without the leading `/` (`C:/…` on Windows).
-fn read_in_session(sessions: &Sessions, path: &str) -> Result<(&'static str, Vec<u8>), StatusCode> {
-    let file = match cfg!(windows) {
+/// An absolute path sent without its leading `/` (`C:/…` on Windows).
+fn absolute(path: &str) -> PathBuf {
+    match cfg!(windows) {
         true => PathBuf::from(path),
         false => Path::new("/").join(path),
-    };
-    if !sessions.contains(&file) {
+    }
+}
+
+/// A file of the open workspace, by its absolute path without the leading `/`.
+fn read_in_workspace(
+    workspace: &OpenWorkspace,
+    path: &str,
+) -> Result<(&'static str, Vec<u8>), StatusCode> {
+    let file = absolute(path);
+    if !workspace.contains(&file) {
         return Err(StatusCode::FORBIDDEN);
+    }
+    if file.is_dir() {
+        return Err(StatusCode::NOT_FOUND);
     }
     let bytes = std::fs::read(&file).map_err(|_| StatusCode::NOT_FOUND)?;
     Ok((deck::mime_for(path), bytes))
 }
 
-fn read_in_deck(dir: &Path, rel: &str) -> Result<(&'static str, Vec<u8>), StatusCode> {
-    let file = deck::resolve_in_deck(dir, rel).map_err(|_| StatusCode::FORBIDDEN)?;
+/// A session file, by its absolute path without the leading `/` (`C:/…` on Windows).
+fn read_in_session(sessions: &Sessions, path: &str) -> Result<(&'static str, Vec<u8>), StatusCode> {
+    let file = absolute(path);
+    if !sessions.contains(&file) {
+        return Err(StatusCode::FORBIDDEN);
+    }
     let bytes = std::fs::read(&file).map_err(|_| StatusCode::NOT_FOUND)?;
-    Ok((deck::mime_for(rel), bytes))
+    Ok((deck::mime_for(path), bytes))
 }
 
 #[cfg(test)]
@@ -150,18 +170,18 @@ mod tests {
     }
 
     #[test]
-    fn splits_deck_id_and_path() {
+    fn splits_prefix_and_path() {
         assert_eq!(
-            split("/talk/deck.html"),
-            Ok(("talk".into(), "deck.html".into()))
+            split("/.file/Users/me/talk/deck.html"),
+            Ok((".file".into(), "Users/me/talk/deck.html".into()))
         );
         assert_eq!(
-            split("/talk/assets/sub/a.png"),
-            Ok(("talk".into(), "assets/sub/a.png".into()))
+            split("/.template/swiss/assets/a.png"),
+            Ok((".template".into(), "swiss/assets/a.png".into()))
         );
         assert_eq!(
-            split("talk/deck.html"),
-            Ok(("talk".into(), "deck.html".into()))
+            split(".session/x/1.png"),
+            Ok((".session".into(), "x/1.png".into()))
         );
     }
 
@@ -169,13 +189,8 @@ mod tests {
     fn percent_decodes_like_the_frontend_encodes() {
         // src/lib/utils.ts encodes each segment with encodeURIComponent.
         assert_eq!(
-            split("/my%20deck/assets/caf%C3%A9%20photo.png"),
-            Ok(("my deck".into(), "assets/café photo.png".into()))
-        );
-        assert_eq!(
-            split("/a%2Fb/deck.html"),
-            Ok(("a".into(), "b/deck.html".into())),
-            "an encoded slash still splits; deck_dir then rejects odd ids"
+            split("/.file/my%20talks/assets/caf%C3%A9%20photo.png"),
+            Ok((".file".into(), "my talks/assets/café photo.png".into()))
         );
     }
 
@@ -217,34 +232,50 @@ mod tests {
         assert!(with_scripts("<p>no body", &[EDITOR_JS]).starts_with("<p>no body<script>"));
     }
 
+    /// As the frontend sends it: the absolute path without its leading slash.
+    fn url_path(path: &Path) -> String {
+        let path = path.to_string_lossy().replace('\\', "/");
+        path.trim_start_matches('/').to_string()
+    }
+
     #[test]
-    fn serves_files_inside_the_deck_only() {
-        let dir = std::env::temp_dir().join(format!("slopslide-proto-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("assets")).unwrap();
-        std::fs::write(dir.join("deck.html"), "<html>").unwrap();
-        std::fs::write(dir.join("assets/a.svg"), "<svg/>").unwrap();
+    fn serves_files_inside_the_open_workspace_only() {
+        let root = std::env::temp_dir().join(format!("slopslide-proto-{}", uuid::Uuid::new_v4()));
+        let ws = root.join("ws");
+        std::fs::create_dir_all(ws.join("talk/assets")).unwrap();
+        std::fs::write(ws.join("talk/q3.html"), "<html>").unwrap();
+        std::fs::write(ws.join("talk/assets/a.svg"), "<svg/>").unwrap();
+        std::fs::write(root.join("secret.txt"), "x").unwrap();
+        let open = OpenWorkspace::default();
+        let read = |path: PathBuf| read_in_workspace(&open, &url_path(&path));
 
         assert_eq!(
-            read_in_deck(&dir, "deck.html"),
+            read(ws.join("talk/q3.html")),
+            Err(StatusCode::FORBIDDEN),
+            "nothing is served without a workspace"
+        );
+        open.set(Some(ws.clone()));
+        assert_eq!(
+            read(ws.join("talk/q3.html")),
             Ok(("text/html; charset=utf-8", b"<html>".to_vec()))
         );
         assert_eq!(
-            read_in_deck(&dir, "assets/a.svg"),
+            read(ws.join("talk/assets/a.svg")),
             Ok(("image/svg+xml", b"<svg/>".to_vec()))
         );
+        assert_eq!(read(ws.join("talk/assets")), Err(StatusCode::NOT_FOUND));
         assert_eq!(
-            read_in_deck(&dir, "assets/missing.png"),
-            Err(StatusCode::NOT_FOUND)
+            read(ws.join("talk/missing.png")),
+            Err(StatusCode::FORBIDDEN),
+            "a missing file is not known to be inside"
         );
-        assert_eq!(read_in_deck(&dir, "assets"), Err(StatusCode::NOT_FOUND));
+        assert_eq!(read(root.join("secret.txt")), Err(StatusCode::FORBIDDEN));
         assert_eq!(
-            read_in_deck(&dir, "../outside.txt"),
+            read(ws.join("talk/../../secret.txt")),
             Err(StatusCode::FORBIDDEN)
         );
-        assert_eq!(read_in_deck(&dir, "/etc/hosts"), Err(StatusCode::FORBIDDEN));
-        assert_eq!(read_in_deck(&dir, ""), Err(StatusCode::FORBIDDEN));
 
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -254,14 +285,9 @@ mod tests {
         std::fs::create_dir_all(&deck).unwrap();
         std::fs::write(deck.join("deck.html"), "<html>").unwrap();
         let sessions = Sessions::new(&root.join("home"));
-        let session = sessions.start(&deck).unwrap();
+        let session = sessions.start(&deck.join("deck.html")).unwrap();
         std::fs::create_dir_all(session.join("sketches")).unwrap();
         std::fs::write(session.join("sketches/1.png"), "png").unwrap();
-        // As the frontend sends it: the absolute path without its leading slash.
-        let url_path = |path: &Path| {
-            let path = path.to_string_lossy().replace('\\', "/");
-            path.trim_start_matches('/').to_string()
-        };
 
         assert_eq!(
             read_in_session(&sessions, &url_path(&session.join("sketches/1.png"))),

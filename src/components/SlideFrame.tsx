@@ -28,7 +28,7 @@ interface SlideFrameProps {
 }
 
 /**
- * One slide of deck.html, rendered by the deck's own player in an iframe the size of the
+ * One slide of the deck file, rendered by the deck's own player in an iframe the size of the
  * slide's canvas, scaled to fill its container (which takes the slide's shape). When the slide changes, the new version loads behind the
  * current one and swaps in once painted, so edits stream in without white flashes.
  */
@@ -45,7 +45,8 @@ export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena
     const el = containerRef.current;
     if (!el) return;
     const observer = new ResizeObserver(([entry]) => {
-      if (entry) setScale(entry.contentRect.width / stageW);
+      // A collapsed panel measures 0 wide: keep the frames (and their loaded slides) as they are.
+      if (entry && entry.contentRect.width > 0) setScale(entry.contentRect.width / stageW);
     });
     observer.observe(el);
     return () => observer.disconnect();

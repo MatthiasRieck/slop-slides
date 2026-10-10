@@ -5,18 +5,39 @@ import type { Stroke } from "./ink";
 import type { Provider, ProviderInfo } from "./models";
 import type { SizeInfo, SlideSize } from "./slideSize";
 
-export interface DeckSummary {
-  id: string;
-  title: string;
-  slideCount: number;
-  firstSlide: string | null;
-  updatedMs: number;
-  /** The slide size, for the thumbnail's shape. */
-  size?: SizeInfo;
+/** What a workspace file is, which decides what it opens in (see src-tauri/src/workspace.rs). */
+export type FileKind = "directory" | "deck" | "slideshow" | "webpage" | "file";
+
+/** A file or folder in the open workspace. */
+export interface WorkspaceEntry {
+  name: string;
+  /** Workspace-relative, `/`-separated. */
+  path: string;
+  kind: FileKind;
+}
+
+/** A workspace file the user opened, with the viewer it needs. */
+export interface OpenedFile {
+  /** Workspace-relative, `/`-separated. */
+  path: string;
+  /** Absolute path: a deck's id, and what the viewer loads the file by. */
+  absolute: string;
+  kind: FileKind;
+}
+
+export interface WorkspaceInfo {
+  path: string;
+  name: string;
+}
+
+export interface RecentWorkspace {
+  path: string;
+  name: string;
+  openedMs: number;
 }
 
 export interface Slide {
-  /** The slide's `id` attribute in deck.html. */
+  /** The slide's `id` attribute in the deck file. */
   id: string;
   /** Changes when the slide's markup changes. */
   hash: string;
@@ -28,7 +49,7 @@ export interface Slide {
   moved: boolean;
 }
 
-/** A named group of slides, started by a marker between slides in deck.html. */
+/** A named group of slides, started by a marker between slides in the deck file. */
 export interface Section {
   /** Position among the deck's section markers, in document order. */
   index: number;
@@ -38,14 +59,16 @@ export interface Section {
 }
 
 export interface Deck {
+  /** The deck file's absolute path. */
   id: string;
   title: string;
+  /** The deck file's absolute path (the same as `id`). */
   path: string;
   slides: Slide[];
   sections: Section[];
   /** Changes when anything outside the slides (styles, fonts) changes. */
   shellHash: string;
-  /** Review marks the user drew, by slide id, stored in deck.html. */
+  /** Review marks the user drew, by slide id, stored in the deck file. */
   review?: Record<string, Stroke[]>;
   /** Id of the template the deck's design comes from (its `slopslide-template` meta). */
   template?: string | null;
@@ -83,7 +106,7 @@ export interface LintIssue {
   rule: string;
   severity: "error" | "warning";
   message: string;
-  /** 1-based line in deck.html. */
+  /** 1-based line in the deck file. */
   line: number;
   slide: string | null;
 }
@@ -117,22 +140,33 @@ export interface AgentEventEnvelope {
   event: AgentEvent;
 }
 
-export interface DeckChanged {
-  deckId: string;
+export interface WorkspaceChanged {
+  /** The workspace folder, as it was opened. */
+  root: string;
+  /** Workspace-relative, `/`-separated. */
   paths: string[];
 }
 
 export const api = {
-  listDecks: () => invoke<DeckSummary[]>("list_decks"),
-  /** With a template, the new deck takes its styles (and names it). */
+  /** Opens a folder: the file tree shows it and the app serves and watches its files. */
+  openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
+  closeWorkspace: () => invoke<void>("close_workspace"),
+  /** Folders opened before, newest first. */
+  recentWorkspaces: () => invoke<RecentWorkspace[]>("recent_workspaces"),
+  forgetWorkspace: (path: string) => invoke<void>("forget_workspace", { path }),
+  /** `~/Documents/SlopSlide`, where decks lived before workspaces. */
+  libraryFolder: () => invoke<string>("library_folder"),
+  /** One folder of the open workspace (`""` for its root), folders first. */
+  listDir: (path: string) => invoke<WorkspaceEntry[]>("list_dir", { path }),
+  /** A file of the open workspace, with the viewer it opens in. */
+  openFile: (path: string) => invoke<OpenedFile>("open_file", { path }),
+  /** Creates `<workspace>/<title>/deck.html`; with a template, it takes its styles (and names it). */
   createDeck: (title: string, template: string | null = null) => invoke<Deck>("create_deck", { title, template }),
   openDeck: (id: string) => invoke<Deck>("open_deck", { id }),
-  closeDeck: () => invoke<void>("close_deck"),
   loadDeck: (id: string) => invoke<Deck>("load_deck", { id }),
-  /** Stores the review marks (by slide id) in deck.html. */
+  /** Stores the review marks (by slide id) in the deck file. */
   saveReview: (id: string, review: Record<string, Stroke[]>) => invoke<void>("save_review", { id, review }),
   renameDeck: (id: string, title: string) => invoke<Deck>("rename_deck", { id, title }),
-  deleteDeck: (id: string) => invoke<void>("delete_deck", { id }),
   /** `slides` lists every slide id and section key (see `sectionKey`) in the new order. */
   reorderSlides: (id: string, slides: string[]) => invoke<Deck>("reorder_slides", { id, slides }),
   addSlide: (id: string, after: string | null) => invoke<CreatedSlide>("add_slide", { id, after }),

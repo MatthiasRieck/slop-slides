@@ -43,9 +43,9 @@ const frames = (container: HTMLElement) => [...container.querySelectorAll("ifram
 
 describe("SlideFrame", () => {
   it("renders the slide through the deck's player, scaled to fit", () => {
-    const { container } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" />);
+    const { container } = render(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" />);
     const [frame] = frames(container);
-    expect(frame!.getAttribute("src")).toBe("/__deck/talk/deck.html?embed&slide=intro&v=v1");
+    expect(frame!.getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?embed&slide=intro&v=v1");
     expect(frame!.title).toBe("intro");
     expect(frame!.getAttribute("sandbox")).toBe("allow-scripts");
     expect(frame!.style.width).toBe("1920px");
@@ -55,21 +55,34 @@ describe("SlideFrame", () => {
     expect(frame!.tabIndex).not.toBe(-1);
   });
 
+  it("keeps its loaded slide while its panel is collapsed to nothing", () => {
+    const { container } = render(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" thumbnail />);
+    const frame = frames(container)[0]!;
+    const report = (w: number) =>
+      act(() => observers[0]!.callback([{ target: container.firstElementChild, contentRect: { width: w } } as unknown as ResizeObserverEntry], {} as ResizeObserver));
+    report(0);
+    expect(frames(container)).toEqual([frame]);
+    expect(frame.style.transform).toBe("scale(0.5)");
+    report(192);
+    expect(frames(container)).toEqual([frame]);
+    expect(frame.style.transform).toBe("scale(0.1)");
+  });
+
   it("loads the slide editor (on the final animation frame) in edit mode", () => {
-    const { container, rerender } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" editKey="0" />);
-    expect(frames(container)[0]!.getAttribute("src")).toBe("/__deck/talk/deck.html?embed&slide=intro&v=v1&static&edit=0");
+    const { container, rerender } = render(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" editKey="0" />);
+    expect(frames(container)[0]!.getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?embed&slide=intro&v=v1&static&edit=0");
     expect(frames(container)[0]!.style.pointerEvents).toBe("auto");
     // A new key reloads the slide, e.g. after a refused save.
-    rerender(<SlideFrame deckId="talk" slideId="intro" version="v1" editKey="1" />);
+    rerender(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" editKey="1" />);
     expect(frames(container).map((f) => f.getAttribute("src"))).toContain(
-      "/__deck/talk/deck.html?embed&slide=intro&v=v1&static&edit=1",
+      "/__deck/.file/decks/talk/deck.html?embed&slide=intro&v=v1&static&edit=1",
     );
   });
 
   const arena = { width: 1200, height: 700 };
 
   it("lets the editor's preview fill the arena around the centered slide, keeping the slide's scale", () => {
-    const { container } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" editKey="0" arena={arena} />);
+    const { container } = render(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" editKey="0" arena={arena} />);
     const [frame] = frames(container);
     expect(frame!.style.width).toBe("2400px");
     expect(frame!.style.height).toBe("1400px");
@@ -81,7 +94,7 @@ describe("SlideFrame", () => {
 
   it("never makes the preview smaller than the slide", () => {
     const { container } = render(
-      <SlideFrame deckId="talk" slideId="intro" version="v1" editKey="0" arena={{ width: 100, height: 100 }} />,
+      <SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" editKey="0" arena={{ width: 100, height: 100 }} />,
     );
     const [frame] = frames(container);
     expect(frame!.style.width).toBe("1920px");
@@ -90,28 +103,28 @@ describe("SlideFrame", () => {
   });
 
   it("puts a preview given an arena on the pasteboard, in view and edit mode", () => {
-    const { container, rerender } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" arena={arena} />);
+    const { container, rerender } = render(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" arena={arena} />);
     const [viewer] = frames(container);
-    expect(viewer!.getAttribute("src")).toBe("/__deck/talk/deck.html?embed&slide=intro&v=v1&pan");
+    expect(viewer!.getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?embed&slide=intro&v=v1&pan");
     expect(viewer!.style.width).toBe("2400px");
     expect(viewer!.style.left).toBe("-120px");
     const box = container.firstElementChild as HTMLElement;
     expect(box.style.overflow).toBe("visible");
     // The slide may be panned anywhere, so nothing is painted where it started.
     expect(box.style.background).toBe("transparent");
-    rerender(<SlideFrame deckId="talk" slideId="intro" version="v1" editKey="0" arena={arena} />);
+    rerender(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" editKey="0" arena={arena} />);
     const editor = frames(container).at(-1)!;
-    expect(editor.getAttribute("src")).toBe("/__deck/talk/deck.html?embed&slide=intro&v=v1&static&pan&edit=0");
+    expect(editor.getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?embed&slide=intro&v=v1&static&pan&edit=0");
     expect(editor.style.width).toBe("2400px");
   });
 
   it("keeps a plain preview and thumbnails to the slide, clipped, with no pasteboard", () => {
-    const { container, rerender } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" />);
+    const { container, rerender } = render(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" />);
     const box = () => container.firstElementChild as HTMLElement;
     expect(frames(container)[0]!.getAttribute("src")).not.toContain("pan");
     expect(box().style.overflow).toBe("hidden");
     expect(box().style.background).toBe("rgb(0, 0, 0)");
-    rerender(<SlideFrame deckId="talk" slideId="intro" version="v1" thumbnail arena={arena} />);
+    rerender(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" thumbnail arena={arena} />);
     const thumb = frames(container).at(-1)!;
     expect(thumb.getAttribute("src")).not.toContain("pan");
     expect(thumb.style.width).toBe("1920px");
@@ -119,7 +132,7 @@ describe("SlideFrame", () => {
 
   it("renders slides of another size in their own shape", () => {
     const { container, rerender } = render(
-      <SlideFrame deckId="talk" slideId="intro" version="v1" size={{ width: 1080, height: 1350 }} />,
+      <SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" size={{ width: 1080, height: 1350 }} />,
     );
     const box = () => container.firstElementChild as HTMLElement;
     const [frame] = frames(container);
@@ -129,34 +142,34 @@ describe("SlideFrame", () => {
     // A 960 px wide box shows the 1080 px canvas at 960 / 1080.
     expect(frame!.style.transform).toBe(`scale(${960 / 1080})`);
     // Back to the default size: measured again against the new width.
-    rerender(<SlideFrame deckId="talk" slideId="intro" version="v1" />);
+    rerender(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" />);
     expect(box().style.aspectRatio).toBe("1920 / 1080");
     expect(frames(container)[0]!.style.transform).toBe("scale(0.5)");
   });
 
   it("waits for layout before loading anything", () => {
     globalThis.ResizeObserver = NoLayout;
-    const { container } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" />);
+    const { container } = render(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" />);
     expect(frames(container)).toEqual([]);
   });
 
   it("follows size changes", () => {
-    const { container } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" />);
+    const { container } = render(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" />);
     width = 1920;
     act(() => observers[0]!.callback([{ contentRect: { width } } as ResizeObserverEntry], {} as ResizeObserver));
     expect(frames(container)[0]!.style.transform).toBe("scale(1)");
   });
 
   it("stops observing when unmounted", () => {
-    const { unmount } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" />);
+    const { unmount } = render(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" />);
     unmount();
     expect(observers[0]!.disconnected).toBe(true);
   });
 
   it("thumbnails are static and inert", () => {
-    const { container } = render(<SlideFrame deckId="talk" slideId="#2" version="v1" thumbnail />);
+    const { container } = render(<SlideFrame deckId="/decks/talk/deck.html" slideId="#2" version="v1" thumbnail />);
     const [frame] = frames(container);
-    expect(frame!.getAttribute("src")).toBe("/__deck/talk/deck.html?embed&slide=%232&v=v1&static");
+    expect(frame!.getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?embed&slide=%232&v=v1&static");
     expect(frame!.tabIndex).toBe(-1);
     expect(frame!.style.pointerEvents).toBe("none");
   });
@@ -164,9 +177,9 @@ describe("SlideFrame", () => {
   it("loads a new version behind the current one and swaps once it has loaded", () => {
     const onFrameReady = vi.fn();
     const { container, rerender } = render(
-      <SlideFrame deckId="talk" slideId="intro" version="v1" onFrameReady={onFrameReady} />,
+      <SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" onFrameReady={onFrameReady} />,
     );
-    rerender(<SlideFrame deckId="talk" slideId="intro" version="v2" onFrameReady={onFrameReady} />);
+    rerender(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v2" onFrameReady={onFrameReady} />);
     const [current, next] = frames(container);
     expect(current!.getAttribute("src")).toContain("v=v1");
     expect(next!.getAttribute("src")).toContain("v=v2");
@@ -184,15 +197,15 @@ describe("SlideFrame", () => {
   });
 
   it("only keeps the newest pending version", () => {
-    const { container, rerender } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" />);
-    rerender(<SlideFrame deckId="talk" slideId="intro" version="v2" />);
-    rerender(<SlideFrame deckId="talk" slideId="intro" version="v3" />);
+    const { container, rerender } = render(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" />);
+    rerender(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v2" />);
+    rerender(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v3" />);
     expect(frames(container).map((f) => f.getAttribute("src")!.split("v=")[1])).toEqual(["v1", "v3"]);
   });
 
   it("reports the first load too", () => {
     const onFrameReady = vi.fn();
-    const { container } = render(<SlideFrame deckId="talk" slideId="intro" version="v1" onFrameReady={onFrameReady} />);
+    const { container } = render(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" onFrameReady={onFrameReady} />);
     fireEvent.load(frames(container)[0]!);
     expect(onFrameReady).toHaveBeenCalledWith(frames(container)[0]);
   });

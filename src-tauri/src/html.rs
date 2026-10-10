@@ -207,6 +207,18 @@ pub fn find_sections(html: &str) -> Vec<SectionSpan> {
     sections
 }
 
+/// Whether the page has the deck's slide container, `<main class="deck">`.
+pub(crate) fn has_deck_container(html: &str) -> bool {
+    let mut from = 0;
+    while let Some(at) = find_ci(html, from, "<main") {
+        if parse_tag(html, at).is_some_and(|t| t.name == "main" && has_class(&t, "deck")) {
+            return true;
+        }
+        from = at + 1;
+    }
+    false
+}
+
 pub(crate) fn has_class(tag: &Tag, class: &str) -> bool {
     tag.attrs
         .iter()

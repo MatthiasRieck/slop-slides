@@ -21,19 +21,75 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { api, errorMessage } from "../lib/api";
-import { cn, isMac } from "../lib/utils";
+import { api, errorMessage, type Deck } from "../lib/api";
+import { basename, cn, isMac } from "../lib/utils";
 import { lintFixPrompt, useApp, type StageView } from "../store";
 import { SlideSizeButton } from "./SlideSize";
 
+/** The workspace's bar: the folder, the open file, and the deck's tools when it is a deck. */
 export function TopBar() {
+  const workspace = useApp((s) => s.workspace);
   const deck = useApp((s) => s.deck);
-  const [title, setTitle] = useState(deck?.title ?? "");
+  const openedFile = useApp((s) => s.openedFile);
+  if (!workspace) return null;
+
+  return (
+    <header
+      data-tauri-drag-region
+      className={cn(
+        "flex h-12 shrink-0 items-center gap-2 border-b bg-background pr-3",
+        isMac ? "pl-[84px]" : "pl-3",
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => void useApp.getState().closeWorkspace()}
+        title={`Close ${workspace.name}`}
+        className="flex min-w-0 max-w-48 items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+      >
+        <ChevronLeft className="size-4 shrink-0" />
+        <span className="truncate">{workspace.name}</span>
+      </button>
+      {deck ? (
+        <DeckTools deck={deck} />
+      ) : (
+        <>
+          {openedFile && (
+            <>
+              <span className="text-muted-foreground/40">/</span>
+              <span title={openedFile.path} className="min-w-0 truncate px-1.5 text-sm font-medium">
+                {openedFile.path}
+              </span>
+            </>
+          )}
+          <div data-tauri-drag-region className="flex-1 self-stretch" />
+          {openedFile && <RevealButton path={openedFile.absolute} />}
+        </>
+      )}
+      <SidebarToggle />
+    </header>
+  );
+}
+
+function RevealButton({ path }: { path: string }) {
+  return (
+    <button
+      type="button"
+      onClick={() => void revealItemInDir(path)}
+      title={isMac ? "Show in Finder" : "Show in folder"}
+      className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+    >
+      <FolderOpen className="size-4" />
+    </button>
+  );
+}
+
+function DeckTools({ deck }: { deck: Deck }) {
+  const [title, setTitle] = useState(deck.title);
   // Escape blurs the field, and blur commits; this keeps that blur from saving the edit.
   const cancelled = useRef(false);
 
-  useEffect(() => setTitle(deck?.title ?? ""), [deck?.title]);
-  if (!deck) return null;
+  useEffect(() => setTitle(deck.title), [deck.title]);
 
   const commitTitle = async () => {
     if (cancelled.current) {
@@ -76,24 +132,9 @@ export function TopBar() {
   };
 
   return (
-    <header
-      data-tauri-drag-region
-      className={cn(
-        "flex h-12 shrink-0 items-center gap-2 border-b bg-background pr-3",
-        isMac ? "pl-[84px]" : "pl-3",
-      )}
-    >
-      <button
-        type="button"
-        onClick={() => void useApp.getState().closeDeck()}
-        title="All decks"
-        className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-      >
-        <ChevronLeft className="size-4" />
-        Decks
-      </button>
-      <RailToggle />
+    <>
       <span className="text-muted-foreground/40">/</span>
+      <RailToggle />
       <input
         value={title}
         onChange={(e) => setTitle(e.target.value)}
@@ -106,20 +147,14 @@ export function TopBar() {
             e.currentTarget.blur();
           }
         }}
+        title={deck.path}
         className="min-w-0 max-w-md flex-1 truncate rounded-md bg-transparent px-1.5 py-1 text-sm font-medium outline-none hover:bg-accent focus:bg-accent"
       />
       <div data-tauri-drag-region className="flex-1 self-stretch" />
       <SlideSizeButton />
       <LintStatus />
-      <ViewToggle />
-      <button
-        type="button"
-        onClick={() => void revealItemInDir(`${deck.path}/deck.html`)}
-        title="Show deck folder"
-        className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-      >
-        <FolderOpen className="size-4" />
-      </button>
+      <ViewToggle file={basename(deck.id)} />
+      <RevealButton path={deck.path} />
       <ExportMenu
         disabled={deck.slides.length === 0}
         onHtml={() => void exportDeck()}
@@ -134,8 +169,7 @@ export function TopBar() {
         <Play className="size-3.5 fill-current" />
         Present
       </button>
-      <ChatToggle />
-    </header>
+    </>
   );
 }
 
@@ -158,18 +192,18 @@ function RailToggle() {
   );
 }
 
-/** Shows or hides the chat panel on the right. */
-function ChatToggle() {
-  const chatOpen = useApp((s) => s.chatOpen);
-  const Icon = chatOpen ? PanelRightClose : PanelRightOpen;
-  const label = chatOpen ? "Hide chat" : "Show chat";
+/** Shows or hides the sidebar (chat, files) on the right. */
+function SidebarToggle() {
+  const sidebarOpen = useApp((s) => s.sidebarOpen);
+  const Icon = sidebarOpen ? PanelRightClose : PanelRightOpen;
+  const label = sidebarOpen ? "Hide sidebar" : "Show sidebar";
   return (
     <button
       type="button"
       title={label}
       aria-label={label}
-      aria-pressed={chatOpen}
-      onClick={() => useApp.getState().setChatOpen(!chatOpen)}
+      aria-pressed={sidebarOpen}
+      onClick={() => useApp.getState().setSidebarOpen(!sidebarOpen)}
       className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
     >
       <Icon className="size-4" />
@@ -248,12 +282,12 @@ function ExportItem(props: { icon: typeof Share; label: string; hint: string; on
   );
 }
 
-const VIEWS: { id: StageView; label: string; title: string; icon: typeof Code2 }[] = [
-  { id: "slides", label: "Slides", title: "Show the rendered slide", icon: Presentation },
-  { id: "code", label: "HTML", title: "Show deck.html, scrolled to the selected slide", icon: Code2 },
+const VIEWS: { id: StageView; label: string; title: (file: string) => string; icon: typeof Code2 }[] = [
+  { id: "slides", label: "Slides", title: () => "Show the rendered slide", icon: Presentation },
+  { id: "code", label: "HTML", title: (file) => `Show ${file}, scrolled to the selected slide`, icon: Code2 },
 ];
 
-function ViewToggle() {
+function ViewToggle({ file }: { file: string }) {
   const view = useApp((s) => s.view);
   const codeDirty = useApp((s) => s.codeDirty);
   return (
@@ -262,7 +296,7 @@ function ViewToggle() {
         <button
           key={id}
           type="button"
-          title={title}
+          title={title(file)}
           aria-pressed={view === id}
           onClick={() => useApp.getState().setView(id)}
           className={cn(
@@ -281,15 +315,16 @@ function ViewToggle() {
   );
 }
 
-/** Lint result for deck.html. When it has issues, clicking puts fix instructions in the chat. */
+/** Lint result for the deck file. When it has issues, clicking puts fix instructions in the chat. */
 export function LintStatus() {
   const lint = useApp((s) => s.lint);
   const running = useApp((s) => s.running);
+  const file = useApp((s) => basename(s.deck?.id ?? "") || "deck.html");
 
   if (lint === null) {
     return (
       <span
-        title="Checking deck.html…"
+        title={`Checking ${file}…`}
         className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground"
       >
         <Loader2 className="size-3.5 animate-spin" />
@@ -304,7 +339,7 @@ export function LintStatus() {
     return (
       <button
         type="button"
-        title="deck.html passes lint. Click to check again."
+        title={`${file} passes lint. Click to check again.`}
         onClick={() => void useApp.getState().refreshLint()}
         className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-emerald-600 hover:bg-accent"
       >
@@ -331,7 +366,7 @@ export function LintStatus() {
       type="button"
       disabled={running}
       title={`${details}\n\nClick to ask the agent to fix ${lint.length === 1 ? "it" : "them"}.`}
-      onClick={() => useApp.getState().fillComposer(lintFixPrompt(lint))}
+      onClick={() => useApp.getState().fillComposer(lintFixPrompt(lint, file))}
       className={cn(
         "flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium hover:bg-accent disabled:opacity-50",
         errors > 0 ? "text-destructive" : "text-amber-600",

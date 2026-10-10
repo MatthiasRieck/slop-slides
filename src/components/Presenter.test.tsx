@@ -27,20 +27,20 @@ function fromFrame(data: unknown, source: MessageEventSource | null = frame().co
 describe("Presenter", () => {
   it("plays the whole deck from the selected slide", () => {
     render(<Presenter />);
-    expect(frame().getAttribute("src")).toBe("/__deck/talk/deck.html?v=shell-1&show#outro");
+    expect(frame().getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?v=shell-1&show#outro");
     expect(frame().getAttribute("sandbox")).toBe("allow-scripts");
   });
 
   it("encodes positional slide ids in the hash", () => {
     useApp.setState({ selected: "#2" });
     render(<Presenter />);
-    expect(frame().getAttribute("src")).toBe("/__deck/talk/deck.html?v=shell-1&show#%232");
+    expect(frame().getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?v=shell-1&show#%232");
   });
 
   it("starts at the beginning without a selection", () => {
     useApp.setState({ selected: null });
     render(<Presenter />);
-    expect(frame().getAttribute("src")).toBe("/__deck/talk/deck.html?v=shell-1&show");
+    expect(frame().getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?v=shell-1&show");
   });
 
   it("does not restart when the editor selection follows the show", () => {

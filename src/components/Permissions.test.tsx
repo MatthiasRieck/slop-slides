@@ -27,7 +27,7 @@ describe("permission picker", () => {
     fireEvent.click(screen.getByRole("button", { name: /Approve for me/ }));
     expect(useApp.getState().permissionMode).toBe("autoReview");
     expect(picker().textContent).toContain("Approve for me");
-    expect(invoke).toHaveBeenCalledWith("codex_permission_modes", { id: "talk" });
+    expect(invoke).toHaveBeenCalledWith("codex_permission_modes", { id: "/decks/talk/deck.html" });
     act(() => useApp.setState({ selection: { ...useApp.getState().selection, provider: "claude" } }));
     expect(screen.queryByRole("button", { name: "Codex permissions" })).toBeNull();
   });
@@ -91,14 +91,14 @@ describe("approval card", () => {
     const button = screen.getByRole("button", { name: label });
     fireEvent.click(button); fireEvent.click(button);
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
-    expect(invoke).toHaveBeenCalledWith("respond_approval", { deckId: "talk", id: "r1", decision: label === "Deny" ? "decline" : "accept" });
+    expect(invoke).toHaveBeenCalledWith("respond_approval", { deckId: "/decks/talk/deck.html", id: "r1", decision: label === "Deny" ? "decline" : "accept" });
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Allow for session" })).toBeNull();
   });
   it("offers session approval only when supplied by Codex", async () => {
     const p = part(); p.approval.decisions.push("acceptForSession");
     render(<ApprovalCard part={p} />); fireEvent.click(screen.getByRole("button", { name: "Allow for session" }));
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("respond_approval", { deckId: "talk", id: "r1", decision: "acceptForSession" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("respond_approval", { deckId: "/decks/talk/deck.html", id: "r1", decision: "acceptForSession" }));
   });
   it("shows an MCP tool confirmation and sends the user's decision through the existing card", async () => {
     const p = part();
@@ -110,7 +110,7 @@ describe("approval card", () => {
     expect(screen.getByText(/This checks the presentation/).textContent).toContain("\n");
     expect(screen.getByText(/tool_params/).textContent).toContain("slopslide");
     fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("respond_approval", { deckId: "talk", id: "r1", decision: "accept" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("respond_approval", { deckId: "/decks/talk/deck.html", id: "r1", decision: "accept" }));
     expect(screen.queryByRole("button", { name: "Allow for session" })).toBeNull();
   });
   it("stops the turn without sending an approval", () => {

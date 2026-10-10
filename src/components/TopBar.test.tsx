@@ -18,6 +18,9 @@ import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { TopBar } from "./TopBar";
 
+const WORKSPACE = { path: "/decks", name: "decks" };
+const OPENED = { path: "talk/deck.html", absolute: "/decks/talk/deck.html", kind: "deck" as const };
+
 const toggle = (name: "Slides" | "HTML") => screen.getByRole("button", { name }) as HTMLButtonElement;
 
 beforeEach(() => {
@@ -25,7 +28,7 @@ beforeEach(() => {
   save.mockReset();
   openDialog.mockReset();
   revealItemInDir.mockReset();
-  useApp.setState({ deck: deckFor(DECK_HTML), view: "slides", chatOpen: true, railOpen: true, codeDirty: false, presenting: false, error: null, imageExport: null });
+  useApp.setState({ workspace: WORKSPACE, openedFile: OPENED, deck: deckFor(DECK_HTML), view: "slides", sidebarOpen: true, railOpen: true, codeDirty: false, presenting: false, error: null, imageExport: null });
 });
 
 describe("slide rail toggle", () => {
@@ -42,17 +45,17 @@ describe("slide rail toggle", () => {
   });
 });
 
-describe("chat toggle", () => {
-  it("hides and shows the chat panel", () => {
+describe("sidebar toggle", () => {
+  it("hides and shows the sidebar", () => {
     render(<TopBar />);
-    const hide = screen.getByRole("button", { name: "Hide chat" });
+    const hide = screen.getByRole("button", { name: "Hide sidebar" });
     expect(hide.getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(hide);
-    expect(useApp.getState().chatOpen).toBe(false);
-    const show = screen.getByRole("button", { name: "Show chat" });
+    expect(useApp.getState().sidebarOpen).toBe(false);
+    const show = screen.getByRole("button", { name: "Show sidebar" });
     expect(show.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(show);
-    expect(useApp.getState().chatOpen).toBe(true);
+    expect(useApp.getState().sidebarOpen).toBe(true);
   });
 });
 
@@ -102,7 +105,7 @@ describe("deck title", () => {
     fireEvent.change(titleInput(), { target: { value: "  Board meeting " } });
     titleInput().focus();
     await act(async () => fireEvent.keyDown(titleInput(), { key: "Enter" }));
-    expect(invoke).toHaveBeenCalledWith("rename_deck", { id: "talk", title: "Board meeting" });
+    expect(invoke).toHaveBeenCalledWith("rename_deck", { id: "/decks/talk/deck.html", title: "Board meeting" });
     expect(useApp.getState().deck!.title).toBe("Board meeting");
     expect(titleInput().value).toBe("Board meeting");
   });
@@ -112,7 +115,7 @@ describe("deck title", () => {
     render(<TopBar />);
     fireEvent.change(titleInput(), { target: { value: "New" } });
     await act(async () => fireEvent.blur(titleInput()));
-    expect(invoke).toHaveBeenCalledWith("rename_deck", { id: "talk", title: "New" });
+    expect(invoke).toHaveBeenCalledWith("rename_deck", { id: "/decks/talk/deck.html", title: "New" });
   });
 
   it("Escape restores the saved title without renaming", async () => {
@@ -133,7 +136,7 @@ describe("deck title", () => {
     await act(async () => fireEvent.keyDown(titleInput(), { key: "Escape" }));
     fireEvent.change(titleInput(), { target: { value: "Second try" } });
     await act(async () => fireEvent.blur(titleInput()));
-    expect(invoke).toHaveBeenCalledWith("rename_deck", { id: "talk", title: "Second try" });
+    expect(invoke).toHaveBeenCalledWith("rename_deck", { id: "/decks/talk/deck.html", title: "Second try" });
   });
 
   it.each([[""], ["   "], ["Talk"], [" Talk "]])("does not rename to %j", async (value) => {
@@ -172,7 +175,7 @@ describe("toolbar actions", () => {
     render(<TopBar />);
     await exportAs("HTML file");
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: "Talk.html" }));
-    expect(invoke).toHaveBeenCalledWith("export_deck", { id: "talk", dest: "/Users/me/Desktop/Talk.html" });
+    expect(invoke).toHaveBeenCalledWith("export_deck", { id: "/decks/talk/deck.html", dest: "/Users/me/Desktop/Talk.html" });
     expect(revealItemInDir).toHaveBeenCalledWith("/Users/me/Desktop/Talk.html");
   });
 
@@ -229,7 +232,7 @@ describe("toolbar actions", () => {
     render(<TopBar />);
     await exportAs("PNG images");
     expect(openDialog).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
-    expect(invoke).toHaveBeenCalledWith("create_image_export_dir", { id: "talk", parent: "/Users/me/Desktop" });
+    expect(invoke).toHaveBeenCalledWith("create_image_export_dir", { id: "/decks/talk/deck.html", parent: "/Users/me/Desktop" });
     expect(useApp.getState().imageExport).toEqual({ dir: "/Users/me/Desktop/Talk", slides: ["intro", "#2", "outro"] });
     expect(screen.queryByRole("menu")).toBeNull();
   });
@@ -264,24 +267,36 @@ describe("toolbar actions", () => {
     expect(presentButton().disabled).toBe(true);
   });
 
-  it("reveals deck.html in the file manager", () => {
+  it("reveals the deck file in the file manager", () => {
     render(<TopBar />);
-    fireEvent.click(screen.getByTitle("Show deck folder"));
+    fireEvent.click(screen.getByTitle("Show in folder"));
     expect(revealItemInDir).toHaveBeenCalledWith("/decks/talk/deck.html");
   });
 
-  it("goes back to the deck library", async () => {
+  it("closes the folder, back to the start screen", async () => {
     invoke.mockResolvedValue(undefined);
     render(<TopBar />);
-    await act(async () => fireEvent.click(screen.getByTitle("All decks")));
-    expect(invoke).toHaveBeenCalledWith("close_deck");
+    await act(async () => fireEvent.click(screen.getByTitle("Close decks")));
+    expect(invoke).toHaveBeenCalledWith("close_workspace");
     expect(useApp.getState().deck).toBeNull();
+    expect(useApp.getState().workspace).toBeNull();
   });
 
-  it("renders nothing without a deck", () => {
-    useApp.setState({ deck: null });
+  it("renders nothing without a workspace", () => {
+    useApp.setState({ workspace: null });
     const { container } = render(<TopBar />);
     expect(container.innerHTML).toBe("");
+  });
+
+  it("shows the open page's path and no deck tools when it is not a deck", () => {
+    useApp.setState({ deck: null, openedFile: { path: "site/index.html", absolute: "/decks/site/index.html", kind: "webpage" } });
+    render(<TopBar />);
+    expect(screen.getByText("site/index.html")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Present/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Hide slides" })).toBeNull();
+    fireEvent.click(screen.getByTitle("Show in folder"));
+    expect(revealItemInDir).toHaveBeenCalledWith("/decks/site/index.html");
+    expect(screen.getByRole("button", { name: "Hide sidebar" })).toBeTruthy();
   });
 });
 

@@ -484,7 +484,9 @@ mod tests {
             r#"{"ps":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/s","args":["${CLAUDE_PLUGIN_ROOT}"]}}"#,
         );
         let ext = Extensions::load(&home2.0, &ws2.0);
-        let root = home2.0.join("plugins/p").to_string_lossy().into_owned();
+        // The folder as listed, with the platform's separators.
+        let root = ext.plugins[0].to_string_lossy().into_owned();
+        assert_eq!(ext.plugins[0], home2.0.join("plugins").join("p"));
         assert_eq!(
             ext.plugin_mcp_servers["ps"]["command"],
             format!("{root}/bin/s")

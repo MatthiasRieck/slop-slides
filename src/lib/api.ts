@@ -219,6 +219,7 @@ export const api = {
     rect: { x: number; y: number; width: number; height: number },
     viewport: { width: number; height: number },
   ) => invoke<string>("capture_sketch", { id, rect, viewport }),
+  sessionProvider: (id: string) => invoke<Provider | null>("session_provider", { id }),
   loadChat: (id: string) => invoke<unknown>("load_chat", { id }),
   saveChat: (id: string, chat: unknown) => invoke<void>("save_chat", { id, chat }),
   resetChat: (id: string) => invoke<void>("reset_chat", { id }),

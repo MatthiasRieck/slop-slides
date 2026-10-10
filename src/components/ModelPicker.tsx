@@ -12,7 +12,7 @@ import {
   type ProviderModel,
 } from "../lib/models";
 import { cn, isMac } from "../lib/utils";
-import { useApp } from "../store";
+import { chatProvider, useApp } from "../store";
 import { ProviderIcon } from "./ProviderIcon";
 import { ComposerPopover } from "./ComposerPopover";
 
@@ -72,6 +72,7 @@ export function ModelPicker() {
 
 function ModelMenu({ onClose }: { onClose: () => void }) {
   const selection = useApp((s) => s.selection);
+  const locked = useApp(chatProvider);
   const favorites = useApp((s) => s.favoriteModels);
   const providers = useApp((s) => s.providers);
   const [filter, setFilter] = useState<Filter>(selection.provider);
@@ -82,8 +83,10 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
   const info = (provider: Provider) => providers?.find((p) => p.id === provider);
 
   const allRows = useMemo<Row[]>(
-    () => (providers ?? []).flatMap((p) => p.models.map((m) => ({ ...m, provider: p.id }))),
-    [providers],
+    () => (providers ?? [])
+      .filter((p) => !locked || p.id === locked)
+      .flatMap((p) => p.models.map((m) => ({ ...m, provider: p.id }))),
+    [providers, locked],
   );
 
   const rows = useMemo(() => {
@@ -163,13 +166,14 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
             <button
               key={item.id}
               type="button"
-              title={item.title}
+              disabled={!!locked && item.id !== "favorites" && item.id !== locked}
+              title={locked && item.id !== "favorites" && item.id !== locked ? "Start a new chat to change provider" : item.title}
               onClick={() => {
                 setFilter(item.id);
                 setQuery("");
               }}
               className={cn(
-                "relative flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground",
+                "relative flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed",
                 selected && "bg-accent text-foreground",
               )}
             >
@@ -182,6 +186,7 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
         })}
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {locked && <p className="shrink-0 border-b px-3 py-2 text-xs text-muted-foreground">Start a new chat to change provider.</p>}
         <label className="flex shrink-0 items-center gap-2 border-b px-3 focus-within:border-primary">
           <Search className="size-3.5 shrink-0 text-muted-foreground" />
           <input

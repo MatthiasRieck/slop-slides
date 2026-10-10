@@ -4,6 +4,7 @@
 //! ```text
 //! ~/.slopslides/sessions/<session-id>/
 //!   meta.json        {"deck": "<deck file>"}: the deck the session belongs to
+//!   provider.json    the provider chosen for this conversation
 //!   chat.json        the conversation as the chat panel shows it
 //!   *-session        each agent provider's resumable session id
 //!   snapshots/       copies of the deck file from before agent turns and destructive edits
@@ -24,12 +25,51 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 
+use crate::agent::Provider;
 use crate::deck::DECK_FILE;
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 const SESSIONS_DIR: &str = "sessions";
 const META_FILE: &str = "meta.json";
 pub const CHAT_FILE: &str = "chat.json";
+
+/// Restores a provider lock, including conversations saved before locks were recorded.
+pub fn provider(session: &Path) -> Result<Option<Provider>> {
+    match fs::read(session.join("provider.json")) {
+        Ok(raw) => {
+            return serde_json::from_slice(&raw)
+                .map(Some)
+                .map_err(|e| Error::msg(e.to_string()))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    let chat = crate::deck::load_chat(Some(session))?;
+    if let Some(reply) = chat
+        .as_array()
+        .and_then(|messages| messages.iter().rev().find(|m| m["role"] == "assistant"))
+    {
+        return match reply.get("provider") {
+            Some(value) => serde_json::from_value(value.clone())
+                .map(Some)
+                .map_err(|e| Error::msg(e.to_string())),
+            None => Ok(Some(Provider::Claude)),
+        };
+    }
+    Ok(Provider::ALL
+        .into_iter()
+        .find(|p| crate::deck::read_session(session, p.session_file()).is_some()))
+}
+
+/// Called under the agent's running lock before launching a turn.
+pub fn claim_provider(session: &Path, requested: Provider) -> Result<()> {
+    if provider(session)?.is_some_and(|p| p != requested) {
+        return Err(Error::msg("Start a new chat to change provider."));
+    }
+    let raw = serde_json::to_vec(&requested).map_err(|e| Error::msg(e.to_string()))?;
+    fs::write(session.join("provider.json"), raw)?;
+    Ok(())
+}
 
 /// All sessions, under the app's home folder.
 #[derive(Debug, Clone)]
@@ -142,6 +182,48 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn provider_is_locked_until_a_new_session_starts() {
+        let t = Temp::new();
+        let deck = t.deck("a");
+        let session = t.sessions().start(&deck).unwrap();
+        assert_eq!(provider(&session).unwrap(), None);
+        claim_provider(&session, Provider::Codex).unwrap();
+        claim_provider(&session, Provider::Codex).unwrap();
+        assert!(claim_provider(&session, Provider::Claude).is_err());
+        assert_eq!(provider(&session).unwrap(), Some(Provider::Codex));
+        let next = t.sessions().start(&deck).unwrap();
+        claim_provider(&next, Provider::Claude).unwrap();
+    }
+
+    #[test]
+    fn legacy_chats_use_the_last_reply_provider_or_claude() {
+        let t = Temp::new();
+        let session = t.sessions().start(&t.deck("a")).unwrap();
+        crate::deck::save_chat(
+            &session,
+            &json!([
+                {"role": "assistant", "provider": "claude"},
+                {"role": "assistant", "provider": "copilot"}
+            ]),
+        )
+        .unwrap();
+        assert_eq!(provider(&session).unwrap(), Some(Provider::Copilot));
+        assert!(claim_provider(&session, Provider::Codex).is_err());
+        crate::deck::save_chat(&session, &json!([{"role": "assistant"}])).unwrap();
+        assert_eq!(provider(&session).unwrap(), Some(Provider::Claude));
+    }
+
+    #[test]
+    fn provider_can_be_restored_from_a_legacy_session_id() {
+        let t = Temp::new();
+        let session = t.sessions().start(&t.deck("a")).unwrap();
+        crate::deck::write_session(&session, Provider::Codex.session_file(), Some("thread"))
+            .unwrap();
+        assert_eq!(provider(&session).unwrap(), Some(Provider::Codex));
+        assert!(claim_provider(&session, Provider::Claude).is_err());
     }
 
     #[test]

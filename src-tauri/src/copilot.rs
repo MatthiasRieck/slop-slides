@@ -6,6 +6,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -16,6 +17,7 @@ use tokio::sync::watch;
 use crate::agent::{AgentEvent, Outcome, SYSTEM_PROMPT};
 use crate::error::{Error, Result};
 use crate::mcp;
+use crate::permissions::{Approval, Approvals, Choices, Decision, PermissionMode};
 use crate::providers::ModelInfo;
 
 const METHOD_NOT_FOUND: i64 = -32601;
@@ -237,6 +239,9 @@ pub struct TurnArgs<'a> {
     pub session: Option<&'a str>,
     /// Summarize the session's history instead of sending `prompt`.
     pub compact: bool,
+    pub workspace: &'a str,
+    pub mode: PermissionMode,
+    pub approvals: Arc<Approvals>,
 }
 
 /// Runs one turn. `on_session` persists the session id as soon as it is known.
@@ -261,7 +266,7 @@ pub async fn run_turn(
                 "type": "stdio",
                 "command": args.lint_server,
                 "args": [mcp::FLAG, args.dir],
-                "tools": [mcp::TOOL, mcp::OPEN_TOOL],
+                "tools": ["*"],
             }
         },
     });
@@ -339,6 +344,7 @@ pub async fn run_turn(
         return Ok(Outcome::Done);
     }
 
+    let (run, mut answers) = args.approvals.start(args.workspace);
     emit(&AgentEvent::Thinking);
     conn.request(
         "session.send",
@@ -348,6 +354,16 @@ pub async fn run_turn(
 
     loop {
         let message = tokio::select! {
+            biased;
+            Some(answer) = answers.recv() => {
+                conn.notify_request(
+                    "session.permissions.handlePendingPermissionRequest",
+                    json!({ "sessionId": session_id, "requestId": answer.wire_id, "result": answer.payload }),
+                )
+                .await?;
+                emit(&AgentEvent::ApprovalResolved { id: answer.id });
+                continue;
+            }
             message = conn.next() => message?,
             _ = cancel.changed() => {
                 let _ = conn
@@ -370,12 +386,25 @@ pub async fn run_turn(
         }
         let event = &message["params"]["event"];
         if event["type"] == "permission.requested" {
-            if let Some((request_id, result)) = permission_decision(&event["data"], args.dir) {
-                conn.notify_request(
-                    "session.permissions.handlePendingPermissionRequest",
-                    json!({ "sessionId": session_id, "requestId": request_id, "result": result }),
-                )
-                .await?;
+            match permission(&event["data"], args.dir, args.mode) {
+                Some((request_id, Permission::Answer(result))) => {
+                    conn.notify_request(
+                        "session.permissions.handlePendingPermissionRequest",
+                        json!({ "sessionId": session_id, "requestId": request_id, "result": result }),
+                    )
+                    .await?;
+                }
+                Some((request_id, Permission::Ask(approval, choices))) => {
+                    run.ask(json!(request_id), &approval, choices);
+                    emit(&AgentEvent::ApprovalRequested { approval });
+                }
+                None => {}
+            }
+            continue;
+        }
+        if event["type"] == "permission.completed" {
+            if let Some(id) = run.resolved(&event["data"]["requestId"]) {
+                emit(&AgentEvent::ApprovalResolved { id });
             }
             continue;
         }
@@ -405,30 +434,107 @@ async fn detach(conn: &mut Conn, session_id: &str) {
     .await;
 }
 
-/// Read and write within the workspace, fetch URLs, and use the app's MCP tools; no shell, other MCP servers, or extensions.
-fn permission_decision(data: &Value, dir: &Path) -> Option<(String, Value)> {
+enum Permission {
+    /// Answered without the user.
+    Answer(Value),
+    /// The user decides.
+    Ask(Approval, Choices),
+}
+
+/// How to answer a permission request. Reading and writing inside the workspace, fetching
+/// URLs, and the app's MCP tools never ask; under Full access nothing does. Anything else
+/// (shell commands, files outside the workspace, other tools) asks the user.
+fn permission(data: &Value, dir: &Path, mode: PermissionMode) -> Option<(String, Permission)> {
     if data["resolvedByHook"].as_bool().unwrap_or(false) {
         return None;
     }
     let request_id = data["requestId"].as_str()?.to_string();
     let request = &data["permissionRequest"];
-    let allowed = match request["kind"].as_str() {
-        Some("url") => true,
-        Some("read" | "write") => request["fileName"]
+    let kind = request["kind"].as_str().unwrap_or_default();
+    let inside = |key: &str| {
+        request[key]
             .as_str()
-            .is_some_and(|file| is_inside(dir, Path::new(file))),
-        Some("mcp") => request["serverName"] == mcp::SERVER,
+            .is_some_and(|file| is_inside(dir, Path::new(file)))
+    };
+    let allowed = match kind {
+        "url" => true,
+        "read" => inside("path"),
+        "write" => inside("fileName"),
+        "mcp" => request["serverName"] == mcp::SERVER,
         _ => false,
     };
-    let result = if allowed {
-        json!({ "kind": "approve-once" })
-    } else {
-        json!({
-            "kind": "reject",
-            "feedback": "SlopSlide only allows reading files, reading and editing files inside the workspace, and fetching URLs, and lint_deck/open_file.",
-        })
+    if allowed || mode == PermissionMode::FullAccess {
+        return Some((
+            request_id,
+            Permission::Answer(json!({ "kind": "approve-once" })),
+        ));
+    }
+    let text = |key: &str| request[key].as_str().map(str::to_string);
+    let session_approval =
+        |approval: Value| json!({ "kind": "approve-for-session", "approval": approval });
+    let can_remember = request["canOfferSessionApproval"].as_bool().unwrap_or(true);
+    let (title, details, session) = match kind {
+        "shell" => {
+            let commands: Vec<&str> = request["commands"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c["identifier"].as_str())
+                .collect();
+            let session = (can_remember && !commands.is_empty()).then(|| {
+                session_approval(json!({ "kind": "commands", "commandIdentifiers": commands }))
+            });
+            ("Run a command", text("fullCommandText"), session)
+        }
+        "write" => {
+            let details = text("fileName").map(|file| match request["diff"].as_str() {
+                Some(diff) if !diff.is_empty() => format!("{file}\n\n{diff}"),
+                _ => file,
+            });
+            let session = can_remember.then(|| session_approval(json!({ "kind": "write" })));
+            ("Change files", details, session)
+        }
+        "read" => (
+            "Read files",
+            text("path"),
+            Some(session_approval(json!({ "kind": "read" }))),
+        ),
+        "mcp" => {
+            let details = json!({
+                "server": request["serverName"],
+                "tool": request["toolName"],
+                "arguments": request["args"],
+            });
+            let session = session_approval(json!({
+                "kind": "mcp",
+                "serverName": request["serverName"],
+                "toolName": request["toolName"],
+            }));
+            (
+                "Use an MCP tool",
+                serde_json::to_string_pretty(&details).ok(),
+                Some(session),
+            )
+        }
+        _ => ("Use a tool", None, None),
     };
-    Some((request_id, result))
+    let details =
+        details.unwrap_or_else(|| serde_json::to_string_pretty(request).unwrap_or_default());
+    let mut choices = Choices::from([
+        ("accept", json!({ "kind": "approve-once" })),
+        (
+            "decline",
+            json!({ "kind": "reject", "feedback": "The user declined this request." }),
+        ),
+    ]);
+    let mut decisions = vec![Decision::Accept];
+    if let Some(session) = session {
+        choices.insert("acceptForSession", session);
+        decisions.push(Decision::AcceptForSession);
+    }
+    decisions.push(Decision::Decline);
+    let approval = Approval::new(title, text("intention"), details, decisions);
+    Some((request_id, Permission::Ask(approval, choices)))
 }
 
 fn is_inside(dir: &Path, file: &Path) -> bool {
@@ -595,13 +701,26 @@ fn tool_presentation(name: &str, args: &Value) -> (String, Value) {
         "grep" | "glob" => ("Grep".into(), json!({ "pattern": args["pattern"] })),
         "web_fetch" => ("WebFetch".into(), json!({ "url": args["url"] })),
         "web_search" => ("WebSearch".into(), json!({ "query": args["query"] })),
-        _ => (name.to_string(), args.clone()),
+        _ => (mcp::display_name(name).to_string(), args.clone()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shows_the_apps_tools_by_their_own_names() {
+        let (name, input) = tool_presentation("slopslide-lint_deck", &json!({"path":"deck.html"}));
+        assert_eq!(
+            (name.as_str(), &input),
+            ("lint_deck", &json!({"path":"deck.html"}))
+        );
+        assert_eq!(
+            tool_presentation("github-push", &json!({})).0,
+            "github-push"
+        );
+    }
 
     #[test]
     fn maps_streamed_turn() {
@@ -667,55 +786,109 @@ mod tests {
         );
     }
 
+    fn decide(request: Value, mode: PermissionMode) -> Permission {
+        let data = json!({"requestId":"r","permissionRequest":request});
+        permission(&data, Path::new("/decks/pitch"), mode)
+            .unwrap()
+            .1
+    }
+
+    fn kind(request: Value) -> Value {
+        match decide(request, PermissionMode::Ask) {
+            Permission::Answer(result) => result["kind"].clone(),
+            Permission::Ask(..) => json!("ask"),
+        }
+    }
+
     #[test]
-    fn decides_permissions() {
-        let dir = Path::new("/decks/pitch");
-        let decide = |request: Value| {
-            permission_decision(&json!({"requestId":"r","permissionRequest":request}), dir)
-                .unwrap()
-                .1["kind"]
-                .clone()
+    fn approves_workspace_work_and_the_apps_tools() {
+        for request in [
+            json!({"kind":"read","path":"notes.md"}),
+            json!({"kind":"read","path":"/decks/pitch/assets/logo.png"}),
+            json!({"kind":"write","fileName":"/decks/pitch/deck.html"}),
+            json!({"kind":"write","fileName":"deck.html"}),
+            json!({"kind":"write","fileName":"talks/q3.html"}),
+            json!({"kind":"url","url":"https://example.com"}),
+            json!({"kind":"mcp","serverName":"slopslide","toolName":"open_file"}),
+            json!({"kind":"mcp","serverName":"slopslide","toolName":"lint_deck"}),
+        ] {
+            assert_eq!(kind(request.clone()), "approve-once", "{request}");
+        }
+    }
+
+    #[test]
+    fn asks_for_everything_else() {
+        for request in [
+            json!({"kind":"write","fileName":"../other/deck.html"}),
+            json!({"kind":"read","path":"../secret.txt"}),
+            json!({"kind":"read","path":"/etc/hosts"}),
+            json!({"kind":"shell","fullCommandText":"rm -rf /"}),
+            json!({"kind":"mcp","serverName":"github","toolName":"push"}),
+            json!({"kind":"custom-tool","toolName":"deploy"}),
+        ] {
+            assert_eq!(kind(request.clone()), "ask", "{request}");
+        }
+    }
+
+    #[test]
+    fn full_access_approves_everything() {
+        let shell = json!({"kind":"shell","fullCommandText":"rm -rf /"});
+        assert!(matches!(
+            decide(shell, PermissionMode::FullAccess),
+            Permission::Answer(result) if result["kind"] == "approve-once"
+        ));
+    }
+
+    #[test]
+    fn hook_resolved_requests_are_left_alone() {
+        let data =
+            json!({"requestId":"r","resolvedByHook":true,"permissionRequest":{"kind":"shell"}});
+        assert!(permission(&data, Path::new("/d"), PermissionMode::Ask).is_none());
+    }
+
+    #[test]
+    fn approvals_describe_the_request_and_remember_it_for_the_session() {
+        let shell = json!({"kind":"shell","fullCommandText":"curl -sI https://example.com",
+            "intention":"Check the site","canOfferSessionApproval":true,
+            "commands":[{"identifier":"curl","readOnly":false}]});
+        let Permission::Ask(approval, choices) = decide(shell, PermissionMode::Ask) else {
+            panic!("asks")
         };
+        assert_eq!(approval.title, "Run a command");
+        assert_eq!(approval.details, "curl -sI https://example.com");
+        assert_eq!(approval.reason.as_deref(), Some("Check the site"));
         assert_eq!(
-            decide(json!({"kind":"read","fileName":"notes.md"})),
-            "approve-once"
+            approval.decisions,
+            [
+                Decision::Accept,
+                Decision::AcceptForSession,
+                Decision::Decline
+            ]
         );
+        assert_eq!(choices["accept"], json!({"kind":"approve-once"}));
+        assert_eq!(choices["decline"]["kind"], "reject");
         assert_eq!(
-            decide(json!({"kind":"write","fileName":"/decks/pitch/deck.html"})),
-            "approve-once"
+            choices["acceptForSession"],
+            json!({"kind":"approve-for-session","approval":{"kind":"commands","commandIdentifiers":["curl"]}})
         );
+
+        let mcp =
+            json!({"kind":"mcp","serverName":"github","toolName":"push","args":{"branch":"main"}});
+        let Permission::Ask(approval, choices) = decide(mcp, PermissionMode::Ask) else {
+            panic!("asks")
+        };
+        assert!(approval.details.contains("github") && approval.details.contains("main"));
         assert_eq!(
-            decide(json!({"kind":"write","fileName":"deck.html"})),
-            "approve-once"
+            choices["acceptForSession"]["approval"],
+            json!({"kind":"mcp","serverName":"github","toolName":"push"})
         );
-        assert_eq!(
-            decide(json!({"kind":"write","fileName":"../other/deck.html"})),
-            "reject"
-        );
-        assert_eq!(
-            decide(json!({"kind":"read","fileName":"../secret.txt"})),
-            "reject"
-        );
-        assert_eq!(
-            decide(json!({"kind":"write","fileName":"talks/q3.html"})),
-            "approve-once"
-        );
-        assert_eq!(
-            decide(json!({"kind":"mcp","serverName":"slopslide","toolName":"open_file"})),
-            "approve-once"
-        );
-        assert_eq!(
-            decide(json!({"kind":"shell","fullCommandText":"rm -rf /"})),
-            "reject"
-        );
-        assert_eq!(
-            decide(json!({"kind":"mcp","serverName":"slopslide","toolName":"lint_deck"})),
-            "approve-once"
-        );
-        assert_eq!(
-            decide(json!({"kind":"mcp","serverName":"github","toolName":"push"})),
-            "reject"
-        );
+
+        let shell = json!({"kind":"shell","fullCommandText":"ls","canOfferSessionApproval":false,
+            "commands":[{"identifier":"ls"}]});
+        let Permission::Ask(approval, _) = decide(shell, PermissionMode::Ask) else {
+            panic!("asks")
+        };
+        assert_eq!(approval.decisions, [Decision::Accept, Decision::Decline]);
     }
 
     #[test]
@@ -785,6 +958,219 @@ read()
         assert_eq!(models[0].label, "Model One");
     }
 
+    /// A stand-in server whose turn asks to run a shell command and then a workspace read,
+    /// logging the decisions it receives.
+    #[cfg(unix)]
+    #[test]
+    fn asks_the_user_over_framed_stdio() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Mutex;
+
+        let dir = std::env::temp_dir().join(format!("slopslide-ask-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = r#"#!/usr/bin/env python3
+import json, sys
+log = open("decisions.log", "w")
+def read():
+    length = None
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line: sys.exit(0)
+        line = line.strip()
+        if not line: break
+        name, _, value = line.partition(b":")
+        if name.lower() == b"content-length": length = int(value)
+    return json.loads(sys.stdin.buffer.read(length))
+def send(message):
+    body = json.dumps(message).encode()
+    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+    sys.stdout.buffer.flush()
+def event(kind, data):
+    send({"jsonrpc": "2.0", "method": "session.event", "params": {"event": {"type": kind, "data": data}}})
+def decision():
+    while True:
+        request = read()
+        if request["method"] == "session.permissions.handlePendingPermissionRequest":
+            log.write(json.dumps(request["params"]) + "\n"); log.flush()
+            send({"jsonrpc": "2.0", "id": request["id"], "result": {"success": True}})
+            return request["params"]
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {}})
+while True:
+    request = read()
+    method = request["method"]
+    if method == "session.create":
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {"sessionId": "s1"}})
+    elif method == "session.send":
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {}})
+        event("permission.requested", {"requestId": "p1", "permissionRequest": {"kind": "shell", "fullCommandText": "curl -sI https://example.com", "intention": "Check the site", "canOfferSessionApproval": True, "commands": [{"identifier": "curl", "readOnly": False}]}})
+        decision()
+        event("permission.completed", {"requestId": "p1", "result": {"kind": "approved"}})
+        event("permission.requested", {"requestId": "p2", "permissionRequest": {"kind": "read", "path": "deck.html", "intention": "Read the deck"}})
+        decision()
+        event("session.idle", {})
+    else:
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {}})
+"#;
+        let bin = dir.join("copilot");
+        std::fs::write(&bin, script).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let approvals = Arc::<Approvals>::default();
+        let events = Mutex::new(Vec::new());
+        let (_tx, mut rx) = watch::channel(false);
+        let args = TurnArgs {
+            bin: &bin,
+            dir: &dir,
+            lint_server: Path::new("/app/slopslide"),
+            prompt: "Check the site",
+            model: None,
+            effort: None,
+            session: None,
+            compact: false,
+            workspace: "deck-1",
+            mode: PermissionMode::Ask,
+            approvals: approvals.clone(),
+        };
+        let outcome = runtime.block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(20),
+                run_turn(
+                    args,
+                    &mut rx,
+                    &|e| {
+                        events.lock().unwrap().push(e.clone());
+                        if let AgentEvent::ApprovalRequested { approval } = e {
+                            approvals
+                                .respond("deck-1", &approval.id, Decision::AcceptForSession)
+                                .unwrap();
+                        }
+                    },
+                    &|_| Ok(()),
+                ),
+            )
+            .await
+            .expect("turn timed out")
+        });
+        let decisions = std::fs::read_to_string(dir.join("decisions.log")).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(matches!(outcome, Ok(Outcome::Done)));
+        let decisions: Vec<Value> = decisions
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(decisions.len(), 2, "{decisions:?}");
+        assert_eq!(decisions[0]["requestId"], "p1");
+        assert_eq!(
+            decisions[0]["result"],
+            json!({"kind":"approve-for-session","approval":{"kind":"commands","commandIdentifiers":["curl"]}})
+        );
+        assert_eq!(
+            decisions[1],
+            json!({"sessionId":"s1","requestId":"p2","result":{"kind":"approve-once"}}),
+            "workspace reads never ask"
+        );
+        let events = events.into_inner().unwrap();
+        let asked: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::ApprovalRequested { approval } => Some(approval),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(asked.len(), 1, "{events:?}");
+        assert_eq!(asked[0].details, "curl -sI https://example.com");
+        assert!(events.contains(&AgentEvent::ApprovalResolved {
+            id: asked[0].id.clone()
+        }));
+        assert!(approvals.is_empty());
+    }
+
+    /// Explicit opt-in: on a real Copilot, the app's tools and workspace reads run without
+    /// asking while a shell command asks (and is declined here).
+    #[test]
+    #[ignore = "requires a signed-in GitHub Copilot CLI, network access, and a built app binary"]
+    fn real_copilot_permissions_test() {
+        use std::sync::Mutex;
+
+        let bin = crate::env::resolve_copilot().expect("Copilot installed");
+        let lint = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug/slopslide");
+        assert!(lint.is_file(), "Build the app before running this test");
+        let dir =
+            std::env::temp_dir().join(format!("slopslide-copilot-smoke-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        std::fs::write(dir.join("deck.html"), "<html><body><main class=\"deck\"><section class=\"slide\" id=\"smoke\"><div></section></main></body></html>").unwrap();
+        let approvals = Arc::<Approvals>::default();
+        let events = Mutex::new(Vec::new());
+        let (_tx, mut rx) = watch::channel(false);
+        let args = TurnArgs {
+            bin: &bin,
+            dir: &dir,
+            lint_server: &lint,
+            prompt: "Do exactly these three steps and nothing else: 1. Call the slopslide MCP lint_deck tool once. 2. Read the file deck.html. 3. Run the shell command `curl -sI https://example.com`. If a step is declined, skip it. Then reply done.",
+            model: None,
+            effort: None,
+            session: None,
+            compact: false,
+            workspace: "deck-1",
+            mode: PermissionMode::Ask,
+            approvals: approvals.clone(),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let outcome = runtime.block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(180),
+                run_turn(
+                    args,
+                    &mut rx,
+                    &|e| {
+                        events.lock().unwrap().push(e.clone());
+                        if let AgentEvent::ApprovalRequested { approval } = e {
+                            approvals
+                                .respond("deck-1", &approval.id, Decision::Decline)
+                                .unwrap();
+                        }
+                    },
+                    &|_| Ok(()),
+                ),
+            )
+            .await
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+        let events = events.into_inner().unwrap();
+        assert!(matches!(outcome, Ok(Ok(Outcome::Done))), "{events:?}");
+        let asked: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::ApprovalRequested { approval } => Some(approval.title.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(asked, ["Run a command"], "{events:?}");
+        let tool = |name: &str| {
+            events.iter().find_map(|e| match e {
+                AgentEvent::ToolUse { id, name: n, .. } if n == name => Some(id.clone()),
+                _ => None,
+            })
+        };
+        for name in [mcp::TOOL, "Read"] {
+            let id = tool(name).unwrap_or_else(|| panic!("{name} was called: {events:?}"));
+            assert!(
+                events.contains(&AgentEvent::ToolResult {
+                    id,
+                    is_error: false
+                }),
+                "{name} ran: {events:?}"
+            );
+        }
+    }
+
     /// A stand-in server that resumes a session and compacts it, logging each method.
     #[cfg(unix)]
     #[test]
@@ -844,6 +1230,9 @@ while True:
             effort: None,
             session: Some("s1"),
             compact: true,
+            workspace: "deck-1",
+            mode: PermissionMode::Ask,
+            approvals: Arc::default(),
         };
         let outcome = runtime.block_on(run_turn(
             args,

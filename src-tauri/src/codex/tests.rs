@@ -1,5 +1,6 @@
 use super::*;
 use std::collections::BTreeSet;
+use std::sync::Mutex;
 
 mod fake_server;
 
@@ -18,8 +19,24 @@ fn args(dir: &Path) -> TurnArgs<'_> {
     }
 }
 
+#[test]
+fn configures_the_builtin_mcp_server_as_preapproved() {
+    let args = mcp_config_args(Path::new("/app/slopslide"), Path::new("/decks/talk"));
+    assert_eq!(
+        args,
+        [
+            "-c",
+            "mcp_servers.slopslide.command=\"/app/slopslide\"",
+            "-c",
+            "mcp_servers.slopslide.args=[\"--lint-mcp\",\"/decks/talk\"]",
+            "-c",
+            "mcp_servers.slopslide.default_tools_approval_mode=\"approve\"",
+        ]
+    );
+}
+
 fn mcp_approval_params() -> Value {
-    json!({"serverName":"slopslide","mode":"form","message":"Allow lint_deck?",
+    json!({"serverName":"docs","mode":"form","message":"Allow search?",
         "requestedSchema":{"type":"object","properties":{}},
         "_meta":{"codex_approval_kind":"mcp_tool_call","tool_params":{}}})
 }
@@ -306,8 +323,8 @@ fn mcp_tool_approvals_use_elicitation_actions_without_persistent_grants() {
         let (a, result) = approval_request("mcpServer/elicitation/request", &p).unwrap();
         assert_eq!(result["accept"], json!({"action":"accept","content":{}}));
         assert_eq!(result["decline"], json!({"action":"decline"}));
-        assert!(a.details.contains("slopslide"));
-        assert_eq!(a.reason.as_deref(), Some("Allow lint_deck?"));
+        assert!(a.details.contains("docs"));
+        assert_eq!(a.reason.as_deref(), Some("Allow search?"));
         let session = persist == "session" || persist.is_array();
         assert_eq!(a.decisions.contains(&Decision::AcceptForSession), session);
         if session {
@@ -619,8 +636,32 @@ mod process {
                     decision == Decision::AcceptForSession
                 );
                 assert!(response["result"].get("decision").is_none());
-                assert!(broker.0.lock().unwrap().is_empty());
+                assert!(broker.is_empty());
             }
+        });
+    }
+
+    #[test]
+    fn builtin_mcp_tools_are_approved_without_asking() {
+        run(async {
+            let mut params = mcp_approval_params();
+            params["serverName"] = json!(mcp::SERVER);
+            params["turnId"] = json!("turn-1");
+            let f = Fixture::new(
+                json!({"approvals":[{"method":"mcpServer/elicitation/request","params":params}]}),
+            );
+            let (_tx, mut rx) = watch::channel(false);
+            let outcome = run_turn(
+                f.args(),
+                &mut rx,
+                &|e| assert!(!matches!(e, AgentEvent::ApprovalRequested { .. })),
+                &|_| Ok(()),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(outcome, Outcome::Done));
+            let response = f.requests().into_iter().find(|r| r["id"] == 90).unwrap();
+            assert_eq!(response["result"]["action"], "accept");
         });
     }
 
@@ -779,7 +820,7 @@ mod process {
                     .count(),
                 2
             );
-            assert!(broker.0.lock().unwrap().is_empty());
+            assert!(broker.is_empty());
         });
     }
 
@@ -841,7 +882,7 @@ mod process {
             .await
             .unwrap();
             assert!(matches!(outcome, Outcome::Interrupted));
-            assert!(broker.0.lock().unwrap().is_empty());
+            assert!(broker.is_empty());
             assert!(broker
                 .respond("deck-1", &id.lock().unwrap(), Decision::Accept)
                 .is_err());
@@ -880,7 +921,7 @@ mod process {
             .expect("Stop must not wait indefinitely")
             .unwrap();
             assert!(matches!(outcome, Outcome::Interrupted));
-            assert!(broker.0.lock().unwrap().is_empty());
+            assert!(broker.is_empty());
             assert!(!f
                 .requests()
                 .iter()
@@ -913,7 +954,7 @@ mod process {
             .await
             .unwrap();
             assert!(!id.lock().unwrap().is_empty());
-            assert!(broker.0.lock().unwrap().is_empty());
+            assert!(broker.is_empty());
         });
     }
 
@@ -1007,7 +1048,7 @@ mod process {
             let broker = a.approvals.clone();
             let (_tx, mut rx) = watch::channel(false);
             assert!(run_turn(a, &mut rx, &|_| {}, &|_| Ok(())).await.is_err());
-            assert!(broker.0.lock().unwrap().is_empty());
+            assert!(broker.is_empty());
         });
     }
 
@@ -1032,7 +1073,7 @@ mod process {
             };
             let (outcome, ()) = tokio::join!(run_turn(a, &mut rx, &|_| {}, &|_| Ok(())), cancel);
             assert!(matches!(outcome, Ok(Outcome::Interrupted)));
-            assert!(broker.0.lock().unwrap().is_empty());
+            assert!(broker.is_empty());
             assert!(!f.requests().iter().any(|r| r["method"] == "thread/start"));
         });
     }
@@ -1052,7 +1093,7 @@ mod process {
     }
 }
 
-/// Explicit opt-in: exercise the real MCP approval path using only the app's read-only linter.
+/// Explicit opt-in: the app's own MCP tools run on a real Codex without asking the user.
 #[test]
 #[ignore = "requires a signed-in Codex CLI, network access, and subscription usage"]
 fn real_codex_lint_approval_test() {
@@ -1074,24 +1115,15 @@ fn real_codex_lint_approval_test() {
         a.model = None;
         a.effort = Some("low");
         a.prompt = "Call the slopslide MCP lint_deck tool exactly once, then briefly report its findings. Do not run shell commands, use any other tool, or change any files.";
-        let broker = a.approvals.clone();
         let (_tx, mut rx) = watch::channel(false);
         let outcome = tokio::time::timeout(Duration::from_secs(90), run_turn(
             a, &mut rx,
-            &|e| {
-                events.lock().unwrap().push(e.clone());
-                if let AgentEvent::ApprovalRequested { approval } = e {
-                    // Never approve unrelated tools or shell/file access in the live test.
-                    assert_eq!(approval.title, "Use an MCP tool");
-                    assert!(approval.details.contains("slopslide"));
-                    assert!(approval.reason.as_deref().unwrap_or_default().contains("lint_deck"));
-                    broker.respond("deck-1", &approval.id, Decision::Accept).unwrap();
-                }
-            }, &|_| Ok(()),
+            &|e| events.lock().unwrap().push(e.clone()),
+            &|_| Ok(()),
         )).await.expect("live lint turn timed out").unwrap();
         let events = events.into_inner().unwrap();
         assert!(matches!(outcome, Outcome::Done));
-        assert!(events.iter().any(|e| matches!(e, AgentEvent::ApprovalRequested { .. })), "{events:?}");
+        assert!(!events.iter().any(|e| matches!(e, AgentEvent::ApprovalRequested { .. })), "{events:?}");
         let tool_id = events.iter().find_map(|e| match e {
             AgentEvent::ToolUse { id, name, .. } if name == "lint_deck" => Some(id),
             _ => None,

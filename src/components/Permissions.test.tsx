@@ -14,22 +14,46 @@ beforeEach(() => {
   invoke.mockReset().mockResolvedValue(["ask", "autoReview", "fullAccess", "custom"]);
   ask.mockReset().mockResolvedValue(true);
   interrupt.mockReset();
-  useApp.setState({ workspace: { path: "/decks/talk", name: "talk" }, deck: deckFor(DECK_HTML), selection: { provider: "codex", model: "m", label: "M", effort: "high", contextWindow: null }, permissionMode: "ask", running: false, interrupt });
+  useApp.setState({ workspace: { path: "/decks/talk", name: "talk" }, deck: deckFor(DECK_HTML), selection: { provider: "codex", model: "m", label: "M", effort: "high", contextWindow: null }, permissionModes: { claude: "ask", codex: "ask", copilot: "ask" }, running: false, interrupt });
 });
-const picker = () => screen.getByRole("button", { name: "Codex permissions" });
+const picker = () => screen.getByRole("button", { name: "Permissions" });
+const mode = () => useApp.getState().permissionModes[useApp.getState().selection.provider];
 const openPicker = async () => { fireEvent.click(picker()); await screen.findByRole("button", { name: /Approve for me/ }); };
 const part = (): Extract<ChatPart, { kind: "approval" }> => ({ kind: "approval", status: "pending", approval: { id: "r1", title: "Run a command", reason: "Read reference", details: "cat /reference", acceptLabel: "Allow once", decisions: ["accept", "decline"] } });
 
 describe("permission picker", () => {
-  it("appears only for Codex and applies the chosen mode", async () => {
+  it("applies the chosen mode to the selected provider only", async () => {
     render(<PermissionPicker />);
     await openPicker();
     fireEvent.click(screen.getByRole("button", { name: /Approve for me/ }));
-    expect(useApp.getState().permissionMode).toBe("autoReview");
+    expect(mode()).toBe("autoReview");
     expect(picker().textContent).toContain("Approve for me");
-    expect(invoke).toHaveBeenCalledWith("codex_permission_modes", { id: "/decks/talk" });
+    expect(invoke).toHaveBeenCalledWith("permission_modes", { provider: "codex", id: "/decks/talk" });
+    invoke.mockResolvedValue(["ask", "fullAccess"]);
     act(() => useApp.setState({ selection: { ...useApp.getState().selection, provider: "claude" } }));
-    expect(screen.queryByRole("button", { name: "Codex permissions" })).toBeNull();
+    expect(mode()).toBe("ask");
+    expect(picker().title).toBe("Claude Code permissions: Ask for approval");
+    fireEvent.click(picker());
+    await screen.findByRole("button", { name: /Full access/ });
+    expect(invoke).toHaveBeenCalledWith("permission_modes", { provider: "claude", id: "/decks/talk" });
+    expect(screen.queryByRole("button", { name: /Approve for me/ })).toBeNull();
+    expect(useApp.getState().permissionModes.codex).toBe("autoReview");
+  });
+
+  it("asks the backend for modes only when opened", async () => {
+    render(<PermissionPicker />);
+    expect(invoke).not.toHaveBeenCalled();
+    await openPicker();
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the provider in the Full access warning", async () => {
+    invoke.mockResolvedValue(["ask", "fullAccess"]);
+    useApp.setState({ selection: { ...useApp.getState().selection, provider: "copilot" } });
+    render(<PermissionPicker />); fireEvent.click(picker());
+    fireEvent.click(await screen.findByRole("button", { name: /Full access/ }));
+    await waitFor(() => expect(mode()).toBe("fullAccess"));
+    expect(ask.mock.calls[0]![0]).toContain("GitHub Copilot will be able");
   });
 
   it("confirms Full access and keeps the old mode when cancelled", async () => {
@@ -37,9 +61,9 @@ describe("permission picker", () => {
     render(<PermissionPicker />); await openPicker();
     fireEvent.click(screen.getByRole("button", { name: /Full access/ }));
     await waitFor(() => expect(ask).toHaveBeenCalled());
-    expect(useApp.getState().permissionMode).toBe("ask");
+    expect(mode()).toBe("ask");
     fireEvent.click(screen.getByRole("button", { name: /Full access/ }));
-    await waitFor(() => expect(useApp.getState().permissionMode).toBe("fullAccess"));
+    await waitFor(() => expect(mode()).toBe("fullAccess"));
   });
 
   it("locks during turns and cannot apply a delayed confirmation", async () => {
@@ -50,7 +74,7 @@ describe("permission picker", () => {
     act(() => useApp.setState({ running: true }));
     await act(async () => resolve(true));
     expect((picker() as HTMLButtonElement).disabled).toBe(true);
-    expect(useApp.getState().permissionMode).toBe("ask");
+    expect(mode()).toBe("ask");
   });
 
   it("keeps the old mode if the confirmation dialog fails", async () => {
@@ -58,12 +82,12 @@ describe("permission picker", () => {
     render(<PermissionPicker />); await openPicker();
     fireEvent.click(screen.getByRole("button", { name: /Full access/ }));
     expect((await screen.findByRole("alert")).textContent).toBe("Dialog unavailable");
-    expect(useApp.getState().permissionMode).toBe("ask");
+    expect(mode()).toBe("ask");
   });
 
   it("shows only modes returned by Codex and reports an unavailable saved mode", async () => {
     invoke.mockResolvedValue(["ask", "custom"]);
-    useApp.setState({ permissionMode: "autoReview" });
+    useApp.setState({ permissionModes: { claude: "ask", codex: "autoReview", copilot: "ask" } });
     render(<PermissionPicker />); fireEvent.click(picker());
     await screen.findByRole("button", { name: /Use your existing/ });
     expect(screen.queryByRole("button", { name: /Full access/ })).toBeNull();

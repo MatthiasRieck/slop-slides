@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -20,6 +20,7 @@ use crate::deck;
 use crate::env;
 use crate::error::{Error, Result};
 use crate::mcp;
+use crate::permissions::{Approval, Approvals, Choices, Decision, PermissionMode};
 use crate::sessions::Sessions;
 use crate::{codex, copilot};
 
@@ -29,8 +30,12 @@ pub(crate) const SYSTEM_PROMPT: &str = concat!(
     "\n\n",
     include_str!("../prompts/design-reference.md"),
 );
-/// The agent edits files only: no shell, no MCP servers.
-const TOOLS: &str = "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch";
+/// The agent's tools; no MCP servers but the app's. What runs without asking depends on the
+/// permission mode (see [`build_claude_args`]).
+const TOOLS: &str = "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch";
+/// Tools that never ask in Ask mode, besides the app's MCP tools. Claude Code itself lets
+/// file tools work inside the workspace and asks outside it; the shell always asks.
+const ALLOWED_TOOLS: &str = "WebSearch,WebFetch";
 const STDERR_LIMIT: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq)]
@@ -90,7 +95,7 @@ impl Provider {
 #[derive(Default)]
 pub struct AgentManager {
     running: Mutex<HashMap<String, watch::Sender<bool>>>,
-    pub approvals: Arc<codex::Approvals>,
+    pub approvals: Arc<Approvals>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -101,7 +106,7 @@ pub struct AgentManager {
 )]
 pub enum AgentEvent {
     ApprovalRequested {
-        approval: codex::Approval,
+        approval: Approval,
     },
     ApprovalResolved {
         id: String,
@@ -178,7 +183,7 @@ pub struct SendArgs {
     #[serde(default)]
     pub compact: bool,
     #[serde(default)]
-    pub permission_mode: codex::PermissionMode,
+    pub permission_mode: PermissionMode,
 }
 
 impl AgentManager {
@@ -307,8 +312,8 @@ struct Turn {
     effort: Option<String>,
     compact: bool,
     workspace: String,
-    permission_mode: codex::PermissionMode,
-    approvals: Arc<codex::Approvals>,
+    permission_mode: PermissionMode,
+    approvals: Arc<Approvals>,
 }
 
 /// The prompt Claude Code runs as its built-in compaction command.
@@ -401,6 +406,9 @@ impl Turn {
                 effort,
                 session,
                 compact: self.compact,
+                workspace: &self.workspace,
+                mode: self.permission_mode,
+                approvals: self.approvals.clone(),
             };
             let on_session = |id: &str| {
                 deck::write_session(&self.session_dir, self.provider.session_file(), Some(id))
@@ -441,6 +449,7 @@ impl Turn {
             model,
             effort,
             session,
+            self.permission_mode,
         );
         let started = Instant::now();
 
@@ -465,10 +474,12 @@ impl Turn {
             session_id: session.map(str::to_string),
         });
 
-        let mut stdin = child.stdin.take().expect("piped stdin");
+        // Stream-json input keeps stdin open for answering permission requests; closing it
+        // after the result lets Claude Code exit.
+        let mut stdin = child.stdin.take();
         let prompt = if self.compact { CLAUDE_COMPACT } else { prompt };
-        stdin.write_all(prompt.as_bytes()).await?;
-        drop(stdin);
+        write_line(stdin.as_mut(), &claude_user_message(prompt)).await?;
+        let (run, mut answers) = self.approvals.start(&self.workspace);
 
         let mut stderr = child.stderr.take().expect("piped stderr");
         let stderr_task = tokio::spawn(async move {
@@ -487,9 +498,38 @@ impl Turn {
         let mut result_text = None;
         loop {
             tokio::select! {
+                biased;
+                Some(answer) = answers.recv() => {
+                    let response = claude_control_response(&answer.wire_id, Ok(answer.payload));
+                    write_line(stdin.as_mut(), &response).await?;
+                    self.emit(&AgentEvent::ApprovalResolved { id: answer.id });
+                }
                 line = lines.next_line() => {
                     let Some(line) = line? else { break };
                     let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
+                    match value["type"].as_str() {
+                        Some("control_request") => {
+                            let id = &value["request_id"];
+                            match claude_permission(&value["request"], self.permission_mode) {
+                                ClaudePermission::Answer(reply) => {
+                                    write_line(stdin.as_mut(), &claude_control_response(id, reply)).await?;
+                                }
+                                ClaudePermission::Ask(approval, choices) => {
+                                    run.ask(id.clone(), &approval, choices);
+                                    self.emit(&AgentEvent::ApprovalRequested { approval });
+                                }
+                            }
+                            continue;
+                        }
+                        Some("control_cancel_request") => {
+                            if let Some(id) = run.resolved(&value["request_id"]) {
+                                self.emit(&AgentEvent::ApprovalResolved { id });
+                            }
+                            continue;
+                        }
+                        Some("result") => stdin = None,
+                        _ => {}
+                    }
                     if let Some(id) = session_id_of_init(&value) {
                         saw_init = true;
                         deck::write_session(&self.session_dir, self.provider.session_file(), Some(&id))?;
@@ -592,15 +632,25 @@ fn build_claude_args(
     model: Option<&str>,
     effort: Option<&str>,
     session: Option<&str>,
+    mode: PermissionMode,
 ) -> Vec<String> {
+    let permission_mode = match mode {
+        PermissionMode::FullAccess => "bypassPermissions",
+        _ => "acceptEdits",
+    };
     let mut args: Vec<String> = [
         "-p",
+        "--input-format",
+        "stream-json",
         "--output-format",
         "stream-json",
         "--verbose",
         "--include-partial-messages",
         "--permission-mode",
-        "acceptEdits",
+        permission_mode,
+        // Requests that would prompt arrive on stdout as `can_use_tool` control requests.
+        "--permission-prompt-tool",
+        "stdio",
         "--strict-mcp-config",
         "--tools",
         TOOLS,
@@ -610,11 +660,7 @@ fn build_claude_args(
     .collect();
     args.extend([
         "--allowedTools".into(),
-        format!(
-            "{TOOLS},{},{}",
-            mcp::QUALIFIED_TOOL,
-            mcp::QUALIFIED_OPEN_TOOL
-        ),
+        format!("{ALLOWED_TOOLS},{}", mcp::CLAUDE_TOOLS),
         "--mcp-config".into(),
         mcp_config.to_string_lossy().into_owned(),
         "--append-system-prompt-file".into(),
@@ -633,6 +679,98 @@ fn build_claude_args(
         args.extend(["--resume".into(), session.into()]);
     }
     args
+}
+
+/// Writes one stream-json line; nothing once stdin is closed.
+async fn write_line(stdin: Option<&mut tokio::process::ChildStdin>, value: &Value) -> Result<()> {
+    let Some(stdin) = stdin else { return Ok(()) };
+    let mut line = serde_json::to_vec(value).expect("serializable JSON");
+    line.push(b'\n');
+    stdin.write_all(&line).await?;
+    stdin.flush().await?;
+    Ok(())
+}
+
+fn claude_user_message(prompt: &str) -> Value {
+    json!({"type": "user", "message": {"role": "user", "content": prompt}})
+}
+
+/// Answers control request `id`: `Ok` with the response, `Err` with a refusal.
+fn claude_control_response(id: &Value, reply: std::result::Result<Value, &str>) -> Value {
+    let response = match reply {
+        Ok(response) => json!({"subtype": "success", "request_id": id, "response": response}),
+        Err(error) => json!({"subtype": "error", "request_id": id, "error": error}),
+    };
+    json!({"type": "control_response", "response": response})
+}
+
+enum ClaudePermission {
+    /// Answered without the user.
+    Answer(std::result::Result<Value, &'static str>),
+    /// The user decides.
+    Ask(Approval, Choices),
+}
+
+/// How to answer one Claude Code control request. Only tool permission prompts are
+/// handled: the app's MCP tools and everything under Full access are allowed outright,
+/// anything else asks the user.
+fn claude_permission(request: &Value, mode: PermissionMode) -> ClaudePermission {
+    if request["subtype"] != "can_use_tool" {
+        return ClaudePermission::Answer(Err("SlopSlide does not support this request."));
+    }
+    let tool = request["tool_name"].as_str().unwrap_or_default();
+    let input = &request["input"];
+    let allow = json!({"behavior": "allow", "updatedInput": input});
+    if mode == PermissionMode::FullAccess || mcp::is_claude_tool(tool) {
+        return ClaudePermission::Answer(Ok(allow));
+    }
+    let text = |key: &str| input[key].as_str().map(str::to_string);
+    let (title, details) = match tool {
+        "Bash" => ("Run a command", text("command")),
+        "Write" | "Edit" | "NotebookEdit" => ("Change files", text("file_path")),
+        "Read" => ("Read files", text("file_path")),
+        "Glob" | "Grep" => ("Read files", text("path").or_else(|| text("pattern"))),
+        "WebFetch" => ("Network access", text("url")),
+        _ => ("Use a tool", None),
+    };
+    let details = details.unwrap_or_else(|| {
+        format!(
+            "{tool}\n{}",
+            serde_json::to_string_pretty(input).unwrap_or_default()
+        )
+    });
+    let reason = request["description"]
+        .as_str()
+        .or_else(|| input["description"].as_str())
+        .map(str::to_string);
+    let mut choices = Choices::from([
+        ("accept", allow.clone()),
+        (
+            "decline",
+            json!({"behavior": "deny", "message": "The user declined this request."}),
+        ),
+    ]);
+    let mut decisions = vec![Decision::Accept];
+    // Claude Code suggests the rules that would allow requests like this one; kept for the
+    // session only, never written to the user's settings.
+    let rules: Vec<Value> = request["permission_suggestions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|rule| {
+            let mut rule = rule.clone();
+            rule["destination"] = json!("session");
+            rule
+        })
+        .collect();
+    if !rules.is_empty() {
+        let mut session = allow;
+        session["updatedPermissions"] = json!(rules);
+        choices.insert("acceptForSession", session);
+        decisions.push(Decision::AcceptForSession);
+    }
+    decisions.push(Decision::Decline);
+    ClaudePermission::Ask(Approval::new(title, reason, details, decisions), choices)
 }
 
 const MISSING_SESSION: &str = "No conversation found";
@@ -683,7 +821,7 @@ fn parse_line(value: &Value) -> Vec<AgentEvent> {
             .filter(|block| block["type"] == "tool_use")
             .map(|block| AgentEvent::ToolUse {
                 id: block["id"].as_str().unwrap_or_default().to_string(),
-                name: block["name"].as_str().unwrap_or_default().to_string(),
+                name: mcp::display_name(block["name"].as_str().unwrap_or_default()).to_string(),
                 input: block["input"].clone(),
             })
             .chain(
@@ -1059,8 +1197,17 @@ mod tests {
         let prompt = Path::new("/home/.slopslides/system-prompt.md");
         let mcp = Path::new("/home/.slopslides/mcp.json");
         let session = Path::new("/home/.slopslides/sessions/1-ab");
-        let base = build_claude_args(prompt, mcp, session, None, None, None);
-        assert_eq!(base[..3], ["-p", "--output-format", "stream-json"]);
+        let base = build_claude_args(prompt, mcp, session, None, None, None, PermissionMode::Ask);
+        assert_eq!(
+            base[..5],
+            [
+                "-p",
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json"
+            ]
+        );
         let after = |args: &[String], flag: &str| {
             args.iter()
                 .position(|a| a == flag)
@@ -1073,7 +1220,12 @@ mod tests {
         assert_eq!(after(&base, "--tools").as_deref(), Some(TOOLS));
         assert_eq!(
             after(&base, "--allowedTools").as_deref(),
-            Some(format!("{TOOLS},mcp__slopslide__lint_deck,mcp__slopslide__open_file").as_str())
+            Some("WebSearch,WebFetch,mcp__slopslide"),
+            "the shell and files outside the workspace ask; the app's tools never do"
+        );
+        assert_eq!(
+            after(&base, "--permission-prompt-tool").as_deref(),
+            Some("stdio")
         );
         assert_eq!(
             after(&base, "--mcp-config").as_deref(),
@@ -1092,7 +1244,6 @@ mod tests {
         assert!(!base.contains(&"--model".to_string()));
         assert!(!base.contains(&"--resume".to_string()));
         assert!(!base.contains(&"--effort".to_string()));
-        assert!(!TOOLS.contains("Bash"), "the agent must not get a shell");
 
         let full = build_claude_args(
             prompt,
@@ -1101,10 +1252,130 @@ mod tests {
             Some("opus"),
             Some("high"),
             Some("s-1"),
+            PermissionMode::FullAccess,
+        );
+        assert_eq!(
+            after(&full, "--permission-mode").as_deref(),
+            Some("bypassPermissions")
         );
         assert_eq!(after(&full, "--model").as_deref(), Some("opus"));
         assert_eq!(after(&full, "--effort").as_deref(), Some("high"));
         assert_eq!(after(&full, "--resume").as_deref(), Some("s-1"));
+    }
+
+    #[test]
+    fn shows_the_apps_tools_by_their_own_names() {
+        let line = json!({"type":"assistant","message":{"content":[
+            {"type":"tool_use","id":"t1","name":"mcp__slopslide__lint_deck","input":{}},
+            {"type":"tool_use","id":"t2","name":"mcp__github__push","input":{}}
+        ]}});
+        let names: Vec<_> = parse_line(&line)
+            .into_iter()
+            .filter_map(|e| match e {
+                AgentEvent::ToolUse { name, .. } => Some(name),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["lint_deck", "mcp__github__push"]);
+    }
+
+    fn can_use_tool(tool: &str, input: Value) -> Value {
+        json!({"subtype":"can_use_tool","tool_name":tool,"input":input,"permission_suggestions":[]})
+    }
+
+    #[test]
+    fn claude_runs_the_apps_tools_without_asking() {
+        for tool in ["mcp__slopslide__lint_deck", "mcp__slopslide__open_file"] {
+            let request = can_use_tool(tool, json!({"path":"deck.html"}));
+            assert!(matches!(
+                claude_permission(&request, PermissionMode::Ask),
+                ClaudePermission::Answer(Ok(r)) if r["behavior"] == "allow" && r["updatedInput"]["path"] == "deck.html"
+            ));
+        }
+    }
+
+    #[test]
+    fn claude_asks_before_other_tools() {
+        let cases = [
+            (
+                "Bash",
+                json!({"command":"npm test","description":"Run tests"}),
+                "Run a command",
+                "npm test",
+            ),
+            (
+                "Write",
+                json!({"file_path":"/etc/hosts"}),
+                "Change files",
+                "/etc/hosts",
+            ),
+            (
+                "Read",
+                json!({"file_path":"/Users/me/.ssh/id"}),
+                "Read files",
+                "/Users/me/.ssh/id",
+            ),
+            (
+                "WebFetch",
+                json!({"url":"https://example.com"}),
+                "Network access",
+                "https://example.com",
+            ),
+            (
+                "mcp__github__push",
+                json!({"branch":"main"}),
+                "Use a tool",
+                "mcp__github__push",
+            ),
+        ];
+        for (tool, input, title, details) in cases {
+            let ClaudePermission::Ask(approval, choices) =
+                claude_permission(&can_use_tool(tool, input.clone()), PermissionMode::Ask)
+            else {
+                panic!("{tool} asks");
+            };
+            assert_eq!(approval.title, title);
+            assert!(approval.details.contains(details), "{}", approval.details);
+            assert_eq!(
+                approval.decisions,
+                [Decision::Accept, Decision::Decline],
+                "no rule offered"
+            );
+            assert_eq!(
+                choices["accept"],
+                json!({"behavior":"allow","updatedInput":input})
+            );
+            assert_eq!(choices["decline"]["behavior"], "deny");
+        }
+        let ClaudePermission::Ask(approval, _) = claude_permission(
+            &can_use_tool("Bash", json!({"command":"ls","description":"List files"})),
+            PermissionMode::Ask,
+        ) else {
+            panic!("asks");
+        };
+        assert_eq!(approval.reason.as_deref(), Some("List files"));
+    }
+
+    #[test]
+    fn claude_full_access_allows_everything() {
+        let request = can_use_tool("Bash", json!({"command":"rm -rf build"}));
+        assert!(matches!(
+            claude_permission(&request, PermissionMode::FullAccess),
+            ClaudePermission::Answer(Ok(r)) if r["behavior"] == "allow"
+        ));
+    }
+
+    #[test]
+    fn claude_refuses_other_control_requests() {
+        let request = json!({"subtype":"hook_callback"});
+        assert!(matches!(
+            claude_permission(&request, PermissionMode::Ask),
+            ClaudePermission::Answer(Err(_))
+        ));
+        assert_eq!(
+            claude_control_response(&json!("r1"), Err("no")),
+            json!({"type":"control_response","response":{"subtype":"error","request_id":"r1","error":"no"}})
+        );
     }
 
     #[test]
@@ -1268,6 +1539,9 @@ mod tests {
         struct Fixture {
             dir: PathBuf,
             events: Arc<Mutex<Vec<AgentEvent>>>,
+            /// How the user answers approval requests; unanswered when `None`.
+            answer: Option<Decision>,
+            mode: PermissionMode,
         }
 
         impl Fixture {
@@ -1286,7 +1560,7 @@ mod tests {
                      for a in \"$@\"; do [ \"$prev\" = --resume ] && RESUME=\"$a\"; prev=\"$a\"; done\n\
                      printf '%s\\n' \"$@\" > \"$LOG/args.$$\"\n\
                      printf '%s\\n' \"$$\" >> \"$LOG/runs\"\n\
-                     cat > \"$LOG/stdin.log\"\n\
+                     IFS= read -r line; printf '%s' \"$line\" > \"$LOG/stdin.log\"\n\
                      {body}\n"
                 );
                 let claude = dir.join("claude");
@@ -1295,6 +1569,8 @@ mod tests {
                 Fixture {
                     dir,
                     events: Arc::default(),
+                    answer: None,
+                    mode: PermissionMode::Ask,
                 }
             }
 
@@ -1304,8 +1580,17 @@ mod tests {
 
             fn turn_with(&self, claude: PathBuf, model: Option<&str>) -> Turn {
                 let events = self.events.clone();
+                let approvals = Arc::<Approvals>::default();
+                let (broker, answer) = (approvals.clone(), self.answer);
                 Turn {
-                    emit: Box::new(move |e| events.lock().unwrap().push(e.clone())),
+                    emit: Box::new(move |e| {
+                        events.lock().unwrap().push(e.clone());
+                        if let (AgentEvent::ApprovalRequested { approval }, Some(decision)) =
+                            (e, answer)
+                        {
+                            broker.respond("test", &approval.id, decision).unwrap();
+                        }
+                    }),
                     dir: self.dir.clone(),
                     app_home: self.dir.join("home"),
                     session_dir: self.session_dir(),
@@ -1315,8 +1600,8 @@ mod tests {
                     effort: None,
                     compact: false,
                     workspace: "test".into(),
-                    permission_mode: codex::PermissionMode::Ask,
-                    approvals: Arc::default(),
+                    permission_mode: self.mode,
+                    approvals,
                 }
             }
 
@@ -1352,6 +1637,14 @@ mod tests {
                         _ => None,
                     })
                     .collect()
+            }
+
+            /// The prompt of the last invocation, from its stream-json user message.
+            fn prompt(&self) -> String {
+                let line = fs::read_to_string(self.dir.join(LOG_DIR).join("stdin.log")).unwrap();
+                let message: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(message["type"], "user");
+                message["message"]["content"].as_str().unwrap().to_string()
             }
 
             /// Arguments of each invocation, in order.
@@ -1435,11 +1728,7 @@ echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id
                 ]
             );
             assert_eq!(fx.session().as_deref(), Some("new-session"));
-            let log = fx.dir.join(LOG_DIR);
-            assert_eq!(
-                fs::read_to_string(log.join("stdin.log")).unwrap(),
-                "Make it pop"
-            );
+            assert_eq!(fx.prompt(), "Make it pop");
             let home = fx.dir.join("home");
             let prompt_file = home.join("system-prompt.md");
             assert_eq!(fs::read_to_string(&prompt_file).unwrap(), SYSTEM_PROMPT);
@@ -1552,6 +1841,100 @@ fi
             assert!(fx.errors().is_empty(), "{:?}", fx.errors());
         }
 
+        /// A `can_use_tool` request for `curl`, then the response the app wrote, then a result.
+        fn permission_script() -> String {
+            format!(
+                r#"{INIT}
+echo '{{"type":"control_request","request_id":"req-1","request":{{"subtype":"can_use_tool","tool_name":"Bash","input":{{"command":"curl -sI https://example.com"}},"permission_suggestions":[{{"type":"addRules","rules":[{{"toolName":"Bash","ruleContent":"curl -sI https://example.com"}}],"behavior":"allow","destination":"localSettings"}}]}}}}'
+IFS= read -r answer; printf '%s' "$answer" > "$LOG/answer.log"
+{OK}"#
+            )
+        }
+
+        #[tokio::test]
+        async fn asks_the_user_and_answers_claude_code() {
+            for (decision, behavior) in [
+                (Decision::Accept, "allow"),
+                (Decision::AcceptForSession, "allow"),
+                (Decision::Decline, "deny"),
+            ] {
+                let mut fx = Fixture::new(&permission_script());
+                fx.answer = Some(decision);
+                assert!(!fx.run("Check the site", None).await);
+                let answer: Value = serde_json::from_str(
+                    &fs::read_to_string(fx.dir.join(LOG_DIR).join("answer.log")).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(answer["type"], "control_response");
+                let response = &answer["response"];
+                assert_eq!(response["request_id"], "req-1");
+                assert_eq!(response["response"]["behavior"], behavior);
+                let rules = &response["response"]["updatedPermissions"];
+                assert_eq!(rules.is_array(), decision == Decision::AcceptForSession);
+                if decision == Decision::AcceptForSession {
+                    assert_eq!(
+                        rules[0]["destination"], "session",
+                        "never saved to settings"
+                    );
+                }
+                let events = fx.events();
+                let requested = events.iter().find_map(|e| match e {
+                    AgentEvent::ApprovalRequested { approval } => Some(approval.clone()),
+                    _ => None,
+                });
+                let approval = requested.expect("the user was asked");
+                assert_eq!(approval.title, "Run a command");
+                assert_eq!(approval.details, "curl -sI https://example.com");
+                assert!(events.contains(&AgentEvent::ApprovalResolved { id: approval.id }));
+                assert!(fx.errors().is_empty(), "{:?}", fx.errors());
+            }
+        }
+
+        #[tokio::test]
+        async fn full_access_answers_without_asking() {
+            let mut fx = Fixture::new(&permission_script());
+            fx.mode = PermissionMode::FullAccess;
+            assert!(!fx.run("Check the site", None).await);
+            let answer = fs::read_to_string(fx.dir.join(LOG_DIR).join("answer.log")).unwrap();
+            assert!(answer.contains(r#""behavior":"allow""#), "{answer}");
+            assert!(!fx
+                .events()
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ApprovalRequested { .. })));
+            assert!(has_flag(
+                &fx.invocations()[0],
+                "--permission-mode",
+                "bypassPermissions"
+            ));
+        }
+
+        #[tokio::test]
+        async fn interrupting_closes_a_pending_approval() {
+            let fx = Fixture::new(&permission_script());
+            let (tx, rx) = watch::channel(false);
+            let turn = fx.turn();
+            let approvals = turn.approvals.clone();
+            let run = tokio::spawn(async move { turn.run("Check the site", rx).await });
+            for _ in 0..200 {
+                if fx
+                    .events()
+                    .iter()
+                    .any(|e| matches!(e, AgentEvent::ApprovalRequested { .. }))
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            assert!(!approvals.is_empty(), "waiting for the user");
+            tx.send(true).unwrap();
+            let interrupted = tokio::time::timeout(Duration::from_secs(5), run)
+                .await
+                .expect("interrupt did not stop the turn")
+                .unwrap();
+            assert!(interrupted);
+            assert!(approvals.is_empty(), "the request closed with the turn");
+        }
+
         #[tokio::test]
         async fn compacts_the_stored_session() {
             let fx = Fixture::new(&format!(
@@ -1565,10 +1948,7 @@ echo '{{"type":"system","subtype":"compact_boundary","compact_metadata":{{"trigg
             let runs = fx.invocations();
             assert_eq!(runs.len(), 1);
             assert!(has_flag(&runs[0], "--resume", "old-session"));
-            assert_eq!(
-                fs::read_to_string(fx.dir.join(LOG_DIR).join("stdin.log")).unwrap(),
-                "/compact"
-            );
+            assert_eq!(fx.prompt(), "/compact");
             let events = fx.events();
             assert!(events.contains(&AgentEvent::Compacting));
             assert!(events.contains(&AgentEvent::Compacted));

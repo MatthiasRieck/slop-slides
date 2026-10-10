@@ -543,6 +543,41 @@ describe("model choice", () => {
     expect(useApp.getState().selection).toMatchObject({ provider: "codex", model: "gpt-6-astra", effort: "low" });
   });
 
+  it("locks a started chat to its provider while allowing model changes", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, providers: PROVIDERS });
+    await useApp.getState().send("hello", { includeSlide: false, attachments: [] });
+    useApp.getState().setModel("codex", "gpt-6-astra");
+    expect(useApp.getState().selection.provider).toBe("claude");
+    useApp.getState().setModel("claude", "claude-sonnet-5");
+    expect(useApp.getState().selection.model).toBe("claude-sonnet-5");
+    await useApp.getState().resetChat();
+    useApp.getState().setModel("codex", "gpt-6-astra");
+    expect(useApp.getState().selection.provider).toBe("codex");
+  });
+
+  it("keeps a chat's provider when its CLI becomes unavailable", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ sessionProvider: "claude" });
+    backend({ list_providers: () => PROVIDERS.map((p) => p.id === "claude" ? { ...p, installed: false, models: [] } : p) });
+    await useApp.getState().refreshProviders();
+    expect(useApp.getState().selection.provider).toBe("claude");
+  });
+
+  it("restores a deck's provider instead of the global selection", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ providers: PROVIDERS });
+    useApp.getState().setModel("codex", "gpt-6-astra");
+    backend({ open_deck: () => DECK, session_provider: () => "claude", load_chat: () => [] });
+    await useApp.getState().openDeck(DECK.id);
+    expect(useApp.getState().selection).toMatchObject({ provider: "claude", model: "claude-opus-5-5" });
+    useApp.getState().setModel("codex", "gpt-6-astra");
+    expect(useApp.getState().selection.provider).toBe("claude");
+    await useApp.getState().closeDeck();
+    useApp.getState().setModel("codex", "gpt-6-astra");
+    expect(useApp.getState().selection.provider).toBe("codex");
+  });
+
   it("ignores models that are not offered", async () => {
     const useApp = await freshStore();
     useApp.setState({ providers: PROVIDERS });

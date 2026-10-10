@@ -357,6 +357,14 @@ fn load_chat(id: String) -> Result<serde_json::Value> {
 }
 
 #[tauri::command]
+fn session_provider(id: String) -> Result<Option<agent::Provider>> {
+    current_session(&deck::deck_file(&id)?)?
+        .map(|path| sessions::provider(&path))
+        .transpose()
+        .map(Option::flatten)
+}
+
+#[tauri::command]
 fn save_chat(id: String, chat: serde_json::Value) -> Result<()> {
     deck::save_chat(&session(&deck::deck_file(&id)?)?, &chat)
 }
@@ -371,7 +379,7 @@ fn reset_chat(agent: State<AgentManager>, id: String) -> Result<()> {
 /// A session for a new chat: the current one while it has no conversation yet, else a new one.
 fn new_chat(sessions: &Sessions, file: &Path) -> Result<PathBuf> {
     if let Some(current) = sessions.current(file) {
-        if deck::load_chat(Some(&current))?.is_null() {
+        if deck::load_chat(Some(&current))?.is_null() && sessions::provider(&current)?.is_none() {
             for provider in agent::Provider::ALL {
                 deck::write_session(&current, provider.session_file(), None)?;
             }
@@ -471,6 +479,7 @@ pub fn run() {
             create_image_export_dir,
             export_slide_image,
             load_chat,
+            session_provider,
             save_chat,
             reset_chat,
             send_message,
@@ -487,4 +496,29 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running SlopSlide");
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+
+    #[test]
+    fn resetting_a_claimed_session_starts_a_new_chat_even_without_saved_messages() {
+        let root = std::env::temp_dir().join(format!("slopslide-reset-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("deck.html");
+        std::fs::write(&file, "<html></html>").unwrap();
+        let sessions = Sessions::new(&root.join("home"));
+        let first = new_chat(&sessions, &file).unwrap();
+        assert_eq!(new_chat(&sessions, &file).unwrap(), first);
+        sessions::claim_provider(&first, agent::Provider::Codex).unwrap();
+        let next = new_chat(&sessions, &file).unwrap();
+        assert_ne!(next, first);
+        assert_eq!(sessions::provider(&next).unwrap(), None);
+        assert_eq!(
+            sessions::provider(&first).unwrap(),
+            Some(agent::Provider::Codex)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

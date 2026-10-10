@@ -68,6 +68,8 @@ export function installBrowserMock() {
           throw new Error("Saving is not available in the browser preview.");
         case "save_asset":
           return `assets/${String(a.name)}`;
+        case "session_provider":
+          return null;
         case "load_chat":
           return JSON.parse(localStorage.getItem(`mock-chat-${String(a.id)}`) ?? "null");
         default:

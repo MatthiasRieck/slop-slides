@@ -45,7 +45,7 @@ pub struct Approval {
 }
 
 struct Pending {
-    deck_id: String,
+    workspace: String,
     run_id: String,
     wire_id: Value,
     result: HashMap<DecisionKey, Value>,
@@ -66,13 +66,15 @@ impl Decision {
 #[derive(Default)]
 pub struct Approvals(Mutex<HashMap<String, Pending>>);
 impl Approvals {
-    pub fn respond(&self, deck_id: &str, id: &str, decision: Decision) -> Result<()> {
+    pub fn respond(&self, workspace: &str, id: &str, decision: Decision) -> Result<()> {
         let mut pending = self.0.lock().unwrap();
         let request = pending
             .get(id)
             .ok_or_else(|| Error::msg("This approval is no longer pending."))?;
-        if request.deck_id != deck_id {
-            return Err(Error::msg("This approval belongs to a different deck."));
+        if request.workspace != workspace {
+            return Err(Error::msg(
+                "This approval belongs to a different workspace.",
+            ));
         }
         let result = request
             .result
@@ -86,8 +88,11 @@ impl Approvals {
             .map_err(|_| Error::msg("This Codex turn has ended."))
     }
 
-    pub fn cancel_deck(&self, deck_id: &str) {
-        self.0.lock().unwrap().retain(|_, p| p.deck_id != deck_id);
+    pub fn cancel_workspace(&self, workspace: &str) {
+        self.0
+            .lock()
+            .unwrap()
+            .retain(|_, p| p.workspace != workspace);
     }
 
     fn resolved(&self, run_id: &str, wire_id: &Value) -> Option<String> {
@@ -311,7 +316,7 @@ pub struct TurnArgs<'a> {
     pub bin: &'a Path,
     pub dir: &'a Path,
     pub lint_server: &'a Path,
-    pub deck_id: &'a str,
+    pub workspace: &'a str,
     pub prompt: &'a str,
     pub model: Option<&'a str>,
     pub effort: Option<&'a str>,
@@ -446,7 +451,7 @@ async fn connected_turn(
                 args.approvals.0.lock().unwrap().insert(
                     approval.id.clone(),
                     Pending {
-                        deck_id: args.deck_id.into(),
+                        workspace: args.workspace.into(),
                         run_id: run_id.into(),
                         wire_id: message["id"].clone(),
                         result,

@@ -7,5 +7,5 @@ whenever the deck structure changes (deck.html format, slide markup, runtime blo
 where files live:
 - app content (system prompt, reference docs, runtime) is compiled into the app and injected, never copied into decks
 - config shared by all decks (MCP config, user templates) goes in ~/.slopslides
-- per-deck app state (chat, provider session ids, snapshots, sketches) goes in the deck's session, ~/.slopslides/sessions/<id> (src-tauri/src/sessions.rs)
-- a deck folder holds only deck.html and assets/, nothing of the app's
+- workspace app state (chat, provider session ids, per-file snapshots, sketches) goes in the workspace's session, ~/.slopslides/sessions/<id> (src-tauri/src/sessions.rs)
+- a workspace may hold many decks and other files; new decks use <name>/deck.html with assets/ next to the deck file

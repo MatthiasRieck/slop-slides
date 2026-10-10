@@ -1,5 +1,5 @@
 //! Drives a coding agent CLI headless inside a deck folder, one process per turn, resuming
-//! the deck's session between turns: Claude Code (`claude -p --output-format stream-json`)
+//! the workspace's session between turns: Claude Code (`claude -p --output-format stream-json`)
 //! OpenAI Codex (`codex app-server`), or GitHub Copilot (see [`crate::copilot`]). Stream events are normalized into [`AgentEvent`]s
 //! and emitted to the frontend as `agent-event`.
 
@@ -45,7 +45,7 @@ pub enum Provider {
 impl Provider {
     pub const ALL: [Provider; 3] = [Provider::Claude, Provider::Codex, Provider::Copilot];
 
-    /// File in the deck's session (see [`crate::sessions`]) holding this provider's
+    /// File in the workspace's session (see [`crate::sessions`]) holding this provider's
     /// resumable session id.
     pub fn session_file(self) -> &'static str {
         match self {
@@ -147,6 +147,9 @@ pub enum AgentEvent {
     Compacting,
     /// The conversation was summarized; its new size is reported by the next `Usage`.
     Compacted,
+    OpenFile {
+        path: String,
+    },
     Finished {
         interrupted: bool,
     },
@@ -155,14 +158,14 @@ pub enum AgentEvent {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Envelope<'a> {
-    deck_id: &'a str,
+    workspace: &'a str,
     event: &'a AgentEvent,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendArgs {
-    pub deck_id: String,
+    pub workspace: String,
     pub prompt: String,
     #[serde(default)]
     pub provider: Provider,
@@ -179,39 +182,45 @@ pub struct SendArgs {
 }
 
 impl AgentManager {
-    pub fn is_running(&self, deck_id: &str) -> bool {
-        self.running.lock().unwrap().contains_key(deck_id)
+    pub fn is_running(&self, workspace: &str) -> bool {
+        let path = Path::new(workspace)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(workspace));
+        self.running.lock().unwrap().keys().any(|key| {
+            Path::new(key)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(key))
+                == path
+        })
     }
 
     pub fn send(&self, app: AppHandle, args: SendArgs) -> Result<()> {
-        let file = deck::deck_file(&args.deck_id)?;
-        let dir = deck::folder(&file).to_path_buf();
+        let dir = crate::workspace::root(&args.workspace)?;
         let app_home = deck::app_home()?;
-        let session_dir = Sessions::new(&app_home).current_or_start(&file)?;
+        let session_dir = Sessions::new(&app_home).current_or_start(&dir)?;
         let bin = args.provider.resolve()?;
         let (cancel_tx, cancel_rx) = watch::channel(false);
         {
             let mut running = self.running.lock().unwrap();
-            if running.contains_key(&args.deck_id) {
-                return Err(Error::msg("The agent is still working on this deck."));
+            if running.contains_key(&args.workspace) {
+                return Err(Error::msg("The agent is still working in this workspace."));
             }
             crate::sessions::claim_provider(&session_dir, args.provider)?;
-            running.insert(args.deck_id.clone(), cancel_tx);
+            running.insert(args.workspace.clone(), cancel_tx);
         }
         let approvals = self.approvals.clone();
         tauri::async_runtime::spawn(async move {
-            let (emitter, deck_id) = (app.clone(), args.deck_id.clone());
+            let (emitter, workspace) = (app.clone(), args.workspace.clone());
             let turn = Turn {
                 emit: Box::new(move |event| {
                     let _ = emitter.emit(
                         "agent-event",
                         Envelope {
-                            deck_id: &deck_id,
+                            workspace: &workspace,
                             event,
                         },
                     );
                 }),
-                file,
                 dir,
                 app_home,
                 session_dir,
@@ -226,47 +235,49 @@ impl AgentManager {
                     }),
                 effort: args.effort.filter(|e| !e.is_empty()),
                 compact: args.compact,
-                deck_id: args.deck_id.clone(),
+                workspace: args.workspace.clone(),
                 permission_mode: args.permission_mode,
                 approvals,
             };
-            // The whole deck is one file: keep a copy to fall back on before every turn.
-            if let Err(e) = deck::snapshot(&turn.file, &turn.session_dir) {
-                log::warn!("snapshot failed: {e}");
-            }
-            // Remember the locked slides, to put back any the agent changes.
-            if let Err(e) = deck::guard_locked(&turn.file, &turn.session_dir) {
-                log::warn!("could not record locked slides: {e}");
-            }
-            let interrupted = turn.run(&args.prompt, cancel_rx).await;
-            match deck::release_guard(&turn.file, &turn.session_dir) {
-                Ok(restored) if !restored.is_empty() => turn.emit(&AgentEvent::Error {
-                    message: locked_restored_message(&restored),
-                }),
-                Ok(_) => {}
-                Err(e) => turn.emit(&AgentEvent::Error {
-                    message: format!("Could not check the locked slides after this turn: {e}"),
-                }),
-            }
-            // Give new slides ids and restore the player runtime if the agent touched it.
-            if let Err(e) = deck::normalize(&turn.file) {
-                turn.emit(&AgentEvent::Error {
-                    message: format!("Could not tidy the deck after this turn: {e}"),
-                });
-            }
+            let interrupted = match crate::safety::Guard::start(&turn.dir, &turn.session_dir) {
+                Ok(guard) => {
+                    let interrupted = turn.run_with_open_requests(&args.prompt, cancel_rx).await;
+                    match guard.finish() {
+                        Ok(restored) => {
+                            for (file, ids) in restored {
+                                turn.emit(&AgentEvent::Error {
+                                    message: format!("{file}: {}", locked_restored_message(&ids)),
+                                });
+                            }
+                        }
+                        Err(e) => turn.emit(&AgentEvent::Error {
+                            message: format!(
+                                "Could not protect the workspace after this turn: {e}"
+                            ),
+                        }),
+                    }
+                    interrupted
+                }
+                Err(e) => {
+                    turn.emit(&AgentEvent::Error {
+                        message: format!("Could not protect the workspace before this turn: {e}"),
+                    });
+                    false
+                }
+            };
             app.state::<AgentManager>()
                 .running
                 .lock()
                 .unwrap()
-                .remove(&args.deck_id);
+                .remove(&args.workspace);
             turn.emit(&AgentEvent::Finished { interrupted });
         });
         Ok(())
     }
 
-    pub fn interrupt(&self, deck_id: &str) {
-        self.approvals.cancel_deck(deck_id);
-        if let Some(tx) = self.running.lock().unwrap().get(deck_id) {
+    pub fn interrupt(&self, workspace: &str) {
+        self.approvals.cancel_workspace(workspace);
+        if let Some(tx) = self.running.lock().unwrap().get(workspace) {
             let _ = tx.send(true);
         }
     }
@@ -284,20 +295,18 @@ fn locked_restored_message(ids: &[String]) -> String {
 
 struct Turn {
     emit: Box<dyn Fn(&AgentEvent) + Send + Sync>,
-    /// The deck file.
-    file: PathBuf,
-    /// The deck's folder, where the agent works.
+    /// The workspace root, where the agent works.
     dir: PathBuf,
     /// Where the files every deck's agent shares are written (see [`deck::app_home`]).
     app_home: PathBuf,
-    /// The deck's session this turn belongs to: chat state, snapshots, provider session ids.
+    /// The workspace's session this turn belongs to: chat state, snapshots, provider session ids.
     session_dir: PathBuf,
     provider: Provider,
     bin: PathBuf,
     model: Option<String>,
     effort: Option<String>,
     compact: bool,
-    deck_id: String,
+    workspace: String,
     permission_mode: codex::PermissionMode,
     approvals: Arc<codex::Approvals>,
 }
@@ -312,6 +321,25 @@ pub(crate) enum Outcome {
 }
 
 impl Turn {
+    /// MCP requests use a session inbox, independent of provider-specific tool events.
+    async fn run_with_open_requests(&self, prompt: &str, cancel: watch::Receiver<bool>) -> bool {
+        let run = self.run(prompt, cancel);
+        tokio::pin!(run);
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+        loop {
+            tokio::select! {
+                interrupted = &mut run => { self.open_requests(); return interrupted; }
+                _ = interval.tick() => self.open_requests(),
+            }
+        }
+    }
+
+    fn open_requests(&self) {
+        for path in mcp::take_open_requests(&self.dir, &self.session_dir) {
+            self.emit(&AgentEvent::OpenFile { path });
+        }
+    }
+
     fn emit(&self, event: &AgentEvent) {
         (self.emit)(event);
     }
@@ -385,7 +413,7 @@ impl Turn {
                     bin: &self.bin,
                     dir: &self.dir,
                     lint_server: &std::env::current_exe()?,
-                    deck_id: &self.deck_id,
+                    workspace: &self.workspace,
                     prompt,
                     model,
                     effort,
@@ -582,7 +610,11 @@ fn build_claude_args(
     .collect();
     args.extend([
         "--allowedTools".into(),
-        format!("{TOOLS},{}", mcp::QUALIFIED_TOOL),
+        format!(
+            "{TOOLS},{},{}",
+            mcp::QUALIFIED_TOOL,
+            mcp::QUALIFIED_OPEN_TOOL
+        ),
         "--mcp-config".into(),
         mcp_config.to_string_lossy().into_owned(),
         "--append-system-prompt-file".into(),
@@ -861,11 +893,11 @@ mod tests {
     #[test]
     fn send_args_compact_defaults_to_off() {
         let args: SendArgs =
-            serde_json::from_value(json!({"deckId":"d","prompt":"hi","provider":"claude"}))
+            serde_json::from_value(json!({"workspace":"d","prompt":"hi","provider":"claude"}))
                 .unwrap();
         assert!(!args.compact);
         let args: SendArgs = serde_json::from_value(
-            json!({"deckId":"d","prompt":"/compact","provider":"copilot","compact":true}),
+            json!({"workspace":"d","prompt":"/compact","provider":"copilot","compact":true}),
         )
         .unwrap();
         assert!(args.compact);
@@ -1041,7 +1073,7 @@ mod tests {
         assert_eq!(after(&base, "--tools").as_deref(), Some(TOOLS));
         assert_eq!(
             after(&base, "--allowedTools").as_deref(),
-            Some(format!("{TOOLS},mcp__slopslide__lint_deck").as_str())
+            Some(format!("{TOOLS},mcp__slopslide__lint_deck,mcp__slopslide__open_file").as_str())
         );
         assert_eq!(
             after(&base, "--mcp-config").as_deref(),
@@ -1182,21 +1214,21 @@ mod tests {
             assert_eq!(serde_json::to_value(&event).unwrap(), expected);
         }
         let envelope = Envelope {
-            deck_id: "talk",
+            workspace: "talk",
             event: &AgentEvent::Thinking,
         };
         assert_eq!(
             serde_json::to_value(envelope).unwrap(),
-            json!({"deckId":"talk","event":{"type":"thinking"}})
+            json!({"workspace":"talk","event":{"type":"thinking"}})
         );
     }
 
     #[test]
     fn send_args_deserialize_from_the_frontend() {
         let args: SendArgs =
-            serde_json::from_value(json!({"deckId":"talk","prompt":"Hi","model":null})).unwrap();
+            serde_json::from_value(json!({"workspace":"talk","prompt":"Hi","model":null})).unwrap();
         assert_eq!(
-            (args.deck_id.as_str(), args.prompt.as_str()),
+            (args.workspace.as_str(), args.prompt.as_str()),
             ("talk", "Hi")
         );
         assert_eq!(args.model, None);
@@ -1206,7 +1238,7 @@ mod tests {
             "older frontends send no provider"
         );
         let args: SendArgs = serde_json::from_value(
-            json!({"deckId":"t","prompt":"","provider":"codex","model":"gpt-6-astra","effort":"high"}),
+            json!({"workspace":"t","prompt":"","provider":"codex","model":"gpt-6-astra","effort":"high"}),
         )
         .unwrap();
         assert_eq!(args.provider, Provider::Codex);
@@ -1274,7 +1306,6 @@ mod tests {
                 let events = self.events.clone();
                 Turn {
                     emit: Box::new(move |e| events.lock().unwrap().push(e.clone())),
-                    file: self.dir.join(deck::DECK_FILE),
                     dir: self.dir.clone(),
                     app_home: self.dir.join("home"),
                     session_dir: self.session_dir(),
@@ -1283,7 +1314,7 @@ mod tests {
                     model: model.map(str::to_string),
                     effort: None,
                     compact: false,
-                    deck_id: "test".into(),
+                    workspace: "test".into(),
                     permission_mode: codex::PermissionMode::Ask,
                     approvals: Arc::default(),
                 }
@@ -1338,7 +1369,7 @@ mod tests {
                     .collect()
             }
 
-            /// The deck's session folder, outside the deck.
+            /// The workspace's session folder, outside the deck.
             fn session_dir(&self) -> PathBuf {
                 self.dir.join("home").join("sessions").join("1-test")
             }

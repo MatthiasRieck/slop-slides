@@ -1,8 +1,6 @@
-//! A tiny MCP server (JSON-RPC over stdio) that gives the agent one tool, `lint_deck`, so
-//! it can verify a deck after editing. The agent starts it as
-//! `slopslide --lint-mcp [deck dir]`, the folder defaulting to the working directory
-//! (see `agent.rs`); the tool lints the folder's deck.html unless its `path` argument names
-//! another deck file.
+//! Workspace MCP tools: lint_deck validates a workspace-relative deck and open_file
+//! queues a request in the current workspace session for the app to show a file.
+//! Started as `slopslide --lint-mcp [workspace root]`.
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -16,6 +14,9 @@ use crate::sessions::Sessions;
 pub const FLAG: &str = "--lint-mcp";
 pub const SERVER: &str = "slopslide";
 pub const TOOL: &str = "lint_deck";
+pub const OPEN_TOOL: &str = "open_file";
+pub const QUALIFIED_OPEN_TOOL: &str = "mcp__slopslide__open_file";
+const OPEN_REQUESTS: &str = "open-requests";
 /// The name Claude Code gives the tool, for `--allowedTools`.
 pub const QUALIFIED_TOOL: &str = "mcp__slopslide__lint_deck";
 
@@ -25,7 +26,7 @@ const DEFAULT_PROTOCOL: &str = "2024-11-05";
 /// current session, where the app records them for the running turn.
 pub fn serve(dir: &Path) {
     let sessions = deck::app_home().ok().map(|home| Sessions::new(&home));
-    let session = |file: &Path| sessions.as_ref().and_then(|s| s.current(file));
+    let session = |_: &Path| sessions.as_ref().and_then(|s| s.current(dir));
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
@@ -48,8 +49,7 @@ pub fn serve(dir: &Path) {
     }
 }
 
-/// Answers one JSON-RPC message; notifications get no response. `session` finds a deck
-/// file's current session.
+/// Answers one JSON-RPC message; notifications get no response. `session` finds the workspace's current session.
 pub fn handle(
     request: &Value,
     dir: &Path,
@@ -77,16 +77,22 @@ pub fn handle(
             "inputSchema": { "type": "object", "properties": {
                 "path": {
                     "type": "string",
-                    "description": "The deck file, relative to the working directory; deck.html when left out.",
+                    "description": "The deck file, relative to the workspace root; deck.html when left out.",
                 },
             } },
+        }, {
+            "name": OPEN_TOOL,
+            "description": "Show a workspace file in SlopSlide. Use after creating a deck or to show the user another file.",
+            "inputSchema": { "type": "object", "properties": {
+                "path": { "type": "string", "description": "Workspace-relative file path." }
+            }, "required": ["path"] }
         }]}),
         "tools/call" if request["params"]["name"] == TOOL => {
             let rel = request["params"]["arguments"]["path"]
                 .as_str()
                 .filter(|p| !p.is_empty())
                 .unwrap_or(deck::DECK_FILE);
-            let linted = deck::resolve_in_deck(dir, rel).and_then(|file| {
+            let linted = crate::workspace::resolve(dir, rel).and_then(|file| {
                 let session = session(&file);
                 deck::lint(&file, session.as_deref())
             });
@@ -96,10 +102,68 @@ pub fn handle(
             };
             json!({ "content": [{ "type": "text", "text": text }], "isError": failed })
         }
+        "tools/call" if request["params"]["name"] == OPEN_TOOL => {
+            let opened = (|| -> crate::error::Result<String> {
+                let rel = request["params"]["arguments"]["path"]
+                    .as_str()
+                    .filter(|p| !p.is_empty())
+                    .ok_or_else(|| crate::error::Error::msg("path is required"))?;
+                let file = crate::workspace::open_file(dir, rel)?;
+                if file.kind == crate::workspace::FileKind::Directory {
+                    return Err(crate::error::Error::msg("expected a file"));
+                }
+                let session =
+                    session(dir).ok_or_else(|| crate::error::Error::msg("no workspace session"))?;
+                let inbox = session.join(OPEN_REQUESTS);
+                std::fs::create_dir_all(&inbox)?;
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos();
+                let name = format!("{stamp:025}-{}", uuid::Uuid::new_v4());
+                let temp = inbox.join(format!("{name}.tmp"));
+                std::fs::write(&temp, json!({"path": rel}).to_string())?;
+                std::fs::rename(temp, inbox.join(format!("{name}.json")))?;
+                Ok(format!("Requested opening {rel} in SlopSlide."))
+            })();
+            let (text, failed) = match opened {
+                Ok(text) => (text, false),
+                Err(e) => (e.to_string(), true),
+            };
+            json!({ "content": [{ "type": "text", "text": text }], "isError": failed })
+        }
         "tools/call" => return Some(error(id, -32602, "unknown tool")),
         method => return Some(error(id, -32601, &format!("method not found: {method}"))),
     };
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+}
+
+/// Drain the session inbox. Validate again before forwarding a request to the UI.
+pub fn take_open_requests(root: &Path, session: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(session.join(OPEN_REQUESTS)) else {
+        return Vec::new();
+    };
+    let mut requests = Vec::new();
+    let mut files: Vec<_> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    files.sort();
+    for file in files {
+        let request = std::fs::read_to_string(&file)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+        let _ = std::fs::remove_file(file);
+        if let Some(path) = request.as_ref().and_then(|r| r["path"].as_str()) {
+            if crate::workspace::open_file(root, path)
+                .is_ok_and(|f| f.kind != crate::workspace::FileKind::Directory)
+            {
+                requests.push(path.to_string());
+            }
+        }
+    }
+    requests
 }
 
 fn error(id: Value, code: i64, message: &str) -> Value {
@@ -164,7 +228,8 @@ mod tests {
     fn lists_the_lint_tool() {
         let res = call(Path::new("/nonexistent"), "tools/list", json!({}));
         let tools = res["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 1);
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[1]["name"], OPEN_TOOL);
         assert_eq!(tools[0]["name"], TOOL);
         assert_eq!(QUALIFIED_TOOL, format!("mcp__{SERVER}__{TOOL}"));
     }
@@ -218,6 +283,55 @@ mod tests {
             json!({"name": TOOL, "arguments": {"path": "../x.html"}}),
         );
         assert_eq!(res["result"]["isError"], true, "only files in the folder");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn opens_workspace_files_through_the_session_inbox_and_rejects_escapes() {
+        let dir = temp_deck("<main class=\"deck\"></main>");
+        std::fs::create_dir_all(dir.join("talks")).unwrap();
+        std::fs::write(dir.join("talks/q3.html"), "<main class=\"deck\"></main>").unwrap();
+        let res = call(
+            &dir,
+            "tools/call",
+            json!({"name":OPEN_TOOL,"arguments":{"path":"talks/q3.html"}}),
+        );
+        assert_eq!(res["result"]["isError"], false);
+        assert_eq!(
+            take_open_requests(&dir, &dir.join("session")),
+            ["talks/q3.html"]
+        );
+        assert!(take_open_requests(&dir, &dir.join("session")).is_empty());
+        for path in ["../outside.html", "/etc/passwd", "talks", "missing.html"] {
+            assert_eq!(
+                call(
+                    &dir,
+                    "tools/call",
+                    json!({"name":OPEN_TOOL,"arguments":{"path":path}})
+                )["result"]["isError"],
+                true
+            );
+        }
+        let res = call(
+            &dir,
+            "tools/call",
+            json!({"name":TOOL,"arguments":{"path":"talks/q3.html"}}),
+        );
+        assert_eq!(res["result"]["isError"], false);
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(std::env::temp_dir(), dir.join("outside")).unwrap();
+            for tool in [TOOL, OPEN_TOOL] {
+                assert_eq!(
+                    call(
+                        &dir,
+                        "tools/call",
+                        json!({"name":tool,"arguments":{"path":"outside"}})
+                    )["result"]["isError"],
+                    true
+                );
+            }
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 

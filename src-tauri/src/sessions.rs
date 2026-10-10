@@ -1,23 +1,12 @@
-//! Chat sessions: what the app keeps about a conversation with the agent, stored outside the
-//! deck folder so it is never shared or committed along with the deck:
+//! Conversations belong to a workspace folder. The newest session is current.
+//! `meta.json` stores {"workspace": "<canonical folder>"}; chat, provider ids,
+//! sketches and templates live here, with snapshots/<relative deck path>/<stamp>.html
+//! and locked.json keyed by relative deck path.
 //!
-//! ```text
-//! ~/.slopslides/sessions/<session-id>/
-//!   meta.json        {"deck": "<deck file>"}: the deck the session belongs to
-//!   provider.json    the provider chosen for this conversation
-//!   chat.json        the conversation as the chat panel shows it
-//!   *-session        each agent provider's resumable session id
-//!   snapshots/       copies of the deck file from before agent turns and destructive edits
-//!   sketches/        screenshots of slides the user drew on, for the agent
-//!   templates/       templates staged for the agent to read
-//!   locked.json      the locked slides while an agent turn runs
-//! ```
-//!
-//! Session ids start with their creation time, so they sort oldest first. A deck's current
-//! session is its newest; starting a new chat starts a new session and keeps the old ones.
-//!
-//! Sessions from before decks were addressed by file name their deck's folder; they still
-//! belong to that folder's `deck.html`.
+//! Migration: legacy {"deck": ...} sessions (including folder-keyed ones) remain
+//! readable on disk. Opening a workspace starts a fresh conversation rather than
+//! silently adopting one of several decks' unrelated histories.
+//! provider.json records the provider chosen for the workspace conversation.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,7 +15,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::{json, Value};
 
 use crate::agent::Provider;
-use crate::deck::DECK_FILE;
 use crate::error::{Error, Result};
 
 const SESSIONS_DIR: &str = "sessions";
@@ -84,39 +72,35 @@ impl Sessions {
         }
     }
 
-    /// Session folders of the deck file `deck`, oldest first.
-    pub fn list(&self, deck: &Path) -> Vec<PathBuf> {
-        let deck = canonical(deck);
-        // A `deck.html`'s folder, which sessions from before named instead of the file.
-        let legacy = (deck.file_name().and_then(|n| n.to_str()) == Some(DECK_FILE))
-            .then(|| deck.parent().map(Path::to_path_buf))
-            .flatten();
+    /// Session folders of the workspace folder `workspace`, oldest first.
+    pub fn list(&self, workspace: &Path) -> Vec<PathBuf> {
+        let workspace = canonical(workspace);
         let Ok(entries) = fs::read_dir(&self.root) else {
             return Vec::new();
         };
         let mut found: Vec<PathBuf> = entries
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|dir| deck_of(dir).is_some_and(|d| d == deck || legacy.as_ref() == Some(&d)))
+            .filter(|dir| workspace_of(dir).is_some_and(|d| canonical(&d) == workspace))
             .collect();
         found.sort();
         found
     }
 
-    /// The deck's current session, if it has one.
-    pub fn current(&self, deck: &Path) -> Option<PathBuf> {
-        self.list(deck).pop()
+    /// The workspace's current session, if it has one.
+    pub fn current(&self, workspace: &Path) -> Option<PathBuf> {
+        self.list(workspace).pop()
     }
 
-    /// The deck's current session, starting one if it has none.
-    pub fn current_or_start(&self, deck: &Path) -> Result<PathBuf> {
-        match self.current(deck) {
+    /// The workspace's current session, starting one if it has none.
+    pub fn current_or_start(&self, workspace: &Path) -> Result<PathBuf> {
+        match self.current(workspace) {
             Some(dir) => Ok(dir),
-            None => self.start(deck),
+            None => self.start(workspace),
         }
     }
 
-    /// Starts a new, empty session for `deck` and makes it the current one.
-    pub fn start(&self, deck: &Path) -> Result<PathBuf> {
+    /// Starts a new, empty session for `workspace` and makes it the current one.
+    pub fn start(&self, workspace: &Path) -> Result<PathBuf> {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -124,7 +108,7 @@ impl Sessions {
         let short = &uuid::Uuid::new_v4().simple().to_string()[..8];
         let dir = self.root.join(format!("{stamp:013}-{short}"));
         fs::create_dir_all(&dir)?;
-        let meta = json!({ "deck": canonical(deck) });
+        let meta = json!({ "workspace": canonical(workspace) });
         fs::write(dir.join(META_FILE), meta.to_string())?;
         Ok(dir)
     }
@@ -138,14 +122,14 @@ impl Sessions {
     }
 }
 
-/// The deck file a session belongs to (its folder, for sessions from before).
-fn deck_of(session: &Path) -> Option<PathBuf> {
+/// The workspace folder a session belongs to; legacy deck sessions have no workspace.
+pub fn workspace_of(session: &Path) -> Option<PathBuf> {
     let raw = fs::read_to_string(session.join(META_FILE)).ok()?;
     let meta: Value = serde_json::from_str(&raw).ok()?;
-    meta["deck"].as_str().map(PathBuf::from)
+    meta["workspace"].as_str().map(PathBuf::from)
 }
 
-/// The deck's path in one canonical spelling, so the same file always matches.
+/// The workspace's path in one canonical spelling, so the same folder always matches.
 fn canonical(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
@@ -174,7 +158,7 @@ mod tests {
             let dir = self.0.join("library").join(id);
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join("deck.html"), "<html></html>").unwrap();
-            dir.join("deck.html")
+            dir
         }
     }
 
@@ -227,17 +211,14 @@ mod tests {
     }
 
     #[test]
-    fn a_deck_has_no_session_until_one_starts() {
+    fn a_workspace_has_no_session_until_one_starts() {
         let t = Temp::new();
         let deck = t.deck("talk");
         let sessions = t.sessions();
         assert_eq!(sessions.current(&deck), None);
         let started = sessions.current_or_start(&deck).unwrap();
         assert!(started.starts_with(t.0.join("home").join("sessions")));
-        assert!(
-            !started.starts_with(deck.parent().unwrap()),
-            "kept outside the deck"
-        );
+        assert!(!started.starts_with(&deck), "kept outside the deck");
         assert_eq!(sessions.current(&deck), Some(started.clone()));
         assert_eq!(sessions.current_or_start(&deck).unwrap(), started);
     }
@@ -256,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn sessions_belong_to_one_deck() {
+    fn sessions_belong_to_one_workspace() {
         let t = Temp::new();
         let (a, b) = (t.deck("a"), t.deck("b"));
         let sessions = t.sessions();
@@ -264,44 +245,36 @@ mod tests {
         assert_eq!(sessions.current(&b), None);
         let session_b = sessions.start(&b).unwrap();
         // The same file spelled differently is the same deck.
-        let spelled = t.0.join("library").join(".").join("a").join("deck.html");
+        let spelled = t.0.join("library").join(".").join("a");
         assert_eq!(sessions.list(&spelled), [session_a]);
         assert_eq!(sessions.list(&b), [session_b]);
     }
 
     #[test]
-    fn decks_in_one_folder_have_their_own_sessions() {
+    fn every_deck_in_a_workspace_shares_its_session() {
         let t = Temp::new();
-        let deck = t.deck("talks");
-        let other = deck.with_file_name("q3.html");
-        fs::write(&other, "<html></html>").unwrap();
+        let folder = t.deck("talks");
+        fs::write(folder.join("q3.html"), "<html></html>").unwrap();
         let sessions = t.sessions();
-        let session = sessions.start(&deck).unwrap();
-        assert_eq!(sessions.current(&other), None);
-        let other_session = sessions.start(&other).unwrap();
-        assert_eq!(sessions.list(&deck), [session]);
-        assert_eq!(sessions.list(&other), [other_session]);
+        let session = sessions.current_or_start(&folder).unwrap();
+        assert_eq!(sessions.current_or_start(&folder).unwrap(), session);
+        assert_eq!(workspace_of(&session), Some(folder.canonicalize().unwrap()));
     }
 
     #[test]
-    fn sessions_named_by_the_deck_folder_belong_to_its_deck_html() {
+    fn legacy_deck_sessions_are_preserved_but_not_adopted() {
         let t = Temp::new();
-        let deck = t.deck("talk");
-        let folder = deck.parent().unwrap().to_path_buf();
+        let folder = t.deck("talk");
+        let file = folder.join("deck.html");
         let sessions = t.sessions();
-        // How sessions were started before decks were files.
         let old = sessions.start(&folder).unwrap();
-        assert_eq!(sessions.current(&deck), Some(old.clone()));
-        let other = deck.with_file_name("other.html");
-        fs::write(&other, "<html></html>").unwrap();
-        assert_eq!(
-            sessions.current(&other),
-            None,
-            "only deck.html inherits them"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        let new = sessions.start(&deck).unwrap();
-        assert_eq!(sessions.list(&deck), [old, new]);
+        fs::write(old.join(META_FILE), json!({"deck": file}).to_string()).unwrap();
+        fs::write(old.join(CHAT_FILE), "[1]").unwrap();
+        assert_eq!(sessions.current(&folder), None);
+        let new = sessions.current_or_start(&folder).unwrap();
+        assert_ne!(new, old);
+        assert_eq!(fs::read_to_string(old.join(CHAT_FILE)).unwrap(), "[1]");
+        assert_eq!(workspace_of(&new), Some(folder.canonicalize().unwrap()));
     }
 
     #[test]

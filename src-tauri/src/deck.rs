@@ -10,10 +10,10 @@
 //! Decks the app creates get a folder of their own and the name `deck.html`
 //! ([`DECK_FILE`]); any other file passing [`crate::workspace::classify`] opens as a deck too.
 //! Nothing of the app's goes next to the deck: chat history and the other app state about a
-//! deck live in its sessions ([`crate::sessions`]), and what every deck shares lives in the
+//! workspace live in its sessions ([`crate::sessions`]), and what every deck shares lives in the
 //! app ([`crate::agent::SYSTEM_PROMPT`]) or in the user's [`app_home`] folder (user templates,
 //! the agent's MCP config, sessions). Functions taking a `session` keep their part of that
-//! state in the deck's current session folder.
+//! state in the workspace's current session folder.
 //!
 //! A deck opens directly in any browser as a slideshow; [`export`] inlines the assets so the
 //! single file can be shared on its own.
@@ -278,14 +278,57 @@ pub fn load(file: &Path) -> Result<Deck> {
 
 /// Saves a copy of the deck file under the session's `snapshots/`, keeping the newest few.
 pub fn snapshot(file: &Path, session: &Path) -> Result<()> {
-    let snapshots = session.join("snapshots");
+    let snapshots = snapshot_dir(file, session)?;
     fs::create_dir_all(&snapshots)?;
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis();
-    fs::copy(file, snapshots.join(format!("{stamp}.html")))?;
+        .as_nanos();
+    fs::copy(
+        file,
+        snapshots.join(format!("{stamp}-{}.html", uuid::Uuid::new_v4().simple())),
+    )?;
     prune_oldest(&snapshots, SNAPSHOTS_KEPT)
+}
+
+/// Per-file history prevents decks in the same workspace from overwriting each other.
+fn snapshot_dir(file: &Path, session: &Path) -> Result<PathBuf> {
+    let base = session.join("snapshots");
+    match sessions::workspace_of(session) {
+        Some(root) => Ok(base.join(guard_key(file, &root)?)),
+        None => Ok(base), // Legacy sessions remain readable.
+    }
+}
+
+fn guard_key(file: &Path, root: &Path) -> Result<String> {
+    // Canonicalize the parent, so a deleted deck still has its original key.
+    let mut parent = folder(file);
+    let mut missing = Vec::new();
+    while !parent.exists() {
+        missing.push(
+            parent
+                .file_name()
+                .ok_or_else(|| Error::msg("missing parent"))?
+                .to_os_string(),
+        );
+        parent = parent
+            .parent()
+            .ok_or_else(|| Error::msg("missing parent"))?;
+    }
+    let mut parent = parent.canonicalize()?;
+    for part in missing.iter().rev() {
+        parent.push(part);
+    }
+    let root = root.canonicalize()?;
+    let path = parent.join(
+        file.file_name()
+            .ok_or_else(|| Error::msg("missing file name"))?,
+    );
+    Ok(path
+        .strip_prefix(root)
+        .map_err(|_| Error::msg("deck outside workspace"))?
+        .to_string_lossy()
+        .replace('\\', "/"))
 }
 
 /// Saves a screenshot of a sketched-on slide under the session's `sketches/`, keeping the
@@ -429,25 +472,43 @@ fn ensure_unlocked(source: &str, slide: &str) -> std::result::Result<(), String>
 }
 
 /// The locked slides an agent turn must leave alone; empty when no turn is guarded.
-pub fn read_guard(session: Option<&Path>) -> Vec<html::LockedSlide> {
-    session
-        .and_then(|session| fs::read_to_string(session.join(LOCKS_FILE)).ok())
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+pub fn read_guard(file: &Path, session: Option<&Path>) -> Vec<html::LockedSlide> {
+    let Some(session) = session else {
+        return Vec::new();
+    };
+    let raw = fs::read_to_string(session.join(LOCKS_FILE)).unwrap_or_default();
+    if let Some(root) = sessions::workspace_of(session) {
+        let entries: std::collections::BTreeMap<String, Vec<html::LockedSlide>> =
+            serde_json::from_str(&raw).unwrap_or_default();
+        guard_key(file, &root)
+            .ok()
+            .and_then(|key| entries.get(&key).cloned())
+            .unwrap_or_default()
+    } else {
+        serde_json::from_str(&raw).unwrap_or_default()
+    }
 }
 
-fn write_guard(session: &Path, locked: &[html::LockedSlide]) -> Result<()> {
+fn write_guard(file: &Path, session: &Path, locked: &[html::LockedSlide]) -> Result<()> {
     fs::create_dir_all(session)?;
-    atomic_write(
-        &session.join(LOCKS_FILE),
-        serde_json::to_string(locked).expect("json").as_bytes(),
-    )
+    let value = if let Some(root) = sessions::workspace_of(session) {
+        let mut entries: std::collections::BTreeMap<String, Vec<html::LockedSlide>> =
+            fs::read_to_string(session.join(LOCKS_FILE))
+                .ok()
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_default();
+        entries.insert(guard_key(file, &root)?, locked.to_vec());
+        serde_json::to_string(&entries).expect("json")
+    } else {
+        serde_json::to_string(locked).expect("json")
+    };
+    atomic_write(&session.join(LOCKS_FILE), value.as_bytes())
 }
 
 /// Records the locked slides before an agent turn, so [`release_guard`] can put back any the
 /// agent changes and the lint tool can tell it about them.
 pub fn guard_locked(file: &Path, session: &Path) -> Result<()> {
-    write_guard(session, &html::locked_slides(&read_html(file)?))
+    write_guard(file, session, &html::locked_slides(&read_html(file)?))
 }
 
 /// Keeps a running turn's guard in step with what the user did to `slide`: locking,
@@ -456,24 +517,39 @@ fn refresh_guard(file: &Path, session: Option<&Path>, slide: &str) -> Result<()>
     let Some(session) = session.filter(|s| s.join(LOCKS_FILE).is_file()) else {
         return Ok(());
     };
-    let mut guard = read_guard(Some(session));
+    let mut guard = read_guard(file, Some(session));
     let now = html::locked_slides(&read_html(file)?);
     guard.retain(|l| l.id != slide);
     guard.extend(now.into_iter().filter(|l| l.id == slide));
-    write_guard(session, &guard)
+    write_guard(file, session, &guard)
 }
 
 /// Ends an agent turn's guard: puts back every locked slide the agent changed or removed.
 /// Returns their ids.
 pub fn release_guard(file: &Path, session: &Path) -> Result<Vec<String>> {
-    let guard = read_guard(Some(session));
-    let _ = fs::remove_file(session.join(LOCKS_FILE));
+    let guard = read_guard(file, Some(session));
+    if sessions::workspace_of(session).is_none() {
+        let _ = fs::remove_file(session.join(LOCKS_FILE));
+    }
     if guard.is_empty() {
         return Ok(Vec::new());
     }
-    let source = read_html(file)?;
-    let (restored, ids) = html::restore_locked(&source, &guard);
+    let source = if file.exists() {
+        String::from_utf8_lossy(&fs::read(file)?).into_owned()
+    } else {
+        String::from("<html><body><main class=\"deck\"></main></body></html>")
+    };
+    let (mut restored, mut ids) = html::restore_locked(&source, &guard);
+    if !html::changed_locked(&restored, &guard).is_empty() {
+        // A removed or broken slide container cannot host the missing locked slides.
+        // Rebuild their container; the snapshot keeps the complete pre-turn deck.
+        (restored, ids) = html::restore_locked(
+            "<html><body><main class=\"deck\"></main></body></html>",
+            &guard,
+        );
+    }
     if !ids.is_empty() {
+        fs::create_dir_all(folder(file))?;
         write_html(file, &restored)?;
     }
     Ok(ids)
@@ -634,7 +710,11 @@ pub fn lint(file: &Path, session: Option<&Path>) -> Result<Vec<lint::Issue>> {
         let rel = percent_encoding::percent_decode_str(rel).decode_utf8_lossy();
         resolve_in_deck(folder(file), &rel).is_ok_and(|path| path.is_file())
     };
-    Ok(lint::lint(&source, asset_exists, &read_guard(session)))
+    Ok(lint::lint(
+        &source,
+        asset_exists,
+        &read_guard(file, session),
+    ))
 }
 
 pub fn mime_for(path: &str) -> &'static str {
@@ -664,7 +744,7 @@ pub fn mime_for(path: &str) -> &'static str {
 }
 
 pub fn import_assets(file: &Path, paths: Vec<String>) -> Result<Vec<String>> {
-    let assets = folder(file).join("assets");
+    let assets = if file.is_dir() { file } else { folder(file) }.join("assets");
     fs::create_dir_all(&assets)?;
     let mut imported = Vec::new();
     for source in paths {
@@ -685,7 +765,7 @@ pub fn save_asset(file: &Path, name: &str, data: &str) -> Result<String> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(data.trim())
         .map_err(|e| Error::msg(format!("invalid pasted data: {e}")))?;
-    let assets = folder(file).join("assets");
+    let assets = if file.is_dir() { file } else { folder(file) }.join("assets");
     fs::create_dir_all(&assets)?;
     // Only the file name counts; a pasted name must not reach outside `assets/`.
     let name = Path::new(name).file_name().unwrap_or_default();
@@ -1031,7 +1111,7 @@ mod tests {
     fn a_guarded_turn_puts_back_the_locked_slides() {
         let deck = TempDeck::new(LOCKED);
         guard_locked(&deck.file(), &deck.session()).unwrap();
-        assert_eq!(read_guard(Some(&deck.session())).len(), 1);
+        assert_eq!(read_guard(&deck.file(), Some(&deck.session())).len(), 1);
         // The agent rewrites everything, dropping the locked slide.
         let agent = "<html><head><title>Talk</title></head><body><main>\n<section class=\"slide\" id=\"b\">New B</section>\n</main></body></html>";
         fs::write(deck.0.join(DECK_FILE), agent).unwrap();
@@ -1047,7 +1127,7 @@ mod tests {
             "<html><head><title>Talk</title></head><body><main>\n<section class=\"slide\" id=\"a\" data-locked>A</section>\n<section class=\"slide\" id=\"b\">New B</section>\n</main></body></html>"
         );
         assert!(
-            read_guard(Some(&deck.session())).is_empty(),
+            read_guard(&deck.file(), Some(&deck.session())).is_empty(),
             "the guard ends with the turn"
         );
         assert!(!lint(&deck.file(), Some(&deck.session()))
@@ -1067,7 +1147,7 @@ mod tests {
         set_slide_locked(&deck.file(), Some(&deck.session()), "a", false).unwrap();
         set_slide_locked(&deck.file(), Some(&deck.session()), "b", true).unwrap();
         set_slide_hidden(&deck.file(), Some(&deck.session()), "b", true).unwrap();
-        let ids: Vec<_> = read_guard(Some(&deck.session()))
+        let ids: Vec<_> = read_guard(&deck.file(), Some(&deck.session()))
             .into_iter()
             .map(|l| l.id)
             .collect();
@@ -1091,12 +1171,12 @@ mod tests {
         guard_locked(&deck.file(), &deck.session()).unwrap();
         open(&deck.file(), Some(&deck.session()), false).unwrap();
         assert_eq!(
-            read_guard(Some(&deck.session())).len(),
+            read_guard(&deck.file(), Some(&deck.session())).len(),
             1,
             "a running turn keeps its guard"
         );
         open(&deck.file(), Some(&deck.session()), true).unwrap();
-        assert!(read_guard(Some(&deck.session())).is_empty());
+        assert!(read_guard(&deck.file(), Some(&deck.session())).is_empty());
     }
 
     #[test]
@@ -1788,6 +1868,49 @@ mod tests {
             read_session(&deck.session(), "codex-session").as_deref(),
             Some("codex-1")
         );
+    }
+
+    #[test]
+    fn workspace_assets_without_a_deck_and_per_file_snapshot_retention() {
+        let deck = TempDeck::new(ORIGINAL);
+        assert_eq!(
+            save_asset(&deck.0, "photo.png", "aGk=").unwrap(),
+            "assets/photo.png"
+        );
+        assert_eq!(fs::read(deck.0.join("assets/photo.png")).unwrap(), b"hi");
+        let session = crate::sessions::Sessions::new(&deck.session())
+            .start(&deck.0)
+            .unwrap();
+        let other = deck.0.join("q3.html");
+        fs::write(&other, ORIGINAL).unwrap();
+        snapshot(&other, &session).unwrap();
+        for _ in 0..SNAPSHOTS_KEPT + 2 {
+            snapshot(&deck.file(), &session).unwrap();
+        }
+        assert_eq!(
+            fs::read_dir(session.join("snapshots/deck.html"))
+                .unwrap()
+                .count(),
+            SNAPSHOTS_KEPT
+        );
+        assert_eq!(
+            fs::read_dir(session.join("snapshots/q3.html"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn named_decks_resolve_their_own_assets_and_reject_shared_parent_images() {
+        let deck = TempDeck::new(ORIGINAL);
+        fs::create_dir_all(deck.0.join("assets")).unwrap();
+        fs::write(deck.0.join("assets/x.png"), "png").unwrap();
+        let file = deck.0.join("q3.html");
+        fs::write(&file, "<html><body><main class=\"deck\"><section class=\"slide\" id=\"a\"><img src=\"assets/x.png\" alt=\"X\"><img src=\"../shared/x.png\" alt=\"X\"></section></main></body></html>").unwrap();
+        let issues = lint(&file, None).unwrap();
+        assert!(!issues.iter().any(|i| i.rule == "missing-asset"));
+        assert!(issues.iter().any(|i| i.rule == "asset-outside-deck"));
     }
 
     #[test]

@@ -8,7 +8,7 @@ import { FileTree } from "./FileTree";
 
 /** What each sidebar tab shows. Add a tab here and to `SIDEBAR_TABS` in the store. */
 const TABS: Record<SidebarTab, { label: string; icon: typeof Files; render: () => ReactNode }> = {
-  chat: { label: "Chat", icon: MessageSquare, render: () => <ChatTab /> },
+  chat: { label: "Chat", icon: MessageSquare, render: () => <ChatPanel /> },
   files: { label: "Files", icon: Files, render: () => <FileTree /> },
 };
 
@@ -41,26 +41,6 @@ export function Sidebar() {
       <div role="tabpanel" className="min-h-0 flex-1">
         {TABS[active].render()}
       </div>
-    </div>
-  );
-}
-
-/** The chat is about the open deck; without one there is nothing to talk about yet. */
-function ChatTab() {
-  const hasDeck = useApp((s) => s.deck !== null);
-  if (hasDeck) return <ChatPanel />;
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-      <MessageSquare className="size-5 text-muted-foreground" />
-      <p className="text-sm font-medium">No presentation open</p>
-      <p className="text-xs text-muted-foreground">Open a deck from the Files tab, or create one, to chat about it.</p>
-      <button
-        type="button"
-        onClick={() => useApp.getState().setSidebarTab("files")}
-        className="mt-1 rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-accent"
-      >
-        Show files
-      </button>
     </div>
   );
 }

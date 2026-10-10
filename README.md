@@ -77,7 +77,7 @@ release, run `scripts/update-codex-schemas.sh <version>` and then `./check.sh`. 
 behavior tests below remain opt-in; schema validation cannot detect every behavioral
 change in an external CLI.
 
-The top bar shows whether `deck.html` passes the HTML lint. When it does not, clicking the
+The top bar shows whether the open deck file passes the HTML lint. When it does not, clicking the
 status puts fix instructions into the chat composer; the agent then fixes the issues and
 re-checks with its `lint_deck` tool.
 
@@ -143,7 +143,7 @@ draft GitHub release. Code signing and notarization secrets are listed in the wo
 src/                    React UI (Zustand store, Tailwind)
 src-tauri/src/
   deck.rs               deck folders: load/normalize, slide operations, export, snapshots
-  sessions.rs           chat sessions in `~/.slopslides/sessions`, each tied to one deck
+  sessions.rs           chat sessions in `~/.slopslides/sessions`, each tied to one workspace
   html.rs               finds the slide <section>s in deck.html and rewrites them;
                         installs the player runtime (assets/runtime.{css,js})
   size.rs               the deck's slide size (`slopslide-size` meta) and the stage CSS for it
@@ -178,26 +178,28 @@ everything else in `~/.slopslides/`:
 
 ```
 templates/<name>/          user templates
-sessions/<session id>/     one chat with the agent about one deck: meta.json (the deck
-                           folder it belongs to), chat.json, each provider's session id,
-                           snapshots/, sketches/, and templates staged for the agent
-mcp.json                   the agent's MCP config: this app as the `lint_deck` server,
-                           linting the deck in its working directory
+sessions/<session id>/     one chat about a workspace: meta.json (its workspace
+                           folder), chat.json, each provider's session id,
+                           snapshots/<relative deck path>/, sketches/, and templates staged for the agent
+mcp.json                   the agent's MCP config: this app as the `lint_deck` and `open_file` server
 system-prompt.md           the system prompt file Claude Code reads
 ```
 
-A deck's newest session is its current chat; New chat starts another and keeps the old
+A workspace's newest session is its current chat; New chat starts another and keeps the old
 one. `mcp.json` and `system-prompt.md` are rewritten by the app when they change.
 
 `deck.html` already plays standalone in a browser. The editor renders individual slides of
 it in sandboxed iframes (`deck.html?embed&slide=<id>`), so the thumbnails, stage, and
 exported file all use the same player. Before every agent turn and slide deletion, a copy is
-saved to the session's `snapshots/` (last 30 kept).
+saved for every deck to the session's `snapshots/<relative deck path>/` (last 30 kept per file).
+The safety scan skips dot folders and is bounded to 10,000 entries and 64 MiB of HTML;
+turns refuse to start if those limits are exceeded. Legacy per-deck sessions remain on
+disk; opening their workspace starts a fresh conversation.
 
 Claude receives file tools (Read/Write/Edit/Glob/Grep plus web search/fetch) and the app's
-`lint_deck` tool, with no shell access or other MCP servers. Codex uses its configured tools
-and MCP servers, plus `lint_deck`, under the selected permission mode. Copilot uses its
-existing deck-scoped permission handler. You can also edit `deck.html` by hand in any
+`lint_deck` and `open_file` tools, with no shell access or other MCP servers. Codex uses its configured tools
+and MCP servers, plus `lint_deck` and `open_file`, under the selected permission mode. Copilot uses its
+workspace-scoped read/write permission handler. You can also edit `deck.html` by hand in any
 editor; the app picks up the changes.
 
 The design guidance in the agent's prompt draws on

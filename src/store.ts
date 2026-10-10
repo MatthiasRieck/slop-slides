@@ -415,17 +415,19 @@ export const useApp = create<AppState>((set, get) => ({
     try {
       const workspace = await api.openWorkspace(path);
       set({ workspace, openedFile: null, workspaceChange: null });
+      await loadWorkspaceChat(workspace.path);
     } catch (error) {
       set({ error: errorMessage(error) });
       return;
     }
-    const last = localStorage.getItem(LAST_FILE_KEY + path);
+    const workspacePath = get().workspace!.path;
+    const last = localStorage.getItem(LAST_FILE_KEY + workspacePath);
     if (last === null) return get().setSidebarTab("files");
     // A file that is gone since just leaves the viewer empty.
     try {
       await openFileAt(last, await api.openFile(last));
     } catch {
-      localStorage.removeItem(LAST_FILE_KEY + path);
+      localStorage.removeItem(LAST_FILE_KEY + workspacePath);
       get().setSidebarTab("files");
     }
   },
@@ -433,8 +435,13 @@ export const useApp = create<AppState>((set, get) => ({
   closeWorkspace: async () => {
     if (!get().workspace) return true;
     if (!(await get().closeDeck())) return false;
+    const { workspace, messages, running } = get();
+    if (workspace) {
+      if (running) await api.interruptAgent(workspace.path);
+      await api.saveChat(workspace.path, messages.map(settleInterrupted));
+    }
     await api.closeWorkspace();
-    set({ workspace: null, openedFile: null, workspaceChange: null });
+    set({ workspace: null, openedFile: null, workspaceChange: null, messages: [], running: false, sessionProvider: null });
     return true;
   },
 
@@ -482,16 +489,7 @@ export const useApp = create<AppState>((set, get) => ({
     }
     if (get().codeDirty && !(await confirmDiscardEdits())) return false;
     await flushReviewSave();
-    const { deck, running, messages } = get();
-    const reply = messages.findLast((m) => m.role === "assistant");
-    // Codex can pause for an approval. Stop before leaving so no invisible request is stranded.
-    if (deck && running && reply?.role === "assistant" && replyProvider(reply) === "codex") {
-      await api.interruptAgent(deck.id);
-      const chat = get().messages.map(settleInterrupted);
-      set({ messages: chat });
-      await api.saveChat(deck.id, chat);
-    }
-    set({ codeDirty: false, openedFile: null, deck: null, selected: null, messages: [], sessionProvider: null, running: false, presenting: false, lint: null, composerFill: null, sketches: {}, sketchesSent: {}, imageExport: null, editing: false, slideUndo: [], slideRedo: [] });
+    set({ codeDirty: false, openedFile: null, deck: null, selected: null, presenting: false, lint: null, composerFill: null, sketches: {}, sketchesSent: {}, imageExport: null, editing: false, slideUndo: [], slideRedo: [] });
     return true;
   },
 
@@ -757,15 +755,15 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   send: async (text, { includeSlide, attachments, screenshot }) => {
-    const { deck, selected, running, selection } = get();
-    if (!deck || running) return;
+    const { workspace, openedFile, deck, selected, running, selection } = get();
+    if (!workspace || running) return;
     // Typed as a message, the command still compacts rather than reaching the agent as text.
     if (text.trim() === COMPACT_COMMAND) return get().compact();
-    const slide = includeSlide ? selected : null;
+    const slide = deck && includeSlide ? selected : null;
     const strokes = slide ? (get().sketches[slide] ?? []) : [];
     // Marks go out once, while they are on show; they stay on the slide as a review.
     const unsent = !!slide && get().reviewVisible && strokes !== get().sketchesSent[slide];
-    const bounds = unsent ? inkBounds(strokes, pixelsOf(deck)) : null;
+    const bounds = unsent && deck ? inkBounds(strokes, pixelsOf(deck)) : null;
     let user: UserMessage = {
       id: newId(),
       role: "user",
@@ -780,7 +778,7 @@ export const useApp = create<AppState>((set, get) => ({
     set((s) => ({ messages: [...s.messages, user, assistant], running: true }));
     // Let any edit still being saved land first, so the agent sees the final version.
     await editQueue;
-    if (slide && user.sketch) {
+    if (deck && slide && user.sketch) {
       // Screenshot the slide with the ink on it.
       const image = await captureSlide(deck.id);
       const captured: UserMessage = { ...user, sketch: { ...user.sketch, image } };
@@ -788,13 +786,14 @@ export const useApp = create<AppState>((set, get) => ({
       set((s) => ({ messages: s.messages.map((m) => (m.id === captured.id ? captured : m)) }));
       set((s) => ({ sketchesSent: { ...s.sketchesSent, [slide]: strokes } }));
     }
-    const template = await stageDeckTemplate(deck);
-    await startTurn(deck.id, assistant.id, buildPrompt(deck, user, template), false);
+    const template = deck ? await stageDeckTemplate(deck) : null;
+    if (get().workspace?.path !== workspace.path) return;
+    await startTurn(workspace.path, assistant.id, buildPrompt(deck, openedFile, user, template), false);
   },
 
   compact: async () => {
-    const { deck, running, selection } = get();
-    if (!deck || running) return;
+    const { workspace, running, selection } = get();
+    if (!workspace || running) return;
     const user: UserMessage = {
       id: newId(),
       role: "user",
@@ -806,21 +805,21 @@ export const useApp = create<AppState>((set, get) => ({
     };
     const assistant = newReply(selection.provider);
     set((s) => ({ messages: [...s.messages, user, assistant], running: true }));
-    await startTurn(deck.id, assistant.id, COMPACT_COMMAND, true);
+    await startTurn(workspace.path, assistant.id, COMPACT_COMMAND, true);
   },
 
   interrupt: () => {
-    const { deck } = get();
-    if (deck) {
+    const { workspace } = get();
+    if (workspace) {
       updateLastAssistant((m) => ({ ...m, parts: expireApprovals(m.parts) }));
-      void api.interruptAgent(deck.id);
+      void api.interruptAgent(workspace.path);
     }
   },
 
   resetChat: async () => {
-    const { deck } = get();
-    if (!deck) return;
-    await api.resetChat(deck.id);
+    const { workspace, running } = get();
+    if (!workspace || running) return;
+    await api.resetChat(workspace.path);
     set({ messages: [], running: false, sessionProvider: null });
   },
 }));
@@ -947,17 +946,24 @@ async function openFileAt(path: string, file: OpenedFile) {
   useApp.setState((s) => ({ openedFile: file, fileRev: s.fileRev + 1 }));
 }
 
-async function loadDeckState(deck: Deck) {
-  const [chat, running, provider] = await Promise.all([api.loadChat(deck.id), api.agentRunning(deck.id), api.sessionProvider(deck.id)]);
-  savedReview = reviewKey(deck.review ?? {});
+async function loadWorkspaceChat(path: string) {
+  const [chat, running, provider] = await Promise.all([api.loadChat(path), api.agentRunning(path), api.sessionProvider(path)]);
+  if (useApp.getState().workspace?.path !== path) return;
   const messages = Array.isArray(chat) ? (chat as ChatMessage[]) : [];
+  useApp.setState({ messages: running ? messages : messages.map(settleInterrupted), running, sessionProvider: provider === "claude" || provider === "codex" || provider === "copilot" ? provider : null });
+  const locked = chatProvider(useApp.getState());
+  const { selection, providers } = useApp.getState();
+  if (locked && locked !== selection.provider) {
+    saveSelection(reconcileSelection({ ...selection, provider: locked, model: "", label: PROVIDERS[locked].label, contextWindow: null }, providers ?? [], true));
+  }
+}
+
+async function loadDeckState(deck: Deck) {
+  savedReview = reviewKey(deck.review ?? {});
   useApp.setState({
     deck,
     selected: deck.slides[0]?.id ?? null,
     assetsRev: 0,
-    messages: messages.map(settleInterrupted),
-    sessionProvider: provider === "claude" || provider === "codex" || provider === "copilot" ? provider : null,
-    running,
     presenting: false,
     lint: null,
     composerFill: null,
@@ -968,11 +974,6 @@ async function loadDeckState(deck: Deck) {
     slideUndo: [],
     slideRedo: [],
   });
-  const locked = chatProvider(useApp.getState());
-  const { selection, providers } = useApp.getState();
-  if (locked && locked !== selection.provider) {
-    saveSelection(reconcileSelection({ ...selection, provider: locked, model: "", label: PROVIDERS[locked].label, contextWindow: null }, providers ?? [], true));
-  }
 }
 
 const REVIEW_SAVE_DELAY = 400;
@@ -1091,27 +1092,25 @@ async function stageDeckTemplate(deck: Deck): Promise<string | null> {
   }
 }
 
-function buildPrompt(deck: Deck, message: UserMessage, template: string | null = null): string {
-  const context: string[] = [];
-  const file = basename(deck.id);
-  if (file !== "deck.html") {
-    context.push(`Deck file: ${file} (the deck the instructions call deck.html; pass it as lint_deck's path)`);
-  }
-  if (message.slide) {
+function buildPrompt(deck: Deck | null, openedFile: OpenedFile | null, message: UserMessage, template: string | null = null): string {
+  const file = openedFile?.path ?? (deck ? relativePath(useApp.getState().workspace, deck.id) ?? basename(deck.id) : null);
+  const kind = deck ? "deck" : openedFile?.kind === "webpage" ? "web page" : openedFile?.kind;
+  const context: string[] = [file ? `Open file: ${file} (${kind})` : "No file open"];
+  if (deck && message.slide) {
     const index = deck.slides.findIndex((s) => s.id === message.slide);
     context.push(
-      `Current slide: <section id="${message.slide}"> in ${basename(deck.id)} (slide ${index + 1} of ${deck.slides.length})`,
+      `Current slide: <section id="${message.slide}"> in ${file} (slide ${index + 1} of ${deck.slides.length})`,
     );
     if (deck.slides[index]?.locked) {
       context.push("The current slide is locked (data-locked): do not change it.");
     }
-  } else if (deck.slides.length === 0) {
+  } else if (deck && deck.slides.length === 0) {
     context.push("The deck has no slides yet.");
   }
   if (message.attachments.length > 0) {
     context.push(`Attached files: ${message.attachments.join(", ")}`);
   }
-  if (message.sketch) {
+  if (deck && message.sketch) {
     const { image, bounds } = message.sketch;
     if (image) {
       context.push(`Sketch: ${image} (screenshot of the current slide with the user's marks drawn on top)`);
@@ -1147,8 +1146,8 @@ function replyProvider(message: AssistantMessage): Provider {
 }
 
 function persistChat() {
-  const { deck, messages } = useApp.getState();
-  if (deck) void api.saveChat(deck.id, messages);
+  const { workspace, messages } = useApp.getState();
+  if (workspace) void api.saveChat(workspace.path, messages);
 }
 
 function expireApprovals(parts: ChatPart[]): ChatPart[] {
@@ -1157,6 +1156,9 @@ function expireApprovals(parts: ChatPart[]): ChatPart[] {
 
 function applyAgentEvent(event: AgentEvent) {
   switch (event.type) {
+    case "openFile":
+      void useApp.getState().openPath(event.path);
+      return;
     case "approvalRequested":
       return updateLastAssistant((m) => ({ ...m, thinking: false, parts: [...m.parts, { kind: "approval", approval: event.approval, status: "pending" }] }));
     case "approvalResolved":
@@ -1295,7 +1297,7 @@ export async function initEventBridge() {
   // Listing Codex models starts its app server; don't hold up the rest of the bridge.
   void useApp.getState().refreshProviders();
   await listen<AgentEventEnvelope>("agent-event", ({ payload }) => {
-    if (payload.deckId === useApp.getState().deck?.id) applyAgentEvent(payload.event);
+    if (payload.workspace === useApp.getState().workspace?.path) applyAgentEvent(payload.event);
   });
   await listen<WorkspaceChanged>("workspace-changed", ({ payload }) => {
     if (payload.root === useApp.getState().workspace?.path) applyWorkspaceChanged(payload.paths);

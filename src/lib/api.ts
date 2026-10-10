@@ -115,6 +115,7 @@ export type AgentEvent =
   | { type: "approvalRequested"; approval: Approval }
   | { type: "approvalResolved"; id: string }
   | { type: "approvalReview"; id: string; status: string; detail: string | null }
+  | { type: "openFile"; path: string }
   | { type: "started"; sessionId: string | null }
   | { type: "thinking" }
   | { type: "textStart" }
@@ -136,7 +137,7 @@ export type AgentEvent =
   | { type: "finished"; interrupted: boolean };
 
 export interface AgentEventEnvelope {
-  deckId: string;
+  workspace: string;
   event: AgentEvent;
 }
 
@@ -211,7 +212,7 @@ export const api = {
   ) => invoke<string>("export_slide_image", { dir, index, total, rect, viewport, width }),
   lintDeck: (id: string) => invoke<LintIssue[]>("lint_deck", { id }),
   /**
-   * Screenshots `rect` of the window; returns the deck-relative image path. Both are in CSS
+   * Screenshots `rect` of the window; returns an absolute session image path. Both are in CSS
    * pixels; the viewport size lets the backend work out the display's scale.
    */
   captureSketch: (
@@ -224,21 +225,21 @@ export const api = {
   saveChat: (id: string, chat: unknown) => invoke<void>("save_chat", { id, chat }),
   resetChat: (id: string) => invoke<void>("reset_chat", { id }),
   sendMessage: (
-    deckId: string,
+    workspace: string,
     prompt: string,
     selection: { provider: Provider; model: string; effort: string; contextWindow: string | null; permissionMode?: PermissionMode },
     /** Summarize the conversation so far instead of sending `prompt`. */
     compact = false,
-  ) => invoke<void>("send_message", { args: { deckId, prompt, ...selection, compact } }),
+  ) => invoke<void>("send_message", { args: { workspace, prompt, ...selection, compact } }),
   codexPermissionModes: (id: string) => invoke<PermissionMode[]>("codex_permission_modes", { id }),
-  respondApproval: (deckId: string, id: string, decision: ApprovalDecision) =>
-    invoke<void>("respond_approval", { deckId, id, decision }),
+  respondApproval: (workspace: string, id: string, decision: ApprovalDecision) =>
+    invoke<void>("respond_approval", { workspace, id, decision }),
   interruptAgent: (id: string) => invoke<void>("interrupt_agent", { id }),
   agentRunning: (id: string) => invoke<boolean>("agent_running", { id }),
   listProviders: () => invoke<ProviderInfo[]>("list_providers"),
   /** The user's templates first, then the built-in ones. */
   listTemplates: () => invoke<TemplateSummary[]>("list_templates"),
-  /** Copies the template into the deck's session for the agent; returns its absolute path. */
+  /** Copies the template into the workspace's session for the agent; returns its absolute path. */
   stageTemplate: (id: string, template: string) => invoke<string>("stage_template", { id, template }),
   /** Gives a deck without slides the template's styles. */
   applyTemplate: (id: string, template: string) => invoke<Deck>("apply_template", { id, template }),

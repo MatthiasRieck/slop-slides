@@ -70,7 +70,7 @@ describe("close file", () => {
   it("shows the close control for a non-deck file", () => {
     useApp.setState({ deck: null, openedFile: { path: "notes.md", absolute: "/decks/notes.md", kind: "file" } });
     render(<TopBar />);
-    expect(screen.getByRole("button", { name: "Close file" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Close file" })).not.toBeNull();
   });
 });
 

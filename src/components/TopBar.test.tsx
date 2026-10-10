@@ -5,10 +5,11 @@ const invoke = vi.fn();
 const save = vi.fn();
 const openDialog = vi.fn();
 const revealItemInDir = vi.fn();
+const ask = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
-  ask: vi.fn(),
+  ask: (...args: unknown[]) => ask(...args),
   save: (...args: unknown[]) => save(...args),
   open: (...args: unknown[]) => openDialog(...args),
 }));
@@ -21,13 +22,12 @@ import { TopBar } from "./TopBar";
 const WORKSPACE = { path: "/decks", name: "decks" };
 const OPENED = { path: "talk/deck.html", absolute: "/decks/talk/deck.html", kind: "deck" as const };
 
-const toggle = (name: "Slides" | "HTML") => screen.getByRole("button", { name }) as HTMLButtonElement;
-
 beforeEach(() => {
   invoke.mockReset();
   save.mockReset();
   openDialog.mockReset();
   revealItemInDir.mockReset();
+  ask.mockReset();
   useApp.setState({ workspace: WORKSPACE, openedFile: OPENED, deck: deckFor(DECK_HTML), view: "slides", sidebarOpen: true, railOpen: true, codeDirty: false, presenting: false, error: null, imageExport: null });
 });
 
@@ -59,227 +59,38 @@ describe("sidebar toggle", () => {
   });
 });
 
-describe("Slides / HTML toggle", () => {
-  it("marks the current view as pressed", () => {
-    render(<TopBar />);
-    expect(toggle("Slides").getAttribute("aria-pressed")).toBe("true");
-    expect(toggle("HTML").getAttribute("aria-pressed")).toBe("false");
-  });
-
-  it("switches to the HTML view and back", () => {
-    render(<TopBar />);
-    fireEvent.click(toggle("HTML"));
-    expect(useApp.getState().view).toBe("code");
-    expect(toggle("HTML").getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(toggle("Slides"));
-    expect(useApp.getState().view).toBe("slides");
-    expect(localStorage.getItem("slopslide.view")).toBe("slides");
-  });
-
-  it("shows an unsaved-changes dot on the HTML button", () => {
-    render(<TopBar />);
-    expect(screen.queryByTitle("Unsaved changes")).toBeNull();
-    act(() => useApp.setState({ codeDirty: true }));
-    const dot = screen.getByTitle("Unsaved changes");
-    expect(toggle("HTML").contains(dot)).toBe(true);
-  });
-
-  it("explains each view in its tooltip", () => {
-    render(<TopBar />);
-    expect(toggle("HTML").title).toMatch(/deck\.html/);
-    expect(toggle("Slides").title).toMatch(/rendered slide/);
-  });
-});
-
-describe("deck title", () => {
-  const titleInput = () => document.querySelector("header input") as HTMLInputElement;
-
-  it("shows the deck title", () => {
-    render(<TopBar />);
-    expect(titleInput().value).toBe("Talk");
-  });
-
-  it("renames on Enter", async () => {
-    invoke.mockResolvedValue({ ...deckFor(DECK_HTML), title: "Board meeting" });
-    render(<TopBar />);
-    fireEvent.change(titleInput(), { target: { value: "  Board meeting " } });
-    titleInput().focus();
-    await act(async () => fireEvent.keyDown(titleInput(), { key: "Enter" }));
-    expect(invoke).toHaveBeenCalledWith("rename_deck", { id: "/decks/talk/deck.html", title: "Board meeting" });
-    expect(useApp.getState().deck!.title).toBe("Board meeting");
-    expect(titleInput().value).toBe("Board meeting");
-  });
-
-  it("renames when focus leaves the field", async () => {
-    invoke.mockResolvedValue({ ...deckFor(DECK_HTML), title: "New" });
-    render(<TopBar />);
-    fireEvent.change(titleInput(), { target: { value: "New" } });
-    await act(async () => fireEvent.blur(titleInput()));
-    expect(invoke).toHaveBeenCalledWith("rename_deck", { id: "/decks/talk/deck.html", title: "New" });
-  });
-
-  it("Escape restores the saved title without renaming", async () => {
-    render(<TopBar />);
-    fireEvent.change(titleInput(), { target: { value: "Oops" } });
-    titleInput().focus();
-    // Escape blurs the field, and blurring normally commits the edit.
-    await act(async () => fireEvent.keyDown(titleInput(), { key: "Escape" }));
-    expect(titleInput().value).toBe("Talk");
-    expect(document.activeElement).not.toBe(titleInput());
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("still renames normally after an Escape", async () => {
-    invoke.mockResolvedValue({ ...deckFor(DECK_HTML), title: "Second try" });
-    render(<TopBar />);
-    titleInput().focus();
-    await act(async () => fireEvent.keyDown(titleInput(), { key: "Escape" }));
-    fireEvent.change(titleInput(), { target: { value: "Second try" } });
-    await act(async () => fireEvent.blur(titleInput()));
-    expect(invoke).toHaveBeenCalledWith("rename_deck", { id: "/decks/talk/deck.html", title: "Second try" });
-  });
-
-  it.each([[""], ["   "], ["Talk"], [" Talk "]])("does not rename to %j", async (value) => {
-    render(<TopBar />);
-    fireEvent.change(titleInput(), { target: { value } });
-    await act(async () => fireEvent.blur(titleInput()));
-    expect(invoke).not.toHaveBeenCalled();
-    expect(titleInput().value).toBe("Talk");
-  });
-
-  it("reports a failed rename", async () => {
-    invoke.mockRejectedValue("deck not found: talk");
-    render(<TopBar />);
-    fireEvent.change(titleInput(), { target: { value: "New" } });
-    await act(async () => fireEvent.blur(titleInput()));
-    expect(useApp.getState().error).toBe("deck not found: talk");
-  });
-
-  it("picks up title changes made elsewhere (e.g. by the agent)", () => {
-    render(<TopBar />);
-    act(() => useApp.getState().setDeck({ ...deckFor(DECK_HTML), title: "Agent's title" }));
-    expect(titleInput().value).toBe("Agent's title");
-  });
-});
-
-describe("toolbar actions", () => {
-  const exportButton = () => screen.getByRole("button", { name: /Export/ }) as HTMLButtonElement;
-  const presentButton = () => screen.getByRole("button", { name: /Present/ }) as HTMLButtonElement;
-  async function exportAs(item: "HTML file" | "PNG images") {
-    fireEvent.click(exportButton());
-    await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: new RegExp(item) })));
-  }
-
-  it("exports to the chosen file and reveals it", async () => {
-    save.mockResolvedValue("/Users/me/Desktop/Talk.html");
-    render(<TopBar />);
-    await exportAs("HTML file");
-    expect(save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: "Talk.html" }));
-    expect(invoke).toHaveBeenCalledWith("export_deck", { id: "/decks/talk/deck.html", dest: "/Users/me/Desktop/Talk.html" });
-    expect(revealItemInDir).toHaveBeenCalledWith("/Users/me/Desktop/Talk.html");
-  });
-
-  it.each([
-    [`Q3: "Plan" / <2025>?`, "Q3 Plan  2025.html"],
-    [`a\\b|c*d`, "abcd.html"],
-    [`///`, "presentation.html"],
-  ])("suggests a file name safe on every OS for %j", async (title, expected) => {
-    useApp.setState({ deck: { ...deckFor(DECK_HTML), title } });
-    save.mockResolvedValue(null);
-    render(<TopBar />);
-    await exportAs("HTML file");
-    expect(save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: expected }));
-  });
-
-  it("does nothing when the save dialog is cancelled", async () => {
-    save.mockResolvedValue(null);
-    render(<TopBar />);
-    await exportAs("HTML file");
-    expect(invoke).not.toHaveBeenCalled();
-    expect(revealItemInDir).not.toHaveBeenCalled();
-  });
-
-  it("reports a failed export", async () => {
-    save.mockResolvedValue("/read-only/Talk.html");
-    invoke.mockRejectedValue("Permission denied (os error 13)");
-    render(<TopBar />);
-    await exportAs("HTML file");
-    expect(useApp.getState().error).toBe("Permission denied (os error 13)");
-    expect(revealItemInDir).not.toHaveBeenCalled();
-  });
-
-  it("opens and closes the export menu", () => {
-    render(<TopBar />);
-    expect(screen.queryByRole("menu")).toBeNull();
-    fireEvent.click(exportButton());
-    expect(exportButton().getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
-      "HTML fileOne self-contained file to share",
-      "PNG imagesOne image per slide, in a new folder",
-    ]);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("menu")).toBeNull();
-    fireEvent.click(exportButton());
-    fireEvent.pointerDown(document.body);
-    expect(screen.queryByRole("menu")).toBeNull();
-  });
-
-  it("exports PNGs into a new folder named after the deck", async () => {
-    openDialog.mockResolvedValue("/Users/me/Desktop");
-    invoke.mockImplementation(async (command: string) =>
-      command === "create_image_export_dir" ? "/Users/me/Desktop/Talk" : undefined,
-    );
-    render(<TopBar />);
-    await exportAs("PNG images");
-    expect(openDialog).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
-    expect(invoke).toHaveBeenCalledWith("create_image_export_dir", { id: "/decks/talk/deck.html", parent: "/Users/me/Desktop" });
-    expect(useApp.getState().imageExport).toEqual({ dir: "/Users/me/Desktop/Talk", slides: ["intro", "#2", "outro"] });
-    expect(screen.queryByRole("menu")).toBeNull();
-  });
-
-  it("does nothing when no folder is chosen", async () => {
-    openDialog.mockResolvedValue(null);
-    render(<TopBar />);
-    await exportAs("PNG images");
-    expect(invoke).not.toHaveBeenCalled();
-    expect(useApp.getState().imageExport).toBeNull();
-  });
-
-  it("reports a folder that cannot be created", async () => {
-    openDialog.mockResolvedValue("/read-only");
-    invoke.mockRejectedValue("Permission denied (os error 13)");
-    render(<TopBar />);
-    await exportAs("PNG images");
-    expect(useApp.getState().error).toBe("Permission denied (os error 13)");
-    expect(useApp.getState().imageExport).toBeNull();
-  });
-
-  it("starts the presentation", () => {
-    render(<TopBar />);
-    fireEvent.click(presentButton());
-    expect(useApp.getState().presenting).toBe(true);
-  });
-
-  it("cannot export or present an empty deck", () => {
-    useApp.setState({ deck: { ...deckFor(DECK_HTML), slides: [] } });
-    render(<TopBar />);
-    expect(exportButton().disabled).toBe(true);
-    expect(presentButton().disabled).toBe(true);
-  });
-
+describe("workspace bar", () => {
   it("reveals the deck file in the file manager", () => {
     render(<TopBar />);
     fireEvent.click(screen.getByTitle("Show in folder"));
     expect(revealItemInDir).toHaveBeenCalledWith("/decks/talk/deck.html");
   });
 
-  it("closes the folder, back to the start screen", async () => {
-    invoke.mockResolvedValue(undefined);
+  it("closes the open deck, back to the workspace with nothing open", async () => {
     render(<TopBar />);
-    await act(async () => fireEvent.click(screen.getByTitle("Close decks")));
-    expect(invoke).toHaveBeenCalledWith("close_workspace");
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Close deck.html" })));
     expect(useApp.getState().deck).toBeNull();
-    expect(useApp.getState().workspace).toBeNull();
+    expect(useApp.getState().openedFile).toBeNull();
+    expect(useApp.getState().workspace).toEqual(WORKSPACE);
+    expect(invoke).not.toHaveBeenCalledWith("close_workspace");
+  });
+
+  it("closes an open page that is not a deck", async () => {
+    useApp.setState({ deck: null, openedFile: { path: "site/index.html", absolute: "/decks/site/index.html", kind: "webpage" } });
+    render(<TopBar />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Close index.html" })));
+    expect(useApp.getState().openedFile).toBeNull();
+    expect(useApp.getState().workspace).toEqual(WORKSPACE);
+  });
+
+  it("keeps the deck open when unsaved HTML edits are not discarded", async () => {
+    useApp.setState({ codeDirty: true });
+    ask.mockResolvedValue(false);
+    render(<TopBar />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Close deck.html" })));
+    expect(ask).toHaveBeenCalled();
+    expect(useApp.getState().deck).not.toBeNull();
+    expect(useApp.getState().openedFile).toEqual(OPENED);
   });
 
   it("renders nothing without a workspace", () => {
@@ -291,7 +102,7 @@ describe("toolbar actions", () => {
   it("shows the open page's path and no deck tools when it is not a deck", () => {
     useApp.setState({ deck: null, openedFile: { path: "site/index.html", absolute: "/decks/site/index.html", kind: "webpage" } });
     render(<TopBar />);
-    expect(screen.getByText("site/index.html")).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "Breadcrumbs" }).textContent).toBe("decks/site/index.html");
     expect(screen.queryByRole("button", { name: /Present/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Hide slides" })).toBeNull();
     fireEvent.click(screen.getByTitle("Show in folder"));
@@ -300,54 +111,51 @@ describe("toolbar actions", () => {
   });
 });
 
-describe("lint status", () => {
-  const issues = [
-    { rule: "unclosed-tag", severity: "error" as const, message: "<div> is never closed.", line: 12, slide: "intro" },
-    { rule: "title", severity: "warning" as const, message: "Needs a title.", line: 1, slide: null },
-  ];
+describe("layout", () => {
+  const order = () =>
+    Array.from(document.querySelectorAll("header > button, header > nav")).map(
+      (el) => el.getAttribute("aria-label") ?? el.getAttribute("title"),
+    );
 
-  it("shows a pending state until the first check finishes", () => {
-    useApp.setState({ lint: null });
+  it("puts the slide rail toggle first, then the breadcrumbs, then the file and folder actions", () => {
     render(<TopBar />);
-    expect(screen.getByTitle(/Checking deck\.html/)).toBeTruthy();
+    expect(order()).toEqual(["Hide slides", "Breadcrumbs", "Show in folder", "Close deck.html", "Hide sidebar"]);
   });
 
-  it("shows OK and re-checks on click", () => {
-    const refreshLint = vi.fn(async () => {});
-    useApp.setState({ lint: [], refreshLint });
+  it("leaves the deck's tools to the deck toolbar", () => {
     render(<TopBar />);
-    fireEvent.click(screen.getByRole("button", { name: /Lint OK/ }));
-    expect(refreshLint).toHaveBeenCalled();
-    expect(useApp.getState().composerFill).toBeNull();
+    for (const name of [/Present/, /Export/, "Slides", "HTML", "Slide size"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+    expect(document.querySelector("header input")).toBeNull();
+  });
+});
+
+describe("breadcrumbs", () => {
+  const crumbs = () =>
+    Array.from(screen.getByRole("navigation", { name: "Breadcrumbs" }).querySelectorAll("span > span:last-child")).map(
+      (el) => el.textContent,
+    );
+
+  it("goes from the workspace folder to the open file", () => {
+    render(<TopBar />);
+    expect(crumbs()).toEqual(["decks", "talk", "deck.html"]);
+    expect(screen.getByText("deck.html").getAttribute("aria-current")).toBe("page");
+    expect(screen.getByText("decks").getAttribute("aria-current")).toBeNull();
   });
 
-  it("counts errors and warnings and lists them in the tooltip", () => {
-    useApp.setState({ lint: issues });
+  it("shows a file at the workspace root", () => {
+    useApp.setState({ deck: null, openedFile: { path: "notes.md", absolute: "/decks/notes.md", kind: "file" } });
     render(<TopBar />);
-    const button = screen.getByRole("button", { name: /Lint: 1 error, 1 warning/ });
-    expect(button.title).toContain("Line 12: <div> is never closed.");
-    expect(button.className).toContain("text-destructive");
+    expect(crumbs()).toEqual(["decks", "notes.md"]);
   });
 
-  it("uses the warning style when there are only warnings", () => {
-    useApp.setState({ lint: [issues[1]!, issues[1]!] });
+  it("shows only the workspace when no file is open", () => {
+    useApp.setState({ deck: null, openedFile: null });
     render(<TopBar />);
-    expect(screen.getByRole("button", { name: /Lint: 2 warnings/ }).className).toContain("text-amber-600");
-  });
-
-  it("fills the chat composer with fix instructions when clicked", () => {
-    useApp.setState({ lint: issues, composerFill: null, running: false });
-    render(<TopBar />);
-    fireEvent.click(screen.getByRole("button", { name: /Lint: 1 error/ }));
-    const fill = useApp.getState().composerFill!;
-    expect(fill.text).toContain("[unclosed-tag] (slide `intro`)");
-    expect(fill.text).toContain("lint_deck");
-  });
-
-  it("is disabled while the agent works", () => {
-    useApp.setState({ lint: issues, running: true });
-    render(<TopBar />);
-    expect((screen.getByRole("button", { name: /Lint: 1 error/ }) as HTMLButtonElement).disabled).toBe(true);
-    useApp.setState({ running: false });
+    expect(crumbs()).toEqual(["decks"]);
+    expect(screen.getByText("decks").getAttribute("aria-current")).toBe("page");
+    expect(screen.queryByTitle("Show in folder")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Close/ })).toBeNull();
   });
 });

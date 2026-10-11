@@ -4,8 +4,8 @@
    The preview fills the whole stage area and the slide sits in its middle, at the size it has on
    the stage. The surroundings are an endless pasteboard: drag with the middle button (pressed
    mouse wheel), swipe on a trackpad or hold Space and drag to pan; turn the mouse wheel, pinch or
-   Ctrl/⌘+scroll to zoom; 0 returns to the start. Without the slide editor, dragging with the
-   primary button pans too. The slide's frame (outline and shadow) moves with it.
+   Ctrl/⌘+scroll to zoom; 0 returns to the start. A plain drag with the primary button is left
+   to the slide, so its text can be selected. The slide's frame (outline and shadow) moves with it.
    The view is reported as { type: "slop:view", slide, x, y, k } (pan in px, zoom) and restored
    with { type: "slop:camera", x, y, k } or { type: "slop:camera", home: true }. The app also
    sends { type: "slop:canvas", color, accent }: the color of the panel around the slide and its
@@ -31,7 +31,6 @@
   var DRAG_THRESHOLD = 3;
   // Wheel events closer together than this belong to one gesture (a swipe and its momentum).
   var WHEEL_GESTURE_MS = 150;
-  var editor = params.has("edit");
 
   var deck = slide.parentElement;
   var root = document.documentElement;
@@ -168,15 +167,12 @@
   }
 
   // The middle button (pressing the mouse wheel) always pans, even while typing; Space+drag pans
-  // unless typing. Without the editor, the primary button pans too, except on controls; in a show
-  // it clicks through the slides.
+  // unless typing. Any other press with the primary button belongs to the slide: it selects text,
+  // follows links, and in a show clicks through the slides.
   document.addEventListener("pointerdown", function (event) {
     // A press always ends an earlier pan, even one whose release never arrived.
     pan = null;
-    var primary = event.button === 0;
-    if (event.button !== 1 && !(primary && spaceDown && !api.busy())) {
-      if (!primary || editor || show || event.target.closest("a, button, input, select, textarea, video, audio, [contenteditable]")) return;
-    }
+    if (event.button !== 1 && !(event.button === 0 && spaceDown && !api.busy())) return;
     startPan(event);
     event.stopImmediatePropagation();
   });

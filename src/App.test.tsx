@@ -64,12 +64,15 @@ describe("App", () => {
   it("keeps the chat draft mounted when switching the right sidebar to narration", () => {
     useApp.setState({ deck: deckFor(DECK_HTML) });
     render(<App />);
+    expect(screen.queryByTestId("stub-presets")).toBeNull();
     fireEvent.change(screen.getByLabelText("Chat draft"), { target: { value: "Keep this draft" } });
     fireEvent.click(screen.getByRole("tab", { name: "Narration" }));
     expect(screen.getByRole("tabpanel").getAttribute("id")).toBe("panel-narration");
     fireEvent.click(screen.getByRole("tab", { name: "Presentation presets" }));
     expect(screen.getByRole("tabpanel").getAttribute("id")).toBe("panel-presets");
+    expect(screen.getByTestId("stub-presets")).toBeTruthy();
     fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
+    expect(screen.queryByTestId("stub-presets")).toBeNull();
     expect((screen.getByLabelText("Chat draft") as HTMLInputElement).value).toBe("Keep this draft");
     expect(useApp.getState().selected).toBeNull();
   });

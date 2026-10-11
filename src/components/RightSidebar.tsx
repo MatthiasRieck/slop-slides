@@ -13,9 +13,9 @@ export function RightSidebar() {
       </div>
       <button aria-label="Hide sidebar" title="Hide sidebar" className="rounded p-1 text-muted-foreground hover:bg-accent" onClick={() => useApp.getState().setChatOpen(false)}><PanelRightClose className="size-3.5" /></button>
     </div>
-    {/* Keep both mounted: composer drafts, attachments and edits survive tab switches. */}
+    {/* Keep Chat and Narration mounted so drafts and edits survive tab switches. */}
     <div id="panel-chat" role="tabpanel" aria-labelledby="tab-chat" hidden={tab !== "chat"} className="min-h-0 flex-1"><ChatPanel embedded /></div>
     <div id="panel-narration" role="tabpanel" aria-labelledby="tab-narration" hidden={tab !== "narration"} className="min-h-0 flex-1"><NarrationPanel /></div>
-    <div id="panel-presets" role="tabpanel" aria-labelledby="tab-presets" hidden={tab !== "presets"} className="min-h-0 flex-1"><PresentationPresets /></div>
+    {tab === "presets" && <div id="panel-presets" role="tabpanel" aria-labelledby="tab-presets" className="min-h-0 flex-1"><PresentationPresets /></div>}
   </div>;
 }

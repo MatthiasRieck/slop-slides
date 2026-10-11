@@ -151,6 +151,24 @@ describe("Stage", () => {
       frame.remove();
     });
 
+    it("focuses a slide iframe that asks for it, taking the keys from the composer", () => {
+      render(
+        <>
+          <Stage />
+          <textarea data-testid="composer" />
+        </>,
+      );
+      const frame = document.createElement("iframe");
+      document.body.appendChild(frame);
+      screen.getByTestId("composer").focus();
+      act(() => void window.dispatchEvent(new MessageEvent("message", { data: { type: "slop:focus" }, source: window })));
+      expect(document.activeElement).toBe(screen.getByTestId("composer"));
+      act(() => void window.dispatchEvent(new MessageEvent("message", { data: { type: "slop:focus" }, source: frame.contentWindow })));
+      expect(document.activeElement).toBe(frame);
+      expect(useApp.getState().selected).toBe("intro");
+      frame.remove();
+    });
+
     it("ignores messages from anywhere else", () => {
       render(<Stage />);
       forward("ArrowRight", window);

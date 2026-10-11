@@ -2,6 +2,32 @@
 
 SlopSlide stores per-slide scripts and accepted recordings beside each deck, generates local speech with Qwen3-TTS 0.6B, and supports saved presenters, recording history, narrated preview and MP4 export. Native speech and video helpers currently target macOS; other platforms can edit scripts. The [speech connector guide](../src-tauri/speech-connector/README.md) documents the provider interface and opt-in model tests.
 
+## Architecture
+
+```mermaid
+flowchart TD
+    UI["Narration editor"] --> M["Per-deck narration.json"]
+    Agent["Agent narration tools"] -->|"fingerprint-checked writes"| M
+    M --> S["Speech jobs and provider contract"]
+    Private["Private model packs and voice profiles"] --> S
+    S --> Q["Bundled Qwen speech worker"]
+    Q --> T["Validated WAV takes and history"]
+    M --> F["Frozen video job"]
+    Deck["Deck HTML and assets"] --> F
+    T -->|"accepted recordings"| F
+    F --> R["Bundled WebKit renderer"]
+    R --> Preview["Narrated preview"]
+    R --> Encode["AVFoundation MP4 export"]
+```
+
+The React editor and agent tools share the same versioned narration manifest. Agent writes carry the last-read fingerprint; audio acceptance also checks that the source settings still match. Failed or cancelled generation keeps previous recordings available.
+
+The Tauri host owns deck storage, jobs, cancellation and acceptance of generated audio. The [speech connector](../src-tauri/speech-connector/README.md) owns provider capabilities, model verification, worker reuse and voice profiles; its library and CLI do not depend on Tauri. Model packs and personal references stay in private app data. Scripts and generated recordings live beside `deck.html`; another HTML filename gets its own `<filename>.slopslide/` directory.
+
+Video preparation freezes the deck, settings and accepted audio, then renders static slide images for preview and encoding. Later edits enter the video only after preparing it again. Hidden slides are excluded; blank scripts use timed silence. Animation and embedded media are flattened, and embedded sound is excluded.
+
+Speech synthesis runs locally after model setup. Agent drafting uses the configured chat provider and is a separate operation.
+
 ## Research behind the implementation
 
 The October 8–11, 2026 investigation compared native CPU speech configurations with the official Python reference, auditioned English/German stock and cloned voices, measured memory and resident-worker reuse, and prototyped WebKit rendering and AVFoundation encoding. The selected prototype uses BF16 CPU inference with `QWEN_NO_KLEIDI=1`, a reusable worker, Sonic pacing, and a separate Base model pack for personal voices. Listening accepted the tested German reference and usable English output with a slight accent; this is limited evidence, not broad voice-quality or hardware qualification.

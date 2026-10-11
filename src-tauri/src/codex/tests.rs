@@ -16,6 +16,7 @@ fn args(dir: &Path) -> TurnArgs<'_> {
         session: None,
         mode: PermissionMode::Ask,
         approvals: Arc::default(),
+        extensions: Box::leak(Box::default()),
     }
 }
 
@@ -33,6 +34,25 @@ fn configures_the_builtin_mcp_server_as_preapproved() {
             "mcp_servers.slopslide.default_tools_approval_mode=\"approve\"",
         ]
     );
+}
+
+#[test]
+fn skill_roots_leave_out_the_workspace_codex_reads_itself() {
+    let dir = std::env::temp_dir().join(format!("codex-skills-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(dir.join("plugin/skills")).unwrap();
+    std::fs::create_dir_all(dir.join("bare-plugin")).unwrap();
+    let ext = Extensions {
+        user_skills: Some(dir.join("skills")),
+        workspace_skills: Some(dir.join("ws/.agents/skills")),
+        plugins: vec![dir.join("plugin"), dir.join("bare-plugin")],
+        ..Default::default()
+    };
+    assert_eq!(
+        skill_roots(&ext),
+        [dir.join("skills"), dir.join("plugin/skills")]
+    );
+    assert!(skill_roots(&Extensions::default()).is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 fn mcp_approval_params() -> Value {
@@ -266,11 +286,17 @@ fn codex_payloads_match_pinned_protocol_schemas() {
             let f = process::Fixture::new(
                 json!({"approvals":[{"params":{"command":"ls"}}],"hold":true}),
             );
+            let ext = Extensions {
+                user_skills: Some(PathBuf::from("/home/.slopslides/skills")),
+                ..Default::default()
+            };
+            let mut a = f.args();
+            a.extensions = &ext;
             let (tx, mut rx) = watch::channel(false);
             tokio::time::timeout(
                 Duration::from_secs(10),
                 run_turn(
-                    f.args(),
+                    a,
                     &mut rx,
                     &|e| {
                         if matches!(e, AgentEvent::ApprovalRequested { .. }) {
@@ -283,10 +309,22 @@ fn codex_payloads_match_pinned_protocol_schemas() {
             .await
             .expect("contract transport capture timed out")
             .unwrap();
+            assert!(
+                f.requests()
+                    .iter()
+                    .any(|r| r["method"] == "skills/extraRoots/set"
+                        && r["params"]["extraRoots"] == json!(["/home/.slopslides/skills"])),
+                "the user's skills are added before the thread starts"
+            );
             for request in f.requests() {
                 let schema = match request["method"].as_str() {
                     Some("initialize") => "InitializeParams",
                     Some("config/read") => "ConfigReadParams",
+                    // Its Params schema is not pinned; ClientRequest covers it.
+                    Some("skills/extraRoots/set") => {
+                        add("ClientRequest", request.clone());
+                        continue;
+                    }
                     Some("configRequirements/read") => {
                         // This parameterless RPC has no separate Params schema.
                         add("ClientRequest", request.clone());
@@ -399,6 +437,17 @@ fn policies_are_explicit_and_custom_resets_resumed_threads() {
         assert_eq!(p["model"], "test-model");
         assert_eq!(p["developerInstructions"], SYSTEM_PROMPT);
     }
+    let ext = Extensions {
+        instructions: Some("Be brief.".into()),
+        ..Default::default()
+    };
+    a.extensions = &ext;
+    let p = thread_params(&a, &json!({}));
+    assert_eq!(
+        p["developerInstructions"],
+        ext.system_prompt(SYSTEM_PROMPT),
+        "the user's AGENTS.md follows the app's instructions"
+    );
     a.mode = PermissionMode::Custom;
     let p = thread_params(&a, &json!({}));
     assert_eq!(p["sandbox"], "read-only");
@@ -1147,7 +1196,7 @@ fn real_codex_permission_modes_test() {
         let dir =
             std::env::temp_dir().join(format!("slopslide-policy-smoke-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let mut server = Server::spawn(&bin, Some(&dir), None).unwrap();
+        let mut server = Server::spawn(&bin, Some(&dir), &[]).unwrap();
         server.initialize().await.unwrap();
         let (config, requirements) = server.configuration(&dir).await.unwrap();
         for (mode, sandbox, policy, reviewer) in [
@@ -1195,7 +1244,7 @@ fn real_codex_smoke_test() {
         let dir=std::env::temp_dir().join(format!("slopslide-real-smoke-{}",uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let lint=Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug/slopslide");
-        let mut probe=Server::spawn(&bin,Some(&dir),None).unwrap();
+        let mut probe=Server::spawn(&bin,Some(&dir),&[]).unwrap();
         probe.initialize().await.unwrap();
         let models=probe.request("model/list",json!({})).await.unwrap();
         let model=models["data"].as_array().unwrap().iter().find(|m| m["isDefault"]==true).or_else(||models["data"].as_array().unwrap().first()).unwrap()["model"].as_str().unwrap();

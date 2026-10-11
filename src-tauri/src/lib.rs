@@ -5,6 +5,7 @@ mod copilot;
 mod deck;
 mod env;
 mod error;
+mod extensions;
 mod html;
 mod lint;
 mod mcp;

@@ -161,6 +161,8 @@ src-tauri/src/
   mcp.rs                stdio MCP server (`slopslide --lint-mcp [deck]`) exposing the
                         linter to the agent as its `lint_deck` tool
   agent.rs              manages turns and snapshots; normalizes provider events for the UI
+  extensions.rs         the user's MCP servers, skills, plugins and AGENTS.md, passed to
+                        every provider (see below)
   codex.rs              Codex app-server transport, permissions, and approval responses
   protocol.rs           `slop://` scheme serving deck files to the slide iframes;
                         adds the slide editor (assets/editor.js) for edit mode
@@ -187,13 +189,49 @@ everything else in `~/.slopslides/`:
 templates/<name>/          user templates
 sessions/<session id>/     one chat about a workspace: meta.json (its workspace
                            folder), chat.json, each provider's session id,
-                           snapshots/<relative deck path>/, sketches/, and templates staged for the agent
-mcp.json                   the agent's MCP config: this app as the `lint_deck` and `open_file` server
+                           snapshots/<relative deck path>/, sketches/, templates staged for the agent,
+                           and Claude Code's generated mcp.json and claude-plugins/
 system-prompt.md           the system prompt file Claude Code reads
+mcp.json                   your MCP servers, for every agent (see Extensions)
+skills/<name>/SKILL.md     your skills
+plugins/<name>/            your plugins
+AGENTS.md                  your instructions, appended to the system prompt
 ```
 
 A workspace's newest session is its current chat; New chat starts another and keeps the old
-one. `mcp.json` and `system-prompt.md` are rewritten by the app when they change.
+one. `system-prompt.md` and the session's Claude Code files are rewritten by the app when
+they change.
+
+### Extensions
+
+Every agent gets the same MCP servers, skills, plugins and instructions, from
+`~/.slopslides` and from the workspace:
+
+| | `~/.slopslides` | workspace |
+|---|---|---|
+| MCP servers | `mcp.json` | `.mcp.json` |
+| skills | `skills/<name>/SKILL.md` | `.agents/skills/<name>/SKILL.md` |
+| plugins | `plugins/<name>/` | `.agents/plugins/<name>/` |
+| instructions | `AGENTS.md` | `AGENTS.md` |
+
+MCP files use Claude Code's `.mcp.json` format (`{"mcpServers": {"name": {"command": …}}}`
+or `{"url": …, "headers": …}`); the workspace's servers win over yours of the same name, and
+`slopslide` is reserved for the app. Plugins use the Claude Code plugin layout
+(`.claude-plugin/plugin.json`, `skills/`, `agents/`, `hooks/`, `.mcp.json`). Each agent gets
+them its own way:
+
+| | Claude Code | Codex | Copilot |
+|---|---|---|---|
+| MCP servers | session `mcp.json`, with plugins' servers | `-c mcp_servers.<name>=…` | `mcpServers` |
+| skills | a generated `slopslides` plugin | `skills/extraRoots/set` (finds `.agents/skills` itself) | `skillDirectories` |
+| plugins | `--plugin-dir` | skills and MCP servers only | `pluginDirectories` |
+| `~/.slopslides/AGENTS.md` | appended to the system prompt | `developerInstructions` | `systemMessage` |
+
+Every agent reads the workspace's `AGENTS.md` itself. MCP tools other than the app's ask
+for approval as the permission mode says; loading a skill never asks. The agents' own setup
+(`~/.claude`, `~/.codex`, `~/.copilot`) is mostly left out: Copilot loads none of it,
+Claude Code none of its MCP servers, but Claude Code and Codex still load their own skills
+and plugins, and Codex its MCP servers.
 
 `deck.html` already plays standalone in a browser. The editor renders individual slides of
 it in sandboxed iframes (`deck.html?embed&slide=<id>`), so the thumbnails, stage, and
@@ -203,9 +241,10 @@ The safety scan skips dot folders and is bounded to 10,000 entries and 64 MiB of
 turns refuse to start if those limits are exceeded. Legacy per-deck sessions remain on
 disk; opening their workspace starts a fresh conversation.
 
-Claude receives file tools (Read/Write/Edit/Glob/Grep plus web search/fetch) and the app's
-`lint_deck` and `open_file` tools, with no shell access or other MCP servers. Codex uses its configured tools
-and MCP servers, plus `lint_deck` and `open_file`, under the selected permission mode. Copilot uses its
+Claude receives file tools (Read/Write/Edit/Glob/Grep plus web search/fetch), skills, the
+app's `lint_deck` and `open_file` tools and the MCP servers from Extensions. Codex uses its
+configured tools and MCP servers, plus `lint_deck`, `open_file` and the extensions, under the
+selected permission mode. Copilot uses its
 workspace-scoped read/write permission handler. You can also edit `deck.html` by hand in any
 editor; the app picks up the changes.
 

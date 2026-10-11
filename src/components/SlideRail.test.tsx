@@ -10,13 +10,16 @@ import type { Deck } from "../lib/api";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { SlideRail } from "./SlideRail";
+import { useNarration } from "../narrationStore";
+import { useSpeech } from "../speechStore";
+import { emptyNarration, emptyScript } from "../lib/narration";
 
 const DECK = deckFor(DECK_HTML);
 const withSlides = (...ids: string[]): Deck => ({ ...DECK, slides: ids.map((id) => ({ id, hash: id, hidden: false, locked: false, moved: false })) });
 
 beforeEach(() => {
   invoke.mockReset();
-  useApp.setState({ deck: DECK, selected: "intro", error: null, revealRev: 0, templates: [{ id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title"] }] });
+  useApp.setState({ deck: DECK, selected: "intro", sidebarTab: "chat", error: null, revealRev: 0, templates: [{ id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title"] }] });
 });
 
 // dnd-kit gives sortable items role="button", so find them by tag.
@@ -59,6 +62,25 @@ describe("SlideRail", () => {
     fireEvent.click(thumbnail);
     expect(useApp.getState().selected).toBe("outro");
     expect(useApp.getState().revealRev).toBe(1);
+  });
+
+  it("opens narration for a selected slide from presentation presets", () => {
+    useApp.setState({ sidebarTab: "presets", chatOpen: true });
+    render(<SlideRail />);
+    fireEvent.click(items()[2]!.querySelector("button")!);
+    expect(useApp.getState().selected).toBe("outro");
+    expect(useApp.getState().sidebarTab).toBe("narration");
+  });
+
+  it("shows audio readiness in the existing thumbnails while narrating", () => {
+    const document = emptyNarration();
+    document.manifest.slides.intro = { ...emptyScript(), text: "Welcome" };
+    useNarration.setState({ deckId: "talk", document, edits: {}, languageEdit: null, settingsEdits: {} });
+    useSpeech.setState({ deckId: "talk", takes: {} });
+    useApp.setState({ sidebarTab: "narration" });
+    render(<SlideRail />);
+    expect(item(0).getByText("Needs audio")).toBeTruthy();
+    expect(item(2).getByText("Silent · 5s")).toBeTruthy();
   });
 
   it("highlights the selected slide's number", () => {

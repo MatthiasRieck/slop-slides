@@ -1,4 +1,7 @@
 import { useNarration } from "../narrationStore";
+import { useSpeech } from "../speechStore";
+import { editedManifest, DEFAULT_SILENT_DURATION_MS, emptyScript } from "../lib/narration";
+import { currentTake } from "../lib/speech";
 import {
   DndContext,
   PointerSensor,
@@ -28,6 +31,9 @@ export function SlideRail() {
   const styleButton = useRef<HTMLButtonElement>(null);
   const addButton = useRef<HTMLButtonElement>(null);
   const templates = useApp((s) => s.templates);
+  const sidebarTab = useApp((s) => s.sidebarTab);
+  const narration = useNarration();
+  const speech = useSpeech();
   const styleTitle = templates?.find((t) => t.id === deck?.template)?.title;
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   if (!deck) return null;
@@ -36,6 +42,16 @@ export function SlideRail() {
   const keys = items.map((item) => item.key);
   const selectedIndex = deck.slides.findIndex((s) => s.id === selected);
   const canAddSection = selectedIndex >= 0 && !startsSection(deck, selectedIndex);
+  const manifest = narration.deckId === deck.id && narration.document?.manifest
+    ? editedManifest(narration.document.manifest, narration.edits, narration.languageEdit, narration.settingsEdits)
+    : null;
+  const audioStatus = (slide: Slide): string | null => {
+    if (sidebarTab === "chat" || !manifest || slide.hidden) return null;
+    const script = manifest.slides[slide.id] ?? emptyScript();
+    if (!script.text.trim()) return `Silent · ${((script.silentDurationMs ?? DEFAULT_SILENT_DURATION_MS) / 1000).toFixed(1).replace(/\.0$/, "")}s`;
+    const take = speech.deckId === deck.id ? speech.takes[slide.id] : undefined;
+    return take && currentTake(take, script, manifest, speech.status?.providers ?? []) ? "Audio ready" : "Needs audio";
+  };
 
   const onDragEnd = async ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
@@ -139,7 +155,7 @@ export function SlideRail() {
               <ol className="flex flex-col gap-3">
                 {items.map((item) =>
                   item.kind === "slide" ? (
-                    <Thumbnail key={item.key} deckId={deck.id} slide={item.slide} index={item.index} />
+                    <Thumbnail key={item.key} deckId={deck.id} slide={item.slide} index={item.index} audioStatus={audioStatus(item.slide)} />
                   ) : (
                     <SectionHeader
                       key={item.key}
@@ -264,7 +280,7 @@ function SectionAction(props: { title: string; onClick: () => void; children: Re
   );
 }
 
-function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; index: number }) {
+function Thumbnail({ deckId, slide, index, audioStatus }: { deckId: string; slide: Slide; index: number; audioStatus: string | null }) {
   const selected = useApp((s) => s.selected === slide.id);
   const version = useSlideVersion(slide);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -342,7 +358,7 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
       <div className="relative min-w-0 flex-1">
         <button
           type="button"
-          onClick={() => useApp.getState().select(slide.id)}
+          onClick={() => { const app = useApp.getState(); app.select(slide.id); if (app.sidebarTab === "presets") app.setSidebarTab("narration"); }}
           className={cn(
             "block w-full overflow-hidden rounded-md ring-1 ring-border transition-shadow",
             selected ? "ring-2 ring-primary" : "hover:ring-input",
@@ -356,6 +372,7 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
             className={cn(slide.hidden && "opacity-35 grayscale")}
           />
         </button>
+        {audioStatus && <span className="mt-1 block text-2xs text-muted-foreground">{audioStatus}</span>}
         {slide.hidden && <HiddenMark />}
         {slide.locked && (
           <span

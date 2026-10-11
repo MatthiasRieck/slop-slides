@@ -1538,6 +1538,22 @@ describe("editing slides on the stage", () => {
 });
 
 describe("narration integration", () => {
+  it("drafts only blank visible scripts and leaves the written script out of the request", async () => {
+    const { useApp } = await freshModule();
+    const { useNarration } = await import("./narrationStore");
+    const { emptyNarration, emptyScript } = await import("./lib/narration");
+    const document = emptyNarration();
+    document.manifest.slides.intro = { ...emptyScript(), text: "Already written" };
+    backend({ open_deck: () => DECK, load_narration: () => document });
+    await useApp.getState().openDeck("talk");
+    await useApp.getState().draftNarration("missing", "", "");
+    const request = calls("send_message")[0]!.args as { prompt: string };
+    expect(request.prompt).toContain('exact slide IDs: ["outro"]');
+    expect(request.prompt).toContain("preserve every existing nonblank script exactly");
+    useApp.getState().reviewNarration();
+    expect(useApp.getState().selected).toBe("outro");
+    await useNarration.getState().load(null);
+  });
   it("flushes scripts before drafting, uses the selected provider, and returns to the requested slide for review", async () => {
     const { useApp } = await freshModule();
     const { useNarration } = await import("./narrationStore");

@@ -180,11 +180,11 @@ interface AppState {
   codeDirty: boolean;
   /** The chat panel is shown; the user can collapse it to give the stage more room. */
   chatOpen: boolean;
-  sidebarTab: "chat" | "narration";
+  sidebarTab: "chat" | "narration" | "presets";
   narrationReviewSlide: string | null;
   reviewNarration: () => void;
-  setSidebarTab: (tab: "chat" | "narration") => void;
-  draftNarration: (scope: "slide" | "deck", audience: string, minutes: string) => Promise<void>;
+  setSidebarTab: (tab: "chat" | "narration" | "presets") => void;
+  draftNarration: (scope: "slide" | "deck" | "missing", audience: string, minutes: string) => Promise<void>;
   /** Bumped when attached assets change, reloading every slide preview. */
   assetsRev: number;
   messages: ChatMessage[];
@@ -446,9 +446,11 @@ export const useApp = create<AppState>((set, get) => ({
     const { document, edits, languageEdit, settingsEdits } = useNarration.getState();
     if (!document || useNarration.getState().deckId !== deck.id || useNarration.getState().error) return;
     const manifest = editedManifest(document.manifest, edits, languageEdit, settingsEdits);
-    set({ narrationReviewSlide: scope === "slide" ? selected : deck.slides.find((s) => !s.hidden && !s.id.startsWith("#"))?.id ?? null });
+    const missingIds = scope === "missing" ? deck.slides.filter((slide) => !slide.hidden && !slide.id.startsWith("#") && !manifest.slides[slide.id]?.text.trim()).map((slide) => slide.id) : [];
+    if (scope === "missing" && missingIds.length === 0) return;
+    set({ narrationReviewSlide: scope === "slide" ? selected : scope === "missing" ? missingIds[0]! : deck.slides.find((s) => !s.hidden && !s.id.startsWith("#"))?.id ?? null });
     get().setSidebarTab("chat");
-    await get().send(narrationDraftPrompt(deck, selected, scope, manifest.defaultLanguage, audience, minutes), { includeSlide: scope === "slide", attachments: [] });
+    await get().send(narrationDraftPrompt(deck, selected, scope, manifest.defaultLanguage, audience, minutes, missingIds), { includeSlide: scope === "slide", attachments: [] });
   },
 
   setModel: (provider, id) => {

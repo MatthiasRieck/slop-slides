@@ -18,6 +18,12 @@ describe("narration draft requests", () => {
     deck.slides.find((s) => s.id === "outro")!.hidden = true;
     expect(narrationDraftPrompt(deck, "outro", "slide", "en", "", "")).toContain('exact slide IDs: ["outro"]');
   });
+  it("limits blank-slide drafting to requested IDs and preserves existing scripts", () => {
+    const prompt = narrationDraftPrompt(deckFor(DECK_HTML), "intro", "missing", "en", "", "", ["outro"]);
+    expect(prompt).toContain('exact slide IDs: ["outro"]');
+    expect(prompt).toContain("Only fill blank scripts");
+    expect(prompt).toContain("preserve every existing nonblank script exactly");
+  });
   it("tracks visual edits separately from script text and never relies on position", () => {
     const deck = deckFor(DECK_HTML);
     const before = slideReviewHash(deck, "intro");

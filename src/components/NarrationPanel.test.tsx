@@ -22,11 +22,24 @@ beforeEach(() => {
 });
 afterEach(async () => { await useNarration.getState().load(null); vi.useRealTimers(); });
 describe("NarrationPanel", () => {
-  it("puts voice creation before the script and allows it without a selected slide", () => {
+  it("shows script and audio progress and drafts only blank slides", () => {
+    const draft = vi.spyOn(useApp.getState(), "draftNarration").mockResolvedValue();
+    const generate = vi.spyOn(useSpeech.getState(), "generate").mockResolvedValue();
+    render(<NarrationPanel />);
+    expect(screen.getByText(/Scripts: 0 of 2 · Audio: 0 of 0 ready/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Draft blank slides…" }));
+    expect(draft).toHaveBeenCalledWith("missing", "", "");
+    fireEvent.change(screen.getByLabelText("Narration script"), { target: { value: "Welcome" } });
+    expect(screen.getByText(/Scripts: 1 of 2 · Audio: 0 of 1 ready/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Generate missing audio" }));
+    expect(generate).toHaveBeenCalledWith("talk", null);
+    draft.mockRestore(); generate.mockRestore();
+  });
+  it("keeps voice creation visible after the script and allows it without a selected slide", () => {
     useSpeech.setState({ status: { providers: [{ ...testSpeechProvider(), supportsCloning: true, cloneReady: true }], job: null, presenters: [] } });
     render(<NarrationPanel />);
     const create = screen.getByRole("button", { name: "Create voice from recording…" });
-    expect(create.compareDocumentPosition(screen.getByLabelText("Narration script")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByLabelText("Narration script").compareDocumentPosition(create) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     act(() => useApp.setState({ selected: null }));
     expect((create as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(create);
@@ -64,11 +77,10 @@ describe("NarrationPanel", () => {
   });
   it("provides language overrides, pauses and explicit silence", () => {
     render(<NarrationPanel />);
-    fireEvent.change(screen.getByLabelText("Deck narration language"), { target: { value: "de" } });
     fireEvent.change(screen.getByLabelText("Slide narration language"), { target: { value: "en" } });
     fireEvent.change(screen.getByLabelText("Pause after speech"), { target: { value: "900" } });
     fireEvent.change(screen.getByLabelText("Silent slide duration"), { target: { value: "4" } });
-    expect(useNarration.getState().languageEdit).toBe("de");
+    expect(screen.queryByLabelText("Deck narration language")).toBeNull();
     expect(useNarration.getState().edits.intro).toMatchObject({ languageOverride: "en", tailMs: 900, silentDurationMs: 4000 });
   });
   it("retains accepted-take references when editing scripts or language", () => {

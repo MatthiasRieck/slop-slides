@@ -30,6 +30,14 @@ beforeEach(() => {
 });
 
 describe("sidebar navigation", () => {
+  it.each(["chat", "narration", "presets"] as const)("opens narrated preview from %s", (tab) => {
+    const open = vi.spyOn(useVideo.getState(), "open").mockResolvedValue();
+    useApp.setState({ sidebarTab: tab });
+    render(<TopBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Preview deck" }));
+    expect(open).toHaveBeenCalledWith("talk");
+    open.mockRestore();
+  });
   it("hides and shows the sidebar without changing its selected tab", () => {
     useApp.setState({ sidebarTab: "narration" });
     render(<TopBar />);

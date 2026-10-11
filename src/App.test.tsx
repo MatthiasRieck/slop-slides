@@ -11,6 +11,7 @@ vi.mock("./components/SlideRail", () => ({ SlideRail: () => <div data-testid="st
 vi.mock("./components/Stage", () => ({ Stage: () => <div data-testid="stub-stage" /> }));
 vi.mock("./components/ChatPanel", () => ({ ChatPanel: () => <input data-testid="stub-chat" aria-label="Chat draft" /> }));
 vi.mock("./components/NarrationPanel", () => ({ NarrationPanel: () => <div data-testid="stub-narration" /> }));
+vi.mock("./components/PresentationPresets", () => ({ PresentationPresets: () => <div data-testid="stub-presets" /> }));
 vi.mock("./components/Presenter", () => ({ Presenter: () => <div data-testid="stub-presenter" /> }));
 vi.mock("./components/CodeView", () => ({
   CodeView: ({ active }: { active: boolean }) => <div data-testid="stub-code" data-active={String(active)} />,
@@ -66,6 +67,8 @@ describe("App", () => {
     fireEvent.change(screen.getByLabelText("Chat draft"), { target: { value: "Keep this draft" } });
     fireEvent.click(screen.getByRole("tab", { name: "Narration" }));
     expect(screen.getByRole("tabpanel").getAttribute("id")).toBe("panel-narration");
+    fireEvent.click(screen.getByRole("tab", { name: "Presentation presets" }));
+    expect(screen.getByRole("tabpanel").getAttribute("id")).toBe("panel-presets");
     fireEvent.click(screen.getByRole("tab", { name: "Chat" }));
     expect((screen.getByLabelText("Chat draft") as HTMLInputElement).value).toBe("Keep this draft");
     expect(useApp.getState().selected).toBeNull();

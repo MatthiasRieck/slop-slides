@@ -1,9 +1,8 @@
 import { useRef, useState } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useApp } from "../store";
-import { useVideo } from "../videoStore";
 import { useNarration } from "../narrationStore";
 import { useSpeech } from "../speechStore";
+import { currentTake } from "../lib/speech";
 import { insertPause, narrationMarkers } from "../lib/narrationMarkers";
 import { SpeechControls } from "./SpeechControls";
 import { editedManifest, DEFAULT_SILENT_DURATION_MS, emptyScript, slideReviewHash, slideSpeechSettings, type NarrationLanguage } from "../lib/narration";
@@ -31,6 +30,12 @@ export function NarrationPanel() {
   const words = markers.words;
   const needsReview = !!words && script.reviewedSlideHash !== hash;
   const orphans = manifest ? Object.entries(manifest.slides).filter(([id]) => !deck.slides.some((s) => s.id === id)) : [];
+  const visibleSlides = deck.slides.filter((s) => !s.hidden && !s.id.startsWith("#"));
+  const scriptedSlides = manifest ? visibleSlides.filter((s) => manifest.slides[s.id]?.text.trim()) : [];
+  const readyAudio = manifest && speech.deckId === deck.id ? scriptedSlides.filter((s) => {
+    const take = speech.takes[s.id];
+    return !!take && currentTake(take, manifest.slides[s.id]!, manifest, speech.status?.providers ?? []);
+  }).length : 0;
   const edit = (patch: Parameters<typeof state.edit>[1]) => { if (selected) state.edit(selected, patch); };
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -52,13 +57,18 @@ export function NarrationPanel() {
             )}
           </div>
         )}
+        {manifest && visibleSlides.length > 0 && <section aria-label="Presentation narration progress" className="mb-3 rounded-md border border-border p-2">
+          <p className="font-medium">Presentation progress</p>
+          <p className="mt-1 text-muted-foreground">Scripts: {scriptedSlides.length} of {visibleSlides.length} · Audio: {readyAudio} of {scriptedSlides.length} ready{visibleSlides.length > scriptedSlides.length ? ` · ${visibleSlides.length - scriptedSlides.length} silent` : ""}</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button className={field} disabled={scriptedSlides.length === visibleSlides.length || !!state.error || !!state.conflict || running} onClick={() => void useApp.getState().draftNarration("missing", "", "")}>Draft blank slides…</button>
+            <button className={field} disabled={!scriptedSlides.length || readyAudio === scriptedSlides.length || !!state.error || !!state.conflict || !!speech.job} onClick={() => void speech.generate(deck.id, null)}>Generate missing audio</button>
+          </div>
+          {scriptedSlides.length < visibleSlides.length && <p className="mt-1 text-muted-foreground">Blank slides stay silent for 5 seconds by default. Draft only those you want narrated.</p>}
+        </section>}
         <SpeechControls deck={deck} selected={selected} manifest={manifest} editable={editable} scriptEditor={<div className="mt-3">
         <div className="mb-2 flex items-center justify-between">
           <span className="font-medium">{slide ? `Slide ${index + 1} of ${deck.slides.length}` : "Select a slide"}</span>
-          <div className="flex gap-1">
-            <button aria-label="Previous narration slide" disabled={index <= 0} className="rounded p-1 hover:bg-accent disabled:opacity-30" onClick={() => useApp.getState().selectRelative(-1)}><ChevronLeft className="size-4" /></button>
-            <button aria-label="Next narration slide" disabled={index < 0 || index >= deck.slides.length - 1} className="rounded p-1 hover:bg-accent disabled:opacity-30" onClick={() => useApp.getState().selectRelative(1)}><ChevronRight className="size-4" /></button>
-          </div>
         </div>
         {slide?.hidden && <p className="mb-2 text-muted-foreground">Hidden slide · excluded from whole-deck drafting and export.</p>}
         {slide?.id.startsWith("#") && <p className="mb-2 text-amber-600">Waiting for a stable slide ID before saving narration.</p>}
@@ -96,13 +106,7 @@ export function NarrationPanel() {
             <label className="text-muted-foreground">Pause before (ms)<input aria-label="Pause before speech" type="number" min={0} max={60000} step={50} className={`${field} mt-1 text-foreground`} disabled={!editable} value={script.leadInMs} onChange={(e) => edit({ leadInMs: Math.min(60000, Math.max(0, Math.round(Number(e.target.value)))) })} /></label>
             <label className="text-muted-foreground">Pause after (ms)<input aria-label="Pause after speech" type="number" min={0} max={60000} step={50} className={`${field} mt-1 text-foreground`} disabled={!editable} value={script.tailMs} onChange={(e) => edit({ tailMs: Math.min(60000, Math.max(0, Math.round(Number(e.target.value)))) })} /></label>
           </div>
-          <label className="mt-3 block text-muted-foreground">Deck language
-            <select aria-label="Deck narration language" className={`${field} mt-1 text-foreground`} value={manifest?.defaultLanguage ?? "en"} disabled={!manifest} onChange={(e) => state.setLanguage(e.target.value as NarrationLanguage)}>
-              <option value="en">English</option><option value="de">German</option>
-            </select>
-          </label>
         </SpeechControls>
-        <button className={`${field} mt-4`} disabled={!manifest || !!state.error} onClick={() => void useVideo.getState().open(deck.id)}>Preview narrated deck</button>
         <details className="mt-4 text-muted-foreground">
           <summary className="cursor-pointer">Draft options</summary>
           <p className="my-2">Uses your selected chat model. Review the script before generating audio.</p>

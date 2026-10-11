@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, errorMessage } from "../lib/api";
-import { deckFileUrl } from "../lib/utils";
+import { previewFileUrl } from "../lib/utils";
 import type { SavedPresenter, SpeechProvider, VoiceProfile } from "../lib/speech";
 import { startVoiceRecording, type VoiceRecording } from "../lib/voiceRecording";
 import { runProfileJob, useSpeech } from "../speechStore";
@@ -122,7 +122,7 @@ export function VoiceSetup({ provider, initialLanguage, replace, onClose, onSave
       await runProfileJob("profile-preview", (id) => api.previewVoiceProfile(id, provider.id, profile.revision, lang));
       if (alive.current) {
         setPreviewLanguage(lang);
-        setPreviews((p) => ({ ...p, [lang]: deckFileUrl(".voice", `${profile.revision}/${lang}.wav`, `v=${crypto.randomUUID()}`) }));
+        setPreviews((p) => ({ ...p, [lang]: previewFileUrl("voice", `${profile.revision}/${lang}.wav`, `v=${crypto.randomUUID()}`) }));
       }
     } finally { if (alive.current) setPreparing(false); }
   };
@@ -191,7 +191,7 @@ export function VoiceSetup({ provider, initialLanguage, replace, onClose, onSave
         </section>}
         {reference && <>
           <p role="status" className="text-muted-foreground">Recording ready: {referenceLabel}</p>
-          {tempRecording.current && <audio aria-label="Reference recording" controls preload="metadata" className="w-full" src={deckFileUrl(".recording", `${tempRecording.current}.wav`)} />}
+          {tempRecording.current && <audio aria-label="Reference recording" controls preload="metadata" className="w-full" src={previewFileUrl("recording", `${tempRecording.current}.wav`)} />}
           <button className={secondary} disabled={inputBusy} onClick={() => void attempt(() => restart("record"))}>Record again…</button>
         </>}
         {(reference || (recording && !warmingUp)) && <>
@@ -220,7 +220,7 @@ export function VoiceSetup({ provider, initialLanguage, replace, onClose, onSave
         {preparing && <p role="status" className="text-muted-foreground">Preparing your voice preview…</p>}
         <details><summary className="cursor-pointer text-muted-foreground">Preview options</summary>
           <button className={`${field} mt-2`} disabled={busy || saving} onClick={() => void attempt(() => preview(draft, previewLanguage))}>{previews[previewLanguage] ? "Generate preview again" : "Generate preview"}</button>
-          {previews[previewLanguage] && <button className="mt-2 underline disabled:opacity-40" disabled={busy || saving} onClick={() => { setError(null); setPreviews((p) => ({ ...p, [previewLanguage]: deckFileUrl(".voice", `${draft.revision}/${previewLanguage}.wav`, `v=${crypto.randomUUID()}`) })); }}>Reload preview audio</button>}
+          {previews[previewLanguage] && <button className="mt-2 underline disabled:opacity-40" disabled={busy || saving} onClick={() => { setError(null); setPreviews((p) => ({ ...p, [previewLanguage]: previewFileUrl("voice", `${draft.revision}/${previewLanguage}.wav`, `v=${crypto.randomUUID()}`) })); }}>Reload preview audio</button>}
         </details>
         <p className="text-muted-foreground">{previews[draft.referenceLanguage] ? "Listen before saving. Saving adds this voice to the Presenter menu in every deck." : `Generate the ${draft.referenceLanguage === "de" ? "German" : "English"} preview before saving.`}</p>
         <label className="flex gap-2"><input type="checkbox" checked={makeDefault} disabled={busy || saving} onChange={(e) => setMakeDefault(e.target.checked)} />Use as default presenter for new decks</label>

@@ -90,6 +90,15 @@
     .layout-quote blockquote { padding-left: 56px; border-left: 12px solid var(--red); font-weight: 700; font-size: 78px; text-transform: uppercase; }
     .slide .cite { padding-left: 68px; font-family: var(--font-display); color: var(--cyan); text-transform: uppercase; letter-spacing: 0.1em; }
     .layout-closing h2 { font-size: 200px; color: var(--accent); text-shadow: -6px 0 var(--red), 6px 0 var(--cyan); }
+    /* Entrance: a hard slice in from the left with a flicker. */
+    @keyframes cyberpunk-reveal {
+      from { opacity: 0; translate: -60px 0; }
+      60% { opacity: 1; translate: 8px 0; }
+      75% { opacity: 0.5; translate: 0 0; }
+      85% { opacity: 1; }
+      to { opacity: 1; }
+    }
+    .slide.active .reveal { animation: cyberpunk-reveal 0.45s cubic-bezier(0.2, 0.9, 0.3, 1) both; }
   </style>
 </head>
 <body>

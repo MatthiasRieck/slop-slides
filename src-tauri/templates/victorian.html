@@ -101,6 +101,12 @@
     .layout-quote { align-items: center; }
     .layout-quote blockquote { font-family: var(--font-body); font-style: italic; font-weight: 400; font-size: 76px; }
     .slide .cite { font-variant: small-caps; letter-spacing: 0.12em; color: var(--accent); }
+    /* Entrance: a stately unveiling. */
+    @keyframes victorian-reveal {
+      from { opacity: 0; scale: 1.06; translate: 0 -10px; }
+      to { opacity: 1; }
+    }
+    .slide.active .reveal { animation: victorian-reveal 1.4s ease-in-out both; }
   </style>
 </head>
 <body>

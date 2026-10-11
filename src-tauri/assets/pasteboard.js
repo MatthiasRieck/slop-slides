@@ -25,8 +25,6 @@
   var params = new URLSearchParams(location.search);
   var show = params.has("show");
 
-  var STAGE_W = 1920;
-  var STAGE_H = 1080;
   var MIN_ZOOM = 0.1;
   var MAX_ZOOM = 8;
   var WHEEL_ZOOM = 0.005;
@@ -37,6 +35,9 @@
 
   var deck = slide.parentElement;
   var root = document.documentElement;
+  // The stage's size in slide pixels: the deck's slide size.
+  var STAGE_W = deck.offsetWidth || 1920;
+  var STAGE_H = deck.offsetHeight || 1080;
   // The page is transparent around the slide, so keep whatever the deck painted behind it.
   if (!show && getComputedStyle(deck).backgroundColor === "rgba(0, 0, 0, 0)") {
     var behind = [document.body, root]

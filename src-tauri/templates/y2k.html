@@ -85,6 +85,14 @@
     .slide .value { font-weight: 400; font-size: 110px; color: var(--accent); text-shadow: 5px 5px 0 #8fd8ff; }
     .layout-quote blockquote { font-family: var(--font-body); font-size: 76px; color: var(--ink); }
     .slide .cite { color: var(--accent); }
+    /* Entrance: zoomed and spun in like a screensaver. */
+    @keyframes y2k-reveal {
+      from { opacity: 0; scale: 0.3; rotate: 12deg; }
+      60% { opacity: 1; scale: 1.12; rotate: -3deg; }
+      80% { scale: 0.97; rotate: 1deg; }
+      to { opacity: 1; }
+    }
+    .slide.active .reveal { animation: y2k-reveal 0.7s ease-out both; }
   </style>
 </head>
 <body>

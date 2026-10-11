@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, ChevronDown, Loader2, RotateCw, Search, Star } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, Gauge, Loader2, RotateCw, Search, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import {
@@ -12,8 +12,9 @@ import {
   type ProviderModel,
 } from "../lib/models";
 import { cn, isMac } from "../lib/utils";
-import { useApp } from "../store";
+import { chatProvider, useApp } from "../store";
 import { ProviderIcon } from "./ProviderIcon";
+import { ComposerPopover } from "./ComposerPopover";
 
 type Filter = "favorites" | Provider;
 
@@ -49,7 +50,6 @@ export function ModelPicker() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const close = useMemo(() => () => setOpen(false), []);
-  useDismiss(rootRef, open, close);
 
   return (
     <div ref={rootRef} className="relative">
@@ -57,19 +57,22 @@ export function ModelPicker() {
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className={triggerClass}
+        title={selection.label}
+        aria-label={selection.label}
+        className={cn(triggerClass, "shrink-0")}
       >
         <ProviderIcon provider={selection.provider} className="size-3.5" />
-        <span className="font-medium text-foreground/90">{selection.label}</span>
+        <span className="hidden font-medium text-foreground/90 @[26rem]:inline">{selection.label}</span>
         <ChevronDown className="size-3 opacity-60" />
       </button>
-      {open && <ModelMenu onClose={close} />}
+      {open && <ComposerPopover anchor={rootRef} onClose={close} width={352} className="flex overflow-hidden"><ModelMenu onClose={close} /></ComposerPopover>}
     </div>
   );
 }
 
 function ModelMenu({ onClose }: { onClose: () => void }) {
   const selection = useApp((s) => s.selection);
+  const locked = useApp(chatProvider);
   const favorites = useApp((s) => s.favoriteModels);
   const providers = useApp((s) => s.providers);
   const [filter, setFilter] = useState<Filter>(selection.provider);
@@ -80,8 +83,10 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
   const info = (provider: Provider) => providers?.find((p) => p.id === provider);
 
   const allRows = useMemo<Row[]>(
-    () => (providers ?? []).flatMap((p) => p.models.map((m) => ({ ...m, provider: p.id }))),
-    [providers],
+    () => (providers ?? [])
+      .filter((p) => !locked || p.id === locked)
+      .flatMap((p) => p.models.map((m) => ({ ...m, provider: p.id }))),
+    [providers, locked],
   );
 
   const rows = useMemo(() => {
@@ -152,7 +157,7 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
   return (
     <div
       onKeyDown={onKeyDown}
-      className="absolute bottom-full left-0 z-50 mb-2 flex w-[22rem] overflow-hidden rounded-xl border bg-card shadow-xl shadow-black/20"
+      className="flex min-h-0 w-full"
     >
       <div className="flex w-12 shrink-0 flex-col items-center gap-1 border-r py-2">
         {rail.map((item) => {
@@ -161,13 +166,14 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
             <button
               key={item.id}
               type="button"
-              title={item.title}
+              disabled={!!locked && item.id !== "favorites" && item.id !== locked}
+              title={locked && item.id !== "favorites" && item.id !== locked ? "Start a new chat to change provider" : item.title}
               onClick={() => {
                 setFilter(item.id);
                 setQuery("");
               }}
               className={cn(
-                "relative flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground",
+                "relative flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed",
                 selected && "bg-accent text-foreground",
               )}
             >
@@ -179,8 +185,9 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
           );
         })}
       </div>
-      <div className="flex min-w-0 flex-1 flex-col">
-        <label className="flex items-center gap-2 border-b px-3 focus-within:border-primary">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {locked && <p className="shrink-0 border-b px-3 py-2 text-xs text-muted-foreground">Start a new chat to change provider.</p>}
+        <label className="flex shrink-0 items-center gap-2 border-b px-3 focus-within:border-primary">
           <Search className="size-3.5 shrink-0 text-muted-foreground" />
           <input
             autoFocus
@@ -190,7 +197,7 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
             className="h-10 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
           />
         </label>
-        <div ref={listRef} className="max-h-72 min-h-32 overflow-y-auto p-1.5">
+        <div ref={listRef} className="max-h-72 min-h-0 overflow-y-auto p-1.5">
           {providers === undefined ? (
             <p className="flex items-center justify-center gap-2 px-2 py-8 text-xs text-muted-foreground">
               <Loader2 className="size-3.5 animate-spin" />
@@ -303,7 +310,6 @@ export function EffortPicker() {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const close = useMemo(() => () => setOpen(false), []);
-  useDismiss(rootRef, open, close);
 
   const model = useApp((s) =>
     s.providers
@@ -343,14 +349,16 @@ export function EffortPicker() {
         type="button"
         aria-expanded={open}
         title={showContextWindow ? "Reasoning effort and context window" : "Reasoning effort"}
+        aria-label={label}
         onClick={() => setOpen((v) => !v)}
-        className={triggerClass}
+        className={cn(triggerClass, "shrink-0")}
       >
-        <span>{label}</span>
+        <Gauge className="size-3.5 @[26rem]:hidden" />
+        <span className="hidden @[26rem]:inline">{label}</span>
         <ChevronDown className="size-3 opacity-60" />
       </button>
       {open && (
-        <div className="absolute bottom-full left-0 z-50 mb-2 w-40 rounded-xl border bg-card p-1.5 shadow-xl shadow-black/20">
+        <ComposerPopover anchor={rootRef} onClose={close} width={160} className="p-1.5">
           {sections.map((section, index) => (
             <div key={section.title} className={cn(index > 0 && "mt-1.5 border-t pt-1.5")}>
               <div className="px-2 pt-1 pb-1.5 text-2xs font-medium text-muted-foreground">
@@ -372,7 +380,7 @@ export function EffortPicker() {
               ))}
             </div>
           ))}
-        </div>
+        </ComposerPopover>
       )}
     </div>
   );

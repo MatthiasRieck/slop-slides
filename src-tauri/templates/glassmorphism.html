@@ -88,6 +88,12 @@
     .slide .stat { padding: 48px; border: var(--glass-border); border-radius: 40px; background: var(--panel); backdrop-filter: blur(40px); -webkit-backdrop-filter: blur(40px); box-shadow: var(--glass-shadow); }
     .slide .value { color: #fff; font-size: 130px; }
     .layout-quote blockquote { font-size: 68px; font-weight: 600; }
+    /* Entrance: frosted glass coming into focus. */
+    @keyframes glassmorphism-reveal {
+      from { opacity: 0; scale: 0.95; filter: blur(12px); }
+      to { opacity: 1; }
+    }
+    .slide.active .reveal { animation: glassmorphism-reveal 1s cubic-bezier(0.16, 1, 0.3, 1) both; }
   </style>
 </head>
 <body>

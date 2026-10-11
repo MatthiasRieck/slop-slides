@@ -23,17 +23,17 @@ const providers: ProviderInfo[] = [{ id: "codex", installed: true, path: "/mock/
   models: [{ id: "test", label: "Test model", isDefault: true, efforts: ["low"], defaultEffort: "low", contextWindows: [], defaultContextWindow: null }] }];
 const approval = { id: "mcp-approval", title: "Use an MCP tool", reason: "Allow lint_deck?",
   details: '{"server":"slopslide"}', acceptLabel: "Allow once", decisions: ["accept", "acceptForSession", "decline"] as ApprovalDecision[] };
-const emit = (event: AgentEvent, deckId = "talk") => act(() => listeners.get("agent-event")!({ payload: { deckId, event } }));
+const emit = (event: AgentEvent, workspace = "/decks/talk") => act(() => listeners.get("agent-event")!({ payload: { workspace, event } }));
 const calls = (command: string) => invoke.mock.calls.filter(([name]) => name === command);
 
 beforeEach(async () => {
   listeners.clear();
   invoke.mockReset().mockImplementation(async (command: string) => {
     if (command === "list_providers") return providers;
-    if (command === "codex_permission_modes") return ["ask", "fullAccess", "custom"];
+    if (command === "permission_modes") return ["ask", "fullAccess", "custom"];
   });
-  useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", messages: [], running: false,
-    permissionMode: "ask", providers, selection: { provider: "codex", model: "test", label: "Test model", effort: "low", contextWindow: null },
+  useApp.setState({ workspace: { path: "/decks/talk", name: "talk" }, deck: deckFor(DECK_HTML), selected: "intro", messages: [], running: false,
+    permissionModes: { claude: "ask", codex: "ask", copilot: "ask" }, providers, selection: { provider: "codex", model: "test", label: "Test model", effort: "low", contextWindow: null },
     sketches: {}, sketchesSent: {}, favoriteModels: [], error: null });
   await initEventBridge();
   render(<ChatPanel />);
@@ -50,7 +50,7 @@ describe("Codex approval event → store → chat → IPC", () => {
     emit({ type: "approvalRequested", approval });
     fireEvent.click(screen.getByRole("button", { name: label }));
     await waitFor(() => expect(calls("respond_approval")).toHaveLength(1));
-    expect(calls("respond_approval")[0]![1]).toEqual({ deckId: "talk", id: "mcp-approval", decision });
+    expect(calls("respond_approval")[0]![1]).toEqual({ workspace: "/decks/talk", id: "mcp-approval", decision });
     emit({ type: "approvalResolved", id: approval.id });
     emit({ type: "finished", interrupted: false });
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
@@ -62,7 +62,7 @@ describe("Codex approval event → store → chat → IPC", () => {
 
   it("drafts narration with Ask permissions and routes read/write approvals before review", async () => {
     act(() => useApp.setState({ running: false, messages: [] }));
-    await act(async () => useNarration.getState().load("talk"));
+    await act(async () => useNarration.getState().load(deckFor(DECK_HTML).id));
     await act(async () => useApp.getState().draftNarration("slide", "general", "1"));
     expect(calls("send_message").at(-1)![1].args).toMatchObject({ provider: "codex", permissionMode: "ask" });
     expect(calls("send_message").at(-1)![1].args.prompt).toContain("read_narration and write_narration");
@@ -70,7 +70,7 @@ describe("Codex approval event → store → chat → IPC", () => {
       const request = { ...approval, id: tool, reason: `Allow ${tool}?`, details: JSON.stringify({ server: "slopslide", tool }) };
       emit({ type: "approvalRequested", approval: request });
       fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
-      await waitFor(() => expect(calls("respond_approval").at(-1)![1]).toEqual({ deckId: "talk", id: tool, decision: "accept" }));
+      await waitFor(() => expect(calls("respond_approval").at(-1)![1]).toEqual({ workspace: "/decks/talk", id: tool, decision: "accept" }));
       emit({ type: "approvalResolved", id: tool });
     }
     const document = emptyNarration();

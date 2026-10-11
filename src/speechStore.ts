@@ -38,7 +38,7 @@ export const useSpeech = create<SpeechState>((set, get) => ({
   },
   loadTakes: async (deckId) => {
     const run = ++takeRequest;
-    if (get().deckId !== deckId) set({ deckId, takes: {}, preview: null });
+    if (get().deckId !== deckId) set({ deckId, takes: {}, preview: null, message: null, error: null });
     if (!deckId) return;
     try { const takes = await api.speechTakes(deckId); if (run === takeRequest) set({ takes: takes ?? {} }); }
     catch (e) { if (run === takeRequest) set({ error: errorMessage(e) }); }

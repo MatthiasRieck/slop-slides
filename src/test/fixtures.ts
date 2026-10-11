@@ -36,9 +36,9 @@ export function deckFor(html: string, rev = "1"): Deck {
     }
   }
   return {
-    id: "talk",
+    id: "/decks/talk/deck.html",
     title: "Talk",
-    path: "/decks/talk",
+    path: "/decks/talk/deck.html",
     slides: slides.map(({ id, hidden, locked, moved }) => ({ id, hash: `${id}-${rev}`, hidden, locked, moved })),
     sections,
     shellHash: `shell-${rev}`,

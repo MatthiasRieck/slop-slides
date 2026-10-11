@@ -1,5 +1,6 @@
 use super::*;
 use std::collections::BTreeSet;
+use std::sync::Mutex;
 
 mod fake_server;
 
@@ -8,18 +9,54 @@ fn args(dir: &Path) -> TurnArgs<'_> {
         bin: dir,
         dir,
         lint_server: dir,
-        deck_id: "deck-1",
+        workspace: "deck-1",
         prompt: "Make slides",
         model: Some("test-model"),
         effort: Some("high"),
         session: None,
         mode: PermissionMode::Ask,
         approvals: Arc::default(),
+        extensions: Box::leak(Box::default()),
     }
 }
 
+#[test]
+fn configures_the_builtin_mcp_server_as_preapproved() {
+    let args = mcp_config_args(Path::new("/app/slopslide"), Path::new("/decks/talk"));
+    assert_eq!(
+        args,
+        [
+            "-c",
+            "mcp_servers.slopslide.command=\"/app/slopslide\"",
+            "-c",
+            "mcp_servers.slopslide.args=[\"--lint-mcp\",\"/decks/talk\"]",
+            "-c",
+            "mcp_servers.slopslide.default_tools_approval_mode=\"approve\"",
+        ]
+    );
+}
+
+#[test]
+fn skill_roots_leave_out_the_workspace_codex_reads_itself() {
+    let dir = std::env::temp_dir().join(format!("codex-skills-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(dir.join("plugin/skills")).unwrap();
+    std::fs::create_dir_all(dir.join("bare-plugin")).unwrap();
+    let ext = Extensions {
+        user_skills: Some(dir.join("skills")),
+        workspace_skills: Some(dir.join("ws/.agents/skills")),
+        plugins: vec![dir.join("plugin"), dir.join("bare-plugin")],
+        ..Default::default()
+    };
+    assert_eq!(
+        skill_roots(&ext),
+        [dir.join("skills"), dir.join("plugin/skills")]
+    );
+    assert!(skill_roots(&Extensions::default()).is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 fn mcp_approval_params() -> Value {
-    json!({"serverName":"slopslide","mode":"form","message":"Allow lint_deck?",
+    json!({"serverName":"docs","mode":"form","message":"Allow search?",
         "requestedSchema":{"type":"object","properties":{}},
         "_meta":{"codex_approval_kind":"mcp_tool_call","tool_params":{}}})
 }
@@ -249,11 +286,17 @@ fn codex_payloads_match_pinned_protocol_schemas() {
             let f = process::Fixture::new(
                 json!({"approvals":[{"params":{"command":"ls"}}],"hold":true}),
             );
+            let ext = Extensions {
+                user_skills: Some(PathBuf::from("/home/.slopslides/skills")),
+                ..Default::default()
+            };
+            let mut a = f.args();
+            a.extensions = &ext;
             let (tx, mut rx) = watch::channel(false);
             tokio::time::timeout(
                 Duration::from_secs(10),
                 run_turn(
-                    f.args(),
+                    a,
                     &mut rx,
                     &|e| {
                         if matches!(e, AgentEvent::ApprovalRequested { .. }) {
@@ -266,10 +309,22 @@ fn codex_payloads_match_pinned_protocol_schemas() {
             .await
             .expect("contract transport capture timed out")
             .unwrap();
+            assert!(
+                f.requests()
+                    .iter()
+                    .any(|r| r["method"] == "skills/extraRoots/set"
+                        && r["params"]["extraRoots"] == json!(["/home/.slopslides/skills"])),
+                "the user's skills are added before the thread starts"
+            );
             for request in f.requests() {
                 let schema = match request["method"].as_str() {
                     Some("initialize") => "InitializeParams",
                     Some("config/read") => "ConfigReadParams",
+                    // Its Params schema is not pinned; ClientRequest covers it.
+                    Some("skills/extraRoots/set") => {
+                        add("ClientRequest", request.clone());
+                        continue;
+                    }
                     Some("configRequirements/read") => {
                         // This parameterless RPC has no separate Params schema.
                         add("ClientRequest", request.clone());
@@ -306,8 +361,8 @@ fn mcp_tool_approvals_use_elicitation_actions_without_persistent_grants() {
         let (a, result) = approval_request("mcpServer/elicitation/request", &p).unwrap();
         assert_eq!(result["accept"], json!({"action":"accept","content":{}}));
         assert_eq!(result["decline"], json!({"action":"decline"}));
-        assert!(a.details.contains("slopslide"));
-        assert_eq!(a.reason.as_deref(), Some("Allow lint_deck?"));
+        assert!(a.details.contains("docs"));
+        assert_eq!(a.reason.as_deref(), Some("Allow search?"));
         let session = persist == "session" || persist.is_array();
         assert_eq!(a.decisions.contains(&Decision::AcceptForSession), session);
         if session {
@@ -382,6 +437,17 @@ fn policies_are_explicit_and_custom_resets_resumed_threads() {
         assert_eq!(p["model"], "test-model");
         assert_eq!(p["developerInstructions"], SYSTEM_PROMPT);
     }
+    let ext = Extensions {
+        instructions: Some("Be brief.".into()),
+        ..Default::default()
+    };
+    a.extensions = &ext;
+    let p = thread_params(&a, &json!({}));
+    assert_eq!(
+        p["developerInstructions"],
+        ext.system_prompt(SYSTEM_PROMPT),
+        "the user's AGENTS.md follows the app's instructions"
+    );
     a.mode = PermissionMode::Custom;
     let p = thread_params(&a, &json!({}));
     assert_eq!(p["sandbox"], "read-only");
@@ -575,17 +641,12 @@ mod process {
     #[test]
     fn mcp_approvals_route_actions_and_accept_nullable_turn_correlation() {
         run(async {
-            for (tool, turn, decision) in [
-                (mcp::READ_NARRATION, json!("turn-1"), Decision::Accept),
-                (mcp::WRITE_NARRATION, Value::Null, Decision::Decline),
-                (
-                    mcp::WRITE_NARRATION,
-                    json!("turn-1"),
-                    Decision::AcceptForSession,
-                ),
+            for (turn, decision) in [
+                (json!("turn-1"), Decision::Accept),
+                (Value::Null, Decision::Decline),
+                (json!("turn-1"), Decision::AcceptForSession),
             ] {
                 let mut params = mcp_approval_params();
-                params["message"] = json!(format!("Allow {tool}?"));
                 params["turnId"] = turn;
                 params["_meta"]["persist"] = json!("session");
                 let f = Fixture::new(
@@ -610,14 +671,7 @@ mod process {
                 .unwrap();
                 assert!(matches!(outcome, Outcome::Done));
                 assert!(*seen.lock().unwrap());
-                let requests = f.requests();
-                let start = requests
-                    .iter()
-                    .find(|r| r["method"] == "thread/start")
-                    .unwrap();
-                assert_eq!(start["params"]["approvalPolicy"], "on-request");
-                assert_eq!(start["params"]["sandbox"], "workspace-write");
-                let response = requests.into_iter().find(|r| r["id"] == 90).unwrap();
+                let response = f.requests().into_iter().find(|r| r["id"] == 90).unwrap();
                 assert_eq!(
                     response["result"]["action"],
                     if decision == Decision::Decline {
@@ -631,8 +685,32 @@ mod process {
                     decision == Decision::AcceptForSession
                 );
                 assert!(response["result"].get("decision").is_none());
-                assert!(broker.0.lock().unwrap().is_empty());
+                assert!(broker.is_empty());
             }
+        });
+    }
+
+    #[test]
+    fn builtin_mcp_tools_are_approved_without_asking() {
+        run(async {
+            let mut params = mcp_approval_params();
+            params["serverName"] = json!(mcp::SERVER);
+            params["turnId"] = json!("turn-1");
+            let f = Fixture::new(
+                json!({"approvals":[{"method":"mcpServer/elicitation/request","params":params}]}),
+            );
+            let (_tx, mut rx) = watch::channel(false);
+            let outcome = run_turn(
+                f.args(),
+                &mut rx,
+                &|e| assert!(!matches!(e, AgentEvent::ApprovalRequested { .. })),
+                &|_| Ok(()),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(outcome, Outcome::Done));
+            let response = f.requests().into_iter().find(|r| r["id"] == 90).unwrap();
+            assert_eq!(response["result"]["action"], "accept");
         });
     }
 
@@ -791,7 +869,7 @@ mod process {
                     .count(),
                 2
             );
-            assert!(broker.0.lock().unwrap().is_empty());
+            assert!(broker.is_empty());
         });
     }
 
@@ -853,7 +931,7 @@ mod process {
             .await
             .unwrap();
             assert!(matches!(outcome, Outcome::Interrupted));
-            assert!(broker.0.lock().unwrap().is_empty());
+            assert!(broker.is_empty());
             assert!(broker
                 .respond("deck-1", &id.lock().unwrap(), Decision::Accept)
                 .is_err());
@@ -892,7 +970,7 @@ mod process {
             .expect("Stop must not wait indefinitely")
             .unwrap();
             assert!(matches!(outcome, Outcome::Interrupted));
-            assert!(broker.0.lock().unwrap().is_empty());
+            assert!(broker.is_empty());
             assert!(!f
                 .requests()
                 .iter()
@@ -925,7 +1003,7 @@ mod process {
             .await
             .unwrap();
             assert!(!id.lock().unwrap().is_empty());
-            assert!(broker.0.lock().unwrap().is_empty());
+            assert!(broker.is_empty());
         });
     }
 
@@ -1019,7 +1097,7 @@ mod process {
             let broker = a.approvals.clone();
             let (_tx, mut rx) = watch::channel(false);
             assert!(run_turn(a, &mut rx, &|_| {}, &|_| Ok(())).await.is_err());
-            assert!(broker.0.lock().unwrap().is_empty());
+            assert!(broker.is_empty());
         });
     }
 
@@ -1044,7 +1122,7 @@ mod process {
             };
             let (outcome, ()) = tokio::join!(run_turn(a, &mut rx, &|_| {}, &|_| Ok(())), cancel);
             assert!(matches!(outcome, Ok(Outcome::Interrupted)));
-            assert!(broker.0.lock().unwrap().is_empty());
+            assert!(broker.is_empty());
             assert!(!f.requests().iter().any(|r| r["method"] == "thread/start"));
         });
     }
@@ -1064,21 +1142,10 @@ mod process {
     }
 }
 
-/// Explicit opt-in: exercise the real MCP approval path using only the app's read-only linter.
+/// Explicit opt-in: the app's own MCP tools run on a real Codex without asking the user.
 #[test]
 #[ignore = "requires a signed-in Codex CLI, network access, and subscription usage"]
 fn real_codex_lint_approval_test() {
-    real_codex_read_tool_approval_test("lint_deck");
-}
-
-/// Explicit opt-in: reproduce narration's MCP approval path without changing a deck.
-#[test]
-#[ignore = "requires a signed-in Codex CLI, network access, and subscription usage"]
-fn real_codex_narration_approval_test() {
-    real_codex_read_tool_approval_test("read_narration");
-}
-
-fn real_codex_read_tool_approval_test(tool: &str) {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1096,30 +1163,20 @@ fn real_codex_read_tool_approval_test(tool: &str) {
         a.lint_server = &lint;
         a.model = None;
         a.effort = Some("low");
-        let prompt = format!("Call the slopslide MCP {tool} tool exactly once, then briefly report its findings. Use tool search to discover it if needed. Do not run shell commands, call other MCP tools, or change any files.");
-        a.prompt = &prompt;
-        let broker = a.approvals.clone();
+        a.prompt = "Call the slopslide MCP lint_deck tool exactly once, then briefly report its findings. Do not run shell commands, use any other tool, or change any files.";
         let (_tx, mut rx) = watch::channel(false);
         let outcome = tokio::time::timeout(Duration::from_secs(90), run_turn(
             a, &mut rx,
-            &|e| {
-                events.lock().unwrap().push(e.clone());
-                if let AgentEvent::ApprovalRequested { approval } = e {
-                    // Never approve unrelated tools or shell/file access in the live test.
-                    assert_eq!(approval.title, "Use an MCP tool");
-                    assert!(approval.details.contains("slopslide"));
-                    assert!(approval.reason.as_deref().unwrap_or_default().contains(tool));
-                    broker.respond("deck-1", &approval.id, Decision::Accept).unwrap();
-                }
-            }, &|_| Ok(()),
-        )).await.expect("live read-only MCP turn timed out").unwrap();
+            &|e| events.lock().unwrap().push(e.clone()),
+            &|_| Ok(()),
+        )).await.expect("live lint turn timed out").unwrap();
         let events = events.into_inner().unwrap();
         assert!(matches!(outcome, Outcome::Done));
-        assert!(events.iter().any(|e| matches!(e, AgentEvent::ApprovalRequested { .. })), "{events:?}");
+        assert!(!events.iter().any(|e| matches!(e, AgentEvent::ApprovalRequested { .. })), "{events:?}");
         let tool_id = events.iter().find_map(|e| match e {
-            AgentEvent::ToolUse { id, name, .. } if name == tool => Some(id),
+            AgentEvent::ToolUse { id, name, .. } if name == "lint_deck" => Some(id),
             _ => None,
-        }).expect("real read-only MCP tool was called");
+        }).expect("real lint_deck tool was called");
         assert!(events.iter().any(|e| matches!(e, AgentEvent::ToolResult { id, is_error: false } if id == tool_id)), "{events:?}");
         assert!(matches!(events.last(), Some(AgentEvent::Result { is_error: false, .. })), "{events:?}");
         let _ = std::fs::remove_dir_all(dir);
@@ -1139,7 +1196,7 @@ fn real_codex_permission_modes_test() {
         let dir =
             std::env::temp_dir().join(format!("slopslide-policy-smoke-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
-        let mut server = Server::spawn(&bin, Some(&dir), None).unwrap();
+        let mut server = Server::spawn(&bin, Some(&dir), &[]).unwrap();
         server.initialize().await.unwrap();
         let (config, requirements) = server.configuration(&dir).await.unwrap();
         for (mode, sandbox, policy, reviewer) in [
@@ -1187,7 +1244,7 @@ fn real_codex_smoke_test() {
         let dir=std::env::temp_dir().join(format!("slopslide-real-smoke-{}",uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let lint=Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug/slopslide");
-        let mut probe=Server::spawn(&bin,Some(&dir),None).unwrap();
+        let mut probe=Server::spawn(&bin,Some(&dir),&[]).unwrap();
         probe.initialize().await.unwrap();
         let models=probe.request("model/list",json!({})).await.unwrap();
         let model=models["data"].as_array().unwrap().iter().find(|m| m["isDefault"]==true).or_else(||models["data"].as_array().unwrap().first()).unwrap()["model"].as_str().unwrap();

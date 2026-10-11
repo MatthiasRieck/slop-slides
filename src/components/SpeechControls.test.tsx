@@ -18,8 +18,8 @@ const take: SpeechTake = { id: "recording", key: "key", engineVersion: "v1", mod
 beforeEach(() => {
   vi.spyOn(api, "speechHistory").mockResolvedValue([]);
   useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
-  useNarration.setState({ deckId: "talk", document: doc, edits: {}, settingsEdits: {}, languageEdit: null, error: null });
-  useSpeech.setState({ status: { providers: [testSpeechProvider()], job: null }, deckId: "talk", takes: {}, job: null, error: null, message: null });
+  useNarration.setState({ deckId: deckFor(DECK_HTML).id, document: doc, edits: {}, settingsEdits: {}, languageEdit: null, error: null });
+  useSpeech.setState({ status: { providers: [testSpeechProvider()], job: null }, deckId: deckFor(DECK_HTML).id, takes: {}, job: null, error: null, message: null });
   vi.spyOn(useSpeech.getState(), "initialize").mockResolvedValue(); vi.spyOn(useSpeech.getState(), "loadTakes").mockResolvedValue();
 });
 it("uses a saved presenter's readiness independently of the stock pack", () => {
@@ -47,7 +47,7 @@ it("applies presenter and pace to this slide without changing deck defaults", ()
   fireEvent.change(screen.getByLabelText("Narration presenter"), { target: { value: "preset:aiden" } }); expect(edit).toHaveBeenCalledWith("intro", expect.objectContaining({ presenterIdOverride: "preset:aiden", presenterNameSnapshotOverride: "Aiden", speechProviderIdOverride: "qwen-local" }));
   fireEvent.change(screen.getByLabelText("Narration pace"), { target: { value: "1.2" } }); expect(edit).toHaveBeenCalledWith("intro", expect.objectContaining({ paceOverride: 1.2 }));
   expect(useNarration.getState().settingsEdits).toEqual({});
-  fireEvent.click(screen.getByText("Generate audio")); expect(generate).toHaveBeenCalledWith("talk", "intro", false);
+  fireEvent.click(screen.getByText("Generate audio")); expect(generate).toHaveBeenCalledWith(deckFor(DECK_HTML).id, "intro", false);
 });
 it("shows actual duration and identifies old audio after a script edit", () => {
   useSpeech.setState({ takes: { intro: take } }); render(<SpeechPlayback />);
@@ -121,10 +121,10 @@ it("keeps advanced controls closed and explicitly generates a new take", () => {
   expect((screen.getByText("Voice & timing").closest("details") as HTMLDetailsElement).open).toBe(false);
   expect(screen.queryByText("Generate audio for all slides")).toBeNull();
   fireEvent.click(screen.getByText("Generate another take"));
-  expect(generate).toHaveBeenCalledWith("talk", "intro", true);
+  expect(generate).toHaveBeenCalledWith(deckFor(DECK_HTML).id, "intro", true);
 });
 it("previews history in the player without changing the accepted recording", () => {
-  useSpeech.setState({ takes: { intro: take }, preview: { deckId: "talk", slide: "intro", take: { ...take, id: "older" } } });
+  useSpeech.setState({ takes: { intro: take }, preview: { deckId: deckFor(DECK_HTML).id, slide: "intro", take: { ...take, id: "older" } } });
   render(<SpeechPlayback />);
   expect(screen.getByText("History preview")).toBeTruthy();
   expect(screen.getByLabelText("Narration audio").getAttribute("src")).toContain("/audio/older.wav");
@@ -136,9 +136,9 @@ it("restarts playback when listening to the accepted take or replaying a history
   useSpeech.setState({ preview: null, takes: { intro: take } });
   render(<SpeechPlayback />);
   const original = screen.getByLabelText("Narration audio");
-  act(() => useSpeech.setState({ preview: { deckId: "talk", slide: "intro", take, requestId: "first" } }));
+  act(() => useSpeech.setState({ preview: { deckId: deckFor(DECK_HTML).id, slide: "intro", take, requestId: "first" } }));
   const first = screen.getByLabelText("Narration audio");
   expect(first).not.toBe(original); expect((first as HTMLAudioElement).autoplay).toBe(true);
-  act(() => useSpeech.setState({ preview: { deckId: "talk", slide: "intro", take, requestId: "second" } }));
+  act(() => useSpeech.setState({ preview: { deckId: deckFor(DECK_HTML).id, slide: "intro", take, requestId: "second" } }));
   expect(screen.getByLabelText("Narration audio")).not.toBe(first);
 });

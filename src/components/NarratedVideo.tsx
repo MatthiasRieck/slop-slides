@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { Pause, Play } from "lucide-react";
 import { useVideo } from "../videoStore";
-import { cn, deckFileUrl, isMac } from "../lib/utils";
+import { cn, previewFileUrl, isMac } from "../lib/utils";
 import { videoSlideAt } from "../lib/video";
 import type { VideoTimeline } from "../lib/video";
 
@@ -27,7 +27,7 @@ const VideoAudio = memo(function VideoAudio({ timeline, onSlide }: { timeline: V
   }, [timeline, onSlide]);
   const time = (value: number) => `${Math.floor(value / 60)}:${Math.floor(value % 60).toString().padStart(2, "0")}`;
   return <>
-    <audio ref={audioRef} aria-label="Narrated deck audio" preload="auto" src={deckFileUrl(".video", `${timeline.id}/timeline.wav`)} onTimeUpdate={updateTime} onSeeked={updateTime} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => { setPlaying(false); updateTime(); }} onError={() => setError("Could not play the prepared audio. Close and reopen the preview.")} />
+    <audio ref={audioRef} aria-label="Narrated deck audio" preload="auto" src={previewFileUrl("video", `${timeline.id}/timeline.wav`)} onTimeUpdate={updateTime} onSeeked={updateTime} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => { setPlaying(false); updateTime(); }} onError={() => setError("Could not play the prepared audio. Close and reopen the preview.")} />
     <div className="flex items-center gap-3 rounded-lg bg-white/10 px-3 py-2">
       <button aria-label={playing ? "Pause narrated deck" : "Play narrated deck"} className="rounded p-2 hover:bg-white/10" onClick={() => {
         const audio = audioRef.current;
@@ -71,9 +71,9 @@ export function NarratedVideo() {
         // Decode the following slide ahead of its boundary without keeping the
         // entire deck's image pixels resident.
         if (index + 1 < timeline.slides.length) {
-          const next = new Image(); next.src = deckFileUrl(".video", `${timeline.id}/frame-${index + 1}.png`); void next.decode().catch(() => {});
+          const next = new Image(); next.src = previewFileUrl("video", `${timeline.id}/frame-${index + 1}.png`); void next.decode().catch(() => {});
         }
-      }} alt={`Narrated slide ${index + 1}`} className="max-h-full max-w-full object-contain" src={deckFileUrl(".video", `${timeline.id}/frame-${index}.png`)} />}
+      }} alt={`Narrated slide ${index + 1}`} className="max-h-full max-w-full object-contain" src={previewFileUrl("video", `${timeline.id}/frame-${index}.png`)} />}
       {!timeline && !state.busy && !state.error && <span>No narrated preview prepared.</span>}
     </div>
     <div className="mx-auto w-full max-w-4xl space-y-2 px-5 pb-5 text-xs text-white/75">

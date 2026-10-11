@@ -1,11 +1,10 @@
 //! Codex app-server transport. Provider policy and JSON-RPC stay out of the shared agent loop.
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -13,107 +12,9 @@ use tokio::sync::{mpsc, watch};
 
 use crate::agent::{AgentEvent, Outcome, SYSTEM_PROMPT};
 use crate::error::{Error, Result};
+use crate::extensions::{self, Extensions};
+use crate::permissions::{Answer, Approval, Approvals, Choices, Decision, PermissionMode, Run};
 use crate::{env, mcp};
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum PermissionMode {
-    #[default]
-    Ask,
-    AutoReview,
-    FullAccess,
-    Custom,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum Decision {
-    Accept,
-    AcceptForSession,
-    Decline,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct Approval {
-    pub id: String,
-    pub title: String,
-    pub reason: Option<String>,
-    pub details: String,
-    pub accept_label: String,
-    pub decisions: Vec<Decision>,
-}
-
-struct Pending {
-    deck_id: String,
-    run_id: String,
-    wire_id: Value,
-    result: HashMap<DecisionKey, Value>,
-    sender: mpsc::UnboundedSender<(String, Value)>,
-}
-// Wire decision names are also the keys for the responses offered by the server.
-type DecisionKey = &'static str;
-impl Decision {
-    fn key(self) -> DecisionKey {
-        match self {
-            Self::Accept => "accept",
-            Self::AcceptForSession => "acceptForSession",
-            Self::Decline => "decline",
-        }
-    }
-}
-
-#[derive(Default)]
-pub struct Approvals(Mutex<HashMap<String, Pending>>);
-impl Approvals {
-    pub fn respond(&self, deck_id: &str, id: &str, decision: Decision) -> Result<()> {
-        let mut pending = self.0.lock().unwrap();
-        let request = pending
-            .get(id)
-            .ok_or_else(|| Error::msg("This approval is no longer pending."))?;
-        if request.deck_id != deck_id {
-            return Err(Error::msg("This approval belongs to a different deck."));
-        }
-        let result = request
-            .result
-            .get(decision.key())
-            .ok_or_else(|| Error::msg("Codex did not offer that decision."))?
-            .clone();
-        let request = pending.remove(id).expect("checked pending request");
-        request
-            .sender
-            .send((id.into(), json!({"id":request.wire_id,"result":result})))
-            .map_err(|_| Error::msg("This Codex turn has ended."))
-    }
-
-    pub fn cancel_deck(&self, deck_id: &str) {
-        self.0.lock().unwrap().retain(|_, p| p.deck_id != deck_id);
-    }
-
-    fn resolved(&self, run_id: &str, wire_id: &Value) -> Option<String> {
-        let mut pending = self.0.lock().unwrap();
-        let id = pending
-            .iter()
-            .find(|(_, p)| p.run_id == run_id && p.wire_id == *wire_id)
-            .map(|(id, _)| id.clone())?;
-        pending.remove(&id);
-        Some(id)
-    }
-}
-
-struct PendingGuard {
-    approvals: Arc<Approvals>,
-    run_id: String,
-}
-impl Drop for PendingGuard {
-    fn drop(&mut self) {
-        self.approvals
-            .0
-            .lock()
-            .unwrap()
-            .retain(|_, p| p.run_id != self.run_id);
-    }
-}
 
 struct Server {
     _child: Child,
@@ -124,25 +25,12 @@ struct Server {
     active_turn: Option<(String, String)>,
 }
 impl Server {
-    fn spawn(bin: &Path, cwd: Option<&Path>, lint_server: Option<&Path>) -> Result<Self> {
+    /// `config` holds `-c` overrides.
+    fn spawn(bin: &Path, cwd: Option<&Path>, config: &[String]) -> Result<Self> {
         let mut cmd = Command::new(bin);
-        cmd.arg("app-server");
+        cmd.arg("app-server").args(config);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
-        }
-        if let (Some(exe), Some(dir)) = (lint_server, cwd) {
-            cmd.arg("-c")
-                .arg(format!(
-                    "mcp_servers.{}.command={}",
-                    mcp::SERVER,
-                    serde_json::to_string(&exe.to_string_lossy()).expect("serializable path")
-                ))
-                .arg("-c")
-                .arg(format!(
-                    "mcp_servers.{}.args={}",
-                    mcp::SERVER,
-                    json!([mcp::FLAG, dir.to_string_lossy()])
-                ));
         }
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -230,6 +118,31 @@ impl Server {
     }
 }
 
+/// `-c` overrides that add the app's MCP server, its tools approved up front.
+fn mcp_config_args(exe: &Path, dir: &Path) -> Vec<String> {
+    let server = mcp::SERVER;
+    let command = serde_json::to_string(&exe.to_string_lossy()).expect("serializable path");
+    let args = json!([mcp::FLAG, dir.to_string_lossy()]);
+    [
+        format!("mcp_servers.{server}.command={command}"),
+        format!("mcp_servers.{server}.args={args}"),
+        format!("mcp_servers.{server}.default_tools_approval_mode=\"approve\""),
+    ]
+    .into_iter()
+    .flat_map(|value| ["-c".to_string(), value])
+    .collect()
+}
+
+/// The skill folders Codex does not find itself: it reads the workspace's `.agents/skills`
+/// but not the app home's or the plugins'.
+fn skill_roots(ext: &Extensions) -> Vec<PathBuf> {
+    ext.user_skills
+        .iter()
+        .cloned()
+        .chain(ext.plugin_skill_folders())
+        .collect()
+}
+
 fn allowed(requirements: &Value, key: &str, value: &str) -> bool {
     requirements[key]
         .as_array()
@@ -260,14 +173,15 @@ fn supported_modes(config: &Value, requirements: &Value) -> Vec<PermissionMode> 
 
 pub async fn permission_modes(dir: &Path) -> Result<Vec<PermissionMode>> {
     let bin = env::resolve_codex().ok_or_else(|| Error::msg("Codex is not installed."))?;
-    let mut server = Server::spawn(&bin, Some(dir), None)?;
+    let mut server = Server::spawn(&bin, Some(dir), &[])?;
     server.initialize().await?;
     let (config, requirements) = server.configuration(dir).await?;
     Ok(supported_modes(&config, &requirements))
 }
 
 fn thread_params(args: &TurnArgs<'_>, config: &Value) -> Value {
-    let mut p = json!({"cwd":args.dir,"developerInstructions":SYSTEM_PROMPT});
+    let instructions = args.extensions.system_prompt(SYSTEM_PROMPT);
+    let mut p = json!({"cwd":args.dir,"developerInstructions":instructions});
     if let Some(model) = args.model {
         p["model"] = json!(model);
     }
@@ -311,13 +225,14 @@ pub struct TurnArgs<'a> {
     pub bin: &'a Path,
     pub dir: &'a Path,
     pub lint_server: &'a Path,
-    pub deck_id: &'a str,
+    pub workspace: &'a str,
     pub prompt: &'a str,
     pub model: Option<&'a str>,
     pub effort: Option<&'a str>,
     pub session: Option<&'a str>,
     pub mode: PermissionMode,
     pub approvals: Arc<Approvals>,
+    pub extensions: &'a Extensions,
 }
 
 pub async fn run_turn(
@@ -326,12 +241,17 @@ pub async fn run_turn(
     emit: &(dyn Fn(&AgentEvent) + Sync),
     on_session: &(dyn Fn(&str) -> Result<()> + Sync),
 ) -> Result<Outcome> {
-    let mut server = Server::spawn(args.bin, Some(args.dir), Some(args.lint_server))?;
-    let run_id = uuid::Uuid::new_v4().to_string();
-    let _guard = PendingGuard {
-        approvals: args.approvals.clone(),
-        run_id: run_id.clone(),
-    };
+    let mut warnings = Vec::new();
+    let mut config = mcp_config_args(args.lint_server, args.dir);
+    config.extend(extensions::codex_config_args(
+        &args.extensions.all_mcp_servers(),
+        &mut warnings,
+    ));
+    for message in warnings {
+        emit(&AgentEvent::Error { message });
+    }
+    let mut server = Server::spawn(args.bin, Some(args.dir), &config)?;
+    let (run, mut answers) = args.approvals.start(args.workspace);
     // Cancellation covers initialization/resume as well as generation and approval waits.
     if *cancel.borrow() {
         return Ok(Outcome::Interrupted);
@@ -353,7 +273,7 @@ pub async fn run_turn(
             }
             Ok(Outcome::Interrupted)
         },
-        result = connected_turn(&mut server, &args, &run_id, emit, on_session) => result,
+        result = connected_turn(&mut server, &args, &run, &mut answers, emit, on_session) => result,
     }
     // Server's kill_on_drop closes the transport, including any pending approvals.
 }
@@ -361,11 +281,23 @@ pub async fn run_turn(
 async fn connected_turn(
     server: &mut Server,
     args: &TurnArgs<'_>,
-    run_id: &str,
+    run: &Run,
+    answers: &mut mpsc::UnboundedReceiver<Answer>,
     emit: &(dyn Fn(&AgentEvent) + Sync),
     on_session: &(dyn Fn(&str) -> Result<()> + Sync),
 ) -> Result<Outcome> {
     server.initialize().await?;
+    let roots = skill_roots(args.extensions);
+    if !roots.is_empty() {
+        if let Err(e) = server
+            .request("skills/extraRoots/set", json!({"extraRoots": roots}))
+            .await
+        {
+            emit(&AgentEvent::Error {
+                message: format!("Codex could not load the skills from ~/.slopslides: {e}"),
+            });
+        }
+    }
     let (config, requirements) = server.configuration(args.dir).await?;
     if !supported_modes(&config, &requirements).contains(&args.mode) {
         return Err(Error::msg(
@@ -411,13 +343,12 @@ async fn connected_turn(
         .to_string();
     server.active_turn = Some((thread.clone(), turn.clone()));
     let mut mapper = EventMapper::default();
-    let (tx, mut rx) = mpsc::unbounded_channel();
     loop {
         let message = tokio::select! {
             biased;
-            Some((id, answer)) = rx.recv() => {
-                server.send(&answer).await?;
-                emit(&AgentEvent::ApprovalResolved { id });
+            Some(answer) = answers.recv() => {
+                server.send(&json!({"id":answer.wire_id,"result":answer.payload})).await?;
+                emit(&AgentEvent::ApprovalResolved { id: answer.id });
                 continue;
             }
             message = server.next() => message?,
@@ -440,19 +371,16 @@ async fn connected_turn(
                 server.reject_unknown(&message).await?;
                 continue;
             }
-            if let Some((approval, result)) =
+            if builtin_mcp_request(method, p) {
+                server
+                    .send(&json!({"id":message["id"],"result":{"action":"accept","content":{}}}))
+                    .await?;
+                continue;
+            }
+            if let Some((approval, choices)) =
                 approval_request(method, &mapper.approval_details(method, p))
             {
-                args.approvals.0.lock().unwrap().insert(
-                    approval.id.clone(),
-                    Pending {
-                        deck_id: args.deck_id.into(),
-                        run_id: run_id.into(),
-                        wire_id: message["id"].clone(),
-                        result,
-                        sender: tx.clone(),
-                    },
-                );
+                run.ask(message["id"].clone(), &approval, choices);
                 emit(&AgentEvent::ApprovalRequested { approval });
             } else {
                 server.reject_unknown(&message).await?;
@@ -461,7 +389,7 @@ async fn connected_turn(
             continue;
         }
         if method == "serverRequest/resolved" {
-            if let Some(id) = args.approvals.resolved(run_id, &p["requestId"]) {
+            if let Some(id) = run.resolved(&p["requestId"]) {
                 emit(&AgentEvent::ApprovalResolved { id });
             }
         }
@@ -497,7 +425,16 @@ fn missing_thread(message: &str) -> bool {
         || m.contains("no conversation found")
 }
 
-fn approval_request(method: &str, p: &Value) -> Option<(Approval, HashMap<DecisionKey, Value>)> {
+/// The app's own MCP tools need no approval; the server config already says so (see
+/// [`Server::spawn`]), this covers Codex asking anyway.
+fn builtin_mcp_request(method: &str, p: &Value) -> bool {
+    method == "mcpServer/elicitation/request"
+        && p["serverName"] == mcp::SERVER
+        && p["_meta"]["codex_approval_kind"] == "mcp_tool_call"
+        && p["_meta"]["codex_requires_user_input"] != true
+}
+
+fn approval_request(method: &str, p: &Value) -> Option<(Approval, Choices)> {
     if method == "mcpServer/elicitation/request" {
         return mcp_approval_request(p);
     }
@@ -550,7 +487,7 @@ fn approval_request(method: &str, p: &Value) -> Option<(Approval, HashMap<Decisi
         Decision::AcceptForSession,
         Decision::Decline,
     ];
-    let mut result = HashMap::new();
+    let mut result = Choices::new();
     let mut decisions = Vec::new();
     for d in choices {
         let offered = if permissions {
@@ -590,7 +527,7 @@ fn approval_request(method: &str, p: &Value) -> Option<(Approval, HashMap<Decisi
 }
 
 /// Codex wraps MCP tool approvals in empty forms. These are confirmations, not input forms.
-fn mcp_approval_request(p: &Value) -> Option<(Approval, HashMap<DecisionKey, Value>)> {
+fn mcp_approval_request(p: &Value) -> Option<(Approval, Choices)> {
     let meta = &p["_meta"];
     let schema = &p["requestedSchema"];
     if p["mode"] != "form"
@@ -605,7 +542,7 @@ fn mcp_approval_request(p: &Value) -> Option<(Approval, HashMap<DecisionKey, Val
     let server = p["serverName"].as_str()?;
     let message = p["message"].as_str()?;
     let mut decisions = vec![Decision::Accept];
-    let mut result = HashMap::from([
+    let mut result = Choices::from([
         ("accept", json!({"action":"accept","content":{}})),
         ("decline", json!({"action":"decline"})),
     ]);

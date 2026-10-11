@@ -251,9 +251,8 @@ pub fn save(dir: &Path, mut manifest: Manifest, base: &str) -> Result<Document> 
     })
 }
 
-/// Prepare narration before creating the duplicate HTML. A failed HTML write leaves
-/// a recoverable orphan, rather than losing the source or an older removed copy.
-pub fn duplicate(dir: &Path, from: &str, to: &str, from_hash: &str, hash: &str) -> Result<()> {
+/// Copy a slide's script when its HTML is duplicated. The new slide needs review.
+pub fn duplicate(dir: &Path, from: &str, to: &str) -> Result<()> {
     let doc = load(dir)?;
     let Some(mut source) = doc.manifest.slides.get(from).cloned() else {
         return Ok(());
@@ -265,8 +264,7 @@ pub fn duplicate(dir: &Path, from: &str, to: &str, from_hash: &str, hash: &str) 
             previous,
         );
     }
-    source.reviewed_slide_hash =
-        (source.reviewed_slide_hash.as_deref() == Some(from_hash)).then(|| hash.into());
+    source.reviewed_slide_hash = None;
     manifest.slides.insert(to.into(), source);
     save(dir, manifest, &doc.version)?;
     Ok(())
@@ -304,7 +302,7 @@ mod tests {
         );
         let saved = save(&t.0, m.clone(), "missing").unwrap();
         assert_eq!(load(&t.0).unwrap().manifest, saved.manifest);
-        duplicate(&t.0, "a", "b", "hash", "new-hash").unwrap();
+        duplicate(&t.0, "a", "b").unwrap();
         let loaded = load(&t.0).unwrap().manifest;
         assert_eq!(loaded.slides["a"], loaded.slides["b"]);
         assert_eq!(loaded.presenter_id, "preset:ryan");
@@ -451,23 +449,19 @@ mod tests {
         assert_eq!(load(&t.0).unwrap().manifest.revision, 2);
     }
     #[test]
-    fn paired_snapshot_pruning_keeps_narration_and_deck_together() {
-        let t = Temp::with_script();
-        for _ in 0..35 {
-            deck::snapshot(&t.0).unwrap();
-        }
-        let internal = t.0.join(deck::INTERNAL_DIR);
-        let html = internal.join("snapshots");
-        let json = internal.join("narration-snapshots");
-        assert_eq!(fs::read_dir(&html).unwrap().count(), 30);
-        assert_eq!(fs::read_dir(&json).unwrap().count(), 30);
-        for entry in fs::read_dir(&json).unwrap() {
-            let path = entry.unwrap().path();
-            assert!(html
-                .join(path.file_stem().unwrap())
-                .with_extension("html")
-                .exists());
-        }
+    fn generated_and_arbitrary_html_decks_have_independent_narration_locations() {
+        let t = Temp::new();
+        let generated = t.0.join("deck.html");
+        let custom = t.0.join("talk.html");
+        assert_eq!(deck::narration_dir(&generated), t.0);
+        assert_eq!(
+            deck::narration_dir(&custom),
+            t.0.join("talk.html.slopslide")
+        );
+        assert_ne!(
+            deck::narration_dir(&custom),
+            deck::narration_dir(&t.0.join("talk.htm"))
+        );
     }
 
     #[test]
@@ -489,23 +483,25 @@ mod tests {
     fn reorder_hide_delete_and_restoration_keep_scripts_by_id() {
         let t = Temp::with_script();
         let original = fs::read_to_string(t.0.join(deck::DECK_FILE)).unwrap();
-        deck::reorder(&t.0, "test", vec!["b".into(), "a".into()]).unwrap();
-        deck::set_slide_hidden(&t.0, "test", "a", true).unwrap();
-        deck::delete_slide(&t.0, "test", "a").unwrap();
+        deck::reorder(&t.0.join(deck::DECK_FILE), vec!["b".into(), "a".into()]).unwrap();
+        deck::set_slide_hidden(&t.0.join(deck::DECK_FILE), None, "a", true).unwrap();
+        deck::delete_slide(&t.0.join(deck::DECK_FILE), &t.0.join("session"), "a").unwrap();
         assert_eq!(load(&t.0).unwrap().manifest.slides["a"].text, "Hello ✨");
-        deck::save_source(&t.0, "test", &original, None, false).unwrap();
+        deck::save_source(
+            &t.0.join(deck::DECK_FILE),
+            &t.0.join("session"),
+            &original,
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(load(&t.0).unwrap().manifest.slides["a"].text, "Hello ✨");
-        let archived = t.0.join(deck::INTERNAL_DIR).join("narration-snapshots");
-        assert!(fs::read_dir(archived)
-            .unwrap()
-            .any(|p| fs::read_to_string(p.unwrap().path())
-                .unwrap()
-                .contains("Hello")));
     }
     #[test]
     fn duplicate_copies_script_and_preserves_removed_copy() {
         let t = Temp::with_script();
-        let (_, copied) = deck::duplicate(&t.0, "test", "a").unwrap();
+        let (_, copied) = deck::duplicate(&t.0.join(deck::DECK_FILE), "a").unwrap();
+        duplicate(&t.0, "a", &copied).unwrap();
         assert_eq!(
             load(&t.0).unwrap().manifest.slides[&copied].text,
             "Hello ✨"
@@ -515,8 +511,9 @@ mod tests {
             None,
             "unreviewed scripts stay unreviewed"
         );
-        deck::delete_slide(&t.0, "test", &copied).unwrap();
-        deck::duplicate(&t.0, "test", "a").unwrap();
+        deck::delete_slide(&t.0.join(deck::DECK_FILE), &t.0.join("session"), &copied).unwrap();
+        let (_, again) = deck::duplicate(&t.0.join(deck::DECK_FILE), "a").unwrap();
+        duplicate(&t.0, "a", &again).unwrap();
         assert_eq!(load(&t.0).unwrap().manifest.slides.len(), 3);
     }
 }

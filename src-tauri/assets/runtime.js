@@ -21,11 +21,14 @@
       });
   if (!deck || slides.length === 0) return;
   var current = -1;
+  // The stage's size in slide pixels (the deck's slide size, 1920×1080 unless it names another).
+  var W = deck.offsetWidth || 1920;
+  var H = deck.offsetHeight || 1080;
 
   function fit() {
-    var scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
-    var x = (window.innerWidth - 1920 * scale) / 2;
-    var y = (window.innerHeight - 1080 * scale) / 2;
+    var scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    var x = (window.innerWidth - W * scale) / 2;
+    var y = (window.innerHeight - H * scale) / 2;
     deck.style.transform = "translate(" + x + "px," + y + "px) scale(" + scale + ")";
   }
 
@@ -82,7 +85,7 @@
   // bent by each point between as a quadratic Bézier control point, to the last point.
   function smoothPath(points) {
     var xy = points.map(function (p) {
-      return [p[0] * 1920, p[1] * 1080];
+      return [p[0] * W, p[1] * H];
     });
     var at = function (x, y) {
       return Math.round(x * 10) / 10 + " " + Math.round(y * 10) / 10;
@@ -108,7 +111,7 @@
   function drawReview(slide, strokes) {
     var svg = document.createElementNS(SVG, "svg");
     svg.setAttribute("class", "slop-review");
-    svg.setAttribute("viewBox", "0 0 1920 1080");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
     svg.setAttribute("preserveAspectRatio", "none");
     svg.setAttribute("aria-hidden", "true");
     strokes.forEach(function (stroke) {

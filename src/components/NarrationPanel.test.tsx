@@ -18,7 +18,7 @@ beforeEach(() => {
   vi.spyOn(useSpeech.getState(), "initialize").mockResolvedValue();
   vi.spyOn(useSpeech.getState(), "loadTakes").mockResolvedValue();
   useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", running: false });
-  useNarration.setState({ deckId: "talk", document: emptyNarration(), edits: {}, languageEdit: null, error: null, conflict: null, saving: false });
+  useNarration.setState({ deckId: deckFor(DECK_HTML).id, document: emptyNarration(), edits: {}, languageEdit: null, error: null, conflict: null, saving: false });
 });
 afterEach(async () => { await useNarration.getState().load(null); vi.useRealTimers(); });
 describe("NarrationPanel", () => {
@@ -32,7 +32,7 @@ describe("NarrationPanel", () => {
     fireEvent.change(screen.getByLabelText("Narration script"), { target: { value: "Welcome" } });
     expect(screen.getByText(/Scripts: 1 of 2 · Audio: 0 of 1 ready/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Generate missing audio" }));
-    expect(generate).toHaveBeenCalledWith("talk", null);
+    expect(generate).toHaveBeenCalledWith(deckFor(DECK_HTML).id, null);
     draft.mockRestore(); generate.mockRestore();
   });
   it("keeps voice creation visible after the script and allows it without a selected slide", () => {

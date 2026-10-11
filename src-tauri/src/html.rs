@@ -11,6 +11,8 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
+use crate::size::{self, SlideSize};
+
 const RUNTIME_CSS: &str = include_str!("../assets/runtime.css");
 const RUNTIME_JS: &str = include_str!("../assets/runtime.js");
 pub(crate) const CSS_START: &str =
@@ -49,6 +51,11 @@ pub const LOCKED_ATTR: &str = "data-locked";
 /// Marks an element the user moved, rotated or scaled by hand in the editor; it carries inline
 /// `translate` / `rotate` / `scale` styles until the agent tidies the slide's layout.
 pub const MOVED_ATTR: &str = "data-moved";
+
+/// Marks an image the user dropped onto a slide in the editor. It sits on top of the slide,
+/// placed with inline `position: absolute; left: 0; top: 0; width` (and moved with
+/// [`MOVED_ATTR`]'s `translate`) until the agent gives it a place in the layout.
+pub const DROPPED_ATTR: &str = "data-dropped";
 
 /// Attributes the in-editor slide editor puts on elements while it works. They never belong
 /// in deck.html; the editor strips them before saving.
@@ -198,6 +205,18 @@ pub fn find_sections(html: &str) -> Vec<SectionSpan> {
         });
     }
     sections
+}
+
+/// Whether the page has the deck's slide container, `<main class="deck">`.
+pub(crate) fn has_deck_container(html: &str) -> bool {
+    let mut from = 0;
+    while let Some(at) = find_ci(html, from, "<main") {
+        if parse_tag(html, at).is_some_and(|t| t.name == "main" && has_class(&t, "deck")) {
+            return true;
+        }
+        from = at + 1;
+    }
+    false
 }
 
 pub(crate) fn has_class(tag: &Tag, class: &str) -> bool {
@@ -363,9 +382,13 @@ fn insert_after_head(html: &str, snippet: &str) -> String {
 
 /// Installs (or refreshes) the player runtime: base CSS first in `<head>` so deck styles
 /// override it, and the script at the end of `<body>`.
+/// The stage takes the size named in the deck's `slopslide-size` meta, so refresh the runtime
+/// whenever that changes.
 pub fn ensure_runtime(html: &str) -> String {
-    let css =
-        format!("{CSS_START}\n  <style>\n{RUNTIME_CSS}  </style>\n  {PLAYER_FLAG}\n  {CSS_END}");
+    let stage = slide_size(html).runtime_css();
+    let css = format!(
+        "{CSS_START}\n  <style>\n{RUNTIME_CSS}{stage}  </style>\n  {PLAYER_FLAG}\n  {CSS_END}"
+    );
     let js = format!("{JS_START}\n  <script>\n{RUNTIME_JS}  </script>\n  {JS_END}");
     let html = match replace_block(html, CSS_START, CSS_END, &css) {
         Some(updated) => updated,
@@ -787,35 +810,34 @@ pub fn copy_slide(
 /// `<meta name="slopslide-template" content="<template id>">`.
 pub const TEMPLATE_META: &str = "slopslide-template";
 
-/// The template `<meta>` tag: where it starts and its parsed tag.
-fn template_meta(html: &str) -> Option<(usize, Tag)> {
+/// The first `<meta name="<name>">` tag (an app setting such as [`TEMPLATE_META`]): where it
+/// starts and its parsed tag.
+fn app_meta(html: &str, name: &str) -> Option<(usize, Tag)> {
     tags(html).find(|(_, tag)| {
         !tag.closing
             && tag.name == "meta"
             && tag
                 .attrs
                 .iter()
-                .any(|(n, v, _, _)| n == "name" && v.trim().eq_ignore_ascii_case(TEMPLATE_META))
+                .any(|(n, v, _, _)| n == "name" && v.trim().eq_ignore_ascii_case(name))
     })
 }
 
-/// Id of the template the deck's design comes from (see [`TEMPLATE_META`]).
-pub fn template(html: &str) -> Option<String> {
-    let (_, tag) = template_meta(html)?;
+/// The decoded, trimmed `content` of the app setting `<meta name="<name>">`; None when it is
+/// missing or empty.
+pub(crate) fn app_meta_content(html: &str, name: &str) -> Option<String> {
+    let (_, tag) = app_meta(html, name)?;
     let content = tag.attrs.iter().find(|(n, _, _, _)| n == "content")?;
-    let id = decode_entities(content.1.trim());
-    (!id.is_empty()).then_some(id)
+    let value = decode_entities(content.1.trim());
+    (!value.is_empty()).then_some(value)
 }
 
-/// Names the deck's template in its `<meta>` (right after `<title>`), or removes it for None.
-pub fn set_template(html: &str, template: Option<&str>) -> String {
-    let tag = template.map(|id| {
-        format!(
-            "<meta name=\"{TEMPLATE_META}\" content=\"{}\">",
-            escape_attr(id)
-        )
-    });
-    match (template_meta(html), tag) {
+/// Sets the app setting `<meta name="<name>">` (new ones go right after `<title>`), or removes
+/// it for None.
+fn set_app_meta(html: &str, name: &str, content: Option<&str>) -> String {
+    let tag =
+        content.map(|value| format!("<meta name=\"{name}\" content=\"{}\">", escape_attr(value)));
+    match (app_meta(html, name), tag) {
         (Some((at, old)), Some(tag)) => format!("{}{tag}{}", &html[..at], &html[old.end..]),
         (Some((at, old)), None) => {
             let start = html[..at].trim_end().len();
@@ -830,6 +852,30 @@ pub fn set_template(html: &str, template: Option<&str>) -> String {
         },
         (None, None) => html.to_string(),
     }
+}
+
+/// Id of the template the deck's design comes from (see [`TEMPLATE_META`]).
+pub fn template(html: &str) -> Option<String> {
+    app_meta_content(html, TEMPLATE_META)
+}
+
+/// Names the deck's template in its `<meta>` (right after `<title>`), or removes it for None.
+pub fn set_template(html: &str, template: Option<&str>) -> String {
+    set_app_meta(html, TEMPLATE_META, template)
+}
+
+/// The deck's slide size (see [`size::SIZE_META`]); the default 1920×1080 px without one.
+pub fn slide_size(html: &str) -> SlideSize {
+    app_meta_content(html, size::SIZE_META)
+        .and_then(|content| SlideSize::parse(&content))
+        .unwrap_or_default()
+}
+
+/// Sets the deck's slide size in its `<meta>`; the default size removes the tag. The player
+/// runtime has to be refreshed after (see [`ensure_runtime`]) for the stage to take it.
+pub fn set_slide_size(html: &str, size: SlideSize) -> String {
+    let content = (size != SlideSize::default()).then(|| size.to_string());
+    set_app_meta(html, size::SIZE_META, content.as_deref())
 }
 
 /// `html` without its slides and section markers: the deck's shell (styles, runtime).
@@ -1787,6 +1833,25 @@ mod tests {
     }
 
     #[test]
+    fn the_runtime_entrance_keeps_transforms_and_its_stagger() {
+        let start = RUNTIME_CSS.find("@keyframes slop-reveal").unwrap();
+        let keyframes = &RUNTIME_CSS[start..start + RUNTIME_CSS[start..].find("\n}").unwrap()];
+        assert!(
+            !keyframes.contains("transform"),
+            "an entrance leaves the elements' own transforms alone"
+        );
+        for n in 1..=4 {
+            // Outranks a deck's `.slide.active .reveal { animation: … }`, which resets the delay.
+            assert!(
+                RUNTIME_CSS.contains(&format!(
+                    ".slide.active .reveal.reveal-delay-{n} {{ animation-delay:"
+                )),
+                "reveal-delay-{n}"
+            );
+        }
+    }
+
+    #[test]
     fn ensure_runtime_embeds_the_current_assets() {
         let out = ensure_runtime(DECK);
         assert!(out.contains(RUNTIME_CSS));
@@ -2080,6 +2145,62 @@ mod tests {
             untitled,
             "<html><head>\n  <meta name=\"slopslide-template\" content=\"x\"></head></html>"
         );
+    }
+
+    #[test]
+    fn reads_and_writes_the_slide_size_meta() {
+        use crate::size::Unit;
+        assert_eq!(slide_size(STYLED), SlideSize::default());
+        let named = set_template(STYLED, Some("swiss"));
+        let a4 = SlideSize {
+            width: 21.0,
+            height: 29.7,
+            unit: Unit::Cm,
+        };
+        let sized = set_slide_size(&named, a4);
+        assert!(
+            sized.contains("<title>Talk</title>\n  <meta name=\"slopslide-size\" content=\"21x29.7cm\">\n  <meta name=\"slopslide-template\""),
+            "{sized}"
+        );
+        assert_eq!(slide_size(&sized), a4);
+        assert_eq!(
+            template(&sized).as_deref(),
+            Some("swiss"),
+            "other metas stay"
+        );
+        let square = SlideSize::parse("1080x1080").unwrap();
+        let resized = set_slide_size(&sized, square);
+        assert_eq!(resized.matches(crate::size::SIZE_META).count(), 1);
+        assert_eq!(slide_size(&resized), square);
+        assert_eq!(
+            set_slide_size(&sized, SlideSize::default()),
+            named,
+            "the default size removes the meta"
+        );
+        // Unusable sizes fall back to the default.
+        let bad = sized.replace("21x29.7cm", "huge");
+        assert_eq!(slide_size(&bad), SlideSize::default());
+    }
+
+    #[test]
+    fn ensure_runtime_sizes_the_stage_from_the_meta() {
+        let landscape = ensure_runtime(DECK);
+        assert!(landscape.contains("--slop-w: 1920px;") && landscape.contains("--slop-h: 1080px;"));
+        let portrait = ensure_runtime(&set_slide_size(
+            &landscape,
+            SlideSize::parse("1080x1920").unwrap(),
+        ));
+        assert!(portrait.contains("--slop-w: 1080px;") && portrait.contains("--slop-h: 1920px;"));
+        assert!(portrait.contains("size: 1080px 1920px;"));
+        assert!(
+            !portrait.contains("--slop-w: 1920px;"),
+            "refreshed, not added twice"
+        );
+        assert_eq!(portrait.matches(CSS_START).count(), 1);
+        assert_eq!(portrait, ensure_runtime(&portrait));
+        let start = portrait.find(CSS_START).unwrap();
+        let end = portrait.find(CSS_END).unwrap();
+        assert!((start..end).contains(&portrait.find("--slop-w: 1080px;").unwrap()));
     }
 
     #[test]

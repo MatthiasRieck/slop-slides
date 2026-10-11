@@ -97,6 +97,14 @@
     .layout-quote blockquote { padding: 64px; background: var(--violet); color: var(--panel); border: 10px solid var(--ink); box-shadow: 20px 20px 0 var(--accent); font-size: 72px; }
     .slide .cite { padding: 8px 20px; background: var(--accent); color: var(--ink); font-weight: 700; }
     .layout-closing h2 { font-size: 220px; }
+    /* Entrance: slammed down, oversized and spinning. */
+    @keyframes maximalism-reveal {
+      from { opacity: 0; scale: 1.5; rotate: -8deg; }
+      60% { opacity: 1; scale: 0.94; rotate: 3deg; }
+      80% { scale: 1.03; rotate: -1deg; }
+      to { opacity: 1; }
+    }
+    .slide.active .reveal { animation: maximalism-reveal 0.75s ease-out both; }
   </style>
 </head>
 <body>

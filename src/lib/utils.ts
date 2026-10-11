@@ -6,16 +6,78 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export const isMac = navigator.userAgent.includes("Mac");
-const isWindows = navigator.userAgent.includes("Windows");
+export const isWindows = navigator.userAgent.includes("Windows");
 /** Dev-only: the UI is running in a plain browser via dev/browserPreview.ts. */
 const inBrowserPreview = import.meta.env.DEV && !("__TAURI_INTERNALS__" in window);
 
-/** URL of a deck file served by the backend's `slop://` protocol. */
-export function deckFileUrl(deckId: string, path: string, query?: string): string {
-  const encoded = [deckId, ...path.split("/")].map(encodeURIComponent).join("/");
+/** URL of a file served by the backend's `slop://` protocol, as `<prefix>/<path>`. */
+function servedUrl(prefix: string, path: string, query?: string): string {
+  const encoded = [prefix, ...path.split("/")].map(encodeURIComponent).join("/");
   // WebView2 (Windows) and Android expose custom schemes as http://<scheme>.localhost.
   const base = inBrowserPreview ? "/__deck" : isWindows ? "http://slop.localhost" : "slop://localhost";
   return `${base}/${encoded}${query ? `?${query}` : ""}`;
+}
+
+/** First path segments the backend serves files under (see src-tauri/src/protocol.rs). */
+const FILE_PREFIX = ".file";
+const SESSION_PREFIX = ".session";
+
+/** An absolute path as the backend takes it in URLs: `/`-separated, without the leading `/`. */
+const urlPath = (absolute: string) => absolute.replaceAll("\\", "/").replace(/^\//, "");
+
+/** URL of a file in the open workspace, by its absolute path. */
+export function fileUrl(absolute: string, query?: string): string {
+  return servedUrl(FILE_PREFIX, urlPath(absolute), query);
+}
+
+/** The folder holding a file (`/`-separated, as the path came). */
+export function dirname(path: string): string {
+  const at = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return at < 0 ? "" : path.slice(0, at);
+}
+
+/** The file name at the end of a path. */
+export function basename(path: string): string {
+  return path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1);
+}
+
+/**
+ * URL of a file next to the deck (an attached asset), by its path relative to the deck file.
+ * A deck's id is its file's absolute path.
+ */
+export function deckFileUrl(deckId: string, path: string, query?: string): string {
+  return fileUrl(`${dirname(deckId)}/${path}`, query);
+}
+
+/** Recordings stay beside generated decks; other HTML files have their own sidecar. */
+export function narrationAudioUrl(deckId: string, takeId: string): string {
+  const folder = basename(deckId) === "deck.html" ? "" : `${basename(deckId)}.slopslide/`;
+  return deckFileUrl(deckId, `${folder}audio/${takeId}.wav`);
+}
+
+/** Short-lived recording, presenter and video previews served by the app. */
+export function previewFileUrl(kind: "recording" | "voice" | "video", path: string, query?: string): string {
+  return servedUrl(`.${kind}`, path, query);
+}
+
+/** Files the app keeps in the deck's session (screenshots) come as absolute paths. */
+export function isSessionFile(path: string): boolean {
+  return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
+}
+
+/**
+ * URL of a file shown in the chat: deck files (attached assets) are deck-relative, while
+ * screenshots live in the deck's session outside it and come as absolute paths.
+ */
+export function chatFileUrl(deckId: string, path: string): string {
+  if (!isSessionFile(path)) return deckFileUrl(deckId, path);
+  return servedUrl(SESSION_PREFIX, urlPath(path));
+}
+
+/** Chat attachments are workspace-relative; screenshots are absolute session paths. */
+export function workspaceChatFileUrl(workspace: string, path: string): string {
+  if (isSessionFile(path)) return servedUrl(SESSION_PREFIX, urlPath(path));
+  return fileUrl(`${workspace}/${path}`);
 }
 
 /**
@@ -26,7 +88,7 @@ export function deckFileUrl(deckId: string, path: string, query?: string): strin
 export function slideUrl(deckId: string, slideId: string, version: string, still = false, edit?: string, pan = false): string {
   const editing = edit === undefined ? "" : `&edit=${encodeURIComponent(edit)}`;
   const query = `embed&slide=${encodeURIComponent(slideId)}&v=${version}${still ? "&static" : ""}${pan ? "&pan" : ""}${editing}`;
-  return deckFileUrl(deckId, "deck.html", query);
+  return fileUrl(deckId, query);
 }
 
 /** First path segment the backend serves templates under (see src-tauri/src/protocol.rs). */
@@ -34,7 +96,7 @@ const TEMPLATE_PREFIX = ".template";
 
 /** One slide of a template, as a still preview (final animation frame). */
 export function templateSlideUrl(templateId: string, slideId: string): string {
-  return deckFileUrl(TEMPLATE_PREFIX, `${templateId}/deck.html`, `embed&slide=${encodeURIComponent(slideId)}&static`);
+  return servedUrl(TEMPLATE_PREFIX, `${templateId}/deck.html`, `embed&slide=${encodeURIComponent(slideId)}&static`);
 }
 
 /** A slide id as a readable name: `pricing-tiers` → "Pricing tiers". */

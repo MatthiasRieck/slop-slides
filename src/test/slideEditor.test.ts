@@ -221,6 +221,69 @@ describe("slide editor", () => {
     expect(last.markup).not.toContain("contenteditable");
   });
 
+  describe("dropped images", () => {
+    const drop = (e: ReturnType<typeof editor>, images: unknown, x = 960, y = 540) =>
+      e.fromParent({ type: "slop:edit-insert-images", images, x, y });
+
+    it("puts them on top of the slide, centered where they landed and fit to it, and saves once", () => {
+      const e = editor();
+      drop(e, [{ src: "assets/wide.png", w: 1280, h: 720 }, { src: "assets/icon.svg" }]);
+      const [wide, icon] = [...e.doc.querySelectorAll<HTMLImageElement>("#intro > img")] as [HTMLImageElement, HTMLImageElement];
+      // Fit to a third of the slide's width: 640×360, centered on (960, 540).
+      expect(wide.getAttribute("src")).toBe("assets/wide.png");
+      expect(wide.getAttribute("alt")).toBe("");
+      expect(wide.hasAttribute("data-dropped")).toBe(true);
+      expect(wide.hasAttribute("data-moved")).toBe(true);
+      expect(wide.style.position).toBe("absolute");
+      expect([wide.style.left, wide.style.top, wide.style.width]).toEqual(["0px", "0px", "640px"]);
+      expect(wide.style.translate).toBe("640px 360px");
+      // Without a known size it gets the default width, its top at the drop point, fanned out.
+      expect(icon.style.width).toBe("640px");
+      expect(icon.style.translate).toBe("680px 580px");
+      expect(e.$("#intro").lastElementChild).toBe(icon);
+      expect(e.selected()).toEqual([icon]);
+      expect(e.commits()).toHaveLength(1);
+      const commit = e.commits()[0]!;
+      expect(commit.select).toEqual([e.$("#intro").children.length - 1]);
+      expect(commit.markup).toContain('src="assets/wide.png" alt="" data-dropped=""');
+      expect(commit.markup).not.toContain("data-slop-selected");
+    });
+
+    it("keeps small images at their own size", () => {
+      const e = editor();
+      drop(e, [{ src: "assets/logo.png", w: 200, h: 100 }], 300, 200);
+      const img = e.$("#intro > img");
+      expect(img.style.width).toBe("200px");
+      expect(img.style.translate).toBe("200px 150px");
+    });
+
+    it("can be moved like any hand-moved element", () => {
+      const e = editor();
+      drop(e, [{ src: "assets/logo.png", w: 200, h: 100 }], 300, 200);
+      e.drag(e.$("#intro > img"), 10, 20);
+      expect(e.$("#intro > img").style.translate).toBe("210px 170px");
+      expect(e.commits()).toHaveLength(2);
+    });
+
+    it("ends text editing first", () => {
+      const e = editor();
+      e.down(e.$(".card p"));
+      e.key("Enter");
+      drop(e, [{ src: "assets/logo.png", w: 200, h: 100 }]);
+      expect(e.$(".card p").hasAttribute("contenteditable")).toBe(false);
+      expect(e.commits().at(-1)!.markup).not.toContain("contenteditable");
+    });
+
+    it("only takes files from the deck's assets", () => {
+      const e = editor();
+      drop(e, [{ src: "https://example.com/x.png" }, { src: "javascript:alert(1)" }, null, { src: 3 }]);
+      drop(e, "assets/a.png");
+      e.fromParent({ type: "slop:edit-insert-images", images: [{ src: "assets/a.png" }], x: "left", y: 0 });
+      expect(e.doc.querySelector("#intro > img")).toBeNull();
+      expect(e.commits()).toEqual([]);
+    });
+  });
+
   it("tells the app whether anything is selected, when that changes", () => {
     const e = editor();
     const reports = () => e.posted().filter((m) => (m as { type: string }).type === "slop:edit-selection");

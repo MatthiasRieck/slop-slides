@@ -305,26 +305,33 @@ fn stream_audio(
     Ok(())
 }
 
-pub fn freeze(dir: &Path, root: &Path, job: &str, id: &str, flag: &AtomicBool) -> Result<Timeline> {
-    let source = fs::read_to_string(dir.join(deck::DECK_FILE))?;
+pub fn freeze(
+    file: &Path,
+    root: &Path,
+    job: &str,
+    id: &str,
+    flag: &AtomicBool,
+) -> Result<Timeline> {
+    let dir = deck::narration_dir(file);
+    let source = fs::read_to_string(file)?;
     if source.len() > 10_000_000 {
         return Err(Error::msg("Deck HTML exceeds the 10 MB export limit."));
     }
-    let document = narration::load(dir)?;
-    let timeline = timeline(&source, &document.manifest, dir, job, id)?;
+    let document = narration::load(&dir)?;
+    let timeline = timeline(&source, &document.manifest, &dir, job, id)?;
     let mut originals = Vec::new();
     copy_assets(
-        &dir.join("assets"),
+        &deck::folder(file).join("assets"),
         &root.join("assets"),
         &mut originals,
         &mut 0,
         flag,
     )?;
     fs::write(root.join("deck.html"), &source)?;
-    write_audio(dir, root, &timeline, flag)?;
+    write_audio(&dir, root, &timeline, flag)?;
     // Reject a mixed snapshot. Later edits are allowed after these frozen bytes exist.
-    if fs::read_to_string(dir.join(deck::DECK_FILE))? != source
-        || narration::load(dir)?.version != document.version
+    if fs::read_to_string(file)? != source
+        || narration::load(&dir)?.version != document.version
         || originals
             .iter()
             .any(|(path, digest)| fs::read(path).map(|b| hash(&b) != *digest).unwrap_or(true))
@@ -416,13 +423,13 @@ impl VideoManager {
             },
         );
         let result = async {
-            let dir = deck::deck_dir(app, id)?;
+            let file = deck::deck_file(id)?;
             let frozen_root = root.clone();
             let flag = cancelled.clone();
             let job = job_id.to_string();
             let deck = id.to_string();
             let timeline = tauri::async_runtime::spawn_blocking(move || {
-                freeze(&dir, &frozen_root, &job, &deck, &flag)
+                freeze(&file, &frozen_root, &job, &deck, &flag)
             })
             .await
             .map_err(|e| Error::msg(e.to_string()))??;
@@ -714,7 +721,14 @@ mod tests {
         );
         save(&dir.0, &html(&["a", "b", "c"]), &m);
         let original = fs::read(dir.0.join("narration.json")).unwrap();
-        let t = freeze(&dir.0, &root.0, "job", "deck", &AtomicBool::new(false)).unwrap();
+        let t = freeze(
+            &dir.0.join(deck::DECK_FILE),
+            &root.0,
+            "job",
+            "deck",
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert_eq!(t.total_samples, RATE * 25 / 2);
         assert_eq!(t.total_frames, 375);
         assert_eq!(t.slides[0].end_sample, RATE * 5);
@@ -782,7 +796,14 @@ mod tests {
         let mut m = silent(&["a", "b"], 1000);
         spoken(&dir.0, &mut m, "a", &[1234; 24_001]);
         save(&dir.0, &html(&["a", "b"]), &m);
-        let t = freeze(&dir.0, &root.0, "job", "deck", &AtomicBool::new(false)).unwrap();
+        let t = freeze(
+            &dir.0.join(deck::DECK_FILE),
+            &root.0,
+            "job",
+            "deck",
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert_eq!(t.slides[0].end_sample, 42_001);
         assert_eq!(t.slides[1].start_sample, 42_001);
         let pcm = cache::decode_wav(&fs::read(root.0.join("timeline.wav")).unwrap()).unwrap();
@@ -801,7 +822,14 @@ mod tests {
         m.slides.get_mut("b").unwrap().lead_in_ms = 100;
         m.slides.get_mut("b").unwrap().tail_ms = 200;
         save(&dir.0, &html(&["a", "b"]), &m);
-        let t = freeze(&dir.0, &root.0, "job", "deck", &AtomicBool::new(false)).unwrap();
+        let t = freeze(
+            &dir.0.join(deck::DECK_FILE),
+            &root.0,
+            "job",
+            "deck",
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         let pcm = cache::decode_wav(&fs::read(root.0.join("timeline.wav")).unwrap()).unwrap();
         assert_eq!(t.slides[1].audio_start_sample, 44401);
         assert!(pcm[6000..30001].iter().all(|s| *s == 1234));
@@ -835,7 +863,14 @@ mod tests {
         .unwrap();
         m.slides.get_mut("b").unwrap().accepted_take_id = Some(take_b.id.clone());
         save(&dir.0, &html(&["a", "b"]), &m);
-        let t = freeze(&dir.0, &root.0, "job", "deck", &AtomicBool::new(false)).unwrap();
+        let t = freeze(
+            &dir.0.join(deck::DECK_FILE),
+            &root.0,
+            "job",
+            "deck",
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert_eq!(t.slides[0].take_id.as_deref(), Some(a.id.as_str()));
         assert_eq!(t.slides[1].take_id.as_deref(), Some(take_b.id.as_str()));
         let pcm = cache::decode_wav(&fs::read(root.0.join("timeline.wav")).unwrap()).unwrap();
@@ -863,7 +898,14 @@ mod tests {
         save(&dir.0, &source, &silent(&["a"], 1000));
         fs::create_dir(dir.0.join("assets")).unwrap();
         fs::write(dir.0.join("assets/example.txt"), "before").unwrap();
-        freeze(&dir.0, &root.0, "job", "deck", &AtomicBool::new(false)).unwrap();
+        freeze(
+            &dir.0.join(deck::DECK_FILE),
+            &root.0,
+            "job",
+            "deck",
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         fs::write(dir.0.join("deck.html"), "modified").unwrap();
         fs::write(dir.0.join("assets/example.txt"), "after").unwrap();
         assert_eq!(
@@ -880,7 +922,14 @@ mod tests {
         let dir = Temp::new();
         let root = Temp::new();
         save(&dir.0, &html(&["a"]), &silent(&["a"], 1000));
-        assert!(freeze(&dir.0, &root.0, "job", "deck", &AtomicBool::new(true)).is_err());
+        assert!(freeze(
+            &dir.0.join(deck::DECK_FILE),
+            &root.0,
+            "job",
+            "deck",
+            &AtomicBool::new(true)
+        )
+        .is_err());
         let dest = root.0.join("existing.mp4");
         fs::write(&dest, "existing").unwrap();
         assert!(publish(&root.0.join("absent.mp4"), &dest).is_err());
@@ -926,12 +975,16 @@ mod tests {
         save(&dir.0, &html(&["a"]), &silent(&["a"], 1000));
         fs::create_dir(dir.0.join("assets")).unwrap();
         std::os::unix::fs::symlink("/tmp", dir.0.join("assets/escape")).unwrap();
-        assert!(
-            freeze(&dir.0, &root.0, "job", "deck", &AtomicBool::new(false))
-                .unwrap_err()
-                .to_string()
-                .contains("symbolic")
-        );
+        assert!(freeze(
+            &dir.0.join(deck::DECK_FILE),
+            &root.0,
+            "job",
+            "deck",
+            &AtomicBool::new(false)
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("symbolic"));
     }
     #[test]
     fn changing_an_otherwise_valid_take_after_timeline_creation_is_rejected() {
@@ -997,7 +1050,14 @@ mod tests {
         let speech_ms = ((pcm.len() as u64 + 18_000) * 1000 / RATE) as u32;
         m.slides.get_mut("b").unwrap().silent_duration_ms = Some(600_000 - speech_ms);
         save(&dir.0, &html(&["a", "b"]), &m);
-        let t = freeze(&dir.0, &root.0, "job", "deck", &AtomicBool::new(false)).unwrap();
+        let t = freeze(
+            &dir.0.join(deck::DECK_FILE),
+            &root.0,
+            "job",
+            "deck",
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert!(t.total_frames.abs_diff(18_000) <= 1);
         let helper = Path::new(env!("CARGO_MANIFEST_DIR")).join("video-runtime/slopslide-video");
         for mode in ["render", "encode"] {

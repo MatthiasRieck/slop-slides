@@ -171,6 +171,17 @@ describe("inkBounds", () => {
       ]),
     ).toEqual({ left: 0, top: 0, right: SLIDE_SIZE.width, bottom: SLIDE_SIZE.height });
   });
+
+  it("measures in pixels of the deck's slide size", () => {
+    const strokes = [
+      pen([
+        [0.5, 0.5],
+        [1, 1],
+      ]),
+    ];
+    const pad = INK_STYLE.pen.width;
+    expect(inkBounds(strokes, { width: 1080, height: 1350 })).toEqual({ left: 540 - pad, top: 675 - pad, right: 1080, bottom: 1350 });
+  });
 });
 
 describe("laser trails", () => {

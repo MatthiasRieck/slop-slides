@@ -1,21 +1,45 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { SpeechStatus, SpeechTake, SpeechResult } from "./speech";
-import type { NarrationDocument, NarrationManifest } from "./narration";
 import type { Approval, ApprovalDecision, PermissionMode } from "./permissions";
 import type { Stroke } from "./ink";
 import type { Provider, ProviderInfo } from "./models";
+import type { SizeInfo, SlideSize } from "./slideSize";
+import type { SpeechStatus, SpeechTake, SpeechResult } from "./speech";
+import type { NarrationDocument, NarrationManifest } from "./narration";
 
-export interface DeckSummary {
-  id: string;
-  title: string;
-  slideCount: number;
-  firstSlide: string | null;
-  updatedMs: number;
+/** What a workspace file is, which decides what it opens in (see src-tauri/src/workspace.rs). */
+export type FileKind = "directory" | "deck" | "slideshow" | "webpage" | "file";
+
+/** A file or folder in the open workspace. */
+export interface WorkspaceEntry {
+  name: string;
+  /** Workspace-relative, `/`-separated. */
+  path: string;
+  kind: FileKind;
+}
+
+/** A workspace file the user opened, with the viewer it needs. */
+export interface OpenedFile {
+  /** Workspace-relative, `/`-separated. */
+  path: string;
+  /** Absolute path: a deck's id, and what the viewer loads the file by. */
+  absolute: string;
+  kind: FileKind;
+}
+
+export interface WorkspaceInfo {
+  path: string;
+  name: string;
+}
+
+export interface RecentWorkspace {
+  path: string;
+  name: string;
+  openedMs: number;
 }
 
 export interface Slide {
-  /** The slide's `id` attribute in deck.html. */
+  /** The slide's `id` attribute in the deck file. */
   id: string;
   /** Changes when the slide's markup changes. */
   hash: string;
@@ -27,7 +51,7 @@ export interface Slide {
   moved: boolean;
 }
 
-/** A named group of slides, started by a marker between slides in deck.html. */
+/** A named group of slides, started by a marker between slides in the deck file. */
 export interface Section {
   /** Position among the deck's section markers, in document order. */
   index: number;
@@ -37,17 +61,21 @@ export interface Section {
 }
 
 export interface Deck {
+  /** The deck file's absolute path. */
   id: string;
   title: string;
+  /** The deck file's absolute path (the same as `id`). */
   path: string;
   slides: Slide[];
   sections: Section[];
   /** Changes when anything outside the slides (styles, fonts) changes. */
   shellHash: string;
-  /** Review marks the user drew, by slide id, stored in deck.html. */
+  /** Review marks the user drew, by slide id, stored in the deck file. */
   review?: Record<string, Stroke[]>;
   /** Id of the template the deck's design comes from (its `slopslide-template` meta). */
   template?: string | null;
+  /** Every slide's canvas (its `slopslide-size` meta); 1920×1080 px when missing. */
+  size?: SizeInfo;
 }
 
 /** A deck of example layouts in one style; each slide is a layout for new or changed slides. */
@@ -60,6 +88,8 @@ export interface TemplateSummary {
   path: string | null;
   /** Slide ids, one per layout, in order. */
   slides: string[];
+  /** The template's slide size, which a deck made from it takes. */
+  size?: SizeInfo;
 }
 
 export interface CreatedSlide {
@@ -78,7 +108,7 @@ export interface LintIssue {
   rule: string;
   severity: "error" | "warning";
   message: string;
-  /** 1-based line in deck.html. */
+  /** 1-based line in the deck file. */
   line: number;
   slide: string | null;
 }
@@ -87,6 +117,7 @@ export type AgentEvent =
   | { type: "approvalRequested"; approval: Approval }
   | { type: "approvalResolved"; id: string }
   | { type: "approvalReview"; id: string; status: string; detail: string | null }
+  | { type: "openFile"; path: string }
   | { type: "started"; sessionId: string | null }
   | { type: "thinking" }
   | { type: "textStart" }
@@ -108,26 +139,36 @@ export type AgentEvent =
   | { type: "finished"; interrupted: boolean };
 
 export interface AgentEventEnvelope {
-  deckId: string;
+  workspace: string;
   event: AgentEvent;
 }
 
-export interface DeckChanged {
-  deckId: string;
+export interface WorkspaceChanged {
+  /** The workspace folder, as it was opened. */
+  root: string;
+  /** Workspace-relative, `/`-separated. */
   paths: string[];
 }
 
 export const api = {
-  prepareVideo: (id: string, jobId: string) => invoke<import("./video").VideoTimeline>("prepare_video", { id, jobId }),
-  exportVideo: (jobId: string, dest: string) => invoke<void>("export_video", { jobId, dest }),
-  cancelVideo: (jobId: string) => invoke<void>("cancel_video", { jobId }),
-  releaseVideo: (jobId: string) => invoke<void>("release_video", { jobId }),
-  listDecks: () => invoke<DeckSummary[]>("list_decks"),
-  /** With a template, the new deck takes its styles (and names it). */
+  /** Opens a folder: the file tree shows it and the app serves and watches its files. */
+  openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
+  closeWorkspace: () => invoke<void>("close_workspace"),
+  /** Folders opened before, newest first. */
+  recentWorkspaces: () => invoke<RecentWorkspace[]>("recent_workspaces"),
+  forgetWorkspace: (path: string) => invoke<void>("forget_workspace", { path }),
+  /** `~/Documents/SlopSlide`, where decks lived before workspaces. */
+  libraryFolder: () => invoke<string>("library_folder"),
+  /** One folder of the open workspace (`""` for its root), folders first. */
+  listDir: (path: string) => invoke<WorkspaceEntry[]>("list_dir", { path }),
+  /** A file of the open workspace, with the viewer it opens in. */
+  openFile: (path: string) => invoke<OpenedFile>("open_file", { path }),
+  /** Creates `<workspace>/<title>/deck.html`; with a template, it takes its styles (and names it). */
   createDeck: (title: string, template: string | null = null) => invoke<Deck>("create_deck", { title, template }),
   openDeck: (id: string) => invoke<Deck>("open_deck", { id }),
-  closeDeck: () => invoke<void>("close_deck"),
   loadDeck: (id: string) => invoke<Deck>("load_deck", { id }),
+  loadNarration: (id: string) => invoke<NarrationDocument>("load_narration", { id }),
+  saveNarration: (id: string, manifest: NarrationManifest, base: string) => invoke<NarrationDocument>("save_narration", { id, manifest, base }),
   speechStatus: () => invoke<SpeechStatus>("speech_status"),
   speechTakes: (id: string) => invoke<Record<string, SpeechTake>>("speech_takes", { id }),
   speechHistory: (id: string, slide: string) => invoke<import("./speech").SpeechHistoryTake[]>("speech_history", { id, slide }),
@@ -144,12 +185,13 @@ export const api = {
   removeSpeechPack: (providerId: string) => invoke<void>("remove_speech_pack", { providerId }),
   generateSpeech: (jobId: string, id: string, slide: string | null, fresh = false) => invoke<SpeechResult>("generate_speech", { jobId, id, slide, fresh }),
   cancelSpeech: (jobId: string) => invoke<void>("cancel_speech", { jobId }),
-  loadNarration: (id: string) => invoke<NarrationDocument>("load_narration", { id }),
-  saveNarration: (id: string, manifest: NarrationManifest, base: string) => invoke<NarrationDocument>("save_narration", { id, manifest, base }),
-  /** Stores the review marks (by slide id) in deck.html. */
+  prepareVideo: (id: string, jobId: string) => invoke<import("./video").VideoTimeline>("prepare_video", { id, jobId }),
+  exportVideo: (jobId: string, dest: string) => invoke<void>("export_video", { jobId, dest }),
+  cancelVideo: (jobId: string) => invoke<void>("cancel_video", { jobId }),
+  releaseVideo: (jobId: string) => invoke<void>("release_video", { jobId }),
+  /** Stores the review marks (by slide id) in the deck file. */
   saveReview: (id: string, review: Record<string, Stroke[]>) => invoke<void>("save_review", { id, review }),
   renameDeck: (id: string, title: string) => invoke<Deck>("rename_deck", { id, title }),
-  deleteDeck: (id: string) => invoke<void>("delete_deck", { id }),
   /** `slides` lists every slide id and section key (see `sectionKey`) in the new order. */
   reorderSlides: (id: string, slides: string[]) => invoke<Deck>("reorder_slides", { id, slides }),
   addSlide: (id: string, after: string | null) => invoke<CreatedSlide>("add_slide", { id, after }),
@@ -159,6 +201,8 @@ export const api = {
     invoke<Deck>("set_slide_hidden", { id, slide, hidden }),
   setSlideLocked: (id: string, slide: string, locked: boolean) =>
     invoke<Deck>("set_slide_locked", { id, slide, locked }),
+  /** Gives every slide the canvas `size` (the slides' content stays as it is). */
+  setSlideSize: (id: string, size: SlideSize) => invoke<Deck>("set_slide_size", { id, size }),
   addSection: (id: string, before: string | null, title: string) =>
     invoke<Deck>("add_section", { id, before, title }),
   renameSection: (id: string, index: number, title: string) =>
@@ -178,17 +222,21 @@ export const api = {
   /** Creates a new folder named after the deck inside `parent`; returns its path. */
   createImageExportDir: (id: string, parent: string) =>
     invoke<string>("create_image_export_dir", { id, parent }),
-  /** Screenshots `rect` (one slide, CSS pixels) as `<dir>/slide-NN.png`; returns its path. */
+  /**
+   * Screenshots `rect` (one slide, CSS pixels) as `<dir>/slide-NN.png`, at most `width` (the
+   * slides' canvas width) pixels wide; returns its path.
+   */
   exportSlideImage: (
     dir: string,
     index: number,
     total: number,
     rect: { x: number; y: number; width: number; height: number },
     viewport: { width: number; height: number },
-  ) => invoke<string>("export_slide_image", { dir, index, total, rect, viewport }),
+    width: number,
+  ) => invoke<string>("export_slide_image", { dir, index, total, rect, viewport, width }),
   lintDeck: (id: string) => invoke<LintIssue[]>("lint_deck", { id }),
   /**
-   * Screenshots `rect` of the window; returns the deck-relative image path. Both are in CSS
+   * Screenshots `rect` of the window; returns an absolute session image path. Both are in CSS
    * pixels; the viewport size lets the backend work out the display's scale.
    */
   captureSketch: (
@@ -196,25 +244,27 @@ export const api = {
     rect: { x: number; y: number; width: number; height: number },
     viewport: { width: number; height: number },
   ) => invoke<string>("capture_sketch", { id, rect, viewport }),
+  sessionProvider: (id: string) => invoke<Provider | null>("session_provider", { id }),
   loadChat: (id: string) => invoke<unknown>("load_chat", { id }),
   saveChat: (id: string, chat: unknown) => invoke<void>("save_chat", { id, chat }),
   resetChat: (id: string) => invoke<void>("reset_chat", { id }),
   sendMessage: (
-    deckId: string,
+    workspace: string,
     prompt: string,
     selection: { provider: Provider; model: string; effort: string; contextWindow: string | null; permissionMode?: PermissionMode },
     /** Summarize the conversation so far instead of sending `prompt`. */
     compact = false,
-  ) => invoke<void>("send_message", { args: { deckId, prompt, ...selection, compact } }),
-  codexPermissionModes: (id: string) => invoke<PermissionMode[]>("codex_permission_modes", { id }),
-  respondApproval: (deckId: string, id: string, decision: ApprovalDecision) =>
-    invoke<void>("respond_approval", { deckId, id, decision }),
+  ) => invoke<void>("send_message", { args: { workspace, prompt, ...selection, compact } }),
+  /** The modes `provider` offers in workspace `id` (Codex: per its configuration). */
+  permissionModes: (provider: Provider, id: string) => invoke<PermissionMode[]>("permission_modes", { provider, id }),
+  respondApproval: (workspace: string, id: string, decision: ApprovalDecision) =>
+    invoke<void>("respond_approval", { workspace, id, decision }),
   interruptAgent: (id: string) => invoke<void>("interrupt_agent", { id }),
   agentRunning: (id: string) => invoke<boolean>("agent_running", { id }),
   listProviders: () => invoke<ProviderInfo[]>("list_providers"),
   /** The user's templates first, then the built-in ones. */
   listTemplates: () => invoke<TemplateSummary[]>("list_templates"),
-  /** Copies the template into the deck's internals for the agent; returns its deck-relative path. */
+  /** Copies the template into the workspace's session for the agent; returns its absolute path. */
   stageTemplate: (id: string, template: string) => invoke<string>("stage_template", { id, template }),
   /** Gives a deck without slides the template's styles. */
   applyTemplate: (id: string, template: string) => invoke<Deck>("apply_template", { id, template }),

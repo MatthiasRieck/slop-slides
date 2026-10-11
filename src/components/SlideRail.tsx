@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { api, errorMessage, type Section, type Slide } from "../lib/api";
 import { applyOrder, railItems, startsSection } from "../lib/sections";
+import { pixelsOf } from "../lib/slideSize";
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
@@ -312,6 +313,8 @@ function Thumbnail({ deckId, slide, index, audioStatus }: { deckId: string; slid
     }
   };
 
+  const deckSize = useApp((s) => s.deck?.size);
+
   const toggleLocked = async () => {
     try {
       useApp.getState().setDeck(await api.setSlideLocked(deckId, slide.id, !slide.locked));
@@ -326,7 +329,7 @@ function Thumbnail({ deckId, slide, index, audioStatus }: { deckId: string; slid
       const neighbor = (before[index + 1] ?? before[index - 1])?.id ?? null;
       if (!(await useNarration.getState().save())) { useApp.getState().setSidebarTab("narration"); return; }
       const next = await api.deleteSlide(deckId, slide.id);
-      // deck.html drops the slide's review marks with it; forget them here too.
+      // The deck file drops the slide's review marks with it; forget them here too.
       useApp.getState().clearSketch(slide.id);
       if (selected) useApp.getState().select(neighbor);
       useApp.getState().setDeck(next);
@@ -368,6 +371,7 @@ function Thumbnail({ deckId, slide, index, audioStatus }: { deckId: string; slid
             deckId={deckId}
             slideId={slide.id}
             version={version}
+            size={pixelsOf({ size: deckSize })}
             thumbnail
             className={cn(slide.hidden && "opacity-35 grayscale")}
           />

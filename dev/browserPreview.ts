@@ -1,5 +1,6 @@
 // Dev-only Vite plugin: lets the UI run in a plain browser (no Tauri) against the real deck
-// library, read-only. Used for visual checks; the desktop app uses the `slop://` protocol.
+// library as its only workspace, read-only. Used for visual checks; the desktop app uses the
+// `slop://` protocol.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -52,10 +53,36 @@ function templateHtml(id: string): string | null {
 }
 const hash = (text: string) => createHash("sha1").update(text).digest("hex").slice(0, 12);
 
+/** A workspace-relative path inside the library; null for anything outside it. */
+function inLibrary(rel: string): string | null {
+  const file = path.resolve(library, rel);
+  return file === library || file.startsWith(library + path.sep) ? file : null;
+}
+
+type Kind = "directory" | "deck" | "slideshow" | "webpage" | "file";
+
+// Approximates src-tauri/src/workspace.rs `classify`.
+function kindOf(file: string): Kind {
+  if (fs.statSync(file).isDirectory()) return "directory";
+  if (!/\.html?$/i.test(file)) return "file";
+  const html = fs.readFileSync(file, "utf8");
+  if (/slopslide:runtime-|<meta\s+name=["']slopslide-|<main\b[^>]*\bclass=["'][^"']*\bdeck\b/i.test(html)) return "deck";
+  if (/class="reveal"|reveal\.js|id="impress"|data-marpit-svg|remark\.create\(/i.test(html)) return "slideshow";
+  return "webpage";
+}
+
+function listDir(rel: string) {
+  const dir = inLibrary(rel);
+  if (!dir || !fs.existsSync(dir)) return null;
+  return fs
+    .readdirSync(dir)
+    .filter((name) => !name.startsWith(".") && !name.includes(".tmp-"))
+    .map((name) => ({ name, path: rel ? `${rel}/${name}` : name, kind: kindOf(path.join(dir, name)) }))
+    .sort((a, b) => Number(a.kind !== "directory") - Number(b.kind !== "directory") || a.name.localeCompare(b.name));
+}
+
 // Approximates src-tauri/src/html.rs: good enough for previews of well-formed decks.
-function readDeck(id: string) {
-  const dir = path.join(library, id);
-  const file = path.join(dir, "deck.html");
+function readDeck(file: string) {
   const html = fs.readFileSync(file, "utf8");
   const slideTags = [...html.matchAll(/<section\b[^>]*\bclass=["'][^"']*\bslide\b[^"']*["'][^>]*>/gi)];
   const slides = slideTags.map((match, index) => {
@@ -72,8 +99,8 @@ function readDeck(id: string) {
       before: slideTags.filter((slide) => slide.index < match.index).length,
     }),
   );
-  const title = /<title>([^<]*)<\/title>/i.exec(html)?.[1] ?? id;
-  return { id, title, path: dir, slides, sections, shellHash: hash(html), updatedMs: fs.statSync(file).mtimeMs };
+  const title = /<title>([^<]*)<\/title>/i.exec(html)?.[1] ?? path.basename(file, path.extname(file));
+  return { id: file, title, path: file, slides, sections, shellHash: hash(html) };
 }
 
 export function browserPreview(): Plugin {
@@ -83,15 +110,21 @@ export function browserPreview(): Plugin {
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const url = new URL(req.url ?? "/", "http://x");
-        if (url.pathname === "/__api/decks") {
-          const decks = fs.existsSync(library)
-            ? fs
-                .readdirSync(library)
-                .filter((id) => fs.existsSync(path.join(library, id, "deck.html")))
-                .map(readDeck)
-            : [];
+        const json = (body: unknown) => {
+          if (body === null) res.statusCode = 404;
           res.setHeader("content-type", "application/json");
-          return res.end(JSON.stringify(decks));
+          return res.end(JSON.stringify(body));
+        };
+        const rel = url.searchParams.get("path") ?? "";
+        if (url.pathname === "/__api/library") return json(library);
+        if (url.pathname === "/__api/dir") return json(listDir(rel));
+        if (url.pathname === "/__api/open") {
+          const file = inLibrary(rel);
+          return json(file && fs.existsSync(file) ? { path: rel, absolute: file, kind: kindOf(file) } : null);
+        }
+        if (url.pathname === "/__api/deck") {
+          const file = url.searchParams.get("id") ?? "";
+          return json(file.startsWith(library + path.sep) && fs.existsSync(file) ? readDeck(file) : null);
         }
         if (url.pathname === "/__api/templates") {
           res.setHeader("content-type", "application/json");
@@ -108,8 +141,10 @@ export function browserPreview(): Plugin {
           res.setHeader("content-type", "text/html; charset=utf-8");
           return res.end(html);
         }
-        const file = path.resolve(library, decodeURIComponent(url.pathname.slice("/__deck/".length)));
-        if (!file.startsWith(library + path.sep) || !fs.existsSync(file)) {
+        // Workspace files come by absolute path: `/__deck/.file/<path without its leading />`.
+        const served = /^\/__deck\/\.file\/(.+)$/.exec(url.pathname);
+        const file = served ? path.resolve("/", decodeURIComponent(served[1]!)) : "";
+        if (!file.startsWith(library + path.sep) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
           res.statusCode = 404;
           return res.end();
         }

@@ -1,5 +1,5 @@
 //! Drives a coding agent CLI headless inside a deck folder, one process per turn, resuming
-//! the deck's session between turns: Claude Code (`claude -p --output-format stream-json`)
+//! the workspace's session between turns: Claude Code (`claude -p --output-format stream-json`)
 //! OpenAI Codex (`codex app-server`), or GitHub Copilot (see [`crate::copilot`]). Stream events are normalized into [`AgentEvent`]s
 //! and emitted to the frontend as `agent-event`.
 
@@ -10,24 +10,37 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::watch;
 
-use crate::deck::{self, INTERNAL_DIR};
+use crate::deck;
 use crate::env;
 use crate::error::{Error, Result};
+use crate::extensions::Extensions;
 use crate::mcp;
+use crate::permissions::{Approval, Approvals, Choices, Decision, PermissionMode};
+use crate::sessions::Sessions;
 use crate::{codex, copilot};
 
-pub(crate) const SYSTEM_PROMPT: &str = include_str!("../prompts/system.md");
-/// File edits, URL fetches and this app's MCP tools; no shell.
-const TOOLS: &str = "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch";
+/// The agent's instructions, with the design reference it consults appended.
+pub(crate) const SYSTEM_PROMPT: &str = concat!(
+    include_str!("../prompts/system.md"),
+    "\n\n",
+    include_str!("../prompts/design-reference.md"),
+);
+/// The agent's built-in tools, besides MCP servers (see [`crate::extensions`]). What runs
+/// without asking depends on the permission mode (see [`build_claude_args`]).
+const TOOLS: &str = "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Skill";
+/// Tools that never ask in Ask mode, besides the app's MCP tools. Claude Code itself lets
+/// file tools work inside the workspace and asks outside it; the shell always asks. Loading
+/// a skill only reads its instructions.
+const ALLOWED_TOOLS: &str = "WebSearch,WebFetch,Skill";
 const STDERR_LIMIT: usize = 16 * 1024;
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum Provider {
     #[default]
@@ -39,10 +52,11 @@ pub enum Provider {
 impl Provider {
     pub const ALL: [Provider; 3] = [Provider::Claude, Provider::Codex, Provider::Copilot];
 
-    /// File under `.slopslide/` holding this provider's resumable session id.
+    /// File in the workspace's session (see [`crate::sessions`]) holding this provider's
+    /// resumable session id.
     pub fn session_file(self) -> &'static str {
         match self {
-            Provider::Claude => "session",
+            Provider::Claude => "claude-session",
             Provider::Codex => "codex-session",
             Provider::Copilot => "copilot-session",
         }
@@ -83,7 +97,7 @@ impl Provider {
 #[derive(Default)]
 pub struct AgentManager {
     running: Mutex<HashMap<String, watch::Sender<bool>>>,
-    pub approvals: Arc<codex::Approvals>,
+    pub approvals: Arc<Approvals>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -94,7 +108,7 @@ pub struct AgentManager {
 )]
 pub enum AgentEvent {
     ApprovalRequested {
-        approval: codex::Approval,
+        approval: Approval,
     },
     ApprovalResolved {
         id: String,
@@ -140,6 +154,9 @@ pub enum AgentEvent {
     Compacting,
     /// The conversation was summarized; its new size is reported by the next `Usage`.
     Compacted,
+    OpenFile {
+        path: String,
+    },
     Finished {
         interrupted: bool,
     },
@@ -148,14 +165,14 @@ pub enum AgentEvent {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Envelope<'a> {
-    deck_id: &'a str,
+    workspace: &'a str,
     event: &'a AgentEvent,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendArgs {
-    pub deck_id: String,
+    pub workspace: String,
     pub prompt: String,
     #[serde(default)]
     pub provider: Provider,
@@ -168,39 +185,53 @@ pub struct SendArgs {
     #[serde(default)]
     pub compact: bool,
     #[serde(default)]
-    pub permission_mode: codex::PermissionMode,
+    pub permission_mode: PermissionMode,
 }
 
 impl AgentManager {
-    pub fn is_running(&self, deck_id: &str) -> bool {
-        self.running.lock().unwrap().contains_key(deck_id)
+    pub fn is_running(&self, workspace: &str) -> bool {
+        let path = Path::new(workspace)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(workspace));
+        self.running.lock().unwrap().keys().any(|key| {
+            Path::new(key)
+                .canonicalize()
+                .unwrap_or_else(|_| PathBuf::from(key))
+                == path
+        })
     }
 
     pub fn send(&self, app: AppHandle, args: SendArgs) -> Result<()> {
-        let dir = deck::deck_dir(&app, &args.deck_id)?;
+        let dir = crate::workspace::root(&args.workspace)?;
+        let app_home = deck::app_home()?;
+        let session_dir = Sessions::new(&app_home).current_or_start(&dir)?;
         let bin = args.provider.resolve()?;
+        let extensions = Extensions::load(&app_home, &dir);
         let (cancel_tx, cancel_rx) = watch::channel(false);
         {
             let mut running = self.running.lock().unwrap();
-            if running.contains_key(&args.deck_id) {
-                return Err(Error::msg("The agent is still working on this deck."));
+            if running.contains_key(&args.workspace) {
+                return Err(Error::msg("The agent is still working in this workspace."));
             }
-            running.insert(args.deck_id.clone(), cancel_tx);
+            crate::sessions::claim_provider(&session_dir, args.provider)?;
+            running.insert(args.workspace.clone(), cancel_tx);
         }
         let approvals = self.approvals.clone();
         tauri::async_runtime::spawn(async move {
-            let (emitter, deck_id) = (app.clone(), args.deck_id.clone());
+            let (emitter, workspace) = (app.clone(), args.workspace.clone());
             let turn = Turn {
                 emit: Box::new(move |event| {
                     let _ = emitter.emit(
                         "agent-event",
                         Envelope {
-                            deck_id: &deck_id,
+                            workspace: &workspace,
                             event,
                         },
                     );
                 }),
                 dir,
+                app_home,
+                session_dir,
                 provider: args.provider,
                 bin,
                 model: args
@@ -212,47 +243,55 @@ impl AgentManager {
                     }),
                 effort: args.effort.filter(|e| !e.is_empty()),
                 compact: args.compact,
-                deck_id: args.deck_id.clone(),
+                workspace: args.workspace.clone(),
                 permission_mode: args.permission_mode,
                 approvals,
+                extensions,
             };
-            // The whole deck is one file: keep a copy to fall back on before every turn.
-            if let Err(e) = deck::snapshot(&turn.dir) {
-                log::warn!("snapshot failed: {e}");
-            }
-            // Remember the locked slides, to put back any the agent changes.
-            if let Err(e) = deck::guard_locked(&turn.dir) {
-                log::warn!("could not record locked slides: {e}");
-            }
-            let interrupted = turn.run(&args.prompt, cancel_rx).await;
-            match deck::release_guard(&turn.dir) {
-                Ok(restored) if !restored.is_empty() => turn.emit(&AgentEvent::Error {
-                    message: locked_restored_message(&restored),
-                }),
-                Ok(_) => {}
-                Err(e) => turn.emit(&AgentEvent::Error {
-                    message: format!("Could not check the locked slides after this turn: {e}"),
-                }),
-            }
-            // Give new slides ids and restore the player runtime if the agent touched it.
-            if let Err(e) = deck::normalize(&turn.dir) {
+            for message in &turn.extensions.warnings {
                 turn.emit(&AgentEvent::Error {
-                    message: format!("Could not tidy deck.html after this turn: {e}"),
+                    message: message.clone(),
                 });
             }
+            let interrupted = match crate::safety::Guard::start(&turn.dir, &turn.session_dir) {
+                Ok(guard) => {
+                    let interrupted = turn.run_with_open_requests(&args.prompt, cancel_rx).await;
+                    match guard.finish() {
+                        Ok(restored) => {
+                            for (file, ids) in restored {
+                                turn.emit(&AgentEvent::Error {
+                                    message: format!("{file}: {}", locked_restored_message(&ids)),
+                                });
+                            }
+                        }
+                        Err(e) => turn.emit(&AgentEvent::Error {
+                            message: format!(
+                                "Could not protect the workspace after this turn: {e}"
+                            ),
+                        }),
+                    }
+                    interrupted
+                }
+                Err(e) => {
+                    turn.emit(&AgentEvent::Error {
+                        message: format!("Could not protect the workspace before this turn: {e}"),
+                    });
+                    false
+                }
+            };
             app.state::<AgentManager>()
                 .running
                 .lock()
                 .unwrap()
-                .remove(&args.deck_id);
+                .remove(&args.workspace);
             turn.emit(&AgentEvent::Finished { interrupted });
         });
         Ok(())
     }
 
-    pub fn interrupt(&self, deck_id: &str) {
-        self.approvals.cancel_deck(deck_id);
-        if let Some(tx) = self.running.lock().unwrap().get(deck_id) {
+    pub fn interrupt(&self, workspace: &str) {
+        self.approvals.cancel_workspace(workspace);
+        if let Some(tx) = self.running.lock().unwrap().get(workspace) {
             let _ = tx.send(true);
         }
     }
@@ -270,15 +309,22 @@ fn locked_restored_message(ids: &[String]) -> String {
 
 struct Turn {
     emit: Box<dyn Fn(&AgentEvent) + Send + Sync>,
+    /// The workspace root, where the agent works.
     dir: PathBuf,
+    /// Where the files every deck's agent shares are written (see [`deck::app_home`]).
+    app_home: PathBuf,
+    /// The workspace's session this turn belongs to: chat state, snapshots, provider session ids.
+    session_dir: PathBuf,
     provider: Provider,
     bin: PathBuf,
     model: Option<String>,
     effort: Option<String>,
     compact: bool,
-    deck_id: String,
-    permission_mode: codex::PermissionMode,
-    approvals: Arc<codex::Approvals>,
+    workspace: String,
+    permission_mode: PermissionMode,
+    approvals: Arc<Approvals>,
+    /// The user's MCP servers, skills, plugins and instructions.
+    extensions: Extensions,
 }
 
 /// The prompt Claude Code runs as its built-in compaction command.
@@ -291,6 +337,25 @@ pub(crate) enum Outcome {
 }
 
 impl Turn {
+    /// MCP requests use a session inbox, independent of provider-specific tool events.
+    async fn run_with_open_requests(&self, prompt: &str, cancel: watch::Receiver<bool>) -> bool {
+        let run = self.run(prompt, cancel);
+        tokio::pin!(run);
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+        loop {
+            tokio::select! {
+                interrupted = &mut run => { self.open_requests(); return interrupted; }
+                _ = interval.tick() => self.open_requests(),
+            }
+        }
+    }
+
+    fn open_requests(&self) {
+        for path in mcp::take_open_requests(&self.dir, &self.session_dir) {
+            self.emit(&AgentEvent::OpenFile { path });
+        }
+    }
+
     fn emit(&self, event: &AgentEvent) {
         (self.emit)(event);
     }
@@ -298,7 +363,7 @@ impl Turn {
     /// Returns whether the turn was interrupted.
     async fn run(&self, prompt: &str, mut cancel: watch::Receiver<bool>) -> bool {
         let session_file = self.provider.session_file();
-        let session = deck::read_session(&self.dir, session_file);
+        let session = deck::read_session(&self.session_dir, session_file);
         if self.compact {
             if let Some(message) = compact_refusal(self.provider, session.as_deref()) {
                 self.emit(&AgentEvent::Error {
@@ -310,7 +375,7 @@ impl Turn {
         let mut outcome = self.run_once(prompt, session.as_deref(), &mut cancel).await;
         if self.compact && matches!(outcome, Ok(Outcome::ResumeFailed)) {
             // Starting fresh would leave nothing to compact.
-            let _ = deck::write_session(&self.dir, session_file, None);
+            let _ = deck::write_session(&self.session_dir, session_file, None);
             self.emit(&AgentEvent::Error {
                 message: "The conversation could not be resumed, so there is nothing to compact."
                     .into(),
@@ -319,7 +384,7 @@ impl Turn {
         }
         if matches!(outcome, Ok(Outcome::ResumeFailed)) {
             // The stored session is gone (other machine, cleared history): start fresh.
-            let _ = deck::write_session(&self.dir, session_file, None);
+            let _ = deck::write_session(&self.session_dir, session_file, None);
             outcome = self.run_once(prompt, None, &mut cancel).await;
         }
         match outcome {
@@ -352,9 +417,14 @@ impl Turn {
                 effort,
                 session,
                 compact: self.compact,
+                workspace: &self.workspace,
+                mode: self.permission_mode,
+                approvals: self.approvals.clone(),
+                extensions: &self.extensions,
             };
-            let on_session =
-                |id: &str| deck::write_session(&self.dir, self.provider.session_file(), Some(id));
+            let on_session = |id: &str| {
+                deck::write_session(&self.session_dir, self.provider.session_file(), Some(id))
+            };
             return copilot::run_turn(args, cancel, &|event| self.emit(event), &on_session).await;
         }
         if self.provider == Provider::Codex {
@@ -363,28 +433,54 @@ impl Turn {
                     bin: &self.bin,
                     dir: &self.dir,
                     lint_server: &std::env::current_exe()?,
-                    deck_id: &self.deck_id,
+                    workspace: &self.workspace,
                     prompt,
                     model,
                     effort,
                     session,
                     mode: self.permission_mode,
                     approvals: self.approvals.clone(),
+                    extensions: &self.extensions,
                 },
                 cancel,
                 &|event| self.emit(event),
-                &|id| deck::write_session(&self.dir, self.provider.session_file(), Some(id)),
+                &|id| {
+                    deck::write_session(&self.session_dir, self.provider.session_file(), Some(id))
+                },
             )
             .await;
         }
-        let system_prompt = self.dir.join(INTERNAL_DIR).join("system-prompt.md");
-        std::fs::write(&system_prompt, SYSTEM_PROMPT)?;
-        let mcp_config = self.dir.join(INTERNAL_DIR).join("mcp.json");
-        std::fs::write(
-            &mcp_config,
-            lint_server_config(&std::env::current_exe()?, &self.dir),
+        // A file rather than an argument: the prompt outgrows Windows command lines.
+        let system_prompt = self.app_home.join("system-prompt.md");
+        write_if_changed(
+            &system_prompt,
+            &self.extensions.system_prompt(SYSTEM_PROMPT),
         )?;
-        let args = build_claude_args(&system_prompt, &mcp_config, model, effort, session);
+        // Per workspace, as it holds the workspace's servers. Claude Code leaves out the
+        // servers of the plugins it loads (`--strict-mcp-config`), so they are added here.
+        let mcp_config = self.session_dir.join(CLAUDE_MCP_CONFIG);
+        write_if_changed(
+            &mcp_config,
+            &mcp_config_json(
+                &std::env::current_exe()?,
+                &self.extensions.all_mcp_servers(),
+            ),
+        )?;
+        let mut plugins = self.extensions.plugins.clone();
+        plugins.extend(
+            self.extensions
+                .claude_skills_plugin(&self.session_dir.join(CLAUDE_PLUGINS))?,
+        );
+        let mut args = build_claude_args(
+            &system_prompt,
+            &mcp_config,
+            &self.session_dir,
+            model,
+            effort,
+            session,
+            self.permission_mode,
+        );
+        args.extend(plugin_args(&plugins));
         let started = Instant::now();
 
         let mut cmd = Command::new(&self.bin);
@@ -408,10 +504,12 @@ impl Turn {
             session_id: session.map(str::to_string),
         });
 
-        let mut stdin = child.stdin.take().expect("piped stdin");
+        // Stream-json input keeps stdin open for answering permission requests; closing it
+        // after the result lets Claude Code exit.
+        let mut stdin = child.stdin.take();
         let prompt = if self.compact { CLAUDE_COMPACT } else { prompt };
-        stdin.write_all(prompt.as_bytes()).await?;
-        drop(stdin);
+        write_line(stdin.as_mut(), &claude_user_message(prompt)).await?;
+        let (run, mut answers) = self.approvals.start(&self.workspace);
 
         let mut stderr = child.stderr.take().expect("piped stderr");
         let stderr_task = tokio::spawn(async move {
@@ -430,12 +528,41 @@ impl Turn {
         let mut result_text = None;
         loop {
             tokio::select! {
+                biased;
+                Some(answer) = answers.recv() => {
+                    let response = claude_control_response(&answer.wire_id, Ok(answer.payload));
+                    write_line(stdin.as_mut(), &response).await?;
+                    self.emit(&AgentEvent::ApprovalResolved { id: answer.id });
+                }
                 line = lines.next_line() => {
                     let Some(line) = line? else { break };
                     let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
+                    match value["type"].as_str() {
+                        Some("control_request") => {
+                            let id = &value["request_id"];
+                            match claude_permission(&value["request"], self.permission_mode) {
+                                ClaudePermission::Answer(reply) => {
+                                    write_line(stdin.as_mut(), &claude_control_response(id, reply)).await?;
+                                }
+                                ClaudePermission::Ask(approval, choices) => {
+                                    run.ask(id.clone(), &approval, choices);
+                                    self.emit(&AgentEvent::ApprovalRequested { approval });
+                                }
+                            }
+                            continue;
+                        }
+                        Some("control_cancel_request") => {
+                            if let Some(id) = run.resolved(&value["request_id"]) {
+                                self.emit(&AgentEvent::ApprovalResolved { id });
+                            }
+                            continue;
+                        }
+                        Some("result") => stdin = None,
+                        _ => {}
+                    }
                     if let Some(id) = session_id_of_init(&value) {
                         saw_init = true;
-                        deck::write_session(&self.dir, self.provider.session_file(), Some(&id))?;
+                        deck::write_session(&self.session_dir, self.provider.session_file(), Some(&id))?;
                         self.emit(&AgentEvent::Started { session_id: Some(id) });
                     }
                     if session.is_some() && !saw_init && is_missing_session(&value) {
@@ -490,18 +617,49 @@ fn compact_refusal(provider: Provider, session: Option<&str>) -> Option<&'static
     }
 }
 
-/// MCP config running this app binary as the agent's lint tool server (`mcp.rs`).
-fn lint_server_config(exe: &Path, dir: &Path) -> String {
-    serde_json::json!({
-        "mcpServers": {
-            mcp::SERVER: {
-                "type": "stdio",
-                "command": exe,
-                "args": [mcp::FLAG, dir],
-            }
-        }
-    })
-    .to_string()
+/// Claude Code's MCP config in the session: the user's `servers` and this app binary as the
+/// agent's lint tool server (`mcp.rs`), which lints the deck in its working directory, which
+/// Claude Code sets to its own (the workspace).
+const CLAUDE_MCP_CONFIG: &str = "mcp.json";
+/// Where the session's generated Claude Code plugins go (see [`Extensions::claude_skills_plugin`]).
+const CLAUDE_PLUGINS: &str = "claude-plugins";
+
+fn mcp_config_json(exe: &Path, servers: &serde_json::Map<String, Value>) -> String {
+    let mut servers = servers.clone();
+    servers.insert(
+        mcp::SERVER.into(),
+        json!({
+            "type": "stdio",
+            "command": exe,
+            "args": [mcp::FLAG],
+        }),
+    );
+    json!({ "mcpServers": servers }).to_string()
+}
+
+/// `--plugin-dir` for each plugin folder.
+fn plugin_args(plugins: &[PathBuf]) -> Vec<String> {
+    plugins
+        .iter()
+        .flat_map(|p| ["--plugin-dir".into(), p.to_string_lossy().into_owned()])
+        .collect()
+}
+
+/// Writes `path` unless it already holds `contents`. Turns in other decks may be reading
+/// it, so it is replaced whole rather than rewritten in place.
+fn write_if_changed(path: &Path, contents: &str) -> Result<()> {
+    if std::fs::read_to_string(path).ok().as_deref() == Some(contents) {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    std::fs::write(&temp, contents)?;
+    std::fs::rename(&temp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temp);
+    })?;
+    Ok(())
 }
 
 /// Claude Code selects the 1M-token context window with a `[1m]` model suffix.
@@ -515,18 +673,29 @@ fn claude_model(model: String, context_window: Option<&str>) -> String {
 fn build_claude_args(
     system_prompt: &Path,
     mcp_config: &Path,
+    session_dir: &Path,
     model: Option<&str>,
     effort: Option<&str>,
     session: Option<&str>,
+    mode: PermissionMode,
 ) -> Vec<String> {
+    let permission_mode = match mode {
+        PermissionMode::FullAccess => "bypassPermissions",
+        _ => "acceptEdits",
+    };
     let mut args: Vec<String> = [
         "-p",
+        "--input-format",
+        "stream-json",
         "--output-format",
         "stream-json",
         "--verbose",
         "--include-partial-messages",
         "--permission-mode",
-        "acceptEdits",
+        permission_mode,
+        // Requests that would prompt arrive on stdout as `can_use_tool` control requests.
+        "--permission-prompt-tool",
+        "stdio",
         "--strict-mcp-config",
         "--tools",
         TOOLS,
@@ -536,11 +705,14 @@ fn build_claude_args(
     .collect();
     args.extend([
         "--allowedTools".into(),
-        format!("{TOOLS},{},{}", mcp::QUALIFIED_TOOL, mcp::NARRATION_TOOLS),
+        format!("{ALLOWED_TOOLS},{}", mcp::CLAUDE_TOOLS),
         "--mcp-config".into(),
         mcp_config.to_string_lossy().into_owned(),
         "--append-system-prompt-file".into(),
         system_prompt.to_string_lossy().into_owned(),
+        // Sketches and staged templates are in the session, outside the deck.
+        "--add-dir".into(),
+        session_dir.to_string_lossy().into_owned(),
     ]);
     if let Some(model) = model {
         args.extend(["--model".into(), model.into()]);
@@ -552,6 +724,98 @@ fn build_claude_args(
         args.extend(["--resume".into(), session.into()]);
     }
     args
+}
+
+/// Writes one stream-json line; nothing once stdin is closed.
+async fn write_line(stdin: Option<&mut tokio::process::ChildStdin>, value: &Value) -> Result<()> {
+    let Some(stdin) = stdin else { return Ok(()) };
+    let mut line = serde_json::to_vec(value).expect("serializable JSON");
+    line.push(b'\n');
+    stdin.write_all(&line).await?;
+    stdin.flush().await?;
+    Ok(())
+}
+
+fn claude_user_message(prompt: &str) -> Value {
+    json!({"type": "user", "message": {"role": "user", "content": prompt}})
+}
+
+/// Answers control request `id`: `Ok` with the response, `Err` with a refusal.
+fn claude_control_response(id: &Value, reply: std::result::Result<Value, &str>) -> Value {
+    let response = match reply {
+        Ok(response) => json!({"subtype": "success", "request_id": id, "response": response}),
+        Err(error) => json!({"subtype": "error", "request_id": id, "error": error}),
+    };
+    json!({"type": "control_response", "response": response})
+}
+
+enum ClaudePermission {
+    /// Answered without the user.
+    Answer(std::result::Result<Value, &'static str>),
+    /// The user decides.
+    Ask(Approval, Choices),
+}
+
+/// How to answer one Claude Code control request. Only tool permission prompts are
+/// handled: the app's MCP tools and everything under Full access are allowed outright,
+/// anything else asks the user.
+fn claude_permission(request: &Value, mode: PermissionMode) -> ClaudePermission {
+    if request["subtype"] != "can_use_tool" {
+        return ClaudePermission::Answer(Err("SlopSlide does not support this request."));
+    }
+    let tool = request["tool_name"].as_str().unwrap_or_default();
+    let input = &request["input"];
+    let allow = json!({"behavior": "allow", "updatedInput": input});
+    if mode == PermissionMode::FullAccess || mcp::is_claude_tool(tool) {
+        return ClaudePermission::Answer(Ok(allow));
+    }
+    let text = |key: &str| input[key].as_str().map(str::to_string);
+    let (title, details) = match tool {
+        "Bash" => ("Run a command", text("command")),
+        "Write" | "Edit" | "NotebookEdit" => ("Change files", text("file_path")),
+        "Read" => ("Read files", text("file_path")),
+        "Glob" | "Grep" => ("Read files", text("path").or_else(|| text("pattern"))),
+        "WebFetch" => ("Network access", text("url")),
+        _ => ("Use a tool", None),
+    };
+    let details = details.unwrap_or_else(|| {
+        format!(
+            "{tool}\n{}",
+            serde_json::to_string_pretty(input).unwrap_or_default()
+        )
+    });
+    let reason = request["description"]
+        .as_str()
+        .or_else(|| input["description"].as_str())
+        .map(str::to_string);
+    let mut choices = Choices::from([
+        ("accept", allow.clone()),
+        (
+            "decline",
+            json!({"behavior": "deny", "message": "The user declined this request."}),
+        ),
+    ]);
+    let mut decisions = vec![Decision::Accept];
+    // Claude Code suggests the rules that would allow requests like this one; kept for the
+    // session only, never written to the user's settings.
+    let rules: Vec<Value> = request["permission_suggestions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|rule| {
+            let mut rule = rule.clone();
+            rule["destination"] = json!("session");
+            rule
+        })
+        .collect();
+    if !rules.is_empty() {
+        let mut session = allow;
+        session["updatedPermissions"] = json!(rules);
+        choices.insert("acceptForSession", session);
+        decisions.push(Decision::AcceptForSession);
+    }
+    decisions.push(Decision::Decline);
+    ClaudePermission::Ask(Approval::new(title, reason, details, decisions), choices)
 }
 
 const MISSING_SESSION: &str = "No conversation found";
@@ -602,7 +866,7 @@ fn parse_line(value: &Value) -> Vec<AgentEvent> {
             .filter(|block| block["type"] == "tool_use")
             .map(|block| AgentEvent::ToolUse {
                 id: block["id"].as_str().unwrap_or_default().to_string(),
-                name: block["name"].as_str().unwrap_or_default().to_string(),
+                name: mcp::display_name(block["name"].as_str().unwrap_or_default()).to_string(),
                 input: block["input"].clone(),
             })
             .chain(
@@ -812,11 +1076,11 @@ mod tests {
     #[test]
     fn send_args_compact_defaults_to_off() {
         let args: SendArgs =
-            serde_json::from_value(json!({"deckId":"d","prompt":"hi","provider":"claude"}))
+            serde_json::from_value(json!({"workspace":"d","prompt":"hi","provider":"claude"}))
                 .unwrap();
         assert!(!args.compact);
         let args: SendArgs = serde_json::from_value(
-            json!({"deckId":"d","prompt":"/compact","provider":"copilot","compact":true}),
+            json!({"workspace":"d","prompt":"/compact","provider":"copilot","compact":true}),
         )
         .unwrap();
         assert!(args.compact);
@@ -975,10 +1239,20 @@ mod tests {
 
     #[test]
     fn builds_cli_arguments() {
-        let prompt = Path::new("/deck/.slopslide/system-prompt.md");
-        let mcp = Path::new("/deck/.slopslide/mcp.json");
-        let base = build_claude_args(prompt, mcp, None, None, None);
-        assert_eq!(base[..3], ["-p", "--output-format", "stream-json"]);
+        let prompt = Path::new("/home/.slopslides/system-prompt.md");
+        let mcp = Path::new("/home/.slopslides/sessions/1-ab/mcp.json");
+        let session = Path::new("/home/.slopslides/sessions/1-ab");
+        let base = build_claude_args(prompt, mcp, session, None, None, None, PermissionMode::Ask);
+        assert_eq!(
+            base[..5],
+            [
+                "-p",
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json"
+            ]
+        );
         let after = |args: &[String], flag: &str| {
             args.iter()
                 .position(|a| a == flag)
@@ -991,39 +1265,245 @@ mod tests {
         assert_eq!(after(&base, "--tools").as_deref(), Some(TOOLS));
         assert_eq!(
             after(&base, "--allowedTools").as_deref(),
-            Some(format!("{TOOLS},{},{}", mcp::QUALIFIED_TOOL, mcp::NARRATION_TOOLS).as_str())
+            Some("WebSearch,WebFetch,Skill,mcp__slopslide"),
+            "the shell and files outside the workspace ask; the app's tools and skills never do"
+        );
+        assert_eq!(
+            after(&base, "--permission-prompt-tool").as_deref(),
+            Some("stdio")
         );
         assert_eq!(
             after(&base, "--mcp-config").as_deref(),
-            Some("/deck/.slopslide/mcp.json")
+            Some("/home/.slopslides/sessions/1-ab/mcp.json")
         );
         assert_eq!(
             after(&base, "--append-system-prompt-file").as_deref(),
-            Some("/deck/.slopslide/system-prompt.md")
+            Some("/home/.slopslides/system-prompt.md")
+        );
+        assert_eq!(
+            after(&base, "--add-dir").as_deref(),
+            Some("/home/.slopslides/sessions/1-ab"),
+            "the agent reads sketches and templates in the session"
         );
         assert!(base.contains(&"--strict-mcp-config".to_string()));
         assert!(!base.contains(&"--model".to_string()));
         assert!(!base.contains(&"--resume".to_string()));
         assert!(!base.contains(&"--effort".to_string()));
-        assert!(!TOOLS.contains("Bash"), "the agent must not get a shell");
 
-        let full = build_claude_args(prompt, mcp, Some("opus"), Some("high"), Some("s-1"));
+        let full = build_claude_args(
+            prompt,
+            mcp,
+            session,
+            Some("opus"),
+            Some("high"),
+            Some("s-1"),
+            PermissionMode::FullAccess,
+        );
+        assert_eq!(
+            after(&full, "--permission-mode").as_deref(),
+            Some("bypassPermissions")
+        );
         assert_eq!(after(&full, "--model").as_deref(), Some("opus"));
         assert_eq!(after(&full, "--effort").as_deref(), Some("high"));
         assert_eq!(after(&full, "--resume").as_deref(), Some("s-1"));
     }
 
     #[test]
-    fn lint_server_config_runs_this_binary_for_the_deck() {
-        let config: Value = serde_json::from_str(&lint_server_config(
+    fn shows_the_apps_tools_by_their_own_names() {
+        let line = json!({"type":"assistant","message":{"content":[
+            {"type":"tool_use","id":"t1","name":"mcp__slopslide__lint_deck","input":{}},
+            {"type":"tool_use","id":"t2","name":"mcp__github__push","input":{}}
+        ]}});
+        let names: Vec<_> = parse_line(&line)
+            .into_iter()
+            .filter_map(|e| match e {
+                AgentEvent::ToolUse { name, .. } => Some(name),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["lint_deck", "mcp__github__push"]);
+    }
+
+    fn can_use_tool(tool: &str, input: Value) -> Value {
+        json!({"subtype":"can_use_tool","tool_name":tool,"input":input,"permission_suggestions":[]})
+    }
+
+    #[test]
+    fn claude_runs_the_apps_tools_without_asking() {
+        for tool in ["mcp__slopslide__lint_deck", "mcp__slopslide__open_file"] {
+            let request = can_use_tool(tool, json!({"path":"deck.html"}));
+            assert!(matches!(
+                claude_permission(&request, PermissionMode::Ask),
+                ClaudePermission::Answer(Ok(r)) if r["behavior"] == "allow" && r["updatedInput"]["path"] == "deck.html"
+            ));
+        }
+    }
+
+    #[test]
+    fn claude_asks_before_other_tools() {
+        let cases = [
+            (
+                "Bash",
+                json!({"command":"npm test","description":"Run tests"}),
+                "Run a command",
+                "npm test",
+            ),
+            (
+                "Write",
+                json!({"file_path":"/etc/hosts"}),
+                "Change files",
+                "/etc/hosts",
+            ),
+            (
+                "Read",
+                json!({"file_path":"/Users/me/.ssh/id"}),
+                "Read files",
+                "/Users/me/.ssh/id",
+            ),
+            (
+                "WebFetch",
+                json!({"url":"https://example.com"}),
+                "Network access",
+                "https://example.com",
+            ),
+            (
+                "mcp__github__push",
+                json!({"branch":"main"}),
+                "Use a tool",
+                "mcp__github__push",
+            ),
+        ];
+        for (tool, input, title, details) in cases {
+            let ClaudePermission::Ask(approval, choices) =
+                claude_permission(&can_use_tool(tool, input.clone()), PermissionMode::Ask)
+            else {
+                panic!("{tool} asks");
+            };
+            assert_eq!(approval.title, title);
+            assert!(approval.details.contains(details), "{}", approval.details);
+            assert_eq!(
+                approval.decisions,
+                [Decision::Accept, Decision::Decline],
+                "no rule offered"
+            );
+            assert_eq!(
+                choices["accept"],
+                json!({"behavior":"allow","updatedInput":input})
+            );
+            assert_eq!(choices["decline"]["behavior"], "deny");
+        }
+        let ClaudePermission::Ask(approval, _) = claude_permission(
+            &can_use_tool("Bash", json!({"command":"ls","description":"List files"})),
+            PermissionMode::Ask,
+        ) else {
+            panic!("asks");
+        };
+        assert_eq!(approval.reason.as_deref(), Some("List files"));
+    }
+
+    #[test]
+    fn claude_full_access_allows_everything() {
+        let request = can_use_tool("Bash", json!({"command":"rm -rf build"}));
+        assert!(matches!(
+            claude_permission(&request, PermissionMode::FullAccess),
+            ClaudePermission::Answer(Ok(r)) if r["behavior"] == "allow"
+        ));
+    }
+
+    #[test]
+    fn claude_refuses_other_control_requests() {
+        let request = json!({"subtype":"hook_callback"});
+        assert!(matches!(
+            claude_permission(&request, PermissionMode::Ask),
+            ClaudePermission::Answer(Err(_))
+        ));
+        assert_eq!(
+            claude_control_response(&json!("r1"), Err("no")),
+            json!({"type":"control_response","response":{"subtype":"error","request_id":"r1","error":"no"}})
+        );
+    }
+
+    #[test]
+    fn mcp_config_runs_this_binary_in_the_working_directory() {
+        let config: Value = serde_json::from_str(&mcp_config_json(
             Path::new("/Apps/SlopSlide"),
-            Path::new("/decks/my deck"),
+            &serde_json::Map::new(),
         ))
         .unwrap();
         let server = &config["mcpServers"]["slopslide"];
         assert_eq!(server["type"], "stdio");
         assert_eq!(server["command"], "/Apps/SlopSlide");
-        assert_eq!(server["args"], json!(["--lint-mcp", "/decks/my deck"]));
+        assert_eq!(
+            server["args"],
+            json!(["--lint-mcp"]),
+            "no deck: Claude Code runs it in the workspace"
+        );
+    }
+
+    #[test]
+    fn mcp_config_adds_the_users_servers_but_keeps_the_apps() {
+        let servers = json!({"docs": {"url": "https://x/mcp"}, "slopslide": {"command": "evil"}});
+        let config: Value = serde_json::from_str(&mcp_config_json(
+            Path::new("/Apps/SlopSlide"),
+            servers.as_object().unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(config["mcpServers"]["docs"]["url"], "https://x/mcp");
+        assert_eq!(
+            config["mcpServers"]["slopslide"]["command"],
+            "/Apps/SlopSlide"
+        );
+    }
+
+    #[test]
+    fn plugins_are_passed_as_plugin_dirs() {
+        let plugins = [PathBuf::from("/p/a"), PathBuf::from("/p/b")];
+        assert_eq!(
+            plugin_args(&plugins),
+            ["--plugin-dir", "/p/a", "--plugin-dir", "/p/b"]
+        );
+        assert!(plugin_args(&[]).is_empty());
+    }
+
+    #[test]
+    fn system_prompt_includes_the_design_reference() {
+        assert!(SYSTEM_PROMPT.starts_with(include_str!("../prompts/system.md")));
+        assert!(SYSTEM_PROMPT.ends_with(include_str!("../prompts/design-reference.md")));
+        assert!(
+            SYSTEM_PROMPT.contains("\"Design Reference\""),
+            "system.md points at the reference by its title"
+        );
+        assert!(
+            !SYSTEM_PROMPT.contains("Style Presets")
+                && !SYSTEM_PROMPT.contains("Animation Patterns"),
+            "styles live in the templates, not in the prompt"
+        );
+        assert!(
+            !SYSTEM_PROMPT.contains(".slopslide/reference"),
+            "the references are not files in the deck"
+        );
+    }
+
+    #[test]
+    fn write_if_changed_replaces_only_different_contents() {
+        let dir = std::env::temp_dir().join(format!("slopslide-write-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mcp.json");
+        write_if_changed(&path, "one").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "one");
+        let written = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_if_changed(&path, "one").unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            written,
+            "unchanged contents are not rewritten"
+        );
+        write_if_changed(&path, "two").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "two");
+        let leftovers = std::fs::read_dir(&dir).unwrap().count();
+        assert_eq!(leftovers, 1, "no temporary files left behind");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1078,21 +1558,21 @@ mod tests {
             assert_eq!(serde_json::to_value(&event).unwrap(), expected);
         }
         let envelope = Envelope {
-            deck_id: "talk",
+            workspace: "talk",
             event: &AgentEvent::Thinking,
         };
         assert_eq!(
             serde_json::to_value(envelope).unwrap(),
-            json!({"deckId":"talk","event":{"type":"thinking"}})
+            json!({"workspace":"talk","event":{"type":"thinking"}})
         );
     }
 
     #[test]
     fn send_args_deserialize_from_the_frontend() {
         let args: SendArgs =
-            serde_json::from_value(json!({"deckId":"talk","prompt":"Hi","model":null})).unwrap();
+            serde_json::from_value(json!({"workspace":"talk","prompt":"Hi","model":null})).unwrap();
         assert_eq!(
-            (args.deck_id.as_str(), args.prompt.as_str()),
+            (args.workspace.as_str(), args.prompt.as_str()),
             ("talk", "Hi")
         );
         assert_eq!(args.model, None);
@@ -1102,7 +1582,7 @@ mod tests {
             "older frontends send no provider"
         );
         let args: SendArgs = serde_json::from_value(
-            json!({"deckId":"t","prompt":"","provider":"codex","model":"gpt-6-astra","effort":"high"}),
+            json!({"workspace":"t","prompt":"","provider":"codex","model":"gpt-6-astra","effort":"high"}),
         )
         .unwrap();
         assert_eq!(args.provider, Provider::Codex);
@@ -1126,9 +1606,15 @@ mod tests {
         use std::sync::Arc;
         use std::time::Duration;
 
+        /// Where the fake `claude` logs its arguments and input, inside the test deck.
+        const LOG_DIR: &str = ".test-log";
+
         struct Fixture {
             dir: PathBuf,
             events: Arc<Mutex<Vec<AgentEvent>>>,
+            /// How the user answers approval requests; unanswered when `None`.
+            answer: Option<Decision>,
+            mode: PermissionMode,
         }
 
         impl Fixture {
@@ -1137,16 +1623,17 @@ mod tests {
             fn new(body: &str) -> Self {
                 let dir =
                     std::env::temp_dir().join(format!("slopslide-agent-{}", uuid::Uuid::new_v4()));
-                fs::create_dir_all(dir.join(INTERNAL_DIR)).unwrap();
+                fs::create_dir_all(dir.join(LOG_DIR)).unwrap();
+                fs::create_dir_all(dir.join("home")).unwrap();
                 let script = format!(
                     "#!/bin/sh\n\
-                     LOG=\"$PWD/{INTERNAL_DIR}\"\n\
+                     LOG=\"$PWD/{LOG_DIR}\"\n\
                      RESUME=\n\
                      prev=\n\
                      for a in \"$@\"; do [ \"$prev\" = --resume ] && RESUME=\"$a\"; prev=\"$a\"; done\n\
                      printf '%s\\n' \"$@\" > \"$LOG/args.$$\"\n\
                      printf '%s\\n' \"$$\" >> \"$LOG/runs\"\n\
-                     cat > \"$LOG/stdin.log\"\n\
+                     IFS= read -r line; printf '%s' \"$line\" > \"$LOG/stdin.log\"\n\
                      {body}\n"
                 );
                 let claude = dir.join("claude");
@@ -1155,6 +1642,8 @@ mod tests {
                 Fixture {
                     dir,
                     events: Arc::default(),
+                    answer: None,
+                    mode: PermissionMode::Ask,
                 }
             }
 
@@ -1164,17 +1653,29 @@ mod tests {
 
             fn turn_with(&self, claude: PathBuf, model: Option<&str>) -> Turn {
                 let events = self.events.clone();
+                let approvals = Arc::<Approvals>::default();
+                let (broker, answer) = (approvals.clone(), self.answer);
                 Turn {
-                    emit: Box::new(move |e| events.lock().unwrap().push(e.clone())),
+                    emit: Box::new(move |e| {
+                        events.lock().unwrap().push(e.clone());
+                        if let (AgentEvent::ApprovalRequested { approval }, Some(decision)) =
+                            (e, answer)
+                        {
+                            broker.respond("test", &approval.id, decision).unwrap();
+                        }
+                    }),
                     dir: self.dir.clone(),
+                    app_home: self.dir.join("home"),
+                    session_dir: self.session_dir(),
                     provider: Provider::Claude,
                     bin: claude,
                     model: model.map(str::to_string),
                     effort: None,
                     compact: false,
-                    deck_id: "test".into(),
-                    permission_mode: codex::PermissionMode::Ask,
-                    approvals: Arc::default(),
+                    workspace: "test".into(),
+                    permission_mode: self.mode,
+                    approvals,
+                    extensions: Extensions::default(),
                 }
             }
 
@@ -1212,9 +1713,17 @@ mod tests {
                     .collect()
             }
 
+            /// The prompt of the last invocation, from its stream-json user message.
+            fn prompt(&self) -> String {
+                let line = fs::read_to_string(self.dir.join(LOG_DIR).join("stdin.log")).unwrap();
+                let message: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(message["type"], "user");
+                message["message"]["content"].as_str().unwrap().to_string()
+            }
+
             /// Arguments of each invocation, in order.
             fn invocations(&self) -> Vec<Vec<String>> {
-                let log = self.dir.join(INTERNAL_DIR);
+                let log = self.dir.join(LOG_DIR);
                 let runs = fs::read_to_string(log.join("runs")).unwrap_or_default();
                 runs.lines()
                     .map(|pid| {
@@ -1227,8 +1736,13 @@ mod tests {
                     .collect()
             }
 
+            /// The workspace's session folder, outside the deck.
+            fn session_dir(&self) -> PathBuf {
+                self.dir.join("home").join("sessions").join("1-test")
+            }
+
             fn session(&self) -> Option<String> {
-                deck::read_session(&self.dir, Provider::Claude.session_file())
+                deck::read_session(&self.session_dir(), Provider::Claude.session_file())
             }
         }
 
@@ -1288,16 +1802,39 @@ echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id
                 ]
             );
             assert_eq!(fx.session().as_deref(), Some("new-session"));
-            let log = fx.dir.join(INTERNAL_DIR);
-            assert_eq!(
-                fs::read_to_string(log.join("stdin.log")).unwrap(),
-                "Make it pop"
-            );
-            let prompt_file = log.join("system-prompt.md");
+            assert_eq!(fx.prompt(), "Make it pop");
+            let home = fx.dir.join("home");
+            let prompt_file = home.join("system-prompt.md");
             assert_eq!(fs::read_to_string(&prompt_file).unwrap(), SYSTEM_PROMPT);
+            let mcp_file = fx.session_dir().join("mcp.json");
+            let mcp: Value = serde_json::from_str(&fs::read_to_string(&mcp_file).unwrap()).unwrap();
+            assert_eq!(
+                mcp["mcpServers"]["slopslide"]["args"],
+                json!(["--lint-mcp"])
+            );
+            let mut written: Vec<_> = fs::read_dir(&fx.dir)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            written.sort();
+            assert_eq!(
+                written,
+                [LOG_DIR, "claude", "home"],
+                "nothing of the app's is written into the deck"
+            );
+            assert!(has_flag(
+                &fx.invocations()[0],
+                "--add-dir",
+                &fx.session_dir().to_string_lossy()
+            ));
             let runs = fx.invocations();
             assert_eq!(runs.len(), 1);
             assert!(has_flag(&runs[0], "--model", "sonnet"));
+            assert!(has_flag(
+                &runs[0],
+                "--mcp-config",
+                &mcp_file.to_string_lossy()
+            ));
             assert!(has_flag(
                 &runs[0],
                 "--append-system-prompt-file",
@@ -1307,12 +1844,62 @@ echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id
         }
 
         #[tokio::test]
+        async fn loads_the_users_extensions() {
+            let fx = Fixture::new(&format!("{INIT}\n{OK}"));
+            let home = fx.dir.join("home");
+            let skill = home.join("skills/tone");
+            fs::create_dir_all(&skill).unwrap();
+            fs::write(skill.join("SKILL.md"), "---\nname: tone\n---\n").unwrap();
+            let plugin = home.join("plugins/p");
+            fs::create_dir_all(&plugin).unwrap();
+            fs::write(plugin.join(".mcp.json"), r#"{"ps":{"command":"p"}}"#).unwrap();
+            fs::write(
+                home.join("mcp.json"),
+                r#"{"mcpServers":{"docs":{"url":"https://x"}}}"#,
+            )
+            .unwrap();
+            fs::write(home.join("AGENTS.md"), "Be brief.").unwrap();
+
+            let (_tx, rx) = watch::channel(false);
+            let mut turn = fx.turn();
+            turn.extensions = Extensions::load(&home, &fx.dir);
+            assert!(
+                !tokio::time::timeout(Duration::from_secs(20), turn.run("Hi", rx))
+                    .await
+                    .unwrap()
+            );
+            assert!(fx.errors().is_empty(), "{:?}", fx.errors());
+
+            let run = &fx.invocations()[0];
+            let skills_plugin = fx.session_dir().join("claude-plugins/slopslides");
+            assert!(has_flag(run, "--plugin-dir", &plugin.to_string_lossy()));
+            assert!(has_flag(
+                run,
+                "--plugin-dir",
+                &skills_plugin.to_string_lossy()
+            ));
+            assert!(skills_plugin.join("skills/tone/SKILL.md").is_file());
+            let mcp: Value = serde_json::from_str(
+                &fs::read_to_string(fx.session_dir().join("mcp.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(mcp["mcpServers"]["docs"]["url"], "https://x");
+            assert_eq!(
+                mcp["mcpServers"]["ps"]["command"], "p",
+                "--strict-mcp-config drops plugins' servers, so the app adds them"
+            );
+            assert!(mcp["mcpServers"]["slopslide"].is_object());
+            let prompt = fs::read_to_string(home.join("system-prompt.md")).unwrap();
+            assert!(prompt.starts_with(SYSTEM_PROMPT) && prompt.ends_with("Be brief."));
+        }
+
+        #[tokio::test]
         async fn resumes_the_stored_session() {
             let fx = Fixture::new(&format!(
                 r#"echo "{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$RESUME\"}}"
 {OK}"#
             ));
-            deck::write_session(&fx.dir, "session", Some("old-session")).unwrap();
+            deck::write_session(&fx.session_dir(), "claude-session", Some("old-session")).unwrap();
             assert!(!fx.run("Again", None).await);
             let runs = fx.invocations();
             assert_eq!(runs.len(), 1);
@@ -1338,7 +1925,7 @@ fi
 {INIT}
 {OK}"#
             ));
-            deck::write_session(&fx.dir, "session", Some("gone")).unwrap();
+            deck::write_session(&fx.session_dir(), "claude-session", Some("gone")).unwrap();
             assert!(!fx.run("Hi", None).await);
             let runs = fx.invocations();
             assert_eq!(runs.len(), 2, "retried once");
@@ -1371,11 +1958,105 @@ fi
 {INIT}
 {OK}"#
             ));
-            deck::write_session(&fx.dir, "session", Some("gone")).unwrap();
+            deck::write_session(&fx.session_dir(), "claude-session", Some("gone")).unwrap();
             assert!(!fx.run("Hi", None).await);
             assert_eq!(fx.invocations().len(), 2);
             assert_eq!(fx.session().as_deref(), Some("new-session"));
             assert!(fx.errors().is_empty(), "{:?}", fx.errors());
+        }
+
+        /// A `can_use_tool` request for `curl`, then the response the app wrote, then a result.
+        fn permission_script() -> String {
+            format!(
+                r#"{INIT}
+echo '{{"type":"control_request","request_id":"req-1","request":{{"subtype":"can_use_tool","tool_name":"Bash","input":{{"command":"curl -sI https://example.com"}},"permission_suggestions":[{{"type":"addRules","rules":[{{"toolName":"Bash","ruleContent":"curl -sI https://example.com"}}],"behavior":"allow","destination":"localSettings"}}]}}}}'
+IFS= read -r answer; printf '%s' "$answer" > "$LOG/answer.log"
+{OK}"#
+            )
+        }
+
+        #[tokio::test]
+        async fn asks_the_user_and_answers_claude_code() {
+            for (decision, behavior) in [
+                (Decision::Accept, "allow"),
+                (Decision::AcceptForSession, "allow"),
+                (Decision::Decline, "deny"),
+            ] {
+                let mut fx = Fixture::new(&permission_script());
+                fx.answer = Some(decision);
+                assert!(!fx.run("Check the site", None).await);
+                let answer: Value = serde_json::from_str(
+                    &fs::read_to_string(fx.dir.join(LOG_DIR).join("answer.log")).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(answer["type"], "control_response");
+                let response = &answer["response"];
+                assert_eq!(response["request_id"], "req-1");
+                assert_eq!(response["response"]["behavior"], behavior);
+                let rules = &response["response"]["updatedPermissions"];
+                assert_eq!(rules.is_array(), decision == Decision::AcceptForSession);
+                if decision == Decision::AcceptForSession {
+                    assert_eq!(
+                        rules[0]["destination"], "session",
+                        "never saved to settings"
+                    );
+                }
+                let events = fx.events();
+                let requested = events.iter().find_map(|e| match e {
+                    AgentEvent::ApprovalRequested { approval } => Some(approval.clone()),
+                    _ => None,
+                });
+                let approval = requested.expect("the user was asked");
+                assert_eq!(approval.title, "Run a command");
+                assert_eq!(approval.details, "curl -sI https://example.com");
+                assert!(events.contains(&AgentEvent::ApprovalResolved { id: approval.id }));
+                assert!(fx.errors().is_empty(), "{:?}", fx.errors());
+            }
+        }
+
+        #[tokio::test]
+        async fn full_access_answers_without_asking() {
+            let mut fx = Fixture::new(&permission_script());
+            fx.mode = PermissionMode::FullAccess;
+            assert!(!fx.run("Check the site", None).await);
+            let answer = fs::read_to_string(fx.dir.join(LOG_DIR).join("answer.log")).unwrap();
+            assert!(answer.contains(r#""behavior":"allow""#), "{answer}");
+            assert!(!fx
+                .events()
+                .iter()
+                .any(|e| matches!(e, AgentEvent::ApprovalRequested { .. })));
+            assert!(has_flag(
+                &fx.invocations()[0],
+                "--permission-mode",
+                "bypassPermissions"
+            ));
+        }
+
+        #[tokio::test]
+        async fn interrupting_closes_a_pending_approval() {
+            let fx = Fixture::new(&permission_script());
+            let (tx, rx) = watch::channel(false);
+            let turn = fx.turn();
+            let approvals = turn.approvals.clone();
+            let run = tokio::spawn(async move { turn.run("Check the site", rx).await });
+            for _ in 0..200 {
+                if fx
+                    .events()
+                    .iter()
+                    .any(|e| matches!(e, AgentEvent::ApprovalRequested { .. }))
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            assert!(!approvals.is_empty(), "waiting for the user");
+            tx.send(true).unwrap();
+            let interrupted = tokio::time::timeout(Duration::from_secs(5), run)
+                .await
+                .expect("interrupt did not stop the turn")
+                .unwrap();
+            assert!(interrupted);
+            assert!(approvals.is_empty(), "the request closed with the turn");
         }
 
         #[tokio::test]
@@ -1386,15 +2067,12 @@ echo "{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$RESUME\"}}"
 echo '{{"type":"system","subtype":"compact_boundary","compact_metadata":{{"trigger":"manual"}}}}'
 {OK}"#
             ));
-            deck::write_session(&fx.dir, "session", Some("old-session")).unwrap();
+            deck::write_session(&fx.session_dir(), "claude-session", Some("old-session")).unwrap();
             assert!(!fx.run_compact().await);
             let runs = fx.invocations();
             assert_eq!(runs.len(), 1);
             assert!(has_flag(&runs[0], "--resume", "old-session"));
-            assert_eq!(
-                fs::read_to_string(fx.dir.join(INTERNAL_DIR).join("stdin.log")).unwrap(),
-                "/compact"
-            );
+            assert_eq!(fx.prompt(), "/compact");
             let events = fx.events();
             assert!(events.contains(&AgentEvent::Compacting));
             assert!(events.contains(&AgentEvent::Compacted));
@@ -1420,7 +2098,7 @@ fi
 {INIT}
 {OK}"#
             ));
-            deck::write_session(&fx.dir, "session", Some("gone")).unwrap();
+            deck::write_session(&fx.session_dir(), "claude-session", Some("gone")).unwrap();
             assert!(!fx.run_compact().await);
             assert_eq!(fx.invocations().len(), 1, "not retried without the session");
             assert_eq!(fx.session(), None, "the stale session is forgotten");

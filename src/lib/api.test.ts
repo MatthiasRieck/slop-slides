@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
-import { emptyNarration } from "./narration";
 import { api, errorMessage } from "./api";
+import { emptyNarration } from "./narration";
 
 beforeEach(() => {
   invoke.mockReset().mockResolvedValue("result");
@@ -32,12 +32,17 @@ const CASES = [
   ["removeSpeechPack", () => api.removeSpeechPack("qwen-local"), "remove_speech_pack", { providerId: "qwen-local" }],
   ["generateSpeech", () => api.generateSpeech("job", "talk", "intro"), "generate_speech", { jobId: "job", id: "talk", slide: "intro", fresh: false }],
   ["cancelSpeech", () => api.cancelSpeech("job"), "cancel_speech", { jobId: "job" }],
-  ["listDecks", () => api.listDecks(), "list_decks", undefined],
-  ["createDeck", () => api.createDeck("Talk"), "create_deck", { title: "Talk", template: null }],
-  ["openDeck", () => api.openDeck("talk"), "open_deck", { id: "talk" }],
-  ["closeDeck", () => api.closeDeck(), "close_deck", undefined],
   ["loadNarration", () => api.loadNarration("talk"), "load_narration", { id: "talk" }],
   ["saveNarration", () => api.saveNarration("talk", emptyNarration().manifest, "missing"), "save_narration", { id: "talk", manifest: emptyNarration().manifest, base: "missing" }],
+  ["openWorkspace", () => api.openWorkspace("/ws"), "open_workspace", { path: "/ws" }],
+  ["closeWorkspace", () => api.closeWorkspace(), "close_workspace", undefined],
+  ["recentWorkspaces", () => api.recentWorkspaces(), "recent_workspaces", undefined],
+  ["forgetWorkspace", () => api.forgetWorkspace("/ws"), "forget_workspace", { path: "/ws" }],
+  ["libraryFolder", () => api.libraryFolder(), "library_folder", undefined],
+  ["listDir", () => api.listDir("talks"), "list_dir", { path: "talks" }],
+  ["openFile", () => api.openFile("talks/q3.html"), "open_file", { path: "talks/q3.html" }],
+  ["createDeck", () => api.createDeck("Talk"), "create_deck", { title: "Talk", template: null }],
+  ["openDeck", () => api.openDeck("talk"), "open_deck", { id: "talk" }],
   ["loadDeck", () => api.loadDeck("talk"), "load_deck", { id: "talk" }],
   ["renameDeck", () => api.renameDeck("talk", "New"), "rename_deck", { id: "talk", title: "New" }],
   [
@@ -46,7 +51,6 @@ const CASES = [
     "save_review",
     { id: "talk", review: { intro: [{ tool: "pen", color: "#fff", points: [[0.5, 0.5]] }] } },
   ],
-  ["deleteDeck", () => api.deleteDeck("talk"), "delete_deck", { id: "talk" }],
   ["reorderSlides", () => api.reorderSlides("talk", ["b", "a"]), "reorder_slides", { id: "talk", slides: ["b", "a"] }],
   ["addSlide", () => api.addSlide("talk", null), "add_slide", { id: "talk", after: null }],
   ["duplicateSlide", () => api.duplicateSlide("talk", "a"), "duplicate_slide", { id: "talk", slide: "a" }],
@@ -61,6 +65,12 @@ const CASES = [
     () => api.setSlideLocked("talk", "a", true),
     "set_slide_locked",
     { id: "talk", slide: "a", locked: true },
+  ],
+  [
+    "setSlideSize",
+    () => api.setSlideSize("talk", { width: 21, height: 29.7, unit: "cm" }),
+    "set_slide_size",
+    { id: "talk", size: { width: 21, height: 29.7, unit: "cm" } },
   ],
   [
     "addSection",
@@ -95,9 +105,9 @@ const CASES = [
   ["createImageExportDir", () => api.createImageExportDir("talk", "/out"), "create_image_export_dir", { id: "talk", parent: "/out" }],
   [
     "exportSlideImage",
-    () => api.exportSlideImage("/out/Talk", 2, 9, { x: 0, y: 10, width: 640, height: 360 }, { width: 640, height: 400 }),
+    () => api.exportSlideImage("/out/Talk", 2, 9, { x: 0, y: 10, width: 640, height: 360 }, { width: 640, height: 400 }, 1080),
     "export_slide_image",
-    { dir: "/out/Talk", index: 2, total: 9, rect: { x: 0, y: 10, width: 640, height: 360 }, viewport: { width: 640, height: 400 } },
+    { dir: "/out/Talk", index: 2, total: 9, rect: { x: 0, y: 10, width: 640, height: 360 }, viewport: { width: 640, height: 400 }, width: 1080 },
   ],
   [
     "captureSketch",
@@ -105,6 +115,7 @@ const CASES = [
     "capture_sketch",
     { id: "talk", rect: { x: 1, y: 2, width: 300, height: 168.75 }, viewport: { width: 1480, height: 920 } },
   ],
+  ["sessionProvider", () => api.sessionProvider("talk"), "session_provider", { id: "talk" }],
   ["loadChat", () => api.loadChat("talk"), "load_chat", { id: "talk" }],
   ["saveChat", () => api.saveChat("talk", [1]), "save_chat", { id: "talk", chat: [1] }],
   ["resetChat", () => api.resetChat("talk"), "reset_chat", { id: "talk" }],
@@ -112,11 +123,11 @@ const CASES = [
     "sendMessage",
     () => api.sendMessage("talk", "Hi", { provider: "claude", model: "claude-opus-5-5", effort: "high", contextWindow: "1m" }),
     "send_message",
-    { args: { deckId: "talk", prompt: "Hi", provider: "claude", model: "claude-opus-5-5", effort: "high", contextWindow: "1m", compact: false } },
+    { args: { workspace: "talk", prompt: "Hi", provider: "claude", model: "claude-opus-5-5", effort: "high", contextWindow: "1m", compact: false } },
   ],
 
-  ["codexPermissionModes", () => api.codexPermissionModes("talk"), "codex_permission_modes", { id: "talk" }],
-  ["respondApproval", () => api.respondApproval("talk", "request-1", "decline"), "respond_approval", { deckId: "talk", id: "request-1", decision: "decline" }],
+  ["permissionModes", () => api.permissionModes("copilot", "talk"), "permission_modes", { provider: "copilot", id: "talk" }],
+  ["respondApproval", () => api.respondApproval("talk", "request-1", "decline"), "respond_approval", { workspace: "talk", id: "request-1", decision: "decline" }],
   ["interruptAgent", () => api.interruptAgent("talk"), "interrupt_agent", { id: "talk" }],
   ["agentRunning", () => api.agentRunning("talk"), "agent_running", { id: "talk" }],
   ["listProviders", () => api.listProviders(), "list_providers", undefined],
@@ -148,13 +159,8 @@ describe("api", () => {
     invoke.mockResolvedValue(undefined);
     await api.sendMessage("talk", "/compact", { provider: "copilot", model: "gpt-x", effort: "", contextWindow: null }, true);
     expect(invoke).toHaveBeenLastCalledWith("send_message", {
-      args: { deckId: "talk", prompt: "/compact", provider: "copilot", model: "gpt-x", effort: "", contextWindow: null, compact: true },
+      args: { workspace: "talk", prompt: "/compact", provider: "copilot", model: "gpt-x", effort: "", contextWindow: null, compact: true },
     });
-  });
-
-  it("passes the final presenter name and replacement identity separately at save", async () => {
-    await api.voiceProfileAction("qwen-local", "save", "revision", "profile:id", "Final name");
-    expect(invoke).toHaveBeenCalledWith("voice_profile_action", { providerId: "qwen-local", action: "save", id: "revision", value: "profile:id", name: "Final name" });
   });
 
   it("covers every api function", () => {

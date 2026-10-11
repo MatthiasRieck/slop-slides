@@ -10,7 +10,7 @@ describe("narration draft requests", () => {
     expect(prompt).toContain("German");
     expect(prompt).toContain("engineers");
     expect(prompt).toContain("2 minutes");
-    expect(prompt).toContain("Do not change deck.html");
+    expect(prompt).toContain("Do not change the HTML deck file");
     expect(prompt).toContain("including removed slides");
   });
   it("allows explicit selected hidden-slide drafting, without index matching", () => {

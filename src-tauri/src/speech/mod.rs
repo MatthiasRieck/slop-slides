@@ -310,9 +310,10 @@ impl SpeechManager {
         slide: Option<String>,
         fresh: bool,
     ) -> Result<GenerationResult> {
-        let dir = deck::deck_dir(&app, &deck_id)?;
+        let file = deck::deck_file(&deck_id)?;
+        let dir = deck::narration_dir(&file);
         let doc = narration::load(&dir)?;
-        let deck = deck::load(&dir, &deck_id)?;
+        let deck = deck::load(&file)?;
         let mut sources = Vec::new();
         for s in &deck.slides {
             if slide.as_ref().map_or(!s.hidden, |id| id == &s.id)
@@ -676,8 +677,8 @@ impl Drop for Temp {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
-pub fn takes(app: &AppHandle, id: &str) -> Result<BTreeMap<String, cache::Take>> {
-    let dir = deck::deck_dir(app, id)?;
+pub fn takes(_app: &AppHandle, id: &str) -> Result<BTreeMap<String, cache::Take>> {
+    let dir = deck::narration_dir(&deck::deck_file(id)?);
     let doc = narration::load(&dir)?;
     let mut takes = BTreeMap::new();
     for (slide, script) in doc.manifest.slides {

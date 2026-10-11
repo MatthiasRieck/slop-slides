@@ -10,6 +10,10 @@
    Every change is posted to the app as the slide's new markup:
    { type: "slop:edit-commit", slide, markup, select }. Whether anything is selected is posted
    as { type: "slop:edit-selection", slide, selected } whenever that changes.
+   Images dropped on the slide come from the app (which saved them as assets) as
+   { type: "slop:edit-insert-images", images: [{ src, w, h }], x, y }: each is placed on top,
+   centered on the drop point (x, y in this window's pixels), and marked `data-dropped` until
+   the agent gives it a place in the layout.
 
    It runs on the pasteboard (pasteboard.js), which pans and zooms the view; dragging empty space
    pans too. The slide no longer clips, so content that runs past its edge stays visible (dimmed
@@ -26,6 +30,7 @@
   // Attributes the editor adds while it works; stripped from the markup it saves.
   var EDITOR_ATTRS = ["contenteditable", "data-slop-selected", "data-slop-hover", "data-slop-editing", "data-slop-typing"];
   var MOVED = "data-moved";
+  var DROPPED = "data-dropped";
   var DRAG_THRESHOLD = 3;
   var DOUBLE_CLICK_MS = 400;
   var NUDGE_SAVE_MS = 500;
@@ -37,6 +42,10 @@
   var TILT = /^perspective\([\d.]+px\) rotateX\((-?[\d.]+)deg\) rotateY\((-?[\d.]+)deg\)\s*/;
   var MIN_SCALE = 0.1;
   var OVERFLOW_TOLERANCE = 2;
+  // A dropped image fits in a third of the slide's width and half its height; images dropped
+  // together fan out by this many slide pixels. Without a known size, it is this wide.
+  var DROP_CASCADE = 40;
+  var DROP_WIDTH = 640;
 
   var style = document.createElement("style");
   style.textContent =
@@ -703,6 +712,46 @@
     if (editing) event.preventDefault();
   });
 
+  /**
+   * Adds dropped images (`assets/…` files) on top of the slide, centered on (x, y) and fit to
+   * the slide, then selects the last one and saves. Each sits at the slide's top left with an
+   * inline `translate` to where it was dropped, so it moves like any hand-moved element.
+   */
+  function insertImages(images, x, y) {
+    finishEditing();
+    if (nudgeTimer) commit();
+    var rect = slide.getBoundingClientRect();
+    var k = zoom();
+    var maxW = (slide.offsetWidth || 1920) / 3;
+    var maxH = (slide.offsetHeight || 1080) / 2;
+    var last = null;
+    var placed = 0;
+    (Array.isArray(images) ? images : []).forEach(function (image) {
+      if (!image || typeof image.src !== "string" || !/^assets\//.test(image.src)) return;
+      var w = image.w > 0 ? image.w : DROP_WIDTH;
+      var h = image.h > 0 ? image.h : 0;
+      var fit = Math.min(1, maxW / w, h ? maxH / h : 1);
+      w = Math.round(w * fit);
+      h = Math.round(h * fit);
+      var img = document.createElement("img");
+      img.setAttribute("src", image.src);
+      img.setAttribute("alt", "");
+      img.setAttribute(DROPPED, "");
+      img.style.position = "absolute";
+      img.style.left = "0px";
+      img.style.top = "0px";
+      img.style.width = w + "px";
+      slide.appendChild(img);
+      var shift = DROP_CASCADE * placed++;
+      moveTo(img, (x - rect.left) / k - w / 2 + shift, (y - rect.top) / k - h / 2 + shift);
+      mark(img, MOVED, true);
+      last = img;
+    });
+    if (!last) return;
+    select(last);
+    commit();
+  }
+
   // Capture phase, so keys the editor handles never reach the player (which forwards keys
   // to the app for slide navigation).
   window.addEventListener(
@@ -757,6 +806,8 @@
       if (data.quiet) mark(wires, "data-quiet", true);
     } else if (data.type === "slop:edit-delete") {
       removeSelected();
+    } else if (data.type === "slop:edit-insert-images" && isFinite(data.x) && isFinite(data.y)) {
+      insertImages(data.images, data.x, data.y);
     }
   });
 })();

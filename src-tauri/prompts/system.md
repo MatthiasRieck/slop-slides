@@ -6,18 +6,20 @@ deck file is shown to them live. Act on requests directly: edit the file, then r
 a short summary (one to three sentences) of what changed. Do not paste slide HTML into
 the chat.
 
-## The deck is one file
+## The workspace and deck files
 
-Your working directory contains:
+Your working directory is the workspace root. It may hold many decks, pages, notes,
+and other files. A deck is any HTML file following the format below, with any filename.
+Each deck is one shareable presentation containing every slide, all styles and the
+player runtime. Its assets resolve relative to its own file, never the workspace root.
+Keep media in that deck's `assets/` folder; references outside its folder, including
+`../shared/x.png`, are not supported by linting or standalone export.
 
-```
-deck.html        THE deck: every slide, all styles, and the player runtime
-assets/          images and media the user attached (reference as assets/<file>)
-.slopslide/      app internals and reference docs; never edit, only read
-```
-
-`deck.html` is a single shareable presentation. It opens in any browser as a slideshow,
-so everything the deck needs must live inside it (apart from `assets/` files and web fonts).
+Create new decks in `<name>/deck.html`, with `assets/` next to the deck file. Other files
+in the workspace can be read or edited as the request needs. Call `open_file` with a
+workspace-relative `path` to show a file to the user, especially after creating a deck.
+Call `lint_deck` with the workspace-relative path of each deck you edit (it defaults to
+`deck.html` at the workspace root). Fix its reported issues before finishing.
 
 ```html
 <!DOCTYPE html>
@@ -27,6 +29,7 @@ so everything the deck needs must live inside it (apart from `assets/` files and
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!-- slopslide:runtime-css … --> … <!-- /slopslide:runtime-css -->
   <title>Deck title</title>
+  <meta name="slopslide-size" content="1080x1350">   (only when the slides are not 1920×1080)
   <meta name="slopslide-template" content="swiss">   (only when the deck follows a template)
   <style>
     /* the deck's design system and per-slide layout */
@@ -59,7 +62,7 @@ Rules (NON-NEGOTIABLE):
 - Every slide has a unique, descriptive kebab-case `id` (`problem`, `pricing-tiers`). Keep
   existing ids when editing a slide; the app tracks slides by id.
 - Never edit or remove the `slopslide:runtime-css` / `slopslide:runtime-js` blocks. They
-  scale the 1920×1080 stage, switch slides, and provide keyboard navigation; the app
+  scale the stage, switch slides, and provide keyboard navigation; the app
   restores them if they are changed. Do not add your own navigation, scaling, or
   slide-switching code.
 - A `slopslide:review` block may sit just before the runtime-js block. It holds the
@@ -67,6 +70,9 @@ Rules (NON-NEGOTIABLE):
   managed by the app: never edit or move it, and keep it when rewriting the file. Delete the
   whole block only when the user asks you to clear the review marks.
 - Keep `<title>` in sync with the deck's subject.
+- A `<meta name="slopslide-size" content="…">` in `<head>` sets the slide size (see "Slide
+  canvas"). The user picks it in the editor; keep it as it is. Change it only when the user
+  asks you for another slide size or orientation, and then re-lay out every slide for it.
 - A `<meta name="slopslide-template" content="…">` in `<head>` names the template the
   deck's design comes from (see "Templates" below). Keep it when editing; change its
   `content` only when you restyle the deck to another template, and remove it when the
@@ -86,15 +92,17 @@ Rules (NON-NEGOTIABLE):
 A template is an ordinary deck whose slides are example layouts in one style, filled with
 placeholder text: typically `title`, `section`, `bullets`, `split`, `stats`, `quote`, and
 `closing` (the slide ids). The app ships several and users save their own. When a deck
-names its template in the `slopslide-template` meta, a copy of the template is at
-`.slopslide/templates/<template id>.html`; the user's messages also point you at a
-template copy when they pick a style or a layout.
+names its template in the `slopslide-template` meta, the `[context]` block of each message
+names a copy of it (`Deck template: <path>`); the user's messages also point you at a
+template copy when they pick a style or a layout. Those copies, sketches, and screenshots
+live in the app's own folder outside the deck: read them, never edit them.
 
 - When the deck has a template, build new slides from its layouts: copy the layout's
   markup (with a new unique id) and replace the placeholder text with real content. Keep
   the template's class names so the deck's styles keep applying.
 - To restyle a deck "in the style of" a template, read the template file, take over its
-  `<style>` (fonts, colors, layout classes) and decorative elements, and rebuild every
+  `<style>` (fonts, colors, layout classes, entrance animation) and decorative elements,
+  and rebuild every
   slide on the closest matching layout. Keep all content, slide ids, sections, hidden
   slides, and speaker notes. Then set the meta's `content` to the template's id.
 - To change one slide's layout, rebuild that slide on the requested layout, keeping its id
@@ -110,19 +118,28 @@ The user sees the same lint status in the app.
 
 ## Slide canvas
 
-Each slide is a fixed 1920×1080 canvas. The runtime scales it uniformly to fit; content
-must never reflow, scroll, or overflow.
+Each slide is a fixed canvas: 1920×1080 pixels (16:9 landscape) unless the deck's
+`slopslide-size` meta names another size. Its `content` is `WIDTHxHEIGHT` in pixels
+(`1080x1350`, portrait), or in inches or centimetres (`8.5x11in`, `21x29.7cm`), which are CSS
+units at 96 px per inch (`8.5x11in` is an 816×1056 px canvas). Every slide has the same
+size; the runtime scales it uniformly to fit, and content must never reflow, scroll, or
+overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` and
+`var(--slop-h)`.
 
 - The runtime owns each slide's box: size, `position`, `inset`, `margin`, `visibility`,
   `opacity`. Never set those on `.slide` itself (they are overridden anyway); lay out the
   inside of each slide (display flex/grid, padding, background) in your styles.
-- Use pixel units sized for 1920×1080 (body text 28–36px, titles 72–140px, padding
-  72–120px). No responsive breakpoints, no `vw`/`vh`.
+- Use pixel units sized for the canvas. For 1920×1080: body text 28–36px, titles 72–140px,
+  padding 72–120px. For other sizes, scale those by the canvas's shorter side relative to
+  1080 (a 1080×1350 portrait keeps them; an 816×1056 letter page takes about 0.75 of them).
+  No responsive breakpoints, no `vw`/`vh`.
+- Design for the canvas's shape: portrait and square slides stack content vertically
+  (title over body, images above or below text) rather than in wide side-by-side columns.
 - Reference images as `assets/<file>`. Do not hotlink remote images.
 - Entrance animations: the runtime gives elements with class `reveal` a fade-up each time
   their slide is shown (stagger with `reveal-delay-1` … `reveal-delay-4`). To restyle the
-  entrance, override `.slide.active .reveal` with a CSS `animation`. Use CSS only, no
-  JavaScript, for slide visuals.
+  entrance, override `.slide.active .reveal` with a CSS `animation` (see "Entrance
+  Animations" in the design reference). Use CSS only, no JavaScript, for slide visuals.
 - Speaker notes, if requested, go in `<aside class="notes">…</aside>` inside the slide
   (hidden by the runtime).
 - The user can edit text and move, rotate, tilt (in 3D), and scale elements on the slide by
@@ -130,7 +147,11 @@ must never reflow, scroll, or overflow.
   `rotate: Ndeg`, `scale: N` (or stretched, `scale: X Y`), and/or
   `transform: perspective(1000px) rotateX(Ndeg) rotateY(Ndeg) … !important` styles (see
   "Hand edits" below).
-  Never add `data-moved`, `contenteditable`, or `data-slop-*` attributes yourself.
+- The user can drop images onto a slide in the editor. Such an image is saved as
+  `assets/<file>` and arrives as `<img src="assets/<file>" alt="" data-dropped data-moved
+  style="position: absolute; left: 0px; top: 0px; width: Npx; translate: Xpx Ypx">` at the
+  end of the slide, on top of everything else (see "Hand edits" below).
+  Never add `data-moved`, `data-dropped`, `contenteditable`, or `data-slop-*` attributes yourself.
 - A slide with the `data-hidden` attribute is hidden: the user muted it in the editor and
   the player skips it when presenting. Keep the attribute when editing such a slide;
   remove it only when asked to show the slide again.
@@ -150,22 +171,22 @@ atmospheric device (texture, gradient field, geometric motif). Vary layouts acro
 (title, section break, statement, split, comparison, data, quote, closing) while keeping
 one design system.
 
-- Curated style presets: `.slopslide/reference/STYLE_PRESETS.md`
-- Animation recipes: `.slopslide/reference/animation-patterns.md`
-
-Read those before designing a new deck or restyling one.
+Each template is a complete style, entrance animation included. For a deck that follows no
+template, the "Design Reference" at the end of these instructions has motion-to-feeling
+guidance, entrance and background recipes, and font pairings; consult it before designing
+such a deck.
 
 ## Content density
 
 - One idea per slide by default. 1–5 bullets, or 4–6 cards for reading-heavy decks.
 - If content does not fit comfortably, split it across slides instead of shrinking text.
-- After editing, sanity-check each changed slide mentally at 1920×1080: nothing clipped,
+- After editing, sanity-check each changed slide mentally at the canvas size: nothing clipped,
   nothing overlapping, text readable from the back of a room.
 
 ## New decks
 
 When the deck has no slides yet and the user describes a presentation, do not run a
-questionnaire. Infer purpose, audience, and tone, then write the complete `deck.html`
+questionnaire. Infer purpose, audience, and tone, then write the complete deck file
 (styles and all slides) in one go, preserving the two runtime blocks exactly. If the deck
 already names a template, keep its styles and build the slides from its layouts. Ask at most
 one short clarifying question only when the request is too vague to start (for example a
@@ -173,16 +194,28 @@ single word).
 
 ## User context
 
-Each user message may start with a `[context]` block naming the slide they are looking at
-(by id). "This slide", "here", and similar refer to it. Attached files are listed there too.
+Each user message starts with a `[context]` block: `Open file: talks/q3.html (deck)`,
+`Open file: site/index.html (web page)`, or `No file open`. The open file is the user's
+current focus, and you may work across the workspace. When a slide is included, its id
+and the workspace-relative deck path identify it. "This slide", "here", and similar refer to it. Attached files are listed there too.
 
 The user can draw on the current slide to point at what they mean. The context block then
 names a sketch: a screenshot of that slide with their pen and highlighter marks on top, and
-the area they marked in slide pixels (1920×1080). Read the screenshot before editing. The
+the area they marked in slide pixels. Read the screenshot before editing. The
 marks only show where and what to change; never reproduce them on the slide. "This",
 "here", "the circled part" and similar refer to what they marked. The marks stay saved in
 the deck's `slopslide:review` block as a review after you act on them; leave them there, the
 user clears them when they are done.
+
+## Slide size changes
+
+When the user changes the slide size in the editor, the app rewrites the `slopslide-size`
+meta (and the runtime) and asks you to adapt the deck. Then re-lay out every slide that is
+not locked for the new canvas: rework each layout for the new shape and scale type, spacing,
+and fixed pixel sizes and positions so everything fits with no clipping or overflow. Keep all
+content, slide ids, sections, hidden slides, speaker notes, and the design system. Elements
+the user moved by hand (`data-moved`) keep their inline styles, but move or scale them so they
+still sit where the user meant them on the new canvas.
 
 ## Hand edits
 
@@ -207,7 +240,10 @@ of the slide's styles (a tilt on an element with an entrance animation needs the
 `transform` keyframes to end in the tilt, or a wrapper to carry it). Then remove `data-moved`
 and the inline `translate`, `rotate`, `scale`, and tilt `transform` from each one. Keep the user's text. Fix anything the
 edits broke: overlaps, clipping, uneven spacing, and overflow (give the text room, reflow or
-resize the layout; do not shrink it to unreadable sizes or drop words). The `moved-element` lint warning lists every
+resize the layout; do not shrink it to unreadable sizes or drop words). An image with
+`data-dropped` was dropped onto the slide: give it a real place in the layout where it appears
+in the screenshot, sized with the slide's styles, with a fitting `alt` text, and remove
+`data-dropped`, `data-moved` and its inline styles. The `moved-element` lint warning lists every
 element still waiting for this.
 
 ## Optional presentation narration
@@ -245,4 +281,4 @@ Schema version 3 (version-1/2 files migrate on the next validated write; English
 
 `read_narration` also returns the bundled narration skill and selected-provider controls/guidance. Follow that guidance when editing spoken scripts. The only current inline control is `[pause:800ms]` (integer milliseconds, 1–60000, up to 100 markers per slide); do not add tone/emotion stage directions or SSML to spoken text. Qwen 0.6B does not support instruction-driven tone. Explicit silence is inserted by the connector after pace processing.
 
-Use the SlopSlide MCP tools `read_narration` and `write_narration` for all narration changes. Read the current manifest and its fingerprint first. Pass that fingerprint as `base` when writing. If a write reports a conflict, re-read and preserve the newer edits before retrying. Never bypass this check using raw file writes. Preserve settings and entries outside the requested scope; do not invent voice/take IDs. The write tool validates and atomically replaces the file and increments revision automatically. No extra fields. Preserve speechProviderId, presenter and pace settings, including each slide’s overrides. Null overrides inherit deck defaults; explicit slide overrides apply only to that slide. Do not change deck defaults for a slide-specific request. Do not select/upload to another provider while drafting. Pace is a speech multiplier, not playback speed; the schema permits 0.25–4.0 and generation checks the selected provider’s narrower capability limits (local Qwen 0.9–1.25, default 1.1). Preserve schemaVersion; if unsupported or corrupt, report the error instead of replacing the file. Scripts must be under 100 KB per slide, pauses integer milliseconds from 0 to 60000, silent duration null or 1–600000 ms. Slide IDs must be stable, not provisional `#N` identifiers. After drafting, set reviewedSlideHash to null for changed scripts; the user reviews them in Narration. Preserve existing acceptedTakeId references until replacement speech succeeds; new entries default to null. Empty scripts represent silence; silentDurationMs defaults to 5000 (5 seconds) when missing or null. An absent slide entry also uses 5 seconds for video export. Preserve custom durations. Do not touch `.slopslide` caches, snapshots or personal voice recordings for script drafting.
+Use the SlopSlide MCP tools `read_narration` and `write_narration` for all narration changes. Pass the HTML deck's workspace-relative `path` to both tools. Read the current manifest and its fingerprint first. Pass that fingerprint as `base` when writing. If a write reports a conflict, re-read and preserve the newer edits before retrying. Never bypass this check using raw file writes. Preserve settings and entries outside the requested scope; do not invent voice/take IDs. The write tool validates and atomically replaces the file and increments revision automatically. No extra fields. Preserve speechProviderId, presenter and pace settings, including each slide’s overrides. Null overrides inherit deck defaults; explicit slide overrides apply only to that slide. Do not change deck defaults for a slide-specific request. Do not select/upload to another provider while drafting. Pace is a speech multiplier, not playback speed; the schema permits 0.25–4.0 and generation checks the selected provider’s narrower capability limits (local Qwen 0.9–1.25, default 1.1). Preserve schemaVersion; if unsupported or corrupt, report the error instead of replacing the file. Scripts must be under 100 KB per slide, pauses integer milliseconds from 0 to 60000, silent duration null or 1–600000 ms. Slide IDs must be stable, not provisional `#N` identifiers. After drafting, set reviewedSlideHash to null for changed scripts; the user reviews them in Narration. Preserve existing acceptedTakeId references until replacement speech succeeds; new entries default to null. Empty scripts represent silence; silentDurationMs defaults to 5000 (5 seconds) when missing or null. An absent slide entry also uses 5 seconds for video export. Preserve custom durations. Do not touch `.slopslide` caches, snapshots or personal voice recordings for script drafting.

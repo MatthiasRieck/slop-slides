@@ -8,7 +8,6 @@ import {
   FoldVertical,
   Globe,
   Loader2,
-  PanelRightClose,
   Paperclip,
   Pencil,
   PenLine,
@@ -24,11 +23,12 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { api, errorMessage } from "../lib/api";
+import { claimDrop, dropCovered, dropPoint, isImage } from "../lib/drop";
 import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowTokens } from "../lib/context";
-import { cn, deckFileUrl } from "../lib/utils";
+import { basename, workspaceChatFileUrl, cn, dirname, isSessionFile } from "../lib/utils";
 import { PROVIDERS, type Provider } from "../lib/models";
+import { relativePath, useApp, type AssistantMessage, type ChatMessage, type ChatPart, type UserMessage } from "../store";
 import { useNarration } from "../narrationStore";
-import { useApp, type AssistantMessage, type ChatMessage, type ChatPart, type UserMessage } from "../store";
 import { ApprovalCard, PermissionPicker, ApprovalReview } from "./Permissions";
 import { EffortPicker, ModelPicker, useDismiss } from "./ModelPicker";
 
@@ -38,8 +38,7 @@ const SUGGESTIONS = [
   "Quarterly engineering update: shipped, in progress, risks, asks",
 ];
 
-export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
-  const hasNarration = useNarration((s) => !!s.document && Object.keys(s.document.manifest.slides).length > 0);
+export function ChatPanel() {
   const messages = useApp((s) => s.messages);
   const running = useApp((s) => s.running);
   const provider = useApp((s) => s.selection.provider);
@@ -48,6 +47,7 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
   );
   const deckEmpty = useApp((s) => (s.deck?.slides.length ?? 0) === 0);
   const composerFill = useApp((s) => s.composerFill);
+  const hasNarration = useNarration((s) => !!s.document && Object.keys(s.document.manifest.slides).length > 0);
   const [draft, setDraft] = useState("");
 
   // Other parts of the app (e.g. the lint status) can hand the composer a prepared message.
@@ -57,35 +57,22 @@ export function ChatPanel({ embedded = false }: { embedded?: boolean }) {
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <div className="flex h-10 shrink-0 items-center justify-between px-3">
-        <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
-          {embedded ? "Conversation" : "Chat"}
-        </span>
-        <div className="flex items-center gap-1">
-          {messages.length > 0 && (
-            <button
-              type="button"
-              title="New conversation (slides are kept)"
-              onClick={() => void useApp.getState().resetChat()}
-              className="flex items-center gap-1 rounded-md px-1.5 py-1 text-2xs text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              <RotateCcw className="size-3" />
-              New chat
-            </button>
-          )}
-          {!embedded && <button
+      {messages.length > 0 && (
+        <div className="flex h-8 shrink-0 items-center justify-end px-3">
+          <button
             type="button"
-            title="Hide chat"
-            aria-label="Hide chat"
-            onClick={() => useApp.getState().setChatOpen(false)}
-            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            title="New conversation (files are kept)"
+            disabled={running}
+            onClick={() => void useApp.getState().resetChat()}
+            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-2xs text-muted-foreground hover:bg-accent hover:text-foreground"
           >
-            <PanelRightClose className="size-3.5" />
-          </button>}
+            <RotateCcw className="size-3" />
+            New chat
+          </button>
         </div>
-      </div>
-      {hasNarration && <button className="mx-3 mb-2 rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent" onClick={() => useApp.getState().reviewNarration()}>Review narration</button>}
+      )}
       {cliMissing && <MissingCli provider={provider} />}
+      {hasNarration && <button className="mx-3 mb-2 rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent" onClick={() => useApp.getState().reviewNarration()}>Review narration</button>}
       <MessageList messages={messages} running={running}>
         {messages.length === 0 && (
           <EmptyChat deckEmpty={deckEmpty} onPick={(text) => setDraft(text)} />
@@ -113,7 +100,7 @@ function EmptyChat({ deckEmpty, onPick }: { deckEmpty: boolean; onPick: (text: s
     <div className="flex flex-col gap-3 px-1 pt-6">
       <p className="text-sm text-muted-foreground">
         {deckEmpty
-          ? "Describe the presentation you want. The agent writes the theme and slides; you can steer from there."
+          ? "Ask the agent to create a presentation or work with files in this workspace."
           : "Ask for changes to the current slide or the whole deck."}
       </p>
       {deckEmpty && (
@@ -246,7 +233,7 @@ function AssistantBlock({ message }: { message: AssistantMessage }) {
 function ToolRow({ part }: { part: Extract<ChatPart, { kind: "tool" }> }) {
   const deck = useApp((s) => s.deck);
   const { icon: Icon, label, target } = describeTool(part, deck?.id ?? "");
-  const slide = target === "deck.html" ? editedSlide(part, deck?.slides.map((s) => s.id) ?? []) : null;
+  const slide = deck && target === basename(deck.id) ? editedSlide(part, deck?.slides.map((s) => s.id) ?? []) : null;
   return (
     <button
       type="button"
@@ -271,7 +258,7 @@ function ToolRow({ part }: { part: Extract<ChatPart, { kind: "tool" }> }) {
   );
 }
 
-/** The slide an Edit of deck.html touched, found via an `id="…"` in the edited text. */
+/** The slide an Edit of the deck file touched, found via an `id="…"` in the edited text. */
 function editedSlide(part: Extract<ChatPart, { kind: "tool" }>, slideIds: string[]): string | null {
   for (const key of ["new_string", "old_string"]) {
     const text = part.input[key];
@@ -287,11 +274,10 @@ function describeTool(part: Extract<ChatPart, { kind: "tool" }>, deckId: string)
   const input = part.input;
   const str = (key: string) => (typeof input[key] === "string" ? (input[key] as string) : "");
   // Tool paths are absolute inside the deck folder; show them deck-relative.
+  const folder = dirname(deckId).replaceAll("\\", "/");
   const relative = (path: string) => {
     const normalized = path.replaceAll("\\", "/");
-    const marker = `/${deckId}/`;
-    const index = normalized.lastIndexOf(marker);
-    return index >= 0 ? normalized.slice(index + marker.length) : normalized;
+    return folder && normalized.startsWith(`${folder}/`) ? normalized.slice(folder.length + 1) : normalized;
   };
   switch (part.name) {
     case "Write":
@@ -318,6 +304,10 @@ function describeTool(part: Extract<ChatPart, { kind: "tool" }>, deckId: string)
 function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const { draft, setDraft } = props;
   const deck = useApp((s) => s.deck);
+  const workspace = useApp((s) => s.workspace);
+  const assetTarget = deck?.id ?? workspace?.path;
+  const assetPrefix = deck && workspace ? dirname(relativePath(workspace, deck.id) ?? basename(deck.id)) : "";
+  const attachmentRef = (path: string) => assetPrefix ? `${assetPrefix}/${path}` : path;
   const selected = useApp((s) => s.selected);
   const running = useApp((s) => s.running);
   const [includeSlide, setIncludeSlide] = useState(true);
@@ -354,8 +344,14 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
       el.style.height = `${inputHeight}px`;
       return;
     }
+    // An empty composer stays at its smallest; measuring the placeholder while the panel
+    // is still opening (and narrow) would otherwise make it start out tall.
+    if (!draft) {
+      el.style.height = "64px";
+      return;
+    }
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 64), 240)}px`;
   }, [draft, inputHeight]);
 
   useEffect(() => {
@@ -369,9 +365,9 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   }, [composerFill]);
 
   const importPaths = async (paths: string[]) => {
-    if (!deck || paths.length === 0) return;
+    if (!assetTarget || paths.length === 0) return;
     try {
-      const imported = await api.importAssets(deck.id, paths);
+      const imported = (await api.importAssets(assetTarget, paths)).map(attachmentRef);
       setAttachments((prev) => [...prev, ...imported.filter((a) => !prev.includes(a))]);
     } catch (error) {
       useApp.getState().setError(errorMessage(error));
@@ -380,11 +376,11 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
 
   // Images pasted into the composer are saved as assets and attached.
   const pasteImages = async (files: File[]) => {
-    if (!deck) return;
+    if (!assetTarget) return;
     try {
       const saved: string[] = [];
       for (const file of files) {
-        saved.push(await api.saveAsset(deck.id, pastedName(file), await readBase64(file)));
+        saved.push(attachmentRef(await api.saveAsset(assetTarget, pastedName(file), await readBase64(file))));
       }
       setAttachments((prev) => [...prev, ...saved.filter((a) => !prev.includes(a))]);
     } catch (error) {
@@ -400,17 +396,18 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     void pasteImages(images);
   };
 
-  // Files dropped anywhere on the window become attachments.
+  // Files dropped anywhere on the window become attachments, unless something there (like the
+  // slide being edited) takes them.
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void getCurrentWebview()
       .onDragDropEvent((event) => {
-        if (event.payload.type === "over" || event.payload.type === "enter") setDragging(true);
+        if (event.payload.type === "over" || event.payload.type === "enter") setDragging(!dropCovered(dropPoint(event.payload.position)));
         else if (event.payload.type === "leave") setDragging(false);
         else if (event.payload.type === "drop") {
           setDragging(false);
-          void importPaths(event.payload.paths);
+          void importPaths(claimDrop(event.payload.paths, dropPoint(event.payload.position)));
         }
       })
       .then((fn) => {
@@ -421,7 +418,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
       disposed = true;
       unlisten?.();
     };
-  }, [deck?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [assetTarget]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pickFiles = async () => {
     const picked = await open({
@@ -443,10 +440,10 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
 
   return (
     <div className="relative shrink-0 px-3 pb-3">
-      {deck && images.length > 0 && (
+      {workspace && images.length > 0 && (
         gridOpen ? (
           <ImageGrid
-            deckId={deck.id}
+            workspacePath={workspace.path}
             images={images}
             onRemove={(path) => {
               removeAttachment(path);
@@ -455,7 +452,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
             onClose={() => setGridOpen(false)}
           />
         ) : (
-          <ImageFan deckId={deck.id} images={images} onOpen={() => setGridOpen(true)} />
+          <ImageFan workspacePath={workspace.path} images={images} onOpen={() => setGridOpen(true)} />
         )
       )}
       <ContextMeter />
@@ -559,7 +556,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
         <textarea
           ref={textareaRef}
           value={draft}
-          rows={2}
+          rows={1}
           onChange={(e) => setDraft(e.target.value)}
           onPaste={onPaste}
           onKeyDown={(e) => {
@@ -571,12 +568,13 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           placeholder={running ? "The agent is working…" : "Ask for slides or changes…"}
           className="block max-h-[max(64px,min(240px,40vh))] min-h-16 w-full resize-none bg-transparent px-3.5 pt-3 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/70"
         />
-        <div className="relative flex flex-wrap items-center gap-1 px-2 pt-1 pb-2">
+        <div className="@container px-2 pt-1 pb-2">
+        <div className="relative flex flex-nowrap items-center gap-1">
           <ModelPicker />
           <div className="mx-0.5 h-4 w-px bg-border" />
           <EffortPicker />
           <PermissionPicker />
-          <div className="flex-1" />
+          <div className="min-w-0 flex-1" />
           <button
             type="button"
             onClick={pickFiles}
@@ -605,15 +603,14 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
               <ArrowUp className="size-4" />
             </button>
           )}
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|svg|avif)$/i;
-const isImage = (path: string) => IMAGE_EXTENSIONS.test(path);
-const assetName = (path: string) => (path.startsWith(".slopslide/") ? "Slide screenshot" : path.replace(/^assets\//, ""));
+const assetName = (path: string) => (isSessionFile(path) ? "Slide screenshot" : basename(path));
 
 /** How many previews the fan shows; the rest are counted on a badge. */
 const FAN_SIZE = 4;
@@ -622,8 +619,8 @@ const FAN_SIZE = 4;
  * Attached images as a fan of cards tucked behind the composer, peeking up above its top
  * edge. Clicking it opens {@link ImageGrid}.
  */
-function ImageFan(props: { deckId: string; images: string[]; onOpen: () => void }) {
-  const { deckId, images } = props;
+function ImageFan(props: { workspacePath: string; images: string[]; onOpen: () => void }) {
+  const { workspacePath, images } = props;
   const shown = images.slice(-FAN_SIZE);
   const mid = (shown.length - 1) / 2;
   const label = `${images.length} attached image${images.length === 1 ? "" : "s"}`;
@@ -641,7 +638,7 @@ function ImageFan(props: { deckId: string; images: string[]; onOpen: () => void 
           return (
             <img
               key={path}
-              src={deckFileUrl(deckId, path)}
+              src={workspaceChatFileUrl(workspacePath, path)}
               alt={assetName(path)}
               draggable={false}
               style={{ "--x": `${offset * 18}px`, "--r": `${offset * 8}deg` } as React.CSSProperties}
@@ -664,8 +661,8 @@ function ImageFan(props: { deckId: string; images: string[]; onOpen: () => void 
 }
 
 /** Every attached image as a preview, each with a way to remove it. */
-function ImageGrid(props: { deckId: string; images: string[]; onRemove: (path: string) => void; onClose: () => void }) {
-  const { deckId, images, onClose } = props;
+function ImageGrid(props: { workspacePath: string; images: string[]; onRemove: (path: string) => void; onClose: () => void }) {
+  const { workspacePath, images, onClose } = props;
   const ref = useRef<HTMLDivElement>(null);
   useDismiss(ref, true, onClose);
   return (
@@ -692,7 +689,7 @@ function ImageGrid(props: { deckId: string; images: string[]; onRemove: (path: s
         {images.map((path) => (
           <figure key={path} className="group relative m-0">
             <img
-              src={deckFileUrl(deckId, path)}
+              src={workspaceChatFileUrl(workspacePath, path)}
               alt={assetName(path)}
               draggable={false}
               className="aspect-square w-full rounded-lg border bg-muted object-cover"

@@ -14,7 +14,7 @@ beforeEach(() => {
   const document = emptyNarration();
   document.manifest.slides.intro = { ...emptyScript(), text: "Welcome", presenterIdOverride: "preset:aiden" };
   useApp.setState({ deck: deckFor(DECK_HTML) });
-  useNarration.setState({ deckId: "talk", document, edits: {}, settingsEdits: {}, languageEdit: null, error: null, conflict: null });
+  useNarration.setState({ deckId: deckFor(DECK_HTML).id, document, edits: {}, settingsEdits: {}, languageEdit: null, error: null, conflict: null });
   useSpeech.setState({ status: { providers: [testSpeechProvider()], job: null }, job: null });
   vi.spyOn(useSpeech.getState(), "initialize").mockResolvedValue();
 });

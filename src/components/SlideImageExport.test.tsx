@@ -83,10 +83,26 @@ describe("SlideImageExport", () => {
     }
     const rect = { x: 24, y: 30, width: 1280, height: 720 };
     const viewport = { width: window.innerWidth, height: window.innerHeight };
-    expect(exports()).toEqual([0, 1, 2].map((index) => ({ dir: DIR, index, total: 3, rect, viewport })));
+    expect(exports()).toEqual([0, 1, 2].map((index) => ({ dir: DIR, index, total: 3, rect, viewport, width: 1920 })));
     expect(useApp.getState().imageExport).toBeNull();
     expect(revealItemInDir).toHaveBeenCalledWith(DIR);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("shows slides of another size in their own shape, saved at most their canvas width", async () => {
+    useApp.setState({
+      deck: { ...deckFor(DECK_HTML), size: { width: 1080, height: 1350, unit: "px", pixelWidth: 1080, pixelHeight: 1350 } },
+      imageExport: { dir: DIR, slides: ["intro"] },
+    });
+    render(<SlideImageExport />);
+    // A 1280×720 area fits a 4:5 slide 576 px wide; the frame keeps the slide's shape.
+    const holder = frame().parentElement!.parentElement!;
+    expect(holder.style.width).toBe("576px");
+    expect(frame().parentElement!.style.aspectRatio).toBe("1080 / 1350");
+    expect(frame().style.width).toBe("1080px");
+    expect(frame().style.height).toBe("1350px");
+    await loadSlide();
+    expect(exports()[0]).toMatchObject({ width: 1080 });
   });
 
   it("keeps going under StrictMode's double-mounted effects", async () => {

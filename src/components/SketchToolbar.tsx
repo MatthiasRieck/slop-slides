@@ -8,7 +8,7 @@ import type { Annotations } from "./PresenterTools";
 
 /**
  * Pen, highlighter and eraser for marking up the slide in the editor. The marks are saved in
- * deck.html as a review, which can be shown and hidden, and sent to the agent as a screenshot
+ * the deck file as a review, which can be shown and hidden, and sent to the agent as a screenshot
  * with the next chat message.
  */
 export function SketchToolbar({ annotations }: { annotations: Annotations }) {

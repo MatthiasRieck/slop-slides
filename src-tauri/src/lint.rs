@@ -1,4 +1,4 @@
-//! Lints deck.html: checks that the markup is well formed (every element closed, no stray
+//! Lints a deck file: checks that the markup is well formed (every element closed, no stray
 //! end tags) and that it follows the deck format the app and player rely on (see
 //! `prompts/system.md`). Keep these rules in sync whenever the deck structure changes.
 //! Provider settings and narration schema v2 live in narration.json; their validation
@@ -9,10 +9,11 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 use crate::html::{
-    self, find_ci, has_class, parse_tag, EDITOR_ATTRS, HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR,
-    SECTION_CLASS, SECTION_TITLE_ATTR,
+    self, find_ci, has_class, parse_tag, DROPPED_ATTR, EDITOR_ATTRS, HIDDEN_ATTR, LOCKED_ATTR,
+    MOVED_ATTR, SECTION_CLASS, SECTION_TITLE_ATTR,
 };
 use crate::review;
+use crate::size::{self, SlideSize};
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
@@ -27,7 +28,7 @@ pub struct Issue {
     pub rule: &'static str,
     pub severity: Severity,
     pub message: String,
-    /// 1-based line in deck.html.
+    /// 1-based line in the deck file.
     pub line: usize,
     /// Id of the slide the issue is in, if any.
     pub slide: Option<String>,
@@ -110,6 +111,8 @@ pub fn lint(
     check_sections(&mut l);
     check_review(&mut l);
     check_template(&mut l);
+    check_slide_size(&mut l);
+    check_entrances(&mut l);
     check_assets(&mut l, asset_exists);
     check_locked(&mut l, locked);
     l.issues.sort_by_key(|i| (i.line, i.severity));
@@ -263,7 +266,17 @@ fn check_markup(l: &mut Linter) {
                         ),
                     );
                 }
-                if tag.attrs.iter().any(|(n, ..)| n == MOVED_ATTR) {
+                if tag.attrs.iter().any(|(n, ..)| n == DROPPED_ATTR) {
+                    l.report(
+                        "dropped-image",
+                        Severity::Warning,
+                        i,
+                        format!(
+                            "<{}> was dropped onto the slide by hand ({DROPPED_ATTR}, placed on top with inline `position: absolute`, `left`, `top`, `width` and `translate`). Give it a place in the slide's layout where it appears now, sized with the slide's styles, and a fitting alt text, then remove {DROPPED_ATTR}, {MOVED_ATTR} and the inline styles.",
+                            tag.name
+                        ),
+                    );
+                } else if tag.attrs.iter().any(|(n, ..)| n == MOVED_ATTR) {
                     l.report(
                         "moved-element",
                         Severity::Warning,
@@ -372,7 +385,7 @@ fn check_document(l: &mut Linter) {
             "doctype",
             Severity::Warning,
             0,
-            "deck.html should start with <!DOCTYPE html>.".into(),
+            "The deck should start with <!DOCTYPE html>.".into(),
         );
     }
     if html::title(html).is_none() {
@@ -383,7 +396,7 @@ fn check_document(l: &mut Linter) {
             "The deck needs a non-empty <title> in <head>.".into(),
         );
     }
-    if !has_deck_container(html) {
+    if !html::has_deck_container(html) {
         l.report(
             "deck-container",
             Severity::Error,
@@ -399,17 +412,6 @@ fn check_document(l: &mut Linter) {
             "The slopslide:runtime-css / runtime-js blocks are missing; keep them intact.".into(),
         );
     }
-}
-
-fn has_deck_container(html: &str) -> bool {
-    let mut from = 0;
-    while let Some(at) = find_ci(html, from, "<main") {
-        if parse_tag(html, at).is_some_and(|t| t.name == "main" && has_class(&t, "deck")) {
-            return true;
-        }
-        from = at + 1;
-    }
-    false
 }
 
 /// Slide ids: present, unique, kebab-case.
@@ -543,6 +545,64 @@ fn check_review(l: &mut Linter) {
 
 /// The template `<meta>`: at most one, in `<head>`, naming a template.
 fn check_template(l: &mut Linter) {
+    check_app_meta(
+        l,
+        html::TEMPLATE_META,
+        [
+            "template-meta-empty",
+            "template-meta-duplicate",
+            "template-meta-misplaced",
+        ],
+        |content| {
+            content.is_empty().then(|| {
+                format!(
+                    "<meta name=\"{}\"> needs the template's id in `content`; remove the tag if the deck follows no template.",
+                    html::TEMPLATE_META
+                )
+            })
+        },
+    );
+}
+
+/// The slide size meta must name a size the app can use (see [`size::SlideSize::parse`]).
+fn check_slide_size(l: &mut Linter) {
+    check_app_meta(
+        l,
+        size::SIZE_META,
+        [
+            "slide-size-invalid",
+            "slide-size-duplicate",
+            "slide-size-misplaced",
+        ],
+        |content| {
+            if SlideSize::parse(content).is_some() {
+                return None;
+            }
+            let problem = if content.is_empty() {
+                "is empty".to_string()
+            } else {
+                format!("\"{}\" is not a usable size", truncate(content, 40))
+            };
+            Some(format!(
+                "<meta name=\"{}\"> {problem}: use WIDTHxHEIGHT in px, in or cm (e.g. 1920x1080, 8.5x11in, 21x29.7cm), {}–{} px a side. Remove it for the default 1920x1080.",
+                size::SIZE_META,
+                size::MIN_PX,
+                size::MAX_PX
+            ))
+        },
+    );
+}
+
+/// An app setting in `<meta name="<name>">`: at most one, in `<head>`, with a `content`
+/// that `invalid` accepts (it returns the message for one it rejects). `rules` names the
+/// invalid, duplicate and misplaced issues.
+fn check_app_meta(
+    l: &mut Linter,
+    name: &str,
+    rules: [&'static str; 3],
+    invalid: impl Fn(&str) -> Option<String>,
+) {
+    let [invalid_rule, duplicate_rule, misplaced_rule] = rules;
     let html = l.html;
     let body = find_ci(html, 0, "<body").unwrap_or(html.len());
     let mut seen = 0;
@@ -552,40 +612,36 @@ fn check_template(l: &mut Linter) {
         let Some(tag) = parse_tag(html, at) else {
             continue;
         };
-        let names_template = tag
+        let named = tag
             .attrs
             .iter()
-            .any(|(n, v, _, _)| n == "name" && v.trim().eq_ignore_ascii_case(html::TEMPLATE_META));
-        if tag.name != "meta" || !names_template || !in_markup(l, at) {
+            .any(|(n, v, _, _)| n == "name" && v.trim().eq_ignore_ascii_case(name));
+        if tag.name != "meta" || !named || !in_markup(l, at) {
             continue;
         }
         seen += 1;
-        let content = tag.attrs.iter().find(|(n, _, _, _)| n == "content");
-        if !content.is_some_and(|(_, v, _, _)| !v.trim().is_empty()) {
-            l.report(
-                "template-meta-empty",
-                Severity::Warning,
-                at,
-                format!(
-                    "<meta name=\"{}\"> needs the template's id in `content`; remove the tag if the deck follows no template.",
-                    html::TEMPLATE_META
-                ),
-            );
+        let content = tag
+            .attrs
+            .iter()
+            .find(|(n, _, _, _)| n == "content")
+            .map_or("", |(_, v, _, _)| v.trim());
+        if let Some(message) = invalid(content) {
+            l.report(invalid_rule, Severity::Warning, at, message);
         }
         if seen > 1 {
             l.report(
-                "template-meta-duplicate",
+                duplicate_rule,
                 Severity::Warning,
                 at,
-                format!("Keep only one <meta name=\"{}\">.", html::TEMPLATE_META),
+                format!("Keep only one <meta name=\"{name}\">."),
             );
         }
         if at > body {
             l.report(
-                "template-meta-misplaced",
+                misplaced_rule,
                 Severity::Warning,
                 at,
-                format!("<meta name=\"{}\"> belongs in <head>.", html::TEMPLATE_META),
+                format!("<meta name=\"{name}\"> belongs in <head>."),
             );
         }
     }
@@ -609,7 +665,7 @@ fn check_assets(l: &mut Linter, asset_exists: impl Fn(&str) -> bool) {
                 "missing-asset",
                 Severity::Error,
                 range.start,
-                format!("`{path}` does not exist in the deck's assets folder."),
+                format!("`{path}` does not exist relative to the deck file."),
             );
         }
     }
@@ -636,6 +692,13 @@ fn check_assets(l: &mut Linter, asset_exists: impl Fn(&str) -> bool) {
                 "Images should be attached files (assets/…), not hotlinked URLs.".into(),
             );
         }
+        if attr("src").is_some_and(|s| {
+            let decoded = percent_encoding::percent_decode_str(s).decode_utf8_lossy();
+            decoded.split('/').any(|part| part == "..") || decoded.starts_with('/')
+        }) {
+            l.report("asset-outside-deck", Severity::Error, at,
+                "Keep images in assets/ next to the deck file; references outside its folder are not supported.".into());
+        }
         if attr("alt").is_none() {
             l.report(
                 "img-alt",
@@ -645,6 +708,91 @@ fn check_assets(l: &mut Linter, asset_exists: impl Fn(&str) -> bool) {
             );
         }
     }
+}
+
+/// Entrance keyframes (those a `.reveal` rule animates with) must not animate `transform`:
+/// held by `both` fill, it would replace each element's own transform and tilt.
+fn check_entrances(l: &mut Linter) {
+    let mut from = 0;
+    while let Some(open) = find_ci(l.html, from, "<style") {
+        let Some(start) = l.html[open..].find('>').map(|i| open + i + 1) else {
+            break;
+        };
+        let end = find_ci(l.html, start, "</style").unwrap_or(l.html.len());
+        from = end;
+        if !in_markup(l, open) {
+            continue;
+        }
+        let css = &l.html[start..end];
+        for (at, name) in transform_keyframes(css) {
+            if animates_reveal(css, name) {
+                l.report(
+                    "entrance-transform",
+                    Severity::Warning,
+                    start + at,
+                    format!(
+                        "@keyframes {name} animates `transform` for a `.reveal` entrance, which overrides the elements' own transforms and hand edits. Animate `translate`, `scale`, or `rotate` instead and leave them out of the last frame."
+                    ),
+                );
+            }
+        }
+    }
+}
+
+/// `@keyframes` blocks in `css` that set `transform`: where each starts, and its name.
+fn transform_keyframes(css: &str) -> Vec<(usize, &str)> {
+    let mut found = Vec::new();
+    for (at, _) in css.match_indices("@keyframes") {
+        let rest = &css[at + "@keyframes".len()..];
+        let Some(brace) = rest.find('{') else {
+            continue;
+        };
+        let name = rest[..brace].trim();
+        let mut depth = 0;
+        let body_end = rest[brace..]
+            .char_indices()
+            .find_map(|(i, c)| {
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+                (depth == 0).then_some(brace + i)
+            })
+            .unwrap_or(rest.len());
+        if !name.is_empty() && sets_property(&rest[brace..body_end], "transform") {
+            found.push((at, name));
+        }
+    }
+    found
+}
+
+/// Whether `css` declares `property` itself (not, say, `text-transform` or `transform-origin`).
+fn sets_property(css: &str, property: &str) -> bool {
+    css.match_indices(property).any(|(i, _)| {
+        let before = css[..i].chars().next_back();
+        let after = css[i + property.len()..].trim_start();
+        !before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-') && after.starts_with(':')
+    })
+}
+
+/// Whether a rule whose selector mentions `.reveal` uses the keyframes `name`.
+fn animates_reveal(css: &str, name: &str) -> bool {
+    css.match_indices(name).any(|(i, _)| {
+        let word =
+            |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        if word(css[..i].chars().next_back()) || word(css[i + name.len()..].chars().next()) {
+            return false;
+        }
+        let Some(open) = css[..i].rfind('{') else {
+            return false;
+        };
+        let selector_start = css[..open].rfind('}').map_or(0, |b| b + 1);
+        let selector = &css[selector_start..open];
+        !selector.contains("@keyframes")
+            && selector.contains(".reveal")
+            && css[open..i].find('}').is_none()
+    })
 }
 
 /// Whether `at` is in markup rather than inside a comment, script, or style.
@@ -672,14 +820,14 @@ fn truncate(text: &str, max: usize) -> String {
 /// Plain-text report for the agent's lint tool.
 pub fn format_report(issues: &[Issue]) -> String {
     if issues.is_empty() {
-        return "deck.html passes lint: no issues.".into();
+        return "The deck passes lint: no issues.".into();
     }
     let errors = issues
         .iter()
         .filter(|i| i.severity == Severity::Error)
         .count();
     let warnings = issues.len() - errors;
-    let mut out = format!("deck.html has {errors} error(s) and {warnings} warning(s):\n");
+    let mut out = format!("The deck has {errors} error(s) and {warnings} warning(s):\n");
     for issue in issues {
         let severity = match issue.severity {
             Severity::Error => "error",
@@ -1021,6 +1169,43 @@ mod tests {
     }
 
     #[test]
+    fn flags_dropped_images_awaiting_a_place() {
+        let found = rules(&deck(
+            "<section class=\"slide\" id=\"a\">\n<img src=\"assets/logo.png\" alt=\"\" data-dropped data-moved style=\"position: absolute; left: 0px; top: 0px; width: 640px; translate: 640px 300px\">\n</section>",
+        ));
+        // One warning covers both markers.
+        assert_eq!(found, ["dropped-image"]);
+        let issues = lint(
+            &deck("<section class=\"slide\" id=\"a\"><img src=\"assets/logo.png\" alt=\"\" data-dropped></section>"),
+            |_| true,
+            &[],
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].slide.as_deref(), Some("a"));
+        assert_eq!(issues[0].severity, Severity::Warning);
+        // Outside slides the attribute means nothing to the editor.
+        assert_eq!(
+            rules(&format!(
+                "{}<img src=\"assets/logo.png\" alt=\"\" data-dropped>",
+                deck("<section class=\"slide\" id=\"a\"></section>")
+            )),
+            Vec::<&str>::new()
+        );
+    }
+
+    #[test]
+    fn rejects_image_references_outside_the_deck_folder() {
+        let html = deck("<section class=\"slide\" id=\"a\"><img src=\"../shared/x.png\" alt=\"X\"><img src=\"%2e%2e/shared/x.png\" alt=\"X\"></section>");
+        assert_eq!(
+            lint(&html, |_| true, &[])
+                .iter()
+                .filter(|i| i.rule == "asset-outside-deck")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn checks_images_and_assets() {
         let found = rules(&deck(
             r#"<section class="slide" id="a">
@@ -1040,13 +1225,13 @@ mod tests {
         assert!(issues.windows(2).all(|w| w[0].line <= w[1].line));
         let report = format_report(&issues);
         assert!(
-            report.starts_with("deck.html has 1 error(s) and 1 warning(s):"),
+            report.starts_with("The deck has 1 error(s) and 1 warning(s):"),
             "{report}"
         );
         assert!(
             report.contains("line 10 error [unclosed-tag] (slide `Bad`): <span> is never closed")
         );
-        assert_eq!(format_report(&[]), "deck.html passes lint: no issues.");
+        assert_eq!(format_report(&[]), "The deck passes lint: no issues.");
     }
 
     #[test]
@@ -1116,6 +1301,39 @@ mod tests {
     }
 
     #[test]
+    fn warns_about_entrances_that_animate_transform() {
+        let styled = |css: &str| {
+            deck(r#"<section class="slide" id="a"><h1 class="reveal">Hi</h1></section>"#)
+                .replace("<style>.slide {}</style>", &format!("<style>{css}</style>"))
+        };
+        let own =
+            "@keyframes rise { from { opacity: 0; translate: 0 20px; } to { opacity: 1; } }\n\
+            .slide.active .reveal { animation: rise 0.6s ease both; }";
+        assert_eq!(rules(&styled(own)), Vec::<&str>::new());
+        let transform = "@keyframes rise { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: none; } }\n\
+            .slide.active .reveal { animation: rise 0.6s ease both; }";
+        assert_eq!(rules(&styled(transform)), ["entrance-transform"]);
+        let issue = &lint(&styled(transform), |_| false, &[])[0];
+        assert_eq!(issue.line, 6, "reported at the keyframes");
+        assert!(issue.message.contains("@keyframes rise"));
+        let in_media = "@keyframes rise { from { transform: scale(0.9); } }\n\
+            @media (min-width: 1px) { .slide.active .reveal { animation-name: rise; } }";
+        assert_eq!(rules(&styled(in_media)), ["entrance-transform"]);
+        let not_an_entrance = "@keyframes spin { to { transform: rotate(1turn); } }\n\
+            .slide .logo { animation: spin 4s linear infinite; }\n\
+            .slide.active .reveal { animation: spinner 1s both; }";
+        assert_eq!(rules(&styled(not_an_entrance)), Vec::<&str>::new());
+        let lookalikes =
+            "@keyframes rise { from { text-transform: none; transform-origin: 0 0; } }\n\
+            .slide.active .reveal { animation: rise 1s both; }";
+        assert_eq!(rules(&styled(lookalikes)), Vec::<&str>::new());
+        let commented = deck(&format!(
+            "<!-- <style>{transform}</style> -->\n<section class=\"slide\" id=\"a\"></section>"
+        ));
+        assert_eq!(rules(&commented), Vec::<&str>::new());
+    }
+
+    #[test]
     fn checks_the_template_meta() {
         let named = html::set_template(
             &deck(r#"<section class="slide" id="a"></section>"#),
@@ -1139,5 +1357,37 @@ mod tests {
         assert_eq!(rules(&commented), Vec::<&str>::new());
         let other = deck("").replace("<title>", "<meta name=\"description\" content=\"\"><title>");
         assert_eq!(rules(&other), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn checks_the_slide_size_meta() {
+        let sized = html::set_slide_size(
+            &deck(r#"<section class="slide" id="a"></section>"#),
+            SlideSize::parse("8.5x11in").unwrap(),
+        );
+        assert_eq!(rules(&sized), Vec::<&str>::new());
+        assert_eq!(rules(&html::ensure_runtime(&sized)), Vec::<&str>::new());
+        for bad in ["", " ", "portrait", "1920", "50x50", "1920x1080mm"] {
+            let html = sized.replace("8.5x11in", bad);
+            assert_eq!(rules(&html), ["slide-size-invalid"], "{bad}");
+        }
+        let no_content = sized.replace(" content=\"8.5x11in\"", "");
+        assert_eq!(rules(&no_content), ["slide-size-invalid"]);
+        let message = &lint(&sized.replace("8.5x11in", "big"), |_| true, &[])[0].message;
+        assert!(
+            message.contains("\"big\" is not a usable size"),
+            "{message}"
+        );
+        let twice = sized.replace(
+            "<title>Talk</title>",
+            "<title>Talk</title><meta name=\"slopslide-size\" content=\"1080x1080\">",
+        );
+        assert_eq!(rules(&twice), ["slide-size-duplicate"]);
+        let in_body = deck(
+            r#"<section class="slide" id="a"><meta name="slopslide-size" content="1080x1080"></section>"#,
+        );
+        assert_eq!(rules(&in_body), ["slide-size-misplaced"]);
+        let commented = deck(r#"<!-- <meta name="slopslide-size" content="nope"> -->"#);
+        assert_eq!(rules(&commented), Vec::<&str>::new());
     }
 }

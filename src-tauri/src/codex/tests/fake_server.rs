@@ -92,6 +92,7 @@ impl FakeServer {
                     });
                     reply(&message, json!({ "config": config }));
                 }
+                "skills/extraRoots/set" => reply(&message, json!({})),
                 "configRequirements/read" => {
                     let requirements = self.scenario["requirements"].clone();
                     reply(&message, json!({ "requirements": requirements }));

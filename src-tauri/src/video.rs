@@ -536,11 +536,8 @@ async fn run(
     dest: Option<&Path>,
     flag: &AtomicBool,
 ) -> Result<()> {
-    let helper = app
-        .path()
-        .resource_dir()
-        .map_err(|e| Error::msg(e.to_string()))?
-        .join("video-runtime/slopslide-video");
+    let helper = crate::native_runtime::helper(app, "video-runtime/slopslide-video")
+        .ok_or_else(|| Error::msg("The bundled video helper is unavailable in this build."))?;
     let mut command = tokio::process::Command::new(helper);
     command
         .arg(operation)

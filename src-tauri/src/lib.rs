@@ -10,6 +10,7 @@ mod html;
 mod lint;
 mod mcp;
 mod narration;
+mod native_runtime;
 mod permissions;
 mod protocol;
 mod providers;

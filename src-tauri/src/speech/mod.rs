@@ -95,25 +95,9 @@ fn root(app: &AppHandle) -> Result<PathBuf> {
         .join("speech"))
 }
 fn runtime(app: &AppHandle) -> Option<PathBuf> {
-    if !cfg!(target_os = "macos") {
-        return None;
-    }
-    let bundled = app
-        .path()
-        .resource_dir()
-        .ok()?
-        .join("speech-runtime/slopslide-speech");
-    if bundled.is_file() {
-        return Some(bundled);
-    }
-    if cfg!(debug_assertions) {
-        let dev = Path::new(env!("CARGO_MANIFEST_DIR")).join("speech-runtime/slopslide-speech");
-        if dev.is_file() {
-            return Some(dev);
-        }
-    }
-    None
+    crate::native_runtime::helper(app, "speech-runtime/slopslide-speech")
 }
+
 impl SpeechManager {
     fn provider(&self, app: &AppHandle, id: &str) -> Result<Arc<dyn SpeechProvider>> {
         let mut providers = self.0.providers.lock().expect("speech providers");

@@ -72,6 +72,16 @@ describe("SlideRail", () => {
     expect(item(1).getByText("2").className).not.toContain("font-semibold");
   });
 
+  it("rings the selected thumbnail with a gap so it stands out on dark slides", () => {
+    render(<SlideRail />);
+    const selected = items()[0]!.querySelector("button")!;
+    const other = items()[1]!.querySelector("button")!;
+    expect(selected.classList).toContain("ring-primary");
+    expect(selected.classList).toContain("ring-offset-2");
+    expect(selected.classList).toContain("ring-offset-sidebar");
+    expect(other.classList).not.toContain("ring-offset-2");
+  });
+
   it("adds a blank slide after the selected one and selects it", async () => {
     invoke.mockResolvedValue({ deck: withSlides("intro", "slide", "#2", "outro"), slide: "slide" });
     render(<SlideRail />);

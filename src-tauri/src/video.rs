@@ -1042,7 +1042,7 @@ mod tests {
         let mut m = silent(&["a", "b"], 600_000);
         let wav = fs::read(
             Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../docs/feasibility/listening-2026-10-09/b-native-bf16-ryan.wav"),
+                .join("../fixtures/narration/b-native-bf16-ryan.wav"),
         )
         .unwrap();
         let pcm = cache::decode_wav(&wav).unwrap();

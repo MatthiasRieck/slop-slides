@@ -3,7 +3,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import platform
 import shutil
 import subprocess
 import sys
@@ -15,13 +14,15 @@ RUNTIME.mkdir(exist_ok=True)
 if sys.platform != 'darwin':
     print('Native speech currently targets macOS; other platforms can edit scripts.')
     sys.exit(0)
+from native_target import native_macos_arch
+arch_name = native_macos_arch()
 engine = ROOT / 'src-tauri/target/speech-engine'
 source = ROOT / 'src-tauri/speech-worker/worker.c'
 sonic = source.parent / 'vendor/sonic'
-inputs = {'engineRevision': REV, 'platform': platform.machine(), 'protocol': 1,
+inputs = {'engineRevision': REV, 'platform': arch_name, 'protocol': 1,
           'sources': {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
                       for p in [source, source.parent / 'profile.h', sonic / 'sonic.c', sonic / 'sonic.h']},
-          'flags': '-O3 -ffast-math -march=armv8-a' if platform.machine() == 'arm64' else '-O3 -ffast-math -msse2'}
+          'flags': '-O3 -ffast-math -march=armv8-a' if arch_name == 'arm64' else '-O3 -ffast-math -msse2'}
 stamp = RUNTIME / 'build.json'
 binary = RUNTIME / 'slopslide-speech'
 if binary.is_file() and stamp.is_file() and json.loads(stamp.read_text()) == inputs:
@@ -41,7 +42,7 @@ assert subprocess.check_output(['git', '-C', str(engine), 'rev-parse', 'HEAD'], 
 assert not subprocess.check_output(['git', '-C', str(engine), 'status', '--porcelain', '--untracked-files=no'], text=True).strip(), 'engine checkout must be clean'
 makefile = engine.parent / 'Makefile.speech-compat'
 makefile.write_text((engine / 'Makefile').read_text().replace("'^#define __ARM_FEATURE_BF16 '", "'^\\#define __ARM_FEATURE_BF16 '"))
-arch = '-march=armv8-a' if platform.machine() == 'arm64' else '-msse2'
+arch = '-march=armv8-a' if arch_name == 'arm64' else '-msse2'
 subprocess.run(['make', '-f', str(makefile), 'blas', 'CC=clang', f'ARCH_FLAGS={arch}', '-j4'], cwd=engine, check=True)
 objects = sorted(p for p in engine.glob('*.o') if p.name != 'main.o')
 objects += sorted((engine / 'third_party/kleidiai').rglob('*.o'))

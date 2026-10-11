@@ -24,13 +24,21 @@ fn cargo_dev_command_defaults_to_desktop_entry_point() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|p| p["manifest_path"].as_str() == root.join("Cargo.toml").to_str())
+        .find(|p| {
+            p["manifest_path"]
+                .as_str()
+                .is_some_and(|path| Path::new(path) == root.join("Cargo.toml"))
+        })
         .expect("desktop package");
     let desktop = package["targets"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|t| t["src_path"].as_str() == root.join("src/main.rs").to_str())
+        .find(|t| {
+            t["src_path"]
+                .as_str()
+                .is_some_and(|path| Path::new(path) == root.join("src").join("main.rs"))
+        })
         .expect("desktop entry point");
     assert!(desktop["kind"]
         .as_array()

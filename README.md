@@ -251,3 +251,5 @@ editor; the app picks up the changes.
 The design guidance in the agent's prompt draws on
 [frontend-slides](https://github.com/zarazhangrui/frontend-slides) (MIT). See
 `src-tauri/prompts/THIRD_PARTY_NOTICES.md`.
+
+See [Narration: implementation and research background](docs/narration.md) for local speech, video export, research references and qualification limits.

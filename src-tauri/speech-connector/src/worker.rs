@@ -15,7 +15,7 @@ pub struct Worker {
     _pack_lock: super::models::PackLock,
 }
 impl Worker {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub async fn start(
         bin: &Path,
         root: &Path,

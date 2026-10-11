@@ -27,6 +27,8 @@ run() {
   fi
 }
 
+run "Native build target tests" python3 -m unittest discover -s scripts -p 'test_*.py'
+
 manifest=src-tauri/Cargo.toml
 run "TypeScript typecheck"  pnpm -s typecheck
 run "Frontend tests"        pnpm -s test

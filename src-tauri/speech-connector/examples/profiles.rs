@@ -10,7 +10,7 @@ fn main() {
     assert!(!out.exists(), "output must be new");
     std::fs::create_dir_all(&out).unwrap();
     let reference = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/feasibility/listening-2026-10-09/l-german-public-reference.wav");
+        .join("../../fixtures/narration/l-german-public-reference.wav");
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

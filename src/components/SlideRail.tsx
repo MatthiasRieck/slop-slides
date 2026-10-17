@@ -344,7 +344,8 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
           onClick={() => useApp.getState().select(slide.id)}
           className={cn(
             "block w-full overflow-hidden rounded-md ring-1 ring-border transition-shadow",
-            selected ? "ring-2 ring-primary" : "hover:ring-input",
+            // The offset gap keeps the ring visible against dark slides.
+            selected ? "ring-2 ring-primary ring-offset-2 ring-offset-sidebar" : "hover:ring-input",
           )}
         >
           <SlideFrame

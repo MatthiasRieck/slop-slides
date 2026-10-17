@@ -106,7 +106,9 @@ export function LayoutPicker(props: { mode: "add" | "change"; onDone: () => void
   // Both modes stay on one template: picking a layout must not change the deck's style.
   const current = templates ? initialTemplate(templates, deckTemplate) : null;
   const template = templates?.find((t) => t.id === current);
-  const sameStyle = !!template && template.id === deckTemplate;
+  // An empty deck takes the template's style, so its layouts are added as they are.
+  const empty = useApp((s) => s.deck?.slides.length === 0);
+  const sameStyle = !!template && (template.id === deckTemplate || empty);
 
   const choose = (slide: string) => {
     if (!template) return;

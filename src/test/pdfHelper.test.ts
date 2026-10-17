@@ -24,6 +24,7 @@ afterEach(() => {
 
 interface Helper {
   ready: () => void;
+  fit: (width: number, height: number) => void;
   decor: () => void;
   show: (index: number) => void;
   paint: (index: number, url: string) => void;
@@ -56,6 +57,17 @@ describe("PDF helper", () => {
     const { answers, settle } = helper();
     await settle();
     expect(answers).toEqual(["ready&slides=2"]);
+  });
+
+  it("prints slides the size of the paper they get", async () => {
+    const { doc, api, answers, settle } = helper();
+    await settle();
+    api.fit(794, 1122);
+    expect(answers.at(-1)).toBe("fit");
+    const css = doc.querySelector("style[data-slop-pdf-fit]")!.textContent!;
+    expect(css).toContain("@media print");
+    expect(css).toContain("--slop-w: 794px !important; --slop-h: 1122px !important;");
+    expect(css).toContain("@page { size: 794px 1122px; margin: 0; }");
   });
 
   it("hides the text for the decor, keeping currentColor for borders and icons", async () => {

@@ -74,6 +74,23 @@
       });
     },
 
+    /**
+     * Prints slides `width` × `height` CSS pixels: the paper the system actually gives, when it
+     * snaps a slide size close to a standard paper to that paper (A4 is 1122.52 px tall, not
+     * 1123). A slide taller than its page would spill onto a page of its own.
+     */
+    fit: function (width, height) {
+      var style = document.createElement("style");
+      style.setAttribute("data-slop-pdf-fit", "");
+      style.textContent =
+        "@media print {\n" +
+        "  :root { --slop-w: " + width + "px !important; --slop-h: " + height + "px !important; }\n" +
+        "  @page { size: " + width + "px " + height + "px; margin: 0; }\n" +
+        "}";
+      document.head.appendChild(style);
+      signal("fit");
+    },
+
     /** Hides the text, to capture each slide's decor. */
     decor: function () {
       var style = document.createElement("style");

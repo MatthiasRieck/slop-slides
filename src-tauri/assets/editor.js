@@ -2,11 +2,11 @@
    src-tauri/src/protocol.rs); it is never part of deck.html or an export.
 
    Click selects an element, drag (or arrow keys) moves it. Its corner and edge handles
-   stretch it while the opposite side stays put (Shift keeps the aspect ratio, Alt scales
+   resize its box while the opposite side stays put (Shift keeps the aspect ratio, Alt resizes
    from the center); the round handle above it rotates it and the diamond next to it tilts it
    in depth, in 3D with perspective (Shift snaps to 15°). Double-click a handle to reset.
-   Added shapes and drawings are resized rather than scaled: a shape gets a new width and
-   height, a drawing's points move apart, so borders and lines keep their width.
+   Resize keeps text and borders at their size; drawings spread their points. The toolbar
+   can switch to Stretch, which scales the contents too.
    Double-click (or Enter) edits its text, Escape selects the parent. Delete (or Backspace, or
    { type: "slop:edit-delete" } from the app) removes it.
    Every change is posted to the app as the slide's new markup:
@@ -28,6 +28,7 @@
      border (a drawing's fill and stroke).
    - { type: "slop:edit-order", to } moves it "front", "forward", "backward" or "back" among the
      elements it overlaps, with an inline z-index.
+   - { type: "slop:edit-size-mode", mode: "resize" | "stretch" } sets how handles change size.
    - { type: "slop:edit-delete" } removes it.
    Whenever the selection changes it reports whether anything is selected and what the toolbar
    shows for it: { type: "slop:edit-selection", slide, selected, selection }.
@@ -58,6 +59,7 @@
   // The tilt the editor puts in front of an element's inline `transform`.
   var TILT = /^perspective\([\d.]+px\) rotateX\((-?[\d.]+)deg\) rotateY\((-?[\d.]+)deg\)\s*/;
   var MIN_SCALE = 0.1;
+  var sizeMode = "resize";
   var OVERFLOW_TOLERANCE = 2;
   // Marks an element the user added (a text box, shape or drawing); it stays in the markup.
   var ADDED = "data-added";
@@ -143,7 +145,7 @@
         };
         return (
           '<div data-handle="scale" data-dir="' + d[0] + " " + d[1] + '"' + axis +
-          ' title="Stretch (Shift keeps the aspect ratio, Alt scales from the center, double-click resets)"' +
+          ' title="Resize (Shift keeps the aspect ratio, Alt resizes from the center)"' +
           ' style="left: ' + (d[0] + 1) * 50 + "%; top: " + (d[1] + 1) * 50 + "%; margin: " + outside(d[1], h) + "px 0 0 " +
           outside(d[0], w) + "px; cursor: " + cursor + '-resize"></div>'
         );
@@ -514,7 +516,8 @@
       size: sizeOf(selected),
       zoom: zoom(),
       dir: { x: dir[0], y: dir[1] },
-      vectors: resizable(selected) ? vectorShapes(selected) : null,
+      resize: sizeMode === "resize",
+      vectors: sizeMode === "resize" && selected.getAttribute(ADDED) === "drawing" ? vectorShapes(selected) : null,
       moved: false,
     };
     if (event.target.setPointerCapture) {
@@ -593,7 +596,7 @@
     var cx = fromCenter || !d.x ? 0 : (d.x * w * (sx - s0.x)) / 2;
     var cy = fromCenter || !d.y ? 0 : (d.y * h * (sy - s0.y)) / 2;
     var shift = turn(cx, cy, drag.angle);
-    if (resizable(drag.el)) {
+    if (drag.resize) {
       resizeTo(sx, sy, shift);
       return;
     }
@@ -601,27 +604,30 @@
     moveTo(drag.el, drag.offset.x + shift.x, drag.offset.y + shift.y);
   }
 
-  /** Added shapes and drawings stretch by their size, not a `scale`, so their borders and lines keep their width. */
-  function resizable(el) {
-    return /^(shape|drawing)$/.test(el.getAttribute(ADDED) || "");
-  }
-
-  /**
-   * Gives the dragged element the size `sx` × `sy` times its box (dropping any `scale`), with
-   * its center moved by `shift`. A drawing's points spread out to fill the new box.
-   */
+  /** Changes the border box without scaling its contents or discarding an existing scale. */
   function resizeTo(sx, sy, shift) {
     var el = drag.el;
     var w = drag.size.w;
     var h = drag.size.h;
-    var nw = Math.max(1, Math.round(w * sx));
-    var nh = Math.max(1, Math.round(h * sy));
-    el.style.width = nw + "px";
-    el.style.height = nh + "px";
+    var nw = Math.max(1, Math.round(w * sx / drag.scale.x));
+    var nh = Math.max(1, Math.round(h * sy / drag.scale.y));
+    var computed = getComputedStyle(el);
+    var px = function (name) { return parseFloat(computed[name]) || 0; };
+    var contentBox = computed.boxSizing !== "border-box";
+    var paddingX = contentBox ? px("paddingLeft") + px("paddingRight") + px("borderLeftWidth") + px("borderRightWidth") : 0;
+    var paddingY = contentBox ? px("paddingTop") + px("paddingBottom") + px("borderTopWidth") + px("borderBottomWidth") : 0;
+    el.style.width = Math.max(0, nw - paddingX) + "px";
+    el.style.height = Math.max(0, nh - paddingY) + "px";
+    el.style.minWidth = "0px";
+    el.style.minHeight = "0px";
+    el.style.maxWidth = "none";
+    el.style.maxHeight = "none";
+    el.style.flexShrink = "0";
+    el.style.flexBasis = "auto";
+    if (computed.display === "inline") el.style.display = "inline-block";
+    if (computed.whiteSpace === "nowrap") el.style.whiteSpace = "normal";
     if (drag.vectors && w && h) spreadVectors(drag.vectors, nw / w, nh / h);
-    scaleTo(el, 1, 1);
-    // A wider box grows from its left and top, moving its center by half the growth; the
-    // translate makes up the rest.
+    // Layout grows from the top left; translate compensates to keep the opposite handle fixed.
     moveTo(el, drag.offset.x + shift.x - (nw - w) / 2, drag.offset.y + shift.y - (nh - h) / 2);
   }
 
@@ -1339,6 +1345,14 @@
       select(atPath(data.path));
       // Clearing the selection for a screenshot hides the wires too, until the next interaction.
       if (data.quiet) mark(wires, "data-quiet", true);
+    } else if (data.type === "slop:edit-size-mode") {
+      if (data.mode !== "resize" && data.mode !== "stretch") return;
+      sizeMode = data.mode;
+      ui.querySelectorAll('[data-handle="scale"]').forEach(function (handle) {
+        handle.title = sizeMode === "resize"
+          ? "Resize (Shift keeps the aspect ratio, Alt resizes from the center)"
+          : "Stretch (Shift keeps the aspect ratio, Alt scales from the center, double-click resets)";
+      });
     } else if (data.type === "slop:edit-tool") {
       toolStyle = data.style && typeof data.style === "object" ? data.style : {};
       if (data.tool !== tool) {

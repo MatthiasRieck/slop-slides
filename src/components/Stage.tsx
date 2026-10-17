@@ -103,6 +103,8 @@ export function Stage() {
             tool={editTool}
             selection={editFrames.selection}
             styles={editStyles}
+            sizeMode={editFrames.sizeMode}
+            onSizeMode={editFrames.setSizeMode}
             onTool={(tool) => useApp.getState().setEditTool(tool)}
             onStyle={restyle}
             onOrder={(to) => postToEditor({ type: "slop:edit-order", to })}
@@ -152,7 +154,7 @@ export function Stage() {
                   title={
                     locked
                       ? "This slide is locked; unlock it in the slide list to edit it"
-                      : "Edit the slide: click to select, drag to move, drag the handles to scale or rotate, double-click to edit text, drop images onto it to add them; the toolbar above adds text, shapes and drawings and restyles the selection"
+                      : "Edit the slide: click to select, drag to move, drag the handles to resize or rotate, double-click to edit text, drop images onto it to add them; the toolbar above adds text, shapes and drawings and restyles the selection"
                   }
                   aria-pressed={editing}
                   disabled={locked}
@@ -429,6 +431,7 @@ interface PasteboardView {
  * handles undo and leaving edit mode. Images dropped on the stage go onto the slide.
  */
 function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetView: () => void) {
+  const [sizeMode, setSizeMode] = useState<"resize" | "stretch">("resize");
   // What to select again once the edited slide reloads.
   const restore = useRef<{ slide: string; path: number[] } | null>(null);
   const frame = useRef<HTMLIFrameElement | null>(null);
@@ -517,6 +520,11 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
   const post = useCallback((data: unknown) => frame.current?.contentWindow?.postMessage(data, "*"), []);
 
   return {
+    sizeMode,
+    setSizeMode: (mode: "resize" | "stretch") => {
+      setSizeMode(mode);
+      post({ type: "slop:edit-size-mode", mode });
+    },
     overflow: editing && overflow?.slide === current ? overflow.items : NO_OVERFLOW,
     /** What the editor has selected, as its toolbar shows it. */
     selection: editing && selection?.slide === current ? selection.selection : null,
@@ -529,7 +537,10 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
       // selection itself.
       setSelection(null);
       const { editing, selected, editTool, editStyles } = useApp.getState();
-      if (editing) post(toolMessage(editTool, editStyles));
+      if (editing) {
+        post({ type: "slop:edit-size-mode", mode: sizeMode });
+        post(toolMessage(editTool, editStyles));
+      }
       const again = restore.current;
       if (editing && again && again.slide === selected) {
         loaded.contentWindow?.postMessage({ type: "slop:edit-select", path: again.path }, "*");

@@ -455,6 +455,18 @@ describe("Stage", () => {
         expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-tool", tool: "select", style: undefined }, "*");
       });
 
+      it("defaults to Resize and preserves Stretch across preview reloads", () => {
+        const { frame, post } = enter();
+        const mode = screen.getByRole("combobox", { name: "Size mode" });
+        expect((mode as HTMLSelectElement).value).toBe("resize");
+        fireEvent.change(mode, { target: { value: "stretch" } });
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-size-mode", mode: "stretch" }, "*");
+        post.mockClear();
+        fireEvent.load(frame);
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-size-mode", mode: "stretch" }, "*");
+        expect((mode as HTMLSelectElement).value).toBe("stretch");
+      });
+
       it("tells a reloaded editor the current tool", () => {
         const { frame } = enter();
         fireEvent.click(button("Add text (T)"));

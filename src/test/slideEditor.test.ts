@@ -389,8 +389,9 @@ describe("slide editor", () => {
   });
   describe("scale and rotate handles", () => {
     /** Selects the heading, laid out as a 200×100 box centered at (500, 300). */
-    function withHeading() {
+    function withHeading(mode: "resize" | "stretch" = "stretch") {
       const e = editor();
+      if (mode === "stretch") e.fromParent({ type: "slop:edit-size-mode", mode });
       const h1 = e.$("h1");
       Object.defineProperty(h1, "offsetWidth", { value: 200, configurable: true });
       Object.defineProperty(h1, "offsetHeight", { value: 100, configurable: true });
@@ -423,6 +424,37 @@ describe("slide editor", () => {
       expect(e.$("#intro").contains(ui)).toBe(false);
       e.down(e.$("#intro"));
       expect(ui.style.display).toBe("none");
+    });
+
+    it("resizes the text box by default without stretching the glyphs", () => {
+      const { h1, pull, e } = withHeading("resize");
+      h1.style.fontSize = "48px";
+      h1.style.whiteSpace = "nowrap";
+      pull("1 1", [600, 350], [650, 400]);
+      expect(h1.style).toMatchObject({ width: "250px", height: "150px", scale: "", translate: "", fontSize: "48px", whiteSpace: "normal" });
+      expect(e.commits()[0]!.markup).toContain("width: 250px");
+      expect(h1.hasAttribute("viewBox")).toBe(false);
+    });
+
+    it("accounts for padding and borders in a content box", () => {
+      const { h1, pull } = withHeading("resize");
+      h1.style.cssText = "box-sizing: content-box; padding: 10px; border: 2px solid red";
+      pull("1 0", [600, 300], [650, 300]);
+      expect(h1.style).toMatchObject({ width: "226px", height: "76px", borderWidth: "2px", scale: "" });
+    });
+
+    it("preserves an existing stretch when resizing the box", () => {
+      const { h1, pull } = withHeading("resize");
+      h1.style.scale = "2 1";
+      pull("-1 0", [300, 300], [200, 300]);
+      expect(h1.style).toMatchObject({ width: "250px", height: "100px", scale: "2 1", translate: "-75px 0px" });
+    });
+
+    it("keeps the opposite edge fixed when resizing a rotated box", () => {
+      const { h1, pull } = withHeading("resize");
+      h1.style.rotate = "90deg";
+      pull("1 0", [500, 400], [500, 450]);
+      expect(h1.style).toMatchObject({ width: "250px", height: "100px", scale: "", translate: "-25px 25px" });
     });
 
     it("stretches from a corner while the opposite corner stays put", () => {
@@ -1294,7 +1326,7 @@ describe("slide editor", () => {
         expect(svg.querySelector("path")!.getAttribute("d")).toBe("m3 3 l80 20 h20 v-5 A10 5 0 0 1 163 3 z");
       });
 
-      it("still scales the deck's own elements and text boxes", () => {
+      it("resizes added text boxes without scaling the text", () => {
         const e = editor();
         e.fromParent({ type: "slop:edit-tool", tool: "text", style: TEXT_STYLE });
         dragOut(e, [100, 100], [400, 100]);
@@ -1303,8 +1335,12 @@ describe("slide editor", () => {
         e.down(box);
         e.up(box);
         pullRight(e, 150);
-        expect(box.style.scale).toBe("1.5 1");
-        expect(box.style.width).toBe("300px");
+        expect(box.style.scale).toBe("");
+        expect(box.style.width).toBe("450px");
+        e.fromParent({ type: "slop:edit-size-mode", mode: "stretch" });
+        pullRight(e, 150);
+        expect(box.style.scale).toBe("1.333 1");
+        expect(box.style.width).toBe("450px");
       });
     });
 

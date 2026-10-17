@@ -42,6 +42,7 @@ const BUILTIN: &[(&str, &str)] = &[
     ("editorial", include_str!("../templates/editorial.html")),
     ("swiss", include_str!("../templates/swiss.html")),
     ("minimalism", include_str!("../templates/minimalism.html")),
+    ("plain", include_str!("../templates/plain.html")),
     ("maximalism", include_str!("../templates/maximalism.html")),
     (
         "luxury-typography",
@@ -305,7 +306,7 @@ mod tests {
 
     #[test]
     fn every_builtin_template_has_the_shared_layouts_and_passes_lint() {
-        assert_eq!(BUILTIN.len(), 31);
+        assert_eq!(BUILTIN.len(), 32);
         for (id, source) in BUILTIN {
             assert!(is_valid_id(id) && html::slugify(id) == *id, "{id}");
             let ids: Vec<_> = html::find_slides(source)
@@ -359,6 +360,27 @@ mod tests {
                 "{id}: elements stay hidden until their turn"
             );
         }
+    }
+
+    #[test]
+    fn plain_template_is_black_on_white_without_decoration() {
+        let source = builtin("plain").unwrap();
+        assert_eq!(html::title(source).as_deref(), Some("Plain"));
+        for rule in [
+            "--bg: #ffffff;",
+            "--ink: #000000;",
+            "--muted: #000000;",
+            "--accent: #000000;",
+            ".slide .deco { display: none; }",
+        ] {
+            assert!(source.contains(rule), "plain: {rule}");
+        }
+        let style = &source[source.find("/* Plain").unwrap()..];
+        for gimmick in ["gradient", "shadow", "border-radius", "translate", "rotate"] {
+            assert!(!style.contains(gimmick), "plain has no {gimmick}");
+        }
+        let size = html::slide_size(source);
+        assert_eq!((size.width, size.height), (1920.0, 1080.0));
     }
 
     #[test]

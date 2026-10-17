@@ -36,8 +36,8 @@ png = "0.18"
 block2 = "0.6"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSBitmapImageRep", "NSImage", "NSImageRep", "NSPrintInfo", "NSPrintOperation", "NSResponder", "NSView", "NSWindow"] }
-objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSError", "NSGeometry", "NSString", "NSURL"] }
-objc2-web-kit = { version = "0.3", features = ["block2", "objc2-app-kit", "WKSnapshotConfiguration", "WKWebView"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSError", "NSGeometry", "NSString", "NSURL", "NSValue"] }
+objc2-web-kit = { version = "0.3", features = ["block2", "objc2-app-kit", "objc2-core-foundation", "WKSnapshotConfiguration", "WKWebView"] }
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39"

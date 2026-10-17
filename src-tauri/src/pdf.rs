@@ -27,6 +27,9 @@ const POINTS_PER_PX: f64 = 0.75;
 const SIGNAL_PATH: &str = "/.pdf-signal";
 /// Longest wait for the deck to load, for a step of the helper, or for the PDF to be written.
 const TIMEOUT: Duration = Duration::from_secs(60);
+/// Decor images are this many pixels per slide pixel: 3840 wide for a 1920 slide, about
+/// 290 dpi on a page 13.3 inches wide.
+const DECOR_SCALE: f64 = 2.0;
 /// The page's helper, run once it has loaded; it starts by reporting when it is ready.
 const PDF_JS: &str = include_str!("../assets/pdf.js");
 
@@ -168,15 +171,19 @@ impl Helper<'_> {
     async fn flatten_decor(&mut self, slides: usize, width: u32) -> Result<()> {
         use base64::Engine as _;
         self.run("window.__slopPdf.decor()", "decor").await?;
-        // Twice the canvas width, for sharp edges on zoom (a 2x display captures that much).
-        let max_width = width.saturating_mul(2).clamp(1, crate::size::MAX_PX);
+        let pixels_wide = decor_pixels(width);
         for index in 0..slides {
             let shown = self
                 .run(&format!("window.__slopPdf.show({index})"), "shown")
                 .await?;
             let (rect, viewport) = geometry(&shown)?;
+            #[cfg(target_os = "macos")]
             let png =
-                crate::capture::snapshot(self.window.as_ref(), rect, viewport, max_width).await?;
+                crate::capture::render_region(self.window.as_ref(), rect, viewport, pixels_wide)
+                    .await?;
+            #[cfg(not(target_os = "macos"))]
+            let png =
+                crate::capture::snapshot(self.window.as_ref(), rect, viewport, pixels_wide).await?;
             let url = format!(
                 "data:image/png;base64,{}",
                 base64::engine::general_purpose::STANDARD.encode(png)
@@ -191,6 +198,14 @@ impl Helper<'_> {
         self.run("window.__slopPdf.text()", "text").await?;
         Ok(())
     }
+}
+
+/// How wide each slide's decor image is, in pixels: [`DECOR_SCALE`] times the canvas width,
+/// rendered afresh at that size (not scaled up from the screen).
+fn decor_pixels(canvas_width: u32) -> u32 {
+    (f64::from(canvas_width) * DECOR_SCALE)
+        .round()
+        .clamp(1.0, f64::from(crate::size::MAX_PX)) as u32
 }
 
 /// The query parameters of a helper's answer (`/.pdf-signal?shown=0&rect=…`).
@@ -576,6 +591,14 @@ mod tests {
             window_size((1920, 1080), Some((0.0, 0.0))),
             (1920.0, 1080.0)
         );
+    }
+
+    #[test]
+    fn decor_images_are_twice_the_canvas_within_limits() {
+        assert_eq!(decor_pixels(1920), 3840);
+        assert_eq!(decor_pixels(1080), 2160);
+        assert_eq!(decor_pixels(9000), crate::size::MAX_PX);
+        assert_eq!(decor_pixels(0), 1);
     }
 
     #[test]

@@ -195,6 +195,8 @@ export const api = {
   saveAsset: (id: string, name: string, data: string) =>
     invoke<string>("save_asset", { id, name, data }),
   exportDeck: (id: string, dest: string) => invoke<void>("export_deck", { id, dest }),
+  /** Prints the deck to `dest` as a PDF: one page per shown slide, with selectable text. */
+  exportPdf: (id: string, dest: string) => invoke<void>("export_pdf", { id, dest }),
   /** Creates a new folder named after the deck inside `parent`; returns its path. */
   createImageExportDir: (id: string, parent: string) =>
     invoke<string>("create_image_export_dir", { id, parent }),

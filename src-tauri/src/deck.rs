@@ -137,7 +137,7 @@ pub fn resolve_in_deck(dir: &Path, rel: &str) -> Result<PathBuf> {
     Ok(dir.join(rel_path))
 }
 
-fn read_html(file: &Path) -> Result<String> {
+pub fn read_html(file: &Path) -> Result<String> {
     Ok(fs::read_to_string(file)?)
 }
 

@@ -12,16 +12,18 @@
 //! editor (`assets/editor.js`), which builds on the pasteboard, so the stage can edit text and
 //! move elements in place. With `?show`, the presenter's whole-deck player gets the pasteboard
 //! too, to zoom and pan the slide being shown. None of them ever becomes part of the deck file
-//! or an export.
+//! or an export. With `?print`, a deck is served with its player runtime brought up to date,
+//! as an export has it, for printing to PDF (see pdf.rs).
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
-use percent_encoding::percent_decode_str;
+use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use tauri::http::{header, Request, Response, StatusCode};
 use tauri::{AppHandle, Manager};
 
 use crate::deck;
+use crate::html;
 use crate::sessions::Sessions;
 use crate::templates;
 use crate::workspace::OpenWorkspace;
@@ -33,12 +35,25 @@ const TEMPLATE_PREFIX: &str = ".template";
 /// First path segment of session files, followed by their absolute path.
 const SESSION_PREFIX: &str = ".session";
 
+/// What `encodeURIComponent` leaves alone, as the frontend builds the same URLs.
+const URI_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'!')
+    .remove(b'~')
+    .remove(b'*')
+    .remove(b'\'')
+    .remove(b'(')
+    .remove(b')');
+
 const PASTEBOARD_JS: &str = include_str!("../assets/pasteboard.js");
 const EDITOR_JS: &str = include_str!("../assets/editor.js");
 
 pub fn handle(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     let uri = request.uri();
     let served = serve(app, uri.path()).map(|(mime, body)| {
+        let (mime, body) = for_print(uri.query(), mime, body);
         let scripts = stage_scripts(uri.query());
         if !scripts.is_empty() && mime.starts_with("text/html") {
             let html = String::from_utf8_lossy(&body);
@@ -78,6 +93,30 @@ fn serve(app: &AppHandle, raw_path: &str) -> Result<(&'static str, Vec<u8>), Sta
         return read_in_session(&Sessions::new(&home), &rel);
     }
     Err(StatusCode::NOT_FOUND)
+}
+
+/// URL of a workspace file, by its absolute path, as the frontend's `fileUrl` makes it.
+pub fn file_url(file: &Path, query: &str) -> String {
+    let path = file.to_string_lossy().replace('\\', "/");
+    let encoded: Vec<String> = std::iter::once(FILE_PREFIX)
+        .chain(path.trim_start_matches('/').split('/'))
+        .map(|segment| utf8_percent_encode(segment, URI_COMPONENT).to_string())
+        .collect();
+    // WebView2 (Windows) exposes custom schemes as http://<scheme>.localhost.
+    let base = match cfg!(windows) {
+        true => "http://slop.localhost",
+        false => "slop://localhost",
+    };
+    format!("{base}/{}?{query}", encoded.join("/"))
+}
+
+/// A deck asked for `?print` with its runtime current, so it prints as an export would.
+fn for_print(query: Option<&str>, mime: &'static str, body: Vec<u8>) -> (&'static str, Vec<u8>) {
+    if !has_param(query, "print") || !mime.starts_with("text/html") {
+        return (mime, body);
+    }
+    let html = html::ensure_runtime(&String::from_utf8_lossy(&body));
+    (mime, html.into_bytes())
 }
 
 /// `/<prefix>/<path>`, percent-decoded.
@@ -167,6 +206,62 @@ mod tests {
 
     fn split(raw: &str) -> Result<(String, String), StatusCode> {
         split_path(raw)
+    }
+
+    #[test]
+    fn file_urls_match_the_frontend_and_round_trip() {
+        let url = file_url(
+            Path::new("/Users/me/my talks/café/deck.html"),
+            "static&print",
+        );
+        let expected = match cfg!(windows) {
+            true => "http://slop.localhost",
+            false => "slop://localhost",
+        };
+        assert_eq!(
+            url,
+            format!("{expected}/.file/Users/me/my%20talks/caf%C3%A9/deck.html?static&print")
+        );
+        let path = url
+            .split_once("localhost")
+            .unwrap()
+            .1
+            .split('?')
+            .next()
+            .unwrap();
+        assert_eq!(
+            split(path),
+            Ok((".file".into(), "Users/me/my talks/café/deck.html".into()))
+        );
+    }
+
+    #[test]
+    fn file_urls_take_windows_paths() {
+        let url = file_url(Path::new(r"C:\Users\me\deck (1).html"), "print");
+        assert!(
+            url.ends_with("/.file/C%3A/Users/me/deck%20(1).html?print"),
+            "{url}"
+        );
+    }
+
+    #[test]
+    fn print_brings_a_deck_runtime_up_to_date() {
+        let bare = b"<html><head></head><body><main class=\"deck\"></main></body></html>".to_vec();
+        let (mime, printed) = for_print(
+            Some("static&print"),
+            "text/html; charset=utf-8",
+            bare.clone(),
+        );
+        assert_eq!(mime, "text/html; charset=utf-8");
+        let printed = String::from_utf8(printed).unwrap();
+        assert!(printed.contains("slopslide:runtime-css"));
+        assert!(printed.contains("print-color-adjust: exact"));
+        assert!(printed.contains("slopslide:runtime-js"));
+
+        let (_, untouched) = for_print(Some("static"), "text/html", bare.clone());
+        assert_eq!(untouched, bare);
+        let (_, image) = for_print(Some("print"), "image/png", vec![1, 2, 3]);
+        assert_eq!(image, [1, 2, 3]);
     }
 
     #[test]

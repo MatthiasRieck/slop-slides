@@ -78,6 +78,7 @@ const CASES = [
   ["importAssets", () => api.importAssets("talk", ["/a.png"]), "import_assets", { id: "talk", paths: ["/a.png"] }],
   ["saveAsset", () => api.saveAsset("talk", "shot.png", "aGk="), "save_asset", { id: "talk", name: "shot.png", data: "aGk=" }],
   ["exportDeck", () => api.exportDeck("talk", "/out.html"), "export_deck", { id: "talk", dest: "/out.html" }],
+  ["exportPdf", () => api.exportPdf("talk", "/out.pdf"), "export_pdf", { id: "talk", dest: "/out.pdf" }],
   ["lintDeck", () => api.lintDeck("talk"), "lint_deck", { id: "talk" }],
   ["createImageExportDir", () => api.createImageExportDir("talk", "/out"), "create_image_export_dir", { id: "talk", parent: "/out" }],
   [

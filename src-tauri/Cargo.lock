@@ -3494,6 +3494,7 @@ dependencies = [
  "block2",
  "cairo-rs",
  "ctor",
+ "gtk",
  "jsonschema",
  "log",
  "notify",

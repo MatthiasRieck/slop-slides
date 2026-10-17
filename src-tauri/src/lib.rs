@@ -9,6 +9,7 @@ mod extensions;
 mod html;
 mod lint;
 mod mcp;
+mod pdf;
 mod permissions;
 mod protocol;
 mod providers;
@@ -399,6 +400,12 @@ async fn export_slide_image(
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// Prints the deck to `dest` as a PDF, one page per shown slide, with selectable text.
+#[tauri::command]
+async fn export_pdf(app: AppHandle, id: String, dest: String) -> Result<()> {
+    pdf::export(&app, &deck::deck_file(&id)?, Path::new(&dest)).await
+}
+
 #[tauri::command]
 fn load_chat(id: String) -> Result<serde_json::Value> {
     deck::load_chat(sessions()?.current(&workspace::root(&id)?).as_deref())
@@ -535,6 +542,7 @@ pub fn run() {
             capture_sketch,
             create_image_export_dir,
             export_slide_image,
+            export_pdf,
             load_chat,
             session_provider,
             save_chat,

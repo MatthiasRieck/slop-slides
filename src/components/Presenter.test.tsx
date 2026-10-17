@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setFullscreen = vi.fn(async () => {});
@@ -9,6 +9,8 @@ vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setFullscr
 
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { LASER_SIZE, TRAIL_FADE_MS, TRAIL_HOLD_MS } from "../lib/ink";
+import { fakeCanvas2D } from "../test/fakeCanvas";
 import { Presenter } from "./Presenter";
 
 beforeEach(() => {
@@ -25,20 +27,20 @@ function fromFrame(data: unknown, source: MessageEventSource | null = frame().co
 describe("Presenter", () => {
   it("plays the whole deck from the selected slide", () => {
     render(<Presenter />);
-    expect(frame().getAttribute("src")).toBe("/__deck/talk/deck.html?v=shell-1&show#outro");
+    expect(frame().getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?v=shell-1&show#outro");
     expect(frame().getAttribute("sandbox")).toBe("allow-scripts");
   });
 
   it("encodes positional slide ids in the hash", () => {
     useApp.setState({ selected: "#2" });
     render(<Presenter />);
-    expect(frame().getAttribute("src")).toBe("/__deck/talk/deck.html?v=shell-1&show#%232");
+    expect(frame().getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?v=shell-1&show#%232");
   });
 
   it("starts at the beginning without a selection", () => {
     useApp.setState({ selected: null });
     render(<Presenter />);
-    expect(frame().getAttribute("src")).toBe("/__deck/talk/deck.html?v=shell-1&show");
+    expect(frame().getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?v=shell-1&show");
   });
 
   it("does not restart when the editor selection follows the show", () => {
@@ -74,6 +76,15 @@ describe("Presenter", () => {
     expect(useApp.getState().presenting).toBe(true);
   });
 
+  it("has previous and next buttons that drive the player", () => {
+    render(<Presenter />);
+    const post = vi.spyOn(frame().contentWindow!, "postMessage");
+    fireEvent.click(screen.getByLabelText("Next slide"));
+    expect(post).toHaveBeenLastCalledWith({ type: "slop:go", key: "ArrowRight" }, "*");
+    fireEvent.click(screen.getByLabelText("Previous slide"));
+    expect(post).toHaveBeenLastCalledWith({ type: "slop:go", key: "ArrowLeft" }, "*");
+  });
+
   it("ignores messages that are not from the show", () => {
     render(<Presenter />);
     fromFrame({ type: "slop:key", key: "Escape" }, window);
@@ -86,13 +97,17 @@ describe("Presenter", () => {
 
   it("keeps the ink on the slide as it is zoomed and panned, ignoring nonsense", () => {
     render(<Presenter />);
-    const zoom = () => screen.getByTestId("annotation-zoom").style.transform;
-    expect(zoom()).toBe("translate(0px, 0px) scale(1)");
+    const zoom = () => {
+      const { left, top, width, height, transform } = screen.getByTestId("annotation-zoom").style;
+      return { left, top, width, height, transform };
+    };
+    expect(zoom()).toEqual({ left: "0px", top: "0px", width: "100%", height: "100%", transform: "" });
     fromFrame({ type: "slop:zoom", x: -100, y: -50, k: 2 });
-    expect(zoom()).toBe("translate(-100px, -50px) scale(2)");
+    // Laid out at the zoomed size, not CSS-scaled, so the ink is not stretched blurry.
+    expect(zoom()).toEqual({ left: "-100px", top: "-50px", width: "200%", height: "200%", transform: "" });
     fromFrame({ type: "slop:zoom", x: "a", y: 0, k: 1 });
     fromFrame({ type: "slop:zoom", x: 0, y: 0, k: 1 }, window);
-    expect(zoom()).toBe("translate(-100px, -50px) scale(2)");
+    expect(zoom()).toEqual({ left: "-100px", top: "-50px", width: "200%", height: "200%", transform: "" });
   });
 
   it("0 fits the slide to the screen again, from the app too", () => {
@@ -216,9 +231,63 @@ describe("Presenter tools", () => {
     ]);
     expect(strokes()).toHaveLength(1);
     const path = strokes()[0]!;
-    expect(path.getAttribute("d")).toBe("M100 100L200 150L300 250");
+    expect(path.getAttribute("d")).toBe("M100 100L150 125Q200 150 300 250");
     expect(path.getAttribute("stroke")).toBe("#ef4444");
     expect(path.getAttribute("stroke-width")).toBe("4");
+  });
+
+  /** A move that also carries the samples the browser coalesced into it, the event's own last. */
+  function moveThrough(samples: [number, number][]) {
+    const [x, y] = samples[samples.length - 1]!;
+    const event = createEvent.pointerMove(layer(), { buttons: 1, clientX: x, clientY: y, pointerId: 1 });
+    const coalesced = samples.map(([clientX, clientY]) => ({ clientX, clientY }));
+    Object.assign(event, { getCoalescedEvents: () => coalesced });
+    fireEvent(layer(), event);
+  }
+
+  it("the pen keeps every sample of a fast move, not just one per frame", () => {
+    render(<Presenter />);
+    fireEvent.click(tool(/^Pen/));
+    fireEvent.pointerDown(layer(), { button: 0, buttons: 1, clientX: 100, clientY: 100, pointerId: 1 });
+    moveThrough([
+      [200, 100],
+      [200, 200],
+      [100, 200],
+    ]);
+    fireEvent.pointerUp(layer(), { pointerId: 1 });
+    expect(strokes()[0]!.getAttribute("d")).toBe("M100 100L150 100Q200 100 200 150Q200 200 100 200");
+  });
+
+  it("draws ink as vectors at the zoomed size, thickening with the slide", () => {
+    const resized: (() => void)[] = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          resized.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    render(<Presenter />);
+    fireEvent.click(tool(/^Pen/));
+    draw([
+      [100, 100],
+      [200, 150],
+    ]);
+    fireEvent.keyDown(document.body, { key: "h" });
+    draw([[300, 200]]);
+    // The layer now measures twice the size, as it would once laid out at 200%.
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue(new DOMRect(-100, -50, 2000, 1000));
+    fromFrame({ type: "slop:zoom", x: -100, y: -50, k: 2 });
+    // Redrawn right in the resize callback, before the browser paints, so zooming doesn't flicker.
+    resized.forEach((callback) => callback());
+    const [pen, dot] = strokes();
+    expect(pen!.getAttribute("d")).toBe("M200 200L400 300");
+    expect(pen!.getAttribute("stroke-width")).toBe("8");
+    expect(dot!.getAttribute("r")).toBe("28");
+    expect(layer().querySelector("svg")!.style.transform).toBe("");
   });
 
   it("the highlighter draws wide, translucent strokes", () => {
@@ -377,6 +446,115 @@ describe("Presenter tools", () => {
     expect(screen.queryByTestId("laser")).toBeNull();
   });
 
+  /** Records what is painted on the laser trail's canvas. */
+  function paintedTrail() {
+    const painted = { strokes: [] as number[], images: [] as { shadowBlur: number; shadowColor: string }[] };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(function (this: HTMLCanvasElement) {
+      const ctx = fakeCanvas2D(this);
+      // The visible canvas is in the document; the scratch canvas the trail is drawn on first is not.
+      if (this.isConnected) {
+        const clear = ctx.clearRect;
+        ctx.clearRect = () => {
+          clear();
+          painted.strokes = ctx.strokes;
+          painted.images = ctx.images;
+        };
+      } else {
+        ctx.clearRect = () => {
+          ctx.strokes = [];
+          painted.strokes = ctx.strokes;
+        };
+      }
+      return ctx as unknown as CanvasRenderingContext2D;
+    } as unknown as typeof HTMLCanvasElement.prototype.getContext);
+    return painted;
+  }
+
+  function dragLaser() {
+    fireEvent.keyDown(document.body, { key: "l" });
+    // Just moving the laser leaves no trail.
+    fireEvent.pointerMove(layer(), { buttons: 0, clientX: 100, clientY: 100 });
+    expect(screen.queryByTestId("laser-trail")).toBeNull();
+    fireEvent.pointerDown(layer(), { button: 0, buttons: 1, clientX: 100, clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(layer(), { buttons: 1, clientX: 200, clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(layer(), { buttons: 1, clientX: 300, clientY: 150, pointerId: 1 });
+    fireEvent.pointerUp(layer(), { pointerId: 1 });
+  }
+
+  it("dragging the laser leaves a trail that lingers, then fades away", () => {
+    vi.useFakeTimers();
+    try {
+      const painted = paintedTrail();
+      render(<Presenter />);
+      dragLaser();
+      expect(screen.getByTestId("laser-trail")).toBeTruthy();
+      expect(painted.strokes).toEqual([LASER_SIZE, LASER_SIZE]);
+      expect(strokes()).toHaveLength(0);
+      act(() => void vi.advanceTimersByTime(TRAIL_HOLD_MS - 100));
+      expect(painted.strokes).toEqual([LASER_SIZE, LASER_SIZE]);
+      act(() => void vi.advanceTimersByTime(100 + TRAIL_FADE_MS / 2));
+      expect(painted.strokes).toHaveLength(2);
+      for (const width of painted.strokes) {
+        expect(width).toBeGreaterThan(0);
+        expect(width).toBeLessThan(LASER_SIZE);
+      }
+      act(() => void vi.advanceTimersByTime(TRAIL_FADE_MS));
+      expect(screen.queryByTestId("laser-trail")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the laser trail keeps every sample of a fast move", () => {
+    const painted = paintedTrail();
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "l" });
+    fireEvent.pointerDown(layer(), { button: 0, buttons: 1, clientX: 100, clientY: 100, pointerId: 1 });
+    moveThrough([
+      [200, 100],
+      [200, 200],
+      [100, 200],
+    ]);
+    expect(painted.strokes).toEqual([LASER_SIZE, LASER_SIZE, LASER_SIZE]);
+  });
+
+  it("a fresh laser trail is as wide as the dot and glows like it", () => {
+    const painted = paintedTrail();
+    render(<Presenter />);
+    dragLaser();
+    fireEvent.pointerMove(layer(), { buttons: 0, clientX: 300, clientY: 150 });
+    const dot = screen.getByTestId("laser");
+    expect(`${painted.strokes[0]}px`).toBe(dot.style.width);
+    const colors = (css: string) => css.match(/rgb\([^)]*\)/g)!.map((c) => c.replace(/\s+/g, " "));
+    const glow = painted.images.filter((i) => i.shadowBlur > 0).map((i) => i.shadowColor);
+    expect(new Set(glow)).toEqual(new Set(colors(dot.style.boxShadow)));
+  });
+
+  it("a zoomed-in laser trail only gets a canvas the size of the screen", () => {
+    paintedTrail();
+    const zoomed = { left: -1000, top: -500, width: window.innerWidth * 4, height: window.innerHeight * 4 };
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ ...zoomed, x: zoomed.left, y: zoomed.top } as DOMRect);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(zoomed.width);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(zoomed.height);
+    render(<Presenter />);
+    dragLaser();
+    const canvas = screen.getByTestId("laser-trail") as HTMLCanvasElement;
+    expect([canvas.style.left, canvas.style.top]).toEqual(["1000px", "500px"]);
+    expect([canvas.style.width, canvas.style.height]).toEqual([`${window.innerWidth}px`, `${window.innerHeight}px`]);
+    const scale = window.devicePixelRatio || 1;
+    expect([canvas.width, canvas.height]).toEqual([window.innerWidth * scale, window.innerHeight * scale]);
+  });
+
+  it("putting the laser away clears its trail", () => {
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "l" });
+    fireEvent.pointerDown(layer(), { button: 0, buttons: 1, clientX: 100, clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(layer(), { buttons: 1, clientX: 200, clientY: 100, pointerId: 1 });
+    expect(screen.queryByTestId("laser-trail")).not.toBeNull();
+    fireEvent.keyDown(document.body, { key: "l" });
+    expect(screen.queryByTestId("laser-trail")).toBeNull();
+  });
+
   it("the toolbar shows on hover and briefly after shortcuts", () => {
     vi.useFakeTimers();
     try {
@@ -393,6 +571,28 @@ describe("Presenter tools", () => {
       expect(bar.dataset.visible).toBe("true");
       act(() => void vi.advanceTimersByTime(2000));
       expect(bar.dataset.visible).toBe("false");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the arrow buttons show at the start, on hover and briefly after shortcuts", () => {
+    vi.useFakeTimers();
+    try {
+      render(<Presenter />);
+      const next = screen.getByLabelText("Next slide");
+      const zone = screen.getByTestId("nav-zone");
+      expect(next.dataset.visible).toBe("true");
+      act(() => void vi.advanceTimersByTime(2000));
+      expect(next.dataset.visible).toBe("false");
+      fireEvent.mouseEnter(zone);
+      expect(next.dataset.visible).toBe("true");
+      fireEvent.mouseLeave(zone);
+      expect(next.dataset.visible).toBe("false");
+      fireEvent.keyDown(document.body, { key: "p" });
+      expect(next.dataset.visible).toBe("true");
+      act(() => void vi.advanceTimersByTime(2000));
+      expect(next.dataset.visible).toBe("false");
     } finally {
       vi.useRealTimers();
     }

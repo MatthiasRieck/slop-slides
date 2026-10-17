@@ -196,6 +196,117 @@ describe("slide editor", () => {
     expect(e.commits()[0]!.markup).toContain(`<div class="card"><p style="color: red">Two</p></div>`);
   });
 
+  it("removes the selection with Backspace too, and ignores Delete with nothing selected", () => {
+    const e = editor();
+    e.key("Delete");
+    expect(e.commits()).toEqual([]);
+    e.down(e.$(".shape"));
+    e.key("Backspace");
+    expect(e.doc.querySelector(".shape")).toBeNull();
+    expect(e.commits()).toHaveLength(1);
+    expect(e.selected()).toEqual([]);
+  });
+
+  it("removes the selection when the app asks, ending any text editing first", () => {
+    const e = editor();
+    e.fromParent({ type: "slop:edit-delete" });
+    expect(e.commits()).toEqual([]);
+    e.down(e.$(".card p"));
+    e.key("Enter");
+    expect(e.$(".card p").hasAttribute("contenteditable")).toBe(true);
+    e.fromParent({ type: "slop:edit-delete" });
+    expect(e.doc.querySelectorAll(".card p")).toHaveLength(1);
+    const last = e.commits().at(-1)!;
+    expect(last.markup).toContain(`<div class="card"><p style="color: red">Two</p></div>`);
+    expect(last.markup).not.toContain("contenteditable");
+  });
+
+  describe("dropped images", () => {
+    const drop = (e: ReturnType<typeof editor>, images: unknown, x = 960, y = 540) =>
+      e.fromParent({ type: "slop:edit-insert-images", images, x, y });
+
+    it("puts them on top of the slide, centered where they landed and fit to it, and saves once", () => {
+      const e = editor();
+      drop(e, [{ src: "assets/wide.png", w: 1280, h: 720 }, { src: "assets/icon.svg" }]);
+      const [wide, icon] = [...e.doc.querySelectorAll<HTMLImageElement>("#intro > img")] as [HTMLImageElement, HTMLImageElement];
+      // Fit to a third of the slide's width: 640×360, centered on (960, 540).
+      expect(wide.getAttribute("src")).toBe("assets/wide.png");
+      expect(wide.getAttribute("alt")).toBe("");
+      expect(wide.hasAttribute("data-dropped")).toBe(true);
+      expect(wide.hasAttribute("data-moved")).toBe(true);
+      expect(wide.style.position).toBe("absolute");
+      expect([wide.style.left, wide.style.top, wide.style.width]).toEqual(["0px", "0px", "640px"]);
+      expect(wide.style.translate).toBe("640px 360px");
+      // Without a known size it gets the default width, its top at the drop point, fanned out.
+      expect(icon.style.width).toBe("640px");
+      expect(icon.style.translate).toBe("680px 580px");
+      expect(e.$("#intro").lastElementChild).toBe(icon);
+      expect(e.selected()).toEqual([icon]);
+      expect(e.commits()).toHaveLength(1);
+      const commit = e.commits()[0]!;
+      expect(commit.select).toEqual([e.$("#intro").children.length - 1]);
+      expect(commit.markup).toContain('src="assets/wide.png" alt="" data-dropped=""');
+      expect(commit.markup).not.toContain("data-slop-selected");
+    });
+
+    it("keeps small images at their own size", () => {
+      const e = editor();
+      drop(e, [{ src: "assets/logo.png", w: 200, h: 100 }], 300, 200);
+      const img = e.$("#intro > img");
+      expect(img.style.width).toBe("200px");
+      expect(img.style.translate).toBe("200px 150px");
+    });
+
+    it("can be moved like any hand-moved element", () => {
+      const e = editor();
+      drop(e, [{ src: "assets/logo.png", w: 200, h: 100 }], 300, 200);
+      e.drag(e.$("#intro > img"), 10, 20);
+      expect(e.$("#intro > img").style.translate).toBe("210px 170px");
+      expect(e.commits()).toHaveLength(2);
+    });
+
+    it("ends text editing first", () => {
+      const e = editor();
+      e.down(e.$(".card p"));
+      e.key("Enter");
+      drop(e, [{ src: "assets/logo.png", w: 200, h: 100 }]);
+      expect(e.$(".card p").hasAttribute("contenteditable")).toBe(false);
+      expect(e.commits().at(-1)!.markup).not.toContain("contenteditable");
+    });
+
+    it("reports the dropped image to the edit toolbar as media", () => {
+      const e = editor();
+      drop(e, [{ src: "assets/logo.png", w: 200, h: 100 }]);
+      const reports = e.posted().filter((m) => (m as { type: string }).type === "slop:edit-selection");
+      expect(reports.at(-1)).toMatchObject({ slide: "intro", selected: true, selection: { kind: "media", text: false, vector: false } });
+    });
+
+    it("only takes files from the deck's assets", () => {
+      const e = editor();
+      drop(e, [{ src: "https://example.com/x.png" }, { src: "javascript:alert(1)" }, null, { src: 3 }]);
+      drop(e, "assets/a.png");
+      e.fromParent({ type: "slop:edit-insert-images", images: [{ src: "assets/a.png" }], x: "left", y: 0 });
+      expect(e.doc.querySelector("#intro > img")).toBeNull();
+      expect(e.commits()).toEqual([]);
+    });
+  });
+
+  it("tells the app whether anything is selected, whenever the selection changes", () => {
+    const e = editor();
+    const reports = () =>
+      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-selection") as { slide: string; selected: boolean; selection: unknown }[];
+    e.down(e.$("h1"));
+    e.down(e.$("h1"));
+    e.down(e.$(".card p"));
+    expect(reports().map((r) => [r.slide, r.selected])).toEqual([
+      ["intro", true],
+      ["intro", true],
+    ]);
+    e.key("Delete");
+    expect(reports().at(-1)).toEqual({ type: "slop:edit-selection", slide: "intro", selected: false, selection: null });
+    expect(reports()).toHaveLength(3);
+  });
+
   it("edits text on double-click and saves it when done", () => {
     const e = editor();
     const p = e.$(".card p");
@@ -287,9 +398,9 @@ describe("slide editor", () => {
       e.down(h1);
       e.up(h1);
       const ui = e.$("[data-slop-ui]");
-      /** "rotate", or a stretch handle by direction from the center, like "1 1" (bottom right). */
+      /** "rotate", "tilt", or a stretch handle by direction from the center, like "1 1" (bottom right). */
       const handle = (kind: string) =>
-        ui.querySelector<HTMLElement>(kind === "rotate" ? `[data-handle="rotate"]` : `[data-dir="${kind}"]`)!;
+        ui.querySelector<HTMLElement>(/^[a-z]+$/.test(kind) ? `[data-handle="${kind}"]` : `[data-dir="${kind}"]`)!;
       const pointer = (type: string, target: Element, x: number, y: number, init: PointerEventInit = {}) =>
         target.dispatchEvent(
           new e.window.PointerEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true, ...init }),
@@ -428,6 +539,76 @@ describe("slide editor", () => {
       expect(h1.style.rotate).toBe("100deg");
       pull("rotate", [600, 300], [500, 200]);
       expect(h1.hasAttribute("style")).toBe(false);
+      expect(h1.hasAttribute("data-moved")).toBe(false);
+    });
+
+    it("tilts the selection in 3D with perspective, the side pulled towards turning away", () => {
+      const { e, h1, ui, pull } = withHeading();
+      // Right by 60px and up by 20px: around the vertical axis by 30°, the horizontal by 10°.
+      pull("tilt", [520, 200], [580, 180]);
+      expect(h1.style.transform).toBe("perspective(1000px) rotateX(10deg) rotateY(30deg)");
+      expect(h1.style.getPropertyPriority("transform")).toBe("important");
+      expect(h1.hasAttribute("data-moved")).toBe(true);
+      // The frame and stretch handles tilt along; the rotate and tilt handles stay flat.
+      const plane = ui.querySelector<HTMLElement>("[data-plane]")!;
+      expect(plane.style.transform).toBe("perspective(1000px) rotateX(10deg) rotateY(30deg)");
+      expect(plane.querySelectorAll('[data-handle="scale"]')).toHaveLength(8);
+      expect(plane.querySelector('[data-handle="rotate"], [data-handle="tilt"]')).toBeNull();
+      expect(ui.style.transform).toBe("rotate(0deg)");
+      const [commit] = e.commits();
+      expect(commit!.markup).toContain(
+        `style="transform: perspective(1000px) rotateX(10deg) rotateY(30deg) !important;" data-moved="">Hello`,
+      );
+      // Further from where it was, snapping each axis to 15° with Shift.
+      pull("tilt", [520, 200], [520, 160], { shiftKey: true });
+      expect(h1.style.transform).toBe("perspective(1000px) rotateX(30deg) rotateY(30deg)");
+      expect(e.commits()).toHaveLength(2);
+    });
+
+    it("tilts along a rotated element's own axes, and keeps its rotation", () => {
+      const { h1, pull } = withHeading();
+      h1.style.rotate = "90deg";
+      // Turned a quarter, dragging down pulls towards the element's right side.
+      pull("tilt", [520, 200], [520, 240]);
+      expect(h1.getAttribute("style")).toBe(
+        "rotate: 90deg; transform: perspective(1000px) rotateX(0deg) rotateY(20deg) !important;",
+      );
+    });
+
+    it("drops the tilt when turned back or the tilt handle is double-clicked", () => {
+      const { e, h1, handle, pull } = withHeading();
+      pull("tilt", [520, 200], [580, 200]);
+      pull("tilt", [580, 200], [520, 200]);
+      expect(h1.hasAttribute("style")).toBe(false);
+      expect(h1.hasAttribute("data-moved")).toBe(false);
+      pull("tilt", [520, 200], [520, 300]);
+      pull("rotate", [500, 200], [600, 300]);
+      handle("tilt").dispatchEvent(new e.window.MouseEvent("dblclick", { bubbles: true }));
+      expect(h1.getAttribute("style")).toBe("rotate: 90deg;");
+      expect(e.$("[data-plane]").style.transform).toBe("");
+    });
+
+    it("keeps a transform the element already had, behind the tilt", () => {
+      const { e, h1, pull } = withHeading();
+      const sheet = e.doc.createElement("style");
+      sheet.textContent = ".title { transform: translateX(-50%); }";
+      e.doc.head.appendChild(sheet);
+      pull("tilt", [520, 200], [550, 200]);
+      expect(h1.style.transform).toBe("perspective(1000px) rotateX(0deg) rotateY(15deg) translateX(-50%)");
+      pull("tilt", [550, 200], [520, 200]);
+      expect(h1.hasAttribute("style")).toBe(false);
+      // Nothing to keep from the identity matrix a finished entrance animation leaves.
+      sheet.textContent = ".title { transform: matrix(1, 0, 0, 1, 0, 0); }";
+      pull("tilt", [520, 200], [550, 200]);
+      expect(h1.style.transform).toBe("perspective(1000px) rotateX(0deg) rotateY(15deg)");
+      pull("tilt", [550, 200], [520, 200]);
+      expect(h1.hasAttribute("style")).toBe(false);
+      // A transform set inline by the deck stays inline.
+      h1.setAttribute("style", "transform: scaleX(-1)");
+      pull("tilt", [520, 200], [550, 200]);
+      expect(h1.style.transform).toBe("perspective(1000px) rotateX(0deg) rotateY(15deg) scaleX(-1)");
+      pull("tilt", [550, 200], [520, 200]);
+      expect(h1.getAttribute("style")).toBe("transform: scaleX(-1);");
       expect(h1.hasAttribute("data-moved")).toBe(false);
     });
 
@@ -974,6 +1155,7 @@ describe("slide editor", () => {
       expect(reports(e).at(-1)).toEqual({
         type: "slop:edit-selection",
         slide: "intro",
+        selected: true,
         selection: {
           kind: "shape",
           text: true,

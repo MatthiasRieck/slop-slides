@@ -1,10 +1,18 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
+// jsdom loads no images; dropped ones measure as 1200×800.
+vi.mock("../lib/drop", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/drop")>()),
+  imageSize: vi.fn(async () => ({ w: 1200, h: 800 })),
+}));
 
+import { invoke } from "@tauri-apps/api/core";
+
+import { claimDrop, dropCovered } from "../lib/drop";
 import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
 import { DEFAULT_EDIT_STYLES } from "../lib/editTools";
 import { DECK_HTML, deckFor } from "../test/fixtures";
@@ -51,6 +59,19 @@ describe("Stage", () => {
     render(<Stage />);
     expect(screen.getByText("Start with a conversation")).toBeTruthy();
     expect(screen.queryByText(/\d+ \/ \d+/)).toBeNull();
+  });
+
+  it("opens the template layouts to change the slide's layout", () => {
+    useApp.setState({ templates: [{ id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title", "quote"] }], running: false });
+    render(<Stage />);
+    const button = screen.getByRole("button", { name: /^Layout$/ });
+    fireEvent.click(button);
+    expect(screen.getByRole("dialog", { name: "Change layout" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Quote layout" })).toBeTruthy();
+    fireEvent.click(button);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    act(() => useApp.setState({ running: true }));
+    expect((button as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("renders nothing without a deck", () => {
@@ -128,6 +149,24 @@ describe("Stage", () => {
       document.body.appendChild(frame);
       forward("ArrowRight", frame.contentWindow);
       expect(useApp.getState().selected).toBe("#2");
+      frame.remove();
+    });
+
+    it("focuses a slide iframe that asks for it, taking the keys from the composer", () => {
+      render(
+        <>
+          <Stage />
+          <textarea data-testid="composer" />
+        </>,
+      );
+      const frame = document.createElement("iframe");
+      document.body.appendChild(frame);
+      screen.getByTestId("composer").focus();
+      act(() => void window.dispatchEvent(new MessageEvent("message", { data: { type: "slop:focus" }, source: window })));
+      expect(document.activeElement).toBe(screen.getByTestId("composer"));
+      act(() => void window.dispatchEvent(new MessageEvent("message", { data: { type: "slop:focus" }, source: frame.contentWindow })));
+      expect(document.activeElement).toBe(frame);
+      expect(useApp.getState().selected).toBe("intro");
       frame.remove();
     });
 
@@ -230,6 +269,14 @@ describe("Stage", () => {
       expect(screen.queryByRole("button", { name: "Clear marks on this slide" })).toBeNull();
     });
 
+    it("puts the review toggle before the sketch tools", () => {
+      const mark = { tool: "pen" as const, color: "#ef4444", points: [[0.5, 0.5]] as [number, number][] };
+      act(() => useApp.setState({ sketches: { intro: [mark] } }));
+      render(<Stage />);
+      const toggle = tool("Hide review marks");
+      expect(toggle.compareDocumentPosition(tool("Draw on the slide")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
     it("shows and hides the review marks", () => {
       const mark = { tool: "pen" as const, color: "#ef4444", points: [[0.5, 0.5]] as [number, number][] };
       render(<Stage />);
@@ -308,6 +355,23 @@ describe("Stage", () => {
       globalThis.ResizeObserver = NoLayout;
       useApp.setState({ saveSlideEdit, undoSlideEdit, redoSlideEdit, discardSlideEdits, tidyLayout });
       vi.restoreAllMocks();
+    });
+
+    it("locks the edit button, Layout and Tidy layout on a locked slide, and leaves edit mode for one", () => {
+      const locked = deckFor(DECK_HTML.replace(`id="outro"`, `id="outro" data-locked`));
+      useApp.setState({ deck: locked, templates: [] });
+      render(<Stage />);
+      fireEvent.click(editButton());
+      expect(useApp.getState().editing).toBe(true);
+      expect(screen.queryByText("Locked")).toBeNull();
+
+      act(() => useApp.getState().select("outro"));
+      expect(useApp.getState().editing).toBe(false);
+      expect((editButton() as HTMLButtonElement).disabled).toBe(true);
+      expect(editButton().title).toContain("locked");
+      expect(screen.getByText("Locked")).toBeTruthy();
+      expect((screen.getByRole("button", { name: /^Layout$/ }) as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByRole("button", { name: /Tidy layout/ }) as HTMLButtonElement).disabled).toBe(true);
     });
 
     it("shows a pencil icon on the edit button", () => {
@@ -592,6 +656,99 @@ describe("Stage", () => {
       expect(save).toHaveBeenCalledTimes(1);
     });
 
+    it("deletes the editor's selection from the edit bar, enabled only while something is selected", () => {
+      const { container } = render(<Stage />);
+      fireEvent.click(editButton());
+      const frame = stageFrame(container);
+      fireEvent.load(frame);
+      const remove = () => screen.getByRole("button", { name: "Delete selected element" }) as HTMLButtonElement;
+      expect(remove().disabled).toBe(true);
+      fromFrame(frame, { type: "slop:edit-selection", slide: "outro", selected: true, selection: { kind: "element" } });
+      fromFrame(null, { type: "slop:edit-selection", slide: "intro", selected: true, selection: { kind: "element" } });
+      expect(remove().disabled).toBe(true);
+      fromFrame(frame, { type: "slop:edit-selection", slide: "intro", selected: true, selection: { kind: "element" } });
+      expect(remove().disabled).toBe(false);
+      // The edit toolbar's delete button follows the same selection.
+      expect((screen.getByRole("button", { name: "Delete (⌫)" }) as HTMLButtonElement).disabled).toBe(false);
+      const post = vi.spyOn(frame.contentWindow!, "postMessage");
+      fireEvent.click(remove());
+      expect(post).toHaveBeenCalledWith({ type: "slop:edit-delete" }, "*");
+      fromFrame(frame, { type: "slop:edit-selection", slide: "intro", selected: false, selection: null });
+      expect(remove().disabled).toBe(true);
+      // A reloaded editor starts without a selection.
+      fromFrame(frame, { type: "slop:edit-selection", slide: "intro", selected: true, selection: { kind: "element" } });
+      fireEvent.load(frame);
+      expect(remove().disabled).toBe(true);
+    });
+
+    describe("dropping images", () => {
+      beforeEach(() => void vi.mocked(invoke).mockReset());
+
+      /** The stage area at (0, 0, 1000×600); the editing preview 2000px wide, scaled to half, at (-20, -10). */
+      function laidOut(container: HTMLElement) {
+        const frame = [...container.querySelectorAll("iframe")].at(-1)!;
+        fireEvent.load(frame);
+        vi.spyOn(screen.getByTestId("stage-area"), "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 600));
+        vi.spyOn(frame, "getBoundingClientRect").mockReturnValue(new DOMRect(-20, -10, 1000, 600));
+        Object.defineProperty(frame, "clientWidth", { value: 2000, configurable: true });
+        return { frame, post: vi.spyOn(frame.contentWindow!, "postMessage") };
+      }
+
+      it("puts images dropped on the slide while editing onto it, where they landed", async () => {
+        vi.mocked(invoke).mockResolvedValue(["assets/photo.png"]);
+        const { container } = render(<Stage />);
+        fireEvent.click(editButton());
+        const { post } = laidOut(container);
+        expect(dropCovered({ x: 480, y: 290 })).toBe(true);
+        let rest: string[] = [];
+        await act(async () => {
+          rest = claimDrop(["/tmp/photo.png", "/tmp/notes.md"], { x: 480, y: 290 });
+        });
+        // Anything that is not an image goes on to the chat.
+        expect(rest).toEqual(["/tmp/notes.md"]);
+        expect(invoke).toHaveBeenCalledWith("import_assets", { id: useApp.getState().deck!.id, paths: ["/tmp/photo.png"] });
+        await waitFor(() =>
+          expect(post).toHaveBeenCalledWith(
+            { type: "slop:edit-insert-images", images: [{ src: "assets/photo.png", w: 1200, h: 800 }], x: 1000, y: 600 },
+            "*",
+          ),
+        );
+      });
+
+      it("leaves drops to the chat outside edit mode, outside the stage, or without images", () => {
+        const { container, unmount } = render(<Stage />);
+        expect(claimDrop(["/tmp/photo.png"], { x: 100, y: 100 })).toEqual(["/tmp/photo.png"]);
+        expect(dropCovered({ x: 100, y: 100 })).toBe(false);
+        fireEvent.click(editButton());
+        laidOut(container);
+        expect(dropCovered({ x: 1200, y: 100 })).toBe(false);
+        expect(claimDrop(["/tmp/photo.png"], { x: 1200, y: 100 })).toEqual(["/tmp/photo.png"]);
+        expect(claimDrop(["/tmp/notes.md"], { x: 100, y: 100 })).toEqual(["/tmp/notes.md"]);
+        unmount();
+        expect(dropCovered({ x: 100, y: 100 })).toBe(false);
+        expect(claimDrop(["/tmp/photo.png"], { x: 100, y: 100 })).toEqual(["/tmp/photo.png"]);
+        expect(invoke).not.toHaveBeenCalledWith("import_assets", expect.anything());
+      });
+
+      it("does not insert into a slide that is no longer being edited, and reports failed imports", async () => {
+        let finish: (refs: string[]) => void = () => {};
+        vi.mocked(invoke).mockImplementation(() => new Promise((resolve) => (finish = resolve)));
+        const { container } = render(<Stage />);
+        fireEvent.click(editButton());
+        const { post } = laidOut(container);
+        act(() => void claimDrop(["/tmp/photo.png"], { x: 100, y: 100 }));
+        fireEvent.click(editButton());
+        await act(async () => finish(["assets/photo.png"]));
+        expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-insert-images" }), "*");
+
+        vi.mocked(invoke).mockRejectedValue("disk full");
+        fireEvent.click(editButton());
+        laidOut(container);
+        await act(async () => void claimDrop(["/tmp/photo.png"], { x: 100, y: 100 }));
+        await waitFor(() => expect(useApp.getState().error).toBe("disk full"));
+      });
+    });
+
     it("selects the edited element again once the slide reloads", () => {
       useApp.setState({ saveSlideEdit: vi.fn().mockResolvedValue(undefined) });
       const { container } = render(<Stage />);
@@ -657,6 +814,17 @@ describe("Stage", () => {
       expect(post).toHaveBeenCalledWith(colors, "*");
       fireEvent.click(editButton());
       expect(slideBox().style.width).toBe("960px");
+    });
+
+    it("fits a slide of another size into the area in its own shape", () => {
+      const deck = deckFor(DECK_HTML);
+      useApp.setState({ deck: { ...deck, size: { width: 1080, height: 1350, unit: "px", pixelWidth: 1080, pixelHeight: 1350 } } });
+      const { container } = render(<Stage />);
+      const slideBox = container.querySelector<HTMLElement>("[data-sketch-target]")!;
+      // The 960x540 area fits a 4:5 slide 432 px wide (540 px tall).
+      expect(slideBox.style.width).toBe("432px");
+      const viewer = stageFrame(container);
+      expect(viewer.parentElement!.style.aspectRatio).toBe("1080 / 1350");
     });
 
     describe("pasteboard view", () => {
@@ -729,12 +897,16 @@ describe("Stage", () => {
 
       it("moves the ink with the slide as the view pans and zooms", () => {
         const { container } = render(<Stage />);
-        const ink = () => screen.getByTestId("annotation-view");
-        expect(ink().style.transform).toBe("");
-        // Slide pixels on a 960px wide slide: half a CSS px each.
+        const ink = () => {
+          const { left, top, width, height, transform } = screen.getByTestId("annotation-view").style;
+          return { left, top, width, height, transform };
+        };
+        expect(ink()).toEqual({ left: "0px", top: "0px", width: "100%", height: "100%", transform: "" });
+        // Slide pixels on a 960px wide slide: half a CSS px each. The ink is laid out at the
+        // zoomed size rather than CSS-scaled, so it stays sharp.
         fromFrame(stageFrame(container), { type: "slop:view", slide: "intro", x: 40, y: -20, k: 2 });
-        expect(ink().style.transform).toBe("translate(20px, -10px) scale(2)");
-        expect(ink().contains(screen.getByTestId("annotation-layer"))).toBe(true);
+        expect(ink()).toEqual({ left: "20px", top: "-10px", width: "200%", height: "200%", transform: "" });
+        expect(screen.getByTestId("annotation-view").contains(screen.getByTestId("annotation-layer"))).toBe(true);
       });
 
       it("keeps zoomed ink inside the stage area, off the bar below", () => {

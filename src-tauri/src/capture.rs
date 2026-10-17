@@ -15,7 +15,7 @@ use crate::error::{Error, Result};
 
 /// Widest sketch screenshot, in pixels; about what the model looks at anyway.
 pub const SKETCH_WIDTH: u32 = 1600;
-/// Widest exported slide image: the slides' own 1920×1080 stage.
+/// Widest exported slide image when the canvas width is not given: the default 1920×1080 stage.
 pub const SLIDE_WIDTH: u32 = 1920;
 
 /// A region of the webview in CSS pixels, as `getBoundingClientRect()` reports it.

@@ -5,11 +5,14 @@
    the stage. The surroundings are an endless pasteboard: drag with the middle button (pressed
    mouse wheel), swipe on a trackpad or hold Space and drag to pan; turn the mouse wheel, pinch or
    Ctrl/⌘+scroll to zoom; 0 returns to the start. Without the slide editor, dragging with the
-   primary button pans too. The slide's frame (outline and shadow) moves with it.
+   primary button pans too, except from text, which it selects instead (even text under an
+   invisible layer the deck spreads over the slide), and from links and other controls. The slide's frame (outline and shadow) moves with it.
    The view is reported as { type: "slop:view", slide, x, y, k } (pan in px, zoom) and restored
    with { type: "slop:camera", x, y, k } or { type: "slop:camera", home: true }. The app also
    sends { type: "slop:canvas", color, accent }: the color of the panel around the slide and its
    accent color, which the editor uses to dim what lies outside the slide and mark edit mode.
+   A press on the preview while it lacks keyboard focus posts { type: "slop:focus" }, and the
+   app focuses the preview.
 
    The slide editor (editor.js) runs after this and builds on window.slopPasteboard.
 
@@ -25,8 +28,6 @@
   var params = new URLSearchParams(location.search);
   var show = params.has("show");
 
-  var STAGE_W = 1920;
-  var STAGE_H = 1080;
   var MIN_ZOOM = 0.1;
   var MAX_ZOOM = 8;
   var WHEEL_ZOOM = 0.005;
@@ -37,6 +38,9 @@
 
   var deck = slide.parentElement;
   var root = document.documentElement;
+  // The stage's size in slide pixels: the deck's slide size.
+  var STAGE_W = deck.offsetWidth || 1920;
+  var STAGE_H = deck.offsetHeight || 1080;
   // The page is transparent around the slide, so keep whatever the deck painted behind it.
   if (!show && getComputedStyle(deck).backgroundColor === "rgba(0, 0, 0, 0)") {
     var behind = [document.body, root]
@@ -166,20 +170,129 @@
     }
   }
 
+  /** The caret position nearest the screen point (x, y), as { node, offset }, if any. */
+  function caretAt(x, y) {
+    if (document.caretPositionFromPoint) {
+      var position = document.caretPositionFromPoint(x, y);
+      return position && { node: position.offsetNode, offset: position.offset };
+    }
+    if (document.caretRangeFromPoint) {
+      var range = document.caretRangeFromPoint(x, y);
+      return range && { node: range.startContainer, offset: range.startOffset };
+    }
+    return null;
+  }
+
+  /**
+   * Whether the caret at (x, y) sits by a character drawn under that point, not merely inside a
+   * text box: padding, gaps between lines and the space past a line's end don't count.
+   */
+  function onGlyph(caret, x, y) {
+    if (!caret || caret.node.nodeType !== 3 || !caret.node.data.trim()) return false;
+    var node = caret.node;
+    // The caret sits between two characters; the point may be over either of them.
+    var range = document.createRange();
+    for (var i = Math.max(0, caret.offset - 1); i < Math.min(node.data.length, caret.offset + 1); i++) {
+      range.setStart(node, i);
+      range.setEnd(node, i + 1);
+      var rects = range.getClientRects();
+      for (var j = 0; j < rects.length; j++) {
+        var r = rects[j];
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The text under the screen point (x, y): { caret, covers }, where covers are the elements on
+   * top of it, like an invisible layer a deck spreads over the slide to react to hovering. Each
+   * one found is taken out of hit testing (pointer-events: none) until restore(covers). Null when
+   * no character lies under the point.
+   */
+  function textAt(x, y) {
+    if (!document.caretPositionFromPoint && !document.caretRangeFromPoint) return null;
+    var covers = [];
+    for (var tries = 0; tries < 20; tries++) {
+      var caret = caretAt(x, y);
+      if (onGlyph(caret, x, y)) return { caret: caret, covers: covers };
+      var el = document.elementFromPoint(x, y);
+      // Down to the slide itself: nothing but the slide's background is left.
+      if (!el || !slide.contains(el) || el === slide) break;
+      covers.push({ el: el, value: el.style.getPropertyValue("pointer-events"), priority: el.style.getPropertyPriority("pointer-events") });
+      el.style.setProperty("pointer-events", "none", "important");
+    }
+    restore(covers);
+    return null;
+  }
+
+  function restore(covers) {
+    covers.forEach(function (cover) {
+      if (cover.value) cover.el.style.setProperty("pointer-events", cover.value, cover.priority);
+      else cover.el.style.removeProperty("pointer-events");
+    });
+  }
+
+  // Selecting text that lies under a covering layer, which the browser can't do on its own:
+  // { anchor, covers }, with the covers out of the way until the button is released.
+  var selecting = null;
+
+  function endSelecting() {
+    if (!selecting) return;
+    restore(selecting.covers);
+    selecting = null;
+  }
+
+  // Panning and the editor cancel the press, so it never moves keyboard focus here by itself and
+  // keys would stay with whatever had it in the app (the chat composer, say). The app focuses
+  // this preview instead, so the arrow keys change slides after a click on the slide.
+  if (!show) {
+    window.addEventListener(
+      "pointerdown",
+      function () {
+        if (!document.hasFocus()) window.parent.postMessage({ type: "slop:focus" }, "*");
+      },
+      true,
+    );
+  }
+
   // The middle button (pressing the mouse wheel) always pans, even while typing; Space+drag pans
-  // unless typing. Without the editor, the primary button pans too, except on controls; in a show
-  // it clicks through the slides.
+  // unless typing. Without the editor, the primary button pans too, except from text (to select
+  // it, even under a layer the deck put over it) and controls; in a show it clicks through the
+  // slides.
   document.addEventListener("pointerdown", function (event) {
-    // A press always ends an earlier pan, even one whose release never arrived.
+    // A press always ends an earlier pan or selection, even one whose release never arrived.
     pan = null;
+    endSelecting();
     var primary = event.button === 0;
     if (event.button !== 1 && !(primary && spaceDown && !api.busy())) {
-      if (!primary || editor || show || event.target.closest("a, button, input, select, textarea, video, audio, [contenteditable]")) return;
+      if (!primary || editor || show) return;
+      if (event.target.closest("a, button, input, select, textarea, video, audio, [contenteditable]")) return;
+      var text = textAt(event.clientX, event.clientY);
+      if (text && !text.covers.length) return;
+      if (text) {
+        event.preventDefault();
+        selecting = { anchor: text.caret, covers: text.covers };
+        window.getSelection().collapse(text.caret.node, text.caret.offset);
+        event.stopImmediatePropagation();
+        return;
+      }
+      // A click away from the text deselects it, which the browser no longer does once panning
+      // takes the press.
+      window.getSelection().removeAllRanges();
     }
     startPan(event);
     event.stopImmediatePropagation();
   });
   document.addEventListener("pointermove", function (event) {
+    if (selecting) {
+      var caret = caretAt(event.clientX, event.clientY);
+      if (caret && slide.contains(caret.node)) {
+        window.getSelection().setBaseAndExtent(selecting.anchor.node, selecting.anchor.offset, caret.node, caret.offset);
+      }
+      event.stopImmediatePropagation();
+      return;
+    }
     if (!pan) return;
     var dx = event.clientX - pan.x;
     var dy = event.clientY - pan.y;
@@ -189,6 +302,7 @@
     event.stopImmediatePropagation();
   });
   function endPan(event) {
+    endSelecting();
     if (!pan) return;
     pan = null;
     root.style.cursor = spaceDown ? "grab" : "";

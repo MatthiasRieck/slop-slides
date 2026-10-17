@@ -8,7 +8,7 @@ import type { Annotations } from "./PresenterTools";
 
 /**
  * Pen, highlighter and eraser for marking up the slide in the editor. The marks are saved in
- * deck.html as a review, which can be shown and hidden, and sent to the agent as a screenshot
+ * the deck file as a review, which can be shown and hidden, and sent to the agent as a screenshot
  * with the next chat message.
  */
 export function SketchToolbar({ annotations }: { annotations: Annotations }) {
@@ -26,6 +26,14 @@ export function SketchToolbar({ annotations }: { annotations: Annotations }) {
 
   return (
     <div role="toolbar" aria-label="Sketch tools" className="flex items-center gap-0.5">
+      {hasReview && (
+        <>
+          <SketchButton label={reviewVisible ? "Hide review marks" : "Show review marks"} onClick={toggleReview}>
+            {reviewVisible ? <Eye /> : <EyeOff />}
+          </SketchButton>
+          <div className="mx-1 h-4 w-px bg-border" />
+        </>
+      )}
       <SketchButton label="Draw on the slide" active={tool === "pen"} onClick={() => toggle("pen")}>
         <PenLine />
       </SketchButton>
@@ -61,14 +69,6 @@ export function SketchToolbar({ annotations }: { annotations: Annotations }) {
           </SketchButton>
           <SketchButton label="Clear marks on this slide" onClick={clear}>
             <Trash2 />
-          </SketchButton>
-        </>
-      )}
-      {hasReview && (
-        <>
-          <div className="mx-1 h-4 w-px bg-border" />
-          <SketchButton label={reviewVisible ? "Hide review marks" : "Show review marks"} onClick={toggleReview}>
-            {reviewVisible ? <Eye /> : <EyeOff />}
           </SketchButton>
         </>
       )}

@@ -54,6 +54,7 @@ impl PageSize {
 pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
     let (width, height) = html::slide_size(&deck::read_html(file)?).pixels();
     let dest = absolute_dest(dest)?;
+    let dest_file = dest.clone();
     let url = protocol::file_url(file, "static&print")
         .parse()
         .map_err(|e| Error::msg(format!("cannot open the deck for printing: {e}")))?;
@@ -97,22 +98,115 @@ pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
         if slides == 0 {
             return Err(Error::msg("the deck has no shown slides to export"));
         }
+        let page = platform::paper(PageSize::of_slides(width, height));
+        let slide_height = print_height(page, width);
+        if (slide_height - f64::from(height)).abs() > 0.001 {
+            helper
+                .run(
+                    &format!("window.__slopPdf.fit({width}, {slide_height})"),
+                    "fit",
+                )
+                .await?;
+        }
         if cfg!(target_os = "macos") {
             helper.flatten_decor(slides, width).await?;
         }
         let (tx, rx) = oneshot::channel::<Result<()>>();
-        let page = PageSize::of_slides(width, height);
         window
             .with_webview(move |platform| platform::print(platform, dest, page, tx))
             .map_err(|e| Error::msg(format!("cannot reach the webview: {e}")))?;
         tokio::time::timeout(TIMEOUT, rx)
             .await
             .map_err(|_| Error::msg("printing the PDF took too long"))?
-            .map_err(|_| Error::msg("printing the PDF was cancelled"))?
+            .map_err(|_| Error::msg("printing the PDF was cancelled"))??;
+        if cfg!(target_os = "macos") {
+            let mut pdf = std::fs::read(&dest_file)?;
+            if crop_to_whole_points(&mut pdf) > 0 {
+                std::fs::write(&dest_file, pdf)?;
+            }
+        }
+        Ok(())
     }
     .await;
     let _ = window.destroy();
     printed
+}
+
+/// How tall each slide prints, in CSS pixels, on `paper` for slides `width` pixels wide.
+/// WebKit scales the slides to the paper's width and breaks pages every whole CSS pixel of
+/// the paper's height (A4 gives 794 px slides 1122 px of its 1122.9), so a slide taller than
+/// that spills onto a page of its own.
+fn print_height(paper: PageSize, width: u32) -> f64 {
+    (paper.height * f64::from(width) / paper.width + 1e-6).floor()
+}
+
+/// Crops each page box of a macOS WebKit PDF to whole points at the top: WebKit draws a page
+/// whole points tall, shifted down by the fraction (A4 is 841.89 pt; its pages start 0.89 pt
+/// down), which would leave a hairline of bare paper above every slide. Boxes are rewritten
+/// in place, padded with spaces, so no byte offsets move. Returns how many it cropped.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn crop_to_whole_points(pdf: &mut [u8]) -> usize {
+    const KEY: &[u8] = b"/MediaBox";
+    let mut cropped = 0;
+    let mut at = 0;
+    while let Some(found) = find(&pdf[at..], KEY) {
+        at += found + KEY.len();
+        let Some(top) = box_top(pdf, at) else {
+            continue;
+        };
+        let text = std::str::from_utf8(&pdf[top.clone()]).unwrap_or("");
+        let Ok(value) = text.parse::<f64>() else {
+            continue;
+        };
+        if value.fract() == 0.0 {
+            continue;
+        }
+        let whole = format!("{}", value.floor());
+        if whole.len() > top.len() {
+            continue;
+        }
+        let field = &mut pdf[top];
+        field.fill(b' ');
+        field[..whole.len()].copy_from_slice(whole.as_bytes());
+        cropped += 1;
+    }
+    cropped
+}
+
+/// Where `haystack` first has `needle`.
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// The bytes of the fourth number (the top) of the `[x0 y0 x1 y1]` box starting at `at`.
+fn box_top(pdf: &[u8], mut at: usize) -> Option<std::ops::Range<usize>> {
+    let skip_space = |at: &mut usize| {
+        while pdf.get(*at).is_some_and(u8::is_ascii_whitespace) {
+            *at += 1;
+        }
+    };
+    skip_space(&mut at);
+    if pdf.get(at) != Some(&b'[') {
+        return None;
+    }
+    at += 1;
+    let mut number = 0..0;
+    for _ in 0..4 {
+        skip_space(&mut at);
+        let start = at;
+        while pdf
+            .get(at)
+            .is_some_and(|c| c.is_ascii_digit() || *c == b'.' || *c == b'-')
+        {
+            at += 1;
+        }
+        if at == start {
+            return None;
+        }
+        number = start..at;
+    }
+    skip_space(&mut at);
+    (pdf.get(at) == Some(&b']')).then_some(number)
 }
 
 /// The room on screen for a window, in logical pixels: the main screen's work area.
@@ -177,6 +271,7 @@ impl Helper<'_> {
                 .run(&format!("window.__slopPdf.show({index})"), "shown")
                 .await?;
             let (rect, viewport) = geometry(&shown)?;
+            let rect = inside_whole_points(rect);
             #[cfg(target_os = "macos")]
             let png =
                 crate::capture::render_region(self.window.as_ref(), rect, viewport, pixels_wide)
@@ -241,6 +336,24 @@ fn geometry(
             },
         )),
         _ => Err(Error::msg("the deck did not say where its slide is")),
+    }
+}
+
+/// `rect` shrunk to the whole points inside it. The slide sits at a fraction of a point (the
+/// player centres and scales it), and a capture from its exact edge would blend in a hairline
+/// of the black page around it; the image is stretched over the slide, so the lost edge (under
+/// a pixel) does not show.
+fn inside_whole_points(rect: crate::capture::Rect) -> crate::capture::Rect {
+    let (left, top) = (rect.x.ceil(), rect.y.ceil());
+    let (right, bottom) = (
+        (rect.x + rect.width).floor(),
+        (rect.y + rect.height).floor(),
+    );
+    crate::capture::Rect {
+        x: left,
+        y: top,
+        width: (right - left).max(1.0),
+        height: (bottom - top).max(1.0),
     }
 }
 
@@ -327,6 +440,17 @@ mod platform {
         static DELEGATES: RefCell<Vec<Retained<PrintDelegate>>> = const { RefCell::new(Vec::new()) };
     }
 
+    /// The paper AppKit prints `page` on: a size close to a standard paper becomes that paper.
+    pub fn paper(page: PageSize) -> PageSize {
+        let info = NSPrintInfo::new();
+        info.setPaperSize(NSSize::new(page.width, page.height));
+        let paper = info.paperSize();
+        PageSize {
+            width: paper.width,
+            height: paper.height,
+        }
+    }
+
     /// Prints the WKWebView to `dest`; runs on the main thread (`with_webview`).
     pub fn print(platform: PlatformWebview, dest: PathBuf, page: PageSize, tx: Sender<Result<()>>) {
         let Some(mtm) = MainThreadMarker::new() else {
@@ -402,6 +526,11 @@ mod platform {
 
     use super::PageSize;
     use crate::error::{Error, Result};
+
+    /// The paper `page` prints on: exactly that size.
+    pub fn paper(page: PageSize) -> PageSize {
+        page
+    }
 
     /// Prints the WebView2 to `dest`; runs on the UI thread (`with_webview`).
     pub fn print(platform: PlatformWebview, dest: PathBuf, page: PageSize, tx: Sender<Result<()>>) {
@@ -479,6 +608,11 @@ mod platform {
     /// it up by) the name translated into the user's language, from its `gtk30` catalog.
     const FILE_PRINTER: &str = "Print to File";
 
+    /// The paper `page` prints on: exactly that size.
+    pub fn paper(page: PageSize) -> PageSize {
+        page
+    }
+
     /// Prints the WebKitGTK view to `dest`; runs on the GTK thread (`with_webview`).
     pub fn print(platform: PlatformWebview, dest: PathBuf, page: PageSize, tx: Sender<Result<()>>) {
         let uri = match gtk::glib::filename_to_uri(&dest, None) {
@@ -537,6 +671,10 @@ mod platform {
     use super::PageSize;
     use crate::error::{Error, Result};
 
+    pub fn paper(page: PageSize) -> PageSize {
+        page
+    }
+
     pub fn print(
         _platform: PlatformWebview,
         _dest: PathBuf,
@@ -594,6 +732,55 @@ mod tests {
     }
 
     #[test]
+    fn slides_print_as_tall_as_whole_pixels_of_the_paper_allow() {
+        // A 21×29.7 cm slide is 794×1123 px; macOS gives it A4, 595.28×841.89 pt, which
+        // WebKit pages every 1122 px (measured: 1122 fits, 1122.1 spills).
+        let a4 = PageSize {
+            width: 595.2755670547485,
+            height: 841.8897705078125,
+        };
+        assert_eq!(print_height(a4, 794), 1122.0);
+        assert_eq!(print_height(PageSize::of_slides(1920, 1080), 1920), 1080.0);
+        assert_eq!(print_height(PageSize::of_slides(1080, 1350), 1080), 1350.0);
+        assert_eq!(print_height(PageSize::of_slides(794, 1123), 794), 1123.0);
+    }
+
+    #[test]
+    fn crops_page_boxes_to_whole_points_in_place() {
+        let mut pdf = b"<< /Type /Pages /MediaBox [0 0 595.2756 841.8898] /Count 2 >>\n\
+            << /Type /Page /MediaBox\n[0 0 810 1012.5] >>\n\
+            << /MediaBox [0 0 1440 810] >> /MediaBox (not a box)"
+            .to_vec();
+        let before = pdf.len();
+        assert_eq!(crop_to_whole_points(&mut pdf), 2);
+        assert_eq!(pdf.len(), before, "offsets stay put");
+        let text = String::from_utf8(pdf).unwrap();
+        assert!(
+            text.contains("/MediaBox [0 0 595.2756 841     ] /Count"),
+            "{text}"
+        );
+        assert!(text.contains("/MediaBox\n[0 0 810 1012  ] >>"), "{text}");
+        assert!(text.contains("/MediaBox [0 0 1440 810] >>"));
+    }
+
+    #[test]
+    fn leaves_malformed_boxes_alone() {
+        let mut pdf = b"/MediaBox [0 0 1.5] /MediaBox [a b c d] /MediaBox [0 0 1 2.5".to_vec();
+        let copy = pdf.clone();
+        assert_eq!(crop_to_whole_points(&mut pdf), 0);
+        assert_eq!(pdf, copy);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn appkit_snaps_a4_slides_to_a4_paper() {
+        let paper = platform::paper(PageSize::of_slides(794, 1123));
+        assert!(paper.height <= 842.25 && paper.height > 841.0, "{paper:?}");
+        let odd = PageSize::of_slides(1920, 1080);
+        assert_eq!(platform::paper(odd), odd, "no standard paper is close");
+    }
+
+    #[test]
     fn decor_images_are_twice_the_canvas_within_limits() {
         assert_eq!(decor_pixels(1920), 3840);
         assert_eq!(decor_pixels(1080), 2160);
@@ -638,6 +825,26 @@ mod tests {
         );
         assert_eq!(ready["slides"], "7");
         assert!(ready.contains_key("ready"));
+    }
+
+    #[test]
+    fn captures_only_whole_points_inside_the_slide() {
+        let rect = |x, y, width, height| crate::capture::Rect {
+            x,
+            y,
+            width,
+            height,
+        };
+        // As the player showed an A4 slide: 0.09 px down, its bottom edge mid-pixel.
+        assert_eq!(
+            inside_whole_points(rect(0.0, 0.09375, 1877.0, 1055.8125)),
+            rect(0.0, 1.0, 1877.0, 1054.0)
+        );
+        assert_eq!(
+            inside_whole_points(rect(28.2777, 0.0, 1820.4443, 1024.0)),
+            rect(29.0, 0.0, 1819.0, 1024.0)
+        );
+        assert_eq!(inside_whole_points(rect(10.0, 10.0, 0.5, 0.5)).width, 1.0);
     }
 
     #[test]

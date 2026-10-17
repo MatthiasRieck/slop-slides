@@ -290,6 +290,43 @@ mod tests {
     }
 
     #[test]
+    fn lint_tool_reports_slide_id_styles_for_agent_repair_without_modifying_the_deck() {
+        let source = html::ensure_runtime(
+            "<!DOCTYPE html><html><head><title>Pitch</title>\n<style>\n#title .card { color: red; }\n</style></head><body><main class=\"deck\"><section class=\"slide\" id=\"title\"><div class=\"card\">AI-KIT</div></section></main></body></html>",
+        );
+        let dir = temp_deck(&source);
+        let report = || {
+            let res = call(&dir, "tools/call", json!({"name": TOOL, "arguments": {}}));
+            assert_eq!(res["result"]["isError"], false);
+            res["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let text = report();
+        assert!(
+            text.starts_with("The deck has 1 error(s) and 0 warning(s):"),
+            "{text}"
+        );
+        assert!(
+            text.contains("error [slide-id-style] (slide `title`)"),
+            "{text}"
+        );
+        assert!(text.contains("reusable layout class"), "{text}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(deck::DECK_FILE)).unwrap(),
+            source
+        );
+
+        let repaired = source
+            .replace("class=\"slide\"", "class=\"slide layout-title\"")
+            .replace("#title .card", ".layout-title .card");
+        std::fs::write(dir.join(deck::DECK_FILE), repaired).unwrap();
+        assert_eq!(report(), "The deck passes lint: no issues.");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn lint_tool_reports_locked_slides_changed_during_a_turn() {
         let html = "<html><body><main class=\"deck\"><section class=\"slide\" id=\"a\" data-locked>A</section></main></body></html>";
         let dir = temp_deck(html);

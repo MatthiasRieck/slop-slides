@@ -90,7 +90,7 @@ function readDeck(file: string) {
     const hidden = /\sdata-hidden\b/i.test(match[0]);
     const locked = /\sdata-locked\b/i.test(match[0]);
     const source = html.slice(match.index, html.indexOf("</section>", match.index));
-    return { id, hash: hash(source), hidden, locked, moved: /<[^>]*\sdata-moved\b/i.test(source) };
+    return { id, hash: hash(source), hidden, locked, moved: /<[^>]*\sdata-(moved|added)\b/i.test(source) };
   });
   const sections = [...html.matchAll(/<div\b[^>]*\bclass=["'][^"']*\bdeck-section\b[^"']*["'][^>]*>/gi)].map(
     (match, index) => ({

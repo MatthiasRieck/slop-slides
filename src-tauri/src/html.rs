@@ -52,6 +52,11 @@ pub const LOCKED_ATTR: &str = "data-locked";
 /// `translate` / `rotate` / `scale` styles until the agent tidies the slide's layout.
 pub const MOVED_ATTR: &str = "data-moved";
 
+/// Marks an element the user added in the editor: a text box (`text`), shape (`shape`) or
+/// freehand drawing (`drawing`), absolutely positioned on the slide with inline styles until
+/// the agent tidies the slide's layout.
+pub const ADDED_ATTR: &str = "data-added";
+
 /// Marks an image the user dropped onto a slide in the editor. It sits on top of the slide,
 /// placed with inline `position: absolute; left: 0; top: 0; width` (and moved with
 /// [`MOVED_ATTR`]'s `translate`) until the agent gives it a place in the layout.
@@ -746,9 +751,16 @@ pub fn delete_section(html: &str, index: usize) -> Result<String, String> {
     Ok(format!("{}{}", &html[..start], &html[span.range.end..]))
 }
 
-/// Whether the slide markup contains an element moved by hand (see [`MOVED_ATTR`]).
+/// Whether the slide markup contains an element moved or added by hand (see [`MOVED_ATTR`] and
+/// [`ADDED_ATTR`]).
 pub fn has_moved(slide: &str) -> bool {
-    tags(slide).any(|(_, tag)| !tag.closing && tag.attrs.iter().any(|a| a.0 == MOVED_ATTR))
+    tags(slide).any(|(_, tag)| {
+        !tag.closing
+            && tag
+                .attrs
+                .iter()
+                .any(|a| a.0 == MOVED_ATTR || a.0 == ADDED_ATTR)
+    })
 }
 
 /// Replaces slide `id` with `markup`, which must be one whole `<section class="slide">` with
@@ -1210,6 +1222,12 @@ mod tests {
         ));
         assert!(!has_moved(
             r#"<section class="slide" id="a"><p>data-moved</p><!-- <p data-moved> --></section>"#
+        ));
+        assert!(has_moved(
+            r#"<section class="slide" id="a"><div data-added="shape" style="position: absolute; left: 10px; top: 20px"></div></section>"#
+        ));
+        assert!(!has_moved(
+            r#"<section class="slide" id="a"><p>data-added</p></section>"#
         ));
     }
 

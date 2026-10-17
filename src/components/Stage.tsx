@@ -1,13 +1,15 @@
 import { AlertTriangle, Check, ChevronLeft, ChevronRight, LayoutTemplate, Lock, Maximize, Pencil, Redo2, Sparkles, Trash2, Undo2, Wand2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { SKETCH_TARGET_ATTR, useApp } from "../store";
+import { EditToolbar } from "./EditToolbar";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { SketchToolbar } from "./SketchToolbar";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { LayoutPicker, Popover } from "./Templates";
 import { api, errorMessage, type Slide } from "../lib/api";
 import { catchDrops, imageSize, isImage, type DropPoint } from "../lib/drop";
+import { EDIT_TOOL_KEYS, familyOf, familyOfKind, parseSelection, type EditSelection, type EditStyle, type EditTool } from "../lib/editTools";
 import { zoomBox, type Stroke } from "../lib/ink";
 import { pixelsOf, type Pixels } from "../lib/slideSize";
 import { cn, deckFileUrl } from "../lib/utils";
@@ -25,6 +27,8 @@ export function Stage() {
   const running = useApp((s) => s.running);
   const canUndo = useApp((s) => s.slideUndo.length > 0);
   const canRedo = useApp((s) => s.slideRedo.length > 0);
+  const editTool = useApp((s) => s.editTool);
+  const editStyles = useApp((s) => s.editStyles);
   const annotations = useAnnotations(selected ?? "", {
     ink: reviewVisible ? sketches : NO_INK,
     setInk: useApp.getState().setSketches,
@@ -32,6 +36,7 @@ export function Stage() {
   const areaRef = useRef<HTMLDivElement>(null);
   const pasteboard = usePasteboard(areaRef);
   const editFrames = useSlideEditing(areaRef, pasteboard.resetView);
+  const postToEditor = editFrames.post;
   const overflow = editFrames.overflow;
   const view = pasteboard.view;
   const canvas = pixelsOf(deck);
@@ -64,6 +69,17 @@ export function Stage() {
     useApp.getState().setEditing(false);
     useApp.getState().setReviewVisible(true);
   }, [annotations.tool]);
+  // The editor in the preview adds what the toolbar's tool says, styled like its defaults.
+  useEffect(() => {
+    if (editing) postToEditor(toolMessage(editTool, editStyles));
+  }, [editing, editTool, editStyles, postToEditor]);
+  const restyle = (changes: EditStyle) => {
+    const selection = editFrames.selection;
+    // Restyling also sets how the next one of its kind looks.
+    const family = selection ? familyOfKind(selection.kind) : familyOf(editTool);
+    if (family) useApp.getState().setEditStyle(family, changes);
+    if (selection) postToEditor({ type: "slop:edit-style", style: changes });
+  };
   const toggleEditing = () => {
     if (!editing) annotations.setTool("pointer");
     useApp.getState().setEditing(!editing);
@@ -81,14 +97,21 @@ export function Stage() {
 
   return (
     <div className="flex h-full flex-col bg-canvas">
+      {slide && editing && (
+        <div className="relative z-20 flex shrink-0 justify-center px-3 pt-2">
+          <EditToolbar
+            tool={editTool}
+            selection={editFrames.selection}
+            styles={editStyles}
+            onTool={(tool) => useApp.getState().setEditTool(tool)}
+            onStyle={restyle}
+            onOrder={(to) => postToEditor({ type: "slop:edit-order", to })}
+            onDelete={editFrames.deleteSelection}
+          />
+        </div>
+      )}
       {/* Clips the ink, which zooms past the slide along with the pasteboard, so it stays off the bar below. */}
       <div ref={areaRef} data-testid="stage-area" className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-8">
-        {slide && editing && (
-          <span className="pointer-events-none absolute top-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full bg-primary px-2.5 py-0.5 text-xs font-medium text-primary-foreground shadow-sm [&_svg]:size-3">
-            <Pencil />
-            Editing
-          </span>
-        )}
         {slide ? (
           // The slide's frame (outline, shadow, the edit-mode ring) is drawn in the preview, so it
           // pans and zooms with the slide.
@@ -129,7 +152,7 @@ export function Stage() {
                   title={
                     locked
                       ? "This slide is locked; unlock it in the slide list to edit it"
-                      : "Edit the slide: click to select, drag to move, drag the handles to scale or rotate, double-click to edit text, drop images onto it to add them"
+                      : "Edit the slide: click to select, drag to move, drag the handles to scale or rotate, double-click to edit text, drop images onto it to add them; the toolbar above adds text, shapes and drawings and restyles the selection"
                   }
                   aria-pressed={editing}
                   disabled={locked}
@@ -143,7 +166,7 @@ export function Stage() {
                 </button>
                 <div className="mx-1 h-4 w-px bg-border" />
                 {editing ? (
-                  <EditBar canUndo={canUndo} canRedo={canRedo} canDelete={editFrames.hasSelection} onDelete={editFrames.deleteSelection} />
+                  <EditBar canUndo={canUndo} canRedo={canRedo} canDelete={!!editFrames.selection} onDelete={editFrames.deleteSelection} />
                 ) : (
                   <SketchToolbar annotations={annotations} />
                 )}
@@ -410,8 +433,8 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
   const restore = useRef<{ slide: string; path: number[] } | null>(null);
   const frame = useRef<HTMLIFrameElement | null>(null);
   const [overflow, setOverflow] = useState<{ slide: string; items: string[] } | null>(null);
-  // Which slide has an element selected in the editor, if any.
-  const [selection, setSelection] = useState<string | null>(null);
+  // What the editor has selected, and on which slide.
+  const [selection, setSelection] = useState<{ slide: string; selection: EditSelection | null } | null>(null);
 
   useEffect(() => {
     const fromStage = (source: MessageEventSource | null) =>
@@ -426,16 +449,23 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
       } else if (data?.type === "slop:edit-overflow" && data.slide === selected && Array.isArray(data.items)) {
         setOverflow({ slide: data.slide, items: data.items.map(String) });
       } else if (data?.type === "slop:edit-selection" && data.slide === selected) {
-        setSelection(data.selected ? data.slide : null);
+        setSelection({ slide: data.slide, selection: parseSelection(data.selection) });
+      } else if (data?.type === "slop:edit-tool" && data.slide === selected && typeof data.tool === "string") {
+        // The editor put its tool away by itself (after adding a shape, or on Escape).
+        if (data.tool in TOOL_NAMES) useApp.getState().setEditTool(data.tool as EditTool);
       } else if (data?.type === "slop:key") {
         if (data.mod) runHistoryKey(String(data.key), Boolean(data.shift));
-        else if (data.key === "Escape") useApp.getState().setEditing(false);
+        else runEditKey(String(data.key));
       }
     };
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (!useApp.getState().editing || target?.closest("input, textarea, [contenteditable]")) return;
-      if ((event.metaKey || event.ctrlKey) && runHistoryKey(event.key, event.shiftKey)) event.preventDefault();
+      if (!useApp.getState().editing || target?.closest("input, textarea, select, [contenteditable]")) return;
+      if (event.metaKey || event.ctrlKey) {
+        if (runHistoryKey(event.key, event.shiftKey)) event.preventDefault();
+      } else if (!event.altKey && runEditKey(event.key, true)) {
+        event.preventDefault();
+      }
     };
     window.addEventListener("message", onMessage);
     window.addEventListener("keydown", onKey);
@@ -484,15 +514,22 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
   const current = useApp((s) => s.selected);
   const editing = useApp((s) => s.editing);
 
+  const post = useCallback((data: unknown) => frame.current?.contentWindow?.postMessage(data, "*"), []);
+
   return {
     overflow: editing && overflow?.slide === current ? overflow.items : NO_OVERFLOW,
-    hasSelection: editing && selection !== null && selection === current,
-    deleteSelection: () => frame.current?.contentWindow?.postMessage({ type: "slop:edit-delete" }, "*"),
+    /** What the editor has selected, as its toolbar shows it. */
+    selection: editing && selection?.slide === current ? selection.selection : null,
+    /** Sends a message to the slide editor in the preview. */
+    post,
+    deleteSelection: () => post({ type: "slop:edit-delete" }),
     onFrameReady: (loaded: HTMLIFrameElement) => {
       frame.current = loaded;
-      // A fresh editor starts with nothing selected; it reports a restored selection itself.
+      // A fresh editor starts with the select tool and nothing selected; it reports a restored
+      // selection itself.
       setSelection(null);
-      const { editing, selected } = useApp.getState();
+      const { editing, selected, editTool, editStyles } = useApp.getState();
+      if (editing) post(toolMessage(editTool, editStyles));
       const again = restore.current;
       if (editing && again && again.slide === selected) {
         loaded.contentWindow?.postMessage({ type: "slop:edit-select", path: again.path }, "*");
@@ -508,6 +545,33 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
 }
 
 const NO_OVERFLOW: string[] = [];
+const TOOL_NAMES: Record<EditTool, true> = { select: true, text: true, rect: true, rounded: true, ellipse: true, draw: true };
+
+/** Picks the editor's tool, with the style of what it adds. */
+function toolMessage(tool: EditTool, styles: Record<string, EditStyle>) {
+  const family = familyOf(tool);
+  return { type: "slop:edit-tool", tool, style: family ? styles[family] : undefined };
+}
+
+/**
+ * Edit mode's plain keys: a tool's shortcut picks it, Escape puts the tool away or else leaves
+ * edit mode. `fromApp` when pressed in the app rather than forwarded by the slide, where
+ * Escape belongs to whatever has focus. True when the key was one of them.
+ */
+function runEditKey(key: string, fromApp = false) {
+  const app = useApp.getState();
+  const tool = EDIT_TOOL_KEYS[key.toLowerCase()];
+  if (tool && key.length === 1) {
+    app.setEditTool(tool);
+  } else if (key === "Escape" && app.editTool !== "select") {
+    app.setEditTool("select");
+  } else if (key === "Escape" && !fromApp) {
+    app.setEditing(false);
+  } else {
+    return false;
+  }
+  return true;
+}
 const NO_INK: Record<string, Stroke[]> = {};
 
 /** ⌘Z undoes, ⇧⌘Z / ⌘Y redo; true when the key was one of them. */

@@ -147,11 +147,16 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   `rotate: Ndeg`, `scale: N` (or stretched, `scale: X Y`), and/or
   `transform: perspective(1000px) rotateX(Ndeg) rotateY(Ndeg) … !important` styles (see
   "Hand edits" below).
+  They can also restyle elements (inline `color`, `font-size`, `font-weight`, `font-style`,
+  `text-align`, `background-color`, `border`, and `position: relative` with a `z-index` to
+  change the stacking order) and add text boxes, shapes, and freehand drawings, which carry
+  `data-added="text"`, `"shape"`, or `"drawing"`.
 - The user can drop images onto a slide in the editor. Such an image is saved as
   `assets/<file>` and arrives as `<img src="assets/<file>" alt="" data-dropped data-moved
   style="position: absolute; left: 0px; top: 0px; width: Npx; translate: Xpx Ypx">` at the
   end of the slide, on top of everything else (see "Hand edits" below).
-  Never add `data-moved`, `data-dropped`, `contenteditable`, or `data-slop-*` attributes yourself.
+  Never add `data-moved`, `data-added`, `data-dropped`, `contenteditable`, or `data-slop-*`
+  attributes yourself.
 - A slide with the `data-hidden` attribute is hidden: the user muted it in the editor and
   the player skips it when presenting. Keep the attribute when editing such a slide;
   remove it only when asked to show the slide again.
@@ -245,3 +250,13 @@ resize the layout; do not shrink it to unreadable sizes or drop words). An image
 in the screenshot, sized with the slide's styles, with a fitting `alt` text, and remove
 `data-dropped`, `data-moved` and its inline styles. The `moved-element` lint warning lists every
 element still waiting for this.
+
+The user can also restyle elements and add their own with the editor's toolbar. Inline style
+changes (text color, size, weight, alignment, fill, border, `z-index` stacking) are what they
+chose; keep them when editing, and when tidying move them into the slide's rules. An element
+they added carries `data-added` (`text` for a text box, `shape` for a rectangle or ellipse,
+which may hold text, `drawing` for a freehand `<svg>`) and is absolutely positioned on the
+slide with inline `left`, `top`, `width`, and `height`. When tidying, keep each one where it
+appears and as it looks (its text, colors, border, and stacking), give it a class and move its
+styles into the slide's rules (or fit it into the layout where that is cleaner), then remove
+`data-added`. The `added-element` lint warning lists every one still waiting for this.

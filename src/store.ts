@@ -19,6 +19,9 @@ import { latestContext, mergeContext, type ContextUsage } from "./lib/context";
 import { inkBounds, type Stroke } from "./lib/ink";
 import { DEFAULT_SIZE, pixelsOf, resizePrompt, sameSize, type SlideSize } from "./lib/slideSize";
 import { basename, dirname, layoutLabel } from "./lib/utils";
+import { useNarration } from "./narrationStore";
+import { editedManifest, narrationDraftPrompt } from "./lib/narration";
+import { useSpeech } from "./speechStore";
 import {
   defaultModel,
   PROVIDER_IDS,
@@ -184,12 +187,10 @@ function loadFavorites(): string[] {
 export type StageView = "slides" | "code";
 
 /** The right sidebar's tabs, in order (see components/Sidebar.tsx). */
-export const SIDEBAR_TABS = ["chat", "files"] as const;
+export const SIDEBAR_TABS = ["chat", "narration", "presets", "files"] as const;
 export type SidebarTab = (typeof SIDEBAR_TABS)[number];
-const isSidebarTab = (value: unknown): value is SidebarTab => SIDEBAR_TABS.includes(value as SidebarTab);
 
 const SIDEBAR_OPEN_KEY = "slopslide.sidebarOpen";
-const SIDEBAR_TAB_KEY = "slopslide.sidebarTab";
 /** The file last open in each workspace, reopened with it: `slopslide.lastFile:<root>`. */
 const LAST_FILE_KEY = "slopslide.lastFile:";
 
@@ -222,6 +223,9 @@ interface AppState {
   sidebarOpen: boolean;
   /** The sidebar tab shown. */
   sidebarTab: SidebarTab;
+  narrationReviewSlide: string | null;
+  reviewNarration: () => void;
+  draftNarration: (scope: "slide" | "deck" | "missing", audience: string, minutes: string) => Promise<void>;
   /** The slide rail is shown; the user can collapse it to give the stage more room. */
   railOpen: boolean;
   /** Bumped when attached assets change, reloading every slide preview. */
@@ -395,7 +399,8 @@ export const useApp = create<AppState>((set, get) => ({
   view: localStorage.getItem("slopslide.view") === "code" ? "code" : "slides",
   codeDirty: false,
   sidebarOpen: localStorage.getItem(SIDEBAR_OPEN_KEY) !== "false",
-  sidebarTab: loadSidebarTab(),
+  sidebarTab: "chat",
+  narrationReviewSlide: null,
   railOpen: localStorage.getItem("slopslide.railOpen") !== "false",
   assetsRev: 0,
   messages: [],
@@ -438,13 +443,12 @@ export const useApp = create<AppState>((set, get) => ({
     }
     const workspacePath = get().workspace!.path;
     const last = localStorage.getItem(LAST_FILE_KEY + workspacePath);
-    if (last === null) return get().setSidebarTab("files");
+    if (last === null) return;
     // A file that is gone since just leaves the viewer empty.
     try {
       await openFileAt(last, await api.openFile(last));
     } catch {
       localStorage.removeItem(LAST_FILE_KEY + workspacePath);
-      get().setSidebarTab("files");
     }
   },
 
@@ -504,7 +508,10 @@ export const useApp = create<AppState>((set, get) => ({
       return true;
     }
     if (get().codeDirty && !(await confirmDiscardEdits())) return false;
+    if (!(await useNarration.getState().save())) { get().setSidebarTab("narration"); return false; }
     await flushReviewSave();
+    await useNarration.getState().load(null);
+    await useSpeech.getState().loadTakes(null);
     set({ codeDirty: false, openedFile: null, deck: null, selected: null, presenting: false, lint: null, composerFill: null, sketches: {}, sketchesSent: {}, imageExport: null, editing: false, slideUndo: [], slideRedo: [] });
     return true;
   },
@@ -538,9 +545,29 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setSidebarTab: (sidebarTab) => {
-    localStorage.setItem(SIDEBAR_TAB_KEY, sidebarTab);
     if (!get().sidebarOpen) get().setSidebarOpen(true);
     set({ sidebarTab });
+  },
+
+  reviewNarration: () => {
+    const { deck, narrationReviewSlide } = get();
+    if (narrationReviewSlide && deck?.slides.some((s) => s.id === narrationReviewSlide)) get().select(narrationReviewSlide);
+    get().setSidebarTab("narration");
+  },
+
+  draftNarration: async (scope, audience, minutes) => {
+    const { deck, selected, running } = get();
+    if (!deck || running || (scope === "slide" && (!selected || selected.startsWith("#")))) return;
+    if (!(await useNarration.getState().save())) { get().setSidebarTab("narration"); return; }
+    if (get().deck?.id !== deck.id || get().running) return;
+    const { document, edits, languageEdit, settingsEdits } = useNarration.getState();
+    if (!document || useNarration.getState().deckId !== deck.id || useNarration.getState().error) return;
+    const manifest = editedManifest(document.manifest, edits, languageEdit, settingsEdits);
+    const missingIds = scope === "missing" ? deck.slides.filter((slide) => !slide.hidden && !slide.id.startsWith("#") && !manifest.slides[slide.id]?.text.trim()).map((slide) => slide.id) : [];
+    if (scope === "missing" && missingIds.length === 0) return;
+    set({ narrationReviewSlide: scope === "slide" ? selected : scope === "missing" ? missingIds[0]! : deck.slides.find((s) => !s.hidden && !s.id.startsWith("#"))?.id ?? null });
+    get().setSidebarTab("chat");
+    await get().send(narrationDraftPrompt(deck, selected, scope, manifest.defaultLanguage, audience, minutes, missingIds, relativePath(get().workspace, deck.id) ?? basename(deck.id)), { includeSlide: scope === "slide", attachments: [] });
   },
 
   setRailOpen: (railOpen) => {
@@ -869,6 +896,12 @@ function newReply(provider: Provider): AssistantMessage {
 async function startTurn(deckId: string, replyId: string, prompt: string, compact: boolean) {
   const { selection, providers, permissionModes } = useApp.getState();
   try {
+    const activeDeck = useApp.getState().deck;
+    if (activeDeck && useNarration.getState().deckId === activeDeck.id && !(await useNarration.getState().save())) {
+      useApp.getState().setSidebarTab("narration");
+      throw new Error("Save or resolve your narration edits before starting the agent.");
+    }
+    if (useApp.getState().workspace?.path !== deckId) return;
     const { provider, model, contextWindow } = selection;
     const info = providers?.find((p) => p.id === provider)?.models.find((m) => m.id === model);
     const effort = requestEffort(info, selection.effort);
@@ -934,11 +967,6 @@ function promptAgent(text: string, options?: { screenshot?: string | null }) {
   fillComposer(text, options);
 }
 
-function loadSidebarTab(): SidebarTab {
-  const saved = localStorage.getItem(SIDEBAR_TAB_KEY);
-  return isSidebarTab(saved) ? saved : "chat";
-}
-
 /** `absolute` relative to the workspace folder, `/`-separated; null when outside it. */
 export function relativePath(workspace: WorkspaceInfo | null, absolute: string): string | null {
   if (!workspace) return null;
@@ -975,9 +1003,11 @@ async function loadWorkspaceChat(path: string) {
 }
 
 async function loadDeckState(deck: Deck) {
+  await Promise.all([useNarration.getState().load(deck.id), useSpeech.getState().loadTakes(deck.id)]);
   savedReview = reviewKey(deck.review ?? {});
   useApp.setState({
     deck,
+    narrationReviewSlide: null,
     selected: deck.slides[0]?.id ?? null,
     assetsRev: 0,
     presenting: false,
@@ -1264,6 +1294,7 @@ function applyAgentEvent(event: AgentEvent) {
       }));
       useApp.setState({ running: false });
       persistChat();
+      if (useNarration.getState().deckId === useApp.getState().deck?.id) void useNarration.getState().refresh();
       return;
   }
 }
@@ -1286,6 +1317,8 @@ function applyWorkspaceChanged(paths: string[]) {
 
 /** `paths` are relative to the deck's folder; `file` is the deck file's name. */
 function applyDeckChanged(paths: string[], file: string) {
+  if (paths.includes("narration.json") || paths.includes(`${file}.slopslide/narration.json`)) void useNarration.getState().refresh();
+  if (paths.some((p) => p.startsWith("audio/") || p.startsWith(`${file}.slopslide/audio/`))) void useSpeech.getState().loadTakes(useApp.getState().deck?.id ?? null);
   if (paths.some((p) => p.startsWith("assets/"))) {
     useApp.setState((s) => ({ assetsRev: s.assetsRev + 1 }));
   }

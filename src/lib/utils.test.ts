@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { basename, chatFileUrl, cn, dirname, isSessionFile, deckFileUrl, fileUrl, layoutLabel, relativeTime, slideUrl, templateSlideUrl } from "./utils";
+import { basename, chatFileUrl, cn, dirname, isSessionFile, deckFileUrl, fileUrl, layoutLabel, narrationAudioUrl, previewFileUrl, relativeTime, slideUrl, templateSlideUrl } from "./utils";
 
 describe("cn", () => {
   it("joins truthy classes and lets later Tailwind classes win", () => {
@@ -35,6 +35,9 @@ describe("deck URLs (browser preview)", () => {
 
   it("resolves deck files next to the deck file", () => {
     expect(deckFileUrl(TALK, "assets/a.png")).toBe("/__deck/.file/Users/me/talks/assets/a.png");
+    expect(narrationAudioUrl("/Users/me/talks/deck.html", "take-1")).toBe("/__deck/.file/Users/me/talks/audio/take-1.wav");
+    expect(narrationAudioUrl(TALK, "take-1")).toBe("/__deck/.file/Users/me/talks/q3.html.slopslide/audio/take-1.wav");
+    expect(previewFileUrl("video", "job/frame-0.png")).toBe("/__deck/.video/job/frame-0.png");
   });
 
   it("encodes each path segment but keeps the slashes", () => {

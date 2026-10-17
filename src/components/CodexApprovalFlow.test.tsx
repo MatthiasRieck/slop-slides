@@ -15,6 +15,8 @@ import type { ApprovalDecision } from "../lib/permissions";
 import type { ProviderInfo } from "../lib/models";
 import { initEventBridge, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { emptyNarration, emptyScript } from "../lib/narration";
+import { useNarration } from "../narrationStore";
 import { ChatPanel } from "./ChatPanel";
 
 const providers: ProviderInfo[] = [{ id: "codex", installed: true, path: "/mock/codex", error: null,
@@ -56,6 +58,31 @@ describe("Codex approval event → store → chat → IPC", () => {
     await waitFor(() => expect(calls("save_chat")).toHaveLength(1));
     const saved = calls("save_chat")[0]![1].chat;
     expect(saved.at(-1).parts).toContainEqual({ kind: "approval", approval, status: "resolved" });
+  });
+
+  it("drafts narration with Ask permissions and routes read/write approvals before review", async () => {
+    act(() => useApp.setState({ running: false, messages: [] }));
+    await act(async () => useNarration.getState().load(deckFor(DECK_HTML).id));
+    await act(async () => useApp.getState().draftNarration("slide", "general", "1"));
+    expect(calls("send_message").at(-1)![1].args).toMatchObject({ provider: "codex", permissionMode: "ask" });
+    expect(calls("send_message").at(-1)![1].args.prompt).toContain("read_narration and write_narration");
+    for (const tool of ["read_narration", "write_narration"]) {
+      const request = { ...approval, id: tool, reason: `Allow ${tool}?`, details: JSON.stringify({ server: "slopslide", tool }) };
+      emit({ type: "approvalRequested", approval: request });
+      fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+      await waitFor(() => expect(calls("respond_approval").at(-1)![1]).toEqual({ workspace: "/decks/talk", id: tool, decision: "accept" }));
+      emit({ type: "approvalResolved", id: tool });
+    }
+    const document = emptyNarration();
+    document.version = "drafted";
+    document.manifest.slides.intro = { ...emptyScript(), text: "Welcome to this presentation." };
+    invoke.mockImplementation(async (command: string) => command === "load_narration" ? document : undefined);
+    emit({ type: "finished", interrupted: false });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Review narration" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Review narration" }));
+    expect(useApp.getState().sidebarTab).toBe("narration");
+    expect(useNarration.getState().document?.manifest.slides.intro?.text).toBe("Welcome to this presentation.");
+    await act(async () => useNarration.getState().load(null));
   });
 
   it("Stop closes the request without approving it", async () => {

@@ -118,9 +118,6 @@ describe("sidebar", () => {
     useApp.getState().setSidebarTab("files");
     expect(useApp.getState()).toMatchObject({ sidebarTab: "files", sidebarOpen: true });
     useApp = await freshStore();
-    expect(useApp.getState().sidebarTab).toBe("files");
-    localStorage.setItem("slopslide.sidebarTab", "bogus");
-    useApp = await freshStore();
     expect(useApp.getState().sidebarTab).toBe("chat");
   });
 });
@@ -148,14 +145,14 @@ describe("workspaces", () => {
     });
   }
 
-  it("opens a folder on the files tab when nothing was open in it before", async () => {
+  it("opens a folder with Chat selected when nothing was open in it before", async () => {
     const useApp = await freshStore(false);
     workspaceBackend();
     useApp.setState({ sidebarTab: "chat" });
     await useApp.getState().openWorkspace("/ws");
     expect(useApp.getState().workspace).toEqual(WS);
     expect(useApp.getState().openedFile).toBeNull();
-    expect(useApp.getState().sidebarTab).toBe("files");
+    expect(useApp.getState().sidebarTab).toBe("chat");
   });
 
   it("opens a deck in the editor and other pages as they are", async () => {

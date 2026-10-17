@@ -114,17 +114,20 @@ describe("workspace bar", () => {
 describe("layout", () => {
   const order = () =>
     Array.from(document.querySelectorAll("header > button, header > nav")).map(
-      (el) => el.getAttribute("aria-label") ?? el.getAttribute("title"),
+      (el) => el.getAttribute("aria-label") ?? el.getAttribute("title") ?? el.textContent?.trim(),
     );
 
   it("puts the slide rail toggle first, then the breadcrumbs, then the file and folder actions", () => {
     render(<TopBar />);
-    expect(order()).toEqual(["Hide slides", "Breadcrumbs", "Show in folder", "Close deck.html", "Hide sidebar"]);
+    expect(order()).toEqual(["Hide slides", "Breadcrumbs", "Preview deck", "Present", "Show in folder", "Close deck.html", "Hide sidebar"]);
   });
 
-  it("leaves the deck's tools to the deck toolbar", () => {
+  it("keeps preview and export in the top row while slide editing tools stay below", () => {
     render(<TopBar />);
-    for (const name of [/Present/, /Export/, "Slides", "HTML", "Slide size"]) {
+    for (const name of [/Present/, /Export/, /Preview deck/]) {
+      expect(screen.getByRole("button", { name })).toBeTruthy();
+    }
+    for (const name of ["Slides", "HTML", "Slide size"]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
     }
     expect(document.querySelector("header input")).toBeNull();

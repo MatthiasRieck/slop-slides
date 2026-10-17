@@ -9,6 +9,8 @@ mod extensions;
 mod html;
 mod lint;
 mod mcp;
+mod narration;
+mod native_runtime;
 mod permissions;
 mod protocol;
 mod providers;
@@ -16,7 +18,9 @@ mod review;
 mod safety;
 mod sessions;
 mod size;
+mod speech;
 mod templates;
+mod video;
 mod watcher;
 mod workspace;
 
@@ -131,7 +135,9 @@ fn open_file(open: State<OpenWorkspace>, path: String) -> Result<workspace::Open
 /// Creates a deck in its own folder at the root of the open workspace.
 #[tauri::command]
 fn create_deck(
+    app: AppHandle,
     open: State<OpenWorkspace>,
+    speech: State<speech::SpeechManager>,
     title: String,
     template: Option<String>,
 ) -> Result<Deck> {
@@ -144,7 +150,13 @@ fn create_deck(
         .as_deref()
         .zip(source.as_deref())
         .map(|(id, html)| deck::TemplateSource { id, html });
-    deck::create(&workspace_root(&open)?, &title, template)
+    let deck = deck::create(&workspace_root(&open)?, &title, template)?;
+    speech::initialize_presenter(
+        &app,
+        &speech,
+        &deck::narration_dir(&deck::deck_file(&deck.id)?),
+    )?;
+    Ok(deck)
 }
 
 #[tauri::command]
@@ -191,8 +203,15 @@ fn create_template(id: String, name: String) -> Result<templates::TemplateSummar
 }
 
 #[tauri::command]
-fn open_deck(open: State<OpenWorkspace>, agent: State<AgentManager>, id: String) -> Result<Deck> {
+fn open_deck(
+    app: AppHandle,
+    open: State<OpenWorkspace>,
+    agent: State<AgentManager>,
+    speech: State<speech::SpeechManager>,
+    id: String,
+) -> Result<Deck> {
     let file = deck::deck_file(&id)?;
+    speech::initialize_presenter(&app, &speech, &deck::narration_dir(&file))?;
     let session = current_session(&open)?;
     deck::open(
         &file,
@@ -204,6 +223,208 @@ fn open_deck(open: State<OpenWorkspace>, agent: State<AgentManager>, id: String)
 #[tauri::command]
 fn load_deck(id: String) -> Result<Deck> {
     deck::load(&deck::deck_file(&id)?)
+}
+
+#[tauri::command]
+fn load_narration(id: String) -> Result<narration::Document> {
+    narration::load(&deck::narration_dir(&deck::deck_file(&id)?))
+}
+
+#[tauri::command]
+fn save_narration(
+    id: String,
+    manifest: narration::Manifest,
+    base: String,
+) -> Result<narration::Document> {
+    narration::save(
+        &deck::narration_dir(&deck::deck_file(&id)?),
+        manifest,
+        &base,
+    )
+}
+
+#[tauri::command]
+fn speech_status(app: AppHandle, manager: State<speech::SpeechManager>) -> Result<speech::Status> {
+    manager.status(&app)
+}
+#[tauri::command]
+fn speech_takes(
+    app: AppHandle,
+    id: String,
+) -> Result<std::collections::BTreeMap<String, speech::cache::Take>> {
+    speech::takes(&app, &id)
+}
+#[tauri::command]
+fn speech_history(id: String, slide: String) -> Result<Vec<speech::cache::HistoryTake>> {
+    speech::cache::history(&deck::narration_dir(&deck::deck_file(&id)?), &slide)
+}
+#[tauri::command]
+fn select_speech_take(
+    id: String,
+    slide: String,
+    take_id: String,
+    base: String,
+) -> Result<narration::Document> {
+    let dir = deck::narration_dir(&deck::deck_file(&id)?);
+    if !deck::load(&deck::deck_file(&id)?)?
+        .slides
+        .iter()
+        .any(|s| s.id == slide)
+    {
+        return Err(error::Error::msg("Select an existing slide first."));
+    }
+    speech::cache::select(&dir, &slide, &take_id, &base)
+}
+#[tauri::command]
+async fn install_speech_pack(
+    app: AppHandle,
+    manager: State<'_, speech::SpeechManager>,
+    job_id: String,
+    source: Option<String>,
+    provider_id: String,
+) -> Result<()> {
+    manager
+        .install(app, job_id, provider_id, source, false)
+        .await
+}
+#[tauri::command]
+async fn install_cloning_pack(
+    app: AppHandle,
+    manager: State<'_, speech::SpeechManager>,
+    job_id: String,
+    source: Option<String>,
+    provider_id: String,
+) -> Result<()> {
+    manager
+        .install(app, job_id, provider_id, source, true)
+        .await
+}
+#[tauri::command]
+async fn create_voice_profile(
+    app: AppHandle,
+    manager: State<'_, speech::SpeechManager>,
+    job_id: String,
+    provider_id: String,
+    request: speech_connector::profiles::Create,
+) -> Result<speech_connector::profiles::Profile> {
+    manager
+        .create_profile(app, job_id, provider_id, request)
+        .await
+}
+
+#[tauri::command]
+async fn preview_voice_profile(
+    app: AppHandle,
+    manager: State<'_, speech::SpeechManager>,
+    job_id: String,
+    provider_id: String,
+    token: String,
+    language: String,
+) -> Result<()> {
+    manager
+        .preview_profile(app, job_id, provider_id, token, language)
+        .await
+}
+#[tauri::command]
+async fn voice_profile_action(
+    app: AppHandle,
+    manager: State<'_, speech::SpeechManager>,
+    provider_id: String,
+    action: String,
+    id: String,
+    value: Option<String>,
+    name: Option<String>,
+) -> Result<Option<speech_connector::profiles::Profile>> {
+    manager
+        .profile_action(
+            &app,
+            &provider_id,
+            &action,
+            &id,
+            value.as_deref(),
+            name.as_deref(),
+        )
+        .await
+}
+#[tauri::command]
+fn set_default_presenter(
+    app: AppHandle,
+    manager: State<speech::SpeechManager>,
+    choice: Option<speech::DefaultPresenter>,
+) -> Result<()> {
+    manager.set_default(&app, choice)
+}
+#[tauri::command]
+fn stage_voice_recording(app: AppHandle, bytes: Vec<u8>) -> Result<speech::Recording> {
+    speech::stage_recording(&app, &bytes)
+}
+#[tauri::command]
+fn release_voice_recording(app: AppHandle, id: String) -> Result<()> {
+    speech::release_recording(&app, &id)
+}
+#[tauri::command]
+fn import_voice_recording(app: AppHandle, path: String) -> Result<speech::Recording> {
+    let meta = std::fs::symlink_metadata(&path)?;
+    if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 12_000_000 {
+        return Err(error::Error::msg(
+            "Choose a regular PCM16 WAV recording, up to 30 seconds.",
+        ));
+    }
+    speech::stage_recording(&app, &std::fs::read(path)?)
+}
+#[tauri::command]
+async fn remove_speech_pack(
+    app: AppHandle,
+    manager: State<'_, speech::SpeechManager>,
+    provider_id: String,
+) -> Result<()> {
+    manager.remove(&app, &provider_id).await
+}
+#[tauri::command]
+async fn generate_speech(
+    app: AppHandle,
+    manager: State<'_, speech::SpeechManager>,
+    job_id: String,
+    id: String,
+    slide: Option<String>,
+    fresh: Option<bool>,
+) -> Result<speech::GenerationResult> {
+    manager
+        .generate(app, job_id, id, slide, fresh.unwrap_or(false))
+        .await
+}
+#[tauri::command]
+fn cancel_speech(manager: State<speech::SpeechManager>, job_id: String) -> Result<()> {
+    manager.cancel(&job_id)
+}
+
+#[tauri::command]
+async fn prepare_video(
+    app: AppHandle,
+    manager: State<'_, video::VideoManager>,
+    id: String,
+    job_id: String,
+) -> Result<video::Timeline> {
+    manager.prepare(&app, &id, &job_id).await
+}
+#[tauri::command]
+async fn export_video(
+    app: AppHandle,
+    manager: State<'_, video::VideoManager>,
+    job_id: String,
+    dest: String,
+) -> Result<()> {
+    manager
+        .export(&app, &job_id, std::path::Path::new(&dest))
+        .await
+}
+#[tauri::command]
+fn cancel_video(manager: State<video::VideoManager>, job_id: String) -> Result<()> {
+    manager.cancel(&job_id)
+}
+#[tauri::command]
+fn release_video(manager: State<video::VideoManager>, job_id: String) -> Result<()> {
+    manager.release(&job_id)
 }
 
 #[tauri::command]
@@ -229,7 +450,12 @@ fn add_slide(id: String, after: Option<String>) -> Result<CreatedSlide> {
 
 #[tauri::command]
 fn duplicate_slide(id: String, slide: String) -> Result<CreatedSlide> {
-    let (deck, slide) = deck::duplicate(&deck::deck_file(&id)?, &slide)?;
+    let file = deck::deck_file(&id)?;
+    let dir = deck::narration_dir(&file);
+    narration::load(&dir)?;
+    let (deck, copied) = deck::duplicate(&file, &slide)?;
+    narration::duplicate(&dir, &slide, &copied)?;
+    let slide = copied;
     Ok(CreatedSlide { deck, slide })
 }
 
@@ -498,6 +724,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AgentManager::default())
+        .manage(speech::SpeechManager::default())
+        .manage(video::VideoManager::default())
         .manage(WorkspaceWatcher::default())
         .manage(OpenWorkspace::default())
         .register_uri_scheme_protocol("slop", |ctx, request| {
@@ -514,6 +742,28 @@ pub fn run() {
             create_deck,
             open_deck,
             load_deck,
+            load_narration,
+            save_narration,
+            speech_status,
+            speech_takes,
+            speech_history,
+            select_speech_take,
+            install_speech_pack,
+            install_cloning_pack,
+            create_voice_profile,
+            preview_voice_profile,
+            voice_profile_action,
+            set_default_presenter,
+            stage_voice_recording,
+            release_voice_recording,
+            import_voice_recording,
+            remove_speech_pack,
+            generate_speech,
+            cancel_speech,
+            prepare_video,
+            export_video,
+            cancel_video,
+            release_video,
             rename_deck,
             save_review,
             reorder_slides,

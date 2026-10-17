@@ -9,6 +9,7 @@ import { Home } from "./components/Home";
 import { Presenter } from "./components/Presenter";
 import { Sidebar } from "./components/Sidebar";
 import { SlideImageExport } from "./components/SlideImageExport";
+import { NarratedVideo } from "./components/NarratedVideo";
 import { SlideRail } from "./components/SlideRail";
 import { Stage } from "./components/Stage";
 import { TopBar } from "./components/TopBar";
@@ -23,6 +24,7 @@ export function App() {
       {workspace ? <Workbench /> : <Home />}
       {presenting && <Presenter />}
       <SlideImageExport />
+      <NarratedVideo />
       <ErrorToast />
     </>
   );

@@ -1,14 +1,18 @@
-import { Files, MessageSquare } from "lucide-react";
+import { Files, MessageSquare, Mic2, SlidersHorizontal } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { cn } from "../lib/utils";
 import { SIDEBAR_TABS, useApp, type SidebarTab } from "../store";
 import { ChatPanel } from "./ChatPanel";
 import { FileTree } from "./FileTree";
+import { NarrationPanel } from "./NarrationPanel";
+import { PresentationPresets } from "./PresentationPresets";
 
 /** What each sidebar tab shows. Add a tab here and to `SIDEBAR_TABS` in the store. */
 const TABS: Record<SidebarTab, { label: string; icon: typeof Files; render: () => ReactNode }> = {
   chat: { label: "Chat", icon: MessageSquare, render: () => <ChatPanel /> },
+  narration: { label: "Narration", icon: Mic2, render: () => <NarrationPanel /> },
+  presets: { label: "Presets", icon: SlidersHorizontal, render: () => <PresentationPresets /> },
   files: { label: "Files", icon: Files, render: () => <FileTree /> },
 };
 

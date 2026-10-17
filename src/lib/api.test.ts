@@ -4,6 +4,7 @@ const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
 import { api, errorMessage } from "./api";
+import { emptyNarration } from "./narration";
 
 beforeEach(() => {
   invoke.mockReset().mockResolvedValue("result");
@@ -11,6 +12,28 @@ beforeEach(() => {
 
 // Command names and argument keys must match the #[tauri::command]s in src-tauri/src/lib.rs.
 const CASES = [
+  ["prepareVideo", () => api.prepareVideo("talk", "job"), "prepare_video", { id: "talk", jobId: "job" }],
+  ["exportVideo", () => api.exportVideo("job", "/tmp/talk.mp4"), "export_video", { jobId: "job", dest: "/tmp/talk.mp4" }],
+  ["cancelVideo", () => api.cancelVideo("job"), "cancel_video", { jobId: "job" }],
+  ["releaseVideo", () => api.releaseVideo("job"), "release_video", { jobId: "job" }],
+  ["speechStatus", () => api.speechStatus(), "speech_status", undefined],
+  ["speechHistory", () => api.speechHistory("talk", "intro"), "speech_history", { id: "talk", slide: "intro" }],
+  ["selectSpeechTake", () => api.selectSpeechTake("talk", "intro", "take", "version"), "select_speech_take", { id: "talk", slide: "intro", takeId: "take", base: "version" }],
+  ["speechTakes", () => api.speechTakes("talk"), "speech_takes", { id: "talk" }],
+  ["installSpeechPack", () => api.installSpeechPack("job", null, "qwen-local"), "install_speech_pack", { jobId: "job", source: null, providerId: "qwen-local" }],
+  ["installCloningPack", () => api.installCloningPack("job", null, "qwen-local"), "install_cloning_pack", { jobId: "job", source: null, providerId: "qwen-local" }],
+  ["createVoiceProfile", () => api.createVoiceProfile("job", "qwen-local", { name: "My voice", language: "en", transcript: "Exact words", reference: "/voice.wav", authorized: true }), "create_voice_profile", { jobId: "job", providerId: "qwen-local", request: { name: "My voice", language: "en", transcript: "Exact words", reference: "/voice.wav", authorized: true } }],
+  ["previewVoiceProfile", () => api.previewVoiceProfile("job", "qwen-local", "token", "de"), "preview_voice_profile", { jobId: "job", providerId: "qwen-local", token: "token", language: "de" }],
+  ["voiceProfileAction", () => api.voiceProfileAction("qwen-local", "rename", "profile:id", "Name"), "voice_profile_action", { providerId: "qwen-local", action: "rename", id: "profile:id", value: "Name", name: null }],
+  ["setDefaultPresenter", () => api.setDefaultPresenter({ providerId: "qwen-local", presenterId: "profile:id" }), "set_default_presenter", { choice: { providerId: "qwen-local", presenterId: "profile:id" } }],
+  ["importVoiceRecording", () => api.importVoiceRecording("/sample.wav"), "import_voice_recording", { path: "/sample.wav" }],
+  ["stageVoiceRecording", () => api.stageVoiceRecording([1, 2]), "stage_voice_recording", { bytes: [1, 2] }],
+  ["releaseVoiceRecording", () => api.releaseVoiceRecording("recording-id"), "release_voice_recording", { id: "recording-id" }],
+  ["removeSpeechPack", () => api.removeSpeechPack("qwen-local"), "remove_speech_pack", { providerId: "qwen-local" }],
+  ["generateSpeech", () => api.generateSpeech("job", "talk", "intro"), "generate_speech", { jobId: "job", id: "talk", slide: "intro", fresh: false }],
+  ["cancelSpeech", () => api.cancelSpeech("job"), "cancel_speech", { jobId: "job" }],
+  ["loadNarration", () => api.loadNarration("talk"), "load_narration", { id: "talk" }],
+  ["saveNarration", () => api.saveNarration("talk", emptyNarration().manifest, "missing"), "save_narration", { id: "talk", manifest: emptyNarration().manifest, base: "missing" }],
   ["openWorkspace", () => api.openWorkspace("/ws"), "open_workspace", { path: "/ws" }],
   ["closeWorkspace", () => api.closeWorkspace(), "close_workspace", undefined],
   ["recentWorkspaces", () => api.recentWorkspaces(), "recent_workspaces", undefined],

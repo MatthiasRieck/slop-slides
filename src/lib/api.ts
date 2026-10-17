@@ -4,6 +4,8 @@ import type { Approval, ApprovalDecision, PermissionMode } from "./permissions";
 import type { Stroke } from "./ink";
 import type { Provider, ProviderInfo } from "./models";
 import type { SizeInfo, SlideSize } from "./slideSize";
+import type { SpeechStatus, SpeechTake, SpeechResult } from "./speech";
+import type { NarrationDocument, NarrationManifest } from "./narration";
 
 /** What a workspace file is, which decides what it opens in (see src-tauri/src/workspace.rs). */
 export type FileKind = "directory" | "deck" | "slideshow" | "webpage" | "file";
@@ -165,6 +167,28 @@ export const api = {
   createDeck: (title: string, template: string | null = null) => invoke<Deck>("create_deck", { title, template }),
   openDeck: (id: string) => invoke<Deck>("open_deck", { id }),
   loadDeck: (id: string) => invoke<Deck>("load_deck", { id }),
+  loadNarration: (id: string) => invoke<NarrationDocument>("load_narration", { id }),
+  saveNarration: (id: string, manifest: NarrationManifest, base: string) => invoke<NarrationDocument>("save_narration", { id, manifest, base }),
+  speechStatus: () => invoke<SpeechStatus>("speech_status"),
+  speechTakes: (id: string) => invoke<Record<string, SpeechTake>>("speech_takes", { id }),
+  speechHistory: (id: string, slide: string) => invoke<import("./speech").SpeechHistoryTake[]>("speech_history", { id, slide }),
+  selectSpeechTake: (id: string, slide: string, takeId: string, base: string) => invoke<NarrationDocument>("select_speech_take", { id, slide, takeId, base }),
+  installSpeechPack: (jobId: string, source: string | null, providerId: string) => invoke<void>("install_speech_pack", { jobId, source, providerId }),
+  installCloningPack: (jobId: string, source: string | null, providerId: string) => invoke<void>("install_cloning_pack", { jobId, source, providerId }),
+  createVoiceProfile: (jobId: string, providerId: string, request: { name: string; language: string; transcript: string; reference: string; authorized: boolean }) => invoke<import("./speech").VoiceProfile>("create_voice_profile", { jobId, providerId, request }),
+  previewVoiceProfile: (jobId: string, providerId: string, token: string, language: string) => invoke<void>("preview_voice_profile", { jobId, providerId, token, language }),
+  voiceProfileAction: (providerId: string, action: "save" | "discard" | "rename" | "delete", id: string, value: string | null = null, name: string | null = null) => invoke<import("./speech").VoiceProfile | null>("voice_profile_action", { providerId, action, id, value, name }),
+  setDefaultPresenter: (choice: import("./speech").DefaultPresenter | null) => invoke<void>("set_default_presenter", { choice }),
+  importVoiceRecording: (path: string) => invoke<{ id: string; path: string }>("import_voice_recording", { path }),
+  stageVoiceRecording: (bytes: number[]) => invoke<{ id: string; path: string }>("stage_voice_recording", { bytes }),
+  releaseVoiceRecording: (id: string) => invoke<void>("release_voice_recording", { id }),
+  removeSpeechPack: (providerId: string) => invoke<void>("remove_speech_pack", { providerId }),
+  generateSpeech: (jobId: string, id: string, slide: string | null, fresh = false) => invoke<SpeechResult>("generate_speech", { jobId, id, slide, fresh }),
+  cancelSpeech: (jobId: string) => invoke<void>("cancel_speech", { jobId }),
+  prepareVideo: (id: string, jobId: string) => invoke<import("./video").VideoTimeline>("prepare_video", { id, jobId }),
+  exportVideo: (jobId: string, dest: string) => invoke<void>("export_video", { jobId, dest }),
+  cancelVideo: (jobId: string) => invoke<void>("cancel_video", { jobId }),
+  releaseVideo: (jobId: string) => invoke<void>("release_video", { jobId }),
   /** Stores the review marks (by slide id) in the deck file. */
   saveReview: (id: string, review: Record<string, Stroke[]>) => invoke<void>("save_review", { id, review }),
   renameDeck: (id: string, title: string) => invoke<Deck>("rename_deck", { id, title }),

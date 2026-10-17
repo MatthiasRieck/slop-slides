@@ -28,6 +28,7 @@ import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowT
 import { basename, workspaceChatFileUrl, cn, dirname, isSessionFile } from "../lib/utils";
 import { PROVIDERS, type Provider } from "../lib/models";
 import { relativePath, useApp, type AssistantMessage, type ChatMessage, type ChatPart, type UserMessage } from "../store";
+import { useNarration } from "../narrationStore";
 import { ApprovalCard, PermissionPicker, ApprovalReview } from "./Permissions";
 import { EffortPicker, ModelPicker, useDismiss } from "./ModelPicker";
 
@@ -46,6 +47,7 @@ export function ChatPanel() {
   );
   const deckEmpty = useApp((s) => (s.deck?.slides.length ?? 0) === 0);
   const composerFill = useApp((s) => s.composerFill);
+  const hasNarration = useNarration((s) => !!s.document && Object.keys(s.document.manifest.slides).length > 0);
   const [draft, setDraft] = useState("");
 
   // Other parts of the app (e.g. the lint status) can hand the composer a prepared message.
@@ -70,6 +72,7 @@ export function ChatPanel() {
         </div>
       )}
       {cliMissing && <MissingCli provider={provider} />}
+      {hasNarration && <button className="mx-3 mb-2 rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent" onClick={() => useApp.getState().reviewNarration()}>Review narration</button>}
       <MessageList messages={messages} running={running}>
         {messages.length === 0 && (
           <EmptyChat deckEmpty={deckEmpty} onPick={(text) => setDraft(text)} />

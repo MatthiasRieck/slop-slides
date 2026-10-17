@@ -9,12 +9,15 @@ use serde_json::{json, Value};
 
 use crate::deck;
 use crate::lint;
+use crate::narration;
 use crate::sessions::Sessions;
 
 pub const FLAG: &str = "--lint-mcp";
 pub const SERVER: &str = "slopslide";
 pub const TOOL: &str = "lint_deck";
 pub const OPEN_TOOL: &str = "open_file";
+pub const READ_NARRATION: &str = "read_narration";
+pub const WRITE_NARRATION: &str = "write_narration";
 const OPEN_REQUESTS: &str = "open-requests";
 /// Claude Code's rule for every tool of this server, for `--allowedTools`; its tools are
 /// named `mcp__slopslide__<tool>`.
@@ -110,6 +113,19 @@ pub fn handle(
             "inputSchema": { "type": "object", "properties": {
                 "path": { "type": "string", "description": "Workspace-relative file path." }
             }, "required": ["path"] }
+        }, {
+            "name": READ_NARRATION,
+            "description": "Read a deck's narration, file fingerprint, and provider guidance before editing scripts.",
+            "inputSchema": { "type": "object", "properties": {
+                "path": { "type": "string", "description": "Deck HTML file relative to the workspace root." }
+            }, "required": ["path"] }
+        }, {
+            "name": WRITE_NARRATION,
+            "description": "Validate and atomically save the full narration manifest using the fingerprint from read_narration. Preserve unrelated scripts and settings; re-read and merge on conflict.",
+            "inputSchema": { "type": "object", "properties": {
+                "path": { "type": "string", "description": "Deck HTML file relative to the workspace root." },
+                "manifest": { "type": "object" }, "base": { "type": "string" }
+            }, "required": ["path", "manifest", "base"] }
         }]}),
         "tools/call" if request["params"]["name"] == TOOL => {
             let rel = request["params"]["arguments"]["path"]
@@ -156,10 +172,110 @@ pub fn handle(
             };
             json!({ "content": [{ "type": "text", "text": text }], "isError": failed })
         }
+        "tools/call" if request["params"]["name"] == READ_NARRATION => narration_read_result(
+            narration_target(dir, &request["params"]["arguments"])
+                .and_then(|sidecar| narration::load(&sidecar)),
+        ),
+        "tools/call" if request["params"]["name"] == WRITE_NARRATION => {
+            let args = &request["params"]["arguments"];
+            let result = (|| -> crate::error::Result<narration::Document> {
+                let sidecar = narration_target(dir, args)?;
+                let manifest: narration::Manifest =
+                    serde_json::from_value(args["manifest"].clone())
+                        .map_err(|e| crate::error::Error::msg(e.to_string()))?;
+                let base = args["base"].as_str().ok_or_else(|| {
+                    crate::error::Error::msg("Missing narration base fingerprint.")
+                })?;
+                let current = narration::load(&sidecar)?;
+                for (id, script) in &manifest.slides {
+                    if current
+                        .manifest
+                        .slides
+                        .get(id)
+                        .is_some_and(|s| s.text == script.text)
+                    {
+                        continue;
+                    }
+                    let plan = speech_connector::narration::parse(&script.text)
+                        .map_err(|e| crate::error::Error::msg(format!("Slide {id}: {e}")))?;
+                    let provider = script
+                        .speech_provider_id_override
+                        .as_deref()
+                        .unwrap_or(&manifest.speech_provider_id);
+                    if plan.marked && provider_guidance(provider).is_none() {
+                        return Err(crate::error::Error::msg("Pause controls are not verified for this provider. Use plain narration."));
+                    }
+                    if !script.text.trim().is_empty() && !plan.has_speech() {
+                        return Err(crate::error::Error::msg(
+                            "Write spoken text as well as pause markers.",
+                        ));
+                    }
+                }
+                narration::save(&sidecar, manifest, base)
+            })();
+            narration_result(result)
+        }
         "tools/call" => return Some(error(id, -32602, "unknown tool")),
         method => return Some(error(id, -32601, &format!("method not found: {method}"))),
     };
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+}
+
+fn narration_target(root: &Path, args: &Value) -> crate::error::Result<PathBuf> {
+    let rel = args["path"]
+        .as_str()
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| crate::error::Error::msg("Deck path is required."))?;
+    let file = crate::workspace::resolve(root, rel)?;
+    let file = deck::deck_file(&file.to_string_lossy())?;
+    Ok(deck::narration_dir(&file))
+}
+
+fn provider_guidance(id: &str) -> Option<Value> {
+    use speech_connector::SpeechProvider;
+    let descriptor = match id {
+        speech_connector::QWEN_ID => {
+            speech_connector::QwenConnector::new(Default::default(), None).describe()
+        }
+        "fixture-tone" => speech_connector::FixtureProvider.describe(),
+        _ => return None,
+    };
+    Some(
+        json!({ "controls": descriptor.narration_controls, "guidance": descriptor.narration_guidance }),
+    )
+}
+
+fn narration_read_result(result: crate::error::Result<narration::Document>) -> Value {
+    let Ok(doc) = result else {
+        return narration_result(result);
+    };
+    let mut providers = std::collections::BTreeMap::new();
+    for id in std::iter::once(doc.manifest.speech_provider_id.as_str()).chain(
+        doc.manifest
+            .slides
+            .values()
+            .filter_map(|s| s.speech_provider_id_override.as_deref()),
+    ) {
+        providers.entry(id).or_insert_with(|| provider_guidance(id));
+    }
+    let guidance = json!({ "narrationSkill": include_str!("../skills/slopslide-narration/SKILL.md"), "providers": providers });
+    let mut result = narration_result(Ok(doc));
+    result["content"]
+        .as_array_mut()
+        .expect("content")
+        .push(json!({ "type": "text", "text": guidance.to_string() }));
+    result
+}
+
+fn narration_result(result: crate::error::Result<narration::Document>) -> Value {
+    match result {
+        Ok(doc) => {
+            json!({ "content": [{ "type": "text", "text": serde_json::to_string(&doc).expect("serializable document") }], "isError": false })
+        }
+        Err(e) => {
+            json!({ "content": [{ "type": "text", "text": e.to_string() }], "isError": true })
+        }
+    }
 }
 
 /// Drain the session inbox. Validate again before forwarding a request to the UI.
@@ -252,10 +368,61 @@ mod tests {
     fn lists_the_lint_tool() {
         let res = call(Path::new("/nonexistent"), "tools/list", json!({}));
         let tools = res["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 2);
+        assert_eq!(tools.len(), 4);
         assert_eq!(tools[1]["name"], OPEN_TOOL);
+        assert_eq!(tools[2]["name"], READ_NARRATION);
+        assert_eq!(tools[3]["name"], WRITE_NARRATION);
         assert_eq!(tools[0]["name"], TOOL);
         assert_eq!(CLAUDE_TOOLS, format!("mcp__{SERVER}"));
+    }
+
+    #[test]
+    fn narration_tools_target_the_requested_deck_and_reject_escape_or_conflicts() {
+        let dir = temp_deck("<html><main class=\"deck\"><section class=\"slide\" id=\"a\">A</section></main></html>");
+        std::fs::write(
+            dir.join("other.html"),
+            "<html><main class=\"deck\"></main></html>",
+        )
+        .unwrap();
+        let read = |path: &str| {
+            call(
+                &dir,
+                "tools/call",
+                json!({"name": READ_NARRATION, "arguments": {"path": path}}),
+            )
+        };
+        let first = read("deck.html");
+        assert_eq!(first["result"]["isError"], false);
+        let read_doc: Value =
+            serde_json::from_str(first["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        let mut manifest: narration::Manifest =
+            serde_json::from_value(read_doc["manifest"].clone()).unwrap();
+        manifest.slides.insert(
+            "a".into(),
+            narration::SlideNarration {
+                text: "Hello there.".into(),
+                ..Default::default()
+            },
+        );
+        let write = |path: &str, base: &str, manifest: &narration::Manifest| {
+            call(
+                &dir,
+                "tools/call",
+                json!({"name": WRITE_NARRATION, "arguments": {"path": path, "base": base, "manifest": manifest}}),
+            )
+        };
+        assert_eq!(
+            write("other.html", "missing", &manifest)["result"]["isError"],
+            false
+        );
+        assert!(dir.join("other.html.slopslide/narration.json").is_file());
+        assert!(!dir.join("narration.json").exists());
+        assert_eq!(
+            write("other.html", "missing", &manifest)["result"]["isError"],
+            true
+        );
+        assert_eq!(read("../outside.html")["result"]["isError"], true);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

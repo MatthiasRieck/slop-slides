@@ -37,6 +37,8 @@ use crate::templates;
 pub const HOME_DIR: &str = ".slopslides";
 /// The file name of decks the app creates.
 pub const DECK_FILE: &str = "deck.html";
+/// Internal narration locks and recovery files, kept next to deck media.
+pub const INTERNAL_DIR: &str = ".slopslide";
 const DECK_TEMPLATE: &str = include_str!("../assets/deck-template.html");
 const BLANK_SLIDE: &str = include_str!("../assets/blank-slide.html");
 const SNAPSHOTS_KEPT: usize = 30;
@@ -125,6 +127,18 @@ pub fn folder(file: &Path) -> &Path {
     file.parent().unwrap_or(Path::new("."))
 }
 
+/// Narration and recordings live beside generated decks. An arbitrary HTML file gets a
+/// dedicated sibling folder so two decks in the same workspace cannot share scripts.
+pub fn narration_dir(file: &Path) -> PathBuf {
+    let parent = folder(file);
+    if file.file_name().is_some_and(|name| name == DECK_FILE) {
+        parent.to_path_buf()
+    } else {
+        let name = file.file_name().unwrap_or_default().to_string_lossy();
+        parent.join(format!("{name}.slopslide"))
+    }
+}
+
 /// Resolves a deck-relative path, refusing anything that escapes the deck folder.
 pub fn resolve_in_deck(dir: &Path, rel: &str) -> Result<PathBuf> {
     let rel_path = Path::new(rel);
@@ -145,7 +159,7 @@ fn write_html(file: &Path, html: &str) -> Result<()> {
     atomic_write(file, html.as_bytes())
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4().simple()));
     fs::write(&tmp, bytes)?;
     fs::rename(&tmp, path)?;

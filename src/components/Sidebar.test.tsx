@@ -7,6 +7,8 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 // The tabs' contents have their own tests.
 vi.mock("./ChatPanel", () => ({ ChatPanel: () => <div data-testid="chat" /> }));
 vi.mock("./FileTree", () => ({ FileTree: () => <div data-testid="files" /> }));
+vi.mock("./NarrationPanel", () => ({ NarrationPanel: () => <div data-testid="narration" /> }));
+vi.mock("./PresentationPresets", () => ({ PresentationPresets: () => <div data-testid="presets" /> }));
 
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
@@ -22,7 +24,7 @@ const tab = (name: string) => screen.getByRole("tab", { name });
 describe("Sidebar", () => {
   it("shows one tab at a time and switches between them", () => {
     render(<Sidebar />);
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Chat", "Files"]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Chat", "Narration", "Presets", "Files"]);
     expect(tab("Chat").getAttribute("aria-selected")).toBe("true");
     expect(screen.queryByTestId("chat")).not.toBeNull();
     expect(screen.queryByTestId("files")).toBeNull();

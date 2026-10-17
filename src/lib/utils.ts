@@ -49,6 +49,17 @@ export function deckFileUrl(deckId: string, path: string, query?: string): strin
   return fileUrl(`${dirname(deckId)}/${path}`, query);
 }
 
+/** Recordings stay beside generated decks; other HTML files have their own sidecar. */
+export function narrationAudioUrl(deckId: string, takeId: string): string {
+  const folder = basename(deckId) === "deck.html" ? "" : `${basename(deckId)}.slopslide/`;
+  return deckFileUrl(deckId, `${folder}audio/${takeId}.wav`);
+}
+
+/** Short-lived recording, presenter and video previews served by the app. */
+export function previewFileUrl(kind: "recording" | "voice" | "video", path: string, query?: string): string {
+  return servedUrl(`.${kind}`, path, query);
+}
+
 /** Files the app keeps in the deck's session (screenshots) come as absolute paths. */
 export function isSessionFile(path: string): boolean {
   return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);

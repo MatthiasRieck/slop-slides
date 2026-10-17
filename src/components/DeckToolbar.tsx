@@ -7,6 +7,7 @@ import { api, errorMessage, type Deck } from "../lib/api";
 import { basename, cn } from "../lib/utils";
 import { lintFixPrompt, useApp, type StageView } from "../store";
 import { SlideSizeButton } from "./SlideSize";
+import { useVideo } from "../videoStore";
 
 /**
  * The open deck's toolbar, above the slides (or its HTML): the title, the slide size, lint,
@@ -39,6 +40,34 @@ function DeckTools({ deck }: { deck: Deck }) {
     }
   };
 
+  return (
+    <div role="toolbar" aria-label="Deck" className="flex h-10 shrink-0 items-center gap-2 border-b bg-background px-3">
+      <input
+        value={title}
+        onChange={(e) => setTitle(e.target.value)}
+        onBlur={commitTitle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+          if (e.key === "Escape") {
+            cancelled.current = true;
+            setTitle(deck.title);
+            e.currentTarget.blur();
+          }
+        }}
+        title={deck.path}
+        aria-label="Deck title"
+        className="min-w-0 max-w-md flex-1 truncate rounded-md bg-transparent px-1.5 py-1 text-sm font-medium outline-none hover:bg-accent focus:bg-accent"
+      />
+      <div className="flex-1" />
+      <SlideSizeButton />
+      <LintStatus />
+      <ViewToggle file={basename(deck.id)} />
+    </div>
+  );
+}
+
+/** Preview and export stay in the workspace top row across deck tabs. */
+export function DeckActions({ deck }: { deck: Deck }) {
   const exportDeck = async () => {
     const name = deck.title.replace(/[\\/:*?"<>|]+/g, "").trim() || "presentation";
     const dest = await save({
@@ -66,32 +95,14 @@ function DeckTools({ deck }: { deck: Deck }) {
   };
 
   return (
-    <div role="toolbar" aria-label="Deck" className="flex h-10 shrink-0 items-center gap-2 border-b bg-background px-3">
-      <input
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        onBlur={commitTitle}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") e.currentTarget.blur();
-          if (e.key === "Escape") {
-            cancelled.current = true;
-            setTitle(deck.title);
-            e.currentTarget.blur();
-          }
-        }}
-        title={deck.path}
-        aria-label="Deck title"
-        className="min-w-0 max-w-md flex-1 truncate rounded-md bg-transparent px-1.5 py-1 text-sm font-medium outline-none hover:bg-accent focus:bg-accent"
-      />
-      <div className="flex-1" />
-      <SlideSizeButton />
-      <LintStatus />
-      <ViewToggle file={basename(deck.id)} />
+    <>
       <ExportMenu
         disabled={deck.slides.length === 0}
         onHtml={() => void exportDeck()}
         onImages={() => void exportImages()}
+        onVideo={() => void useVideo.getState().open(deck.id, true)}
       />
+      <button type="button" disabled={deck.slides.length === 0} onClick={() => void useVideo.getState().open(deck.id)} className="flex shrink-0 items-center gap-1 rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-40"><Play className="size-3.5" />Preview deck</button>
       <button
         type="button"
         disabled={deck.slides.length === 0}
@@ -101,12 +112,12 @@ function DeckTools({ deck }: { deck: Deck }) {
         <Play className="size-3.5 fill-current" />
         Present
       </button>
-    </div>
+    </>
   );
 }
 
 /** The Export button and its choices: one shareable HTML file, or a PNG per slide. */
-function ExportMenu(props: { disabled: boolean; onHtml: () => void; onImages: () => void }) {
+function ExportMenu(props: { disabled: boolean; onHtml: () => void; onImages: () => void; onVideo: () => void }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -152,6 +163,7 @@ function ExportMenu(props: { disabled: boolean; onHtml: () => void; onImages: ()
         >
           <ExportItem icon={FileCode2} label="HTML file" hint="One self-contained file to share" onClick={choose(props.onHtml)} />
           <ExportItem icon={Images} label="PNG images" hint="One image per slide, in a new folder" onClick={choose(props.onImages)} />
+          <ExportItem icon={Presentation} label="Narrated MP4" hint="Slides with speech or timed silence" onClick={choose(props.onVideo)} />
         </div>
       )}
     </div>

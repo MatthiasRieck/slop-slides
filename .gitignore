@@ -4,3 +4,9 @@ src-tauri/target
 src-tauri/gen/schemas
 .DS_Store
 *.log
+
+src-tauri/speech-runtime/*
+!src-tauri/speech-runtime/README.txt
+
+src-tauri/video-runtime/*
+!src-tauri/video-runtime/README.txt

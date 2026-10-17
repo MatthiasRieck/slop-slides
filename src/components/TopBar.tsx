@@ -3,6 +3,7 @@ import { FolderOpen, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightO
 
 import { basename, cn, isMac } from "../lib/utils";
 import { useApp } from "../store";
+import { DeckActions } from "./DeckToolbar";
 
 /**
  * The workspace's bar: the slide rail toggle (for a deck), breadcrumbs from the workspace folder
@@ -12,6 +13,7 @@ import { useApp } from "../store";
 export function TopBar() {
   const workspace = useApp((s) => s.workspace);
   const hasDeck = useApp((s) => s.deck !== null);
+  const deck = useApp((s) => s.deck);
   const openedFile = useApp((s) => s.openedFile);
   if (!workspace) return null;
 
@@ -26,6 +28,7 @@ export function TopBar() {
       {hasDeck && <RailToggle />}
       <Breadcrumbs workspace={workspace.name} path={openedFile?.path ?? null} />
       <div data-tauri-drag-region className="flex-1 self-stretch" />
+      {deck && <DeckActions deck={deck} />}
       {openedFile && (
         <>
           <RevealButton path={openedFile.absolute} />

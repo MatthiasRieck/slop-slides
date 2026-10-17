@@ -48,6 +48,13 @@ pub fn handle(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Cow<'stati
         }
     });
     match served {
+        Ok(("audio/wav", body)) => audio_response(
+            body,
+            request
+                .headers()
+                .get(header::RANGE)
+                .and_then(|h| h.to_str().ok()),
+        ),
         Ok((mime, body)) => Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, mime)
@@ -63,10 +70,84 @@ pub fn handle(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Cow<'stati
     }
 }
 
+fn byte_range(value: &str, length: usize) -> Option<(usize, usize)> {
+    let (start, end) = value.strip_prefix("bytes=")?.split_once('-')?;
+    if length == 0 {
+        return None;
+    }
+    if start.is_empty() {
+        let suffix = end.parse::<usize>().ok()?;
+        return (suffix > 0).then_some((length.saturating_sub(suffix), length - 1));
+    }
+    let start = start.parse::<usize>().ok()?;
+    let end = if end.is_empty() {
+        length - 1
+    } else {
+        end.parse::<usize>().ok()?.min(length - 1)
+    };
+    (start <= end && start < length).then_some((start, end))
+}
+fn audio_response(body: Vec<u8>, range: Option<&str>) -> Response<Cow<'static, [u8]>> {
+    let length = body.len();
+    let (status, bytes, content_range) = match range {
+        None => (StatusCode::OK, body, None),
+        Some(range) => match byte_range(range, length) {
+            Some((start, end)) => (
+                StatusCode::PARTIAL_CONTENT,
+                body[start..=end].to_vec(),
+                Some(format!("bytes {start}-{end}/{length}")),
+            ),
+            None => (
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                Vec::new(),
+                Some(format!("bytes */{length}")),
+            ),
+        },
+    };
+    let mut response = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "audio/wav")
+        .header(header::CONTENT_LENGTH, bytes.len())
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CACHE_CONTROL, "no-store")
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*");
+    if let Some(range) = content_range {
+        response = response.header(header::CONTENT_RANGE, range);
+    }
+    response.body(Cow::Owned(bytes)).expect("audio response")
+}
+
 fn serve(app: &AppHandle, raw_path: &str) -> Result<(&'static str, Vec<u8>), StatusCode> {
     let (prefix, rel) = split_path(raw_path)?;
     if prefix == FILE_PREFIX {
         return read_in_workspace(&app.state::<OpenWorkspace>(), &rel);
+    }
+    if prefix == ".recording" {
+        let id = rel.strip_suffix(".wav").ok_or(StatusCode::NOT_FOUND)?;
+        let path =
+            crate::speech::reference_recording_file(app, id).map_err(|_| StatusCode::NOT_FOUND)?;
+        return std::fs::read(path)
+            .map(|body| ("audio/wav", body))
+            .map_err(|_| StatusCode::NOT_FOUND);
+    }
+    if prefix == ".voice" {
+        let (token, name) = rel.split_once('/').ok_or(StatusCode::NOT_FOUND)?;
+        let language = name.strip_suffix(".wav").ok_or(StatusCode::NOT_FOUND)?;
+        let path = crate::speech::profile_preview_file(app, token, language)
+            .map_err(|_| StatusCode::NOT_FOUND)?;
+        return std::fs::read(path)
+            .map(|body| ("audio/wav", body))
+            .map_err(|_| StatusCode::NOT_FOUND);
+    }
+    if prefix == ".video" {
+        let (job, name) = rel.split_once('/').ok_or(StatusCode::NOT_FOUND)?;
+        let path = app
+            .state::<crate::video::VideoManager>()
+            .file(job, name)
+            .ok_or(StatusCode::NOT_FOUND)?;
+        return std::fs::read(path)
+            .map(|body| (deck::mime_for(name), body))
+            .map_err(|_| StatusCode::NOT_FOUND);
     }
     if prefix == TEMPLATE_PREFIX {
         let (template, rel) = rel.split_once('/').ok_or(StatusCode::NOT_FOUND)?;

@@ -4,26 +4,25 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { api, errorMessage, type Deck, type Slide } from "../lib/api";
 import { pixelsOf, type Pixels } from "../lib/slideSize";
-import { useApp, type ImageExport } from "../store";
+import { useApp } from "../store";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
 /** Wait after a slide loads before capturing it, for web fonts and images to paint. */
 export const SETTLE_MS = 400;
 
 /**
- * Saves every slide as a PNG, or as a page of a PDF. Each slide is shown in turn, as large as
- * the window allows, in its final animation state, and screenshotted natively (see
- * src-tauri/src/capture.rs and pdf.rs). Covers the editor while it works; when done, reveals
- * the folder or file.
+ * Saves every slide as a PNG. Each slide is shown in turn, as large as the window allows,
+ * in its final animation state, and screenshotted natively (see src-tauri/src/capture.rs).
+ * Covers the editor while it works; when done, reveals the folder.
  */
 export function SlideImageExport() {
   const job = useApp((s) => s.imageExport);
   const deck = useApp((s) => s.deck);
   if (!job || !deck) return null;
-  return <ExportRun key={`${job.format}:${job.dest}`} job={job} deck={deck} />;
+  return <ExportRun key={job.dir} dir={job.dir} slides={job.slides} deck={deck} />;
 }
 
-function ExportRun({ job: { format, dest, slides }, deck }: { job: ImageExport; deck: Deck }) {
+function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck: Deck }) {
   const [index, setIndex] = useState(0);
   const areaRef = useRef<HTMLDivElement>(null);
   const slideRef = useRef<HTMLDivElement>(null);
@@ -63,33 +62,21 @@ function ExportRun({ job: { format, dest, slides }, deck }: { job: ImageExport; 
     return () => {
       stopped.current = true;
       window.removeEventListener("keydown", onKey);
-      // Pages of a PDF that was not finished (cancelled, failed, or the deck closed).
-      if (format === "pdf") void api.discardPdfExport(dest).catch(() => {});
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
-  const next = async () => {
+  const next = () => {
     if (index + 1 < total) {
       setIndex(index + 1);
       return;
     }
-    if (format === "pdf") {
-      try {
-        await api.finishPdfExport(deck.id, dest);
-      } catch (error) {
-        useApp.getState().setError(`Could not save the PDF: ${errorMessage(error)}`);
-        useApp.getState().endImageExport();
-        return;
-      }
-      if (stopped.current) return;
-    }
     useApp.getState().endImageExport();
-    void revealItemInDir(dest).catch(() => {});
+    void revealItemInDir(dir).catch(() => {});
   };
 
   // A slide deleted since the export started has nothing to show.
   useEffect(() => {
-    if (!slide) void next();
+    if (!slide) next();
   }, [slide]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const capture = async () => {
@@ -99,23 +86,20 @@ function ExportRun({ job: { format, dest, slides }, deck }: { job: ImageExport; 
     if (stopped.current || !slideRef.current) return;
     const { x, y, width: w, height: h } = slideRef.current.getBoundingClientRect();
     const viewport = { width: window.innerWidth, height: window.innerHeight };
-    const rect = { x, y, width: w, height: h };
     try {
-      if (format === "pdf") await api.addPdfPage(dest, rect, viewport, canvas.width, canvas.height);
-      else await api.exportSlideImage(dest, index, total, rect, viewport, canvas.width);
+      await api.exportSlideImage(dir, index, total, { x, y, width: w, height: h }, viewport, canvas.width);
     } catch (error) {
-      const as = format === "pdf" ? "to the PDF" : "as an image";
-      useApp.getState().setError(`Could not save slide ${index + 1} ${as}: ${errorMessage(error)}`);
+      useApp.getState().setError(`Could not save slide ${index + 1} as an image: ${errorMessage(error)}`);
       useApp.getState().endImageExport();
       return;
     }
-    if (!stopped.current) await next();
+    if (!stopped.current) next();
   };
 
   return (
     <div
       role="dialog"
-      aria-label={format === "pdf" ? "Saving PDF" : "Saving slide images"}
+      aria-label="Saving slide images"
       className="fixed inset-0 z-50 flex flex-col bg-neutral-950 text-white"
     >
       <div ref={areaRef} className="flex min-h-0 flex-1 items-center justify-center p-6">

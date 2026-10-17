@@ -206,19 +206,35 @@ describe("deck actions", () => {
     await exportAs("PNG images");
     expect(openDialog).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
     expect(invoke).toHaveBeenCalledWith("create_image_export_dir", { id: "/decks/talk/deck.html", parent: "/Users/me/Desktop" });
-    expect(useApp.getState().imageExport).toEqual({ format: "png", dest: "/Users/me/Desktop/Talk", slides: ["intro", "#2", "outro"] });
+    expect(useApp.getState().imageExport).toEqual({ dir: "/Users/me/Desktop/Talk", slides: ["intro", "#2", "outro"] });
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("exports a PDF to the chosen file", async () => {
+  it("prints a PDF to the chosen file and reveals it", async () => {
     save.mockResolvedValue("/Users/me/Desktop/Talk.pdf");
     render(<DeckToolbar />);
     await exportAs("PDF");
     expect(save).toHaveBeenCalledWith(
       expect.objectContaining({ defaultPath: "Talk.pdf", filters: [{ name: "PDF document", extensions: ["pdf"] }] }),
     );
-    expect(useApp.getState().imageExport).toEqual({ format: "pdf", dest: "/Users/me/Desktop/Talk.pdf", slides: ["intro", "#2", "outro"] });
+    expect(invoke).toHaveBeenCalledWith("export_pdf", { id: "/decks/talk/deck.html", dest: "/Users/me/Desktop/Talk.pdf" });
+    expect(revealItemInDir).toHaveBeenCalledWith("/Users/me/Desktop/Talk.pdf");
+    expect(useApp.getState().imageExport).toBeNull();
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("shows the PDF is being written, and blocks another export meanwhile", async () => {
+    let finish!: () => void;
+    save.mockResolvedValue("/Users/me/Desktop/Talk.pdf");
+    invoke.mockImplementation(() => new Promise<void>((resolve) => (finish = resolve)));
+    render(<DeckToolbar />);
+    await exportAs("PDF");
+    expect(exportButton().textContent).toContain("Exporting…");
+    expect(exportButton().disabled).toBe(true);
+    await act(async () => finish());
+    expect(exportButton().textContent).toContain("Export");
+    expect(exportButton().textContent).not.toContain("Exporting");
+    expect(exportButton().disabled).toBe(false);
   });
 
   it("does not export a PDF when the save dialog is cancelled", async () => {
@@ -226,7 +242,17 @@ describe("deck actions", () => {
     render(<DeckToolbar />);
     await exportAs("PDF");
     expect(invoke).not.toHaveBeenCalled();
-    expect(useApp.getState().imageExport).toBeNull();
+    expect(revealItemInDir).not.toHaveBeenCalled();
+  });
+
+  it("reports a PDF that cannot be printed", async () => {
+    save.mockResolvedValue("/Users/me/Desktop/Talk.pdf");
+    invoke.mockRejectedValue("the deck took too long to load");
+    render(<DeckToolbar />);
+    await exportAs("PDF");
+    expect(useApp.getState().error).toBe("Could not save the PDF: the deck took too long to load");
+    expect(revealItemInDir).not.toHaveBeenCalled();
+    expect(exportButton().disabled).toBe(false);
   });
 
   it("does nothing when no folder is chosen", async () => {

@@ -482,16 +482,9 @@ describe("slide image export", () => {
     const useApp = await freshStore();
     useApp.setState({ deck: DECK });
     useApp.getState().startImageExport("/out/Talk");
-    expect(useApp.getState().imageExport).toEqual({ format: "png", dest: "/out/Talk", slides: ["intro", "#2", "outro"] });
+    expect(useApp.getState().imageExport).toEqual({ dir: "/out/Talk", slides: ["intro", "#2", "outro"] });
     useApp.getState().endImageExport();
     expect(useApp.getState().imageExport).toBeNull();
-  });
-
-  it("remembers a PDF export's file", async () => {
-    const useApp = await freshStore();
-    useApp.setState({ deck: DECK });
-    useApp.getState().startImageExport("/out/Talk.pdf", "pdf");
-    expect(useApp.getState().imageExport).toEqual({ format: "pdf", dest: "/out/Talk.pdf", slides: ["intro", "#2", "outro"] });
   });
 
   it("does not start without slides", async () => {
@@ -504,11 +497,11 @@ describe("slide image export", () => {
 
   it("is abandoned when the deck closes or another opens", async () => {
     const useApp = await freshStore();
-    useApp.setState({ deck: DECK, imageExport: { format: "png", dest: "/out", slides: ["intro"] } });
+    useApp.setState({ deck: DECK, imageExport: { dir: "/out", slides: ["intro"] } });
     await useApp.getState().closeDeck();
     expect(useApp.getState().imageExport).toBeNull();
     backend({ open_workspace: () => ({ path: "/decks/talk", name: "talk" }), open_deck: () => DECK, load_chat: () => [], agent_running: () => false });
-    useApp.setState({ imageExport: { format: "png", dest: "/out", slides: ["intro"] } });
+    useApp.setState({ imageExport: { dir: "/out", slides: ["intro"] } });
     await useApp.getState().openDeck("/decks/talk/deck.html");
     expect(useApp.getState().imageExport).toBeNull();
   });

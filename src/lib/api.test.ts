@@ -78,6 +78,7 @@ const CASES = [
   ["importAssets", () => api.importAssets("talk", ["/a.png"]), "import_assets", { id: "talk", paths: ["/a.png"] }],
   ["saveAsset", () => api.saveAsset("talk", "shot.png", "aGk="), "save_asset", { id: "talk", name: "shot.png", data: "aGk=" }],
   ["exportDeck", () => api.exportDeck("talk", "/out.html"), "export_deck", { id: "talk", dest: "/out.html" }],
+  ["exportPdf", () => api.exportPdf("talk", "/out.pdf"), "export_pdf", { id: "talk", dest: "/out.pdf" }],
   ["lintDeck", () => api.lintDeck("talk"), "lint_deck", { id: "talk" }],
   ["createImageExportDir", () => api.createImageExportDir("talk", "/out"), "create_image_export_dir", { id: "talk", parent: "/out" }],
   [
@@ -86,14 +87,6 @@ const CASES = [
     "export_slide_image",
     { dir: "/out/Talk", index: 2, total: 9, rect: { x: 0, y: 10, width: 640, height: 360 }, viewport: { width: 640, height: 400 }, width: 1080 },
   ],
-  [
-    "addPdfPage",
-    () => api.addPdfPage("/out/Talk.pdf", { x: 0, y: 10, width: 640, height: 360 }, { width: 640, height: 400 }, 1920, 1080),
-    "add_pdf_page",
-    { dest: "/out/Talk.pdf", rect: { x: 0, y: 10, width: 640, height: 360 }, viewport: { width: 640, height: 400 }, width: 1920, height: 1080 },
-  ],
-  ["finishPdfExport", () => api.finishPdfExport("talk", "/out/Talk.pdf"), "finish_pdf_export", { id: "talk", dest: "/out/Talk.pdf" }],
-  ["discardPdfExport", () => api.discardPdfExport("/out/Talk.pdf"), "discard_pdf_export", { dest: "/out/Talk.pdf" }],
   [
     "captureSketch",
     () => api.captureSketch("talk", { x: 1, y: 2, width: 300, height: 168.75 }, { width: 1480, height: 920 }),

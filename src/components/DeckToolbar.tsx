@@ -39,6 +39,9 @@ function DeckTools({ deck }: { deck: Deck }) {
     }
   };
 
+  // An export the backend is still writing (printing a PDF takes a moment).
+  const [exporting, setExporting] = useState(false);
+
   const fileName = deck.title.replace(/[\\/:*?"<>|]+/g, "").trim() || "presentation";
 
   const exportDeck = async () => {
@@ -62,7 +65,16 @@ function DeckTools({ deck }: { deck: Deck }) {
       defaultPath: `${fileName}.pdf`,
       filters: [{ name: "PDF document", extensions: ["pdf"] }],
     });
-    if (dest) useApp.getState().startImageExport(dest, "pdf");
+    if (!dest) return;
+    setExporting(true);
+    try {
+      await api.exportPdf(deck.id, dest);
+      await revealItemInDir(dest);
+    } catch (error) {
+      useApp.getState().setError(`Could not save the PDF: ${errorMessage(error)}`);
+    } finally {
+      setExporting(false);
+    }
   };
 
   const exportImages = async () => {
@@ -98,7 +110,8 @@ function DeckTools({ deck }: { deck: Deck }) {
       <LintStatus />
       <ViewToggle file={basename(deck.id)} />
       <ExportMenu
-        disabled={deck.slides.length === 0}
+        disabled={deck.slides.length === 0 || exporting}
+        busy={exporting}
         onHtml={() => void exportDeck()}
         onPdf={() => void exportPdf()}
         onImages={() => void exportImages()}
@@ -117,7 +130,7 @@ function DeckTools({ deck }: { deck: Deck }) {
 }
 
 /** The Export button and its choices: one shareable HTML file, a PDF, or a PNG per slide. */
-function ExportMenu(props: { disabled: boolean; onHtml: () => void; onPdf: () => void; onImages: () => void }) {
+function ExportMenu(props: { disabled: boolean; busy: boolean; onHtml: () => void; onPdf: () => void; onImages: () => void }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -152,8 +165,8 @@ function ExportMenu(props: { disabled: boolean; onHtml: () => void; onPdf: () =>
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-40"
       >
-        <Share className="size-3.5" />
-        Export
+        {props.busy ? <Loader2 className="size-3.5 animate-spin" /> : <Share className="size-3.5" />}
+        {props.busy ? "Exporting…" : "Export"}
         <ChevronDown className="size-3 text-muted-foreground" />
       </button>
       {open && (

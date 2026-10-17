@@ -56,19 +56,6 @@ pub async fn snapshot(
     viewport: Size,
     max_width: u32,
 ) -> Result<Vec<u8>> {
-    let image = snapshot_image(webview, rect, viewport, max_width).await?;
-    tauri::async_runtime::spawn_blocking(move || encode_png(&image))
-        .await
-        .map_err(|e| Error::msg(format!("screenshot failed: {e}")))?
-}
-
-/// `rect` as currently shown in `webview`, at most `max_width` pixels wide.
-pub async fn snapshot_image(
-    webview: &Webview,
-    rect: Rect,
-    viewport: Size,
-    max_width: u32,
-) -> Result<Image> {
     check(rect, viewport)?;
     let (tx, rx) = tokio::sync::oneshot::channel::<Result<Image>>();
     webview
@@ -79,7 +66,7 @@ pub async fn snapshot_image(
         .map_err(|_| Error::msg("the screenshot was cancelled"))??;
     tauri::async_runtime::spawn_blocking(move || {
         let region = crop(&full, rect, viewport)?;
-        Ok(downscale(&region, max_width))
+        encode_png(&downscale(&region, max_width))
     })
     .await
     .map_err(|e| Error::msg(format!("screenshot failed: {e}")))?

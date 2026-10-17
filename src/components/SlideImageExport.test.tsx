@@ -31,7 +31,7 @@ beforeEach(() => {
     },
   );
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(24, 30, 1280, 720));
-  useApp.setState({ deck: deckFor(DECK_HTML), error: null, imageExport: { format: "png", dest: DIR, slides: ["intro", "#2", "outro"] } });
+  useApp.setState({ deck: deckFor(DECK_HTML), error: null, imageExport: { dir: DIR, slides: ["intro", "#2", "outro"] } });
 });
 
 afterEach(() => {
@@ -92,7 +92,7 @@ describe("SlideImageExport", () => {
   it("shows slides of another size in their own shape, saved at most their canvas width", async () => {
     useApp.setState({
       deck: { ...deckFor(DECK_HTML), size: { width: 1080, height: 1350, unit: "px", pixelWidth: 1080, pixelHeight: 1350 } },
-      imageExport: { format: "png", dest: DIR, slides: ["intro"] },
+      imageExport: { dir: DIR, slides: ["intro"] },
     });
     render(<SlideImageExport />);
     // A 1280×720 area fits a 4:5 slide 576 px wide; the frame keeps the slide's shape.
@@ -144,7 +144,7 @@ describe("SlideImageExport", () => {
   });
 
   it("skips slides deleted since the export started", async () => {
-    useApp.setState({ imageExport: { format: "png", dest: DIR, slides: ["intro", "gone", "outro"] } });
+    useApp.setState({ imageExport: { dir: DIR, slides: ["intro", "gone", "outro"] } });
     render(<SlideImageExport />);
     await loadSlide();
     expect(frame().getAttribute("title")).toBe("outro");
@@ -180,74 +180,6 @@ describe("SlideImageExport", () => {
     );
     expect(useApp.getState().imageExport).toBeNull();
     expect(exports()).toHaveLength(1);
-    expect(revealItemInDir).not.toHaveBeenCalled();
-  });
-});
-
-describe("SlideImageExport as PDF", () => {
-  const PDF = "/Users/me/Desktop/Talk.pdf";
-  const pages = () => invoke.mock.calls.filter(([c]) => c === "add_pdf_page").map(([, args]) => args);
-  const commands = () => invoke.mock.calls.map(([c]) => c);
-
-  beforeEach(() => {
-    useApp.setState({ imageExport: { format: "pdf", dest: PDF, slides: ["intro", "#2", "outro"] } });
-  });
-
-  it("adds every slide as a page, writes the file, then reveals it", async () => {
-    render(<SlideImageExport />);
-    expect(screen.getByRole("dialog", { name: "Saving PDF" })).toBeTruthy();
-    for (const id of ["intro", "#2", "outro"]) {
-      expect(frame().getAttribute("title")).toBe(id);
-      await loadSlide();
-    }
-    const rect = { x: 24, y: 30, width: 1280, height: 720 };
-    const viewport = { width: window.innerWidth, height: window.innerHeight };
-    expect(pages()).toEqual([0, 1, 2].map(() => ({ dest: PDF, rect, viewport, width: 1920, height: 1080 })));
-    expect(invoke).toHaveBeenCalledWith("finish_pdf_export", { id: deckFor(DECK_HTML).id, dest: PDF });
-    expect(commands().indexOf("finish_pdf_export")).toBeGreaterThan(commands().lastIndexOf("add_pdf_page"));
-    expect(exports()).toEqual([]);
-    expect(useApp.getState().imageExport).toBeNull();
-    expect(revealItemInDir).toHaveBeenCalledWith(PDF);
-  });
-
-  it("sizes pages to the slides' canvas", async () => {
-    useApp.setState({
-      deck: { ...deckFor(DECK_HTML), size: { width: 1080, height: 1350, unit: "px", pixelWidth: 1080, pixelHeight: 1350 } },
-      imageExport: { format: "pdf", dest: PDF, slides: ["intro"] },
-    });
-    render(<SlideImageExport />);
-    await loadSlide();
-    expect(pages()[0]).toMatchObject({ width: 1080, height: 1350 });
-  });
-
-  it("discards the pages when cancelled", async () => {
-    render(<SlideImageExport />);
-    await loadSlide();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(useApp.getState().imageExport).toBeNull();
-    expect(invoke).toHaveBeenCalledWith("discard_pdf_export", { dest: PDF });
-    expect(commands()).not.toContain("finish_pdf_export");
-    expect(revealItemInDir).not.toHaveBeenCalled();
-  });
-
-  it("stops and reports a slide that cannot be added", async () => {
-    invoke.mockRejectedValue("the screenshot was cancelled");
-    render(<SlideImageExport />);
-    await loadSlide();
-    expect(useApp.getState().error).toBe("Could not save slide 1 to the PDF: the screenshot was cancelled");
-    expect(useApp.getState().imageExport).toBeNull();
-    expect(commands()).not.toContain("finish_pdf_export");
-  });
-
-  it("reports a PDF that cannot be written", async () => {
-    invoke.mockImplementation(async (command: string) => {
-      if (command === "finish_pdf_export") throw "Permission denied (os error 13)";
-    });
-    useApp.setState({ imageExport: { format: "pdf", dest: PDF, slides: ["intro"] } });
-    render(<SlideImageExport />);
-    await loadSlide();
-    expect(useApp.getState().error).toBe("Could not save the PDF: Permission denied (os error 13)");
-    expect(useApp.getState().imageExport).toBeNull();
     expect(revealItemInDir).not.toHaveBeenCalled();
   });
 });

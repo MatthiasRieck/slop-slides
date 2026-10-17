@@ -151,8 +151,13 @@ html[data-slop-static] *::after {
     transition-duration: 0.01ms !important;
   }
 }
-/* Print / save as PDF: one slide per page (the app's size rules set the page size). */
+/* Print / save as PDF: one slide per page (the app's size rules set the page size), printed as
+   shown, backgrounds and all, rather than in the browser's ink-saving colors. */
 @media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
   html,
   body,
   html[data-slop-player],

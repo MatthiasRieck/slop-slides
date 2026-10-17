@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import EDITOR from "../../src-tauri/assets/editor.js?raw";
 import PASTEBOARD from "../../src-tauri/assets/pasteboard.js?raw";
 import RUNTIME from "../../src-tauri/assets/runtime.js?raw";
+import { placement } from "./placement";
 
 const DECK = `<!DOCTYPE html><html><head></head><body>
 <main class="deck">
@@ -769,9 +770,9 @@ describe("slide editor", () => {
     it("centers the slide at full size in a larger preview and stops it clipping", () => {
       const e = editor();
       const deck = e.$(".deck");
-      expect(deck.style.transform).toBe("translate(0px,0px) scale(1)");
+      expect(placement(deck)).toBe("translate(0px,0px) scale(1)");
       resize(e, 2560, 1440);
-      expect(deck.style.transform).toBe("translate(320px,180px) scale(1)");
+      expect(placement(deck)).toBe("translate(320px,180px) scale(1)");
       const frame = e.$("[data-slop-frame]");
       expect(frame.style.cssText).toContain("left: 320px");
       expect(frame.style.cssText).toContain("width: 1920px");
@@ -818,7 +819,7 @@ describe("slide editor", () => {
       expect(event.defaultPrevented).toBe(true);
       expect(views(e).at(-1)!.k).toBeCloseTo(Math.exp(0.2), 5);
       // Zooming at the slide's corner leaves that corner where it was.
-      expect(e.$(".deck").style.transform).toContain("translate(0px,0px)");
+      expect(placement(e.$(".deck"))).toContain("translate(0px,0px)");
       notch(e, 1, { clientX: 0, clientY: 0 });
       expect(views(e).at(-1)!.k).toBeCloseTo(1, 5);
       expect(views(e).at(-1)!.x).toBeCloseTo(0, 5);
@@ -839,20 +840,20 @@ describe("slide editor", () => {
       wheel(e, { deltaY: 12.000732421875, clientX: 0, clientY: 0 }, { wheelDeltaY: -36 });
       expect(views(e).at(-1)!.k).toBeCloseTo(Math.exp(-8.00048828125 * 0.005), 5);
       expect(views(e).at(-1)!.x).toBeCloseTo(0, 5);
-      expect(e.$(".deck").style.transform).toContain("translate(0px,0px)");
+      expect(placement(e.$(".deck"))).toContain("translate(0px,0px)");
     });
 
     it("pans when swiping on a trackpad, without limit", () => {
       const e = editor();
       const event = wheel(e, { deltaX: 30, deltaY: 100 });
       expect(event.defaultPrevented).toBe(true);
-      expect(e.$(".deck").style.transform).toBe("translate(-30px,-100px) scale(1)");
+      expect(placement(e.$(".deck"))).toBe("translate(-30px,-100px) scale(1)");
       expect(views(e).at(-1)).toEqual({ type: "slop:view", slide: "intro", x: -30, y: -100, k: 1 });
       // Purely vertical swipes pan too; Chromium reports their wheelDelta as 3× the pixels.
       wheel(e, { deltaY: 7 }, { wheelDeltaY: -21 });
-      expect(e.$(".deck").style.transform).toBe("translate(-30px,-107px) scale(1)");
+      expect(placement(e.$(".deck"))).toBe("translate(-30px,-107px) scale(1)");
       for (let i = 0; i < 50; i++) wheel(e, { deltaY: -400 });
-      expect(e.$(".deck").style.transform).toBe("translate(-30px,19893px) scale(1)");
+      expect(placement(e.$(".deck"))).toBe("translate(-30px,19893px) scale(1)");
       expect(e.commits()).toEqual([]);
     });
 
@@ -860,7 +861,7 @@ describe("slide editor", () => {
       const e = editor();
       wheel(e, { deltaY: 5 }, { wheelDeltaY: -15 });
       wheel(e, { deltaY: 40 }, { wheelDeltaY: -120, sameGesture: true });
-      expect(e.$(".deck").style.transform).toBe("translate(0px,-45px) scale(1)");
+      expect(placement(e.$(".deck"))).toBe("translate(0px,-45px) scale(1)");
       // A new gesture is judged afresh.
       notch(e, -1);
       expect(views(e).at(-1)!.k).toBeCloseTo(Math.exp(0.2), 5);
@@ -908,10 +909,10 @@ describe("slide editor", () => {
       e.down(e.doc.body, 10, 10);
       e.move(e.doc.body, 60, 40);
       expect(e.selected()).toEqual([]);
-      expect(e.$(".deck").style.transform).toBe("translate(50px,30px) scale(1)");
+      expect(placement(e.$(".deck"))).toBe("translate(50px,30px) scale(1)");
       e.up(e.doc.body, 60, 40);
       e.move(e.doc.body, 200, 200);
-      expect(e.$(".deck").style.transform).toBe("translate(50px,30px) scale(1)");
+      expect(placement(e.$(".deck"))).toBe("translate(50px,30px) scale(1)");
       expect(e.commits()).toEqual([]);
     });
 
@@ -921,7 +922,7 @@ describe("slide editor", () => {
       h1.dispatchEvent(new e.window.PointerEvent("pointerdown", { clientX: 10, clientY: 10, button: 1, bubbles: true, cancelable: true }));
       e.move(h1, 30, 10);
       e.up(h1, 30, 10);
-      expect(e.$(".deck").style.transform).toBe("translate(20px,0px) scale(1)");
+      expect(placement(e.$(".deck"))).toBe("translate(20px,0px) scale(1)");
       expect(h1.style.translate).toBe("");
       const space = e.key(" ");
       expect(space.defaultPrevented).toBe(true);
@@ -929,7 +930,7 @@ describe("slide editor", () => {
       e.down(h1, 0, 0);
       e.move(h1, 5, 5);
       e.up(h1, 5, 5);
-      expect(e.$(".deck").style.transform).toBe("translate(25px,5px) scale(1)");
+      expect(placement(e.$(".deck"))).toBe("translate(25px,5px) scale(1)");
       expect(h1.style.translate).toBe("");
       e.doc.defaultView!.dispatchEvent(new e.window.KeyboardEvent("keyup", { key: " ", bubbles: true }));
       expect(e.doc.documentElement.style.cursor).toBe("");
@@ -944,7 +945,7 @@ describe("slide editor", () => {
       h1.dispatchEvent(new e.window.PointerEvent("pointerdown", { clientX: 0, clientY: 0, button: 1, bubbles: true, cancelable: true }));
       e.move(h1, 40, 20);
       e.up(h1, 40, 20);
-      expect(e.$(".deck").style.transform).toBe("translate(40px,20px) scale(1)");
+      expect(placement(e.$(".deck"))).toBe("translate(40px,20px) scale(1)");
       expect(h1.getAttribute("contenteditable")).toBe("true");
       const click = new e.window.MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true });
       h1.dispatchEvent(click);
@@ -961,7 +962,7 @@ describe("slide editor", () => {
       wheel(e, { deltaY: 50 });
       e.key("0");
       e.key(" ");
-      expect(e.$(".deck").style.transform).toBe("translate(0px,-50px) scale(1)");
+      expect(placement(e.$(".deck"))).toBe("translate(0px,-50px) scale(1)");
       expect(e.doc.documentElement.style.cursor).toBe("");
     });
 
@@ -971,27 +972,27 @@ describe("slide editor", () => {
       notch(e, -1);
       const zero = e.key("0");
       expect(zero.defaultPrevented).toBe(true);
-      expect(e.$(".deck").style.transform).toBe("translate(0px,0px) scale(1)");
+      expect(placement(e.$(".deck"))).toBe("translate(0px,0px) scale(1)");
       expect(views(e).at(-1)).toEqual({ type: "slop:view", slide: "intro", x: 0, y: 0, k: 1 });
       wheel(e, { deltaX: 100 });
       e.fromParent({ type: "slop:camera", home: true });
-      expect(e.$(".deck").style.transform).toBe("translate(0px,0px) scale(1)");
+      expect(placement(e.$(".deck"))).toBe("translate(0px,0px) scale(1)");
     });
 
     it("restores a view the app sends back after a reload, ignoring nonsense", () => {
       const e = editor();
       e.fromParent({ type: "slop:camera", x: -200, y: 50, k: 0.5 });
-      expect(e.$(".deck").style.transform).toBe("translate(-200px,50px) scale(0.5)");
+      expect(placement(e.$(".deck"))).toBe("translate(-200px,50px) scale(0.5)");
       expect(e.$("[data-slop-frame]").style.cssText).toContain("width: 960px");
       e.fromParent({ type: "slop:camera", x: "a", y: 0, k: 1 });
-      expect(e.$(".deck").style.transform).toBe("translate(-200px,50px) scale(0.5)");
+      expect(placement(e.$(".deck"))).toBe("translate(-200px,50px) scale(0.5)");
     });
 
     it("keeps the slide centered when the preview resizes, relative to the pan", () => {
       const e = editor();
       wheel(e, { deltaX: -40 });
       resize(e, 2560, 1440);
-      expect(e.$(".deck").style.transform).toBe("translate(360px,180px) scale(1)");
+      expect(placement(e.$(".deck"))).toBe("translate(360px,180px) scale(1)");
     });
 
     it("reports overflow in slide pixels whatever the zoom", async () => {

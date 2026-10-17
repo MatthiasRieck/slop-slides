@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import PASTEBOARD from "../../src-tauri/assets/pasteboard.js?raw";
 import RUNTIME from "../../src-tauri/assets/runtime.js?raw";
+import { placement } from "./placement";
 
 const DECK = (bodyStyle = "") => `<!DOCTYPE html><html><head><style>${bodyStyle}</style></head><body>
 <main class="deck">
@@ -62,7 +63,8 @@ function pasteboard({ framed = true, bodyStyle = "", show = false, stage }: { fr
     window,
     doc,
     $,
-    transform: () => $(".deck").style.transform,
+    /** Where the deck lands on screen, as one translate-then-scale (it is zoomed, not scaled). */
+    transform: () => placement($(".deck")),
     views: () => posted.filter((m) => (m as View).type === "slop:view") as View[],
     zooms: () => posted.filter((m) => (m as View).type === "slop:zoom") as View[],
     keys: () => posted.filter((m) => (m as View).type === "slop:key"),
@@ -112,6 +114,34 @@ describe("pasteboard", () => {
     expect(css).toMatch(/\[data-slop-frame\] \{[^}]*box-shadow:[^}]*outline: 1px solid var\(--slop-border/);
     // Only the editor lets the slide show what runs past its edge.
     expect(css).not.toContain("overflow: visible");
+  });
+
+  // Under a `scale()`, WebKit stretches what a slide paints on layers of its own (backdrop
+  // filters, filters, animations) from the size it was first painted, blurring text when zoomed in.
+  it("zooms the slide with `zoom` rather than a scale, so it is painted sharp at every size", () => {
+    const p = pasteboard();
+    const deck = p.$(".deck");
+    expect(deck.style.zoom).toBe("1");
+    p.fromParent({ type: "slop:camera", x: 30, y: -60, k: 4 });
+    expect(deck.style.zoom).toBe("4");
+    expect(deck.style.transform).not.toContain("scale");
+    // The pan is zoomed along with the deck, so it is given in unzoomed px: (320 + 30) / 4.
+    expect(deck.style.transform).toBe("translate(87.5px,30px)");
+    expect(p.transform()).toBe("translate(350px,120px) scale(4)");
+    // The frame is not zoomed; it sits where the zoomed slide does.
+    expect(p.$("[data-slop-frame]").style.cssText).toContain("left: 350px");
+    expect(p.$("[data-slop-frame]").style.cssText).toContain("width: 7680px");
+  });
+
+  it("zooms with `zoom` in a show too, over the player's fit to the window", () => {
+    const p = pasteboard({ show: true });
+    const deck = p.$(".deck");
+    expect(deck.style.zoom).toBe(String(4 / 3));
+    expect(deck.style.transform).toBe("translate(0px,0px)");
+    // A resize runs the player's fit (a scale) first; the pasteboard puts its zoom back.
+    p.window.dispatchEvent(new p.window.Event("resize"));
+    expect(deck.style.transform).not.toContain("scale");
+    expect(p.transform()).toBe(`translate(0px,0px) scale(${4 / 3})`);
   });
 
   it("centers and frames a slide of another size", () => {

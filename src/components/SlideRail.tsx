@@ -30,6 +30,7 @@ export function SlideRail() {
   const templates = useApp((s) => s.templates);
   const styleTitle = templates?.find((t) => t.id === deck?.template)?.title;
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  useEffect(() => releaseIframes, []);
   if (!deck) return null;
 
   const items = railItems(deck);
@@ -38,6 +39,7 @@ export function SlideRail() {
   const canAddSection = selectedIndex >= 0 && !startsSection(deck, selectedIndex);
 
   const onDragEnd = async ({ active, over }: DragEndEvent) => {
+    releaseIframes();
     if (!over || active.id === over.id) return;
     const order = arrayMove(keys, keys.indexOf(String(active.id)), keys.indexOf(String(over.id)));
     useApp.getState().setDeck(applyOrder(deck, order));
@@ -133,7 +135,9 @@ export function SlideRail() {
             sensors={sensors}
             collisionDetection={closestCenter}
             modifiers={[restrictToVerticalAxis]}
+            onDragStart={holdIframes}
             onDragEnd={onDragEnd}
+            onDragCancel={releaseIframes}
           >
             <SortableContext items={keys} strategy={verticalListSortingStrategy}>
               <ol className="flex flex-col gap-3">
@@ -158,6 +162,25 @@ export function SlideRail() {
       </div>
     </div>
   );
+}
+
+const IFRAME_HOLD_ID = "slide-drag-iframe-hold";
+
+/**
+ * A pointer over an iframe (the stage's slide) sends its events to the iframe's document, so a
+ * drag that crossed it lost the moves and the release and stayed stuck. Keep iframes out of the
+ * way while a slide is dragged.
+ */
+function holdIframes() {
+  if (document.getElementById(IFRAME_HOLD_ID)) return;
+  const style = document.createElement("style");
+  style.id = IFRAME_HOLD_ID;
+  style.textContent = "iframe { pointer-events: none !important; }";
+  document.head.appendChild(style);
+}
+
+function releaseIframes() {
+  document.getElementById(IFRAME_HOLD_ID)?.remove();
 }
 
 /** Divider row that names a section. Only the editor shows it; the player never does. */

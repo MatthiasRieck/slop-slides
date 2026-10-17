@@ -406,4 +406,57 @@ describe("sections in the rail", () => {
     await waitFor(() => expect(useApp.getState().error).toBe("Slide not found: intro"));
     expect(screen.queryByLabelText("Section title")).toBeNull();
   });
+  describe("dragging a slide", () => {
+    // The stage shows the slide in an iframe. A pointer over an iframe sends its events to the
+    // iframe's document, so the rail never saw the move or the release and the drag stuck.
+    const startDrag = (li: HTMLElement) => {
+      fireEvent.pointerDown(li, { isPrimary: true, button: 0, clientX: 10, clientY: 10 });
+      fireEvent.pointerMove(document, { isPrimary: true, clientX: 10, clientY: 40 });
+    };
+    const stageFrame = () => {
+      const frame = document.createElement("iframe");
+      frame.style.pointerEvents = "auto";
+      document.body.appendChild(frame);
+      return frame;
+    };
+
+    it("keeps iframes from swallowing the pointer while a slide is dragged", () => {
+      render(<SlideRail />);
+      const frame = stageFrame();
+      expect(getComputedStyle(frame).pointerEvents).toBe("auto");
+
+      act(() => startDrag(items()[0]!));
+      expect(getComputedStyle(frame).pointerEvents).toBe("none");
+
+      act(() => {
+        fireEvent.pointerUp(document, { isPrimary: true, clientX: 10, clientY: 40 });
+      });
+      expect(getComputedStyle(frame).pointerEvents).toBe("auto");
+      frame.remove();
+    });
+
+    it("gives iframes the pointer back when a drag is cancelled", () => {
+      render(<SlideRail />);
+      const frame = stageFrame();
+      act(() => startDrag(items()[0]!));
+      expect(getComputedStyle(frame).pointerEvents).toBe("none");
+
+      act(() => {
+        fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+      });
+      expect(getComputedStyle(frame).pointerEvents).toBe("auto");
+      frame.remove();
+    });
+
+    it("gives iframes the pointer back when the rail unmounts mid-drag", () => {
+      const { unmount } = render(<SlideRail />);
+      const frame = stageFrame();
+      act(() => startDrag(items()[0]!));
+      expect(getComputedStyle(frame).pointerEvents).toBe("none");
+
+      unmount();
+      expect(getComputedStyle(frame).pointerEvents).toBe("auto");
+      frame.remove();
+    });
+  });
 });

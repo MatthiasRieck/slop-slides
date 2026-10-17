@@ -555,7 +555,8 @@ function useSketchKeyboard(active: boolean, putAway: () => void) {
 /**
  * Arrow keys / PageUp / PageDown move between slides unless the user is typing. Also handles
  * keys the slide preview forwards as `slop:key` messages, so navigation keeps working after
- * clicking into the slide (which moves focus into its iframe).
+ * clicking into the slide. The preview cancels presses on it (to pan, select and drag), which
+ * leaves focus where it was, e.g. in the chat composer: it asks for focus with `slop:focus`.
  */
 function useSlideKeyboard() {
   useEffect(() => {
@@ -572,11 +573,14 @@ function useSlideKeyboard() {
       if (navigate(event.key)) event.preventDefault();
     };
     const onMessage = (event: MessageEvent) => {
-      if (event.data?.type !== "slop:key") return;
-      const fromSlide = Array.from(document.querySelectorAll("iframe")).some(
+      const type = event.data?.type;
+      if (type !== "slop:key" && type !== "slop:focus") return;
+      const slide = Array.from(document.querySelectorAll("iframe")).find(
         (frame) => frame.contentWindow === event.source,
       );
-      if (fromSlide) navigate(String(event.data.key));
+      if (!slide) return;
+      if (type === "slop:focus") slide.focus();
+      else navigate(String(event.data.key));
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("message", onMessage);

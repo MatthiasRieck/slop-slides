@@ -2,11 +2,12 @@
    src-tauri/src/protocol.rs); it is never part of deck.html or an export.
 
    Click selects an element, drag (or arrow keys) moves it. Its corner and edge handles
-   stretch it while the opposite side stays put (Shift keeps the aspect ratio, Alt scales
+   resize its box while the opposite side stays put (Shift keeps the aspect ratio, Alt resizes
    from the center); the round handle above it rotates it and the diamond next to it tilts it
    in depth, in 3D with perspective (Shift snaps to 15°). Double-click a handle to reset.
-   Added shapes and drawings are resized rather than scaled: a shape gets a new width and
-   height, a drawing's points move apart, so borders and lines keep their width.
+   Resize keeps text and borders at their size; drawings spread their points. The toolbar
+   can switch to Stretch, which scales the contents too. On the first box resize, an in-flow
+   element leaves an invisible placeholder in its original slot so its siblings stay put.
    Double-click (or Enter) edits its text, Escape selects the parent. Delete (or Backspace, or
    { type: "slop:edit-delete" } from the app) removes it.
    Every change is posted to the app as the slide's new markup:
@@ -28,6 +29,7 @@
      border (a drawing's fill and stroke).
    - { type: "slop:edit-order", to } moves it "front", "forward", "backward" or "back" among the
      elements it overlaps, with an inline z-index.
+   - { type: "slop:edit-size-mode", mode: "resize" | "stretch" } sets how handles change size.
    - { type: "slop:edit-delete" } removes it.
    Whenever the selection changes it reports whether anything is selected and what the toolbar
    shows for it: { type: "slop:edit-selection", slide, selected, selection }.
@@ -47,6 +49,7 @@
   // Attributes the editor adds while it works; stripped from the markup it saves.
   var EDITOR_ATTRS = ["contenteditable", "data-slop-selected", "data-slop-hover", "data-slop-editing", "data-slop-typing"];
   var MOVED = "data-moved";
+  var PLACEHOLDER = "data-resize-placeholder";
   var DROPPED = "data-dropped";
   var DRAG_THRESHOLD = 3;
   var DOUBLE_CLICK_MS = 400;
@@ -58,6 +61,7 @@
   // The tilt the editor puts in front of an element's inline `transform`.
   var TILT = /^perspective\([\d.]+px\) rotateX\((-?[\d.]+)deg\) rotateY\((-?[\d.]+)deg\)\s*/;
   var MIN_SCALE = 0.1;
+  var sizeMode = "resize";
   var OVERFLOW_TOLERANCE = 2;
   // Marks an element the user added (a text box, shape or drawing); it stays in the markup.
   var ADDED = "data-added";
@@ -143,7 +147,7 @@
         };
         return (
           '<div data-handle="scale" data-dir="' + d[0] + " " + d[1] + '"' + axis +
-          ' title="Stretch (Shift keeps the aspect ratio, Alt scales from the center, double-click resets)"' +
+          ' title="Resize (Shift keeps the aspect ratio, Alt resizes from the center)"' +
           ' style="left: ' + (d[0] + 1) * 50 + "%; top: " + (d[1] + 1) * 50 + "%; margin: " + outside(d[1], h) + "px 0 0 " +
           outside(d[0], w) + "px; cursor: " + cursor + '-resize"></div>'
         );
@@ -233,7 +237,7 @@
 
   /** The element to select for `el`: not inline text runs, whole SVG drawings. */
   function selectable(el) {
-    if (!el || el.nodeType !== 1 || !slide.contains(el) || el === slide) return null;
+    if (!el || el.nodeType !== 1 || !slide.contains(el) || el === slide || el.closest("[" + PLACEHOLDER + "]")) return null;
     var svg = el.closest("svg");
     while (svg && svg.parentElement && svg.parentElement.closest("svg")) svg = svg.parentElement.closest("svg");
     if (svg && slide.contains(svg)) el = svg;
@@ -455,9 +459,12 @@
   /** The element's untransformed size, in slide pixels. */
   function sizeOf(el) {
     var computed = getComputedStyle(el);
+    var px = function (name) { return parseFloat(computed[name]) || 0; };
+    var contentBox = computed.boxSizing !== "border-box";
+    // offsetWidth/Height round to whole pixels, which can shift flex/grid siblings.
     return {
-      w: el.offsetWidth || parseFloat(computed.width) || 0,
-      h: el.offsetHeight || parseFloat(computed.height) || 0,
+      w: /px$/.test(computed.width) ? px("width") + (contentBox ? px("paddingLeft") + px("paddingRight") + px("borderLeftWidth") + px("borderRightWidth") : 0) : el.offsetWidth || 0,
+      h: /px$/.test(computed.height) ? px("height") + (contentBox ? px("paddingTop") + px("paddingBottom") + px("borderTopWidth") + px("borderBottomWidth") : 0) : el.offsetHeight || 0,
     };
   }
 
@@ -514,7 +521,8 @@
       size: sizeOf(selected),
       zoom: zoom(),
       dir: { x: dir[0], y: dir[1] },
-      vectors: resizable(selected) ? vectorShapes(selected) : null,
+      resize: sizeMode === "resize",
+      vectors: sizeMode === "resize" && selected.getAttribute(ADDED) === "drawing" ? vectorShapes(selected) : null,
       moved: false,
     };
     if (event.target.setPointerCapture) {
@@ -593,7 +601,7 @@
     var cx = fromCenter || !d.x ? 0 : (d.x * w * (sx - s0.x)) / 2;
     var cy = fromCenter || !d.y ? 0 : (d.y * h * (sy - s0.y)) / 2;
     var shift = turn(cx, cy, drag.angle);
-    if (resizable(drag.el)) {
+    if (drag.resize) {
       resizeTo(sx, sy, shift);
       return;
     }
@@ -601,27 +609,83 @@
     moveTo(drag.el, drag.offset.x + shift.x, drag.offset.y + shift.y);
   }
 
-  /** Added shapes and drawings stretch by their size, not a `scale`, so their borders and lines keep their width. */
-  function resizable(el) {
-    return /^(shape|drawing)$/.test(el.getAttribute(ADDED) || "");
+  /** The invisible layout slot immediately following its freely positioned element. */
+  function placeholderOf(el) {
+    var next = el.nextElementSibling;
+    return next && next.hasAttribute(PLACEHOLDER) ? next : null;
   }
 
-  /**
-   * Gives the dragged element the size `sx` × `sy` times its box (dropping any `scale`), with
-   * its center moved by `shift`. A drawing's points spread out to fill the new box.
-   */
+  /** Reserves the original footprint before taking an element out of normal flow. */
+  function reserveLayout(el) {
+    var computed = getComputedStyle(el);
+    if (/^(absolute|fixed)$/.test(computed.position) || placeholderOf(el)) return;
+    var size = sizeOf(el);
+    var center = centerOf(el);
+    var placeholder = el.cloneNode(true);
+    // Capture resolved styles so ID selectors and inherited styles still reserve the same slot.
+    // Keep a hidden copy of the contents for its text baseline and intrinsic grid sizing.
+    placeholder.style.cssText = "";
+    for (var i = 0; i < computed.length; i++) {
+      var prop = computed[i];
+      placeholder.style.setProperty(prop, computed.getPropertyValue(prop));
+    }
+    placeholder.setAttribute(PLACEHOLDER, "");
+    placeholder.setAttribute("aria-hidden", "true");
+    placeholder.setAttribute("inert", "");
+    [placeholder].concat(Array.prototype.slice.call(placeholder.querySelectorAll("*"))).forEach(function (node) {
+      ["id", MOVED, ADDED, DROPPED].concat(EDITOR_ATTRS).forEach(function (attr) { node.removeAttribute(attr); });
+      node.style.setProperty("visibility", "hidden", "important");
+      node.style.setProperty("pointer-events", "none", "important");
+      node.style.setProperty("animation", "none", "important");
+      node.style.setProperty("transition", "none", "important");
+    });
+    placeholder.style.boxSizing = "border-box";
+    placeholder.style.width = placeholder.style.minWidth = placeholder.style.maxWidth = size.w + "px";
+    placeholder.style.height = placeholder.style.minHeight = placeholder.style.maxHeight = size.h + "px";
+    // A fixed flex contribution preserves the space already allocated after grow/shrink.
+    placeholder.style.flex = "0 0 auto";
+    el.parentElement.insertBefore(placeholder, el.nextSibling);
+    var contentBox = computed.boxSizing !== "border-box";
+    var px = function (name) { return parseFloat(computed[name]) || 0; };
+    var width = size.w - (contentBox ? px("paddingLeft") + px("paddingRight") + px("borderLeftWidth") + px("borderRightWidth") : 0);
+    var height = size.h - (contentBox ? px("paddingTop") + px("paddingBottom") + px("borderTopWidth") + px("borderBottomWidth") : 0);
+    el.style.position = "absolute";
+    el.style.margin = "0px";
+    el.style.left = el.style.top = "0px";
+    el.style.right = el.style.bottom = "auto";
+    el.style.width = Math.max(0, width) + "px";
+    el.style.height = Math.max(0, height) + "px";
+    // Locate it in its existing containing block, preserving its rotation, scale and translate.
+    var placed = centerOf(el);
+    el.style.left = (center.x - placed.x) / drag.zoom + "px";
+    el.style.top = (center.y - placed.y) / drag.zoom + "px";
+  }
+
+  /** Changes the border box without scaling its contents or discarding an existing scale. */
   function resizeTo(sx, sy, shift) {
     var el = drag.el;
+    reserveLayout(el);
     var w = drag.size.w;
     var h = drag.size.h;
-    var nw = Math.max(1, Math.round(w * sx));
-    var nh = Math.max(1, Math.round(h * sy));
-    el.style.width = nw + "px";
-    el.style.height = nh + "px";
+    var nw = Math.max(1, Math.round(w * sx / drag.scale.x * 1000) / 1000);
+    var nh = Math.max(1, Math.round(h * sy / drag.scale.y * 1000) / 1000);
+    var computed = getComputedStyle(el);
+    var px = function (name) { return parseFloat(computed[name]) || 0; };
+    var contentBox = computed.boxSizing !== "border-box";
+    var paddingX = contentBox ? px("paddingLeft") + px("paddingRight") + px("borderLeftWidth") + px("borderRightWidth") : 0;
+    var paddingY = contentBox ? px("paddingTop") + px("paddingBottom") + px("borderTopWidth") + px("borderBottomWidth") : 0;
+    el.style.width = Math.max(0, nw - paddingX) + "px";
+    el.style.height = Math.max(0, nh - paddingY) + "px";
+    el.style.minWidth = "0px";
+    el.style.minHeight = "0px";
+    el.style.maxWidth = "none";
+    el.style.maxHeight = "none";
+    el.style.flexShrink = "0";
+    el.style.flexBasis = "auto";
+    if (computed.display === "inline") el.style.display = "inline-block";
+    if (computed.whiteSpace === "nowrap") el.style.whiteSpace = "normal";
     if (drag.vectors && w && h) spreadVectors(drag.vectors, nw / w, nh / h);
-    scaleTo(el, 1, 1);
-    // A wider box grows from its left and top, moving its center by half the growth; the
-    // translate makes up the rest.
+    // Layout grows from the top left; translate compensates to keep the opposite handle fixed.
     moveTo(el, drag.offset.x + shift.x - (nw - w) / 2, drag.offset.y + shift.y - (nh - h) / 2);
   }
 
@@ -756,7 +820,7 @@
     var hits = [];
     Array.prototype.forEach.call(slide.querySelectorAll("*"), function (el) {
       var svg = el.closest("svg");
-      if ((svg && svg !== el) || el.closest(".notes")) return;
+      if ((svg && svg !== el) || el.closest(".notes, [" + PLACEHOLDER + "]")) return;
       var rect = el.getBoundingClientRect();
       if (!rect.width && !rect.height) return;
       var past = hasContent(el) && paints(el) ? pastEdges(rect, bounds, k) : [];
@@ -1137,6 +1201,8 @@
     if (!el) return;
     finishEditing();
     select(null);
+    var placeholder = placeholderOf(el);
+    if (placeholder) placeholder.remove();
     if (el.parentElement) el.parentElement.removeChild(el);
     commit();
   }
@@ -1339,6 +1405,14 @@
       select(atPath(data.path));
       // Clearing the selection for a screenshot hides the wires too, until the next interaction.
       if (data.quiet) mark(wires, "data-quiet", true);
+    } else if (data.type === "slop:edit-size-mode") {
+      if (data.mode !== "resize" && data.mode !== "stretch") return;
+      sizeMode = data.mode;
+      ui.querySelectorAll('[data-handle="scale"]').forEach(function (handle) {
+        handle.title = sizeMode === "resize"
+          ? "Resize (Shift keeps the aspect ratio, Alt resizes from the center)"
+          : "Stretch (Shift keeps the aspect ratio, Alt scales from the center, double-click resets)";
+      });
     } else if (data.type === "slop:edit-tool") {
       toolStyle = data.style && typeof data.style === "object" ? data.style : {};
       if (data.tool !== tool) {

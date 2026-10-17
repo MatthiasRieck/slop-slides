@@ -77,6 +77,8 @@ const ORDER: { to: StackOrder; label: string; icon: ReactNode }[] = [
  * tool adds.
  */
 export function EditToolbar(props: {
+  sizeMode: "resize" | "stretch";
+  onSizeMode: (mode: "resize" | "stretch") => void;
   tool: EditTool;
   selection: EditSelection | null;
   styles: Record<ToolFamily, EditStyle>;
@@ -97,6 +99,17 @@ export function EditToolbar(props: {
           {t.icon}
         </ToolButton>
       ))}
+      <Divider />
+      <select
+        aria-label="Size mode"
+        title="Resize changes the box; Stretch scales its contents"
+        value={props.sizeMode}
+        onChange={(event) => props.onSizeMode(event.target.value as "resize" | "stretch")}
+        className="rounded border bg-card px-1 py-1 text-xs"
+      >
+        <option value="resize">Resize</option>
+        <option value="stretch">Stretch</option>
+      </select>
       <Divider />
       <ColorButton label="Text color" icon={<Baseline />} value={style.color ?? null} disabled={textOff} onChange={(color) => props.onStyle({ color })} />
       <ToolButton label="Smaller text" disabled={textOff} onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, -1) })}>

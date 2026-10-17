@@ -1259,6 +1259,85 @@ mod tests {
     }
 
     #[test]
+    fn copying_a_slide_does_not_silence_id_style_errors_or_rewrite_css() {
+        let css = "#title { padding: 52px 60px; }\n#title .hero-image { width: 700px; }";
+        let source = deck(
+            r#"<section class="slide" id="title"><img class="hero-image" src="assets/logo.png" alt="Logo"></section>"#,
+        )
+        .replace(".slide {}", css);
+        let before = lint(&source, |_| true, &[]);
+        let (copied, copy_id) = html::duplicate(&source, "title").unwrap();
+
+        assert_eq!(copy_id, "title-copy");
+        assert_eq!(html::find_slides(&copied).len(), 2);
+        assert!(copied.contains(&format!("<style>{css}</style>")));
+        assert_eq!(lint(&copied, |_| true, &[]), before);
+        assert_eq!(before.len(), 2);
+        assert!(before.iter().all(|issue| issue.rule == "slide-id-style"
+            && issue.severity == Severity::Error
+            && issue.slide.as_deref() == Some("title")));
+    }
+
+    #[test]
+    fn class_based_repair_passes_lint_and_survives_repeated_copying() {
+        let source = deck(r#"<section class="slide" id="title"><h1>AI-KIT</h1></section>"#)
+            .replace(
+                ".slide {}",
+                "#title { padding: 52px 60px; } #title h1 { font-size: 100px; }",
+            );
+        assert_eq!(rules(&source), ["slide-id-style", "slide-id-style"]);
+
+        // The agent's repair changes styling hooks, retaining the slide identity/content.
+        let repaired = source
+            .replace("class=\"slide\"", "class=\"slide layout-title\"")
+            .replace("#title", ".layout-title");
+        let (once, first_id) = html::duplicate(&repaired, "title").unwrap();
+        let (twice, second_id) = html::duplicate(&once, &first_id).unwrap();
+        assert_ne!(first_id, second_id);
+        for version in [&repaired, &once, &twice] {
+            assert!(lint(version, |_| true, &[]).is_empty());
+            assert!(version.contains(".layout-title { padding: 52px 60px; }"));
+            assert!(version.contains(".layout-title h1 { font-size: 100px; }"));
+            for slide in html::find_slides(version) {
+                let markup = &version[slide.range];
+                assert!(markup.contains("class=\"slide layout-title\""));
+                assert!(markup.contains("<h1>AI-KIT</h1>"));
+            }
+        }
+    }
+
+    #[test]
+    fn slide_id_styles_reject_grouping_rules_and_copy_id_workarounds() {
+        let source = deck(
+            r#"<section class="slide" id="title"></section>
+<section class="slide" id="title-copy" data-hidden></section>"#,
+        );
+        for css in [
+            "@layer layouts { @supports (display: grid) { #title .card { display: grid; } } }",
+            "@container (width > 100px) { #title { color: red; } }",
+            "@scope (#title) { .card { color: red; } }",
+            ":is(#title, #title-copy) .card { color: red; }",
+            "#title, #title-copy { color: red; }",
+        ] {
+            let styled = source.replace(".slide {}", css);
+            let issues = lint(&styled, |_| true, &[]);
+            let slides: Vec<_> = issues.iter().map(|i| i.slide.as_deref()).collect();
+            assert_eq!(
+                slides,
+                if css.contains("#title-copy") {
+                    vec![Some("title"), Some("title-copy")]
+                } else {
+                    vec![Some("title")]
+                },
+                "{css}: {issues:?}"
+            );
+            assert!(issues
+                .iter()
+                .all(|i| i.rule == "slide-id-style" && i.severity == Severity::Error));
+        }
+    }
+
+    #[test]
     fn flags_valued_hidden_attributes() {
         assert_eq!(
             rules(&deck(

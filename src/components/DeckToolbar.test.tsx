@@ -330,6 +330,28 @@ describe("lint status", () => {
     expect(fill.text).toContain("lint_deck");
   });
 
+  it("hands slide id style errors to the agent without editing the deck", () => {
+    const message = "CSS targets slide id `intro`; add a reusable layout class and replace its id-based selectors, preserving its appearance.";
+    const deck = deckFor(DECK_HTML);
+    useApp.setState({
+      deck,
+      lint: [{ rule: "slide-id-style", severity: "error", message, line: 337, slide: "intro" }],
+      composerFill: null,
+      running: false,
+    });
+    render(<DeckToolbar />);
+    const button = screen.getByRole("button", { name: "Lint: 1 error" });
+    expect(button.title).toContain(message);
+    fireEvent.click(button);
+
+    const prompt = useApp.getState().composerFill!.text;
+    expect(prompt).toContain("- line 337 error [slide-id-style] (slide `intro`): " + message);
+    expect(prompt).toContain("without changing how the slides look");
+    expect(prompt).toContain("run the lint_deck tool to verify");
+    expect(useApp.getState().deck).toBe(deck);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("is disabled while the agent works", () => {
     useApp.setState({ lint: issues, running: true });
     render(<DeckToolbar />);

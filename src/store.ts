@@ -719,7 +719,9 @@ export const useApp = create<AppState>((set, get) => ({
     const template = findTemplate(id);
     if (!deck || !template) return;
     try {
-      if (deck.template === id) {
+      if (deck.template === id || deck.slides.length === 0) {
+        // An empty deck takes the template's style first, as picking the style would.
+        if (deck.template !== id) get().setDeck(await api.applyTemplate(deck.id, id));
         const created = await api.addTemplateSlide(deck.id, id, slide, selected);
         get().setDeck(created.deck);
         get().select(created.slide);

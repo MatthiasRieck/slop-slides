@@ -82,6 +82,31 @@ describe("LayoutPicker", () => {
     expect(useApp.getState().selected).toBe("outro");
   });
 
+  it("adds the layout's slide to an empty deck without a style, giving it the template's style", async () => {
+    const empty = { ...DECK, slides: [], template: null };
+    const styled = { ...empty, template: "swiss" };
+    const added = { ...styled, slides: [{ id: "quote", hash: "q", hidden: false, locked: false, moved: false }] };
+    useApp.setState({ deck: empty, selected: null });
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "apply_template") return styled;
+      if (command === "add_template_slide") return { deck: added, slide: "quote" };
+    });
+    localStorage.setItem("slopslide.layoutTemplate", "swiss");
+    render(<LayoutPicker mode="add" onDone={() => {}} />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Quote layout" })));
+    expect(invoke).toHaveBeenCalledWith("apply_template", { id: DECK.id, template: "swiss" });
+    expect(invoke).toHaveBeenCalledWith("add_template_slide", { id: DECK.id, template: "swiss", slide: "quote", after: null });
+    expect(useApp.getState().deck?.slides.map((s) => s.id)).toEqual(["quote"]);
+    expect(useApp.getState().selected).toBe("quote");
+    expect(useApp.getState().composerFill).toBeNull();
+  });
+
+  it("tells that a layout picked in an empty deck is added as is", () => {
+    useApp.setState({ deck: { ...DECK, slides: [], template: null }, selected: null });
+    render(<LayoutPicker mode="add" onDone={() => {}} />);
+    expect(screen.getByText(/Adds a copy of the layout/)).toBeTruthy();
+  });
+
   it("asks the agent to change the slide's layout", async () => {
     render(<LayoutPicker mode="change" onDone={() => {}} />);
     expect(screen.getByText("Change layout")).toBeTruthy();

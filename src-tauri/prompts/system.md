@@ -78,9 +78,13 @@ Rules (NON-NEGOTIABLE):
   `content` only when you restyle the deck to another template, and remove it when the
   user asks for a design that follows no template. At most one, never empty.
 - Put all CSS in the single `<style>` element in `<head>` (add `@import` for web fonts at
-  its top). Scope slide-specific rules by id (`#pricing-tiers .card { … }`) or by a
-  layout class shared by several slides (`.layout-split`), so slides never leak styles
-  into each other.
+  its top). Scope slide-specific rules by reusable layout classes
+  (`.layout-pricing .card { … }`), so slides never leak styles into each other.
+  Never target slide ids in CSS, including descendant selectors, pseudo-classes and
+  attribute selectors: copying a slide changes its id and must preserve its styles.
+  To fix a `slide-id-style` lint error, add a layout class to the original slide and
+  replace every selector that depends on its id with that class, preserving its look.
+  Keep the slide id for tracking; do not add duplicate rules for copied ids.
 - Keep the HTML well formed and readable: close every element you open, no stray end
   tags, no `<div/>`-style self-closing HTML elements (fine inside `<svg>`), no duplicate
   attributes, `alt` on every `<img>`.

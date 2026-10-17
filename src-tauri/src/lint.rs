@@ -106,6 +106,7 @@ pub fn lint(
     check_markup(&mut l);
     check_document(&mut l);
     check_slides(&mut l);
+    check_slide_id_styles(&mut l);
     check_sections(&mut l);
     check_review(&mut l);
     check_template(&mut l);
@@ -238,7 +239,7 @@ fn check_markup(l: &mut Linter) {
                         "style-in-slide",
                         Severity::Warning,
                         i,
-                        "Move this <style> into the single <style> in <head>, scoped by the slide id.".into(),
+                        "Move this <style> into the single <style> in <head>, scoped by a reusable layout class, never the slide id.".into(),
                     );
                 }
                 if tag.name == "script" {
@@ -736,6 +737,101 @@ fn check_assets(l: &mut Linter, asset_exists: impl Fn(&str) -> bool) {
     }
 }
 
+/// Slide ids are identity, not styling hooks: copies get new ids but retain classes.
+fn check_slide_id_styles(l: &mut Linter) {
+    let ids: HashSet<_> = l.slides.iter().filter_map(|s| s.id.as_deref()).collect();
+    let mut references = Vec::new();
+    let mut from = 0;
+    while let Some(open) = find_ci(l.html, from, "<style") {
+        let Some(tag) = parse_tag(l.html, open) else {
+            break;
+        };
+        let end = find_ci(l.html, tag.end, "</style").unwrap_or(l.html.len());
+        from = end;
+        if tag.name != "style" || !in_markup(l, open) {
+            continue;
+        }
+        let mut input = cssparser::ParserInput::new(&l.html[tag.end..end]);
+        let mut parser = cssparser::Parser::new(&mut input);
+        let mut found = Vec::new();
+        css_id_references(&mut parser, &mut found);
+        references.extend(
+            found
+                .into_iter()
+                .filter(|(_, id)| ids.contains(id.as_str()))
+                .map(|(at, id)| (tag.end + at, id)),
+        );
+    }
+    for (at, id) in references {
+        l.issues.push(Issue {
+            rule: "slide-id-style",
+            severity: Severity::Error,
+            message: format!("CSS targets slide id `{id}`; copying the slide changes its id and breaks these styles. Add a reusable layout class to the slide and replace its id-based selectors with that class, preserving its appearance and keeping its id for tracking."),
+            line: l.line(at),
+            slide: Some(id),
+        });
+    }
+}
+
+/// Tokenize rather than search text: comments, strings, URL fragments and declaration
+/// colors must not count as selectors. Pending references become selectors only when
+/// followed by a rule block; recurse into grouping rules and CSS nesting as well.
+fn css_id_references<'i>(
+    parser: &mut cssparser::Parser<'i, '_>,
+    found: &mut Vec<(usize, String)>,
+) -> Vec<(usize, String)> {
+    use cssparser::Token;
+    let mut pending = Vec::new();
+    let mut at_rule = false;
+    loop {
+        let at = parser.position().byte_index();
+        let Ok(token) = parser.next_including_whitespace_and_comments().cloned() else {
+            break;
+        };
+        match token {
+            Token::AtKeyword(name) => at_rule = !name.eq_ignore_ascii_case("scope"),
+            Token::IDHash(id) => pending.push((at, id.to_string())),
+            Token::Semicolon => {
+                pending.clear();
+                at_rule = false;
+            }
+            Token::CurlyBracketBlock => {
+                if at_rule {
+                    pending.clear();
+                }
+                at_rule = false;
+                found.append(&mut pending);
+                let _: Result<_, cssparser::ParseError<'i, ()>> = parser.parse_nested_block(|p| {
+                    css_id_references(p, found);
+                    Ok(())
+                });
+            }
+            Token::Function(_) | Token::ParenthesisBlock => {
+                let _: Result<_, cssparser::ParseError<'i, ()>> = parser.parse_nested_block(|p| {
+                    pending.extend(css_id_references(p, found));
+                    Ok(())
+                });
+            }
+            Token::SquareBracketBlock => {
+                let _: Result<_, cssparser::ParseError<'i, ()>> = parser.parse_nested_block(|p| {
+                    // [id="title"] is just as dependent on identity as #title.
+                    if p.expect_ident_matching("id").is_ok() && p.expect_delim('=').is_ok() {
+                        if let Ok(Token::Ident(id) | Token::QuotedString(id)) = p.next() {
+                            pending.push((at, id.to_string()));
+                        }
+                    }
+                    // Consume flags / other attribute selectors without treating their
+                    // values as CSS id selectors.
+                    while p.next().is_ok() {}
+                    Ok(())
+                });
+            }
+            _ => {}
+        }
+    }
+    pending
+}
+
 /// Entrance keyframes (those a `.reveal` rule animates with) must not animate `transform`:
 /// held by `both` fill, it would replace each element's own transform and tilt.
 fn check_entrances(l: &mut Linter) {
@@ -1073,6 +1169,93 @@ mod tests {
         );
         assert!(is_kebab_case("q3-plan-2"));
         assert!(!is_kebab_case("-a") && !is_kebab_case("a--b") && !is_kebab_case("A"));
+    }
+
+    #[test]
+    fn rejects_slide_id_styles_including_nested_and_escaped_selectors() {
+        let styled = |css: &str| {
+            deck(
+                r#"<section class="slide layout-title" id="title"></section>
+<section class="slide" id="title-copy"></section>"#,
+            )
+            .replace(
+                "<style>.slide {}</style>",
+                &format!("<style>\n{css}\n</style>"),
+            )
+        };
+        for selector in [
+            "#title",
+            "section#title .card",
+            "#title:hover",
+            ".other, #title > h1",
+            ":is(#title, .other)",
+            ":where(#title)",
+            "[id=title] .card",
+            "[id=\"title\"]",
+            r"#\74 itle",
+            "#title-copy",
+        ] {
+            for css in [
+                format!("{selector} {{ color: red; }}"),
+                format!("@media print {{ {selector} {{ color: red; }} }}"),
+                format!(".deck {{ color: black; & {selector} {{ color: red; }} }}"),
+            ] {
+                let issues = lint(&styled(&css), |_| true, &[]);
+                assert_eq!(issues.len(), 1, "{css}: {issues:?}");
+                assert_eq!(issues[0].rule, "slide-id-style");
+                assert_eq!(issues[0].severity, Severity::Error);
+                assert_eq!(issues[0].line, 7);
+                assert_eq!(
+                    issues[0].slide.as_deref(),
+                    Some(if selector == "#title-copy" {
+                        "title-copy"
+                    } else {
+                        "title"
+                    })
+                );
+                assert!(format_report(&issues).contains("reusable layout class"));
+            }
+        }
+        let fixed = styled(".layout-title { color: red; } .layout-title .card { padding: 20px; }");
+        assert!(lint(&fixed, |_| true, &[]).is_empty());
+    }
+
+    #[test]
+    fn slide_id_styles_ignore_declarations_comments_strings_and_other_ids() {
+        let source =
+            deck(r##"<section class="slide" id="abc"><svg><path id="icon"/></svg></section>"##)
+                .replace(
+                    "<style>.slide {}</style>",
+                    r##"<style>
+/* #abc { color: red; } */
+#icon { fill: red; }
+#abc-longer { color: red; }
+.layout { color: #abc; --color: #abc; content: "#abc { }"; background: url(#abc); }
+[data-label="#abc"] { color: blue; }
+@supports (color: #abc) { .layout { color: #abc; } }
+</style>"##,
+                );
+        assert!(lint(&source, |_| true, &[]).is_empty());
+        let fake = format!("{}<!-- <style>#abc {{}}</style> --><script>const s = '<style>#abc {{}}</style>';</script>", source);
+        assert!(lint(&fake, |_| true, &[]).is_empty());
+    }
+
+    #[test]
+    fn slide_id_styles_report_each_selector_at_its_line_in_any_style_block() {
+        let source = deck(r#"<section class="slide" id="title"></section>"#)
+            .replace("<style>.slide {}</style>", "<style>\n#title { color: red; }\n@media print {\n#title h1 { color: black; }\n}\n</style>\n<style>#title { padding: 1px; }</style>");
+        let issues = lint(&source, |_| true, &[]);
+        assert_eq!(
+            issues
+                .iter()
+                .map(|i| (i.rule, i.line, i.slide.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("slide-id-style", 7, Some("title")),
+                ("slide-id-style", 9, Some("title")),
+                ("slide-id-style", 12, Some("title")),
+            ]
+        );
     }
 
     #[test]

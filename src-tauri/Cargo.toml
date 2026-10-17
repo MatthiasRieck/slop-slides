@@ -28,6 +28,7 @@ percent-encoding = "2"
 uuid = { version = "1", features = ["v4"] }
 log = "0.4"
 base64 = "0.23.1"
+cssparser = "0.37"
 png = "0.18"
 
 # Slide screenshots for sketches (see src/capture.rs) and PDF printing (src/pdf.rs); the same

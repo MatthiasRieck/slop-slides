@@ -4,8 +4,9 @@
    The preview fills the whole stage area and the slide sits in its middle, at the size it has on
    the stage. The surroundings are an endless pasteboard: drag with the middle button (pressed
    mouse wheel), swipe on a trackpad or hold Space and drag to pan; turn the mouse wheel, pinch or
-   Ctrl/⌘+scroll to zoom; 0 returns to the start. A plain drag with the primary button is left
-   to the slide, so its text can be selected. The slide's frame (outline and shadow) moves with it.
+   Ctrl/⌘+scroll to zoom; 0 returns to the start. Without the slide editor, dragging with the
+   primary button pans too, except from text, which it selects instead, and from links and other
+   controls. The slide's frame (outline and shadow) moves with it.
    The view is reported as { type: "slop:view", slide, x, y, k } (pan in px, zoom) and restored
    with { type: "slop:camera", x, y, k } or { type: "slop:camera", home: true }. The app also
    sends { type: "slop:canvas", color, accent }: the color of the panel around the slide and its
@@ -31,6 +32,7 @@
   var DRAG_THRESHOLD = 3;
   // Wheel events closer together than this belong to one gesture (a swipe and its momentum).
   var WHEEL_GESTURE_MS = 150;
+  var editor = params.has("edit");
 
   var deck = slide.parentElement;
   var root = document.documentElement;
@@ -166,13 +168,52 @@
     }
   }
 
+  /**
+   * Whether the screen point (x, y) lies on a character of the slide's text, not merely inside a
+   * text box: padding, gaps between lines and the space past a line's end don't count.
+   */
+  function onText(x, y) {
+    var node, offset;
+    if (document.caretPositionFromPoint) {
+      var position = document.caretPositionFromPoint(x, y);
+      if (position) {
+        node = position.offsetNode;
+        offset = position.offset;
+      }
+    } else if (document.caretRangeFromPoint) {
+      var caret = document.caretRangeFromPoint(x, y);
+      if (caret) {
+        node = caret.startContainer;
+        offset = caret.startOffset;
+      }
+    }
+    if (!node || node.nodeType !== 3 || !node.data.trim()) return false;
+    // The caret sits between two characters; the point may be over either of them.
+    var range = document.createRange();
+    for (var i = Math.max(0, offset - 1); i < Math.min(node.data.length, offset + 1); i++) {
+      range.setStart(node, i);
+      range.setEnd(node, i + 1);
+      var rects = range.getClientRects();
+      for (var j = 0; j < rects.length; j++) {
+        var r = rects[j];
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return true;
+      }
+    }
+    return false;
+  }
+
   // The middle button (pressing the mouse wheel) always pans, even while typing; Space+drag pans
-  // unless typing. Any other press with the primary button belongs to the slide: it selects text,
-  // follows links, and in a show clicks through the slides.
+  // unless typing. Without the editor, the primary button pans too, except from text (to select
+  // it) and controls; in a show it clicks through the slides.
   document.addEventListener("pointerdown", function (event) {
     // A press always ends an earlier pan, even one whose release never arrived.
     pan = null;
-    if (event.button !== 1 && !(event.button === 0 && spaceDown && !api.busy())) return;
+    var primary = event.button === 0;
+    if (event.button !== 1 && !(primary && spaceDown && !api.busy())) {
+      if (!primary || editor || show) return;
+      if (event.target.closest("a, button, input, select, textarea, video, audio, [contenteditable]")) return;
+      if (onText(event.clientX, event.clientY)) return;
+    }
     startPan(event);
     event.stopImmediatePropagation();
   });

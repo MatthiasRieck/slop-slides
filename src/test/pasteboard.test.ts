@@ -132,33 +132,68 @@ describe("pasteboard", () => {
     expect(pasteboard({ bodyStyle: ".deck { background: rgb(1, 2, 3) }" }).$(".deck").style.backgroundColor).toBe("");
   });
 
-  it("pans by dragging with the middle button, and reports the view", () => {
+  it("pans by dragging the slide, and reports the view", () => {
     const p = pasteboard();
-    p.drag(p.$("h1"), 50, -30, 1);
+    p.drag(p.$("h1"), 50, -30);
     expect(p.transform()).toBe("translate(370px,150px) scale(1)");
     expect(p.views().at(-1)).toEqual({ type: "slop:view", slide: "intro", x: 50, y: -30, k: 1 });
     // A click that barely moves is not a pan.
-    p.drag(p.$("h1"), 2, 1, 1);
+    p.drag(p.$("h1"), 2, 1);
     expect(p.transform()).toBe("translate(370px,150px) scale(1)");
-    // Links and other controls pan too: the middle button is the pasteboard's everywhere.
+    // The middle button pans too, even from links.
     p.drag(p.$("a"), 50, 0, 1);
     expect(p.transform()).toBe("translate(420px,150px) scale(1)");
   });
 
-  it("leaves a drag with the primary button to the slide, so its text can be selected", () => {
+  it("leaves links and other controls on the slide to be clicked", () => {
     const p = pasteboard();
-    for (const selector of ["h1", "a", "body"]) {
-      const down = new p.window.PointerEvent("pointerdown", { clientX: 100, clientY: 100, button: 0, bubbles: true, cancelable: true });
-      p.$(selector).dispatchEvent(down);
-      // Preventing the press would keep the browser from starting a selection.
-      expect(down.defaultPrevented).toBe(false);
-      p.$(selector).dispatchEvent(new p.window.PointerEvent("pointermove", { clientX: 150, clientY: 70, bubbles: true, cancelable: true }));
-      p.$(selector).dispatchEvent(new p.window.PointerEvent("pointerup", { clientX: 150, clientY: 70, bubbles: true, cancelable: true }));
-    }
+    p.drag(p.$("a"), 50, 0);
     expect(p.transform()).toBe("translate(320px,180px) scale(1)");
-    expect(p.doc.documentElement.style.cursor).toBe("");
-    expect(p.views()).toEqual([]);
-    // Nor does the secondary button pan.
+    p.drag(p.$("a"), 50, 0, 1);
+    expect(p.transform()).toBe("translate(370px,180px) scale(1)");
+  });
+
+  it("selects text when a drag starts on it, and pans from anywhere else in its box", () => {
+    const p = pasteboard();
+    const h1 = p.$("h1");
+    const text = h1.firstChild as Text;
+    // jsdom lays nothing out: put "Hello" at (100, 100), 10px a character, 20px tall.
+    const glyph = (i: number) => ({ left: 100 + i * 10, right: 110 + i * 10, top: 100, bottom: 120 });
+    Object.assign(p.doc, {
+      caretPositionFromPoint: (x: number, y: number) => {
+        if (y < 90 || y > 130) return { offsetNode: p.doc.body, offset: 0 };
+        return { offsetNode: text, offset: Math.max(0, Math.min(5, Math.round((x - 100) / 10))) };
+      },
+    });
+    p.window.Range.prototype.getClientRects = function (this: Range) {
+      return [glyph(this.startOffset)] as unknown as DOMRectList;
+    };
+    const press = (x: number, y: number) => {
+      const down = new p.window.PointerEvent("pointerdown", { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true });
+      h1.dispatchEvent(down);
+      h1.dispatchEvent(new p.window.PointerEvent("pointermove", { clientX: x + 50, clientY: y, bubbles: true, cancelable: true }));
+      h1.dispatchEvent(new p.window.PointerEvent("pointerup", { clientX: x + 50, clientY: y, bubbles: true, cancelable: true }));
+      return down;
+    };
+    // On a character: the browser gets the press, to start a selection.
+    expect(press(125, 110).defaultPrevented).toBe(false);
+    expect(press(149, 119).defaultPrevented).toBe(false);
+    expect(p.transform()).toBe("translate(320px,180px) scale(1)");
+    // Past the line's end, below it, or off the text: the drag pans.
+    expect(press(170, 110).defaultPrevented).toBe(true);
+    expect(p.transform()).toBe("translate(370px,180px) scale(1)");
+    press(125, 125);
+    expect(p.transform()).toBe("translate(420px,180px) scale(1)");
+    press(125, 200);
+    expect(p.transform()).toBe("translate(470px,180px) scale(1)");
+    // The middle button pans even from text.
+    h1.dispatchEvent(new p.window.PointerEvent("pointerdown", { clientX: 125, clientY: 110, button: 1, bubbles: true, cancelable: true }));
+    h1.dispatchEvent(new p.window.PointerEvent("pointermove", { clientX: 175, clientY: 110, bubbles: true, cancelable: true }));
+    expect(p.transform()).toBe("translate(520px,180px) scale(1)");
+  });
+
+  it("leaves the secondary button to the slide", () => {
+    const p = pasteboard();
     p.drag(p.$("h1"), 50, 0, 2);
     expect(p.transform()).toBe("translate(320px,180px) scale(1)");
   });
@@ -196,7 +231,7 @@ describe("pasteboard", () => {
 
   it("returns home with 0 and pans with Space held, keeping both keys from the app", () => {
     const p = pasteboard();
-    p.drag(p.$("h1"), 50, 50, 1);
+    p.drag(p.$("h1"), 50, 50);
     expect(p.key("0").defaultPrevented).toBe(true);
     expect(p.transform()).toBe("translate(320px,180px) scale(1)");
     p.key(" ");

@@ -183,6 +183,13 @@ function loadFavorites(): string[] {
 
 export type StageView = "slides" | "code";
 
+/** Slides being captured: as PNGs into the folder `dest`, or as pages of the PDF file `dest`. */
+export interface ImageExport {
+  format: "png" | "pdf";
+  dest: string;
+  slides: string[];
+}
+
 /** The right sidebar's tabs, in order (see components/Sidebar.tsx). */
 export const SIDEBAR_TABS = ["chat", "files"] as const;
 export type SidebarTab = (typeof SIDEBAR_TABS)[number];
@@ -256,8 +263,11 @@ interface AppState {
   sketchesSent: Record<string, Stroke[]>;
   /** Review marks are shown on the stage (and sent to the agent). */
   reviewVisible: boolean;
-  /** Slides being saved as images into `dir`, one at a time; null when not exporting. */
-  imageExport: { dir: string; slides: string[] } | null;
+  /**
+   * Slides being captured one at a time, as PNGs into the folder `dest` or as pages of the PDF
+   * file `dest`; null when not exporting.
+   */
+  imageExport: ImageExport | null;
   /** The stage lets the user edit text and move elements on the slide. */
   editing: boolean;
   /** Bumped when a slide edit could not be saved, so the stage reloads the slide from disk. */
@@ -304,7 +314,7 @@ interface AppState {
   /** Keeps the slide's current marks out of the next message. */
   skipSketch: (slide: string) => void;
   setReviewVisible: (visible: boolean) => void;
-  startImageExport: (dir: string) => void;
+  startImageExport: (dest: string, format?: ImageExport["format"]) => void;
   endImageExport: () => void;
   /** Enters or leaves edit mode, keeping the edits made so far. */
   setEditing: (editing: boolean) => void;
@@ -622,9 +632,9 @@ export const useApp = create<AppState>((set, get) => ({
     set({ reviewVisible });
   },
 
-  startImageExport: (dir) => {
+  startImageExport: (dest, format = "png") => {
     const { deck } = get();
-    if (deck && deck.slides.length > 0) set({ imageExport: { dir, slides: deck.slides.map((s) => s.id) } });
+    if (deck && deck.slides.length > 0) set({ imageExport: { format, dest, slides: deck.slides.map((s) => s.id) } });
   },
 
   endImageExport: () => set({ imageExport: null }),

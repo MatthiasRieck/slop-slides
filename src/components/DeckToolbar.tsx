@@ -1,6 +1,6 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { AlertTriangle, CheckCircle2, ChevronDown, Code2, FileCode2, Images, Loader2, Play, Presentation, Share, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, Code2, FileCode2, FileText, Images, Loader2, Play, Presentation, Share, XCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { api, errorMessage, type Deck } from "../lib/api";
@@ -39,11 +39,12 @@ function DeckTools({ deck }: { deck: Deck }) {
     }
   };
 
+  const fileName = deck.title.replace(/[\\/:*?"<>|]+/g, "").trim() || "presentation";
+
   const exportDeck = async () => {
-    const name = deck.title.replace(/[\\/:*?"<>|]+/g, "").trim() || "presentation";
     const dest = await save({
       title: "Export presentation",
-      defaultPath: `${name}.html`,
+      defaultPath: `${fileName}.html`,
       filters: [{ name: "HTML presentation", extensions: ["html"] }],
     });
     if (!dest) return;
@@ -53,6 +54,15 @@ function DeckTools({ deck }: { deck: Deck }) {
     } catch (error) {
       useApp.getState().setError(errorMessage(error));
     }
+  };
+
+  const exportPdf = async () => {
+    const dest = await save({
+      title: "Export as PDF",
+      defaultPath: `${fileName}.pdf`,
+      filters: [{ name: "PDF document", extensions: ["pdf"] }],
+    });
+    if (dest) useApp.getState().startImageExport(dest, "pdf");
   };
 
   const exportImages = async () => {
@@ -90,6 +100,7 @@ function DeckTools({ deck }: { deck: Deck }) {
       <ExportMenu
         disabled={deck.slides.length === 0}
         onHtml={() => void exportDeck()}
+        onPdf={() => void exportPdf()}
         onImages={() => void exportImages()}
       />
       <button
@@ -105,8 +116,8 @@ function DeckTools({ deck }: { deck: Deck }) {
   );
 }
 
-/** The Export button and its choices: one shareable HTML file, or a PNG per slide. */
-function ExportMenu(props: { disabled: boolean; onHtml: () => void; onImages: () => void }) {
+/** The Export button and its choices: one shareable HTML file, a PDF, or a PNG per slide. */
+function ExportMenu(props: { disabled: boolean; onHtml: () => void; onPdf: () => void; onImages: () => void }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -151,6 +162,7 @@ function ExportMenu(props: { disabled: boolean; onHtml: () => void; onImages: ()
           className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card p-1 shadow-lg"
         >
           <ExportItem icon={FileCode2} label="HTML file" hint="One self-contained file to share" onClick={choose(props.onHtml)} />
+          <ExportItem icon={FileText} label="PDF" hint="One page per slide, for printing or sharing" onClick={choose(props.onPdf)} />
           <ExportItem icon={Images} label="PNG images" hint="One image per slide, in a new folder" onClick={choose(props.onImages)} />
         </div>
       )}

@@ -210,6 +210,21 @@ export const api = {
     viewport: { width: number; height: number },
     width: number,
   ) => invoke<string>("export_slide_image", { dir, index, total, rect, viewport, width }),
+  /**
+   * Screenshots `rect` (one slide, CSS pixels) as the next page of the PDF going to `dest`; the
+   * page is the slides' canvas, `width` × `height`.
+   */
+  addPdfPage: (
+    dest: string,
+    rect: { x: number; y: number; width: number; height: number },
+    viewport: { width: number; height: number },
+    width: number,
+    height: number,
+  ) => invoke<void>("add_pdf_page", { dest, rect, viewport, width, height }),
+  /** Writes the pages added for `dest` to that file, titled after the deck `id`. */
+  finishPdfExport: (id: string, dest: string) => invoke<void>("finish_pdf_export", { id, dest }),
+  /** Forgets the pages added for `dest`. */
+  discardPdfExport: (dest: string) => invoke<void>("discard_pdf_export", { dest }),
   lintDeck: (id: string) => invoke<LintIssue[]>("lint_deck", { id }),
   /**
    * Screenshots `rect` of the window; returns an absolute session image path. Both are in CSS

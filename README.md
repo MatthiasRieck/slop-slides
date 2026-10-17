@@ -37,7 +37,9 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
 - **Present:** full-screen slideshow (arrows/space/click to advance, `Esc` to exit).
 - **Export:** saves the deck as **one self-contained HTML file** (attached images embedded)
   that plays in any browser: arrows/space/click to navigate, `F` for full screen, `#slide-id`
-  links, print to PDF.
+  links, print to PDF. The same menu saves a **PDF** (one page per slide, sized to the slide
+  canvas, each slide as it looks once its animations finish) or **PNG images** (one per slide,
+  in a new folder).
 
 Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.
 

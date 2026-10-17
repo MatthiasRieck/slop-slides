@@ -9,6 +9,7 @@ mod extensions;
 mod html;
 mod lint;
 mod mcp;
+mod pdf;
 mod permissions;
 mod protocol;
 mod providers;
@@ -399,6 +400,49 @@ async fn export_slide_image(
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// Screenshots `rect` of the window (one slide, shown full size) as the next page of the PDF
+/// going to `dest`, at most `width` pixels wide. `width` × `height` is the slides' canvas, which
+/// sets the page size.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn add_pdf_page(
+    exports: State<'_, pdf::PdfExports>,
+    webview: tauri::Webview,
+    dest: String,
+    rect: capture::Rect,
+    viewport: capture::Size,
+    width: f64,
+    height: f64,
+) -> Result<()> {
+    let pixels = (width.round() as u32).clamp(1, size::MAX_PX);
+    let image = capture::snapshot_image(&webview, rect, viewport, pixels).await?;
+    let page = tauri::async_runtime::spawn_blocking(move || pdf::Page::new(&image, width, height))
+        .await
+        .map_err(|e| error::Error::msg(format!("cannot add the slide: {e}")))??;
+    exports.add(&dest, page);
+    Ok(())
+}
+
+/// Writes the pages captured for `dest` there, titled after the deck.
+#[tauri::command]
+async fn finish_pdf_export(
+    exports: State<'_, pdf::PdfExports>,
+    id: String,
+    dest: String,
+) -> Result<()> {
+    let pages = exports.take(&dest);
+    let title = deck::load(&deck::deck_file(&id)?)?.title;
+    tauri::async_runtime::spawn_blocking(move || pdf::save(Path::new(&dest), &title, &pages))
+        .await
+        .map_err(|e| error::Error::msg(format!("cannot write the PDF: {e}")))?
+}
+
+/// Forgets the pages captured for `dest` (the export was cancelled or failed).
+#[tauri::command]
+fn discard_pdf_export(exports: State<pdf::PdfExports>, dest: String) {
+    exports.take(&dest);
+}
+
 #[tauri::command]
 fn load_chat(id: String) -> Result<serde_json::Value> {
     deck::load_chat(sessions()?.current(&workspace::root(&id)?).as_deref())
@@ -500,6 +544,7 @@ pub fn run() {
         .manage(AgentManager::default())
         .manage(WorkspaceWatcher::default())
         .manage(OpenWorkspace::default())
+        .manage(pdf::PdfExports::default())
         .register_uri_scheme_protocol("slop", |ctx, request| {
             protocol::handle(ctx.app_handle(), request)
         })
@@ -535,6 +580,9 @@ pub fn run() {
             capture_sketch,
             create_image_export_dir,
             export_slide_image,
+            add_pdf_page,
+            finish_pdf_export,
+            discard_pdf_export,
             load_chat,
             session_provider,
             save_chat,

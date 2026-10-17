@@ -137,7 +137,7 @@ describe("deck title", () => {
 describe("deck actions", () => {
   const exportButton = () => screen.getByRole("button", { name: /Export/ }) as HTMLButtonElement;
   const presentButton = () => screen.getByRole("button", { name: /Present/ }) as HTMLButtonElement;
-  async function exportAs(item: "HTML file" | "PNG images") {
+  async function exportAs(item: "HTML file" | "PDF" | "PNG images") {
     fireEvent.click(exportButton());
     await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: new RegExp(item) })));
   }
@@ -187,6 +187,7 @@ describe("deck actions", () => {
     expect(exportButton().getAttribute("aria-expanded")).toBe("true");
     expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
       "HTML fileOne self-contained file to share",
+      "PDFOne page per slide, for printing or sharing",
       "PNG imagesOne image per slide, in a new folder",
     ]);
     fireEvent.keyDown(window, { key: "Escape" });
@@ -205,8 +206,27 @@ describe("deck actions", () => {
     await exportAs("PNG images");
     expect(openDialog).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
     expect(invoke).toHaveBeenCalledWith("create_image_export_dir", { id: "/decks/talk/deck.html", parent: "/Users/me/Desktop" });
-    expect(useApp.getState().imageExport).toEqual({ dir: "/Users/me/Desktop/Talk", slides: ["intro", "#2", "outro"] });
+    expect(useApp.getState().imageExport).toEqual({ format: "png", dest: "/Users/me/Desktop/Talk", slides: ["intro", "#2", "outro"] });
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("exports a PDF to the chosen file", async () => {
+    save.mockResolvedValue("/Users/me/Desktop/Talk.pdf");
+    render(<DeckToolbar />);
+    await exportAs("PDF");
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultPath: "Talk.pdf", filters: [{ name: "PDF document", extensions: ["pdf"] }] }),
+    );
+    expect(useApp.getState().imageExport).toEqual({ format: "pdf", dest: "/Users/me/Desktop/Talk.pdf", slides: ["intro", "#2", "outro"] });
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("does not export a PDF when the save dialog is cancelled", async () => {
+    save.mockResolvedValue(null);
+    render(<DeckToolbar />);
+    await exportAs("PDF");
+    expect(invoke).not.toHaveBeenCalled();
+    expect(useApp.getState().imageExport).toBeNull();
   });
 
   it("does nothing when no folder is chosen", async () => {

@@ -66,6 +66,8 @@ function pasteboard({ framed = true, bodyStyle = "", show = false, stage }: { fr
     views: () => posted.filter((m) => (m as View).type === "slop:view") as View[],
     zooms: () => posted.filter((m) => (m as View).type === "slop:zoom") as View[],
     keys: () => posted.filter((m) => (m as View).type === "slop:key"),
+    focusRequests: () => posted.filter((m) => (m as View).type === "slop:focus").length,
+    pointer,
     drag(target: Element, dx: number, dy: number, button = 0) {
       pointer("pointerdown", target, 100, 100, button);
       pointer("pointermove", target, 100 + dx, 100 + dy, button);
@@ -143,6 +145,23 @@ describe("pasteboard", () => {
     // The middle button pans too, even from links.
     p.drag(p.$("a"), 50, 0, 1);
     expect(p.transform()).toBe("translate(420px,150px) scale(1)");
+  });
+
+  it("asks the app for keyboard focus on a press while it has none, since panning cancels the press", () => {
+    const p = pasteboard();
+    let focused = false;
+    p.doc.hasFocus = () => focused;
+    p.pointer("pointerdown", p.$("h1"), 100, 100);
+    p.pointer("pointerdown", p.$("a"), 100, 100);
+    expect(p.focusRequests()).toBe(2);
+    focused = true;
+    p.pointer("pointerdown", p.$("h1"), 100, 100);
+    expect(p.focusRequests()).toBe(2);
+    // The presenter focuses its show itself.
+    const show = pasteboard({ show: true });
+    show.doc.hasFocus = () => false;
+    show.pointer("pointerdown", show.$("h1"), 100, 100);
+    expect(show.focusRequests()).toBe(0);
   });
 
   it("leaves links and other controls on the slide to be clicked", () => {

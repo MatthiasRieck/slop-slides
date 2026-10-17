@@ -11,6 +11,8 @@
    with { type: "slop:camera", x, y, k } or { type: "slop:camera", home: true }. The app also
    sends { type: "slop:canvas", color, accent }: the color of the panel around the slide and its
    accent color, which the editor uses to dim what lies outside the slide and mark edit mode.
+   A press on the preview while it lacks keyboard focus posts { type: "slop:focus" }, and the
+   app focuses the preview.
 
    The slide editor (editor.js) runs after this and builds on window.slopPasteboard.
 
@@ -239,6 +241,19 @@
     if (!selecting) return;
     restore(selecting.covers);
     selecting = null;
+  }
+
+  // Panning and the editor cancel the press, so it never moves keyboard focus here by itself and
+  // keys would stay with whatever had it in the app (the chat composer, say). The app focuses
+  // this preview instead, so the arrow keys change slides after a click on the slide.
+  if (!show) {
+    window.addEventListener(
+      "pointerdown",
+      function () {
+        if (!document.hasFocus()) window.parent.postMessage({ type: "slop:focus" }, "*");
+      },
+      true,
+    );
   }
 
   // The middle button (pressing the mouse wheel) always pans, even while typing; Space+drag pans

@@ -285,6 +285,18 @@ fn check_markup(l: &mut Linter) {
                         ),
                     );
                 }
+                if tag
+                    .attrs
+                    .iter()
+                    .any(|(n, ..)| n == "data-resize-placeholder")
+                {
+                    l.report(
+                        "resize-placeholder",
+                        Severity::Warning,
+                        i,
+                        "This invisible, inert placeholder reserves the original layout space of the resized element immediately before it. Keep the visible element's text, dimensions and position when tidying, fit it into the slide's layout, then remove this entire placeholder and its hidden contents.".into(),
+                    );
+                }
                 if let Some((_, value, ..)) = tag.attrs.iter().find(|(n, ..)| n == ADDED_ATTR) {
                     let what = match value.as_str() {
                         "text" => "text box",
@@ -1176,6 +1188,25 @@ mod tests {
             )),
             Vec::<&str>::new()
         );
+    }
+
+    #[test]
+    fn flags_resize_placeholders_awaiting_cleanup() {
+        assert_eq!(
+            rules(&deck(
+                "<section class=\"slide\" id=\"a\"><p style=\"position: absolute; width: 300px\">Edited</p><p data-resize-placeholder aria-hidden=\"true\" inert style=\"visibility: hidden\">Original</p></section>"
+            )),
+            ["resize-placeholder"]
+        );
+        assert!(rules(&deck(
+            "<section class=\"slide\" id=\"a\"><p>data-resize-placeholder</p></section>"
+        ))
+        .is_empty());
+        assert!(rules(&format!(
+            "{}<div data-resize-placeholder></div>",
+            deck("<section class=\"slide\" id=\"a\"></section>")
+        ))
+        .is_empty());
     }
 
     #[test]

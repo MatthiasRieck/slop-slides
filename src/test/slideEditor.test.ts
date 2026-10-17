@@ -36,10 +36,10 @@ interface Commit {
   select: number[] | null;
 }
 
-function editor({ slide = "intro", framed = true } = {}) {
+function editor({ slide = "intro", framed = true, markup = DECK } = {}) {
   const posted: unknown[] = [];
   const parent = { postMessage: (data: unknown) => posted.push(data) };
-  const dom = new JSDOM(DECK, {
+  const dom = new JSDOM(markup, {
     url: `https://example.test/deck.html?embed&slide=${slide}&static&edit=0`,
     runScripts: "outside-only",
     pretendToBeVisual: true,
@@ -434,6 +434,76 @@ describe("slide editor", () => {
       expect(h1.style).toMatchObject({ width: "250px", height: "150px", scale: "", translate: "", fontSize: "48px", whiteSpace: "normal" });
       expect(e.commits()[0]!.markup).toContain("width: 250px");
       expect(h1.hasAttribute("viewBox")).toBe(false);
+    });
+
+    it("reserves the original footprint once, saves it, and keeps it when reselecting", () => {
+      const { h1, pull, e } = withHeading("resize");
+      h1.id = "unique-heading";
+      h1.style.fontSize = "48px";
+      h1.style.flex = "1 1 200px";
+      pull("1 0", [600, 300], [650, 300]);
+      const slot = h1.nextElementSibling as HTMLElement;
+      expect(slot.hasAttribute("data-resize-placeholder")).toBe(true);
+      expect(slot.style).toMatchObject({ width: "200px", height: "100px", flex: "0 0 auto", visibility: "hidden" });
+      expect(slot.hasAttribute("inert")).toBe(true);
+      expect(slot.getAttribute("aria-hidden")).toBe("true");
+      expect(slot.querySelector("[id], [data-slop-selected]")).toBeNull();
+      expect(slot.id).toBe("");
+      expect(h1.style.position).toBe("absolute");
+      expect(e.doc.querySelectorAll("#unique-heading")).toHaveLength(1);
+      expect(e.commits().at(-1)!.markup).toContain("data-resize-placeholder");
+      expect(e.commits().at(-1)!.markup).not.toContain("data-slop-selected");
+      e.fromParent({ type: "slop:edit-select", path: e.commits().at(-1)!.select });
+      expect(e.selected()).toEqual([h1]);
+      pull("1 0", [650, 300], [700, 300]);
+      expect(e.doc.querySelectorAll("[data-resize-placeholder]")).toHaveLength(1);
+      expect(slot.style.width).toBe("200px");
+      e.fromParent({ type: "slop:edit-delete" });
+      expect(e.doc.querySelectorAll("[data-resize-placeholder]")).toHaveLength(0);
+      expect(e.doc.querySelector("#unique-heading")).toBeNull();
+    });
+
+    it("restores the layout slot after reload and moves the visible element independently", () => {
+      const { e, pull } = withHeading("resize");
+      pull("1 0", [600, 300], [650, 300]);
+      const saved = e.commits().at(-1)!;
+      const reloaded = editor({ markup: '<main class="deck">' + saved.markup + '</main>' });
+      reloaded.fromParent({ type: "slop:edit-select", path: saved.select });
+      const heading = reloaded.$("h1");
+      const slot = heading.nextElementSibling as HTMLElement;
+      const frozen = slot.getAttribute("style");
+      expect(reloaded.selected()).toEqual([heading]);
+      reloaded.drag(heading, 30, 20);
+      expect(heading.style.translate).toBe("30px 20px");
+      reloaded.drag(reloaded.$('[data-dir="1 0"]'), 50, 0);
+      expect(heading.style.width).toBe("300px");
+      expect(slot.getAttribute("style")).toBe(frozen);
+      expect(reloaded.doc.querySelectorAll("[data-resize-placeholder]")).toHaveLength(1);
+      reloaded.fromParent({ type: "slop:edit-delete" });
+      expect(reloaded.doc.querySelector("[data-resize-placeholder]")).toBeNull();
+    });
+
+    it("does not reserve space on a handle click, a stretch, or an already free element", () => {
+      const { e, h1, handle, pull } = withHeading("resize");
+      e.down(handle("1 0"));
+      e.up(handle("1 0"));
+      expect(e.doc.querySelector("[data-resize-placeholder]")).toBeNull();
+      h1.style.position = "absolute";
+      pull("1 0", [600, 300], [650, 300]);
+      expect(e.doc.querySelector("[data-resize-placeholder]")).toBeNull();
+      const stretched = withHeading("stretch");
+      stretched.pull("1 0", [600, 300], [650, 300]);
+      expect(stretched.e.doc.querySelector("[data-resize-placeholder]")).toBeNull();
+    });
+
+    it("does not select a placeholder or its descendants", () => {
+      const { e, h1, pull } = withHeading("resize");
+      pull("1 0", [600, 300], [650, 300]);
+      e.down(e.$("#intro"));
+      const slot = h1.nextElementSibling!;
+      e.down(slot.querySelector("em")!);
+      e.up(slot.querySelector("em")!);
+      expect(e.selected()).toEqual([]);
     });
 
     it("accounts for padding and borders in a content box", () => {

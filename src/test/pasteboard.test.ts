@@ -142,6 +142,9 @@ describe("pasteboard", () => {
     // A click that barely moves is not a pan.
     p.drag(p.$("h1"), 2, 1);
     expect(p.transform()).toBe("translate(370px,150px) scale(1)");
+    // The middle button pans too, even from links.
+    p.drag(p.$("a"), 50, 0, 1);
+    expect(p.transform()).toBe("translate(420px,150px) scale(1)");
   });
 
   it("asks the app for keyboard focus on a press while it has none, since panning cancels the press", () => {
@@ -167,6 +170,99 @@ describe("pasteboard", () => {
     expect(p.transform()).toBe("translate(320px,180px) scale(1)");
     p.drag(p.$("a"), 50, 0, 1);
     expect(p.transform()).toBe("translate(370px,180px) scale(1)");
+  });
+
+  /**
+   * Lays out the h1's "Hello" for the caret lookups jsdom lacks: at (100, 100), 10px a character,
+   * 20px tall, in a box from (80, 80) to (400, 140). A `cover` given lies over the whole slide and
+   * hides the text from hit testing unless it is out of it (pointer-events: none).
+   */
+  function layOut(p: ReturnType<typeof pasteboard>, cover?: HTMLElement) {
+    const h1 = p.$("h1");
+    const text = h1.firstChild as Text;
+    const covering = () => cover && cover.style.pointerEvents !== "none";
+    const inBox = (x: number, y: number) => x >= 80 && x <= 400 && y >= 80 && y <= 140;
+    Object.assign(p.doc, {
+      elementFromPoint: (x: number, y: number) => (covering() ? cover : inBox(x, y) ? h1 : p.$("#intro")),
+      caretPositionFromPoint: (x: number, y: number) => {
+        if (covering()) return { offsetNode: cover, offset: 0 };
+        if (y < 90 || y > 130) return { offsetNode: p.doc.body, offset: 0 };
+        return { offsetNode: text, offset: Math.max(0, Math.min(5, Math.round((x - 100) / 10))) };
+      },
+    });
+    p.window.Range.prototype.getClientRects = function (this: Range) {
+      const i = this.startOffset;
+      return [{ left: 100 + i * 10, right: 110 + i * 10, top: 100, bottom: 120 }] as unknown as DOMRectList;
+    };
+    const fire = (type: string, x: number, y: number, button = 0) => {
+      const event = new p.window.PointerEvent(type, { clientX: x, clientY: y, button, bubbles: true, cancelable: true });
+      (cover && covering() ? cover : h1).dispatchEvent(event);
+      return event;
+    };
+    return {
+      text,
+      fire,
+      /** Drags 50px to the right from (x, y), returning the press. */
+      press(x: number, y: number, button = 0) {
+        const down = fire("pointerdown", x, y, button);
+        fire("pointermove", x + 50, y);
+        fire("pointerup", x + 50, y);
+        return down;
+      },
+    };
+  }
+
+  it("selects text when a drag starts on it, and pans from anywhere else in its box", () => {
+    const p = pasteboard();
+    const { press } = layOut(p);
+    // On a character: the browser gets the press, to start a selection.
+    expect(press(125, 110).defaultPrevented).toBe(false);
+    expect(press(149, 119).defaultPrevented).toBe(false);
+    expect(p.transform()).toBe("translate(320px,180px) scale(1)");
+    // Past the line's end, below it, or off the text: the drag pans.
+    expect(press(170, 110).defaultPrevented).toBe(true);
+    expect(p.transform()).toBe("translate(370px,180px) scale(1)");
+    press(125, 125);
+    expect(p.transform()).toBe("translate(420px,180px) scale(1)");
+    press(125, 200);
+    expect(p.transform()).toBe("translate(470px,180px) scale(1)");
+    // The middle button pans even from text.
+    press(125, 110, 1);
+    expect(p.transform()).toBe("translate(520px,180px) scale(1)");
+  });
+
+  it("selects text under an invisible layer the deck spread over the slide, and keeps the layer", () => {
+    const p = pasteboard();
+    const cover = p.doc.createElement("div");
+    cover.className = "aim-zones";
+    p.$("#intro").appendChild(cover);
+    const { text, fire } = layOut(p, cover);
+    const down = fire("pointerdown", 102, 110);
+    expect(down.defaultPrevented).toBe(true);
+    // The layer is out of the way while selecting, so the text under it can be found.
+    expect(cover.style.getPropertyValue("pointer-events")).toBe("none");
+    fire("pointermove", 135, 110);
+    const selection = p.window.getSelection()!;
+    expect([selection.anchorNode, selection.anchorOffset, selection.focusNode, selection.focusOffset]).toEqual([text, 0, text, 4]);
+    expect(selection.toString()).toBe("Hell");
+    expect(p.transform()).toBe("translate(320px,180px) scale(1)");
+    fire("pointerup", 135, 110);
+    expect(cover.getAttribute("style")).toBe("");
+    // A press beside the text pans, deselects, and leaves the layer as the deck had it.
+    cover.style.setProperty("pointer-events", "auto", "important");
+    fire("pointerdown", 300, 110);
+    fire("pointermove", 350, 110);
+    fire("pointerup", 350, 110);
+    expect(p.transform()).toBe("translate(370px,180px) scale(1)");
+    expect(selection.rangeCount).toBe(0);
+    expect(cover.style.getPropertyValue("pointer-events")).toBe("auto");
+    expect(cover.style.getPropertyPriority("pointer-events")).toBe("important");
+  });
+
+  it("leaves the secondary button to the slide", () => {
+    const p = pasteboard();
+    p.drag(p.$("h1"), 50, 0, 2);
+    expect(p.transform()).toBe("translate(320px,180px) scale(1)");
   });
 
   it("pans with a trackpad swipe and zooms with a pinch around the pointer", () => {

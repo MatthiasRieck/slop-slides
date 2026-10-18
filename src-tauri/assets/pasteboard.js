@@ -109,7 +109,12 @@
     var x = h.x + cam.x;
     var y = h.y + cam.y;
     var k = h.s * cam.k;
-    deck.style.transform = "translate(" + x + "px," + y + "px) scale(" + k + ")";
+    // Magnified with `zoom`, not `scale()`: WebKit lays the slide out at the zoomed size and
+    // paints all of it sharp, while under a scale it keeps the slide's own layers (backdrop
+    // filters, say) at the size they were first painted and stretches them, blurring their text.
+    // Lengths on a zoomed element are zoomed too, so the pan is given in unzoomed px.
+    deck.style.zoom = String(k);
+    deck.style.transform = "translate(" + x / k + "px," + y / k + "px)";
     if (frame) frame.style.cssText = "left:" + x + "px;top:" + y + "px;width:" + STAGE_W * k + "px;height:" + STAGE_H * k + "px";
     listeners.forEach(function (fn) {
       fn();

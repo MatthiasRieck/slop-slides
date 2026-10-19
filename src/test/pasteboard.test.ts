@@ -63,7 +63,7 @@ function pasteboard({ framed = true, bodyStyle = "", show = false, stage }: { fr
     window,
     doc,
     $,
-    /** Where the deck lands on screen, as one translate-then-scale (it is zoomed, not scaled). */
+    /** Where the deck lands on screen, as one translate-then-scale (zoomed in, scaled down). */
     transform: () => placement($(".deck")),
     views: () => posted.filter((m) => (m as View).type === "slop:view") as View[],
     zooms: () => posted.filter((m) => (m as View).type === "slop:zoom") as View[],
@@ -118,7 +118,7 @@ describe("pasteboard", () => {
 
   // Under a `scale()`, WebKit stretches what a slide paints on layers of its own (backdrop
   // filters, filters, animations) from the size it was first painted, blurring text when zoomed in.
-  it("zooms the slide with `zoom` rather than a scale, so it is painted sharp at every size", () => {
+  it("zooms the slide with `zoom` rather than a scale, so it is painted sharp when zoomed in", () => {
     const p = pasteboard();
     const deck = p.$(".deck");
     expect(deck.style.zoom).toBe("1");
@@ -142,6 +142,30 @@ describe("pasteboard", () => {
     p.window.dispatchEvent(new p.window.Event("resize"));
     expect(deck.style.transform).not.toContain("scale");
     expect(p.transform()).toBe(`translate(0px,0px) scale(${4 / 3})`);
+  });
+
+  // Laid out at a fraction of its size, text no longer measures in proportion (WebKit holds tiny
+  // fonts at a minimum size), so lines wrap differently and the slide overflows when zoomed out.
+  it("shrinks the slide with a scale, laying it out at full size, when zoomed out", () => {
+    const p = pasteboard();
+    const deck = p.$(".deck");
+    p.fromParent({ type: "slop:camera", x: 30, y: -60, k: 0.25 });
+    expect(deck.style.zoom).toBe("1");
+    expect(deck.style.transform).toBe("translate(350px,120px) scale(0.25)");
+    expect(p.transform()).toBe("translate(350px,120px) scale(0.25)");
+    expect(p.$("[data-slop-frame]").style.cssText).toContain("width: 480px");
+    // Back past full size, it zooms again and drops the scale.
+    p.fromParent({ type: "slop:camera", x: 0, y: 0, k: 2 });
+    expect(deck.style.zoom).toBe("2");
+    expect(deck.style.transform).toBe("translate(160px,90px)");
+  });
+
+  it("shrinks with a scale in a show fit to a window smaller than the slide", () => {
+    const p = pasteboard({ show: true });
+    p.fromParent({ type: "slop:camera", x: 0, y: 0, k: 0.5 });
+    const deck = p.$(".deck");
+    expect(deck.style.zoom).toBe("1");
+    expect(deck.style.transform).toBe(`translate(0px,0px) scale(${(4 / 3) * 0.5})`);
   });
 
   it("centers and frames a slide of another size", () => {

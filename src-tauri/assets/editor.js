@@ -9,7 +9,9 @@
    can switch to Stretch, which scales the contents too. On the first box resize, an in-flow
    element leaves an invisible placeholder in its original slot so its siblings stay put.
    Double-click (or Enter) edits its text, Escape selects the parent. Delete (or Backspace, or
-   { type: "slop:edit-delete" } from the app) removes it.
+   { type: "slop:edit-delete" } from the app) removes it; an in-flow element leaves an invisible
+   `data-delete-placeholder` in its slot (or takes over its resize placeholder) so the rest of
+   the layout stays put.
    Every change is posted to the app as the slide's new markup:
    { type: "slop:edit-commit", slide, markup, select }.
    Images dropped on the slide come from the app (which saved them as assets) as
@@ -22,7 +24,8 @@
    app, which reads the clipboard and sends back what to paste:
    - { type: "slop:edit-paste", html } an element copied here: on its own slide right after
      where it was copied (free-floating ones offset, so the copy shows), back in its place after
-     a cut, and on another slide at the same spot, absolutely positioned;
+     a cut (taking over the slot the cut left), and on another slide at the same spot,
+     absolutely positioned;
    - { type: "slop:edit-paste-text", text, style } a text box with `text`, in the middle of the view;
    - images come as dropped images, at the middle of the view.
 
@@ -59,6 +62,9 @@
   var EDITOR_ATTRS = ["contenteditable", "data-slop-selected", "data-slop-hover", "data-slop-editing", "data-slop-typing"];
   var MOVED = "data-moved";
   var PLACEHOLDER = "data-resize-placeholder";
+  var DELETED = "data-delete-placeholder";
+  // Invisible layout slots the editor leaves behind; never selected or checked for overflow.
+  var SLOTS = "[" + PLACEHOLDER + "], [" + DELETED + "]";
   var DROPPED = "data-dropped";
   var DRAG_THRESHOLD = 3;
   var DOUBLE_CLICK_MS = 400;
@@ -262,7 +268,7 @@
 
   /** The element to select for `el`: not inline text runs, whole SVG drawings. */
   function selectable(el) {
-    if (!el || el.nodeType !== 1 || !slide.contains(el) || el === slide || el.closest("[" + PLACEHOLDER + "]")) return null;
+    if (!el || el.nodeType !== 1 || !slide.contains(el) || el === slide || el.closest(SLOTS)) return null;
     var svg = el.closest("svg");
     while (svg && svg.parentElement && svg.parentElement.closest("svg")) svg = svg.parentElement.closest("svg");
     if (svg && slide.contains(svg)) el = svg;
@@ -640,12 +646,10 @@
     return next && next.hasAttribute(PLACEHOLDER) ? next : null;
   }
 
-  /** Reserves the original footprint before taking an element out of normal flow. */
-  function reserveLayout(el) {
+  /** An invisible, inert copy of an in-flow element that fills exactly its layout slot. */
+  function slotFor(el, attr) {
     var computed = getComputedStyle(el);
-    if (/^(absolute|fixed)$/.test(computed.position) || placeholderOf(el)) return;
     var size = sizeOf(el);
-    var center = centerOf(el);
     var placeholder = el.cloneNode(true);
     // Capture resolved styles so ID selectors and inherited styles still reserve the same slot.
     // Keep a hidden copy of the contents for its text baseline and intrinsic grid sizing.
@@ -654,11 +658,11 @@
       var prop = computed[i];
       placeholder.style.setProperty(prop, computed.getPropertyValue(prop));
     }
-    placeholder.setAttribute(PLACEHOLDER, "");
+    placeholder.setAttribute(attr, "");
     placeholder.setAttribute("aria-hidden", "true");
     placeholder.setAttribute("inert", "");
     [placeholder].concat(Array.prototype.slice.call(placeholder.querySelectorAll("*"))).forEach(function (node) {
-      ["id", MOVED, ADDED, DROPPED].concat(EDITOR_ATTRS).forEach(function (attr) { node.removeAttribute(attr); });
+      ["id", MOVED, ADDED, DROPPED].concat(EDITOR_ATTRS).forEach(function (name) { node.removeAttribute(name); });
       node.style.setProperty("visibility", "hidden", "important");
       node.style.setProperty("pointer-events", "none", "important");
       node.style.setProperty("animation", "none", "important");
@@ -669,7 +673,16 @@
     placeholder.style.height = placeholder.style.minHeight = placeholder.style.maxHeight = size.h + "px";
     // A fixed flex contribution preserves the space already allocated after grow/shrink.
     placeholder.style.flex = "0 0 auto";
-    el.parentElement.insertBefore(placeholder, el.nextSibling);
+    return placeholder;
+  }
+
+  /** Reserves the original footprint before taking an element out of normal flow. */
+  function reserveLayout(el) {
+    var computed = getComputedStyle(el);
+    if (/^(absolute|fixed)$/.test(computed.position) || placeholderOf(el)) return;
+    var size = sizeOf(el);
+    var center = centerOf(el);
+    el.parentElement.insertBefore(slotFor(el, PLACEHOLDER), el.nextSibling);
     var contentBox = computed.boxSizing !== "border-box";
     var px = function (name) { return parseFloat(computed[name]) || 0; };
     var width = size.w - (contentBox ? px("paddingLeft") + px("paddingRight") + px("borderLeftWidth") + px("borderRightWidth") : 0);
@@ -845,7 +858,7 @@
     var hits = [];
     Array.prototype.forEach.call(slide.querySelectorAll("*"), function (el) {
       var svg = el.closest("svg");
-      if ((svg && svg !== el) || el.closest(".notes, [" + PLACEHOLDER + "]")) return;
+      if ((svg && svg !== el) || el.closest(".notes, " + SLOTS)) return;
       var rect = el.getBoundingClientRect();
       if (!rect.width && !rect.height) return;
       var past = hasContent(el) && paints(el) ? pastEdges(rect, bounds, k) : [];
@@ -1226,8 +1239,14 @@
     if (!el) return;
     finishEditing();
     select(null);
+    // Keep its slot so the rest of the layout does not reflow; a resized element already has one.
     var placeholder = placeholderOf(el);
-    if (placeholder) placeholder.remove();
+    if (placeholder) {
+      placeholder.removeAttribute(PLACEHOLDER);
+      placeholder.setAttribute(DELETED, "");
+    } else if (el.parentElement && !/^(absolute|fixed)$/.test(getComputedStyle(el).position) && getComputedStyle(el).display !== "none") {
+      el.parentElement.insertBefore(slotFor(el, DELETED), el);
+    }
     if (el.parentElement) el.parentElement.removeChild(el);
     commit();
   }
@@ -1449,8 +1468,18 @@
       original.parentElement.insertBefore(el, after.nextSibling);
       if (header.free) cascade(el);
     } else if (parent) {
-      // After a cut: back where it was.
-      parent.insertBefore(el, parent.children[path[path.length - 1]] || null);
+      // After a cut: back where it was, into the slot the cut left (see removeSelected).
+      var at = parent.children[path[path.length - 1]] || null;
+      if (at && at.hasAttribute(DELETED)) {
+        if (header.free) {
+          // A resized element: the slot was its placeholder, and is again.
+          at.removeAttribute(DELETED);
+          at.setAttribute(PLACEHOLDER, "");
+        } else {
+          parent.replaceChild(el, at);
+        }
+      }
+      if (!el.parentElement) parent.insertBefore(el, at);
     } else {
       slide.appendChild(el);
       if (!header.free || !path || path.length !== 1) placeFree(el, header);

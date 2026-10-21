@@ -189,12 +189,40 @@ describe("slide editor", () => {
     expect(e.keys()).toEqual([]);
   });
 
-  it("removes the selection with Delete", () => {
+  it("removes the selection with Delete, leaving an invisible slot so the layout stays put", () => {
     const e = editor();
+    e.$(".card p").id = "first";
     e.down(e.$(".card p"));
     e.key("Delete");
-    expect(e.doc.querySelectorAll(".card p")).toHaveLength(1);
-    expect(e.commits()[0]!.markup).toContain(`<div class="card"><p style="color: red">Two</p></div>`);
+    expect(e.doc.querySelector("#first")).toBeNull();
+    const [slot, kept] = [...e.doc.querySelectorAll<HTMLElement>(".card p")] as [HTMLElement, HTMLElement];
+    expect(kept.textContent).toBe("Two");
+    expect(slot.hasAttribute("data-delete-placeholder")).toBe(true);
+    expect(slot.hasAttribute("inert")).toBe(true);
+    expect(slot.getAttribute("aria-hidden")).toBe("true");
+    expect(slot.id).toBe("");
+    expect(slot.style).toMatchObject({ visibility: "hidden", flex: "0 0 auto", boxSizing: "border-box" });
+    expect(slot.style.width).toMatch(/px$/);
+    expect(slot.style.height).toMatch(/px$/);
+    const markup = e.commits()[0]!.markup;
+    expect(markup).toContain("data-delete-placeholder");
+    expect(markup).toContain(`<p style="color: red">Two</p></div>`);
+    expect(markup).not.toContain("data-slop-selected");
+  });
+
+  it("does not leave a slot for an element outside the layout, or select a slot", () => {
+    const e = editor();
+    e.$(".shape").style.position = "absolute";
+    e.down(e.$(".shape"));
+    e.key("Delete");
+    expect(e.doc.querySelector(".shape")).toBeNull();
+    expect(e.doc.querySelector("[data-delete-placeholder]")).toBeNull();
+    e.down(e.$("h1"));
+    e.key("Delete");
+    const slot = e.$("[data-delete-placeholder]");
+    e.down(slot.querySelector("em")!);
+    e.up(slot.querySelector("em")!);
+    expect(e.selected()).toEqual([]);
   });
 
   it("removes the selection with Backspace too, and ignores Delete with nothing selected", () => {
@@ -203,7 +231,7 @@ describe("slide editor", () => {
     expect(e.commits()).toEqual([]);
     e.down(e.$(".shape"));
     e.key("Backspace");
-    expect(e.doc.querySelector(".shape")).toBeNull();
+    expect(e.doc.querySelector(".shape:not([data-delete-placeholder])")).toBeNull();
     expect(e.commits()).toHaveLength(1);
     expect(e.selected()).toEqual([]);
   });
@@ -216,9 +244,9 @@ describe("slide editor", () => {
     e.key("Enter");
     expect(e.$(".card p").hasAttribute("contenteditable")).toBe(true);
     e.fromParent({ type: "slop:edit-delete" });
-    expect(e.doc.querySelectorAll(".card p")).toHaveLength(1);
+    expect(e.doc.querySelectorAll(".card p:not([data-delete-placeholder])")).toHaveLength(1);
     const last = e.commits().at(-1)!;
-    expect(last.markup).toContain(`<div class="card"><p style="color: red">Two</p></div>`);
+    expect(last.markup).toContain(`<p style="color: red">Two</p></div>`);
     expect(last.markup).not.toContain("contenteditable");
   });
 
@@ -349,12 +377,14 @@ describe("slide editor", () => {
       expect(e.doc.querySelector("h1")).not.toBeNull();
       e.key("x", { metaKey: true });
       expect(copied(e)).toHaveLength(2);
-      expect(e.doc.querySelector("h1")).toBeNull();
+      // Like a deletion, a cut leaves an invisible slot so the layout stays put.
+      expect(e.doc.querySelector("h1:not([data-delete-placeholder])")).toBeNull();
+      expect(e.doc.querySelector("h1[data-delete-placeholder]")).not.toBeNull();
       expect(e.commits()).toHaveLength(1);
       expect(e.selected()).toEqual([]);
       e.down(e.$(".card p"));
       e.fromParent({ type: "slop:edit-copy", cut: true });
-      expect(e.$(".card").children).toHaveLength(1);
+      expect(e.$(".card").querySelectorAll(":scope > :not([data-delete-placeholder])")).toHaveLength(1);
     });
 
     it("pastes a copy of an element in the layout right after it", () => {
@@ -392,9 +422,35 @@ describe("slide editor", () => {
       e.key("x", { metaKey: true });
       e.down(e.$(".card p"));
       e.key("x", { metaKey: true });
-      expect(e.$(".card").children).toHaveLength(0);
+      const card = e.$(".card");
+      expect([...card.children].every((c) => c.hasAttribute("data-delete-placeholder"))).toBe(true);
       e.fromParent({ type: "slop:edit-paste", html: copied(e)[0]!.html });
-      expect(e.commits().at(-1)!.markup).toContain('<div class="card"><p style="color: red">Two</p></div>');
+      // It takes over its own slot; the other cut's slot stays.
+      const [slot, two] = [...card.children] as HTMLElement[];
+      expect(card.children).toHaveLength(2);
+      expect(slot!.hasAttribute("data-delete-placeholder")).toBe(true);
+      expect(two!.textContent).toBe("Two");
+      e.fromParent({ type: "slop:edit-paste", html: copied(e)[1]!.html });
+      expect(e.commits().at(-1)!.markup).toContain('<div class="card"><p>One</p><p style="color: red">Two</p></div>');
+    });
+
+    it("pastes a cut resized element back in front of its placeholder", () => {
+      const e = editor();
+      const h1 = e.$("h1");
+      h1.style.position = "absolute";
+      const slot = h1.cloneNode(true) as HTMLElement;
+      slot.setAttribute("data-resize-placeholder", "");
+      h1.after(slot);
+      e.down(h1);
+      e.key("x", { metaKey: true });
+      expect(slot.hasAttribute("data-delete-placeholder")).toBe(true);
+      e.fromParent({ type: "slop:edit-paste", html: copied(e)[0]!.html });
+      const pasted = e.$("#intro").firstElementChild as HTMLElement;
+      expect(pasted.style.position).toBe("absolute");
+      expect(pasted.nextElementSibling).toBe(slot);
+      expect(slot.hasAttribute("data-resize-placeholder")).toBe(true);
+      expect(slot.hasAttribute("data-delete-placeholder")).toBe(false);
+      expect(e.doc.querySelectorAll("#intro > h1")).toHaveLength(2);
     });
 
     it("pastes onto another slide where it was, absolutely positioned and looking as it did", () => {
@@ -618,6 +674,9 @@ describe("slide editor", () => {
       e.fromParent({ type: "slop:edit-delete" });
       expect(e.doc.querySelectorAll("[data-resize-placeholder]")).toHaveLength(0);
       expect(e.doc.querySelector("#unique-heading")).toBeNull();
+      // Its slot stays, now marking the deletion, with the original footprint.
+      expect([...e.doc.querySelectorAll("[data-delete-placeholder]")]).toEqual([slot]);
+      expect(slot.style.width).toBe("200px");
     });
 
     it("restores the layout slot after reload and moves the visible element independently", () => {
@@ -638,6 +697,7 @@ describe("slide editor", () => {
       expect(reloaded.doc.querySelectorAll("[data-resize-placeholder]")).toHaveLength(1);
       reloaded.fromParent({ type: "slop:edit-delete" });
       expect(reloaded.doc.querySelector("[data-resize-placeholder]")).toBeNull();
+      expect(reloaded.doc.querySelectorAll("[data-delete-placeholder]")).toHaveLength(1);
     });
 
     it("does not reserve space on a handle click, a stretch, or an already free element", () => {
@@ -1575,7 +1635,7 @@ describe("slide editor", () => {
       const e = editor();
       e.down(e.$("h1"));
       e.fromParent({ type: "slop:edit-delete" });
-      expect(e.doc.querySelector("h1")).toBeNull();
+      expect(e.doc.querySelector("h1:not([data-delete-placeholder])")).toBeNull();
       expect(e.commits()).toHaveLength(1);
       e.fromParent({ type: "slop:edit-delete" });
       expect(e.commits()).toHaveLength(1);

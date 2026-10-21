@@ -761,6 +761,112 @@ describe("Stage", () => {
       });
     });
 
+    describe("the clipboard", () => {
+      beforeEach(() => void vi.mocked(invoke).mockReset());
+
+      /** The editing preview, loaded, 2000×1200 in its own pixels. */
+      function loaded(container: HTMLElement) {
+        const frame = stageFrame(container);
+        fireEvent.load(frame);
+        Object.defineProperty(frame, "clientWidth", { value: 2000, configurable: true });
+        Object.defineProperty(frame, "clientHeight", { value: 1200, configurable: true });
+        return { frame, post: vi.spyOn(frame.contentWindow!, "postMessage") };
+      }
+
+      it("puts what the editor copied on the system clipboard", async () => {
+        vi.mocked(invoke).mockResolvedValue(undefined);
+        const { container } = render(<Stage />);
+        fireEvent.click(editButton());
+        const { frame } = loaded(container);
+        fromFrame(frame, { type: "slop:edit-copied", slide: "intro", html: "<!--slopslides:{}--><p>Hi</p>", text: "Hi" });
+        // Not from another slide.
+        fromFrame(frame, { type: "slop:edit-copied", slide: "outro", html: "<p>Other</p>", text: "" });
+        await waitFor(() => expect(invoke).toHaveBeenCalledWith("copy_to_clipboard", { html: "<!--slopslides:{}--><p>Hi</p>", text: "Hi" }));
+        expect(invoke).toHaveBeenCalledTimes(1);
+      });
+
+      it("asks the editor to copy or cut with ⌘C / ⌘X pressed in the app, unless text is selected there", () => {
+        const { container } = render(<Stage />);
+        fireEvent.click(editButton());
+        const { post } = loaded(container);
+        fireEvent.keyDown(document.body, { key: "c", metaKey: true });
+        fireEvent.keyDown(document.body, { key: "x", ctrlKey: true });
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-copy", cut: false }, "*");
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-copy", cut: true }, "*");
+        post.mockClear();
+        const text = document.createElement("p");
+        text.textContent = "Chat text";
+        document.body.appendChild(text);
+        window.getSelection()!.selectAllChildren(text);
+        fireEvent.keyDown(document.body, { key: "c", metaKey: true });
+        window.getSelection()!.removeAllRanges();
+        text.remove();
+        // The slide's own ⌘C never reaches the app; a forwarded one is not copied twice.
+        fromFrame(stageFrame(container), { type: "slop:key", key: "c", mod: true });
+        expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-copy" }), "*");
+      });
+
+      it("pastes an element copied in the editor back into it", async () => {
+        vi.mocked(invoke).mockResolvedValue({ kind: "element", html: "<!--slopslides:{}--><p>Hi</p>" });
+        const { container } = render(<Stage />);
+        fireEvent.click(editButton());
+        const { frame, post } = loaded(container);
+        fromFrame(frame, { type: "slop:key", key: "v", mod: true });
+        expect(invoke).toHaveBeenCalledWith("paste_from_clipboard", { id: useApp.getState().deck!.id });
+        await waitFor(() => expect(post).toHaveBeenCalledWith({ type: "slop:edit-paste", html: "<!--slopslides:{}--><p>Hi</p>" }, "*"));
+      });
+
+      it("pastes text as a text box styled like new ones, with ⌘V in the app too", async () => {
+        vi.mocked(invoke).mockResolvedValue({ kind: "text", text: "From the web" });
+        useApp.setState({ editStyles: { ...DEFAULT_EDIT_STYLES, text: { ...DEFAULT_EDIT_STYLES.text, fontSize: 64 } } });
+        const { container } = render(<Stage />);
+        fireEvent.click(editButton());
+        const { post } = loaded(container);
+        fireEvent.keyDown(document.body, { key: "v", metaKey: true });
+        await waitFor(() =>
+          expect(post).toHaveBeenCalledWith(
+            { type: "slop:edit-paste-text", text: "From the web", style: expect.objectContaining({ fontSize: 64 }) },
+            "*",
+          ),
+        );
+        useApp.setState({ editStyles: DEFAULT_EDIT_STYLES });
+      });
+
+      it("pastes images in the middle of the view", async () => {
+        vi.mocked(invoke).mockResolvedValue({ kind: "images", images: ["assets/pasted-image.png"] });
+        const { container } = render(<Stage />);
+        fireEvent.click(editButton());
+        const { frame, post } = loaded(container);
+        fromFrame(frame, { type: "slop:key", key: "V", mod: true });
+        await waitFor(() =>
+          expect(post).toHaveBeenCalledWith(
+            { type: "slop:edit-insert-images", images: [{ src: "assets/pasted-image.png", w: 1200, h: 800 }], x: 1000, y: 600 },
+            "*",
+          ),
+        );
+      });
+
+      it("pastes nothing outside edit mode, into a typing field, or when the clipboard is empty, and reports failures", async () => {
+        vi.mocked(invoke).mockResolvedValue({ kind: "nothing" });
+        const { container } = render(<Stage />);
+        fireEvent.keyDown(document.body, { key: "v", metaKey: true });
+        expect(invoke).not.toHaveBeenCalled();
+        fireEvent.click(editButton());
+        const { post } = loaded(container);
+        const input = document.createElement("textarea");
+        document.body.appendChild(input);
+        fireEvent.keyDown(input, { key: "v", metaKey: true });
+        input.remove();
+        expect(invoke).not.toHaveBeenCalled();
+        await act(async () => void fireEvent.keyDown(document.body, { key: "v", metaKey: true }));
+        expect(invoke).toHaveBeenCalledTimes(1);
+        expect(post).not.toHaveBeenCalled();
+        vi.mocked(invoke).mockRejectedValue("no clipboard");
+        await act(async () => void fireEvent.keyDown(document.body, { key: "v", metaKey: true }));
+        await waitFor(() => expect(useApp.getState().error).toBe("no clipboard"));
+      });
+    });
+
     it("selects the edited element again once the slide reloads", () => {
       useApp.setState({ saveSlideEdit: vi.fn().mockResolvedValue(undefined) });
       const { container } = render(<Stage />);

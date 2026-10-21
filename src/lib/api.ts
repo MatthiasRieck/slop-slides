@@ -90,6 +90,13 @@ export interface TemplateSummary {
   size?: SizeInfo;
 }
 
+/** What pasting into a deck brings in (see `paste_from_clipboard`). */
+export type Pasted =
+  | { kind: "element"; html: string }
+  | { kind: "images"; images: string[] }
+  | { kind: "text"; text: string }
+  | { kind: "nothing" };
+
 export interface CreatedSlide {
   deck: Deck;
   slide: string;
@@ -210,6 +217,10 @@ export const api = {
   /** Saves pasted file contents (base64) into the deck's assets; returns its `assets/…` ref. */
   saveAsset: (id: string, name: string, data: string) =>
     invoke<string>("save_asset", { id, name, data }),
+  /** Puts an element copied in the slide editor on the system clipboard, with `text` for other apps. */
+  copyToClipboard: (html: string, text: string) => invoke<void>("copy_to_clipboard", { html, text }),
+  /** What pasting into deck `id` brings in; pasted images are saved into its assets. */
+  pasteFromClipboard: (id: string) => invoke<Pasted>("paste_from_clipboard", { id }),
   exportDeck: (id: string, dest: string) => invoke<void>("export_deck", { id, dest }),
   /** Prints the deck to `dest` as a PDF: one page per shown slide, with selectable text. */
   exportPdf: (id: string, dest: string) => invoke<void>("export_pdf", { id, dest }),

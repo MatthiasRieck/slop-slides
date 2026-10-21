@@ -765,6 +765,11 @@ pub fn save_asset(file: &Path, name: &str, data: &str) -> Result<String> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(data.trim())
         .map_err(|e| Error::msg(format!("invalid pasted data: {e}")))?;
+    write_asset(file, name, &bytes)
+}
+
+/// Writes `bytes` into `assets/`, named after `name` (without overwriting); returns its ref.
+pub fn write_asset(file: &Path, name: &str, bytes: &[u8]) -> Result<String> {
     let assets = if file.is_dir() { file } else { folder(file) }.join("assets");
     fs::create_dir_all(&assets)?;
     // Only the file name counts; a pasted name must not reach outside `assets/`.

@@ -18,13 +18,14 @@ mod safety;
 mod sessions;
 mod size;
 mod templates;
+mod voice;
 mod watcher;
 mod workspace;
 
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use agent::{AgentManager, SendArgs};
 use deck::Deck;
@@ -489,6 +490,34 @@ async fn list_providers() -> Vec<providers::ProviderInfo> {
     providers::list().await
 }
 
+#[tauri::command]
+fn voice_status(voice: State<voice::Voice>) -> Result<voice::VoiceStatus> {
+    Ok(voice.status(&deck::app_home()?))
+}
+
+/// Downloads the speech-to-text model to `~/.slopslides/models` unless it is there.
+#[tauri::command]
+async fn download_voice_model(app: AppHandle, voice: State<'_, voice::Voice>) -> Result<()> {
+    voice.download(&app, &deck::app_home()?).await
+}
+
+/// Starts recording, transcribing live as `voice-partial` events.
+#[tauri::command]
+async fn start_recording(app: AppHandle, voice: State<'_, voice::Voice>) -> Result<()> {
+    voice.start(app, &deck::app_home()?).await
+}
+
+/// Stops recording and returns what was said.
+#[tauri::command]
+async fn stop_recording(voice: State<'_, voice::Voice>) -> Result<String> {
+    voice.stop(&deck::app_home()?).await
+}
+
+#[tauri::command]
+fn cancel_recording(voice: State<voice::Voice>) {
+    voice.cancel();
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // `slopslide --lint-mcp [deck dir]`: the agent's lint tool, started by the agent CLI in
@@ -507,6 +536,7 @@ pub fn run() {
         .manage(AgentManager::default())
         .manage(WorkspaceWatcher::default())
         .manage(OpenWorkspace::default())
+        .manage(voice::Voice::default())
         .register_uri_scheme_protocol("slop", |ctx, request| {
             protocol::handle(ctx.app_handle(), request)
         })
@@ -558,9 +588,19 @@ pub fn run() {
             apply_template,
             add_template_slide,
             create_template,
+            voice_status,
+            download_voice_model,
+            start_recording,
+            stop_recording,
+            cancel_recording,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running SlopSlide");
+        .build(tauri::generate_context!())
+        .expect("error while running SlopSlide")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                app.state::<voice::Voice>().shutdown();
+            }
+        });
 }
 
 #[cfg(test)]

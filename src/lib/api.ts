@@ -148,6 +148,22 @@ export interface WorkspaceChanged {
   paths: string[];
 }
 
+/** Voice input's state (see src-tauri/src/voice.rs). */
+export interface VoiceStatus {
+  /** The speech model is downloaded, so recording can start at once. */
+  modelReady: boolean;
+  /** The model's download size. */
+  modelBytes: number;
+  downloading: boolean;
+  recording: boolean;
+}
+
+/** Payload of `voice-download` events. */
+export interface VoiceDownloadProgress {
+  received: number;
+  total: number;
+}
+
 export const api = {
   /** Opens a folder: the file tree shows it and the app serves and watches its files. */
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
@@ -251,6 +267,14 @@ export const api = {
     invoke<CreatedSlide>("add_template_slide", { id, template, slide, after }),
   /** Saves the deck as a user template with placeholder text in place of its content. */
   createTemplate: (id: string, name: string) => invoke<TemplateSummary>("create_template", { id, name }),
+  voiceStatus: () => invoke<VoiceStatus>("voice_status"),
+  /** Downloads the speech model to `~/.slopslides/models`, reporting `voice-download` events. */
+  downloadVoiceModel: () => invoke<void>("download_voice_model"),
+  /** Records the microphone, reporting its level as `voice-level` events. */
+  startRecording: () => invoke<void>("start_recording"),
+  /** Stops recording; resolves to what was said. */
+  stopRecording: () => invoke<string>("stop_recording"),
+  cancelRecording: () => invoke<void>("cancel_recording"),
 };
 
 export function errorMessage(error: unknown): string {

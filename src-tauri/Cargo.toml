@@ -31,9 +31,19 @@ base64 = "0.23.1"
 cssparser = "0.37"
 png = "0.18"
 
+# Voice input in the chat composer (see src/voice.rs): microphone capture, the speech-to-text
+# model's download, and whisper.cpp to run it.
+cpal = "0.18"
+futures-util = "0.3"
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "stream"] }
+sha2 = "0.10"
+whisper-rs = "0.16"
+
 # Slide screenshots for sketches (see src/capture.rs) and PDF printing (src/pdf.rs); the same
 # versions wry already uses.
 [target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.16", features = ["metal"] }
+objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "AVCaptureDevice", "AVMediaFormat"] }  # microphone permission
 block2 = "0.6"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSBitmapImageRep", "NSImage", "NSImageRep", "NSPrintInfo", "NSPrintOperation", "NSResponder", "NSView", "NSWindow"] }

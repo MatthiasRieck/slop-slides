@@ -30,6 +30,8 @@ import { PROVIDERS, type Provider } from "../lib/models";
 import { relativePath, useApp, type AssistantMessage, type ChatMessage, type ChatPart, type UserMessage } from "../store";
 import { ApprovalCard, PermissionPicker, ApprovalReview } from "./Permissions";
 import { EffortPicker, ModelPicker, useDismiss } from "./ModelPicker";
+import { VoiceInput } from "./VoiceInput";
+import { insertTranscript } from "../lib/voice";
 
 const SUGGESTIONS = [
   "A 6-slide pitch for a neighborhood tool-sharing app, bold and warm",
@@ -334,6 +336,30 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   });
   const sendsSketch = unsentSketch && includeSlide && slideNumber > 0;
 
+  // Dictation goes in at the caret (or in place of the selection), which the textarea keeps
+  // while the microphone button has focus. While it runs, the text so far shows in place.
+  const [dictation, setDictation] = useState<{ start: number; end: number; text: string } | null>(null);
+  const dictated = (text: string) =>
+    dictation ? insertTranscript(draft, text, dictation.start, dictation.end) : { draft, caret: draft.length };
+  const shownDraft = dictation?.text ? dictated(dictation.text).draft : draft;
+  const dictationHandlers = {
+    onStart: () => {
+      const el = textareaRef.current;
+      setDictation({ start: el?.selectionStart ?? draft.length, end: el?.selectionEnd ?? draft.length, text: "" });
+    },
+    onPartial: (text: string) => setDictation((d) => d && { ...d, text }),
+    onEnd: (text: string) => {
+      setDictation(null);
+      if (!text || !dictation) return;
+      const result = dictated(text);
+      setDraft(result.draft);
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(result.caret, result.caret);
+      });
+    },
+  };
+
   useLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
@@ -343,13 +369,13 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     }
     // An empty composer stays at its smallest; measuring the placeholder while the panel
     // is still opening (and narrow) would otherwise make it start out tall.
-    if (!draft) {
+    if (!shownDraft) {
       el.style.height = "64px";
       return;
     }
     el.style.height = "auto";
     el.style.height = `${Math.min(Math.max(el.scrollHeight, 64), 240)}px`;
-  }, [draft, inputHeight]);
+  }, [shownDraft, inputHeight]);
 
   useEffect(() => {
     textareaRef.current?.focus();
@@ -427,7 +453,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
 
   const submit = () => {
     const text = draft.trim();
-    if (!text || running) return;
+    if (!text || running || dictation) return;
     void useApp.getState().send(text, { includeSlide: includeSlide && slideNumber > 0, attachments, ...(screenshot && { screenshot }) });
     setDraft("");
     setAttachments([]);
@@ -552,8 +578,9 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
         )}
         <textarea
           ref={textareaRef}
-          value={draft}
+          value={shownDraft}
           rows={1}
+          readOnly={!!dictation}
           onChange={(e) => setDraft(e.target.value)}
           onPaste={onPaste}
           onKeyDown={(e) => {
@@ -562,7 +589,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
               submit();
             }
           }}
-          placeholder={running ? "The agent is working…" : "Ask for slides or changes…"}
+          placeholder={dictation ? "Listening…" : running ? "The agent is working…" : "Ask for slides or changes…"}
           className="block max-h-[max(64px,min(240px,40vh))] min-h-16 w-full resize-none bg-transparent px-3.5 pt-3 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/70"
         />
         <div className="@container px-2 pt-1 pb-2">
@@ -572,6 +599,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           <EffortPicker />
           <PermissionPicker />
           <div className="min-w-0 flex-1" />
+          <VoiceInput {...dictationHandlers} />
           <button
             type="button"
             onClick={pickFiles}

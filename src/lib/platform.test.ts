@@ -66,8 +66,8 @@ describe("in the window", () => {
     const stop = vi.fn();
     tauriListen.mockResolvedValue(stop);
     const handler = vi.fn();
-    expect(await platform.listen("deck-changed", handler)).toBe(stop);
-    expect(tauriListen).toHaveBeenCalledWith("deck-changed", handler);
+    expect(await platform.listen("workspace-changed", handler)).toBe(stop);
+    expect(tauriListen).toHaveBeenCalledWith("workspace-changed", handler);
     await platform.listen(platform.RESYNC_EVENT, handler);
     expect(tauriListen).toHaveBeenCalledTimes(1);
     expect(FakeEventSource.last).toBeNull();
@@ -97,7 +97,7 @@ describe("on a device", () => {
       body: '{"id":"talk"}',
     });
     fetchMock.mockResolvedValue(reply(200, ""));
-    await expect(platform.invoke("close_deck")).resolves.toBeUndefined();
+    await expect(platform.invoke("close_workspace")).resolves.toBeUndefined();
     expect(fetchMock.mock.lastCall![1].body).toBe("{}");
     expect(tauriInvoke).not.toHaveBeenCalled();
   });
@@ -122,16 +122,16 @@ describe("on a device", () => {
     const platform = await load(true);
     const changed = vi.fn();
     const agent = vi.fn();
-    const stop = await platform.listen("deck-changed", changed);
+    const stop = await platform.listen("workspace-changed", changed);
     await platform.listen("agent-event", agent);
     const source = FakeEventSource.last!;
     expect(source.url).toBe(`${BASE}/events`);
-    source.emit("deck-changed", { deckId: "talk", paths: ["deck.html"] });
-    expect(changed).toHaveBeenCalledWith({ payload: { deckId: "talk", paths: ["deck.html"] } });
+    source.emit("workspace-changed", { root: "/decks", paths: ["talk/deck.html"] });
+    expect(changed).toHaveBeenCalledWith({ payload: { root: "/decks", paths: ["talk/deck.html"] } });
     expect(agent).not.toHaveBeenCalled();
     source.onmessage?.({ data: "not json" });
     stop();
-    source.emit("deck-changed", {});
+    source.emit("workspace-changed", {});
     expect(changed).toHaveBeenCalledTimes(1);
     expect(FakeEventSource.last).toBe(source);
   });

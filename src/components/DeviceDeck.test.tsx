@@ -271,11 +271,11 @@ describe("DeviceDeck", () => {
     expect(screen.queryByTestId("stub-chat")).toBeNull();
   });
 
-  it("goes back to the deck list", () => {
-    const closeDeck = vi.fn(async () => {});
+  it("closes the deck, back to the folder's files", () => {
+    const closeDeck = vi.fn(async () => true);
     app.useApp.setState({ closeDeck });
     show();
-    fireEvent.click(button("All decks"));
+    fireEvent.click(button("Close deck"));
     expect(closeDeck).toHaveBeenCalledOnce();
   });
 

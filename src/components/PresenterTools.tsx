@@ -1,11 +1,17 @@
 import { Eraser, Highlighter, MousePointer2, PenLine, Trash2, Undo2, Wand2, X } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 
 import {
   DEFAULT_COLORS,
   INK_COLORS,
   INK_STYLE,
   isDot,
+  LASER_GLOW,
+  LASER_RGB,
+  LASER_SIZE,
+  paintTrails,
+  pruneTrails,
   strokePath,
   TOOL_KEYS,
   toFraction,
@@ -13,11 +19,14 @@ import {
   type InkTool,
   type Stroke,
   type Tool,
+  type TrailPoint,
+  visibleArea,
 } from "../lib/ink";
 import { cn } from "../lib/utils";
 
 /** How long the toolbar stays visible after a keyboard shortcut changes something. */
 const PEEK_MS = 1500;
+const laserShadow = LASER_GLOW.map((g) => `0 0 ${g.blur}px ${g.spread}px rgb(${LASER_RGB} / ${g.opacity})`).join(", ");
 
 export interface Annotations {
   tool: Tool;
@@ -89,12 +98,16 @@ export function useAnnotations(slideKey: string, store?: InkStore): Annotations 
 }
 
 /**
- * Transparent layer over the slide that draws ink and the laser dot. Finished strokes are an SVG
- * that only changes when a stroke is added or removed; the stroke being drawn goes on a canvas,
- * a segment per move. Redrawing every stroke on every move made drawing slow on iPads, more so
- * the more marks a slide had (WebKit paints SVG on the CPU).
+ * Transparent layer over the slide that draws ink, the laser dot and, while the laser is
+ * dragged, its trail, which stays a moment and then thins away. `zoom` is how far the
+ * layer has been enlarged along with a zoomed slide: the ink is drawn at that size, as
+ * vectors, so it stays sharp, and thickens with the slide.
+ *
+ * Finished strokes are an SVG that only changes when a stroke is added or removed; the stroke
+ * being drawn goes on a canvas, a segment per move. Redrawing every stroke on every move made
+ * drawing slow on iPads, more so the more marks a slide had (WebKit paints SVG on the CPU).
  */
-export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
+export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annotations; zoom?: number }) {
   const { tool, colors, strokes, addStroke, erase } = annotations;
   const layerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -102,11 +115,16 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
   // stroke renders nothing until it is done.
   const draft = useRef<{ stroke: Stroke; pen: [number, number]; ctx: CanvasRenderingContext2D | null } | null>(null);
   const [laser, setLaser] = useState<{ x: number; y: number } | null>(null);
+  const [trails, setTrails] = useState<TrailPoint[][]>([]);
+  const [now, setNow] = useState(() => performance.now());
+  const tracing = useRef(false);
+  const trailRef = useRef<HTMLCanvasElement>(null);
+  const trailCore = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const active = tool !== "pointer";
 
-  // Ink is stored in fractions of the layer but drawn in pixels, so strokes keep their width.
-  // Those are the layer's own pixels, which the stage may zoom along with the slide.
+  // Ink is stored in fractions of the layer but drawn in pixels, so strokes keep their width
+  // (times the zoom) as the layer resizes.
   useLayoutEffect(() => {
     const el = layerRef.current!;
     const measure = () => {
@@ -114,7 +132,9 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
       setSize({ width: el.offsetWidth || rect.width, height: el.offsetHeight || rect.height });
     };
     measure();
-    const observer = new ResizeObserver(measure);
+    // Redraw before the resized layer is painted: a zoom resizes it at once, and ink drawn a
+    // frame later at the old size flickers.
+    const observer = new ResizeObserver(() => flushSync(measure));
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
@@ -130,6 +150,8 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
   useEffect(() => {
     clearDraft();
     setLaser(null);
+    setTrails([]);
+    tracing.current = false;
   }, [tool]);
 
   /** A pointer position in layer pixels and in fractions of the layer. */
@@ -139,35 +161,109 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
     const px: [number, number] = [fraction[0] * el.offsetWidth, fraction[1] * el.offsetHeight];
     return { fraction, px };
   };
+  // Animate trails until the last one has faded.
+  const fading = trails.length > 0;
+  useEffect(() => {
+    if (!fading) return;
+    let frame = requestAnimationFrame(function tick() {
+      const time = performance.now();
+      setNow(time);
+      setTrails((t) => pruneTrails(t, time));
+      frame = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [fading]);
+
+  // The trail is painted on a canvas rather than drawn as glowing SVG: WebKit leaves stale,
+  // clipped pieces of a filtered SVG's glow behind as it changes.
+  useLayoutEffect(() => {
+    const canvas = trailRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+    const scale = window.devicePixelRatio || 1;
+    const core = (trailCore.current ??= document.createElement("canvas"));
+    const coreCtx = core.getContext("2d");
+    if (!coreCtx) return;
+    // Only the part of the layer on screen gets a canvas: zoomed in, the layer is many times
+    // the screen's size, and glowing a canvas that big every frame makes the trail crawl.
+    const { left, top } = layerRef.current!.getBoundingClientRect();
+    const area = visibleArea(
+      { left, top, width: size.width, height: size.height },
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    Object.assign(canvas.style, {
+      left: `${area.x}px`,
+      top: `${area.y}px`,
+      width: `${area.width}px`,
+      height: `${area.height}px`,
+    });
+    for (const c of [canvas, core]) {
+      const [w, h] = [Math.round(area.width * scale), Math.round(area.height * scale)];
+      if (c.width !== w) c.width = w;
+      if (c.height !== h) c.height = h;
+    }
+    paintTrails(ctx, coreCtx, trails, now, size.width, size.height, scale, area);
+  }, [trails, now, size]);
+
+  const at = (event: ReactPointerEvent) =>
+    toFraction(event.clientX, event.clientY, layerRef.current!.getBoundingClientRect());
 
   const eraseUnder = (event: ReactPointerEvent) => {
     const hit = (event.target as Element).closest?.("[data-stroke]");
     if (hit) erase(Number(hit.getAttribute("data-stroke")));
   };
 
+  const tracePoint = (event: ReactPointerEvent): TrailPoint => {
+    const [x, y] = at(event);
+    return { x, y, t: performance.now() };
+  };
+
+  /**
+   * Where the pointer went since the last move, as fractions of the layer: the browser hands
+   * out one move per frame, but keeps the samples in between, which a fast stroke needs.
+   */
+  const movedThrough = (event: ReactPointerEvent): [number, number][] => {
+    const rect = layerRef.current!.getBoundingClientRect();
+    const samples = event.nativeEvent.getCoalescedEvents?.() ?? [];
+    return (samples.length ? samples : [event]).map((e) => toFraction(e.clientX, e.clientY, rect));
+  };
+
   const onPointerDown = (event: ReactPointerEvent) => {
     if (event.button !== 0) return;
+    if (tool === "laser") {
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      tracing.current = true;
+      const point = tracePoint(event);
+      setNow(point.t);
+      setTrails((t) => [...t, [point]]);
+      return;
+    }
     if (tool === "eraser") eraseUnder(event);
     if (tool !== "pen" && tool !== "highlighter") return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
     clearDraft();
     const { fraction, px } = locate(event);
     const color = colors[tool];
-    const ctx = startCanvas(canvasRef.current!, layerRef.current!, tool, color);
+    const ctx = startCanvas(canvasRef.current!, layerRef.current!, tool, color, zoom);
     draft.current = { stroke: { tool, color, points: [fraction] }, pen: px, ctx };
     if (ctx) {
       ctx.beginPath();
-      ctx.arc(px[0], px[1], INK_STYLE[tool].width / 2, 0, 2 * Math.PI);
+      ctx.arc(px[0], px[1], (INK_STYLE[tool].width * zoom) / 2, 0, 2 * Math.PI);
       ctx.fill();
     }
   };
 
   const onPointerMove = (event: ReactPointerEvent) => {
     if (tool === "laser") {
-      const el = layerRef.current!;
-      const rect = el.getBoundingClientRect();
-      const zoom = el.offsetWidth ? rect.width / el.offsetWidth : 1;
-      setLaser({ x: (event.clientX - rect.left) / zoom, y: (event.clientY - rect.top) / zoom });
+      const rect = layerRef.current!.getBoundingClientRect();
+      setLaser({ x: event.clientX - rect.left, y: event.clientY - rect.top });
+      if (tracing.current && event.buttons & 1) {
+        const t = performance.now();
+        const points = movedThrough(event).map(([x, y]) => ({ x, y, t }));
+        setNow(t);
+        // The trail being drawn may have faded away entirely while the pointer rested.
+        setTrails((ts) => (ts.length ? [...ts.slice(0, -1), [...ts[ts.length - 1]!, ...points]] : [points]));
+      }
     } else if (tool === "eraser" && event.buttons & 1) {
       eraseUnder(event);
     } else if (draft.current) {
@@ -193,6 +289,7 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
     // The finished stroke renders before the next paint, so the canvas can be cleared now.
     if (stroke) addStroke(stroke);
     clearDraft();
+    tracing.current = false;
   };
 
   return (
@@ -217,17 +314,16 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
         setLaser(null);
       }}
     >
-      <InkPaths strokes={strokes} width={size.width} height={size.height} erasable={tool === "eraser"} />
+      <InkPaths strokes={strokes} width={size.width} height={size.height} zoom={zoom} erasable={tool === "eraser"} />
       <canvas ref={canvasRef} data-testid="ink-draft" className="pointer-events-none absolute inset-0 size-full" />
+      {trails.length > 0 && (
+        <canvas ref={trailRef} data-testid="laser-trail" className="pointer-events-none absolute" />
+      )}
       {laser && (
         <div
           data-testid="laser"
-          className="pointer-events-none absolute size-4 -translate-1/2 rounded-full bg-red-500"
-          style={{
-            left: laser.x,
-            top: laser.y,
-            boxShadow: "0 0 8px 4px rgb(239 68 68 / 70%), 0 0 24px 10px rgb(239 68 68 / 35%)",
-          }}
+          className="pointer-events-none absolute -translate-1/2 rounded-full bg-red-500"
+          style={{ left: laser.x, top: laser.y, width: LASER_SIZE, height: LASER_SIZE, boxShadow: laserShadow }}
         />
       )}
     </div>
@@ -236,10 +332,10 @@ export function AnnotationLayer({ annotations }: { annotations: Annotations }) {
 
 /**
  * Readies the canvas for a stroke: sized to the layer at the screen's density, in layer pixels,
- * with the tool's look. A highlighter's opacity is the canvas's, so its segments don't darken
- * where they overlap. Null where there is no 2D canvas (tests).
+ * with the tool's look at `zoom`. A highlighter's opacity is the canvas's, so its segments don't
+ * darken where they overlap. Null where there is no 2D canvas (tests).
  */
-function startCanvas(canvas: HTMLCanvasElement, layer: HTMLElement, tool: InkTool, color: string) {
+function startCanvas(canvas: HTMLCanvasElement, layer: HTMLElement, tool: InkTool, color: string, zoom: number) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
   const density = window.devicePixelRatio || 1;
@@ -249,20 +345,21 @@ function startCanvas(canvas: HTMLCanvasElement, layer: HTMLElement, tool: InkToo
   if (canvas.height !== height) canvas.height = height;
   ctx.setTransform(density, 0, 0, density, 0, 0);
   ctx.strokeStyle = ctx.fillStyle = color;
-  ctx.lineWidth = INK_STYLE[tool].width;
+  ctx.lineWidth = INK_STYLE[tool].width * zoom;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   canvas.style.opacity = String(INK_STYLE[tool].opacity);
   return ctx;
 }
 
-/** The finished strokes; renders again only when they, the layer's size or erasing change. */
-const InkPaths = memo(function InkPaths(props: { strokes: Stroke[]; width: number; height: number; erasable: boolean }) {
+/** The finished strokes; renders again only when they, the layer's size, the zoom or erasing change. */
+const InkPaths = memo(function InkPaths(props: { strokes: Stroke[]; width: number; height: number; zoom: number; erasable: boolean }) {
   const pointerEvents = props.erasable ? ("visiblePainted" as const) : ("none" as const);
   return (
     <svg className="absolute inset-0 size-full">
       {props.strokes.map((stroke, i) => {
-        const { width, opacity } = INK_STYLE[stroke.tool];
+        const { opacity } = INK_STYLE[stroke.tool];
+        const width = INK_STYLE[stroke.tool].width * props.zoom;
         const points = toPixels(stroke.points, props.width, props.height);
         const common = { "data-stroke": i, style: { pointerEvents } };
         if (isDot(points)) {
@@ -287,12 +384,8 @@ const InkPaths = memo(function InkPaths(props: { strokes: Stroke[]; width: numbe
   );
 });
 
-/**
- * Tool palette in the bottom-left corner. Hidden while presenting; appears when the mouse
- * moves into the corner, and briefly after a keyboard shortcut.
- */
-export function PresenterToolbar({ annotations, onExit }: { annotations: Annotations; onExit: () => void }) {
-  const { tool, setTool, colors, setColor, strokes, undo, clear, peek } = annotations;
+/** Corner controls hide until the mouse enters their corner; they show at the start and briefly per `peek`. */
+export function useReveal(peek: number) {
   const [hovered, setHovered] = useState(false);
   const [peeking, setPeeking] = useState(true);
 
@@ -302,15 +395,26 @@ export function PresenterToolbar({ annotations, onExit }: { annotations: Annotat
     return () => clearTimeout(timer);
   }, [peek]);
 
-  const visible = hovered || peeking;
+  return {
+    visible: hovered || peeking,
+    zoneProps: { onMouseEnter: () => setHovered(true), onMouseLeave: () => setHovered(false) },
+  };
+}
+
+/**
+ * Tool palette in the bottom-left corner. Hidden while presenting; appears when the mouse
+ * moves into the corner, and briefly after a keyboard shortcut.
+ */
+export function PresenterToolbar({ annotations, onExit }: { annotations: Annotations; onExit: () => void }) {
+  const { tool, setTool, colors, setColor, strokes, undo, clear, peek } = annotations;
+  const { visible, zoneProps } = useReveal(peek);
   const inking = tool === "pen" || tool === "highlighter";
 
   return (
     <div
       data-testid="presenter-toolbar-zone"
       className="absolute bottom-0 left-0 z-10 p-4"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
+      {...zoneProps}
     >
       <div
         role="toolbar"

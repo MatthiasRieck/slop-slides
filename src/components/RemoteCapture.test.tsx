@@ -12,13 +12,14 @@ import { useApp } from "../store";
 import { LOAD_TIMEOUT_MS, RemoteCapture } from "./RemoteCapture";
 import { SETTLE_MS } from "./SlideImageExport";
 
+const SKETCH = "/home/.slopslides/sessions/1-ab/sketches/1-ab.png";
 const mark = { tool: "pen" as const, color: "#ef4444", points: [[0.25, 0.5], [0.5, 0.25]] as [number, number][] };
-const REQUEST: RemoteCaptureRequest = { request: "r1", deckId: "other-deck", slide: "intro", strokes: [mark] };
+const REQUEST: RemoteCaptureRequest = { request: "r1", deckId: "/decks/other/deck.html", slide: "intro", strokes: [mark] };
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   invoke.mockReset().mockImplementation(async (command: string) =>
-    command === "capture_sketch" ? ".slopslide/sketches/1-ab.png" : undefined,
+    command === "capture_sketch" ? SKETCH : undefined,
   );
   vi.stubGlobal(
     "ResizeObserver",
@@ -60,7 +61,7 @@ describe("RemoteCapture", () => {
   it("shows the requested slide, of any deck, in its final state with the device's marks", () => {
     render(<RemoteCapture />);
     expect(screen.getByRole("dialog", { name: "Taking a screenshot for another device" })).toBeTruthy();
-    expect(frame().getAttribute("src")).toContain("/other-deck/deck.html?embed&slide=intro");
+    expect(frame().getAttribute("src")).toContain("/decks/other/deck.html?embed&slide=intro");
     expect(frame().getAttribute("src")).toContain("&static");
     expect(document.querySelectorAll("[data-testid=annotation-layer] path")).toHaveLength(1);
   });
@@ -70,11 +71,11 @@ describe("RemoteCapture", () => {
     expect(invoke).not.toHaveBeenCalledWith("capture_sketch", expect.anything());
     await loadSlide();
     expect(invoke).toHaveBeenCalledWith("capture_sketch", {
-      id: "other-deck",
+      id: "/decks/other/deck.html",
       rect: { x: 24, y: 30, width: 1280, height: 720 },
       viewport: { width: window.innerWidth, height: window.innerHeight },
     });
-    expect(answers()).toEqual([{ request: "r1", path: ".slopslide/sketches/1-ab.png", error: null }]);
+    expect(answers()).toEqual([{ request: "r1", path: SKETCH, error: null }]);
     expect(useApp.getState().remoteCaptures).toEqual([]);
   });
 

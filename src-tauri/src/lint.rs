@@ -1,4 +1,4 @@
-//! Lints deck.html: checks that the markup is well formed (every element closed, no stray
+//! Lints a deck file: checks that the markup is well formed (every element closed, no stray
 //! end tags) and that it follows the deck format the app and player rely on (see
 //! `prompts/system.md`). Keep these rules in sync whenever the deck structure changes.
 
@@ -7,10 +7,11 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 use crate::html::{
-    self, find_ci, has_class, parse_tag, EDITOR_ATTRS, HIDDEN_ATTR, MOVED_ATTR, SECTION_CLASS,
-    SECTION_TITLE_ATTR,
+    self, find_ci, has_class, parse_tag, ADDED_ATTR, DROPPED_ATTR, EDITOR_ATTRS, HIDDEN_ATTR,
+    LOCKED_ATTR, MOVED_ATTR, SECTION_CLASS, SECTION_TITLE_ATTR,
 };
 use crate::review;
+use crate::size::{self, SlideSize};
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "camelCase")]
@@ -25,7 +26,7 @@ pub struct Issue {
     pub rule: &'static str,
     pub severity: Severity,
     pub message: String,
-    /// 1-based line in deck.html.
+    /// 1-based line in the deck file.
     pub line: usize,
     /// Id of the slide the issue is in, if any.
     pub slide: Option<String>,
@@ -93,16 +94,26 @@ impl<'a> Linter<'a> {
     }
 }
 
-/// Lints a deck. `asset_exists` answers whether a deck-relative `assets/…` path exists.
-/// Issues come back sorted by line.
-pub fn lint(source: &str, asset_exists: impl Fn(&str) -> bool) -> Vec<Issue> {
+/// Lints a deck. `asset_exists` answers whether a deck-relative `assets/…` path exists;
+/// `locked` lists the locked slides as an agent turn started (empty outside a turn), and every
+/// one the deck changed or removed is reported. Issues come back sorted by line.
+pub fn lint(
+    source: &str,
+    asset_exists: impl Fn(&str) -> bool,
+    locked: &[html::LockedSlide],
+) -> Vec<Issue> {
     let mut l = Linter::new(source);
     check_markup(&mut l);
     check_document(&mut l);
     check_slides(&mut l);
+    check_slide_id_styles(&mut l);
     check_sections(&mut l);
     check_review(&mut l);
+    check_template(&mut l);
+    check_slide_size(&mut l);
+    check_entrances(&mut l);
     check_assets(&mut l, asset_exists);
+    check_locked(&mut l, locked);
     l.issues.sort_by_key(|i| (i.line, i.severity));
     l.issues
 }
@@ -228,7 +239,7 @@ fn check_markup(l: &mut Linter) {
                         "style-in-slide",
                         Severity::Warning,
                         i,
-                        "Move this <style> into the single <style> in <head>, scoped by the slide id.".into(),
+                        "Move this <style> into the single <style> in <head>, scoped by a reusable layout class, never the slide id.".into(),
                     );
                 }
                 if tag.name == "script" {
@@ -254,14 +265,52 @@ fn check_markup(l: &mut Linter) {
                         ),
                     );
                 }
-                if tag.attrs.iter().any(|(n, ..)| n == MOVED_ATTR) {
+                if tag.attrs.iter().any(|(n, ..)| n == DROPPED_ATTR) {
+                    l.report(
+                        "dropped-image",
+                        Severity::Warning,
+                        i,
+                        format!(
+                            "<{}> was dropped onto the slide by hand ({DROPPED_ATTR}, placed on top with inline `position: absolute`, `left`, `top`, `width` and `translate`). Give it a place in the slide's layout where it appears now, sized with the slide's styles, and a fitting alt text, then remove {DROPPED_ATTR}, {MOVED_ATTR} and the inline styles.",
+                            tag.name
+                        ),
+                    );
+                } else if tag.attrs.iter().any(|(n, ..)| n == MOVED_ATTR) {
                     l.report(
                         "moved-element",
                         Severity::Warning,
                         i,
                         format!(
-                            "<{}> was moved, rotated or scaled by hand ({MOVED_ATTR} with an inline `translate`, `rotate` or `scale`). Rework the slide's layout so it sits where it appears now without the offset, turn a scale into real sizes, keep an intended rotation in the slide's styles, then remove the attribute and the inline transforms.",
+                            "<{}> was moved, rotated, tilted or scaled by hand ({MOVED_ATTR} with an inline `translate`, `rotate`, `scale` or tilt `transform`). Rework the slide's layout so it sits where it appears now without the offset, turn a scale into real sizes, keep an intended rotation or tilt in the slide's styles, then remove the attribute and the inline transforms.",
                             tag.name
+                        ),
+                    );
+                }
+                if tag
+                    .attrs
+                    .iter()
+                    .any(|(n, ..)| n == "data-resize-placeholder")
+                {
+                    l.report(
+                        "resize-placeholder",
+                        Severity::Warning,
+                        i,
+                        "This invisible, inert placeholder reserves the original layout space of the resized element immediately before it. Keep the visible element's text, dimensions and position when tidying, fit it into the slide's layout, then remove this entire placeholder and its hidden contents.".into(),
+                    );
+                }
+                if let Some((_, value, ..)) = tag.attrs.iter().find(|(n, ..)| n == ADDED_ATTR) {
+                    let what = match value.as_str() {
+                        "text" => "text box",
+                        "shape" => "shape",
+                        "drawing" => "drawing",
+                        _ => "element",
+                    };
+                    l.report(
+                        "added-element",
+                        Severity::Warning,
+                        i,
+                        format!(
+                            "This {what} was added by hand ({ADDED_ATTR}, absolutely positioned with inline styles). Keep it where it appears now, but give it a class and move its styles into the slide's rules (fitting it into the layout where that is cleaner), then remove the attribute."
                         ),
                     );
                 }
@@ -363,7 +412,7 @@ fn check_document(l: &mut Linter) {
             "doctype",
             Severity::Warning,
             0,
-            "deck.html should start with <!DOCTYPE html>.".into(),
+            "The deck should start with <!DOCTYPE html>.".into(),
         );
     }
     if html::title(html).is_none() {
@@ -374,7 +423,7 @@ fn check_document(l: &mut Linter) {
             "The deck needs a non-empty <title> in <head>.".into(),
         );
     }
-    if !has_deck_container(html) {
+    if !html::has_deck_container(html) {
         l.report(
             "deck-container",
             Severity::Error,
@@ -390,17 +439,6 @@ fn check_document(l: &mut Linter) {
             "The slopslide:runtime-css / runtime-js blocks are missing; keep them intact.".into(),
         );
     }
-}
-
-fn has_deck_container(html: &str) -> bool {
-    let mut from = 0;
-    while let Some(at) = find_ci(html, from, "<main") {
-        if parse_tag(html, at).is_some_and(|t| t.name == "main" && has_class(&t, "deck")) {
-            return true;
-        }
-        from = at + 1;
-    }
-    false
 }
 
 /// Slide ids: present, unique, kebab-case.
@@ -430,19 +468,52 @@ fn check_slides(l: &mut Linter) {
             ),
             Some(_) => {}
         }
-        if let Some(attr) = &slide.hidden {
-            let attr = &l.html[attr.clone()];
-            if attr.contains('=') && !attr.ends_with("\"\"") && !attr.ends_with("''") {
-                l.report(
-                    "hidden-value",
-                    Severity::Warning,
-                    at,
-                    format!(
-                        "Write `{HIDDEN_ATTR}` without a value; any value still hides the slide."
-                    ),
-                );
-            }
+        let valued = |range: &Option<std::ops::Range<usize>>| {
+            range.as_ref().is_some_and(|r| {
+                let attr = &l.html[r.clone()];
+                attr.contains('=') && !attr.ends_with("\"\"") && !attr.ends_with("''")
+            })
+        };
+        if valued(&slide.hidden) {
+            l.report(
+                "hidden-value",
+                Severity::Warning,
+                at,
+                format!("Write `{HIDDEN_ATTR}` without a value; any value still hides the slide."),
+            );
         }
+        if valued(&slide.locked) {
+            l.report(
+                "locked-value",
+                Severity::Warning,
+                at,
+                format!("Write `{LOCKED_ATTR}` without a value; any value still locks the slide."),
+            );
+        }
+    }
+}
+
+/// Locked slides the agent changed or removed this turn; the app puts them back after it.
+fn check_locked(l: &mut Linter, locked: &[html::LockedSlide]) {
+    for id in html::changed_locked(l.html, locked) {
+        let span = l.slides.iter().find(|s| s.id.as_deref() == Some(&id));
+        let (at, message) = match span {
+            Some(span) => (
+                span.range.start,
+                format!(
+                    "The slide `{id}` is locked ({LOCKED_ATTR}) but was changed. Undo every \
+                     change to it: the user locked it, and the app restores it after your turn."
+                ),
+            ),
+            None => (
+                0,
+                format!(
+                    "The locked slide `{id}` was removed or renamed. Put it back unchanged: \
+                     the user locked it, and the app restores it after your turn."
+                ),
+            ),
+        };
+        l.report("locked-slide-changed", Severity::Error, at, message);
     }
 }
 
@@ -499,6 +570,110 @@ fn check_review(l: &mut Linter) {
     }
 }
 
+/// The template `<meta>`: at most one, in `<head>`, naming a template.
+fn check_template(l: &mut Linter) {
+    check_app_meta(
+        l,
+        html::TEMPLATE_META,
+        [
+            "template-meta-empty",
+            "template-meta-duplicate",
+            "template-meta-misplaced",
+        ],
+        |content| {
+            content.is_empty().then(|| {
+                format!(
+                    "<meta name=\"{}\"> needs the template's id in `content`; remove the tag if the deck follows no template.",
+                    html::TEMPLATE_META
+                )
+            })
+        },
+    );
+}
+
+/// The slide size meta must name a size the app can use (see [`size::SlideSize::parse`]).
+fn check_slide_size(l: &mut Linter) {
+    check_app_meta(
+        l,
+        size::SIZE_META,
+        [
+            "slide-size-invalid",
+            "slide-size-duplicate",
+            "slide-size-misplaced",
+        ],
+        |content| {
+            if SlideSize::parse(content).is_some() {
+                return None;
+            }
+            let problem = if content.is_empty() {
+                "is empty".to_string()
+            } else {
+                format!("\"{}\" is not a usable size", truncate(content, 40))
+            };
+            Some(format!(
+                "<meta name=\"{}\"> {problem}: use WIDTHxHEIGHT in px, in or cm (e.g. 1920x1080, 8.5x11in, 21x29.7cm), {}–{} px a side. Remove it for the default 1920x1080.",
+                size::SIZE_META,
+                size::MIN_PX,
+                size::MAX_PX
+            ))
+        },
+    );
+}
+
+/// An app setting in `<meta name="<name>">`: at most one, in `<head>`, with a `content`
+/// that `invalid` accepts (it returns the message for one it rejects). `rules` names the
+/// invalid, duplicate and misplaced issues.
+fn check_app_meta(
+    l: &mut Linter,
+    name: &str,
+    rules: [&'static str; 3],
+    invalid: impl Fn(&str) -> Option<String>,
+) {
+    let [invalid_rule, duplicate_rule, misplaced_rule] = rules;
+    let html = l.html;
+    let body = find_ci(html, 0, "<body").unwrap_or(html.len());
+    let mut seen = 0;
+    let mut from = 0;
+    while let Some(at) = find_ci(html, from, "<meta") {
+        from = at + 1;
+        let Some(tag) = parse_tag(html, at) else {
+            continue;
+        };
+        let named = tag
+            .attrs
+            .iter()
+            .any(|(n, v, _, _)| n == "name" && v.trim().eq_ignore_ascii_case(name));
+        if tag.name != "meta" || !named || !in_markup(l, at) {
+            continue;
+        }
+        seen += 1;
+        let content = tag
+            .attrs
+            .iter()
+            .find(|(n, _, _, _)| n == "content")
+            .map_or("", |(_, v, _, _)| v.trim());
+        if let Some(message) = invalid(content) {
+            l.report(invalid_rule, Severity::Warning, at, message);
+        }
+        if seen > 1 {
+            l.report(
+                duplicate_rule,
+                Severity::Warning,
+                at,
+                format!("Keep only one <meta name=\"{name}\">."),
+            );
+        }
+        if at > body {
+            l.report(
+                misplaced_rule,
+                Severity::Warning,
+                at,
+                format!("<meta name=\"{name}\"> belongs in <head>."),
+            );
+        }
+    }
+}
+
 fn is_kebab_case(id: &str) -> bool {
     !id.is_empty()
         && id.split('-').all(|p| {
@@ -517,7 +692,7 @@ fn check_assets(l: &mut Linter, asset_exists: impl Fn(&str) -> bool) {
                 "missing-asset",
                 Severity::Error,
                 range.start,
-                format!("`{path}` does not exist in the deck's assets folder."),
+                format!("`{path}` does not exist relative to the deck file."),
             );
         }
     }
@@ -544,6 +719,13 @@ fn check_assets(l: &mut Linter, asset_exists: impl Fn(&str) -> bool) {
                 "Images should be attached files (assets/…), not hotlinked URLs.".into(),
             );
         }
+        if attr("src").is_some_and(|s| {
+            let decoded = percent_encoding::percent_decode_str(s).decode_utf8_lossy();
+            decoded.split('/').any(|part| part == "..") || decoded.starts_with('/')
+        }) {
+            l.report("asset-outside-deck", Severity::Error, at,
+                "Keep images in assets/ next to the deck file; references outside its folder are not supported.".into());
+        }
         if attr("alt").is_none() {
             l.report(
                 "img-alt",
@@ -553,6 +735,186 @@ fn check_assets(l: &mut Linter, asset_exists: impl Fn(&str) -> bool) {
             );
         }
     }
+}
+
+/// Slide ids are identity, not styling hooks: copies get new ids but retain classes.
+fn check_slide_id_styles(l: &mut Linter) {
+    let ids: HashSet<_> = l.slides.iter().filter_map(|s| s.id.as_deref()).collect();
+    let mut references = Vec::new();
+    let mut from = 0;
+    while let Some(open) = find_ci(l.html, from, "<style") {
+        let Some(tag) = parse_tag(l.html, open) else {
+            break;
+        };
+        let end = find_ci(l.html, tag.end, "</style").unwrap_or(l.html.len());
+        from = end;
+        if tag.name != "style" || !in_markup(l, open) {
+            continue;
+        }
+        let mut input = cssparser::ParserInput::new(&l.html[tag.end..end]);
+        let mut parser = cssparser::Parser::new(&mut input);
+        let mut found = Vec::new();
+        css_id_references(&mut parser, &mut found);
+        references.extend(
+            found
+                .into_iter()
+                .filter(|(_, id)| ids.contains(id.as_str()))
+                .map(|(at, id)| (tag.end + at, id)),
+        );
+    }
+    for (at, id) in references {
+        l.issues.push(Issue {
+            rule: "slide-id-style",
+            severity: Severity::Error,
+            message: format!("CSS targets slide id `{id}`; copying the slide changes its id and breaks these styles. Add a reusable layout class to the slide and replace its id-based selectors with that class, preserving its appearance and keeping its id for tracking."),
+            line: l.line(at),
+            slide: Some(id),
+        });
+    }
+}
+
+/// Tokenize rather than search text: comments, strings, URL fragments and declaration
+/// colors must not count as selectors. Pending references become selectors only when
+/// followed by a rule block; recurse into grouping rules and CSS nesting as well.
+fn css_id_references<'i>(
+    parser: &mut cssparser::Parser<'i, '_>,
+    found: &mut Vec<(usize, String)>,
+) -> Vec<(usize, String)> {
+    use cssparser::Token;
+    let mut pending = Vec::new();
+    let mut at_rule = false;
+    loop {
+        let at = parser.position().byte_index();
+        let Ok(token) = parser.next_including_whitespace_and_comments().cloned() else {
+            break;
+        };
+        match token {
+            Token::AtKeyword(name) => at_rule = !name.eq_ignore_ascii_case("scope"),
+            Token::IDHash(id) => pending.push((at, id.to_string())),
+            Token::Semicolon => {
+                pending.clear();
+                at_rule = false;
+            }
+            Token::CurlyBracketBlock => {
+                if at_rule {
+                    pending.clear();
+                }
+                at_rule = false;
+                found.append(&mut pending);
+                let _: Result<_, cssparser::ParseError<'i, ()>> = parser.parse_nested_block(|p| {
+                    css_id_references(p, found);
+                    Ok(())
+                });
+            }
+            Token::Function(_) | Token::ParenthesisBlock => {
+                let _: Result<_, cssparser::ParseError<'i, ()>> = parser.parse_nested_block(|p| {
+                    pending.extend(css_id_references(p, found));
+                    Ok(())
+                });
+            }
+            Token::SquareBracketBlock => {
+                let _: Result<_, cssparser::ParseError<'i, ()>> = parser.parse_nested_block(|p| {
+                    // [id="title"] is just as dependent on identity as #title.
+                    if p.expect_ident_matching("id").is_ok() && p.expect_delim('=').is_ok() {
+                        if let Ok(Token::Ident(id) | Token::QuotedString(id)) = p.next() {
+                            pending.push((at, id.to_string()));
+                        }
+                    }
+                    // Consume flags / other attribute selectors without treating their
+                    // values as CSS id selectors.
+                    while p.next().is_ok() {}
+                    Ok(())
+                });
+            }
+            _ => {}
+        }
+    }
+    pending
+}
+
+/// Entrance keyframes (those a `.reveal` rule animates with) must not animate `transform`:
+/// held by `both` fill, it would replace each element's own transform and tilt.
+fn check_entrances(l: &mut Linter) {
+    let mut from = 0;
+    while let Some(open) = find_ci(l.html, from, "<style") {
+        let Some(start) = l.html[open..].find('>').map(|i| open + i + 1) else {
+            break;
+        };
+        let end = find_ci(l.html, start, "</style").unwrap_or(l.html.len());
+        from = end;
+        if !in_markup(l, open) {
+            continue;
+        }
+        let css = &l.html[start..end];
+        for (at, name) in transform_keyframes(css) {
+            if animates_reveal(css, name) {
+                l.report(
+                    "entrance-transform",
+                    Severity::Warning,
+                    start + at,
+                    format!(
+                        "@keyframes {name} animates `transform` for a `.reveal` entrance, which overrides the elements' own transforms and hand edits. Animate `translate`, `scale`, or `rotate` instead and leave them out of the last frame."
+                    ),
+                );
+            }
+        }
+    }
+}
+
+/// `@keyframes` blocks in `css` that set `transform`: where each starts, and its name.
+fn transform_keyframes(css: &str) -> Vec<(usize, &str)> {
+    let mut found = Vec::new();
+    for (at, _) in css.match_indices("@keyframes") {
+        let rest = &css[at + "@keyframes".len()..];
+        let Some(brace) = rest.find('{') else {
+            continue;
+        };
+        let name = rest[..brace].trim();
+        let mut depth = 0;
+        let body_end = rest[brace..]
+            .char_indices()
+            .find_map(|(i, c)| {
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+                (depth == 0).then_some(brace + i)
+            })
+            .unwrap_or(rest.len());
+        if !name.is_empty() && sets_property(&rest[brace..body_end], "transform") {
+            found.push((at, name));
+        }
+    }
+    found
+}
+
+/// Whether `css` declares `property` itself (not, say, `text-transform` or `transform-origin`).
+fn sets_property(css: &str, property: &str) -> bool {
+    css.match_indices(property).any(|(i, _)| {
+        let before = css[..i].chars().next_back();
+        let after = css[i + property.len()..].trim_start();
+        !before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-') && after.starts_with(':')
+    })
+}
+
+/// Whether a rule whose selector mentions `.reveal` uses the keyframes `name`.
+fn animates_reveal(css: &str, name: &str) -> bool {
+    css.match_indices(name).any(|(i, _)| {
+        let word =
+            |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        if word(css[..i].chars().next_back()) || word(css[i + name.len()..].chars().next()) {
+            return false;
+        }
+        let Some(open) = css[..i].rfind('{') else {
+            return false;
+        };
+        let selector_start = css[..open].rfind('}').map_or(0, |b| b + 1);
+        let selector = &css[selector_start..open];
+        !selector.contains("@keyframes")
+            && selector.contains(".reveal")
+            && css[open..i].find('}').is_none()
+    })
 }
 
 /// Whether `at` is in markup rather than inside a comment, script, or style.
@@ -580,14 +942,14 @@ fn truncate(text: &str, max: usize) -> String {
 /// Plain-text report for the agent's lint tool.
 pub fn format_report(issues: &[Issue]) -> String {
     if issues.is_empty() {
-        return "deck.html passes lint: no issues.".into();
+        return "The deck passes lint: no issues.".into();
     }
     let errors = issues
         .iter()
         .filter(|i| i.severity == Severity::Error)
         .count();
     let warnings = issues.len() - errors;
-    let mut out = format!("deck.html has {errors} error(s) and {warnings} warning(s):\n");
+    let mut out = format!("The deck has {errors} error(s) and {warnings} warning(s):\n");
     for issue in issues {
         let severity = match issue.severity {
             Severity::Error => "error",
@@ -620,7 +982,7 @@ mod tests {
     }
 
     fn rules(html: &str) -> Vec<&'static str> {
-        lint(html, |p| p == "assets/logo.png")
+        lint(html, |p| p == "assets/logo.png", &[])
             .into_iter()
             .map(|i| i.rule)
             .collect()
@@ -640,7 +1002,7 @@ mod tests {
 <!-- <div> commented out -->
 <section class="slide" id="plan-2025" data-hidden><p>Plan</p></section>"#,
         );
-        assert_eq!(lint(&html, |p| p == "assets/logo.png"), vec![]);
+        assert_eq!(lint(&html, |p| p == "assets/logo.png", &[]), vec![]);
     }
 
     fn stroke() -> review::Stroke {
@@ -677,7 +1039,7 @@ mod tests {
         ));
         let found = rules(&inside);
         assert!(found.contains(&"review-misplaced"), "{found:?}");
-        let issue = lint(&html.replace("[[", "["), |_| true).remove(0);
+        let issue = lint(&html.replace("[[", "["), |_| true, &[]).remove(0);
         assert_eq!(
             issue.line,
             html[..html.find(review::START).unwrap()].lines().count()
@@ -697,10 +1059,23 @@ mod tests {
     }
 
     #[test]
+    fn accepts_the_player_flag_script_in_the_runtime_css_block() {
+        let html = html::ensure_runtime(&deck(
+            r#"<section class="slide" id="intro"><p>Hi</p></section>"#,
+        ));
+        let head = &html[..html.find("</head>").unwrap()];
+        assert!(
+            head.contains(html::PLAYER_FLAG),
+            "flag script sits in <head>"
+        );
+        assert_eq!(rules(&html), Vec::<&str>::new());
+    }
+
+    #[test]
     fn reports_unclosed_and_stray_tags_with_lines() {
         let html =
             deck("<section class=\"slide\" id=\"a\">\n<div><span>x</div>\n</section>\n</em>");
-        let issues = lint(&html, |_| true);
+        let issues = lint(&html, |_| true, &[]);
         let unclosed = issues.iter().find(|i| i.rule == "unclosed-tag").unwrap();
         assert!(unclosed.message.contains("<span>"));
         assert_eq!(unclosed.line, 11);
@@ -797,6 +1172,172 @@ mod tests {
     }
 
     #[test]
+    fn rejects_slide_id_styles_including_nested_and_escaped_selectors() {
+        let styled = |css: &str| {
+            deck(
+                r#"<section class="slide layout-title" id="title"></section>
+<section class="slide" id="title-copy"></section>"#,
+            )
+            .replace(
+                "<style>.slide {}</style>",
+                &format!("<style>\n{css}\n</style>"),
+            )
+        };
+        for selector in [
+            "#title",
+            "section#title .card",
+            "#title:hover",
+            ".other, #title > h1",
+            ":is(#title, .other)",
+            ":where(#title)",
+            "[id=title] .card",
+            "[id=\"title\"]",
+            r"#\74 itle",
+            "#title-copy",
+        ] {
+            for css in [
+                format!("{selector} {{ color: red; }}"),
+                format!("@media print {{ {selector} {{ color: red; }} }}"),
+                format!(".deck {{ color: black; & {selector} {{ color: red; }} }}"),
+            ] {
+                let issues = lint(&styled(&css), |_| true, &[]);
+                assert_eq!(issues.len(), 1, "{css}: {issues:?}");
+                assert_eq!(issues[0].rule, "slide-id-style");
+                assert_eq!(issues[0].severity, Severity::Error);
+                assert_eq!(issues[0].line, 7);
+                assert_eq!(
+                    issues[0].slide.as_deref(),
+                    Some(if selector == "#title-copy" {
+                        "title-copy"
+                    } else {
+                        "title"
+                    })
+                );
+                assert!(format_report(&issues).contains("reusable layout class"));
+            }
+        }
+        let fixed = styled(".layout-title { color: red; } .layout-title .card { padding: 20px; }");
+        assert!(lint(&fixed, |_| true, &[]).is_empty());
+    }
+
+    #[test]
+    fn slide_id_styles_ignore_declarations_comments_strings_and_other_ids() {
+        let source =
+            deck(r##"<section class="slide" id="abc"><svg><path id="icon"/></svg></section>"##)
+                .replace(
+                    "<style>.slide {}</style>",
+                    r##"<style>
+/* #abc { color: red; } */
+#icon { fill: red; }
+#abc-longer { color: red; }
+.layout { color: #abc; --color: #abc; content: "#abc { }"; background: url(#abc); }
+[data-label="#abc"] { color: blue; }
+@supports (color: #abc) { .layout { color: #abc; } }
+</style>"##,
+                );
+        assert!(lint(&source, |_| true, &[]).is_empty());
+        let fake = format!("{}<!-- <style>#abc {{}}</style> --><script>const s = '<style>#abc {{}}</style>';</script>", source);
+        assert!(lint(&fake, |_| true, &[]).is_empty());
+    }
+
+    #[test]
+    fn slide_id_styles_report_each_selector_at_its_line_in_any_style_block() {
+        let source = deck(r#"<section class="slide" id="title"></section>"#)
+            .replace("<style>.slide {}</style>", "<style>\n#title { color: red; }\n@media print {\n#title h1 { color: black; }\n}\n</style>\n<style>#title { padding: 1px; }</style>");
+        let issues = lint(&source, |_| true, &[]);
+        assert_eq!(
+            issues
+                .iter()
+                .map(|i| (i.rule, i.line, i.slide.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("slide-id-style", 7, Some("title")),
+                ("slide-id-style", 9, Some("title")),
+                ("slide-id-style", 12, Some("title")),
+            ]
+        );
+    }
+
+    #[test]
+    fn copying_a_slide_does_not_silence_id_style_errors_or_rewrite_css() {
+        let css = "#title { padding: 52px 60px; }\n#title .hero-image { width: 700px; }";
+        let source = deck(
+            r#"<section class="slide" id="title"><img class="hero-image" src="assets/logo.png" alt="Logo"></section>"#,
+        )
+        .replace(".slide {}", css);
+        let before = lint(&source, |_| true, &[]);
+        let (copied, copy_id) = html::duplicate(&source, "title").unwrap();
+
+        assert_eq!(copy_id, "title-copy");
+        assert_eq!(html::find_slides(&copied).len(), 2);
+        assert!(copied.contains(&format!("<style>{css}</style>")));
+        assert_eq!(lint(&copied, |_| true, &[]), before);
+        assert_eq!(before.len(), 2);
+        assert!(before.iter().all(|issue| issue.rule == "slide-id-style"
+            && issue.severity == Severity::Error
+            && issue.slide.as_deref() == Some("title")));
+    }
+
+    #[test]
+    fn class_based_repair_passes_lint_and_survives_repeated_copying() {
+        let source = deck(r#"<section class="slide" id="title"><h1>AI-KIT</h1></section>"#)
+            .replace(
+                ".slide {}",
+                "#title { padding: 52px 60px; } #title h1 { font-size: 100px; }",
+            );
+        assert_eq!(rules(&source), ["slide-id-style", "slide-id-style"]);
+
+        // The agent's repair changes styling hooks, retaining the slide identity/content.
+        let repaired = source
+            .replace("class=\"slide\"", "class=\"slide layout-title\"")
+            .replace("#title", ".layout-title");
+        let (once, first_id) = html::duplicate(&repaired, "title").unwrap();
+        let (twice, second_id) = html::duplicate(&once, &first_id).unwrap();
+        assert_ne!(first_id, second_id);
+        for version in [&repaired, &once, &twice] {
+            assert!(lint(version, |_| true, &[]).is_empty());
+            assert!(version.contains(".layout-title { padding: 52px 60px; }"));
+            assert!(version.contains(".layout-title h1 { font-size: 100px; }"));
+            for slide in html::find_slides(version) {
+                let markup = &version[slide.range];
+                assert!(markup.contains("class=\"slide layout-title\""));
+                assert!(markup.contains("<h1>AI-KIT</h1>"));
+            }
+        }
+    }
+
+    #[test]
+    fn slide_id_styles_reject_grouping_rules_and_copy_id_workarounds() {
+        let source = deck(
+            r#"<section class="slide" id="title"></section>
+<section class="slide" id="title-copy" data-hidden></section>"#,
+        );
+        for css in [
+            "@layer layouts { @supports (display: grid) { #title .card { display: grid; } } }",
+            "@container (width > 100px) { #title { color: red; } }",
+            "@scope (#title) { .card { color: red; } }",
+            ":is(#title, #title-copy) .card { color: red; }",
+            "#title, #title-copy { color: red; }",
+        ] {
+            let styled = source.replace(".slide {}", css);
+            let issues = lint(&styled, |_| true, &[]);
+            let slides: Vec<_> = issues.iter().map(|i| i.slide.as_deref()).collect();
+            assert_eq!(
+                slides,
+                if css.contains("#title-copy") {
+                    vec![Some("title"), Some("title-copy")]
+                } else {
+                    vec![Some("title")]
+                },
+                "{css}: {issues:?}"
+            );
+            assert!(issues
+                .iter()
+                .all(|i| i.rule == "slide-id-style" && i.severity == Severity::Error));
+        }
+    }
+
+    #[test]
     fn flags_valued_hidden_attributes() {
         assert_eq!(
             rules(&deck(
@@ -810,6 +1351,53 @@ mod tests {
             )),
             ["hidden-value"]
         );
+    }
+
+    #[test]
+    fn flags_valued_locked_attributes() {
+        assert_eq!(
+            rules(&deck(
+                "<section class=\"slide\" id=\"a\" data-locked></section>"
+            )),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            rules(&deck(
+                "<section class=\"slide\" id=\"a\" data-locked=\"false\"></section>"
+            )),
+            ["locked-value"]
+        );
+    }
+
+    #[test]
+    fn flags_locked_slides_changed_during_a_turn() {
+        let before = deck(
+            "<section class=\"slide\" id=\"a\" data-locked>A</section>\n<section class=\"slide\" id=\"b\" data-locked>B</section>\n<section class=\"slide\" id=\"c\">C</section>",
+        );
+        let locked = html::locked_slides(&before);
+        assert_eq!(lint(&before, |_| true, &locked), vec![]);
+        let edited = before.replace(">C<", ">C!<");
+        assert_eq!(
+            lint(&edited, |_| true, &locked),
+            vec![],
+            "other slides are free"
+        );
+
+        let changed = html::delete(&before.replace(">A<", ">A!<"), "b").unwrap();
+        let issues = lint(&changed, |_| true, &locked);
+        let found: Vec<_> = issues
+            .iter()
+            .map(|i| (i.rule, i.severity, i.slide.as_deref(), i.line))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("locked-slide-changed", Severity::Error, None, 1),
+                ("locked-slide-changed", Severity::Error, Some("a"), 10),
+            ]
+        );
+        assert!(issues[0].message.contains("`b` was removed"));
+        assert!(issues[1].message.contains("`a` is locked"));
     }
 
     #[test]
@@ -828,17 +1416,75 @@ mod tests {
     }
 
     #[test]
+    fn flags_elements_added_by_hand() {
+        let found = lint(
+            &deck(
+                "<section class=\"slide\" id=\"a\">\n<div data-added=\"text\" style=\"position: absolute; left: 10px; top: 20px\">Hi</div>\n<div data-added=\"shape\" style=\"position: absolute; left: 0px; top: 0px; width: 320px; height: 200px\"></div>\n<svg data-added=\"drawing\" viewBox=\"0 0 10 10\" style=\"position: absolute\"><path d=\"M0 0 L10 10\" stroke=\"#111111\"/></svg>\n</section>",
+            ),
+            |_| true,
+            &[],
+        );
+        let found: Vec<_> = found.iter().map(|i| (i.rule, i.line)).collect();
+        assert_eq!(
+            found,
+            [
+                ("added-element", 11),
+                ("added-element", 12),
+                ("added-element", 13)
+            ]
+        );
+        let messages: Vec<_> = lint(
+            &deck("<section class=\"slide\" id=\"a\"><div data-added=\"shape\"></div><svg data-added=\"drawing\"></svg></section>"),
+            |_| true,
+            &[],
+        )
+        .into_iter()
+        .map(|i| i.message)
+        .collect();
+        assert!(messages[0].starts_with("This shape was added by hand"));
+        assert!(messages[1].starts_with("This drawing was added by hand"));
+        // As text it means nothing to the editor.
+        assert_eq!(
+            rules(&deck(
+                "<section class=\"slide\" id=\"a\"><p>data-added</p></section>"
+            )),
+            Vec::<&str>::new()
+        );
+    }
+
+    #[test]
+    fn flags_resize_placeholders_awaiting_cleanup() {
+        assert_eq!(
+            rules(&deck(
+                "<section class=\"slide\" id=\"a\"><p style=\"position: absolute; width: 300px\">Edited</p><p data-resize-placeholder aria-hidden=\"true\" inert style=\"visibility: hidden\">Original</p></section>"
+            )),
+            ["resize-placeholder"]
+        );
+        assert!(rules(&deck(
+            "<section class=\"slide\" id=\"a\"><p>data-resize-placeholder</p></section>"
+        ))
+        .is_empty());
+        assert!(rules(&format!(
+            "{}<div data-resize-placeholder></div>",
+            deck("<section class=\"slide\" id=\"a\"></section>")
+        ))
+        .is_empty());
+    }
+
+    #[test]
     fn flags_hand_edits_awaiting_cleanup() {
         let found = lint(
             &deck(
-                "<section class=\"slide\" id=\"a\">\n<h2 data-moved style=\"translate: 40px -12px\">Moved</h2>\n<img data-moved style=\"translate: 0px 12px; rotate: 15deg; scale: 1.5 0.8\" src=\"a.png\" alt=\"\">\n<p contenteditable=\"true\" data-slop-selected>Left over</p>\n</section>",
+                "<section class=\"slide\" id=\"a\">\n<h2 data-moved style=\"translate: 40px -12px\">Moved</h2>\n<img data-moved style=\"translate: 0px 12px; rotate: 15deg; scale: 1.5 0.8\" src=\"a.png\" alt=\"\">\n<div data-moved style=\"transform: perspective(1000px) rotateX(10deg) rotateY(30deg) !important\">Tilted</div>\n<p contenteditable=\"true\" data-slop-selected>Left over</p>\n</section>",
             ),
             |_| true,
+            &[],
         );
         let found: Vec<_> = found.iter().map(|i| (i.rule, i.slide.as_deref())).collect();
         assert_eq!(
             found,
             [
+                ("moved-element", Some("a")),
                 ("moved-element", Some("a")),
                 ("moved-element", Some("a")),
                 ("editor-leftover", Some("a"))
@@ -867,6 +1513,43 @@ mod tests {
     }
 
     #[test]
+    fn flags_dropped_images_awaiting_a_place() {
+        let found = rules(&deck(
+            "<section class=\"slide\" id=\"a\">\n<img src=\"assets/logo.png\" alt=\"\" data-dropped data-moved style=\"position: absolute; left: 0px; top: 0px; width: 640px; translate: 640px 300px\">\n</section>",
+        ));
+        // One warning covers both markers.
+        assert_eq!(found, ["dropped-image"]);
+        let issues = lint(
+            &deck("<section class=\"slide\" id=\"a\"><img src=\"assets/logo.png\" alt=\"\" data-dropped></section>"),
+            |_| true,
+            &[],
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].slide.as_deref(), Some("a"));
+        assert_eq!(issues[0].severity, Severity::Warning);
+        // Outside slides the attribute means nothing to the editor.
+        assert_eq!(
+            rules(&format!(
+                "{}<img src=\"assets/logo.png\" alt=\"\" data-dropped>",
+                deck("<section class=\"slide\" id=\"a\"></section>")
+            )),
+            Vec::<&str>::new()
+        );
+    }
+
+    #[test]
+    fn rejects_image_references_outside_the_deck_folder() {
+        let html = deck("<section class=\"slide\" id=\"a\"><img src=\"../shared/x.png\" alt=\"X\"><img src=\"%2e%2e/shared/x.png\" alt=\"X\"></section>");
+        assert_eq!(
+            lint(&html, |_| true, &[])
+                .iter()
+                .filter(|i| i.rule == "asset-outside-deck")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn checks_images_and_assets() {
         let found = rules(&deck(
             r#"<section class="slide" id="a">
@@ -882,17 +1565,17 @@ mod tests {
     #[test]
     fn sorts_by_line_and_formats_a_report() {
         let html = deck("<section class=\"slide\" id=\"Bad\"><span></section>");
-        let issues = lint(&html, |_| true);
+        let issues = lint(&html, |_| true, &[]);
         assert!(issues.windows(2).all(|w| w[0].line <= w[1].line));
         let report = format_report(&issues);
         assert!(
-            report.starts_with("deck.html has 1 error(s) and 1 warning(s):"),
+            report.starts_with("The deck has 1 error(s) and 1 warning(s):"),
             "{report}"
         );
         assert!(
             report.contains("line 10 error [unclosed-tag] (slide `Bad`): <span> is never closed")
         );
-        assert_eq!(format_report(&[]), "deck.html passes lint: no issues.");
+        assert_eq!(format_report(&[]), "The deck passes lint: no issues.");
     }
 
     #[test]
@@ -941,6 +1624,7 @@ mod tests {
                 "<div class=\"deck-section\"></div>\n<section class=\"slide\" id=\"a\">A</section>",
             ),
             |_| true,
+            &[],
         );
         assert_eq!(issues[0].line, 10);
         assert!(issues[0].message.contains("Section 1"));
@@ -958,5 +1642,96 @@ mod tests {
         ));
         assert!(wrapped.contains(&"section-marker-misplaced"));
         assert!(wrapped.contains(&"deck-stray-content"));
+    }
+
+    #[test]
+    fn warns_about_entrances_that_animate_transform() {
+        let styled = |css: &str| {
+            deck(r#"<section class="slide" id="a"><h1 class="reveal">Hi</h1></section>"#)
+                .replace("<style>.slide {}</style>", &format!("<style>{css}</style>"))
+        };
+        let own =
+            "@keyframes rise { from { opacity: 0; translate: 0 20px; } to { opacity: 1; } }\n\
+            .slide.active .reveal { animation: rise 0.6s ease both; }";
+        assert_eq!(rules(&styled(own)), Vec::<&str>::new());
+        let transform = "@keyframes rise { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: none; } }\n\
+            .slide.active .reveal { animation: rise 0.6s ease both; }";
+        assert_eq!(rules(&styled(transform)), ["entrance-transform"]);
+        let issue = &lint(&styled(transform), |_| false, &[])[0];
+        assert_eq!(issue.line, 6, "reported at the keyframes");
+        assert!(issue.message.contains("@keyframes rise"));
+        let in_media = "@keyframes rise { from { transform: scale(0.9); } }\n\
+            @media (min-width: 1px) { .slide.active .reveal { animation-name: rise; } }";
+        assert_eq!(rules(&styled(in_media)), ["entrance-transform"]);
+        let not_an_entrance = "@keyframes spin { to { transform: rotate(1turn); } }\n\
+            .slide .logo { animation: spin 4s linear infinite; }\n\
+            .slide.active .reveal { animation: spinner 1s both; }";
+        assert_eq!(rules(&styled(not_an_entrance)), Vec::<&str>::new());
+        let lookalikes =
+            "@keyframes rise { from { text-transform: none; transform-origin: 0 0; } }\n\
+            .slide.active .reveal { animation: rise 1s both; }";
+        assert_eq!(rules(&styled(lookalikes)), Vec::<&str>::new());
+        let commented = deck(&format!(
+            "<!-- <style>{transform}</style> -->\n<section class=\"slide\" id=\"a\"></section>"
+        ));
+        assert_eq!(rules(&commented), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn checks_the_template_meta() {
+        let named = html::set_template(
+            &deck(r#"<section class="slide" id="a"></section>"#),
+            Some("swiss"),
+        );
+        assert_eq!(rules(&named), Vec::<&str>::new());
+        let empty = named.replace("content=\"swiss\"", "content=\" \"");
+        assert_eq!(rules(&empty), ["template-meta-empty"]);
+        let no_content = named.replace(" content=\"swiss\"", "");
+        assert_eq!(rules(&no_content), ["template-meta-empty"]);
+        let twice = named.replace(
+            "<title>Talk</title>",
+            "<title>Talk</title><meta name=\"slopslide-template\" content=\"bohemian\">",
+        );
+        assert_eq!(rules(&twice), ["template-meta-duplicate"]);
+        let in_body = deck(
+            r#"<section class="slide" id="a"><meta name="slopslide-template" content="x"></section>"#,
+        );
+        assert_eq!(rules(&in_body), ["template-meta-misplaced"]);
+        let commented = deck(r#"<!-- <meta name="slopslide-template" content=""> -->"#);
+        assert_eq!(rules(&commented), Vec::<&str>::new());
+        let other = deck("").replace("<title>", "<meta name=\"description\" content=\"\"><title>");
+        assert_eq!(rules(&other), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn checks_the_slide_size_meta() {
+        let sized = html::set_slide_size(
+            &deck(r#"<section class="slide" id="a"></section>"#),
+            SlideSize::parse("8.5x11in").unwrap(),
+        );
+        assert_eq!(rules(&sized), Vec::<&str>::new());
+        assert_eq!(rules(&html::ensure_runtime(&sized)), Vec::<&str>::new());
+        for bad in ["", " ", "portrait", "1920", "50x50", "1920x1080mm"] {
+            let html = sized.replace("8.5x11in", bad);
+            assert_eq!(rules(&html), ["slide-size-invalid"], "{bad}");
+        }
+        let no_content = sized.replace(" content=\"8.5x11in\"", "");
+        assert_eq!(rules(&no_content), ["slide-size-invalid"]);
+        let message = &lint(&sized.replace("8.5x11in", "big"), |_| true, &[])[0].message;
+        assert!(
+            message.contains("\"big\" is not a usable size"),
+            "{message}"
+        );
+        let twice = sized.replace(
+            "<title>Talk</title>",
+            "<title>Talk</title><meta name=\"slopslide-size\" content=\"1080x1080\">",
+        );
+        assert_eq!(rules(&twice), ["slide-size-duplicate"]);
+        let in_body = deck(
+            r#"<section class="slide" id="a"><meta name="slopslide-size" content="1080x1080"></section>"#,
+        );
+        assert_eq!(rules(&in_body), ["slide-size-misplaced"]);
+        let commented = deck(r#"<!-- <meta name="slopslide-size" content="nope"> -->"#);
+        assert_eq!(rules(&commented), Vec::<&str>::new());
     }
 }

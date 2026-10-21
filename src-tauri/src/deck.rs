@@ -1,15 +1,22 @@
-//! Deck storage. A deck is a folder in the library holding one self-contained HTML file:
+//! Deck storage. A deck is one self-contained HTML file anywhere in a workspace (see
+//! [`crate::workspace`]), with the media it uses in an `assets/` folder next to it:
 //!
 //! ```text
-//! <library>/<deck-id>/
-//!   deck.html      every slide, the shared styles, and the embedded player runtime
+//! <folder>/
+//!   talk.html      every slide, the shared styles, and the embedded player runtime
 //!   assets/        user-attached media, referenced as assets/<file>
-//!   .slopslide/    app internals: chat history, agent session, reference docs, snapshots,
-//!                  sketches (screenshots of slides the user drew on, for the agent)
 //! ```
 //!
-//! `deck.html` opens directly in any browser as a slideshow; [`export`] inlines the
-//! assets so the single file can be shared on its own.
+//! Decks the app creates get a folder of their own and the name `deck.html`
+//! ([`DECK_FILE`]); any other file passing [`crate::workspace::classify`] opens as a deck too.
+//! Nothing of the app's goes next to the deck: chat history and the other app state about a
+//! workspace live in its sessions ([`crate::sessions`]), and what every deck shares lives in the
+//! app ([`crate::agent::SYSTEM_PROMPT`]) or in the user's [`app_home`] folder (user templates,
+//! the agent's MCP config, sessions). Functions taking a `session` keep their part of that
+//! state in the workspace's current session folder.
+//!
+//! A deck opens directly in any browser as a slideshow; [`export`] inlines the assets so the
+//! single file can be shared on its own.
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -22,33 +29,20 @@ use crate::error::{Error, Result};
 use crate::html;
 use crate::lint;
 use crate::review::{self, Review};
+use crate::sessions;
+use crate::size::{SizeInfo, SlideSize, SIZE_META};
+use crate::templates;
 
-pub const INTERNAL_DIR: &str = ".slopslide";
+/// The app's folder in the user's home.
+pub const HOME_DIR: &str = ".slopslides";
+/// The file name of decks the app creates.
 pub const DECK_FILE: &str = "deck.html";
 const DECK_TEMPLATE: &str = include_str!("../assets/deck-template.html");
 const BLANK_SLIDE: &str = include_str!("../assets/blank-slide.html");
 const SNAPSHOTS_KEPT: usize = 30;
 const SKETCHES_KEPT: usize = 30;
-const REFERENCE_DOCS: &[(&str, &str)] = &[
-    (
-        "STYLE_PRESETS.md",
-        include_str!("../prompts/STYLE_PRESETS.md"),
-    ),
-    (
-        "animation-patterns.md",
-        include_str!("../prompts/animation-patterns.md"),
-    ),
-];
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DeckSummary {
-    pub id: String,
-    pub title: String,
-    pub slide_count: usize,
-    pub first_slide: Option<String>,
-    pub updated_ms: u64,
-}
+/// The locked slides as they were when the agent's turn started (see [`guard_locked`]).
+const LOCKS_FILE: &str = "locked.json";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,9 +54,11 @@ pub struct Slide {
     pub hidden: bool,
     /// Has elements the user moved by hand, waiting for the agent to tidy the layout.
     pub moved: bool,
+    /// Can be changed by neither the user nor the agent until it is unlocked.
+    pub locked: bool,
 }
 
-/// A named group of slides, started by a marker between slides in deck.html.
+/// A named group of slides, started by a marker between slides in the deck file.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Section {
@@ -76,8 +72,10 @@ pub struct Section {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Deck {
+    /// The deck file's absolute path; every command addresses the deck by it.
     pub id: String,
     pub title: String,
+    /// The deck file's absolute path (the same as `id`).
     pub path: String,
     pub slides: Vec<Slide>,
     pub sections: Vec<Section>,
@@ -85,8 +83,13 @@ pub struct Deck {
     pub shell_hash: String,
     /// What the user drew on slides, by slide id (see [`review`]).
     pub review: Review,
+    /// Id of the template the deck's design comes from (see [`crate::templates`]).
+    pub template: Option<String>,
+    /// Every slide's canvas (see [`crate::size`]).
+    pub size: SizeInfo,
 }
 
+/// `~/Documents/SlopSlide`, where decks lived before workspaces; the default workspace.
 pub fn library_root(app: &AppHandle) -> Result<PathBuf> {
     let base = app
         .path()
@@ -98,19 +101,28 @@ pub fn library_root(app: &AppHandle) -> Result<PathBuf> {
     Ok(root)
 }
 
-pub fn deck_dir(app: &AppHandle, id: &str) -> Result<PathBuf> {
-    deck_dir_in(&library_root(app)?, id)
-}
-
-fn deck_dir_in(root: &Path, id: &str) -> Result<PathBuf> {
-    if id.is_empty() || !is_plain_name(id) {
+/// The deck file a command's deck id names: the absolute path of an existing HTML file.
+pub fn deck_file(id: &str) -> Result<PathBuf> {
+    let file = PathBuf::from(id);
+    if !file.is_absolute() || !is_html(&file) {
         return Err(Error::msg(format!("invalid deck id: {id}")));
     }
-    let dir = root.join(id);
-    if !dir.join(DECK_FILE).is_file() {
+    if !file.is_file() {
         return Err(Error::msg(format!("deck not found: {id}")));
     }
-    Ok(dir)
+    Ok(file)
+}
+
+/// Whether the file name ends in `.html` or `.htm`.
+pub fn is_html(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("html") || e.eq_ignore_ascii_case("htm"))
+}
+
+/// The folder holding the deck file, which its relative references resolve against.
+pub fn folder(file: &Path) -> &Path {
+    file.parent().unwrap_or(Path::new("."))
 }
 
 /// Resolves a deck-relative path, refusing anything that escapes the deck folder.
@@ -125,17 +137,12 @@ pub fn resolve_in_deck(dir: &Path, rel: &str) -> Result<PathBuf> {
     Ok(dir.join(rel_path))
 }
 
-fn is_plain_name(name: &str) -> bool {
-    let mut parts = Path::new(name).components();
-    matches!(parts.next(), Some(Component::Normal(_))) && parts.next().is_none()
+pub fn read_html(file: &Path) -> Result<String> {
+    Ok(fs::read_to_string(file)?)
 }
 
-fn read_html(dir: &Path) -> Result<String> {
-    Ok(fs::read_to_string(dir.join(DECK_FILE))?)
-}
-
-fn write_html(dir: &Path, html: &str) -> Result<()> {
-    atomic_write(&dir.join(DECK_FILE), html.as_bytes())
+fn write_html(file: &Path, html: &str) -> Result<()> {
+    atomic_write(file, html.as_bytes())
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -145,40 +152,15 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn modified_ms(path: &Path) -> u64 {
-    fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-fn fallback_title(id: &str) -> String {
-    id.replace('-', " ")
-}
-
-pub fn list(root: &Path) -> Result<Vec<DeckSummary>> {
-    let mut decks = Vec::new();
-    for entry in fs::read_dir(root)? {
-        let dir = entry?.path();
-        let Ok(source) = read_html(&dir) else {
-            continue;
-        };
-        let Some(id) = dir.file_name().and_then(|n| n.to_str()).map(str::to_string) else {
-            continue;
-        };
-        let slides = html::find_slides(&source);
-        decks.push(DeckSummary {
-            title: html::title(&source).unwrap_or_else(|| fallback_title(&id)),
-            slide_count: slides.len(),
-            first_slide: slides.first().and_then(|s| s.id.clone()),
-            updated_ms: modified_ms(&dir.join(DECK_FILE)),
-            id,
-        });
-    }
-    decks.sort_by_key(|d| std::cmp::Reverse(d.updated_ms));
-    Ok(decks)
+/// The deck's name when its `<title>` is missing: the folder's name for a `deck.html`, else
+/// the file's.
+fn fallback_title(file: &Path) -> String {
+    let name = match file.file_name().and_then(|n| n.to_str()) {
+        Some(DECK_FILE) => folder(file).file_name(),
+        _ => file.file_stem(),
+    };
+    name.map(|n| n.to_string_lossy().replace(['-', '_'], " "))
+        .unwrap_or_default()
 }
 
 fn unique_dir(root: &Path, stem: &str) -> PathBuf {
@@ -189,23 +171,26 @@ fn unique_dir(root: &Path, stem: &str) -> PathBuf {
         .expect("unbounded")
 }
 
-/// Writes app-owned files and keeps the deck consistent: unique slide ids and the current
-/// player runtime. Safe to call repeatedly; only writes when something changed.
-pub fn normalize(dir: &Path) -> Result<()> {
-    fs::create_dir_all(dir.join("assets"))?;
-    let reference = dir.join(INTERNAL_DIR).join("reference");
-    fs::create_dir_all(&reference)?;
-    for (name, body) in REFERENCE_DOCS {
-        fs::write(reference.join(name), body)?;
-    }
-    let source = read_html(dir)?;
+/// Keeps the deck consistent: unique slide ids and the current player runtime. Safe to call
+/// repeatedly; only writes when something changed.
+pub fn normalize(file: &Path) -> Result<()> {
+    let source = read_html(file)?;
     let fixed = html::normalize_ids(&source).unwrap_or_else(|| source.clone());
     let fixed = html::ensure_runtime(&fixed);
     let fixed = prune_review(&fixed).unwrap_or(fixed);
     if fixed != source {
-        write_html(dir, &fixed)?;
+        write_html(file, &fixed)?;
     }
     Ok(())
+}
+
+/// `~/.slopslides`, created on first use. Not through Tauri: the lint server, which runs
+/// without the app, needs it too.
+pub fn app_home() -> Result<PathBuf> {
+    let home = std::env::home_dir().ok_or_else(|| Error::msg("cannot locate home folder"))?;
+    let root = home.join(HOME_DIR);
+    fs::create_dir_all(&root)?;
+    Ok(root)
 }
 
 /// `html` without review marks of slides it no longer has; None when there are none to drop.
@@ -215,7 +200,14 @@ fn prune_review(html: &str) -> Option<String> {
     review::prune(html, &ids)
 }
 
-pub fn create(root: &Path, title: &str) -> Result<Deck> {
+/// A template a new deck takes its design from: its id and deck.html.
+pub struct TemplateSource<'a> {
+    pub id: &'a str,
+    pub html: &'a str,
+}
+
+/// Creates `<root>/<slugged title>/deck.html` and opens it.
+pub fn create(root: &Path, title: &str, template: Option<TemplateSource>) -> Result<Deck> {
     let title = title.trim();
     let title = if title.is_empty() {
         "Untitled deck"
@@ -224,21 +216,29 @@ pub fn create(root: &Path, title: &str) -> Result<Deck> {
     };
     let dir = unique_dir(root, &html::slugify(title));
     fs::create_dir_all(&dir)?;
-    write_html(&dir, &html::set_title(DECK_TEMPLATE, title))?;
-    let id = dir.file_name().unwrap().to_string_lossy().into_owned();
-    open(&dir, &id, true)
+    let source = match template {
+        Some(t) => templates::deck_shell(t.html, t.id, title),
+        None => html::set_title(DECK_TEMPLATE, title),
+    };
+    let file = dir.join(DECK_FILE);
+    write_html(&file, &source)?;
+    open(&file, None, true)
 }
 
 /// Loads a deck, normalizing it first unless the agent may be mid-edit.
-pub fn open(dir: &Path, id: &str, normalize_first: bool) -> Result<Deck> {
+pub fn open(file: &Path, session: Option<&Path>, normalize_first: bool) -> Result<Deck> {
     if normalize_first {
-        normalize(dir)?;
+        normalize(file)?;
+        // No turn is running: a guard left behind (say, the app quit mid-turn) is stale.
+        if let Some(session) = session {
+            let _ = fs::remove_file(session.join(LOCKS_FILE));
+        }
     }
-    load(dir, id)
+    load(file)
 }
 
-pub fn load(dir: &Path, id: &str) -> Result<Deck> {
-    let source = read_html(dir)?;
+pub fn load(file: &Path) -> Result<Deck> {
+    let source = read_html(file)?;
     let spans = html::find_slides(&source);
     let section_spans = html::find_sections(&source);
     let slides = spans
@@ -250,15 +250,19 @@ pub fn load(dir: &Path, id: &str) -> Result<Deck> {
             id: span.id.clone().unwrap_or_else(|| format!("#{}", index + 1)),
             hash: html::content_hash(&source[span.range.clone()]),
             hidden: span.hidden.is_some(),
+            locked: span.locked.is_some(),
             moved: html::has_moved(&source[span.range.clone()]),
         })
         .collect();
+    let path = file.to_string_lossy().into_owned();
     Ok(Deck {
-        id: id.to_string(),
-        title: html::title(&source).unwrap_or_else(|| fallback_title(id)),
-        path: dir.to_string_lossy().into_owned(),
+        id: path.clone(),
+        title: html::title(&source).unwrap_or_else(|| fallback_title(file)),
+        path,
         shell_hash: html::shell_hash(&source, &spans, &section_spans),
         review: review::read(&source),
+        template: html::template(&source),
+        size: html::slide_size(&source).into(),
         sections: section_spans
             .iter()
             .enumerate()
@@ -272,22 +276,65 @@ pub fn load(dir: &Path, id: &str) -> Result<Deck> {
     })
 }
 
-/// Saves a copy of deck.html under `.slopslide/snapshots/`, keeping the newest few.
-pub fn snapshot(dir: &Path) -> Result<()> {
-    let snapshots = dir.join(INTERNAL_DIR).join("snapshots");
+/// Saves a copy of the deck file under the session's `snapshots/`, keeping the newest few.
+pub fn snapshot(file: &Path, session: &Path) -> Result<()> {
+    let snapshots = snapshot_dir(file, session)?;
     fs::create_dir_all(&snapshots)?;
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis();
-    fs::copy(dir.join(DECK_FILE), snapshots.join(format!("{stamp}.html")))?;
+        .as_nanos();
+    fs::copy(
+        file,
+        snapshots.join(format!("{stamp}-{}.html", uuid::Uuid::new_v4().simple())),
+    )?;
     prune_oldest(&snapshots, SNAPSHOTS_KEPT)
 }
 
-/// Saves a screenshot of a sketched-on slide under `.slopslide/sketches/`, keeping the
-/// newest few. Returns its deck-relative path, for the agent to read.
-pub fn save_sketch(dir: &Path, png: &[u8]) -> Result<String> {
-    let sketches = dir.join(INTERNAL_DIR).join("sketches");
+/// Per-file history prevents decks in the same workspace from overwriting each other.
+fn snapshot_dir(file: &Path, session: &Path) -> Result<PathBuf> {
+    let base = session.join("snapshots");
+    match sessions::workspace_of(session) {
+        Some(root) => Ok(base.join(guard_key(file, &root)?)),
+        None => Ok(base), // Legacy sessions remain readable.
+    }
+}
+
+fn guard_key(file: &Path, root: &Path) -> Result<String> {
+    // Canonicalize the parent, so a deleted deck still has its original key.
+    let mut parent = folder(file);
+    let mut missing = Vec::new();
+    while !parent.exists() {
+        missing.push(
+            parent
+                .file_name()
+                .ok_or_else(|| Error::msg("missing parent"))?
+                .to_os_string(),
+        );
+        parent = parent
+            .parent()
+            .ok_or_else(|| Error::msg("missing parent"))?;
+    }
+    let mut parent = parent.canonicalize()?;
+    for part in missing.iter().rev() {
+        parent.push(part);
+    }
+    let root = root.canonicalize()?;
+    let path = parent.join(
+        file.file_name()
+            .ok_or_else(|| Error::msg("missing file name"))?,
+    );
+    Ok(path
+        .strip_prefix(root)
+        .map_err(|_| Error::msg("deck outside workspace"))?
+        .to_string_lossy()
+        .replace('\\', "/"))
+}
+
+/// Saves a screenshot of a sketched-on slide under the session's `sketches/`, keeping the
+/// newest few. Returns its absolute path, for the agent to read.
+pub fn save_sketch(session: &Path, png: &[u8]) -> Result<String> {
+    let sketches = session.join("sketches");
     fs::create_dir_all(&sketches)?;
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -297,7 +344,7 @@ pub fn save_sketch(dir: &Path, png: &[u8]) -> Result<String> {
     let name = format!("{stamp}-{short}.png");
     fs::write(sketches.join(&name), png)?;
     prune_oldest(&sketches, SKETCHES_KEPT)?;
-    Ok(format!("{INTERNAL_DIR}/sketches/{name}"))
+    Ok(sketches.join(name).to_string_lossy().into_owned())
 }
 
 /// Deletes all but the `keep` newest files of `dir`, whose names start with a timestamp.
@@ -314,119 +361,286 @@ fn prune_oldest(dir: &Path, keep: usize) -> Result<()> {
 
 type EditResult<T> = std::result::Result<(String, T), String>;
 
-fn edit<T>(dir: &Path, id: &str, f: impl FnOnce(&str) -> EditResult<T>) -> Result<(Deck, T)> {
-    let source = read_html(dir)?;
+fn edit<T>(file: &Path, f: impl FnOnce(&str) -> EditResult<T>) -> Result<(Deck, T)> {
+    let source = read_html(file)?;
     let (updated, value) = f(&source).map_err(Error::Message)?;
-    write_html(dir, &updated)?;
-    Ok((load(dir, id)?, value))
+    write_html(file, &updated)?;
+    Ok((load(file)?, value))
 }
 
 /// Stores the user's review marks in deck.html, dropping those of slides that are gone.
 /// Leaves the file alone when nothing changed, so the watcher stays quiet.
-pub fn save_review(dir: &Path, review: &Review) -> Result<()> {
-    let source = read_html(dir)?;
+pub fn save_review(file: &Path, review: &Review) -> Result<()> {
+    let source = read_html(file)?;
     let updated = review::write(&source, review);
     let updated = prune_review(&updated).unwrap_or(updated);
     if updated != source {
-        write_html(dir, &updated)?;
+        write_html(file, &updated)?;
     }
     Ok(())
 }
 
-pub fn rename(dir: &Path, id: &str, title: &str) -> Result<Deck> {
+pub fn rename(file: &Path, title: &str) -> Result<Deck> {
     let title = title.trim().to_string();
-    Ok(edit(dir, id, |s| Ok((html::set_title(s, &title), ())))?.0)
+    Ok(edit(file, |s| Ok((html::set_title(s, &title), ())))?.0)
 }
 
-pub fn reorder(dir: &Path, id: &str, slides: Vec<String>) -> Result<Deck> {
-    Ok(edit(dir, id, |s| Ok((html::reorder(s, &slides)?, ())))?.0)
+pub fn reorder(file: &Path, slides: Vec<String>) -> Result<Deck> {
+    Ok(edit(file, |s| Ok((html::reorder(s, &slides)?, ())))?.0)
 }
 
-pub fn add_blank(dir: &Path, id: &str, after: Option<String>) -> Result<(Deck, String)> {
-    edit(dir, id, |s| {
+pub fn add_blank(file: &Path, after: Option<String>) -> Result<(Deck, String)> {
+    edit(file, |s| {
         html::insert(s, after.as_deref(), BLANK_SLIDE, "slide")
     })
 }
 
-pub fn duplicate(dir: &Path, id: &str, slide: &str) -> Result<(Deck, String)> {
-    edit(dir, id, |s| html::duplicate(s, slide))
+/// Gives a deck without slides the template's design (styles, fonts), keeping its title.
+pub fn apply_template(file: &Path, template: TemplateSource) -> Result<Deck> {
+    Ok(edit(file, |s| {
+        if !html::find_slides(s).is_empty() {
+            return Err("Only a deck without slides takes a template's styles directly.".into());
+        }
+        let title = html::title(s).unwrap_or_else(|| fallback_title(file));
+        let shell = templates::deck_shell(template.html, template.id, &title);
+        // A size the user picked for the deck wins over the template's.
+        let shell = match html::app_meta_content(s, SIZE_META) {
+            Some(_) => html::ensure_runtime(&html::set_slide_size(&shell, html::slide_size(s))),
+            None => shell,
+        };
+        Ok((shell, ()))
+    })?
+    .0)
 }
 
-pub fn set_slide_hidden(dir: &Path, id: &str, slide: &str, hidden: bool) -> Result<Deck> {
-    Ok(edit(dir, id, |s| Ok((html::set_hidden(s, slide, hidden)?, ())))?.0)
+/// Inserts a copy of the template's slide `slide` after `after` (or at the end).
+pub fn add_template_slide(
+    file: &Path,
+    after: Option<String>,
+    template: &str,
+    slide: &str,
+) -> Result<(Deck, String)> {
+    edit(file, |s| {
+        html::copy_slide(s, after.as_deref(), template, slide)
+    })
 }
 
-pub fn add_section(dir: &Path, id: &str, before: Option<String>, title: &str) -> Result<Deck> {
-    Ok(edit(dir, id, |s| {
+pub fn duplicate(file: &Path, slide: &str) -> Result<(Deck, String)> {
+    edit(file, |s| html::duplicate(s, slide))
+}
+
+pub fn set_slide_hidden(
+    file: &Path,
+    session: Option<&Path>,
+    slide: &str,
+    hidden: bool,
+) -> Result<Deck> {
+    let deck = edit(file, |s| Ok((html::set_hidden(s, slide, hidden)?, ())))?.0;
+    refresh_guard(file, session, slide)?;
+    Ok(deck)
+}
+
+/// Gives every slide the canvas `size` and refreshes the player runtime to match. The slides'
+/// content stays as it is; the agent lays it out again for the new size.
+pub fn set_slide_size(file: &Path, size: SlideSize) -> Result<Deck> {
+    size.check().map_err(Error::Message)?;
+    Ok(edit(file, |s| {
+        Ok((html::ensure_runtime(&html::set_slide_size(s, size)), ()))
+    })?
+    .0)
+}
+
+/// Locks or unlocks a slide. Neither the user nor the agent can change a locked slide.
+pub fn set_slide_locked(
+    file: &Path,
+    session: Option<&Path>,
+    slide: &str,
+    locked: bool,
+) -> Result<Deck> {
+    let deck = edit(file, |s| Ok((html::set_locked(s, slide, locked)?, ())))?.0;
+    refresh_guard(file, session, slide)?;
+    Ok(deck)
+}
+
+fn ensure_unlocked(source: &str, slide: &str) -> std::result::Result<(), String> {
+    if html::is_locked(source, slide) {
+        return Err(format!(
+            "The slide `{slide}` is locked; unlock it to change it."
+        ));
+    }
+    Ok(())
+}
+
+/// The locked slides an agent turn must leave alone; empty when no turn is guarded.
+pub fn read_guard(file: &Path, session: Option<&Path>) -> Vec<html::LockedSlide> {
+    let Some(session) = session else {
+        return Vec::new();
+    };
+    let raw = fs::read_to_string(session.join(LOCKS_FILE)).unwrap_or_default();
+    if let Some(root) = sessions::workspace_of(session) {
+        let entries: std::collections::BTreeMap<String, Vec<html::LockedSlide>> =
+            serde_json::from_str(&raw).unwrap_or_default();
+        guard_key(file, &root)
+            .ok()
+            .and_then(|key| entries.get(&key).cloned())
+            .unwrap_or_default()
+    } else {
+        serde_json::from_str(&raw).unwrap_or_default()
+    }
+}
+
+fn write_guard(file: &Path, session: &Path, locked: &[html::LockedSlide]) -> Result<()> {
+    fs::create_dir_all(session)?;
+    let value = if let Some(root) = sessions::workspace_of(session) {
+        let mut entries: std::collections::BTreeMap<String, Vec<html::LockedSlide>> =
+            fs::read_to_string(session.join(LOCKS_FILE))
+                .ok()
+                .and_then(|raw| serde_json::from_str(&raw).ok())
+                .unwrap_or_default();
+        entries.insert(guard_key(file, &root)?, locked.to_vec());
+        serde_json::to_string(&entries).expect("json")
+    } else {
+        serde_json::to_string(locked).expect("json")
+    };
+    atomic_write(&session.join(LOCKS_FILE), value.as_bytes())
+}
+
+/// Records the locked slides before an agent turn, so [`release_guard`] can put back any the
+/// agent changes and the lint tool can tell it about them.
+pub fn guard_locked(file: &Path, session: &Path) -> Result<()> {
+    write_guard(file, session, &html::locked_slides(&read_html(file)?))
+}
+
+/// Keeps a running turn's guard in step with what the user did to `slide`: locking,
+/// unlocking or hiding it mid-turn is theirs to do, and must not be undone after the turn.
+fn refresh_guard(file: &Path, session: Option<&Path>, slide: &str) -> Result<()> {
+    let Some(session) = session.filter(|s| s.join(LOCKS_FILE).is_file()) else {
+        return Ok(());
+    };
+    let mut guard = read_guard(file, Some(session));
+    let now = html::locked_slides(&read_html(file)?);
+    guard.retain(|l| l.id != slide);
+    guard.extend(now.into_iter().filter(|l| l.id == slide));
+    write_guard(file, session, &guard)
+}
+
+/// Ends an agent turn's guard: puts back every locked slide the agent changed or removed.
+/// Returns their ids.
+pub fn release_guard(file: &Path, session: &Path) -> Result<Vec<String>> {
+    let guard = read_guard(file, Some(session));
+    if sessions::workspace_of(session).is_none() {
+        let _ = fs::remove_file(session.join(LOCKS_FILE));
+    }
+    if guard.is_empty() {
+        return Ok(Vec::new());
+    }
+    let source = if file.exists() {
+        String::from_utf8_lossy(&fs::read(file)?).into_owned()
+    } else {
+        String::from("<html><body><main class=\"deck\"></main></body></html>")
+    };
+    let (mut restored, mut ids) = html::restore_locked(&source, &guard);
+    if !html::changed_locked(&restored, &guard).is_empty() {
+        // A removed or broken slide container cannot host the missing locked slides.
+        // Rebuild their container; the snapshot keeps the complete pre-turn deck.
+        (restored, ids) = html::restore_locked(
+            "<html><body><main class=\"deck\"></main></body></html>",
+            &guard,
+        );
+    }
+    if !ids.is_empty() {
+        fs::create_dir_all(folder(file))?;
+        write_html(file, &restored)?;
+    }
+    Ok(ids)
+}
+
+pub fn add_section(file: &Path, before: Option<String>, title: &str) -> Result<Deck> {
+    Ok(edit(file, |s| {
         Ok((html::add_section(s, before.as_deref(), title)?, ()))
     })?
     .0)
 }
 
-pub fn rename_section(dir: &Path, id: &str, index: usize, title: &str) -> Result<Deck> {
-    Ok(edit(dir, id, |s| {
-        Ok((html::rename_section(s, index, title)?, ()))
+pub fn rename_section(file: &Path, index: usize, title: &str) -> Result<Deck> {
+    Ok(edit(file, |s| Ok((html::rename_section(s, index, title)?, ())))?.0)
+}
+
+pub fn delete_section(file: &Path, index: usize) -> Result<Deck> {
+    Ok(edit(file, |s| Ok((html::delete_section(s, index)?, ())))?.0)
+}
+
+/// Deletes a slide along with its review marks.
+pub fn delete_slide(file: &Path, session: &Path, slide: &str) -> Result<Deck> {
+    ensure_unlocked(&read_html(file)?, slide).map_err(Error::Message)?;
+    snapshot(file, session)?;
+    Ok(edit(file, |s| {
+        let updated = html::delete(s, slide)?;
+        Ok((prune_review(&updated).unwrap_or(updated), ()))
     })?
     .0)
-}
-
-pub fn delete_section(dir: &Path, id: &str, index: usize) -> Result<Deck> {
-    Ok(edit(dir, id, |s| Ok((html::delete_section(s, index)?, ())))?.0)
-}
-
-pub fn delete_slide(dir: &Path, id: &str, slide: &str) -> Result<Deck> {
-    snapshot(dir)?;
-    Ok(edit(dir, id, |s| Ok((html::delete(s, slide)?, ())))?.0)
 }
 
 /// Replaces one slide with markup edited on the stage. `base` is the slide's hash the edit
 /// started from; the save is refused when the slide has changed since. Returns the slide's
 /// previous markup, so the edit can be undone by saving it back.
 pub fn update_slide(
-    dir: &Path,
-    id: &str,
+    file: &Path,
+    session: &Path,
     slide: &str,
     markup: &str,
     base: &str,
 ) -> Result<(Deck, String)> {
-    let source = read_html(dir)?;
+    let source = read_html(file)?;
     let current = html::find_slides(&source)
         .into_iter()
         .find(|s| s.id.as_deref() == Some(slide))
         .map(|s| html::content_hash(&source[s.range]))
         .ok_or_else(|| Error::msg(format!("Slide not found: {slide}")))?;
+    ensure_unlocked(&source, slide).map_err(Error::Message)?;
     if current != base {
         return Err(Error::msg(
             "The slide changed while you were editing it; your last change was not saved.",
         ));
     }
-    snapshot(dir)?;
-    edit(dir, id, |s| html::replace_slide(s, slide, markup))
+    snapshot(file, session)?;
+    edit(file, |s| html::replace_slide(s, slide, markup))
 }
 
 /// Replaces deck.html with hand-edited source. `base` is the text the edit started from;
 /// when given and the file has changed since (say, the agent wrote to it), the save is
 /// refused so neither side's work is silently lost.
 pub fn save_source(
-    dir: &Path,
-    id: &str,
+    file: &Path,
+    session: &Path,
     source: &str,
     base: Option<&str>,
     normalize_after: bool,
 ) -> Result<Deck> {
+    let current = read_html(file)?;
     if let Some(base) = base {
-        if !same_text(&read_html(dir)?, base) {
+        if !same_text(&current, base) {
             return Err(Error::msg(
                 "deck.html changed on disk since you started editing",
             ));
         }
     }
-    snapshot(dir)?;
-    write_html(dir, source)?;
-    if normalize_after {
-        normalize(dir)?;
+    let changed = html::changed_locked(
+        &source.replace("\r\n", "\n"),
+        &html::locked_slides(&current.replace("\r\n", "\n")),
+    );
+    if !changed.is_empty() {
+        return Err(Error::msg(format!(
+            "Locked slides cannot be changed: {}. Unlock them in the slide rail first.",
+            changed.join(", ")
+        )));
     }
-    load(dir, id)
+    snapshot(file, session)?;
+    write_html(file, source)?;
+    if normalize_after {
+        normalize(file)?;
+    }
+    load(file)
 }
 
 /// Equal up to line endings (the editor normalizes them to `\n`).
@@ -434,22 +648,17 @@ fn same_text(a: &str, b: &str) -> bool {
     a.replace("\r\n", "\n") == b.replace("\r\n", "\n")
 }
 
-pub fn delete_deck(dir: &Path) -> Result<()> {
-    fs::remove_dir_all(dir)?;
-    Ok(())
-}
-
 /// Writes a standalone copy of the deck with attached assets embedded as data URIs.
-pub fn export(dir: &Path, dest: &Path) -> Result<()> {
-    fs::write(dest, export_html(dir)?)?;
+pub fn export(file: &Path, dest: &Path) -> Result<()> {
+    fs::write(dest, export_html(file)?)?;
     Ok(())
 }
 
 /// The deck as one self-contained HTML file: the player runtime and every asset inlined.
-pub fn export_html(dir: &Path) -> Result<String> {
-    let source = html::ensure_runtime(&read_html(dir)?);
+pub fn export_html(file: &Path) -> Result<String> {
+    let source = html::ensure_runtime(&read_html(file)?);
     Ok(html::inline_assets(&source, |rel| {
-        let path = resolve_in_deck(dir, rel).ok()?;
+        let path = resolve_in_deck(folder(file), rel).ok()?;
         Some((mime_for(rel).to_string(), fs::read(path).ok()?))
     }))
 }
@@ -510,13 +719,19 @@ pub fn slide_image_name(index: usize, total: usize) -> String {
     format!("slide-{:0digits$}.png", index + 1)
 }
 
-/// Lints deck.html; asset references are checked against the deck's own files.
-pub fn lint(dir: &Path) -> Result<Vec<lint::Issue>> {
-    let source = read_html(dir)?;
-    Ok(lint::lint(&source, |rel| {
+/// Lints the deck file; asset references are checked against the files next to it, and during
+/// an agent turn, locked slides against how they were when it started.
+pub fn lint(file: &Path, session: Option<&Path>) -> Result<Vec<lint::Issue>> {
+    let source = read_html(file)?;
+    let asset_exists = |rel: &str| {
         let rel = percent_encoding::percent_decode_str(rel).decode_utf8_lossy();
-        resolve_in_deck(dir, &rel).is_ok_and(|path| path.is_file())
-    }))
+        resolve_in_deck(folder(file), &rel).is_ok_and(|path| path.is_file())
+    };
+    Ok(lint::lint(
+        &source,
+        asset_exists,
+        &read_guard(file, session),
+    ))
 }
 
 pub fn mime_for(path: &str) -> &'static str {
@@ -545,87 +760,96 @@ pub fn mime_for(path: &str) -> &'static str {
     }
 }
 
-pub fn import_assets(dir: &Path, paths: Vec<String>) -> Result<Vec<String>> {
+pub fn import_assets(file: &Path, paths: Vec<String>) -> Result<Vec<String>> {
+    let assets = if file.is_dir() { file } else { folder(file) }.join("assets");
+    fs::create_dir_all(&assets)?;
     let mut imported = Vec::new();
     for source in paths {
         let source = PathBuf::from(source);
         if !source.is_file() {
             continue;
         }
-        let name = source.file_name().unwrap_or_default().to_string_lossy();
-        let dest = new_asset_path(dir, &name)?;
+        let dest = free_asset_path(&assets, &source);
         fs::copy(&source, &dest)?;
-        imported.push(asset_rel(&dest));
+        imported.push(asset_ref(&dest));
     }
     Ok(imported)
 }
 
-/// Saves an uploaded file (e.g. from a phone or tablet) into `assets/` under a free name
-/// based on `name`; returns its deck-relative path.
-pub fn save_asset(dir: &Path, name: &str, bytes: &[u8]) -> Result<String> {
-    let dest = new_asset_path(dir, name)?;
-    fs::write(&dest, bytes)?;
-    Ok(asset_rel(&dest))
+/// Writes pasted file contents (base64) into `assets/`, named after `name`; returns its ref.
+pub fn save_asset(file: &Path, name: &str, data: &str) -> Result<String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.trim())
+        .map_err(|e| Error::msg(format!("invalid pasted data: {e}")))?;
+    save_asset_bytes(file, name, &bytes)
 }
 
-/// A free path in the deck's `assets/` for a file called `name`: slugified, keeping its
-/// lowercased extension, numbered (`photo-2.png`) when taken.
-fn new_asset_path(dir: &Path, name: &str) -> Result<PathBuf> {
-    let assets = dir.join("assets");
+/// Writes an uploaded file (e.g. from a phone or tablet) into `assets/` under a free name
+/// based on `name`; returns its ref.
+pub fn save_asset_bytes(file: &Path, name: &str, bytes: &[u8]) -> Result<String> {
+    let assets = if file.is_dir() { file } else { folder(file) }.join("assets");
     fs::create_dir_all(&assets)?;
-    // Only the last component: an uploaded name may carry a client path.
-    let name = Path::new(name.rsplit(['/', '\\']).next().unwrap_or(name));
-    let stem = html::slugify(&name.file_stem().unwrap_or_default().to_string_lossy());
+    // Only the file name counts; a pasted or uploaded name (which may carry a client's path,
+    // `\`-separated on Windows) must not reach outside `assets/`.
+    let name = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let dest = free_asset_path(&assets, Path::new(name));
+    fs::write(&dest, bytes)?;
+    Ok(asset_ref(&dest))
+}
+
+/// A path in `assets` for a file named like `source`: slugged, lowercase extension, unused.
+fn free_asset_path(assets: &Path, source: &Path) -> PathBuf {
+    let stem = html::slugify(&source.file_stem().unwrap_or_default().to_string_lossy());
     let stem = if stem.is_empty() {
         "asset".to_string()
     } else {
         stem
     };
-    let ext = name
+    let ext = source
         .extension()
-        .map(|e| html::slugify(&e.to_string_lossy()))
-        .filter(|e| !e.is_empty())
-        .map(|e| format!(".{e}"))
+        .map(|e| format!(".{}", e.to_string_lossy().to_lowercase()))
         .unwrap_or_default();
-    Ok(std::iter::once(assets.join(format!("{stem}{ext}")))
+    std::iter::once(assets.join(format!("{stem}{ext}")))
         .chain((2..).map(|n| assets.join(format!("{stem}-{n}{ext}"))))
         .find(|p| !p.exists())
-        .expect("unbounded"))
+        .expect("unbounded")
 }
 
-fn asset_rel(path: &Path) -> String {
+fn asset_ref(path: &Path) -> String {
     format!("assets/{}", path.file_name().unwrap().to_string_lossy())
 }
 
-fn internal_file(dir: &Path, name: &str) -> Result<PathBuf> {
-    let dir = dir.join(INTERNAL_DIR);
-    fs::create_dir_all(&dir)?;
-    Ok(dir.join(name))
-}
-
-pub fn load_chat(dir: &Path) -> Result<serde_json::Value> {
-    let path = internal_file(dir, "chat.json")?;
-    match fs::read_to_string(&path) {
+/// The session's chat; Null for a deck without one yet.
+pub fn load_chat(session: Option<&Path>) -> Result<serde_json::Value> {
+    let Some(session) = session else {
+        return Ok(serde_json::Value::Null);
+    };
+    match fs::read_to_string(session.join(sessions::CHAT_FILE)) {
         Ok(raw) => Ok(serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Value::Null),
         Err(e) => Err(e.into()),
     }
 }
 
-pub fn save_chat(dir: &Path, chat: &serde_json::Value) -> Result<()> {
-    let path = internal_file(dir, "chat.json")?;
-    atomic_write(&path, serde_json::to_string(chat).expect("json").as_bytes())
+pub fn save_chat(session: &Path, chat: &serde_json::Value) -> Result<()> {
+    fs::create_dir_all(session)?;
+    atomic_write(
+        &session.join(sessions::CHAT_FILE),
+        serde_json::to_string(chat).expect("json").as_bytes(),
+    )
 }
 
-/// Each agent provider keeps its own resumable session, stored under `name`.
-pub fn read_session(dir: &Path, name: &str) -> Option<String> {
-    fs::read_to_string(dir.join(INTERNAL_DIR).join(name))
+/// Each agent provider keeps its own resumable session id in the session, stored under `name`.
+pub fn read_session(session: &Path, name: &str) -> Option<String> {
+    fs::read_to_string(session.join(name))
         .ok()
         .map(|s| s.trim().to_string())
 }
 
-pub fn write_session(dir: &Path, name: &str, session_id: Option<&str>) -> Result<()> {
-    let path = dir.join(INTERNAL_DIR).join(name);
+pub fn write_session(session: &Path, name: &str, session_id: Option<&str>) -> Result<()> {
+    fs::create_dir_all(session)?;
+    let path = session.join(name);
     match session_id {
         Some(id) => fs::write(path, id)?,
         None if path.exists() => fs::remove_file(path)?,
@@ -648,16 +872,19 @@ mod tests {
     }
 
     #[test]
-    fn plain_names_only() {
-        assert!(is_plain_name("my-deck"));
-        assert!(!is_plain_name("a/b"));
-        assert!(!is_plain_name(".."));
+    fn falls_back_to_the_file_or_folder_name_for_the_title() {
+        assert_eq!(fallback_title(Path::new("/w/q3-review.html")), "q3 review");
+        assert_eq!(fallback_title(Path::new("/w/my_talk/deck.html")), "my talk");
     }
 
     /// A throwaway deck folder holding `html` as deck.html.
     struct TempDeck(PathBuf);
 
     impl TempDeck {
+        /// The deck file, deck.html.
+        fn file(&self) -> PathBuf {
+            self.0.join(DECK_FILE)
+        }
         fn new(html: &str) -> Self {
             let dir = std::env::temp_dir().join(format!("slopslide-test-{}", uuid::Uuid::new_v4()));
             fs::create_dir_all(&dir).unwrap();
@@ -667,8 +894,12 @@ mod tests {
         fn html(&self) -> String {
             fs::read_to_string(self.0.join(DECK_FILE)).unwrap()
         }
+        /// The deck's session folder, outside the deck.
+        fn session(&self) -> PathBuf {
+            PathBuf::from(format!("{}-session", self.0.display()))
+        }
         fn snapshots(&self) -> Vec<String> {
-            let dir = self.0.join(INTERNAL_DIR).join("snapshots");
+            let dir = self.session().join("snapshots");
             let Ok(entries) = fs::read_dir(dir) else {
                 return Vec::new();
             };
@@ -680,6 +911,7 @@ mod tests {
 
     impl Drop for TempDeck {
         fn drop(&mut self) {
+            let _ = fs::remove_dir_all(self.session());
             let _ = fs::remove_dir_all(&self.0);
         }
     }
@@ -690,7 +922,8 @@ mod tests {
     #[test]
     fn saves_source_when_base_matches() {
         let deck = TempDeck::new(ORIGINAL);
-        let saved = save_source(&deck.0, "talk", EDITED, Some(ORIGINAL), false).unwrap();
+        let saved =
+            save_source(&deck.file(), &deck.session(), EDITED, Some(ORIGINAL), false).unwrap();
         assert_eq!(deck.html(), EDITED);
         let ids: Vec<_> = saved.slides.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, ["a", "b"]);
@@ -700,7 +933,7 @@ mod tests {
     #[test]
     fn save_snapshots_the_previous_version() {
         let deck = TempDeck::new(ORIGINAL);
-        save_source(&deck.0, "talk", EDITED, Some(ORIGINAL), false).unwrap();
+        save_source(&deck.file(), &deck.session(), EDITED, Some(ORIGINAL), false).unwrap();
         assert_eq!(deck.snapshots(), [ORIGINAL]);
     }
 
@@ -709,7 +942,8 @@ mod tests {
         let deck = TempDeck::new(ORIGINAL);
         let agent_version = ORIGINAL.replace(">A<", ">Agent<");
         fs::write(deck.0.join(DECK_FILE), &agent_version).unwrap();
-        let err = save_source(&deck.0, "talk", EDITED, Some(ORIGINAL), false).unwrap_err();
+        let err =
+            save_source(&deck.file(), &deck.session(), EDITED, Some(ORIGINAL), false).unwrap_err();
         assert!(err.to_string().contains("changed on disk"), "{err}");
         assert_eq!(
             deck.html(),
@@ -723,14 +957,14 @@ mod tests {
     fn save_without_base_overwrites() {
         let deck = TempDeck::new(ORIGINAL);
         fs::write(deck.0.join(DECK_FILE), "<html>agent</html>").unwrap();
-        save_source(&deck.0, "talk", EDITED, None, false).unwrap();
+        save_source(&deck.file(), &deck.session(), EDITED, None, false).unwrap();
         assert_eq!(deck.html(), EDITED);
     }
 
     #[test]
     fn save_accepts_base_with_different_line_endings() {
         let deck = TempDeck::new(&ORIGINAL.replace('\n', "\r\n"));
-        save_source(&deck.0, "talk", EDITED, Some(ORIGINAL), false).unwrap();
+        save_source(&deck.file(), &deck.session(), EDITED, Some(ORIGINAL), false).unwrap();
         assert_eq!(deck.html(), EDITED);
     }
 
@@ -738,7 +972,8 @@ mod tests {
     fn save_normalizes_when_asked() {
         let deck = TempDeck::new(ORIGINAL);
         let no_id = EDITED.replace(" id=\"b\"", "");
-        let saved = save_source(&deck.0, "talk", &no_id, Some(ORIGINAL), true).unwrap();
+        let saved =
+            save_source(&deck.file(), &deck.session(), &no_id, Some(ORIGINAL), true).unwrap();
         let html = deck.html();
         assert!(html.contains("slopslide:runtime-js"), "runtime installed");
         assert!(
@@ -746,14 +981,13 @@ mod tests {
             "ids assigned"
         );
         assert_eq!(saved.slides.len(), 2);
-        assert!(deck.0.join("assets").is_dir());
     }
 
     #[test]
     fn save_leaves_markup_alone_without_normalizing() {
         let deck = TempDeck::new(ORIGINAL);
         let no_id = EDITED.replace(" id=\"b\"", "");
-        let saved = save_source(&deck.0, "talk", &no_id, None, false).unwrap();
+        let saved = save_source(&deck.file(), &deck.session(), &no_id, None, false).unwrap();
         assert_eq!(deck.html(), no_id);
         assert_eq!(
             saved.slides[1].id, "#2",
@@ -764,9 +998,10 @@ mod tests {
     #[test]
     fn update_slide_replaces_it_and_returns_the_old_markup() {
         let deck = TempDeck::new(EDITED);
-        let base = load(&deck.0, "talk").unwrap().slides[0].hash.clone();
+        let base = load(&deck.file()).unwrap().slides[0].hash.clone();
         let markup = "<section class=\"slide\" id=\"a\"><p data-moved=\"\" style=\"translate: 10px 0px\">A!</p></section>";
-        let (saved, previous) = update_slide(&deck.0, "talk", "a", markup, &base).unwrap();
+        let (saved, previous) =
+            update_slide(&deck.file(), &deck.session(), "a", markup, &base).unwrap();
         assert_eq!(previous, "<section class=\"slide\" id=\"a\">A!</section>");
         assert_eq!(deck.html(), EDITED.replace(&previous, markup));
         assert_eq!(deck.snapshots(), [EDITED]);
@@ -775,8 +1010,14 @@ mod tests {
         assert_ne!(saved.slides[0].hash, base);
 
         // Undo: save the previous markup back on top of the new version.
-        let (restored, _) =
-            update_slide(&deck.0, "talk", "a", &previous, &saved.slides[0].hash).unwrap();
+        let (restored, _) = update_slide(
+            &deck.file(),
+            &deck.session(),
+            "a",
+            &previous,
+            &saved.slides[0].hash,
+        )
+        .unwrap();
         assert_eq!(deck.html(), EDITED);
         assert_eq!(restored.slides[0].hash, base);
     }
@@ -785,31 +1026,188 @@ mod tests {
     fn update_slide_refuses_when_the_slide_changed_since_base() {
         let deck = TempDeck::new(EDITED);
         let markup = "<section class=\"slide\" id=\"a\">mine</section>";
-        let err = update_slide(&deck.0, "talk", "a", markup, "stale").unwrap_err();
+        let err = update_slide(&deck.file(), &deck.session(), "a", markup, "stale").unwrap_err();
         assert!(err.to_string().contains("changed"), "{err}");
         assert_eq!(deck.html(), EDITED);
         assert!(deck.snapshots().is_empty());
 
-        let base = load(&deck.0, "talk").unwrap().slides[0].hash.clone();
-        assert!(update_slide(&deck.0, "talk", "zz", markup, &base).is_err());
+        let base = load(&deck.file()).unwrap().slides[0].hash.clone();
+        assert!(update_slide(&deck.file(), &deck.session(), "zz", markup, &base).is_err());
         let other = "<section class=\"slide\" id=\"b\">mine</section>";
-        assert!(update_slide(&deck.0, "talk", "a", other, &base).is_err());
+        assert!(update_slide(&deck.file(), &deck.session(), "a", other, &base).is_err());
         assert_eq!(deck.html(), EDITED);
     }
 
     #[test]
     fn load_reports_hidden_slides() {
         let deck = TempDeck::new(&EDITED.replace(" id=\"b\"", " id=\"b\" data-hidden"));
-        let loaded = load(&deck.0, "talk").unwrap();
+        let loaded = load(&deck.file()).unwrap();
         let hidden: Vec<_> = loaded.slides.iter().map(|s| s.hidden).collect();
         assert_eq!(hidden, [false, true]);
+    }
+
+    #[test]
+    fn load_reports_locked_slides() {
+        let deck = TempDeck::new(&EDITED.replace(" id=\"a\"", " id=\"a\" data-locked"));
+        assert_eq!(locked_flags(&load(&deck.file()).unwrap()), [true, false]);
+    }
+
+    const LOCKED: &str = "<html><head><title>Talk</title></head><body><main>\n<section class=\"slide\" id=\"a\" data-locked>A</section>\n<section class=\"slide\" id=\"b\">B</section>\n</main></body></html>";
+
+    fn locked_flags(deck: &Deck) -> Vec<bool> {
+        deck.slides.iter().map(|s| s.locked).collect()
+    }
+
+    #[test]
+    fn locks_and_unlocks_slides_on_disk() {
+        let deck = TempDeck::new(EDITED);
+        let locked = set_slide_locked(&deck.file(), Some(&deck.session()), "b", true).unwrap();
+        assert_eq!(locked_flags(&locked), [false, true]);
+        assert!(deck
+            .html()
+            .contains("<section data-locked class=\"slide\" id=\"b\">B<"));
+        let unlocked = set_slide_locked(&deck.file(), Some(&deck.session()), "b", false).unwrap();
+        assert_eq!(locked_flags(&unlocked), [false, false]);
+        assert_eq!(deck.html(), EDITED);
+        assert!(set_slide_locked(&deck.file(), Some(&deck.session()), "zz", true).is_err());
+    }
+
+    #[test]
+    fn the_editor_cannot_change_or_delete_a_locked_slide() {
+        let deck = TempDeck::new(LOCKED);
+        let base = load(&deck.file()).unwrap().slides[0].hash.clone();
+        let markup = "<section class=\"slide\" id=\"a\" data-locked>mine</section>";
+        let err = update_slide(&deck.file(), &deck.session(), "a", markup, &base).unwrap_err();
+        assert!(err.to_string().contains("locked"), "{err}");
+        let err = delete_slide(&deck.file(), &deck.session(), "a").unwrap_err();
+        assert!(err.to_string().contains("locked"), "{err}");
+        assert_eq!(deck.html(), LOCKED);
+        assert!(deck.snapshots().is_empty());
+
+        // Other slides, hiding, and moving it stay open.
+        let base = load(&deck.file()).unwrap().slides[1].hash.clone();
+        let other = "<section class=\"slide\" id=\"b\">B!</section>";
+        update_slide(&deck.file(), &deck.session(), "b", other, &base).unwrap();
+        set_slide_hidden(&deck.file(), Some(&deck.session()), "a", true).unwrap();
+        let moved = reorder(&deck.file(), vec!["b".into(), "a".into()]).unwrap();
+        assert_eq!(slide_ids(&moved), ["b", "a"]);
+        delete_slide(&deck.file(), &deck.session(), "b").unwrap();
+    }
+
+    #[test]
+    fn source_edits_cannot_change_a_locked_slide() {
+        let deck = TempDeck::new(LOCKED);
+        let changed = LOCKED.replace(">A<", ">mine<");
+        let err =
+            save_source(&deck.file(), &deck.session(), &changed, Some(LOCKED), false).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Locked slides cannot be changed: a"),
+            "{err}"
+        );
+        let unlocked = LOCKED.replace(" data-locked", "");
+        assert!(save_source(
+            &deck.file(),
+            &deck.session(),
+            &unlocked,
+            Some(LOCKED),
+            false
+        )
+        .is_err());
+        assert_eq!(deck.html(), LOCKED);
+
+        // Changing the rest of the deck, or locking another slide, is fine.
+        let other = LOCKED
+            .replace(">B<", ">B!<")
+            .replace("id=\"b\"", "id=\"b\" data-locked");
+        save_source(&deck.file(), &deck.session(), &other, Some(LOCKED), false).unwrap();
+        assert_eq!(deck.html(), other);
+        let crlf = other.replace('\n', "\r\n").replace(">B!<", ">B<");
+        assert!(
+            save_source(&deck.file(), &deck.session(), &crlf, Some(&other), false).is_err(),
+            "line endings alone are not a change, the text is"
+        );
+        let crlf = other.replace('\n', "\r\n");
+        save_source(&deck.file(), &deck.session(), &crlf, Some(&other), false).unwrap();
+    }
+
+    #[test]
+    fn a_guarded_turn_puts_back_the_locked_slides() {
+        let deck = TempDeck::new(LOCKED);
+        guard_locked(&deck.file(), &deck.session()).unwrap();
+        assert_eq!(read_guard(&deck.file(), Some(&deck.session())).len(), 1);
+        // The agent rewrites everything, dropping the locked slide.
+        let agent = "<html><head><title>Talk</title></head><body><main>\n<section class=\"slide\" id=\"b\">New B</section>\n</main></body></html>";
+        fs::write(deck.0.join(DECK_FILE), agent).unwrap();
+        let issues = lint(&deck.file(), Some(&deck.session())).unwrap();
+        assert!(
+            issues.iter().any(|i| i.rule == "locked-slide-changed"),
+            "{issues:?}"
+        );
+
+        assert_eq!(release_guard(&deck.file(), &deck.session()).unwrap(), ["a"]);
+        assert_eq!(
+            deck.html(),
+            "<html><head><title>Talk</title></head><body><main>\n<section class=\"slide\" id=\"a\" data-locked>A</section>\n<section class=\"slide\" id=\"b\">New B</section>\n</main></body></html>"
+        );
+        assert!(
+            read_guard(&deck.file(), Some(&deck.session())).is_empty(),
+            "the guard ends with the turn"
+        );
+        assert!(!lint(&deck.file(), Some(&deck.session()))
+            .unwrap()
+            .iter()
+            .any(|i| i.rule == "locked-slide-changed"));
+        assert!(release_guard(&deck.file(), &deck.session())
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn locking_mid_turn_updates_the_guard() {
+        let deck = TempDeck::new(LOCKED);
+        guard_locked(&deck.file(), &deck.session()).unwrap();
+        // The user unlocks `a`, locks `b` and hides it while the agent works.
+        set_slide_locked(&deck.file(), Some(&deck.session()), "a", false).unwrap();
+        set_slide_locked(&deck.file(), Some(&deck.session()), "b", true).unwrap();
+        set_slide_hidden(&deck.file(), Some(&deck.session()), "b", true).unwrap();
+        let ids: Vec<_> = read_guard(&deck.file(), Some(&deck.session()))
+            .into_iter()
+            .map(|l| l.id)
+            .collect();
+        assert_eq!(ids, ["b"]);
+        let mine = deck.html();
+        let agent = mine.replace(">A<", ">Agent A<");
+        fs::write(deck.0.join(DECK_FILE), &agent).unwrap();
+        assert!(release_guard(&deck.file(), &deck.session())
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            deck.html(),
+            agent,
+            "unlocked `a` keeps the agent's edit, `b` stays hidden"
+        );
+    }
+
+    #[test]
+    fn opening_a_deck_drops_a_stale_guard() {
+        let deck = TempDeck::new(LOCKED);
+        guard_locked(&deck.file(), &deck.session()).unwrap();
+        open(&deck.file(), Some(&deck.session()), false).unwrap();
+        assert_eq!(
+            read_guard(&deck.file(), Some(&deck.session())).len(),
+            1,
+            "a running turn keeps its guard"
+        );
+        open(&deck.file(), Some(&deck.session()), true).unwrap();
+        assert!(read_guard(&deck.file(), Some(&deck.session())).is_empty());
     }
 
     #[test]
     fn save_reports_missing_deck() {
         let deck = TempDeck::new(ORIGINAL);
         fs::remove_file(deck.0.join(DECK_FILE)).unwrap();
-        assert!(save_source(&deck.0, "talk", EDITED, Some(ORIGINAL), false).is_err());
+        assert!(save_source(&deck.file(), &deck.session(), EDITED, Some(ORIGINAL), false).is_err());
         assert!(!deck.0.join(DECK_FILE).exists());
     }
 
@@ -873,118 +1271,85 @@ mod tests {
     }
 
     #[test]
-    fn deck_dir_validates_ids_and_requires_deck_html() {
+    fn deck_file_takes_absolute_paths_of_html_files() {
         let lib = TempLib::new();
-        lib.add("talk", ORIGINAL);
-        fs::create_dir_all(lib.0.join("not-a-deck")).unwrap();
-        assert_eq!(deck_dir_in(&lib.0, "talk").unwrap(), lib.0.join("talk"));
-        for bad in ["", "..", ".", "a/b", "/abs", "../talk"] {
-            let err = deck_dir_in(&lib.0, bad).unwrap_err().to_string();
+        let talk = lib.add("talk", ORIGINAL).join(DECK_FILE);
+        let other = lib.0.join("talk/q3.HTM");
+        fs::write(&other, ORIGINAL).unwrap();
+        fs::write(lib.0.join("notes.txt"), "x").unwrap();
+        assert_eq!(deck_file(&talk.to_string_lossy()).unwrap(), talk);
+        assert_eq!(deck_file(&other.to_string_lossy()).unwrap(), other);
+        for bad in [
+            "".to_string(),
+            "talk/deck.html".into(),
+            lib.0.join("notes.txt").to_string_lossy().into_owned(),
+            lib.0.join("talk").to_string_lossy().into_owned(),
+        ] {
+            let err = deck_file(&bad).unwrap_err().to_string();
             assert!(err.contains("invalid deck id"), "{bad}: {err}");
         }
-        let err = deck_dir_in(&lib.0, "not-a-deck").unwrap_err().to_string();
+        let missing = lib.0.join("missing.html");
+        let err = deck_file(&missing.to_string_lossy())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("deck not found"), "{err}");
-        assert!(deck_dir_in(&lib.0, "missing").is_err());
-    }
-
-    #[test]
-    fn lists_decks_newest_first_and_skips_other_folders() {
-        let lib = TempLib::new();
-        let old = lib.add("old-one", THREE);
-        lib.add(
-            "no-title",
-            "<main><section class=\"slide\"></section></main>",
-        );
-        lib.add(
-            "empty-deck",
-            "<title>Empty</title><main class=\"deck\"></main>",
-        );
-        fs::create_dir_all(lib.0.join("stray-folder")).unwrap();
-        fs::write(lib.0.join("loose-file.txt"), "x").unwrap();
-        let past = SystemTime::now() - std::time::Duration::from_secs(3600);
-        fs::File::options()
-            .write(true)
-            .open(old.join(DECK_FILE))
-            .unwrap()
-            .set_modified(past)
-            .unwrap();
-
-        let decks = list(&lib.0).unwrap();
-        let ids: Vec<_> = decks.iter().map(|d| d.id.as_str()).collect();
-        assert_eq!(ids.len(), 3);
-        assert_eq!(ids.last(), Some(&"old-one"), "oldest last: {ids:?}");
-
-        let three = decks.iter().find(|d| d.id == "old-one").unwrap();
-        assert_eq!(three.title, "Three");
-        assert_eq!(three.slide_count, 3);
-        assert_eq!(three.first_slide.as_deref(), Some("a"));
-        assert!(three.updated_ms > 0);
-
-        let untitled = decks.iter().find(|d| d.id == "no-title").unwrap();
-        assert_eq!(untitled.title, "no title", "falls back to the folder name");
-        assert_eq!(
-            untitled.first_slide, None,
-            "slide without id has no addressable id"
-        );
-
-        let empty = decks.iter().find(|d| d.id == "empty-deck").unwrap();
-        assert_eq!((empty.slide_count, empty.first_slide.as_deref()), (0, None));
-    }
-
-    #[test]
-    fn lists_an_empty_library() {
-        let lib = TempLib::new();
-        assert!(list(&lib.0).unwrap().is_empty());
     }
 
     #[test]
     fn creates_decks_in_unique_slugged_folders() {
         let lib = TempLib::new();
-        let first = create(&lib.0, "  Series A pitch!  ").unwrap();
-        assert_eq!(first.id, "series-a-pitch");
+        let first = create(&lib.0, "  Series A pitch!  ", None).unwrap();
+        let file = lib.0.join("series-a-pitch").join(DECK_FILE);
+        assert_eq!(Path::new(&first.id), file);
+        assert_eq!(first.path, first.id);
         assert_eq!(first.title, "Series A pitch!");
         assert!(first.slides.is_empty());
-        let second = create(&lib.0, "Series A Pitch").unwrap();
-        assert_eq!(second.id, "series-a-pitch-2");
-        let untitled = create(&lib.0, "   ").unwrap();
+        let folder_of = |deck: &Deck| {
+            let file = PathBuf::from(&deck.id);
+            folder(&file)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        };
+        let second = create(&lib.0, "Series A Pitch", None).unwrap();
+        assert_eq!(folder_of(&second), "series-a-pitch-2");
+        let untitled = create(&lib.0, "   ", None).unwrap();
         assert_eq!(
-            (untitled.id.as_str(), untitled.title.as_str()),
+            (folder_of(&untitled).as_str(), untitled.title.as_str()),
             ("untitled-deck", "Untitled deck")
         );
-        let symbols = create(&lib.0, "日本語").unwrap();
-        assert_eq!(symbols.id, "untitled");
+        let symbols = create(&lib.0, "日本語", None).unwrap();
+        assert_eq!(folder_of(&symbols), "untitled");
         assert_eq!(symbols.title, "日本語");
 
-        let dir = lib.0.join(&first.id);
-        let html = fs::read_to_string(dir.join(DECK_FILE)).unwrap();
+        let html = fs::read_to_string(&file).unwrap();
         assert!(html.contains("<title>Series A pitch!</title>"));
         assert!(
             html.contains("slopslide:runtime-js"),
             "created decks are normalized"
         );
-        assert!(dir.join("assets").is_dir());
-        assert_eq!(Path::new(&first.path), dir);
     }
 
     #[test]
-    fn normalize_writes_app_files_and_is_idempotent() {
+    fn normalize_writes_only_the_deck_file_and_is_idempotent() {
         let deck = TempDeck::new(&EDITED.replace(" id=\"b\"", ""));
-        normalize(&deck.0).unwrap();
-        for (name, body) in REFERENCE_DOCS {
-            let path = deck.0.join(INTERNAL_DIR).join("reference").join(name);
-            assert_eq!(fs::read_to_string(path).unwrap(), *body);
-        }
-        assert!(deck.0.join("assets").is_dir());
+        normalize(&deck.file()).unwrap();
+        let entries: Vec<_> = fs::read_dir(&deck.0)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, [DECK_FILE], "nothing next to the deck");
         let once = deck.html();
         assert!(once.contains("id=\"slide-2\""));
-        normalize(&deck.0).unwrap();
+        normalize(&deck.file()).unwrap();
         assert_eq!(deck.html(), once);
     }
 
     #[test]
     fn normalize_does_not_rewrite_an_already_tidy_deck() {
         let deck = TempDeck::new(ORIGINAL);
-        normalize(&deck.0).unwrap();
+        normalize(&deck.file()).unwrap();
         let past = SystemTime::now() - std::time::Duration::from_secs(3600);
         let file = deck.0.join(DECK_FILE);
         fs::File::options()
@@ -993,10 +1358,11 @@ mod tests {
             .unwrap()
             .set_modified(past)
             .unwrap();
-        let before = modified_ms(&file);
-        normalize(&deck.0).unwrap();
+        let modified = |file: &Path| fs::metadata(file).unwrap().modified().unwrap();
+        let before = modified(&file);
+        normalize(&deck.file()).unwrap();
         assert_eq!(
-            modified_ms(&file),
+            modified(&file),
             before,
             "no write, so the watcher stays quiet"
         );
@@ -1005,21 +1371,22 @@ mod tests {
     #[test]
     fn open_only_normalizes_when_asked() {
         let deck = TempDeck::new(&EDITED.replace(" id=\"b\"", ""));
-        let raw = open(&deck.0, "talk", false).unwrap();
+        let raw = open(&deck.file(), Some(&deck.session()), false).unwrap();
         assert_eq!(slide_ids(&raw), ["a", "#2"]);
         assert!(!deck.html().contains("slopslide:runtime"));
-        let tidy = open(&deck.0, "talk", true).unwrap();
+        let tidy = open(&deck.file(), Some(&deck.session()), true).unwrap();
         assert_eq!(slide_ids(&tidy), ["a", "slide-2"]);
     }
 
     #[test]
     fn load_hashes_change_per_slide() {
         let deck = TempDeck::new(THREE);
-        let before = load(&deck.0, "three").unwrap();
-        assert_eq!(before.id, "three");
+        let before = load(&deck.file()).unwrap();
+        assert_eq!(Path::new(&before.id), deck.file());
+        assert_eq!(before.path, before.id);
         assert_eq!(before.title, "Three");
         fs::write(deck.0.join(DECK_FILE), THREE.replace(">B<", ">Bee<")).unwrap();
-        let after = load(&deck.0, "three").unwrap();
+        let after = load(&deck.file()).unwrap();
         let changed: Vec<_> = before
             .slides
             .iter()
@@ -1035,7 +1402,7 @@ mod tests {
             THREE.replace("<head>", "<head><style>x</style>"),
         )
         .unwrap();
-        let restyled = load(&deck.0, "three").unwrap();
+        let restyled = load(&deck.file()).unwrap();
         assert_ne!(before.shell_hash, restyled.shell_hash);
         assert!(before
             .slides
@@ -1045,36 +1412,32 @@ mod tests {
     }
 
     #[test]
-    fn load_falls_back_to_the_id_for_the_title() {
-        let deck = TempDeck::new("<main></main>");
-        assert_eq!(load(&deck.0, "my-talk").unwrap().title, "my talk");
+    fn load_falls_back_to_the_file_name_for_the_title() {
+        let lib = TempLib::new();
+        let file = lib.add("my-talk", "<main></main>").join(DECK_FILE);
+        assert_eq!(load(&file).unwrap().title, "my talk");
+        let other = file.with_file_name("q3_numbers.html");
+        fs::write(&other, "<main></main>").unwrap();
+        assert_eq!(load(&other).unwrap().title, "q3 numbers");
     }
 
     #[test]
     fn deck_serializes_in_camel_case_for_the_frontend() {
         let deck = TempDeck::new(ORIGINAL);
-        let json = serde_json::to_value(load(&deck.0, "talk").unwrap()).unwrap();
+        let json = serde_json::to_value(load(&deck.file()).unwrap()).unwrap();
         assert!(json["shellHash"].is_string());
         assert_eq!(json["slides"][0]["id"], "a");
         assert!(json["slides"][0]["hash"].is_string());
-        let summary = serde_json::to_value(DeckSummary {
-            id: "x".into(),
-            title: "X".into(),
-            slide_count: 2,
-            first_slide: None,
-            updated_ms: 5,
-        })
-        .unwrap();
         assert_eq!(
-            summary,
-            serde_json::json!({"id":"x","title":"X","slideCount":2,"firstSlide":null,"updatedMs":5})
+            json["size"],
+            serde_json::json!({"width":1920.0,"height":1080.0,"unit":"px","pixelWidth":1920,"pixelHeight":1080})
         );
     }
 
     #[test]
     fn snapshots_keep_only_the_newest() {
         let deck = TempDeck::new(ORIGINAL);
-        let snapshots = deck.0.join(INTERNAL_DIR).join("snapshots");
+        let snapshots = deck.session().join("snapshots");
         fs::create_dir_all(&snapshots).unwrap();
         // Older snapshots, named by timestamp like real ones.
         for n in 0..SNAPSHOTS_KEPT + 5 {
@@ -1084,7 +1447,7 @@ mod tests {
             )
             .unwrap();
         }
-        snapshot(&deck.0).unwrap();
+        snapshot(&deck.file(), &deck.session()).unwrap();
         let mut names: Vec<_> = fs::read_dir(&snapshots)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -1102,18 +1465,18 @@ mod tests {
     #[test]
     fn save_sketch_writes_a_png_and_prunes_old_ones() {
         let deck = TempDeck::new(ORIGINAL);
-        let sketches = deck.0.join(INTERNAL_DIR).join("sketches");
+        let sketches = deck.session().join("sketches");
         fs::create_dir_all(&sketches).unwrap();
         for n in 0..SKETCHES_KEPT + 3 {
             let name = format!("{}-old.png", 1_000_000_000_000u64 + n as u64);
             fs::write(sketches.join(name), b"old").unwrap();
         }
-        let rel = save_sketch(&deck.0, b"\x89PNG fake").unwrap();
+        let path = save_sketch(&deck.session(), b"\x89PNG fake").unwrap();
         assert!(
-            rel.starts_with(".slopslide/sketches/") && rel.ends_with(".png"),
-            "{rel}"
+            Path::new(&path).starts_with(&sketches) && path.ends_with(".png"),
+            "absolute, in the session: {path}"
         );
-        assert_eq!(fs::read(deck.0.join(&rel)).unwrap(), b"\x89PNG fake");
+        assert_eq!(fs::read(&path).unwrap(), b"\x89PNG fake");
         let names: Vec<_> = fs::read_dir(&sketches)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
@@ -1124,7 +1487,7 @@ mod tests {
             "oldest pruned"
         );
         assert!(
-            rel.ends_with(names.iter().max().unwrap().as_str()),
+            path.ends_with(names.iter().max().unwrap().as_str()),
             "new sketch kept"
         );
     }
@@ -1199,8 +1562,8 @@ mod tests {
     #[test]
     fn review_marks_are_saved_in_the_deck_and_loaded_back() {
         let deck = TempDeck::new(THREE);
-        save_review(&deck.0, &marks(&["b", "gone"])).unwrap();
-        let loaded = load(&deck.0, "three").unwrap();
+        save_review(&deck.file(), &marks(&["b", "gone"])).unwrap();
+        let loaded = load(&deck.file()).unwrap();
         assert_eq!(
             loaded.review,
             marks(&["b"]),
@@ -1208,27 +1571,27 @@ mod tests {
         );
         assert!(deck.html().contains(review::START));
 
-        save_review(&deck.0, &Review::new()).unwrap();
+        save_review(&deck.file(), &Review::new()).unwrap();
         assert_eq!(deck.html(), THREE, "clearing every mark removes the block");
     }
 
     #[test]
     fn saving_unchanged_review_marks_leaves_the_file_alone() {
         let deck = TempDeck::new(THREE);
-        save_review(&deck.0, &marks(&["a"])).unwrap();
+        save_review(&deck.file(), &marks(&["a"])).unwrap();
         let path = deck.0.join(DECK_FILE);
         let before = fs::metadata(&path).unwrap().modified().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
-        save_review(&deck.0, &marks(&["a"])).unwrap();
+        save_review(&deck.file(), &marks(&["a"])).unwrap();
         assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
     }
 
     #[test]
     fn review_marks_leave_slide_and_shell_hashes_alone() {
         let deck = TempDeck::new(THREE);
-        let before = load(&deck.0, "three").unwrap();
-        save_review(&deck.0, &marks(&["a", "c"])).unwrap();
-        let after = load(&deck.0, "three").unwrap();
+        let before = load(&deck.file()).unwrap();
+        save_review(&deck.file(), &marks(&["a", "c"])).unwrap();
+        let after = load(&deck.file()).unwrap();
         assert_eq!(before.shell_hash, after.shell_hash);
         assert!(before
             .slides
@@ -1246,15 +1609,15 @@ mod tests {
                 .replace("<section class=\"slide\" id=\"b\">B</section>", ""),
         )
         .unwrap();
-        normalize(&deck.0).unwrap();
-        assert_eq!(load(&deck.0, "three").unwrap().review, marks(&["a"]));
+        normalize(&deck.file()).unwrap();
+        assert_eq!(load(&deck.file()).unwrap().review, marks(&["a"]));
     }
 
     #[test]
     fn save_sketch_names_are_unique() {
         let deck = TempDeck::new(ORIGINAL);
-        let a = save_sketch(&deck.0, b"a").unwrap();
-        let b = save_sketch(&deck.0, b"b").unwrap();
+        let a = save_sketch(&deck.session(), b"a").unwrap();
+        let b = save_sketch(&deck.session(), b"b").unwrap();
         assert_ne!(a, b);
     }
 
@@ -1262,13 +1625,13 @@ mod tests {
     fn snapshot_fails_without_a_deck_file() {
         let deck = TempDeck::new(ORIGINAL);
         fs::remove_file(deck.0.join(DECK_FILE)).unwrap();
-        assert!(snapshot(&deck.0).is_err());
+        assert!(snapshot(&deck.file(), &deck.session()).is_err());
     }
 
     #[test]
     fn rename_trims_and_escapes() {
         let deck = TempDeck::new(THREE);
-        let renamed = rename(&deck.0, "three", "  R&D <2025>  ").unwrap();
+        let renamed = rename(&deck.file(), "  R&D <2025>  ").unwrap();
         assert_eq!(renamed.title, "R&D <2025>");
         assert!(deck.html().contains("<title>R&amp;D &lt;2025&gt;</title>"));
         assert_eq!(slide_ids(&renamed), ["a", "b", "c"]);
@@ -1279,12 +1642,12 @@ mod tests {
         let deck = TempDeck::new(THREE);
         let order = vec!["c".to_string(), "a".to_string(), "b".to_string()];
         assert_eq!(
-            slide_ids(&reorder(&deck.0, "three", order).unwrap()),
+            slide_ids(&reorder(&deck.file(), order).unwrap()),
             ["c", "a", "b"]
         );
-        assert_eq!(slide_ids(&load(&deck.0, "three").unwrap()), ["c", "a", "b"]);
+        assert_eq!(slide_ids(&load(&deck.file()).unwrap()), ["c", "a", "b"]);
         let before = deck.html();
-        let err = reorder(&deck.0, "three", vec!["a".into(), "b".into()]).unwrap_err();
+        let err = reorder(&deck.file(), vec!["a".into(), "b".into()]).unwrap_err();
         assert!(err.to_string().contains("try again"), "{err}");
         assert_eq!(deck.html(), before, "a refused edit writes nothing");
     }
@@ -1292,25 +1655,28 @@ mod tests {
     #[test]
     fn add_blank_inserts_after_the_given_slide() {
         let deck = TempDeck::new(THREE);
-        let (after_a, id) = add_blank(&deck.0, "three", Some("a".into())).unwrap();
+        let (after_a, id) = add_blank(&deck.file(), Some("a".into())).unwrap();
         assert_eq!(id, "slide");
         assert_eq!(slide_ids(&after_a), ["a", "slide", "b", "c"]);
-        let (at_end, id) = add_blank(&deck.0, "three", None).unwrap();
+        let (at_end, id) = add_blank(&deck.file(), None).unwrap();
         assert_eq!(id, "slide-2");
         assert_eq!(slide_ids(&at_end), ["a", "slide", "b", "c", "slide-2"]);
-        assert!(deck.html().contains("Untitled slide"));
+        assert!(deck
+            .html()
+            .contains("<section class=\"slide layout-blank\" id=\"slide\"></section>"));
+        assert!(!deck.html().contains("Untitled slide"));
     }
 
     #[test]
     fn duplicate_and_delete_slides_on_disk() {
         let deck = TempDeck::new(THREE);
-        let (copied, id) = duplicate(&deck.0, "three", "b").unwrap();
+        let (copied, id) = duplicate(&deck.file(), "b").unwrap();
         assert_eq!(id, "b-copy");
         assert_eq!(slide_ids(&copied), ["a", "b", "b-copy", "c"]);
         assert!(deck.html().contains("id=\"b-copy\">B</section>"));
 
         let before_delete = deck.html();
-        let deleted = delete_slide(&deck.0, "three", "b").unwrap();
+        let deleted = delete_slide(&deck.file(), &deck.session(), "b").unwrap();
         assert_eq!(slide_ids(&deleted), ["a", "b-copy", "c"]);
         assert_eq!(
             deck.snapshots(),
@@ -1318,19 +1684,23 @@ mod tests {
             "deleting keeps a snapshot to recover from"
         );
 
-        assert!(duplicate(&deck.0, "three", "nope").is_err());
-        assert!(delete_slide(&deck.0, "three", "nope").is_err());
+        assert!(duplicate(&deck.file(), "nope").is_err());
+        assert!(delete_slide(&deck.file(), &deck.session(), "nope").is_err());
     }
 
     #[test]
-    fn delete_deck_removes_the_folder() {
-        let lib = TempLib::new();
-        let dir = lib.add("gone", ORIGINAL);
-        fs::create_dir_all(dir.join("assets")).unwrap();
-        fs::write(dir.join("assets/a.png"), "x").unwrap();
-        delete_deck(&dir).unwrap();
-        assert!(!dir.exists());
-        assert!(delete_deck(&dir).is_err());
+    fn deleting_a_slide_drops_its_review_marks() {
+        let deck = TempDeck::new(THREE);
+        save_review(&deck.file(), &marks(&["a", "b"])).unwrap();
+        let deleted = delete_slide(&deck.file(), &deck.session(), "b").unwrap();
+        assert_eq!(deleted.review, marks(&["a"]));
+        assert_eq!(load(&deck.file()).unwrap().review, marks(&["a"]));
+
+        delete_slide(&deck.file(), &deck.session(), "a").unwrap();
+        assert!(
+            !deck.html().contains(review::START),
+            "deleting the last marked slide removes the block"
+        );
     }
 
     #[test]
@@ -1340,7 +1710,7 @@ mod tests {
         );
         fs::create_dir_all(deck.0.join("assets")).unwrap();
         fs::write(deck.0.join("assets/my dot.png"), [0]).unwrap();
-        let missing: Vec<_> = lint(&deck.0)
+        let missing: Vec<_> = lint(&deck.file(), Some(&deck.session()))
             .unwrap()
             .into_iter()
             .filter(|i| i.rule == "missing-asset")
@@ -1352,7 +1722,7 @@ mod tests {
             missing[1].contains("assets/../deck.html"),
             "escaping paths count as missing"
         );
-        assert!(lint(&deck.0.join("nope")).is_err());
+        assert!(lint(&deck.0.join("nope"), None).is_err());
     }
 
     #[test]
@@ -1363,7 +1733,7 @@ mod tests {
         fs::create_dir_all(deck.0.join("assets")).unwrap();
         fs::write(deck.0.join("assets/dot.png"), [0x89, b'P', b'N', b'G']).unwrap();
         let dest = deck.0.join("out.html");
-        export(&deck.0, &dest).unwrap();
+        export(&deck.file(), &dest).unwrap();
         let out = fs::read_to_string(&dest).unwrap();
         assert!(
             out.contains("src=\"data:image/png;base64,iVBORw==\""),
@@ -1411,7 +1781,7 @@ mod tests {
         let path = |p: &PathBuf| p.to_string_lossy().into_owned();
 
         let imported = import_assets(
-            &deck.0,
+            &deck.file(),
             vec![
                 path(&photo),
                 path(&photo),
@@ -1435,30 +1805,61 @@ mod tests {
             fs::read_to_string(deck.0.join("assets/my-photo-2.png")).unwrap(),
             "png"
         );
-        assert!(import_assets(&deck.0, vec![]).unwrap().is_empty());
+        assert!(import_assets(&deck.file(), vec![]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn saves_pasted_assets_with_unique_names() {
+        let deck = TempDeck::new(ORIGINAL);
+        // "aGk=" is "hi".
+        assert_eq!(
+            save_asset(&deck.file(), "Screen Shot.PNG", "aGk=").unwrap(),
+            "assets/screen-shot.png"
+        );
+        assert_eq!(
+            save_asset(&deck.file(), "Screen Shot.PNG", "aGk=").unwrap(),
+            "assets/screen-shot-2.png"
+        );
+        assert_eq!(
+            fs::read_to_string(deck.0.join("assets/screen-shot-2.png")).unwrap(),
+            "hi"
+        );
+        assert_eq!(
+            save_asset(&deck.file(), "../../evil.png", "aGk=").unwrap(),
+            "assets/evil.png"
+        );
+        assert_eq!(
+            save_asset(&deck.file(), "", "aGk=").unwrap(),
+            "assets/asset"
+        );
+        assert!(save_asset(&deck.file(), "x.png", "not base64!").is_err());
+        assert!(!deck.0.join("assets/x.png").exists());
     }
 
     #[test]
     fn saves_uploaded_assets_under_safe_unique_names() {
         let deck = TempDeck::new(ORIGINAL);
         assert_eq!(
-            save_asset(&deck.0, "IMG 0042.HEIC", b"a").unwrap(),
+            save_asset_bytes(&deck.file(), "IMG 0042.HEIC", b"a").unwrap(),
             "assets/img-0042.heic"
         );
         assert_eq!(
-            save_asset(&deck.0, "IMG 0042.HEIC", b"b").unwrap(),
+            save_asset_bytes(&deck.file(), "IMG 0042.HEIC", b"b").unwrap(),
             "assets/img-0042-2.heic"
         );
         assert_eq!(
-            save_asset(&deck.0, "../../evil.sh", b"c").unwrap(),
+            save_asset_bytes(&deck.file(), "../../evil.sh", b"c").unwrap(),
             "assets/evil.sh",
             "a client path never leaves assets/"
         );
         assert_eq!(
-            save_asset(&deck.0, "C:\\Users\\me\\scan.pdf", b"d").unwrap(),
+            save_asset_bytes(&deck.file(), "C:\\Users\\me\\scan.pdf", b"d").unwrap(),
             "assets/scan.pdf"
         );
-        assert_eq!(save_asset(&deck.0, "", b"e").unwrap(), "assets/asset");
+        assert_eq!(
+            save_asset_bytes(&deck.file(), "", b"e").unwrap(),
+            "assets/asset"
+        );
         assert_eq!(
             fs::read(deck.0.join("assets/img-0042-2.heic")).unwrap(),
             b"b"
@@ -1474,50 +1875,108 @@ mod tests {
     #[test]
     fn chat_round_trips_and_tolerates_bad_files() {
         let deck = TempDeck::new(ORIGINAL);
-        assert_eq!(load_chat(&deck.0).unwrap(), serde_json::Value::Null);
+        assert_eq!(
+            load_chat(Some(&deck.session())).unwrap(),
+            serde_json::Value::Null
+        );
         let chat = serde_json::json!([{"id": "1", "role": "user", "text": "hi ✨"}]);
-        save_chat(&deck.0, &chat).unwrap();
-        assert_eq!(load_chat(&deck.0).unwrap(), chat);
-        fs::write(deck.0.join(INTERNAL_DIR).join("chat.json"), "{not json").unwrap();
-        assert_eq!(load_chat(&deck.0).unwrap(), serde_json::Value::Null);
-        save_chat(&deck.0, &serde_json::Value::Null).unwrap();
-        assert_eq!(load_chat(&deck.0).unwrap(), serde_json::Value::Null);
+        save_chat(&deck.session(), &chat).unwrap();
+        assert_eq!(load_chat(Some(&deck.session())).unwrap(), chat);
+        fs::write(deck.session().join("chat.json"), "{not json").unwrap();
+        assert_eq!(
+            load_chat(Some(&deck.session())).unwrap(),
+            serde_json::Value::Null
+        );
+        save_chat(&deck.session(), &serde_json::Value::Null).unwrap();
+        assert_eq!(
+            load_chat(Some(&deck.session())).unwrap(),
+            serde_json::Value::Null
+        );
     }
 
     #[test]
     fn session_is_stored_trimmed_and_cleared() {
         let deck = TempDeck::new(ORIGINAL);
-        fs::create_dir_all(deck.0.join(INTERNAL_DIR)).unwrap();
-        assert_eq!(read_session(&deck.0, "session"), None);
-        write_session(&deck.0, "session", Some("abc-123")).unwrap();
-        assert_eq!(read_session(&deck.0, "session").as_deref(), Some("abc-123"));
-        fs::write(deck.0.join(INTERNAL_DIR).join("session"), "  xyz\n").unwrap();
-        assert_eq!(read_session(&deck.0, "session").as_deref(), Some("xyz"));
-        write_session(&deck.0, "session", None).unwrap();
-        assert_eq!(read_session(&deck.0, "session"), None);
-        write_session(&deck.0, "session", None).unwrap();
+        fs::create_dir_all(deck.session()).unwrap();
+        assert_eq!(read_session(&deck.session(), "session"), None);
+        write_session(&deck.session(), "session", Some("abc-123")).unwrap();
+        assert_eq!(
+            read_session(&deck.session(), "session").as_deref(),
+            Some("abc-123")
+        );
+        fs::write(deck.session().join("session"), "  xyz\n").unwrap();
+        assert_eq!(
+            read_session(&deck.session(), "session").as_deref(),
+            Some("xyz")
+        );
+        write_session(&deck.session(), "session", None).unwrap();
+        assert_eq!(read_session(&deck.session(), "session"), None);
+        write_session(&deck.session(), "session", None).unwrap();
     }
 
     #[test]
     fn sessions_are_kept_per_provider() {
         let deck = TempDeck::new(ORIGINAL);
-        fs::create_dir_all(deck.0.join(INTERNAL_DIR)).unwrap();
-        write_session(&deck.0, "session", Some("claude-1")).unwrap();
-        write_session(&deck.0, "codex-session", Some("codex-1")).unwrap();
+        fs::create_dir_all(deck.session()).unwrap();
+        write_session(&deck.session(), "session", Some("claude-1")).unwrap();
+        write_session(&deck.session(), "codex-session", Some("codex-1")).unwrap();
         assert_eq!(
-            read_session(&deck.0, "session").as_deref(),
+            read_session(&deck.session(), "session").as_deref(),
             Some("claude-1")
         );
         assert_eq!(
-            read_session(&deck.0, "codex-session").as_deref(),
+            read_session(&deck.session(), "codex-session").as_deref(),
             Some("codex-1")
         );
     }
 
     #[test]
+    fn workspace_assets_without_a_deck_and_per_file_snapshot_retention() {
+        let deck = TempDeck::new(ORIGINAL);
+        assert_eq!(
+            save_asset(&deck.0, "photo.png", "aGk=").unwrap(),
+            "assets/photo.png"
+        );
+        assert_eq!(fs::read(deck.0.join("assets/photo.png")).unwrap(), b"hi");
+        let session = crate::sessions::Sessions::new(&deck.session())
+            .start(&deck.0)
+            .unwrap();
+        let other = deck.0.join("q3.html");
+        fs::write(&other, ORIGINAL).unwrap();
+        snapshot(&other, &session).unwrap();
+        for _ in 0..SNAPSHOTS_KEPT + 2 {
+            snapshot(&deck.file(), &session).unwrap();
+        }
+        assert_eq!(
+            fs::read_dir(session.join("snapshots/deck.html"))
+                .unwrap()
+                .count(),
+            SNAPSHOTS_KEPT
+        );
+        assert_eq!(
+            fs::read_dir(session.join("snapshots/q3.html"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn named_decks_resolve_their_own_assets_and_reject_shared_parent_images() {
+        let deck = TempDeck::new(ORIGINAL);
+        fs::create_dir_all(deck.0.join("assets")).unwrap();
+        fs::write(deck.0.join("assets/x.png"), "png").unwrap();
+        let file = deck.0.join("q3.html");
+        fs::write(&file, "<html><body><main class=\"deck\"><section class=\"slide\" id=\"a\"><img src=\"assets/x.png\" alt=\"X\"><img src=\"../shared/x.png\" alt=\"X\"></section></main></body></html>").unwrap();
+        let issues = lint(&file, None).unwrap();
+        assert!(!issues.iter().any(|i| i.rule == "missing-asset"));
+        assert!(issues.iter().any(|i| i.rule == "asset-outside-deck"));
+    }
+
+    #[test]
     fn atomic_write_leaves_no_temp_files() {
         let deck = TempDeck::new(ORIGINAL);
-        write_html(&deck.0, EDITED).unwrap();
+        write_html(&deck.file(), EDITED).unwrap();
         assert_eq!(deck.html(), EDITED);
         let names: Vec<_> = fs::read_dir(&deck.0)
             .unwrap()
@@ -1538,10 +1997,10 @@ mod tests {
     #[test]
     fn load_lists_sections_without_counting_them_as_slides() {
         let deck = TempDeck::new(SECTIONED);
-        let loaded = load(&deck.0, "s").unwrap();
+        let loaded = load(&deck.file()).unwrap();
         assert_eq!(slide_ids(&loaded), ["a", "b", "c"]);
         assert_eq!(sections(&loaded), [(0, "Part two", 1)]);
-        assert!(load(&TempDeck::new(THREE).0, "three")
+        assert!(load(&TempDeck::new(THREE).file())
             .unwrap()
             .sections
             .is_empty());
@@ -1553,25 +2012,25 @@ mod tests {
     #[test]
     fn adds_renames_and_deletes_sections() {
         let deck = TempDeck::new(THREE);
-        let added = add_section(&deck.0, "three", Some("c".into()), "Finale").unwrap();
+        let added = add_section(&deck.file(), Some("c".into()), "Finale").unwrap();
         assert_eq!(sections(&added), [(0, "Finale", 2)]);
-        let added = add_section(&deck.0, "three", Some("a".into()), "Start").unwrap();
+        let added = add_section(&deck.file(), Some("a".into()), "Start").unwrap();
         assert_eq!(sections(&added), [(0, "Start", 0), (1, "Finale", 2)]);
-        let renamed = rename_section(&deck.0, "three", 1, "The end").unwrap();
+        let renamed = rename_section(&deck.file(), 1, "The end").unwrap();
         assert_eq!(sections(&renamed), [(0, "Start", 0), (1, "The end", 2)]);
-        let removed = delete_section(&deck.0, "three", 0).unwrap();
+        let removed = delete_section(&deck.file(), 0).unwrap();
         assert_eq!(sections(&removed), [(0, "The end", 2)]);
         assert_eq!(slide_ids(&removed), ["a", "b", "c"]);
-        assert!(delete_section(&deck.0, "three", 4).is_err());
-        assert!(rename_section(&deck.0, "three", 4, "x").is_err());
-        assert!(add_section(&deck.0, "three", Some("zzz".into()), "x").is_err());
+        assert!(delete_section(&deck.file(), 4).is_err());
+        assert!(rename_section(&deck.file(), 4, "x").is_err());
+        assert!(add_section(&deck.file(), Some("zzz".into()), "x").is_err());
     }
 
     #[test]
     fn section_edits_do_not_reload_slide_previews() {
         let deck = TempDeck::new(SECTIONED);
-        let before = load(&deck.0, "s").unwrap();
-        let renamed = rename_section(&deck.0, "s", 0, "Renamed").unwrap();
+        let before = load(&deck.file()).unwrap();
+        let renamed = rename_section(&deck.file(), 0, "Renamed").unwrap();
         assert_eq!(before.shell_hash, renamed.shell_hash);
         assert!(before
             .slides
@@ -1584,19 +2043,158 @@ mod tests {
     fn reorder_slides_and_sections_together() {
         let deck = TempDeck::new(SECTIONED);
         let order = ["a", "b", "section:0", "c"].map(String::from).to_vec();
-        let out = reorder(&deck.0, "s", order).unwrap();
+        let out = reorder(&deck.file(), order).unwrap();
         assert_eq!(slide_ids(&out), ["a", "b", "c"]);
         assert_eq!(sections(&out), [(0, "Part two", 2)]);
-        assert!(reorder(&deck.0, "s", vec!["a".into(), "b".into(), "c".into()]).is_err());
+        assert!(reorder(&deck.file(), vec!["a".into(), "b".into(), "c".into()]).is_err());
     }
 
     #[test]
     fn export_keeps_section_markers_for_the_player_to_hide() {
         let deck = TempDeck::new(SECTIONED);
         let dest = deck.0.join("out.html");
-        export(&deck.0, &dest).unwrap();
+        export(&deck.file(), &dest).unwrap();
         let exported = fs::read_to_string(dest).unwrap();
         assert!(exported.contains("data-title=\"Part two\""));
         assert!(exported.contains(".deck > .deck-section"));
+    }
+
+    #[test]
+    fn creates_decks_from_a_template() {
+        let lib = TempLib::new();
+        let source = include_str!("../templates/swiss.html");
+        let deck = create(
+            &lib.0,
+            "Board update",
+            Some(TemplateSource {
+                id: "swiss",
+                html: source,
+            }),
+        )
+        .unwrap();
+        assert_eq!(deck.title, "Board update");
+        assert_eq!(deck.template.as_deref(), Some("swiss"));
+        assert!(deck.slides.is_empty());
+        let html = fs::read_to_string(PathBuf::from(&deck.id)).unwrap();
+        assert!(
+            html.contains("Hanken Grotesk"),
+            "takes the template's styles"
+        );
+        assert_eq!(lint(Path::new(&deck.id), None).unwrap(), vec![]);
+        assert_eq!(create(&lib.0, "Plain", None).unwrap().template, None);
+    }
+
+    #[test]
+    fn applies_a_template_to_an_empty_deck_only() {
+        let lib = TempLib::new();
+        let deck = create(&lib.0, "Pitch", None).unwrap();
+        let dir = PathBuf::from(&deck.id);
+        let source = include_str!("../templates/synthwave.html");
+        let template = || TemplateSource {
+            id: "synthwave",
+            html: source,
+        };
+        let styled = apply_template(&dir, template()).unwrap();
+        assert_eq!(styled.template.as_deref(), Some("synthwave"));
+        assert_eq!(styled.title, "Pitch", "keeps the deck's title");
+        assert!(read_html(&dir).unwrap().contains("Audiowide"));
+
+        let (with_slide, _) = add_blank(&dir, None).unwrap();
+        assert_eq!(with_slide.slides.len(), 1);
+        let before = read_html(&dir).unwrap();
+        assert!(apply_template(&dir, template()).is_err());
+        assert_eq!(read_html(&dir).unwrap(), before);
+    }
+
+    #[test]
+    fn sets_the_slide_size_and_refreshes_the_runtime() {
+        let lib = TempLib::new();
+        let deck = create(&lib.0, "Poster", None).unwrap();
+        assert_eq!(deck.size, SizeInfo::from(SlideSize::default()));
+        let dir = PathBuf::from(&deck.id);
+        add_blank(&dir, None).unwrap();
+
+        let a4 = SlideSize::parse("21x29.7cm").unwrap();
+        let resized = set_slide_size(&dir, a4).unwrap();
+        assert_eq!(resized.size.size, a4);
+        assert_eq!(
+            (resized.size.pixel_width, resized.size.pixel_height),
+            (794, 1123)
+        );
+        assert_eq!(resized.slides.len(), 1, "keeps the slides");
+        let html = read_html(&dir).unwrap();
+        assert!(html.contains("<meta name=\"slopslide-size\" content=\"21x29.7cm\">"));
+        assert!(
+            html.contains("--slop-w: 794px;"),
+            "the stage takes the new size"
+        );
+        assert!(!html.contains("--slop-w: 1920px;"));
+        assert_eq!(lint(&dir, None).unwrap(), vec![]);
+        assert_eq!(load(&dir).unwrap().size, resized.size);
+
+        // Back to the default: the meta goes away again.
+        let back = set_slide_size(&dir, SlideSize::default()).unwrap();
+        assert_eq!(back.size, SizeInfo::from(SlideSize::default()));
+        let html = read_html(&dir).unwrap();
+        assert!(!html.contains("<meta name=\"slopslide-size\""));
+        assert!(html.contains("--slop-w: 1920px;"));
+
+        let tiny = SlideSize {
+            width: 10.0,
+            ..SlideSize::default()
+        };
+        assert!(set_slide_size(&dir, tiny).is_err());
+        assert_eq!(read_html(&dir).unwrap(), html, "a bad size changes nothing");
+    }
+
+    #[test]
+    fn applying_a_template_keeps_a_chosen_slide_size() {
+        let lib = TempLib::new();
+        let source = include_str!("../templates/swiss.html");
+        let template = || TemplateSource {
+            id: "swiss",
+            html: source,
+        };
+        let deck = create(&lib.0, "Square", None).unwrap();
+        let dir = PathBuf::from(&deck.id);
+        let square = SlideSize::parse("1080x1080").unwrap();
+        set_slide_size(&dir, square).unwrap();
+        let styled = apply_template(&dir, template()).unwrap();
+        assert_eq!(styled.template.as_deref(), Some("swiss"));
+        assert_eq!(styled.size.size, square);
+        assert!(read_html(&dir).unwrap().contains("--slop-h: 1080px;"));
+        assert!(read_html(&dir).unwrap().contains("--slop-w: 1080px;"));
+        assert_eq!(lint(&dir, None).unwrap(), vec![]);
+
+        // A portrait template gives its size to a deck that never picked one.
+        let portrait = html::set_slide_size(source, SlideSize::parse("1080x1350").unwrap());
+        let plain = create(&lib.0, "Plain", None).unwrap();
+        let styled = apply_template(
+            Path::new(&plain.id),
+            TemplateSource {
+                id: "swiss",
+                html: &portrait,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (styled.size.pixel_width, styled.size.pixel_height),
+            (1080, 1350)
+        );
+    }
+
+    #[test]
+    fn adds_slides_from_a_template() {
+        let deck = TempDeck::new(THREE);
+        let source = include_str!("../templates/editorial.html");
+        let (after_a, id) =
+            add_template_slide(&deck.file(), Some("a".into()), source, "quote").unwrap();
+        assert_eq!(id, "quote");
+        assert_eq!(slide_ids(&after_a), ["a", "quote", "b", "c"]);
+        assert!(deck.html().contains("layout-quote"));
+        let (at_end, second) = add_template_slide(&deck.file(), None, source, "quote").unwrap();
+        assert_eq!(second, "quote-2");
+        assert_eq!(slide_ids(&at_end).last(), Some(&"quote-2"));
+        assert!(add_template_slide(&deck.file(), None, source, "nope").is_err());
     }
 }

@@ -1,18 +1,22 @@
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, Maximize, Pencil, Redo2, Sparkles, Undo2, Wand2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { AlertTriangle, Check, ChevronLeft, ChevronRight, LayoutTemplate, Lock, Maximize, Pencil, Redo2, Sparkles, Trash2, Undo2, Wand2, X } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { SKETCH_TARGET_ATTR, useApp } from "../store";
+import { EditToolbar } from "./EditToolbar";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { SketchToolbar } from "./SketchToolbar";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
-import type { Slide } from "../lib/api";
-import type { Stroke } from "../lib/ink";
+import { LayoutPicker, Popover } from "./Templates";
+import { api, errorMessage, type Slide } from "../lib/api";
+import { catchDrops, imageSize, isImage, type DropPoint } from "../lib/drop";
+import { EDIT_TOOL_KEYS, familyOf, familyOfKind, parseSelection, type EditSelection, type EditStyle, type EditTool } from "../lib/editTools";
+import { zoomBox, type Stroke } from "../lib/ink";
 import { isRemote } from "../lib/platform";
-import { cn } from "../lib/utils";
+import { pixelsOf, type Pixels } from "../lib/slideSize";
+import { cn, deckFileUrl } from "../lib/utils";
 
 /** The stage area's padding (Tailwind p-8), which the pasteboard covers too. */
 const AREA_PADDING = 32;
-const STAGE_W = 1920;
 
 /** The current slide, fit to the available space with letterboxing. */
 export function Stage() {
@@ -24,6 +28,8 @@ export function Stage() {
   const running = useApp((s) => s.running);
   const canUndo = useApp((s) => s.slideUndo.length > 0);
   const canRedo = useApp((s) => s.slideRedo.length > 0);
+  const editTool = useApp((s) => s.editTool);
+  const editStyles = useApp((s) => s.editStyles);
   const annotations = useAnnotations(selected ?? "", {
     ink: reviewVisible ? sketches : NO_INK,
     setInk: useApp.getState().setSketches,
@@ -31,11 +37,16 @@ export function Stage() {
   const areaRef = useRef<HTMLDivElement>(null);
   const pasteboard = usePasteboard(areaRef);
   const editFrames = useSlideEditing(areaRef, pasteboard.resetView);
+  const postToEditor = editFrames.post;
   const overflow = editFrames.overflow;
   const view = pasteboard.view;
-  const [width, setWidth] = useState(0);
+  const canvas = pixelsOf(deck);
   // The preview fills the whole area around the slide: an endless pasteboard to pan and zoom on.
   const [arena, setArena] = useState<{ width: number; height: number } | undefined>();
+  // The slide as large as fits the area, in its own shape.
+  const width = arena
+    ? Math.max(0, Math.min(arena.width - 2 * AREA_PADDING, ((arena.height - 2 * AREA_PADDING) * canvas.width) / canvas.height))
+    : 0;
 
   useLayoutEffect(() => {
     const el = areaRef.current;
@@ -43,7 +54,6 @@ export function Stage() {
     const observer = new ResizeObserver(([entry]) => {
       if (!entry) return;
       const { width: w, height: h } = entry.contentRect;
-      setWidth(Math.max(0, Math.min(w, (h * 16) / 9)));
       setArena({ width: w + 2 * AREA_PADDING, height: h + 2 * AREA_PADDING });
     });
     observer.observe(el);
@@ -60,25 +70,51 @@ export function Stage() {
     useApp.getState().setEditing(false);
     useApp.getState().setReviewVisible(true);
   }, [annotations.tool]);
+  // The editor in the preview adds what the toolbar's tool says, styled like its defaults.
+  useEffect(() => {
+    if (editing) postToEditor(toolMessage(editTool, editStyles));
+  }, [editing, editTool, editStyles, postToEditor]);
+  const restyle = (changes: EditStyle) => {
+    const selection = editFrames.selection;
+    // Restyling also sets how the next one of its kind looks.
+    const family = selection ? familyOfKind(selection.kind) : familyOf(editTool);
+    if (family) useApp.getState().setEditStyle(family, changes);
+    if (selection) postToEditor({ type: "slop:edit-style", style: changes });
+  };
   const toggleEditing = () => {
     if (!editing) annotations.setTool("pointer");
     useApp.getState().setEditing(!editing);
   };
 
+  const index = deck?.slides.findIndex((s) => s.id === selected) ?? -1;
+  const slide = deck?.slides[index];
+  const locked = !!slide?.locked;
+  // A locked slide cannot be edited: going to one, or locking this one, leaves edit mode.
+  useEffect(() => {
+    if (locked && editing) useApp.getState().setEditing(false);
+  }, [locked, editing]);
+
   if (!deck) return null;
-  const index = deck.slides.findIndex((s) => s.id === selected);
-  const slide = deck.slides[index];
 
   return (
     <div className="flex h-full flex-col bg-canvas">
+      {slide && editing && (
+        <div className="relative z-20 flex shrink-0 justify-center px-3 pt-2">
+          <EditToolbar
+            tool={editTool}
+            selection={editFrames.selection}
+            styles={editStyles}
+            sizeMode={editFrames.sizeMode}
+            onSizeMode={editFrames.setSizeMode}
+            onTool={(tool) => useApp.getState().setEditTool(tool)}
+            onStyle={restyle}
+            onOrder={(to) => postToEditor({ type: "slop:edit-order", to })}
+            onDelete={editFrames.deleteSelection}
+          />
+        </div>
+      )}
       {/* Clips the ink, which zooms past the slide along with the pasteboard, so it stays off the bar below. */}
       <div ref={areaRef} data-testid="stage-area" className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-8">
-        {slide && editing && (
-          <span className="pointer-events-none absolute top-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full bg-primary px-2.5 py-0.5 text-xs font-medium text-primary-foreground shadow-sm [&_svg]:size-3">
-            <Pencil />
-            Editing
-          </span>
-        )}
         {slide ? (
           // The slide's frame (outline, shadow, the edit-mode ring) is drawn in the preview, so it
           // pans and zooms with the slide.
@@ -86,6 +122,7 @@ export function Stage() {
             <CurrentSlide
               deckId={deck.id}
               slide={slide}
+              size={canvas}
               editing={editing}
               // A pasteboard page spans the area in slide pixels: around a small slide it is huge,
               // and phones and tablets kill the app's page over it (twice over while a slide swaps).
@@ -99,10 +136,10 @@ export function Stage() {
             {/* Ink sits on the slide, wherever the pasteboard has moved it. */}
             <div
               data-testid="annotation-view"
-              className="pointer-events-none absolute inset-0 origin-top-left"
-              style={pasteboard.current && width ? { transform: viewTransform(pasteboard.current, width / STAGE_W) } : undefined}
+              className="pointer-events-none absolute"
+              style={inkBox(pasteboard.current, width / canvas.width)}
             >
-              <AnnotationLayer annotations={annotations} />
+              <AnnotationLayer annotations={annotations} zoom={pasteboard.current?.k} />
             </div>
           </div>
         ) : (
@@ -117,11 +154,16 @@ export function Stage() {
                 <button
                   type="button"
                   aria-label="Edit text and move elements"
-                  title="Edit the slide: click to select, drag to move, drag the handles to scale or rotate, double-click to edit text"
+                  title={
+                    locked
+                      ? "This slide is locked; unlock it in the slide list to edit it"
+                      : "Edit the slide: click to select, drag to move, drag the handles to resize or rotate, double-click to edit text, drop images onto it to add them; the toolbar above adds text, shapes and drawings and restyles the selection"
+                  }
                   aria-pressed={editing}
+                  disabled={locked}
                   onClick={toggleEditing}
                   className={cn(
-                    "rounded-md p-1 hover:bg-accent hover:text-foreground [&_svg]:size-4",
+                    "rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4",
                     editing && "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground",
                   )}
                 >
@@ -129,7 +171,7 @@ export function Stage() {
                 </button>
                 <div className="mx-1 h-4 w-px bg-border" />
                 {editing ? (
-                  <EditBar canUndo={canUndo} canRedo={canRedo} />
+                  <EditBar canUndo={canUndo} canRedo={canRedo} canDelete={!!editFrames.selection} onDelete={editFrames.deleteSelection} />
                 ) : (
                   <SketchToolbar annotations={annotations} />
                 )}
@@ -180,11 +222,21 @@ export function Stage() {
                 Overflow
               </span>
             )}
+            {locked && (
+              <span
+                title="Locked: neither you nor the agent can change this slide. Unlock it in the slide list."
+                className="mr-1 flex items-center gap-1 rounded-md px-1.5 py-1"
+              >
+                <Lock className="size-3.5" />
+                Locked
+              </span>
+            )}
+            {slide && <ChangeLayoutButton disabled={running || locked} />}
             {slide && (
               <button
                 type="button"
-                title="Ask the agent to rebuild this slide's layout, fixing overflow and clipping and keeping the elements you moved, rotated or scaled, using a screenshot"
-                disabled={running}
+                title="Prepare a message, with a screenshot, asking the agent to rebuild this slide's layout, fixing overflow and clipping and keeping the elements you moved, rotated or scaled"
+                disabled={running || locked}
                 onClick={() => {
                   editFrames.clearSelection();
                   // Give the preview a frame to drop its selection outline before the screenshot.
@@ -206,8 +258,35 @@ export function Stage() {
   );
 }
 
-/** Shown in place of the sketch tools while editing: history and leaving edit mode. */
-function EditBar(props: { canUndo: boolean; canRedo: boolean }) {
+/** Opens the template layouts, to have the agent rebuild the current slide on one. */
+function ChangeLayoutButton(props: { disabled: boolean }) {
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        title="Rebuild this slide on a template layout"
+        aria-expanded={open}
+        disabled={props.disabled}
+        onClick={() => setOpen((v) => !v)}
+        className="mr-1 flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+      >
+        <LayoutTemplate className="size-3.5" />
+        Layout
+      </button>
+      {open && (
+        <Popover anchor={buttonRef} placement="above" width={560} label="Change layout" onClose={() => setOpen(false)}>
+          <LayoutPicker mode="change" onDone={() => setOpen(false)} />
+        </Popover>
+      )}
+    </>
+  );
+}
+
+/** Shown in place of the sketch tools while editing: history, deleting, and leaving edit mode. */
+function EditBar(props: { canUndo: boolean; canRedo: boolean; canDelete: boolean; onDelete: () => void }) {
   const icon = "rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4";
   const app = useApp.getState;
   return (
@@ -217,6 +296,16 @@ function EditBar(props: { canUndo: boolean; canRedo: boolean }) {
       </button>
       <button type="button" aria-label="Redo" title="Redo (⇧⌘Z)" disabled={!props.canRedo} onClick={() => void app().redoSlideEdit()} className={icon}>
         <Redo2 />
+      </button>
+      <button
+        type="button"
+        aria-label="Delete selected element"
+        title="Delete the selected element (⌫)"
+        disabled={!props.canDelete}
+        onClick={props.onDelete}
+        className={icon}
+      >
+        <Trash2 />
       </button>
       <div className="mx-1 h-4 w-px bg-border" />
       <button
@@ -244,6 +333,7 @@ function EditBar(props: { canUndo: boolean; canRedo: boolean }) {
 function CurrentSlide(props: {
   deckId: string;
   slide: Slide;
+  size: Pixels;
   editing: boolean;
   /** The panel around the slide; its colors frame the slide and dim what lies outside it in the editor. */
   canvas: React.RefObject<HTMLElement | null>;
@@ -258,6 +348,7 @@ function CurrentSlide(props: {
       version={useSlideVersion(props.slide)}
       editKey={props.editing ? String(editReload) : undefined}
       arena={props.arena}
+      size={props.size}
       onFrameReady={(frame) => {
         const canvas = props.canvas.current;
         if (canvas) frame.contentWindow?.postMessage({ type: "slop:canvas", ...canvasColors(canvas) }, "*");
@@ -281,9 +372,9 @@ function canvasColors(canvas: HTMLElement) {
   return colors;
 }
 
-/** CSS transform that puts what lies on the slide (`scale` CSS px per slide px) where the view has it. */
-function viewTransform(view: PasteboardView, scale: number) {
-  return `translate(${view.x * scale}px, ${view.y * scale}px) scale(${view.k})`;
+/** Puts what lies on the slide (`scale` CSS px per slide px) where the view has it. */
+function inkBox(view: PasteboardView | null, scale: number) {
+  return view && scale ? zoomBox(view.x * scale, view.y * scale, view.k) : zoomBox(0, 0, 1);
 }
 
 /**
@@ -340,13 +431,16 @@ interface PasteboardView {
 /**
  * Connects the stage to the slide editor running in its preview (src-tauri/assets/editor.js):
  * saves the markup it posts, keeps the selection across the reload that follows, and
- * handles undo and leaving edit mode.
+ * handles undo and leaving edit mode. Images dropped on the stage go onto the slide.
  */
 function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetView: () => void) {
+  const [sizeMode, setSizeMode] = useState<"resize" | "stretch">("resize");
   // What to select again once the edited slide reloads.
   const restore = useRef<{ slide: string; path: number[] } | null>(null);
   const frame = useRef<HTMLIFrameElement | null>(null);
   const [overflow, setOverflow] = useState<{ slide: string; items: string[] } | null>(null);
+  // What the editor has selected, and on which slide.
+  const [selection, setSelection] = useState<{ slide: string; selection: EditSelection | null } | null>(null);
 
   useEffect(() => {
     const fromStage = (source: MessageEventSource | null) =>
@@ -360,15 +454,24 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
         void useApp.getState().saveSlideEdit(data.slide, data.markup);
       } else if (data?.type === "slop:edit-overflow" && data.slide === selected && Array.isArray(data.items)) {
         setOverflow({ slide: data.slide, items: data.items.map(String) });
+      } else if (data?.type === "slop:edit-selection" && data.slide === selected) {
+        setSelection({ slide: data.slide, selection: parseSelection(data.selection) });
+      } else if (data?.type === "slop:edit-tool" && data.slide === selected && typeof data.tool === "string") {
+        // The editor put its tool away by itself (after adding a shape, or on Escape).
+        if (data.tool in TOOL_NAMES) useApp.getState().setEditTool(data.tool as EditTool);
       } else if (data?.type === "slop:key") {
         if (data.mod) runHistoryKey(String(data.key), Boolean(data.shift));
-        else if (data.key === "Escape") useApp.getState().setEditing(false);
+        else runEditKey(String(data.key));
       }
     };
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (!useApp.getState().editing || target?.closest("input, textarea, [contenteditable]")) return;
-      if ((event.metaKey || event.ctrlKey) && runHistoryKey(event.key, event.shiftKey)) event.preventDefault();
+      if (!useApp.getState().editing || target?.closest("input, textarea, select, [contenteditable]")) return;
+      if (event.metaKey || event.ctrlKey) {
+        if (runHistoryKey(event.key, event.shiftKey)) event.preventDefault();
+      } else if (!event.altKey && runEditKey(event.key, true)) {
+        event.preventDefault();
+      }
     };
     window.addEventListener("message", onMessage);
     window.addEventListener("keydown", onKey);
@@ -378,14 +481,69 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
     };
   }, [areaRef]);
 
+  // Images dropped on the stage while editing are saved as assets and put on the slide where
+  // they landed; anything else dropped there goes on to the chat.
+  useEffect(() => {
+    const insert = async (deckId: string, slide: string, paths: string[], point: DropPoint) => {
+      try {
+        const refs = await api.importAssets(deckId, paths);
+        const images = await Promise.all(refs.map(async (src) => ({ src, ...(await imageSize(deckFileUrl(deckId, src))) })));
+        const { editing, selected } = useApp.getState();
+        const loaded = frame.current;
+        if (!editing || selected !== slide || !loaded?.contentWindow || images.length === 0) return;
+        // The preview is scaled down to fit; the editor wants the point in its own pixels.
+        const rect = loaded.getBoundingClientRect();
+        const k = loaded.clientWidth ? rect.width / loaded.clientWidth : 1;
+        loaded.contentWindow.postMessage(
+          { type: "slop:edit-insert-images", images, x: (point.x - rect.left) / k, y: (point.y - rect.top) / k },
+          "*",
+        );
+      } catch (error) {
+        useApp.getState().setError(errorMessage(error));
+      }
+    };
+    const covers = (point: DropPoint) => {
+      const { deck, editing, selected } = useApp.getState();
+      const area = areaRef.current?.getBoundingClientRect();
+      const inside = !!area && point.x >= area.left && point.x <= area.right && point.y >= area.top && point.y <= area.bottom;
+      return !!deck && editing && !!selected && !!frame.current && inside;
+    };
+    return catchDrops((paths, point) => {
+      const { deck, selected } = useApp.getState();
+      const images = paths.filter(isImage);
+      if (!deck || !selected || images.length === 0 || !covers(point)) return paths;
+      void insert(deck.id, selected, images, point);
+      return paths.filter((p) => !isImage(p));
+    }, covers);
+  }, [areaRef]);
+
   const current = useApp((s) => s.selected);
   const editing = useApp((s) => s.editing);
 
+  const post = useCallback((data: unknown) => frame.current?.contentWindow?.postMessage(data, "*"), []);
+
   return {
+    sizeMode,
+    setSizeMode: (mode: "resize" | "stretch") => {
+      setSizeMode(mode);
+      post({ type: "slop:edit-size-mode", mode });
+    },
     overflow: editing && overflow?.slide === current ? overflow.items : NO_OVERFLOW,
+    /** What the editor has selected, as its toolbar shows it. */
+    selection: editing && selection?.slide === current ? selection.selection : null,
+    /** Sends a message to the slide editor in the preview. */
+    post,
+    deleteSelection: () => post({ type: "slop:edit-delete" }),
     onFrameReady: (loaded: HTMLIFrameElement) => {
       frame.current = loaded;
-      const { editing, selected } = useApp.getState();
+      // A fresh editor starts with the select tool and nothing selected; it reports a restored
+      // selection itself.
+      setSelection(null);
+      const { editing, selected, editTool, editStyles } = useApp.getState();
+      if (editing) {
+        post({ type: "slop:edit-size-mode", mode: sizeMode });
+        post(toolMessage(editTool, editStyles));
+      }
       const again = restore.current;
       if (editing && again && again.slide === selected) {
         loaded.contentWindow?.postMessage({ type: "slop:edit-select", path: again.path }, "*");
@@ -401,6 +559,33 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
 }
 
 const NO_OVERFLOW: string[] = [];
+const TOOL_NAMES: Record<EditTool, true> = { select: true, text: true, rect: true, rounded: true, ellipse: true, draw: true };
+
+/** Picks the editor's tool, with the style of what it adds. */
+function toolMessage(tool: EditTool, styles: Record<string, EditStyle>) {
+  const family = familyOf(tool);
+  return { type: "slop:edit-tool", tool, style: family ? styles[family] : undefined };
+}
+
+/**
+ * Edit mode's plain keys: a tool's shortcut picks it, Escape puts the tool away or else leaves
+ * edit mode. `fromApp` when pressed in the app rather than forwarded by the slide, where
+ * Escape belongs to whatever has focus. True when the key was one of them.
+ */
+function runEditKey(key: string, fromApp = false) {
+  const app = useApp.getState();
+  const tool = EDIT_TOOL_KEYS[key.toLowerCase()];
+  if (tool && key.length === 1) {
+    app.setEditTool(tool);
+  } else if (key === "Escape" && app.editTool !== "select") {
+    app.setEditTool("select");
+  } else if (key === "Escape" && !fromApp) {
+    app.setEditing(false);
+  } else {
+    return false;
+  }
+  return true;
+}
 const NO_INK: Record<string, Stroke[]> = {};
 
 /** ⌘Z undoes, ⇧⌘Z / ⌘Y redo; true when the key was one of them. */
@@ -448,7 +633,8 @@ function useSketchKeyboard(active: boolean, putAway: () => void) {
 /**
  * Arrow keys / PageUp / PageDown move between slides unless the user is typing. Also handles
  * keys the slide preview forwards as `slop:key` messages, so navigation keeps working after
- * clicking into the slide (which moves focus into its iframe).
+ * clicking into the slide. The preview cancels presses on it (to pan, select and drag), which
+ * leaves focus where it was, e.g. in the chat composer: it asks for focus with `slop:focus`.
  */
 function useSlideKeyboard() {
   useEffect(() => {
@@ -465,11 +651,14 @@ function useSlideKeyboard() {
       if (navigate(event.key)) event.preventDefault();
     };
     const onMessage = (event: MessageEvent) => {
-      if (event.data?.type !== "slop:key") return;
-      const fromSlide = Array.from(document.querySelectorAll("iframe")).some(
+      const type = event.data?.type;
+      if (type !== "slop:key" && type !== "slop:focus") return;
+      const slide = Array.from(document.querySelectorAll("iframe")).find(
         (frame) => frame.contentWindow === event.source,
       );
-      if (fromSlide) navigate(String(event.data.key));
+      if (!slide) return;
+      if (type === "slop:focus") slide.focus();
+      else navigate(String(event.data.key));
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("message", onMessage);

@@ -255,7 +255,7 @@ describe("CodeView: editing and saving", () => {
       }
     });
     await act(async () => fireEvent.click(button("Save")));
-    expect(invoke).toHaveBeenCalledWith("save_deck_source", { id: "talk", source: edited, base: DECK_HTML });
+    expect(invoke).toHaveBeenCalledWith("save_deck_source", { id: "/decks/talk/deck.html", source: edited, base: DECK_HTML });
     await waitFor(() => expect(useApp.getState().codeDirty).toBe(false));
     // The saved deck is adopted so thumbnails and the stage refresh.
     expect(useApp.getState().deck!.shellHash).toBe("shell-saved");
@@ -355,7 +355,7 @@ describe("CodeView: conflicts with changes on disk", () => {
       return deckFor(mine, "forced");
     });
     await act(async () => fireEvent.click(button("Overwrite with mine")));
-    expect(invoke).toHaveBeenCalledWith("save_deck_source", { id: "talk", source: mine, base: null });
+    expect(invoke).toHaveBeenCalledWith("save_deck_source", { id: "/decks/talk/deck.html", source: mine, base: null });
     await waitFor(() => expect(screen.queryByText(/changed on disk while/)).toBeNull());
     expect(useApp.getState().codeDirty).toBe(false);
   });
@@ -436,7 +436,7 @@ describe("CodeView: section markers", () => {
     });
     await act(async () => fireEvent.click(button("Save")));
     expect(invoke).toHaveBeenCalledWith("save_deck_source", {
-      id: "talk",
+      id: "/decks/talk/deck.html",
       source: renamed,
       base: SECTIONED.replace("Wrap up", "Closing"),
     });

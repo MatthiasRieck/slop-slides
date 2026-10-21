@@ -70,7 +70,7 @@ export function DeviceDeck() {
       )}
 
       <nav className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-white/10 px-2 pt-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))]">
-        <BarButton label="All decks" onClick={() => void useApp.getState().closeDeck()}>
+        <BarButton label="Close deck" onClick={() => void useApp.getState().closeDeck()}>
           <ChevronLeft />
         </BarButton>
         {slide && <InkTools annotations={annotations} />}

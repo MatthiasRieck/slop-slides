@@ -15,7 +15,7 @@ use crate::error::{Error, Result};
 
 /// Widest sketch screenshot, in pixels; about what the model looks at anyway.
 pub const SKETCH_WIDTH: u32 = 1600;
-/// Widest exported slide image: the slides' own 1920×1080 stage.
+/// Widest exported slide image when the canvas width is not given: the default 1920×1080 stage.
 pub const SLIDE_WIDTH: u32 = 1920;
 
 /// A region of the webview in CSS pixels, as `getBoundingClientRect()` reports it.
@@ -70,6 +70,24 @@ pub async fn snapshot(
     })
     .await
     .map_err(|e| Error::msg(format!("screenshot failed: {e}")))?
+}
+
+/// PNG of `rect` of `webview`, rendered afresh `pixels_wide` pixels wide: sharper than the
+/// screen shows it, as WebKit draws the region again at that size rather than scaling pixels.
+#[cfg(target_os = "macos")]
+pub async fn render_region(
+    webview: &Webview,
+    rect: Rect,
+    viewport: Size,
+    pixels_wide: u32,
+) -> Result<Vec<u8>> {
+    check(rect, viewport)?;
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<Vec<u8>>>();
+    webview
+        .with_webview(move |platform| platform::start_region(platform, rect, pixels_wide, tx))
+        .map_err(|e| Error::msg(format!("cannot reach the webview: {e}")))?;
+    rx.await
+        .map_err(|_| Error::msg("the screenshot was cancelled"))?
 }
 
 fn check(rect: Rect, viewport: Size) -> Result<()> {
@@ -241,14 +259,15 @@ mod platform {
     use std::cell::Cell;
 
     use block2::RcBlock;
+    use objc2::rc::Retained;
     use objc2::MainThreadMarker;
     use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
-    use objc2_foundation::{NSDictionary, NSError};
+    use objc2_foundation::{NSDictionary, NSError, NSNumber, NSPoint, NSRect, NSSize};
     use objc2_web_kit::{WKSnapshotConfiguration, WKWebView};
     use tauri::webview::PlatformWebview;
     use tokio::sync::oneshot::Sender;
 
-    use super::{decode_png, Image};
+    use super::{decode_png, Image, Rect};
     use crate::error::{Error, Result};
 
     /// Snapshots the visible WKWebView; runs on the main thread (`with_webview`).
@@ -261,12 +280,54 @@ mod platform {
         let webview = unsafe { &*platform.inner().cast::<WKWebView>() };
         // The default configuration captures the view's bounds at its backing resolution.
         let config = unsafe { WKSnapshotConfiguration::new(mtm) };
+        take(webview, &config, tx, |image| {
+            png(image).and_then(|bytes| decode_png(&bytes))
+        });
+    }
+
+    /// Renders `rect` of the WKWebView as a PNG `pixels_wide` pixels wide; runs on the main
+    /// thread (`with_webview`).
+    pub fn start_region(
+        platform: PlatformWebview,
+        rect: Rect,
+        pixels_wide: u32,
+        tx: Sender<Result<Vec<u8>>>,
+    ) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            let _ = tx.send(Err(Error::msg("screenshots must start on the main thread")));
+            return;
+        };
+        // SAFETY: on macOS the platform handle is the window's live WKWebView.
+        let webview = unsafe { &*platform.inner().cast::<WKWebView>() };
+        // The snapshot width is in points; each is `scale` pixels.
+        let scale = webview.window().map_or(1.0, |w| w.backingScaleFactor());
+        let config = unsafe { WKSnapshotConfiguration::new(mtm) };
+        let region = NSRect::new(
+            NSPoint::new(rect.x, rect.y),
+            NSSize::new(rect.width, rect.height),
+        );
+        let width: Retained<NSNumber> = NSNumber::new_f64(f64::from(pixels_wide) / scale);
+        // SAFETY: plain configuration values for a snapshot of this view.
+        unsafe {
+            config.setRect(region);
+            config.setSnapshotWidth(Some(&width));
+        }
+        take(webview, &config, tx, png);
+    }
+
+    /// Takes the snapshot `config` describes and sends `convert` of it to `tx`.
+    fn take<T: 'static>(
+        webview: &WKWebView,
+        config: &WKSnapshotConfiguration,
+        tx: Sender<Result<T>>,
+        convert: impl Fn(&NSImage) -> Result<T> + 'static,
+    ) {
         // The handler is called once, but block2 needs a `Fn`.
         let tx = Cell::new(Some(tx));
         let handler = RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
             // SAFETY: WebKit passes either a valid image or a valid error (or null).
             let result = match unsafe { image.as_ref() } {
-                Some(image) => png(image).and_then(|bytes| decode_png(&bytes)),
+                Some(image) => convert(image),
                 None => Err(Error::msg(match unsafe { error.as_ref() } {
                     Some(error) => format!("screenshot failed: {}", error.localizedDescription()),
                     None => "screenshot failed".into(),
@@ -276,7 +337,7 @@ mod platform {
                 let _ = tx.send(result);
             }
         });
-        unsafe { webview.takeSnapshotWithConfiguration_completionHandler(Some(&config), &handler) };
+        unsafe { webview.takeSnapshotWithConfiguration_completionHandler(Some(config), &handler) };
     }
 
     fn png(image: &NSImage) -> Result<Vec<u8>> {

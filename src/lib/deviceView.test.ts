@@ -32,8 +32,8 @@ describe("deckPageVersion", () => {
   const deck = {
     shellHash: "s1",
     slides: [
-      { id: "intro", hash: "a", hidden: false, moved: false },
-      { id: "#2", hash: "b", hidden: false, moved: false },
+      { id: "intro", hash: "a", hidden: false, locked: false, moved: false },
+      { id: "#2", hash: "b", hidden: false, locked: false, moved: false },
     ],
   };
 

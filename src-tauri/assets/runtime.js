@@ -1,6 +1,9 @@
 /* SlopSlide player. Keys: ←/→, space, PageUp/PageDown, Home/End, F for full screen, R for review marks. */
 (function () {
   var root = document.documentElement;
+  // The runtime-css block sets this before the body renders; without it the stylesheet lists
+  // the slides for viewers that run no JavaScript.
+  root.setAttribute("data-slop-player", "");
   var params = new URLSearchParams(location.search);
   var embed = params.has("embed");
   var framed = window.parent !== window;
@@ -18,11 +21,14 @@
       });
   if (!deck || slides.length === 0) return;
   var current = -1;
+  // The stage's size in slide pixels (the deck's slide size, 1920×1080 unless it names another).
+  var W = deck.offsetWidth || 1920;
+  var H = deck.offsetHeight || 1080;
 
   function fit() {
-    var scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
-    var x = (window.innerWidth - 1920 * scale) / 2;
-    var y = (window.innerHeight - 1080 * scale) / 2;
+    var scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    var x = (window.innerWidth - W * scale) / 2;
+    var y = (window.innerHeight - H * scale) / 2;
     deck.style.transform = "translate(" + x + "px," + y + "px) scale(" + scale + ")";
   }
 
@@ -74,21 +80,45 @@
   // Widths in screen pixels, as the editor draws them.
   var INK = { pen: { width: 4, opacity: 1 }, highlighter: { width: 28, opacity: 0.4 } };
 
+  // SVG path data for a smooth curve through a stroke's points (fractions of the slide), as the
+  // app draws it: from the first point to halfway to the next, then from halfway to halfway,
+  // bent by each point between as a quadratic Bézier control point, to the last point.
+  function smoothPath(points) {
+    var xy = points.map(function (p) {
+      return [p[0] * W, p[1] * H];
+    });
+    var at = function (x, y) {
+      return Math.round(x * 10) / 10 + " " + Math.round(y * 10) / 10;
+    };
+    var halfway = function (i) {
+      return at((xy[i][0] + xy[i + 1][0]) / 2, (xy[i][1] + xy[i + 1][1]) / 2);
+    };
+    var last = xy.length - 1;
+    if (last < 2) {
+      return xy
+        .map(function (p, i) {
+          return (i ? "L" : "M") + at(p[0], p[1]);
+        })
+        .join("");
+    }
+    var d = "M" + at(xy[0][0], xy[0][1]) + "L" + halfway(0);
+    for (var i = 1; i < last; i++) {
+      d += "Q" + at(xy[i][0], xy[i][1]) + " " + (i === last - 1 ? at(xy[last][0], xy[last][1]) : halfway(i));
+    }
+    return d;
+  }
+
   function drawReview(slide, strokes) {
     var svg = document.createElementNS(SVG, "svg");
     svg.setAttribute("class", "slop-review");
-    svg.setAttribute("viewBox", "0 0 1920 1080");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
     svg.setAttribute("preserveAspectRatio", "none");
     svg.setAttribute("aria-hidden", "true");
     strokes.forEach(function (stroke) {
       var ink = stroke && INK[stroke.tool];
       var points = stroke && stroke.points;
       if (!ink || !Array.isArray(points) || points.length === 0) return;
-      var d = points
-        .map(function (p, i) {
-          return (i ? "L" : "M") + Math.round(p[0] * 19200) / 10 + " " + Math.round(p[1] * 10800) / 10;
-        })
-        .join("");
+      var d = smoothPath(points);
       // A tap never moves; a tiny step makes the round cap draw it as a dot.
       if (points.every(function (p) { return p[0] === points[0][0] && p[1] === points[0][1]; })) d += "l0.01 0";
       var path = document.createElementNS(SVG, "path");

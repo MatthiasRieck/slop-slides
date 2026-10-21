@@ -7,12 +7,17 @@
 //! /s/<token>/                 the app (index.html, told where its backend is)
 //! /s/<token>/<file>           the app's other files (the built frontend)
 //! /s/<token>/api/<command>    POST, JSON arguments → JSON result, or the error as text
-//! /s/<token>/events           server-sent events: the window's `agent-event`, `deck-changed`
-//!                             and `chat-changed` events, as {"event": name, "payload": …}
-//! /s/<token>/deck/<id>/<path> deck files, as the `slop://` protocol serves them
+//! /s/<token>/events           server-sent events: the window's `agent-event`,
+//!                             `workspace-changed` and `chat-changed` events, as
+//!                             {"event": name, "payload": …}
+//! /s/<token>/deck/<path>      workspace, template and session files, as the `slop://`
+//!                             protocol serves them
 //! /s/<token>/upload/<id>      POST ?name=<file name>, the file as the body → its asset path
 //! /s/<token>/export/<id>      the exported deck as a download
 //! ```
+//!
+//! A device works in the folder the window has open: it cannot open another one, and it can
+//! only reach files inside it.
 //!
 //! The random token in every path is the only credential: whoever has the address can use
 //! the app, so it is only valid while sharing is on, and changes each time it is turned on.
@@ -43,10 +48,10 @@ use tokio::net::TcpListener;
 use tokio::sync::{broadcast, oneshot, watch};
 
 use crate::error::{Error, Result};
-use crate::{agent::AgentManager, deck, protocol, watcher::DeckWatcher};
+use crate::{agent::AgentManager, deck, protocol, workspace, workspace::OpenWorkspace};
 
 /// Window events that devices get too.
-pub const FORWARDED_EVENTS: [&str; 3] = ["agent-event", "deck-changed", "chat-changed"];
+pub const FORWARDED_EVENTS: [&str; 3] = ["agent-event", "workspace-changed", "chat-changed"];
 /// Tried first, so the address stays the same between sessions when it can.
 const PREFERRED_PORT: u16 = 47_419;
 /// Largest upload (an attached photo or video).
@@ -189,7 +194,7 @@ pub fn capture_done(app: &AppHandle, request: &str, result: std::result::Result<
 }
 
 /// Has the window screenshot `slide` of deck `id` with `strokes` (review marks) drawn on top;
-/// returns the deck-relative image path.
+/// returns the image's path in the workspace's session.
 async fn capture(app: &AppHandle, id: String, slide: String, strokes: Value) -> Result<String> {
     let server = app.state::<RemoteServer>();
     let request = uuid::Uuid::new_v4().simple().to_string();
@@ -345,18 +350,18 @@ async fn handle(State(ctx): State<Ctx>, method: Method, uri: Uri, body: Bytes) -
         Route::Events => events(&ctx).into_response(),
         Route::Upload(id) => {
             let name = query_param(uri.query(), "name").unwrap_or_default();
-            let saved = deck::deck_dir(app, &decode(id))
-                .and_then(|dir| deck::save_asset(&dir, &name, &body));
+            let saved = crate::workspace_root(&app.state::<OpenWorkspace>())
+                .and_then(|root| crate::asset_target(&root, &decode(id)))
+                .and_then(|target| deck::save_asset_bytes(&target, &name, &body));
             match saved {
                 Ok(path) => axum::Json(path).into_response(),
                 Err(e) => error_response(e.to_string()),
             }
         }
         Route::Export(id) => {
-            let id = decode(id);
-            let exported = deck::deck_dir(app, &id).and_then(|dir| {
-                let title = deck::load(&dir, &id)?.title;
-                Ok((deck::export_file_name(&title), deck::export_html(&dir)?))
+            let exported = deck_in_workspace(app, &decode(id)).and_then(|file| {
+                let title = deck::load(&file)?.title;
+                Ok((deck::export_file_name(&title), deck::export_html(&file)?))
             });
             match exported {
                 Ok((name, html)) => Response::builder()
@@ -470,125 +475,178 @@ fn json<T: Serialize>(value: T) -> Result<Value> {
     serde_json::to_value(value).map_err(|e| Error::msg(e.to_string()))
 }
 
+/// The open workspace's folder, as the window shows it.
+fn current_workspace(app: &AppHandle) -> Option<crate::WorkspaceInfo> {
+    workspace_info(&app.state::<OpenWorkspace>())
+}
+
+fn workspace_info(open: &OpenWorkspace) -> Option<crate::WorkspaceInfo> {
+    open.get().map(|root| crate::WorkspaceInfo {
+        name: workspace::display_name(&root),
+        path: root.to_string_lossy().into_owned(),
+    })
+}
+
+/// A device "opens" a folder: it can only be the one the window has open.
+fn reopen(open: &OpenWorkspace, path: &str) -> Result<crate::WorkspaceInfo> {
+    workspace_info(open)
+        .filter(|w| workspace::root(path).is_ok_and(|p| p.to_string_lossy() == w.path))
+        .ok_or_else(|| Error::msg("Open that folder in SlopSlide on your computer first."))
+}
+
+/// Refuses a path outside the folder the window has open: devices only get to work in it.
+fn check_inside(open: &OpenWorkspace, path: &str) -> Result<()> {
+    match open.contains(std::path::Path::new(path)) {
+        true => Ok(()),
+        false => Err(Error::msg(
+            "That is not in the folder SlopSlide has open on your computer.",
+        )),
+    }
+}
+
+fn in_workspace(app: &AppHandle, path: &str) -> Result<()> {
+    check_inside(&app.state::<OpenWorkspace>(), path)
+}
+
+fn deck_in_workspace(app: &AppHandle, id: &str) -> Result<std::path::PathBuf> {
+    in_workspace(app, id)?;
+    deck::deck_file(id)
+}
+
+/// The `id` argument (a deck file or the workspace folder), once it is known to be inside the
+/// open workspace.
+fn id_arg(app: &AppHandle, args: &Value) -> Result<String> {
+    let id: String = arg(args, "id")?;
+    in_workspace(app, &id)?;
+    Ok(id)
+}
+
 /// Runs a command for a device. The same commands the window has, minus those that only make
-/// sense on the computer itself (file paths and dialogs, native screenshots, sharing).
+/// sense on the computer itself (file paths and dialogs, native screenshots, the microphone,
+/// sharing), and limited to the folder the window has open.
 async fn dispatch(app: &AppHandle, command: &str, args: &Value) -> Result<Value> {
     use crate as c;
     let app = app.clone();
     let agent = || app.state::<AgentManager>();
-    let watcher = || app.state::<DeckWatcher>();
+    let open = || app.state::<OpenWorkspace>();
+    let id = || id_arg(&app, args);
     match command {
-        "list_decks" => json(c::list_decks(app.clone())?),
-        "create_deck" => json(c::create_deck(app.clone(), watcher(), arg(args, "title")?)?),
-        "open_deck" => json(c::open_deck(
-            app.clone(),
-            agent(),
-            watcher(),
-            arg(args, "id")?,
-        )?),
-        "close_deck" => {
-            c::close_deck(watcher(), arg(args, "id")?);
-            Ok(Value::Null)
-        }
-        "load_deck" => json(c::load_deck(app.clone(), arg(args, "id")?)?),
-        "rename_deck" => json(c::rename_deck(
-            app.clone(),
-            arg(args, "id")?,
+        "current_workspace" => json(current_workspace(&app)),
+        // The device follows the window's folder; it can "open" only that one.
+        "open_workspace" => json(reopen(&open(), &arg::<String>(args, "path")?)?),
+        // Leaving the folder on a device leaves it open in the window.
+        "close_workspace" => Ok(Value::Null),
+        "list_dir" => json(c::list_dir(open(), arg(args, "path")?)?),
+        "open_file" => json(c::open_file(open(), arg(args, "path")?)?),
+        "create_deck" => json(c::create_deck(
+            open(),
             arg(args, "title")?,
+            arg(args, "template")?,
         )?),
-        "save_review" => json(c::save_review(
-            app.clone(),
-            arg(args, "id")?,
-            arg(args, "review")?,
-        )?),
-        "delete_deck" => json(c::delete_deck(
-            app.clone(),
-            agent(),
-            watcher(),
-            arg(args, "id")?,
-        )?),
-        "reorder_slides" => json(c::reorder_slides(
-            app.clone(),
-            arg(args, "id")?,
-            arg(args, "slides")?,
-        )?),
-        "add_slide" => json(c::add_slide(
-            app.clone(),
-            arg(args, "id")?,
+        "list_templates" => json(c::list_templates()?),
+        "stage_template" => json(c::stage_template(open(), id()?, arg(args, "template")?)?),
+        "apply_template" => json(c::apply_template(id()?, arg(args, "template")?)?),
+        "add_template_slide" => json(c::add_template_slide(
+            id()?,
+            arg(args, "template")?,
+            arg(args, "slide")?,
             arg(args, "after")?,
         )?),
-        "duplicate_slide" => json(c::duplicate_slide(
-            app.clone(),
-            arg(args, "id")?,
-            arg(args, "slide")?,
-        )?),
+        "open_deck" => json(c::open_deck(open(), agent(), id()?)?),
+        "load_deck" => json(c::load_deck(id()?)?),
+        "rename_deck" => json(c::rename_deck(id()?, arg(args, "title")?)?),
+        "save_review" => json(c::save_review(id()?, arg(args, "review")?)?),
+        "reorder_slides" => json(c::reorder_slides(id()?, arg(args, "slides")?)?),
+        "add_slide" => json(c::add_slide(id()?, arg(args, "after")?)?),
+        "duplicate_slide" => json(c::duplicate_slide(id()?, arg(args, "slide")?)?),
         "set_slide_hidden" => json(c::set_slide_hidden(
-            app.clone(),
-            arg(args, "id")?,
+            open(),
+            id()?,
             arg(args, "slide")?,
             arg(args, "hidden")?,
         )?),
+        "set_slide_locked" => json(c::set_slide_locked(
+            open(),
+            id()?,
+            arg(args, "slide")?,
+            arg(args, "locked")?,
+        )?),
+        "set_slide_size" => json(c::set_slide_size(id()?, arg(args, "size")?)?),
         "add_section" => json(c::add_section(
-            app.clone(),
-            arg(args, "id")?,
+            id()?,
             arg(args, "before")?,
             arg(args, "title")?,
         )?),
         "rename_section" => json(c::rename_section(
-            app.clone(),
-            arg(args, "id")?,
+            id()?,
             arg(args, "index")?,
             arg(args, "title")?,
         )?),
-        "delete_section" => json(c::delete_section(
-            app.clone(),
-            arg(args, "id")?,
-            arg(args, "index")?,
-        )?),
-        "delete_slide" => json(c::delete_slide(
-            app.clone(),
-            arg(args, "id")?,
-            arg(args, "slide")?,
-        )?),
+        "delete_section" => json(c::delete_section(id()?, arg(args, "index")?)?),
+        "delete_slide" => json(c::delete_slide(open(), id()?, arg(args, "slide")?)?),
         "update_slide" => json(c::update_slide(
-            app.clone(),
-            arg(args, "id")?,
+            open(),
+            id()?,
             arg(args, "slide")?,
             arg(args, "markup")?,
             arg(args, "base")?,
         )?),
         "save_deck_source" => json(c::save_deck_source(
-            app.clone(),
+            open(),
             agent(),
-            arg(args, "id")?,
+            id()?,
             arg(args, "source")?,
             arg(args, "base")?,
         )?),
-        "lint_deck" => json(c::lint_deck(app.clone(), arg(args, "id")?)?),
-        "load_chat" => json(c::load_chat(app.clone(), arg(args, "id")?)?),
+        "save_asset" => json(c::save_asset(
+            open(),
+            id()?,
+            arg(args, "name")?,
+            arg(args, "data")?,
+        )?),
+        "lint_deck" => json(c::lint_deck(open(), id()?)?),
+        "load_chat" => json(c::load_chat(id()?)?),
+        "session_provider" => json(c::session_provider(id()?)?),
         "save_chat" => json(c::save_chat(
             app.clone(),
-            arg(args, "id")?,
+            id()?,
             arg(args, "chat")?,
             arg(args, "origin")?,
         )?),
         "reset_chat" => json(c::reset_chat(
             app.clone(),
             agent(),
-            arg(args, "id")?,
+            id()?,
             arg(args, "origin")?,
         )?),
-        "send_message" => json(c::send_message(app.clone(), agent(), arg(args, "args")?)?),
+        "send_message" => {
+            let send: crate::agent::SendArgs = arg(args, "args")?;
+            in_workspace(&app, &send.workspace)?;
+            json(c::send_message(app.clone(), agent(), send)?)
+        }
         "interrupt_agent" => {
-            c::interrupt_agent(agent(), arg(args, "id")?);
+            c::interrupt_agent(agent(), id()?);
             Ok(Value::Null)
         }
-        "agent_running" => json(c::agent_running(agent(), arg(args, "id")?)),
+        "agent_running" => json(c::agent_running(agent(), id()?)),
+        "permission_modes" => json(c::permission_modes(arg(args, "provider")?, id()?).await?),
+        "respond_approval" => {
+            let workspace: String = arg(args, "workspace")?;
+            in_workspace(&app, &workspace)?;
+            json(c::respond_approval(
+                agent(),
+                workspace,
+                arg(args, "id")?,
+                arg(args, "decision")?,
+            )?)
+        }
         "list_providers" => json(c::list_providers().await),
         "capture_remote_sketch" => json(
             capture(
                 &app,
-                arg(args, "id")?,
+                deck_in_workspace(&app, &arg::<String>(args, "id")?)?
+                    .to_string_lossy()
+                    .into_owned(),
                 arg(args, "slide")?,
                 arg(args, "strokes")?,
             )
@@ -618,8 +676,8 @@ mod tests {
             Some(Route::Api("list_decks"))
         );
         assert_eq!(
-            r("/s/0123abcd/deck/talk/assets/a.png"),
-            Some(Route::Deck("talk/assets/a.png"))
+            r("/s/0123abcd/deck/.file/decks/talk/assets/a.png"),
+            Some(Route::Deck(".file/decks/talk/assets/a.png"))
         );
         assert_eq!(r("/s/0123abcd/upload/talk"), Some(Route::Upload("talk")));
         assert_eq!(r("/s/0123abcd/export/talk"), Some(Route::Export("talk")));
@@ -644,10 +702,13 @@ mod tests {
 
     #[test]
     fn envelopes_carry_name_and_raw_payload() {
-        let message = envelope("deck-changed", r#"{"deckId":"a","paths":["deck.html"]}"#);
+        let message = envelope(
+            "workspace-changed",
+            r#"{"root":"/decks","paths":["talk/deck.html"]}"#,
+        );
         let parsed: Value = serde_json::from_str(&message).unwrap();
-        assert_eq!(parsed["event"], "deck-changed");
-        assert_eq!(parsed["payload"]["paths"][0], "deck.html");
+        assert_eq!(parsed["event"], "workspace-changed");
+        assert_eq!(parsed["payload"]["paths"][0], "talk/deck.html");
         let empty: Value = serde_json::from_str(&envelope("resync", "")).unwrap();
         assert_eq!(empty["payload"], Value::Null);
     }
@@ -713,5 +774,38 @@ mod tests {
         assert_eq!(arg::<usize>(&args, "index").unwrap(), 2);
         let err = arg::<String>(&args, "missing").unwrap_err().to_string();
         assert!(err.contains("`missing`"), "{err}");
+    }
+
+    #[test]
+    fn devices_stay_inside_the_open_workspace() {
+        let base = std::env::temp_dir().join(format!("slopslide-remote-{}", uuid::Uuid::new_v4()));
+        let root = base.join("talks");
+        std::fs::create_dir_all(root.join("q3")).unwrap();
+        std::fs::write(root.join("q3/deck.html"), "<html></html>").unwrap();
+        std::fs::write(base.join("secret.html"), "<html></html>").unwrap();
+        let path = |p: &std::path::Path| p.to_string_lossy().into_owned();
+
+        let open = OpenWorkspace::default();
+        assert!(workspace_info(&open).is_none());
+        assert!(check_inside(&open, &path(&root.join("q3/deck.html"))).is_err());
+        assert!(reopen(&open, &path(&root)).is_err(), "nothing is open");
+
+        open.set(Some(root.clone()));
+        let info = workspace_info(&open).unwrap();
+        assert_eq!(info.name, "talks");
+        assert_eq!(reopen(&open, &path(&root)).unwrap().path, info.path);
+        assert!(reopen(&open, &path(&base)).is_err(), "another folder");
+        assert!(
+            check_inside(&open, &path(&root)).is_ok(),
+            "the folder itself"
+        );
+        assert!(check_inside(&open, &path(&root.join("q3/deck.html"))).is_ok());
+        assert!(check_inside(&open, &path(&base.join("secret.html"))).is_err());
+        assert!(
+            check_inside(&open, &path(&root.join("../secret.html"))).is_err(),
+            "`..` cannot leave it"
+        );
+        assert!(check_inside(&open, &path(&root.join("missing.html"))).is_err());
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

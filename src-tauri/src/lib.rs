@@ -25,7 +25,7 @@ mod workspace;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use agent::{AgentManager, SendArgs};
 use deck::Deck;
@@ -594,8 +594,13 @@ pub fn run() {
             stop_recording,
             cancel_recording,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running SlopSlide");
+        .build(tauri::generate_context!())
+        .expect("error while running SlopSlide")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                app.state::<voice::Voice>().shutdown();
+            }
+        });
 }
 
 #[cfg(test)]

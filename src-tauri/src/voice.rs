@@ -211,6 +211,26 @@ impl Voice {
             session.recording.finish();
         }
     }
+
+    /// Ends any recording and frees the model; called as the app exits. ggml aborts the process
+    /// when its Metal device is torn down while a model still holds buffers on it.
+    pub fn shutdown(&self) {
+        let session = self
+            .session
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        if let Some(session) = session {
+            session.live.store(false, Ordering::SeqCst);
+            session.recording.finish();
+            let _ = session.live_thread.join();
+        }
+        // Waits for a transcription still running.
+        self.whisper
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+    }
 }
 
 /// Transcribes a recording while it runs, reporting the text so far.
@@ -648,6 +668,27 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("slopslide-voice-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn shutdown_without_a_recording_or_model_does_nothing() {
+        let voice = Voice::default();
+        voice.shutdown();
+        assert!(voice.whisper.lock().unwrap().is_none());
+        assert!(!voice.status(&temp_dir()).recording);
+    }
+
+    #[test]
+    fn shutdown_frees_a_loaded_model() {
+        let home = crate::deck::app_home().unwrap();
+        let model = model_path(&home);
+        if !model.is_file() {
+            return; // the model is not downloaded on this machine
+        }
+        let voice = Voice::default();
+        load(&mut voice.whisper.lock().unwrap(), &model).unwrap();
+        voice.shutdown();
+        assert!(voice.whisper.lock().unwrap().is_none());
     }
 
     #[test]

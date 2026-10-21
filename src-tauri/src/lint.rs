@@ -298,6 +298,18 @@ fn check_markup(l: &mut Linter) {
                         "This invisible, inert placeholder reserves the original layout space of the resized element immediately before it. Keep the visible element's text, dimensions and position when tidying, fit it into the slide's layout, then remove this entire placeholder and its hidden contents.".into(),
                     );
                 }
+                if tag
+                    .attrs
+                    .iter()
+                    .any(|(n, ..)| n == "data-delete-placeholder")
+                {
+                    l.report(
+                        "delete-placeholder",
+                        Severity::Warning,
+                        i,
+                        "The user deleted an element here; this invisible, inert copy only holds its empty slot so the rest of the layout did not shift. Do not bring the deleted content back. When tidying, remove this entire placeholder and its hidden contents and rework the surrounding layout so the gap closes cleanly.".into(),
+                    );
+                }
                 if let Some((_, value, ..)) = tag.attrs.iter().find(|(n, ..)| n == ADDED_ATTR) {
                     let what = match value.as_str() {
                         "text" => "text box",
@@ -1466,6 +1478,33 @@ mod tests {
         .is_empty());
         assert!(rules(&format!(
             "{}<div data-resize-placeholder></div>",
+            deck("<section class=\"slide\" id=\"a\"></section>")
+        ))
+        .is_empty());
+    }
+
+    #[test]
+    fn flags_delete_placeholders_awaiting_cleanup() {
+        let found = lint(
+            &deck(
+                "<section class=\"slide\" id=\"a\"><p data-delete-placeholder aria-hidden=\"true\" inert style=\"visibility: hidden\">Gone</p><p>Kept</p></section>",
+            ),
+            |_| true,
+            &[],
+        );
+        assert_eq!(
+            found.iter().map(|f| f.rule).collect::<Vec<_>>(),
+            ["delete-placeholder"]
+        );
+        assert!(found[0]
+            .message
+            .contains("Do not bring the deleted content back"));
+        assert!(rules(&deck(
+            "<section class=\"slide\" id=\"a\"><p>data-delete-placeholder</p></section>"
+        ))
+        .is_empty());
+        assert!(rules(&format!(
+            "{}<div data-delete-placeholder></div>",
             deck("<section class=\"slide\" id=\"a\"></section>")
         ))
         .is_empty());

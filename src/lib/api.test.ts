@@ -119,6 +119,11 @@ const CASES = [
     { id: "talk", template: "swiss", slide: "quote", after: "intro" },
   ],
   ["createTemplate", () => api.createTemplate("talk", "Mine"), "create_template", { id: "talk", name: "Mine" }],
+  ["voiceStatus", () => api.voiceStatus(), "voice_status", undefined],
+  ["downloadVoiceModel", () => api.downloadVoiceModel(), "download_voice_model", undefined],
+  ["startRecording", () => api.startRecording(), "start_recording", undefined],
+  ["stopRecording", () => api.stopRecording(), "stop_recording", undefined],
+  ["cancelRecording", () => api.cancelRecording(), "cancel_recording", undefined],
 ] as const;
 
 describe("api", () => {

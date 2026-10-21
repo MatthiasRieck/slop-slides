@@ -470,6 +470,58 @@ describe("ChatPanel: composing", () => {
   });
 });
 
+describe("ChatPanel: voice input", () => {
+  const partial = async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    const call = vi.mocked(listen).mock.calls.findLast(([name]) => name === "voice-partial");
+    return call![1] as (event: { payload: string }) => void;
+  };
+
+  it("shows the text at the caret as it is said, then keeps it", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "voice_status") return { modelReady: true, modelBytes: 1, downloading: false, recording: false };
+      if (cmd === "stop_recording") return "really big";
+      return [];
+    });
+    render(<ChatPanel />);
+    fireEvent.change(textarea(), { target: { value: "Make the title." } });
+    textarea().setSelectionRange(8, 8);
+
+    fireEvent.click(screen.getByRole("button", { name: "Dictate a message" }));
+    const stop = await screen.findByRole("button", { name: /Stop dictating/ });
+    expect(textarea().readOnly).toBe(true);
+    const onPartial = await waitFor(partial);
+    act(() => onPartial({ payload: "really" }));
+    expect(textarea().value).toBe("Make the really title.");
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(send).not.toHaveBeenCalled();
+
+    fireEvent.click(stop);
+    await waitFor(() => expect(textarea().value).toBe("Make the really big title."));
+    expect(textarea().readOnly).toBe(false);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("restores the draft when dictation is discarded", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "voice_status") return { modelReady: true, modelBytes: 1, downloading: false, recording: false };
+      return [];
+    });
+    render(<ChatPanel />);
+    fireEvent.change(textarea(), { target: { value: "Keep this" } });
+    fireEvent.click(screen.getByRole("button", { name: "Dictate a message" }));
+    await screen.findByRole("button", { name: /Stop dictating/ });
+    const onPartial = await waitFor(partial);
+    act(() => onPartial({ payload: "never mind" }));
+    expect(textarea().value).toBe("Keep this never mind");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(textarea().value).toBe("Keep this");
+    expect(textarea().readOnly).toBe(false);
+    expect(invoke).toHaveBeenCalledWith("cancel_recording");
+  });
+});
+
 describe("ChatPanel: attachments", () => {
   it("attaches picked files and sends them with the message", async () => {
     openDialog.mockResolvedValue(["/Users/me/Photo.PNG", "/Users/me/data.csv"]);

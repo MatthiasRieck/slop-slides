@@ -19,7 +19,12 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   temporary offset; **Tidy layout** then sends the agent a screenshot so it rebuilds the
   slide's layout around where you put things.
 - **Right:** chat with the agent. It knows which slide you're on, and you can attach images
-  (paperclip, or drop files anywhere on the window).
+  (paperclip, or drop files anywhere on the window). The microphone button dictates: click to
+  start, and what you say shows up at the cursor as you speak; click again to keep it (Esc
+  discards it). On macOS the first use asks for microphone access (when running from a
+  terminal or editor, macOS asks for that app instead). Speech is
+  transcribed on your computer with [Whisper](https://github.com/ggml-org/whisper.cpp) (small,
+  multilingual); its model (190 MB) is downloaded on first use to `~/.slopslides/models`.
 - **Styles and layouts:** decks can follow a template, a deck of example layouts (title,
   section, bullets, split, stats, quote, closing) in one style, with its own entrance animation. 31 come
   with the app (Claymorphism, Swiss Design, Synthwave, Terminal Green, Wabi-Sabi, …); add your own as folders in
@@ -52,8 +57,9 @@ Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.
   [OpenAI Codex](https://developers.openai.com/codex/cli), or GitHub Copilot. Select its
   model in the chat composer. To use a binary outside your PATH, set
   `SLOPSLIDE_CLAUDE_PATH`, `SLOPSLIDE_CODEX_PATH`, or `SLOPSLIDE_COPILOT_PATH`.
-- For development: Node 22+, pnpm, Rust (stable), and the
-  [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS.
+- For development: Node 22+, pnpm, Rust (stable), CMake (to build whisper.cpp), and the
+  [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS; on Linux also
+  `libasound2-dev` for the microphone.
 
 ## Development
 

@@ -71,6 +71,11 @@ export function installBrowserMock() {
           return `assets/${String(a.name)}`;
         case "session_provider":
           return null;
+        case "voice_status":
+          return { modelReady: false, modelBytes: 190_085_487, downloading: false, recording: false };
+        case "download_voice_model":
+        case "start_recording":
+          throw new Error("Voice input requires the desktop app.");
         case "load_chat":
           return JSON.parse(localStorage.getItem(`mock-chat-${String(a.id)}`) ?? "null");
         default:

@@ -24,7 +24,8 @@
    app, which reads the clipboard and sends back what to paste:
    - { type: "slop:edit-paste", html } an element copied here: on its own slide right after
      where it was copied (free-floating ones offset, so the copy shows), back in its place after
-     a cut, and on another slide at the same spot, absolutely positioned;
+     a cut (taking over the slot the cut left), and on another slide at the same spot,
+     absolutely positioned;
    - { type: "slop:edit-paste-text", text, style } a text box with `text`, in the middle of the view;
    - images come as dropped images, at the middle of the view.
 
@@ -1467,8 +1468,18 @@
       original.parentElement.insertBefore(el, after.nextSibling);
       if (header.free) cascade(el);
     } else if (parent) {
-      // After a cut: back where it was.
-      parent.insertBefore(el, parent.children[path[path.length - 1]] || null);
+      // After a cut: back where it was, into the slot the cut left (see removeSelected).
+      var at = parent.children[path[path.length - 1]] || null;
+      if (at && at.hasAttribute(DELETED)) {
+        if (header.free) {
+          // A resized element: the slot was its placeholder, and is again.
+          at.removeAttribute(DELETED);
+          at.setAttribute(PLACEHOLDER, "");
+        } else {
+          parent.replaceChild(el, at);
+        }
+      }
+      if (!el.parentElement) parent.insertBefore(el, at);
     } else {
       slide.appendChild(el);
       if (!header.free || !path || path.length !== 1) placeFree(el, header);

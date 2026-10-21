@@ -428,7 +428,9 @@ interface PasteboardView {
 /**
  * Connects the stage to the slide editor running in its preview (src-tauri/assets/editor.js):
  * saves the markup it posts, keeps the selection across the reload that follows, and
- * handles undo and leaving edit mode. Images dropped on the stage go onto the slide.
+ * handles undo and leaving edit mode. Images dropped on the stage go onto the slide. The
+ * editor copies elements through the system clipboard, and ⌘V pastes from it: an element
+ * copied there, images (saved as assets) or text from anywhere.
  */
 function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetView: () => void) {
   const [sizeMode, setSizeMode] = useState<"resize" | "stretch">("resize");
@@ -440,6 +442,44 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
   const [selection, setSelection] = useState<{ slide: string; selection: EditSelection | null } | null>(null);
 
   useEffect(() => {
+    const paste = async () => {
+      const { deck, editing, selected } = useApp.getState();
+      if (!deck || !editing || !selected) return;
+      try {
+        const pasted = await api.pasteFromClipboard(deck.id);
+        const loaded = frame.current;
+        const now = useApp.getState();
+        if (!now.editing || now.selected !== selected || !loaded?.contentWindow) return;
+        if (pasted.kind === "element") {
+          loaded.contentWindow.postMessage({ type: "slop:edit-paste", html: pasted.html }, "*");
+        } else if (pasted.kind === "text") {
+          loaded.contentWindow.postMessage({ type: "slop:edit-paste-text", text: pasted.text, style: now.editStyles.text }, "*");
+        } else if (pasted.kind === "images") {
+          const images = await Promise.all(pasted.images.map(async (src) => ({ src, ...(await imageSize(deckFileUrl(deck.id, src))) })));
+          // In the middle of the view, in the editor's own pixels.
+          const x = loaded.clientWidth / 2;
+          const y = loaded.clientHeight / 2;
+          loaded.contentWindow.postMessage({ type: "slop:edit-insert-images", images, x, y }, "*");
+        }
+      } catch (error) {
+        useApp.getState().setError(errorMessage(error));
+      }
+    };
+    /** ⌘C / ⌘X / ⌘V while editing; `fromApp` when pressed outside the slide. True when handled. */
+    const runClipboardKey = (key: string, shift: boolean, fromApp: boolean) => {
+      const lower = key.toLowerCase();
+      if (shift) return false;
+      if (lower === "v") {
+        void paste();
+        return true;
+      }
+      // In the slide, the editor copies by itself; in the app, copying selected text comes first.
+      if ((lower === "c" || lower === "x") && fromApp && !window.getSelection()?.toString()) {
+        frame.current?.contentWindow?.postMessage({ type: "slop:edit-copy", cut: lower === "x" }, "*");
+        return true;
+      }
+      return false;
+    };
     const fromStage = (source: MessageEventSource | null) =>
       Array.from(areaRef.current?.querySelectorAll("iframe") ?? []).some((f) => f.contentWindow === source);
     const onMessage = (event: MessageEvent) => {
@@ -456,8 +496,10 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
       } else if (data?.type === "slop:edit-tool" && data.slide === selected && typeof data.tool === "string") {
         // The editor put its tool away by itself (after adding a shape, or on Escape).
         if (data.tool in TOOL_NAMES) useApp.getState().setEditTool(data.tool as EditTool);
+      } else if (data?.type === "slop:edit-copied" && data.slide === selected && typeof data.html === "string") {
+        api.copyToClipboard(data.html, String(data.text ?? "")).catch((error) => useApp.getState().setError(errorMessage(error)));
       } else if (data?.type === "slop:key") {
-        if (data.mod) runHistoryKey(String(data.key), Boolean(data.shift));
+        if (data.mod) runHistoryKey(String(data.key), Boolean(data.shift)) || runClipboardKey(String(data.key), Boolean(data.shift), false);
         else runEditKey(String(data.key));
       }
     };
@@ -465,7 +507,7 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
       const target = event.target as HTMLElement | null;
       if (!useApp.getState().editing || target?.closest("input, textarea, select, [contenteditable]")) return;
       if (event.metaKey || event.ctrlKey) {
-        if (runHistoryKey(event.key, event.shiftKey)) event.preventDefault();
+        if (runHistoryKey(event.key, event.shiftKey) || runClipboardKey(event.key, event.shiftKey, true)) event.preventDefault();
       } else if (!event.altKey && runEditKey(event.key, true)) {
         event.preventDefault();
       }

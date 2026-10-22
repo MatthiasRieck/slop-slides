@@ -782,12 +782,12 @@ pub fn save_asset(file: &Path, name: &str, data: &str) -> Result<String> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(data.trim())
         .map_err(|e| Error::msg(format!("invalid pasted data: {e}")))?;
-    save_asset_bytes(file, name, &bytes)
+    write_asset(file, name, &bytes)
 }
 
-/// Writes an uploaded file (e.g. from a phone or tablet) into `assets/` under a free name
-/// based on `name`; returns its ref.
-pub fn save_asset_bytes(file: &Path, name: &str, bytes: &[u8]) -> Result<String> {
+/// Writes `bytes` (pasted, or uploaded e.g. from a phone or tablet) into `assets/`, named
+/// after `name` (without overwriting); returns its ref.
+pub fn write_asset(file: &Path, name: &str, bytes: &[u8]) -> Result<String> {
     let assets = if file.is_dir() { file } else { folder(file) }.join("assets");
     fs::create_dir_all(&assets)?;
     // Only the file name counts; a pasted or uploaded name (which may carry a client's path,
@@ -1840,26 +1840,23 @@ mod tests {
     fn saves_uploaded_assets_under_safe_unique_names() {
         let deck = TempDeck::new(ORIGINAL);
         assert_eq!(
-            save_asset_bytes(&deck.file(), "IMG 0042.HEIC", b"a").unwrap(),
+            write_asset(&deck.file(), "IMG 0042.HEIC", b"a").unwrap(),
             "assets/img-0042.heic"
         );
         assert_eq!(
-            save_asset_bytes(&deck.file(), "IMG 0042.HEIC", b"b").unwrap(),
+            write_asset(&deck.file(), "IMG 0042.HEIC", b"b").unwrap(),
             "assets/img-0042-2.heic"
         );
         assert_eq!(
-            save_asset_bytes(&deck.file(), "../../evil.sh", b"c").unwrap(),
+            write_asset(&deck.file(), "../../evil.sh", b"c").unwrap(),
             "assets/evil.sh",
             "a client path never leaves assets/"
         );
         assert_eq!(
-            save_asset_bytes(&deck.file(), "C:\\Users\\me\\scan.pdf", b"d").unwrap(),
+            write_asset(&deck.file(), "C:\\Users\\me\\scan.pdf", b"d").unwrap(),
             "assets/scan.pdf"
         );
-        assert_eq!(
-            save_asset_bytes(&deck.file(), "", b"e").unwrap(),
-            "assets/asset"
-        );
+        assert_eq!(write_asset(&deck.file(), "", b"e").unwrap(), "assets/asset");
         assert_eq!(
             fs::read(deck.0.join("assets/img-0042-2.heic")).unwrap(),
             b"b"

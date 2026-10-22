@@ -9,13 +9,25 @@
    can switch to Stretch, which scales the contents too. On the first box resize, an in-flow
    element leaves an invisible placeholder in its original slot so its siblings stay put.
    Double-click (or Enter) edits its text, Escape selects the parent. Delete (or Backspace, or
-   { type: "slop:edit-delete" } from the app) removes it.
+   { type: "slop:edit-delete" } from the app) removes it; an in-flow element leaves an invisible
+   `data-delete-placeholder` in its slot (or takes over its resize placeholder) so the rest of
+   the layout stays put.
    Every change is posted to the app as the slide's new markup:
    { type: "slop:edit-commit", slide, markup, select }.
    Images dropped on the slide come from the app (which saved them as assets) as
    { type: "slop:edit-insert-images", images: [{ src, w, h }], x, y }: each is placed on top,
    centered on the drop point (x, y in this window's pixels), and marked `data-dropped` until
    the agent gives it a place in the layout.
+   ⌘C / ⌘X (or { type: "slop:edit-copy", cut } from the app) copy / cut the selection: it is
+   posted as { type: "slop:edit-copied", slide, html, text } for the app to put on the system
+   clipboard, `html` being its markup behind a header saying where it came from. ⌘V goes to the
+   app, which reads the clipboard and sends back what to paste:
+   - { type: "slop:edit-paste", html } an element copied here: on its own slide right after
+     where it was copied (free-floating ones offset, so the copy shows), back in its place after
+     a cut (taking over the slot the cut left), and on another slide at the same spot,
+     absolutely positioned;
+   - { type: "slop:edit-paste-text", text, style } a text box with `text`, in the middle of the view;
+   - images come as dropped images, at the middle of the view.
 
    The app's edit toolbar drives the rest with messages:
    - { type: "slop:edit-tool", tool, style } picks a tool: "select", "text" (click or drag out a
@@ -50,6 +62,9 @@
   var EDITOR_ATTRS = ["contenteditable", "data-slop-selected", "data-slop-hover", "data-slop-editing", "data-slop-typing"];
   var MOVED = "data-moved";
   var PLACEHOLDER = "data-resize-placeholder";
+  var DELETED = "data-delete-placeholder";
+  // Invisible layout slots the editor leaves behind; never selected or checked for overflow.
+  var SLOTS = "[" + PLACEHOLDER + "], [" + DELETED + "]";
   var DROPPED = "data-dropped";
   var DRAG_THRESHOLD = 3;
   var DOUBLE_CLICK_MS = 400;
@@ -81,6 +96,12 @@
   // together fan out by this many slide pixels. Without a known size, it is this wide.
   var DROP_CASCADE = 40;
   var DROP_WIDTH = 640;
+  // Starts a copied element's markup; a JSON header with where it came from follows (see copySelected).
+  var CLIP_MARKER = "<!--slopslides:";
+  // Text styles a copied element takes along to another slide, where the deck's CSS may differ.
+  var LOOK = ["color", "fontFamily", "fontSize", "fontWeight", "fontStyle", "lineHeight", "letterSpacing", "textAlign", "textTransform"];
+  // A long pasted text wraps at this share of the slide's width.
+  var PASTE_TEXT_WIDTH = 0.6;
 
   var style = document.createElement("style");
   style.textContent =
@@ -183,14 +204,24 @@
 
   /** The slide's markup without anything the editor or the player added. */
   function serialize() {
-    var copy = slide.cloneNode(true);
+    var copy = cleanCopy(slide);
     copy.classList.remove("active");
-    [copy].concat(Array.prototype.slice.call(copy.querySelectorAll("*"))).forEach(function (el) {
+    return copy.outerHTML;
+  }
+
+  /** A copy of `el` without the editor's marks. */
+  function cleanCopy(el) {
+    var copy = el.cloneNode(true);
+    withDescendants(copy).forEach(function (node) {
       EDITOR_ATTRS.forEach(function (name) {
-        el.removeAttribute(name);
+        node.removeAttribute(name);
       });
     });
-    return copy.outerHTML;
+    return copy;
+  }
+
+  function withDescendants(el) {
+    return [el].concat(Array.prototype.slice.call(el.querySelectorAll("*")));
   }
 
   function commit() {
@@ -237,7 +268,7 @@
 
   /** The element to select for `el`: not inline text runs, whole SVG drawings. */
   function selectable(el) {
-    if (!el || el.nodeType !== 1 || !slide.contains(el) || el === slide || el.closest("[" + PLACEHOLDER + "]")) return null;
+    if (!el || el.nodeType !== 1 || !slide.contains(el) || el === slide || el.closest(SLOTS)) return null;
     var svg = el.closest("svg");
     while (svg && svg.parentElement && svg.parentElement.closest("svg")) svg = svg.parentElement.closest("svg");
     if (svg && slide.contains(svg)) el = svg;
@@ -615,12 +646,10 @@
     return next && next.hasAttribute(PLACEHOLDER) ? next : null;
   }
 
-  /** Reserves the original footprint before taking an element out of normal flow. */
-  function reserveLayout(el) {
+  /** An invisible, inert copy of an in-flow element that fills exactly its layout slot. */
+  function slotFor(el, attr) {
     var computed = getComputedStyle(el);
-    if (/^(absolute|fixed)$/.test(computed.position) || placeholderOf(el)) return;
     var size = sizeOf(el);
-    var center = centerOf(el);
     var placeholder = el.cloneNode(true);
     // Capture resolved styles so ID selectors and inherited styles still reserve the same slot.
     // Keep a hidden copy of the contents for its text baseline and intrinsic grid sizing.
@@ -629,11 +658,11 @@
       var prop = computed[i];
       placeholder.style.setProperty(prop, computed.getPropertyValue(prop));
     }
-    placeholder.setAttribute(PLACEHOLDER, "");
+    placeholder.setAttribute(attr, "");
     placeholder.setAttribute("aria-hidden", "true");
     placeholder.setAttribute("inert", "");
     [placeholder].concat(Array.prototype.slice.call(placeholder.querySelectorAll("*"))).forEach(function (node) {
-      ["id", MOVED, ADDED, DROPPED].concat(EDITOR_ATTRS).forEach(function (attr) { node.removeAttribute(attr); });
+      ["id", MOVED, ADDED, DROPPED].concat(EDITOR_ATTRS).forEach(function (name) { node.removeAttribute(name); });
       node.style.setProperty("visibility", "hidden", "important");
       node.style.setProperty("pointer-events", "none", "important");
       node.style.setProperty("animation", "none", "important");
@@ -644,7 +673,16 @@
     placeholder.style.height = placeholder.style.minHeight = placeholder.style.maxHeight = size.h + "px";
     // A fixed flex contribution preserves the space already allocated after grow/shrink.
     placeholder.style.flex = "0 0 auto";
-    el.parentElement.insertBefore(placeholder, el.nextSibling);
+    return placeholder;
+  }
+
+  /** Reserves the original footprint before taking an element out of normal flow. */
+  function reserveLayout(el) {
+    var computed = getComputedStyle(el);
+    if (/^(absolute|fixed)$/.test(computed.position) || placeholderOf(el)) return;
+    var size = sizeOf(el);
+    var center = centerOf(el);
+    el.parentElement.insertBefore(slotFor(el, PLACEHOLDER), el.nextSibling);
     var contentBox = computed.boxSizing !== "border-box";
     var px = function (name) { return parseFloat(computed[name]) || 0; };
     var width = size.w - (contentBox ? px("paddingLeft") + px("paddingRight") + px("borderLeftWidth") + px("borderRightWidth") : 0);
@@ -820,7 +858,7 @@
     var hits = [];
     Array.prototype.forEach.call(slide.querySelectorAll("*"), function (el) {
       var svg = el.closest("svg");
-      if ((svg && svg !== el) || el.closest(".notes, [" + PLACEHOLDER + "]")) return;
+      if ((svg && svg !== el) || el.closest(".notes, " + SLOTS)) return;
       var rect = el.getBoundingClientRect();
       if (!rect.width && !rect.height) return;
       var past = hasContent(el) && paints(el) ? pastEdges(rect, bounds, k) : [];
@@ -1201,8 +1239,14 @@
     if (!el) return;
     finishEditing();
     select(null);
+    // Keep its slot so the rest of the layout does not reflow; a resized element already has one.
     var placeholder = placeholderOf(el);
-    if (placeholder) placeholder.remove();
+    if (placeholder) {
+      placeholder.removeAttribute(PLACEHOLDER);
+      placeholder.setAttribute(DELETED, "");
+    } else if (el.parentElement && !/^(absolute|fixed)$/.test(getComputedStyle(el).position) && getComputedStyle(el).display !== "none") {
+      el.parentElement.insertBefore(slotFor(el, DELETED), el);
+    }
     if (el.parentElement) el.parentElement.removeChild(el);
     commit();
   }
@@ -1346,6 +1390,170 @@
     commit();
   }
 
+  /**
+   * Posts the selection for the app to put on the clipboard (and with `cut`, removes it). The
+   * header says where it came from: the slide, its path, whether it floats freely (absolutely
+   * positioned) and its box and text styles, for pasting it elsewhere.
+   */
+  function copySelected(cut) {
+    var el = selected;
+    if (!el || !slide.contains(el)) return;
+    finishEditing();
+    if (nudgeTimer) commit();
+    var computed = getComputedStyle(el);
+    var center = centerOf(el);
+    var size = sizeOf(el);
+    var rect = slide.getBoundingClientRect();
+    var k = zoom();
+    var look = {};
+    LOOK.forEach(function (prop) {
+      if (computed[prop]) look[prop] = computed[prop];
+    });
+    var header = {
+      slide: slide.id,
+      path: pathOf(el),
+      free: /^(absolute|fixed)$/.test(computed.position),
+      box: {
+        x: Math.round((center.x - rect.left) / k - size.w / 2),
+        y: Math.round((center.y - rect.top) / k - size.h / 2),
+        w: Math.round(size.w),
+        h: Math.round(size.h),
+      },
+      look: look,
+    };
+    // `>` only appears inside JSON strings, where `\u003e` stands for it, so `-->` cannot end the comment early.
+    var html = CLIP_MARKER + JSON.stringify(header).replace(/>/g, "\\u003e") + "-->" + cleanCopy(el).outerHTML;
+    var text = (typeof el.innerText === "string" ? el.innerText : el.textContent).trim();
+    window.parent.postMessage({ type: "slop:edit-copied", slide: slide.id, html: html, text: text }, "*");
+    if (cut) removeSelected();
+  }
+
+  /** The header and element of markup copied by copySelected; null for anything else. */
+  function parseClip(html) {
+    if (typeof html !== "string" || html.indexOf(CLIP_MARKER) !== 0) return null;
+    var end = html.indexOf("-->");
+    if (end < 0) return null;
+    var header;
+    try {
+      header = JSON.parse(html.slice(CLIP_MARKER.length, end));
+    } catch (e) {
+      return null;
+    }
+    var template = document.createElement("template");
+    template.innerHTML = html.slice(end + 3).trim();
+    var el = template.content.firstElementChild;
+    if (!el || !header || typeof header !== "object") return null;
+    return { header: header, el: el, markup: el.outerHTML };
+  }
+
+  /** Pastes an element copied by copySelected (see the top of this file for where it goes). */
+  function pasteElement(html) {
+    var clip = parseClip(html);
+    if (!clip) return;
+    finishEditing();
+    if (nudgeTimer) commit();
+    var el = document.importNode(clip.el, true);
+    var header = clip.header;
+    var path = Array.isArray(header.path) ? header.path : null;
+    // Ids stay unique; a copy takes one only when the original is gone.
+    withDescendants(el).forEach(function (node) {
+      if (node.id && document.getElementById(node.id)) node.removeAttribute("id");
+    });
+    var here = header.slide === slide.id && path;
+    var original = here ? atPath(path) : null;
+    if (original && cleanCopy(original).outerHTML !== clip.markup) original = null;
+    var parent = here && !original ? (path.length > 1 ? atPath(path.slice(0, -1)) : slide) : null;
+    if (original) {
+      var after = placeholderOf(original) || original;
+      original.parentElement.insertBefore(el, after.nextSibling);
+      if (header.free) cascade(el);
+    } else if (parent) {
+      // After a cut: back where it was, into the slot the cut left (see removeSelected).
+      var at = parent.children[path[path.length - 1]] || null;
+      if (at && at.hasAttribute(DELETED)) {
+        if (header.free) {
+          // A resized element: the slot was its placeholder, and is again.
+          at.removeAttribute(DELETED);
+          at.setAttribute(PLACEHOLDER, "");
+        } else {
+          parent.replaceChild(el, at);
+        }
+      }
+      if (!el.parentElement) parent.insertBefore(el, at);
+    } else {
+      slide.appendChild(el);
+      if (!header.free || !path || path.length !== 1) placeFree(el, header);
+    }
+    select(el);
+    commit();
+  }
+
+  /** Moves a pasted copy down and right of its original, and of any copies already there. */
+  function cascade(el) {
+    var at = offsetOf(el);
+    var taken = function (x, y) {
+      return Array.prototype.some.call(el.parentElement.children, function (other) {
+        if (other === el || other.tagName !== el.tagName) return false;
+        var o = offsetOf(other);
+        return other.style.left === el.style.left && other.style.top === el.style.top && o.x === x && o.y === y;
+      });
+    };
+    var x = at.x + DROP_CASCADE;
+    var y = at.y + DROP_CASCADE;
+    for (var i = 0; i < 50 && taken(x, y); i++) {
+      x += DROP_CASCADE;
+      y += DROP_CASCADE;
+    }
+    moveTo(el, x, y);
+  }
+
+  /** Puts an element from elsewhere on the slide where it was there, sized and styled as it looked. */
+  function placeFree(el, header) {
+    var box = header.box || {};
+    var num = function (n) {
+      return isFinite(n) ? Math.round(n) : 0;
+    };
+    el.style.position = "absolute";
+    el.style.margin = "0px";
+    el.style.left = num(box.x) + "px";
+    el.style.top = num(box.y) + "px";
+    el.style.right = el.style.bottom = "auto";
+    el.style.boxSizing = "border-box";
+    if (box.w > 0) el.style.width = num(box.w) + "px";
+    // Text may wrap differently here, so only boxes without text keep their height.
+    if (box.h > 0 && !el.textContent.trim()) el.style.height = num(box.h) + "px";
+    var look = header.look && typeof header.look === "object" ? header.look : {};
+    LOOK.forEach(function (prop) {
+      if (typeof look[prop] === "string" && !el.style[prop]) el.style[prop] = look[prop];
+    });
+    // The box already includes where it was moved to.
+    moveTo(el, 0, 0);
+  }
+
+  /** Adds a text box with pasted `text` in the middle of the view, styled like new text boxes. */
+  function pasteText(text, style) {
+    text = String(text || "").replace(/\r\n?/g, "\n").replace(/\s+$/, "");
+    if (!text.trim()) return;
+    finishEditing();
+    if (nudgeTimer) commit();
+    var toolStyleBefore = toolStyle;
+    toolStyle = style && typeof style === "object" ? style : {};
+    var el = newText(0, 0);
+    toolStyle = toolStyleBefore;
+    el.textContent = "";
+    text.split("\n").forEach(function (line, i) {
+      if (i) el.appendChild(document.createElement("br"));
+      el.appendChild(document.createTextNode(line));
+    });
+    var maxW = Math.round((slide.offsetWidth || 1920) * PASTE_TEXT_WIDTH);
+    if (sizeOf(el).w > maxW) el.style.width = maxW + "px";
+    var center = slidePoint(window.innerWidth / 2, window.innerHeight / 2);
+    var size = sizeOf(el);
+    place(el, Math.round(center.x - size.w / 2), Math.round(center.y - size.h / 2), null, null);
+    select(el);
+    commit();
+  }
+
   // Capture phase, so keys the editor handles never reach the player (which forwards keys
   // to the app for slide navigation).
   window.addEventListener(
@@ -1369,9 +1577,20 @@
         event.stopImmediatePropagation();
         return;
       }
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
+        var letter = String(event.key).toLowerCase();
+        if ((letter === "c" || letter === "x") && selected) {
+          copySelected(letter === "x");
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+        // The app pastes: the player forwards the key. Nothing here takes a native paste.
+        if (letter === "v") event.preventDefault();
+      }
       if (!selected) return;
       if (event.metaKey || event.ctrlKey) {
-        // Undo and other shortcuts go to the app, after any pending nudge is saved.
+        // Undo, paste and other shortcuts go to the app, after any pending nudge is saved.
         if (nudgeTimer) commit();
         return;
       }
@@ -1431,6 +1650,12 @@
       if (selected) removeSelected();
     } else if (data.type === "slop:edit-insert-images" && isFinite(data.x) && isFinite(data.y)) {
       insertImages(data.images, data.x, data.y);
+    } else if (data.type === "slop:edit-copy") {
+      copySelected(!!data.cut);
+    } else if (data.type === "slop:edit-paste") {
+      pasteElement(data.html);
+    } else if (data.type === "slop:edit-paste-text" && typeof data.text === "string") {
+      pasteText(data.text, data.style);
     }
   });
 })();

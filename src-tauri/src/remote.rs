@@ -352,7 +352,7 @@ async fn handle(State(ctx): State<Ctx>, method: Method, uri: Uri, body: Bytes) -
             let name = query_param(uri.query(), "name").unwrap_or_default();
             let saved = crate::workspace_root(&app.state::<OpenWorkspace>())
                 .and_then(|root| crate::asset_target(&root, &decode(id)))
-                .and_then(|target| deck::save_asset_bytes(&target, &name, &body));
+                .and_then(|target| deck::write_asset(&target, &name, &body));
             match saved {
                 Ok(path) => axum::Json(path).into_response(),
                 Err(e) => error_response(e.to_string()),

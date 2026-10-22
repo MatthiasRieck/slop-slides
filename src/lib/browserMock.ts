@@ -69,6 +69,10 @@ export function installBrowserMock() {
           throw new Error("Saving is not available in the browser preview.");
         case "save_asset":
           return `assets/${String(a.name)}`;
+        case "copy_to_clipboard":
+          return null;
+        case "paste_from_clipboard":
+          return { kind: "nothing" };
         case "session_provider":
           return null;
         case "voice_status":

@@ -1,5 +1,6 @@
 mod agent;
 mod capture;
+mod clipboard;
 mod codex;
 mod copilot;
 mod deck;
@@ -349,6 +350,20 @@ fn save_asset(
     deck::save_asset(&target, &name, &data)
 }
 
+/// Puts an element copied in the slide editor on the system clipboard.
+#[tauri::command]
+fn copy_to_clipboard(html: String, text: String) -> Result<()> {
+    clipboard::write(&html, &text)
+}
+
+/// What pasting into deck `id` brings in; pasted images are saved into its assets.
+#[tauri::command]
+fn paste_from_clipboard(open: State<OpenWorkspace>, id: String) -> Result<clipboard::Pasted> {
+    let root = workspace_root(&open)?;
+    let target = asset_target(&root, &id)?;
+    clipboard::paste(clipboard::read()?, &target)
+}
+
 #[tauri::command]
 fn export_deck(id: String, dest: String) -> Result<()> {
     deck::export(&deck::deck_file(&id)?, std::path::Path::new(&dest))
@@ -629,6 +644,8 @@ pub fn run() {
             save_deck_source,
             import_assets,
             save_asset,
+            copy_to_clipboard,
+            paste_from_clipboard,
             export_deck,
             lint_deck,
             capture_sketch,

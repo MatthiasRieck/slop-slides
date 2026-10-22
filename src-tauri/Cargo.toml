@@ -41,6 +41,7 @@ futures-util = "0.3"
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "stream"] }
 sha2 = "0.10"
 whisper-rs = "0.16"
+arboard = { version = "3.7.0", default-features = false, features = ["image-data"] }
 
 # Slide screenshots for sketches (see src/capture.rs) and PDF printing (src/pdf.rs); the same
 # versions wry already uses.
@@ -49,7 +50,7 @@ whisper-rs = { version = "0.16", features = ["metal"] }
 objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "AVCaptureDevice", "AVMediaFormat"] }  # microphone permission
 block2 = "0.6"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSBitmapImageRep", "NSImage", "NSImageRep", "NSPrintInfo", "NSPrintOperation", "NSResponder", "NSView", "NSWindow"] }
+objc2-app-kit = { version = "0.3", features = ["NSBitmapImageRep", "NSImage", "NSImageRep", "NSPasteboard", "NSPrintInfo", "NSPrintOperation", "NSResponder", "NSView", "NSWindow"] }
 objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSError", "NSGeometry", "NSString", "NSURL", "NSValue"] }
 objc2-web-kit = { version = "0.3", features = ["block2", "objc2-app-kit", "objc2-core-foundation", "WKSnapshotConfiguration", "WKWebView"] }
 

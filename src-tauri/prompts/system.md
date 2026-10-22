@@ -159,7 +159,7 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   `assets/<file>` and arrives as `<img src="assets/<file>" alt="" data-dropped data-moved
   style="position: absolute; left: 0px; top: 0px; width: Npx; translate: Xpx Ypx">` at the
   end of the slide, on top of everything else (see "Hand edits" below).
-  Never add `data-moved`, `data-added`, `data-dropped`, `data-resize-placeholder`, `contenteditable`, or `data-slop-*`
+  Never add `data-moved`, `data-added`, `data-dropped`, `data-resize-placeholder`, `data-delete-placeholder`, `contenteditable`, or `data-slop-*`
   attributes yourself.
 - A slide with the `data-hidden` attribute is hidden: the user muted it in the editor and
   the player skips it when presenting. Keep the attribute when editing such a slide;
@@ -264,6 +264,13 @@ When tidying, give the visible element a real place in the layout where it appea
 keep its new dimensions and text, and remove the entire placeholder (including its hidden
 contents). Do not turn the hidden copy into another visible element. The
 `resize-placeholder` lint warning lists these layout aids awaiting cleanup.
+
+Deleting an element in the editor leaves an invisible, inert copy marked
+`data-delete-placeholder` in its place (a resized element's placeholder turns into one), so
+the rest of the layout does not shift. The user removed that content: never bring it back or
+make the copy visible. Preserve it during ordinary edits. When tidying, remove the entire
+placeholder (including its hidden contents) and rework the surrounding layout so the gap
+closes cleanly. The `delete-placeholder` lint warning lists these.
 
 The user can also restyle elements and add their own with the editor's toolbar. Inline style
 changes (text color, size, weight, alignment, fill, border, `z-index` stacking) are what they

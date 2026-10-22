@@ -2,27 +2,33 @@ import { X } from "lucide-react";
 import { useEffect, useRef, type ReactNode } from "react";
 import { Group, Panel, Separator, usePanelRef, type PanelSize } from "react-resizable-panels";
 
+import { DeviceDeck } from "./components/DeviceDeck";
 import { CodeView } from "./components/CodeView";
 import { DeckToolbar } from "./components/DeckToolbar";
 import { FileViewer } from "./components/FileViewer";
 import { Home } from "./components/Home";
 import { Presenter } from "./components/Presenter";
+import { RemoteCapture } from "./components/RemoteCapture";
 import { Sidebar } from "./components/Sidebar";
 import { SlideImageExport } from "./components/SlideImageExport";
 import { SlideRail } from "./components/SlideRail";
 import { Stage } from "./components/Stage";
 import { TopBar } from "./components/TopBar";
+import { isRemote } from "./lib/platform";
 import { useApp } from "./store";
 
 export function App() {
   const workspace = useApp((s) => s.workspace);
+  const hasDeck = useApp((s) => s.deck !== null);
   const presenting = useApp((s) => s.presenting);
 
   return (
     <>
-      {workspace ? <Workbench /> : <Home />}
+      {/* A phone or tablet gets a deck's slides alone: the editor's panels and previews don't fit it (see DeviceDeck). */}
+      {workspace ? isRemote && hasDeck ? <DeviceDeck /> : <Workbench /> : <Home />}
       {presenting && <Presenter />}
       <SlideImageExport />
+      <RemoteCapture />
       <ErrorToast />
     </>
   );

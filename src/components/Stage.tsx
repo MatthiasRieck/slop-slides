@@ -11,6 +11,7 @@ import { api, errorMessage, type Slide } from "../lib/api";
 import { catchDrops, imageSize, isImage, type DropPoint } from "../lib/drop";
 import { EDIT_TOOL_KEYS, familyOf, familyOfKind, parseSelection, type EditSelection, type EditStyle, type EditTool } from "../lib/editTools";
 import { zoomBox, type Stroke } from "../lib/ink";
+import { isRemote } from "../lib/platform";
 import { pixelsOf, type Pixels } from "../lib/slideSize";
 import { cn, deckFileUrl } from "../lib/utils";
 
@@ -123,7 +124,9 @@ export function Stage() {
               slide={slide}
               size={canvas}
               editing={editing}
-              arena={arena}
+              // A pasteboard page spans the area in slide pixels: around a small slide it is huge,
+              // and phones and tablets kill the app's page over it (twice over while a slide swaps).
+              arena={isRemote ? undefined : arena}
               canvas={areaRef}
               onFrameReady={(frame) => {
                 pasteboard.onFrameReady(frame);

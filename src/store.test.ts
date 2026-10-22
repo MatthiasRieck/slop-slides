@@ -777,7 +777,22 @@ describe("sending a message", () => {
     const reply = useApp.getState().messages[1] as AssistantMessage;
     expect(reply).toMatchObject({ status: "error", thinking: false, error: "Claude Code was not found." });
     expect(useApp.getState().running).toBe(false);
-    expect(calls("save_chat")).toEqual([{ id: "/decks/talk", chat: useApp.getState().messages }]);
+    // Saved once as the turn starts (for other devices), then with the failure.
+    const saves = calls("save_chat");
+    expect(saves).toHaveLength(2);
+    expect(saves.at(-1)).toEqual({ id: "/decks/talk", chat: useApp.getState().messages, origin: expect.any(String) });
+  });
+
+  it("saves the chat before the agent starts, so other devices show the message", async () => {
+    const useApp = await freshStore();
+    const order: string[] = [];
+    backend({
+      save_chat: ({ chat }) => order.push(`save:${(chat as ChatMessage[]).length}`),
+      send_message: () => order.push("send"),
+    });
+    useApp.setState({ deck: DECK });
+    await useApp.getState().send("hi", { includeSlide: false, attachments: [] });
+    expect(order).toEqual(["save:2", "send"]);
   });
 
   describe("with a sketch on the slide", () => {
@@ -1086,7 +1101,7 @@ describe("sending a message", () => {
     expect(calls("reset_chat")).toEqual([]);
     useApp.setState({ workspace: { path: "/decks/talk", name: "talk" }, messages: [userMessage("x")], running: false });
     await useApp.getState().resetChat();
-    expect(calls("reset_chat")).toEqual([{ id: "/decks/talk" }]);
+    expect(calls("reset_chat")).toEqual([{ id: "/decks/talk", origin: expect.any(String) }]);
     expect(useApp.getState().messages).toEqual([]);
     expect(useApp.getState().running).toBe(false);
   });
@@ -1222,14 +1237,27 @@ describe("agent events", () => {
     [{ interrupted: false }, "boom", "error"],
     [{ interrupted: true }, "boom", "interrupted"],
   ] as const)("finished %j with error %j settles as %s", async (finished, error, status) => {
-    const { useApp, emit, reply } = await bridged();
+    const { useApp, emit, reply } = await bridged([]);
+    useApp.setState({ running: false });
+    await useApp.getState().send("hi", { includeSlide: false, attachments: [] });
+    invoke.mockClear();
     emit({ type: "toolUse", id: "t1", name: "Edit", input: {} });
     if (error) emit({ type: "error", message: error });
     emit({ type: "finished", ...finished });
     expect(reply()).toMatchObject({ status, thinking: false });
     expect(reply().parts[0]).toMatchObject({ status: "done" });
     expect(useApp.getState().running).toBe(false);
-    expect(calls("save_chat")).toEqual([{ id: "/decks/talk", chat: useApp.getState().messages }]);
+    expect(calls("save_chat")).toEqual([{ id: "/decks/talk", chat: useApp.getState().messages, origin: expect.any(String) }]);
+  });
+
+  it("follows a reply another client started without saving it", async () => {
+    const { useApp, emit, reply } = await bridged();
+    emit({ type: "textDelta", text: "from the tablet" });
+    emit({ type: "finished", interrupted: false });
+    expect(reply()).toMatchObject({ status: "done", parts: [{ kind: "text", text: "from the tablet" }] });
+    expect(useApp.getState().running).toBe(false);
+    // The client that started the turn saves it; saving here too could race with that.
+    expect(calls("save_chat")).toEqual([]);
   });
 
   it("only updates the last reply", async () => {
@@ -1837,6 +1865,152 @@ describe("editing slides on the stage", () => {
       });
       expect(useApp.getState().sketches).toEqual({ intro: ink });
     });
+  });
+});
+
+describe("several clients (the window and phones or tablets)", () => {
+  async function bridged(messages: ChatMessage[] = [userMessage("hi"), assistantMessage()]) {
+    const store = await freshModule();
+    const { clientId } = await import("./lib/platform");
+    backend({ list_providers: () => [] });
+    await store.initEventBridge();
+    store.useApp.setState({ deck: DECK, messages, running: false });
+    const chatChanged = (origin: string | null, workspace = "/decks/talk") =>
+      listeners.get("chat-changed")!({ payload: { workspace, origin } });
+    const emit = (event: AgentEvent) => listeners.get("agent-event")!({ payload: { workspace: "/decks/talk", event } });
+    return { useApp: store.useApp, clientId, chatChanged, emit };
+  }
+
+  const started = [userMessage("hi"), assistantMessage(), userMessage("from the tablet"), assistantMessage({ id: "a-2", status: "streaming", thinking: true })];
+
+  it("takes on a chat another client saved, and follows its running reply", async () => {
+    const { useApp, chatChanged } = await bridged();
+    backend({ load_chat: () => started });
+    chatChanged("tablet");
+    await vi.waitFor(() => expect(useApp.getState().messages).toEqual(started));
+    expect(useApp.getState().running).toBe(true);
+
+    const done = started.map((m) => (m.id === "a-2" ? { ...m, status: "done", thinking: false } : m));
+    backend({ load_chat: () => done });
+    chatChanged("tablet");
+    await vi.waitFor(() => expect(useApp.getState().running).toBe(false));
+  });
+
+  it("ignores its own saves and other workspaces' chats", async () => {
+    const { clientId, chatChanged } = await bridged();
+    chatChanged(clientId);
+    chatChanged("tablet", "/decks/other");
+    await Promise.resolve();
+    expect(calls("load_chat")).toEqual([]);
+  });
+
+  it("applies agent events after the chat they belong to has loaded", async () => {
+    const { useApp, chatChanged, emit } = await bridged();
+    let release!: () => void;
+    const loaded = new Promise<void>((resolve) => (release = resolve));
+    backend({ load_chat: async () => (await loaded, started) });
+    chatChanged("tablet");
+    emit({ type: "textDelta", text: "Sure" });
+    // Not applied to the reply before it.
+    expect(useApp.getState().messages[1]).toEqual(assistantMessage());
+    release();
+    await vi.waitFor(() =>
+      expect(useApp.getState().messages.at(-1)).toMatchObject({ id: "a-2", parts: [{ kind: "text", text: "Sure" }] }),
+    );
+    expect(useApp.getState().messages[1]).toEqual(assistantMessage());
+  });
+
+  it("queues screenshot requests from devices in the window", async () => {
+    const { useApp } = await bridged();
+    const request = { request: "r1", deckId: DECK.id, slide: "intro", strokes: [] };
+    listeners.get("remote-capture")!({ payload: request });
+    listeners.get("remote-capture")!({ payload: { ...request, request: "r2" } });
+    expect(useApp.getState().remoteCaptures.map((r) => r.request)).toEqual(["r1", "r2"]);
+    useApp.getState().endRemoteCapture("r1");
+    expect(useApp.getState().remoteCaptures.map((r) => r.request)).toEqual(["r2"]);
+  });
+});
+
+describe("on a device", () => {
+  let source: { onmessage: ((event: { data: string }) => void) | null } | null = null;
+  const mark = { tool: "pen" as const, color: "#ef4444", points: [[0.25, 0.5], [0.5, 0.25]] as [number, number][] };
+
+  beforeEach(() => {
+    window.__SLOPSLIDE_REMOTE__ = { base: "/s/tok" };
+    // Commands go over HTTP on a device; answer them from the same table as in the window.
+    vi.stubGlobal("fetch", async (url: string, init: { body: string }) => {
+      const command = url.split("/api/")[1]!;
+      try {
+        const result = await invoke(command, JSON.parse(init.body));
+        return { ok: true, status: 200, text: async () => (result === undefined ? "" : JSON.stringify(result)) };
+      } catch (error) {
+        return { ok: false, status: 400, text: async () => String(error) };
+      }
+    });
+    vi.stubGlobal(
+      "EventSource",
+      class {
+        onmessage: ((event: { data: string }) => void) | null = null;
+        constructor(readonly url: string) {
+          source = this;
+        }
+      },
+    );
+  });
+
+  afterEach(() => {
+    delete window.__SLOPSLIDE_REMOTE__;
+    vi.unstubAllGlobals();
+  });
+
+  it("leaves the folder without stopping the window's turn or saving over its chat", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, messages: [userMessage("hi"), assistantMessage({ status: "streaming" })], running: true });
+    expect(await useApp.getState().closeWorkspace()).toBe(true);
+    expect(calls("interrupt_agent")).toEqual([]);
+    expect(calls("save_chat")).toEqual([]);
+    expect(calls("close_workspace")).toEqual([{}]);
+    expect(useApp.getState()).toMatchObject({ workspace: null, deck: null, messages: [] });
+  });
+
+  it("has the window screenshot a sketch with the device's marks", async () => {
+    const useApp = await freshStore();
+    backend({ capture_remote_sketch: () => ".slopslide/sketches/2-cd.png" });
+    useApp.setState({ deck: DECK, selected: "outro", sketches: { outro: [mark] } });
+    await useApp.getState().send("Move this up", { includeSlide: true, attachments: [] });
+    expect(calls("capture_remote_sketch")).toEqual([{ id: DECK.id, slide: "outro", strokes: [mark] }]);
+    expect(calls("capture_sketch")).toEqual([]);
+    const prompt = (calls("send_message")[0]!.args as { prompt: string }).prompt;
+    expect(prompt).toContain("Sketch: .slopslide/sketches/2-cd.png");
+  });
+
+  it("still sends the marked area when the window cannot take the screenshot", async () => {
+    const useApp = await freshStore();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    backend({
+      capture_remote_sketch: () => {
+        throw "The SlopSlide window did not take the screenshot.";
+      },
+    });
+    useApp.setState({ deck: DECK, selected: "outro", sketches: { outro: [mark] } });
+    await useApp.getState().send("Fix", { includeSlide: true, attachments: [] });
+    const prompt = (calls("send_message")[0]!.args as { prompt: string }).prompt;
+    expect(prompt).not.toContain("Sketch:");
+    expect(prompt).toContain("Marked area:");
+    vi.restoreAllMocks();
+  });
+
+  it("follows the backend's events over its event stream, but takes no screenshot requests", async () => {
+    const store = await freshModule();
+    backend({ list_providers: () => [], load_chat: () => [userMessage("from the window")] });
+    await store.initEventBridge();
+    store.useApp.setState({ deck: DECK, messages: [] });
+    const send = (event: string, payload: unknown) => source!.onmessage!({ data: JSON.stringify({ event, payload }) });
+    send("remote-capture", { request: "r1", deckId: DECK.id, slide: "intro", strokes: [] });
+    expect(store.useApp.getState().remoteCaptures).toEqual([]);
+    send("chat-changed", { workspace: "/decks/talk", origin: "window" });
+    await vi.waitFor(() => expect(store.useApp.getState().messages).toEqual([userMessage("from the window")]));
+    expect(listeners.size).toBe(0);
   });
 });
 

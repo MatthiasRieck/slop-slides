@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
@@ -12,6 +12,7 @@ vi.mock("./components/SlideRail", () => ({ SlideRail: () => <div data-testid="st
 vi.mock("./components/Stage", () => ({ Stage: () => <div data-testid="stub-stage" /> }));
 vi.mock("./components/Sidebar", () => ({ Sidebar: () => <div data-testid="stub-sidebar-tabs" /> }));
 vi.mock("./components/FileViewer", () => ({ FileViewer: () => <div data-testid="stub-viewer" /> }));
+vi.mock("./components/DeviceDeck", () => ({ DeviceDeck: () => <div data-testid="stub-device-deck" /> }));
 vi.mock("./components/Presenter", () => ({ Presenter: () => <div data-testid="stub-presenter" /> }));
 vi.mock("./components/CodeView", () => ({
   CodeView: ({ active }: { active: boolean }) => <div data-testid="stub-code" data-active={String(active)} />,
@@ -128,5 +129,31 @@ describe("lint status", () => {
     useApp.setState({ refreshLint });
     render(<App />);
     expect(refreshLint).not.toHaveBeenCalled();
+  });
+});
+
+describe("App on a device", () => {
+  afterEach(() => {
+    delete window.__SLOPSLIDE_REMOTE__;
+  });
+
+  it("shows an open deck as the single-slide view, not the editor", async () => {
+    window.__SLOPSLIDE_REMOTE__ = { base: "/s/tok" };
+    vi.resetModules();
+    const store = await import("./store");
+    const { App: DeviceApp } = await import("./App");
+    store.useApp.setState({ workspace: null, deck: null });
+    const first = render(<DeviceApp />);
+    expect(shown("home")).toBe(true);
+    first.unmount();
+    // A file other than a deck shows as in the window.
+    store.useApp.setState({ workspace: WORKSPACE, deck: null });
+    const second = render(<DeviceApp />);
+    expect(["top-bar", "viewer", "device-deck"].map(shown)).toEqual([true, true, false]);
+    second.unmount();
+    store.useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) });
+    render(<DeviceApp />);
+    expect(shown("device-deck")).toBe(true);
+    expect(["top-bar", "rail", "stage", "sidebar-tabs"].map(shown)).toEqual([false, false, false, false]);
   });
 });

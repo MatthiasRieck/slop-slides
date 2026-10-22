@@ -1,8 +1,7 @@
-import { invoke } from "@tauri-apps/api/core";
-
 import type { Approval, ApprovalDecision, PermissionMode } from "./permissions";
 import type { Stroke } from "./ink";
 import type { Provider, ProviderInfo } from "./models";
+import { clientId, invoke } from "./platform";
 import type { SizeInfo, SlideSize } from "./slideSize";
 
 /** What a workspace file is, which decides what it opens in (see src-tauri/src/workspace.rs). */
@@ -155,6 +154,29 @@ export interface WorkspaceChanged {
   paths: string[];
 }
 
+/** A client saved a workspace's chat; `origin` is the client that saved it (see `clientId`). */
+export interface ChatChanged {
+  workspace: string;
+  origin: string | null;
+}
+
+/** How the app is shared with phones and tablets (src-tauri/src/remote.rs). */
+export interface RemoteInfo {
+  url: string;
+  /** The URL as a QR code. */
+  qrSvg: string;
+  /** Devices connected right now. */
+  devices: number;
+}
+
+/** A device asks the window to screenshot a slide with the device's marks on it. */
+export interface RemoteCaptureRequest {
+  request: string;
+  deckId: string;
+  slide: string;
+  strokes: Stroke[];
+}
+
 /** Voice input's state (see src-tauri/src/voice.rs). */
 export interface VoiceStatus {
   /** The speech model is downloaded, so recording can start at once. */
@@ -175,6 +197,8 @@ export const api = {
   /** Opens a folder: the file tree shows it and the app serves and watches its files. */
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
   closeWorkspace: () => invoke<void>("close_workspace"),
+  /** On a device: the folder the window has open, which is the one a device works in. */
+  currentWorkspace: () => invoke<WorkspaceInfo | null>("current_workspace"),
   /** Folders opened before, newest first. */
   recentWorkspaces: () => invoke<RecentWorkspace[]>("recent_workspaces"),
   forgetWorkspace: (path: string) => invoke<void>("forget_workspace", { path }),
@@ -249,10 +273,16 @@ export const api = {
     rect: { x: number; y: number; width: number; height: number },
     viewport: { width: number; height: number },
   ) => invoke<string>("capture_sketch", { id, rect, viewport }),
+  /**
+   * On a device: has the window screenshot `slide` with `strokes` drawn on it; returns the
+   * image's path in the workspace's session.
+   */
+  captureRemoteSketch: (id: string, slide: string, strokes: Stroke[]) =>
+    invoke<string>("capture_remote_sketch", { id, slide, strokes }),
   sessionProvider: (id: string) => invoke<Provider | null>("session_provider", { id }),
   loadChat: (id: string) => invoke<unknown>("load_chat", { id }),
-  saveChat: (id: string, chat: unknown) => invoke<void>("save_chat", { id, chat }),
-  resetChat: (id: string) => invoke<void>("reset_chat", { id }),
+  saveChat: (id: string, chat: unknown) => invoke<void>("save_chat", { id, chat, origin: clientId }),
+  resetChat: (id: string) => invoke<void>("reset_chat", { id, origin: clientId }),
   sendMessage: (
     workspace: string,
     prompt: string,
@@ -267,6 +297,15 @@ export const api = {
   interruptAgent: (id: string) => invoke<void>("interrupt_agent", { id }),
   agentRunning: (id: string) => invoke<boolean>("agent_running", { id }),
   listProviders: () => invoke<ProviderInfo[]>("list_providers"),
+  remoteStart: () => invoke<RemoteInfo>("remote_start"),
+  remoteStop: () => invoke<void>("remote_stop"),
+  remoteStatus: () => invoke<RemoteInfo | null>("remote_status"),
+  remoteCaptureDone: (request: string, result: { path: string } | { error: string }) =>
+    invoke<void>("remote_capture_done", {
+      request,
+      path: "path" in result ? result.path : null,
+      error: "error" in result ? result.error : null,
+    }),
   /** The user's templates first, then the built-in ones. */
   listTemplates: () => invoke<TemplateSummary[]>("list_templates"),
   /** Copies the template into the workspace's session for the agent; returns its absolute path. */

@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
 const save = vi.fn();
@@ -373,5 +373,39 @@ describe("deck toolbar", () => {
     const toolbar = screen.getByRole("toolbar", { name: "Deck" });
     const labels = Array.from(toolbar.querySelectorAll("button")).map((b) => b.getAttribute("aria-label") ?? b.textContent);
     expect(labels).toEqual(["Slide size", "Lint OK", "Slides", "HTML", "Export", "Present"]);
+  });
+});
+
+describe("on a device", () => {
+  async function renderOnDevice() {
+    window.__SLOPSLIDE_REMOTE__ = { base: "/s/tok" };
+    vi.resetModules();
+    const { useApp: deviceApp } = await import("../store");
+    const { DeckToolbar: DeviceToolbar } = await import("./DeckToolbar");
+    deviceApp.setState({ deck: deckFor(DECK_HTML), view: "slides", codeDirty: false, lint: [] });
+    render(<DeviceToolbar />);
+  }
+
+  afterEach(() => {
+    delete window.__SLOPSLIDE_REMOTE__;
+  });
+
+  it("offers only the exports a device can save", async () => {
+    await renderOnDevice();
+    fireEvent.click(screen.getByRole("button", { name: /Export/ }));
+    expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["HTML fileOne self-contained file to share"]);
+  });
+
+  it("downloads the exported deck through the browser", async () => {
+    await renderOnDevice();
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    fireEvent.click(screen.getByRole("button", { name: /Export/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /HTML file/ }));
+    expect(click).toHaveBeenCalledOnce();
+    const link = click.mock.contexts[0] as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe(`/s/tok/export/${encodeURIComponent("/decks/talk/deck.html")}`);
+    expect(link.hasAttribute("download")).toBe(true);
+    expect(save).not.toHaveBeenCalled();
+    click.mockRestore();
   });
 });

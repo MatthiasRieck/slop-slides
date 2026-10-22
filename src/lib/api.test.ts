@@ -4,6 +4,7 @@ const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
 import { api, errorMessage } from "./api";
+import { clientId } from "./platform";
 
 beforeEach(() => {
   invoke.mockReset().mockResolvedValue("result");
@@ -13,6 +14,7 @@ beforeEach(() => {
 const CASES = [
   ["openWorkspace", () => api.openWorkspace("/ws"), "open_workspace", { path: "/ws" }],
   ["closeWorkspace", () => api.closeWorkspace(), "close_workspace", undefined],
+  ["currentWorkspace", () => api.currentWorkspace(), "current_workspace", undefined],
   ["recentWorkspaces", () => api.recentWorkspaces(), "recent_workspaces", undefined],
   ["forgetWorkspace", () => api.forgetWorkspace("/ws"), "forget_workspace", { path: "/ws" }],
   ["libraryFolder", () => api.libraryFolder(), "library_folder", undefined],
@@ -97,8 +99,15 @@ const CASES = [
   ],
   ["sessionProvider", () => api.sessionProvider("talk"), "session_provider", { id: "talk" }],
   ["loadChat", () => api.loadChat("talk"), "load_chat", { id: "talk" }],
-  ["saveChat", () => api.saveChat("talk", [1]), "save_chat", { id: "talk", chat: [1] }],
-  ["resetChat", () => api.resetChat("talk"), "reset_chat", { id: "talk" }],
+  [
+    "captureRemoteSketch",
+    () => api.captureRemoteSketch("talk", "intro", []),
+    "capture_remote_sketch",
+    { id: "talk", slide: "intro", strokes: [] },
+  ],
+  // Other clients reload a chat saved elsewhere; the origin tells them apart.
+  ["saveChat", () => api.saveChat("talk", [1]), "save_chat", { id: "talk", chat: [1], origin: clientId }],
+  ["resetChat", () => api.resetChat("talk"), "reset_chat", { id: "talk", origin: clientId }],
   [
     "sendMessage",
     () => api.sendMessage("talk", "Hi", { provider: "claude", model: "claude-opus-5-5", effort: "high", contextWindow: "1m" }),
@@ -111,6 +120,15 @@ const CASES = [
   ["interruptAgent", () => api.interruptAgent("talk"), "interrupt_agent", { id: "talk" }],
   ["agentRunning", () => api.agentRunning("talk"), "agent_running", { id: "talk" }],
   ["listProviders", () => api.listProviders(), "list_providers", undefined],
+  ["remoteStart", () => api.remoteStart(), "remote_start", undefined],
+  ["remoteStop", () => api.remoteStop(), "remote_stop", undefined],
+  ["remoteStatus", () => api.remoteStatus(), "remote_status", undefined],
+  [
+    "remoteCaptureDone",
+    () => api.remoteCaptureDone("r1", { path: ".slopslide/sketches/a.png" }),
+    "remote_capture_done",
+    { request: "r1", path: ".slopslide/sketches/a.png", error: null },
+  ],
   ["listTemplates", () => api.listTemplates(), "list_templates", undefined],
   ["stageTemplate", () => api.stageTemplate("talk", "swiss"), "stage_template", { id: "talk", template: "swiss" }],
   ["applyTemplate", () => api.applyTemplate("talk", "swiss"), "apply_template", { id: "talk", template: "swiss" }],
@@ -146,6 +164,11 @@ describe("api", () => {
     expect(invoke).toHaveBeenLastCalledWith("send_message", {
       args: { workspace: "talk", prompt: "/compact", provider: "copilot", model: "gpt-x", effort: "", contextWindow: null, compact: true },
     });
+  });
+
+  it("reports a failed capture to the backend as an error", async () => {
+    await api.remoteCaptureDone("r1", { error: "window hidden" });
+    expect(invoke).toHaveBeenLastCalledWith("remote_capture_done", { request: "r1", path: null, error: "window hidden" });
   });
 
   it("covers every api function", () => {

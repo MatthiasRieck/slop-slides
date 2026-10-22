@@ -650,13 +650,30 @@ fn same_text(a: &str, b: &str) -> bool {
 
 /// Writes a standalone copy of the deck with attached assets embedded as data URIs.
 pub fn export(file: &Path, dest: &Path) -> Result<()> {
+    fs::write(dest, export_html(file)?)?;
+    Ok(())
+}
+
+/// The deck as one self-contained HTML file: the player runtime and every asset inlined.
+pub fn export_html(file: &Path) -> Result<String> {
     let source = html::ensure_runtime(&read_html(file)?);
-    let standalone = html::inline_assets(&source, |rel| {
+    Ok(html::inline_assets(&source, |rel| {
         let path = resolve_in_deck(folder(file), rel).ok()?;
         Some((mime_for(rel).to_string(), fs::read(path).ok()?))
-    });
-    fs::write(dest, standalone)?;
-    Ok(())
+    }))
+}
+
+/// File name for an exported deck: its title made safe for file systems, plus `.html`.
+pub fn export_file_name(title: &str) -> String {
+    let name = safe_file_name(title);
+    format!(
+        "{}.html",
+        if name.is_empty() {
+            "presentation"
+        } else {
+            &name
+        }
+    )
 }
 
 /// Creates a new folder for exported slide images inside `parent`, named after the deck
@@ -768,12 +785,14 @@ pub fn save_asset(file: &Path, name: &str, data: &str) -> Result<String> {
     write_asset(file, name, &bytes)
 }
 
-/// Writes `bytes` into `assets/`, named after `name` (without overwriting); returns its ref.
+/// Writes `bytes` (pasted, or uploaded e.g. from a phone or tablet) into `assets/`, named
+/// after `name` (without overwriting); returns its ref.
 pub fn write_asset(file: &Path, name: &str, bytes: &[u8]) -> Result<String> {
     let assets = if file.is_dir() { file } else { folder(file) }.join("assets");
     fs::create_dir_all(&assets)?;
-    // Only the file name counts; a pasted name must not reach outside `assets/`.
-    let name = Path::new(name).file_name().unwrap_or_default();
+    // Only the file name counts; a pasted or uploaded name (which may carry a client's path,
+    // `\`-separated on Windows) must not reach outside `assets/`.
+    let name = name.rsplit(['/', '\\']).next().unwrap_or(name);
     let dest = free_asset_path(&assets, Path::new(name));
     fs::write(&dest, bytes)?;
     Ok(asset_ref(&dest))
@@ -1815,6 +1834,39 @@ mod tests {
         );
         assert!(save_asset(&deck.file(), "x.png", "not base64!").is_err());
         assert!(!deck.0.join("assets/x.png").exists());
+    }
+
+    #[test]
+    fn saves_uploaded_assets_under_safe_unique_names() {
+        let deck = TempDeck::new(ORIGINAL);
+        assert_eq!(
+            write_asset(&deck.file(), "IMG 0042.HEIC", b"a").unwrap(),
+            "assets/img-0042.heic"
+        );
+        assert_eq!(
+            write_asset(&deck.file(), "IMG 0042.HEIC", b"b").unwrap(),
+            "assets/img-0042-2.heic"
+        );
+        assert_eq!(
+            write_asset(&deck.file(), "../../evil.sh", b"c").unwrap(),
+            "assets/evil.sh",
+            "a client path never leaves assets/"
+        );
+        assert_eq!(
+            write_asset(&deck.file(), "C:\\Users\\me\\scan.pdf", b"d").unwrap(),
+            "assets/scan.pdf"
+        );
+        assert_eq!(write_asset(&deck.file(), "", b"e").unwrap(), "assets/asset");
+        assert_eq!(
+            fs::read(deck.0.join("assets/img-0042-2.heic")).unwrap(),
+            b"b"
+        );
+    }
+
+    #[test]
+    fn export_file_names_are_safe() {
+        assert_eq!(export_file_name("Q3: Plans"), "Q3 Plans.html");
+        assert_eq!(export_file_name("///"), "presentation.html");
     }
 
     #[test]

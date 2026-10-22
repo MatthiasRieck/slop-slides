@@ -19,7 +19,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["process", "io-util", "rt", "sync", "macros", "time"] }
+tokio = { version = "1", features = ["process", "io-util", "rt", "sync", "macros", "time", "net"] }
 notify = "8"
 notify-debouncer-mini = "0.7"
 which = "8"
@@ -30,6 +30,9 @@ log = "0.4"
 base64 = "0.23.1"
 cssparser = "0.37"
 png = "0.18"
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+local-ip-address = "0.6"
 
 # Voice input in the chat composer (see src/voice.rs): microphone capture, the speech-to-text
 # model's download, and whisper.cpp to run it.

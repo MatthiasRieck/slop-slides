@@ -14,6 +14,7 @@ mod pdf;
 mod permissions;
 mod protocol;
 mod providers;
+mod remote;
 mod review;
 mod safety;
 mod sessions;
@@ -26,7 +27,7 @@ mod workspace;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use agent::{AgentManager, SendArgs};
 use deck::Deck;
@@ -436,19 +437,46 @@ fn session_provider(id: String) -> Result<Option<agent::Provider>> {
         .map(Option::flatten)
 }
 
+/// Tells every client (the window, devices) that a workspace's chat was saved. `origin` is
+/// the client that saved it, which has it already.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatChanged {
+    workspace: String,
+    origin: Option<String>,
+}
+
+fn chat_changed(app: &AppHandle, workspace: String, origin: Option<String>) {
+    let _ = app.emit("chat-changed", ChatChanged { workspace, origin });
+}
+
 #[tauri::command]
-fn save_chat(id: String, chat: serde_json::Value) -> Result<()> {
+fn save_chat(
+    app: AppHandle,
+    id: String,
+    chat: serde_json::Value,
+    origin: Option<String>,
+) -> Result<()> {
     deck::save_chat(
         &sessions()?.current_or_start(&workspace::root(&id)?)?,
         &chat,
-    )
+    )?;
+    chat_changed(&app, id, origin);
+    Ok(())
 }
 
 /// Starts a new chat in a new session; the old conversation stays in its own.
 #[tauri::command]
-fn reset_chat(agent: State<AgentManager>, id: String) -> Result<()> {
+fn reset_chat(
+    app: AppHandle,
+    agent: State<AgentManager>,
+    id: String,
+    origin: Option<String>,
+) -> Result<()> {
     agent.interrupt(&id);
-    new_chat(&sessions()?, &workspace::root(&id)?).map(|_| ())
+    new_chat(&sessions()?, &workspace::root(&id)?)?;
+    chat_changed(&app, id, origin);
+    Ok(())
 }
 
 /// A session for a new chat: the current one while it has no conversation yet, else a new one.
@@ -505,6 +533,35 @@ async fn list_providers() -> Vec<providers::ProviderInfo> {
     providers::list().await
 }
 
+/// Starts serving the app to phones and tablets on the network (see src/remote.rs).
+#[tauri::command]
+async fn remote_start(app: AppHandle) -> Result<remote::RemoteInfo> {
+    remote::start(&app).await
+}
+
+#[tauri::command]
+fn remote_stop(app: AppHandle) {
+    remote::stop(&app);
+}
+
+#[tauri::command]
+fn remote_status(app: AppHandle) -> Option<remote::RemoteInfo> {
+    remote::status(&app)
+}
+
+/// The window's answer to a device's `remote-capture` request: the screenshot's path, or why
+/// it could not take one.
+#[tauri::command]
+fn remote_capture_done(
+    app: AppHandle,
+    request: String,
+    path: Option<String>,
+    error: Option<String>,
+) {
+    let result = path.ok_or_else(|| error.unwrap_or_else(|| "no screenshot".into()));
+    remote::capture_done(&app, &request, result);
+}
+
 #[tauri::command]
 fn voice_status(voice: State<voice::Voice>) -> Result<voice::VoiceStatus> {
     Ok(voice.status(&deck::app_home()?))
@@ -552,6 +609,11 @@ pub fn run() {
         .manage(WorkspaceWatcher::default())
         .manage(OpenWorkspace::default())
         .manage(voice::Voice::default())
+        .manage(remote::RemoteServer::default())
+        .setup(|app| {
+            remote::forward_events(app.handle());
+            Ok(())
+        })
         .register_uri_scheme_protocol("slop", |ctx, request| {
             protocol::handle(ctx.app_handle(), request)
         })
@@ -600,6 +662,10 @@ pub fn run() {
             respond_approval,
             agent_running,
             list_providers,
+            remote_start,
+            remote_stop,
+            remote_status,
+            remote_capture_done,
             list_templates,
             stage_template,
             apply_template,

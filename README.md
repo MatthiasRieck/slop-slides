@@ -16,7 +16,9 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   use the arrow keys) to move it, double-click (or press Enter) to edit its text, Escape to
   select the parent, Delete (or the trash button in the edit bar) to remove
   it, ⌘C / ⌘X / ⌘V to copy, cut and paste elements (also between slides), and ⌘Z / Ctrl+Z
-  to undo. ⌘V also pastes images and text copied in other apps, like a browser. Moved
+  to undo. ⌘V also pastes images and text copied in other apps, like a browser. Pastes go
+  on top of the slide, under the pointer (or in the middle of the view), without moving the
+  layout. Moved
   elements keep a
   temporary offset; **Tidy layout** then sends the agent a screenshot so it rebuilds the
   slide's layout around where you put things.
@@ -75,9 +77,10 @@ pnpm app:build      # installers for the current OS → src-tauri/target/release
 and read-only access to your deck library (`dev/browserPreview.ts`). This is handy for
 UI work. Chat and editing need the desktop app.
 
-Run `./check.sh` for typechecking, frontend tests/build, Rust formatting, clippy, and Rust
-tests. Every tool comes from `package.json` or `src-tauri/Cargo.toml`; nothing else needs to
-be installed. CI runs this same script on macOS, Linux, and Windows, including approval
+Run `./check.sh` for Biome linting/formatting, typechecking, frontend tests/build, Rust
+formatting, clippy, Rust tests, and dependency audits (`pnpm audit`, `cargo audit`); run
+`./check.sh --fix` to format and autofix first. Every tool comes from `package.json` or
+`src-tauri/Cargo.toml`, except `cargo-audit`, which the script installs on first run. CI runs this same script on macOS, Linux, and Windows, including approval
 routing and cancellation tests against a mock Codex app-server built into the Rust test
 binary. The full chat approval flow is tested through events, the store, UI, IPC
 responses, and transcript persistence.
@@ -270,4 +273,9 @@ editor; the app picks up the changes.
 
 The design guidance in the agent's prompt draws on
 [frontend-slides](https://github.com/zarazhangrui/frontend-slides) (MIT). See
+`src-tauri/prompts/THIRD_PARTY_NOTICES.md`.
+
+## License
+
+[MIT](LICENSE) © 2026 Matthias Rieck. Third-party notices are in
 `src-tauri/prompts/THIRD_PARTY_NOTICES.md`.

@@ -2,8 +2,8 @@ import { Eraser, Eye, EyeOff, Highlighter, PenLine, Trash2, Undo2 } from "lucide
 import type { ReactNode } from "react";
 
 import { INK_COLORS } from "../lib/ink";
-import { useApp } from "../store";
 import { cn } from "../lib/utils";
+import { useApp } from "../store";
 import type { Annotations } from "./PresenterTools";
 
 /**
@@ -37,7 +37,11 @@ export function SketchToolbar({ annotations }: { annotations: Annotations }) {
       <SketchButton label="Draw on the slide" active={tool === "pen"} onClick={() => toggle("pen")}>
         <PenLine />
       </SketchButton>
-      <SketchButton label="Highlight on the slide" active={tool === "highlighter"} onClick={() => toggle("highlighter")}>
+      <SketchButton
+        label="Highlight on the slide"
+        active={tool === "highlighter"}
+        onClick={() => toggle("highlighter")}
+      >
         <Highlighter />
       </SketchButton>
       <SketchButton label="Erase marks" active={tool === "eraser"} onClick={() => toggle("eraser")}>

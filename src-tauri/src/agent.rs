@@ -540,7 +540,7 @@ impl Turn {
                     match value["type"].as_str() {
                         Some("control_request") => {
                             let id = &value["request_id"];
-                            match claude_permission(&value["request"], self.permission_mode) {
+                            match claude_permission(&value["request"], self.permission_mode, &self.session_dir) {
                                 ClaudePermission::Answer(reply) => {
                                     write_line(stdin.as_mut(), &claude_control_response(id, reply)).await?;
                                 }
@@ -757,16 +757,23 @@ enum ClaudePermission {
 }
 
 /// How to answer one Claude Code control request. Only tool permission prompts are
-/// handled: the app's MCP tools and everything under Full access are allowed outright,
-/// anything else asks the user.
-fn claude_permission(request: &Value, mode: PermissionMode) -> ClaudePermission {
+/// handled: the app's MCP tools, reads of the templates staged in `session_dir` and
+/// everything under Full access are allowed outright, anything else asks the user.
+fn claude_permission(
+    request: &Value,
+    mode: PermissionMode,
+    session_dir: &Path,
+) -> ClaudePermission {
     if request["subtype"] != "can_use_tool" {
         return ClaudePermission::Answer(Err("SlopSlide does not support this request."));
     }
     let tool = request["tool_name"].as_str().unwrap_or_default();
     let input = &request["input"];
     let allow = json!({"behavior": "allow", "updatedInput": input});
-    if mode == PermissionMode::FullAccess || mcp::is_claude_tool(tool) {
+    if mode == PermissionMode::FullAccess
+        || mcp::is_claude_tool(tool)
+        || reads_staged_template(tool, input, session_dir)
+    {
         return ClaudePermission::Answer(Ok(allow));
     }
     let text = |key: &str| input[key].as_str().map(str::to_string);
@@ -816,6 +823,22 @@ fn claude_permission(request: &Value, mode: PermissionMode) -> ClaudePermission 
     }
     decisions.push(Decision::Decline);
     ClaudePermission::Ask(Approval::new(title, reason, details, decisions), choices)
+}
+
+/// Whether `tool` reads a template staged in `session_dir` (see [`crate::templates::stage`]):
+/// a style the user picked, so reading it never asks.
+fn reads_staged_template(tool: &str, input: &Value, session_dir: &Path) -> bool {
+    let Some(path) = input["file_path"].as_str().map(Path::new) else {
+        return false;
+    };
+    if tool != "Read" {
+        return false;
+    }
+    path.is_absolute()
+        && !path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        && path.starts_with(session_dir.join(crate::templates::STAGED_DIR))
 }
 
 const MISSING_SESSION: &str = "No conversation found";
@@ -1324,6 +1347,46 @@ mod tests {
         assert_eq!(names, ["lint_deck", "mcp__github__push"]);
     }
 
+    /// A session dir that is absolute on every platform (`/home/...` is not on Windows).
+    fn session_dir() -> PathBuf {
+        std::env::temp_dir().join("sessions").join("1-ab")
+    }
+
+    #[test]
+    fn claude_reads_staged_templates_without_asking() {
+        let dir = session_dir();
+        let at = |rel: &str| format!("{}/{rel}", dir.display());
+        let path = at("templates/ethereal.html");
+        let request = can_use_tool("Read", json!({"file_path": path}));
+        assert!(matches!(
+            claude_permission(&request, PermissionMode::Ask, &dir),
+            ClaudePermission::Answer(Ok(r)) if r["behavior"] == "allow" && r["updatedInput"]["file_path"] == path.as_str()
+        ));
+        let other = format!("{}/2-cd/templates/x.html", dir.parent().unwrap().display());
+        for (tool, input) in [
+            ("Read", json!({"file_path": at("templates/../chat.json")})),
+            ("Read", json!({"file_path": at("chat.json")})),
+            ("Read", json!({"file_path": other})),
+            ("Read", json!({"file_path": at("templates-x/a.html")})),
+            ("Read", json!({"file_path":"templates/ethereal.html"})),
+            ("Read", json!({})),
+            ("Write", json!({"file_path": path})),
+            ("Grep", json!({"path": at("templates"), "glob": "/etc/*"})),
+        ] {
+            assert!(
+                matches!(
+                    claude_permission(
+                        &can_use_tool(tool, input.clone()),
+                        PermissionMode::Ask,
+                        &dir
+                    ),
+                    ClaudePermission::Ask(..)
+                ),
+                "{tool} {input} asks"
+            );
+        }
+    }
+
     fn can_use_tool(tool: &str, input: Value) -> Value {
         json!({"subtype":"can_use_tool","tool_name":tool,"input":input,"permission_suggestions":[]})
     }
@@ -1333,7 +1396,7 @@ mod tests {
         for tool in ["mcp__slopslide__lint_deck", "mcp__slopslide__open_file"] {
             let request = can_use_tool(tool, json!({"path":"deck.html"}));
             assert!(matches!(
-                claude_permission(&request, PermissionMode::Ask),
+                claude_permission(&request, PermissionMode::Ask, &session_dir()),
                 ClaudePermission::Answer(Ok(r)) if r["behavior"] == "allow" && r["updatedInput"]["path"] == "deck.html"
             ));
         }
@@ -1374,9 +1437,11 @@ mod tests {
             ),
         ];
         for (tool, input, title, details) in cases {
-            let ClaudePermission::Ask(approval, choices) =
-                claude_permission(&can_use_tool(tool, input.clone()), PermissionMode::Ask)
-            else {
+            let ClaudePermission::Ask(approval, choices) = claude_permission(
+                &can_use_tool(tool, input.clone()),
+                PermissionMode::Ask,
+                &session_dir(),
+            ) else {
                 panic!("{tool} asks");
             };
             assert_eq!(approval.title, title);
@@ -1395,6 +1460,7 @@ mod tests {
         let ClaudePermission::Ask(approval, _) = claude_permission(
             &can_use_tool("Bash", json!({"command":"ls","description":"List files"})),
             PermissionMode::Ask,
+            &session_dir(),
         ) else {
             panic!("asks");
         };
@@ -1405,7 +1471,7 @@ mod tests {
     fn claude_full_access_allows_everything() {
         let request = can_use_tool("Bash", json!({"command":"rm -rf build"}));
         assert!(matches!(
-            claude_permission(&request, PermissionMode::FullAccess),
+            claude_permission(&request, PermissionMode::FullAccess, &session_dir()),
             ClaudePermission::Answer(Ok(r)) if r["behavior"] == "allow"
         ));
     }
@@ -1414,7 +1480,7 @@ mod tests {
     fn claude_refuses_other_control_requests() {
         let request = json!({"subtype":"hook_callback"});
         assert!(matches!(
-            claude_permission(&request, PermissionMode::Ask),
+            claude_permission(&request, PermissionMode::Ask, &session_dir()),
             ClaudePermission::Answer(Err(_))
         ));
         assert_eq!(

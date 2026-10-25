@@ -138,7 +138,11 @@ describe("workspaces", () => {
       open_deck: () => TALK,
       create_deck: () => ({ ...TALK, id: "/ws/new-deck/deck.html", path: "/ws/new-deck/deck.html" }),
       open_file: ({ path }) => {
-        const kinds: Record<string, string> = { "talks/q3.html": "deck", "site/index.html": "webpage", "notes.md": "file" };
+        const kinds: Record<string, string> = {
+          "talks/q3.html": "deck",
+          "site/index.html": "webpage",
+          "notes.md": "file",
+        };
         if (!kinds[String(path)]) throw `file not found: ${String(path)}`;
         return opened(String(path), kinds[String(path)]!);
       },
@@ -165,7 +169,11 @@ describe("workspaces", () => {
     await useApp.getState().openPath("talks/q3.html");
     expect(calls("open_deck")).toEqual([{ id: "/ws/talks/q3.html" }]);
     expect(useApp.getState().deck).toEqual(TALK);
-    expect(useApp.getState().openedFile).toEqual({ path: "talks/q3.html", absolute: "/ws/talks/q3.html", kind: "deck" });
+    expect(useApp.getState().openedFile).toEqual({
+      path: "talks/q3.html",
+      absolute: "/ws/talks/q3.html",
+      kind: "deck",
+    });
 
     await useApp.getState().openPath("site/index.html");
     expect(useApp.getState().deck).toBeNull();
@@ -236,7 +244,11 @@ describe("workspaces", () => {
     await useApp.getState().openPath("talks/q3.html");
     await useApp.getState().openWorkspace("/other");
     expect(calls("close_workspace")).toHaveLength(1);
-    expect(useApp.getState()).toMatchObject({ workspace: { path: "/other", name: "other" }, deck: null, openedFile: null });
+    expect(useApp.getState()).toMatchObject({
+      workspace: { path: "/other", name: "other" },
+      deck: null,
+      openedFile: null,
+    });
     await useApp.getState().openWorkspace("/other");
     expect(calls("open_workspace")).toHaveLength(2);
   });
@@ -255,7 +267,11 @@ describe("workspaces", () => {
     await useApp.getState().openWorkspace("/ws");
     await useApp.getState().createDeck("New deck");
     expect(calls("create_deck")).toEqual([{ title: "New deck", template: null }]);
-    expect(useApp.getState().openedFile).toEqual({ path: "new-deck/deck.html", absolute: "/ws/new-deck/deck.html", kind: "deck" });
+    expect(useApp.getState().openedFile).toEqual({
+      path: "new-deck/deck.html",
+      absolute: "/ws/new-deck/deck.html",
+      kind: "deck",
+    });
     expect(localStorage.getItem("slopslide.lastFile:/ws")).toBe("new-deck/deck.html");
   });
 
@@ -323,7 +339,11 @@ describe("stage view", () => {
 describe("closing a deck with unsaved HTML edits", () => {
   it("closes immediately when there are no edits", async () => {
     const useApp = await freshStore();
-    useApp.setState({ deck: deckFor(DECK_HTML), codeDirty: false, sketches: { intro: [{ tool: "pen", color: "#fff", points: [[0, 0]] }] } });
+    useApp.setState({
+      deck: deckFor(DECK_HTML),
+      codeDirty: false,
+      sketches: { intro: [{ tool: "pen", color: "#fff", points: [[0, 0]] }] },
+    });
     useApp.setState({ openedFile: { path: "talk/deck.html", absolute: DECK_HTML_PATH, kind: "deck" } });
     expect(await useApp.getState().closeDeck()).toBe(true);
     expect(ask).not.toHaveBeenCalled();
@@ -392,8 +412,18 @@ describe("opening and creating decks", () => {
   it("openDeck loads the deck, its chat and whether the agent is running", async () => {
     const useApp = await freshStore(false);
     const chat: ChatMessage[] = [userMessage("hi"), assistantMessage()];
-    backend({ open_workspace: () => ({ path: "/decks/talk", name: "talk" }), open_deck: () => DECK, load_chat: () => chat, agent_running: () => true });
-    useApp.setState({ assetsRev: 4, presenting: true, selected: "stale", sketches: { intro: [{ tool: "pen", color: "#fff", points: [[0, 0]] }] } });
+    backend({
+      open_workspace: () => ({ path: "/decks/talk", name: "talk" }),
+      open_deck: () => DECK,
+      load_chat: () => chat,
+      agent_running: () => true,
+    });
+    useApp.setState({
+      assetsRev: 4,
+      presenting: true,
+      selected: "stale",
+      sketches: { intro: [{ tool: "pen", color: "#fff", points: [[0, 0]] }] },
+    });
     await useApp.getState().openWorkspace("/decks/talk");
     await useApp.getState().openDeck("/decks/talk/deck.html");
     expect(calls("open_deck")).toEqual([{ id: "/decks/talk/deck.html" }]);
@@ -411,21 +441,41 @@ describe("opening and creating decks", () => {
   it("settles a transcript that was saved mid-turn", async () => {
     const useApp = await freshStore(false);
     const streaming = assistantMessage({ status: "streaming", thinking: true, compacting: true });
-    backend({ open_workspace: () => ({ path: "/decks/talk", name: "talk" }), open_deck: () => DECK, load_chat: () => [userMessage("hi"), streaming], agent_running: () => false });
+    backend({
+      open_workspace: () => ({ path: "/decks/talk", name: "talk" }),
+      open_deck: () => DECK,
+      load_chat: () => [userMessage("hi"), streaming],
+      agent_running: () => false,
+    });
     await useApp.getState().openWorkspace("/decks/talk");
     await useApp.getState().openDeck("/decks/talk/deck.html");
-    expect(useApp.getState().messages[1]).toEqual({ ...streaming, status: "interrupted", thinking: false, compacting: false });
+    expect(useApp.getState().messages[1]).toEqual({
+      ...streaming,
+      status: "interrupted",
+      thinking: false,
+      compacting: false,
+    });
   });
 
   it("starts with an empty transcript when the chat file is missing or not a list", async () => {
     const useApp = await freshStore(false);
-    backend({ open_workspace: () => ({ path: "/decks/talk", name: "talk" }), open_deck: () => DECK, load_chat: () => null, agent_running: () => false });
+    backend({
+      open_workspace: () => ({ path: "/decks/talk", name: "talk" }),
+      open_deck: () => DECK,
+      load_chat: () => null,
+      agent_running: () => false,
+    });
     useApp.setState({ messages: [userMessage("old deck")] });
     await useApp.getState().openWorkspace("/decks/talk");
     await useApp.getState().openDeck("/decks/talk/deck.html");
     expect(useApp.getState().messages).toEqual([]);
     await useApp.getState().closeWorkspace();
-    backend({ open_workspace: () => ({ path: "/decks/talk", name: "talk" }), open_deck: () => DECK, load_chat: () => ({ bogus: true }), agent_running: () => false });
+    backend({
+      open_workspace: () => ({ path: "/decks/talk", name: "talk" }),
+      open_deck: () => DECK,
+      load_chat: () => ({ bogus: true }),
+      agent_running: () => false,
+    });
     await useApp.getState().openWorkspace("/decks/talk");
     await useApp.getState().openDeck("/decks/talk/deck.html");
     expect(useApp.getState().messages).toEqual([]);
@@ -473,7 +523,13 @@ describe("opening and creating decks", () => {
     const useApp = await freshStore();
     useApp.setState({ deck: DECK, selected: "intro", messages: [userMessage("x")], running: true, presenting: true });
     await useApp.getState().closeDeck();
-    expect(useApp.getState()).toMatchObject({ deck: null, selected: null, messages: [userMessage("x")], running: true, presenting: false });
+    expect(useApp.getState()).toMatchObject({
+      deck: null,
+      selected: null,
+      messages: [userMessage("x")],
+      running: true,
+      presenting: false,
+    });
   });
 });
 
@@ -500,7 +556,12 @@ describe("slide image export", () => {
     useApp.setState({ deck: DECK, imageExport: { dir: "/out", slides: ["intro"] } });
     await useApp.getState().closeDeck();
     expect(useApp.getState().imageExport).toBeNull();
-    backend({ open_workspace: () => ({ path: "/decks/talk", name: "talk" }), open_deck: () => DECK, load_chat: () => [], agent_running: () => false });
+    backend({
+      open_workspace: () => ({ path: "/decks/talk", name: "talk" }),
+      open_deck: () => DECK,
+      load_chat: () => [],
+      agent_running: () => false,
+    });
     useApp.setState({ imageExport: { dir: "/out", slides: ["intro"] } });
     await useApp.getState().openDeck("/decks/talk/deck.html");
     expect(useApp.getState().imageExport).toBeNull();
@@ -514,8 +575,24 @@ describe("model choice", () => {
       installed: true,
       path: "/bin/claude",
       models: [
-        { id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true, efforts: ["low", "medium", "high", "max"], defaultEffort: "medium", contextWindows: ["200k", "1m"], defaultContextWindow: "1m" },
-        { id: "claude-sonnet-5", label: "Claude Sonnet 5", isDefault: false, efforts: ["low", "medium", "high", "max"], defaultEffort: "medium", contextWindows: ["200k", "1m"], defaultContextWindow: "200k" },
+        {
+          id: "claude-opus-5-5",
+          label: "Claude Opus 5.5",
+          isDefault: true,
+          efforts: ["low", "medium", "high", "max"],
+          defaultEffort: "medium",
+          contextWindows: ["200k", "1m"],
+          defaultContextWindow: "1m",
+        },
+        {
+          id: "claude-sonnet-5",
+          label: "Claude Sonnet 5",
+          isDefault: false,
+          efforts: ["low", "medium", "high", "max"],
+          defaultEffort: "medium",
+          contextWindows: ["200k", "1m"],
+          defaultContextWindow: "200k",
+        },
       ],
       error: null,
     },
@@ -523,7 +600,17 @@ describe("model choice", () => {
       id: "codex",
       installed: true,
       path: "/bin/codex",
-      models: [{ id: "gpt-6-astra", label: "GPT-6-Astra", isDefault: true, efforts: ["low", "high"], defaultEffort: "high", contextWindows: [], defaultContextWindow: null }],
+      models: [
+        {
+          id: "gpt-6-astra",
+          label: "GPT-6-Astra",
+          isDefault: true,
+          efforts: ["low", "high"],
+          defaultEffort: "high",
+          contextWindows: [],
+          defaultContextWindow: null,
+        },
+      ],
       error: null,
     },
   ];
@@ -544,7 +631,13 @@ describe("model choice", () => {
     useApp.setState({ providers: PROVIDERS });
     useApp.getState().setModel("codex", "gpt-6-astra");
     // Codex's model has no "medium", so its own default applies.
-    expect(useApp.getState().selection).toEqual({ provider: "codex", model: "gpt-6-astra", label: "GPT-6-Astra", effort: "high", contextWindow: null });
+    expect(useApp.getState().selection).toEqual({
+      provider: "codex",
+      model: "gpt-6-astra",
+      label: "GPT-6-Astra",
+      effort: "high",
+      contextWindow: null,
+    });
     useApp.getState().setEffort("low");
     useApp = await freshStore();
     expect(useApp.getState().selection).toMatchObject({ provider: "codex", model: "gpt-6-astra", effort: "low" });
@@ -567,7 +660,9 @@ describe("model choice", () => {
   it("keeps a chat's provider when its CLI becomes unavailable", async () => {
     const useApp = await freshStore();
     useApp.setState({ sessionProvider: "claude" });
-    backend({ list_providers: () => PROVIDERS.map((p) => p.id === "claude" ? { ...p, installed: false, models: [] } : p) });
+    backend({
+      list_providers: () => PROVIDERS.map((p) => (p.id === "claude" ? { ...p, installed: false, models: [] } : p)),
+    });
     await useApp.getState().refreshProviders();
     expect(useApp.getState().selection.provider).toBe("claude");
   });
@@ -576,7 +671,12 @@ describe("model choice", () => {
     const useApp = await freshStore(false);
     useApp.setState({ providers: PROVIDERS });
     useApp.getState().setModel("codex", "gpt-6-astra");
-    backend({ open_workspace: () => ({ path: "/decks/talk", name: "talk" }), open_deck: () => DECK, session_provider: () => "claude", load_chat: () => [] });
+    backend({
+      open_workspace: () => ({ path: "/decks/talk", name: "talk" }),
+      open_deck: () => DECK,
+      session_provider: () => "claude",
+      load_chat: () => [],
+    });
     await useApp.getState().openWorkspace("/decks/talk");
     expect(calls("session_provider")).toEqual([{ id: "/decks/talk" }]);
     expect(useApp.getState().selection).toMatchObject({ provider: "claude", model: "claude-opus-5-5" });
@@ -611,7 +711,13 @@ describe("model choice", () => {
     backend({ list_providers: () => providers });
     await useApp.getState().refreshProviders();
     expect(useApp.getState().providers).toEqual(providers);
-    expect(useApp.getState().selection).toEqual({ provider: "claude", model: "claude-opus-5-5", label: "Claude Opus 5.5", effort: "max", contextWindow: "1m" });
+    expect(useApp.getState().selection).toEqual({
+      provider: "claude",
+      model: "claude-opus-5-5",
+      label: "Claude Opus 5.5",
+      effort: "max",
+      contextWindow: "1m",
+    });
   });
 
   it("keeps the saved model when its provider could not list models", async () => {
@@ -692,7 +798,11 @@ describe("sending a message", () => {
 
   it("names a deck file that is not deck.html for the agent", async () => {
     const useApp = await freshStore();
-    useApp.setState({ workspace: { path: "/ws", name: "ws" }, deck: { ...DECK, id: "/ws/talks/q3.html", path: "/ws/talks/q3.html" }, selected: "#2" });
+    useApp.setState({
+      workspace: { path: "/ws", name: "ws" },
+      deck: { ...DECK, id: "/ws/talks/q3.html", path: "/ws/talks/q3.html" },
+      selected: "#2",
+    });
     await useApp.getState().send("Make it blue", { includeSlide: true, attachments: [] });
     expect(prompt()).toBe(
       `[context]\nOpen file: talks/q3.html (deck)\nCurrent slide: <section id="#2"> in talks/q3.html (slide 2 of 3)\n[/context]\n\nMake it blue`,
@@ -754,7 +864,15 @@ describe("sending a message", () => {
           installed: true,
           path: "/bin/copilot",
           models: [
-            { id: "auto", label: "Auto", isDefault: false, efforts: [], defaultEffort: null, contextWindows: [], defaultContextWindow: null },
+            {
+              id: "auto",
+              label: "Auto",
+              isDefault: false,
+              efforts: [],
+              defaultEffort: null,
+              contextWindows: [],
+              defaultContextWindow: null,
+            },
           ],
           error: null,
         },
@@ -823,7 +941,7 @@ describe("sending a message", () => {
       expect(prompt()).toBe(
         [
           "[context]",
-        "Open file: deck.html (deck)",
+          "Open file: deck.html (deck)",
           'Current slide: <section id="outro"> in deck.html (slide 3 of 3)',
           "Sketch: /home/.slopslides/sessions/1-ab/sketches/1-ab.png (screenshot of the current slide with the user's marks drawn on top)",
           "Marked area: x 476–964, y 266–544 of the 1920×1080 slide",
@@ -833,7 +951,10 @@ describe("sending a message", () => {
         ].join("\n"),
       );
       expect(useApp.getState().messages[0]).toMatchObject({
-        sketch: { image: "/home/.slopslides/sessions/1-ab/sketches/1-ab.png", bounds: { left: 476, top: 266, right: 964, bottom: 544 } },
+        sketch: {
+          image: "/home/.slopslides/sessions/1-ab/sketches/1-ab.png",
+          bounds: { left: 476, top: 266, right: 964, bottom: 544 },
+        },
       });
     });
 
@@ -1004,7 +1125,11 @@ describe("sending a message", () => {
 
     it("are loaded with the deck", async () => {
       const useApp = await freshStore();
-      backend({ open_deck: () => ({ ...DECK, review: { intro: ink } }), load_chat: () => [], agent_running: () => false });
+      backend({
+        open_deck: () => ({ ...DECK, review: { intro: ink } }),
+        load_chat: () => [],
+        agent_running: () => false,
+      });
       await useApp.getState().openDeck("/decks/talk/deck.html");
       expect(useApp.getState().sketches).toEqual({ intro: ink });
     });
@@ -1075,7 +1200,10 @@ describe("sending a message", () => {
       });
       useApp.setState({ deck: DECK });
       await useApp.getState().compact();
-      expect(useApp.getState().messages[1]).toMatchObject({ status: "error", error: "The agent is still working on this deck." });
+      expect(useApp.getState().messages[1]).toMatchObject({
+        status: "error",
+        error: "The agent is still working on this deck.",
+      });
       expect(useApp.getState().running).toBe(false);
     });
   });
@@ -1093,19 +1221,29 @@ describe("sending a message", () => {
 });
 
 describe("agent events", () => {
-  async function bridged(messages: ChatMessage[] = [userMessage("hi"), assistantMessage({ status: "streaming", thinking: true })]) {
+  async function bridged(
+    messages: ChatMessage[] = [userMessage("hi"), assistantMessage({ status: "streaming", thinking: true })],
+  ) {
     const store = await freshModule();
     backend({ list_providers: () => [] });
     await store.initEventBridge();
     store.useApp.setState({ deck: DECK, messages, running: true });
-    const emit = (event: AgentEvent, workspace = "/decks/talk") => listeners.get("agent-event")!({ payload: { workspace, event } });
+    const emit = (event: AgentEvent, workspace = "/decks/talk") =>
+      listeners.get("agent-event")!({ payload: { workspace, event } });
     const reply = () => store.useApp.getState().messages.findLast((m) => m.role === "assistant") as AssistantMessage;
     return { useApp: store.useApp, emit, reply };
   }
 
   it("tracks approvals, resolves only the matching request, and expires unanswered requests", async () => {
     const { emit, reply } = await bridged();
-    const approval = { id: "r1", title: "Run", reason: null, details: "ls", acceptLabel: "Allow once", decisions: ["accept", "decline"] as const };
+    const approval = {
+      id: "r1",
+      title: "Run",
+      reason: null,
+      details: "ls",
+      acceptLabel: "Allow once",
+      decisions: ["accept", "decline"] as const,
+    };
     emit({ type: "approvalRequested", approval: { ...approval, decisions: [...approval.decisions] } });
     emit({ type: "approvalRequested", approval: { ...approval, id: "r2", decisions: [...approval.decisions] } });
     emit({ type: "approvalResolved", id: "r1" });
@@ -1118,12 +1256,27 @@ describe("agent events", () => {
     const { emit, reply } = await bridged();
     emit({ type: "approvalReview", id: "review-1", status: "inProgress", detail: null });
     emit({ type: "approvalReview", id: "review-1", status: "approved", detail: "Within scope" });
-    expect(reply().parts).toEqual([{ kind: "approvalReview", id: "review-1", status: "approved", detail: "Within scope" }]);
+    expect(reply().parts).toEqual([
+      { kind: "approvalReview", id: "review-1", status: "approved", detail: "Within scope" },
+    ]);
   });
 
   it("ignores approval events for other decks", async () => {
     const { emit, reply } = await bridged();
-    emit({ type: "approvalRequested", approval: { id: "r", title: "Run", reason: null, details: "ls", acceptLabel: "Allow once", decisions: ["accept"] } }, "another-deck");
+    emit(
+      {
+        type: "approvalRequested",
+        approval: {
+          id: "r",
+          title: "Run",
+          reason: null,
+          details: "ls",
+          acceptLabel: "Allow once",
+          decisions: ["accept"],
+        },
+      },
+      "another-deck",
+    );
     expect(reply().parts).toEqual([]);
   });
 
@@ -1193,7 +1346,12 @@ describe("agent events", () => {
   it("uses the result text when nothing was streamed", async () => {
     const { emit, reply } = await bridged();
     emit({ type: "result", isError: false, text: "All done.", costUsd: 0.12, durationMs: 3400 });
-    expect(reply()).toMatchObject({ parts: [{ kind: "text", text: "All done." }], costUsd: 0.12, durationMs: 3400, error: null });
+    expect(reply()).toMatchObject({
+      parts: [{ kind: "text", text: "All done." }],
+      costUsd: 0.12,
+      durationMs: 3400,
+      error: null,
+    });
   });
 
   it("does not repeat the result text after streamed text", async () => {
@@ -1234,14 +1392,21 @@ describe("agent events", () => {
 
   it("only updates the last reply", async () => {
     const first = assistantMessage({ id: "a-0", parts: [{ kind: "text", text: "old" }] });
-    const { useApp, emit } = await bridged([first, userMessage("again"), assistantMessage({ id: "a-1", status: "streaming" })]);
+    const { useApp, emit } = await bridged([
+      first,
+      userMessage("again"),
+      assistantMessage({ id: "a-1", status: "streaming" }),
+    ]);
     emit({ type: "textDelta", text: "new" });
     expect(useApp.getState().messages[0]).toEqual(first);
   });
 
   describe("context usage", () => {
     it("records the context size on the reply, keeping what a report leaves out", async () => {
-      const { emit, reply } = await bridged([userMessage("hi"), assistantMessage({ status: "streaming", provider: "claude" })]);
+      const { emit, reply } = await bridged([
+        userMessage("hi"),
+        assistantMessage({ status: "streaming", provider: "claude" }),
+      ]);
       emit({ type: "usage", contextTokens: 20_000, contextWindow: null });
       expect(reply().context).toEqual({ provider: "claude", tokens: 20_000, window: null });
       emit({ type: "usage", contextTokens: null, contextWindow: 200_000 });
@@ -1249,9 +1414,22 @@ describe("agent events", () => {
     });
 
     it("carries the window over from an earlier reply of the same provider", async () => {
-      const earlier = assistantMessage({ id: "a-0", provider: "claude", context: { provider: "claude", tokens: 5, window: 1_000_000 } });
-      const other = assistantMessage({ id: "a-1", provider: "copilot", context: { provider: "copilot", tokens: 9, window: 128_000 } });
-      const { emit, reply } = await bridged([earlier, other, userMessage("hi"), assistantMessage({ id: "a-2", status: "streaming", provider: "claude" })]);
+      const earlier = assistantMessage({
+        id: "a-0",
+        provider: "claude",
+        context: { provider: "claude", tokens: 5, window: 1_000_000 },
+      });
+      const other = assistantMessage({
+        id: "a-1",
+        provider: "copilot",
+        context: { provider: "copilot", tokens: 9, window: 128_000 },
+      });
+      const { emit, reply } = await bridged([
+        earlier,
+        other,
+        userMessage("hi"),
+        assistantMessage({ id: "a-2", status: "streaming", provider: "claude" }),
+      ]);
       emit({ type: "usage", contextTokens: 60_000, contextWindow: null });
       expect(reply().context).toEqual({ provider: "claude", tokens: 60_000, window: 1_000_000 });
     });
@@ -1264,12 +1442,24 @@ describe("agent events", () => {
     });
 
     it("shows compaction, forgets the old size, and settles when the turn ends", async () => {
-      const earlier = assistantMessage({ id: "a-0", provider: "claude", context: { provider: "claude", tokens: 90_000, window: 200_000 } });
-      const { emit, reply } = await bridged([earlier, userMessage("/compact"), assistantMessage({ id: "a-1", status: "streaming", thinking: true, provider: "claude" })]);
+      const earlier = assistantMessage({
+        id: "a-0",
+        provider: "claude",
+        context: { provider: "claude", tokens: 90_000, window: 200_000 },
+      });
+      const { emit, reply } = await bridged([
+        earlier,
+        userMessage("/compact"),
+        assistantMessage({ id: "a-1", status: "streaming", thinking: true, provider: "claude" }),
+      ]);
       emit({ type: "compacting" });
       expect(reply()).toMatchObject({ compacting: true, thinking: false });
       emit({ type: "compacted" });
-      expect(reply()).toMatchObject({ compacting: false, compacted: true, context: { provider: "claude", tokens: null, window: 200_000 } });
+      expect(reply()).toMatchObject({
+        compacting: false,
+        compacted: true,
+        context: { provider: "claude", tokens: null, window: 200_000 },
+      });
       emit({ type: "usage", contextTokens: 12_000, contextWindow: 128_000 });
       expect(reply().context).toEqual({ provider: "claude", tokens: 12_000, window: 128_000 });
       emit({ type: "compacting" });
@@ -1311,8 +1501,13 @@ describe("deck file changes", () => {
       running: false,
       assetsRev: 0,
     });
-    const changedIn = (root: string, paths: string[]) => listeners.get("workspace-changed")!({ payload: { root, paths } });
-    const changed = (paths: string[]) => changedIn("/decks", paths.map((p) => `talk/${p}`));
+    const changedIn = (root: string, paths: string[]) =>
+      listeners.get("workspace-changed")!({ payload: { root, paths } });
+    const changed = (paths: string[]) =>
+      changedIn(
+        "/decks",
+        paths.map((p) => `talk/${p}`),
+      );
     return { useApp: store.useApp, changed, changedIn };
   }
 
@@ -1387,7 +1582,10 @@ describe("deck file changes", () => {
   });
 
   it("follows the agent to a newly added slide", async () => {
-    const added = { ...DECK, slides: [...DECK.slides, { id: "fresh", hash: "f", hidden: false, locked: false, moved: false }] };
+    const added = {
+      ...DECK,
+      slides: [...DECK.slides, { id: "fresh", hash: "f", hidden: false, locked: false, moved: false }],
+    };
     const { useApp, changed } = await watching(() => added);
     useApp.setState({ running: true });
     changed(["deck.html"]);
@@ -1434,7 +1632,10 @@ describe("deck file changes", () => {
   it("follows a deck with another file name at the workspace root", async () => {
     const edited = deckFor(DECK_HTML, "2");
     const { useApp, changedIn } = await watching(() => edited);
-    useApp.setState({ openedFile: { path: "q3.html", absolute: "/decks/q3.html", kind: "deck" }, deck: { ...DECK, id: "/decks/q3.html" } });
+    useApp.setState({
+      openedFile: { path: "q3.html", absolute: "/decks/q3.html", kind: "deck" },
+      deck: { ...DECK, id: "/decks/q3.html" },
+    });
     changedIn("/decks", ["talk/deck.html"]);
     await vi.advanceTimersByTimeAsync(200);
     expect(calls("load_deck")).toEqual([]);
@@ -1446,7 +1647,11 @@ describe("deck file changes", () => {
 
   it("reloads an open page (not a deck) when it changes", async () => {
     const { useApp, changedIn } = await watching(() => DECK);
-    useApp.setState({ deck: null, openedFile: { path: "site/index.html", absolute: "/decks/site/index.html", kind: "webpage" }, fileRev: 0 });
+    useApp.setState({
+      deck: null,
+      openedFile: { path: "site/index.html", absolute: "/decks/site/index.html", kind: "webpage" },
+      fileRev: 0,
+    });
     changedIn("/decks", ["site/style.css"]);
     expect(useApp.getState().fileRev).toBe(0);
     changedIn("/decks", ["site/index.html"]);
@@ -1534,7 +1739,11 @@ describe("lint", () => {
     useApp.getState().fillComposer("fix it");
     expect(useApp.getState().composerFill).toEqual({ text: "fix it", rev: 2 });
     useApp.getState().fillComposer("tidy it", { screenshot: "/home/.slopslides/sessions/1-ab/sketches/1.png" });
-    expect(useApp.getState().composerFill).toEqual({ text: "tidy it", rev: 3, screenshot: "/home/.slopslides/sessions/1-ab/sketches/1.png" });
+    expect(useApp.getState().composerFill).toEqual({
+      text: "tidy it",
+      rev: 3,
+      screenshot: "/home/.slopslides/sessions/1-ab/sketches/1.png",
+    });
   });
 
   it("lintFixPrompt lists every issue and asks the agent to verify with its tool", async () => {
@@ -1567,7 +1776,13 @@ describe("editing slides on the stage", () => {
         if (!revs.has(markup)) revs.set(markup, revs.size + 1);
         rev = revs.get(markup)!;
         const deck = deckFor(DECK_HTML, String(rev));
-        return { deck: { ...deck, slides: deck.slides.map((s) => (s.id === slide ? { ...s, moved: markup.includes("data-moved") } : s)) }, previous };
+        return {
+          deck: {
+            ...deck,
+            slides: deck.slides.map((s) => (s.id === slide ? { ...s, moved: markup.includes("data-moved") } : s)),
+          },
+          previous,
+        };
       },
     });
     return { markup: () => markup };
@@ -1578,7 +1793,9 @@ describe("editing slides on the stage", () => {
     slideBackend();
     useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
     await useApp.getState().saveSlideEdit("intro", MOVED);
-    expect(calls("update_slide")).toEqual([{ id: "/decks/talk/deck.html", slide: "intro", markup: MOVED, base: "intro-1" }]);
+    expect(calls("update_slide")).toEqual([
+      { id: "/decks/talk/deck.html", slide: "intro", markup: MOVED, base: "intro-1" },
+    ]);
     const deck = useApp.getState().deck!;
     expect(deck.slides[0]).toMatchObject({ hash: "intro-2", moved: true });
     expect(useApp.getState().slideUndo).toEqual([{ slide: "intro", markup: ORIGINAL, after: "intro-2" }]);
@@ -1621,7 +1838,12 @@ describe("editing slides on the stage", () => {
     useApp.getState().select("outro");
     await useApp.getState().undoSlideEdit();
     expect(disk.markup()).toBe(ORIGINAL);
-    expect(calls("update_slide")[1]).toEqual({ id: "/decks/talk/deck.html", slide: "intro", markup: ORIGINAL, base: "intro-2" });
+    expect(calls("update_slide")[1]).toEqual({
+      id: "/decks/talk/deck.html",
+      slide: "intro",
+      markup: ORIGINAL,
+      base: "intro-2",
+    });
     expect(useApp.getState().selected).toBe("intro");
     expect(useApp.getState().slideUndo).toEqual([]);
     await useApp.getState().undoSlideEdit();
@@ -1649,7 +1871,12 @@ describe("editing slides on the stage", () => {
     expect(useApp.getState().slideRedo).toEqual([{ slide: "intro", markup: MOVED, after: "intro-1" }]);
     await useApp.getState().redoSlideEdit();
     expect(disk.markup()).toBe(MOVED);
-    expect(calls("update_slide")[2]).toEqual({ id: "/decks/talk/deck.html", slide: "intro", markup: MOVED, base: "intro-1" });
+    expect(calls("update_slide")[2]).toEqual({
+      id: "/decks/talk/deck.html",
+      slide: "intro",
+      markup: MOVED,
+      base: "intro-1",
+    });
     expect(useApp.getState().slideRedo).toEqual([]);
     expect(useApp.getState().slideUndo).toEqual([{ slide: "intro", markup: ORIGINAL, after: "intro-2" }]);
     await useApp.getState().undoSlideEdit();
@@ -1736,7 +1963,11 @@ describe("editing slides on the stage", () => {
 
   it("does not enter edit mode on a locked slide", async () => {
     const useApp = await freshStore();
-    useApp.setState({ deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)), selected: "intro", editing: false });
+    useApp.setState({
+      deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)),
+      selected: "intro",
+      editing: false,
+    });
     useApp.getState().setEditing(true);
     expect(useApp.getState().editing).toBe(false);
     useApp.getState().select("outro");
@@ -1771,7 +2002,11 @@ describe("editing slides on the stage", () => {
 
     it("does not tidy a locked slide", async () => {
       const { useApp } = await freshModule();
-      useApp.setState({ deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)), selected: "intro", composerFill: null });
+      useApp.setState({
+        deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)),
+        selected: "intro",
+        composerFill: null,
+      });
       await useApp.getState().tidyLayout();
       expect(calls("capture_sketch")).toEqual([]);
       expect(useApp.getState().composerFill).toBeNull();
@@ -1803,12 +2038,16 @@ describe("editing slides on the stage", () => {
     it("sends the screenshot handed over with the message", async () => {
       const { useApp, TIDY_PROMPT } = await freshModule();
       useApp.setState({ deck: DECK, selected: "intro" });
-      await useApp.getState().send(TIDY_PROMPT, { includeSlide: true, attachments: [], screenshot: "/home/.slopslides/sessions/1-ab/sketches/2-cd.png" });
+      await useApp.getState().send(TIDY_PROMPT, {
+        includeSlide: true,
+        attachments: [],
+        screenshot: "/home/.slopslides/sessions/1-ab/sketches/2-cd.png",
+      });
       expect(calls("capture_sketch")).toHaveLength(0);
       expect((calls("send_message")[0]!.args as { prompt: string }).prompt).toBe(
         [
           "[context]",
-        "Open file: deck.html (deck)",
+          "Open file: deck.html (deck)",
           'Current slide: <section id="intro"> in deck.html (slide 1 of 3)',
           "Screenshot: /home/.slopslides/sessions/1-ab/sketches/2-cd.png (screenshot of the slide with the user's hand edits)",
           "[/context]",
@@ -1829,7 +2068,11 @@ describe("editing slides on the stage", () => {
       backend({ capture_sketch: () => "/home/.slopslides/sessions/1-ab/sketches/3.png" });
       const ink = [{ tool: "pen" as const, color: "#f00", points: [[0.5, 0.5]] as [number, number][] }];
       useApp.setState({ deck: DECK, selected: "intro", sketches: { intro: ink } });
-      await useApp.getState().send("Tidy", { includeSlide: true, attachments: [], screenshot: "/home/.slopslides/sessions/1-ab/sketches/2.png" });
+      await useApp.getState().send("Tidy", {
+        includeSlide: true,
+        attachments: [],
+        screenshot: "/home/.slopslides/sessions/1-ab/sketches/2.png",
+      });
       expect(calls("capture_sketch")).toHaveLength(1);
       expect(useApp.getState().messages[0]).toMatchObject({
         sketch: { image: "/home/.slopslides/sessions/1-ab/sketches/3.png" },
@@ -1840,11 +2083,33 @@ describe("editing slides on the stage", () => {
   });
 });
 
-
 describe("permissions", () => {
   it("stops a Codex turn and saves a closed transcript before leaving the workspace", async () => {
     const store = await freshStore();
-    store.setState({ deck: deckFor(DECK_HTML), running: true, messages: [assistantMessage({ provider: "codex", status: "streaming", parts: [{ kind: "approval", status: "pending", approval: { id: "live", title: "Run", reason: null, details: "ls", acceptLabel: "Allow once", decisions: ["accept"] } }] })] });
+    store.setState({
+      deck: deckFor(DECK_HTML),
+      running: true,
+      messages: [
+        assistantMessage({
+          provider: "codex",
+          status: "streaming",
+          parts: [
+            {
+              kind: "approval",
+              status: "pending",
+              approval: {
+                id: "live",
+                title: "Run",
+                reason: null,
+                details: "ls",
+                acceptLabel: "Allow once",
+                decisions: ["accept"],
+              },
+            },
+          ],
+        }),
+      ],
+    });
     await store.getState().closeWorkspace();
     const order = invoke.mock.calls.map(([command]) => command);
     expect(order.indexOf("interrupt_agent")).toBeLessThan(order.indexOf("save_chat"));
@@ -1854,7 +2119,11 @@ describe("permissions", () => {
 
   it("keeps the existing background behavior for other providers", async () => {
     const store = await freshStore();
-    store.setState({ deck: deckFor(DECK_HTML), running: true, messages: [assistantMessage({ provider: "claude", status: "streaming" })] });
+    store.setState({
+      deck: deckFor(DECK_HTML),
+      running: true,
+      messages: [assistantMessage({ provider: "claude", status: "streaming" })],
+    });
     await store.getState().closeDeck();
     expect(calls("interrupt_agent")).toHaveLength(0);
   });
@@ -1869,7 +2138,11 @@ describe("permissions", () => {
     store.getState().setPermissionMode("autoReview");
     store.setState({ selection: claude });
     store.getState().setPermissionMode("fullAccess");
-    expect(JSON.parse(localStorage.getItem("slopslide.permissions")!)).toEqual({ claude: "fullAccess", codex: "autoReview", copilot: "ask" });
+    expect(JSON.parse(localStorage.getItem("slopslide.permissions")!)).toEqual({
+      claude: "fullAccess",
+      codex: "autoReview",
+      copilot: "ask",
+    });
     store = await freshStore();
     expect(store.getState().permissionModes).toEqual({ claude: "fullAccess", codex: "autoReview", copilot: "ask" });
     localStorage.setItem("slopslide.permissions", '{"claude":"__proto__","codex":3,"__proto__":{"copilot":"custom"}}');
@@ -1893,7 +2166,11 @@ describe("permissions", () => {
 
   it("sends each provider its own mode", async () => {
     const store = await freshStore();
-    store.setState({ deck: deckFor(DECK_HTML), permissionModes: { claude: "fullAccess", codex: "autoReview", copilot: "ask" }, selection: codex });
+    store.setState({
+      deck: deckFor(DECK_HTML),
+      permissionModes: { claude: "fullAccess", codex: "autoReview", copilot: "ask" },
+      selection: codex,
+    });
     await store.getState().send("slides", { includeSlide: false, attachments: [] });
     expect(calls("send_message")[0]!.args).toMatchObject({ provider: "codex", permissionMode: "autoReview" });
     store.setState({ running: false, selection: claude });
@@ -1903,8 +2180,29 @@ describe("permissions", () => {
 
   it("restored approvals are closed rather than reusable", async () => {
     const store = await freshStore(false);
-    const message = assistantMessage({ status: "streaming", parts: [{ kind: "approval", status: "pending", approval: { id: "old", title: "Run", reason: null, details: "ls", acceptLabel: "Allow once", decisions: ["accept"] } }] });
-    backend({ open_workspace: () => ({ path: "/decks/talk", name: "talk" }), open_deck: () => deckFor(DECK_HTML), load_chat: () => [message], agent_running: () => false });
+    const message = assistantMessage({
+      status: "streaming",
+      parts: [
+        {
+          kind: "approval",
+          status: "pending",
+          approval: {
+            id: "old",
+            title: "Run",
+            reason: null,
+            details: "ls",
+            acceptLabel: "Allow once",
+            decisions: ["accept"],
+          },
+        },
+      ],
+    });
+    backend({
+      open_workspace: () => ({ path: "/decks/talk", name: "talk" }),
+      open_deck: () => deckFor(DECK_HTML),
+      load_chat: () => [message],
+      agent_running: () => false,
+    });
     await store.getState().openWorkspace("/decks/talk");
     await store.getState().openDeck("/decks/talk/deck.html");
     expect((store.getState().messages[0] as AssistantMessage).parts[0]).toMatchObject({ status: "expired" });
@@ -1936,7 +2234,9 @@ describe("templates", () => {
     const useApp = await storeWith(DECK, null);
     await useApp.getState().send("Hi", { includeSlide: false, attachments: [] });
     expect(calls("stage_template")).toEqual([]);
-    expect(calls("send_message")[0]!.args).toMatchObject({ prompt: "[context]\nOpen file: deck.html (deck)\n[/context]\n\nHi" });
+    expect(calls("send_message")[0]!.args).toMatchObject({
+      prompt: "[context]\nOpen file: deck.html (deck)\n[/context]\n\nHi",
+    });
 
     useApp.setState({ deck: { ...DECK, template: "gone" }, running: false, messages: [] });
     backend({
@@ -1946,7 +2246,9 @@ describe("templates", () => {
     });
     await useApp.getState().send("Hi again", { includeSlide: false, attachments: [] });
     expect(calls("stage_template")).toEqual([{ id: DECK.id, template: "gone" }]);
-    expect(calls("send_message").at(-1)!.args).toMatchObject({ prompt: "[context]\nOpen file: deck.html (deck)\n[/context]\n\nHi again" });
+    expect(calls("send_message").at(-1)!.args).toMatchObject({
+      prompt: "[context]\nOpen file: deck.html (deck)\n[/context]\n\nHi again",
+    });
   });
 
   it("loads the template list", async () => {
@@ -2005,7 +2307,11 @@ describe("templates", () => {
 
   it("copies a layout into a deck that uses the template", async () => {
     const useApp = await storeWith({ ...DECK, template: "swiss" });
-    const next = { ...DECK, template: "swiss", slides: [...DECK.slides, { id: "quote", hash: "q", hidden: false, locked: false, moved: false }] };
+    const next = {
+      ...DECK,
+      template: "swiss",
+      slides: [...DECK.slides, { id: "quote", hash: "q", hidden: false, locked: false, moved: false }],
+    };
     backend({ add_template_slide: () => ({ deck: next, slide: "quote" }) });
     await useApp.getState().addLayoutSlide("swiss", "quote");
     expect(calls("add_template_slide")).toEqual([{ id: DECK.id, template: "swiss", slide: "quote", after: "intro" }]);
@@ -2076,7 +2382,11 @@ describe("templates", () => {
 
 describe("changing the slide size", () => {
   const PORTRAIT = { width: 1080, height: 1350, unit: "px" as const };
-  const resized = (size = PORTRAIT) => ({ ...DECK, shellHash: "shell-2", size: { ...size, pixelWidth: 1080, pixelHeight: 1350 } });
+  const resized = (size = PORTRAIT) => ({
+    ...DECK,
+    shellHash: "shell-2",
+    size: { ...size, pixelWidth: 1080, pixelHeight: 1350 },
+  });
 
   it("resizes the slides, then prepares a message asking the agent to lay them out again", async () => {
     const { useApp } = await freshModule();
@@ -2132,29 +2442,45 @@ describe("changing the slide size", () => {
 describe("workspace conversations", () => {
   it.each([
     [null, "No file open"],
-    [{ path: "site/index.html", absolute: "/decks/talk/site/index.html", kind: "webpage" as const }, "Open file: site/index.html (web page)"],
+    [
+      { path: "site/index.html", absolute: "/decks/talk/site/index.html", kind: "webpage" as const },
+      "Open file: site/index.html (web page)",
+    ],
     [{ path: "notes.md", absolute: "/decks/talk/notes.md", kind: "file" as const }, "Open file: notes.md (file)"],
   ])("sends without a deck and describes the open file %j", async (openedFile, context) => {
     const useApp = await freshStore();
     useApp.setState({ deck: null, openedFile });
     await useApp.getState().send("Make a deck from notes.md", { includeSlide: true, attachments: ["assets/notes.md"] });
-    expect(calls("send_message")[0]!.args).toMatchObject({ workspace: "/decks/talk", prompt: `[context]\n${context}\nAttached files: assets/notes.md\n[/context]\n\nMake a deck from notes.md` });
+    expect(calls("send_message")[0]!.args).toMatchObject({
+      workspace: "/decks/talk",
+      prompt: `[context]\n${context}\nAttached files: assets/notes.md\n[/context]\n\nMake a deck from notes.md`,
+    });
     expect(useApp.getState().messages[0]).toMatchObject({ slide: null, sketch: null });
   });
 
   it("keeps a running conversation and approvals when switching files, and routes openFile through openPath", async () => {
     const { useApp, initEventBridge } = await freshModule();
     backend({ open_file: ({ path }) => ({ path, absolute: `/decks/talk/${path}`, kind: "webpage" }) });
-    useApp.setState({ deck: DECK, messages: [userMessage("hi"), assistantMessage({ status: "streaming" })], running: true });
+    useApp.setState({
+      deck: DECK,
+      messages: [userMessage("hi"), assistantMessage({ status: "streaming" })],
+      running: true,
+    });
     await initEventBridge();
-    listeners.get("agent-event")!({ payload: { workspace: "/other", event: { type: "openFile", path: "outside.html" } } });
+    listeners.get("agent-event")!({
+      payload: { workspace: "/other", event: { type: "openFile", path: "outside.html" } },
+    });
     expect(calls("open_file")).toEqual([]);
-    listeners.get("agent-event")!({ payload: { workspace: "/decks/talk", event: { type: "openFile", path: "site/index.html" } } });
+    listeners.get("agent-event")!({
+      payload: { workspace: "/decks/talk", event: { type: "openFile", path: "site/index.html" } },
+    });
     await vi.waitFor(() => expect(useApp.getState().openedFile?.path).toBe("site/index.html"));
     expect(useApp.getState()).toMatchObject({ deck: null, running: true });
     expect(useApp.getState().messages).toHaveLength(2);
     expect(calls("interrupt_agent")).toEqual([]);
-    listeners.get("agent-event")!({ payload: { workspace: "/decks/talk", event: { type: "textDelta", text: "Still here" } } });
+    listeners.get("agent-event")!({
+      payload: { workspace: "/decks/talk", event: { type: "textDelta", text: "Still here" } },
+    });
     expect((useApp.getState().messages[1] as AssistantMessage).parts).toEqual([{ kind: "text", text: "Still here" }]);
   });
 });

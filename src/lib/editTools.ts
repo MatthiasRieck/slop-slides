@@ -50,8 +50,28 @@ export interface EditSelection {
 export const EDIT_TOOL_KEYS: Record<string, EditTool> = { v: "select", t: "text", r: "rect", o: "ellipse", d: "draw" };
 
 export const DEFAULT_EDIT_STYLES: Record<ToolFamily, EditStyle> = {
-  text: { color: "#111111", fontSize: 48, bold: false, italic: false, align: "left", valign: "top", fill: null, stroke: null, strokeWidth: 0 },
-  shape: { color: "#ffffff", fontSize: 40, bold: false, italic: false, align: "center", valign: "middle", fill: "#3b82f6", stroke: null, strokeWidth: 0 },
+  text: {
+    color: "#111111",
+    fontSize: 48,
+    bold: false,
+    italic: false,
+    align: "left",
+    valign: "top",
+    fill: null,
+    stroke: null,
+    strokeWidth: 0,
+  },
+  shape: {
+    color: "#ffffff",
+    fontSize: 40,
+    bold: false,
+    italic: false,
+    align: "center",
+    valign: "middle",
+    fill: "#3b82f6",
+    stroke: null,
+    strokeWidth: 0,
+  },
   draw: { fill: null, stroke: "#111111", strokeWidth: 6 },
 };
 
@@ -105,7 +125,13 @@ export function toolbarState(selection: EditSelection | null, tool: EditTool, st
   }
   const family = familyOf(tool);
   if (!family) return null;
-  return { style: styles[family], text: family !== "draw", vector: family === "draw", valign: family !== "draw", selected: false };
+  return {
+    style: styles[family],
+    text: family !== "draw",
+    vector: family === "draw",
+    valign: family !== "draw",
+    selected: false,
+  };
 }
 
 /** A selection report from the slide editor, or null when it is malformed (or nothing is selected). */

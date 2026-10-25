@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { contextPercent, formatTokens, latestContext, mergeContext, windowTokens, type ContextUsage } from "./context";
+import { type ContextUsage, contextPercent, formatTokens, latestContext, mergeContext, windowTokens } from "./context";
 
 const usage = (patch: Partial<ContextUsage> = {}): ContextUsage => ({
   provider: "claude",
@@ -64,7 +64,11 @@ describe("context usage", () => {
     expect(mergeContext(previous, "claude", { contextTokens: null, contextWindow: 1_000_000 })).toEqual(
       usage({ tokens: 500, window: 1_000_000 }),
     );
-    expect(mergeContext(usage({ tokens: null }), "claude", { contextTokens: null, contextWindow: 200_000 }).tokens).toBeNull();
-    expect(mergeContext(usage(), "claude", { contextTokens: 7, contextWindow: 8 })).toEqual(usage({ tokens: 7, window: 8 }));
+    expect(
+      mergeContext(usage({ tokens: null }), "claude", { contextTokens: null, contextWindow: 200_000 }).tokens,
+    ).toBeNull();
+    expect(mergeContext(usage(), "claude", { contextTokens: 7, contextWindow: 8 })).toEqual(
+      usage({ tokens: 7, window: 8 }),
+    );
   });
 });

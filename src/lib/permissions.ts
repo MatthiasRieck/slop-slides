@@ -1,7 +1,10 @@
 import type { Provider } from "./models";
 
 export const PERMISSION_MODES = {
-  ask: { label: "Ask for approval", description: "Work in the workspace freely; ask before commands and anything outside it." },
+  ask: {
+    label: "Ask for approval",
+    description: "Work in the workspace freely; ask before commands and anything outside it.",
+  },
   autoReview: { label: "Approve for me", description: "Codex reviews eligible requests for extra access." },
   fullAccess: { label: "Full access", description: "Run commands and change files anywhere without asking." },
   custom: { label: "Custom", description: "Use your existing Codex configuration." },

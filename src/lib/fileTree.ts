@@ -20,7 +20,10 @@ export function ancestorsOf(path: string): string[] {
 }
 
 /** The rows to show: the root's entries, and those of every expanded folder under its parent. */
-export function visibleRows(folders: ReadonlyMap<string, readonly WorkspaceEntry[]>, expanded: ReadonlySet<string>): TreeRow[] {
+export function visibleRows(
+  folders: ReadonlyMap<string, readonly WorkspaceEntry[]>,
+  expanded: ReadonlySet<string>,
+): TreeRow[] {
   const rows: TreeRow[] = [];
   const visit = (folder: string, depth: number) => {
     for (const entry of folders.get(folder) ?? []) {

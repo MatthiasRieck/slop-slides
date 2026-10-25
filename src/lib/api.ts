@@ -1,8 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-
-import type { Approval, ApprovalDecision, PermissionMode } from "./permissions";
 import type { Stroke } from "./ink";
 import type { Provider, ProviderInfo } from "./models";
+import type { Approval, ApprovalDecision, PermissionMode } from "./permissions";
 import type { SizeInfo, SlideSize } from "./slideSize";
 
 /** What a workspace file is, which decides what it opens in (see src-tauri/src/workspace.rs). */
@@ -194,18 +193,15 @@ export const api = {
   /** `slides` lists every slide id and section key (see `sectionKey`) in the new order. */
   reorderSlides: (id: string, slides: string[]) => invoke<Deck>("reorder_slides", { id, slides }),
   addSlide: (id: string, after: string | null) => invoke<CreatedSlide>("add_slide", { id, after }),
-  duplicateSlide: (id: string, slide: string) =>
-    invoke<CreatedSlide>("duplicate_slide", { id, slide }),
+  duplicateSlide: (id: string, slide: string) => invoke<CreatedSlide>("duplicate_slide", { id, slide }),
   setSlideHidden: (id: string, slide: string, hidden: boolean) =>
     invoke<Deck>("set_slide_hidden", { id, slide, hidden }),
   setSlideLocked: (id: string, slide: string, locked: boolean) =>
     invoke<Deck>("set_slide_locked", { id, slide, locked }),
   /** Gives every slide the canvas `size` (the slides' content stays as it is). */
   setSlideSize: (id: string, size: SlideSize) => invoke<Deck>("set_slide_size", { id, size }),
-  addSection: (id: string, before: string | null, title: string) =>
-    invoke<Deck>("add_section", { id, before, title }),
-  renameSection: (id: string, index: number, title: string) =>
-    invoke<Deck>("rename_section", { id, index, title }),
+  addSection: (id: string, before: string | null, title: string) => invoke<Deck>("add_section", { id, before, title }),
+  renameSection: (id: string, index: number, title: string) => invoke<Deck>("rename_section", { id, index, title }),
   deleteSection: (id: string, index: number) => invoke<Deck>("delete_section", { id, index }),
   deleteSlide: (id: string, slide: string) => invoke<Deck>("delete_slide", { id, slide }),
   /** Replaces one slide's markup; refused when the slide's hash is no longer `base`. */
@@ -215,8 +211,7 @@ export const api = {
     invoke<Deck>("save_deck_source", { id, source, base }),
   importAssets: (id: string, paths: string[]) => invoke<string[]>("import_assets", { id, paths }),
   /** Saves pasted file contents (base64) into the deck's assets; returns its `assets/…` ref. */
-  saveAsset: (id: string, name: string, data: string) =>
-    invoke<string>("save_asset", { id, name, data }),
+  saveAsset: (id: string, name: string, data: string) => invoke<string>("save_asset", { id, name, data }),
   /** Puts an element copied in the slide editor on the system clipboard, with `text` for other apps. */
   copyToClipboard: (html: string, text: string) => invoke<void>("copy_to_clipboard", { html, text }),
   /** What pasting into deck `id` brings in; pasted images are saved into its assets. */
@@ -225,8 +220,7 @@ export const api = {
   /** Prints the deck to `dest` as a PDF: one page per shown slide, with selectable text. */
   exportPdf: (id: string, dest: string) => invoke<void>("export_pdf", { id, dest }),
   /** Creates a new folder named after the deck inside `parent`; returns its path. */
-  createImageExportDir: (id: string, parent: string) =>
-    invoke<string>("create_image_export_dir", { id, parent }),
+  createImageExportDir: (id: string, parent: string) => invoke<string>("create_image_export_dir", { id, parent }),
   /**
    * Screenshots `rect` (one slide, CSS pixels) as `<dir>/slide-NN.png`, at most `width` (the
    * slides' canvas width) pixels wide; returns its path.
@@ -256,7 +250,13 @@ export const api = {
   sendMessage: (
     workspace: string,
     prompt: string,
-    selection: { provider: Provider; model: string; effort: string; contextWindow: string | null; permissionMode?: PermissionMode },
+    selection: {
+      provider: Provider;
+      model: string;
+      effort: string;
+      contextWindow: string | null;
+      permissionMode?: PermissionMode;
+    },
     /** Summarize the conversation so far instead of sending `prompt`. */
     compact = false,
   ) => invoke<void>("send_message", { args: { workspace, prompt, ...selection, compact } }),

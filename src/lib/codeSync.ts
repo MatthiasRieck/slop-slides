@@ -4,19 +4,13 @@
 export const normalizeNewlines = (text: string) => text.replace(/\r\n?/g, "\n");
 
 /** The smallest single replacement turning `current` into `next`, or null when equal. */
-export function changedRange(
-  current: string,
-  next: string,
-): { from: number; to: number; insert: string } | null {
+export function changedRange(current: string, next: string): { from: number; to: number; insert: string } | null {
   if (current === next) return null;
   const max = Math.min(current.length, next.length);
   let start = 0;
   while (start < max && current.charCodeAt(start) === next.charCodeAt(start)) start++;
   let end = 0;
-  while (
-    end < max - start &&
-    current.charCodeAt(current.length - 1 - end) === next.charCodeAt(next.length - 1 - end)
-  )
+  while (end < max - start && current.charCodeAt(current.length - 1 - end) === next.charCodeAt(next.length - 1 - end))
     end++;
   return { from: start, to: current.length - end, insert: next.slice(start, next.length - end) };
 }

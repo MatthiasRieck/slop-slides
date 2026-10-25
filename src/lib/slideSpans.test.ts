@@ -58,7 +58,7 @@ describe("findSlideSpans", () => {
   it("finds hundreds of slides in a large deck quickly", () => {
     const slide = (i: number) =>
       `<section class="slide" id="s${i}">\n  <div><p>${"text ".repeat(40)}</p></div>\n</section>\n`;
-    const html = `<style>${".x{color:red}\n".repeat(2000)}</style>` + Array.from({ length: 500 }, (_, i) => slide(i)).join("");
+    const html = `<style>${".x{color:red}\n".repeat(2000)}</style>${Array.from({ length: 500 }, (_, i) => slide(i)).join("")}`;
     const started = performance.now();
     const spans = findSlideSpans(html);
     expect(spans).toHaveLength(500);

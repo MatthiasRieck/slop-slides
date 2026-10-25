@@ -1,6 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { basename, chatFileUrl, cn, dirname, isSessionFile, deckFileUrl, fileUrl, layoutLabel, relativeTime, slideUrl, templateSlideUrl } from "./utils";
+import {
+  basename,
+  chatFileUrl,
+  cn,
+  deckFileUrl,
+  dirname,
+  fileUrl,
+  isSessionFile,
+  layoutLabel,
+  relativeTime,
+  slideUrl,
+  templateSlideUrl,
+} from "./utils";
 
 describe("cn", () => {
   it("joins truthy classes and lets later Tailwind classes win", () => {
@@ -12,7 +24,9 @@ describe("cn", () => {
 
 describe("templates", () => {
   it("builds still previews of a template's slides", () => {
-    expect(templateSlideUrl("bento-grid", "stats")).toBe("/__deck/.template/bento-grid/deck.html?embed&slide=stats&static");
+    expect(templateSlideUrl("bento-grid", "stats")).toBe(
+      "/__deck/.template/bento-grid/deck.html?embed&slide=stats&static",
+    );
     expect(templateSlideUrl("my style", "#1")).toBe("/__deck/.template/my%20style/deck.html?embed&slide=%231&static");
   });
 
@@ -105,7 +119,9 @@ describe("deck URLs (desktop app)", () => {
 
   it("uses http://slop.localhost on Windows (WebView2)", async () => {
     const utils = await loadWith("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
-    expect(utils.deckFileUrl("C:\\talks\\deck.html", "assets/a.png")).toBe("http://slop.localhost/.file/C%3A/talks/assets/a.png");
+    expect(utils.deckFileUrl("C:\\talks\\deck.html", "assets/a.png")).toBe(
+      "http://slop.localhost/.file/C%3A/talks/assets/a.png",
+    );
   });
 });
 

@@ -4,7 +4,7 @@ import { catchDrops, claimDrop, dropCovered, dropPoint, imageSize, isImage } fro
 
 const stops: (() => void)[] = [];
 afterEach(() => {
-  stops.splice(0).forEach((stop) => stop());
+  for (const stop of stops.splice(0)) stop();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -25,7 +25,10 @@ describe("dropped files", () => {
 
   it("stop at the first catcher that takes them all", () => {
     const later = vi.fn((paths: string[]) => paths);
-    stops.push(catchDrops(() => []), catchDrops(later));
+    stops.push(
+      catchDrops(() => []),
+      catchDrops(later),
+    );
     expect(claimDrop(["/a.png"], { x: 0, y: 0 })).toEqual([]);
     expect(later).not.toHaveBeenCalled();
   });
@@ -43,7 +46,13 @@ describe("dropped files", () => {
 describe("dropCovered", () => {
   it("tells whether any catcher would take a drop at a point", () => {
     expect(dropCovered({ x: 5, y: 5 })).toBe(false);
-    stops.push(catchDrops((paths) => paths), catchDrops((paths) => paths, (p) => p.x < 10));
+    stops.push(
+      catchDrops((paths) => paths),
+      catchDrops(
+        (paths) => paths,
+        (p) => p.x < 10,
+      ),
+    );
     expect(dropCovered({ x: 5, y: 5 })).toBe(true);
     expect(dropCovered({ x: 50, y: 5 })).toBe(false);
     expect(dropCovered(null)).toBe(false);

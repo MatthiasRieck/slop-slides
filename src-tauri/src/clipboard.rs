@@ -53,12 +53,9 @@ pub struct Contents {
 /// next to `target` (a deck file or folder). An element copied here wins, then image files,
 /// then an image, then text.
 pub fn paste(contents: Contents, target: &Path) -> Result<Pasted> {
-    if let Some(html) = contents
-        .html
-        .filter(|h| h.trim_start().starts_with(ELEMENT_MARKER))
-    {
+    if let Some(html) = contents.html.as_deref().and_then(copied_element) {
         return Ok(Pasted::Element {
-            html: html.trim_start().to_string(),
+            html: html.to_string(),
         });
     }
     let files: Vec<String> = contents
@@ -89,6 +86,23 @@ pub fn paste(contents: Contents, target: &Path) -> Result<Pasted> {
         Some(text) if !text.trim().is_empty() => Ok(Pasted::Text { text }),
         _ => Ok(Pasted::Nothing),
     }
+}
+
+/// The element copied in the slide editor, from the clipboard's HTML: from the marker on, without
+/// the document the system may have wrapped it in (macOS puts it in `<html>…<body>…</body></html>`).
+fn copied_element(html: &str) -> Option<&str> {
+    let start = html.find(ELEMENT_MARKER)?;
+    // Only at the start, or as the first thing in a wrapping body.
+    let before = html[..start].trim();
+    if !before.is_empty() && !before.ends_with("<body>") {
+        return None;
+    }
+    let element = &html[start..];
+    let element = match element.rfind("</body>") {
+        Some(end) => &element[..end],
+        None => element,
+    };
+    Some(element.trim_end())
 }
 
 fn is_image(path: &Path) -> bool {
@@ -196,6 +210,48 @@ mod tests {
         .unwrap();
         assert_eq!(pasted, Pasted::Element { html });
         assert!(!dir.join("talk/assets").exists());
+    }
+
+    #[test]
+    fn an_element_copied_here_is_found_in_the_document_macos_wraps_it_in() {
+        let dir = workspace();
+        // A shape has no text, so without the element there is nothing to paste.
+        let html =
+            format!("{ELEMENT_MARKER}{{\"slide\":\"a\"}}--><div data-added=\"shape\"></div>");
+        let wrapped = format!(
+            r#"<html><head><meta http-equiv="content-type" content="text/html; charset=utf-8"></head><body>{html}</body></html>"#
+        );
+        let pasted = paste(
+            Contents {
+                html: Some(wrapped),
+                text: Some(String::new()),
+                ..Default::default()
+            },
+            &dir.join("talk/deck.html"),
+        )
+        .unwrap();
+        assert_eq!(pasted, Pasted::Element { html });
+    }
+
+    #[test]
+    fn the_marker_inside_other_html_is_not_an_element() {
+        let dir = workspace();
+        let html = format!("<p>See {ELEMENT_MARKER}{{}}--><b>x</b></p>");
+        let pasted = paste(
+            Contents {
+                html: Some(html),
+                text: Some("See x".into()),
+                ..Default::default()
+            },
+            &dir.join("talk/deck.html"),
+        )
+        .unwrap();
+        assert_eq!(
+            pasted,
+            Pasted::Text {
+                text: "See x".into()
+            }
+        );
     }
 
     #[test]

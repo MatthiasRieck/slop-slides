@@ -121,7 +121,11 @@ describe("Home", () => {
     expect(invoke).toHaveBeenCalledWith("open_workspace", { path: LIBRARY });
     expect(invoke).toHaveBeenCalledWith("create_deck", { title: "Quarterly update", template: null });
     await waitFor(() => expect(useApp.getState().deck).not.toBeNull());
-    expect(useApp.getState().openedFile).toEqual({ path: "talk/deck.html", absolute: `${LIBRARY}/talk/deck.html`, kind: "deck" });
+    expect(useApp.getState().openedFile).toEqual({
+      path: "talk/deck.html",
+      absolute: `${LIBRARY}/talk/deck.html`,
+      kind: "deck",
+    });
   });
 
   it("creates an untitled deck when no title is given", async () => {

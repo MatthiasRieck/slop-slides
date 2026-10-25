@@ -41,7 +41,8 @@ function listTemplates() {
 function templateHtml(id: string): string | null {
   const own = path.join(userTemplates, id, "deck.html");
   const builtin = new URL(`${id}.html`, builtinTemplates).pathname;
-  const file = !id.includes("/") && fs.existsSync(own) ? own : !id.includes("/") && fs.existsSync(builtin) ? builtin : null;
+  const file =
+    !id.includes("/") && fs.existsSync(own) ? own : !id.includes("/") && fs.existsSync(builtin) ? builtin : null;
   if (!file) return null;
   const html = fs.readFileSync(file, "utf8");
   if (html.includes("slopslide:runtime-js")) return html;
@@ -66,7 +67,8 @@ function kindOf(file: string): Kind {
   if (fs.statSync(file).isDirectory()) return "directory";
   if (!/\.html?$/i.test(file)) return "file";
   const html = fs.readFileSync(file, "utf8");
-  if (/slopslide:runtime-|<meta\s+name=["']slopslide-|<main\b[^>]*\bclass=["'][^"']*\bdeck\b/i.test(html)) return "deck";
+  if (/slopslide:runtime-|<meta\s+name=["']slopslide-|<main\b[^>]*\bclass=["'][^"']*\bdeck\b/i.test(html))
+    return "deck";
   if (/class="reveal"|reveal\.js|id="impress"|data-marpit-svg|remark\.create\(/i.test(html)) return "slideshow";
   return "webpage";
 }
@@ -158,9 +160,7 @@ export function browserPreview(): Plugin {
             ...(q.has("edit") ? ["editor.js"] : []),
           ];
           if (names.length > 0) {
-            const scripts = names
-              .map((name) => `<script>\n${asset(name)}</script>\n`)
-              .join("");
+            const scripts = names.map((name) => `<script>\n${asset(name)}</script>\n`).join("");
             const html = fs.readFileSync(file, "utf8");
             const at = html.toLowerCase().lastIndexOf("</body");
             return res.end(at < 0 ? html + scripts : html.slice(0, at) + scripts + html.slice(at));

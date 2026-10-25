@@ -29,6 +29,9 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
       - run: pnpm install --frozen-lockfile
       - name: Run all checks, including Codex protocol and subprocess regressions
         shell: bash

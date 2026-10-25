@@ -1,5 +1,5 @@
-import { StrictMode } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
@@ -31,7 +31,11 @@ beforeEach(() => {
     },
   );
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(24, 30, 1280, 720));
-  useApp.setState({ deck: deckFor(DECK_HTML), error: null, imageExport: { dir: DIR, slides: ["intro", "#2", "outro"] } });
+  useApp.setState({
+    deck: deckFor(DECK_HTML),
+    error: null,
+    imageExport: { dir: DIR, slides: ["intro", "#2", "outro"] },
+  });
 });
 
 afterEach(() => {
@@ -91,7 +95,10 @@ describe("SlideImageExport", () => {
 
   it("shows slides of another size in their own shape, saved at most their canvas width", async () => {
     useApp.setState({
-      deck: { ...deckFor(DECK_HTML), size: { width: 1080, height: 1350, unit: "px", pixelWidth: 1080, pixelHeight: 1350 } },
+      deck: {
+        ...deckFor(DECK_HTML),
+        size: { width: 1080, height: 1350, unit: "px", pixelWidth: 1080, pixelHeight: 1350 },
+      },
       imageExport: { dir: DIR, slides: ["intro"] },
     });
     render(<SlideImageExport />);

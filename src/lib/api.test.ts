@@ -76,18 +76,48 @@ const CASES = [
     { id: "talk", source: "<html>", base: "<old>" },
   ],
   ["importAssets", () => api.importAssets("talk", ["/a.png"]), "import_assets", { id: "talk", paths: ["/a.png"] }],
-  ["saveAsset", () => api.saveAsset("talk", "shot.png", "aGk="), "save_asset", { id: "talk", name: "shot.png", data: "aGk=" }],
-  ["copyToClipboard", () => api.copyToClipboard("<p>Hi</p>", "Hi"), "copy_to_clipboard", { html: "<p>Hi</p>", text: "Hi" }],
+  [
+    "saveAsset",
+    () => api.saveAsset("talk", "shot.png", "aGk="),
+    "save_asset",
+    { id: "talk", name: "shot.png", data: "aGk=" },
+  ],
+  [
+    "copyToClipboard",
+    () => api.copyToClipboard("<p>Hi</p>", "Hi"),
+    "copy_to_clipboard",
+    { html: "<p>Hi</p>", text: "Hi" },
+  ],
   ["pasteFromClipboard", () => api.pasteFromClipboard("talk"), "paste_from_clipboard", { id: "talk" }],
   ["exportDeck", () => api.exportDeck("talk", "/out.html"), "export_deck", { id: "talk", dest: "/out.html" }],
   ["exportPdf", () => api.exportPdf("talk", "/out.pdf"), "export_pdf", { id: "talk", dest: "/out.pdf" }],
   ["lintDeck", () => api.lintDeck("talk"), "lint_deck", { id: "talk" }],
-  ["createImageExportDir", () => api.createImageExportDir("talk", "/out"), "create_image_export_dir", { id: "talk", parent: "/out" }],
+  [
+    "createImageExportDir",
+    () => api.createImageExportDir("talk", "/out"),
+    "create_image_export_dir",
+    { id: "talk", parent: "/out" },
+  ],
   [
     "exportSlideImage",
-    () => api.exportSlideImage("/out/Talk", 2, 9, { x: 0, y: 10, width: 640, height: 360 }, { width: 640, height: 400 }, 1080),
+    () =>
+      api.exportSlideImage(
+        "/out/Talk",
+        2,
+        9,
+        { x: 0, y: 10, width: 640, height: 360 },
+        { width: 640, height: 400 },
+        1080,
+      ),
     "export_slide_image",
-    { dir: "/out/Talk", index: 2, total: 9, rect: { x: 0, y: 10, width: 640, height: 360 }, viewport: { width: 640, height: 400 }, width: 1080 },
+    {
+      dir: "/out/Talk",
+      index: 2,
+      total: 9,
+      rect: { x: 0, y: 10, width: 640, height: 360 },
+      viewport: { width: 640, height: 400 },
+      width: 1080,
+    },
   ],
   [
     "captureSketch",
@@ -101,13 +131,39 @@ const CASES = [
   ["resetChat", () => api.resetChat("talk"), "reset_chat", { id: "talk" }],
   [
     "sendMessage",
-    () => api.sendMessage("talk", "Hi", { provider: "claude", model: "claude-opus-5-5", effort: "high", contextWindow: "1m" }),
+    () =>
+      api.sendMessage("talk", "Hi", {
+        provider: "claude",
+        model: "claude-opus-5-5",
+        effort: "high",
+        contextWindow: "1m",
+      }),
     "send_message",
-    { args: { workspace: "talk", prompt: "Hi", provider: "claude", model: "claude-opus-5-5", effort: "high", contextWindow: "1m", compact: false } },
+    {
+      args: {
+        workspace: "talk",
+        prompt: "Hi",
+        provider: "claude",
+        model: "claude-opus-5-5",
+        effort: "high",
+        contextWindow: "1m",
+        compact: false,
+      },
+    },
   ],
 
-  ["permissionModes", () => api.permissionModes("copilot", "talk"), "permission_modes", { provider: "copilot", id: "talk" }],
-  ["respondApproval", () => api.respondApproval("talk", "request-1", "decline"), "respond_approval", { workspace: "talk", id: "request-1", decision: "decline" }],
+  [
+    "permissionModes",
+    () => api.permissionModes("copilot", "talk"),
+    "permission_modes",
+    { provider: "copilot", id: "talk" },
+  ],
+  [
+    "respondApproval",
+    () => api.respondApproval("talk", "request-1", "decline"),
+    "respond_approval",
+    { workspace: "talk", id: "request-1", decision: "decline" },
+  ],
   ["interruptAgent", () => api.interruptAgent("talk"), "interrupt_agent", { id: "talk" }],
   ["agentRunning", () => api.agentRunning("talk"), "agent_running", { id: "talk" }],
   ["listProviders", () => api.listProviders(), "list_providers", undefined],
@@ -142,9 +198,22 @@ describe("api", () => {
 
   it("sendMessage can ask for a compaction instead of a prompt", async () => {
     invoke.mockResolvedValue(undefined);
-    await api.sendMessage("talk", "/compact", { provider: "copilot", model: "gpt-x", effort: "", contextWindow: null }, true);
+    await api.sendMessage(
+      "talk",
+      "/compact",
+      { provider: "copilot", model: "gpt-x", effort: "", contextWindow: null },
+      true,
+    );
     expect(invoke).toHaveBeenLastCalledWith("send_message", {
-      args: { workspace: "talk", prompt: "/compact", provider: "copilot", model: "gpt-x", effort: "", contextWindow: null, compact: true },
+      args: {
+        workspace: "talk",
+        prompt: "/compact",
+        provider: "copilot",
+        model: "gpt-x",
+        effort: "",
+        contextWindow: null,
+        compact: true,
+      },
     });
   });
 

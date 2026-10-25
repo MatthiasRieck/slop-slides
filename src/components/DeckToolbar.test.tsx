@@ -28,7 +28,18 @@ beforeEach(() => {
   save.mockReset();
   openDialog.mockReset();
   revealItemInDir.mockReset();
-  useApp.setState({ workspace: WORKSPACE, openedFile: OPENED, deck: deckFor(DECK_HTML), view: "slides", sidebarOpen: true, railOpen: true, codeDirty: false, presenting: false, error: null, imageExport: null });
+  useApp.setState({
+    workspace: WORKSPACE,
+    openedFile: OPENED,
+    deck: deckFor(DECK_HTML),
+    view: "slides",
+    sidebarOpen: true,
+    railOpen: true,
+    codeDirty: false,
+    presenting: false,
+    error: null,
+    imageExport: null,
+  });
 });
 
 describe("Slides / HTML toggle", () => {
@@ -147,7 +158,10 @@ describe("deck actions", () => {
     render(<DeckToolbar />);
     await exportAs("HTML file");
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: "Talk.html" }));
-    expect(invoke).toHaveBeenCalledWith("export_deck", { id: "/decks/talk/deck.html", dest: "/Users/me/Desktop/Talk.html" });
+    expect(invoke).toHaveBeenCalledWith("export_deck", {
+      id: "/decks/talk/deck.html",
+      dest: "/Users/me/Desktop/Talk.html",
+    });
     expect(revealItemInDir).toHaveBeenCalledWith("/Users/me/Desktop/Talk.html");
   });
 
@@ -205,7 +219,10 @@ describe("deck actions", () => {
     render(<DeckToolbar />);
     await exportAs("PNG images");
     expect(openDialog).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
-    expect(invoke).toHaveBeenCalledWith("create_image_export_dir", { id: "/decks/talk/deck.html", parent: "/Users/me/Desktop" });
+    expect(invoke).toHaveBeenCalledWith("create_image_export_dir", {
+      id: "/decks/talk/deck.html",
+      parent: "/Users/me/Desktop",
+    });
     expect(useApp.getState().imageExport).toEqual({ dir: "/Users/me/Desktop/Talk", slides: ["intro", "#2", "outro"] });
     expect(screen.queryByRole("menu")).toBeNull();
   });
@@ -217,7 +234,10 @@ describe("deck actions", () => {
     expect(save).toHaveBeenCalledWith(
       expect.objectContaining({ defaultPath: "Talk.pdf", filters: [{ name: "PDF document", extensions: ["pdf"] }] }),
     );
-    expect(invoke).toHaveBeenCalledWith("export_pdf", { id: "/decks/talk/deck.html", dest: "/Users/me/Desktop/Talk.pdf" });
+    expect(invoke).toHaveBeenCalledWith("export_pdf", {
+      id: "/decks/talk/deck.html",
+      dest: "/Users/me/Desktop/Talk.pdf",
+    });
     expect(revealItemInDir).toHaveBeenCalledWith("/Users/me/Desktop/Talk.pdf");
     expect(useApp.getState().imageExport).toBeNull();
     expect(screen.queryByRole("menu")).toBeNull();
@@ -331,7 +351,8 @@ describe("lint status", () => {
   });
 
   it("hands slide id style errors to the agent without editing the deck", () => {
-    const message = "CSS targets slide id `intro`; add a reusable layout class and replace its id-based selectors, preserving its appearance.";
+    const message =
+      "CSS targets slide id `intro`; add a reusable layout class and replace its id-based selectors, preserving its appearance.";
     const deck = deckFor(DECK_HTML);
     useApp.setState({
       deck,
@@ -345,7 +366,7 @@ describe("lint status", () => {
     fireEvent.click(button);
 
     const prompt = useApp.getState().composerFill!.text;
-    expect(prompt).toContain("- line 337 error [slide-id-style] (slide `intro`): " + message);
+    expect(prompt).toContain(`- line 337 error [slide-id-style] (slide \`intro\`): ${message}`);
     expect(prompt).toContain("without changing how the slides look");
     expect(prompt).toContain("run the lint_deck tool to verify");
     expect(useApp.getState().deck).toBe(deck);
@@ -371,7 +392,9 @@ describe("deck toolbar", () => {
     useApp.setState({ lint: [] });
     render(<DeckToolbar />);
     const toolbar = screen.getByRole("toolbar", { name: "Deck" });
-    const labels = Array.from(toolbar.querySelectorAll("button")).map((b) => b.getAttribute("aria-label") ?? b.textContent);
+    const labels = Array.from(toolbar.querySelectorAll("button")).map(
+      (b) => b.getAttribute("aria-label") ?? b.textContent,
+    );
     expect(labels).toEqual(["Slide size", "Lint OK", "Slides", "HTML", "Export", "Present"]);
   });
 });

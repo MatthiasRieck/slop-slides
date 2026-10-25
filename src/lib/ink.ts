@@ -41,7 +41,8 @@ export function isDot(points: readonly [number, number][]): boolean {
  */
 export function strokePath(points: readonly [number, number][]): string {
   if (points.length < 3) return points.map(([x, y], i) => `${i ? "L" : "M"}${x} ${y}`).join("");
-  const halfway = (i: number) => `${px((points[i]![0] + points[i + 1]![0]) / 2)} ${px((points[i]![1] + points[i + 1]![1]) / 2)}`;
+  const halfway = (i: number) =>
+    `${px((points[i]![0] + points[i + 1]![0]) / 2)} ${px((points[i]![1] + points[i + 1]![1]) / 2)}`;
   const [[x0, y0], [xn, yn]] = [points[0]!, points[points.length - 1]!];
   let d = `M${x0} ${y0}L${halfway(0)}`;
   for (let i = 1; i < points.length - 1; i++) {
@@ -160,7 +161,12 @@ export interface TrailSegment {
  * the same smooth curve `strokePath` draws, cut where its curves meet so each piece can thin
  * on its own, by how much is left of the newer point after it.
  */
-export function trailSegments(trail: readonly TrailPoint[], now: number, width: number, height: number): TrailSegment[] {
+export function trailSegments(
+  trail: readonly TrailPoint[],
+  now: number,
+  width: number,
+  height: number,
+): TrailSegment[] {
   const at = (i: number) => [trail[i]!.x * width, trail[i]!.y * height] as const;
   const mid = (i: number) => {
     const [[ax, ay], [bx, by]] = [at(i - 1), at(i)];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-
+import { fakeCanvas2D } from "../test/fakeCanvas";
 import {
   INK_STYLE,
   inkBounds,
@@ -9,20 +9,19 @@ import {
   paintTrails,
   pruneTrails,
   SLIDE_SIZE,
+  type Stroke,
   strokePath,
   TOOL_KEYS,
-  toFraction,
-  toPixels,
   TRAIL_FADE_MS,
   TRAIL_HOLD_MS,
+  type TrailPoint,
+  toFraction,
+  toPixels,
   trailFade,
   trailSegments,
   visibleArea,
   zoomBox,
-  type Stroke,
-  type TrailPoint,
 } from "./ink";
-import { fakeCanvas2D } from "../test/fakeCanvas";
 
 describe("strokePath", () => {
   it("draws a straight line between two points", () => {
@@ -180,7 +179,12 @@ describe("inkBounds", () => {
       ]),
     ];
     const pad = INK_STYLE.pen.width;
-    expect(inkBounds(strokes, { width: 1080, height: 1350 })).toEqual({ left: 540 - pad, top: 675 - pad, right: 1080, bottom: 1350 });
+    expect(inkBounds(strokes, { width: 1080, height: 1350 })).toEqual({
+      left: 540 - pad,
+      top: 675 - pad,
+      right: 1080,
+      bottom: 1350,
+    });
   });
 });
 
@@ -276,7 +280,12 @@ describe("visibleArea", () => {
   const viewport = { width: 800, height: 600 };
 
   it("is the whole layer when it fits on screen", () => {
-    expect(visibleArea({ left: 50, top: 20, width: 400, height: 300 }, viewport)).toEqual({ x: 0, y: 0, width: 400, height: 300 });
+    expect(visibleArea({ left: 50, top: 20, width: 400, height: 300 }, viewport)).toEqual({
+      x: 0,
+      y: 0,
+      width: 400,
+      height: 300,
+    });
   });
 
   it("is only the on-screen part of a zoomed layer, in the layer's pixels", () => {

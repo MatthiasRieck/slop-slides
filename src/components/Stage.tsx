@@ -1,18 +1,40 @@
-import { AlertTriangle, Check, ChevronLeft, ChevronRight, LayoutTemplate, Lock, Maximize, Pencil, Redo2, Sparkles, Trash2, Undo2, Wand2, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  LayoutTemplate,
+  Lock,
+  Maximize,
+  Pencil,
+  Redo2,
+  Sparkles,
+  Trash2,
+  Undo2,
+  Wand2,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-
+import { api, errorMessage, type Slide } from "../lib/api";
+import { catchDrops, type DropPoint, imageSize, isImage } from "../lib/drop";
+import {
+  EDIT_TOOL_KEYS,
+  type EditSelection,
+  type EditStyle,
+  type EditTool,
+  familyOf,
+  familyOfKind,
+  parseSelection,
+} from "../lib/editTools";
+import { type Stroke, zoomBox } from "../lib/ink";
+import { type Pixels, pixelsOf } from "../lib/slideSize";
+import { cn, deckFileUrl } from "../lib/utils";
 import { SKETCH_TARGET_ATTR, useApp } from "../store";
 import { EditToolbar } from "./EditToolbar";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { SketchToolbar } from "./SketchToolbar";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { LayoutPicker, Popover } from "./Templates";
-import { api, errorMessage, type Slide } from "../lib/api";
-import { catchDrops, imageSize, isImage, type DropPoint } from "../lib/drop";
-import { EDIT_TOOL_KEYS, familyOf, familyOfKind, parseSelection, type EditSelection, type EditStyle, type EditTool } from "../lib/editTools";
-import { zoomBox, type Stroke } from "../lib/ink";
-import { pixelsOf, type Pixels } from "../lib/slideSize";
-import { cn, deckFileUrl } from "../lib/utils";
 
 /** The stage area's padding (Tailwind p-8), which the pasteboard covers too. */
 const AREA_PADDING = 32;
@@ -44,7 +66,10 @@ export function Stage() {
   const [arena, setArena] = useState<{ width: number; height: number } | undefined>();
   // The slide as large as fits the area, in its own shape.
   const width = arena
-    ? Math.max(0, Math.min(arena.width - 2 * AREA_PADDING, ((arena.height - 2 * AREA_PADDING) * canvas.width) / canvas.height))
+    ? Math.max(
+        0,
+        Math.min(arena.width - 2 * AREA_PADDING, ((arena.height - 2 * AREA_PADDING) * canvas.width) / canvas.height),
+      )
     : 0;
 
   useLayoutEffect(() => {
@@ -113,11 +138,20 @@ export function Stage() {
         </div>
       )}
       {/* Clips the ink, which zooms past the slide along with the pasteboard, so it stays off the bar below. */}
-      <div ref={areaRef} data-testid="stage-area" className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-8">
+      <div
+        ref={areaRef}
+        data-testid="stage-area"
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-8"
+      >
         {slide ? (
           // The slide's frame (outline, shadow, the edit-mode ring) is drawn in the preview, so it
           // pans and zooms with the slide.
-          <div style={{ width }} {...{ [SKETCH_TARGET_ATTR]: "" }} data-editing={editing || undefined} className="relative">
+          <div
+            style={{ width }}
+            {...{ [SKETCH_TARGET_ATTR]: "" }}
+            data-editing={editing || undefined}
+            className="relative"
+          >
             <CurrentSlide
               deckId={deck.id}
               slide={slide}
@@ -168,7 +202,12 @@ export function Stage() {
                 </button>
                 <div className="mx-1 h-4 w-px bg-border" />
                 {editing ? (
-                  <EditBar canUndo={canUndo} canRedo={canRedo} canDelete={!!editFrames.selection} onDelete={editFrames.deleteSelection} />
+                  <EditBar
+                    canUndo={canUndo}
+                    canRedo={canRedo}
+                    canDelete={!!editFrames.selection}
+                    onDelete={editFrames.deleteSelection}
+                  />
                 ) : (
                   <SketchToolbar annotations={annotations} />
                 )}
@@ -284,14 +323,29 @@ function ChangeLayoutButton(props: { disabled: boolean }) {
 
 /** Shown in place of the sketch tools while editing: history, deleting, and leaving edit mode. */
 function EditBar(props: { canUndo: boolean; canRedo: boolean; canDelete: boolean; onDelete: () => void }) {
-  const icon = "rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4";
+  const icon =
+    "rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4";
   const app = useApp.getState;
   return (
     <div className="flex min-w-0 items-center gap-0.5">
-      <button type="button" aria-label="Undo" title="Undo (⌘Z)" disabled={!props.canUndo} onClick={() => void app().undoSlideEdit()} className={icon}>
+      <button
+        type="button"
+        aria-label="Undo"
+        title="Undo (⌘Z)"
+        disabled={!props.canUndo}
+        onClick={() => void app().undoSlideEdit()}
+        className={icon}
+      >
         <Undo2 />
       </button>
-      <button type="button" aria-label="Redo" title="Redo (⇧⌘Z)" disabled={!props.canRedo} onClick={() => void app().redoSlideEdit()} className={icon}>
+      <button
+        type="button"
+        aria-label="Redo"
+        title="Redo (⇧⌘Z)"
+        disabled={!props.canRedo}
+        onClick={() => void app().redoSlideEdit()}
+        className={icon}
+      >
         <Redo2 />
       </button>
       <button
@@ -364,7 +418,11 @@ function canvasColors(canvas: HTMLElement) {
     probe.style.color = `var(${variable})`;
     return getComputedStyle(probe).color;
   };
-  const colors = { color: getComputedStyle(panel).backgroundColor, accent: resolve("--primary"), border: resolve("--border") };
+  const colors = {
+    color: getComputedStyle(panel).backgroundColor,
+    accent: resolve("--primary"),
+    border: resolve("--border"),
+  };
   probe.remove();
   return colors;
 }
@@ -398,6 +456,7 @@ function usePasteboard(areaRef: React.RefObject<HTMLDivElement | null>) {
   }, [areaRef]);
 
   const current = useApp((s) => s.selected);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a different slide starts centered
   useEffect(() => {
     setView(null);
   }, [current]);
@@ -453,13 +512,16 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
         if (pasted.kind === "element") {
           loaded.contentWindow.postMessage({ type: "slop:edit-paste", html: pasted.html }, "*");
         } else if (pasted.kind === "text") {
-          loaded.contentWindow.postMessage({ type: "slop:edit-paste-text", text: pasted.text, style: now.editStyles.text }, "*");
+          loaded.contentWindow.postMessage(
+            { type: "slop:edit-paste-text", text: pasted.text, style: now.editStyles.text },
+            "*",
+          );
         } else if (pasted.kind === "images") {
-          const images = await Promise.all(pasted.images.map(async (src) => ({ src, ...(await imageSize(deckFileUrl(deck.id, src))) })));
-          // In the middle of the view, in the editor's own pixels.
-          const x = loaded.clientWidth / 2;
-          const y = loaded.clientHeight / 2;
-          loaded.contentWindow.postMessage({ type: "slop:edit-insert-images", images, x, y }, "*");
+          const images = await Promise.all(
+            pasted.images.map(async (src) => ({ src, ...(await imageSize(deckFileUrl(deck.id, src))) })),
+          );
+          // The editor puts them where the pointer is, or in the middle of the view.
+          loaded.contentWindow.postMessage({ type: "slop:edit-paste-images", images }, "*");
         }
       } catch (error) {
         useApp.getState().setError(errorMessage(error));
@@ -497,9 +559,13 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
         // The editor put its tool away by itself (after adding a shape, or on Escape).
         if (data.tool in TOOL_NAMES) useApp.getState().setEditTool(data.tool as EditTool);
       } else if (data?.type === "slop:edit-copied" && data.slide === selected && typeof data.html === "string") {
-        api.copyToClipboard(data.html, String(data.text ?? "")).catch((error) => useApp.getState().setError(errorMessage(error)));
+        api
+          .copyToClipboard(data.html, String(data.text ?? ""))
+          .catch((error) => useApp.getState().setError(errorMessage(error)));
       } else if (data?.type === "slop:key") {
-        if (data.mod) runHistoryKey(String(data.key), Boolean(data.shift)) || runClipboardKey(String(data.key), Boolean(data.shift), false);
+        if (data.mod)
+          runHistoryKey(String(data.key), Boolean(data.shift)) ||
+            runClipboardKey(String(data.key), Boolean(data.shift), false);
         else runEditKey(String(data.key));
       }
     };
@@ -507,7 +573,8 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
       const target = event.target as HTMLElement | null;
       if (!useApp.getState().editing || target?.closest("input, textarea, select, [contenteditable]")) return;
       if (event.metaKey || event.ctrlKey) {
-        if (runHistoryKey(event.key, event.shiftKey) || runClipboardKey(event.key, event.shiftKey, true)) event.preventDefault();
+        if (runHistoryKey(event.key, event.shiftKey) || runClipboardKey(event.key, event.shiftKey, true))
+          event.preventDefault();
       } else if (!event.altKey && runEditKey(event.key, true)) {
         event.preventDefault();
       }
@@ -526,7 +593,9 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
     const insert = async (deckId: string, slide: string, paths: string[], point: DropPoint) => {
       try {
         const refs = await api.importAssets(deckId, paths);
-        const images = await Promise.all(refs.map(async (src) => ({ src, ...(await imageSize(deckFileUrl(deckId, src))) })));
+        const images = await Promise.all(
+          refs.map(async (src) => ({ src, ...(await imageSize(deckFileUrl(deckId, src))) })),
+        );
         const { editing, selected } = useApp.getState();
         const loaded = frame.current;
         if (!editing || selected !== slide || !loaded?.contentWindow || images.length === 0) return;
@@ -544,7 +613,8 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
     const covers = (point: DropPoint) => {
       const { deck, editing, selected } = useApp.getState();
       const area = areaRef.current?.getBoundingClientRect();
-      const inside = !!area && point.x >= area.left && point.x <= area.right && point.y >= area.top && point.y <= area.bottom;
+      const inside =
+        !!area && point.x >= area.left && point.x <= area.right && point.y >= area.top && point.y <= area.bottom;
       return !!deck && editing && !!selected && !!frame.current && inside;
     };
     return catchDrops((paths, point) => {
@@ -598,7 +668,14 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
 }
 
 const NO_OVERFLOW: string[] = [];
-const TOOL_NAMES: Record<EditTool, true> = { select: true, text: true, rect: true, rounded: true, ellipse: true, draw: true };
+const TOOL_NAMES: Record<EditTool, true> = {
+  select: true,
+  text: true,
+  rect: true,
+  rounded: true,
+  ellipse: true,
+  draw: true,
+};
 
 /** Picks the editor's tool, with the style of what it adds. */
 function toolMessage(tool: EditTool, styles: Record<string, EditStyle>) {
@@ -644,8 +721,8 @@ function EmptyStage() {
       </div>
       <h2 className="text-base font-medium">Start with a conversation</h2>
       <p className="text-sm leading-relaxed text-muted-foreground">
-        Tell the agent what the presentation is about, who it is for, and how long it should be.
-        Slides appear here as they are written.
+        Tell the agent what the presentation is about, who it is for, and how long it should be. Slides appear here as
+        they are written.
       </p>
     </div>
   );

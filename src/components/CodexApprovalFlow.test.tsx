@@ -4,24 +4,51 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const invoke = vi.fn();
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async (name: string, handler: (event: { payload: unknown }) => void) => {
-  listeners.set(name, handler); return () => listeners.delete(name);
-}) }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async (name: string, handler: (event: { payload: unknown }) => void) => {
+    listeners.set(name, handler);
+    return () => listeners.delete(name);
+  }),
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(), open: vi.fn() }));
 vi.mock("@tauri-apps/api/webview", () => ({ getCurrentWebview: () => ({ onDragDropEvent: async () => () => {} }) }));
 
 import type { AgentEvent } from "../lib/api";
-import type { ApprovalDecision } from "../lib/permissions";
 import type { ProviderInfo } from "../lib/models";
+import type { ApprovalDecision } from "../lib/permissions";
 import { initEventBridge, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ChatPanel } from "./ChatPanel";
 
-const providers: ProviderInfo[] = [{ id: "codex", installed: true, path: "/mock/codex", error: null,
-  models: [{ id: "test", label: "Test model", isDefault: true, efforts: ["low"], defaultEffort: "low", contextWindows: [], defaultContextWindow: null }] }];
-const approval = { id: "mcp-approval", title: "Use an MCP tool", reason: "Allow lint_deck?",
-  details: '{"server":"slopslide"}', acceptLabel: "Allow once", decisions: ["accept", "acceptForSession", "decline"] as ApprovalDecision[] };
-const emit = (event: AgentEvent, workspace = "/decks/talk") => act(() => listeners.get("agent-event")!({ payload: { workspace, event } }));
+const providers: ProviderInfo[] = [
+  {
+    id: "codex",
+    installed: true,
+    path: "/mock/codex",
+    error: null,
+    models: [
+      {
+        id: "test",
+        label: "Test model",
+        isDefault: true,
+        efforts: ["low"],
+        defaultEffort: "low",
+        contextWindows: [],
+        defaultContextWindow: null,
+      },
+    ],
+  },
+];
+const approval = {
+  id: "mcp-approval",
+  title: "Use an MCP tool",
+  reason: "Allow lint_deck?",
+  details: '{"server":"slopslide"}',
+  acceptLabel: "Allow once",
+  decisions: ["accept", "acceptForSession", "decline"] as ApprovalDecision[],
+};
+const emit = (event: AgentEvent, workspace = "/decks/talk") =>
+  act(() => listeners.get("agent-event")!({ payload: { workspace, event } }));
 const calls = (command: string) => invoke.mock.calls.filter(([name]) => name === command);
 
 beforeEach(async () => {
@@ -30,9 +57,20 @@ beforeEach(async () => {
     if (command === "list_providers") return providers;
     if (command === "permission_modes") return ["ask", "fullAccess", "custom"];
   });
-  useApp.setState({ workspace: { path: "/decks/talk", name: "talk" }, deck: deckFor(DECK_HTML), selected: "intro", messages: [], running: false,
-    permissionModes: { claude: "ask", codex: "ask", copilot: "ask" }, providers, selection: { provider: "codex", model: "test", label: "Test model", effort: "low", contextWindow: null },
-    sketches: {}, sketchesSent: {}, favoriteModels: [], error: null });
+  useApp.setState({
+    workspace: { path: "/decks/talk", name: "talk" },
+    deck: deckFor(DECK_HTML),
+    selected: "intro",
+    messages: [],
+    running: false,
+    permissionModes: { claude: "ask", codex: "ask", copilot: "ask" },
+    providers,
+    selection: { provider: "codex", model: "test", label: "Test model", effort: "low", contextWindow: null },
+    sketches: {},
+    sketchesSent: {},
+    favoriteModels: [],
+    error: null,
+  });
   await initEventBridge();
   render(<ChatPanel />);
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Please lint the deck" } });
@@ -43,7 +81,9 @@ beforeEach(async () => {
 
 describe("Codex approval event → store → chat → IPC", () => {
   it.each([
-    ["Allow once", "accept"], ["Allow for session", "acceptForSession"], ["Deny", "decline"],
+    ["Allow once", "accept"],
+    ["Allow for session", "acceptForSession"],
+    ["Deny", "decline"],
   ] as const)("routes %s and persists a resolved card", async (label, decision) => {
     emit({ type: "approvalRequested", approval });
     fireEvent.click(screen.getByRole("button", { name: label }));

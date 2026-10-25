@@ -1,5 +1,10 @@
 /** `draft` with `text` put in place of its selection, spaced from the words around it. */
-export function insertTranscript(draft: string, text: string, start = draft.length, end = start): { draft: string; caret: number } {
+export function insertTranscript(
+  draft: string,
+  text: string,
+  start = draft.length,
+  end = start,
+): { draft: string; caret: number } {
   const before = draft.slice(0, start);
   const after = draft.slice(end);
   const lead = before && !/\s$/.test(before) ? " " : "";

@@ -101,12 +101,13 @@ export function VoiceInput(props: DictationHandlers) {
   useEffect(() => {
     if (phase !== "recording" && phase !== "downloading") return;
     let disposed = false;
-    const unlisten = phase === "recording"
-      ? [
-          listen<number>("voice-level", (e) => !disposed && setLevel(e.payload)),
-          listen<string>("voice-partial", (e) => !disposed && handlers.current.onPartial(e.payload)),
-        ]
-      : [listen<VoiceDownloadProgress>("voice-download", (e) => !disposed && setProgress(e.payload))];
+    const unlisten =
+      phase === "recording"
+        ? [
+            listen<number>("voice-level", (e) => !disposed && setLevel(e.payload)),
+            listen<string>("voice-partial", (e) => !disposed && handlers.current.onPartial(e.payload)),
+          ]
+        : [listen<VoiceDownloadProgress>("voice-download", (e) => !disposed && setProgress(e.payload))];
     return () => {
       disposed = true;
       for (const u of unlisten) void u.then((fn) => fn());
@@ -183,10 +184,18 @@ export function VoiceInput(props: DictationHandlers) {
                 downloaded once to ~/.slopslides/models.
               </p>
               <div className="mt-3 flex justify-end gap-1.5">
-                <button type="button" onClick={closeOffer} className="rounded-md px-2 py-1 text-muted-foreground hover:bg-accent hover:text-foreground">
+                <button
+                  type="button"
+                  onClick={closeOffer}
+                  className="rounded-md px-2 py-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
                   Not now
                 </button>
-                <button type="button" onClick={() => void download()} className="rounded-md bg-primary px-2 py-1 text-primary-foreground hover:opacity-90">
+                <button
+                  type="button"
+                  onClick={() => void download()}
+                  className="rounded-md bg-primary px-2 py-1 text-primary-foreground hover:opacity-90"
+                >
                   Download
                 </button>
               </div>

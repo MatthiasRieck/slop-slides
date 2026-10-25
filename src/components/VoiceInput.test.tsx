@@ -112,6 +112,9 @@ describe("VoiceInput", () => {
     render(<VoiceInput {...h} />);
     fireEvent.click(micButton());
     await waitFor(() => expect(micButton().getAttribute("aria-pressed")).toBe("true"));
+    // The Escape handler is attached in the same effect flush as the recording listeners,
+    // which can land after the commit that shows the pressed button.
+    await waitFor(() => expect(listeners.has("voice-partial")).toBe(true));
     fireEvent.keyDown(document, { key: "Escape" });
     expect(commands()).toContain("cancel_recording");
     expect(commands()).not.toContain("stop_recording");

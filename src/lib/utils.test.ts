@@ -143,3 +143,23 @@ describe("relativeTime", () => {
     expect(relativeTime(now + 5 * MIN)).toBe("just now");
   });
 });
+
+describe("workspace file URLs (on a device)", () => {
+  afterEach(() => {
+    delete window.__SLOPSLIDE_REMOTE__;
+  });
+
+  it("serves workspace files from the desktop app's server, under its token", async () => {
+    window.__SLOPSLIDE_REMOTE__ = { base: "/s/tok" };
+    vi.resetModules();
+    const utils = await import("./utils");
+    expect(utils.deckFileUrl("/decks/my talk/deck.html", "assets/a b.png")).toBe(
+      "/s/tok/deck/.file/decks/my%20talk/assets/a%20b.png",
+    );
+    expect(utils.slideUrl("/decks/talk/deck.html", "intro", "v1")).toBe(
+      "/s/tok/deck/.file/decks/talk/deck.html?embed&slide=intro&v=v1",
+    );
+    // An iPad reports itself as a Mac, but its browser has no traffic lights to make room for.
+    expect(utils.hasTrafficLights).toBe(false);
+  });
+});

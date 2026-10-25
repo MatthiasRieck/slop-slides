@@ -53,8 +53,9 @@ describe("Codex approval event → store → chat → IPC", () => {
     emit({ type: "finished", interrupted: false });
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
     expect(useApp.getState().running).toBe(false);
-    await waitFor(() => expect(calls("save_chat")).toHaveLength(1));
-    const saved = calls("save_chat")[0]![1].chat;
+    // Saved as the turn starts (so other devices show the message), then once it is done.
+    await waitFor(() => expect(calls("save_chat")).toHaveLength(2));
+    const saved = calls("save_chat").at(-1)![1].chat;
     expect(saved.at(-1).parts).toContainEqual({ kind: "approval", approval, status: "resolved" });
   });
 

@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, ChevronDown, Code2, FileCode2, FileText, I
 import { useEffect, useRef, useState } from "react";
 
 import { api, errorMessage, type Deck } from "../lib/api";
+import { exportUrl, isRemote } from "../lib/platform";
 import { basename, cn } from "../lib/utils";
 import { lintFixPrompt, useApp, type StageView } from "../store";
 import { SlideSizeButton } from "./SlideSize";
@@ -45,6 +46,14 @@ function DeckTools({ deck }: { deck: Deck }) {
   const fileName = deck.title.replace(/[\\/:*?"<>|]+/g, "").trim() || "presentation";
 
   const exportDeck = async () => {
+    if (isRemote) {
+      // The browser downloads what the desktop app exports.
+      const link = document.createElement("a");
+      link.href = exportUrl(deck.id);
+      link.download = "";
+      link.click();
+      return;
+    }
     const dest = await save({
       title: "Export presentation",
       defaultPath: `${fileName}.html`,
@@ -113,8 +122,9 @@ function DeckTools({ deck }: { deck: Deck }) {
         disabled={deck.slides.length === 0 || exporting}
         busy={exporting}
         onHtml={() => void exportDeck()}
-        onPdf={() => void exportPdf()}
-        onImages={() => void exportImages()}
+        // PDFs are printed and slide images screenshot by the window, so only it can save them.
+        onPdf={isRemote ? undefined : () => void exportPdf()}
+        onImages={isRemote ? undefined : () => void exportImages()}
       />
       <button
         type="button"
@@ -130,7 +140,7 @@ function DeckTools({ deck }: { deck: Deck }) {
 }
 
 /** The Export button and its choices: one shareable HTML file, a PDF, or a PNG per slide. */
-function ExportMenu(props: { disabled: boolean; busy: boolean; onHtml: () => void; onPdf: () => void; onImages: () => void }) {
+function ExportMenu(props: { disabled: boolean; busy: boolean; onHtml: () => void; onPdf?: () => void; onImages?: () => void }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -175,8 +185,12 @@ function ExportMenu(props: { disabled: boolean; busy: boolean; onHtml: () => voi
           className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card p-1 shadow-lg"
         >
           <ExportItem icon={FileCode2} label="HTML file" hint="One self-contained file to share" onClick={choose(props.onHtml)} />
-          <ExportItem icon={FileText} label="PDF" hint="One page per slide, for printing or sharing" onClick={choose(props.onPdf)} />
-          <ExportItem icon={Images} label="PNG images" hint="One image per slide, in a new folder" onClick={choose(props.onImages)} />
+          {props.onPdf && (
+            <ExportItem icon={FileText} label="PDF" hint="One page per slide, for printing or sharing" onClick={choose(props.onPdf)} />
+          )}
+          {props.onImages && (
+            <ExportItem icon={Images} label="PNG images" hint="One image per slide, in a new folder" onClick={choose(props.onImages)} />
+          )}
         </div>
       )}
     </div>

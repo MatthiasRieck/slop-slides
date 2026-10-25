@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
 const openDialog = vi.fn();
@@ -152,5 +152,51 @@ describe("Home", () => {
     fireEvent.change(screen.getByPlaceholderText(/Deck title/), { target: { value: "Board" } });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: /New deck/ })));
     expect(invoke).toHaveBeenCalledWith("create_deck", { title: "Board", template: "swiss" });
+  });
+});
+
+describe("Home on a device", () => {
+  let current: { path: string; name: string } | null;
+
+  /** Home as a phone or tablet gets it, its commands going over HTTP to the window's backend. */
+  async function renderOnDevice() {
+    window.__SLOPSLIDE_REMOTE__ = { base: "/s/tok" };
+    vi.stubGlobal("fetch", async (url: string, init: { body: string }) => {
+      const command = url.split("/api/")[1]!;
+      const result = command === "current_workspace" ? current : await invoke(command, JSON.parse(init.body));
+      return { ok: true, status: 200, text: async () => (result === undefined ? "" : JSON.stringify(result)) };
+    });
+    vi.stubGlobal("EventSource", class {});
+    vi.resetModules();
+    const store = await import("../store");
+    const { Home: DeviceHome } = await import("./Home");
+    store.useApp.setState({ workspace: null, deck: null, error: null });
+    render(<DeviceHome />);
+    return store.useApp;
+  }
+
+  afterEach(() => {
+    delete window.__SLOPSLIDE_REMOTE__;
+    vi.unstubAllGlobals();
+  });
+
+  it("opens the folder the window has open", async () => {
+    current = { path: "/Users/me/talks", name: "talks" };
+    const deviceApp = await renderOnDevice();
+    await waitFor(() => expect(deviceApp.getState().workspace).toEqual(current));
+    expect(invoke).toHaveBeenCalledWith("open_workspace", { path: "/Users/me/talks" });
+    // A device has no folder dialog, recent folders or library of its own.
+    expect(openDialog).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalledWith("recent_workspaces", expect.anything());
+  });
+
+  it("asks for a folder to be opened on the computer, and tries again", async () => {
+    current = null;
+    const deviceApp = await renderOnDevice();
+    await screen.findByText(/Open a folder in SlopSlide on your computer/);
+    expect(screen.queryByRole("button", { name: /Open folder/ })).toBeNull();
+    current = { path: "/Users/me/talks", name: "talks" };
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Try again" })));
+    await waitFor(() => expect(deviceApp.getState().workspace).toEqual(current));
   });
 });

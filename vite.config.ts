@@ -8,6 +8,8 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://v2.tauri.app/start/frontend/vite/
 export default defineConfig({
+  // Relative asset URLs: phones and tablets load the app from /s/<token>/ (src-tauri/src/remote.rs).
+  base: "./",
   plugins: [react(), tailwindcss(), browserPreview()],
   clearScreen: false,
   server: {

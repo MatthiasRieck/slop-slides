@@ -1,9 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { Slide } from "../lib/api";
+import { isRemote } from "../lib/platform";
 import { pixelsOf, type Pixels } from "../lib/slideSize";
-import { isPasteboardUrl, slideUrl } from "../lib/utils";
+import { cn, isPasteboardUrl, slideUrl } from "../lib/utils";
 import { useApp } from "../store";
+
+/**
+ * The pasteboard's largest size, in slides: a slide squeezed small (e.g. on a phone) would
+ * otherwise get a preview page tens of thousands of px across, which iOS kills the page over.
+ */
+export const MAX_ARENA_SLIDES = 3;
 
 interface SlideFrameProps {
   deckId: string;
@@ -12,6 +19,8 @@ interface SlideFrameProps {
   version: string;
   /** Thumbnails render the final animation frame and ignore pointer input. */
   thumbnail?: boolean;
+  /** Renders the final frame of every animation and transition, so slides show up at once. */
+  still?: boolean;
   /** Loads the slide editor (final animation frame, editable); changing the key reloads it. */
   editKey?: string;
   /**
@@ -32,9 +41,20 @@ interface SlideFrameProps {
  * slide's canvas, scaled to fill its container (which takes the slide's shape). When the slide changes, the new version loads behind the
  * current one and swaps in once painted, so edits stream in without white flashes.
  */
-export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena, className, onFrameReady, url, size: canvas = pixelsOf(null) }: SlideFrameProps) {
+export function SlideFrame(props: SlideFrameProps) {
+  // Every preview is a whole page of its own; phones and tablets kill the app's page when it
+  // holds a dozen of them (one per thumbnail), so there thumbnails are plain placeholders.
+  if (isRemote && props.thumbnail) return <ThumbnailPlaceholder size={props.size ?? pixelsOf(null)} className={props.className} />;
+  return <LiveSlideFrame {...props} />;
+}
+
+function ThumbnailPlaceholder({ size, className }: { size: Pixels; className?: string }) {
+  return <div data-testid="thumbnail-placeholder" className={cn("bg-muted", className)} style={{ aspectRatio: `${size.width} / ${size.height}` }} />;
+}
+
+function LiveSlideFrame({ deckId, slideId, version, thumbnail, still, editKey, arena, className, onFrameReady, url, size: canvas = pixelsOf(null) }: SlideFrameProps) {
   const { width: stageW, height: stageH } = canvas;
-  const src = url ?? slideUrl(deckId, slideId, version, thumbnail || editKey !== undefined, editKey, arena !== undefined && !thumbnail);
+  const src = url ?? slideUrl(deckId, slideId, version, thumbnail || still || editKey !== undefined, editKey, arena !== undefined && !thumbnail);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0);
@@ -68,7 +88,12 @@ export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena
   const slideW = stageW * scale;
   const slideH = stageH * scale;
   const sizeFor = (url: string) =>
-    isPasteboardUrl(url) && arena ? { w: Math.max(arena.width, slideW), h: Math.max(arena.height, slideH) } : { w: slideW, h: slideH };
+    isPasteboardUrl(url) && arena
+      ? {
+          w: Math.min(Math.max(arena.width, slideW), MAX_ARENA_SLIDES * slideW),
+          h: Math.min(Math.max(arena.height, slideH), MAX_ARENA_SLIDES * slideH),
+        }
+      : { w: slideW, h: slideH };
   const bleeds = frames.some(isPasteboardUrl);
 
   return (
@@ -86,6 +111,11 @@ export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena
       {scale > 0 &&
         frames.map((url) => {
           const size = sizeFor(url);
+          // iOS draws a slide's page at its own size, however small it is shown: a 1920×1080 page
+          // scaled down costs a phone ~75 MB, and many times that once zoomed in, so the page is
+          // killed. On a device the page is the size it is shown and the deck's player fits the
+          // slide into it. The pasteboard (and the editor on it) needs the slide at full size.
+          const fitted = isRemote && !isPasteboardUrl(url);
           return (
             <iframe
               key={url}
@@ -104,11 +134,11 @@ export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena
                 position: "absolute",
                 left: (slideW - size.w) / 2,
                 top: (slideH - size.h) / 2,
-                width: size.w / scale,
-                height: size.h / scale,
+                width: fitted ? size.w : size.w / scale,
+                height: fitted ? size.h : size.h / scale,
                 border: 0,
                 transformOrigin: "0 0",
-                transform: `scale(${scale})`,
+                transform: fitted ? undefined : `scale(${scale})`,
                 pointerEvents: thumbnail ? "none" : "auto",
                 visibility: url === shown ? "visible" : "hidden",
               }}

@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
 const save = vi.fn();
@@ -117,9 +117,9 @@ describe("layout", () => {
       (el) => el.getAttribute("aria-label") ?? el.getAttribute("title"),
     );
 
-  it("puts the slide rail toggle first, then the breadcrumbs, then the file and folder actions", () => {
+  it("puts the slide rail toggle first, then the breadcrumbs, then the file, device and folder actions", () => {
     render(<TopBar />);
-    expect(order()).toEqual(["Hide slides", "Breadcrumbs", "Show in folder", "Close deck.html", "Hide sidebar"]);
+    expect(order()).toEqual(["Hide slides", "Breadcrumbs", "Show in folder", "Close deck.html", "Use on another device", "Hide sidebar"]);
   });
 
   it("leaves the deck's tools to the deck toolbar", () => {
@@ -157,5 +157,23 @@ describe("breadcrumbs", () => {
     expect(screen.getByText("decks").getAttribute("aria-current")).toBe("page");
     expect(screen.queryByTitle("Show in folder")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Close/ })).toBeNull();
+  });
+});
+
+describe("on a device", () => {
+  afterEach(() => {
+    delete window.__SLOPSLIDE_REMOTE__;
+  });
+
+  it("leaves out what only the computer can do", async () => {
+    window.__SLOPSLIDE_REMOTE__ = { base: "/s/tok" };
+    vi.resetModules();
+    const { useApp: deviceApp } = await import("../store");
+    const { TopBar: DeviceTopBar } = await import("./TopBar");
+    deviceApp.setState({ workspace: WORKSPACE, openedFile: OPENED, deck: deckFor(DECK_HTML) });
+    render(<DeviceTopBar />);
+    expect(screen.queryByTitle(/Show in/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Use on another device" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Close deck.html" })).toBeTruthy();
   });
 });

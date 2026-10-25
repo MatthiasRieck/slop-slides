@@ -23,6 +23,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { api, errorMessage } from "../lib/api";
+import { isRemote, uploadAsset } from "../lib/platform";
 import { claimDrop, dropCovered, dropPoint, isImage } from "../lib/drop";
 import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowTokens } from "../lib/context";
 import { basename, workspaceChatFileUrl, cn, dirname, isSessionFile } from "../lib/utils";
@@ -316,6 +317,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const [dragging, setDragging] = useState(false);
   const [gridOpen, setGridOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [inputHeight, setInputHeight] = useState<number | null>(null);
   const resizeStart = useRef<{ y: number; height: number } | null>(null);
   const maxInputHeight = Math.max(64, Math.min(240, window.innerHeight * 0.4));
@@ -387,15 +389,55 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     textareaRef.current?.focus();
   }, [composerFill]);
 
+  const addAttachments = (imported: string[]) =>
+    setAttachments((prev) => [...prev, ...imported.filter((a) => !prev.includes(a))]);
+
   const importPaths = async (paths: string[]) => {
     if (!assetTarget || paths.length === 0) return;
     try {
-      const imported = (await api.importAssets(assetTarget, paths)).map(attachmentRef);
-      setAttachments((prev) => [...prev, ...imported.filter((a) => !prev.includes(a))]);
+      addAttachments((await api.importAssets(assetTarget, paths)).map(attachmentRef));
     } catch (error) {
       useApp.getState().setError(errorMessage(error));
     }
   };
+
+  /** On a device: files come from the browser and are uploaded into the deck (or the folder). */
+  const uploadFiles = async (files: File[]) => {
+    if (!assetTarget || files.length === 0) return;
+    try {
+      addAttachments((await Promise.all(files.map((file) => uploadAsset(assetTarget, file)))).map(attachmentRef));
+    } catch (error) {
+      useApp.getState().setError(errorMessage(error));
+    }
+  };
+
+  // On a device, files dropped anywhere on the page become attachments.
+  useEffect(() => {
+    if (!isRemote) return;
+    const hasFiles = (event: DragEvent) => event.dataTransfer?.types.includes("Files") ?? false;
+    const over = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      setDragging(true);
+    };
+    const leave = (event: DragEvent) => {
+      if (!event.relatedTarget) setDragging(false);
+    };
+    const drop = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      setDragging(false);
+      void uploadFiles([...(event.dataTransfer?.files ?? [])]);
+    };
+    window.addEventListener("dragover", over);
+    window.addEventListener("dragleave", leave);
+    window.addEventListener("drop", drop);
+    return () => {
+      window.removeEventListener("dragover", over);
+      window.removeEventListener("dragleave", leave);
+      window.removeEventListener("drop", drop);
+    };
+  }, [assetTarget]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Images pasted into the composer are saved as assets and attached.
   const pasteImages = async (files: File[]) => {
@@ -405,7 +447,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
       for (const file of files) {
         saved.push(attachmentRef(await api.saveAsset(assetTarget, pastedName(file), await readBase64(file))));
       }
-      setAttachments((prev) => [...prev, ...saved.filter((a) => !prev.includes(a))]);
+      addAttachments(saved);
     } catch (error) {
       useApp.getState().setError(errorMessage(error));
     }
@@ -419,9 +461,10 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     void pasteImages(images);
   };
 
-  // Files dropped anywhere on the window become attachments, unless something there (like the
+  // In the window, files dropped anywhere become attachments, unless something there (like the
   // slide being edited) takes them.
   useEffect(() => {
+    if (isRemote) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void getCurrentWebview()
@@ -444,6 +487,10 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   }, [assetTarget]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pickFiles = async () => {
+    if (isRemote) {
+      fileInputRef.current?.click();
+      return;
+    }
     const picked = await open({
       multiple: true,
       filters: [{ name: "Images & media", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "mp4", "webm", "pdf", "csv", "md", "txt"] }],
@@ -599,7 +646,23 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           <EffortPicker />
           <PermissionPicker />
           <div className="min-w-0 flex-1" />
-          <VoiceInput {...dictationHandlers} />
+          {/* Dictation records the computer's microphone, so it is the window's. */}
+          {!isRemote && <VoiceInput {...dictationHandlers} />}
+          {isRemote && (
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              data-testid="attach-input"
+              accept="image/*,video/*,.pdf,.csv,.md,.txt"
+              onChange={(event) => {
+                const files = [...(event.currentTarget.files ?? [])];
+                event.currentTarget.value = "";
+                void uploadFiles(files);
+              }}
+            />
+          )}
           <button
             type="button"
             onClick={pickFiles}

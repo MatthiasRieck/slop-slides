@@ -57,7 +57,11 @@ impl FakeServer {
             exit(0);
         }
         let message: Value = serde_json::from_str(&line).expect("client sent JSON");
-        writeln!(self.log, "{message}").expect("log request");
+        // One write per line: the tests poll this log while the client may kill us at any moment,
+        // and a line written in pieces could be read (or left) half-finished.
+        self.log
+            .write_all(format!("{message}\n").as_bytes())
+            .expect("log request");
         if message["method"] == "turn/interrupt" && !self.flag("ignoreInterrupt") {
             reply(&message, json!({}));
             event(

@@ -1,8 +1,10 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { FolderOpen, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, X } from "lucide-react";
 
-import { basename, cn, isMac } from "../lib/utils";
+import { isRemote } from "../lib/platform";
+import { basename, cn, hasTrafficLights, isMac } from "../lib/utils";
 import { useApp } from "../store";
+import { ShareDevice } from "./ShareDevice";
 
 /**
  * The workspace's bar: the slide rail toggle (for a deck), breadcrumbs from the workspace folder
@@ -20,7 +22,7 @@ export function TopBar() {
       data-tauri-drag-region
       className={cn(
         "flex h-12 shrink-0 items-center gap-1 border-b bg-background pr-3",
-        isMac ? "pl-[84px]" : "pl-3",
+        hasTrafficLights ? "pl-[84px]" : "pl-3",
       )}
     >
       {hasDeck && <RailToggle />}
@@ -28,7 +30,8 @@ export function TopBar() {
       <div data-tauri-drag-region className="flex-1 self-stretch" />
       {openedFile && (
         <>
-          <RevealButton path={openedFile.absolute} />
+          {/* A device cannot show the computer's file manager. */}
+          {!isRemote && <RevealButton path={openedFile.absolute} />}
           <button
             type="button"
             onClick={() => void useApp.getState().closeDeck()}
@@ -40,6 +43,7 @@ export function TopBar() {
           </button>
         </>
       )}
+      <ShareDevice />
       <SidebarToggle />
     </header>
   );

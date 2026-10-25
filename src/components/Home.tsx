@@ -1,10 +1,12 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { Folder, FolderOpen, Library, Plus, X } from "lucide-react";
+import { Folder, FolderOpen, Library, Plus, RotateCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api, errorMessage, type RecentWorkspace } from "../lib/api";
-import { cn, isMac, relativeTime } from "../lib/utils";
+import { isRemote } from "../lib/platform";
+import { cn, hasTrafficLights, relativeTime } from "../lib/utils";
 import { useApp } from "../store";
+import { ShareDevice } from "./ShareDevice";
 import { TemplateSelect } from "./Templates";
 
 /** Asks for a folder and opens it as the workspace. */
@@ -15,6 +17,58 @@ export async function chooseWorkspace() {
 
 /** The start screen: open a folder (or one opened before), or start a deck in the library. */
 export function Home() {
+  return isRemote ? <DeviceHome /> : <WindowHome />;
+}
+
+/**
+ * On a phone or tablet: it works in the folder the window has open, so it opens that one, or
+ * asks for one to be opened on the computer.
+ */
+function DeviceHome() {
+  const [state, setState] = useState<"checking" | "none">("checking");
+
+  const check = async () => {
+    setState("checking");
+    try {
+      const workspace = await api.currentWorkspace();
+      if (workspace) return await useApp.getState().openWorkspace(workspace.path);
+    } catch (error) {
+      useApp.getState().setError(errorMessage(error));
+    }
+    setState("none");
+  };
+
+  useEffect(() => {
+    void check();
+  }, []);
+
+  return (
+    <div className="flex h-full flex-col">
+      <header className="flex h-12 shrink-0 items-center pl-4">
+        <span className="text-sm font-semibold tracking-tight">SlopSlide</span>
+      </header>
+      <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
+        {state === "checking" ? (
+          <p className="text-sm text-muted-foreground">Connecting to SlopSlide on your computer…</p>
+        ) : (
+          <>
+            <p className="max-w-sm text-sm text-muted-foreground">Open a folder in SlopSlide on your computer to work on its decks here.</p>
+            <button
+              type="button"
+              onClick={() => void check()}
+              className="flex h-9 items-center gap-1.5 rounded-lg border bg-card px-3 text-sm font-medium hover:bg-accent"
+            >
+              <RotateCw className="size-4" />
+              Try again
+            </button>
+          </>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function WindowHome() {
   const [recent, setRecent] = useState<RecentWorkspace[] | null>(null);
 
   const refresh = () =>
@@ -46,10 +100,12 @@ export function Home() {
 
   return (
     <div className="flex h-full flex-col">
-      <header data-tauri-drag-region className={cn("flex h-12 shrink-0 items-center", isMac ? "pl-[84px]" : "pl-4")}>
+      <header data-tauri-drag-region className={cn("flex h-12 shrink-0 items-center pr-3", hasTrafficLights ? "pl-[84px]" : "pl-4")}>
         <span data-tauri-drag-region className="text-sm font-semibold tracking-tight">
           SlopSlide
         </span>
+        <div data-tauri-drag-region className="flex-1 self-stretch" />
+        <ShareDevice />
       </header>
       <main className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-3xl flex-col gap-8 px-8 py-10">

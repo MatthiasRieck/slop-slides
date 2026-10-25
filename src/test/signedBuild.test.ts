@@ -18,9 +18,7 @@ describe("macOS bundle config", () => {
     expect(conf.bundle.macOS.hardenedRuntime).toBe(true);
     const entitlements = readFileSync(join(ROOT, "src-tauri", conf.bundle.macOS.entitlements), "utf8");
     // Dictation: without this a hardened-runtime app gets no microphone input at all.
-    expect(entitlements).toMatch(
-      /<key>com\.apple\.security\.device\.audio-input<\/key>\s*<true\/>/,
-    );
+    expect(entitlements).toMatch(/<key>com\.apple\.security\.device\.audio-input<\/key>\s*<true\/>/);
   });
 
   it("targets macOS 10.15, which whisper.cpp's std::filesystem needs", () => {

@@ -34,7 +34,7 @@ describe("macOS bundle config", () => {
   });
 
   it("keeps the local signing settings out of git", () => {
-    expect(readFileSync(join(ROOT, ".gitignore"), "utf8").split("\n")).toContain(".signing.env");
+    expect(readFileSync(join(ROOT, ".gitignore"), "utf8").split(/\r?\n/)).toContain(".signing.env");
   });
 });
 

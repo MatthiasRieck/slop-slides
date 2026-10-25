@@ -1,5 +1,5 @@
-import { cn } from "../lib/utils";
 import type { Provider } from "../lib/models";
+import { cn } from "../lib/utils";
 
 /** Brand marks, as used by T3 Code (GitHub's mark stands in for Copilot). */
 export function ProviderIcon({ provider, className }: { provider: Provider; className?: string }) {

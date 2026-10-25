@@ -193,7 +193,13 @@ function WorkspaceTree({ root, name }: { root: string; name: string }) {
   );
 }
 
-function TreeItem(props: { entry: WorkspaceEntry; depth: number; open: boolean; selected: boolean; onClick: () => void }) {
+function TreeItem(props: {
+  entry: WorkspaceEntry;
+  depth: number;
+  open: boolean;
+  selected: boolean;
+  onClick: () => void;
+}) {
   const { entry, depth, open, selected } = props;
   const folder = entry.kind === "directory";
   const Icon = entry.kind === "directory" ? (open ? FolderOpen : Folder) : ICONS[entry.kind];
@@ -212,7 +218,9 @@ function TreeItem(props: { entry: WorkspaceEntry; depth: number; open: boolean; 
         !selected && entry.kind === "file" && "text-muted-foreground",
       )}
     >
-      <ChevronRight className={cn("size-3 shrink-0 text-muted-foreground", !folder && "invisible", open && "rotate-90")} />
+      <ChevronRight
+        className={cn("size-3 shrink-0 text-muted-foreground", !folder && "invisible", open && "rotate-90")}
+      />
       <Icon className={cn("size-3.5 shrink-0", entry.kind === "deck" ? "text-primary" : "text-muted-foreground")} />
       <span className="truncate">{entry.name}</span>
     </button>

@@ -12,7 +12,11 @@ import type { WorkspaceEntry } from "../lib/api";
 import { useApp } from "../store";
 import { FileTree } from "./FileTree";
 
-const entry = (path: string, kind: WorkspaceEntry["kind"]): WorkspaceEntry => ({ name: path.split("/").pop()!, path, kind });
+const entry = (path: string, kind: WorkspaceEntry["kind"]): WorkspaceEntry => ({
+  name: path.split("/").pop()!,
+  path,
+  kind,
+});
 let folders: Record<string, WorkspaceEntry[]>;
 
 beforeEach(() => {
@@ -30,7 +34,12 @@ beforeEach(() => {
     }
   });
   revealItemInDir.mockReset();
-  useApp.setState({ workspace: { path: "/ws", name: "ws" }, openedFile: null, workspaceChange: null, openPath: vi.fn(async () => {}) });
+  useApp.setState({
+    workspace: { path: "/ws", name: "ws" },
+    openedFile: null,
+    workspaceChange: null,
+    openPath: vi.fn(async () => {}),
+  });
 });
 
 const items = () => screen.queryAllByRole("treeitem").map((i) => i.textContent);

@@ -1,25 +1,32 @@
 import { Eraser, Highlighter, MousePointer2, PenLine, Trash2, Undo2, Wand2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import {
+  type ReactNode,
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { flushSync } from "react-dom";
 
 import {
   DEFAULT_COLORS,
   INK_COLORS,
   INK_STYLE,
+  type InkTool,
   isDot,
   LASER_GLOW,
   LASER_RGB,
   LASER_SIZE,
   paintTrails,
   pruneTrails,
+  type Stroke,
   strokePath,
   TOOL_KEYS,
-  toFraction,
-  toPixels,
-  type InkTool,
-  type Stroke,
   type Tool,
   type TrailPoint,
+  toFraction,
+  toPixels,
   visibleArea,
 } from "../lib/ink";
 import { cn } from "../lib/utils";
@@ -132,6 +139,7 @@ export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annota
     return () => observer.disconnect();
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: switching tools clears any in-progress drawing
   useEffect(() => {
     setDraft(null);
     setLaser(null);
@@ -159,7 +167,8 @@ export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annota
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
     const scale = window.devicePixelRatio || 1;
-    const core = (trailCore.current ??= document.createElement("canvas"));
+    trailCore.current ??= document.createElement("canvas");
+    const core = trailCore.current;
     const coreCtx = core.getContext("2d");
     if (!coreCtx) return;
     // Only the part of the layer on screen gets a canvas: zoomed in, the layer is many times
@@ -277,10 +286,14 @@ export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annota
           };
           if (isDot(points)) {
             const [[cx, cy]] = points as [[number, number]];
-            return <circle key={i} {...common} cx={cx} cy={cy} r={width / 2} fill={stroke.color} fillOpacity={opacity} />;
+            return (
+              // biome-ignore lint/suspicious/noArrayIndexKey: strokes are only appended or cleared
+              <circle key={i} {...common} cx={cx} cy={cy} r={width / 2} fill={stroke.color} fillOpacity={opacity} />
+            );
           }
           return (
             <path
+              // biome-ignore lint/suspicious/noArrayIndexKey: strokes are only appended or cleared
               key={i}
               {...common}
               d={strokePath(points)}
@@ -313,6 +326,7 @@ export function useReveal(peek: number) {
   const [hovered, setHovered] = useState(false);
   const [peeking, setPeeking] = useState(true);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each new peek restarts the timer
   useEffect(() => {
     setPeeking(true);
     const timer = setTimeout(() => setPeeking(false), PEEK_MS);
@@ -335,11 +349,7 @@ export function PresenterToolbar({ annotations, onExit }: { annotations: Annotat
   const inking = tool === "pen" || tool === "highlighter";
 
   return (
-    <div
-      data-testid="presenter-toolbar-zone"
-      className="absolute bottom-0 left-0 z-10 p-4"
-      {...zoneProps}
-    >
+    <div data-testid="presenter-toolbar-zone" className="absolute bottom-0 left-0 z-10 p-4" {...zoneProps}>
       <div
         role="toolbar"
         aria-label="Presenter tools"

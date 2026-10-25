@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
 const openDialog = vi.fn();
-type DragDrop = { payload: { type: "enter" | "over" | "leave" | "drop"; paths?: string[]; position?: { x: number; y: number } } };
+type DragDrop = {
+  payload: { type: "enter" | "over" | "leave" | "drop"; paths?: string[]; position?: { x: number; y: number } };
+};
 let dragDrop: ((event: DragDrop) => void) | null = null;
 const unlistenDragDrop = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
@@ -18,10 +20,10 @@ vi.mock("@tauri-apps/api/webview", () => ({
   }),
 }));
 
-import type { ProviderInfo } from "../lib/models";
-import { flushReviewSave, TIDY_PROMPT, useApp, type AssistantMessage, type ChatMessage, type ChatPart } from "../store";
-import { DECK_HTML, deckFor } from "../test/fixtures";
 import { catchDrops } from "../lib/drop";
+import type { ProviderInfo } from "../lib/models";
+import { type AssistantMessage, type ChatMessage, type ChatPart, flushReviewSave, TIDY_PROMPT, useApp } from "../store";
+import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ChatPanel } from "./ChatPanel";
 
 const PROVIDERS: ProviderInfo[] = [
@@ -30,8 +32,24 @@ const PROVIDERS: ProviderInfo[] = [
     installed: true,
     path: "/bin/claude",
     models: [
-      { id: "claude-opus-5-5", label: "Claude Opus 5.5", isDefault: true, efforts: ["low", "medium", "high", "max"], defaultEffort: "medium", contextWindows: ["200k", "1m"], defaultContextWindow: "1m" },
-      { id: "claude-sonnet-5", label: "Claude Sonnet 5", isDefault: false, efforts: ["low", "medium", "high", "max"], defaultEffort: "medium", contextWindows: ["200k", "1m"], defaultContextWindow: "200k" },
+      {
+        id: "claude-opus-5-5",
+        label: "Claude Opus 5.5",
+        isDefault: true,
+        efforts: ["low", "medium", "high", "max"],
+        defaultEffort: "medium",
+        contextWindows: ["200k", "1m"],
+        defaultContextWindow: "1m",
+      },
+      {
+        id: "claude-sonnet-5",
+        label: "Claude Sonnet 5",
+        isDefault: false,
+        efforts: ["low", "medium", "high", "max"],
+        defaultEffort: "medium",
+        contextWindows: ["200k", "1m"],
+        defaultContextWindow: "200k",
+      },
     ],
     error: null,
   },
@@ -39,7 +57,17 @@ const PROVIDERS: ProviderInfo[] = [
     id: "codex",
     installed: true,
     path: "/bin/codex",
-    models: [{ id: "gpt-6-astra", label: "GPT-6-Astra", isDefault: true, efforts: ["low", "high"], defaultEffort: "high", contextWindows: [], defaultContextWindow: null }],
+    models: [
+      {
+        id: "gpt-6-astra",
+        label: "GPT-6-Astra",
+        isDefault: true,
+        efforts: ["low", "high"],
+        defaultEffort: "high",
+        contextWindows: [],
+        defaultContextWindow: null,
+      },
+    ],
     error: null,
   },
   { id: "copilot", installed: false, path: null, models: [], error: null },
@@ -62,13 +90,20 @@ beforeEach(() => {
   resetChat.mockClear();
   interrupt.mockClear();
   compact.mockClear();
-  useApp.setState({ workspace: { path: "/decks/talk", name: "talk" },
+  useApp.setState({
+    workspace: { path: "/decks/talk", name: "talk" },
     deck: deckFor(DECK_HTML),
     selected: "intro",
     messages: [],
     sessionProvider: null,
     running: false,
-    selection: { provider: "claude", model: "claude-opus-5-5", label: "Claude Opus 5.5", effort: "medium", contextWindow: "1m" },
+    selection: {
+      provider: "claude",
+      model: "claude-opus-5-5",
+      label: "Claude Opus 5.5",
+      effort: "medium",
+      contextWindow: "1m",
+    },
     providers: PROVIDERS,
     favoriteModels: [],
     error: null,
@@ -99,7 +134,11 @@ const reply = (patch: Partial<AssistantMessage>): AssistantMessage => ({
   ...patch,
 });
 
-const tool = (name: string, input: Record<string, unknown>, status: "running" | "done" | "error" = "done"): ChatPart => ({
+const tool = (
+  name: string,
+  input: Record<string, unknown>,
+  status: "running" | "done" | "error" = "done",
+): ChatPart => ({
   kind: "tool",
   id: `${name}-${JSON.stringify(input)}`,
   name,
@@ -144,7 +183,9 @@ describe("ChatPanel: empty chat", () => {
   });
 
   it("warns when the selected model's CLI is not installed", () => {
-    useApp.setState({ providers: PROVIDERS.map((p) => (p.id === "claude" ? { ...p, installed: false, models: [] } : p)) });
+    useApp.setState({
+      providers: PROVIDERS.map((p) => (p.id === "claude" ? { ...p, installed: false, models: [] } : p)),
+    });
     render(<ChatPanel />);
     expect(screen.getByText(/Claude Code is not installed/)).toBeTruthy();
   });
@@ -167,7 +208,11 @@ describe("ChatPanel: composing", () => {
     handle.setPointerCapture = vi.fn();
     handle.hasPointerCapture = () => true;
     handle.releasePointerCapture = vi.fn();
-    for (const [event, y] of [["pointerdown", from], ["pointermove", to], [finish, to]] as const) {
+    for (const [event, y] of [
+      ["pointerdown", from],
+      ["pointermove", to],
+      [finish, to],
+    ] as const) {
       fireEvent(handle, new MouseEvent(event, { bubbles: true, button: 0, clientY: y }));
     }
   };
@@ -374,7 +419,11 @@ describe("ChatPanel: composing", () => {
     useApp.setState({ sessionProvider: "claude", favoriteModels: ["codex:gpt-6-astra", "claude:claude-sonnet-5"] });
     render(<ChatPanel />);
     fireEvent.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
-    expect(screen.getAllByTitle("Start a new chat to change provider").every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+    expect(
+      screen
+        .getAllByTitle("Start a new chat to change provider")
+        .every((button) => (button as HTMLButtonElement).disabled),
+    ).toBe(true);
     fireEvent.click(screen.getByTitle("Favorites"));
     expect(screen.getAllByRole("option")).toHaveLength(1);
     expect(screen.getByRole("option", { name: /Claude Sonnet 5/ })).toBeTruthy();
@@ -404,7 +453,9 @@ describe("ChatPanel: composing", () => {
   });
 
   it("explains a provider that is not installed", () => {
-    useApp.setState({ providers: PROVIDERS.map((p) => (p.id === "codex" ? { ...p, installed: false, models: [] } : p)) });
+    useApp.setState({
+      providers: PROVIDERS.map((p) => (p.id === "codex" ? { ...p, installed: false, models: [] } : p)),
+    });
     render(<ChatPanel />);
     fireEvent.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
     fireEvent.click(screen.getByTitle("Codex is not installed"));
@@ -528,13 +579,19 @@ describe("ChatPanel: attachments", () => {
     invoke.mockResolvedValue(["assets/photo.png", "assets/data.csv"]);
     render(<ChatPanel />);
     await act(async () => fireEvent.click(screen.getByTitle("Attach images or files")));
-    expect(invoke).toHaveBeenCalledWith("import_assets", { id: "/decks/talk/deck.html", paths: ["/Users/me/Photo.PNG", "/Users/me/data.csv"] });
+    expect(invoke).toHaveBeenCalledWith("import_assets", {
+      id: "/decks/talk/deck.html",
+      paths: ["/Users/me/Photo.PNG", "/Users/me/data.csv"],
+    });
     // Images go in the fan; other files stay chips.
     expect(screen.getByAltText("photo.png")).toBeTruthy();
     expect(screen.getByText("data.csv")).toBeTruthy();
     type("Use these");
     fireEvent.keyDown(textarea(), { key: "Enter" });
-    expect(send).toHaveBeenCalledWith("Use these", { includeSlide: true, attachments: ["assets/photo.png", "assets/data.csv"] });
+    expect(send).toHaveBeenCalledWith("Use these", {
+      includeSlide: true,
+      attachments: ["assets/photo.png", "assets/data.csv"],
+    });
     expect(screen.queryByAltText("photo.png")).toBeNull();
     expect(screen.queryByText("data.csv")).toBeNull();
   });
@@ -592,13 +649,17 @@ describe("ChatPanel: attachments", () => {
       render(<ChatPanel />);
       await waitFor(() => expect(dragDrop).not.toBeNull());
       await act(async () =>
-        dragDrop!({ payload: { type: "drop", paths: ["/tmp/photo.png", "/tmp/notes.md"], position: { x: 200, y: 100 } } }),
+        dragDrop!({
+          payload: { type: "drop", paths: ["/tmp/photo.png", "/tmp/notes.md"], position: { x: 200, y: 100 } },
+        }),
       );
       expect(catcher).toHaveBeenCalledWith(["/tmp/photo.png", "/tmp/notes.md"], { x: 200, y: 100 });
       expect(invoke).toHaveBeenCalledWith("import_assets", { id: "/decks/talk/deck.html", paths: ["/tmp/notes.md"] });
       // Nothing left over, nothing to import.
       invoke.mockClear();
-      await act(async () => dragDrop!({ payload: { type: "drop", paths: ["/tmp/photo.png"], position: { x: 1, y: 1 } } }));
+      await act(async () =>
+        dragDrop!({ payload: { type: "drop", paths: ["/tmp/photo.png"], position: { x: 1, y: 1 } } }),
+      );
       expect(invoke).not.toHaveBeenCalledWith("import_assets", expect.anything());
     } finally {
       stop();
@@ -606,7 +667,10 @@ describe("ChatPanel: attachments", () => {
   });
 
   it("does not invite drops over what would take them instead", async () => {
-    const stop = catchDrops((paths) => paths, (point) => point.x > 500);
+    const stop = catchDrops(
+      (paths) => paths,
+      (point) => point.x > 500,
+    );
     try {
       const { container } = render(<ChatPanel />);
       await waitFor(() => expect(dragDrop).not.toBeNull());
@@ -641,8 +705,16 @@ describe("ChatPanel: attachments", () => {
     const photo = new File(["jpg"], "Holiday.jpeg", { type: "image/jpeg" });
     await act(async () => paste([shot, photo]));
     await waitFor(() => expect(screen.getByAltText("Holiday.jpeg")).toBeTruthy());
-    expect(invoke).toHaveBeenCalledWith("save_asset", { id: "/decks/talk/deck.html", name: "pasted-image.png", data: "aGk=" });
-    expect(invoke).toHaveBeenCalledWith("save_asset", { id: "/decks/talk/deck.html", name: "Holiday.jpeg", data: "anBn" });
+    expect(invoke).toHaveBeenCalledWith("save_asset", {
+      id: "/decks/talk/deck.html",
+      name: "pasted-image.png",
+      data: "aGk=",
+    });
+    expect(invoke).toHaveBeenCalledWith("save_asset", {
+      id: "/decks/talk/deck.html",
+      name: "Holiday.jpeg",
+      data: "anBn",
+    });
     expect(screen.getByAltText("pasted-image.png").getAttribute("src")).toMatch(/\/talk\/assets\/pasted-image\.png$/);
     type("Use these");
     fireEvent.keyDown(textarea(), { key: "Enter" });
@@ -759,7 +831,14 @@ describe("ChatPanel: attachments", () => {
 
 describe("ChatPanel: transcript", () => {
   it("shows the user's message with its slide and attachments", () => {
-    showMessages({ id: "u", role: "user", text: "Bigger title", slide: "outro", attachments: ["assets/logo.svg"], createdAt: 0 });
+    showMessages({
+      id: "u",
+      role: "user",
+      text: "Bigger title",
+      slide: "outro",
+      attachments: ["assets/logo.svg"],
+      createdAt: 0,
+    });
     expect(screen.getByText("Bigger title")).toBeTruthy();
     expect(screen.getByText("on slide 3")).toBeTruthy();
     expect(screen.getByText("· logo.svg")).toBeTruthy();
@@ -767,7 +846,15 @@ describe("ChatPanel: transcript", () => {
 
   it("notes when the message came with a sketch", () => {
     const bounds = { left: 0, top: 0, right: 10, bottom: 10 };
-    showMessages({ id: "u", role: "user", text: "Fix", slide: "outro", attachments: [], sketch: { image: null, bounds }, createdAt: 0 });
+    showMessages({
+      id: "u",
+      role: "user",
+      text: "Fix",
+      slide: "outro",
+      attachments: [],
+      sketch: { image: null, bounds },
+      createdAt: 0,
+    });
     expect(screen.getByText("· with sketch")).toBeTruthy();
   });
 
@@ -777,7 +864,9 @@ describe("ChatPanel: transcript", () => {
   });
 
   it("renders replies as markdown", () => {
-    const { container } = showMessages(reply({ parts: [{ kind: "text", text: "**Done.** See:\n\n| a | b |\n|---|---|\n| 1 | 2 |" }] }));
+    const { container } = showMessages(
+      reply({ parts: [{ kind: "text", text: "**Done.** See:\n\n| a | b |\n|---|---|\n| 1 | 2 |" }] }),
+    );
     expect(container.querySelector("strong")!.textContent).toBe("Done.");
     expect(container.querySelector("table")).not.toBeNull();
   });
@@ -788,7 +877,7 @@ describe("ChatPanel: transcript", () => {
     ["Edit", { file_path: "/decks/talk-old/deck.html" }, "Edited /decks/talk-old/deck.html"],
     ["MultiEdit", { file_path: "/elsewhere/file.txt" }, "Edited /elsewhere/file.txt"],
     ["Read", { file_path: "/decks/talk/assets/notes.md" }, "Read assets/notes.md"],
-    ["Grep", { pattern: "class=\"slide\"" }, 'Searched class="slide"'],
+    ["Grep", { pattern: 'class="slide"' }, 'Searched class="slide"'],
     ["Glob", { pattern: "assets/*" }, "Searched assets/*"],
     ["WebSearch", { query: "pitch deck tips" }, "Searched the web for pitch deck tips"],
     ["WebFetch", { url: "https://example.com" }, "Fetched https://example.com"],
@@ -815,7 +904,11 @@ describe("ChatPanel: transcript", () => {
   it("links edits of a deck file with another name", () => {
     useApp.setState({ deck: { ...deckFor(DECK_HTML), id: "/decks/talk/q3.html", path: "/decks/talk/q3.html" } });
     const edit = tool("Edit", { file_path: "/decks/talk/q3.html", new_string: `<section class="slide" id="outro">` });
-    showMessages(reply({ parts: [edit, tool("Edit", { file_path: "/decks/talk/deck.html", new_string: `<section id="outro">` })] }));
+    showMessages(
+      reply({
+        parts: [edit, tool("Edit", { file_path: "/decks/talk/deck.html", new_string: `<section id="outro">` })],
+      }),
+    );
     expect(toolRow("Edited q3.html · #outro").disabled).toBe(false);
     expect(toolRow("Edited deck.html").disabled).toBe(true);
   });
@@ -840,7 +933,9 @@ describe("ChatPanel: transcript", () => {
   });
 
   it("shows that a tool is working", () => {
-    showMessages(reply({ status: "streaming", parts: [tool("Write", { file_path: "/decks/talk/deck.html" }, "running")] }));
+    showMessages(
+      reply({ status: "streaming", parts: [tool("Write", { file_path: "/decks/talk/deck.html" }, "running")] }),
+    );
     expect(screen.getByText("Working…")).toBeTruthy();
     expect(screen.queryByText("Thinking…")).toBeNull();
   });
@@ -852,7 +947,10 @@ describe("ChatPanel: transcript", () => {
   });
 
   it("shows errors and interruptions", () => {
-    showMessages(reply({ status: "error", error: "Claude Code stopped unexpectedly: boom" }), reply({ id: "a2", status: "interrupted" }));
+    showMessages(
+      reply({ status: "error", error: "Claude Code stopped unexpectedly: boom" }),
+      reply({ id: "a2", status: "interrupted" }),
+    );
     expect(screen.getByText("Claude Code stopped unexpectedly: boom")).toBeTruthy();
     expect(screen.getByText("Stopped")).toBeTruthy();
   });
@@ -874,7 +972,13 @@ describe("ChatPanel: context meter", () => {
     reply({ provider, context: { provider, tokens, window } });
   const meter = () => screen.queryByRole("progressbar", { name: "Context used" });
   const compactButton = () => screen.queryByRole("button", { name: "Compact" }) as HTMLButtonElement | null;
-  const copilot = { provider: "copilot" as const, model: "gpt-x", label: "GPT X", effort: "medium", contextWindow: null };
+  const copilot = {
+    provider: "copilot" as const,
+    model: "gpt-x",
+    label: "GPT X",
+    effort: "medium",
+    contextWindow: null,
+  };
 
   it("is hidden until the agent reports its context", () => {
     showMessages(reply({}));
@@ -984,7 +1088,9 @@ describe("composer fill", () => {
 
   it("does not send a prepared message until the user does", async () => {
     useApp.setState({ composerFill: null });
-    invoke.mockImplementation(async (cmd: string) => (cmd === "capture_sketch" ? "/home/.slopslides/sessions/1-ab/sketches/1-ab.png" : []));
+    invoke.mockImplementation(async (cmd: string) =>
+      cmd === "capture_sketch" ? "/home/.slopslides/sessions/1-ab/sketches/1-ab.png" : [],
+    );
     document.body.setAttribute("data-sketch-target", "");
     try {
       render(<ChatPanel />);
@@ -1000,7 +1106,9 @@ describe("composer fill", () => {
   it("shows a handed-over screenshot with the images and sends it with the message", () => {
     useApp.setState({ composerFill: null });
     render(<ChatPanel />);
-    act(() => useApp.getState().fillComposer("Tidy it", { screenshot: "/home/.slopslides/sessions/1-ab/sketches/1-ab.png" }));
+    act(() =>
+      useApp.getState().fillComposer("Tidy it", { screenshot: "/home/.slopslides/sessions/1-ab/sketches/1-ab.png" }),
+    );
     const fan = screen.getByRole("button", { name: "Show 1 attached image" });
     const img = fan.querySelector("img")!;
     expect(img.getAttribute("src")).toContain("/.session/home/.slopslides/sessions/1-ab/sketches/1-ab.png");
@@ -1020,11 +1128,15 @@ describe("composer fill", () => {
   it("lets the user remove the screenshot, and a plain fill clears it", () => {
     useApp.setState({ composerFill: null });
     render(<ChatPanel />);
-    act(() => useApp.getState().fillComposer("Tidy it", { screenshot: "/home/.slopslides/sessions/1-ab/sketches/1-ab.png" }));
+    act(() =>
+      useApp.getState().fillComposer("Tidy it", { screenshot: "/home/.slopslides/sessions/1-ab/sketches/1-ab.png" }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Show 1 attached image" }));
     fireEvent.click(screen.getByRole("button", { name: "Remove Slide screenshot" }));
     expect(screen.queryByRole("button", { name: /attached image/ })).toBeNull();
-    act(() => useApp.getState().fillComposer("Tidy it", { screenshot: "/home/.slopslides/sessions/1-ab/sketches/1-ab.png" }));
+    act(() =>
+      useApp.getState().fillComposer("Tidy it", { screenshot: "/home/.slopslides/sessions/1-ab/sketches/1-ab.png" }),
+    );
     act(() => useApp.getState().fillComposer("Fix it"));
     expect(screen.queryByRole("button", { name: /attached image/ })).toBeNull();
     fireEvent.keyDown(textarea(), { key: "Enter" });
@@ -1037,7 +1149,11 @@ describe("workspace attachments", () => {
     [true, "talk/assets/photo.png", "/decks/talk/deck.html"],
     [false, "assets/photo.png", "/decks"],
   ])("attaches images with workspace-relative context when a deck is open: %s", async (hasDeck, reference, target) => {
-    useApp.setState({ workspace: { path: "/decks", name: "decks" }, deck: hasDeck ? deckFor(DECK_HTML) : null, selected: hasDeck ? "intro" : null });
+    useApp.setState({
+      workspace: { path: "/decks", name: "decks" },
+      deck: hasDeck ? deckFor(DECK_HTML) : null,
+      selected: hasDeck ? "intro" : null,
+    });
     openDialog.mockResolvedValue(["/Users/me/photo.png"]);
     invoke.mockResolvedValue(["assets/photo.png"]);
     render(<ChatPanel />);

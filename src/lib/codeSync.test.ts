@@ -38,7 +38,7 @@ describe("changedRange", () => {
       seed = (seed * 1103515245 + 12345) % 2 ** 31;
       return seed % n;
     };
-    const alphabet = "<>/ abc\n\"=é👋";
+    const alphabet = '<>/ abc\n"=é👋';
     const word = (len: number) => Array.from({ length: len }, () => alphabet[rand(alphabet.length)]).join("");
     for (let i = 0; i < 500; i++) {
       const current = word(rand(30));

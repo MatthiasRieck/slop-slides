@@ -1,4 +1,4 @@
-import { clsx, type ClassValue } from "clsx";
+import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
 export function cn(...inputs: ClassValue[]) {
@@ -74,7 +74,14 @@ export function workspaceChatFileUrl(workspace: string, path: string): string {
  * backend adds the pasteboard to pan and zoom around the slide; with `edit` (any value; changing
  * it reloads the slide), the slide editor, which comes with the pasteboard.
  */
-export function slideUrl(deckId: string, slideId: string, version: string, still = false, edit?: string, pan = false): string {
+export function slideUrl(
+  deckId: string,
+  slideId: string,
+  version: string,
+  still = false,
+  edit?: string,
+  pan = false,
+): string {
   const editing = edit === undefined ? "" : `&edit=${encodeURIComponent(edit)}`;
   const query = `embed&slide=${encodeURIComponent(slideId)}&v=${version}${still ? "&static" : ""}${pan ? "&pan" : ""}${editing}`;
   return fileUrl(deckId, query);

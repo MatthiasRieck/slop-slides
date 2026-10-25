@@ -7,10 +7,10 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) })
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setFullscreen }) }));
 
-import { useApp } from "../store";
-import { DECK_HTML, deckFor } from "../test/fixtures";
 import { LASER_SIZE, TRAIL_FADE_MS, TRAIL_HOLD_MS } from "../lib/ink";
+import { useApp } from "../store";
 import { fakeCanvas2D } from "../test/fakeCanvas";
+import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Presenter } from "./Presenter";
 
 beforeEach(() => {
@@ -282,7 +282,7 @@ describe("Presenter tools", () => {
     vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue(new DOMRect(-100, -50, 2000, 1000));
     fromFrame({ type: "slop:zoom", x: -100, y: -50, k: 2 });
     // Redrawn right in the resize callback, before the browser paints, so zooming doesn't flicker.
-    resized.forEach((callback) => callback());
+    for (const callback of resized) callback();
     const [pen, dot] = strokes();
     expect(pen!.getAttribute("d")).toBe("M200 200L400 300");
     expect(pen!.getAttribute("stroke-width")).toBe("8");
@@ -342,7 +342,9 @@ describe("Presenter tools", () => {
     expect(svg.hasAttribute("viewBox")).toBe(false);
     expect(strokes()[0]!.hasAttribute("vector-effect")).toBe(false);
     vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue(new DOMRect(0, 0, 2000, 1000));
-    act(() => resized.forEach((callback) => callback()));
+    act(() => {
+      for (const callback of resized) callback();
+    });
     expect(strokes()[0]!.getAttribute("d")).toBe("M200 200L1000 500");
   });
 
@@ -533,7 +535,11 @@ describe("Presenter tools", () => {
   it("a zoomed-in laser trail only gets a canvas the size of the screen", () => {
     paintedTrail();
     const zoomed = { left: -1000, top: -500, width: window.innerWidth * 4, height: window.innerHeight * 4 };
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ ...zoomed, x: zoomed.left, y: zoomed.top } as DOMRect);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      ...zoomed,
+      x: zoomed.left,
+      y: zoomed.top,
+    } as DOMRect);
     vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(zoomed.width);
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(zoomed.height);
     render(<Presenter />);

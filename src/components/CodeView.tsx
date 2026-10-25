@@ -5,24 +5,24 @@ import { bracketMatching, foldGutter, foldKeymap, indentOnInput, syntaxHighlight
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import {
   EditorState,
+  type Extension,
   Prec,
   RangeSetBuilder,
   StateEffect,
   StateField,
   Transaction,
-  type Extension,
 } from "@codemirror/state";
 import {
   Decoration,
+  type DecorationSet,
+  drawSelection,
   EditorView,
   GutterMarker,
-  drawSelection,
   gutter,
   highlightActiveLine,
   highlightActiveLineGutter,
   keymap,
   lineNumbers,
-  type DecorationSet,
 } from "@codemirror/view";
 import { classHighlighter } from "@lezer/highlight";
 import { AlertTriangle, FileCode2, RotateCcw, Save } from "lucide-react";
@@ -319,6 +319,7 @@ export function CodeView({ active }: { active: boolean }) {
   };
 
   // Follow the deck file on disk, unless that would throw away unsaved edits.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only a new disk read should reload the editor
   useEffect(() => {
     const view = viewRef.current;
     if (!view || source === null) return;
@@ -348,11 +349,13 @@ export function CodeView({ active }: { active: boolean }) {
     }
   };
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: any of these changes asks for a fresh reveal
   useEffect(() => {
     pendingReveal.current = true;
   }, [selected, revealRev, active]);
 
   // Highlight the selected slide, and scroll to it when the selection came from elsewhere.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: revealRev forces a reveal of the same slide
   useEffect(() => {
     const view = viewRef.current;
     if (!view || source === null) return;

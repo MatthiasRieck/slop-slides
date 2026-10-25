@@ -1,9 +1,9 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Check, FolderOpen, Loader2, Plus, Save } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { TemplateSummary } from "../lib/api";
-import { pixelsOf, type Pixels } from "../lib/slideSize";
+import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn, layoutLabel, templateSlideUrl } from "../lib/utils";
 import { useApp } from "../store";
 import { SlideFrame } from "./SlideFrame";
@@ -167,7 +167,9 @@ export function LayoutPicker(props: { mode: "add" | "change"; onDone: () => void
                   <div className="w-full overflow-hidden rounded-md ring-1 ring-border transition group-hover:ring-2 group-hover:ring-primary">
                     <TemplateSlide template={template.id} slide={slide} size={pixelsOf(template)} />
                   </div>
-                  <span className="truncate text-2xs text-muted-foreground group-hover:text-foreground">{layoutLabel(slide)}</span>
+                  <span className="truncate text-2xs text-muted-foreground group-hover:text-foreground">
+                    {layoutLabel(slide)}
+                  </span>
                 </button>
               </li>
             ))}

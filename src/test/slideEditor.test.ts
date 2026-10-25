@@ -25,7 +25,7 @@ const DECK = `<!DOCTYPE html><html><head></head><body>
 let doms: JSDOM[] = [];
 
 afterEach(() => {
-  doms.forEach((d) => d.window.close());
+  for (const d of doms) d.window.close();
   doms = [];
   vi.useRealTimers();
 });
@@ -257,7 +257,10 @@ describe("slide editor", () => {
     it("puts them on top of the slide, centered where they landed and fit to it, and saves once", () => {
       const e = editor();
       drop(e, [{ src: "assets/wide.png", w: 1280, h: 720 }, { src: "assets/icon.svg" }]);
-      const [wide, icon] = [...e.doc.querySelectorAll<HTMLImageElement>("#intro > img")] as [HTMLImageElement, HTMLImageElement];
+      const [wide, icon] = [...e.doc.querySelectorAll<HTMLImageElement>("#intro > img")] as [
+        HTMLImageElement,
+        HTMLImageElement,
+      ];
       // Fit to a third of the slide's width: 640×360, centered on (960, 540).
       expect(wide.getAttribute("src")).toBe("assets/wide.png");
       expect(wide.getAttribute("alt")).toBe("");
@@ -307,7 +310,11 @@ describe("slide editor", () => {
       const e = editor();
       drop(e, [{ src: "assets/logo.png", w: 200, h: 100 }]);
       const reports = e.posted().filter((m) => (m as { type: string }).type === "slop:edit-selection");
-      expect(reports.at(-1)).toMatchObject({ slide: "intro", selected: true, selection: { kind: "media", text: false, vector: false } });
+      expect(reports.at(-1)).toMatchObject({
+        slide: "intro",
+        selected: true,
+        selection: { kind: "media", text: false, vector: false },
+      });
     });
 
     it("only takes files from the deck's assets", () => {
@@ -422,7 +429,12 @@ describe("slide editor", () => {
       e.move(e.$(".shape"), 300, 400);
       e.fromParent({ type: "slop:edit-paste", html });
       const shape = e.$("#intro").lastElementChild as HTMLElement;
-      expect([shape.style.left, shape.style.top, shape.style.width, shape.style.height]).toEqual(["200px", "350px", "200px", "100px"]);
+      expect([shape.style.left, shape.style.top, shape.style.width, shape.style.height]).toEqual([
+        "200px",
+        "350px",
+        "200px",
+        "100px",
+      ]);
     });
 
     it("pastes in the middle of the view once the pointer is off the slide or out of the window", () => {
@@ -522,7 +534,11 @@ describe("slide editor", () => {
 
     it("pastes text as a new text box in the middle of the view, styled like new ones", () => {
       const e = editor();
-      e.fromParent({ type: "slop:edit-paste-text", text: "First line\r\nSecond <b>line</b>\n\n", style: { fontSize: 64, color: "#ff0000" } });
+      e.fromParent({
+        type: "slop:edit-paste-text",
+        text: "First line\r\nSecond <b>line</b>\n\n",
+        style: { fontSize: 64, color: "#ff0000" },
+      });
       const box = e.$("[data-added=text]");
       expect(box.innerHTML).toBe("First line<br>Second &lt;b&gt;line&lt;/b&gt;");
       expect(box.style.fontSize).toBe("64px");
@@ -540,7 +556,11 @@ describe("slide editor", () => {
   it("tells the app whether anything is selected, whenever the selection changes", () => {
     const e = editor();
     const reports = () =>
-      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-selection") as { slide: string; selected: boolean; selection: unknown }[];
+      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-selection") as {
+        slide: string;
+        selected: boolean;
+        selection: unknown;
+      }[];
     e.down(e.$("h1"));
     e.down(e.$("h1"));
     e.down(e.$(".card p"));
@@ -578,7 +598,13 @@ describe("slide editor", () => {
     const p = e.$(".card p");
     e.down(p);
     e.up(p);
-    const second = new e.window.PointerEvent("pointerdown", { clientX: 100, clientY: 100, button: 0, bubbles: true, cancelable: true });
+    const second = new e.window.PointerEvent("pointerdown", {
+      clientX: 100,
+      clientY: 100,
+      button: 0,
+      bubbles: true,
+      cancelable: true,
+    });
     p.dispatchEvent(second);
     // The browser would otherwise move focus to whatever was clicked, like an invisible overlay.
     expect(second.defaultPrevented).toBe(true);
@@ -650,7 +676,14 @@ describe("slide editor", () => {
         ui.querySelector<HTMLElement>(/^[a-z]+$/.test(kind) ? `[data-handle="${kind}"]` : `[data-dir="${kind}"]`)!;
       const pointer = (type: string, target: Element, x: number, y: number, init: PointerEventInit = {}) =>
         target.dispatchEvent(
-          new e.window.PointerEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true, ...init }),
+          new e.window.PointerEvent(type, {
+            clientX: x,
+            clientY: y,
+            button: 0,
+            bubbles: true,
+            cancelable: true,
+            ...init,
+          }),
         );
       const pull = (kind: string, from: [number, number], to: [number, number], init: PointerEventInit = {}) => {
         pointer("pointerdown", handle(kind), ...from);
@@ -663,7 +696,12 @@ describe("slide editor", () => {
     it("shows handles around the selection, outside the slide", () => {
       const { e, ui, handle } = withHeading();
       expect(ui.style.display).toBe("");
-      expect([ui.style.left, ui.style.top, ui.style.width, ui.style.height]).toEqual(["400px", "250px", "200px", "100px"]);
+      expect([ui.style.left, ui.style.top, ui.style.width, ui.style.height]).toEqual([
+        "400px",
+        "250px",
+        "200px",
+        "100px",
+      ]);
       expect(ui.querySelectorAll('[data-handle="scale"]')).toHaveLength(8);
       expect(ui.querySelectorAll("[data-axis]")).toHaveLength(4);
       expect(handle("rotate")).toBeTruthy();
@@ -677,7 +715,14 @@ describe("slide editor", () => {
       h1.style.fontSize = "48px";
       h1.style.whiteSpace = "nowrap";
       pull("1 1", [600, 350], [650, 400]);
-      expect(h1.style).toMatchObject({ width: "250px", height: "150px", scale: "", translate: "", fontSize: "48px", whiteSpace: "normal" });
+      expect(h1.style).toMatchObject({
+        width: "250px",
+        height: "150px",
+        scale: "",
+        translate: "",
+        fontSize: "48px",
+        whiteSpace: "normal",
+      });
       expect(e.commits()[0]!.markup).toContain("width: 250px");
       expect(h1.hasAttribute("viewBox")).toBe(false);
     });
@@ -716,7 +761,7 @@ describe("slide editor", () => {
       const { e, pull } = withHeading("resize");
       pull("1 0", [600, 300], [650, 300]);
       const saved = e.commits().at(-1)!;
-      const reloaded = editor({ markup: '<main class="deck">' + saved.markup + '</main>' });
+      const reloaded = editor({ markup: `<main class="deck">${saved.markup}</main>` });
       reloaded.fromParent({ type: "slop:edit-select", path: saved.select });
       const heading = reloaded.$("h1");
       const slot = heading.nextElementSibling as HTMLElement;
@@ -878,7 +923,9 @@ describe("slide editor", () => {
 
     it("pressing a handle keeps the selection instead of picking what is under it", () => {
       const { e, h1, handle } = withHeading();
-      handle("rotate").dispatchEvent(new e.window.PointerEvent("pointerdown", { button: 0, bubbles: true, cancelable: true }));
+      handle("rotate").dispatchEvent(
+        new e.window.PointerEvent("pointerdown", { button: 0, bubbles: true, cancelable: true }),
+      );
       expect(e.selected()).toEqual([h1]);
     });
 
@@ -995,11 +1042,20 @@ describe("slide editor", () => {
 
   describe("pasteboard around the slide", () => {
     const views = (e: ReturnType<typeof editor>) =>
-      e.posted().filter((m) => (m as { type: string }).type === "slop:view") as { slide: string; x: number; y: number; k: number }[];
+      e.posted().filter((m) => (m as { type: string }).type === "slop:view") as {
+        slide: string;
+        x: number;
+        y: number;
+        k: number;
+      }[];
     // Wheel events carry their time so tests can say which belong to one gesture; by default
     // each call starts a new one.
     let clock = 0;
-    const wheel = (e: ReturnType<typeof editor>, init: WheelEventInit, extra: { wheelDeltaY?: number; sameGesture?: boolean } = {}) => {
+    const wheel = (
+      e: ReturnType<typeof editor>,
+      init: WheelEventInit,
+      extra: { wheelDeltaY?: number; sameGesture?: boolean } = {},
+    ) => {
       clock += extra.sameGesture ? 16 : 1000;
       const event = new e.window.WheelEvent("wheel", { cancelable: true, bubbles: true, ...init });
       Object.defineProperty(event, "timeStamp", { value: clock });
@@ -1036,7 +1092,9 @@ describe("slide editor", () => {
       expect(e.doc.documentElement.style.getPropertyValue("--slop-canvas")).toBe("rgb(1, 2, 3)");
       expect(e.doc.documentElement.style.getPropertyValue("--slop-accent")).toBe("rgb(4, 5, 6)");
       const css = [...e.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
-      expect(css).toMatch(/\[data-slop-frame\] \{ outline: 2px solid var\(--slop-accent[^}]*outline-offset: 4px[^}]*var\(--slop-canvas/);
+      expect(css).toMatch(
+        /\[data-slop-frame\] \{ outline: 2px solid var\(--slop-accent[^}]*outline-offset: 4px[^}]*var\(--slop-canvas/,
+      );
       // One frame, which the pasteboard moves with the slide.
       expect(e.doc.querySelectorAll("[data-slop-frame]")).toHaveLength(1);
       e.fromParent({ type: "slop:camera", x: 30, y: 40, k: 0.5 });
@@ -1045,7 +1103,10 @@ describe("slide editor", () => {
     });
 
     it("does nothing without the pasteboard", () => {
-      const dom = new JSDOM(DECK, { url: "https://example.test/deck.html?embed&slide=intro&static&edit=0", runScripts: "outside-only" });
+      const dom = new JSDOM(DECK, {
+        url: "https://example.test/deck.html?embed&slide=intro&static&edit=0",
+        runScripts: "outside-only",
+      });
       doms.push(dom);
       Object.defineProperty(dom.window, "parent", { value: { postMessage() {} }, configurable: true });
       dom.window.eval(RUNTIME);
@@ -1168,7 +1229,15 @@ describe("slide editor", () => {
     it("pans with the middle button or with Space held, without moving the element under the pointer", () => {
       const e = editor();
       const h1 = e.$("h1");
-      h1.dispatchEvent(new e.window.PointerEvent("pointerdown", { clientX: 10, clientY: 10, button: 1, bubbles: true, cancelable: true }));
+      h1.dispatchEvent(
+        new e.window.PointerEvent("pointerdown", {
+          clientX: 10,
+          clientY: 10,
+          button: 1,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
       e.move(h1, 30, 10);
       e.up(h1, 30, 10);
       expect(placement(e.$(".deck"))).toBe("translate(20px,0px) scale(1)");
@@ -1191,7 +1260,15 @@ describe("slide editor", () => {
       e.down(h1);
       e.up(h1);
       e.key("Enter");
-      h1.dispatchEvent(new e.window.PointerEvent("pointerdown", { clientX: 0, clientY: 0, button: 1, bubbles: true, cancelable: true }));
+      h1.dispatchEvent(
+        new e.window.PointerEvent("pointerdown", {
+          clientX: 0,
+          clientY: 0,
+          button: 1,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
       e.move(h1, 40, 20);
       e.up(h1, 40, 20);
       expect(placement(e.$(".deck"))).toBe("translate(40px,20px) scale(1)");
@@ -1247,22 +1324,40 @@ describe("slide editor", () => {
     it("reports overflow in slide pixels whatever the zoom", async () => {
       const e = editor();
       e.fromParent({ type: "slop:camera", x: 0, y: 0, k: 0.5 });
-      e.$("#intro").getBoundingClientRect = () => ({ left: 0, top: 0, right: 960, bottom: 540, width: 960, height: 540 }) as DOMRect;
+      e.$("#intro").getBoundingClientRect = () =>
+        ({ left: 0, top: 0, right: 960, bottom: 540, width: 960, height: 540 }) as DOMRect;
       Object.defineProperty(e.$("#intro"), "offsetWidth", { value: 1920, configurable: true });
-      e.$("h1").getBoundingClientRect = () => ({ left: 50, top: 500, right: 300, bottom: 640, width: 250, height: 140 }) as DOMRect;
+      e.$("h1").getBoundingClientRect = () =>
+        ({ left: 50, top: 500, right: 300, bottom: 640, width: 250, height: 140 }) as DOMRect;
       e.key("Tab");
       await new Promise((resolve) => setTimeout(resolve, 40));
-      const report = e.posted().filter((m) => (m as { type: string }).type === "slop:edit-overflow").at(-1) as { items: string[] };
+      const report = e
+        .posted()
+        .filter((m) => (m as { type: string }).type === "slop:edit-overflow")
+        .at(-1) as { items: string[] };
       expect(report.items[0]).toContain("runs past the bottom edge by 200px");
     });
   });
 
   describe("overflow", () => {
     const rect = (left: number, top: number, right: number, bottom: number) =>
-      ({ left, top, right, bottom, width: right - left, height: bottom - top, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
+      ({
+        left,
+        top,
+        right,
+        bottom,
+        width: right - left,
+        height: bottom - top,
+        x: left,
+        y: top,
+        toJSON: () => ({}),
+      }) as DOMRect;
     const frame = () => new Promise((resolve) => setTimeout(resolve, 40));
     const overflows = (e: ReturnType<typeof editor>) =>
-      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-overflow") as { slide: string; items: string[] }[];
+      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-overflow") as {
+        slide: string;
+        items: string[];
+      }[];
 
     function laidOut(e: ReturnType<typeof editor>, boxes: Record<string, DOMRect>) {
       e.$("#intro").getBoundingClientRect = () => rect(0, 0, 1920, 1080);
@@ -1342,12 +1437,42 @@ describe("slide editor", () => {
   });
 
   describe("toolbar tools", () => {
-    const SHAPE_STYLE = { color: "#ffffff", fontSize: 40, align: "center", valign: "middle", fill: "#3b82f6", stroke: null, strokeWidth: 0 };
-    const TEXT_STYLE = { color: "#111111", fontSize: 48, align: "left", valign: "top", fill: null, stroke: null, strokeWidth: 0 };
+    const SHAPE_STYLE = {
+      color: "#ffffff",
+      fontSize: 40,
+      align: "center",
+      valign: "middle",
+      fill: "#3b82f6",
+      stroke: null,
+      strokeWidth: 0,
+    };
+    const TEXT_STYLE = {
+      color: "#111111",
+      fontSize: 48,
+      align: "left",
+      valign: "top",
+      fill: null,
+      stroke: null,
+      strokeWidth: 0,
+    };
     const DRAW_STYLE = { fill: null, stroke: "#ef4444", strokeWidth: 6 };
     const at = (e: ReturnType<typeof editor>, type: string, x: number, y: number, init: PointerEventInit = {}) =>
-      e.$("#intro").dispatchEvent(new e.window.PointerEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true, ...init }));
-    const dragOut = (e: ReturnType<typeof editor>, from: [number, number], to: [number, number], init: PointerEventInit = {}) => {
+      e.$("#intro").dispatchEvent(
+        new e.window.PointerEvent(type, {
+          clientX: x,
+          clientY: y,
+          button: 0,
+          bubbles: true,
+          cancelable: true,
+          ...init,
+        }),
+      );
+    const dragOut = (
+      e: ReturnType<typeof editor>,
+      from: [number, number],
+      to: [number, number],
+      init: PointerEventInit = {},
+    ) => {
       at(e, "pointerdown", ...from);
       at(e, "pointermove", ...to, init);
       at(e, "pointerup", ...to);
@@ -1355,7 +1480,10 @@ describe("slide editor", () => {
     const toolTold = (e: ReturnType<typeof editor>) =>
       e.posted().filter((m) => (m as { type: string }).type === "slop:edit-tool") as { slide: string; tool: string }[];
     const reports = (e: ReturnType<typeof editor>) =>
-      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-selection") as { slide: string; selection: Record<string, unknown> | null }[];
+      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-selection") as {
+        slide: string;
+        selection: Record<string, unknown> | null;
+      }[];
     const added = (e: ReturnType<typeof editor>) => [...e.doc.querySelectorAll<HTMLElement>("#intro [data-added]")];
 
     it("drags out a shape with the app's style, then selects it and goes back to the select tool", () => {
@@ -1365,7 +1493,14 @@ describe("slide editor", () => {
       dragOut(e, [400, 300], [100, 100]);
       const [shape] = added(e);
       expect(shape!.getAttribute("data-added")).toBe("shape");
-      expect(shape!.style).toMatchObject({ position: "absolute", left: "100px", top: "100px", width: "300px", height: "200px", borderRadius: "0px" });
+      expect(shape!.style).toMatchObject({
+        position: "absolute",
+        left: "100px",
+        top: "100px",
+        width: "300px",
+        height: "200px",
+        borderRadius: "0px",
+      });
       expect(shape!.style.display).toBe("flex");
       expect(shape!.style.justifyContent).toBe("center");
       expect(shape!.style.textAlign).toBe("center");
@@ -1375,7 +1510,9 @@ describe("slide editor", () => {
       expect(toolTold(e)).toEqual([{ type: "slop:edit-tool", slide: "intro", tool: "select" }]);
       const [commit] = e.commits();
       expect(commit!.select).toEqual([5]);
-      expect(commit!.markup).toMatch(/<div data-added="shape" style="position: absolute; left: 100px; top: 100px; width: 300px; height: 200px;[^"]*background-color: #3b82f6;[^"]*"><\/div><\/section>$/);
+      expect(commit!.markup).toMatch(
+        /<div data-added="shape" style="position: absolute; left: 100px; top: 100px; width: 300px; height: 200px;[^"]*background-color: #3b82f6;[^"]*"><\/div><\/section>$/,
+      );
       expect(commit!.markup).not.toMatch(/data-slop/);
     });
 
@@ -1383,7 +1520,13 @@ describe("slide editor", () => {
       const e = editor();
       e.fromParent({ type: "slop:edit-tool", tool: "ellipse", style: SHAPE_STYLE });
       dragOut(e, [50, 60], [50, 60]);
-      expect(added(e)[0]!.style).toMatchObject({ left: "50px", top: "60px", width: "320px", height: "200px", borderRadius: "50%" });
+      expect(added(e)[0]!.style).toMatchObject({
+        left: "50px",
+        top: "60px",
+        width: "320px",
+        height: "200px",
+        borderRadius: "50%",
+      });
       e.fromParent({ type: "slop:edit-tool", tool: "rounded", style: SHAPE_STYLE });
       dragOut(e, [100, 100], [300, 150], { shiftKey: true });
       expect(added(e)[1]!.style).toMatchObject({ width: "200px", height: "200px", borderRadius: "24px" });
@@ -1397,7 +1540,13 @@ describe("slide editor", () => {
       expect(box!.getAttribute("data-added")).toBe("text");
       expect(box!.textContent).toBe("Text");
       expect(box!.getAttribute("contenteditable")).toBe("true");
-      expect(box!.style).toMatchObject({ left: "200px", top: "120px", fontSize: "48px", fontWeight: "700", justifyContent: "flex-start" });
+      expect(box!.style).toMatchObject({
+        left: "200px",
+        top: "120px",
+        fontSize: "48px",
+        fontWeight: "700",
+        justifyContent: "flex-start",
+      });
       expect(box!.style.width).toBe("");
       expect(e.commits()).toEqual([]);
       box!.textContent = "Note to self";
@@ -1454,7 +1603,9 @@ describe("slide editor", () => {
       expect(path.getAttribute("d")).toBe("M3 3 L43 23 L83 3");
       expect(path.getAttribute("stroke")).toBe("#ef4444");
       expect(path.getAttribute("stroke-width")).toBe("6");
-      expect(e.commits()[0]!.markup).toContain(`<path fill="none" stroke="#ef4444" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" d="M3 3 L43 23 L83 3"></path></svg></section>`);
+      expect(e.commits()[0]!.markup).toContain(
+        `<path fill="none" stroke="#ef4444" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" d="M3 3 L43 23 L83 3"></path></svg></section>`,
+      );
       expect(e.selected()).toEqual([]);
       expect(e.doc.documentElement.getAttribute("data-slop-tool")).toBe("draw");
       // A tap draws a dot.
@@ -1502,7 +1653,11 @@ describe("slide editor", () => {
 
     it("reports the selection for the toolbar", () => {
       const e = editor();
-      e.fromParent({ type: "slop:edit-tool", tool: "rect", style: { ...SHAPE_STYLE, stroke: "#ff0000", strokeWidth: 8, bold: true } });
+      e.fromParent({
+        type: "slop:edit-tool",
+        tool: "rect",
+        style: { ...SHAPE_STYLE, stroke: "#ff0000", strokeWidth: 8, bold: true },
+      });
       dragOut(e, [100, 100], [400, 300]);
       expect(reports(e).at(-1)).toEqual({
         type: "slop:edit-selection",
@@ -1526,7 +1681,14 @@ describe("slide editor", () => {
       e.down(e.$("svg"));
       expect(reports(e).at(-1)!.selection).toMatchObject({ kind: "media", text: false, vector: false, valign: null });
       e.down(e.$(".card p:nth-child(2)"));
-      expect(reports(e).at(-1)!.selection).toMatchObject({ kind: "element", text: true, color: "#ff0000", fill: null, stroke: null, strokeWidth: 0 });
+      expect(reports(e).at(-1)!.selection).toMatchObject({
+        kind: "element",
+        text: true,
+        color: "#ff0000",
+        fill: null,
+        stroke: null,
+        strokeWidth: 0,
+      });
       e.down(e.$("#intro"));
       expect(reports(e).at(-1)!.selection).toBeNull();
     });
@@ -1535,11 +1697,20 @@ describe("slide editor", () => {
       const e = editor();
       const h1 = e.$("h1");
       e.down(h1);
-      e.fromParent({ type: "slop:edit-style", style: { color: "#ff0000", fontSize: 72, bold: true, italic: true, align: "center" } });
+      e.fromParent({
+        type: "slop:edit-style",
+        style: { color: "#ff0000", fontSize: 72, bold: true, italic: true, align: "center" },
+      });
       expect(h1.style).toMatchObject({ fontSize: "72px", fontWeight: "700", fontStyle: "italic", textAlign: "center" });
       expect(h1.style.color).toMatch(/#ff0000|rgb\(255, 0, 0\)/);
       expect(e.commits()).toHaveLength(1);
-      expect(reports(e).at(-1)!.selection).toMatchObject({ color: "#ff0000", fontSize: 72, bold: true, italic: true, align: "center" });
+      expect(reports(e).at(-1)!.selection).toMatchObject({
+        color: "#ff0000",
+        fontSize: 72,
+        bold: true,
+        italic: true,
+        align: "center",
+      });
       // Text alignment is only vertical in a flex box.
       e.fromParent({ type: "slop:edit-style", style: { valign: "bottom" } });
       expect(h1.style.justifyContent).toBe("");
@@ -1583,10 +1754,21 @@ describe("slide editor", () => {
       e.fromParent({ type: "slop:edit-tool", tool: "select" });
       const svg = added(e)[0]!;
       e.down(svg);
-      expect(reports(e).at(-1)!.selection).toMatchObject({ kind: "drawing", text: false, vector: true, stroke: "#ef4444", strokeWidth: 6, fill: null });
+      expect(reports(e).at(-1)!.selection).toMatchObject({
+        kind: "drawing",
+        text: false,
+        vector: true,
+        stroke: "#ef4444",
+        strokeWidth: 6,
+        fill: null,
+      });
       e.fromParent({ type: "slop:edit-style", style: { stroke: "#00ff00", strokeWidth: 12, fill: "#0000ff" } });
       const path = svg.querySelector("path")!;
-      expect([path.getAttribute("stroke"), path.getAttribute("stroke-width"), path.getAttribute("fill")]).toEqual(["#00ff00", "12", "#0000ff"]);
+      expect([path.getAttribute("stroke"), path.getAttribute("stroke-width"), path.getAttribute("fill")]).toEqual([
+        "#00ff00",
+        "12",
+        "#0000ff",
+      ]);
       expect(svg.hasAttribute("style") && svg.style.backgroundColor).toBe("");
     });
 
@@ -1594,7 +1776,9 @@ describe("slide editor", () => {
       const pullRight = (e: ReturnType<typeof editor>, by: number) => {
         const handle = e.$(`[data-slop-ui] [data-dir="1 0"]`);
         const pointer = (type: string, x: number) =>
-          handle.dispatchEvent(new e.window.PointerEvent(type, { clientX: x, clientY: 100, button: 0, bubbles: true, cancelable: true }));
+          handle.dispatchEvent(
+            new e.window.PointerEvent(type, { clientX: x, clientY: 100, button: 0, bubbles: true, cancelable: true }),
+          );
         pointer("pointerdown", 100);
         pointer("pointermove", 100 + by);
         pointer("pointerup", 100 + by);
@@ -1602,7 +1786,11 @@ describe("slide editor", () => {
 
       it("resizes a shape instead of scaling it, so its border keeps its width", () => {
         const e = editor();
-        e.fromParent({ type: "slop:edit-tool", tool: "rect", style: { ...SHAPE_STYLE, stroke: "#ffffff", strokeWidth: 8 } });
+        e.fromParent({
+          type: "slop:edit-tool",
+          tool: "rect",
+          style: { ...SHAPE_STYLE, stroke: "#ffffff", strokeWidth: 8 },
+        });
         dragOut(e, [100, 100], [400, 300]);
         const shape = added(e)[0]!;
         pullRight(e, 100);
@@ -1699,7 +1887,8 @@ describe("slide editor", () => {
       it("steps forward only past elements it overlaps", () => {
         const e = editor();
         const boxes = { h1: [0, 0, 100, 100], ".card": [500, 500, 100, 100], svg: [50, 50, 100, 100] } as const;
-        for (const [sel, [x, y, w, h]] of Object.entries(boxes)) e.$(sel).getBoundingClientRect = () => new e.window.DOMRect(x, y, w, h);
+        for (const [sel, [x, y, w, h]] of Object.entries(boxes))
+          e.$(sel).getBoundingClientRect = () => new e.window.DOMRect(x, y, w, h);
         e.$(".overlay").getBoundingClientRect = () => new e.window.DOMRect(900, 900, 10, 10);
         e.$(".shape").getBoundingClientRect = () => new e.window.DOMRect(900, 900, 10, 10);
         e.$(".card").setAttribute("style", "position: absolute; z-index: 5");

@@ -24,7 +24,16 @@ import { DECK_HTML, deckFor } from "./test/fixtures";
 const WORKSPACE = { path: "/decks", name: "decks" };
 
 beforeEach(() => {
-  useApp.setState({ workspace: null, openedFile: null, deck: null, view: "slides", sidebarOpen: true, railOpen: true, presenting: false, error: null });
+  useApp.setState({
+    workspace: null,
+    openedFile: null,
+    deck: null,
+    view: "slides",
+    sidebarOpen: true,
+    railOpen: true,
+    presenting: false,
+    error: null,
+  });
 });
 
 // Stub ids are prefixed: react-resizable-panels sets data-testid to each panel's id.

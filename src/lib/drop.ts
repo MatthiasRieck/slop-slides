@@ -66,7 +66,8 @@ export function imageSize(url: string, timeout = 3000): Promise<{ w: number; h: 
       resolve(size);
     };
     const timer = setTimeout(() => done(null), timeout);
-    img.onload = () => done(img.naturalWidth && img.naturalHeight ? { w: img.naturalWidth, h: img.naturalHeight } : null);
+    img.onload = () =>
+      done(img.naturalWidth && img.naturalHeight ? { w: img.naturalWidth, h: img.naturalHeight } : null);
     img.onerror = () => done(null);
     img.src = url;
   });

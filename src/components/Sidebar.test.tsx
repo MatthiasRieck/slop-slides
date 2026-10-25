@@ -14,7 +14,12 @@ import { Sidebar } from "./Sidebar";
 
 beforeEach(() => {
   localStorage.clear();
-  useApp.setState({ workspace: { path: "/ws", name: "ws" }, deck: deckFor(DECK_HTML), sidebarTab: "chat", sidebarOpen: true });
+  useApp.setState({
+    workspace: { path: "/ws", name: "ws" },
+    deck: deckFor(DECK_HTML),
+    sidebarTab: "chat",
+    sidebarOpen: true,
+  });
 });
 
 const tab = (name: string) => screen.getByRole("tab", { name });

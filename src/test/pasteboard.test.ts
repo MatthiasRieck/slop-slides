@@ -20,7 +20,7 @@ const DECK = (bodyStyle = "") => `<!DOCTYPE html><html><head><style>${bodyStyle}
 let doms: JSDOM[] = [];
 
 afterEach(() => {
-  doms.forEach((d) => d.window.close());
+  for (const d of doms) d.window.close();
   doms = [];
 });
 
@@ -32,11 +32,23 @@ interface View {
   k: number;
 }
 
-function pasteboard({ framed = true, bodyStyle = "", show = false, stage }: { framed?: boolean; bodyStyle?: string; show?: boolean; stage?: [number, number] } = {}) {
+function pasteboard({
+  framed = true,
+  bodyStyle = "",
+  show = false,
+  stage,
+}: {
+  framed?: boolean;
+  bodyStyle?: string;
+  show?: boolean;
+  stage?: [number, number];
+} = {}) {
   const posted: unknown[] = [];
   const parent = { postMessage: (data: unknown) => posted.push(data) };
   const dom = new JSDOM(DECK(bodyStyle), {
-    url: show ? "https://example.test/deck.html?v=1&show#intro" : "https://example.test/deck.html?embed&slide=intro&pan",
+    url: show
+      ? "https://example.test/deck.html?v=1&show#intro"
+      : "https://example.test/deck.html?embed&slide=intro&pan",
     runScripts: "outside-only",
     pretendToBeVisual: true,
     beforeParse(window) {
@@ -58,7 +70,9 @@ function pasteboard({ framed = true, bodyStyle = "", show = false, stage }: { fr
   const doc = window.document;
   const $ = (selector: string) => doc.querySelector<HTMLElement>(selector)!;
   const pointer = (type: string, target: Element, x: number, y: number, button = 0) =>
-    target.dispatchEvent(new window.PointerEvent(type, { clientX: x, clientY: y, button, bubbles: true, cancelable: true }));
+    target.dispatchEvent(
+      new window.PointerEvent(type, { clientX: x, clientY: y, button, bubbles: true, cancelable: true }),
+    );
   return {
     window,
     doc,
@@ -87,7 +101,9 @@ function pasteboard({ framed = true, bodyStyle = "", show = false, stage }: { fr
       return event;
     },
     click: (target: Element, x = 1500) =>
-      target.dispatchEvent(new window.MouseEvent("click", { clientX: x, clientY: 100, bubbles: true, cancelable: true })),
+      target.dispatchEvent(
+        new window.MouseEvent("click", { clientX: x, clientY: 100, bubbles: true, cancelable: true }),
+      ),
     fromParent: (data: unknown) => {
       const event = new window.MessageEvent("message", { data });
       Object.defineProperty(event, "source", { value: parent });
@@ -184,7 +200,9 @@ describe("pasteboard", () => {
   });
 
   it("keeps the color the deck painted behind its slides, now that the page is transparent", () => {
-    expect(pasteboard({ bodyStyle: "body { background: rgb(10, 20, 30) }" }).$(".deck").style.backgroundColor).toBe("rgb(10, 20, 30)");
+    expect(pasteboard({ bodyStyle: "body { background: rgb(10, 20, 30) }" }).$(".deck").style.backgroundColor).toBe(
+      "rgb(10, 20, 30)",
+    );
     expect(pasteboard({ bodyStyle: ".deck { background: rgb(1, 2, 3) }" }).$(".deck").style.backgroundColor).toBe("");
   });
 
@@ -249,7 +267,13 @@ describe("pasteboard", () => {
       return [{ left: 100 + i * 10, right: 110 + i * 10, top: 100, bottom: 120 }] as unknown as DOMRectList;
     };
     const fire = (type: string, x: number, y: number, button = 0) => {
-      const event = new p.window.PointerEvent(type, { clientX: x, clientY: y, button, bubbles: true, cancelable: true });
+      const event = new p.window.PointerEvent(type, {
+        clientX: x,
+        clientY: y,
+        button,
+        bubbles: true,
+        cancelable: true,
+      });
       (cover && covering() ? cover : h1).dispatchEvent(event);
       return event;
     };
@@ -297,7 +321,12 @@ describe("pasteboard", () => {
     expect(cover.style.getPropertyValue("pointer-events")).toBe("none");
     fire("pointermove", 135, 110);
     const selection = p.window.getSelection()!;
-    expect([selection.anchorNode, selection.anchorOffset, selection.focusNode, selection.focusOffset]).toEqual([text, 0, text, 4]);
+    expect([selection.anchorNode, selection.anchorOffset, selection.focusNode, selection.focusOffset]).toEqual([
+      text,
+      0,
+      text,
+      4,
+    ]);
     expect(selection.toString()).toBe("Hell");
     expect(p.transform()).toBe("translate(320px,180px) scale(1)");
     fire("pointerup", 135, 110);
@@ -373,11 +402,11 @@ describe("pasteboard", () => {
     expect(p.transform()).toBe("translate(120px,230px) scale(0.5)");
     p.fromParent({ type: "slop:canvas", color: "rgb(1, 2, 3)", accent: "rgb(4, 5, 6)", border: "rgb(7, 8, 9)" });
     const style = p.doc.documentElement.style;
-    expect([style.getPropertyValue("--slop-canvas"), style.getPropertyValue("--slop-accent"), style.getPropertyValue("--slop-border")]).toEqual([
-      "rgb(1, 2, 3)",
-      "rgb(4, 5, 6)",
-      "rgb(7, 8, 9)",
-    ]);
+    expect([
+      style.getPropertyValue("--slop-canvas"),
+      style.getPropertyValue("--slop-accent"),
+      style.getPropertyValue("--slop-border"),
+    ]).toEqual(["rgb(1, 2, 3)", "rgb(4, 5, 6)", "rgb(7, 8, 9)"]);
   });
 
   describe("in a show", () => {
@@ -394,7 +423,13 @@ describe("pasteboard", () => {
 
     it("zooms with the mouse wheel around the pointer and reports where ink belongs", () => {
       const p = pasteboard({ show: true });
-      const event = new p.window.WheelEvent("wheel", { deltaY: -4.000244140625, clientX: 1000, clientY: 500, cancelable: true, bubbles: true });
+      const event = new p.window.WheelEvent("wheel", {
+        deltaY: -4.000244140625,
+        clientX: 1000,
+        clientY: 500,
+        cancelable: true,
+        bubbles: true,
+      });
       Object.defineProperty(event, "wheelDeltaY", { value: 12 });
       p.doc.body.dispatchEvent(event);
       expect(event.defaultPrevented).toBe(true);

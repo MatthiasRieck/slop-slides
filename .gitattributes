@@ -1,0 +1,2 @@
+# Check out text files with LF on every platform so Biome and rustfmt agree with CI on Windows.
+* text=auto eol=lf

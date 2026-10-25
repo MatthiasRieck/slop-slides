@@ -15,9 +15,27 @@ import { SlideRail } from "./SlideRail";
 import { LayoutPicker } from "./Templates";
 
 const DECK = deckFor(DECK_HTML);
-const MINE: TemplateSummary = { id: "mine", title: "Mine", builtin: false, path: "/home/.slopslides/templates/mine", slides: ["cover", "pricing-tiers"] };
-const SWISS: TemplateSummary = { id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title", "split", "quote"] };
-const BENTO: TemplateSummary = { id: "bento-grid", title: "Bento Grid", builtin: true, path: null, slides: ["title", "stats"] };
+const MINE: TemplateSummary = {
+  id: "mine",
+  title: "Mine",
+  builtin: false,
+  path: "/home/.slopslides/templates/mine",
+  slides: ["cover", "pricing-tiers"],
+};
+const SWISS: TemplateSummary = {
+  id: "swiss",
+  title: "Swiss Design",
+  builtin: true,
+  path: null,
+  slides: ["title", "split", "quote"],
+};
+const BENTO: TemplateSummary = {
+  id: "bento-grid",
+  title: "Bento Grid",
+  builtin: true,
+  path: null,
+  slides: ["title", "stats"],
+};
 
 beforeEach(() => {
   reveal.mockReset();
@@ -29,7 +47,15 @@ beforeEach(() => {
         return "/home/.slopslides/sessions/1-ab/templates/x.html";
     }
   });
-  useApp.setState({ deck: DECK, selected: "intro", templates: [MINE, SWISS, BENTO], composerFill: null, error: null, running: false, sidebarOpen: true });
+  useApp.setState({
+    deck: DECK,
+    selected: "intro",
+    templates: [MINE, SWISS, BENTO],
+    composerFill: null,
+    error: null,
+    running: false,
+    sidebarOpen: true,
+  });
 });
 
 const layoutNames = () => screen.getAllByRole("button", { name: / layout$/ }).map((b) => b.getAttribute("aria-label"));
@@ -60,7 +86,9 @@ describe("LayoutPicker", () => {
     expect(layoutNames()).toEqual(["Title layout", "Split layout", "Quote layout"]);
     expect(screen.getByText(/keeping its content and this deck's style/)).toBeTruthy();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Quote layout" })));
-    await waitFor(() => expect(useApp.getState().composerFill?.text).toContain('"Quote" layout of the "Swiss Design" template'));
+    await waitFor(() =>
+      expect(useApp.getState().composerFill?.text).toContain('"Quote" layout of the "Swiss Design" template'),
+    );
     expect(useApp.getState().composerFill?.text).toContain("do not take over the template's style");
   });
 
@@ -78,7 +106,12 @@ describe("LayoutPicker", () => {
     );
     render(<LayoutPicker mode="add" onDone={() => {}} />);
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Quote layout" })));
-    expect(invoke).toHaveBeenCalledWith("add_template_slide", { id: DECK.id, template: "swiss", slide: "quote", after: "intro" });
+    expect(invoke).toHaveBeenCalledWith("add_template_slide", {
+      id: DECK.id,
+      template: "swiss",
+      slide: "quote",
+      after: "intro",
+    });
     expect(useApp.getState().selected).toBe("outro");
   });
 
@@ -95,7 +128,12 @@ describe("LayoutPicker", () => {
     render(<LayoutPicker mode="add" onDone={() => {}} />);
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Quote layout" })));
     expect(invoke).toHaveBeenCalledWith("apply_template", { id: DECK.id, template: "swiss" });
-    expect(invoke).toHaveBeenCalledWith("add_template_slide", { id: DECK.id, template: "swiss", slide: "quote", after: null });
+    expect(invoke).toHaveBeenCalledWith("add_template_slide", {
+      id: DECK.id,
+      template: "swiss",
+      slide: "quote",
+      after: null,
+    });
     expect(useApp.getState().deck?.slides.map((s) => s.id)).toEqual(["quote"]);
     expect(useApp.getState().selected).toBe("quote");
     expect(useApp.getState().composerFill).toBeNull();
@@ -112,7 +150,11 @@ describe("LayoutPicker", () => {
     expect(screen.getByText("Change layout")).toBeTruthy();
     expect(screen.getByText(/rebuild this slide on the layout/)).toBeTruthy();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Cover layout" })));
-    await waitFor(() => expect(useApp.getState().composerFill?.text).toMatch(/^Change the layout of this slide to the "Cover" layout of the "Mine" template/));
+    await waitFor(() =>
+      expect(useApp.getState().composerFill?.text).toMatch(
+        /^Change the layout of this slide to the "Cover" layout of the "Mine" template/,
+      ),
+    );
   });
 
   it("says so when there are no templates", () => {
@@ -129,12 +171,11 @@ describe("SlideRail pickers", () => {
     render(<SlideRail />);
     fireEvent.click(screen.getByTitle("New slide"));
     const dialog = screen.getByRole("dialog", { name: "New slide" });
-    expect(within(dialog).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
-      "Blank slide",
-      "Title layout",
-      "Split layout",
-      "Quote layout",
-    ]);
+    expect(
+      within(dialog)
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("aria-label")),
+    ).toEqual(["Blank slide", "Title layout", "Split layout", "Quote layout"]);
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -176,13 +217,17 @@ describe("style picker", () => {
     open();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Bento Grid style" })));
     expect(screen.queryByRole("dialog")).toBeNull();
-    await waitFor(() => expect(useApp.getState().composerFill?.text).toContain('Restyle the whole deck in the "Bento Grid" style'));
+    await waitFor(() =>
+      expect(useApp.getState().composerFill?.text).toContain('Restyle the whole deck in the "Bento Grid" style'),
+    );
   });
 
   it("styles an empty deck directly and offers no template saving", async () => {
     const empty = { ...DECK, slides: [] };
     useApp.setState({ deck: empty, selected: null });
-    invoke.mockImplementation(async (command: string) => (command === "apply_template" ? { ...empty, template: "swiss" } : undefined));
+    invoke.mockImplementation(async (command: string) =>
+      command === "apply_template" ? { ...empty, template: "swiss" } : undefined,
+    );
     render(<SlideRail />);
     open();
     expect(screen.getByText(/takes the style's fonts/)).toBeTruthy();
@@ -200,7 +245,13 @@ describe("style picker", () => {
   });
 
   it("saves the deck as a template under the name given", async () => {
-    const created: TemplateSummary = { id: "board", title: "Board", builtin: false, path: "/home/.slopslides/templates/board", slides: ["intro"] };
+    const created: TemplateSummary = {
+      id: "board",
+      title: "Board",
+      builtin: false,
+      path: "/home/.slopslides/templates/board",
+      slides: ["intro"],
+    };
     invoke.mockImplementation(async (command: string) => {
       if (command === "create_template") return created;
       if (command === "list_templates") return [created, MINE, SWISS];

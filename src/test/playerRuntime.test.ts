@@ -3,7 +3,7 @@
  * editor's slide iframes, in the presenter, and in exported files opened in any browser.
  */
 import { readFileSync } from "node:fs";
-import { JSDOM, type DOMWindow } from "jsdom";
+import { type DOMWindow, JSDOM } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import RUNTIME from "../../src-tauri/assets/runtime.js?raw";
@@ -19,7 +19,7 @@ const DECK = `<!DOCTYPE html><html><body>
 let doms: JSDOM[] = [];
 
 afterEach(() => {
-  doms.forEach((d) => d.window.close());
+  for (const d of doms) d.window.close();
   doms = [];
 });
 
@@ -247,7 +247,10 @@ describe("player: embedded in the editor", () => {
     const event = p.key("ArrowRight");
     expect(p.active()).toBe(0);
     expect(event.defaultPrevented).toBe(false);
-    expect(parent.postMessage).toHaveBeenCalledWith({ type: "slop:key", key: "ArrowRight", mod: false, shift: false }, "*");
+    expect(parent.postMessage).toHaveBeenCalledWith(
+      { type: "slop:key", key: "ArrowRight", mod: false, shift: false },
+      "*",
+    );
     p.click(p.doc.body, 1500);
     expect(p.active()).toBe(0);
   });
@@ -264,7 +267,10 @@ describe("player: in the presenter", () => {
     const p = player({ at: "#intro", parent });
     expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:slide", id: "intro", index: 0 }, "*");
     p.key("ArrowRight");
-    expect(parent.postMessage).toHaveBeenCalledWith({ type: "slop:key", key: "ArrowRight", mod: false, shift: false }, "*");
+    expect(parent.postMessage).toHaveBeenCalledWith(
+      { type: "slop:key", key: "ArrowRight", mod: false, shift: false },
+      "*",
+    );
     expect(parent.postMessage).toHaveBeenLastCalledWith({ type: "slop:slide", id: null, index: 1 }, "*");
     expect(p.active()).toBe(1);
   });
@@ -378,10 +384,7 @@ describe("player: section markers", () => {
   const SECTIONED = DECK.replace(
     `<section class="slide" id="end">`,
     `<div class="deck-section" data-title="Last part"></div>\n  <section class="slide" id="end">`,
-  ).replace(
-    `<main class="deck">`,
-    `<main class="deck">\n  <div class="deck-section" data-title="First part"></div>`,
-  );
+  ).replace(`<main class="deck">`, `<main class="deck">\n  <div class="deck-section" data-title="First part"></div>`);
 
   it("steps through slides only, never stopping on a marker", () => {
     const p = player({ html: SECTIONED });
@@ -411,7 +414,14 @@ describe("player: section markers", () => {
 describe("player: review marks", () => {
   const MARKS = {
     intro: [
-      { tool: "pen", color: "#ef4444", points: [[0.1, 0.2], [0.5, 0.5]] },
+      {
+        tool: "pen",
+        color: "#ef4444",
+        points: [
+          [0.1, 0.2],
+          [0.5, 0.5],
+        ],
+      },
       { tool: "highlighter", color: "#facc15", points: [[0.25, 0.25]] },
     ],
     gone: [{ tool: "pen", color: "#000", points: [[0, 0]] }],
@@ -455,7 +465,12 @@ describe("player: review marks", () => {
   });
 
   it("draws longer strokes as the same smooth curve the app draws", () => {
-    const points: [number, number][] = [[0, 0], [0.5, 0], [0.5, 0.5], [0, 0.5]];
+    const points: [number, number][] = [
+      [0, 0],
+      [0.5, 0],
+      [0.5, 0.5],
+      [0, 0.5],
+    ];
     const html = DECK.replace(
       "</body>",
       `<script type="application/json" id="slopslide-review">${JSON.stringify({ intro: [{ tool: "pen", color: "#000", points }] })}</script></body>`,
@@ -483,7 +498,7 @@ describe("player: review marks", () => {
   });
 
   it("ignores a damaged review block", () => {
-    const p = player({ html: REVIEWED.replace('{"intro"', '{intro') });
+    const p = player({ html: REVIEWED.replace('{"intro"', "{intro") });
     expect(p.key("r").defaultPrevented).toBe(false);
     expect(p.active()).toBe(0);
   });
@@ -499,8 +514,10 @@ describe("player: without JavaScript", () => {
   const CSS = readFileSync("src-tauri/assets/runtime.css", "utf8");
   // Chat apps on iOS open decks in Quick Look, which renders HTML but runs no scripts.
   function styled(flagged: boolean) {
-    const html = DECK.replace("<html>", `<html${flagged ? " data-slop-player" : ""}><head><style>${CSS}</style></head>`)
-      .replace('<section class="slide"><p>No id</p>', '<section class="slide" data-hidden><p class="reveal">No id</p>');
+    const html = DECK.replace(
+      "<html>",
+      `<html${flagged ? " data-slop-player" : ""}><head><style>${CSS}</style></head>`,
+    ).replace('<section class="slide"><p>No id</p>', '<section class="slide" data-hidden><p class="reveal">No id</p>');
     const dom = new JSDOM(html, { pretendToBeVisual: true });
     doms.push(dom);
     const doc = dom.window.document;

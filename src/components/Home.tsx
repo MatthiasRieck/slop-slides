@@ -23,6 +23,7 @@ export function Home() {
       .then((list) => setRecent(Array.isArray(list) ? list : []))
       .catch((error) => useApp.getState().setError(errorMessage(error)));
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: load the recent list once on mount
   useEffect(() => {
     void refresh();
   }, []);
@@ -100,7 +101,9 @@ export function Home() {
                         <span className="truncate text-sm font-medium">{workspace.name}</span>
                         <span className="truncate text-xs text-muted-foreground">{workspace.path}</span>
                       </span>
-                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">{relativeTime(workspace.openedMs)}</span>
+                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                        {relativeTime(workspace.openedMs)}
+                      </span>
                     </button>
                     <button
                       type="button"

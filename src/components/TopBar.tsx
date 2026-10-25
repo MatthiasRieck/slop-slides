@@ -18,10 +18,7 @@ export function TopBar() {
   return (
     <header
       data-tauri-drag-region
-      className={cn(
-        "flex h-12 shrink-0 items-center gap-1 border-b bg-background pr-3",
-        isMac ? "pl-[84px]" : "pl-3",
-      )}
+      className={cn("flex h-12 shrink-0 items-center gap-1 border-b bg-background pr-3", isMac ? "pl-[84px]" : "pl-3")}
     >
       {hasDeck && <RailToggle />}
       <Breadcrumbs workspace={workspace.name} path={openedFile?.path ?? null} />
@@ -53,6 +50,7 @@ function Breadcrumbs({ workspace, path }: { workspace: string; path: string | nu
       {crumbs.map((crumb, i) => {
         const last = i === crumbs.length - 1;
         return (
+          // biome-ignore lint/suspicious/noArrayIndexKey: crumbs are positional path segments
           <span key={i} className={cn("flex items-center gap-1", last ? "min-w-0" : "shrink-0")}>
             {i > 0 && <span className="text-muted-foreground/40">/</span>}
             <span

@@ -25,19 +25,19 @@ import {
   Trash2,
   Type,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import {
   BORDER_WIDTHS,
   EDIT_COLORS,
-  stepFontSize,
-  toolbarState,
   type EditSelection,
   type EditStyle,
   type EditTool,
   type StackOrder,
+  stepFontSize,
   type TextAlign,
   type ToolFamily,
+  toolbarState,
   type VerticalAlign,
 } from "../lib/editTools";
 import { cn } from "../lib/utils";
@@ -93,7 +93,11 @@ export function EditToolbar(props: {
   const fontSize = style.fontSize ?? 48;
 
   return (
-    <div role="toolbar" aria-label="Edit tools" className="flex flex-wrap items-center justify-center gap-0.5 rounded-lg border bg-card px-1 py-0.5 shadow-sm">
+    <div
+      role="toolbar"
+      aria-label="Edit tools"
+      className="flex flex-wrap items-center justify-center gap-0.5 rounded-lg border bg-card px-1 py-0.5 shadow-sm"
+    >
       {TOOLS.map((t) => (
         <ToolButton key={t.tool} label={t.label} active={props.tool === t.tool} onClick={() => props.onTool(t.tool)}>
           {t.icon}
@@ -111,25 +115,55 @@ export function EditToolbar(props: {
         <option value="stretch">Stretch</option>
       </select>
       <Divider />
-      <ColorButton label="Text color" icon={<Baseline />} value={style.color ?? null} disabled={textOff} onChange={(color) => props.onStyle({ color })} />
-      <ToolButton label="Smaller text" disabled={textOff} onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, -1) })}>
+      <ColorButton
+        label="Text color"
+        icon={<Baseline />}
+        value={style.color ?? null}
+        disabled={textOff}
+        onChange={(color) => props.onStyle({ color })}
+      />
+      <ToolButton
+        label="Smaller text"
+        disabled={textOff}
+        onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, -1) })}
+      >
         <Minus />
       </ToolButton>
       <span aria-label="Font size" className={cn("w-7 text-center text-xs tabular-nums", textOff && "opacity-30")}>
         {state?.text ? fontSize : "–"}
       </span>
-      <ToolButton label="Larger text" disabled={textOff} onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, 1) })}>
+      <ToolButton
+        label="Larger text"
+        disabled={textOff}
+        onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, 1) })}
+      >
         <Plus />
       </ToolButton>
-      <ToolButton label="Bold" active={!textOff && !!style.bold} disabled={textOff} onClick={() => props.onStyle({ bold: !style.bold })}>
+      <ToolButton
+        label="Bold"
+        active={!textOff && !!style.bold}
+        disabled={textOff}
+        onClick={() => props.onStyle({ bold: !style.bold })}
+      >
         <Bold />
       </ToolButton>
-      <ToolButton label="Italic" active={!textOff && !!style.italic} disabled={textOff} onClick={() => props.onStyle({ italic: !style.italic })}>
+      <ToolButton
+        label="Italic"
+        active={!textOff && !!style.italic}
+        disabled={textOff}
+        onClick={() => props.onStyle({ italic: !style.italic })}
+      >
         <Italic />
       </ToolButton>
       <Divider />
       {ALIGN.map((a) => (
-        <ToolButton key={a.value} label={a.label} active={!textOff && style.align === a.value} disabled={textOff} onClick={() => props.onStyle({ align: a.value })}>
+        <ToolButton
+          key={a.value}
+          label={a.label}
+          active={!textOff && style.align === a.value}
+          disabled={textOff}
+          onClick={() => props.onStyle({ align: a.value })}
+        >
           {a.icon}
         </ToolButton>
       ))}
@@ -145,7 +179,14 @@ export function EditToolbar(props: {
         </ToolButton>
       ))}
       <Divider />
-      <ColorButton label="Fill" icon={<PaintBucket />} value={style.fill ?? null} disabled={!state} none onChange={(fill) => props.onStyle({ fill })} />
+      <ColorButton
+        label="Fill"
+        icon={<PaintBucket />}
+        value={style.fill ?? null}
+        disabled={!state}
+        none
+        onChange={(fill) => props.onStyle({ fill })}
+      />
       <ColorButton
         label={state?.vector ? "Line color" : "Border color"}
         icon={<SquareDashed />}
@@ -187,7 +228,13 @@ function Divider() {
   return <div className="mx-1 h-4 w-px bg-border" />;
 }
 
-function ToolButton(props: { label: string; active?: boolean; disabled?: boolean; onClick: () => void; children: ReactNode }) {
+function ToolButton(props: {
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
   return (
     <button
       type="button"
@@ -231,6 +278,7 @@ function ColorButton(props: {
   }, [open]);
 
   // The system color picker reports every color the user passes over; only the one they settle on counts.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the input mounts and unmounts with the popover
   useEffect(() => {
     const input = custom.current;
     if (!input) return;
@@ -264,7 +312,11 @@ function ColorButton(props: {
         />
       </button>
       {open && (
-        <div role="dialog" aria-label={props.label} className="absolute top-full left-1/2 z-30 mt-1 -translate-x-1/2 rounded-md border bg-card p-2 shadow-md">
+        <div
+          role="dialog"
+          aria-label={props.label}
+          className="absolute top-full left-1/2 z-30 mt-1 -translate-x-1/2 rounded-md border bg-card p-2 shadow-md"
+        >
           <div className="grid w-max grid-cols-6 gap-1">
             {props.none && (
               <button
@@ -273,7 +325,10 @@ function ColorButton(props: {
                 title="None"
                 aria-pressed={props.value === null}
                 onClick={() => pick(null)}
-                className={cn("flex size-5 items-center justify-center rounded-full border text-muted-foreground [&_svg]:size-3.5", props.value === null && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-card")}
+                className={cn(
+                  "flex size-5 items-center justify-center rounded-full border text-muted-foreground [&_svg]:size-3.5",
+                  props.value === null && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-card",
+                )}
               >
                 <Ban />
               </button>
@@ -295,7 +350,13 @@ function ColorButton(props: {
             ))}
           </div>
           <label className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-            <input ref={custom} type="color" aria-label={`Custom ${props.label.toLowerCase()}`} defaultValue={props.value ?? "#000000"} className="h-5 w-8 cursor-pointer rounded border-0 bg-transparent p-0" />
+            <input
+              ref={custom}
+              type="color"
+              aria-label={`Custom ${props.label.toLowerCase()}`}
+              defaultValue={props.value ?? "#000000"}
+              className="h-5 w-8 cursor-pointer rounded border-0 bg-transparent p-0"
+            />
             Custom
           </label>
         </div>

@@ -112,6 +112,7 @@ pub fn lint(
     check_template(&mut l);
     check_slide_size(&mut l);
     check_entrances(&mut l);
+    check_morphs(&mut l);
     check_assets(&mut l, asset_exists);
     check_locked(&mut l, locked);
     l.issues.sort_by_key(|i| (i.line, i.severity));
@@ -450,6 +451,42 @@ fn check_document(l: &mut Linter) {
             0,
             "The slopslide:runtime-css / runtime-js blocks are missing; keep them intact.".into(),
         );
+    }
+}
+
+/// Shared-element names are unique within each click state, reusable across slides.
+fn check_morphs(l: &mut Linter) {
+    for slide in l.slides.clone() {
+        let mut seen = HashSet::new();
+        let mut at = slide.range.start;
+        while at < slide.range.end {
+            if let Some(tag) = parse_tag(l.html, at) {
+                if !tag.closing {
+                    if let Some((_, name, ..)) = tag.attrs.iter().find(|(n, ..)| n == "data-morph")
+                    {
+                        if name.is_empty()
+                            || !name.as_bytes()[0].is_ascii_lowercase()
+                            || !name
+                                .bytes()
+                                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                        {
+                            l.report(
+                                "morph-name",
+                                Severity::Warning,
+                                at,
+                                "data-morph needs a lowercase name such as product-hero.".into(),
+                            );
+                        } else if !seen.insert(name.clone()) {
+                            l.report("morph-duplicate", Severity::Warning, at,
+                                format!("data-morph=\"{name}\" occurs twice on this slide; use each name once per slide."));
+                        }
+                    }
+                }
+                at = tag.end;
+            } else {
+                at += 1;
+            }
+        }
     }
 }
 
@@ -998,6 +1035,22 @@ mod tests {
             .into_iter()
             .map(|i| i.rule)
             .collect()
+    }
+
+    #[test]
+    fn morph_names_are_valid_and_unique_per_slide() {
+        let source = deck(
+            r#"<section class="slide" id="a"><img data-morph="hero" alt=""><div data-morph="hero"></div><p data-morph="Bad name">X</p></section><section class="slide" id="b"><img data-morph="hero" alt=""></section>"#,
+        );
+        let issues = lint(&source, |_| true, &[]);
+        assert_eq!(
+            issues
+                .iter()
+                .filter(|i| i.rule == "morph-duplicate")
+                .count(),
+            1
+        );
+        assert_eq!(issues.iter().filter(|i| i.rule == "morph-name").count(), 1);
     }
 
     #[test]

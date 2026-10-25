@@ -1707,6 +1707,23 @@ mod tests {
     }
 
     #[test]
+    fn export_keeps_shared_heroes_and_the_motion_player() {
+        let deck = TempDeck::new(
+            r#"<html><head></head><body><main class="deck"><section class="slide" id="a"><img data-morph="hero" src="assets/dot.png"></section><section class="slide" id="b"><img data-morph="hero" src="assets/dot.png"></section></main></body></html>"#,
+        );
+        fs::create_dir_all(deck.0.join("assets")).unwrap();
+        fs::write(deck.0.join("assets/dot.png"), [0x89, b'P', b'N', b'G']).unwrap();
+        let dest = deck.0.join("motion.html");
+        export(&deck.file(), &dest).unwrap();
+        let out = fs::read_to_string(dest).unwrap();
+        assert_eq!(out.matches(r#"data-morph="hero""#).count(), 2);
+        assert_eq!(out.matches("src=\"data:image/png;base64,").count(), 2);
+        assert!(out.contains("document.startViewTransition(update)"));
+        assert!(out.contains("::view-transition-group(*)"));
+        assert!(!out.contains("src=\"assets/dot.png\""));
+    }
+
+    #[test]
     fn export_inlines_assets_and_installs_the_runtime() {
         let deck = TempDeck::new(
             "<html><head></head><body><main class=\"deck\"><section class=\"slide\" id=\"a\"><img src=\"assets/dot.png\"><img src=\"assets/missing.png\"><img src=\"assets/../../escape.png\"></section></main></body></html>",

@@ -48,13 +48,47 @@
     return isNaN(n) ? 0 : Math.min(slides.length - 1, Math.max(0, n - 1));
   }
 
+  var transition = null;
+  function morphNames(slide, enabled) {
+    var seen = Object.create(null);
+    Array.prototype.forEach.call(slide.querySelectorAll("[data-morph]"), function (el) {
+      var key = el.getAttribute("data-morph");
+      // Invalid or duplicate names must not break the whole browser transition.
+      var valid = /^[a-z][a-z0-9-]*$/.test(key) && !seen[key];
+      seen[key] = true;
+      el.style.viewTransitionName = enabled && valid ? "slop-" + key : "";
+    });
+  }
+
   function show(index) {
     index = Math.min(slides.length - 1, Math.max(0, index));
     if (index === current) return;
+    var previous = current;
     current = index;
-    slides.forEach(function (el, i) {
-      el.classList.toggle("active", i === index);
-    });
+    if (transition) transition.skipTransition();
+    var motion = !window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var canMorph = previous >= 0 && !embed && !params.has("static") && motion &&
+      document.startViewTransition && slides[index].querySelector("[data-morph]") &&
+      slides[previous].querySelector("[data-morph]");
+    function update() {
+      if (current !== index) return;
+      slides.forEach(function (el, i) {
+        morphNames(el, !!canMorph && i === index);
+        el.classList.toggle("active", i === index);
+      });
+    }
+    if (canMorph) {
+      morphNames(slides[previous], true);
+      var next = document.startViewTransition(update);
+      transition = next;
+      // A rejected snapshot (e.g. duplicate author CSS names) still switches the slide.
+      next.ready.catch(function () {});
+      next.finished.catch(function () {}).then(function () {
+        if (transition !== next) return;
+        transition = null;
+        slides.forEach(function (el) { morphNames(el, false); });
+      });
+    } else update();
     if (embed) return;
     var id = slides[index].id || String(index + 1);
     try {

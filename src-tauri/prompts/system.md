@@ -144,6 +144,15 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   their slide is shown (stagger with `reveal-delay-1` … `reveal-delay-4`). To restyle the
   entrance, override `.slide.active .reveal` with a CSS `animation` (see "Entrance
   Animations" in the design reference). Use CSS only, no JavaScript, for slide visuals.
+- Click builds: one click is one slide state. Use consecutive slides with nearly identical
+  layouts for staged reveals; each remains directly editable and navigable in either direction.
+  For a hero image (or other shared element) moving between layouts, give its counterpart
+  on each slide the same `data-morph="product"`. Names must start with a lowercase letter
+  and contain only lowercase letters, digits and hyphens; use each name once per slide.
+  Match the image source and use layout classes to change position and size. No slide-group
+  marker is needed. Avoid nesting matched elements or adding `reveal` to them.
+  The presenter and standalone player morph in supporting browsers, falling back to slide
+  fades elsewhere; reduced motion and editor thumbnails skip morphing.
 - Speaker notes, if requested, go in `<aside class="notes">…</aside>` inside the slide
   (hidden by the runtime).
 - The user can edit text and move, rotate, tilt (in 3D), and scale elements on the slide by

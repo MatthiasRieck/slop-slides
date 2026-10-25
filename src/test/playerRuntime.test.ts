@@ -32,9 +32,10 @@ interface PlayerOptions {
   size?: [number, number];
   /** The stage's laid-out size (the deck's slide size); jsdom lays nothing out, so it is 0×0 without. */
   stage?: [number, number];
+  setup?: (window: DOMWindow) => void;
 }
 
-function player({ at = "", html = DECK, parent, size = [1920, 1080], stage }: PlayerOptions = {}) {
+function player({ at = "", html = DECK, parent, size = [1920, 1080], stage, setup }: PlayerOptions = {}) {
   const dom = new JSDOM(html, {
     url: `https://example.test/deck.html${at}`,
     runScripts: "outside-only",
@@ -51,6 +52,7 @@ function player({ at = "", html = DECK, parent, size = [1920, 1080], stage }: Pl
     Object.defineProperty(stageEl, "offsetWidth", { value: stage[0], configurable: true });
     Object.defineProperty(stageEl, "offsetHeight", { value: stage[1], configurable: true });
   }
+  setup?.(dom.window);
   dom.window.eval(RUNTIME);
   const { window } = dom;
   const doc = window.document;
@@ -578,5 +580,56 @@ describe("player: without JavaScript", () => {
     expect(CSS).toMatch(/\.deck > \.slide \{[^}]*height: var\(--slop-h, 1080px\) !important/);
     expect(CSS).not.toContain("zoom:");
     expect(CSS).not.toContain("@page");
+  });
+});
+
+describe("player: shared heroes", () => {
+  const html = DECK.replace("<button>", '<img data-morph="hero"><button>').replace(
+    "<p>No id</p>",
+    '<img data-morph="hero"><p>No id</p>',
+  );
+  function setup(window: DOMWindow) {
+    Object.assign(window.document, {
+      startViewTransition: vi.fn((update: () => void) => {
+        update();
+        return { ready: Promise.resolve(), finished: Promise.resolve(), skipTransition: vi.fn() };
+      }),
+    });
+  }
+  it("matches heroes forward and backward and cleans up snapshot names", async () => {
+    const p = player({ html, setup });
+    const start = p.doc.startViewTransition;
+    expect(start).not.toHaveBeenCalled();
+    p.key("ArrowRight");
+    expect(start).toHaveBeenCalledOnce();
+    expect(p.active()).toBe(1);
+    expect(p.doc.querySelector<HTMLElement>(".active img")!.style.viewTransitionName).toBe("slop-hero");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(p.doc.querySelector<HTMLElement>(".active img")!.style.viewTransitionName).toBe("");
+    p.key("ArrowLeft");
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(p.active()).toBe(0);
+  });
+  it("falls back without browser support and does not morph editor previews", () => {
+    const p = player({ html });
+    p.key("ArrowRight");
+    expect(p.active()).toBe(1);
+    const embedded = player({ html, setup, at: "?embed&slide=2" });
+    expect(embedded.doc.startViewTransition).not.toHaveBeenCalled();
+  });
+  it("respects reduced motion and static rendering", () => {
+    const p = player({
+      html,
+      setup: (w) => {
+        setup(w);
+        Object.assign(w, { matchMedia: () => ({ matches: true }) });
+      },
+    });
+    p.key("ArrowRight");
+    expect(p.active()).toBe(1);
+    expect(p.doc.startViewTransition).not.toHaveBeenCalled();
+    const still = player({ html, setup, at: "?static" });
+    still.key("ArrowRight");
+    expect(still.doc.startViewTransition).not.toHaveBeenCalled();
   });
 });

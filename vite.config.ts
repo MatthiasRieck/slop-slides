@@ -1,7 +1,10 @@
+import { fileURLToPath } from "node:url";
+
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
+import { ignoreDeckHtml } from "./dev/appWatch.ts";
 import { browserPreview } from "./dev/browserPreview.ts";
 
 const host = process.env.TAURI_DEV_HOST;
@@ -15,7 +18,9 @@ export default defineConfig({
     strictPort: true,
     host: host || false,
     hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
-    watch: { ignored: ["**/src-tauri/**"] },
+    watch: {
+      ignored: ["**/src-tauri/**", ignoreDeckHtml(fileURLToPath(new URL("./index.html", import.meta.url)))],
+    },
   },
   envPrefix: ["VITE_", "TAURI_ENV_*"],
   build: {

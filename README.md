@@ -157,6 +157,13 @@ Push a tag such as `v0.1.0`. `.github/workflows/release.yml` then builds macOS (
 Silicon and Intel), Windows (MSI/NSIS), and Linux (AppImage/deb/rpm) installers into a
 draft GitHub release. Code signing and notarization secrets are listed in the workflow.
 
+To build a signed and notarized macOS app and DMG locally, copy
+`scripts/signing.env.example` to `.signing.env` (git-ignored), fill in your certificate and
+notarization credentials, then run `scripts/build-signed.sh` (`--universal` for Apple Silicon
+and Intel in one app, `--no-notarize` to only sign, `--check` to validate the settings without
+building). Signing uses the hardened runtime with `src-tauri/Entitlements.plist`, which grants
+the microphone for dictation.
+
 ## How it works
 
 ```

@@ -1347,50 +1347,38 @@ mod tests {
         assert_eq!(names, ["lint_deck", "mcp__github__push"]);
     }
 
-    const SESSION_DIR: &str = "/home/.slopslides/sessions/1-ab";
+    /// A session dir that is absolute on every platform (`/home/...` is not on Windows).
+    fn session_dir() -> PathBuf {
+        std::env::temp_dir().join("sessions").join("1-ab")
+    }
 
     #[test]
     fn claude_reads_staged_templates_without_asking() {
-        let path = "/home/.slopslides/sessions/1-ab/templates/ethereal.html";
+        let dir = session_dir();
+        let at = |rel: &str| format!("{}/{rel}", dir.display());
+        let path = at("templates/ethereal.html");
         let request = can_use_tool("Read", json!({"file_path": path}));
         assert!(matches!(
-            claude_permission(&request, PermissionMode::Ask, Path::new(SESSION_DIR)),
-            ClaudePermission::Answer(Ok(r)) if r["behavior"] == "allow" && r["updatedInput"]["file_path"] == path
+            claude_permission(&request, PermissionMode::Ask, &dir),
+            ClaudePermission::Answer(Ok(r)) if r["behavior"] == "allow" && r["updatedInput"]["file_path"] == path.as_str()
         ));
+        let other = format!("{}/2-cd/templates/x.html", dir.parent().unwrap().display());
         for (tool, input) in [
-            (
-                "Read",
-                json!({"file_path":"/home/.slopslides/sessions/1-ab/templates/../chat.json"}),
-            ),
-            (
-                "Read",
-                json!({"file_path":"/home/.slopslides/sessions/1-ab/chat.json"}),
-            ),
-            (
-                "Read",
-                json!({"file_path":"/home/.slopslides/sessions/2-cd/templates/x.html"}),
-            ),
-            (
-                "Read",
-                json!({"file_path":"/home/.slopslides/sessions/1-ab/templates-x/a.html"}),
-            ),
+            ("Read", json!({"file_path": at("templates/../chat.json")})),
+            ("Read", json!({"file_path": at("chat.json")})),
+            ("Read", json!({"file_path": other})),
+            ("Read", json!({"file_path": at("templates-x/a.html")})),
             ("Read", json!({"file_path":"templates/ethereal.html"})),
             ("Read", json!({})),
-            (
-                "Write",
-                json!({"file_path":"/home/.slopslides/sessions/1-ab/templates/ethereal.html"}),
-            ),
-            (
-                "Grep",
-                json!({"path":"/home/.slopslides/sessions/1-ab/templates","glob":"/etc/*"}),
-            ),
+            ("Write", json!({"file_path": path})),
+            ("Grep", json!({"path": at("templates"), "glob": "/etc/*"})),
         ] {
             assert!(
                 matches!(
                     claude_permission(
                         &can_use_tool(tool, input.clone()),
                         PermissionMode::Ask,
-                        Path::new(SESSION_DIR)
+                        &dir
                     ),
                     ClaudePermission::Ask(..)
                 ),
@@ -1408,7 +1396,7 @@ mod tests {
         for tool in ["mcp__slopslide__lint_deck", "mcp__slopslide__open_file"] {
             let request = can_use_tool(tool, json!({"path":"deck.html"}));
             assert!(matches!(
-                claude_permission(&request, PermissionMode::Ask, Path::new(SESSION_DIR)),
+                claude_permission(&request, PermissionMode::Ask, &session_dir()),
                 ClaudePermission::Answer(Ok(r)) if r["behavior"] == "allow" && r["updatedInput"]["path"] == "deck.html"
             ));
         }
@@ -1452,7 +1440,7 @@ mod tests {
             let ClaudePermission::Ask(approval, choices) = claude_permission(
                 &can_use_tool(tool, input.clone()),
                 PermissionMode::Ask,
-                Path::new(SESSION_DIR),
+                &session_dir(),
             ) else {
                 panic!("{tool} asks");
             };
@@ -1472,7 +1460,7 @@ mod tests {
         let ClaudePermission::Ask(approval, _) = claude_permission(
             &can_use_tool("Bash", json!({"command":"ls","description":"List files"})),
             PermissionMode::Ask,
-            Path::new(SESSION_DIR),
+            &session_dir(),
         ) else {
             panic!("asks");
         };
@@ -1483,7 +1471,7 @@ mod tests {
     fn claude_full_access_allows_everything() {
         let request = can_use_tool("Bash", json!({"command":"rm -rf build"}));
         assert!(matches!(
-            claude_permission(&request, PermissionMode::FullAccess, Path::new(SESSION_DIR)),
+            claude_permission(&request, PermissionMode::FullAccess, &session_dir()),
             ClaudePermission::Answer(Ok(r)) if r["behavior"] == "allow"
         ));
     }
@@ -1492,7 +1480,7 @@ mod tests {
     fn claude_refuses_other_control_requests() {
         let request = json!({"subtype":"hook_callback"});
         assert!(matches!(
-            claude_permission(&request, PermissionMode::Ask, Path::new(SESSION_DIR)),
+            claude_permission(&request, PermissionMode::Ask, &session_dir()),
             ClaudePermission::Answer(Err(_))
         ));
         assert_eq!(

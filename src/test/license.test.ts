@@ -2,7 +2,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-const read = (path: string) => readFileSync(path, "utf8");
+// Windows checkouts may convert line endings to CRLF.
+const read = (path: string) => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
 
 describe("license", () => {
   it("ships the MIT license text", () => {

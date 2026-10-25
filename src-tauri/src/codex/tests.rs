@@ -1113,7 +1113,8 @@ mod process {
                 loop {
                     let log =
                         std::fs::read_to_string(f.dir.join("requests.jsonl")).unwrap_or_default();
-                    if log.contains("initialize") {
+                    // A complete line, so killing the child can't leave a half-written request.
+                    if log.contains("initialize") && log.ends_with('\n') {
                         break;
                     }
                     tokio::time::sleep(Duration::from_millis(10)).await;

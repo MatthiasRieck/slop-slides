@@ -387,81 +387,102 @@ describe("slide editor", () => {
       expect(e.$(".card").querySelectorAll(":scope > :not([data-delete-placeholder])")).toHaveLength(1);
     });
 
-    it("pastes a copy of an element in the layout right after it", () => {
+    // A copied element's markup with a header, as copySelected writes it.
+    const clip = (box: object, element: string, rest: object = {}) =>
+      `<!--slopslides:${JSON.stringify({ slide: "intro", path: [0], free: false, box, look: {}, ...rest })}-->${element}`;
+    // jsdom has no layout: put the slide at the top left of the window, at full size.
+    const onScreen = (e: ReturnType<typeof editor>, id = "intro") => {
+      const rect = { left: 0, top: 0, right: 1920, bottom: 1080, width: 1920, height: 1080, x: 0, y: 0 };
+      e.$(`#${id}`).getBoundingClientRect = () => ({ ...rect, toJSON: () => rect }) as DOMRect;
+    };
+
+    it("pastes a copy on top of the slide in the middle of the view, leaving the layout as it was", () => {
       const e = editor();
-      e.down(e.$(".card p"));
-      e.key("c", { metaKey: true });
-      e.fromParent({ type: "slop:edit-paste", html: copied(e)[0]!.html });
-      const [one, copy] = [...e.$(".card").children] as HTMLElement[];
-      expect(one!.textContent).toBe("One");
-      expect(copy!.textContent).toBe("One");
-      expect(copy!.style.translate).toBe("");
+      onScreen(e);
+      const card = e.$(".card").outerHTML;
+      const html = clip({ x: 10, y: 20, w: 200, h: 100 }, '<p style="translate: 5px 5px">One</p>');
+      e.fromParent({ type: "slop:edit-paste", html });
+      const copy = e.$("#intro").lastElementChild as HTMLElement;
+      expect(copy.textContent).toBe("One");
+      // Nothing in the layout moved.
+      expect(e.$(".card").outerHTML).toBe(card);
+      expect(copy.style.position).toBe("absolute");
+      // Centered on (960, 540); its place is all in left and top.
+      expect([copy.style.left, copy.style.top, copy.style.width]).toEqual(["860px", "490px", "200px"]);
+      expect(copy.style.translate).toBe("");
       expect(e.selected()).toEqual([copy]);
       expect(e.commits()).toHaveLength(1);
-      expect(e.commits()[0]!.select).toEqual([1, 1]);
+      expect(e.commits()[0]!.select).toEqual([e.$("#intro").children.length - 1]);
     });
 
-    it("offsets a pasted copy of a free-floating element, further for each copy", () => {
+    it("pastes where the pointer is when it is over the slide", () => {
+      const e = editor();
+      onScreen(e);
+      const html = clip({ x: 0, y: 0, w: 200, h: 100 }, '<div data-added="shape"></div>');
+      e.move(e.$(".shape"), 300, 400);
+      e.fromParent({ type: "slop:edit-paste", html });
+      const shape = e.$("#intro").lastElementChild as HTMLElement;
+      expect([shape.style.left, shape.style.top, shape.style.width, shape.style.height]).toEqual(["200px", "350px", "200px", "100px"]);
+    });
+
+    it("pastes in the middle of the view once the pointer is off the slide or out of the window", () => {
+      const e = editor();
+      onScreen(e);
+      const html = clip({ x: 0, y: 0, w: 200, h: 100 }, '<div data-added="shape"></div>');
+      e.move(e.doc.body, 1950, 400);
+      e.fromParent({ type: "slop:edit-paste", html });
+      expect((e.$("#intro").lastElementChild as HTMLElement).style.left).toBe("860px");
+      e.move(e.doc.body, 300, 400);
+      e.doc.documentElement.dispatchEvent(new e.window.PointerEvent("pointerleave"));
+      e.fromParent({ type: "slop:edit-paste", html });
+      const second = e.$("#intro").lastElementChild as HTMLElement;
+      expect([second.style.left, second.style.translate]).toEqual(["860px", "40px 40px"]);
+    });
+
+    it("offsets copies pasted at the same spot, further for each copy", () => {
       const e = editor({ markup: FREE });
+      onScreen(e);
       e.down(e.$(".note"));
       e.key("c", { metaKey: true });
       const html = copied(e)[0]!.html;
-      expect(header(html).free).toBe(true);
       e.fromParent({ type: "slop:edit-paste", html });
       e.fromParent({ type: "slop:edit-paste", html });
       const notes = [...e.doc.querySelectorAll<HTMLElement>(".note")];
-      expect(notes.map((n) => n.style.translate)).toEqual(["", "80px 80px", "40px 40px"]);
-      expect(notes.map((n) => n.style.left)).toEqual(["100px", "100px", "100px"]);
-      expect(notes[2]!.hasAttribute("data-moved")).toBe(true);
+      expect(notes.map((n) => n.style.translate)).toEqual(["", "", "40px 40px"]);
+      expect(notes[1]!.style.left).toBe(notes[2]!.style.left);
+      expect(notes[0]!.style.left).toBe("100px");
       expect(e.commits()).toHaveLength(2);
     });
 
-    it("pastes a cut element back where it was", () => {
+    it("pastes a cut element on top, keeping the slot the cut left so the layout stays put", () => {
       const e = editor();
-      e.down(e.$(".card p:nth-child(2)"));
-      e.key("x", { metaKey: true });
+      onScreen(e);
       e.down(e.$(".card p"));
       e.key("x", { metaKey: true });
       const card = e.$(".card");
-      expect([...card.children].every((c) => c.hasAttribute("data-delete-placeholder"))).toBe(true);
+      expect(card.firstElementChild!.hasAttribute("data-delete-placeholder")).toBe(true);
       e.fromParent({ type: "slop:edit-paste", html: copied(e)[0]!.html });
-      // It takes over its own slot; the other cut's slot stays.
-      const [slot, two] = [...card.children] as HTMLElement[];
       expect(card.children).toHaveLength(2);
-      expect(slot!.hasAttribute("data-delete-placeholder")).toBe(true);
-      expect(two!.textContent).toBe("Two");
-      e.fromParent({ type: "slop:edit-paste", html: copied(e)[1]!.html });
-      expect(e.commits().at(-1)!.markup).toContain('<div class="card"><p>One</p><p style="color: red">Two</p></div>');
-    });
-
-    it("pastes a cut resized element back in front of its placeholder", () => {
-      const e = editor();
-      const h1 = e.$("h1");
-      h1.style.position = "absolute";
-      const slot = h1.cloneNode(true) as HTMLElement;
-      slot.setAttribute("data-resize-placeholder", "");
-      h1.after(slot);
-      e.down(h1);
-      e.key("x", { metaKey: true });
-      expect(slot.hasAttribute("data-delete-placeholder")).toBe(true);
-      e.fromParent({ type: "slop:edit-paste", html: copied(e)[0]!.html });
-      const pasted = e.$("#intro").firstElementChild as HTMLElement;
+      expect(card.firstElementChild!.hasAttribute("data-delete-placeholder")).toBe(true);
+      const pasted = e.$("#intro").lastElementChild as HTMLElement;
+      expect(pasted.textContent).toBe("One");
       expect(pasted.style.position).toBe("absolute");
-      expect(pasted.nextElementSibling).toBe(slot);
-      expect(slot.hasAttribute("data-resize-placeholder")).toBe(true);
-      expect(slot.hasAttribute("data-delete-placeholder")).toBe(false);
-      expect(e.doc.querySelectorAll("#intro > h1")).toHaveLength(2);
     });
 
-    it("pastes onto another slide where it was, absolutely positioned and looking as it did", () => {
+    it("pastes onto another slide looking as it did", () => {
       const e = editor({ slide: "outro" });
-      const head = { slide: "intro", path: [1, 0], free: false, box: { x: 100, y: 200, w: 300, h: 50 }, look: { color: "rgb(1, 2, 3)", fontSize: "40px" } };
-      const html = `<!--slopslides:${JSON.stringify(head)}--><p class="tag" id="intro" style="translate: 5px 5px; color: blue">Tag</p>`;
+      onScreen(e, "outro");
+      const html = clip(
+        { x: 100, y: 200, w: 300, h: 50 },
+        '<p class="tag" id="intro" style="translate: 5px 5px; color: blue">Tag</p>',
+        { path: [1, 0], look: { color: "rgb(1, 2, 3)", fontSize: "40px" } },
+      );
       e.fromParent({ type: "slop:edit-paste", html });
       const p = e.$("#outro > p.tag");
       expect(e.$("#outro").lastElementChild).toBe(p);
       expect(p.style.position).toBe("absolute");
-      expect([p.style.left, p.style.top, p.style.width, p.style.height]).toEqual(["100px", "200px", "300px", ""]);
+      // Text may wrap differently here, so it keeps its width but not its height.
+      expect([p.style.left, p.style.top, p.style.width, p.style.height]).toEqual(["810px", "515px", "300px", ""]);
       expect(p.style.translate).toBe("");
       // Its own inline styles win over how it looked.
       expect([p.style.color, p.style.fontSize]).toEqual(["blue", "40px"]);
@@ -471,12 +492,15 @@ describe("slide editor", () => {
       expect(e.commits()).toHaveLength(1);
     });
 
-    it("keeps a free-floating element from another slide's top level as it was", () => {
-      const e = editor({ slide: "outro" });
-      const head = { slide: "intro", path: [4], free: true, box: { x: 0, y: 0, w: 10, h: 10 }, look: {} };
-      const html = `<!--slopslides:${JSON.stringify(head)}--><div style="position: absolute; left: 7px; top: 8px">X</div>`;
-      e.fromParent({ type: "slop:edit-paste", html });
-      expect(e.$("#outro").lastElementChild!.getAttribute("style")).toBe("position: absolute; left: 7px; top: 8px");
+    it("pastes images where the pointer is, as dropped ones", () => {
+      const e = editor();
+      onScreen(e);
+      e.move(e.$(".shape"), 400, 300);
+      e.fromParent({ type: "slop:edit-paste-images", images: [{ src: "assets/pasted.png", w: 200, h: 100 }] });
+      const img = e.$("#intro > img");
+      expect(img.hasAttribute("data-dropped")).toBe(true);
+      expect(img.style.translate).toBe("300px 250px");
+      expect(e.commits()).toHaveLength(1);
     });
 
     it("pastes only what the editor copied", () => {
@@ -485,6 +509,15 @@ describe("slide editor", () => {
         e.fromParent({ type: "slop:edit-paste", html });
       }
       expect(e.commits()).toEqual([]);
+    });
+
+    it("pastes text where the pointer is when it is over the slide", () => {
+      const e = editor();
+      onScreen(e);
+      e.move(e.$(".shape"), 300, 400);
+      e.fromParent({ type: "slop:edit-paste-text", text: "Here" });
+      const box = e.$("[data-added=text]");
+      expect([box.style.left, box.style.top]).toEqual(["300px", "400px"]);
     });
 
     it("pastes text as a new text box in the middle of the view, styled like new ones", () => {

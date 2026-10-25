@@ -832,7 +832,7 @@ describe("Stage", () => {
         useApp.setState({ editStyles: DEFAULT_EDIT_STYLES });
       });
 
-      it("pastes images in the middle of the view", async () => {
+      it("pastes images, leaving where they go to the editor", async () => {
         vi.mocked(invoke).mockResolvedValue({ kind: "images", images: ["assets/pasted-image.png"] });
         const { container } = render(<Stage />);
         fireEvent.click(editButton());
@@ -840,7 +840,7 @@ describe("Stage", () => {
         fromFrame(frame, { type: "slop:key", key: "V", mod: true });
         await waitFor(() =>
           expect(post).toHaveBeenCalledWith(
-            { type: "slop:edit-insert-images", images: [{ src: "assets/pasted-image.png", w: 1200, h: 800 }], x: 1000, y: 600 },
+            { type: "slop:edit-paste-images", images: [{ src: "assets/pasted-image.png", w: 1200, h: 800 }] },
             "*",
           ),
         );

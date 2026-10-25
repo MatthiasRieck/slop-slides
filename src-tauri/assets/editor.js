@@ -21,13 +21,13 @@
    ⌘C / ⌘X (or { type: "slop:edit-copy", cut } from the app) copy / cut the selection: it is
    posted as { type: "slop:edit-copied", slide, html, text } for the app to put on the system
    clipboard, `html` being its markup behind a header saying where it came from. ⌘V goes to the
-   app, which reads the clipboard and sends back what to paste:
-   - { type: "slop:edit-paste", html } an element copied here: on its own slide right after
-     where it was copied (free-floating ones offset, so the copy shows), back in its place after
-     a cut (taking over the slot the cut left), and on another slide at the same spot,
-     absolutely positioned;
-   - { type: "slop:edit-paste-text", text, style } a text box with `text`, in the middle of the view;
-   - images come as dropped images, at the middle of the view.
+   app, which reads the clipboard and sends back what to paste. Whatever is pasted goes on top
+   of the slide, absolutely positioned so the layout stays put, centered on the pointer when it
+   is over the slide and otherwise in the middle of the view:
+   - { type: "slop:edit-paste", html } an element copied here, sized and looking as it did
+     (offset when a copy already sits at the same spot, so the copy shows);
+   - { type: "slop:edit-paste-text", text, style } a text box with `text`;
+   - { type: "slop:edit-paste-images", images: [{ src, w, h }] } images, as dropped ones.
 
    The app's edit toolbar drives the rest with messages:
    - { type: "slop:edit-tool", tool, style } picks a tool: "select", "text" (click or drag out a
@@ -189,6 +189,8 @@
   var drag = null;
   var nudgeTimer = null;
   var lastDown = { el: null, at: 0 };
+  // Where the pointer is over this window, in its pixels; null once it leaves.
+  var pointer = null;
   var overflowFrame = 0;
   var reportedOverflow = null;
   var tool = "select";
@@ -1291,6 +1293,7 @@
   });
 
   document.addEventListener("pointermove", function (event) {
+    pointer = { x: event.clientX, y: event.clientY };
     if (create) {
       createTo(event);
       return;
@@ -1324,6 +1327,7 @@
   document.addEventListener("pointerup", endDrag);
   document.addEventListener("pointercancel", endDrag);
   document.documentElement.addEventListener("pointerleave", function () {
+    pointer = null;
     hover(null);
   });
   window.addEventListener("resize", placeHandles);
@@ -1446,49 +1450,40 @@
     return { header: header, el: el, markup: el.outerHTML };
   }
 
-  /** Pastes an element copied by copySelected (see the top of this file for where it goes). */
+  /**
+   * Where a paste goes, in this window's pixels: the pointer when it is over the slide, or
+   * else the middle of the view.
+   */
+  function pastePoint() {
+    var rect = slide.getBoundingClientRect();
+    var over = pointer && pointer.x >= rect.left && pointer.x <= rect.right && pointer.y >= rect.top && pointer.y <= rect.bottom;
+    return over ? { x: pointer.x, y: pointer.y } : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+  }
+
+  /** Pastes an element copied by copySelected on top of the slide (see the top of this file). */
   function pasteElement(html) {
     var clip = parseClip(html);
     if (!clip) return;
     finishEditing();
     if (nudgeTimer) commit();
     var el = document.importNode(clip.el, true);
-    var header = clip.header;
-    var path = Array.isArray(header.path) ? header.path : null;
     // Ids stay unique; a copy takes one only when the original is gone.
     withDescendants(el).forEach(function (node) {
       if (node.id && document.getElementById(node.id)) node.removeAttribute("id");
     });
-    var here = header.slide === slide.id && path;
-    var original = here ? atPath(path) : null;
-    if (original && cleanCopy(original).outerHTML !== clip.markup) original = null;
-    var parent = here && !original ? (path.length > 1 ? atPath(path.slice(0, -1)) : slide) : null;
-    if (original) {
-      var after = placeholderOf(original) || original;
-      original.parentElement.insertBefore(el, after.nextSibling);
-      if (header.free) cascade(el);
-    } else if (parent) {
-      // After a cut: back where it was, into the slot the cut left (see removeSelected).
-      var at = parent.children[path[path.length - 1]] || null;
-      if (at && at.hasAttribute(DELETED)) {
-        if (header.free) {
-          // A resized element: the slot was its placeholder, and is again.
-          at.removeAttribute(DELETED);
-          at.setAttribute(PLACEHOLDER, "");
-        } else {
-          parent.replaceChild(el, at);
-        }
-      }
-      if (!el.parentElement) parent.insertBefore(el, at);
-    } else {
-      slide.appendChild(el);
-      if (!header.free || !path || path.length !== 1) placeFree(el, header);
-    }
+    var box = clip.header.box && typeof clip.header.box === "object" ? clip.header.box : {};
+    var w = box.w > 0 ? box.w : 0;
+    var h = box.h > 0 ? box.h : 0;
+    var at = pastePoint();
+    var center = slidePoint(at.x, at.y);
+    slide.appendChild(el);
+    placeFree(el, clip.header, { x: center.x - w / 2, y: center.y - h / 2 });
+    cascade(el);
     select(el);
     commit();
   }
 
-  /** Moves a pasted copy down and right of its original, and of any copies already there. */
+  /** Moves a pasted copy down and right of any element of its kind already at the same spot. */
   function cascade(el) {
     var at = offsetOf(el);
     var taken = function (x, y) {
@@ -1498,8 +1493,8 @@
         return other.style.left === el.style.left && other.style.top === el.style.top && o.x === x && o.y === y;
       });
     };
-    var x = at.x + DROP_CASCADE;
-    var y = at.y + DROP_CASCADE;
+    var x = at.x;
+    var y = at.y;
     for (var i = 0; i < 50 && taken(x, y); i++) {
       x += DROP_CASCADE;
       y += DROP_CASCADE;
@@ -1507,16 +1502,16 @@
     moveTo(el, x, y);
   }
 
-  /** Puts an element from elsewhere on the slide where it was there, sized and styled as it looked. */
-  function placeFree(el, header) {
-    var box = header.box || {};
+  /** Puts a copied element on the slide with its top left at `at`, sized and styled as it looked. */
+  function placeFree(el, header, at) {
+    var box = header.box && typeof header.box === "object" ? header.box : {};
     var num = function (n) {
       return isFinite(n) ? Math.round(n) : 0;
     };
     el.style.position = "absolute";
     el.style.margin = "0px";
-    el.style.left = num(box.x) + "px";
-    el.style.top = num(box.y) + "px";
+    el.style.left = num(at.x) + "px";
+    el.style.top = num(at.y) + "px";
     el.style.right = el.style.bottom = "auto";
     el.style.boxSizing = "border-box";
     if (box.w > 0) el.style.width = num(box.w) + "px";
@@ -1526,11 +1521,11 @@
     LOOK.forEach(function (prop) {
       if (typeof look[prop] === "string" && !el.style[prop]) el.style[prop] = look[prop];
     });
-    // The box already includes where it was moved to.
+    // Its place is all in left and top.
     moveTo(el, 0, 0);
   }
 
-  /** Adds a text box with pasted `text` in the middle of the view, styled like new text boxes. */
+  /** Adds a text box with pasted `text` where pastes go, styled like new text boxes. */
   function pasteText(text, style) {
     text = String(text || "").replace(/\r\n?/g, "\n").replace(/\s+$/, "");
     if (!text.trim()) return;
@@ -1547,7 +1542,8 @@
     });
     var maxW = Math.round((slide.offsetWidth || 1920) * PASTE_TEXT_WIDTH);
     if (sizeOf(el).w > maxW) el.style.width = maxW + "px";
-    var center = slidePoint(window.innerWidth / 2, window.innerHeight / 2);
+    var at = pastePoint();
+    var center = slidePoint(at.x, at.y);
     var size = sizeOf(el);
     place(el, Math.round(center.x - size.w / 2), Math.round(center.y - size.h / 2), null, null);
     select(el);
@@ -1652,6 +1648,9 @@
       insertImages(data.images, data.x, data.y);
     } else if (data.type === "slop:edit-copy") {
       copySelected(!!data.cut);
+    } else if (data.type === "slop:edit-paste-images") {
+      var at = pastePoint();
+      insertImages(data.images, at.x, at.y);
     } else if (data.type === "slop:edit-paste") {
       pasteElement(data.html);
     } else if (data.type === "slop:edit-paste-text" && typeof data.text === "string") {

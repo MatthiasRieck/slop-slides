@@ -16,7 +16,9 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   use the arrow keys) to move it, double-click (or press Enter) to edit its text, Escape to
   select the parent, Delete (or the trash button in the edit bar) to remove
   it, ⌘C / ⌘X / ⌘V to copy, cut and paste elements (also between slides), and ⌘Z / Ctrl+Z
-  to undo. ⌘V also pastes images and text copied in other apps, like a browser. Moved
+  to undo. ⌘V also pastes images and text copied in other apps, like a browser. Pastes go
+  on top of the slide, under the pointer (or in the middle of the view), without moving the
+  layout. Moved
   elements keep a
   temporary offset; **Tidy layout** then sends the agent a screenshot so it rebuilds the
   slide's layout around where you put things.

@@ -35,25 +35,18 @@ describe("development deck saves", () => {
     try {
       const events: string[] = [];
       server.watcher.on("change", (file) => events.push(file));
-      await new Promise<void>((resolve) => server.watcher.on("ready", resolve));
+      // createServer may return after the one-shot "ready" event already fired.
+      // Wait for observable state instead, with a bounded timeout.
       // The deck is excluded from the watcher, not merely suppressed in the UI.
       const watched = () =>
         Object.entries(server.watcher.getWatched()).flatMap(([dir, files]) =>
           files.map((file) => path.join(dir, file)),
         );
-      await expect.poll(watched).toContain(entry);
+      await expect.poll(watched, { timeout: 5000 }).toContain(entry);
       expect(watched()).not.toContain(deck);
       await writeFile(deck, '<section class="slide"><p style="translate:10px 20px">Moved</p></section>');
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("App shell watcher did not respond")), 5000);
-        server.watcher.on("change", (file) => {
-          if (file === entry) {
-            clearTimeout(timer);
-            resolve();
-          }
-        });
-        void writeFile(entry, "<html><body>Updated app</body></html>").catch(reject);
-      });
+      await writeFile(entry, "<html><body>Updated app</body></html>");
+      await expect.poll(() => events, { timeout: 5000 }).toContain(entry);
       expect(events).not.toContain(deck);
     } finally {
       await server.close();

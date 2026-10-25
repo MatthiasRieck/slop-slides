@@ -1,6 +1,6 @@
 import { X } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
-import { Group, Panel, Separator, usePanelRef, type PanelSize } from "react-resizable-panels";
+import { type ReactNode, useEffect, useRef } from "react";
+import { Group, Panel, type PanelSize, Separator, usePanelRef } from "react-resizable-panels";
 
 import { CodeView } from "./components/CodeView";
 import { DeckToolbar } from "./components/DeckToolbar";
@@ -41,6 +41,7 @@ function Workbench() {
   const deckVersion = useApp((s) =>
     s.deck ? [s.deck.id, s.deck.shellHash, ...s.deck.slides.map((x) => `${x.id}:${x.hash}`)].join("|") : "",
   );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-lint whenever the deck's content changes
   useEffect(() => {
     void useApp.getState().refreshLint();
   }, [deckVersion]);
@@ -50,7 +51,14 @@ function Workbench() {
       <Group orientation="horizontal" className="min-h-0 flex-1">
         {hasDeck && (
           <>
-            <SidePanel id="rail" open={railOpen} onOpenChange={useApp.getState().setRailOpen} defaultSize={220} minSize={150} maxSize={360}>
+            <SidePanel
+              id="rail"
+              open={railOpen}
+              onOpenChange={useApp.getState().setRailOpen}
+              defaultSize={220}
+              minSize={150}
+              maxSize={360}
+            >
               <SlideRail />
             </SidePanel>
             <ResizeHandle />
@@ -71,7 +79,14 @@ function Workbench() {
           )}
         </Panel>
         <ResizeHandle />
-        <SidePanel id="sidebar" open={sidebarOpen} onOpenChange={useApp.getState().setSidebarOpen} defaultSize={380} minSize={260} maxSize={640}>
+        <SidePanel
+          id="sidebar"
+          open={sidebarOpen}
+          onOpenChange={useApp.getState().setSidebarOpen}
+          defaultSize={380}
+          minSize={260}
+          maxSize={640}
+        >
           <Sidebar />
         </SidePanel>
       </Group>

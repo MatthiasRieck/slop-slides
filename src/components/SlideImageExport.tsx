@@ -2,8 +2,8 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Loader2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { api, errorMessage, type Deck, type Slide } from "../lib/api";
-import { pixelsOf, type Pixels } from "../lib/slideSize";
+import { api, type Deck, errorMessage, type Slide } from "../lib/api";
+import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { useApp } from "../store";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
@@ -51,6 +51,7 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
     useApp.getState().endImageExport();
   };
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: install the Escape handler once for the export's lifetime
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -75,9 +76,10 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
   };
 
   // A slide deleted since the export started has nothing to show.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: advance only when the slide disappears
   useEffect(() => {
     if (!slide) next();
-  }, [slide]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [slide]);
 
   const capture = async () => {
     if (captured.current === index || !slideRef.current) return;
@@ -105,7 +107,13 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
       <div ref={areaRef} className="flex min-h-0 flex-1 items-center justify-center p-6">
         {slide && (
           <div ref={slideRef} style={{ width }}>
-            <ExportSlide key={`${index}:${slide.id}`} deckId={deck.id} slide={slide} size={canvas} onReady={() => void capture()} />
+            <ExportSlide
+              key={`${index}:${slide.id}`}
+              deckId={deck.id}
+              slide={slide}
+              size={canvas}
+              onReady={() => void capture()}
+            />
           </div>
         )}
       </div>
@@ -126,6 +134,25 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
   );
 }
 
-function ExportSlide({ deckId, slide, size, onReady }: { deckId: string; slide: Slide; size: Pixels; onReady: () => void }) {
-  return <SlideFrame deckId={deckId} slideId={slide.id} version={useSlideVersion(slide)} size={size} thumbnail onFrameReady={onReady} />;
+function ExportSlide({
+  deckId,
+  slide,
+  size,
+  onReady,
+}: {
+  deckId: string;
+  slide: Slide;
+  size: Pixels;
+  onReady: () => void;
+}) {
+  return (
+    <SlideFrame
+      deckId={deckId}
+      slideId={slide.id}
+      version={useSlideVersion(slide)}
+      size={size}
+      thumbnail
+      onFrameReady={onReady}
+    />
+  );
 }

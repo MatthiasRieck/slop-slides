@@ -18,7 +18,10 @@ export function FileViewer() {
     return (
       <div className="flex h-full items-center justify-center overflow-y-auto p-8">
         <div className="flex w-full max-w-2xl flex-col gap-3">
-          <NewDeckForm heading="Start a deck" hint={`It goes in a new folder in ${workspace?.name ?? "the workspace"}. Or open a file from the Files tab.`} />
+          <NewDeckForm
+            heading="Start a deck"
+            hint={`It goes in a new folder in ${workspace?.name ?? "the workspace"}. Or open a file from the Files tab.`}
+          />
         </div>
       </div>
     );
@@ -33,8 +36,8 @@ function PageView({ file }: { file: OpenedFile }) {
     <div className="flex h-full flex-col">
       {file.kind === "slideshow" && (
         <div className="flex shrink-0 items-center gap-2 border-b bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">
-          <MonitorPlay className="size-3.5" />
-          A slideshow made with another tool, shown as it is. Only SlopSlide decks open in the slide editor.
+          <MonitorPlay className="size-3.5" />A slideshow made with another tool, shown as it is. Only SlopSlide decks
+          open in the slide editor.
         </div>
       )}
       <iframe

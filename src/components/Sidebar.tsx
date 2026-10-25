@@ -2,7 +2,7 @@ import { Files, MessageSquare } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { cn } from "../lib/utils";
-import { SIDEBAR_TABS, useApp, type SidebarTab } from "../store";
+import { SIDEBAR_TABS, type SidebarTab, useApp } from "../store";
 import { ChatPanel } from "./ChatPanel";
 import { FileTree } from "./FileTree";
 

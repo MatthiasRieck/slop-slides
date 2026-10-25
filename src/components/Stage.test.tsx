@@ -13,8 +13,8 @@ vi.mock("../lib/drop", async (importOriginal) => ({
 import { invoke } from "@tauri-apps/api/core";
 
 import { claimDrop, dropCovered } from "../lib/drop";
-import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
 import { DEFAULT_EDIT_STYLES } from "../lib/editTools";
+import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Stage } from "./Stage";
 
@@ -22,7 +22,13 @@ import { Stage } from "./Stage";
 afterEach(() => flushReviewSave());
 
 beforeEach(() => {
-  useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", presenting: false, sketches: {}, reviewVisible: true });
+  useApp.setState({
+    deck: deckFor(DECK_HTML),
+    selected: "intro",
+    presenting: false,
+    sketches: {},
+    reviewVisible: true,
+  });
 });
 
 const position = () => screen.getByText(/^\d+ \/ \d+$/).textContent;
@@ -62,7 +68,10 @@ describe("Stage", () => {
   });
 
   it("opens the template layouts to change the slide's layout", () => {
-    useApp.setState({ templates: [{ id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title", "quote"] }], running: false });
+    useApp.setState({
+      templates: [{ id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title", "quote"] }],
+      running: false,
+    });
     render(<Stage />);
     const button = screen.getByRole("button", { name: /^Layout$/ });
     fireEvent.click(button);
@@ -162,9 +171,16 @@ describe("Stage", () => {
       const frame = document.createElement("iframe");
       document.body.appendChild(frame);
       screen.getByTestId("composer").focus();
-      act(() => void window.dispatchEvent(new MessageEvent("message", { data: { type: "slop:focus" }, source: window })));
+      act(
+        () => void window.dispatchEvent(new MessageEvent("message", { data: { type: "slop:focus" }, source: window })),
+      );
       expect(document.activeElement).toBe(screen.getByTestId("composer"));
-      act(() => void window.dispatchEvent(new MessageEvent("message", { data: { type: "slop:focus" }, source: frame.contentWindow })));
+      act(
+        () =>
+          void window.dispatchEvent(
+            new MessageEvent("message", { data: { type: "slop:focus" }, source: frame.contentWindow }),
+          ),
+      );
       expect(document.activeElement).toBe(frame);
       expect(useApp.getState().selected).toBe("intro");
       frame.remove();
@@ -344,7 +360,10 @@ describe("Stage", () => {
       globalThis.ResizeObserver = class {
         constructor(private callback: ResizeObserverCallback) {}
         observe(target: Element) {
-          this.callback([{ target, contentRect: { width: 960, height: 540 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+          this.callback(
+            [{ target, contentRect: { width: 960, height: 540 } } as unknown as ResizeObserverEntry],
+            this as unknown as ResizeObserver,
+          );
         }
         unobserve() {}
         disconnect() {}
@@ -448,9 +467,15 @@ describe("Stage", () => {
         fireEvent.click(button("Add a rectangle (R)"));
         expect(useApp.getState().editTool).toBe("rect");
         expect(button("Add a rectangle (R)").getAttribute("aria-pressed")).toBe("true");
-        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-tool", tool: "rect", style: DEFAULT_EDIT_STYLES.shape }, "*");
+        expect(post).toHaveBeenLastCalledWith(
+          { type: "slop:edit-tool", tool: "rect", style: DEFAULT_EDIT_STYLES.shape },
+          "*",
+        );
         fireEvent.click(button("Draw freehand (D)"));
-        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-tool", tool: "draw", style: DEFAULT_EDIT_STYLES.draw }, "*");
+        expect(post).toHaveBeenLastCalledWith(
+          { type: "slop:edit-tool", tool: "draw", style: DEFAULT_EDIT_STYLES.draw },
+          "*",
+        );
         fireEvent.click(button("Select and move (V)"));
         expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-tool", tool: "select", style: undefined }, "*");
       });
@@ -472,7 +497,10 @@ describe("Stage", () => {
         fireEvent.click(button("Add text (T)"));
         const post = vi.spyOn(frame.contentWindow!, "postMessage");
         fireEvent.load(frame);
-        expect(post).toHaveBeenCalledWith({ type: "slop:edit-tool", tool: "text", style: DEFAULT_EDIT_STYLES.text }, "*");
+        expect(post).toHaveBeenCalledWith(
+          { type: "slop:edit-tool", tool: "text", style: DEFAULT_EDIT_STYLES.text },
+          "*",
+        );
       });
 
       it("follows the editor when it puts its tool away", () => {
@@ -560,7 +588,12 @@ describe("Stage", () => {
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { valign: "bottom" } }, "*");
         fireEvent.change(screen.getByLabelText("Border width"), { target: { value: "8" } });
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { strokeWidth: 8 } }, "*");
-        expect(useApp.getState().editStyles.shape).toMatchObject({ fontSize: 48, bold: true, valign: "bottom", strokeWidth: 8 });
+        expect(useApp.getState().editStyles.shape).toMatchObject({
+          fontSize: 48,
+          bold: true,
+          valign: "bottom",
+          strokeWidth: 8,
+        });
         expect(useApp.getState().editStyles.text).toEqual(DEFAULT_EDIT_STYLES.text);
       });
 
@@ -575,7 +608,15 @@ describe("Stage", () => {
 
       it("offers a drawing's line color and width, without text controls", () => {
         const { frame } = enter();
-        select(frame, { ...SELECTION, kind: "drawing", text: false, vector: true, stroke: "#ef4444", strokeWidth: 6, fill: null });
+        select(frame, {
+          ...SELECTION,
+          kind: "drawing",
+          text: false,
+          vector: true,
+          stroke: "#ef4444",
+          strokeWidth: 6,
+          fill: null,
+        });
         expect(button("Bold").disabled).toBe(true);
         expect(button("Line color").disabled).toBe(false);
         expect((screen.getByLabelText("Line width") as HTMLSelectElement).value).toBe("6");
@@ -588,7 +629,10 @@ describe("Stage", () => {
         fireEvent.click(button("Italic"));
         expect(useApp.getState().editStyles.text.italic).toBe(true);
         expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-style" }), "*");
-        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-tool", tool: "text", style: { ...DEFAULT_EDIT_STYLES.text, italic: true } }, "*");
+        expect(post).toHaveBeenLastCalledWith(
+          { type: "slop:edit-tool", tool: "text", style: { ...DEFAULT_EDIT_STYLES.text, italic: true } },
+          "*",
+        );
       });
 
       it("picks colors from swatches, none, or a custom color", () => {
@@ -700,7 +744,9 @@ describe("Stage", () => {
       function laidOut(container: HTMLElement) {
         const frame = [...container.querySelectorAll("iframe")].at(-1)!;
         fireEvent.load(frame);
-        vi.spyOn(screen.getByTestId("stage-area"), "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 600));
+        vi.spyOn(screen.getByTestId("stage-area"), "getBoundingClientRect").mockReturnValue(
+          new DOMRect(0, 0, 1000, 600),
+        );
         vi.spyOn(frame, "getBoundingClientRect").mockReturnValue(new DOMRect(-20, -10, 1000, 600));
         Object.defineProperty(frame, "clientWidth", { value: 2000, configurable: true });
         return { frame, post: vi.spyOn(frame.contentWindow!, "postMessage") };
@@ -718,10 +764,18 @@ describe("Stage", () => {
         });
         // Anything that is not an image goes on to the chat.
         expect(rest).toEqual(["/tmp/notes.md"]);
-        expect(invoke).toHaveBeenCalledWith("import_assets", { id: useApp.getState().deck!.id, paths: ["/tmp/photo.png"] });
+        expect(invoke).toHaveBeenCalledWith("import_assets", {
+          id: useApp.getState().deck!.id,
+          paths: ["/tmp/photo.png"],
+        });
         await waitFor(() =>
           expect(post).toHaveBeenCalledWith(
-            { type: "slop:edit-insert-images", images: [{ src: "assets/photo.png", w: 1200, h: 800 }], x: 1000, y: 600 },
+            {
+              type: "slop:edit-insert-images",
+              images: [{ src: "assets/photo.png", w: 1200, h: 800 }],
+              x: 1000,
+              y: 600,
+            },
             "*",
           ),
         );
@@ -778,10 +832,20 @@ describe("Stage", () => {
         const { container } = render(<Stage />);
         fireEvent.click(editButton());
         const { frame } = loaded(container);
-        fromFrame(frame, { type: "slop:edit-copied", slide: "intro", html: "<!--slopslides:{}--><p>Hi</p>", text: "Hi" });
+        fromFrame(frame, {
+          type: "slop:edit-copied",
+          slide: "intro",
+          html: "<!--slopslides:{}--><p>Hi</p>",
+          text: "Hi",
+        });
         // Not from another slide.
         fromFrame(frame, { type: "slop:edit-copied", slide: "outro", html: "<p>Other</p>", text: "" });
-        await waitFor(() => expect(invoke).toHaveBeenCalledWith("copy_to_clipboard", { html: "<!--slopslides:{}--><p>Hi</p>", text: "Hi" }));
+        await waitFor(() =>
+          expect(invoke).toHaveBeenCalledWith("copy_to_clipboard", {
+            html: "<!--slopslides:{}--><p>Hi</p>",
+            text: "Hi",
+          }),
+        );
         expect(invoke).toHaveBeenCalledTimes(1);
       });
 
@@ -813,12 +877,16 @@ describe("Stage", () => {
         const { frame, post } = loaded(container);
         fromFrame(frame, { type: "slop:key", key: "v", mod: true });
         expect(invoke).toHaveBeenCalledWith("paste_from_clipboard", { id: useApp.getState().deck!.id });
-        await waitFor(() => expect(post).toHaveBeenCalledWith({ type: "slop:edit-paste", html: "<!--slopslides:{}--><p>Hi</p>" }, "*"));
+        await waitFor(() =>
+          expect(post).toHaveBeenCalledWith({ type: "slop:edit-paste", html: "<!--slopslides:{}--><p>Hi</p>" }, "*"),
+        );
       });
 
       it("pastes text as a text box styled like new ones, with ⌘V in the app too", async () => {
         vi.mocked(invoke).mockResolvedValue({ kind: "text", text: "From the web" });
-        useApp.setState({ editStyles: { ...DEFAULT_EDIT_STYLES, text: { ...DEFAULT_EDIT_STYLES.text, fontSize: 64 } } });
+        useApp.setState({
+          editStyles: { ...DEFAULT_EDIT_STYLES, text: { ...DEFAULT_EDIT_STYLES.text, fontSize: 64 } },
+        });
         const { container } = render(<Stage />);
         fireEvent.click(editButton());
         const { post } = loaded(container);
@@ -920,7 +988,12 @@ describe("Stage", () => {
       expect(viewer.style.top).toBe("-32px");
       const viewPost = vi.spyOn(viewer.contentWindow!, "postMessage");
       fireEvent.load(viewer);
-      const colors = { type: "slop:canvas", color: expect.any(String), accent: expect.any(String), border: expect.any(String) };
+      const colors = {
+        type: "slop:canvas",
+        color: expect.any(String),
+        accent: expect.any(String),
+        border: expect.any(String),
+      };
       expect(viewPost).toHaveBeenCalledWith(colors, "*");
       fireEvent.click(editButton());
       expect(slideBox().style.width).toBe("960px");
@@ -936,7 +1009,9 @@ describe("Stage", () => {
 
     it("fits a slide of another size into the area in its own shape", () => {
       const deck = deckFor(DECK_HTML);
-      useApp.setState({ deck: { ...deck, size: { width: 1080, height: 1350, unit: "px", pixelWidth: 1080, pixelHeight: 1350 } } });
+      useApp.setState({
+        deck: { ...deck, size: { width: 1080, height: 1350, unit: "px", pixelWidth: 1080, pixelHeight: 1350 } },
+      });
       const { container } = render(<Stage />);
       const slideBox = container.querySelector<HTMLElement>("[data-sketch-target]")!;
       // The 960x540 area fits a 4:5 slide 432 px wide (540 px tall).

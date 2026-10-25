@@ -28,7 +28,18 @@ beforeEach(() => {
   openDialog.mockReset();
   revealItemInDir.mockReset();
   ask.mockReset();
-  useApp.setState({ workspace: WORKSPACE, openedFile: OPENED, deck: deckFor(DECK_HTML), view: "slides", sidebarOpen: true, railOpen: true, codeDirty: false, presenting: false, error: null, imageExport: null });
+  useApp.setState({
+    workspace: WORKSPACE,
+    openedFile: OPENED,
+    deck: deckFor(DECK_HTML),
+    view: "slides",
+    sidebarOpen: true,
+    railOpen: true,
+    codeDirty: false,
+    presenting: false,
+    error: null,
+    imageExport: null,
+  });
 });
 
 describe("slide rail toggle", () => {
@@ -76,7 +87,10 @@ describe("workspace bar", () => {
   });
 
   it("closes an open page that is not a deck", async () => {
-    useApp.setState({ deck: null, openedFile: { path: "site/index.html", absolute: "/decks/site/index.html", kind: "webpage" } });
+    useApp.setState({
+      deck: null,
+      openedFile: { path: "site/index.html", absolute: "/decks/site/index.html", kind: "webpage" },
+    });
     render(<TopBar />);
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Close index.html" })));
     expect(useApp.getState().openedFile).toBeNull();
@@ -100,7 +114,10 @@ describe("workspace bar", () => {
   });
 
   it("shows the open page's path and no deck tools when it is not a deck", () => {
-    useApp.setState({ deck: null, openedFile: { path: "site/index.html", absolute: "/decks/site/index.html", kind: "webpage" } });
+    useApp.setState({
+      deck: null,
+      openedFile: { path: "site/index.html", absolute: "/decks/site/index.html", kind: "webpage" },
+    });
     render(<TopBar />);
     expect(screen.getByRole("navigation", { name: "Breadcrumbs" }).textContent).toBe("decks/site/index.html");
     expect(screen.queryByRole("button", { name: /Present/ })).toBeNull();

@@ -255,7 +255,11 @@ describe("CodeView: editing and saving", () => {
       }
     });
     await act(async () => fireEvent.click(button("Save")));
-    expect(invoke).toHaveBeenCalledWith("save_deck_source", { id: "/decks/talk/deck.html", source: edited, base: DECK_HTML });
+    expect(invoke).toHaveBeenCalledWith("save_deck_source", {
+      id: "/decks/talk/deck.html",
+      source: edited,
+      base: DECK_HTML,
+    });
     await waitFor(() => expect(useApp.getState().codeDirty).toBe(false));
     // The saved deck is adopted so thumbnails and the stage refresh.
     expect(useApp.getState().deck!.shellHash).toBe("shell-saved");
@@ -285,7 +289,9 @@ describe("CodeView: editing and saving", () => {
   it("picks up normalization the backend applied on save", async () => {
     const { view } = await renderView();
     await type(view, "<h1>Hello", "!");
-    const normalized = view.state.doc.toString().replace(`<section class="slide">`, `<section class="slide" id="second">`);
+    const normalized = view.state.doc
+      .toString()
+      .replace(`<section class="slide">`, `<section class="slide" id="second">`);
     invoke.mockImplementation(async () => {
       disk = normalized;
       return deckFor(normalized, "saved");

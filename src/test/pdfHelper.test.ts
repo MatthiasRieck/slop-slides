@@ -17,7 +17,7 @@ const DECK = `<!DOCTYPE html><html><head></head><body>
 let doms: JSDOM[] = [];
 
 afterEach(() => {
-  doms.forEach((d) => d.window.close());
+  for (const d of doms) d.window.close();
   doms = [];
   vi.useRealTimers();
 });

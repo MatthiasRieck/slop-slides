@@ -1,11 +1,24 @@
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { AlertTriangle, CheckCircle2, ChevronDown, Code2, FileCode2, FileText, Images, Loader2, Play, Presentation, Share, XCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  Code2,
+  FileCode2,
+  FileText,
+  Images,
+  Loader2,
+  Play,
+  Presentation,
+  Share,
+  XCircle,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { api, errorMessage, type Deck } from "../lib/api";
+import { api, type Deck, errorMessage } from "../lib/api";
 import { basename, cn } from "../lib/utils";
-import { lintFixPrompt, useApp, type StageView } from "../store";
+import { lintFixPrompt, type StageView, useApp } from "../store";
 import { SlideSizeButton } from "./SlideSize";
 
 /**
@@ -130,7 +143,13 @@ function DeckTools({ deck }: { deck: Deck }) {
 }
 
 /** The Export button and its choices: one shareable HTML file, a PDF, or a PNG per slide. */
-function ExportMenu(props: { disabled: boolean; busy: boolean; onHtml: () => void; onPdf: () => void; onImages: () => void }) {
+function ExportMenu(props: {
+  disabled: boolean;
+  busy: boolean;
+  onHtml: () => void;
+  onPdf: () => void;
+  onImages: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -170,13 +189,25 @@ function ExportMenu(props: { disabled: boolean; busy: boolean; onHtml: () => voi
         <ChevronDown className="size-3 text-muted-foreground" />
       </button>
       {open && (
-        <div
-          role="menu"
-          className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card p-1 shadow-lg"
-        >
-          <ExportItem icon={FileCode2} label="HTML file" hint="One self-contained file to share" onClick={choose(props.onHtml)} />
-          <ExportItem icon={FileText} label="PDF" hint="One page per slide, for printing or sharing" onClick={choose(props.onPdf)} />
-          <ExportItem icon={Images} label="PNG images" hint="One image per slide, in a new folder" onClick={choose(props.onImages)} />
+        <div role="menu" className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card p-1 shadow-lg">
+          <ExportItem
+            icon={FileCode2}
+            label="HTML file"
+            hint="One self-contained file to share"
+            onClick={choose(props.onHtml)}
+          />
+          <ExportItem
+            icon={FileText}
+            label="PDF"
+            hint="One page per slide, for printing or sharing"
+            onClick={choose(props.onPdf)}
+          />
+          <ExportItem
+            icon={Images}
+            label="PNG images"
+            hint="One image per slide, in a new folder"
+            onClick={choose(props.onImages)}
+          />
         </div>
       )}
     </div>
@@ -225,9 +256,7 @@ function ViewToggle({ file }: { file: string }) {
         >
           <Icon className="size-3.5" />
           {label}
-          {id === "code" && codeDirty && (
-            <span title="Unsaved changes" className="size-1.5 rounded-full bg-primary" />
-          )}
+          {id === "code" && codeDirty && <span title="Unsaved changes" className="size-1.5 rounded-full bg-primary" />}
         </button>
       ))}
     </div>

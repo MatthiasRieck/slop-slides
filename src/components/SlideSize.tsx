@@ -6,15 +6,15 @@ import {
   DEFAULT_SIZE,
   describeSize,
   formatSize,
+  type Orientation,
   orientationOf,
-  sameSize,
   SIZE_PRESETS,
+  type SizeUnit,
+  type SlideSize,
+  sameSize,
   sizeProblem,
   toPixels,
   withOrientation,
-  type Orientation,
-  type SizeUnit,
-  type SlideSize,
 } from "../lib/slideSize";
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
@@ -144,7 +144,10 @@ export function SlideSizePanel(props: { current: SlideSize; onDone: () => void }
           </select>
         </label>
       </div>
-      <p role={problem ? "alert" : undefined} className={cn("min-h-4 text-2xs", problem ? "text-destructive" : "text-muted-foreground")}>
+      <p
+        role={problem ? "alert" : undefined}
+        className={cn("min-h-4 text-2xs", problem ? "text-destructive" : "text-muted-foreground")}
+      >
         {problem ?? (unit !== "px" && pixels ? `A ${pixels.width} × ${pixels.height} px canvas (96 px per inch).` : "")}
       </p>
       <div className="flex flex-col gap-1">
@@ -169,11 +172,16 @@ export function SlideSizePanel(props: { current: SlideSize; onDone: () => void }
       </div>
       {hasSlides && (
         <p className="text-2xs text-muted-foreground">
-          The slides keep their content. The chat gets a message asking the agent to lay them out again for the new size.
+          The slides keep their content. The chat gets a message asking the agent to lay them out again for the new
+          size.
         </p>
       )}
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={props.onDone} className="rounded-md border px-2.5 py-1 font-medium hover:bg-accent">
+        <button
+          type="button"
+          onClick={props.onDone}
+          className="rounded-md border px-2.5 py-1 font-medium hover:bg-accent"
+        >
           Cancel
         </button>
         <button

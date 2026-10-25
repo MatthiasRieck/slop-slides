@@ -3,11 +3,11 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
 
 import {
-  api,
-  errorMessage,
   type AgentEvent,
   type AgentEventEnvelope,
+  api,
   type Deck,
+  errorMessage,
   type LintIssue,
   type OpenedFile,
   type Slide,
@@ -15,23 +15,28 @@ import {
   type WorkspaceChanged,
   type WorkspaceInfo,
 } from "./lib/api";
-import { latestContext, mergeContext, type ContextUsage } from "./lib/context";
+import { type ContextUsage, latestContext, mergeContext } from "./lib/context";
 import { DEFAULT_EDIT_STYLES, type EditStyle, type EditTool, type ToolFamily } from "./lib/editTools";
 import { inkBounds, type Stroke } from "./lib/ink";
-import { DEFAULT_SIZE, pixelsOf, resizePrompt, sameSize, type SlideSize } from "./lib/slideSize";
-import { basename, dirname, layoutLabel } from "./lib/utils";
 import {
   defaultModel,
   PROVIDER_IDS,
   PROVIDERS,
+  type Provider,
+  type ProviderInfo,
   pickContextWindow,
   pickEffort,
   requestEffort,
-  type Provider,
-  type ProviderInfo,
 } from "./lib/models";
-
-import { DEFAULT_PERMISSION_MODES, isPermissionMode, type Approval, type PermissionMode, type PermissionModes } from "./lib/permissions";
+import {
+  type Approval,
+  DEFAULT_PERMISSION_MODES,
+  isPermissionMode,
+  type PermissionMode,
+  type PermissionModes,
+} from "./lib/permissions";
+import { DEFAULT_SIZE, pixelsOf, resizePrompt, type SlideSize, sameSize } from "./lib/slideSize";
+import { basename, dirname, layoutLabel } from "./lib/utils";
 
 export type ChatPart =
   | { kind: "approval"; approval: Approval; status: "pending" | "resolved" | "expired" }
@@ -108,7 +113,11 @@ function loadPermissions(): PermissionModes {
   const legacy = localStorage.getItem(CODEX_PERMISSION_KEY);
   if (isPermissionMode(legacy)) modes.codex = legacy;
   let saved: unknown;
-  try { saved = JSON.parse(localStorage.getItem(PERMISSIONS_KEY) ?? "null"); } catch { saved = null; }
+  try {
+    saved = JSON.parse(localStorage.getItem(PERMISSIONS_KEY) ?? "null");
+  } catch {
+    saved = null;
+  }
   if (saved && typeof saved === "object") {
     for (const provider of PROVIDER_IDS) {
       const mode = (saved as Record<string, unknown>)[provider];
@@ -347,10 +356,7 @@ interface AppState {
    * composer asking the agent to lay the slides out again for it.
    */
   resizeSlides: (size: SlideSize) => Promise<void>;
-  send: (
-    text: string,
-    options: { includeSlide: boolean; attachments: string[]; screenshot?: string },
-  ) => Promise<void>;
+  send: (text: string, options: { includeSlide: boolean; attachments: string[]; screenshot?: string }) => Promise<void>;
   /** Has the agent summarize the conversation so far, freeing up its context. */
   compact: () => Promise<void>;
   interrupt: () => void;
@@ -371,7 +377,9 @@ export const TIDY_PROMPT =
   "Tidy up the layout of this slide. I edited it by hand: keep my text, the styles I picked and what I added, and keep things where I moved them, at the size and angle I gave them, but rebuild the layout cleanly and fix any overflow or clipping.";
 
 export const tidyPrompt = (overflow: string[] = []) =>
-  overflow.length ? `${TIDY_PROMPT}\n\nThe editor found overflow:\n${overflow.map((o) => `- ${o}`).join("\n")}` : TIDY_PROMPT;
+  overflow.length
+    ? `${TIDY_PROMPT}\n\nThe editor found overflow:\n${overflow.map((o) => `- ${o}`).join("\n")}`
+    : TIDY_PROMPT;
 
 /** How a prompt names a template's layout: its readable name, the slide and file to read. */
 const layoutRef = (template: TemplateSummary, slide: string, path: string) =>
@@ -466,7 +474,14 @@ export const useApp = create<AppState>((set, get) => ({
       await api.saveChat(workspace.path, messages.map(settleInterrupted));
     }
     await api.closeWorkspace();
-    set({ workspace: null, openedFile: null, workspaceChange: null, messages: [], running: false, sessionProvider: null });
+    set({
+      workspace: null,
+      openedFile: null,
+      workspaceChange: null,
+      messages: [],
+      running: false,
+      sessionProvider: null,
+    });
     return true;
   },
 
@@ -514,7 +529,22 @@ export const useApp = create<AppState>((set, get) => ({
     }
     if (get().codeDirty && !(await confirmDiscardEdits())) return false;
     await flushReviewSave();
-    set({ codeDirty: false, openedFile: null, deck: null, selected: null, presenting: false, lint: null, composerFill: null, sketches: {}, sketchesSent: {}, imageExport: null, editing: false, editTool: "select", slideUndo: [], slideRedo: [] });
+    set({
+      codeDirty: false,
+      openedFile: null,
+      deck: null,
+      selected: null,
+      presenting: false,
+      lint: null,
+      composerFill: null,
+      sketches: {},
+      sketchesSent: {},
+      imageExport: null,
+      editing: false,
+      editTool: "select",
+      slideUndo: [],
+      slideRedo: [],
+    });
     return true;
   },
 
@@ -579,14 +609,13 @@ export const useApp = create<AppState>((set, get) => ({
     const result = await api.listProviders().catch(() => null);
     const providers = Array.isArray(result) ? result : [];
     set({ providers });
-    if (providers.length > 0) saveSelection(reconcileSelection(get().selection, providers, chatProvider(get()) !== null));
+    if (providers.length > 0)
+      saveSelection(reconcileSelection(get().selection, providers, chatProvider(get()) !== null));
   },
 
   toggleFavoriteModel: (key) => {
     const { favoriteModels } = get();
-    const next = favoriteModels.includes(key)
-      ? favoriteModels.filter((k) => k !== key)
-      : [...favoriteModels, key];
+    const next = favoriteModels.includes(key) ? favoriteModels.filter((k) => k !== key) : [...favoriteModels, key];
     localStorage.setItem(FAVORITES_KEY, JSON.stringify(next));
     set({ favoriteModels: next });
   },
@@ -647,7 +676,8 @@ export const useApp = create<AppState>((set, get) => ({
 
   setEditTool: (editTool) => set({ editTool }),
 
-  setEditStyle: (family, changes) => set((s) => ({ editStyles: { ...s.editStyles, [family]: { ...s.editStyles[family], ...changes } } })),
+  setEditStyle: (family, changes) =>
+    set((s) => ({ editStyles: { ...s.editStyles, [family]: { ...s.editStyles[family], ...changes } } })),
 
   saveSlideEdit: (slide, markup) => {
     const save = async () => {
@@ -659,7 +689,10 @@ export const useApp = create<AppState>((set, get) => ({
         if (get().deck?.id !== deck.id) return;
         const after = next.slides.find((s) => s.id === slide)?.hash ?? "";
         get().setDeck(next);
-        set((s) => ({ slideUndo: [...s.slideUndo, { slide, markup: previous, after }].slice(-UNDO_KEPT), slideRedo: [] }));
+        set((s) => ({
+          slideUndo: [...s.slideUndo, { slide, markup: previous, after }].slice(-UNDO_KEPT),
+          slideRedo: [],
+        }));
       } catch (error) {
         set((s) => ({ error: errorMessage(error), editReload: s.editReload + 1 }));
       }
@@ -887,7 +920,12 @@ async function startTurn(deckId: string, replyId: string, prompt: string, compac
     const { provider, model, contextWindow } = selection;
     const info = providers?.find((p) => p.id === provider)?.models.find((m) => m.id === model);
     const effort = requestEffort(info, selection.effort);
-    await api.sendMessage(deckId, prompt, { provider, model, effort, contextWindow, permissionMode: permissionModes[provider] }, compact);
+    await api.sendMessage(
+      deckId,
+      prompt,
+      { provider, model, effort, contextWindow, permissionMode: permissionModes[provider] },
+      compact,
+    );
   } catch (error) {
     updateAssistant(replyId, (m) => ({
       ...m,
@@ -911,7 +949,9 @@ async function stepSlideHistory(from: "slideUndo" | "slideRedo", to: "slideUndo"
   useApp.setState({ [from]: history.slice(0, -1) });
   const current = deck.slides.find((s) => s.id === last.slide)?.hash;
   if (current !== last.after) {
-    useApp.setState({ error: `The slide changed since that edit, so it cannot be ${from === "slideUndo" ? "undone" : "redone"}.` });
+    useApp.setState({
+      error: `The slide changed since that edit, so it cannot be ${from === "slideUndo" ? "undone" : "redone"}.`,
+    });
     return false;
   }
   try {
@@ -978,14 +1018,28 @@ async function openFileAt(path: string, file: OpenedFile) {
 }
 
 async function loadWorkspaceChat(path: string) {
-  const [chat, running, provider] = await Promise.all([api.loadChat(path), api.agentRunning(path), api.sessionProvider(path)]);
+  const [chat, running, provider] = await Promise.all([
+    api.loadChat(path),
+    api.agentRunning(path),
+    api.sessionProvider(path),
+  ]);
   if (useApp.getState().workspace?.path !== path) return;
   const messages = Array.isArray(chat) ? (chat as ChatMessage[]) : [];
-  useApp.setState({ messages: running ? messages : messages.map(settleInterrupted), running, sessionProvider: provider === "claude" || provider === "codex" || provider === "copilot" ? provider : null });
+  useApp.setState({
+    messages: running ? messages : messages.map(settleInterrupted),
+    running,
+    sessionProvider: provider === "claude" || provider === "codex" || provider === "copilot" ? provider : null,
+  });
   const locked = chatProvider(useApp.getState());
   const { selection, providers } = useApp.getState();
   if (locked && locked !== selection.provider) {
-    saveSelection(reconcileSelection({ ...selection, provider: locked, model: "", label: PROVIDERS[locked].label, contextWindow: null }, providers ?? [], true));
+    saveSelection(
+      reconcileSelection(
+        { ...selection, provider: locked, model: "", label: PROVIDERS[locked].label, contextWindow: null },
+        providers ?? [],
+        true,
+      ),
+    );
   }
 }
 
@@ -1102,7 +1156,11 @@ export function lintFixPrompt(issues: LintIssue[], file = "deck.html"): string {
 /** A transcript saved mid-turn (app quit) cannot resume streaming. */
 function settleInterrupted(message: ChatMessage): ChatMessage {
   if (message.role !== "assistant") return message;
-  return { ...message, ...(message.status === "streaming" ? { status: "interrupted" as const, thinking: false, compacting: false } : {}), parts: expireApprovals(message.parts) };
+  return {
+    ...message,
+    ...(message.status === "streaming" ? { status: "interrupted" as const, thinking: false, compacting: false } : {}),
+    parts: expireApprovals(message.parts),
+  };
 }
 
 /** The slide shown on the stage, if any. */
@@ -1124,8 +1182,14 @@ async function stageDeckTemplate(deck: Deck): Promise<string | null> {
   }
 }
 
-function buildPrompt(deck: Deck | null, openedFile: OpenedFile | null, message: UserMessage, template: string | null = null): string {
-  const file = openedFile?.path ?? (deck ? relativePath(useApp.getState().workspace, deck.id) ?? basename(deck.id) : null);
+function buildPrompt(
+  deck: Deck | null,
+  openedFile: OpenedFile | null,
+  message: UserMessage,
+  template: string | null = null,
+): string {
+  const file =
+    openedFile?.path ?? (deck ? (relativePath(useApp.getState().workspace, deck.id) ?? basename(deck.id)) : null);
   const kind = deck ? "deck" : openedFile?.kind === "webpage" ? "web page" : openedFile?.kind;
   const context: string[] = [file ? `Open file: ${file} (${kind})` : "No file open"];
   if (deck && message.slide) {
@@ -1183,7 +1247,7 @@ function persistChat() {
 }
 
 function expireApprovals(parts: ChatPart[]): ChatPart[] {
-  return parts.map((p) => p.kind === "approval" && p.status === "pending" ? { ...p, status: "expired" } : p);
+  return parts.map((p) => (p.kind === "approval" && p.status === "pending" ? { ...p, status: "expired" } : p));
 }
 
 function applyAgentEvent(event: AgentEvent) {
@@ -1192,14 +1256,29 @@ function applyAgentEvent(event: AgentEvent) {
       void useApp.getState().openPath(event.path);
       return;
     case "approvalRequested":
-      return updateLastAssistant((m) => ({ ...m, thinking: false, parts: [...m.parts, { kind: "approval", approval: event.approval, status: "pending" }] }));
+      return updateLastAssistant((m) => ({
+        ...m,
+        thinking: false,
+        parts: [...m.parts, { kind: "approval", approval: event.approval, status: "pending" }],
+      }));
     case "approvalResolved":
-      return updateLastAssistant((m) => ({ ...m, parts: m.parts.map((p) => p.kind === "approval" && p.approval.id === event.id ? { ...p, status: "resolved" } : p) }));
+      return updateLastAssistant((m) => ({
+        ...m,
+        parts: m.parts.map((p) =>
+          p.kind === "approval" && p.approval.id === event.id ? { ...p, status: "resolved" } : p,
+        ),
+      }));
     case "approvalReview":
       return updateLastAssistant((m) => {
         const part: ChatPart = { kind: "approvalReview", id: event.id, status: event.status, detail: event.detail };
         const existing = m.parts.some((p) => p.kind === "approvalReview" && p.id === event.id);
-        return { ...m, thinking: false, parts: existing ? m.parts.map((p) => p.kind === "approvalReview" && p.id === event.id ? part : p) : [...m.parts, part] };
+        return {
+          ...m,
+          thinking: false,
+          parts: existing
+            ? m.parts.map((p) => (p.kind === "approvalReview" && p.id === event.id ? part : p))
+            : [...m.parts, part],
+        };
       });
     case "started":
       return;
@@ -1232,18 +1311,14 @@ function applyAgentEvent(event: AgentEvent) {
       return updateLastAssistant((m) => ({
         ...m,
         parts: m.parts.map((p) =>
-          p.kind === "tool" && p.id === event.id
-            ? { ...p, status: event.isError ? "error" : "done" }
-            : p,
+          p.kind === "tool" && p.id === event.id ? { ...p, status: event.isError ? "error" : "done" } : p,
         ),
       }));
     case "result":
       return updateLastAssistant((m) => {
         const hasText = m.parts.some((p) => p.kind === "text" && p.text.trim() !== "");
         const parts: ChatPart[] =
-          !hasText && !event.isError && event.text
-            ? [...m.parts, { kind: "text", text: event.text }]
-            : m.parts;
+          !hasText && !event.isError && event.text ? [...m.parts, { kind: "text", text: event.text }] : m.parts;
         return {
           ...m,
           parts,
@@ -1294,7 +1369,9 @@ function applyWorkspaceChanged(paths: string[]) {
   if (deck) {
     // The deck's own files, relative to its folder.
     const folder = dirname(openedFile.path);
-    const inFolder = folder ? paths.filter((p) => p.startsWith(`${folder}/`)).map((p) => p.slice(folder.length + 1)) : paths;
+    const inFolder = folder
+      ? paths.filter((p) => p.startsWith(`${folder}/`)).map((p) => p.slice(folder.length + 1))
+      : paths;
     return applyDeckChanged(inFolder, basename(openedFile.path));
   }
   if (paths.includes(openedFile.path)) useApp.setState((s) => ({ fileRev: s.fileRev + 1 }));

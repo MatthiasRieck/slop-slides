@@ -77,9 +77,10 @@ pnpm app:build      # installers for the current OS → src-tauri/target/release
 and read-only access to your deck library (`dev/browserPreview.ts`). This is handy for
 UI work. Chat and editing need the desktop app.
 
-Run `./check.sh` for typechecking, frontend tests/build, Rust formatting, clippy, and Rust
-tests. Every tool comes from `package.json` or `src-tauri/Cargo.toml`; nothing else needs to
-be installed. CI runs this same script on macOS, Linux, and Windows, including approval
+Run `./check.sh` for Biome linting/formatting, typechecking, frontend tests/build, Rust
+formatting, clippy, Rust tests, and dependency audits (`pnpm audit`, `cargo audit`); run
+`./check.sh --fix` to format and autofix first. Every tool comes from `package.json` or
+`src-tauri/Cargo.toml`, except `cargo-audit`, which the script installs on first run. CI runs this same script on macOS, Linux, and Windows, including approval
 routing and cancellation tests against a mock Codex app-server built into the Rust test
 binary. The full chat approval flow is tested through events, the store, UI, IPC
 responses, and transcript persistence.

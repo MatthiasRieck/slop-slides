@@ -1,13 +1,6 @@
-import {
-  DndContext,
-  PointerSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
+import { closestCenter, DndContext, type DragEndEvent, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
-import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Copy, Eye, EyeOff, Lock, LockOpen, Palette, Pencil, Plus, SquareSplitVertical, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -98,7 +91,11 @@ export function SlideRail() {
             type="button"
             onClick={() => setPicker((p) => (p === "style" ? null : "style"))}
             aria-expanded={picker === "style"}
-            title={styleTitle ? `Style: ${styleTitle}. Pick another, or save the deck as a template` : "Pick a style for the deck, or save it as a template"}
+            title={
+              styleTitle
+                ? `Style: ${styleTitle}. Pick another, or save the deck as a template`
+                : "Pick a style for the deck, or save it as a template"
+            }
             className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <Palette className="size-4" />
@@ -422,15 +419,7 @@ function HiddenMark() {
       preserveAspectRatio="none"
       className="pointer-events-none absolute inset-0 size-full overflow-hidden rounded-md text-muted-foreground"
     >
-      <line
-        x1="0"
-        y1="9"
-        x2="16"
-        y2="0"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        vectorEffect="non-scaling-stroke"
-      />
+      <line x1="0" y1="9" x2="16" y2="0" stroke="currentColor" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
     </svg>
   );
 }

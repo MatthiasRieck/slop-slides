@@ -12,11 +12,20 @@ import { DECK_HTML, deckFor } from "../test/fixtures";
 import { SlideRail } from "./SlideRail";
 
 const DECK = deckFor(DECK_HTML);
-const withSlides = (...ids: string[]): Deck => ({ ...DECK, slides: ids.map((id) => ({ id, hash: id, hidden: false, locked: false, moved: false })) });
+const withSlides = (...ids: string[]): Deck => ({
+  ...DECK,
+  slides: ids.map((id) => ({ id, hash: id, hidden: false, locked: false, moved: false })),
+});
 
 beforeEach(() => {
   invoke.mockReset();
-  useApp.setState({ deck: DECK, selected: "intro", error: null, revealRev: 0, templates: [{ id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title"] }] });
+  useApp.setState({
+    deck: DECK,
+    selected: "intro",
+    error: null,
+    revealRev: 0,
+    templates: [{ id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title"] }],
+  });
 });
 
 // dnd-kit gives sortable items role="button", so find them by tag.
@@ -211,7 +220,11 @@ describe("hidden slides in the rail", () => {
     invoke.mockResolvedValue(next);
     render(<SlideRail />);
     await act(async () => fireEvent.click(within(items()[0]!).getByTitle("Hide slide")));
-    expect(invoke).toHaveBeenCalledWith("set_slide_hidden", { id: "/decks/talk/deck.html", slide: "intro", hidden: true });
+    expect(invoke).toHaveBeenCalledWith("set_slide_hidden", {
+      id: "/decks/talk/deck.html",
+      slide: "intro",
+      hidden: true,
+    });
     expect(useApp.getState().deck).toBe(next);
     expect(within(items()[0]!).getByTestId("hidden-mark")).toBeTruthy();
   });
@@ -220,7 +233,11 @@ describe("hidden slides in the rail", () => {
     invoke.mockResolvedValue(deckFor(DECK_HTML, "2"));
     render(<SlideRail />);
     await act(async () => fireEvent.click(within(items()[2]!).getByTitle("Show slide")));
-    expect(invoke).toHaveBeenCalledWith("set_slide_hidden", { id: "/decks/talk/deck.html", slide: "outro", hidden: false });
+    expect(invoke).toHaveBeenCalledWith("set_slide_hidden", {
+      id: "/decks/talk/deck.html",
+      slide: "outro",
+      hidden: false,
+    });
     expect(screen.queryByTestId("hidden-mark")).toBeNull();
   });
 
@@ -261,7 +278,11 @@ describe("locked slides in the rail", () => {
     invoke.mockResolvedValue(next);
     render(<SlideRail />);
     await act(async () => fireEvent.click(item(0).getByTitle("Lock slide")));
-    expect(invoke).toHaveBeenCalledWith("set_slide_locked", { id: "/decks/talk/deck.html", slide: "intro", locked: true });
+    expect(invoke).toHaveBeenCalledWith("set_slide_locked", {
+      id: "/decks/talk/deck.html",
+      slide: "intro",
+      locked: true,
+    });
     expect(useApp.getState().deck).toBe(next);
     expect(item(0).getByTestId("locked-mark")).toBeTruthy();
     expect(item(0).queryByTitle("Delete")).toBeNull();
@@ -271,7 +292,11 @@ describe("locked slides in the rail", () => {
     invoke.mockResolvedValue(deckFor(DECK_HTML, "2"));
     render(<SlideRail />);
     await act(async () => fireEvent.click(item(2).getByTitle("Unlock slide")));
-    expect(invoke).toHaveBeenCalledWith("set_slide_locked", { id: "/decks/talk/deck.html", slide: "outro", locked: false });
+    expect(invoke).toHaveBeenCalledWith("set_slide_locked", {
+      id: "/decks/talk/deck.html",
+      slide: "outro",
+      locked: false,
+    });
     expect(screen.queryByTestId("locked-mark")).toBeNull();
     expect(item(2).getByTitle("Delete")).toBeTruthy();
   });
@@ -297,12 +322,11 @@ describe("sections in the rail", () => {
 
   it("shows a header row before the slide that starts the section, without numbering it", () => {
     render(<SlideRail />);
-    expect(items().map((li) => (li.dataset.testid === "section-header" ? li.textContent : li.querySelector("span")?.textContent))).toEqual([
-      "1",
-      "Middle",
-      "2",
-      "3",
-    ]);
+    expect(
+      items().map((li) =>
+        li.dataset.testid === "section-header" ? li.textContent : li.querySelector("span")?.textContent,
+      ),
+    ).toEqual(["1", "Middle", "2", "3"]);
     expect(screen.getByText("Slides · 3")).toBeTruthy();
   });
 
@@ -314,10 +338,21 @@ describe("sections in the rail", () => {
 
   it("starts a section at the selected slide and lets you name it", async () => {
     useApp.setState({ deck: DECK, selected: "outro" });
-    invoke.mockResolvedValue(deckFor(DECK_HTML.replace(`<section class="slide" id="outro">`, `<div class="deck-section" data-title="New section"></div>\n<section class="slide" id="outro">`)));
+    invoke.mockResolvedValue(
+      deckFor(
+        DECK_HTML.replace(
+          `<section class="slide" id="outro">`,
+          `<div class="deck-section" data-title="New section"></div>\n<section class="slide" id="outro">`,
+        ),
+      ),
+    );
     render(<SlideRail />);
     await act(async () => fireEvent.click(screen.getByTitle("Start a section at this slide")));
-    expect(invoke).toHaveBeenCalledWith("add_section", { id: "/decks/talk/deck.html", before: "outro", title: "New section" });
+    expect(invoke).toHaveBeenCalledWith("add_section", {
+      id: "/decks/talk/deck.html",
+      before: "outro",
+      title: "New section",
+    });
     expect(headers()).toHaveLength(1);
     const input = screen.getByLabelText("Section title") as HTMLInputElement;
     expect(input.value).toBe("New section");

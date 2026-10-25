@@ -1,5 +1,5 @@
 import { AlertTriangle, Check, ChevronDown, Gauge, Loader2, RotateCw, Search, Star } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   contextWindowLabel,
@@ -13,8 +13,8 @@ import {
 } from "../lib/models";
 import { cn, isMac } from "../lib/utils";
 import { chatProvider, useApp } from "../store";
-import { ProviderIcon } from "./ProviderIcon";
 import { ComposerPopover } from "./ComposerPopover";
+import { ProviderIcon } from "./ProviderIcon";
 
 type Filter = "favorites" | Provider;
 
@@ -65,7 +65,11 @@ export function ModelPicker() {
         <span className="hidden font-medium text-foreground/90 @[26rem]:inline">{selection.label}</span>
         <ChevronDown className="size-3 opacity-60" />
       </button>
-      {open && <ComposerPopover anchor={rootRef} onClose={close} width={352} className="flex overflow-hidden"><ModelMenu onClose={close} /></ComposerPopover>}
+      {open && (
+        <ComposerPopover anchor={rootRef} onClose={close} width={352} className="flex overflow-hidden">
+          <ModelMenu onClose={close} />
+        </ComposerPopover>
+      )}
     </div>
   );
 }
@@ -83,28 +87,28 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
   const info = (provider: Provider) => providers?.find((p) => p.id === provider);
 
   const allRows = useMemo<Row[]>(
-    () => (providers ?? [])
-      .filter((p) => !locked || p.id === locked)
-      .flatMap((p) => p.models.map((m) => ({ ...m, provider: p.id }))),
+    () =>
+      (providers ?? [])
+        .filter((p) => !locked || p.id === locked)
+        .flatMap((p) => p.models.map((m) => ({ ...m, provider: p.id }))),
     [providers, locked],
   );
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (q) {
-      return allRows.filter((m) =>
-        `${m.label} ${m.id} ${PROVIDERS[m.provider].label}`.toLowerCase().includes(q),
-      );
+      return allRows.filter((m) => `${m.label} ${m.id} ${PROVIDERS[m.provider].label}`.toLowerCase().includes(q));
     }
     if (filter === "favorites") return allRows.filter((m) => favorites.includes(modelKey(m.provider, m.id)));
     return allRows.filter((m) => m.provider === filter);
   }, [allRows, filter, query, favorites]);
 
   // Start on the selected model whenever the list changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset only when the list changes, not on every selection
   useEffect(() => {
     const index = rows.findIndex((m) => m.provider === selection.provider && m.id === selection.model);
     setActive(Math.max(0, index));
-  }, [rows]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rows]);
 
   useEffect(() => {
     listRef.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView({ block: "nearest" });
@@ -155,10 +159,7 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
   const status = !query && filter !== "favorites" ? info(filter) : undefined;
 
   return (
-    <div
-      onKeyDown={onKeyDown}
-      className="flex min-h-0 w-full"
-    >
+    <div onKeyDown={onKeyDown} className="flex min-h-0 w-full">
       <div className="flex w-12 shrink-0 flex-col items-center gap-1 border-r py-2">
         {rail.map((item) => {
           const selected = !query && filter === item.id;
@@ -167,7 +168,11 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
               key={item.id}
               type="button"
               disabled={!!locked && item.id !== "favorites" && item.id !== locked}
-              title={locked && item.id !== "favorites" && item.id !== locked ? "Start a new chat to change provider" : item.title}
+              title={
+                locked && item.id !== "favorites" && item.id !== locked
+                  ? "Start a new chat to change provider"
+                  : item.title
+              }
               onClick={() => {
                 setFilter(item.id);
                 setQuery("");
@@ -177,16 +182,18 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
                 selected && "bg-accent text-foreground",
               )}
             >
-              {selected && (
-                <span className="absolute -left-2 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary" />
-              )}
+              {selected && <span className="absolute -left-2 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary" />}
               {item.icon}
             </button>
           );
         })}
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {locked && <p className="shrink-0 border-b px-3 py-2 text-xs text-muted-foreground">Start a new chat to change provider.</p>}
+        {locked && (
+          <p className="shrink-0 border-b px-3 py-2 text-xs text-muted-foreground">
+            Start a new chat to change provider.
+          </p>
+        )}
         <label className="flex shrink-0 items-center gap-2 border-b px-3 focus-within:border-primary">
           <Search className="size-3.5 shrink-0 text-muted-foreground" />
           <input
@@ -312,9 +319,7 @@ export function EffortPicker() {
   const close = useMemo(() => () => setOpen(false), []);
 
   const model = useApp((s) =>
-    s.providers
-      ?.find((p) => p.id === s.selection.provider)
-      ?.models.find((m) => m.id === s.selection.model),
+    s.providers?.find((p) => p.id === s.selection.provider)?.models.find((m) => m.id === s.selection.model),
   );
   const efforts = model?.efforts ?? [];
   const contextWindows = model?.contextWindows ?? [];
@@ -361,9 +366,7 @@ export function EffortPicker() {
         <ComposerPopover anchor={rootRef} onClose={close} width={160} className="p-1.5">
           {sections.map((section, index) => (
             <div key={section.title} className={cn(index > 0 && "mt-1.5 border-t pt-1.5")}>
-              <div className="px-2 pt-1 pb-1.5 text-2xs font-medium text-muted-foreground">
-                {section.title}
-              </div>
+              <div className="px-2 pt-1 pb-1.5 text-2xs font-medium text-muted-foreground">{section.title}</div>
               {section.options.map((option) => (
                 <button
                   key={option.id}

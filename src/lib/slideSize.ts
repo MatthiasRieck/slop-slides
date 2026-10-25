@@ -44,7 +44,9 @@ export function toPixels(size: SlideSize): Pixels {
 /** The canvas of a deck, template or deck summary; the default size when it names none. */
 export function pixelsOf(owner: { size?: SizeInfo | null } | null | undefined): Pixels {
   const size = owner?.size;
-  return size ? { width: size.pixelWidth, height: size.pixelHeight } : { width: DEFAULT_SIZE.pixelWidth, height: DEFAULT_SIZE.pixelHeight };
+  return size
+    ? { width: size.pixelWidth, height: size.pixelHeight }
+    : { width: DEFAULT_SIZE.pixelWidth, height: DEFAULT_SIZE.pixelHeight };
 }
 
 /** `n` in `unit`, rounded to what the field shows: whole pixels, or hundredths of in / cm. */
@@ -72,9 +74,13 @@ export function withOrientation(size: SlideSize, orientation: Orientation): Slid
   if (orientationOf(size) === "square") {
     // A square has no long side; give it the 16:9 shape of the default slide.
     const other = roundIn((short * 16) / 9, size.unit);
-    return orientation === "landscape" ? { ...size, width: other, height: short } : { ...size, width: short, height: other };
+    return orientation === "landscape"
+      ? { ...size, width: other, height: short }
+      : { ...size, width: short, height: other };
   }
-  return orientation === "landscape" ? { ...size, width: long, height: short } : { ...size, width: short, height: long };
+  return orientation === "landscape"
+    ? { ...size, width: long, height: short }
+    : { ...size, width: short, height: long };
 }
 
 /** Why the backend would refuse `size`, or null when it is fine. */

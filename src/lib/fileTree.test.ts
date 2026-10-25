@@ -4,7 +4,11 @@ import type { WorkspaceEntry } from "./api";
 import { ancestorsOf, foldersToReload, parentOf, toggleFolder, visibleRows } from "./fileTree";
 
 const dir = (path: string): WorkspaceEntry => ({ name: path.split("/").pop()!, path, kind: "directory" });
-const file = (path: string, kind: WorkspaceEntry["kind"] = "file"): WorkspaceEntry => ({ name: path.split("/").pop()!, path, kind });
+const file = (path: string, kind: WorkspaceEntry["kind"] = "file"): WorkspaceEntry => ({
+  name: path.split("/").pop()!,
+  path,
+  kind,
+});
 
 describe("file tree paths", () => {
   it("finds the folder holding a path and the folders above it", () => {
@@ -35,7 +39,11 @@ describe("visibleRows", () => {
   });
 
   it("hides folders under a collapsed one, and expanded folders not loaded yet are empty", () => {
-    expect(visibleRows(folders, new Set(["talks/q3"])).map((r) => r.entry.path)).toEqual(["talks", "notes", "index.html"]);
+    expect(visibleRows(folders, new Set(["talks/q3"])).map((r) => r.entry.path)).toEqual([
+      "talks",
+      "notes",
+      "index.html",
+    ]);
     expect(visibleRows(folders, new Set(["notes"])).map((r) => r.entry.path)).toEqual(["talks", "notes", "index.html"]);
     expect(visibleRows(new Map(), new Set())).toEqual([]);
   });

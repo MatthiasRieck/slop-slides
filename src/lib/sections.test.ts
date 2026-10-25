@@ -22,7 +22,14 @@ describe("railItems", () => {
   });
 
   it("puts each section before the slide it starts", () => {
-    expect(keys(deck([["One", 0], ["Two", 2]]))).toEqual(["section:0", "a", "b", "section:1", "c"]);
+    expect(
+      keys(
+        deck([
+          ["One", 0],
+          ["Two", 2],
+        ]),
+      ),
+    ).toEqual(["section:0", "a", "b", "section:1", "c"]);
   });
 
   it("keeps a trailing section after the last slide", () => {
@@ -30,7 +37,14 @@ describe("railItems", () => {
   });
 
   it("keeps consecutive sections in document order", () => {
-    expect(keys(deck([["One", 1], ["Two", 1]]))).toEqual(["a", "section:0", "section:1", "b", "c"]);
+    expect(
+      keys(
+        deck([
+          ["One", 1],
+          ["Two", 1],
+        ]),
+      ),
+    ).toEqual(["a", "section:0", "section:1", "b", "c"]);
   });
 
   it("lists sections without slides", () => {
@@ -47,7 +61,10 @@ describe("applyOrder", () => {
   });
 
   it("moves a section marker with its title and renumbers sections", () => {
-    const d = deck([["One", 0], ["Two", 2]]);
+    const d = deck([
+      ["One", 0],
+      ["Two", 2],
+    ]);
     const next = applyOrder(d, ["a", "section:1", "b", "c", "section:0"]);
     expect(next.sections).toEqual([
       { index: 0, title: "Two", before: 1 },
@@ -67,7 +84,10 @@ describe("applyOrder", () => {
 
 describe("startsSection / sectionKey", () => {
   it("knows which slides start a section", () => {
-    const d = deck([["One", 0], ["Two", 2]]);
+    const d = deck([
+      ["One", 0],
+      ["Two", 2],
+    ]);
     expect([0, 1, 2].map((i) => startsSection(d, i))).toEqual([true, false, true]);
   });
 

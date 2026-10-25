@@ -12,7 +12,10 @@ import { DECK_HTML, deckFor } from "../test/fixtures";
 import { SlideSizeButton } from "./SlideSize";
 
 const DECK = deckFor(DECK_HTML);
-const sizedDeck = (size: { width: number; height: number; unit: "px" | "in" | "cm" }, pixels: [number, number]): Deck => ({
+const sizedDeck = (
+  size: { width: number; height: number; unit: "px" | "in" | "cm" },
+  pixels: [number, number],
+): Deck => ({
   ...DECK,
   size: { ...size, pixelWidth: pixels[0], pixelHeight: pixels[1] },
 });

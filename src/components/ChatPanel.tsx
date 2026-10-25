@@ -1,5 +1,5 @@
-import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   AlertTriangle,
   ArrowUp,
@@ -23,15 +23,22 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { api, errorMessage } from "../lib/api";
-import { claimDrop, dropCovered, dropPoint, isImage } from "../lib/drop";
 import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowTokens } from "../lib/context";
-import { basename, workspaceChatFileUrl, cn, dirname, isSessionFile } from "../lib/utils";
+import { claimDrop, dropCovered, dropPoint, isImage } from "../lib/drop";
 import { PROVIDERS, type Provider } from "../lib/models";
-import { relativePath, useApp, type AssistantMessage, type ChatMessage, type ChatPart, type UserMessage } from "../store";
-import { ApprovalCard, PermissionPicker, ApprovalReview } from "./Permissions";
-import { EffortPicker, ModelPicker, useDismiss } from "./ModelPicker";
-import { VoiceInput } from "./VoiceInput";
+import { basename, cn, dirname, isSessionFile, workspaceChatFileUrl } from "../lib/utils";
 import { insertTranscript } from "../lib/voice";
+import {
+  type AssistantMessage,
+  type ChatMessage,
+  type ChatPart,
+  relativePath,
+  type UserMessage,
+  useApp,
+} from "../store";
+import { EffortPicker, ModelPicker, useDismiss } from "./ModelPicker";
+import { ApprovalCard, ApprovalReview, PermissionPicker } from "./Permissions";
+import { VoiceInput } from "./VoiceInput";
 
 const SUGGESTIONS = [
   "A 6-slide pitch for a neighborhood tool-sharing app, bold and warm",
@@ -43,9 +50,7 @@ export function ChatPanel() {
   const messages = useApp((s) => s.messages);
   const running = useApp((s) => s.running);
   const provider = useApp((s) => s.selection.provider);
-  const cliMissing = useApp(
-    (s) => s.providers?.find((p) => p.id === s.selection.provider)?.installed === false,
-  );
+  const cliMissing = useApp((s) => s.providers?.find((p) => p.id === s.selection.provider)?.installed === false);
   const deckEmpty = useApp((s) => (s.deck?.slides.length ?? 0) === 0);
   const composerFill = useApp((s) => s.composerFill);
   const [draft, setDraft] = useState("");
@@ -73,9 +78,7 @@ export function ChatPanel() {
       )}
       {cliMissing && <MissingCli provider={provider} />}
       <MessageList messages={messages} running={running}>
-        {messages.length === 0 && (
-          <EmptyChat deckEmpty={deckEmpty} onPick={(text) => setDraft(text)} />
-        )}
+        {messages.length === 0 && <EmptyChat deckEmpty={deckEmpty} onPick={(text) => setDraft(text)} />}
       </MessageList>
       <Composer draft={draft} setDraft={setDraft} />
     </div>
@@ -181,6 +184,7 @@ function AssistantBlock({ message }: { message: AssistantMessage }) {
       {message.parts.map((part, i) =>
         part.kind === "text" ? (
           part.text.trim() && (
+            // biome-ignore lint/suspicious/noArrayIndexKey: a message's parts only grow at the end
             <div key={i} className="markdown selectable">
               <Markdown remarkPlugins={[remarkGfm]}>{part.text}</Markdown>
             </div>
@@ -193,20 +197,16 @@ function AssistantBlock({ message }: { message: AssistantMessage }) {
           <ToolRow key={part.id} part={part} />
         ),
       )}
-      {streaming && message.compacting && (
-        <span className="shimmer-text text-xs">Compacting the conversation…</span>
-      )}
+      {streaming && message.compacting && <span className="shimmer-text text-xs">Compacting the conversation…</span>}
       {message.compacted && (
         <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <FoldVertical className="size-3.5 shrink-0" />
           Conversation compacted
         </span>
       )}
-      {streaming &&
-        !message.compacting &&
-        (message.thinking || (message.parts.length === 0 && !message.compacted)) && (
-          <span className="shimmer-text text-xs">Thinking…</span>
-        )}
+      {streaming && !message.compacting && (message.thinking || (message.parts.length === 0 && !message.compacted)) && (
+        <span className="shimmer-text text-xs">Thinking…</span>
+      )}
       {streaming && !message.thinking && message.parts.at(-1)?.kind === "tool" && (
         <span className="shimmer-text text-xs">Working…</span>
       )}
@@ -216,13 +216,10 @@ function AssistantBlock({ message }: { message: AssistantMessage }) {
           <span className="whitespace-pre-wrap break-words">{message.error}</span>
         </div>
       )}
-      {message.status === "interrupted" && (
-        <span className="text-2xs text-muted-foreground">Stopped</span>
-      )}
+      {message.status === "interrupted" && <span className="text-2xs text-muted-foreground">Stopped</span>}
       {message.status === "done" && message.durationMs !== null && (
         <span className="text-2xs text-muted-foreground/70">
-          {(message.durationMs / 1000).toFixed(1)}s
-          {message.costUsd ? ` · $${message.costUsd.toFixed(3)}` : ""}
+          {(message.durationMs / 1000).toFixed(1)}s{message.costUsd ? ` · $${message.costUsd.toFixed(3)}` : ""}
         </span>
       )}
     </div>
@@ -306,7 +303,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const workspace = useApp((s) => s.workspace);
   const assetTarget = deck?.id ?? workspace?.path;
   const assetPrefix = deck && workspace ? dirname(relativePath(workspace, deck.id) ?? basename(deck.id)) : "";
-  const attachmentRef = (path: string) => assetPrefix ? `${assetPrefix}/${path}` : path;
+  const attachmentRef = (path: string) => (assetPrefix ? `${assetPrefix}/${path}` : path);
   const selected = useApp((s) => s.selected);
   const running = useApp((s) => s.running);
   const [includeSlide, setIncludeSlide] = useState(true);
@@ -377,9 +374,10 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     el.style.height = `${Math.min(Math.max(el.scrollHeight, 64), 240)}px`;
   }, [shownDraft, inputHeight]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refocus when the draft is sent or cleared
   useEffect(() => {
     textareaRef.current?.focus();
-  }, [draft === ""]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [draft === ""]);
 
   const composerFill = useApp((s) => s.composerFill);
   useEffect(() => {
@@ -421,12 +419,14 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
 
   // Files dropped anywhere on the window become attachments, unless something there (like the
   // slide being edited) takes them.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-register so drops import into the current asset target
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void getCurrentWebview()
       .onDragDropEvent((event) => {
-        if (event.payload.type === "over" || event.payload.type === "enter") setDragging(!dropCovered(dropPoint(event.payload.position)));
+        if (event.payload.type === "over" || event.payload.type === "enter")
+          setDragging(!dropCovered(dropPoint(event.payload.position)));
         else if (event.payload.type === "leave") setDragging(false);
         else if (event.payload.type === "drop") {
           setDragging(false);
@@ -441,12 +441,17 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
       disposed = true;
       unlisten?.();
     };
-  }, [assetTarget]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [assetTarget]);
 
   const pickFiles = async () => {
     const picked = await open({
       multiple: true,
-      filters: [{ name: "Images & media", extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "mp4", "webm", "pdf", "csv", "md", "txt"] }],
+      filters: [
+        {
+          name: "Images & media",
+          extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "mp4", "webm", "pdf", "csv", "md", "txt"],
+        },
+      ],
     });
     if (picked) await importPaths(Array.isArray(picked) ? picked : [picked]);
   };
@@ -454,7 +459,9 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const submit = () => {
     const text = draft.trim();
     if (!text || running || dictation) return;
-    void useApp.getState().send(text, { includeSlide: includeSlide && slideNumber > 0, attachments, ...(screenshot && { screenshot }) });
+    void useApp
+      .getState()
+      .send(text, { includeSlide: includeSlide && slideNumber > 0, attachments, ...(screenshot && { screenshot }) });
     setDraft("");
     setAttachments([]);
     setScreenshot(null);
@@ -463,8 +470,9 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
 
   return (
     <div className="relative shrink-0 px-3 pb-3">
-      {workspace && images.length > 0 && (
-        gridOpen ? (
+      {workspace &&
+        images.length > 0 &&
+        (gridOpen ? (
           <ImageGrid
             workspacePath={workspace.path}
             images={images}
@@ -476,8 +484,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           />
         ) : (
           <ImageFan workspacePath={workspace.path} images={images} onOpen={() => setGridOpen(true)} />
-        )
-      )}
+        ))}
       <ContextMeter />
       <div
         onClick={(e) => {
@@ -512,13 +519,19 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
             resizeStart.current = null;
             if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
           }}
-          onPointerCancel={() => { resizeStart.current = null; }}
-          onLostPointerCapture={() => { resizeStart.current = null; }}
+          onPointerCancel={() => {
+            resizeStart.current = null;
+          }}
+          onLostPointerCapture={() => {
+            resizeStart.current = null;
+          }}
           onKeyDown={(e) => {
             const height = textareaRef.current?.getBoundingClientRect().height ?? 64;
             if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "Home" || e.key === "End") {
               e.preventDefault();
-              resizeInput(e.key === "Home" ? 64 : e.key === "End" ? maxInputHeight : height + (e.key === "ArrowUp" ? 16 : -16));
+              resizeInput(
+                e.key === "Home" ? 64 : e.key === "End" ? maxInputHeight : height + (e.key === "ArrowUp" ? 16 : -16),
+              );
             }
           }}
         >
@@ -530,12 +543,12 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
               <button
                 type="button"
                 onClick={() => setIncludeSlide((v) => !v)}
-                title={includeSlide ? "The agent will know which slide you are on" : "Not referencing the current slide"}
+                title={
+                  includeSlide ? "The agent will know which slide you are on" : "Not referencing the current slide"
+                }
                 className={cn(
                   "flex h-5 items-center gap-1 rounded-md border px-1.5 text-xs",
-                  includeSlide
-                    ? "border-primary/30 bg-primary/10 text-primary"
-                    : "text-muted-foreground line-through",
+                  includeSlide ? "border-primary/30 bg-primary/10 text-primary" : "text-muted-foreground line-through",
                 )}
               >
                 <Presentation className="size-3" />
@@ -561,7 +574,10 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
               </span>
             )}
             {files.map((a) => (
-              <span key={a} className="flex h-5 items-center gap-1 rounded-md border px-1.5 text-xs text-muted-foreground">
+              <span
+                key={a}
+                className="flex h-5 items-center gap-1 rounded-md border px-1.5 text-xs text-muted-foreground"
+              >
                 <FileText className="size-3" />
                 {a.replace(/^assets\//, "")}
                 <button
@@ -593,41 +609,41 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           className="block max-h-[max(64px,min(240px,40vh))] min-h-16 w-full resize-none bg-transparent px-3.5 pt-3 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/70"
         />
         <div className="@container px-2 pt-1 pb-2">
-        <div className="relative flex flex-nowrap items-center gap-1">
-          <ModelPicker />
-          <div className="mx-0.5 h-4 w-px bg-border" />
-          <EffortPicker />
-          <PermissionPicker />
-          <div className="min-w-0 flex-1" />
-          <VoiceInput {...dictationHandlers} />
-          <button
-            type="button"
-            onClick={pickFiles}
-            title="Attach images or files"
-            className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
-          >
-            <Paperclip className="size-4" />
-          </button>
-          {running ? (
+          <div className="relative flex flex-nowrap items-center gap-1">
+            <ModelPicker />
+            <div className="mx-0.5 h-4 w-px bg-border" />
+            <EffortPicker />
+            <PermissionPicker />
+            <div className="min-w-0 flex-1" />
+            <VoiceInput {...dictationHandlers} />
             <button
               type="button"
-              onClick={() => useApp.getState().interrupt()}
-              title="Stop"
-              className="flex size-8 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80"
+              onClick={pickFiles}
+              title="Attach images or files"
+              className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
             >
-              <Square className="size-3 fill-current" />
+              <Paperclip className="size-4" />
             </button>
-          ) : (
-            <button
-              type="button"
-              onClick={submit}
-              disabled={!draft.trim()}
-              title="Send"
-              className="flex size-8 items-center justify-center rounded-full bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-30"
-            >
-              <ArrowUp className="size-4" />
-            </button>
-          )}
+            {running ? (
+              <button
+                type="button"
+                onClick={() => useApp.getState().interrupt()}
+                title="Stop"
+                className="flex size-8 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80"
+              >
+                <Square className="size-3 fill-current" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={submit}
+                disabled={!draft.trim()}
+                title="Send"
+                className="flex size-8 items-center justify-center rounded-full bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-30"
+              >
+                <ArrowUp className="size-4" />
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -686,7 +702,12 @@ function ImageFan(props: { workspacePath: string; images: string[]; onOpen: () =
 }
 
 /** Every attached image as a preview, each with a way to remove it. */
-function ImageGrid(props: { workspacePath: string; images: string[]; onRemove: (path: string) => void; onClose: () => void }) {
+function ImageGrid(props: {
+  workspacePath: string;
+  images: string[];
+  onRemove: (path: string) => void;
+  onClose: () => void;
+}) {
   const { workspacePath, images, onClose } = props;
   const ref = useRef<HTMLDivElement>(null);
   useDismiss(ref, true, onClose);
@@ -790,11 +811,7 @@ function ContextMeter() {
         <div
           className={cn(
             "h-full rounded-full transition-[width] duration-500",
-            percent === null || percent < 70
-              ? "bg-primary/70"
-              : percent < 90
-                ? "bg-amber-500"
-                : "bg-destructive",
+            percent === null || percent < 70 ? "bg-primary/70" : percent < 90 ? "bg-amber-500" : "bg-destructive",
           )}
           style={{ width: `${percent ?? 0}%` }}
         />

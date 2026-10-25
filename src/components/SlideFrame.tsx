@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { Slide } from "../lib/api";
-import { pixelsOf, type Pixels } from "../lib/slideSize";
+import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { isPasteboardUrl, slideUrl } from "../lib/utils";
 import { useApp } from "../store";
 
@@ -32,9 +32,22 @@ interface SlideFrameProps {
  * slide's canvas, scaled to fill its container (which takes the slide's shape). When the slide changes, the new version loads behind the
  * current one and swaps in once painted, so edits stream in without white flashes.
  */
-export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena, className, onFrameReady, url, size: canvas = pixelsOf(null) }: SlideFrameProps) {
+export function SlideFrame({
+  deckId,
+  slideId,
+  version,
+  thumbnail,
+  editKey,
+  arena,
+  className,
+  onFrameReady,
+  url,
+  size: canvas = pixelsOf(null),
+}: SlideFrameProps) {
   const { width: stageW, height: stageH } = canvas;
-  const src = url ?? slideUrl(deckId, slideId, version, thumbnail || editKey !== undefined, editKey, arena !== undefined && !thumbnail);
+  const src =
+    url ??
+    slideUrl(deckId, slideId, version, thumbnail || editKey !== undefined, editKey, arena !== undefined && !thumbnail);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0);
@@ -68,7 +81,9 @@ export function SlideFrame({ deckId, slideId, version, thumbnail, editKey, arena
   const slideW = stageW * scale;
   const slideH = stageH * scale;
   const sizeFor = (url: string) =>
-    isPasteboardUrl(url) && arena ? { w: Math.max(arena.width, slideW), h: Math.max(arena.height, slideH) } : { w: slideW, h: slideH };
+    isPasteboardUrl(url) && arena
+      ? { w: Math.max(arena.width, slideW), h: Math.max(arena.height, slideH) }
+      : { w: slideW, h: slideH };
   const bleeds = frames.some(isPasteboardUrl);
 
   return (

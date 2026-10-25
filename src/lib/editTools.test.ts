@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_EDIT_STYLES, familyOf, familyOfKind, parseSelection, stepFontSize, toolbarState, type EditSelection } from "./editTools";
+import {
+  DEFAULT_EDIT_STYLES,
+  type EditSelection,
+  familyOf,
+  familyOfKind,
+  parseSelection,
+  stepFontSize,
+  toolbarState,
+} from "./editTools";
 
 const SELECTION: EditSelection = {
   kind: "text",
@@ -37,11 +45,22 @@ describe("edit tools", () => {
       "shape",
       "draw",
     ]);
-    expect(["text", "shape", "drawing", "element", "media"].map(familyOfKind)).toEqual(["text", "shape", "draw", null, null]);
+    expect(["text", "shape", "drawing", "element", "media"].map(familyOfKind)).toEqual([
+      "text",
+      "shape",
+      "draw",
+      null,
+      null,
+    ]);
   });
 
   it("shows the selection, else what the tool adds, else nothing", () => {
-    expect(toolbarState(SELECTION, "rect", DEFAULT_EDIT_STYLES)).toMatchObject({ style: SELECTION, text: true, valign: true, selected: true });
+    expect(toolbarState(SELECTION, "rect", DEFAULT_EDIT_STYLES)).toMatchObject({
+      style: SELECTION,
+      text: true,
+      valign: true,
+      selected: true,
+    });
     expect(toolbarState({ ...SELECTION, valign: null }, "select", DEFAULT_EDIT_STYLES)?.valign).toBe(false);
     expect(toolbarState(null, "rect", DEFAULT_EDIT_STYLES)).toEqual({
       style: DEFAULT_EDIT_STYLES.shape,
@@ -59,7 +78,15 @@ describe("edit tools", () => {
     expect(parseSelection(null)).toBeNull();
     expect(parseSelection({ text: true })).toBeNull();
     expect(
-      parseSelection({ kind: "element", color: "red", fill: "#ABCDEF", fontSize: "big", align: "justify", valign: "baseline", strokeWidth: NaN }),
+      parseSelection({
+        kind: "element",
+        color: "red",
+        fill: "#ABCDEF",
+        fontSize: "big",
+        align: "justify",
+        valign: "baseline",
+        strokeWidth: NaN,
+      }),
     ).toEqual({
       kind: "element",
       text: false,

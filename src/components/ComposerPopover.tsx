@@ -1,8 +1,14 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { type CSSProperties, type ReactNode, type RefObject, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 /** Keep composer menus outside container-query and scroll compositing layers. */
-export function ComposerPopover({ anchor, onClose, width, className, children }: {
+export function ComposerPopover({
+  anchor,
+  onClose,
+  width,
+  className,
+  children,
+}: {
   anchor: RefObject<HTMLElement | null>;
   onClose: () => void;
   width: number;
@@ -24,9 +30,7 @@ export function ComposerPopover({ anchor, onClose, width, className, children }:
       setPosition({
         width: popupWidth,
         left: Math.max(margin, Math.min(rect.left, window.innerWidth - popupWidth - margin)),
-        ...(opensAbove
-          ? { bottom: window.innerHeight - rect.top + margin }
-          : { top: rect.bottom + margin }),
+        ...(opensAbove ? { bottom: window.innerHeight - rect.top + margin } : { top: rect.bottom + margin }),
         maxHeight: Math.max(0, opensAbove ? above : below),
       });
     };
@@ -34,7 +38,7 @@ export function ComposerPopover({ anchor, onClose, width, className, children }:
       const target = event.target as Node;
       if (!anchor.current?.contains(target) && !popup.current?.contains(target)) onClose();
     };
-    const escape = (event: KeyboardEvent) => {
+    const onEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.stopPropagation();
         onClose();
@@ -47,18 +51,22 @@ export function ComposerPopover({ anchor, onClose, width, className, children }:
     window.addEventListener("resize", place);
     document.addEventListener("scroll", place, true);
     document.addEventListener("pointerdown", dismiss, true);
-    document.addEventListener("keydown", escape, true);
+    document.addEventListener("keydown", onEscape, true);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", place);
       document.removeEventListener("scroll", place, true);
       document.removeEventListener("pointerdown", dismiss, true);
-      document.removeEventListener("keydown", escape, true);
+      document.removeEventListener("keydown", onEscape, true);
     };
   }, [anchor, onClose, width]);
 
   return createPortal(
-    <div ref={popup} style={position} className={`fixed z-50 overflow-y-auto rounded-xl border bg-card text-foreground shadow-xl shadow-black/20 ${className}`}>
+    <div
+      ref={popup}
+      style={position}
+      className={`fixed z-50 overflow-y-auto rounded-xl border bg-card text-foreground shadow-xl shadow-black/20 ${className}`}
+    >
       {children}
     </div>,
     document.body,

@@ -264,3 +264,8 @@ editor; the app picks up the changes.
 The design guidance in the agent's prompt draws on
 [frontend-slides](https://github.com/zarazhangrui/frontend-slides) (MIT). See
 `src-tauri/prompts/THIRD_PARTY_NOTICES.md`.
+
+## License
+
+[MIT](LICENSE) © 2026 Matthias Rieck. Third-party notices are in
+`src-tauri/prompts/THIRD_PARTY_NOTICES.md`.

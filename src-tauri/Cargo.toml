@@ -3,6 +3,7 @@ name = "slopslide"
 version = "0.1.0"
 description = "Chat-driven slide editor"
 authors = ["Matthias Rieck"]
+license = "MIT"
 edition = "2021"
 rust-version = "1.80"
 

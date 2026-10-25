@@ -456,10 +456,8 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
           loaded.contentWindow.postMessage({ type: "slop:edit-paste-text", text: pasted.text, style: now.editStyles.text }, "*");
         } else if (pasted.kind === "images") {
           const images = await Promise.all(pasted.images.map(async (src) => ({ src, ...(await imageSize(deckFileUrl(deck.id, src))) })));
-          // In the middle of the view, in the editor's own pixels.
-          const x = loaded.clientWidth / 2;
-          const y = loaded.clientHeight / 2;
-          loaded.contentWindow.postMessage({ type: "slop:edit-insert-images", images, x, y }, "*");
+          // The editor puts them where the pointer is, or in the middle of the view.
+          loaded.contentWindow.postMessage({ type: "slop:edit-paste-images", images }, "*");
         }
       } catch (error) {
         useApp.getState().setError(errorMessage(error));

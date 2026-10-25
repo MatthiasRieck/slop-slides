@@ -554,11 +554,11 @@ describe("Stage", () => {
 
       it("has nothing to style until something is selected or a tool is picked", () => {
         const { frame } = enter();
-        for (const name of ["Text color", "Bold", "Fill", "Border color", "Bring to front", "Delete (⌫)"]) {
+        for (const name of ["Text color", "Bold (⌘B)", "Fill", "Border color", "Bring to front", "Delete (⌫)"]) {
           expect(button(name).disabled).toBe(true);
         }
         select(frame);
-        for (const name of ["Text color", "Bold", "Fill", "Border color", "Bring to front", "Delete (⌫)"]) {
+        for (const name of ["Text color", "Bold (⌘B)", "Fill", "Border color", "Bring to front", "Delete (⌫)"]) {
           expect(button(name).disabled).toBe(false);
         }
         select(frame, null);
@@ -568,9 +568,9 @@ describe("Stage", () => {
       it("shows the selection's style", () => {
         const { frame } = enter();
         select(frame);
-        expect(screen.getByLabelText("Font size").textContent).toBe("40");
-        expect(button("Italic").getAttribute("aria-pressed")).toBe("true");
-        expect(button("Bold").getAttribute("aria-pressed")).toBe("false");
+        expect((screen.getByLabelText("Font size") as HTMLInputElement).value).toBe("40");
+        expect(button("Italic (⌘I)").getAttribute("aria-pressed")).toBe("true");
+        expect(button("Bold (⌘B)").getAttribute("aria-pressed")).toBe("false");
         expect(button("Center text").getAttribute("aria-pressed")).toBe("true");
         expect(button("Center text vertically").getAttribute("aria-pressed")).toBe("true");
         expect(screen.getByTestId("Fill swatch").style.background).toBe("rgb(59, 130, 246)");
@@ -582,7 +582,7 @@ describe("Stage", () => {
         select(frame);
         fireEvent.click(button("Larger text"));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { fontSize: 48 } }, "*");
-        fireEvent.click(button("Bold"));
+        fireEvent.click(button("Bold (⌘B)"));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { bold: true } }, "*");
         fireEvent.click(button("Align text to the bottom"));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { valign: "bottom" } }, "*");
@@ -617,7 +617,7 @@ describe("Stage", () => {
           strokeWidth: 6,
           fill: null,
         });
-        expect(button("Bold").disabled).toBe(true);
+        expect(button("Bold (⌘B)").disabled).toBe(true);
         expect(button("Line color").disabled).toBe(false);
         expect((screen.getByLabelText("Line width") as HTMLSelectElement).value).toBe("6");
       });
@@ -626,7 +626,7 @@ describe("Stage", () => {
         const { post } = enter();
         fireEvent.click(button("Add text (T)"));
         expect(button("Fill").disabled).toBe(false);
-        fireEvent.click(button("Italic"));
+        fireEvent.click(button("Italic (⌘I)"));
         expect(useApp.getState().editStyles.text.italic).toBe(true);
         expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-style" }), "*");
         expect(post).toHaveBeenLastCalledWith(
@@ -663,6 +663,151 @@ describe("Stage", () => {
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-order", to: "forward" }, "*");
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-order", to: "back" }, "*");
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-delete" }, "*");
+      });
+
+      describe("text formatting", () => {
+        const TEXT = {
+          ...SELECTION,
+          kind: "text",
+          fontFamily: "Georgia",
+          underline: false,
+          strike: false,
+          script: null,
+          letterSpacing: 0,
+          lineHeight: null,
+          list: null,
+          link: null,
+          autofit: null,
+          editing: false,
+          range: false,
+        };
+        const style = (changes: Record<string, unknown>) => ({ type: "slop:edit-style", style: changes });
+
+        it("underlines, strikes through, raises and lists the selection's text", () => {
+          const { frame, post } = enter();
+          select(frame, { ...TEXT, underline: true, script: "sup", list: "ul" });
+          expect(button("Underline (⌘U)").getAttribute("aria-pressed")).toBe("true");
+          expect(button("Superscript").getAttribute("aria-pressed")).toBe("true");
+          expect(button(/^Bulleted list/).getAttribute("aria-pressed")).toBe("true");
+          fireEvent.click(button("Underline (⌘U)"));
+          fireEvent.click(button("Strikethrough"));
+          fireEvent.click(button("Superscript"));
+          fireEvent.click(button("Subscript"));
+          fireEvent.click(button(/^Numbered list/));
+          expect(post).toHaveBeenCalledWith(style({ underline: false }), "*");
+          expect(post).toHaveBeenCalledWith(style({ strike: true }), "*");
+          expect(post).toHaveBeenCalledWith(style({ script: null }), "*");
+          expect(post).toHaveBeenCalledWith(style({ script: "sub" }), "*");
+          expect(post).toHaveBeenCalledWith({ type: "slop:edit-list", list: "ol" }, "*");
+          // Superscript and lists are not something the next text box starts with.
+          expect(useApp.getState().editStyles.text).toMatchObject({ underline: false, strike: true });
+          expect(useApp.getState().editStyles.text).not.toHaveProperty("script");
+        });
+
+        it("keeps the defaults when styling words while typing", () => {
+          const { frame, post } = enter();
+          select(frame, { ...TEXT, editing: true, range: true });
+          fireEvent.click(button("Bold (⌘B)"));
+          expect(post).toHaveBeenCalledWith(style({ bold: true }), "*");
+          expect(useApp.getState().editStyles).toEqual(DEFAULT_EDIT_STYLES);
+        });
+
+        it("keeps focus in the slide when a button is pressed, and ends typing on a press elsewhere", () => {
+          const { frame, post } = enter();
+          select(frame, TEXT);
+          const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+          button("Bold (⌘B)").dispatchEvent(press);
+          expect(press.defaultPrevented).toBe(true);
+          fireEvent.pointerDown(button("Bold (⌘B)"));
+          expect(post).not.toHaveBeenCalledWith({ type: "slop:edit-finish" }, "*");
+          fireEvent.pointerDown(document.body);
+          expect(post).toHaveBeenCalledWith({ type: "slop:edit-finish" }, "*");
+        });
+
+        it("takes a typed font size on Enter and gives focus back to the slide", () => {
+          const { frame, post } = enter();
+          select(frame, TEXT);
+          const focus = vi.spyOn(frame, "focus");
+          const input = screen.getByLabelText("Font size") as HTMLInputElement;
+          fireEvent.change(input, { target: { value: "13" } });
+          fireEvent.keyDown(input, { key: "Enter" });
+          expect(post).toHaveBeenCalledWith(style({ fontSize: 13 }), "*");
+          expect(focus).toHaveBeenCalled();
+          // Nonsense goes back to the size it has.
+          fireEvent.change(input, { target: { value: "0" } });
+          fireEvent.blur(input);
+          expect(input.value).toBe("40");
+          expect(post).not.toHaveBeenCalledWith(style({ fontSize: 0 }), "*");
+        });
+
+        it("picks a font from the deck's fonts or the system's", () => {
+          const { frame, post } = enter();
+          fromFrame(frame, {
+            type: "slop:edit-fonts",
+            slide: "intro",
+            fonts: [{ name: "Playfair Display", stack: '"Playfair Display", serif' }],
+          });
+          select(frame, TEXT);
+          const font = screen.getByLabelText("Font") as HTMLSelectElement;
+          expect(font.value).toBe("Georgia, serif");
+          expect(screen.getByRole("group", { name: "Deck fonts" })).toBeTruthy();
+          fireEvent.change(font, { target: { value: '"Playfair Display", serif' } });
+          expect(post).toHaveBeenCalledWith(style({ fontFamily: '"Playfair Display", serif' }), "*");
+          fireEvent.change(font, { target: { value: "" } });
+          expect(post).toHaveBeenCalledWith(style({ fontFamily: null }), "*");
+          // A font from the deck's styles that is not on the list still shows.
+          select(frame, { ...TEXT, fontFamily: "Comic Neue" });
+          expect(font.value).toBe("__current");
+          expect(screen.getByRole("option", { name: "Comic Neue" })).toBeTruthy();
+        });
+
+        it("sets line height, letter spacing and how text fits", () => {
+          const { frame, post } = enter();
+          select(frame, TEXT);
+          fireEvent.click(button("Spacing"));
+          fireEvent.change(screen.getByLabelText("Line height"), { target: { value: "1.5" } });
+          fireEvent.change(screen.getByLabelText("Letter spacing"), { target: { value: "4" } });
+          fireEvent.change(screen.getByLabelText("When text does not fit"), { target: { value: "shrink" } });
+          expect(post).toHaveBeenCalledWith(style({ lineHeight: 1.5 }), "*");
+          expect(post).toHaveBeenCalledWith(style({ letterSpacing: 4 }), "*");
+          expect(post).toHaveBeenCalledWith(style({ autofit: "shrink" }), "*");
+          fireEvent.change(screen.getByLabelText("When text does not fit"), { target: { value: "" } });
+          expect(post).toHaveBeenCalledWith(style({ autofit: null }), "*");
+          expect(useApp.getState().editStyles.text).not.toHaveProperty("autofit");
+        });
+
+        it("adds, changes and removes links, to web pages or other slides", () => {
+          const { frame, post } = enter();
+          select(frame, TEXT);
+          fireEvent.click(button("Link"));
+          const address = screen.getByLabelText("Link address");
+          fireEvent.change(address, { target: { value: "javascript:alert(1)" } });
+          fireEvent.click(button("Add link"));
+          expect(screen.getByText(/Enter a web address/)).toBeTruthy();
+          fireEvent.change(address, { target: { value: "example.com" } });
+          fireEvent.click(button("Add link"));
+          expect(post).toHaveBeenCalledWith({ type: "slop:edit-link", href: "https://example.com" }, "*");
+          expect(screen.queryByRole("dialog", { name: "Link" })).toBeNull();
+          fireEvent.click(button("Link"));
+          fireEvent.change(screen.getByLabelText("Link to slide"), { target: { value: "outro" } });
+          fireEvent.click(button("Add link"));
+          expect(post).toHaveBeenCalledWith({ type: "slop:edit-link", href: "#outro" }, "*");
+          select(frame, { ...TEXT, link: "#outro" });
+          fireEvent.click(button("Link"));
+          expect((screen.getByLabelText("Link to slide") as HTMLSelectElement).value).toBe("outro");
+          fireEvent.click(button("Remove link"));
+          expect(post).toHaveBeenCalledWith({ type: "slop:edit-link", href: null }, "*");
+        });
+
+        it("pastes the clipboard's plain text when the editor asks", async () => {
+          vi.mocked(invoke).mockResolvedValue("plain words");
+          const { frame, post } = enter();
+          fromFrame(frame, { type: "slop:edit-paste-request", slide: "intro", plain: true });
+          await waitFor(() =>
+            expect(post).toHaveBeenCalledWith({ type: "slop:edit-insert-text", text: "plain words" }, "*"),
+          );
+          expect(invoke).toHaveBeenCalledWith("read_clipboard_text");
+        });
       });
 
       it("ignores selections from other slides and drops a stale one when the editor reloads", () => {

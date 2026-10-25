@@ -148,6 +148,11 @@ pub fn write(html: &str, text: &str) -> Result<()> {
         .map_err(|e| Error::msg(format!("could not copy: {e}")))
 }
 
+/// The system clipboard's plain text; empty when it holds none.
+pub fn read_text() -> Result<String> {
+    with_clipboard(|c| c.get_text().unwrap_or_default())
+}
+
 /// What the system clipboard holds now.
 pub fn read() -> Result<Contents> {
     with_clipboard(|c| Contents {

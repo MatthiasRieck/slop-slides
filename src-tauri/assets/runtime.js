@@ -184,9 +184,99 @@
   }
   if (params.has("review")) toggleReview(true);
 
+  // Text boxes with data-autofit="shrink" shrink their text until it fits their box. Every
+  // font size in the box scales by the same factor, set inline; `original` gives back what the
+  // inline font size was before, so the slide editor saves the markup without the fit.
+  var FIT_MIN = 0.2;
+  var FIT_STEPS = 10;
+  var fitted = typeof Map === "function" ? new Map() : null;
+  var fitScales = typeof Map === "function" ? new Map() : null;
+
+  function overflows(el) {
+    return el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1;
+  }
+
+  function fitNodes(el) {
+    return [el].concat(
+      Array.prototype.filter.call(el.querySelectorAll("*"), function (node) {
+        return !node.closest("svg") || node.tagName.toLowerCase() === "svg";
+      }),
+    );
+  }
+
+  /** Puts back the font sizes `fitText` changed in `el`. */
+  function unfitText(el) {
+    if (!fitted) return;
+    fitNodes(el).forEach(function (node) {
+      var before = fitted.get(node);
+      if (!before) return;
+      fitted.delete(node);
+      if (before.value) node.style.setProperty("font-size", before.value, before.priority);
+      else node.style.removeProperty("font-size");
+      if (!node.getAttribute("style")) node.removeAttribute("style");
+    });
+    fitScales.delete(el);
+  }
+
+  /** Shrinks the text of a `data-autofit="shrink"` box until it fits; false when it already does. */
+  function fitText(el) {
+    if (!fitted) return false;
+    unfitText(el);
+    if (el.getAttribute("data-autofit") !== "shrink" || (!el.clientHeight && !el.clientWidth) || !overflows(el)) {
+      return false;
+    }
+    var nodes = fitNodes(el);
+    var sizes = nodes.map(function (node) {
+      return parseFloat(getComputedStyle(node).fontSize) || 0;
+    });
+    nodes.forEach(function (node) {
+      fitted.set(node, {
+        value: node.style.getPropertyValue("font-size"),
+        priority: node.style.getPropertyPriority("font-size"),
+      });
+    });
+    var scaleTo = function (k) {
+      nodes.forEach(function (node, i) {
+        if (sizes[i]) node.style.setProperty("font-size", Math.round(sizes[i] * k * 100) / 100 + "px", "important");
+      });
+    };
+    var lo = FIT_MIN;
+    var hi = 1;
+    for (var step = 0; step < FIT_STEPS; step++) {
+      var mid = (lo + hi) / 2;
+      scaleTo(mid);
+      if (overflows(el)) hi = mid;
+      else lo = mid;
+    }
+    scaleTo(lo);
+    fitScales.set(el, lo);
+    return true;
+  }
+
+  function fitAll() {
+    Array.prototype.forEach.call(document.querySelectorAll('.slide [data-autofit="shrink"]'), fitText);
+  }
+
+  window.slopAutofit = {
+    fit: fitText,
+    unfit: unfitText,
+    fitAll: fitAll,
+    /** What `node`'s inline font size was before a fit: { value, priority }, or null when not fitted. */
+    original: function (node) {
+      return (fitted && fitted.get(node)) || null;
+    },
+    /** How far the box `el` is shrunk (1 when it is not). */
+    scale: function (el) {
+      return (fitScales && fitScales.get(el)) || 1;
+    },
+  };
+
   window.addEventListener("resize", fit);
   fit();
   show(indexFor(embed ? params.get("slide") : decodeURIComponent(location.hash.slice(1))));
+  fitAll();
+  window.addEventListener("load", fitAll);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitAll);
 
   function navigate(key) {
     if (key === "ArrowRight" || key === "ArrowDown" || key === "PageDown" || key === " ") show(current + 1);

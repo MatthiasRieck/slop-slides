@@ -8,7 +8,8 @@
    Resize keeps text and borders at their size; drawings spread their points. The toolbar
    can switch to Stretch, which scales the contents too. On the first box resize, an in-flow
    element leaves an invisible placeholder in its original slot so its siblings stay put.
-   Double-click (or Enter) edits its text, Escape selects the parent. Delete (or Backspace, or
+   Double-click (or Enter) edits its text, Escape selects the parent (see "Editing text" below).
+   Delete (or Backspace, or
    { type: "slop:edit-delete" } from the app) removes it; an in-flow element leaves an invisible
    `data-delete-placeholder` in its slot (or takes over its resize placeholder) so the rest of
    the layout stays put.
@@ -36,15 +37,37 @@
      the slide with inline styles and carry `data-added` ("text", "shape" or "drawing"). After a
      text box or shape the tool goes back to "select", and Escape puts any tool away; the editor
      tells the app with { type: "slop:edit-tool", slide, tool }.
-   - { type: "slop:edit-style", style } restyles the selection: text color, size, bold, italic,
-     alignment (vertical only in flex boxes, which added text boxes and shapes are), fill and
-     border (a drawing's fill and stroke).
+   - { type: "slop:edit-style", style } restyles the selection: text color, size, font, bold,
+     italic, underline, strikethrough, superscript / subscript (`script`), letter spacing, line
+     height, alignment (vertical only in flex boxes, which added text boxes and shapes are),
+     fill and border (a drawing's fill and stroke), and `autofit`: "shrink" (data-autofit, the
+     runtime shrinks the text until it fits the box), "grow" (the box's height becomes a
+     min-height, so it grows with its text) or null (overflow is only reported).
+   - { type: "slop:edit-list", list: "ul" | "ol" } turns its text into a bulleted or numbered
+     list (one item per line), switches the list's kind, or with the same kind turns it back
+     into lines.
+   - { type: "slop:edit-link", href } links it (wrapping its text, or an element without text,
+     in an <a>; `#slide-id` links go to another slide) or with a null href removes its link.
+   - { type: "slop:edit-finish" } ends text editing (the app sends it on a click outside its
+     edit toolbar).
    - { type: "slop:edit-order", to } moves it "front", "forward", "backward" or "back" among the
      elements it overlaps, with an inline z-index.
    - { type: "slop:edit-size-mode", mode: "resize" | "stretch" } sets how handles change size.
    - { type: "slop:edit-delete" } removes it.
    Whenever the selection changes it reports whether anything is selected and what the toolbar
-   shows for it: { type: "slop:edit-selection", slide, selected, selection }.
+   shows for it: { type: "slop:edit-selection", slide, selected, selection }. It reports the
+   fonts the deck uses once: { type: "slop:edit-fonts", slide, fonts: [{ name, stack }] }.
+
+   Editing text: while typing, the toolbar's text styles, ⌘B / ⌘I / ⌘U and links apply to the
+   selected text (wrapped in inline <span> styles, <sup> / <sub> or <a>); with only a caret, to
+   the whole element. Editing survives a click on the app's toolbar (the text selection is kept
+   and put back), and ends with Escape, Enter, a click elsewhere or { type: "slop:edit-finish" }.
+   In a list, Enter starts a new item (Enter on an empty item outdents it, or ends the list),
+   Tab / Shift+Tab indent and outdent the item, and Shift+Enter breaks the line. ⌘V pastes
+   with the formatting (bold, italic, underline, strikethrough, color, links and line breaks;
+   fonts and sizes are dropped), ⌘⇧V as plain text: the editor asks the app for the clipboard's
+   text with { type: "slop:edit-paste-request", slide, plain: true } and the app answers with
+   { type: "slop:edit-insert-text", text }.
 
    It runs on the pasteboard (pasteboard.js), which pans and zooms the view; dragging empty space
    pans too. The slide no longer clips, so content that runs past its edge stays visible (dimmed
@@ -182,6 +205,17 @@
   wires.setAttribute("data-slop-overflow", "");
   document.body.appendChild(wires);
 
+  // The runtime's text fit (data-autofit="shrink"); see runtime.js.
+  var autofit = window.slopAutofit || null;
+  // Inline elements: text runs that formatting splits and wraps. Anything else is a block.
+  var INLINE = /^(a|abbr|b|bdi|bdo|cite|code|data|del|dfn|em|font|i|ins|kbd|mark|q|s|samp|small|span|strike|strong|sub|sup|time|u|var)$/i;
+  // Styles that apply to the selected text while typing; the others apply to the whole element.
+  var TEXT_KEYS = ["color", "fontSize", "fontFamily", "bold", "italic", "underline", "strike", "script", "letterSpacing", "link"];
+  var TOGGLES = { b: "bold", i: "italic", u: "underline" };
+  var LIST_TYPES = { ul: ["disc", "circle", "square"], ol: ["decimal", "lower-alpha", "lower-roman"] };
+  // Elements a paste never brings into text.
+  var PASTE_SKIP = /^(script|style|meta|link|title|head|template|noscript|img|picture|svg|video|audio|canvas|iframe|object|embed|button|input|select|textarea)$/i;
+
   var saved = serialize();
   var selected = null;
   var hovered = null;
@@ -192,6 +226,11 @@
   // Where the pointer is over this window, in its pixels; null once it leaves.
   var pointer = null;
   var overflowFrame = 0;
+  var reportFrame = 0;
+  // The last caret or text selection in the element being edited, kept while focus is in the app.
+  var textRange = null;
+  // The next paste goes in as plain text (⌘⇧V).
+  var plainPaste = false;
   var reportedOverflow = null;
   var tool = "select";
   var toolStyle = {};
@@ -211,13 +250,19 @@
     return copy.outerHTML;
   }
 
-  /** A copy of `el` without the editor's marks. */
+  /** A copy of `el` without the editor's marks, or the font sizes a text fit set. */
   function cleanCopy(el) {
     var copy = el.cloneNode(true);
-    withDescendants(copy).forEach(function (node) {
+    var originals = withDescendants(el);
+    withDescendants(copy).forEach(function (node, i) {
       EDITOR_ATTRS.forEach(function (name) {
         node.removeAttribute(name);
       });
+      var before = autofit && autofit.original(originals[i]);
+      if (!before) return;
+      if (before.value) node.style.setProperty("font-size", before.value, before.priority);
+      else node.style.removeProperty("font-size");
+      if (!node.getAttribute("style")) node.removeAttribute("style");
     });
     return copy;
   }
@@ -274,7 +319,11 @@
     var svg = el.closest("svg");
     while (svg && svg.parentElement && svg.parentElement.closest("svg")) svg = svg.parentElement.closest("svg");
     if (svg && slide.contains(svg)) el = svg;
-    while (el.parentElement !== slide && getComputedStyle(el).display === "inline") el = el.parentElement;
+    while (el.parentElement !== slide && getComputedStyle(el).display === "inline") {
+      // A link around an element without text (display: contents) leaves the element selected.
+      if (getComputedStyle(el.parentElement).display === "contents") break;
+      el = el.parentElement;
+    }
     return el;
   }
 
@@ -314,7 +363,13 @@
 
   /** Tells the app what its toolbar shows for the selection. */
   function report() {
+    reportFrame = 0;
     window.parent.postMessage({ type: "slop:edit-selection", slide: slide.id, selected: !!selected, selection: describe(selected) }, "*");
+  }
+
+  /** Reports once per frame, however often the text selection moves while typing. */
+  function scheduleReport() {
+    if (!reportFrame) reportFrame = window.requestAnimationFrame(report);
   }
 
   /** `#rrggbb` for a CSS color, or null when it is transparent or not a plain color. */
@@ -348,7 +403,67 @@
     return /center/.test(value) ? "middle" : /end/.test(value) ? "bottom" : "top";
   }
 
-  /** What the toolbar shows for `el`: its kind, text styles, fill and border. */
+  function weightOf(style) {
+    return style.fontWeight === "bold" ? 700 : parseInt(style.fontWeight, 10) || 400;
+  }
+
+  /** The first family of a CSS `font-family` stack, unquoted. */
+  function firstFamily(stack) {
+    return String(stack || "").split(",")[0].trim().replace(/^["']|["']$/g, "");
+  }
+
+  /** Whether `node` (an element) shows `line` ("underline" or "line-through"), from it or an ancestor. */
+  function decorated(node, line) {
+    var tags = line === "underline" ? /^u$/i : /^(s|strike|del)$/i;
+    for (var n = node; n && n.nodeType === 1 && n !== slide.parentElement; n = n.parentElement) {
+      var style = getComputedStyle(n);
+      if (tags.test(n.tagName) || (style.textDecorationLine || "").indexOf(line) >= 0 || (style.textDecoration || "").indexOf(line) >= 0) {
+        return true;
+      }
+      if (n === slide) break;
+    }
+    return false;
+  }
+
+  /** The element the text selection starts in, while `el` is being edited; otherwise `el`. */
+  function textNodeOf(el) {
+    var range = editing === el ? editRange() : null;
+    if (!range) return el;
+    var node = range.startContainer;
+    if (node.nodeType === 1 && !range.collapsed && node.childNodes[range.startOffset]) node = node.childNodes[range.startOffset];
+    if (node.nodeType !== 1) node = node.parentNode;
+    return node && node.nodeType === 1 && el.contains(node) ? node : el;
+  }
+
+  /** The list `el`'s text is in: `el` itself, its item's, the one at the caret, or one it holds. */
+  function listOf(el, node) {
+    if (/^(ul|ol)$/i.test(el.tagName)) return el;
+    if (/^li$/i.test(el.tagName) && /^(ul|ol)$/i.test(el.parentElement.tagName)) return el.parentElement;
+    var at = node && node !== el ? node.closest("ul, ol") : null;
+    if (at && el.contains(at)) return at;
+    return Array.prototype.find.call(el.children, function (child) {
+      return /^(ul|ol)$/i.test(child.tagName);
+    }) || null;
+  }
+
+  /** The link `el` (or the text at `node` in it) is in, or that wraps all of its text. */
+  function linkOf(el, node) {
+    var at = (node || el).closest("a");
+    if (at && (slide.contains(at) || at === el)) return at;
+    var only = el.children.length === 1 && el.firstElementChild;
+    return only && /^a$/i.test(only.tagName) && only.textContent.trim() === el.textContent.trim() ? only : null;
+  }
+
+  /** The line height as a multiple of the font size; null when it is `normal`. */
+  function lineHeightOf(style) {
+    var size = parseFloat(style.fontSize);
+    var value = style.lineHeight;
+    if (!value || value === "normal") return null;
+    if (/px$/.test(value)) return size ? Math.round((parseFloat(value) / size) * 100) / 100 : null;
+    return parseFloat(value) || null;
+  }
+
+  /** What the toolbar shows for `el`: its kind, text styles (of the selected text, while typing), fill and border. */
   function describe(el) {
     if (!el) return null;
     var style = getComputedStyle(el);
@@ -357,18 +472,37 @@
     var vectors = vectorsOf(el);
     var first = vectors[0];
     var borderWidth = style.borderTopStyle && style.borderTopStyle !== "none" ? parseFloat(style.borderTopWidth) || 0 : 0;
-    var weight = style.fontWeight === "bold" ? 700 : parseInt(style.fontWeight, 10) || 400;
     var align = style.textAlign || "left";
+    var node = textNodeOf(el);
+    var text = node === el ? style : getComputedStyle(node);
+    var range = editing === el ? editRange() : null;
+    var script = node.closest("sup, sub");
+    var link = linkOf(el, node);
+    var list = listOf(el, node);
+    // A shrunk box reports the sizes it was given, not the ones it shrank to.
+    var fit = autofit ? autofit.scale(el.closest('[data-autofit="shrink"]') || el) : 1;
+    var spacing = parseFloat(text.letterSpacing);
     return {
       kind: kind,
       text: kind !== "drawing" && kind !== "media",
       vector: kind === "drawing",
-      color: toHex(style.color),
-      fontSize: Math.round(parseFloat(style.fontSize)) || null,
-      bold: weight >= 600,
-      italic: style.fontStyle === "italic",
+      color: toHex(text.color),
+      fontSize: Math.round(parseFloat(text.fontSize) / fit) || null,
+      fontFamily: firstFamily(text.fontFamily) || null,
+      bold: weightOf(text) >= 600,
+      italic: text.fontStyle === "italic",
+      underline: decorated(node, "underline"),
+      strike: decorated(node, "line-through"),
+      script: script && el.contains(script) ? script.tagName.toLowerCase() : null,
+      letterSpacing: isFinite(spacing) ? Math.round(spacing * 10) / 10 : 0,
+      lineHeight: lineHeightOf(style),
       align: /center/.test(align) ? "center" : /right|end/.test(align) ? "right" : "left",
       valign: valignOf(style),
+      list: list ? list.tagName.toLowerCase() : null,
+      link: link ? link.getAttribute("href") || "" : null,
+      autofit: /^(shrink|grow)$/.test(el.getAttribute("data-autofit") || "") ? el.getAttribute("data-autofit") : null,
+      editing: editing === el,
+      range: !!range && !range.collapsed,
       fill: first ? paintOf(first, "fill") : toHex(style.backgroundColor),
       stroke: first ? paintOf(first, "stroke") : borderWidth ? toHex(style.borderTopColor) : null,
       strokeWidth: first ? parseFloat(first.getAttribute("stroke-width")) || 0 : borderWidth,
@@ -715,9 +849,15 @@
     var paddingX = contentBox ? px("paddingLeft") + px("paddingRight") + px("borderLeftWidth") + px("borderRightWidth") : 0;
     var paddingY = contentBox ? px("paddingTop") + px("paddingBottom") + px("borderTopWidth") + px("borderBottomWidth") : 0;
     el.style.width = Math.max(0, nw - paddingX) + "px";
-    el.style.height = Math.max(0, nh - paddingY) + "px";
     el.style.minWidth = "0px";
-    el.style.minHeight = "0px";
+    if (el.getAttribute("data-autofit") === "grow") {
+      // A box that grows with its text keeps the height as its least.
+      el.style.height = "auto";
+      el.style.minHeight = Math.max(0, nh - paddingY) + "px";
+    } else {
+      el.style.height = Math.max(0, nh - paddingY) + "px";
+      el.style.minHeight = "0px";
+    }
     el.style.maxWidth = "none";
     el.style.maxHeight = "none";
     el.style.flexShrink = "0";
@@ -921,6 +1061,7 @@
     if (!el.textContent.trim() && !/^(text|shape)$/.test(el.getAttribute(ADDED) || "")) return;
     select(el);
     editing = el;
+    textRange = null;
     el.setAttribute("contenteditable", "true");
     el.setAttribute("data-slop-editing", "");
     slide.setAttribute("data-slop-typing", "");
@@ -936,6 +1077,8 @@
       selection.removeAllRanges();
       selection.addRange(range);
     }
+    textRange = range.cloneRange();
+    report();
   }
 
   function finishEditing() {
@@ -945,15 +1088,773 @@
     el.removeAttribute("data-slop-editing");
     slide.removeAttribute("data-slop-typing");
     editing = null;
+    textRange = null;
     var selection = window.getSelection();
     if (selection) selection.removeAllRanges();
     // A text box left empty goes away.
     if (el.getAttribute(ADDED) === "text" && !el.textContent.trim()) {
       if (selected === el) select(null);
       el.parentElement.removeChild(el);
+    } else {
+      refit(el);
     }
     placeHandles();
+    if (selected === el) report();
     commit();
+  }
+
+  /** The text selection (or caret) in the element being edited, or the last one it had. */
+  function editRange() {
+    if (!editing) return null;
+    var selection = window.getSelection();
+    if (selection && selection.rangeCount) {
+      var live = selection.getRangeAt(0);
+      if (editing.contains(live.startContainer) && editing.contains(live.endContainer)) textRange = live.cloneRange();
+    }
+    if (textRange && editing.contains(textRange.startContainer) && editing.contains(textRange.endContainer)) return textRange;
+    return null;
+  }
+
+  /** Makes `range` the text selection again, with focus in the text. */
+  function useRange(range) {
+    if (!editing) return;
+    if (document.activeElement !== editing && editing.focus) editing.focus();
+    var selection = window.getSelection();
+    if (selection) {
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    textRange = range.cloneRange();
+  }
+
+  /** Where `range` starts and ends in `root`'s text, in characters. */
+  function textOffsets(root, range) {
+    var before = document.createRange();
+    before.selectNodeContents(root);
+    before.setEnd(range.startContainer, range.startOffset);
+    var start = before.toString().length;
+    return { start: start, end: start + range.toString().length };
+  }
+
+  /** The range spanning characters `start` to `end` of `root`'s text. */
+  function rangeAt(root, at) {
+    var range = document.createRange();
+    range.selectNodeContents(root);
+    range.collapse(true);
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    var seen = 0;
+    var started = false;
+    for (var node = walker.nextNode(); node; node = walker.nextNode()) {
+      var end = seen + node.data.length;
+      // A selection starts in the text after a boundary, and ends in the text before it.
+      if (!started && (at.start < end || (at.start === end && at.start === at.end))) {
+        range.setStart(node, at.start - seen);
+        started = true;
+      }
+      if (started && at.end <= end) {
+        range.setEnd(node, at.end - seen);
+        return range;
+      }
+      seen = end;
+    }
+    var whole = document.createRange();
+    whole.selectNodeContents(root);
+    if (started) range.setEnd(whole.endContainer, whole.endOffset);
+    else range = whole;
+    if (!started) range.collapse(false);
+    return range;
+  }
+
+  /** The caret's place by node, which survives moving nodes (unlike a live range). */
+  function caretOf(range) {
+    return { sc: range.startContainer, so: range.startOffset, ec: range.endContainer, eo: range.endOffset };
+  }
+
+  function rangeFromCaret(caret, root) {
+    if (!root.contains(caret.sc) || !root.contains(caret.ec)) return null;
+    var range = document.createRange();
+    try {
+      range.setStart(caret.sc, Math.min(caret.so, lengthOf(caret.sc)));
+      range.setEnd(caret.ec, Math.min(caret.eo, lengthOf(caret.ec)));
+    } catch (e) {
+      return null;
+    }
+    return range;
+  }
+
+  function lengthOf(node) {
+    return node.nodeType === 1 ? node.childNodes.length : node.data.length;
+  }
+
+  function isInline(node) {
+    return node.nodeType !== 1 || INLINE.test(node.tagName);
+  }
+
+  /** Whether `node` holds anything that shows: text, a line break, or media. */
+  function hasContent(node) {
+    return !!(node.textContent.trim() || (node.querySelector && node.querySelector("br, img, svg")) || /^(br|img|svg)$/i.test(node.nodeName));
+  }
+
+  /** Replaces `node` with its children. */
+  function unwrap(node) {
+    var parent = node.parentNode;
+    if (!parent) return;
+    while (node.firstChild) parent.insertBefore(node.firstChild, node);
+    parent.removeChild(node);
+  }
+
+  /** Puts `node` inside `wrapper`, where `node` was. */
+  function wrap(node, wrapper) {
+    node.parentNode.insertBefore(wrapper, node);
+    wrapper.appendChild(node);
+    return wrapper;
+  }
+
+  function cloneShallow(el) {
+    var copy = el.cloneNode(false);
+    copy.removeAttribute("id");
+    return copy;
+  }
+
+  /**
+   * Splits the inline elements around text node `t` (up to its block) so each holds only `t`,
+   * and returns them, innermost first: restyling them restyles exactly `t`.
+   */
+  function isolate(t, root) {
+    var chain = [];
+    var node = t;
+    while (node.parentNode && node.parentNode !== root && isInline(node.parentNode)) {
+      var parent = node.parentNode;
+      if (node.previousSibling) {
+        var head = cloneShallow(parent);
+        while (parent.firstChild !== node) head.appendChild(parent.firstChild);
+        parent.parentNode.insertBefore(head, parent);
+      }
+      if (node.nextSibling) {
+        var tail = cloneShallow(parent);
+        while (node.nextSibling) tail.appendChild(node.nextSibling);
+        parent.parentNode.insertBefore(tail, parent.nextSibling);
+      }
+      chain.push(parent);
+      node = parent;
+    }
+    return chain;
+  }
+
+  function removeLine(el, line) {
+    ["text-decoration-line", "text-decoration"].forEach(function (prop) {
+      var value = el.style.getPropertyValue(prop);
+      if (!value || value.indexOf(line) < 0) return;
+      var rest = value.split(/\s+/).filter(function (part) {
+        return part && part !== line;
+      });
+      if (rest.length && !/^(none|solid|double|dotted|dashed|wavy)$/.test(rest.join(" "))) el.style.setProperty(prop, rest.join(" "));
+      else el.style.removeProperty(prop);
+    });
+  }
+
+  /**
+   * Takes the formatting `changes` replace off `el`: inline styles, and tags that only mean
+   * that formatting (`keep` leaves the element itself in place).
+   */
+  function stripFormatting(el, changes, keep) {
+    var has = function (key) {
+      return Object.prototype.hasOwnProperty.call(changes, key);
+    };
+    var tag = el.tagName.toLowerCase();
+    var props = { color: "color", fontSize: "font-size", fontFamily: "font-family", bold: "font-weight", italic: "font-style", letterSpacing: "letter-spacing" };
+    Object.keys(props).forEach(function (key) {
+      if (has(key)) el.style.removeProperty(props[key]);
+    });
+    if (has("underline")) removeLine(el, "underline");
+    if (has("strike")) removeLine(el, "line-through");
+    if (has("script")) el.style.removeProperty("vertical-align");
+    if (tag === "font") {
+      if (has("color")) el.removeAttribute("color");
+      if (has("fontSize")) el.removeAttribute("size");
+      if (has("fontFamily")) el.removeAttribute("face");
+    }
+    if (!el.getAttribute("style")) el.removeAttribute("style");
+    var means =
+      (has("bold") && /^(b|strong)$/.test(tag)) ||
+      (has("italic") && /^(i|em)$/.test(tag)) ||
+      (has("underline") && tag === "u") ||
+      (has("strike") && /^(s|strike|del)$/.test(tag)) ||
+      (has("script") && /^(sup|sub)$/.test(tag)) ||
+      (has("link") && tag === "a") ||
+      (/^(span|font)$/.test(tag) && !el.attributes.length);
+    if (means && !keep) unwrap(el);
+  }
+
+  /**
+   * Gives text node `t` the formatting `changes`, where its surroundings do not already: on
+   * the <span> that holds only it, or a new one around it.
+   */
+  function applyFormatting(t, changes, root) {
+    var has = function (key) {
+      return Object.prototype.hasOwnProperty.call(changes, key);
+    };
+    var own = t.parentNode !== root && /^span$/i.test(t.parentNode.tagName) && t.parentNode.childNodes.length === 1;
+    if (own) {
+      // What its own span already sets for these gives way, so the comparison is with its surroundings.
+      stripFormatting(t.parentNode, changes, true);
+    }
+    var around = getComputedStyle(own ? t.parentNode.parentNode : t.parentNode);
+    var span = own ? t.parentNode : document.createElement("span");
+    if (has("bold") && changes.bold !== weightOf(around) >= 600) span.style.fontWeight = changes.bold ? "700" : "400";
+    if (has("italic") && changes.italic !== (around.fontStyle === "italic")) span.style.fontStyle = changes.italic ? "italic" : "normal";
+    if (has("color") && changes.color && toHex(around.color) !== changes.color) span.style.color = changes.color;
+    if (has("fontSize") && changes.fontSize > 0 && Math.round(parseFloat(around.fontSize)) !== Math.round(changes.fontSize)) {
+      span.style.fontSize = Math.round(changes.fontSize) + "px";
+    }
+    if (has("fontFamily") && changes.fontFamily && firstFamily(around.fontFamily) !== firstFamily(changes.fontFamily)) {
+      span.style.fontFamily = changes.fontFamily;
+    }
+    if (has("letterSpacing") && isFinite(changes.letterSpacing)) {
+      var now = parseFloat(around.letterSpacing) || 0;
+      if (now !== changes.letterSpacing) span.style.letterSpacing = changes.letterSpacing ? changes.letterSpacing + "px" : "normal";
+    }
+    var lines = [];
+    if (changes.underline && !decorated(t.parentNode, "underline")) lines.push("underline");
+    if (changes.strike && !decorated(t.parentNode, "line-through")) lines.push("line-through");
+    if (lines.length) {
+      var kept = span.style.getPropertyValue("text-decoration-line");
+      span.style.setProperty("text-decoration-line", (kept && kept !== "none" ? kept + " " : "") + lines.join(" "));
+    }
+    var node = own ? span : t;
+    if (!own && span.getAttribute("style")) node = wrap(node, span);
+    if (changes.script === "sup" || changes.script === "sub") node = wrap(node, document.createElement(changes.script));
+    if (changes.link) node = wrap(node, linkTo(document.createElement("a"), changes.link));
+  }
+
+  /** The text nodes `range` covers, split at its ends so it covers each one whole. */
+  function coveredText(range, root) {
+    if (range.startContainer.nodeType === 3 && range.startOffset > 0 && range.startOffset < range.startContainer.data.length) {
+      var rest = range.startContainer.splitText(range.startOffset);
+      if (range.endContainer === range.startContainer) range.setEnd(rest, range.endOffset - range.startOffset);
+      range.setStart(rest, 0);
+    }
+    if (range.endContainer.nodeType === 3 && range.endOffset > 0 && range.endOffset < range.endContainer.data.length) {
+      range.endContainer.splitText(range.endOffset);
+    }
+    var nodes = [];
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (var node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.data.length && range.comparePoint(node, 0) >= 0 && range.comparePoint(node, node.data.length) <= 0) nodes.push(node);
+    }
+    return nodes;
+  }
+
+  /** Merges neighboring inline elements that look the same, and drops empty, attribute-less ones. */
+  function tidy(root) {
+    Array.prototype.slice.call(root.querySelectorAll("*")).reverse().forEach(function (el) {
+      if (!INLINE.test(el.tagName) || el.attributes.length) return;
+      if (!hasContent(el)) el.parentNode.removeChild(el);
+      else if (/^(span|font)$/i.test(el.tagName)) unwrap(el);
+    });
+    withDescendants(root).forEach(function (el) {
+      for (var child = el.firstChild; child; child = child.nextSibling) {
+        var next = child.nextSibling;
+        while (next && sameInline(child, next)) {
+          while (next.firstChild) child.appendChild(next.firstChild);
+          el.removeChild(next);
+          next = child.nextSibling;
+        }
+      }
+    });
+    root.normalize();
+  }
+
+  function sameInline(a, b) {
+    if (a.nodeType !== 1 || b.nodeType !== 1 || a.tagName !== b.tagName || !INLINE.test(a.tagName)) return false;
+    if (a.attributes.length !== b.attributes.length) return false;
+    return Array.prototype.every.call(a.attributes, function (attr) {
+      return b.getAttribute(attr.name) === attr.value;
+    });
+  }
+
+  /** Gives the text `range` covers in the element being edited the formatting `changes`. */
+  function formatRange(range, changes) {
+    var root = editing;
+    var at = textOffsets(root, range);
+    coveredText(range, root).forEach(function (t) {
+      isolate(t, root).forEach(function (el) {
+        if (el !== t.parentNode || !/^span$/i.test(el.tagName)) stripFormatting(el, changes);
+      });
+      applyFormatting(t, changes, root);
+    });
+    tidy(root);
+    useRange(rangeAt(root, at));
+  }
+
+  /** Changes to the text while typing, without losing the text selection or the text fit. */
+  function changeText(el, change) {
+    if (autofit) autofit.unfit(el);
+    change();
+    refit(el);
+    placeHandles();
+  }
+
+  /** Shrinks the text of a `data-autofit="shrink"` box again until it fits. */
+  function refit(el) {
+    if (autofit && el && el.getAttribute && el.getAttribute("data-autofit") === "shrink") autofit.fit(el);
+  }
+
+  /**
+   * Restyles the text being edited: the text styles go to the selected text (or with a caret,
+   * the whole element), the rest to the element.
+   */
+  function styleText(changes) {
+    var el = editing;
+    var range = editRange();
+    var text = {};
+    var rest = {};
+    Object.keys(changes).forEach(function (key) {
+      (TEXT_KEYS.indexOf(key) >= 0 && range && !range.collapsed ? text : rest)[key] = changes[key];
+    });
+    if (Object.keys(text).length) {
+      changeText(el, function () {
+        formatRange(range, text);
+      });
+    }
+    if (Object.keys(rest).length) {
+      applyStyle(rest);
+      var again = editRange();
+      if (again) useRange(again);
+    }
+    report();
+  }
+
+  /** ⌘B / ⌘I / ⌘U: turns bold, italic or underline on or off, as the selected text has it now. */
+  function toggleStyle(key) {
+    var now = describe(selected);
+    if (!now || !now.text) return;
+    var changes = {};
+    changes[key] = !now[key];
+    if (editing) styleText(changes);
+    else applyStyle(changes);
+  }
+
+  /** Lines of `el`'s content, as fragments: split at line breaks and blocks, list items one each. */
+  function linesOf(el) {
+    var lines = [document.createDocumentFragment()];
+    var current = function () {
+      return lines[lines.length - 1];
+    };
+    var breakLine = function () {
+      if (current().childNodes.length) lines.push(document.createDocumentFragment());
+    };
+    var take = function (container) {
+      Array.prototype.slice.call(container.childNodes).forEach(function (node) {
+        if (node.nodeName === "BR") {
+          lines.push(document.createDocumentFragment());
+        } else if (isInline(node)) {
+          current().appendChild(node);
+        } else if (/^(ul|ol)$/i.test(node.tagName)) {
+          breakLine();
+          Array.prototype.slice.call(node.children).forEach(function (item) {
+            take(item);
+            breakLine();
+          });
+        } else {
+          breakLine();
+          take(node);
+          breakLine();
+        }
+      });
+    };
+    take(el);
+    var full = lines.filter(hasContent);
+    return full.length ? full : [document.createDocumentFragment()];
+  }
+
+  function styleList(list, depth) {
+    list.style.margin = "0";
+    list.style.paddingLeft = "1.2em";
+    list.style.listStyleType = LIST_TYPES[list.tagName.toLowerCase()][depth % 3];
+  }
+
+  /** How many lists `list` is nested in, inside `root`. */
+  function depthOf(list, root) {
+    var depth = 0;
+    for (var n = list.parentElement; n && n !== root && root.contains(n); n = n.parentElement) {
+      if (/^(ul|ol)$/i.test(n.tagName)) depth++;
+    }
+    return depth;
+  }
+
+  /** `list` as a list of `kind`, keeping its attributes, items and an editor-set bullet style. */
+  function retag(list, kind, root) {
+    var next = document.createElement(kind);
+    Array.prototype.forEach.call(list.attributes, function (attr) {
+      next.setAttribute(attr.name, attr.value);
+    });
+    while (list.firstChild) next.appendChild(list.firstChild);
+    list.parentNode.replaceChild(next, list);
+    if (next.style.listStyleType) next.style.listStyleType = LIST_TYPES[kind][depthOf(next, root) % 3];
+    return next;
+  }
+
+  function ensureLine(item) {
+    if (!hasContent(item)) item.appendChild(document.createElement("br"));
+  }
+
+  /**
+   * Turns the selection's text into a list of `kind` ("ul" or "ol"), one item per line; turns
+   * its list into one of `kind`, or one of `kind` already back into lines.
+   */
+  function toggleList(kind) {
+    var el = editing || selected;
+    if (!el || !slide.contains(el) || !LIST_TYPES[kind] || !describe(el).text) return;
+    var range = editing ? editRange() : null;
+    var caret = range ? caretOf(range) : null;
+    changeText(el, function () {
+      var list = listOf(el, range ? textNodeOf(el) : null);
+      if (list && list.tagName.toLowerCase() !== kind) {
+        var next = retag(list, kind, el);
+        if (list === el) {
+          if (editing === el) editing = next;
+          selected = next;
+          mark(next, "data-slop-selected", true);
+        }
+      } else if (list && list !== el && el.contains(list)) {
+        var lines = linesOf(list);
+        var flat = document.createDocumentFragment();
+        lines.forEach(function (line, i) {
+          if (i) flat.appendChild(document.createElement("br"));
+          flat.appendChild(line);
+        });
+        list.parentNode.replaceChild(flat, list);
+      } else if (!list) {
+        var items = linesOf(el);
+        el.textContent = "";
+        var made = document.createElement(kind);
+        styleList(made, 0);
+        items.forEach(function (line) {
+          var item = document.createElement("li");
+          item.appendChild(line);
+          ensureLine(item);
+          made.appendChild(item);
+        });
+        el.appendChild(made);
+      }
+    });
+    var back = caret && rangeFromCaret(caret, editing);
+    if (editing) {
+      if (!back) {
+        back = document.createRange();
+        back.selectNodeContents(editing);
+        back.collapse(false);
+      }
+      useRange(back);
+    }
+    placeHandles();
+    report();
+    if (!editing) commit();
+  }
+
+  /** The list item the caret is in, inside the element being edited. */
+  function caretItem() {
+    var range = editRange();
+    if (!range) return null;
+    var node = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentNode;
+    var item = node && node.closest ? node.closest("li") : null;
+    return item && item !== editing && editing.contains(item) ? item : null;
+  }
+
+  /** Enter in a list: the rest of the item goes into a new one after it. */
+  function newItem(item) {
+    var range = editRange();
+    if (!item.textContent.trim() && !item.querySelector("img, svg")) {
+      var outer = item.parentElement.parentElement;
+      if (outer && /^li$/i.test(outer.tagName) && editing.contains(outer)) {
+        outdent(item);
+      } else {
+        // An empty last item ends the list, and the editing.
+        var list = item.parentElement;
+        if (list.children.length > 1) list.removeChild(item);
+        finishEditing();
+      }
+      return;
+    }
+    changeText(editing, function () {
+      if (!range.collapsed) range.deleteContents();
+      var rest = document.createRange();
+      rest.setStart(range.startContainer, range.startOffset);
+      rest.setEnd(item, item.childNodes.length);
+      var next = cloneShallow(item);
+      next.appendChild(rest.extractContents());
+      item.parentNode.insertBefore(next, item.nextSibling);
+      ensureLine(item);
+      ensureLine(next);
+      var caret = document.createRange();
+      caret.setStart(next, 0);
+      caret.collapse(true);
+      useRange(caret);
+    });
+  }
+
+  /** Tab in a list: the item goes into a list inside the item before it. */
+  function indent(item) {
+    var before = item.previousElementSibling;
+    if (!before || !/^li$/i.test(before.tagName)) return;
+    var range = editRange();
+    var caret = range ? caretOf(range) : null;
+    var list = item.parentElement;
+    var inner = before.lastElementChild && before.lastElementChild.tagName === list.tagName ? before.lastElementChild : null;
+    if (!inner) {
+      inner = cloneShallow(list);
+      before.appendChild(inner);
+      if (inner.style.listStyleType) inner.style.listStyleType = LIST_TYPES[inner.tagName.toLowerCase()][depthOf(inner, editing) % 3];
+    }
+    inner.appendChild(item);
+    var back = caret && rangeFromCaret(caret, editing);
+    if (back) useRange(back);
+    placeHandles();
+  }
+
+  /** Shift+Tab in a nested list: the item moves out after the item it is in, taking the items after it along. */
+  function outdent(item) {
+    var list = item.parentElement;
+    var outer = list.parentElement;
+    if (!outer || !/^li$/i.test(outer.tagName) || !editing.contains(outer)) return;
+    var range = editRange();
+    var caret = range ? caretOf(range) : null;
+    if (item.nextElementSibling) {
+      var rest = cloneShallow(list);
+      while (item.nextSibling) rest.appendChild(item.nextSibling);
+      item.appendChild(rest);
+    }
+    outer.parentNode.insertBefore(item, outer.nextSibling);
+    if (!list.children.length) list.parentNode.removeChild(list);
+    var back = caret && rangeFromCaret(caret, editing);
+    if (!back) {
+      back = document.createRange();
+      back.setStart(item, 0);
+      back.collapse(true);
+    }
+    useRange(back);
+    placeHandles();
+  }
+
+  /** Shift+Enter: a line break at the caret. */
+  function insertLineBreak() {
+    if (document.execCommand && document.execCommand("insertLineBreak")) return;
+    insertAtCaret(document.createElement("br"));
+  }
+
+  /** Puts `content` (a node or fragment) in place of the selected text and the caret after it. */
+  function insertAtCaret(content) {
+    var range = editRange();
+    if (!range) return;
+    changeText(editing, function () {
+      range.deleteContents();
+      var last = content.nodeType === 11 ? content.lastChild : content;
+      if (!last) return;
+      range.insertNode(content);
+      var after = document.createRange();
+      after.setStartAfter(last);
+      after.collapse(true);
+      useRange(after);
+    });
+  }
+
+  /** Plain text as text with line breaks. */
+  function textFragment(text) {
+    var fragment = document.createDocumentFragment();
+    String(text || "").replace(/\r\n?/g, "\n").split("\n").forEach(function (line, i) {
+      if (i) fragment.appendChild(document.createElement("br"));
+      if (line) fragment.appendChild(document.createTextNode(line));
+    });
+    return fragment;
+  }
+
+  /**
+   * Pasted HTML as text with its formatting: bold, italic, underline, strikethrough,
+   * superscript / subscript, color, links and line breaks. Fonts, sizes, classes and
+   * everything else are dropped, so it takes on the look of the text it goes into.
+   */
+  function pastedFragment(html) {
+    var template = document.createElement("template");
+    template.innerHTML = html;
+    var out = document.createDocumentFragment();
+    var add = function (into, node) {
+      into.appendChild(node);
+    };
+    var walk = function (from, into) {
+      Array.prototype.forEach.call(from.childNodes, function (node) {
+        if (node.nodeType === 3) {
+          var text = node.data.replace(/[\t\n\r ]+/g, " ");
+          if (text.trim() || (into.lastChild && into.lastChild.nodeName !== "BR")) add(into, document.createTextNode(text));
+          return;
+        }
+        if (node.nodeType !== 1 || PASTE_SKIP.test(node.tagName)) return;
+        var tag = node.tagName.toLowerCase();
+        if (tag === "br") {
+          add(into, document.createElement("br"));
+          return;
+        }
+        if (!INLINE.test(tag)) {
+          // Blocks become lines; the extra breaks this leaves are tidied below.
+          into.appendChild(document.createElement("br"));
+          walk(node, into);
+          into.appendChild(document.createElement("br"));
+          return;
+        }
+        var style = node.style;
+        var weight = style.fontWeight === "bold" ? 700 : parseInt(style.fontWeight, 10);
+        var lines = (style.textDecorationLine || "") + " " + (style.textDecoration || "");
+        var bold = /^(b|strong)$/.test(tag) ? !(weight < 600 || style.fontWeight === "normal") : weight >= 600;
+        var span = document.createElement("span");
+        if (bold) span.style.fontWeight = "700";
+        if (/^(i|em)$/.test(tag) || style.fontStyle === "italic") span.style.fontStyle = "italic";
+        var decoration = [];
+        if (tag === "u" || /underline/.test(lines)) decoration.push("underline");
+        if (/^(s|strike|del)$/.test(tag) || /line-through/.test(lines)) decoration.push("line-through");
+        if (decoration.length) span.style.setProperty("text-decoration-line", decoration.join(" "));
+        var color = toHex(style.color || node.getAttribute("color"));
+        if (color) span.style.color = color;
+        var inner = document.createDocumentFragment();
+        walk(node, inner);
+        if (!hasContent(inner) && !inner.textContent) return;
+        var result = inner;
+        if (span.getAttribute("style")) {
+          span.appendChild(result);
+          result = span;
+        }
+        if (tag === "sup" || tag === "sub") {
+          var script = document.createElement(tag);
+          script.appendChild(result);
+          result = script;
+        }
+        var href = tag === "a" ? safeHref(node.getAttribute("href")) : null;
+        if (href) result = wrapIn(linkTo(document.createElement("a"), href), result);
+        add(into, result);
+      });
+    };
+    walk(template.content, out);
+    // One break between lines: none before the first or after the last, none doubled.
+    var walker = document.createTreeWalker(out, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    var breaks = [];
+    var text = false;
+    var lastBreak = null;
+    for (var node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.nodeName === "BR") {
+        if (!text || lastBreak) breaks.push(node);
+        else lastBreak = node;
+      } else if (node.nodeType === 3 && node.data.trim()) {
+        text = true;
+        lastBreak = null;
+      }
+    }
+    if (lastBreak) breaks.push(lastBreak);
+    breaks.forEach(function (br) {
+      br.parentNode.removeChild(br);
+    });
+    while (out.lastChild && out.lastChild.nodeType === 3 && !out.lastChild.data.trim()) out.removeChild(out.lastChild);
+    return out;
+  }
+
+  function wrapIn(wrapper, content) {
+    wrapper.appendChild(content);
+    return wrapper;
+  }
+
+  /** A link's href as given, if it is one a slide may hold: a web or mail address, or another slide. */
+  function safeHref(href) {
+    href = String(href || "").trim();
+    return /^(https?:|mailto:|#)/i.test(href) && href !== "#" ? href : null;
+  }
+
+  /** Points `a` at `href`; web links open in a new window, so the presentation stays open. */
+  function linkTo(a, href) {
+    a.setAttribute("href", href);
+    if (/^https?:/i.test(href)) {
+      a.setAttribute("target", "_blank");
+      a.setAttribute("rel", "noopener");
+    } else {
+      a.removeAttribute("target");
+      a.removeAttribute("rel");
+    }
+    return a;
+  }
+
+  /**
+   * Links the selection to `href`, or with null, removes its link. While typing, the selected
+   * text (or the link at the caret, or else all of the text); otherwise the element: its text,
+   * or an element without text (an image, a shape) in an <a> that leaves its layout alone.
+   */
+  function setLink(given) {
+    var href = given === null ? null : safeHref(given);
+    var el = editing || selected;
+    if (!el || !slide.contains(el) || (given !== null && !href)) return;
+    if (editing) {
+      var range = editRange();
+      var node = textNodeOf(el);
+      var at = node.closest("a");
+      changeText(el, function () {
+        if (range && !range.collapsed) {
+          formatRange(range, { link: href });
+        } else if (at && el.contains(at)) {
+          if (href) linkTo(at, href);
+          else unwrap(at);
+        } else if (href) {
+          var all = document.createRange();
+          all.selectNodeContents(el);
+          formatRange(all, { link: href });
+          var caret = rangeAt(el, { start: el.textContent.length, end: el.textContent.length });
+          useRange(caret);
+        }
+      });
+      report();
+      return;
+    }
+    var link = linkOf(el, el);
+    if (link && href) {
+      linkTo(link, href);
+    } else if (link) {
+      if (link === el) select(link.firstElementChild || null);
+      unwrap(link);
+    } else if (href && describe(el).text && el.textContent.trim()) {
+      var a = linkTo(document.createElement("a"), href);
+      while (el.firstChild) a.appendChild(el.firstChild);
+      el.appendChild(a);
+    } else if (href) {
+      var around = linkTo(document.createElement("a"), href);
+      around.style.display = "contents";
+      wrap(el, around);
+    } else {
+      return;
+    }
+    placeHandles();
+    report();
+    commit();
+  }
+
+  /**
+   * How the box handles text that does not fit: "shrink" its text (data-autofit, see
+   * runtime.js), "grow" (its height becomes a min-height, so it grows with its text), or null.
+   */
+  function setAutofit(el, mode) {
+    mode = mode === "shrink" || mode === "grow" ? mode : null;
+    var was = el.getAttribute("data-autofit");
+    if (was === mode) return;
+    if (autofit) autofit.unfit(el);
+    if (was === "grow") {
+      // Back to a fixed box, as tall as it grew.
+      var grown = getComputedStyle(el).height;
+      el.style.removeProperty("min-height");
+      if (/px$/.test(grown)) el.style.height = grown;
+    }
+    if (mode) el.setAttribute("data-autofit", mode);
+    else el.removeAttribute("data-autofit");
+    if (mode === "grow") {
+      var height = getComputedStyle(el).height;
+      if (/px$/.test(height)) el.style.minHeight = height;
+      el.style.height = "auto";
+      el.style.removeProperty("max-height");
+    }
+    refit(el);
   }
 
   /** Picks a tool; `tell` lets the app know, when the editor switched by itself. */
@@ -1007,8 +1908,14 @@
     return (
       " display: flex; flex-direction: column; justify-content: " + (JUSTIFY[styleFor("valign")] || "flex-start") +
       "; text-align: " + styleFor("align") + "; color: " + styleFor("color") + "; font-size: " + styleFor("fontSize") + "px;" +
+      (styleFor("fontFamily") ? " font-family: " + String(styleFor("fontFamily")).replace(/[;{}<>]/g, "") + ";" : "") +
       (styleFor("bold") ? " font-weight: 700;" : "") +
       (styleFor("italic") ? " font-style: italic;" : "") +
+      (styleFor("underline") || styleFor("strike")
+        ? " text-decoration-line:" + (styleFor("underline") ? " underline" : "") + (styleFor("strike") ? " line-through" : "") + ";"
+        : "") +
+      (styleFor("letterSpacing") ? " letter-spacing: " + Number(styleFor("letterSpacing")) + "px;" : "") +
+      (styleFor("lineHeight") > 0 ? " line-height: " + Number(styleFor("lineHeight")) + ";" : "") +
       (styleFor("fill") ? " background-color: " + styleFor("fill") + ";" : "") +
       (stroke && width > 0 ? " border: " + borderCss(stroke, width) + ";" : "")
     );
@@ -1140,17 +2047,52 @@
     create = null;
   }
 
-  /** Restyles the selection with the toolbar's `changes` and saves it. */
+  /**
+   * Restyles the selection with the toolbar's `changes` and saves it (or, while its text is
+   * being edited, once that is done). Text styles go to all of its text: what its own inline
+   * elements set for them gives way.
+   */
   function applyStyle(changes) {
     var el = selected;
     if (!el || !slide.contains(el)) return;
     var has = function (key) {
       return Object.prototype.hasOwnProperty.call(changes, key);
     };
+    if (autofit) autofit.unfit(el);
+    var text = {};
+    TEXT_KEYS.forEach(function (key) {
+      if (has(key) && key !== "link" && key !== "script") text[key] = changes[key];
+    });
+    if (Object.keys(text).length && vectorsOf(el).length === 0) {
+      Array.prototype.slice.call(el.querySelectorAll("*")).reverse().forEach(function (inner) {
+        if (INLINE.test(inner.tagName) && inner.namespaceURI !== SVG_NS) stripFormatting(inner, text);
+      });
+    }
     if (has("color")) el.style.color = changes.color || "";
     if (has("fontSize")) el.style.fontSize = changes.fontSize > 0 ? Math.round(changes.fontSize) + "px" : "";
+    if (has("fontFamily")) el.style.fontFamily = changes.fontFamily || "";
     if (has("bold")) el.style.fontWeight = changes.bold ? "700" : "400";
     if (has("italic")) el.style.fontStyle = changes.italic ? "italic" : "normal";
+    if (has("underline") || has("strike")) {
+      removeLine(el, "underline");
+      removeLine(el, "line-through");
+      var lines = [];
+      if (has("underline") ? changes.underline : decorated(el, "underline")) lines.push("underline");
+      if (has("strike") ? changes.strike : decorated(el, "line-through")) lines.push("line-through");
+      if (lines.length) el.style.setProperty("text-decoration-line", lines.join(" "));
+      else if (decorated(el, "underline") || decorated(el, "line-through")) el.style.setProperty("text-decoration-line", "none");
+    }
+    if (has("script")) {
+      Array.prototype.slice.call(el.querySelectorAll("sup, sub")).forEach(unwrap);
+      if (changes.script === "sup" || changes.script === "sub") {
+        var script = document.createElement(changes.script);
+        while (el.firstChild) script.appendChild(el.firstChild);
+        el.appendChild(script);
+      }
+    }
+    if (has("letterSpacing")) el.style.letterSpacing = changes.letterSpacing ? changes.letterSpacing + "px" : "";
+    if (has("lineHeight")) el.style.lineHeight = changes.lineHeight > 0 ? String(Math.round(changes.lineHeight * 100) / 100) : "";
+    if (has("autofit")) setAutofit(el, changes.autofit);
     if (has("align") && /^(left|center|right)$/.test(changes.align)) el.style.textAlign = changes.align;
     if (has("valign") && JUSTIFY[changes.valign]) {
       var computed = getComputedStyle(el);
@@ -1178,9 +2120,11 @@
       }
     }
     if (!el.getAttribute("style")) el.removeAttribute("style");
+    if (editing) tidy(el);
+    refit(el);
     placeHandles();
     report();
-    commit();
+    if (!editing) commit();
   }
 
   function overlaps(a, b) {
@@ -1321,8 +2265,12 @@
     if (create) finishCreating();
     if (!drag) return;
     var moved = drag.moved;
+    var el = drag.el;
     drag = null;
-    if (moved) commit();
+    if (moved) {
+      refit(el);
+      commit();
+    }
   }
   document.addEventListener("pointerup", endDrag);
   document.addEventListener("pointercancel", endDrag);
@@ -1334,21 +2282,49 @@
   window.addEventListener("load", scheduleOverflow);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleOverflow);
   scheduleOverflow();
-  document.addEventListener("input", placeHandles);
-  // Clicking elsewhere in the app ends text editing, keeping the text.
-  window.addEventListener("blur", finishEditing);
+  document.addEventListener("input", function () {
+    if (editing) refit(editing);
+    placeHandles();
+    if (editing) scheduleReport();
+  });
+  document.addEventListener("selectionchange", function () {
+    if (editing && editRange()) scheduleReport();
+  });
+  // Clicking the app's toolbar keeps the text being edited, and its selection, for the toolbar
+  // to restyle; a click elsewhere in the app ends editing ({ type: "slop:edit-finish" }).
+  window.addEventListener("blur", function () {
+    if (editing) editRange();
+  });
+  window.addEventListener("focus", function () {
+    var range = editRange();
+    if (range) useRange(range);
+  });
+  // Links on the slide do not go anywhere while editing it.
+  document.addEventListener(
+    "click",
+    function (event) {
+      var link = event.target && event.target.closest ? event.target.closest("a") : null;
+      if (link && slide.contains(link)) event.preventDefault();
+    },
+    true,
+  );
   document.addEventListener("dblclick", function (event) {
     if (tool !== "select") return;
     var el = pickable(event.target, event.clientX, event.clientY);
     if (el && !editing) startEditing(el, event.clientX, event.clientY);
   });
 
-  // Pasted text arrives as plain text, so editing never brings in foreign markup.
+  // Pasted text keeps its formatting (cleaned, see pastedFragment), or with ⌘⇧V comes as plain text.
   document.addEventListener("paste", function (event) {
     if (!editing) return;
     event.preventDefault();
-    var text = event.clipboardData ? event.clipboardData.getData("text/plain") : "";
-    document.execCommand("insertText", false, text);
+    var data = event.clipboardData;
+    var html = data && !plainPaste ? data.getData("text/html") : "";
+    var text = data ? data.getData("text/plain") : "";
+    plainPaste = false;
+    var content = html ? pastedFragment(html) : textFragment(text);
+    if (!content.childNodes.length && text) content = textFragment(text);
+    insertAtCaret(content);
   });
   document.addEventListener("drop", function (event) {
     if (editing) event.preventDefault();
@@ -1555,13 +2531,35 @@
   window.addEventListener(
     "keydown",
     function (event) {
+      var mod = event.metaKey || event.ctrlKey;
+      var letter = String(event.key).toLowerCase();
       if (editing) {
-        if (event.key === "Escape" || (event.key === "Enter" && !event.shiftKey)) {
+        var item = event.key === "Enter" || event.key === "Tab" ? caretItem() : null;
+        if (mod && !event.altKey && !event.shiftKey && TOGGLES[letter]) {
+          event.preventDefault();
+          toggleStyle(TOGGLES[letter]);
+        } else if (mod && event.shiftKey && letter === "v") {
+          // The app reads the clipboard's text and answers with slop:edit-insert-text.
+          event.preventDefault();
+          editRange();
+          window.parent.postMessage({ type: "slop:edit-paste-request", slide: slide.id, plain: true }, "*");
+        } else if (event.key === "Escape" || (event.key === "Enter" && !event.shiftKey && (mod || !item))) {
           event.preventDefault();
           finishEditing();
+        } else if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          newItem(item);
         } else if (event.key === "Enter") {
           event.preventDefault();
-          document.execCommand("insertLineBreak");
+          insertLineBreak();
+        } else if (event.key === "Tab" && !mod) {
+          // Focus stays in the text; in a list, Tab indents the item.
+          event.preventDefault();
+          if (item) changeText(editing, function () {
+            if (event.shiftKey) outdent(item);
+            else indent(item);
+          });
+          report();
         }
         event.stopImmediatePropagation();
         return;
@@ -1573,8 +2571,14 @@
         event.stopImmediatePropagation();
         return;
       }
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
-        var letter = String(event.key).toLowerCase();
+      if (mod && !event.altKey && !event.shiftKey) {
+        if (TOGGLES[letter] && selected && describe(selected).text) {
+          if (nudgeTimer) commit();
+          toggleStyle(TOGGLES[letter]);
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
         if ((letter === "c" || letter === "x") && selected) {
           copySelected(letter === "x");
           event.preventDefault();
@@ -1636,8 +2640,16 @@
         useTool(String(data.tool));
       }
     } else if (data.type === "slop:edit-style" && data.style && typeof data.style === "object") {
+      if (editing) styleText(data.style);
+      else applyStyle(data.style);
+    } else if (data.type === "slop:edit-list") {
+      toggleList(String(data.list));
+    } else if (data.type === "slop:edit-link" && (data.href === null || typeof data.href === "string")) {
+      setLink(data.href);
+    } else if (data.type === "slop:edit-finish") {
       finishEditing();
-      applyStyle(data.style);
+    } else if (data.type === "slop:edit-insert-text" && typeof data.text === "string") {
+      if (editing) insertAtCaret(textFragment(data.text));
     } else if (data.type === "slop:edit-order") {
       finishEditing();
       restack(String(data.to));
@@ -1657,4 +2669,45 @@
       pasteText(data.text, data.style);
     }
   });
+
+  /** The font stacks the deck's styles name, by their first family, for the toolbar's font list. */
+  function deckFonts() {
+    var fonts = [];
+    var seen = {};
+    var add = function (stack) {
+      var name = firstFamily(stack);
+      if (!name || seen[name.toLowerCase()] || /^(inherit|initial|unset|revert|serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-[a-z-]+|-apple-system)$/i.test(name)) return;
+      seen[name.toLowerCase()] = true;
+      fonts.push({ name: name, stack: String(stack).trim() });
+    };
+    var visit = function (rules) {
+      Array.prototype.forEach.call(rules || [], function (rule) {
+        if (rule.style && rule.type !== 5 && rule.style.fontFamily) add(rule.style.fontFamily);
+        if (rule.cssRules) visit(rule.cssRules);
+      });
+    };
+    Array.prototype.forEach.call(document.styleSheets, function (sheet) {
+      if (sheet.ownerNode === style) return;
+      try {
+        visit(sheet.cssRules);
+      } catch (e) {
+        // A stylesheet from another origin (a web font service) cannot be read.
+      }
+    });
+    if (document.fonts && document.fonts.forEach) {
+      document.fonts.forEach(function (face) {
+        add('"' + firstFamily(face.family) + '"');
+      });
+    }
+    Array.prototype.forEach.call(slide.querySelectorAll("[style*='font-family']"), function (el) {
+      add(el.style.fontFamily);
+    });
+    return fonts;
+  }
+
+  function reportFonts() {
+    window.parent.postMessage({ type: "slop:edit-fonts", slide: slide.id, fonts: deckFonts() }, "*");
+  }
+  reportFonts();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(reportFonts);
 })();

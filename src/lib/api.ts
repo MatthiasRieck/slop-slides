@@ -107,6 +107,37 @@ export interface UpdatedSlide {
   previous: string;
 }
 
+/** How find and replace matches (see src-tauri/src/find.rs). */
+export interface FindOptions {
+  matchCase: boolean;
+  /** Only where the query is not part of a longer word. */
+  wholeWord: boolean;
+}
+
+/** One place the query is found on a slide, with some of the text around it. */
+export interface FindMatch {
+  slide: string;
+  /** The slide's position in the deck, from 0. */
+  index: number;
+  /** Locked slides are found but never changed. */
+  locked: boolean;
+  before: string;
+  text: string;
+  after: string;
+}
+
+export interface ReplacedText {
+  deck: Deck;
+  count: number;
+  /** Slides that changed. */
+  slides: string[];
+  /** Locked slides with matches, left as they were. */
+  skipped: string[];
+  /** The deck's source before and after; saving `previous` over `source` undoes the replace. */
+  previous: string;
+  source: string;
+}
+
 export interface LintIssue {
   /** Rule id, e.g. `unclosed-tag` (see src-tauri/src/lint.rs). */
   rule: string;
@@ -209,11 +240,19 @@ export const api = {
     invoke<UpdatedSlide>("update_slide", { id, slide, markup, base }),
   saveDeckSource: (id: string, source: string, base: string | null) =>
     invoke<Deck>("save_deck_source", { id, source, base }),
+  /** Where `query` is found in the text on the deck's slides (and their notes). */
+  findInDeck: (id: string, query: string, options: FindOptions) =>
+    invoke<FindMatch[]>("find_in_deck", { id, query, options }),
+  /** Replaces `query` in the text of the deck's slides, or only of `slides`; locked slides are left alone. */
+  replaceInDeck: (id: string, query: string, replacement: string, options: FindOptions, slides: string[] | null) =>
+    invoke<ReplacedText>("replace_in_deck", { id, query, replacement, options, slides }),
   importAssets: (id: string, paths: string[]) => invoke<string[]>("import_assets", { id, paths }),
   /** Saves pasted file contents (base64) into the deck's assets; returns its `assets/…` ref. */
   saveAsset: (id: string, name: string, data: string) => invoke<string>("save_asset", { id, name, data }),
   /** Puts an element copied in the slide editor on the system clipboard, with `text` for other apps. */
   copyToClipboard: (html: string, text: string) => invoke<void>("copy_to_clipboard", { html, text }),
+  /** The clipboard's plain text (empty without any), for pasting into text without its formatting. */
+  readClipboardText: () => invoke<string>("read_clipboard_text"),
   /** What pasting into deck `id` brings in; pasted images are saved into its assets. */
   pasteFromClipboard: (id: string) => invoke<Pasted>("paste_from_clipboard", { id }),
   exportDeck: (id: string, dest: string) => invoke<void>("export_deck", { id, dest }),

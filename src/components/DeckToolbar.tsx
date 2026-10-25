@@ -19,11 +19,12 @@ import { useEffect, useRef, useState } from "react";
 import { api, type Deck, errorMessage } from "../lib/api";
 import { basename, cn } from "../lib/utils";
 import { lintFixPrompt, type StageView, useApp } from "../store";
+import { FindButton } from "./FindReplace";
 import { SlideSizeButton } from "./SlideSize";
 
 /**
- * The open deck's toolbar, above the slides (or its HTML): the title, the slide size, lint,
- * the Slides / HTML switch, export and present.
+ * The open deck's toolbar, above the slides (or its HTML): the title, find and replace, the
+ * slide size, lint, the Slides / HTML switch, export and present.
  */
 export function DeckToolbar() {
   const deck = useApp((s) => s.deck);
@@ -119,6 +120,7 @@ function DeckTools({ deck }: { deck: Deck }) {
         className="min-w-0 max-w-md flex-1 truncate rounded-md bg-transparent px-1.5 py-1 text-sm font-medium outline-none hover:bg-accent focus:bg-accent"
       />
       <div className="flex-1" />
+      <FindButton />
       <SlideSizeButton />
       <LintStatus />
       <ViewToggle file={basename(deck.id)} />

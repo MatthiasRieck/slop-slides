@@ -105,6 +105,12 @@ export function installBrowserMock() {
           return null;
         case "paste_from_clipboard":
           return { kind: "nothing" };
+        case "read_clipboard_text":
+          return "";
+        case "find_in_deck":
+          return [];
+        case "replace_in_deck":
+          throw new Error("Replacing is not available in the browser preview.");
         case "session_provider":
           return null;
         case "voice_status":

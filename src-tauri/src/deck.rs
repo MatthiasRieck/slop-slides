@@ -26,6 +26,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::error::{Error, Result};
+use crate::find;
 use crate::html;
 use crate::lint;
 use crate::review::{self, Review};
@@ -607,6 +608,48 @@ pub fn update_slide(
     edit(file, |s| html::replace_slide(s, slide, markup))
 }
 
+/// What [`replace_text`] did, with the deck's source before and after, so it can be undone by
+/// saving `previous` back over `source`.
+pub struct ReplacedText {
+    pub deck: Deck,
+    pub count: usize,
+    pub slides: Vec<String>,
+    pub skipped: Vec<String>,
+    pub previous: String,
+    pub source: String,
+}
+
+/// Where `query` is found on the deck's slides (see [`find::find`]).
+pub fn find_text(file: &Path, query: &str, options: find::Options) -> Result<Vec<find::Match>> {
+    Ok(find::find(&read_html(file)?, query, options))
+}
+
+/// Replaces `query` with `replacement` in the text of the deck's slides (or of `only`); locked
+/// slides are left alone. The file is only written when something changed.
+pub fn replace_text(
+    file: &Path,
+    session: &Path,
+    query: &str,
+    replacement: &str,
+    options: find::Options,
+    only: Option<&[String]>,
+) -> Result<ReplacedText> {
+    let previous = read_html(file)?;
+    let replaced = find::replace(&previous, query, replacement, options, only);
+    if replaced.count > 0 {
+        snapshot(file, session)?;
+        write_html(file, &replaced.html)?;
+    }
+    Ok(ReplacedText {
+        deck: load(file)?,
+        count: replaced.count,
+        slides: replaced.slides,
+        skipped: replaced.skipped,
+        previous,
+        source: replaced.html,
+    })
+}
+
 /// Replaces deck.html with hand-edited source. `base` is the text the edit started from;
 /// when given and the file has changed since (say, the agent wrote to it), the save is
 /// refused so neither side's work is silently lost.
@@ -974,6 +1017,42 @@ mod tests {
             saved.slides[1].id, "#2",
             "unnamed slide addressed by position"
         );
+    }
+
+    #[test]
+    fn replace_text_rewrites_slide_text_and_can_be_undone() {
+        let deck = TempDeck::new(EDITED);
+        let options = find::Options::default();
+        let found = find_text(&deck.file(), "a!", options).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].slide, "a");
+
+        let done =
+            replace_text(&deck.file(), &deck.session(), "A!", "Alpha", options, None).unwrap();
+        assert_eq!(
+            (done.count, done.slides.clone()),
+            (1, vec!["a".to_string()])
+        );
+        assert_eq!(done.previous, EDITED);
+        assert_eq!(deck.html(), done.source);
+        assert!(deck.html().contains(">Alpha</section>"));
+        assert_eq!(deck.snapshots(), [EDITED]);
+
+        // Nothing found: the file is left alone.
+        let none = replace_text(&deck.file(), &deck.session(), "zzz", "x", options, None).unwrap();
+        assert_eq!(none.count, 0);
+        assert_eq!(deck.snapshots().len(), 1);
+
+        // Undo: the previous source saved back over this one.
+        save_source(
+            &deck.file(),
+            &deck.session(),
+            &done.previous,
+            Some(&done.source),
+            false,
+        )
+        .unwrap();
+        assert_eq!(deck.html(), EDITED);
     }
 
     #[test]

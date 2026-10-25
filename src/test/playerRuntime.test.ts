@@ -32,6 +32,7 @@ interface PlayerOptions {
   size?: [number, number];
   /** The stage's laid-out size (the deck's slide size); jsdom lays nothing out, so it is 0×0 without. */
   stage?: [number, number];
+  /** Runs before the player, e.g. to fake layout jsdom does not do. */
   setup?: (window: DOMWindow) => void;
 }
 
@@ -509,6 +510,66 @@ describe("player: review marks", () => {
     const css = readFileSync("src-tauri/assets/runtime.css", "utf8");
     expect(css).toMatch(/\.slide > \.slop-review\s*\{[^}]*display:\s*none/);
     expect(css).toMatch(/html\[data-slop-review\] \.slide > \.slop-review\s*\{[^}]*display:\s*block/);
+  });
+});
+
+describe("player: text that shrinks to fit", () => {
+  const FIT_DECK = `<!DOCTYPE html><html><body><main class="deck">
+  <section class="slide" id="a">
+    <div id="box" data-autofit="shrink" style="height: 200px; font-size: 40px">Long text <span id="big" style="font-size: 80px">big</span> <b>bold</b></div>
+    <div id="short" data-autofit="shrink" style="font-size: 40px">Short</div>
+    <div id="plain" style="font-size: 40px">Overflowing, but not asked to fit</div>
+  </section>
+</main></body></html>`;
+
+  /** Lays out a box 200px tall whose text is as tall as 10× its own font size (5× for #short). */
+  const layout = (window: DOMWindow) => {
+    const proto = window.HTMLElement.prototype;
+    const size = (el: HTMLElement) => Number.parseFloat(el.style.fontSize || "40");
+    Object.defineProperty(proto, "clientHeight", { configurable: true, get: () => 200 });
+    Object.defineProperty(proto, "clientWidth", { configurable: true, get: () => 600 });
+    Object.defineProperty(proto, "scrollWidth", { configurable: true, get: () => 600 });
+    Object.defineProperty(proto, "scrollHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return size(this) * (this.id === "short" ? 5 : 10);
+      },
+    });
+  };
+
+  it("scales every font size in the box by the same factor until the text fits", () => {
+    const p = player({ html: FIT_DECK, setup: layout });
+    const box = p.doc.getElementById("box")!;
+    const big = p.doc.getElementById("big")!;
+    const k = Number.parseFloat(box.style.fontSize) / 40;
+    // 10 × 40px × k must fit in 200px (give or take a pixel), and the search lands just under it.
+    expect(10 * 40 * k).toBeLessThanOrEqual(201);
+    expect(k).toBeGreaterThan(0.49);
+    expect(box.style.getPropertyPriority("font-size")).toBe("important");
+    expect(Number.parseFloat(big.style.fontSize) / 80).toBeCloseTo(k, 2);
+    expect(Number.parseFloat(p.doc.querySelector<HTMLElement>("#box b")!.style.fontSize) / 40).toBeCloseTo(k, 2);
+    const fit = (p.window as unknown as { slopAutofit: { scale: (el: Element) => number } }).slopAutofit;
+    expect(fit.scale(box)).toBeCloseTo(k, 3);
+  });
+
+  it("leaves text that fits, and boxes that do not ask, alone", () => {
+    const p = player({ html: FIT_DECK, setup: layout });
+    expect(p.doc.getElementById("short")!.getAttribute("style")).toBe("font-size: 40px");
+    expect(p.doc.getElementById("plain")!.getAttribute("style")).toBe("font-size: 40px");
+  });
+
+  it("gives back the inline font sizes it replaced, so the markup can be saved without the fit", () => {
+    const p = player({ html: FIT_DECK, setup: layout });
+    const fit = (p.window as unknown as { slopAutofit: Record<string, (el: Element) => unknown> }).slopAutofit;
+    const box = p.doc.getElementById("box")!;
+    expect(fit.original!(box)).toEqual({ value: "40px", priority: "" });
+    expect(fit.original!(p.doc.querySelector("#box b")!)).toEqual({ value: "", priority: "" });
+    fit.unfit!(box);
+    expect(box.outerHTML).toBe(
+      `<div id="box" data-autofit="shrink" style="height: 200px; font-size: 40px;">Long text <span id="big" style="font-size: 80px;">big</span> <b>bold</b></div>`,
+    );
+    expect(fit.original!(box)).toBeNull();
+    expect(fit.scale!(box)).toBe(1);
   });
 });
 

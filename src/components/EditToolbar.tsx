@@ -13,26 +13,44 @@ import {
   BringToFront,
   Circle,
   Italic,
+  Link,
+  List,
+  ListOrdered,
   Minus,
   MousePointer2,
   PaintBucket,
   PenLine,
   Plus,
   SendToBack,
+  Space,
   Square,
   SquareDashed,
   SquareRoundCorner,
+  Strikethrough,
+  Subscript,
+  Superscript,
   Trash2,
   Type,
+  Underline,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import {
+  type Autofit,
   BORDER_WIDTHS,
   EDIT_COLORS,
   type EditSelection,
   type EditStyle,
   type EditTool,
+  type FontChoice,
+  firstFamily,
+  fontChoices,
+  LETTER_SPACINGS,
+  LINE_HEIGHTS,
+  type ListKind,
+  linkedSlide,
+  normalizeHref,
+  parseFontSize,
   type StackOrder,
   stepFontSize,
   type TextAlign,
@@ -70,11 +88,31 @@ const ORDER: { to: StackOrder; label: string; icon: ReactNode }[] = [
   { to: "back", label: "Send to back", icon: <SendToBack /> },
 ];
 
+const SCRIPTS: { value: "sup" | "sub"; label: string; icon: ReactNode }[] = [
+  { value: "sup", label: "Superscript", icon: <Superscript /> },
+  { value: "sub", label: "Subscript", icon: <Subscript /> },
+];
+
+const LISTS: { value: ListKind; label: string; icon: ReactNode }[] = [
+  { value: "ul", label: "Bulleted list (Tab indents, Shift+Tab outdents)", icon: <List /> },
+  { value: "ol", label: "Numbered list (Tab indents, Shift+Tab outdents)", icon: <ListOrdered /> },
+];
+
+/** A slide a link can go to. */
+export interface LinkTarget {
+  id: string;
+  label: string;
+}
+
 /**
  * The tools above the slide in edit mode: add text, shapes and freehand drawings, restyle the
- * selection (text color and size, bold, italic, alignment, fill, border), move it up or down
- * the stack, or delete it. With nothing selected, the styles are those of what the current
- * tool adds.
+ * selection (font, size, color, bold, italic, underline, strikethrough, superscript /
+ * subscript, lists, links, spacing, alignment, how text fits, fill, border), move it up or
+ * down the stack, or delete it. While typing, the text styles go to the selected text. With
+ * nothing selected, the styles are those of what the current tool adds.
+ *
+ * Its buttons keep focus in the slide, so the text being edited keeps its selection; after a
+ * typed value (a font size, a link) `onReturnFocus` gives focus back to the slide.
  */
 export function EditToolbar(props: {
   sizeMode: "resize" | "stretch";
@@ -82,8 +120,15 @@ export function EditToolbar(props: {
   tool: EditTool;
   selection: EditSelection | null;
   styles: Record<ToolFamily, EditStyle>;
+  /** The fonts the deck's styles use. */
+  fonts?: FontChoice[];
+  /** The deck's slides, for links between them. */
+  slides?: LinkTarget[];
   onTool: (tool: EditTool) => void;
   onStyle: (changes: EditStyle) => void;
+  onList?: (list: ListKind) => void;
+  onLink?: (href: string | null) => void;
+  onReturnFocus?: () => void;
   onOrder: (to: StackOrder) => void;
   onDelete: () => void;
 }) {
@@ -91,11 +136,14 @@ export function EditToolbar(props: {
   const style = state?.style ?? {};
   const textOff = !state?.text;
   const fontSize = style.fontSize ?? 48;
+  const selection = props.selection;
+  const returnFocus = () => props.onReturnFocus?.();
 
   return (
     <div
       role="toolbar"
       aria-label="Edit tools"
+      data-edit-toolbar=""
       className="flex flex-wrap items-center justify-center gap-0.5 rounded-lg border bg-card px-1 py-0.5 shadow-sm"
     >
       {TOOLS.map((t) => (
@@ -115,6 +163,12 @@ export function EditToolbar(props: {
         <option value="stretch">Stretch</option>
       </select>
       <Divider />
+      <FontPicker
+        value={style.fontFamily ?? null}
+        fonts={props.fonts ?? []}
+        disabled={textOff}
+        onChange={(fontFamily) => props.onStyle({ fontFamily })}
+      />
       <ColorButton
         label="Text color"
         icon={<Baseline />}
@@ -129,9 +183,11 @@ export function EditToolbar(props: {
       >
         <Minus />
       </ToolButton>
-      <span aria-label="Font size" className={cn("w-7 text-center text-xs tabular-nums", textOff && "opacity-30")}>
-        {state?.text ? fontSize : "–"}
-      </span>
+      <FontSizeInput
+        value={state?.text ? fontSize : null}
+        onChange={(size) => props.onStyle({ fontSize: size })}
+        onDone={returnFocus}
+      />
       <ToolButton
         label="Larger text"
         disabled={textOff}
@@ -140,7 +196,7 @@ export function EditToolbar(props: {
         <Plus />
       </ToolButton>
       <ToolButton
-        label="Bold"
+        label="Bold (⌘B)"
         active={!textOff && !!style.bold}
         disabled={textOff}
         onClick={() => props.onStyle({ bold: !style.bold })}
@@ -148,13 +204,77 @@ export function EditToolbar(props: {
         <Bold />
       </ToolButton>
       <ToolButton
-        label="Italic"
+        label="Italic (⌘I)"
         active={!textOff && !!style.italic}
         disabled={textOff}
         onClick={() => props.onStyle({ italic: !style.italic })}
       >
         <Italic />
       </ToolButton>
+      <ToolButton
+        label="Underline (⌘U)"
+        active={!textOff && !!style.underline}
+        disabled={textOff}
+        onClick={() => props.onStyle({ underline: !style.underline })}
+      >
+        <Underline />
+      </ToolButton>
+      <ToolButton
+        label="Strikethrough"
+        active={!textOff && !!style.strike}
+        disabled={textOff}
+        onClick={() => props.onStyle({ strike: !style.strike })}
+      >
+        <Strikethrough />
+      </ToolButton>
+      {SCRIPTS.map((s) => (
+        <ToolButton
+          key={s.value}
+          label={s.label}
+          active={!textOff && !!selection && selection.script === s.value}
+          disabled={textOff || !selection}
+          onClick={() => props.onStyle({ script: selection?.script === s.value ? null : s.value })}
+        >
+          {s.icon}
+        </ToolButton>
+      ))}
+      <Divider />
+      {LISTS.map((l) => (
+        <ToolButton
+          key={l.value}
+          label={l.label}
+          active={!textOff && !!selection && selection.list === l.value}
+          disabled={textOff || !selection}
+          onClick={() => props.onList?.(l.value)}
+        >
+          {l.icon}
+        </ToolButton>
+      ))}
+      <LinkButton
+        value={selection?.link ?? null}
+        disabled={!selection}
+        slides={props.slides ?? []}
+        onChange={(href) => props.onLink?.(href)}
+        onDone={returnFocus}
+      />
+      <SpacingButton
+        lineHeight={style.lineHeight ?? null}
+        letterSpacing={style.letterSpacing ?? 0}
+        disabled={textOff}
+        onChange={props.onStyle}
+      />
+      <select
+        aria-label="When text does not fit"
+        title="When text does not fit its box: only show the overflow, shrink the text, or grow the box"
+        disabled={textOff || !selection}
+        value={selection?.autofit ?? ""}
+        onChange={(event) => props.onStyle({ autofit: (event.target.value || null) as Autofit | null })}
+        className="h-6 rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-30"
+      >
+        <option value="">Report overflow</option>
+        <option value="shrink">Shrink text</option>
+        <option value="grow">Grow box</option>
+      </select>
       <Divider />
       {ALIGN.map((a) => (
         <ToolButton
@@ -228,6 +348,11 @@ function Divider() {
   return <div className="mx-1 h-4 w-px bg-border" />;
 }
 
+/** Keeps focus (and the text selection) in the slide when a toolbar button is pressed. */
+function keepFocus(event: React.MouseEvent) {
+  event.preventDefault();
+}
+
 function ToolButton(props: {
   label: string;
   active?: boolean;
@@ -242,6 +367,7 @@ function ToolButton(props: {
       title={props.label}
       aria-pressed={props.active}
       disabled={props.disabled}
+      onMouseDown={keepFocus}
       onClick={props.onClick}
       className={cn(
         "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4",
@@ -301,6 +427,7 @@ function ColorButton(props: {
         title={props.label}
         aria-expanded={open}
         disabled={props.disabled}
+        onMouseDown={keepFocus}
         onClick={() => setOpen(!open)}
         className="flex flex-col items-center rounded-md px-1 pt-0.5 pb-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-3.5"
       >
@@ -324,6 +451,7 @@ function ColorButton(props: {
                 aria-label="None"
                 title="None"
                 aria-pressed={props.value === null}
+                onMouseDown={keepFocus}
                 onClick={() => pick(null)}
                 className={cn(
                   "flex size-5 items-center justify-center rounded-full border text-muted-foreground [&_svg]:size-3.5",
@@ -340,6 +468,7 @@ function ColorButton(props: {
                 aria-label={color}
                 title={color}
                 aria-pressed={props.value === color}
+                onMouseDown={keepFocus}
                 onClick={() => pick(color)}
                 className={cn(
                   "size-5 rounded-full border border-black/15 dark:border-white/30",
@@ -359,6 +488,302 @@ function ColorButton(props: {
             />
             Custom
           </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Closes a popover on a press outside `ref`. */
+function useOutsideClose(open: boolean, ref: React.RefObject<HTMLElement | null>, close: () => void) {
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: PointerEvent) => {
+      if (!ref.current?.contains(event.target as Node)) closeRef.current();
+    };
+    window.addEventListener("pointerdown", onDown);
+    return () => window.removeEventListener("pointerdown", onDown);
+  }, [open, ref]);
+}
+
+/** The font list: the deck's own fonts, then system fonts; "Default" leaves it to the deck. */
+function FontPicker(props: {
+  value: string | null;
+  fonts: FontChoice[];
+  disabled: boolean;
+  onChange: (stack: string | null) => void;
+}) {
+  const choices = fontChoices(props.fonts);
+  const name = firstFamily(props.value).toLowerCase();
+  const all = [...choices.deck, ...choices.system];
+  const match = name ? all.find((f) => f.name.toLowerCase() === name) : undefined;
+  // A font the list does not have (set in the deck's styles) still shows as the current one.
+  const current = name && !match ? firstFamily(props.value) : null;
+  return (
+    <select
+      aria-label="Font"
+      title="Font"
+      disabled={props.disabled}
+      value={match ? match.stack : current ? "__current" : ""}
+      onChange={(event) => {
+        const value = event.target.value;
+        if (value !== "__current") props.onChange(value || null);
+      }}
+      className="h-6 w-28 truncate rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-30"
+    >
+      <option value="">Default font</option>
+      {current && <option value="__current">{current}</option>}
+      {choices.deck.length > 0 && (
+        <optgroup label="Deck fonts">
+          {choices.deck.map((f) => (
+            <option key={f.name} value={f.stack}>
+              {f.name}
+            </option>
+          ))}
+        </optgroup>
+      )}
+      <optgroup label="System fonts">
+        {choices.system.map((f) => (
+          <option key={f.name} value={f.stack}>
+            {f.name}
+          </option>
+        ))}
+      </optgroup>
+    </select>
+  );
+}
+
+/** The font size as a number to type; it applies on Enter or when the field loses focus. */
+function FontSizeInput(props: { value: number | null; onChange: (size: number) => void; onDone: () => void }) {
+  const [draft, setDraft] = useState(props.value === null ? "" : String(props.value));
+  useEffect(() => setDraft(props.value === null ? "" : String(props.value)), [props.value]);
+  const apply = () => {
+    const size = parseFontSize(draft);
+    if (size === null || size === props.value) {
+      setDraft(props.value === null ? "" : String(props.value));
+      return false;
+    }
+    props.onChange(size);
+    return true;
+  };
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      aria-label="Font size"
+      title="Font size (type a size and press Enter)"
+      disabled={props.value === null}
+      placeholder="–"
+      value={draft}
+      onChange={(event) => setDraft(event.target.value.replace(/[^\d.]/g, ""))}
+      onBlur={apply}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          apply();
+          props.onDone();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          setDraft(props.value === null ? "" : String(props.value));
+          props.onDone();
+        }
+      }}
+      className="h-6 w-9 rounded-md border bg-transparent px-1 text-center text-xs tabular-nums disabled:opacity-30"
+    />
+  );
+}
+
+/** Adds, changes or removes the selection's link: to a web or mail address, or another slide. */
+function LinkButton(props: {
+  value: string | null;
+  disabled: boolean;
+  slides: LinkTarget[];
+  onChange: (href: string | null) => void;
+  onDone: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const slideNow = linkedSlide(props.value);
+  const [address, setAddress] = useState("");
+  const [slide, setSlide] = useState("");
+  const [invalid, setInvalid] = useState(false);
+  useOutsideClose(open, ref, () => setOpen(false));
+  if (props.disabled && open) setOpen(false);
+
+  const toggle = () => {
+    if (!open) {
+      setAddress(props.value && !slideNow ? props.value : "");
+      setSlide(slideNow ?? "");
+      setInvalid(false);
+    }
+    setOpen(!open);
+  };
+  const finish = (href: string | null) => {
+    props.onChange(href);
+    setOpen(false);
+    props.onDone();
+  };
+  const apply = () => {
+    const href = slide ? `#${slide}` : normalizeHref(address);
+    if (!href) {
+      setInvalid(true);
+      return;
+    }
+    finish(href);
+  };
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        aria-label="Link"
+        title={props.value ? `Link: ${props.value}` : "Add a link"}
+        aria-pressed={!!props.value}
+        aria-expanded={open}
+        disabled={props.disabled}
+        onMouseDown={keepFocus}
+        onClick={toggle}
+        className={cn(
+          "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4",
+          props.value && "bg-accent text-foreground",
+        )}
+      >
+        <Link />
+      </button>
+      {open && (
+        <form
+          role="dialog"
+          aria-label="Link"
+          onSubmit={(event) => {
+            event.preventDefault();
+            apply();
+          }}
+          className="absolute top-full left-1/2 z-30 mt-1 flex w-64 -translate-x-1/2 flex-col gap-2 rounded-md border bg-card p-2 text-xs shadow-md"
+        >
+          <input
+            // biome-ignore lint/a11y/noAutofocus: the popover opens to type a link
+            autoFocus
+            aria-label="Link address"
+            placeholder="https://… or someone@example.com"
+            value={address}
+            onChange={(event) => {
+              setAddress(event.target.value);
+              setSlide("");
+              setInvalid(false);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setOpen(false);
+                props.onDone();
+              }
+            }}
+            className={cn("h-7 rounded border bg-transparent px-2", invalid && "border-destructive")}
+          />
+          {props.slides.length > 0 && (
+            <select
+              aria-label="Link to slide"
+              value={slide}
+              onChange={(event) => {
+                setSlide(event.target.value);
+                setInvalid(false);
+              }}
+              className="h-7 rounded border bg-transparent px-1"
+            >
+              <option value="">Or link to a slide…</option>
+              {props.slides.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          )}
+          {invalid && <p className="text-destructive">Enter a web address, an email address, or pick a slide.</p>}
+          <div className="flex justify-end gap-1">
+            {props.value && (
+              <button type="button" onClick={() => finish(null)} className="rounded-md px-2 py-1 hover:bg-accent">
+                Remove link
+              </button>
+            )}
+            <button type="submit" className="rounded-md bg-primary px-2 py-1 font-medium text-primary-foreground">
+              {props.value ? "Update" : "Add link"}
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
+/** Line height and letter spacing. */
+function SpacingButton(props: {
+  lineHeight: number | null;
+  letterSpacing: number;
+  disabled: boolean;
+  onChange: (changes: EditStyle) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useOutsideClose(open, ref, () => setOpen(false));
+  if (props.disabled && open) setOpen(false);
+  const heights = [...new Set<number>([...LINE_HEIGHTS, ...(props.lineHeight ? [props.lineHeight] : [])])].sort(
+    (a, b) => a - b,
+  );
+  const spacings = [...new Set<number>([...LETTER_SPACINGS, props.letterSpacing])].sort((a, b) => a - b);
+  const select = "h-6 rounded border bg-transparent px-1";
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        aria-label="Spacing"
+        title="Line height and letter spacing"
+        aria-expanded={open}
+        disabled={props.disabled}
+        onMouseDown={keepFocus}
+        onClick={() => setOpen(!open)}
+        className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4"
+      >
+        <Space />
+      </button>
+      {open && (
+        <div
+          role="dialog"
+          aria-label="Spacing"
+          className="absolute top-full left-1/2 z-30 mt-1 grid w-max -translate-x-1/2 grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5 rounded-md border bg-card p-2 text-xs shadow-md"
+        >
+          <label htmlFor="edit-line-height" className="text-muted-foreground">
+            Line height
+          </label>
+          <select
+            id="edit-line-height"
+            value={props.lineHeight === null ? "" : String(props.lineHeight)}
+            onChange={(event) => props.onChange({ lineHeight: event.target.value ? Number(event.target.value) : null })}
+            className={select}
+          >
+            <option value="">Default</option>
+            {heights.map((h) => (
+              <option key={h} value={h}>
+                {h}
+              </option>
+            ))}
+          </select>
+          <label htmlFor="edit-letter-spacing" className="text-muted-foreground">
+            Letter spacing
+          </label>
+          <select
+            id="edit-letter-spacing"
+            value={String(props.letterSpacing)}
+            onChange={(event) => props.onChange({ letterSpacing: Number(event.target.value) })}
+            className={select}
+          >
+            {spacings.map((v) => (
+              <option key={v} value={v}>
+                {v === 0 ? "Normal" : `${v}px`}
+              </option>
+            ))}
+          </select>
         </div>
       )}
     </div>

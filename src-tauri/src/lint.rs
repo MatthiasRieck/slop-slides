@@ -7,8 +7,8 @@ use std::collections::HashSet;
 use serde::Serialize;
 
 use crate::html::{
-    self, find_ci, has_class, parse_tag, ADDED_ATTR, DROPPED_ATTR, EDITOR_ATTRS, HIDDEN_ATTR,
-    LOCKED_ATTR, MOVED_ATTR, SECTION_CLASS, SECTION_TITLE_ATTR,
+    self, find_ci, has_class, parse_tag, ADDED_ATTR, AUTOFIT_ATTR, DROPPED_ATTR, EDITOR_ATTRS,
+    HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR, SECTION_CLASS, SECTION_TITLE_ATTR,
 };
 use crate::review;
 use crate::size::{self, SlideSize};
@@ -114,6 +114,7 @@ pub fn lint(
     check_entrances(&mut l);
     check_morphs(&mut l);
     check_assets(&mut l, asset_exists);
+    check_links(&mut l);
     check_locked(&mut l, locked);
     l.issues.sort_by_key(|i| (i.line, i.severity));
     l.issues
@@ -310,6 +311,18 @@ fn check_markup(l: &mut Linter) {
                         i,
                         "The user deleted an element here; this invisible, inert copy only holds its empty slot so the rest of the layout did not shift. Do not bring the deleted content back. When tidying, remove this entire placeholder and its hidden contents and rework the surrounding layout so the gap closes cleanly.".into(),
                     );
+                }
+                if let Some((_, value, ..)) = tag.attrs.iter().find(|(n, ..)| n == AUTOFIT_ATTR) {
+                    if !matches!(value.as_str(), "shrink" | "grow") {
+                        l.report(
+                            "autofit-value",
+                            Severity::Warning,
+                            i,
+                            format!(
+                                "`{AUTOFIT_ATTR}=\"{value}\"` means nothing; use \"shrink\" (the text shrinks to fit its box) or \"grow\" (the box grows with its text), or remove it."
+                            ),
+                        );
+                    }
                 }
                 if let Some((_, value, ..)) = tag.attrs.iter().find(|(n, ..)| n == ADDED_ATTR) {
                     let what = match value.as_str() {
@@ -781,6 +794,56 @@ fn check_assets(l: &mut Linter, asset_exists: impl Fn(&str) -> bool) {
                 Severity::Warning,
                 at,
                 "<img> needs an alt attribute (use alt=\"\" for decoration).".into(),
+            );
+        }
+    }
+}
+
+/// Links on slides go to web pages, email addresses, or other slides (`#slide-id`, or `#3` for
+/// the third slide), which the player shows when they are clicked.
+fn check_links(l: &mut Linter) {
+    let html = l.html;
+    let ids: HashSet<String> = l.slides.iter().filter_map(|s| s.id.clone()).collect();
+    let count = l.slides.len();
+    let mut from = 0;
+    while let Some(at) = find_ci(html, from, "<a") {
+        from = at + 2;
+        let Some(tag) = parse_tag(html, at).filter(|t| t.name == "a" && !t.closing) else {
+            continue;
+        };
+        if !in_markup(l, at) || !l.slides.iter().any(|s| s.range.contains(&at)) {
+            continue;
+        }
+        let Some((_, href, ..)) = tag.attrs.iter().find(|(n, ..)| n == "href") else {
+            continue;
+        };
+        let href = href.trim();
+        if href.to_ascii_lowercase().starts_with("javascript:") {
+            l.report(
+                "script-link",
+                Severity::Warning,
+                at,
+                "Links on slides should go to web pages, email addresses or other slides (`#slide-id`), not run scripts.".into(),
+            );
+            continue;
+        }
+        let Some(target) = href.strip_prefix('#') else {
+            continue;
+        };
+        let target = percent_encoding::percent_decode_str(target).decode_utf8_lossy();
+        let by_number = target
+            .parse::<usize>()
+            .is_ok_and(|n| (1..=count).contains(&n));
+        if !ids.contains(target.as_ref()) && !by_number {
+            l.report(
+                "broken-slide-link",
+                Severity::Warning,
+                at,
+                if target.is_empty() {
+                    "This link goes nowhere (`href=\"#\"`); point it at a slide (`#slide-id`) or remove it.".into()
+                } else {
+                    format!("This link goes to the slide `{target}`, but no slide has that id.")
+                },
             );
         }
     }
@@ -1514,6 +1577,50 @@ mod tests {
                 "<section class=\"slide\" id=\"a\"><p>data-added</p></section>"
             )),
             Vec::<&str>::new()
+        );
+    }
+
+    #[test]
+    fn flags_links_to_missing_slides_and_scripts() {
+        let source = deck(
+            "<section class=\"slide\" id=\"intro\">\n<a href=\"#pricing\">Pricing</a>\n<a href=\"#2\">Two</a>\n<a href=\"#outro\">Out</a>\n<a href=\"#\">Nowhere</a>\n<a href=\"#9\">Nine</a>\n<a href=\"javascript:go()\">Go</a>\n<a href=\"https://example.com\" target=\"_blank\" rel=\"noopener\">Web</a>\n<a href=\"mailto:a@b.c\">Mail</a>\n</section>\n<section class=\"slide\" id=\"outro\"><a>no href</a></section>",
+        );
+        let found: Vec<_> = lint(&source, |_| true, &[])
+            .into_iter()
+            .map(|i| (i.rule, i.line, i.slide))
+            .collect();
+        let intro = Some("intro".to_string());
+        assert_eq!(
+            found,
+            [
+                ("broken-slide-link", 11, intro.clone()),
+                ("broken-slide-link", 14, intro.clone()),
+                ("broken-slide-link", 15, intro.clone()),
+                ("script-link", 16, intro),
+            ]
+        );
+        let messages: Vec<_> = lint(&source, |_| true, &[])
+            .into_iter()
+            .map(|i| i.message)
+            .collect();
+        assert!(messages[0].contains("`pricing`"));
+        assert!(messages[1].contains("goes nowhere"));
+        // Links outside slides (in the head, say) and link-like text are not checked.
+        assert_eq!(
+            rules(&deck(
+                "<section class=\"slide\" id=\"a\"><p>&lt;a href=\"#x\"&gt;</p></section>"
+            )),
+            Vec::<&str>::new()
+        );
+    }
+
+    #[test]
+    fn flags_unknown_autofit_values() {
+        assert_eq!(
+            rules(&deck(
+                "<section class=\"slide\" id=\"a\"><div data-autofit=\"shrink\">A</div><div data-autofit=\"grow\">B</div><div data-autofit=\"squeeze\">C</div></section>"
+            )),
+            ["autofit-value"]
         );
     }
 

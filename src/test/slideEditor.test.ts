@@ -564,13 +564,16 @@ describe("slide editor", () => {
     e.down(e.$("h1"));
     e.down(e.$("h1"));
     e.down(e.$(".card p"));
-    expect(reports().map((r) => [r.slide, r.selected])).toEqual([
-      ["intro", true],
-      ["intro", true],
+    // Selecting, starting and ending text editing (the toolbar shows the text's styles), selecting.
+    expect(reports().map((r) => [r.slide, r.selected, (r.selection as { editing: boolean }).editing])).toEqual([
+      ["intro", true, false],
+      ["intro", true, true],
+      ["intro", true, false],
+      ["intro", true, false],
     ]);
     e.key("Delete");
     expect(reports().at(-1)).toEqual({ type: "slop:edit-selection", slide: "intro", selected: false, selection: null });
-    expect(reports()).toHaveLength(3);
+    expect(reports()).toHaveLength(5);
   });
 
   it("edits text on double-click and saves it when done", () => {
@@ -1669,10 +1672,22 @@ describe("slide editor", () => {
           vector: false,
           color: "#ffffff",
           fontSize: 40,
+          // jsdom has no fonts of its own.
+          fontFamily: expect.any(String),
           bold: true,
           italic: false,
+          underline: false,
+          strike: false,
+          script: null,
+          letterSpacing: 0,
+          lineHeight: null,
           align: "center",
           valign: "middle",
+          list: null,
+          link: null,
+          autofit: null,
+          editing: false,
+          range: false,
           fill: "#3b82f6",
           stroke: "#ff0000",
           strokeWidth: 8,
@@ -1915,6 +1930,365 @@ describe("slide editor", () => {
         e.down(e.$("h1"));
         e.fromParent({ type: "slop:edit-order", to: "back" });
         expect(e.$("#intro").style.isolation).toBe("");
+      });
+    });
+  });
+
+  describe("rich text", () => {
+    const TEXT_DECK = `<!DOCTYPE html><html><head><style>.title { font-family: "Playfair Display", Georgia, serif; }</style></head><body>
+<main class="deck">
+  <section class="slide" id="intro">
+    <p id="p">Hello brave world</p>
+    <p id="b"><b>Hello</b></p>
+    <div id="lines">One<br>Two<br>Three</div>
+    <h2 class="title" id="t">Title</h2>
+    <img id="img" src="assets/a.png" alt="">
+  </section>
+  <section class="slide" id="outro"><p>Bye</p></section>
+</main></body></html>`;
+
+    const editText = (selector: string) => {
+      const e = editor({ markup: TEXT_DECK });
+      const el = e.$(selector);
+      e.down(el);
+      e.key("Enter");
+      expect(el.getAttribute("contenteditable")).toBe("true");
+      return { e, el };
+    };
+    /** Selects characters `start` to `end` of `el`'s text. */
+    const selectText = (e: ReturnType<typeof editor>, el: Element, start: number, end = start) => {
+      const walker = e.doc.createTreeWalker(el, e.window.NodeFilter.SHOW_TEXT);
+      const range = e.doc.createRange();
+      let seen = 0;
+      let started = false;
+      for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
+        if (!started && start <= seen + node.data.length) {
+          range.setStart(node, start - seen);
+          started = true;
+        }
+        if (started && end <= seen + node.data.length) {
+          range.setEnd(node, end - seen);
+          break;
+        }
+        seen += node.data.length;
+      }
+      const selection = e.window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+    };
+    const selectedText = (e: ReturnType<typeof editor>) => e.window.getSelection()!.toString();
+    const lastReport = (e: ReturnType<typeof editor>) =>
+      (
+        e
+          .posted()
+          .filter((m) => (m as { type: string }).type === "slop:edit-selection")
+          .at(-1) as {
+          selection: Record<string, unknown>;
+        }
+      ).selection;
+    const style = (e: ReturnType<typeof editor>, changes: Record<string, unknown>) =>
+      e.fromParent({ type: "slop:edit-style", style: changes });
+
+    it("styles only the selected text while typing, keeps it selected, and saves when done", () => {
+      const { e, el } = editText("#p");
+      selectText(e, el, 6, 11);
+      style(e, { bold: true });
+      expect(el.innerHTML).toBe(`Hello <span style="font-weight: 700;">brave</span> world`);
+      expect(selectedText(e)).toBe("brave");
+      expect(lastReport(e)).toMatchObject({ bold: true, editing: true, range: true });
+      style(e, { color: "#ff0000", fontSize: 72 });
+      expect(el.innerHTML).toBe(
+        `Hello <span style="font-weight: 700; color: rgb(255, 0, 0); font-size: 72px;">brave</span> world`,
+      );
+      // Still typing: nothing is saved until the text is done.
+      expect(el.getAttribute("contenteditable")).toBe("true");
+      expect(e.commits()).toEqual([]);
+      e.key("Escape");
+      expect(e.commits()[0]!.markup).toContain(
+        `<p id="p">Hello <span style="font-weight: 700; color: rgb(255, 0, 0); font-size: 72px;">brave</span> world</p>`,
+      );
+    });
+
+    it("takes formatting off part of a formatted run, splitting it around the selection", () => {
+      const { e, el } = editText("#b");
+      selectText(e, el, 1, 4);
+      expect(lastReport(e)).toMatchObject({ bold: true });
+      style(e, { bold: false });
+      expect(el.innerHTML).toBe("<b>H</b>ell<b>o</b>");
+      expect(selectedText(e)).toBe("ell");
+      // And back on: the neighbors merge again.
+      style(e, { bold: true });
+      expect(el.innerHTML).toBe(`<b>H</b><span style="font-weight: 700;">ell</span><b>o</b>`);
+    });
+
+    it("underlines, strikes through and raises the selected text", () => {
+      const { e, el } = editText("#p");
+      selectText(e, el, 0, 5);
+      style(e, { underline: true });
+      style(e, { strike: true });
+      expect(el.innerHTML).toBe(`<span style="text-decoration-line: underline line-through;">Hello</span> brave world`);
+      expect(lastReport(e)).toMatchObject({ underline: true, strike: true });
+      style(e, { underline: false });
+      expect(el.innerHTML).toBe(`<span style="text-decoration-line: line-through;">Hello</span> brave world`);
+      selectText(e, el, 12, 17);
+      style(e, { script: "sup" });
+      expect(el.innerHTML).toContain("brave <sup>world</sup>");
+      expect(lastReport(e)).toMatchObject({ script: "sup" });
+      style(e, { script: "sub" });
+      expect(el.innerHTML).toContain("brave <sub>world</sub>");
+      style(e, { script: null });
+      expect(el.innerHTML).toContain("brave world");
+    });
+
+    it("styles the whole element when there is only a caret, overriding its inner styles", () => {
+      const { e, el } = editText("#p");
+      selectText(e, el, 0, 5);
+      style(e, { color: "#00ff00" });
+      selectText(e, el, 3);
+      style(e, { color: "#0000ff", letterSpacing: 2, lineHeight: 1.5, fontFamily: "Georgia, serif" });
+      expect(el.innerHTML).toBe("Hello brave world");
+      expect(el.style.color).toMatch(/#0000ff|rgb\(0, 0, 255\)/);
+      expect(el.style).toMatchObject({ letterSpacing: "2px", lineHeight: "1.5", fontFamily: "Georgia, serif" });
+      expect(el.getAttribute("contenteditable")).toBe("true");
+      expect(e.commits()).toEqual([]);
+      expect(lastReport(e)).toMatchObject({ letterSpacing: 2, lineHeight: 1.5, fontFamily: "Georgia" });
+    });
+
+    it("toggles bold, italic and underline with ⌘B / ⌘I / ⌘U, while typing or on the selection", () => {
+      const { e, el } = editText("#p");
+      selectText(e, el, 0, 5);
+      expect(e.key("b", { metaKey: true }).defaultPrevented).toBe(true);
+      e.key("i", { ctrlKey: true });
+      e.key("u", { metaKey: true });
+      expect(el.innerHTML).toBe(
+        `<span style="font-weight: 700; font-style: italic; text-decoration-line: underline;">Hello</span> brave world`,
+      );
+      e.key("b", { metaKey: true });
+      expect(el.innerHTML).not.toContain("font-weight");
+      // The shortcuts never reach the app while typing.
+      expect(e.keys()).toEqual([]);
+      e.key("Escape");
+      const lines = e.$("#lines");
+      e.down(lines);
+      e.key("b", { metaKey: true });
+      expect(lines.style.fontWeight).toBe("700");
+      expect(e.commits()).toHaveLength(2);
+    });
+
+    it("keeps typing when focus goes to the app's toolbar, and stops when the app says so", () => {
+      const { e, el } = editText("#p");
+      selectText(e, el, 6, 11);
+      e.window.dispatchEvent(new e.window.Event("blur"));
+      e.window.getSelection()!.removeAllRanges();
+      expect(el.getAttribute("contenteditable")).toBe("true");
+      // The selection it had is still the one the toolbar restyles.
+      style(e, { italic: true });
+      expect(el.innerHTML).toBe(`Hello <span style="font-style: italic;">brave</span> world`);
+      e.fromParent({ type: "slop:edit-finish" });
+      expect(el.hasAttribute("contenteditable")).toBe(false);
+      expect(e.commits()).toHaveLength(1);
+    });
+
+    describe("lists", () => {
+      it("turns lines into a bulleted list, switches it to numbers, and back into lines", () => {
+        const e = editor({ markup: TEXT_DECK });
+        const lines = e.$("#lines");
+        e.down(lines);
+        e.fromParent({ type: "slop:edit-list", list: "ul" });
+        expect(lines.innerHTML).toBe(
+          `<ul style="margin: 0px; padding-left: 1.2em; list-style-type: disc;"><li>One</li><li>Two</li><li>Three</li></ul>`,
+        );
+        expect(lastReport(e)).toMatchObject({ list: "ul" });
+        e.fromParent({ type: "slop:edit-list", list: "ol" });
+        expect(lines.innerHTML).toBe(
+          `<ol style="margin: 0px; padding-left: 1.2em; list-style-type: decimal;"><li>One</li><li>Two</li><li>Three</li></ol>`,
+        );
+        e.fromParent({ type: "slop:edit-list", list: "ol" });
+        expect(lines.innerHTML).toBe("One<br>Two<br>Three");
+        expect(e.commits()).toHaveLength(3);
+      });
+
+      it("starts a new item with Enter, indents with Tab and outdents with Shift+Tab", () => {
+        const e = editor({ markup: TEXT_DECK });
+        const lines = e.$("#lines");
+        e.down(lines);
+        e.fromParent({ type: "slop:edit-list", list: "ul" });
+        e.key("Enter");
+        const items = () => [...lines.querySelectorAll("li")];
+        selectText(e, lines, 5);
+        // "One" + "Tw|o": the rest of the item goes into a new one.
+        e.key("Enter");
+        expect(lines.getAttribute("contenteditable")).toBe("true");
+        expect(items().map((li) => li.innerHTML)).toEqual(["One", "Tw", "o", "Three"]);
+        const caret = e.window.getSelection()!.getRangeAt(0);
+        expect(items()[2]!.contains(caret.startContainer)).toBe(true);
+        expect(e.key("Tab").defaultPrevented).toBe(true);
+        expect(lines.querySelector("ul ul")!.outerHTML).toBe(
+          `<ul style="margin: 0px; padding-left: 1.2em; list-style-type: circle;"><li>o</li></ul>`,
+        );
+        expect(lastReport(e)).toMatchObject({ list: "ul" });
+        e.key("Tab", { shiftKey: true });
+        expect(lines.querySelector("ul ul")).toBeNull();
+        expect(items().map((li) => li.textContent)).toEqual(["One", "Tw", "o", "Three"]);
+        expect(e.keys()).toEqual([]);
+      });
+
+      it("outdents an empty nested item with Enter, and ends the list on an empty last item", () => {
+        const e = editor({ markup: TEXT_DECK });
+        const lines = e.$("#lines");
+        e.down(lines);
+        e.fromParent({ type: "slop:edit-list", list: "ul" });
+        e.key("Enter");
+        selectText(e, lines, 11);
+        e.key("Enter");
+        expect(lines.querySelectorAll("li")).toHaveLength(4);
+        e.key("Tab");
+        expect(lines.querySelector("ul ul li")!.innerHTML).toBe("<br>");
+        e.key("Enter");
+        expect(lines.querySelector("ul ul")).toBeNull();
+        expect(lines.getAttribute("contenteditable")).toBe("true");
+        e.key("Enter");
+        expect(lines.hasAttribute("contenteditable")).toBe(false);
+        expect([...lines.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["One", "Two", "Three"]);
+      });
+    });
+
+    describe("links", () => {
+      it("links the selected text, to a web page in a new window or to another slide", () => {
+        const { e, el } = editText("#p");
+        selectText(e, el, 6, 11);
+        e.fromParent({ type: "slop:edit-link", href: "https://example.com" });
+        expect(el.innerHTML).toBe(`Hello <a href="https://example.com" target="_blank" rel="noopener">brave</a> world`);
+        expect(lastReport(e)).toMatchObject({ link: "https://example.com" });
+        // With the caret in it, the link changes or goes.
+        selectText(e, el, 8);
+        e.fromParent({ type: "slop:edit-link", href: "#outro" });
+        expect(el.innerHTML).toBe(`Hello <a href="#outro">brave</a> world`);
+        e.fromParent({ type: "slop:edit-link", href: null });
+        expect(el.innerHTML).toBe("Hello brave world");
+        // Only web, mail and slide links.
+        selectText(e, el, 0, 5);
+        e.fromParent({ type: "slop:edit-link", href: "javascript:alert(1)" });
+        expect(el.innerHTML).toBe("Hello brave world");
+      });
+
+      it("links a selected element: its text, or an element without text in a link that keeps the layout", () => {
+        const e = editor({ markup: TEXT_DECK });
+        const p = e.$("#p");
+        e.down(p);
+        e.fromParent({ type: "slop:edit-link", href: "#outro" });
+        expect(p.innerHTML).toBe(`<a href="#outro">Hello brave world</a>`);
+        expect(lastReport(e)).toMatchObject({ link: "#outro" });
+        const img = e.$("#img");
+        e.down(img);
+        e.fromParent({ type: "slop:edit-link", href: "https://example.com" });
+        expect(img.parentElement!.outerHTML).toMatch(
+          /^<a href="https:\/\/example.com" target="_blank" rel="noopener" style="display: contents;"><img/,
+        );
+        // Clicking it still selects the image.
+        e.down(e.$("#p"));
+        e.down(img);
+        expect(e.selected()).toEqual([img]);
+        e.fromParent({ type: "slop:edit-link", href: null });
+        expect(img.parentElement!.id).toBe("intro");
+        expect(e.commits()).toHaveLength(3);
+      });
+
+      it("does not follow links on the slide while editing", () => {
+        const e = editor({ markup: TEXT_DECK });
+        e.down(e.$("#p"));
+        e.fromParent({ type: "slop:edit-link", href: "#outro" });
+        const click = new e.window.MouseEvent("click", { bubbles: true, cancelable: true });
+        e.$("#p a").dispatchEvent(click);
+        expect(click.defaultPrevented).toBe(true);
+      });
+    });
+
+    describe("fitting text", () => {
+      it("grows a box with its text: its height becomes the least it is", () => {
+        const e = editor();
+        e.fromParent({ type: "slop:edit-tool", tool: "rect", style: {} });
+        e.$("#intro").dispatchEvent(
+          new e.window.PointerEvent("pointerdown", { clientX: 100, clientY: 100, button: 0, bubbles: true }),
+        );
+        e.$("#intro").dispatchEvent(
+          new e.window.PointerEvent("pointermove", { clientX: 400, clientY: 300, button: 0, bubbles: true }),
+        );
+        e.$("#intro").dispatchEvent(
+          new e.window.PointerEvent("pointerup", { clientX: 400, clientY: 300, button: 0, bubbles: true }),
+        );
+        const shape = e.doc.querySelector<HTMLElement>("[data-added]")!;
+        style(e, { autofit: "grow" });
+        expect(shape.getAttribute("data-autofit")).toBe("grow");
+        expect(shape.style).toMatchObject({ height: "auto", minHeight: "200px" });
+        expect(lastReport(e)).toMatchObject({ autofit: "grow" });
+        style(e, { autofit: null });
+        expect(shape.hasAttribute("data-autofit")).toBe(false);
+        expect(shape.style.minHeight).toBe("");
+        expect(e.commits().at(-1)!.markup).not.toContain("data-autofit");
+      });
+
+      it("shrinks text that overflows its box, but saves the sizes it was given", () => {
+        const markup = TEXT_DECK.replace(`<p id="p">`, `<p id="p" style="height: 100px; font-size: 40px">`);
+        const e = editor({ markup });
+        const p = e.$("#p");
+        // jsdom lays nothing out: the text is 5× its font size tall in a 100px box.
+        Object.defineProperty(p, "clientHeight", { configurable: true, get: () => 100 });
+        Object.defineProperty(p, "clientWidth", { configurable: true, get: () => 800 });
+        Object.defineProperty(p, "scrollWidth", { configurable: true, get: () => 800 });
+        Object.defineProperty(p, "scrollHeight", {
+          configurable: true,
+          get: () => Number.parseFloat(p.style.fontSize) * 5,
+        });
+        e.down(p);
+        style(e, { autofit: "shrink" });
+        expect(Number.parseFloat(p.style.fontSize)).toBeLessThanOrEqual(20.2);
+        // The toolbar shows the size it was given.
+        expect(lastReport(e)).toMatchObject({ autofit: "shrink", fontSize: 40 });
+        const saved = e.commits().at(-1)!.markup;
+        expect(saved).toContain(`<p id="p" style="height: 100px; font-size: 40px;" data-autofit="shrink">`);
+      });
+    });
+
+    describe("pasting into text", () => {
+      const paste = (e: ReturnType<typeof editor>, data: Record<string, string>) => {
+        const event = new e.window.Event("paste", { bubbles: true, cancelable: true });
+        Object.defineProperty(event, "clipboardData", { value: { getData: (type: string) => data[type] ?? "" } });
+        e.doc.activeElement!.dispatchEvent(event);
+        return event;
+      };
+
+      it("keeps bold, italic, links and line breaks, and drops fonts, sizes and everything else", () => {
+        const { e, el } = editText("#p");
+        selectText(e, el, 6, 11);
+        const event = paste(e, {
+          "text/html": `<meta charset="utf-8"><b style="font-weight:normal" id="docs-internal-guid"><p><span style="font-size:11pt;font-family:Arial;font-weight:700">Bold</span> <i class="x">it</i></p><p><a href="https://example.com" onclick="x()">link</a><script>bad()</script><img src="x.png"></p></b>`,
+          "text/plain": "Bold it\nlink",
+        });
+        expect(event.defaultPrevented).toBe(true);
+        expect(el.innerHTML).toBe(
+          `Hello <span style="font-weight: 700;">Bold</span> <span style="font-style: italic;">it</span><br><a href="https://example.com" target="_blank" rel="noopener">link</a> world`,
+        );
+      });
+
+      it("pastes plain text with ⌘⇧V, which the app reads from the clipboard", () => {
+        const { e, el } = editText("#p");
+        selectText(e, el, 6, 11);
+        expect(e.key("v", { metaKey: true, shiftKey: true }).defaultPrevented).toBe(true);
+        expect(e.posted()).toContainEqual({ type: "slop:edit-paste-request", slide: "intro", plain: true });
+        // The app's answer goes where the selection was, even after focus went to the app.
+        e.window.getSelection()!.removeAllRanges();
+        e.fromParent({ type: "slop:edit-insert-text", text: "big\nbold" });
+        expect(el.innerHTML).toBe("Hello big<br>bold world");
+      });
+    });
+
+    it("tells the app which fonts the deck uses", () => {
+      const e = editor({ markup: TEXT_DECK });
+      expect(e.posted()).toContainEqual({
+        type: "slop:edit-fonts",
+        slide: "intro",
+        fonts: [{ name: "Playfair Display", stack: `"Playfair Display", Georgia, serif` }],
       });
     });
   });

@@ -30,6 +30,7 @@
     "active": true,
     "targets": "all",
     "category": "Productivity",
+    "license": "MIT",
     "shortDescription": "Chat-driven slide editor",
     "icon": [
       "icons/32x32.png",

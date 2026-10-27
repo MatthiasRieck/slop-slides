@@ -160,10 +160,24 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   `rotate: Ndeg`, `scale: N` (or stretched, `scale: X Y`), and/or
   `transform: perspective(1000px) rotateX(Ndeg) rotateY(Ndeg) … !important` styles (see
   "Hand edits" below).
-  They can also restyle elements (inline `color`, `font-size`, `font-weight`, `font-style`,
-  `text-align`, `background-color`, `border`, and `position: relative` with a `z-index` to
-  change the stacking order) and add text boxes, shapes, and freehand drawings, which carry
-  `data-added="text"`, `"shape"`, or `"drawing"`.
+  They can also restyle elements (inline `color`, `font-size`, `font-family`, `font-weight`,
+  `font-style`, `text-decoration-line`, `letter-spacing`, `line-height`, `text-align`,
+  `background-color`, `border`, and `position: relative` with a `z-index` to change the
+  stacking order), restyle words inside text (inline `<span style="…">`, `<sup>`, `<sub>`),
+  turn text into lists (`<ul>` / `<ol>` with inline `margin`, `padding-left` and
+  `list-style-type`), link text or elements (see links below), and add text boxes, shapes,
+  and freehand drawings, which carry `data-added="text"`, `"shape"`, or `"drawing"`.
+- Links: `<a href="#slide-id">` goes to that slide when clicked in the presentation (the
+  player follows the hash); web links carry `target="_blank" rel="noopener"` so the
+  presentation stays open. To link an element without text (an image, a shape) without
+  changing the layout, wrap it in `<a href="…" style="display: contents">`. When you rename
+  or delete a slide, update the links to it; the `broken-slide-link` lint warning lists
+  links to slides that do not exist.
+- `data-autofit="shrink"` on a text box makes the player shrink all its text by the same
+  factor until it fits the box (keep giving it a fixed height and its intended font sizes;
+  the shrinking happens at display time). `data-autofit="grow"` marks a box whose height the
+  user turned into a `min-height` so it grows with its text; keep it growing that way. Keep
+  both attributes when editing such an element.
 - The user can drop images onto a slide in the editor. Such an image is saved as
   `assets/<file>` and arrives as `<img src="assets/<file>" alt="" data-dropped data-moved
   style="position: absolute; left: 0px; top: 0px; width: Npx; translate: Xpx Ypx">` at the

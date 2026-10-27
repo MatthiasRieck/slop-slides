@@ -7,6 +7,7 @@ mod deck;
 mod env;
 mod error;
 mod extensions;
+mod find;
 mod html;
 mod lint;
 mod mcp;
@@ -355,6 +356,62 @@ fn copy_to_clipboard(html: String, text: String) -> Result<()> {
     clipboard::write(&html, &text)
 }
 
+/// The clipboard's plain text, for pasting into text on a slide without its formatting.
+#[tauri::command]
+fn read_clipboard_text() -> Result<String> {
+    clipboard::read_text()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReplacedText {
+    deck: Deck,
+    /// How many matches were replaced.
+    count: usize,
+    /// The slides that changed.
+    slides: Vec<String>,
+    /// Locked slides with matches, left as they were.
+    skipped: Vec<String>,
+    /// The deck's source before and after, to undo the replace by saving `previous` over `source`.
+    previous: String,
+    source: String,
+}
+
+/// Where `query` is found in the text of deck `id`'s slides.
+#[tauri::command]
+fn find_in_deck(id: String, query: String, options: find::Options) -> Result<Vec<find::Match>> {
+    deck::find_text(&deck::deck_file(&id)?, &query, options)
+}
+
+/// Replaces `query` with `replacement` in the text of deck `id`'s slides (or of `slides`).
+#[tauri::command]
+fn replace_in_deck(
+    open: State<OpenWorkspace>,
+    id: String,
+    query: String,
+    replacement: String,
+    options: find::Options,
+    slides: Option<Vec<String>>,
+) -> Result<ReplacedText> {
+    let file = deck::deck_file(&id)?;
+    let done = deck::replace_text(
+        &file,
+        &session(&open)?,
+        &query,
+        &replacement,
+        options,
+        slides.as_deref(),
+    )?;
+    Ok(ReplacedText {
+        deck: done.deck,
+        count: done.count,
+        slides: done.slides,
+        skipped: done.skipped,
+        previous: done.previous,
+        source: done.source,
+    })
+}
+
 /// What pasting into deck `id` brings in; pasted images are saved into its assets.
 #[tauri::command]
 fn paste_from_clipboard(open: State<OpenWorkspace>, id: String) -> Result<clipboard::Pasted> {
@@ -584,6 +641,9 @@ pub fn run() {
             save_asset,
             copy_to_clipboard,
             paste_from_clipboard,
+            read_clipboard_text,
+            find_in_deck,
+            replace_in_deck,
             export_deck,
             lint_deck,
             capture_sketch,

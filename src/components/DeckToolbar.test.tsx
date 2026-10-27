@@ -395,6 +395,6 @@ describe("deck toolbar", () => {
     const labels = Array.from(toolbar.querySelectorAll("button")).map(
       (b) => b.getAttribute("aria-label") ?? b.textContent,
     );
-    expect(labels).toEqual(["Slide size", "Lint OK", "Slides", "HTML", "Export", "Present"]);
+    expect(labels).toEqual(["Find and replace", "Slide size", "Lint OK", "Slides", "HTML", "Export", "Present"]);
   });
 });

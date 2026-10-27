@@ -62,6 +62,11 @@ pub const ADDED_ATTR: &str = "data-added";
 /// [`MOVED_ATTR`]'s `translate`) until the agent gives it a place in the layout.
 pub const DROPPED_ATTR: &str = "data-dropped";
 
+/// How a text box handles text that does not fit: `shrink` (the player shrinks its text until
+/// it fits, see `assets/runtime.js`) or `grow` (the editor turned its height into a
+/// `min-height`, so it grows with its text).
+pub const AUTOFIT_ATTR: &str = "data-autofit";
+
 /// Attributes the in-editor slide editor puts on elements while it works. They never belong
 /// in deck.html; the editor strips them before saving.
 pub const EDITOR_ATTRS: &[&str] = &[

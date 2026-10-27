@@ -8,8 +8,10 @@ import {
   api,
   type Deck,
   errorMessage,
+  type FindOptions,
   type LintIssue,
   type OpenedFile,
+  type ReplacedText,
   type Slide,
   type TemplateSummary,
   type WorkspaceChanged,
@@ -330,6 +332,18 @@ interface AppState {
   redoSlideEdit: () => Promise<void>;
   /** Undoes every edit made since entering edit mode, then leaves it. */
   discardSlideEdits: () => Promise<void>;
+  /**
+   * Replaces `query` in the text of the deck's slides (or only of `slides`), after any slide
+   * edits still being saved. Null when it failed (the error is shown).
+   */
+  replaceInDeck: (
+    query: string,
+    replacement: string,
+    options: FindOptions,
+    slides: string[] | null,
+  ) => Promise<ReplacedText | null>;
+  /** Undoes a replace: saves the deck's `previous` source back, unless it changed since (`source`). */
+  undoReplace: (replaced: ReplacedText) => Promise<boolean>;
   refreshTemplates: () => Promise<void>;
   /**
    * Restyles the deck like the template: an empty deck takes its styles directly; otherwise
@@ -720,6 +734,41 @@ export const useApp = create<AppState>((set, get) => ({
     };
     editQueue = editQueue.then(discard);
     return editQueue;
+  },
+
+  replaceInDeck: (query, replacement, options, slides) => {
+    const run = async () => {
+      const { deck } = get();
+      if (!deck) return null;
+      try {
+        const replaced = await api.replaceInDeck(deck.id, query, replacement, options, slides);
+        if (get().deck?.id === deck.id) get().setDeck(replaced.deck);
+        return replaced;
+      } catch (error) {
+        set({ error: errorMessage(error) });
+        return null;
+      }
+    };
+    const done = editQueue.then(run);
+    editQueue = done.then(() => undefined);
+    return done;
+  },
+
+  undoReplace: (replaced) => {
+    const run = async () => {
+      const { deck } = get();
+      if (!deck || deck.id !== replaced.deck.id) return false;
+      try {
+        get().setDeck(await api.saveDeckSource(deck.id, replaced.previous, replaced.source));
+        return true;
+      } catch (error) {
+        set({ error: `The replace cannot be undone: ${errorMessage(error)}` });
+        return false;
+      }
+    };
+    const done = editQueue.then(run);
+    editQueue = done.then(() => undefined);
+    return done;
   },
 
   refreshTemplates: async () => {

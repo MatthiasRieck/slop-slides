@@ -18,12 +18,15 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { api, errorMessage, type Slide } from "../lib/api";
 import { catchDrops, type DropPoint, imageSize, isImage } from "../lib/drop";
 import {
+  defaultsFrom,
   EDIT_TOOL_KEYS,
   type EditSelection,
   type EditStyle,
   type EditTool,
+  type FontChoice,
   familyOf,
   familyOfKind,
+  parseFonts,
   parseSelection,
 } from "../lib/editTools";
 import { type Stroke, zoomBox } from "../lib/ink";
@@ -100,9 +103,9 @@ export function Stage() {
   }, [editing, editTool, editStyles, postToEditor]);
   const restyle = (changes: EditStyle) => {
     const selection = editFrames.selection;
-    // Restyling also sets how the next one of its kind looks.
+    // Restyling also sets how the next one of its kind looks; styling a few words does not.
     const family = selection ? familyOfKind(selection.kind) : familyOf(editTool);
-    if (family) useApp.getState().setEditStyle(family, changes);
+    if (family && !selection?.editing) useApp.getState().setEditStyle(family, defaultsFrom(changes));
     if (selection) postToEditor({ type: "slop:edit-style", style: changes });
   };
   const toggleEditing = () => {
@@ -130,8 +133,13 @@ export function Stage() {
             styles={editStyles}
             sizeMode={editFrames.sizeMode}
             onSizeMode={editFrames.setSizeMode}
+            fonts={editFrames.fonts}
+            slides={deck?.slides.map((s, i) => ({ id: s.id, label: `${i + 1}. ${s.id}` })) ?? []}
             onTool={(tool) => useApp.getState().setEditTool(tool)}
             onStyle={restyle}
+            onList={(list) => postToEditor({ type: "slop:edit-list", list })}
+            onLink={(href) => postToEditor({ type: "slop:edit-link", href })}
+            onReturnFocus={editFrames.focus}
             onOrder={(to) => postToEditor({ type: "slop:edit-order", to })}
             onDelete={editFrames.deleteSelection}
           />
@@ -499,6 +507,8 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
   const [overflow, setOverflow] = useState<{ slide: string; items: string[] } | null>(null);
   // What the editor has selected, and on which slide.
   const [selection, setSelection] = useState<{ slide: string; selection: EditSelection | null } | null>(null);
+  // The fonts the deck's styles use, for the toolbar's font list.
+  const [fonts, setFonts] = useState<FontChoice[]>(NO_FONTS);
 
   useEffect(() => {
     const paste = async () => {
@@ -558,6 +568,18 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
       } else if (data?.type === "slop:edit-tool" && data.slide === selected && typeof data.tool === "string") {
         // The editor put its tool away by itself (after adding a shape, or on Escape).
         if (data.tool in TOOL_NAMES) useApp.getState().setEditTool(data.tool as EditTool);
+      } else if (data?.type === "slop:edit-fonts" && data.slide === selected) {
+        setFonts(parseFonts(data.fonts));
+      } else if (data?.type === "slop:edit-paste-request" && data.slide === selected) {
+        // ⌘⇧V while typing: the clipboard's text, without its formatting.
+        api
+          .readClipboardText()
+          .then((text) => {
+            if (useApp.getState().editing && text) {
+              frame.current?.contentWindow?.postMessage({ type: "slop:edit-insert-text", text }, "*");
+            }
+          })
+          .catch((error) => useApp.getState().setError(errorMessage(error)));
       } else if (data?.type === "slop:edit-copied" && data.slide === selected && typeof data.html === "string") {
         api
           .copyToClipboard(data.html, String(data.text ?? ""))
@@ -579,11 +601,20 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
         event.preventDefault();
       }
     };
+    // A press anywhere in the app but the edit toolbar ends typing in the slide, keeping the
+    // text; the toolbar restyles the text being typed (see editor.js).
+    const onPress = (event: PointerEvent) => {
+      if (!useApp.getState().editing) return;
+      if ((event.target as Element | null)?.closest?.("[data-edit-toolbar]")) return;
+      frame.current?.contentWindow?.postMessage({ type: "slop:edit-finish" }, "*");
+    };
     window.addEventListener("message", onMessage);
     window.addEventListener("keydown", onKey);
+    window.addEventListener("pointerdown", onPress, true);
     return () => {
       window.removeEventListener("message", onMessage);
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("pointerdown", onPress, true);
     };
   }, [areaRef]);
 
@@ -642,6 +673,10 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
     selection: editing && selection?.slide === current ? selection.selection : null,
     /** Sends a message to the slide editor in the preview. */
     post,
+    /** The fonts the deck uses. */
+    fonts,
+    /** Gives focus back to the slide, as after typing a value into the toolbar. */
+    focus: () => frame.current?.focus(),
     deleteSelection: () => post({ type: "slop:edit-delete" }),
     onFrameReady: (loaded: HTMLIFrameElement) => {
       frame.current = loaded;
@@ -668,6 +703,7 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
 }
 
 const NO_OVERFLOW: string[] = [];
+const NO_FONTS: FontChoice[] = [];
 const TOOL_NAMES: Record<EditTool, true> = {
   select: true,
   text: true,

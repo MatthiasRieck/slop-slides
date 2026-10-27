@@ -43,6 +43,11 @@ jobs:
         with:
           workspaces: src-tauri -> target
       - run: pnpm install --frozen-lockfile
+      # Name the artifacts after the tag: v1.2.3 builds SlopSlide_1.2.3_... instead of the
+      # version checked into tauri.conf.json.
+      - name: Set version from tag
+        if: github.ref_type == 'tag'
+        run: node scripts/setVersion.ts ${{ github.ref_name }}
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -27,8 +27,11 @@ describe("macOS bundle config", () => {
     expect(conf.bundle.macOS.minimumSystemVersion).toBe("10.15");
   });
 
-  it("keeps signing identities out of the checked-in config", () => {
-    expect(conf.bundle.macOS.signingIdentity).toBeUndefined();
+  it("signs ad hoc unless a real identity comes from the environment", () => {
+    // Without an identity the app only carries the linker's ad-hoc signature, which seals no
+    // resources, and Gatekeeper reports downloaded builds as "damaged". "-" signs the whole
+    // bundle ad hoc; APPLE_SIGNING_IDENTITY overrides it, so real identities stay out of git.
+    expect(conf.bundle.macOS.signingIdentity).toBe("-");
   });
 
   it("keeps the local signing settings out of git", () => {

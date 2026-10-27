@@ -51,6 +51,8 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Without these, macOS builds are signed ad hoc (bundle.macOS.signingIdentity "-"), so
+          # downloads open via System Settings → Privacy & Security → Open Anyway.
           # For signed/notarized macOS builds, add APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD,
           # APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID secrets.
         with:

@@ -2,18 +2,28 @@
 
 use std::path::PathBuf;
 
-/// GUI apps on macOS and Linux start with a minimal PATH. Adopt the user's login-shell
-/// PATH so `claude` (and the tools it shells out to) resolve as they do in a terminal.
-pub fn adopt_login_shell_path() {
+const MARKER: &str = "__SLOPSLIDE_ENV__";
+
+/// Shell bookkeeping that describes the probe shell, not the user's environment.
+const SKIPPED: &[&str] = &["PWD", "OLDPWD", "SHLVL", "_"];
+
+/// GUI apps on macOS and Linux start with a minimal environment. Adopt the user's login-shell
+/// environment so `claude` (and the tools it shells out to) resolve as they do in a terminal,
+/// and see what the terminal sees: PATH, but also proxy settings (`HTTPS_PROXY`, `NO_PROXY`),
+/// custom CA bundles (`NODE_EXTRA_CA_CERTS`) and provider config exported in shell profiles.
+pub fn adopt_login_shell_env() {
     #[cfg(unix)]
     {
+        use std::io::Read;
         use std::process::{Command, Stdio};
-        use std::time::{Duration, Instant};
+        use std::time::Duration;
 
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-        let marker = "__SLOPSLIDE_PATH__";
         let Ok(mut child) = Command::new(shell)
-            .args(["-ilc", &format!("printf '{marker}%s{marker}' \"$PATH\"")])
+            .args([
+                "-ilc",
+                &format!("printf '{MARKER}'; /usr/bin/env -0; printf '{MARKER}'"),
+            ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -21,27 +31,38 @@ pub fn adopt_login_shell_path() {
         else {
             return;
         };
+        // Drain stdout on a thread so a large environment cannot fill the pipe and stall the shell.
+        let mut stdout = child.stdout.take().expect("stdout is piped");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut out = Vec::new();
+            let _ = stdout.read_to_end(&mut out);
+            let _ = tx.send(out);
+        });
         // A misbehaving shell profile must not hang app startup.
-        let deadline = Instant::now() + Duration::from_secs(4);
-        while Instant::now() < deadline {
-            match child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) => std::thread::sleep(Duration::from_millis(25)),
-                Err(_) => return,
-            }
-        }
-        if child.try_wait().ok().flatten().is_none() {
+        let Ok(out) = rx.recv_timeout(Duration::from_secs(4)) else {
             let _ = child.kill();
-            return;
-        }
-        let Ok(output) = child.wait_with_output() else {
+            let _ = child.wait();
             return;
         };
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if let Some(path) = stdout.split(marker).nth(1).filter(|p| !p.is_empty()) {
-            std::env::set_var("PATH", path);
+        let _ = child.wait();
+        for (key, value) in parse_env(&String::from_utf8_lossy(&out)) {
+            std::env::set_var(key, value);
         }
     }
+}
+
+/// The variables between the markers of `env -0` output, minus shell bookkeeping. Anything a
+/// profile prints before or after (banners, motd) falls outside the markers and is ignored.
+fn parse_env(stdout: &str) -> Vec<(&str, &str)> {
+    let Some(block) = stdout.split(MARKER).nth(1) else {
+        return Vec::new();
+    };
+    block
+        .split('\0')
+        .filter_map(|entry| entry.split_once('='))
+        .filter(|(key, _)| !key.is_empty() && !SKIPPED.contains(key))
+        .collect()
 }
 
 pub fn resolve_claude() -> Option<PathBuf> {
@@ -84,6 +105,64 @@ fn resolve_cli(name: &str, override_var: &str, extra: &[&str]) -> Option<PathBuf
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn probe(env: &str) -> String {
+        format!("Welcome!\n{MARKER}{env}{MARKER}bye\n")
+    }
+
+    #[test]
+    fn adopts_proxy_and_path_from_the_login_shell() {
+        let out = probe(
+            "PATH=/opt/homebrew/bin:/usr/bin\0HTTPS_PROXY=http://proxy.corp:8080\0\
+             no_proxy=localhost,.corp\0NODE_EXTRA_CA_CERTS=/etc/corp.pem\0",
+        );
+        assert_eq!(
+            parse_env(&out),
+            vec![
+                ("PATH", "/opt/homebrew/bin:/usr/bin"),
+                ("HTTPS_PROXY", "http://proxy.corp:8080"),
+                ("no_proxy", "localhost,.corp"),
+                ("NODE_EXTRA_CA_CERTS", "/etc/corp.pem"),
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_values_with_newlines_and_equals_signs() {
+        let out = probe("MULTI=line one\nline two\0OPTS=--a=b\0");
+        assert_eq!(
+            parse_env(&out),
+            vec![("MULTI", "line one\nline two"), ("OPTS", "--a=b")]
+        );
+    }
+
+    #[test]
+    fn skips_shell_bookkeeping_and_malformed_entries() {
+        let out = probe("PWD=/tmp\0OLDPWD=/\0SHLVL=2\0_=/usr/bin/env\0=x\0junk\0HOME=/Users/me\0");
+        assert_eq!(parse_env(&out), vec![("HOME", "/Users/me")]);
+    }
+
+    #[test]
+    fn ignores_output_without_markers() {
+        assert!(parse_env("zsh: command not found: env\n").is_empty());
+        assert!(parse_env("").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_real_shell_round_trips_through_the_parser() {
+        let out = std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                &format!(
+                    "printf '{MARKER}'; SLOPSLIDE_PROBE='a b=c' /usr/bin/env -0; printf '{MARKER}'"
+                ),
+            ])
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(parse_env(&stdout).contains(&("SLOPSLIDE_PROBE", "a b=c")));
+    }
 
     // The only test that touches SLOPSLIDE_CLAUDE_PATH, so parallel tests cannot race on it.
     #[test]

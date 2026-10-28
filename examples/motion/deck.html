@@ -191,6 +191,19 @@ html[data-slop-static] *::after {
     animation: none !important;
   }
 }
+
+/* Matched heroes move between click states; slide fades must not delay the snapshot. */
+html:active-view-transition .deck > .slide {
+  transition: none !important;
+}
+::view-transition-group(*) {
+  animation-duration: 550ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 220ms;
+}
 /* Stage size: 1920x1080 (the deck's slopslide-size meta). */
 :root {
   --slop-w: 1920px;
@@ -233,7 +246,7 @@ p {font-size:34px;line-height:1.45;max-width:720px;color:#b4bcae}
 .wide .hero {left:740px;top:110px;width:800px;height:800px}
 .wide h1 {font-size:84px;max-width:560px}
 footer {position:absolute;bottom:60px;font-size:22px;color:#b4bcae}
-</style></head><body><main class="deck"><section class="slide" id="introduce"><div class="copy"><div class="kicker">Orbit / Motion study</div><h1 style="height: 339px;">dfsdfsf</h1><p>A familiar object. A new point of view.</p></div><img class="hero" data-morph="orbit" src="assets/orbit.svg" alt="Green spherical object with a tilted ivory orbit" style="translate: -21px -71px;" data-moved=""><footer>01 / 04 · Click right to continue · Click left to go back</footer></section><section class="slide " id="reveal"><div class="copy"><div class="kicker">Orbit / Motion study</div><h1>Meet Orbit.</h1><p>A familiar object. A new point of view.<br><strong style="color:#e7ffb5">One small reveal, one deliberate click.</strong></p></div><img class="hero" data-morph="orbit" src="assets/orbit.svg" alt="Green spherical object with a tilted ivory orbit"><footer>02 / 04 · Click right to continue · Click left to go back</footer></section><section class="slide detail" id="detail"><div class="copy"><div class="kicker">Orbit / Motion study</div><h1>Make room<br>for the story.</h1><p>The same image moves left and grows. The layout changes; the visual thread stays.</p></div><img class="hero" data-morph="orbit" src="assets/orbit.svg" alt="Green spherical object with a tilted ivory orbit"><footer>03 / 04 · Click right to continue · Click left to go back</footer></section><section class="slide wide" id="focus"><div class="copy"><div class="kicker">Orbit / Motion study</div><h1>Let the<br>object lead.</h1><p>A third composition. Go back to see the movement reverse.</p></div><img class="hero" data-morph="orbit" src="assets/orbit.svg" alt="Green spherical object with a tilted ivory orbit" style="translate: 157px 2px; transform: perspective(1000px) rotateX(14deg) rotateY(-44deg) !important;" data-moved=""><footer>04 / 04 · Click right to continue · Click left to go back</footer></section></main>  <!-- slopslide:runtime-js (managed by SlopSlide, do not edit) -->
+</style></head><body><main class="deck"><section class="slide" id="introduce"><div class="copy"><div class="kicker">Orbit / Motion study</div><h1>Meet Orbit.</h1><p>A familiar object. A new point of view.</p></div><img class="hero" data-morph="orbit" src="assets/orbit.svg" alt="Green spherical object with a tilted ivory orbit" style="translate: -21px -71px;" data-moved=""><footer>01 / 04 · Click right to continue · Click left to go back</footer></section><section class="slide " id="reveal"><div class="copy"><div class="kicker">Orbit / Motion study</div><h1>Meet Orbit.</h1><p>A familiar object. A new point of view.<br><strong style="color:#e7ffb5">One small reveal, one deliberate click.</strong></p></div><img class="hero" data-morph="orbit" src="assets/orbit.svg" alt="Green spherical object with a tilted ivory orbit"><footer>02 / 04 · Click right to continue · Click left to go back</footer></section><section class="slide detail" id="detail"><div class="copy"><div class="kicker">Orbit / Motion study</div><h1>Make room<br>for the story.</h1><p>The same image moves left and grows. The layout changes; the visual thread stays.</p></div><img class="hero" data-morph="orbit" src="assets/orbit.svg" alt="Green spherical object with a tilted ivory orbit"><footer>03 / 04 · Click right to continue · Click left to go back</footer></section><section class="slide wide" id="focus"><div class="copy"><div class="kicker">Orbit / Motion study</div><h1>Let the<br>object lead.</h1><p>A third composition. Go back to see the movement reverse.</p></div><img class="hero" data-morph="orbit" src="assets/orbit.svg" alt="Green spherical object with a tilted ivory orbit" style="translate: 157px 2px; transform: perspective(1000px) rotateX(14deg) rotateY(-44deg) !important;" data-moved=""><footer>04 / 04 · Click right to continue · Click left to go back</footer></section></main>  <!-- slopslide:runtime-js (managed by SlopSlide, do not edit) -->
   <script>
 /* SlopSlide player. Keys: ←/→, space, PageUp/PageDown, Home/End, F for full screen, R for review marks. */
 (function () {
@@ -285,13 +298,47 @@ footer {position:absolute;bottom:60px;font-size:22px;color:#b4bcae}
     return isNaN(n) ? 0 : Math.min(slides.length - 1, Math.max(0, n - 1));
   }
 
+  var transition = null;
+  function morphNames(slide, enabled) {
+    var seen = Object.create(null);
+    Array.prototype.forEach.call(slide.querySelectorAll("[data-morph]"), function (el) {
+      var key = el.getAttribute("data-morph");
+      // Invalid or duplicate names must not break the whole browser transition.
+      var valid = /^[a-z][a-z0-9-]*$/.test(key) && !seen[key];
+      seen[key] = true;
+      el.style.viewTransitionName = enabled && valid ? "slop-" + key : "";
+    });
+  }
+
   function show(index) {
     index = Math.min(slides.length - 1, Math.max(0, index));
     if (index === current) return;
+    var previous = current;
     current = index;
-    slides.forEach(function (el, i) {
-      el.classList.toggle("active", i === index);
-    });
+    if (transition) transition.skipTransition();
+    var motion = !window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var canMorph = previous >= 0 && !embed && !params.has("static") && motion &&
+      document.startViewTransition && slides[index].querySelector("[data-morph]") &&
+      slides[previous].querySelector("[data-morph]");
+    function update() {
+      if (current !== index) return;
+      slides.forEach(function (el, i) {
+        morphNames(el, !!canMorph && i === index);
+        el.classList.toggle("active", i === index);
+      });
+    }
+    if (canMorph) {
+      morphNames(slides[previous], true);
+      var next = document.startViewTransition(update);
+      transition = next;
+      // A rejected snapshot (e.g. duplicate author CSS names) still switches the slide.
+      next.ready.catch(function () {});
+      next.finished.catch(function () {}).then(function () {
+        if (transition !== next) return;
+        transition = null;
+        slides.forEach(function (el) { morphNames(el, false); });
+      });
+    } else update();
     if (embed) return;
     var id = slides[index].id || String(index + 1);
     try {

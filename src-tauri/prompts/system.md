@@ -150,7 +150,9 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   on each slide the same `data-morph="product"`. Names must start with a lowercase letter
   and contain only lowercase letters, digits and hyphens; use each name once per slide.
   Match the image source and use layout classes to change position and size. No slide-group
-  marker is needed. Avoid nesting matched elements or adding `reveal` to them.
+  marker is needed. Avoid nesting matched elements or adding `reveal` to them. When the user
+  asks for a hero animation, an element that moves between slides, or a build, use this (see
+  "Hero Morphs" in the design reference).
   The presenter and standalone player morph in supporting browsers, falling back to slide
   fades elsewhere; reduced motion and editor thumbnails skip morphing.
 - Speaker notes, if requested, go in `<aside class="notes">…</aside>` inside the slide

@@ -1881,6 +1881,30 @@ mod tests {
         assert!(out.contains(RUNTIME_JS));
     }
 
+    /// Example decks open straight in a browser with their embedded runtime, so it must be the
+    /// current one (a deck saved by an older build loses newer player features, like morphs).
+    /// Run with SLOP_UPDATE_EXAMPLES=1 to refresh them.
+    #[test]
+    fn example_decks_embed_the_current_runtime() {
+        let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
+        for entry in std::fs::read_dir(&examples).unwrap() {
+            let path = entry.unwrap().path().join("deck.html");
+            let Ok(html) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let current = ensure_runtime(&html);
+            if std::env::var_os("SLOP_UPDATE_EXAMPLES").is_some() {
+                std::fs::write(&path, &current).unwrap();
+            } else {
+                assert!(
+                    html == current,
+                    "{} embeds a stale runtime; rerun with SLOP_UPDATE_EXAMPLES=1",
+                    path.display()
+                );
+            }
+        }
+    }
+
     #[test]
     fn inlines_cropped_css_backgrounds() {
         // Crops are CSS backgrounds with offsets; the same image can back several crops.

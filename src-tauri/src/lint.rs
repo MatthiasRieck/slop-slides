@@ -1117,6 +1117,24 @@ mod tests {
     }
 
     #[test]
+    fn the_hero_morph_example_in_the_design_reference_is_clean() {
+        let reference = include_str!("../prompts/design-reference.md");
+        let section = &reference[reference.find("## Hero Morphs").unwrap()..];
+        let start = section.find("```html\n").unwrap() + "```html\n".len();
+        let example = &section[start..start + section[start..].find("```").unwrap()];
+        let (style, slides) = example.split_at(example.find("<section").unwrap());
+        let html = deck(slides).replace("<style>.slide {}</style>", style.trim());
+        assert_eq!(
+            lint(&html, |_| true, &[])
+                .into_iter()
+                .map(|i| i.rule)
+                .collect::<Vec<_>>(),
+            Vec::<&str>::new()
+        );
+        assert_eq!(example.matches(r#"data-morph="orbit""#).count(), 3);
+    }
+
+    #[test]
     fn a_clean_deck_passes() {
         let html = deck(
             r#"<section class="slide" id="intro">

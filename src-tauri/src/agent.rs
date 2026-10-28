@@ -1540,6 +1540,12 @@ mod tests {
             "system.md points at the reference by its title"
         );
         assert!(
+            include_str!("../prompts/system.md")
+                .contains("\"Hero Morphs\" in the design reference")
+                && include_str!("../prompts/design-reference.md").contains("\n## Hero Morphs\n"),
+            "the morph rule points at the reference's worked example"
+        );
+        assert!(
             !SYSTEM_PROMPT.contains("Style Presets")
                 && !SYSTEM_PROMPT.contains("Animation Patterns"),
             "styles live in the templates, not in the prompt"

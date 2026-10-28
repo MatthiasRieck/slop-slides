@@ -42,6 +42,51 @@ from { opacity: 0; filter: blur(10px); }     /* blur in */
 A `clip-path` wipe needs an explicit last frame (`to { opacity: 1; clip-path: inset(-20px); }`),
 since `none` does not animate.
 
+## Hero Morphs
+
+A hero morph carries one element (a product shot, a logo, a chart) across consecutive slides:
+on each click it glides and resizes from its place on one slide to its place on the next,
+while the rest of the slide crossfades. Use it for a sequence that builds on one subject, such as
+introduce → explain → zoom in, not for unrelated slides. Two to five steps read well.
+
+Each step is a full slide that repeats the hero with the same `data-morph` name and the same
+`src`. One base rule places it, and a layout class on the slide moves and resizes it, so the
+morph comes from the layout change:
+
+```html
+<style>
+.hero { position: absolute; left: 1110px; top: 190px; width: 660px; height: 660px; }
+.detail .hero { left: 120px; top: 170px; width: 740px; height: 740px; }  /* left and larger */
+.detail .copy { margin-left: 920px; }                                     /* text makes room */
+.focus .hero { left: 560px; top: 90px; width: 900px; height: 900px; }    /* center stage */
+</style>
+<section class="slide" id="orbit-intro">
+  <div class="copy"><h1>Meet Orbit.</h1></div>
+  <img class="hero" data-morph="orbit" src="assets/orbit.png" alt="Orbit">
+</section>
+<section class="slide detail" id="orbit-detail">
+  <div class="copy"><h1>Make room for the story.</h1><p>…</p></div>
+  <img class="hero" data-morph="orbit" src="assets/orbit.png" alt="Orbit">
+</section>
+<section class="slide focus" id="orbit-focus">
+  <img class="hero" data-morph="orbit" src="assets/orbit.png" alt="Orbit">
+</section>
+```
+
+- Change position, size, and rotation between steps; keep the element's look the same. Its
+  two snapshots crossfade during the move, so a different image or recolor shows as a blend,
+  and a different aspect ratio stretches it.
+- Morph whole elements: images, shapes, a card, a heading whose text is unchanged. Text that
+  changes size reflows and stretches while it moves. Changing copy belongs outside the hero
+  and simply crossfades.
+- Several elements can morph at once, each with its own name (`data-morph="logo"`,
+  `data-morph="price"`). Use each name once per slide and do not nest morphing elements.
+- A staged reveal without movement is the same pattern: repeat the slide and add one
+  element per step; what stays the same stays put.
+- Leave `reveal` off morphing elements; other elements on the slide can still use it.
+- The runtime sets the timing (about half a second, ease-out), and going back plays the move in
+  reverse. Editor thumbnails and reduced motion show each step without movement.
+
 ## Background Devices
 
 ```css

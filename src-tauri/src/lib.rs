@@ -601,7 +601,7 @@ pub fn run() {
             .map_or_else(|| ".".into(), std::path::PathBuf::from);
         return mcp::serve(&dir);
     }
-    env::adopt_login_shell_path();
+    env::adopt_login_shell_env();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())

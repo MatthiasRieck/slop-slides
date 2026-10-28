@@ -195,13 +195,18 @@ describe("hidden slides in the rail", () => {
     useApp.setState({ deck: deckFor(HIDDEN_HTML) });
   });
 
-  it("mutes hidden slides and strikes them through", () => {
+  it("mutes hidden slides and marks them with a closed eye", () => {
     render(<SlideRail />);
     const [intro, , outro] = items() as [HTMLElement, HTMLElement, HTMLElement];
     expect(thumbnail(outro).className).toMatch(/opacity-35/);
     expect(thumbnail(outro).className).toMatch(/grayscale/);
-    expect(within(outro).getByTestId("hidden-mark")).toBeTruthy();
-    expect(within(outro).getByText("3").className).toMatch(/line-through/);
+    const mark = within(outro).getByTestId("hidden-mark");
+    expect(mark.getAttribute("aria-label")).toBe("Hidden slide");
+    // A closed eye (lid and lashes), not a strike through the slide or its number.
+    expect(mark.querySelectorAll("path")).toHaveLength(2);
+    expect(mark.querySelector("line")).toBeNull();
+    expect(within(outro).getByText("3").className).not.toMatch(/line-through/);
+    expect(within(outro).getByText("3").className).toMatch(/opacity-60/);
 
     expect(thumbnail(intro).className).not.toMatch(/opacity-35/);
     expect(within(intro).queryByTestId("hidden-mark")).toBeNull();

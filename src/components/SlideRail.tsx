@@ -353,7 +353,7 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
         className={cn(
           "w-4 shrink-0 pt-0.5 text-right text-2xs tabular-nums text-muted-foreground",
           selected && "font-semibold text-foreground",
-          slide.hidden && "line-through opacity-60",
+          slide.hidden && "opacity-60",
         )}
       >
         {index + 1}
@@ -408,19 +408,25 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
   );
 }
 
-/** Diagonal strike across a hidden slide's thumbnail. */
+/** A closed eye over a hidden slide's thumbnail. */
 function HiddenMark() {
   return (
-    <svg
-      data-testid="hidden-mark"
-      aria-label="Hidden slide"
-      role="img"
-      viewBox="0 0 16 9"
-      preserveAspectRatio="none"
-      className="pointer-events-none absolute inset-0 size-full overflow-hidden rounded-md text-muted-foreground"
-    >
-      <line x1="0" y1="9" x2="16" y2="0" stroke="currentColor" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-    </svg>
+    <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-foreground/80">
+      <svg
+        data-testid="hidden-mark"
+        aria-label="Hidden slide"
+        role="img"
+        viewBox="2 8 20 11"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        className="h-1/3 max-h-8 drop-shadow"
+      >
+        <path d="M3 10q9 8 18 0" />
+        <path d="M6.6 12.6 5 15.6M10.2 13.8l-.6 3.4M13.8 13.8l.6 3.4M17.4 12.6l1.6 3" />
+      </svg>
+    </div>
   );
 }
 

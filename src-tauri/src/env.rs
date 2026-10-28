@@ -2,9 +2,11 @@
 
 use std::path::PathBuf;
 
+#[cfg(any(unix, test))]
 const MARKER: &str = "__SLOPSLIDE_ENV__";
 
 /// Shell bookkeeping that describes the probe shell, not the user's environment.
+#[cfg(any(unix, test))]
 const SKIPPED: &[&str] = &["PWD", "OLDPWD", "SHLVL", "_"];
 
 /// GUI apps on macOS and Linux start with a minimal environment. Adopt the user's login-shell
@@ -54,6 +56,7 @@ pub fn adopt_login_shell_env() {
 
 /// The variables between the markers of `env -0` output, minus shell bookkeeping. Anything a
 /// profile prints before or after (banners, motd) falls outside the markers and is ignored.
+#[cfg(any(unix, test))]
 fn parse_env(stdout: &str) -> Vec<(&str, &str)> {
     let Some(block) = stdout.split(MARKER).nth(1) else {
         return Vec::new();

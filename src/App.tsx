@@ -12,11 +12,14 @@ import { SlideImageExport } from "./components/SlideImageExport";
 import { SlideRail } from "./components/SlideRail";
 import { Stage } from "./components/Stage";
 import { TopBar } from "./components/TopBar";
+import { api, errorMessage } from "./lib/api";
+import { isMac } from "./lib/utils";
 import { useApp } from "./store";
 
 export function App() {
   const workspace = useApp((s) => s.workspace);
   const presenting = useApp((s) => s.presenting);
+  useNewWindowKey();
 
   return (
     <>
@@ -26,6 +29,20 @@ export function App() {
       <ErrorToast />
     </>
   );
+}
+
+/** Ctrl+N opens another window; on macOS, ⌘N is File › New Window in the menu bar. */
+export function useNewWindowKey() {
+  useEffect(() => {
+    if (isMac) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || event.shiftKey || event.altKey || event.metaKey || event.key.toLowerCase() !== "n") return;
+      event.preventDefault();
+      api.newWindow().catch((error) => useApp.getState().setError(errorMessage(error)));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 }
 
 /**

@@ -22,12 +22,13 @@ mod size;
 mod templates;
 mod voice;
 mod watcher;
+mod windows;
 mod workspace;
 
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, State, Window};
 
 use agent::{AgentManager, SendArgs};
 use deck::Deck;
@@ -40,19 +41,21 @@ fn sessions() -> Result<Sessions> {
     Ok(Sessions::new(&deck::app_home()?))
 }
 
-/// The deck's current session, starting one if it has none.
-fn session(open: &OpenWorkspace) -> Result<PathBuf> {
-    sessions()?.current_or_start(&workspace_root(open)?)
+/// The current session of the window's workspace, starting one if it has none.
+fn session(window: &Window) -> Result<PathBuf> {
+    sessions()?.current_or_start(&workspace_root(window)?)
 }
 
-/// The deck's current session, if it has one.
-fn current_session(open: &OpenWorkspace) -> Result<Option<PathBuf>> {
-    Ok(sessions()?.current(&workspace_root(open)?))
+/// The current session of the window's workspace, if it has one.
+fn current_session(window: &Window) -> Result<Option<PathBuf>> {
+    Ok(sessions()?.current(&workspace_root(window)?))
 }
 
-/// The open workspace's folder.
-fn workspace_root(open: &OpenWorkspace) -> Result<PathBuf> {
-    open.get()
+/// The folder the window has open.
+fn workspace_root(window: &Window) -> Result<PathBuf> {
+    window
+        .state::<OpenWorkspace>()
+        .get(window.label())
         .ok_or_else(|| error::Error::msg("No folder is open."))
 }
 
@@ -78,19 +81,31 @@ struct WorkspaceInfo {
     name: String,
 }
 
-/// Opens a folder as the workspace: the file tree shows it, `slop://` serves from it, and
-/// the watcher reports its changes.
+/// Opens a folder as the window's workspace: the file tree shows it, `slop://` serves from
+/// it, and the watcher reports its changes. A folder open in another window is shown there
+/// instead: two windows on one folder would share (and overwrite) its chat and session.
 #[tauri::command]
 fn open_workspace(
     app: AppHandle,
+    window: Window,
     open: State<OpenWorkspace>,
     watcher: State<WorkspaceWatcher>,
     path: String,
 ) -> Result<WorkspaceInfo> {
     let root = workspace::root(&path)?;
+    if let Some(other) = open.window_with(&root, window.label()) {
+        if let Some(other) = app.get_webview_window(&other) {
+            let _ = other.unminimize();
+            let _ = other.set_focus();
+        }
+        return Err(error::Error::msg(format!(
+            "{} is already open in another window.",
+            workspace::display_name(&root)
+        )));
+    }
     sessions()?.current_or_start(&root)?;
-    open.set(Some(root.clone()));
-    watcher.watch(app, root.clone())?;
+    open.set(window.label(), Some(root.clone()));
+    watcher.watch(app, window.label(), root.clone())?;
     workspace::remember(&deck::app_home()?, &root)?;
     Ok(WorkspaceInfo {
         name: workspace::display_name(&root),
@@ -99,9 +114,23 @@ fn open_workspace(
 }
 
 #[tauri::command]
-fn close_workspace(open: State<OpenWorkspace>, watcher: State<WorkspaceWatcher>) {
-    watcher.stop();
-    open.set(None);
+fn close_workspace(window: Window, open: State<OpenWorkspace>, watcher: State<WorkspaceWatcher>) {
+    watcher.stop(window.label());
+    open.set(window.label(), None);
+}
+
+/// The folder waiting to be opened in this window (see [`windows::open_folder`]), once.
+#[tauri::command]
+fn take_pending_folder(window: Window, pending: State<windows::PendingFolders>) -> Option<String> {
+    pending
+        .take(window.label())
+        .map(|root| root.to_string_lossy().into_owned())
+}
+
+/// Opens another app window on the start screen.
+#[tauri::command]
+fn new_window(app: AppHandle) -> Result<()> {
+    windows::open_new(&app)
 }
 
 #[tauri::command]
@@ -122,23 +151,19 @@ fn library_folder(app: AppHandle) -> Result<String> {
 
 /// One folder of the open workspace (`""` for its root).
 #[tauri::command]
-fn list_dir(open: State<OpenWorkspace>, path: String) -> Result<Vec<workspace::Entry>> {
-    workspace::list_dir(&workspace_root(&open)?, &path)
+fn list_dir(window: Window, path: String) -> Result<Vec<workspace::Entry>> {
+    workspace::list_dir(&workspace_root(&window)?, &path)
 }
 
 /// A file of the open workspace, with the viewer it opens in.
 #[tauri::command]
-fn open_file(open: State<OpenWorkspace>, path: String) -> Result<workspace::OpenedFile> {
-    workspace::open_file(&workspace_root(&open)?, &path)
+fn open_file(window: Window, path: String) -> Result<workspace::OpenedFile> {
+    workspace::open_file(&workspace_root(&window)?, &path)
 }
 
 /// Creates a deck in its own folder at the root of the open workspace.
 #[tauri::command]
-fn create_deck(
-    open: State<OpenWorkspace>,
-    title: String,
-    template: Option<String>,
-) -> Result<Deck> {
+fn create_deck(window: Window, title: String, template: Option<String>) -> Result<Deck> {
     let root = templates::user_root()?;
     let source = template
         .as_deref()
@@ -148,7 +173,7 @@ fn create_deck(
         .as_deref()
         .zip(source.as_deref())
         .map(|(id, html)| deck::TemplateSource { id, html });
-    deck::create(&workspace_root(&open)?, &title, template)
+    deck::create(&workspace_root(&window)?, &title, template)
 }
 
 #[tauri::command]
@@ -158,9 +183,9 @@ fn list_templates() -> Result<Vec<templates::TemplateSummary>> {
 
 /// Copies a template into the deck's session for the agent; returns its absolute path.
 #[tauri::command]
-fn stage_template(open: State<OpenWorkspace>, id: String, template: String) -> Result<String> {
+fn stage_template(window: Window, id: String, template: String) -> Result<String> {
     deck::deck_file(&id)?;
-    templates::stage(&session(&open)?, &templates::user_root()?, &template)
+    templates::stage(&session(&window)?, &templates::user_root()?, &template)
 }
 
 /// Gives a deck without slides the template's styles.
@@ -195,13 +220,13 @@ fn create_template(id: String, name: String) -> Result<templates::TemplateSummar
 }
 
 #[tauri::command]
-fn open_deck(open: State<OpenWorkspace>, agent: State<AgentManager>, id: String) -> Result<Deck> {
+fn open_deck(window: Window, agent: State<AgentManager>, id: String) -> Result<Deck> {
     let file = deck::deck_file(&id)?;
-    let session = current_session(&open)?;
+    let session = current_session(&window)?;
     deck::open(
         &file,
         session.as_deref(),
-        !agent.is_running(&workspace_root(&open)?.to_string_lossy()),
+        !agent.is_running(&workspace_root(&window)?.to_string_lossy()),
     )
 }
 
@@ -238,14 +263,9 @@ fn duplicate_slide(id: String, slide: String) -> Result<CreatedSlide> {
 }
 
 #[tauri::command]
-fn set_slide_hidden(
-    open: State<OpenWorkspace>,
-    id: String,
-    slide: String,
-    hidden: bool,
-) -> Result<Deck> {
+fn set_slide_hidden(window: Window, id: String, slide: String, hidden: bool) -> Result<Deck> {
     let file = deck::deck_file(&id)?;
-    deck::set_slide_hidden(&file, current_session(&open)?.as_deref(), &slide, hidden)
+    deck::set_slide_hidden(&file, current_session(&window)?.as_deref(), &slide, hidden)
 }
 
 /// Gives every slide of the deck the canvas `size`.
@@ -255,14 +275,9 @@ fn set_slide_size(id: String, size: size::SlideSize) -> Result<Deck> {
 }
 
 #[tauri::command]
-fn set_slide_locked(
-    open: State<OpenWorkspace>,
-    id: String,
-    slide: String,
-    locked: bool,
-) -> Result<Deck> {
+fn set_slide_locked(window: Window, id: String, slide: String, locked: bool) -> Result<Deck> {
     let file = deck::deck_file(&id)?;
-    deck::set_slide_locked(&file, current_session(&open)?.as_deref(), &slide, locked)
+    deck::set_slide_locked(&file, current_session(&window)?.as_deref(), &slide, locked)
 }
 
 #[tauri::command]
@@ -281,38 +296,44 @@ fn delete_section(id: String, index: usize) -> Result<Deck> {
 }
 
 #[tauri::command]
-fn delete_slide(open: State<OpenWorkspace>, id: String, slide: String) -> Result<Deck> {
+fn delete_slide(window: Window, id: String, slide: String) -> Result<Deck> {
     let file = deck::deck_file(&id)?;
-    deck::delete_slide(&file, &session(&open)?, &slide)
+    deck::delete_slide(&file, &session(&window)?, &slide)
 }
 
 /// Saves a slide edited on the stage (text edits, moved elements). `base` is its hash when
 /// the edit started.
 #[tauri::command]
 fn update_slide(
-    open: State<OpenWorkspace>,
+    window: Window,
     id: String,
     slide: String,
     markup: String,
     base: String,
 ) -> Result<UpdatedSlide> {
     let file = deck::deck_file(&id)?;
-    let (deck, previous) = deck::update_slide(&file, &session(&open)?, &slide, &markup, &base)?;
+    let (deck, previous) = deck::update_slide(&file, &session(&window)?, &slide, &markup, &base)?;
     Ok(UpdatedSlide { deck, previous })
 }
 
 #[tauri::command]
 fn save_deck_source(
-    open: State<OpenWorkspace>,
+    window: Window,
     agent: State<AgentManager>,
     id: String,
     source: String,
     base: Option<String>,
 ) -> Result<Deck> {
     // Normalizing mid-turn could rewrite ids the agent is about to reference.
-    let normalize = !agent.is_running(&workspace_root(&open)?.to_string_lossy());
+    let normalize = !agent.is_running(&workspace_root(&window)?.to_string_lossy());
     let file = deck::deck_file(&id)?;
-    deck::save_source(&file, &session(&open)?, &source, base.as_deref(), normalize)
+    deck::save_source(
+        &file,
+        &session(&window)?,
+        &source,
+        base.as_deref(),
+        normalize,
+    )
 }
 
 fn asset_target(root: &Path, id: &str) -> Result<PathBuf> {
@@ -328,32 +349,45 @@ fn asset_target(root: &Path, id: &str) -> Result<PathBuf> {
 }
 
 #[tauri::command]
-fn import_assets(
-    open: State<OpenWorkspace>,
-    id: String,
-    paths: Vec<String>,
-) -> Result<Vec<String>> {
-    let root = workspace_root(&open)?;
+fn import_assets(window: Window, id: String, paths: Vec<String>) -> Result<Vec<String>> {
+    let root = workspace_root(&window)?;
     let target = asset_target(&root, &id)?;
     deck::import_assets(&target, paths)
 }
 
 #[tauri::command]
-fn save_asset(
-    open: State<OpenWorkspace>,
-    id: String,
-    name: String,
-    data: String,
-) -> Result<String> {
-    let root = workspace_root(&open)?;
+fn save_asset(window: Window, id: String, name: String, data: String) -> Result<String> {
+    let root = workspace_root(&window)?;
     let target = asset_target(&root, &id)?;
     deck::save_asset(&target, &name, &data)
 }
 
-/// Puts an element copied in the slide editor on the system clipboard.
+/// Puts an element copied in the slide editor of deck `id` on the system clipboard.
 #[tauri::command]
-fn copy_to_clipboard(html: String, text: String) -> Result<()> {
+fn copy_to_clipboard(html: String, text: String, id: Option<String>) -> Result<()> {
+    let html = match id {
+        Some(id) => clipboard::with_source(&html, &deck::deck_file(&id)?),
+        None => html,
+    };
     clipboard::write(&html, &text)
+}
+
+/// Puts slide `slide` of deck `id` on the system clipboard, to paste into any deck.
+#[tauri::command]
+fn copy_slide(id: String, slide: String) -> Result<()> {
+    clipboard::copy_slide(&deck::deck_file(&id)?, &slide)
+}
+
+/// Inserts the slide on the system clipboard into deck `id` after `after`, with the assets
+/// it shows; None when the clipboard holds no slide.
+#[tauri::command]
+fn paste_slide(id: String, after: Option<String>) -> Result<Option<CreatedSlide>> {
+    let Some(copied) = clipboard::read_slide()? else {
+        return Ok(None);
+    };
+    let file = deck::deck_file(&id)?;
+    let (deck, slide) = deck::paste_slide(&file, after, copied.deck.as_deref(), &copied.markup)?;
+    Ok(Some(CreatedSlide { deck, slide }))
 }
 
 /// The clipboard's plain text, for pasting into text on a slide without its formatting.
@@ -386,7 +420,7 @@ fn find_in_deck(id: String, query: String, options: find::Options) -> Result<Vec
 /// Replaces `query` with `replacement` in the text of deck `id`'s slides (or of `slides`).
 #[tauri::command]
 fn replace_in_deck(
-    open: State<OpenWorkspace>,
+    window: Window,
     id: String,
     query: String,
     replacement: String,
@@ -396,7 +430,7 @@ fn replace_in_deck(
     let file = deck::deck_file(&id)?;
     let done = deck::replace_text(
         &file,
-        &session(&open)?,
+        &session(&window)?,
         &query,
         &replacement,
         options,
@@ -414,8 +448,8 @@ fn replace_in_deck(
 
 /// What pasting into deck `id` brings in; pasted images are saved into its assets.
 #[tauri::command]
-fn paste_from_clipboard(open: State<OpenWorkspace>, id: String) -> Result<clipboard::Pasted> {
-    let root = workspace_root(&open)?;
+fn paste_from_clipboard(window: Window, id: String) -> Result<clipboard::Pasted> {
+    let root = workspace_root(&window)?;
     let target = asset_target(&root, &id)?;
     clipboard::paste(clipboard::read()?, &target)
 }
@@ -426,16 +460,16 @@ fn export_deck(id: String, dest: String) -> Result<()> {
 }
 
 #[tauri::command]
-fn lint_deck(open: State<OpenWorkspace>, id: String) -> Result<Vec<lint::Issue>> {
+fn lint_deck(window: Window, id: String) -> Result<Vec<lint::Issue>> {
     let file = deck::deck_file(&id)?;
-    deck::lint(&file, current_session(&open)?.as_deref())
+    deck::lint(&file, current_session(&window)?.as_deref())
 }
 
 /// Screenshots `rect` of the window (the sketched-on slide) into the deck's session.
 /// Both are in CSS pixels; `viewport` is the window's size, to find the display scale.
 #[tauri::command]
 async fn capture_sketch(
-    open: State<'_, OpenWorkspace>,
+    window: Window,
     webview: tauri::Webview,
     id: String,
     rect: capture::Rect,
@@ -443,7 +477,7 @@ async fn capture_sketch(
 ) -> Result<String> {
     deck::deck_file(&id)?;
     let png = capture::snapshot(&webview, rect, viewport, capture::SKETCH_WIDTH).await?;
-    deck::save_sketch(&session(&open)?, &png)
+    deck::save_sketch(&session(&window)?, &png)
 }
 
 /// Creates `<parent>/<deck title>` (or `<deck title> 2`, …) for exported slide images.
@@ -602,17 +636,35 @@ pub fn run() {
         return mcp::serve(&dir);
     }
     env::adopt_login_shell_env();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(windows::menu);
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AgentManager::default())
         .manage(WorkspaceWatcher::default())
         .manage(OpenWorkspace::default())
+        .manage(windows::PendingFolders::default())
         .manage(voice::Voice::default())
+        .on_menu_event(|app, event| {
+            if event.id() == windows::NEW_WINDOW_MENU {
+                if let Err(e) = windows::open_new(app) {
+                    eprintln!("{e}");
+                }
+            }
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
+                windows::closed(window);
+            }
+        })
         .register_uri_scheme_protocol("slop", |ctx, request| {
             protocol::handle(ctx.app_handle(), request)
         })
         .invoke_handler(tauri::generate_handler![
+            new_window,
+            take_pending_folder,
             open_workspace,
             close_workspace,
             recent_workspaces,
@@ -640,6 +692,8 @@ pub fn run() {
             import_assets,
             save_asset,
             copy_to_clipboard,
+            copy_slide,
+            paste_slide,
             paste_from_clipboard,
             read_clipboard_text,
             find_in_deck,
@@ -673,10 +727,30 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while running SlopSlide")
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
-                app.state::<voice::Voice>().shutdown();
+        .run(|app, event| match event {
+            tauri::RunEvent::Exit => app.state::<voice::Voice>().shutdown(),
+            // Opening the app again (a double-click in Finder, a click on its Dock icon) opens
+            // another window.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => {
+                if let Err(e) = windows::open_new(app) {
+                    eprintln!("{e}");
+                }
             }
+            // Folders opened with the app from Finder (dropped on its icon, Open With).
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Opened { urls } => {
+                let folders = urls
+                    .iter()
+                    .filter_map(|url| url.to_file_path().ok())
+                    .filter(|path| path.is_dir());
+                for folder in folders {
+                    if let Err(e) = windows::open_folder(app, folder) {
+                        eprintln!("{e}");
+                    }
+                }
+            }
+            _ => {}
         });
 }
 

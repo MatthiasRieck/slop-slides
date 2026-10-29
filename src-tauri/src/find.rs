@@ -143,6 +143,25 @@ pub fn replace(
     }
 }
 
+/// The text of `markup` (a slide) as read, one space between its runs of text: for pasting a
+/// copied slide into other apps.
+pub fn plain_text(markup: &str) -> String {
+    let words: Vec<String> = text_runs(markup, 0..markup.len())
+        .into_iter()
+        .map(|run| {
+            decode(markup, run)
+                .into_iter()
+                .map(|(c, _)| c)
+                .collect::<String>()
+        })
+        .collect();
+    words
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Byte ranges of the text between tags in `range` (one slide), outside comments, raw-text
 /// elements and the editor's placeholders.
 fn text_runs(source: &str, range: Range<usize>) -> Vec<Range<usize>> {
@@ -341,6 +360,13 @@ mod tests {
         format!(
             "<!DOCTYPE html>\n<html>\n<head><title>Plan</title><style>.plan {{}}</style></head>\n<body>\n<main class=\"deck\">\n{body}\n</main>\n</body>\n</html>\n"
         )
+    }
+
+    #[test]
+    fn plain_text_reads_a_slide_as_words() {
+        let slide = "<section class=\"slide\" id=\"a\">\n  <h1>Q3 &amp; more</h1><p>Hello <em>there</em></p>\n  <style>.x{}</style><div data-delete-placeholder>gone</div>\n</section>";
+        assert_eq!(plain_text(slide), "Q3 & more Hello there");
+        assert_eq!(plain_text("<section class=\"slide\"></section>"), "");
     }
 
     const CASE: Options = Options {

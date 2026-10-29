@@ -1296,6 +1296,38 @@ describe("agent events", () => {
     await vi.waitFor(() => expect(failing.useApp.getState().providers).toEqual([]));
   });
 
+  it("opens the folder from Finder waiting for this window, at start and when told", async () => {
+    const store = await freshModule(false);
+    let pending: string | null = "/decks/a";
+    backend({
+      take_pending_folder: () => {
+        const path = pending;
+        pending = null;
+        return path;
+      },
+      open_workspace: ({ path }) => ({ path, name: String(path).split("/").pop() }),
+    });
+    await store.initEventBridge();
+    await vi.waitFor(() => expect(store.useApp.getState().workspace?.path).toBe("/decks/a"));
+    expect(calls("open_workspace")).toEqual([{ path: "/decks/a" }]);
+
+    // Another window's folder: this one has none waiting.
+    listeners.get("folder-pending")?.({ payload: null });
+    await vi.waitFor(() => expect(calls("take_pending_folder")).toHaveLength(2));
+    expect(calls("open_workspace")).toHaveLength(1);
+  });
+
+  it("reports a folder from Finder that cannot be opened", async () => {
+    const store = await freshModule(false);
+    backend({
+      take_pending_folder: () => {
+        throw "no such window";
+      },
+    });
+    await store.initEventBridge();
+    expect(store.useApp.getState().error).toBe("no such window");
+  });
+
   it("streams text into the last reply", async () => {
     const { emit, reply } = await bridged();
     emit({ type: "started", sessionId: "s" });
@@ -2303,6 +2335,39 @@ describe("templates", () => {
     await useApp.getState().applyStyle("swiss");
     expect(useApp.getState().error).toBe("template not found: swiss");
     expect(useApp.getState().composerFill).toBeNull();
+  });
+
+  it("copies the selected slide and pastes one from the clipboard after it", async () => {
+    const useApp = await storeWith(DECK);
+    const next = {
+      ...DECK,
+      slides: [DECK.slides[0], { ...DECK.slides[0], id: "pasted" }, ...DECK.slides.slice(1)],
+    };
+    backend({ paste_slide: () => ({ deck: next, slide: "pasted" }) });
+    await useApp.getState().copySlide();
+    expect(calls("copy_slide")).toEqual([{ id: DECK.id, slide: "intro" }]);
+    expect(await useApp.getState().pasteSlide()).toBe(true);
+    expect(calls("paste_slide")).toEqual([{ id: DECK.id, after: "intro" }]);
+    expect(useApp.getState()).toMatchObject({ deck: next, selected: "pasted" });
+
+    backend({ paste_slide: () => null });
+    expect(await useApp.getState().pasteSlide()).toBe(false);
+    expect(useApp.getState().selected).toBe("pasted");
+  });
+
+  it("pastes a slide at the end without a selection, and reports failures", async () => {
+    const useApp = await storeWith(DECK);
+    useApp.setState({ selected: null });
+    await useApp.getState().copySlide();
+    expect(calls("copy_slide")).toEqual([]);
+    backend({
+      paste_slide: () => {
+        throw "The clipboard holds no slide.";
+      },
+    });
+    expect(await useApp.getState().pasteSlide()).toBe(false);
+    expect(calls("paste_slide")).toEqual([{ id: DECK.id, after: null }]);
+    expect(useApp.getState().error).toBe("The clipboard holds no slide.");
   });
 
   it("copies a layout into a deck that uses the template", async () => {

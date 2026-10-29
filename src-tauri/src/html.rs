@@ -823,6 +823,33 @@ pub fn copy_slide(
     Ok((set_locked(&out, &id, false)?, id))
 }
 
+/// The markup of slide `id`, as it is in the document.
+pub fn slide_markup<'a>(html: &'a str, id: &str) -> Result<&'a str, String> {
+    let slides = find_slides(html);
+    let span = span_of(&slides, id).ok_or_else(|| format!("Slide not found: {id}"))?;
+    Ok(&html[span.range.clone()])
+}
+
+/// Inserts `markup`, one slide copied from a deck (this one or another), after `after`,
+/// keeping its id when the deck does not use it yet. Returns the document and the new id.
+pub fn paste_slide(
+    html: &str,
+    after: Option<&str>,
+    markup: &str,
+) -> Result<(String, String), String> {
+    let markup = markup.trim();
+    let slides = find_slides(markup);
+    let [slide] = slides.as_slice() else {
+        return Err("The clipboard holds no slide.".into());
+    };
+    if slide.range != (0..markup.len()) {
+        return Err("The clipboard holds no slide.".into());
+    }
+    let markup = normalize_ids(markup).unwrap_or_else(|| markup.to_string());
+    let id = find_slides(&markup)[0].id.clone().expect("normalized");
+    copy_slide(html, after, &markup, &id)
+}
+
 /// Name of the `<meta>` naming the template a deck's design comes from:
 /// `<meta name="slopslide-template" content="<template id>">`.
 pub const TEMPLATE_META: &str = "slopslide-template";
@@ -2287,6 +2314,65 @@ mod tests {
             Some("b-2")
         );
         assert!(copy_slide(deck, None, STYLED, "missing").is_err());
+    }
+
+    #[test]
+    fn reads_one_slides_markup() {
+        let deck = "<main class=\"deck\">\n  <section class=\"slide\" id=\"a\"><h1>A</h1></section>\n</main>";
+        assert_eq!(
+            slide_markup(deck, "a").unwrap(),
+            "<section class=\"slide\" id=\"a\"><h1>A</h1></section>"
+        );
+        assert!(slide_markup(deck, "b").is_err());
+    }
+
+    #[test]
+    fn pastes_a_copied_slide_after_the_selected_one() {
+        let deck = "<main class=\"deck\">\n    <section class=\"slide\" id=\"a\">A</section>\n    <section class=\"slide\" id=\"z\">Z</section>\n</main>";
+        let copied = "<section class=\"slide\" id=\"plan\" data-locked><p>Plan</p></section>";
+        let (out, id) = paste_slide(deck, Some("a"), copied).unwrap();
+        assert_eq!(id, "plan", "keeps its id when free");
+        let ids: Vec<_> = find_slides(&out).into_iter().filter_map(|s| s.id).collect();
+        assert_eq!(ids, ["a", "plan", "z"]);
+        assert!(!is_locked(&out, "plan"), "a pasted copy can be changed");
+        assert!(out.contains("    <section class=\"slide\" id=\"plan\""));
+
+        let (again, second) = paste_slide(&out, Some("a"), copied).unwrap();
+        assert_eq!(
+            second, "plan-2",
+            "the same slide pasted twice gets a new id"
+        );
+        let ids: Vec<_> = find_slides(&again)
+            .into_iter()
+            .filter_map(|s| s.id)
+            .collect();
+        assert_eq!(ids, ["a", "plan-2", "plan", "z"]);
+    }
+
+    #[test]
+    fn a_pasted_slide_without_an_id_gets_one() {
+        let deck = "<main class=\"deck\">\n</main>";
+        let (out, id) = paste_slide(
+            deck,
+            None,
+            "  <section class=\"slide\"><p>x</p></section>\n",
+        )
+        .unwrap();
+        assert_eq!(id, "slide-1");
+        assert_eq!(find_slides(&out)[0].id.as_deref(), Some("slide-1"));
+    }
+
+    #[test]
+    fn only_a_single_slide_can_be_pasted() {
+        let deck = "<main class=\"deck\"></main>";
+        for markup in [
+            "<p>Not a slide</p>",
+            "<section class=\"slide\" id=\"a\"></section><section class=\"slide\" id=\"b\"></section>",
+            "<div><section class=\"slide\" id=\"a\"></section></div>",
+            "<section class=\"slide\" id=\"a\"></section><script>x()</script>",
+        ] {
+            assert!(paste_slide(deck, None, markup).is_err(), "{markup}");
+        }
     }
 
     #[test]

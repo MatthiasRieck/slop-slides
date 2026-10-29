@@ -86,8 +86,19 @@ const CASES = [
     "copyToClipboard",
     () => api.copyToClipboard("<p>Hi</p>", "Hi"),
     "copy_to_clipboard",
-    { html: "<p>Hi</p>", text: "Hi" },
+    { html: "<p>Hi</p>", text: "Hi", id: null },
   ],
+  [
+    "copyToClipboard",
+    () => api.copyToClipboard("<p>Hi</p>", "Hi", "/w/talk/deck.html"),
+    "copy_to_clipboard",
+    { html: "<p>Hi</p>", text: "Hi", id: "/w/talk/deck.html" },
+  ],
+  ["copySlide", () => api.copySlide("talk", "a"), "copy_slide", { id: "talk", slide: "a" }],
+  ["pasteSlide", () => api.pasteSlide("talk", "a"), "paste_slide", { id: "talk", after: "a" }],
+  ["newWindow", () => api.newWindow(), "new_window", undefined],
+  ["takePendingFolder", () => api.takePendingFolder(), "take_pending_folder", undefined],
+  ["pasteSlide", () => api.pasteSlide("talk", null), "paste_slide", { id: "talk", after: null }],
   ["pasteFromClipboard", () => api.pasteFromClipboard("talk"), "paste_from_clipboard", { id: "talk" }],
   ["readClipboardText", () => api.readClipboardText(), "read_clipboard_text", undefined],
   [
@@ -231,7 +242,7 @@ describe("api", () => {
   });
 
   it("covers every api function", () => {
-    expect(CASES.map(([name]) => name).sort()).toEqual(Object.keys(api).sort());
+    expect([...new Set(CASES.map(([name]) => name))].sort()).toEqual(Object.keys(api).sort());
   });
 
   it("passes backend rejections through", async () => {

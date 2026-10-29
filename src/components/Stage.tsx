@@ -526,6 +526,8 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
             { type: "slop:edit-paste-text", text: pasted.text, style: now.editStyles.text },
             "*",
           );
+        } else if (pasted.kind === "slide") {
+          await useApp.getState().pasteSlide();
         } else if (pasted.kind === "images") {
           const images = await Promise.all(
             pasted.images.map(async (src) => ({ src, ...(await imageSize(deckFileUrl(deck.id, src))) })),
@@ -582,7 +584,7 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
           .catch((error) => useApp.getState().setError(errorMessage(error)));
       } else if (data?.type === "slop:edit-copied" && data.slide === selected && typeof data.html === "string") {
         api
-          .copyToClipboard(data.html, String(data.text ?? ""))
+          .copyToClipboard(data.html, String(data.text ?? ""), useApp.getState().deck?.id ?? null)
           .catch((error) => useApp.getState().setError(errorMessage(error)));
       } else if (data?.type === "slop:key") {
         if (data.mod)
@@ -783,7 +785,8 @@ function useSketchKeyboard(active: boolean, putAway: () => void) {
 }
 
 /**
- * Arrow keys / PageUp / PageDown move between slides unless the user is typing. Also handles
+ * Arrow keys / PageUp / PageDown move between slides unless the user is typing, and ⌘C / ⌘V
+ * copy and paste whole slides outside edit mode. Also handles
  * keys the slide preview forwards as `slop:key` messages, so navigation keeps working after
  * clicking into the slide. The preview cancels presses on it (to pan, select and drag), which
  * leaves focus where it was, e.g. in the chat composer: it asks for focus with `slop:focus`.
@@ -797,10 +800,25 @@ function useSlideKeyboard() {
       else return false;
       return true;
     };
+    // Out of edit mode, ⌘C / ⌘V copy the selected slide and paste one after it, also from
+    // another window (edit mode copies and pastes elements, see useSlideEditing).
+    const clipboard = (key: string, shift: boolean, fromApp: boolean) => {
+      const { editing, presenting, copySlide, pasteSlide } = useApp.getState();
+      if (editing || presenting || shift) return false;
+      // Copying selected text comes first.
+      if (fromApp && window.getSelection()?.toString()) return false;
+      const lower = key.toLowerCase();
+      if (lower === "c") void copySlide();
+      else if (lower === "v") void pasteSlide();
+      else return false;
+      return true;
+    };
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, [contenteditable]")) return;
-      if (navigate(event.key)) event.preventDefault();
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && clipboard(event.key, event.shiftKey, true))
+        event.preventDefault();
+      else if (navigate(event.key)) event.preventDefault();
     };
     const onMessage = (event: MessageEvent) => {
       const type = event.data?.type;
@@ -810,7 +828,8 @@ function useSlideKeyboard() {
       );
       if (!slide) return;
       if (type === "slop:focus") slide.focus();
-      else navigate(String(event.data.key));
+      else if (!(event.data.mod && clipboard(String(event.data.key), Boolean(event.data.shift), false)))
+        navigate(String(event.data.key));
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("message", onMessage);

@@ -147,6 +147,85 @@ describe("Stage", () => {
     });
   });
 
+  describe("copying and pasting slides", () => {
+    beforeEach(() => {
+      vi.mocked(invoke).mockReset();
+      useApp.setState({ editing: false, error: null });
+    });
+
+    it("copies the selected slide with ⌘C and pastes one after it with ⌘V", async () => {
+      const deck = useApp.getState().deck!;
+      const pasted = {
+        ...deck,
+        slides: [deck.slides[0]!, { ...deck.slides[0]!, id: "pasted" }, ...deck.slides.slice(1)],
+      };
+      vi.mocked(invoke).mockImplementation(async (command) =>
+        command === "paste_slide" ? { deck: pasted, slide: "pasted" } : undefined,
+      );
+      render(<Stage />);
+      const copy = new KeyboardEvent("keydown", { key: "c", metaKey: true, cancelable: true, bubbles: true });
+      act(() => void document.body.dispatchEvent(copy));
+      expect(copy.defaultPrevented).toBe(true);
+      expect(invoke).toHaveBeenCalledWith("copy_slide", { id: deck.id, slide: "intro" });
+      await act(async () => void fireEvent.keyDown(document.body, { key: "v", ctrlKey: true }));
+      expect(invoke).toHaveBeenCalledWith("paste_slide", { id: deck.id, after: "intro" });
+      expect(useApp.getState().selected).toBe("pasted");
+      expect(useApp.getState().deck?.slides.map((s) => s.id)).toEqual(["intro", "pasted", "#2", "outro"]);
+    });
+
+    it("takes ⌘C / ⌘V forwarded by a slide preview", async () => {
+      render(<Stage />);
+      const frame = document.createElement("iframe");
+      document.body.appendChild(frame);
+      const send = (key: string) =>
+        act(
+          () =>
+            void window.dispatchEvent(
+              new MessageEvent("message", { data: { type: "slop:key", key, mod: true }, source: frame.contentWindow }),
+            ),
+        );
+      send("c");
+      send("v");
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("paste_slide", expect.anything()));
+      expect(invoke).toHaveBeenCalledWith("copy_slide", expect.anything());
+      frame.remove();
+    });
+
+    it("leaves a clipboard without a slide alone and reports failures", async () => {
+      vi.mocked(invoke).mockResolvedValue(null);
+      render(<Stage />);
+      const before = useApp.getState().deck;
+      await act(async () => void fireEvent.keyDown(document.body, { key: "v", metaKey: true }));
+      expect(useApp.getState().deck).toBe(before);
+      expect(useApp.getState().selected).toBe("intro");
+      vi.mocked(invoke).mockRejectedValue("could not copy");
+      await act(async () => void fireEvent.keyDown(document.body, { key: "c", metaKey: true }));
+      await waitFor(() => expect(useApp.getState().error).toBe("could not copy"));
+    });
+
+    it("leaves the keys to typing, selected text, presenting and ⌘⇧V", () => {
+      render(
+        <>
+          <Stage />
+          <textarea data-testid="composer" />
+        </>,
+      );
+      fireEvent.keyDown(screen.getByTestId("composer"), { key: "c", metaKey: true });
+      fireEvent.keyDown(document.body, { key: "v", metaKey: true, shiftKey: true });
+      const text = document.createElement("p");
+      text.textContent = "Chat text";
+      document.body.appendChild(text);
+      window.getSelection()!.selectAllChildren(text);
+      fireEvent.keyDown(document.body, { key: "c", metaKey: true });
+      window.getSelection()!.removeAllRanges();
+      text.remove();
+      act(() => useApp.setState({ presenting: true }));
+      fireEvent.keyDown(document.body, { key: "v", metaKey: true });
+      expect(invoke).not.toHaveBeenCalledWith("copy_slide", expect.anything());
+      expect(invoke).not.toHaveBeenCalledWith("paste_slide", expect.anything());
+    });
+  });
+
   describe("keys forwarded by slide previews", () => {
     function forward(key: string, source: MessageEventSource | null) {
       act(() => void window.dispatchEvent(new MessageEvent("message", { data: { type: "slop:key", key }, source })));
@@ -989,6 +1068,7 @@ describe("Stage", () => {
           expect(invoke).toHaveBeenCalledWith("copy_to_clipboard", {
             html: "<!--slopslides:{}--><p>Hi</p>",
             text: "Hi",
+            id: useApp.getState().deck!.id,
           }),
         );
         expect(invoke).toHaveBeenCalledTimes(1);
@@ -1059,11 +1139,27 @@ describe("Stage", () => {
         );
       });
 
-      it("pastes nothing outside edit mode, into a typing field, or when the clipboard is empty, and reports failures", async () => {
+      it("pastes a copied slide as a new slide after the selected one", async () => {
+        const deck = useApp.getState().deck!;
+        const pasted = {
+          ...deck,
+          slides: [deck.slides[0]!, { ...deck.slides[0]!, id: "pasted" }, ...deck.slides.slice(1)],
+        };
+        vi.mocked(invoke).mockImplementation(async (command) =>
+          command === "paste_slide" ? { deck: pasted, slide: "pasted" } : { kind: "slide" },
+        );
+        const { container } = render(<Stage />);
+        fireEvent.click(editButton());
+        const { post } = loaded(container);
+        await act(async () => void fireEvent.keyDown(document.body, { key: "v", metaKey: true }));
+        await waitFor(() => expect(useApp.getState().selected).toBe("pasted"));
+        expect(invoke).toHaveBeenCalledWith("paste_slide", { id: deck.id, after: "intro" });
+        expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-paste" }), "*");
+      });
+
+      it("pastes no element outside edit mode, into a typing field, or when the clipboard is empty, and reports failures", async () => {
         vi.mocked(invoke).mockResolvedValue({ kind: "nothing" });
         const { container } = render(<Stage />);
-        fireEvent.keyDown(document.body, { key: "v", metaKey: true });
-        expect(invoke).not.toHaveBeenCalled();
         fireEvent.click(editButton());
         const { post } = loaded(container);
         const input = document.createElement("textarea");

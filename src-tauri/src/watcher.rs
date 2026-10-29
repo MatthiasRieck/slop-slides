@@ -1,6 +1,7 @@
 //! Watches the open workspace and tells the frontend which files changed, so the file tree
 //! and slide iframes refresh while the agent (or any editor) writes to disk.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -12,8 +13,9 @@ use tauri::{AppHandle, Emitter};
 
 use crate::error::{Error, Result};
 
+/// A watcher for each window's workspace, by window label.
 #[derive(Default)]
-pub struct WorkspaceWatcher(Mutex<Option<Debouncer<notify::RecommendedWatcher>>>);
+pub struct WorkspaceWatcher(Mutex<HashMap<String, Debouncer<notify::RecommendedWatcher>>>);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,7 +27,7 @@ struct WorkspaceChanged {
 }
 
 impl WorkspaceWatcher {
-    pub fn watch(&self, app: AppHandle, dir: PathBuf) -> Result<()> {
+    pub fn watch(&self, app: AppHandle, window: &str, dir: PathBuf) -> Result<()> {
         let root = dir.to_string_lossy().into_owned();
         // Deleted files cannot be canonicalized, so match against both spellings of the root.
         let roots = [
@@ -53,12 +55,12 @@ impl WorkspaceWatcher {
             .watcher()
             .watch(&dir, RecursiveMode::Recursive)
             .map_err(|e| Error::msg(format!("cannot watch the folder: {e}")))?;
-        *self.0.lock().unwrap() = Some(debouncer);
+        self.0.lock().unwrap().insert(window.to_string(), debouncer);
         Ok(())
     }
 
-    pub fn stop(&self) {
-        self.0.lock().unwrap().take();
+    pub fn stop(&self, window: &str) {
+        self.0.lock().unwrap().remove(window);
     }
 }
 

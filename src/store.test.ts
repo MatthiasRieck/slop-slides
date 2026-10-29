@@ -1296,6 +1296,38 @@ describe("agent events", () => {
     await vi.waitFor(() => expect(failing.useApp.getState().providers).toEqual([]));
   });
 
+  it("opens the folder from Finder waiting for this window, at start and when told", async () => {
+    const store = await freshModule(false);
+    let pending: string | null = "/decks/a";
+    backend({
+      take_pending_folder: () => {
+        const path = pending;
+        pending = null;
+        return path;
+      },
+      open_workspace: ({ path }) => ({ path, name: String(path).split("/").pop() }),
+    });
+    await store.initEventBridge();
+    await vi.waitFor(() => expect(store.useApp.getState().workspace?.path).toBe("/decks/a"));
+    expect(calls("open_workspace")).toEqual([{ path: "/decks/a" }]);
+
+    // Another window's folder: this one has none waiting.
+    listeners.get("folder-pending")?.({ payload: null });
+    await vi.waitFor(() => expect(calls("take_pending_folder")).toHaveLength(2));
+    expect(calls("open_workspace")).toHaveLength(1);
+  });
+
+  it("reports a folder from Finder that cannot be opened", async () => {
+    const store = await freshModule(false);
+    backend({
+      take_pending_folder: () => {
+        throw "no such window";
+      },
+    });
+    await store.initEventBridge();
+    expect(store.useApp.getState().error).toBe("no such window");
+  });
+
   it("streams text into the last reply", async () => {
     const { emit, reply } = await bridged();
     emit({ type: "started", sessionId: "s" });

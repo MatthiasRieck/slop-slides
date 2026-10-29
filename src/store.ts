@@ -1495,4 +1495,18 @@ export async function initEventBridge() {
   await listen<WorkspaceChanged>("workspace-changed", ({ payload }) => {
     if (payload.root === useApp.getState().workspace?.path) applyWorkspaceChanged(payload.paths);
   });
+  // A folder opened with the app from Finder may be waiting for this window: one opened before
+  // the window was up, or one sent to it later.
+  await listen("folder-pending", () => void openPendingFolder());
+  await openPendingFolder();
+}
+
+/** Opens the folder from Finder waiting for this window, if there is one. */
+async function openPendingFolder() {
+  try {
+    const path = await api.takePendingFolder();
+    if (path) await useApp.getState().openWorkspace(path);
+  } catch (error) {
+    useApp.getState().setError(errorMessage(error));
+  }
 }

@@ -97,6 +97,7 @@ const CASES = [
   ["copySlide", () => api.copySlide("talk", "a"), "copy_slide", { id: "talk", slide: "a" }],
   ["pasteSlide", () => api.pasteSlide("talk", "a"), "paste_slide", { id: "talk", after: "a" }],
   ["newWindow", () => api.newWindow(), "new_window", undefined],
+  ["takePendingFolder", () => api.takePendingFolder(), "take_pending_folder", undefined],
   ["pasteSlide", () => api.pasteSlide("talk", null), "paste_slide", { id: "talk", after: null }],
   ["pasteFromClipboard", () => api.pasteFromClipboard("talk"), "paste_from_clipboard", { id: "talk" }],
   ["readClipboardText", () => api.readClipboardText(), "read_clipboard_text", undefined],

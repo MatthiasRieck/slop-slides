@@ -106,6 +106,7 @@ export function installBrowserMock() {
         case "new_window":
           return null;
         case "paste_slide":
+        case "take_pending_folder":
           return null;
         case "paste_from_clipboard":
           return { kind: "nothing" };

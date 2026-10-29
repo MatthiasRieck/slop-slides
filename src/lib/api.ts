@@ -206,6 +206,8 @@ export interface VoiceDownloadProgress {
 export const api = {
   /** Opens another app window, on the start screen; each window has a folder of its own. */
   newWindow: () => invoke<void>("new_window"),
+  /** The folder opened from Finder that is waiting to open in this window, once; null without one. */
+  takePendingFolder: () => invoke<string | null>("take_pending_folder"),
   /** Opens a folder: the file tree shows it and the app serves and watches its files. */
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
   closeWorkspace: () => invoke<void>("close_workspace"),

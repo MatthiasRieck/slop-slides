@@ -119,6 +119,14 @@ fn close_workspace(window: Window, open: State<OpenWorkspace>, watcher: State<Wo
     open.set(window.label(), None);
 }
 
+/// The folder waiting to be opened in this window (see [`windows::open_folder`]), once.
+#[tauri::command]
+fn take_pending_folder(window: Window, pending: State<windows::PendingFolders>) -> Option<String> {
+    pending
+        .take(window.label())
+        .map(|root| root.to_string_lossy().into_owned())
+}
+
 /// Opens another app window on the start screen.
 #[tauri::command]
 fn new_window(app: AppHandle) -> Result<()> {
@@ -637,6 +645,7 @@ pub fn run() {
         .manage(AgentManager::default())
         .manage(WorkspaceWatcher::default())
         .manage(OpenWorkspace::default())
+        .manage(windows::PendingFolders::default())
         .manage(voice::Voice::default())
         .on_menu_event(|app, event| {
             if event.id() == windows::NEW_WINDOW_MENU {
@@ -655,6 +664,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             new_window,
+            take_pending_folder,
             open_workspace,
             close_workspace,
             recent_workspaces,
@@ -717,10 +727,30 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while running SlopSlide")
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
-                app.state::<voice::Voice>().shutdown();
+        .run(|app, event| match event {
+            tauri::RunEvent::Exit => app.state::<voice::Voice>().shutdown(),
+            // Opening the app again (a double-click in Finder, a click on its Dock icon) opens
+            // another window.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => {
+                if let Err(e) = windows::open_new(app) {
+                    eprintln!("{e}");
+                }
             }
+            // Folders opened with the app from Finder (dropped on its icon, Open With).
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Opened { urls } => {
+                let folders = urls
+                    .iter()
+                    .filter_map(|url| url.to_file_path().ok())
+                    .filter(|path| path.is_dir());
+                for folder in folders {
+                    if let Err(e) = windows::open_folder(app, folder) {
+                        eprintln!("{e}");
+                    }
+                }
+            }
+            _ => {}
         });
 }
 

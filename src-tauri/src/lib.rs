@@ -907,3 +907,17 @@ mod session_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(test)]
+mod window_config_tests {
+    #[test]
+    fn traffic_lights_are_vertically_centered_in_the_top_bar() {
+        // The top bar and home header are `h-12` (48px); macOS window buttons are 14px tall.
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let position = &config["app"]["windows"][0]["trafficLightPosition"];
+        assert_eq!(position["y"].as_f64(), Some((48.0 - 14.0) / 2.0));
+        // Leaves room before the `pl-[84px]` content padding.
+        assert!(position["x"].as_f64().unwrap() + 54.0 < 84.0);
+    }
+}

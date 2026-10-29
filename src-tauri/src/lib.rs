@@ -268,6 +268,12 @@ fn set_slide_hidden(window: Window, id: String, slide: String, hidden: bool) -> 
     deck::set_slide_hidden(&file, current_session(&window)?.as_deref(), &slide, hidden)
 }
 
+/// Sets what is said over a slide; empty `text` removes its narration.
+#[tauri::command]
+fn set_slide_narration(id: String, slide: String, text: String) -> Result<Deck> {
+    deck::set_slide_narration(&deck::deck_file(&id)?, &slide, &text)
+}
+
 /// Gives every slide of the deck the canvas `size`.
 #[tauri::command]
 fn set_slide_size(id: String, size: size::SlideSize) -> Result<Deck> {
@@ -682,6 +688,7 @@ pub fn run() {
             duplicate_slide,
             set_slide_hidden,
             set_slide_locked,
+            set_slide_narration,
             set_slide_size,
             add_section,
             rename_section,

@@ -44,6 +44,12 @@ const CASES = [
     { id: "talk", slide: "a", locked: true },
   ],
   [
+    "setSlideNarration",
+    () => api.setSlideNarration("talk", "a", "Hello"),
+    "set_slide_narration",
+    { id: "talk", slide: "a", text: "Hello" },
+  ],
+  [
     "setSlideSize",
     () => api.setSlideSize("talk", { width: 21, height: 29.7, unit: "cm" }),
     "set_slide_size",

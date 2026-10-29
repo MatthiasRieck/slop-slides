@@ -1000,7 +1000,7 @@
     var hits = [];
     Array.prototype.forEach.call(slide.querySelectorAll("*"), function (el) {
       var svg = el.closest("svg");
-      if ((svg && svg !== el) || el.closest(".notes, " + SLOTS)) return;
+      if ((svg && svg !== el) || el.closest(".notes, .narration, " + SLOTS)) return;
       var rect = el.getBoundingClientRect();
       if (!rect.width && !rect.height) return;
       var past = hasContent(el) && paints(el) ? pastEdges(rect, bounds, k) : [];
@@ -2143,7 +2143,7 @@
     if (!el || !slide.contains(el) || ["front", "forward", "backward", "back"].indexOf(where) < 0) return;
     var parent = el.parentElement;
     var siblings = Array.prototype.filter.call(parent.children, function (s) {
-      return !/^(script|style|template)$/i.test(s.tagName) && !s.classList.contains("notes") && !s.classList.contains("slop-review");
+      return !/^(script|style|template)$/i.test(s.tagName) && !s.classList.contains("notes") && !s.classList.contains("narration") && !s.classList.contains("slop-review");
     });
     var layer = function (s) {
       var style = getComputedStyle(s);

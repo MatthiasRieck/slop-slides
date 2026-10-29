@@ -58,6 +58,8 @@ pub struct Slide {
     pub moved: bool,
     /// Can be changed by neither the user nor the agent until it is unlocked.
     pub locked: bool,
+    /// What is said over the slide, as plain text; empty without any (see [`html::narration`]).
+    pub narration: String,
 }
 
 /// A named group of slides, started by a marker between slides in the deck file.
@@ -254,6 +256,7 @@ pub fn load(file: &Path) -> Result<Deck> {
             hidden: span.hidden.is_some(),
             locked: span.locked.is_some(),
             moved: html::has_moved(&source[span.range.clone()]),
+            narration: html::narration(&source[span.range.clone()]),
         })
         .collect();
     let path = file.to_string_lossy().into_owned();
@@ -455,6 +458,16 @@ pub fn set_slide_hidden(
     let deck = edit(file, |s| Ok((html::set_hidden(s, slide, hidden)?, ())))?.0;
     refresh_guard(file, session, slide)?;
     Ok(deck)
+}
+
+/// Sets what is said over a slide (see [`html::set_narration`]); empty `text` removes it.
+/// A locked slide keeps its narration too.
+pub fn set_slide_narration(file: &Path, slide: &str, text: &str) -> Result<Deck> {
+    Ok(edit(file, |s| {
+        ensure_unlocked(s, slide)?;
+        Ok((html::set_narration(s, slide, text)?, ()))
+    })?
+    .0)
 }
 
 /// Gives every slide the canvas `size` and refreshes the player runtime to match. The slides'
@@ -1254,6 +1267,33 @@ mod tests {
         let loaded = load(&deck.file()).unwrap();
         let hidden: Vec<_> = loaded.slides.iter().map(|s| s.hidden).collect();
         assert_eq!(hidden, [false, true]);
+    }
+
+    #[test]
+    fn narration_is_loaded_saved_and_refused_on_locked_slides() {
+        let deck = TempDeck::new(EDITED);
+        let narrations = |d: &Deck| {
+            d.slides
+                .iter()
+                .map(|s| s.narration.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(narrations(&load(&deck.file()).unwrap()), ["", ""]);
+        let before = load(&deck.file()).unwrap().slides[1].hash.clone();
+        let saved = set_slide_narration(&deck.file(), "b", "Point at the chart.").unwrap();
+        assert_eq!(narrations(&saved), ["", "Point at the chart."]);
+        assert_ne!(saved.slides[1].hash, before);
+        assert!(deck
+            .html()
+            .contains("<aside class=\"narration\">Point at the chart.</aside>"));
+        let cleared = set_slide_narration(&deck.file(), "b", "").unwrap();
+        assert_eq!(narrations(&cleared), ["", ""]);
+        assert_eq!(deck.html(), EDITED);
+
+        set_slide_locked(&deck.file(), None, "a", true).unwrap();
+        let locked = deck.html();
+        assert!(set_slide_narration(&deck.file(), "a", "No").is_err());
+        assert_eq!(deck.html(), locked);
     }
 
     #[test]

@@ -67,6 +67,30 @@ describe("Stage", () => {
     expect(screen.queryByText(/\d+ \/ \d+/)).toBeNull();
   });
 
+  it("opens the slide's narration in the sidebar and goes back to the chat", () => {
+    useApp.setState({ sidebarOpen: false, sidebarTab: "chat" });
+    render(<Stage />);
+    const button = screen.getByRole("button", { name: /Narration/ });
+    expect(screen.queryByTestId("has-narration")).toBeNull();
+    fireEvent.click(button);
+    expect(useApp.getState()).toMatchObject({ sidebarOpen: true, sidebarTab: "narration" });
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(button);
+    expect(useApp.getState().sidebarTab).toBe("chat");
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("marks a slide that has narration", () => {
+    const deck = deckFor(DECK_HTML);
+    useApp.setState({
+      deck: { ...deck, slides: deck.slides.map((s, i) => (i === 0 ? { ...s, narration: "Hi" } : s)) },
+    });
+    render(<Stage />);
+    expect(screen.queryByTestId("has-narration")).not.toBeNull();
+    act(() => useApp.getState().select("outro"));
+    expect(screen.queryByTestId("has-narration")).toBeNull();
+  });
+
   it("opens the template layouts to change the slide's layout", () => {
     useApp.setState({
       templates: [{ id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title", "quote"] }],

@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::html::{
     self, find_ci, has_class, parse_tag, ADDED_ATTR, AUTOFIT_ATTR, DROPPED_ATTR, EDITOR_ATTRS,
-    HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR, SECTION_CLASS, SECTION_TITLE_ATTR,
+    HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR, NARRATION_CLASS, SECTION_CLASS, SECTION_TITLE_ATTR,
 };
 use crate::review;
 use crate::size::{self, SlideSize};
@@ -106,6 +106,7 @@ pub fn lint(
     check_markup(&mut l);
     check_document(&mut l);
     check_slides(&mut l);
+    check_narration(&mut l);
     check_slide_id_styles(&mut l);
     check_sections(&mut l);
     check_review(&mut l);
@@ -232,6 +233,20 @@ fn check_markup(l: &mut Linter) {
                         Severity::Error,
                         i,
                         "Slides must be direct children of <main class=\"deck\">.".into(),
+                    );
+                }
+            }
+            if has_class(&tag, NARRATION_CLASS) {
+                // Directly inside a slide: the innermost open element is the slide itself.
+                let in_slide = stack
+                    .last()
+                    .is_some_and(|open| l.slides.iter().any(|s| s.range.start == open.at));
+                if tag.name != "aside" || !in_slide {
+                    l.report(
+                        "narration-misplaced",
+                        Severity::Warning,
+                        i,
+                        "A slide's narration is one <aside class=\"narration\"> placed directly inside its <section class=\"slide\">; move it there.".into(),
                     );
                 }
             }
@@ -551,6 +566,37 @@ fn check_slides(l: &mut Linter) {
                 at,
                 format!("Write `{LOCKED_ATTR}` without a value; any value still locks the slide."),
             );
+        }
+    }
+}
+
+/// Narration: one plain-text `<aside class="narration">` per slide, read out as it is.
+fn check_narration(l: &mut Linter) {
+    let slides = l.slides.clone();
+    for slide in &slides {
+        let markup = &l.html[slide.range.clone()];
+        let spans = html::narration_spans(markup);
+        for extra in spans.iter().skip(1) {
+            l.report(
+                "narration-duplicate",
+                Severity::Warning,
+                slide.range.start + extra.range.start,
+                "This slide has more than one narration; merge them into a single <aside class=\"narration\">.".into(),
+            );
+        }
+        for span in &spans {
+            let inner = &markup[span.inner.clone()];
+            let has_markup = inner
+                .match_indices('<')
+                .any(|(at, _)| html::parse_tag(inner, at).is_some_and(|t| t.name != "br"));
+            if has_markup {
+                l.report(
+                    "narration-markup",
+                    Severity::Warning,
+                    slide.range.start + span.range.start,
+                    "Narration is plain text read out loud; remove the markup inside it (keep its text, separate paragraphs with a blank line).".into(),
+                );
+            }
         }
     }
 }
@@ -1551,6 +1597,30 @@ mod tests {
         let found = rules(&deck("<div>loose</div>\nloose text\n<section class=\"slide\" id=\"a\"><div>fine</div></section>"));
         assert_eq!(found, ["deck-stray-content", "deck-stray-content"]);
         assert_eq!(rules(&deck("<section class=\"slide\" id=\"a\"><section class=\"slide\">nested</section></section>")), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn accepts_one_plain_narration_per_slide() {
+        let found = rules(&deck(
+            "<section class=\"slide\" id=\"a\"><h1>A</h1>\n<aside class=\"narration\">Say &amp; this.<br>\n\nThen that.</aside></section>",
+        ));
+        assert_eq!(found, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn flags_misplaced_duplicate_or_marked_up_narration() {
+        let found = rules(&deck(
+            "<section class=\"slide\" id=\"a\"><div><aside class=\"narration\">Nested</aside></div><p class=\"narration\">Wrong tag</p></section>",
+        ));
+        assert_eq!(found, ["narration-misplaced", "narration-misplaced"]);
+        let found = rules(&deck(
+            "<section class=\"slide\" id=\"a\"><aside class=\"narration\">One</aside><aside class=\"narration\">Two</aside></section>",
+        ));
+        assert_eq!(found, ["narration-duplicate"]);
+        let found = rules(&deck(
+            "<section class=\"slide\" id=\"a\"><aside class=\"narration\"><p>Say <b>this</b></p></aside></section>",
+        ));
+        assert_eq!(found, ["narration-markup"]);
     }
 
     #[test]

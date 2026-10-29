@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  AudioLines,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -295,10 +296,34 @@ export function Stage() {
                 Tidy layout
               </button>
             )}
+            {slide && <NarrationButton hasNarration={!!slide.narration} />}
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+/** Shows the slide's narration in the sidebar, or goes back to the chat when it is showing. */
+function NarrationButton(props: { hasNarration: boolean }) {
+  const showing = useApp((s) => s.sidebarOpen && s.sidebarTab === "narration");
+  return (
+    <button
+      type="button"
+      title={props.hasNarration ? "Show this slide's narration" : "Write narration for this slide"}
+      aria-pressed={showing}
+      onClick={() => useApp.getState().setSidebarTab(showing ? "chat" : "narration")}
+      className={cn(
+        "ml-1 flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-accent hover:text-foreground",
+        showing && "bg-accent text-foreground",
+      )}
+    >
+      <AudioLines className="size-3.5" />
+      Narration
+      {props.hasNarration && (
+        <span data-testid="has-narration" className="size-1.5 rounded-full bg-primary" aria-hidden />
+      )}
+    </button>
   );
 }
 

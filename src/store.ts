@@ -196,7 +196,7 @@ function loadFavorites(): string[] {
 export type StageView = "slides" | "code";
 
 /** The right sidebar's tabs, in order (see components/Sidebar.tsx). */
-export const SIDEBAR_TABS = ["chat", "files"] as const;
+export const SIDEBAR_TABS = ["chat", "narration", "files"] as const;
 export type SidebarTab = (typeof SIDEBAR_TABS)[number];
 const isSidebarTab = (value: unknown): value is SidebarTab => SIDEBAR_TABS.includes(value as SidebarTab);
 
@@ -328,6 +328,8 @@ interface AppState {
   setEditStyle: (family: ToolFamily, changes: EditStyle) => void;
   /** Saves `markup` as the new version of `slide`, after any edits still being saved. */
   saveSlideEdit: (slide: string, markup: string) => Promise<void>;
+  /** Saves what is said over `slide` (empty removes it), after any slide edits still being saved. */
+  setNarration: (slide: string, text: string) => Promise<void>;
   undoSlideEdit: () => Promise<void>;
   redoSlideEdit: () => Promise<void>;
   /** Undoes every edit made since entering edit mode, then leaves it. */
@@ -717,6 +719,21 @@ export const useApp = create<AppState>((set, get) => ({
         }));
       } catch (error) {
         set((s) => ({ error: errorMessage(error), editReload: s.editReload + 1 }));
+      }
+    };
+    editQueue = editQueue.then(save);
+    return editQueue;
+  },
+
+  setNarration: (slide, text) => {
+    const save = async () => {
+      const { deck } = get();
+      if (!deck) return;
+      try {
+        const next = await api.setSlideNarration(deck.id, slide, text);
+        if (get().deck?.id === deck.id) get().setDeck(next);
+      } catch (error) {
+        set({ error: errorMessage(error) });
       }
     };
     editQueue = editQueue.then(save);

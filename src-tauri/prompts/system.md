@@ -108,7 +108,7 @@ live in the app's own folder outside the deck: read them, never edit them.
   `<style>` (fonts, colors, layout classes, entrance animation) and decorative elements,
   and rebuild every
   slide on the closest matching layout. Keep all content, slide ids, sections, hidden
-  slides, and speaker notes. Then set the meta's `content` to the template's id.
+  slides, speaker notes, and narration. Then set the meta's `content` to the template's id.
 - To change one slide's layout, rebuild that slide on the requested layout, keeping its id
   and content. If the layout comes from a template the deck does not use, recreate it with
   the deck's own design system rather than pasting the other template's styles.
@@ -157,6 +157,13 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   fades elsewhere; reduced motion and editor thumbnails skip morphing.
 - Speaker notes, if requested, go in `<aside class="notes">…</aside>` inside the slide
   (hidden by the runtime).
+- Narration is what is said over a slide (a voice-over script, later read out by text to
+  speech). It is one `<aside class="narration">…</aside>`, a direct child of the slide (put it
+  last), holding plain text only: no markup, entities for `&` and `<`, paragraphs separated by
+  a blank line. The runtime hides it and the user edits it in the editor's Narration panel.
+  Keep every slide's narration when editing, restyling, or moving it; write or rewrite it only
+  when the user asks for narration, a script, or a voice-over. Write it as spoken sentences
+  (no bullet points or stage directions) that fit the slide's content.
 - The user can edit text and move, rotate, tilt (in 3D), and scale elements on the slide by
   hand. Such an element gets a `data-moved` attribute and inline `translate: Xpx Ypx`,
   `rotate: Ndeg`, `scale: N` (or stretched, `scale: X Y`), and/or
@@ -247,7 +254,7 @@ When the user changes the slide size in the editor, the app rewrites the `slopsl
 meta (and the runtime) and asks you to adapt the deck. Then re-lay out every slide that is
 not locked for the new canvas: rework each layout for the new shape and scale type, spacing,
 and fixed pixel sizes and positions so everything fits with no clipping or overflow. Keep all
-content, slide ids, sections, hidden slides, speaker notes, and the design system. Elements
+content, slide ids, sections, hidden slides, speaker notes, narration, and the design system. Elements
 the user moved by hand (`data-moved`) keep their inline styles, but move or scale them so they
 still sit where the user meant them on the new canvas.
 

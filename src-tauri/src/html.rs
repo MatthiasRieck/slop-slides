@@ -768,6 +768,142 @@ pub fn has_moved(slide: &str) -> bool {
     })
 }
 
+/// A slide's narration, the script read out over it (say, by text to speech): plain text in one
+/// `<aside class="narration">` that is a direct child of the slide. The player never shows it.
+pub const NARRATION_CLASS: &str = "narration";
+
+/// A narration element inside one slide's markup.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NarrationSpan {
+    /// The whole `<aside …>…</aside>`; it runs to the end of `slide` when never closed.
+    pub range: Range<usize>,
+    /// Between the start and end tags.
+    pub inner: Range<usize>,
+}
+
+/// Every narration element in `slide` (the markup of one slide), in document order.
+pub fn narration_spans(slide: &str) -> Vec<NarrationSpan> {
+    // An element never closed runs to the slide's end tag, not past it.
+    let limit = slide
+        .to_ascii_lowercase()
+        .rfind("</section")
+        .unwrap_or(slide.len());
+    let mut spans: Vec<NarrationSpan> = Vec::new();
+    for (start, tag) in tags(slide) {
+        if tag.closing || tag.name != "aside" || !has_class(&tag, NARRATION_CLASS) {
+            continue;
+        }
+        if start >= limit || spans.last().is_some_and(|s| s.range.contains(&start)) {
+            continue;
+        }
+        let close = find_ci(slide, tag.end, "</aside").filter(|&c| c < limit);
+        let inner = tag.end..close.unwrap_or(limit);
+        let end = close
+            .and_then(|c| slide[c..].find('>').map(|e| c + e + 1))
+            .unwrap_or(limit);
+        spans.push(NarrationSpan {
+            range: start..end,
+            inner,
+        });
+    }
+    spans
+}
+
+/// The slide's narration as plain text: tags dropped, entities decoded, each line trimmed and
+/// blank lines between paragraphs kept (one at most). Empty when it has none.
+pub fn narration(slide: &str) -> String {
+    let Some(span) = narration_spans(slide).into_iter().next() else {
+        return String::new();
+    };
+    let inner = &slide[span.inner];
+    let mut text = String::new();
+    let mut rest = inner;
+    while let Some(open) = rest.find('<') {
+        text.push_str(&rest[..open]);
+        match parse_tag(rest, open) {
+            Some(tag) => {
+                if !tag.closing && tag.name == "br" {
+                    text.push('\n');
+                }
+                rest = &rest[tag.end..];
+            }
+            None => {
+                text.push('<');
+                rest = &rest[open + 1..];
+            }
+        }
+    }
+    text.push_str(rest);
+    let decoded = decode_entities(&text);
+    let mut out = String::new();
+    let mut blank = false;
+    for line in decoded.lines().map(str::trim) {
+        if line.is_empty() {
+            blank = !out.is_empty();
+            continue;
+        }
+        if !out.is_empty() {
+            out.push_str(if blank { "\n\n" } else { "\n" });
+        }
+        out.push_str(line);
+        blank = false;
+    }
+    out
+}
+
+/// Sets slide `id`'s narration to `text` (trimmed): fills its narration element, adds one at
+/// the end of the slide, or removes it when `text` is empty. Leaves the markup untouched when
+/// the narration is already `text`.
+pub fn set_narration(html: &str, id: &str, text: &str) -> Result<String, String> {
+    let slides = find_slides(html);
+    let span = span_of(&slides, id).ok_or_else(|| format!("Slide not found: {id}"))?;
+    let slide = &html[span.range.clone()];
+    let text = text.trim();
+    if narration(slide) == text && narration_spans(slide).len() <= 1 {
+        return Ok(html.to_string());
+    }
+    let offset = span.range.start;
+    let existing = narration_spans(slide);
+    // Only the first one counts; extra ones go.
+    let mut out = html.to_string();
+    for extra in existing.iter().skip(1).rev() {
+        let start = offset + slide[..extra.range.start].trim_end().len();
+        out.replace_range(start..offset + extra.range.end, "");
+    }
+    match (existing.first(), text.is_empty()) {
+        (Some(first), true) => {
+            let start = offset + slide[..first.range.start].trim_end().len();
+            out.replace_range(start..offset + first.range.end, "");
+        }
+        (Some(first), false) => {
+            let inner = offset + first.inner.start..offset + first.inner.end;
+            if first.inner.end == first.range.end {
+                // Never closed: close it, so the rest of the slide stays outside.
+                out.replace_range(inner, &format!("{}</aside>", escape(text)));
+            } else {
+                out.replace_range(inner, &escape(text));
+            }
+        }
+        (None, true) => {}
+        (None, false) => {
+            let close = slide
+                .to_ascii_lowercase()
+                .rfind("</section")
+                .unwrap_or(slide.len());
+            let at = offset + slide[..close].trim_end().len();
+            let indent = indent_before(html, span.range.start);
+            out.insert_str(
+                at,
+                &format!(
+                    "\n{indent}  <aside class=\"{NARRATION_CLASS}\">{}</aside>",
+                    escape(text)
+                ),
+            );
+        }
+    }
+    Ok(out)
+}
+
 /// Replaces slide `id` with `markup`, which must be one whole `<section class="slide">` with
 /// the same id. Returns the new document and the slide's previous markup.
 pub fn replace_slide(html: &str, id: &str, markup: &str) -> Result<(String, String), String> {
@@ -2406,6 +2542,68 @@ mod tests {
             with_placeholder_text(&out).len(),
             out.len(),
             "same shape again"
+        );
+    }
+
+    #[test]
+    fn reads_a_slides_narration_as_plain_text() {
+        let slide = "<section class=\"slide\" id=\"a\"><h1>Hi</h1>\n  <aside class=\"narration\">\n    Welcome &amp; hello.\n    Second <b>line</b>.<br>Third\n\n\n    New paragraph.\n  </aside>\n</section>";
+        assert_eq!(
+            narration(slide),
+            "Welcome & hello.\nSecond line.\nThird\n\nNew paragraph."
+        );
+        assert_eq!(
+            narration(
+                "<section class=\"slide\" id=\"a\"><aside class=\"notes\">x</aside></section>"
+            ),
+            ""
+        );
+        assert_eq!(
+            narration("<section class=\"slide\" id=\"a\"><aside class=\"narration\">open"),
+            "open"
+        );
+    }
+
+    #[test]
+    fn sets_adds_and_removes_a_slides_narration() {
+        let html = "<main class=\"deck\">\n  <section class=\"slide\" id=\"a\">\n    <h1>Hi</h1>\n  </section>\n  <section class=\"slide\" id=\"b\"><p>B</p></section>\n</main>";
+        let added = set_narration(html, "a", "  Say <hi> & wave\nthen go  ").unwrap();
+        assert_eq!(
+            added,
+            "<main class=\"deck\">\n  <section class=\"slide\" id=\"a\">\n    <h1>Hi</h1>\n    <aside class=\"narration\">Say &lt;hi&gt; &amp; wave\nthen go</aside>\n  </section>\n  <section class=\"slide\" id=\"b\"><p>B</p></section>\n</main>"
+        );
+        let slide = slide_markup(&added, "a").unwrap();
+        assert_eq!(narration(slide), "Say <hi> & wave\nthen go");
+        assert_eq!(
+            set_narration(&added, "a", "Say <hi> & wave\nthen go").unwrap(),
+            added
+        );
+
+        let changed = set_narration(&added, "a", "Bye").unwrap();
+        assert!(changed.contains("<aside class=\"narration\">Bye</aside>"));
+        assert_eq!(set_narration(&changed, "a", "  ").unwrap(), html);
+        assert_eq!(set_narration(html, "a", "").unwrap(), html);
+        assert!(set_narration(html, "missing", "x").is_err());
+
+        let inline = set_narration(html, "b", "B text").unwrap();
+        assert!(
+            inline.contains("<p>B</p>\n    <aside class=\"narration\">B text</aside></section>")
+        );
+    }
+
+    #[test]
+    fn setting_narration_keeps_one_element_and_closes_an_open_one() {
+        let two = "<main class=\"deck\"><section class=\"slide\" id=\"a\"><aside class=\"narration x\">One</aside><p>P</p> <aside class=\"narration\">Two</aside></section></main>";
+        let out = set_narration(two, "a", "New").unwrap();
+        assert_eq!(out, "<main class=\"deck\"><section class=\"slide\" id=\"a\"><aside class=\"narration x\">New</aside><p>P</p></section></main>");
+        assert_eq!(set_narration(two, "a", "One").unwrap(), "<main class=\"deck\"><section class=\"slide\" id=\"a\"><aside class=\"narration x\">One</aside><p>P</p></section></main>");
+        let spans = narration_spans(slide_markup(two, "a").unwrap());
+        assert_eq!(spans.len(), 2);
+
+        let open = "<main class=\"deck\"><section class=\"slide\" id=\"a\"><aside class=\"narration\">Old</section></main>";
+        assert_eq!(
+            set_narration(open, "a", "New").unwrap(),
+            "<main class=\"deck\"><section class=\"slide\" id=\"a\"><aside class=\"narration\">New</aside></section></main>"
         );
     }
 }

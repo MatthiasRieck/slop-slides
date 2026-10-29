@@ -46,6 +46,8 @@ export interface Slide {
   locked: boolean;
   /** Has elements moved by hand (`data-moved`) that the agent has not tidied up yet. */
   moved: boolean;
+  /** What is said over the slide (its `<aside class="narration">`), as plain text; empty without any. */
+  narration?: string;
 }
 
 /** A named group of slides, started by a marker between slides in the deck file. */
@@ -235,6 +237,9 @@ export const api = {
     invoke<Deck>("set_slide_hidden", { id, slide, hidden }),
   setSlideLocked: (id: string, slide: string, locked: boolean) =>
     invoke<Deck>("set_slide_locked", { id, slide, locked }),
+  /** Sets what is said over the slide; empty `text` removes its narration. */
+  setSlideNarration: (id: string, slide: string, text: string) =>
+    invoke<Deck>("set_slide_narration", { id, slide, text }),
   /** Gives every slide the canvas `size` (the slides' content stays as it is). */
   setSlideSize: (id: string, size: SlideSize) => invoke<Deck>("set_slide_size", { id, size }),
   addSection: (id: string, before: string | null, title: string) => invoke<Deck>("add_section", { id, before, title }),

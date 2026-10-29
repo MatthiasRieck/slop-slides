@@ -129,6 +129,6 @@ export function resizePrompt(from: SlideSize, to: SlideSize): string {
   return (
     `I changed the slide size from ${shape(from)} to ${shape(to)}. ` +
     "Re-lay out every slide for the new canvas: rework each layout for its shape and rescale type, spacing and any fixed sizes or positions so nothing is clipped, overflows or leaves awkward empty space. " +
-    "Keep all content, slide ids, sections, hidden slides and speaker notes, and keep the design system."
+    "Keep all content, slide ids, sections, hidden slides, speaker notes and narration, and keep the design system."
   );
 }

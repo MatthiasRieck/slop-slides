@@ -2,13 +2,17 @@
 //! folders can be open side by side; File › New Window (⌘N, Ctrl+N elsewhere) opens another,
 //! and so does opening the app again (on macOS: a double-click in Finder, a click on its Dock
 //! icon). On macOS, folders opened with the app from Finder (dropped on its icon, Open With)
-//! open in a window too: see [`open_folder`].
+//! open in a window too: see `open_folder`.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+#[cfg(any(target_os = "macos", test))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
-use tauri::{AppHandle, Emitter, LogicalPosition, Manager, WebviewWindowBuilder, Window};
+#[cfg(target_os = "macos")]
+use tauri::Emitter;
+use tauri::{AppHandle, LogicalPosition, Manager, WebviewWindowBuilder, Window};
 
 use crate::agent::AgentManager;
 use crate::error::{Error, Result};
@@ -22,12 +26,14 @@ pub const LABEL_PREFIX: &str = "window-";
 /// Id of the File › New Window menu item.
 pub const NEW_WINDOW_MENU: &str = "new-window";
 
+#[cfg(target_os = "macos")]
 /// Tells the windows a folder is waiting to be opened in one of them; each asks for its own
 /// with `take_pending_folder`.
 pub const PENDING_EVENT: &str = "folder-pending";
 
 /// Folders waiting to be opened, by the label of the window they open in. The window takes
-/// its folder once its frontend is up, which for a new window is after it is built.
+/// its folder once its frontend is up, which for a new window is after it is built. Only
+/// macOS opens folders from outside the app; elsewhere none are ever waiting.
 #[derive(Default)]
 pub struct PendingFolders(Mutex<HashMap<String, PathBuf>>);
 
@@ -35,7 +41,10 @@ impl PendingFolders {
     pub fn take(&self, window: &str) -> Option<PathBuf> {
         self.0.lock().unwrap().remove(window)
     }
+}
 
+#[cfg(any(target_os = "macos", test))]
+impl PendingFolders {
     fn insert(&self, window: &str, root: PathBuf) {
         self.0.lock().unwrap().insert(window.to_string(), root);
     }
@@ -54,12 +63,14 @@ impl PendingFolders {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn same_folder(a: &Path, b: &Path) -> bool {
     let resolve = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     resolve(a) == resolve(b)
 }
 
 /// Where a folder opened from outside the app goes.
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, PartialEq)]
 enum Target {
     /// The window that has it open (or is about to): brought to the front.
@@ -71,6 +82,7 @@ enum Target {
 }
 
 /// Where `root` goes, given the app windows (`windows`, in the order to prefer them).
+#[cfg(any(target_os = "macos", test))]
 fn target(
     open: &OpenWorkspace,
     pending: &PendingFolders,
@@ -95,6 +107,7 @@ fn target(
 
 /// Opens `root`, a folder opened with the app from outside it, in a window: the one that has
 /// it open already, else one on the start screen, else a new one.
+#[cfg(target_os = "macos")]
 pub fn open_folder(app: &AppHandle, root: PathBuf) -> Result<()> {
     let mut windows: Vec<String> = app
         .webview_windows()
@@ -123,6 +136,7 @@ pub fn open_folder(app: &AppHandle, root: PathBuf) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn focus(app: &AppHandle, window: &str) {
     if let Some(window) = app.get_webview_window(window) {
         let _ = window.unminimize();

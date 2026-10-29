@@ -56,6 +56,19 @@ pub async fn snapshot(
     viewport: Size,
     max_width: u32,
 ) -> Result<Vec<u8>> {
+    let image = snapshot_image(webview, rect, viewport, max_width).await?;
+    tauri::async_runtime::spawn_blocking(move || encode_png(&image))
+        .await
+        .map_err(|e| Error::msg(format!("screenshot failed: {e}")))?
+}
+
+/// The pixels of `rect` as currently shown in `webview`, at most `max_width` pixels wide.
+pub async fn snapshot_image(
+    webview: &Webview,
+    rect: Rect,
+    viewport: Size,
+    max_width: u32,
+) -> Result<Image> {
     check(rect, viewport)?;
     let (tx, rx) = tokio::sync::oneshot::channel::<Result<Image>>();
     webview
@@ -66,7 +79,7 @@ pub async fn snapshot(
         .map_err(|_| Error::msg("the screenshot was cancelled"))??;
     tauri::async_runtime::spawn_blocking(move || {
         let region = crop(&full, rect, viewport)?;
-        encode_png(&downscale(&region, max_width))
+        Ok(downscale(&region, max_width))
     })
     .await
     .map_err(|e| Error::msg(format!("screenshot failed: {e}")))?
@@ -74,6 +87,7 @@ pub async fn snapshot(
 
 /// PNG of `rect` of `webview`, rendered afresh `pixels_wide` pixels wide: sharper than the
 /// screen shows it, as WebKit draws the region again at that size rather than scaling pixels.
+/// The PNG keeps the snapshot's colour profile.
 #[cfg(target_os = "macos")]
 pub async fn render_region(
     webview: &Webview,
@@ -81,10 +95,35 @@ pub async fn render_region(
     viewport: Size,
     pixels_wide: u32,
 ) -> Result<Vec<u8>> {
+    render(webview, rect, viewport, pixels_wide, platform::png).await
+}
+
+/// The pixels of `rect` of `webview`, rendered afresh `pixels_wide` pixels wide (see
+/// [`render_region`]), read straight from the snapshot without encoding an image file.
+#[cfg(target_os = "macos")]
+pub async fn render_region_image(
+    webview: &Webview,
+    rect: Rect,
+    viewport: Size,
+    pixels_wide: u32,
+) -> Result<Image> {
+    render(webview, rect, viewport, pixels_wide, platform::pixels).await
+}
+
+#[cfg(target_os = "macos")]
+async fn render<T: Send + 'static>(
+    webview: &Webview,
+    rect: Rect,
+    viewport: Size,
+    pixels_wide: u32,
+    convert: fn(&objc2_app_kit::NSImage) -> Result<T>,
+) -> Result<T> {
     check(rect, viewport)?;
-    let (tx, rx) = tokio::sync::oneshot::channel::<Result<Vec<u8>>>();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<T>>();
     webview
-        .with_webview(move |platform| platform::start_region(platform, rect, pixels_wide, tx))
+        .with_webview(move |platform| {
+            platform::start_region(platform, rect, pixels_wide, tx, convert)
+        })
         .map_err(|e| Error::msg(format!("cannot reach the webview: {e}")))?;
     rx.await
         .map_err(|_| Error::msg("the screenshot was cancelled"))?
@@ -196,7 +235,7 @@ pub fn encode_png(image: &Image) -> Result<Vec<u8>> {
 }
 
 /// Decodes a PNG of any color type into RGBA.
-#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn decode_png(bytes: &[u8]) -> Result<Image> {
     let fail = |e: png::DecodingError| Error::msg(format!("cannot read the screenshot: {e}"));
     let mut decoder = png::Decoder::new(Cursor::new(bytes));
@@ -226,6 +265,20 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image> {
         height: info.height,
         rgba,
     })
+}
+
+/// Turns premultiplied RGBA pixels, in place, into the plain RGBA an [`Image`] holds.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn unpremultiply(rgba: &mut [u8]) {
+    for px in rgba.chunks_exact_mut(4) {
+        let a = u32::from(px[3]);
+        if a == 255 {
+            continue;
+        }
+        for c in &mut px[..3] {
+            *c = ((u32::from(*c) * 255 + a / 2).checked_div(a)).map_or(0, |v| v.min(255) as u8);
+        }
+    }
 }
 
 /// Converts cairo's ARGB32 (premultiplied alpha, native-endian 32-bit pixels) to RGBA.
@@ -262,12 +315,17 @@ mod platform {
     use objc2::rc::Retained;
     use objc2::MainThreadMarker;
     use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+    use objc2_core_graphics::{
+        CGBitmapContextCreate, CGBlendMode, CGColorSpace, CGColorSpaceModel, CGContext, CGImage,
+        CGImageAlphaInfo, CGImageByteOrderInfo, CGInterpolationQuality,
+    };
     use objc2_foundation::{NSDictionary, NSError, NSNumber, NSPoint, NSRect, NSSize};
     use objc2_web_kit::{WKSnapshotConfiguration, WKWebView};
     use tauri::webview::PlatformWebview;
     use tokio::sync::oneshot::Sender;
 
-    use super::{decode_png, Image, Rect};
+    use super::{unpremultiply, Image, Rect};
     use crate::error::{Error, Result};
 
     /// Snapshots the visible WKWebView; runs on the main thread (`with_webview`).
@@ -280,18 +338,17 @@ mod platform {
         let webview = unsafe { &*platform.inner().cast::<WKWebView>() };
         // The default configuration captures the view's bounds at its backing resolution.
         let config = unsafe { WKSnapshotConfiguration::new(mtm) };
-        take(webview, &config, tx, |image| {
-            png(image).and_then(|bytes| decode_png(&bytes))
-        });
+        take(webview, &config, tx, pixels);
     }
 
-    /// Renders `rect` of the WKWebView as a PNG `pixels_wide` pixels wide; runs on the main
-    /// thread (`with_webview`).
-    pub fn start_region(
+    /// Renders `rect` of the WKWebView `pixels_wide` pixels wide and sends `convert` of it;
+    /// runs on the main thread (`with_webview`).
+    pub fn start_region<T: 'static>(
         platform: PlatformWebview,
         rect: Rect,
         pixels_wide: u32,
-        tx: Sender<Result<Vec<u8>>>,
+        tx: Sender<Result<T>>,
+        convert: fn(&NSImage) -> Result<T>,
     ) {
         let Some(mtm) = MainThreadMarker::new() else {
             let _ = tx.send(Err(Error::msg("screenshots must start on the main thread")));
@@ -312,7 +369,7 @@ mod platform {
             config.setRect(region);
             config.setSnapshotWidth(Some(&width));
         }
-        take(webview, &config, tx, png);
+        take(webview, &config, tx, convert);
     }
 
     /// Takes the snapshot `config` describes and sends `convert` of it to `tx`.
@@ -340,7 +397,8 @@ mod platform {
         unsafe { webview.takeSnapshotWithConfiguration_completionHandler(Some(config), &handler) };
     }
 
-    fn png(image: &NSImage) -> Result<Vec<u8>> {
+    /// `image` as a PNG, its colour profile kept.
+    pub fn png(image: &NSImage) -> Result<Vec<u8>> {
         let encode = || {
             let tiff = image.TIFFRepresentation()?;
             let bitmap = NSBitmapImageRep::imageRepWithData(&tiff)?;
@@ -355,6 +413,155 @@ mod platform {
         encode()
             .map(|data| data.to_vec())
             .ok_or_else(|| Error::msg("cannot encode the screenshot as PNG"))
+    }
+
+    /// The pixels of `image` at its full resolution (its largest representation, as a PNG of
+    /// it holds), drawn once into an RGBA buffer: no image file is encoded or decoded. The
+    /// values stay in the snapshot's own colour space, as in its PNG.
+    pub fn pixels(image: &NSImage) -> Result<Image> {
+        let fail = || Error::msg("cannot read the screenshot's pixels");
+        let (width, height) = image
+            .representations()
+            .iter()
+            .map(|rep| (rep.pixelsWide(), rep.pixelsHigh()))
+            .filter(|&(w, h)| w > 0 && h > 0)
+            .max_by_key(|&(w, h)| w * h)
+            .ok_or_else(fail)?;
+        let (width, height) = (width as usize, height as usize);
+        let mut proposed = NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(width as f64, height as f64),
+        );
+        // SAFETY: a valid rect, no context or hints: the image's best bitmap for that size.
+        let cg = unsafe { image.CGImageForProposedRect_context_hints(&mut proposed, None, None) }
+            .ok_or_else(fail)?;
+        let space = CGImage::color_space(Some(&cg))
+            .filter(|space| CGColorSpace::model(Some(space)) == CGColorSpaceModel::RGB)
+            .or_else(CGColorSpace::new_device_rgb)
+            .ok_or_else(fail)?;
+        let mut rgba = vec![0u8; width * height * 4];
+        // Bytes R, G, B, A in memory, alpha premultiplied (all CoreGraphics draws into).
+        let info = CGImageAlphaInfo::PremultipliedLast.0 | CGImageByteOrderInfo::Order32Big.0;
+        {
+            // SAFETY: `rgba` holds `height` rows of `width * 4` bytes and outlives the context.
+            let context = unsafe {
+                CGBitmapContextCreate(
+                    rgba.as_mut_ptr().cast(),
+                    width,
+                    height,
+                    8,
+                    width * 4,
+                    Some(&space),
+                    info,
+                )
+            }
+            .ok_or_else(fail)?;
+            CGContext::set_blend_mode(Some(&context), CGBlendMode::Copy);
+            CGContext::set_interpolation_quality(Some(&context), CGInterpolationQuality::High);
+            let bounds = CGRect::new(
+                CGPoint::new(0.0, 0.0),
+                CGSize::new(width as f64, height as f64),
+            );
+            // Bitmap contexts keep the top row first, as images are drawn upright.
+            CGContext::draw_image(Some(&context), bounds, Some(&cg));
+        }
+        unpremultiply(&mut rgba);
+        Ok(Image {
+            width: width as u32,
+            height: height as u32,
+            rgba,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use objc2::AllocAnyThread;
+        use objc2_core_graphics::CGBitmapContextCreateImage;
+
+        use super::*;
+        use crate::capture::decode_png;
+
+        /// An NSImage of `px` (RGBA, rows top first), `scale` pixels per point, as WebKit's
+        /// snapshots of a Retina window are.
+        fn ns_image(width: usize, height: usize, px: &[u8], scale: f64) -> Retained<NSImage> {
+            let mut data = px.to_vec();
+            for p in data.chunks_exact_mut(4) {
+                let a = u32::from(p[3]);
+                for c in &mut p[..3] {
+                    *c = ((u32::from(*c) * a + 127) / 255) as u8;
+                }
+            }
+            let space = CGColorSpace::new_device_rgb().unwrap();
+            let info = CGImageAlphaInfo::PremultipliedLast.0 | CGImageByteOrderInfo::Order32Big.0;
+            let context = unsafe {
+                CGBitmapContextCreate(
+                    data.as_mut_ptr().cast(),
+                    width,
+                    height,
+                    8,
+                    width * 4,
+                    Some(&space),
+                    info,
+                )
+            }
+            .unwrap();
+            let cg = CGBitmapContextCreateImage(Some(&context)).unwrap();
+            let size = NSSize::new(width as f64 / scale, height as f64 / scale);
+            NSImage::initWithCGImage_size(NSImage::alloc(), &cg, size)
+        }
+
+        fn gradient(width: usize, height: usize) -> Vec<u8> {
+            (0..height)
+                .flat_map(|y| {
+                    (0..width).flat_map(move |x| [(x * 7) as u8, (y * 5) as u8, (x + y) as u8, 255])
+                })
+                .collect()
+        }
+
+        #[test]
+        fn reads_pixels_upright_at_full_retina_resolution() {
+            let px = gradient(40, 24);
+            let image = pixels(&ns_image(40, 24, &px, 2.0)).unwrap();
+            assert_eq!((image.width, image.height), (40, 24), "pixels, not points");
+            assert_eq!(image.rgba, px, "same rows, top first, RGBA order");
+        }
+
+        #[test]
+        fn matches_the_png_path() {
+            let mut px = gradient(33, 17);
+            // A transparent and a half-transparent pixel too.
+            px[..4].copy_from_slice(&[0, 0, 0, 0]);
+            px[4..8].copy_from_slice(&[200, 100, 50, 128]);
+            let image = ns_image(33, 17, &px, 2.0);
+            let direct = pixels(&image).unwrap();
+            let via_png = decode_png(&png(&image).unwrap()).unwrap();
+            assert_eq!(
+                (direct.width, direct.height),
+                (via_png.width, via_png.height)
+            );
+            assert_eq!(direct.rgba, via_png.rgba);
+        }
+
+        /// Run explicitly to compare reading a 1080p snapshot's pixels directly with the
+        /// TIFF → PNG → decode path video export used before.
+        #[test]
+        #[ignore = "1080p capture conversion benchmark; run with --ignored --nocapture"]
+        fn benchmark_capture_conversion_1080p() {
+            use std::time::Instant;
+            let image = ns_image(1920, 1080, &gradient(1920, 1080), 2.0);
+            let runs = 20;
+            let start = Instant::now();
+            for _ in 0..runs {
+                std::hint::black_box(decode_png(&png(&image).unwrap()).unwrap());
+            }
+            let via_png = start.elapsed() / runs;
+            let start = Instant::now();
+            for _ in 0..runs {
+                std::hint::black_box(pixels(&image).unwrap());
+            }
+            let direct = start.elapsed() / runs;
+            eprintln!("1080p frame: TIFF/PNG round trip {via_png:?}, direct pixels {direct:?}");
+        }
     }
 }
 
@@ -681,6 +888,16 @@ mod tests {
     #[test]
     fn rejects_bytes_that_are_not_a_png() {
         assert!(decode_png(b"not a png").is_err());
+    }
+
+    #[test]
+    fn unpremultiplies_pixels_in_place() {
+        let mut rgba = [10, 20, 30, 255, 64, 32, 0, 128, 0, 0, 0, 0, 1, 1, 1, 1];
+        unpremultiply(&mut rgba);
+        assert_eq!(
+            rgba,
+            [10, 20, 30, 255, 128, 64, 0, 128, 0, 0, 0, 0, 255, 255, 255, 1]
+        );
     }
 
     #[test]

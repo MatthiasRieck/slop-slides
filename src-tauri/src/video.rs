@@ -1,5 +1,8 @@
 //! Video export: the deck as an AV1 MP4, each shown slide on screen for the same time, with
 //! its entrance animations, slide fades and hero morphs playing as the presenter shows them.
+//! With narration, each slide's narration (see narration/) is said over it, after a pause,
+//! and the slide stays until a pause after it ends: longer than the set time, if need be.
+//! Narration without up-to-date audio is said first.
 //!
 //! A hidden window plays the deck (`?print`, its runtime current, as pdf.rs prints it) and the
 //! page's helper (`assets/video.js`) takes over the clock of every animation in it, so each
@@ -11,6 +14,7 @@
 //! Frames are encoded on a thread of their own as AV1, a royalty-free codec, with rav1e
 //! (written in Rust, so every platform encodes the same way), and written to the MP4 (see
 //! mp4.rs) as they come. A frame held on screen is stored once, lasting as long as it shows.
+//! The narration is one Opus audio track, royalty-free too, encoded once the frames are.
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -32,8 +36,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::capture::{decode_png, Image, Rect, Size};
 use crate::error::{Error, Result};
-use crate::mp4::Mp4Writer;
-use crate::{deck, html, pdf, protocol};
+use crate::mp4::{AudioTrack, Mp4Writer};
+use crate::narration::{self, Narration};
+use crate::{deck, html, pdf, protocol, voice};
 
 /// Where the page's helper answers; the navigation is caught, never made.
 const SIGNAL_PATH: &str = "/.video-signal";
@@ -46,6 +51,10 @@ const TIMESCALE: u32 = 90_000;
 /// The shortest and longest time a slide may be shown, in seconds.
 pub const MIN_SECONDS: f64 = 0.5;
 pub const MAX_SECONDS: f64 = 600.0;
+/// The longest pause before or after a slide's narration, in seconds.
+pub const MAX_PAUSE: f64 = 10.0;
+/// The narration's bit rate: clear speech, mono.
+const OPUS_BITRATE: i32 = 64_000;
 /// The largest video, in pixels: 4K UHD. Larger slides are scaled down to fit.
 const MAX_SIZE: (u32, u32) = (3840, 2160);
 /// Frames between keyframes besides the one starting each slide, in seconds of video.
@@ -72,12 +81,20 @@ static CANCEL: AtomicBool = AtomicBool::new(false);
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Options {
-    /// How long each slide is shown, in seconds.
+    /// How long each slide is shown, in seconds; with narration, at least.
     pub seconds_per_slide: f64,
     /// Frames per second, one of [`FRAME_RATES`].
     pub fps: u32,
     /// Play entrance animations, slide fades and morphs; otherwise each slide is a still.
     pub animate: bool,
+    /// Say each slide's narration over it.
+    #[serde(default)]
+    pub narration: bool,
+    /// Silence before and after a slide's narration, in seconds.
+    #[serde(default)]
+    pub pause_before: f64,
+    #[serde(default)]
+    pub pause_after: f64,
 }
 
 impl Options {
@@ -90,6 +107,13 @@ impl Options {
                 "each slide must be shown for {MIN_SECONDS} to {MAX_SECONDS} seconds"
             )));
         }
+        if !(0.0..=MAX_PAUSE).contains(&self.pause_before)
+            || !(0.0..=MAX_PAUSE).contains(&self.pause_after)
+        {
+            return Err(Error::msg(format!(
+                "the pauses around narration must be 0 to {MAX_PAUSE} seconds"
+            )));
+        }
         Ok(())
     }
 
@@ -100,15 +124,39 @@ impl Options {
             .max(1.0) as u32
     }
 
+    /// How many frames a slide whose narration lasts `narration` seconds is shown for: the
+    /// set time, or longer to fit the narration and its pauses.
+    pub fn slide_frames(&self, narration: Option<f64>) -> u32 {
+        let least = self.frames_per_slide();
+        match narration {
+            Some(seconds) => {
+                let needed = (self.pause_before + seconds + self.pause_after) * f64::from(self.fps);
+                least.max(needed.ceil() as u32)
+            }
+            None => least,
+        }
+    }
+
     /// When frame `n` is shown, in milliseconds of video.
     fn millis(&self, n: u32) -> f64 {
         f64::from(n) * 1000.0 / f64::from(self.fps)
     }
 }
 
+/// What the export is doing.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Phase {
+    /// Saying narration that has no up-to-date audio; `frame` counts slides.
+    Narration,
+    /// Recording the frames.
+    Video,
+}
+
 /// How far the export has got, sent to the frontend after each frame.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct Progress {
+    pub phase: Phase,
     pub frame: u32,
     pub frames: u32,
 }
@@ -161,6 +209,10 @@ pub async fn export(
 ) -> Result<()> {
     options.check()?;
     let _running = Running::start()?;
+    let clips = match options.narration {
+        true => narrate(app, file, &progress).await?,
+        false => Vec::new(),
+    };
     let canvas = html::slide_size(&deck::read_html(file)?).pixels();
     let dest = pdf::absolute_dest(dest)?;
     let query = if options.animate {
@@ -208,6 +260,7 @@ pub async fn export(
         &dest,
         video_size(canvas.0, canvas.1),
         options,
+        &clips,
         progress,
     )
     .await;
@@ -218,12 +271,123 @@ pub async fn export(
     recorded
 }
 
+/// Says the shown slides' narration that has no up-to-date audio yet, then gives each shown
+/// slide's narration audio, at [`narration::audio::RATE`], in order.
+async fn narrate(
+    app: &AppHandle,
+    file: &Path,
+    progress: &impl Fn(Progress),
+) -> Result<Vec<Option<Vec<f32>>>> {
+    use tauri::Manager;
+    let shown: Vec<String> = deck::load(file)?
+        .slides
+        .into_iter()
+        .filter(|s| !s.hidden)
+        .map(|s| s.id)
+        .collect();
+    let home = deck::app_home()?;
+    let render = app
+        .state::<Narration>()
+        .inner()
+        .render(&home, file, Some(&shown), |p| {
+            progress(Progress {
+                phase: Phase::Narration,
+                frame: p.done as u32,
+                frames: p.total as u32,
+            })
+        });
+    tokio::select! {
+        rendered = render => { rendered?; }
+        _ = cancelled() => return Err(Error::msg(CANCELLED)),
+    }
+    let deck = deck::load(file)?;
+    let mut ready = narration::ready_audio(file, &deck);
+    Ok(deck
+        .slides
+        .iter()
+        .filter(|s| !s.hidden)
+        .map(|s| {
+            ready.remove(&s.id).map(|(samples, rate)| match rate {
+                narration::audio::RATE => samples,
+                rate => voice::resample(&samples, rate, narration::audio::RATE),
+            })
+        })
+        .collect())
+}
+
+/// Resolves once the export is cancelled.
+async fn cancelled() {
+    while !CANCEL.load(Ordering::SeqCst) {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+/// The video's soundtrack, at [`AudioTrack::RATE`]: each slide's narration `clips` (at
+/// [`narration::audio::RATE`]) placed `pause_before` into the slide, which lasts its `frames`.
+pub fn soundtrack(
+    frames: &[u32],
+    fps: u32,
+    clips: &[Option<Vec<f32>>],
+    pause_before: f64,
+) -> Vec<f32> {
+    let rate = f64::from(AudioTrack::RATE);
+    let at = |frame: u32| (f64::from(frame) / f64::from(fps) * rate).round() as usize;
+    let total: u32 = frames.iter().sum();
+    let mut out = vec![0.0; at(total)];
+    let mut start = 0;
+    for (n, clip) in frames
+        .iter()
+        .zip(clips.iter().chain(std::iter::repeat(&None)))
+    {
+        let end = at(start + n);
+        if let Some(clip) = clip {
+            let from = (at(start) + (pause_before * rate).round() as usize).min(end);
+            let clip = voice::resample(clip, narration::audio::RATE, AudioTrack::RATE);
+            let len = clip.len().min(end - from);
+            out[from..from + len].copy_from_slice(&clip[..len]);
+        }
+        start += n;
+    }
+    out
+}
+
+/// `samples` (mono, at [`AudioTrack::RATE`]) encoded as an Opus track.
+pub fn encode_opus(samples: &[f32]) -> Result<AudioTrack> {
+    let failed = |e: opus::Error| Error::msg(format!("cannot encode the narration: {e}"));
+    let mut encoder = opus::Encoder::new(
+        AudioTrack::RATE,
+        opus::Channels::Mono,
+        opus::Application::Audio,
+    )
+    .map_err(failed)?;
+    encoder
+        .set_bitrate(opus::Bitrate::Bits(OPUS_BITRATE))
+        .map_err(failed)?;
+    let pre_skip = encoder.get_lookahead().map_err(failed)?.clamp(0, 0xffff) as usize;
+    // The decoder drops the first `pre_skip` samples; pad the end by as much, so none of the
+    // audio is lost, and to whole packets.
+    let packet = AudioTrack::PACKET as usize;
+    let mut padded = samples.to_vec();
+    padded.resize((samples.len() + pre_skip).div_ceil(packet) * packet, 0.0);
+    let packets = padded
+        .chunks(packet)
+        .map(|chunk| encoder.encode_vec_float(chunk, 4000).map_err(failed))
+        .collect::<Result<_>>()?;
+    Ok(AudioTrack {
+        packets,
+        pre_skip: pre_skip as u16,
+        input_rate: narration::audio::RATE,
+        length: samples.len() as u64,
+    })
+}
+
 /// Plays the deck in the helper's window, frame by frame, into the MP4 at `dest`.
 async fn record(
     helper: &mut pdf::Helper<'_>,
     dest: &Path,
     size: (u32, u32),
     options: Options,
+    clips: &[Option<Vec<f32>>],
     progress: impl Fn(Progress),
 ) -> Result<()> {
     let ready = helper.answer("ready").await?;
@@ -236,14 +400,24 @@ async fn record(
     }
     let (rect, viewport) = pdf::geometry(&ready)?;
     let rect = pdf::inside_whole_points(rect);
-    let per_slide = options.frames_per_slide();
-    let frames = per_slide.saturating_mul(slides);
+    let lengths: Vec<u32> = (0..slides as usize)
+        .map(|i| {
+            let clip = clips.get(i).and_then(Option::as_ref);
+            let seconds = clip.map(|c| c.len() as f64 / f64::from(narration::audio::RATE));
+            options.slide_frames(seconds)
+        })
+        .collect();
+    let frames = lengths.iter().sum();
+    let audio = clips
+        .iter()
+        .any(Option::is_some)
+        .then(|| soundtrack(&lengths, options.fps, clips, options.pause_before));
 
-    let (jobs, encoded) = spawn_encoder(dest.to_path_buf(), size, options.fps)?;
+    let (jobs, encoded) = spawn_encoder(dest.to_path_buf(), size, options.fps, audio)?;
     let encoder_gone = || Error::msg("the video encoder stopped");
     let played = async {
-        for slide in 0..slides {
-            let first = slide * per_slide;
+        let mut first = 0;
+        for (slide, per_slide) in lengths.iter().copied().enumerate() {
             if slide > 0 {
                 let at = options.millis(first);
                 helper
@@ -269,10 +443,12 @@ async fn record(
                 };
                 jobs.send(job).await.map_err(|_| encoder_gone())?;
                 progress(Progress {
+                    phase: Phase::Video,
                     frame: n + 1,
                     frames,
                 });
             }
+            first += per_slide;
         }
         Ok(())
     }
@@ -312,6 +488,7 @@ fn spawn_encoder(
     dest: PathBuf,
     size: (u32, u32),
     fps: u32,
+    audio: Option<Vec<f32>>,
 ) -> Result<(mpsc::Sender<Job>, oneshot::Receiver<Result<()>>)> {
     let (jobs, mut queue) = mpsc::channel::<Job>(QUEUE);
     let (done, encoded) = oneshot::channel();
@@ -328,7 +505,8 @@ fn spawn_encoder(
                         Job::Keyframe => video.keyframe(),
                     }
                 }
-                video.finish()
+                let audio = audio.as_deref().map(encode_opus).transpose()?;
+                video.finish(audio.as_ref())
             })();
             let _ = done.send(result);
         })?;
@@ -447,11 +625,14 @@ impl<W: Write + Seek> VideoWriter<W> {
         self.key = true;
     }
 
-    /// Encodes what is left and writes the MP4's index.
-    pub fn finish(mut self) -> Result<()> {
+    /// Encodes what is left, adds the `audio` track, if any, and writes the MP4's index.
+    pub fn finish(mut self, audio: Option<&AudioTrack>) -> Result<()> {
         self.encoder.flush();
         self.drain()?;
         self.write_ready(u64::MAX)?;
+        if let Some(audio) = audio {
+            self.mp4.write_audio(audio)?;
+        }
         self.mp4.finish()?;
         Ok(())
     }
@@ -607,11 +788,44 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    /// Run explicitly to measure the CPU export path without webview capture or narration.
+    #[test]
+    #[ignore = "1080p encoding benchmark; run with --ignored --nocapture"]
+    fn benchmark_video_encoding_1080p() {
+        use std::time::Instant;
+        let mut image = solid(1920, 1080, [24, 32, 28, 255]);
+        let mut video = VideoWriter::new(Cursor::new(Vec::new()), (1920, 1080), 30).unwrap();
+        let start = Instant::now();
+        for frame in 0..8 {
+            // Small moving detail over a still slide, like a deck's looping decoration.
+            for y in 800..900 {
+                for x in 1600..1700 {
+                    let i = (y * 1920 + x) * 4;
+                    image.rgba[i] = ((x + y + frame * 8) % 256) as u8;
+                }
+            }
+            let conversion = Instant::now();
+            std::hint::black_box(to_yuv(&image, 1920, 1080));
+            eprintln!("RGB conversion: {:?}", conversion.elapsed());
+            let encode = Instant::now();
+            video.push(&image).unwrap();
+            eprintln!("Conversion + encoder submission: {:?}", encode.elapsed());
+        }
+        video.finish(None).unwrap();
+        eprintln!(
+            "Eight 1080p frames including encoder flush: {:?}",
+            start.elapsed()
+        );
+    }
+
     fn options(seconds: f64, fps: u32) -> Options {
         Options {
             seconds_per_slide: seconds,
             fps,
             animate: true,
+            narration: false,
+            pause_before: 0.0,
+            pause_after: 0.0,
         }
     }
 
@@ -646,9 +860,18 @@ mod tests {
             Options {
                 seconds_per_slide: 2.5,
                 fps: 60,
-                animate: false
+                animate: false,
+                narration: false,
+                pause_before: 0.0,
+                pause_after: 0.0,
             }
         );
+        let narrated: Options = serde_json::from_str(
+            r#"{"secondsPerSlide":3,"fps":30,"animate":true,"narration":true,"pauseBefore":0.5,"pauseAfter":1}"#,
+        )
+        .unwrap();
+        assert!(narrated.narration);
+        assert_eq!((narrated.pause_before, narrated.pause_after), (0.5, 1.0));
     }
 
     #[test]
@@ -659,6 +882,86 @@ mod tests {
         assert_eq!(options(1.0 / 70.0, 60).frames_per_slide(), 1);
         assert_eq!(options(1.0, 30).millis(15), 500.0);
         assert!((options(1.0, 24).millis(1) - 41.667).abs() < 0.001);
+    }
+
+    #[test]
+    fn pauses_around_narration_are_checked() {
+        let mut o = options(5.0, 30);
+        o.pause_before = 0.5;
+        o.pause_after = MAX_PAUSE;
+        assert!(o.check().is_ok());
+        o.pause_after = MAX_PAUSE + 0.1;
+        assert!(o.check().is_err());
+        o.pause_after = 1.0;
+        o.pause_before = -0.1;
+        assert!(o.check().is_err());
+        o.pause_before = f64::NAN;
+        assert!(o.check().is_err());
+    }
+
+    #[test]
+    fn narrated_slides_stay_until_their_narration_and_pauses_end() {
+        let mut o = options(5.0, 30);
+        o.pause_before = 0.5;
+        o.pause_after = 1.0;
+        // The set time is the least a slide is shown.
+        assert_eq!(o.slide_frames(None), 150);
+        assert_eq!(o.slide_frames(Some(2.0)), 150);
+        // 0.5 + 10 + 1 seconds, at 30 fps.
+        assert_eq!(o.slide_frames(Some(10.0)), 345);
+        // A part of a frame rounds up, so the narration is never cut short.
+        assert_eq!(o.slide_frames(Some(10.01)), 346);
+    }
+
+    #[test]
+    fn the_soundtrack_says_each_narration_after_its_pause() {
+        let rate = narration::audio::RATE as usize;
+        let out_rate = AudioTrack::RATE as usize;
+        // Three one-second slides at 30 fps; the first and last narrated.
+        let clips = vec![Some(vec![0.5; rate / 2]), None, Some(vec![0.25; rate * 2])];
+        let track = soundtrack(&[30, 30, 30], 30, &clips, 0.25);
+        assert_eq!(track.len(), 3 * out_rate, "as long as the video");
+        let quarter = out_rate / 4;
+        assert!(
+            track[..quarter].iter().all(|s| *s == 0.0),
+            "the pause before"
+        );
+        assert!(track[quarter + 10..quarter + out_rate / 2 - 10]
+            .iter()
+            .all(|s| (*s - 0.5).abs() < 1e-6));
+        assert!(track[out_rate..2 * out_rate + quarter]
+            .iter()
+            .all(|s| *s == 0.0));
+        // Narration longer than its slide is cut where the slide ends.
+        assert!(track[2 * out_rate + quarter + 10..]
+            .iter()
+            .all(|s| (*s - 0.25).abs() < 1e-6));
+        // Slides past the clips are silent.
+        assert_eq!(soundtrack(&[30, 30], 30, &[], 0.0), vec![0.0; 2 * out_rate]);
+    }
+
+    #[test]
+    fn narration_is_encoded_as_opus_that_decodes_to_the_same_length() {
+        let rate = AudioTrack::RATE as usize;
+        let tone: Vec<f32> = (0..rate)
+            .map(|i| (i as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin() * 0.3)
+            .collect();
+        let track = encode_opus(&tone).unwrap();
+        assert!(track.pre_skip > 0);
+        assert_eq!(track.input_rate, narration::audio::RATE);
+        let mut decoder = opus::Decoder::new(AudioTrack::RATE, opus::Channels::Mono).unwrap();
+        let mut decoded = Vec::new();
+        for packet in &track.packets {
+            let mut out = vec![0.0; AudioTrack::PACKET as usize];
+            let n = decoder.decode_float(packet, &mut out, false).unwrap();
+            decoded.extend_from_slice(&out[..n]);
+        }
+        let decoded = &decoded[track.pre_skip as usize..];
+        assert!(decoded.len() >= tone.len(), "none of the audio is lost");
+        assert!(decoded.len() < tone.len() + AudioTrack::PACKET as usize);
+        let energy = |s: &[f32]| s.iter().map(|x| x * x).sum::<f32>() / s.len() as f32;
+        let (a, b) = (energy(&tone), energy(&decoded[..tone.len()]));
+        assert!((a - b).abs() / a < 0.1, "{a} vs {b}");
     }
 
     #[test]
@@ -724,7 +1027,7 @@ mod tests {
         for _ in 0..14 {
             video.repeat().unwrap();
         }
-        video.finish().unwrap();
+        video.finish(None).unwrap();
 
         let track = crate::mp4::read::track(&out.into_inner());
         assert_eq!(
@@ -748,6 +1051,24 @@ mod tests {
             .samples
             .iter()
             .all(|s| obu(s) != OBU_TEMPORAL_DELIMITER));
+    }
+
+    #[test]
+    fn narrated_videos_carry_an_opus_track() {
+        let mut out = Cursor::new(Vec::new());
+        let mut video = VideoWriter::new(&mut out, (64, 36), 30).unwrap();
+        video.push(&solid(64, 36, [200, 30, 30, 255])).unwrap();
+        for _ in 0..29 {
+            video.repeat().unwrap();
+        }
+        let audio = encode_opus(&vec![0.1; AudioTrack::RATE as usize]).unwrap();
+        video.finish(Some(&audio)).unwrap();
+        let file = out.into_inner();
+        assert_eq!(crate::mp4::read::track(&file).durations, [TIMESCALE]);
+        let read = crate::mp4::read::audio(&file);
+        assert_eq!(read.samples.len(), audio.packets.len());
+        assert_eq!(read.pre_skip, audio.pre_skip);
+        assert_eq!(read.edit.0, 1000, "a second of audio");
     }
 
     #[test]

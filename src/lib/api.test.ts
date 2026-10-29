@@ -4,6 +4,7 @@ const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 
 import { api, errorMessage } from "./api";
+import { DEFAULT_VIDEO_OPTIONS } from "./video";
 
 beforeEach(() => {
   invoke.mockReset().mockResolvedValue("result");
@@ -123,9 +124,9 @@ const CASES = [
   ["exportPdf", () => api.exportPdf("talk", "/out.pdf"), "export_pdf", { id: "talk", dest: "/out.pdf" }],
   [
     "exportVideo",
-    () => api.exportVideo("talk", "/out.mp4", { secondsPerSlide: 5, fps: 30, animate: true }),
+    () => api.exportVideo("talk", "/out.mp4", { ...DEFAULT_VIDEO_OPTIONS }),
     "export_video",
-    { id: "talk", dest: "/out.mp4", options: { secondsPerSlide: 5, fps: 30, animate: true } },
+    { id: "talk", dest: "/out.mp4", options: DEFAULT_VIDEO_OPTIONS },
   ],
   ["cancelVideoExport", () => api.cancelVideoExport(), "cancel_video_export", undefined],
   ["lintDeck", () => api.lintDeck("talk"), "lint_deck", { id: "talk" }],
@@ -219,6 +220,25 @@ const CASES = [
   ["startRecording", () => api.startRecording(), "start_recording", undefined],
   ["stopRecording", () => api.stopRecording(), "stop_recording", undefined],
   ["cancelRecording", () => api.cancelRecording(), "cancel_recording", undefined],
+  ["speechStatus", () => api.speechStatus(), "speech_status", undefined],
+  ["downloadSpeechModel", () => api.downloadSpeechModel(), "download_speech_model", undefined],
+  ["narrationAudio", () => api.narrationAudio("talk"), "narration_audio", { id: "talk" }],
+  ["renderNarration", () => api.renderNarration("talk", ["a"]), "render_narration", { id: "talk", slides: ["a"] }],
+  ["renderNarration", () => api.renderNarration("talk", null), "render_narration", { id: "talk", slides: null }],
+  ["cancelNarration", () => api.cancelNarration(), "cancel_narration", undefined],
+  ["narrationWav", () => api.narrationWav("talk", "a"), "narration_wav", { id: "talk", slide: "a" }],
+  [
+    "setNarrationVoice",
+    () => api.setNarrationVoice("talk", "aiden"),
+    "set_narration_voice",
+    { id: "talk", voice: "aiden" },
+  ],
+  [
+    "setNarrationLanguage",
+    () => api.setNarrationLanguage("talk", "de"),
+    "set_narration_language",
+    { id: "talk", language: "de" },
+  ],
 ] as const;
 
 describe("api", () => {

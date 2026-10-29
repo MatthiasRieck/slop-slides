@@ -123,6 +123,23 @@ export function installBrowserMock() {
         case "download_voice_model":
         case "start_recording":
           throw new Error("Voice input requires the desktop app.");
+        case "speech_status":
+          return {
+            available: false,
+            modelReady: false,
+            modelBytes: 2_498_383_610,
+            downloading: false,
+            rendering: null,
+            voices: [{ id: "ryan", name: "Ryan", description: "Dynamic male voice", native: "en" }],
+            languages: [{ id: "en", name: "English" }],
+          };
+        case "narration_audio":
+          return [];
+        case "download_speech_model":
+        case "render_narration":
+        case "set_narration_voice":
+        case "set_narration_language":
+          throw new Error("Narration requires the desktop app.");
         case "load_chat":
           return JSON.parse(localStorage.getItem(`mock-chat-${String(a.id)}`) ?? "null");
         default:

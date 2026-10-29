@@ -13,6 +13,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# The narration speech engine (vendor/qwen3-tts, see build.rs), and OpenBLAS on Linux.
+cc = "1"
+pkg-config = "0.3"
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -44,6 +47,8 @@ arboard = { version = "3.7.0", default-features = false, features = ["image-data
 # Video export (see src/video.rs): AV1, a royalty-free codec, encoded in Rust (no nasm or
 # system libraries needed).
 rav1e = { version = "0.8", default-features = false, features = ["threading"] }
+# Narration in the video: Opus, royalty-free like AV1 (libopus, built from source).
+opus = "0.4"
 
 # Slide screenshots for sketches (see src/capture.rs) and PDF printing (src/pdf.rs); the same
 # versions wry already uses.
@@ -74,6 +79,11 @@ ctor = "1.0.13"
 jsonschema = { version = "0.33.0", default-features = false }
 
 # The AV1 encoder is unusably slow unoptimized; optimize it in dev builds and tests too.
+# The app also processes every captured pixel (scaling and RGB-to-YUV conversion).
+# Optimizing only rav1e leaves that work taking hundreds of milliseconds per HD frame.
+[profile.dev.package.slopslide]
+opt-level = 2
+
 [profile.dev.package.rav1e]
 opt-level = 3
 

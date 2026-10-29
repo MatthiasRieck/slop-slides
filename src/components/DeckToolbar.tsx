@@ -19,9 +19,9 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { api, type Deck, errorMessage } from "../lib/api";
+import { api, type Deck, errorMessage, type Slide } from "../lib/api";
 import { basename, cn } from "../lib/utils";
-import { VIDEO_CANCELLED, type VideoOptions } from "../lib/video";
+import { VIDEO_CANCELLED, type VideoOptions, type VideoProgress } from "../lib/video";
 import { lintFixPrompt, type StageView, useApp } from "../store";
 import { FindButton } from "./FindReplace";
 import { SlideSizeButton } from "./SlideSize";
@@ -61,8 +61,8 @@ function DeckTools({ deck }: { deck: Deck }) {
 
   // An export the backend is still writing (printing a PDF takes a moment).
   const [exporting, setExporting] = useState(false);
-  // How much of a video export is done, 0–1; null when none is running.
-  const [videoProgress, setVideoProgress] = useState<number | null>(null);
+  // How far a video export has got; null when none is running.
+  const [videoProgress, setVideoProgress] = useState<VideoProgress | null>(null);
 
   const fileName = deck.title.replace(/[\\/:*?"<>|]+/g, "").trim() || "presentation";
 
@@ -107,10 +107,8 @@ function DeckTools({ deck }: { deck: Deck }) {
     });
     if (!dest) return;
     setExporting(true);
-    setVideoProgress(0);
-    const unlisten = await listen<{ frame: number; frames: number }>("video-export-progress", ({ payload }) =>
-      setVideoProgress(payload.frames > 0 ? payload.frame / payload.frames : 0),
-    );
+    setVideoProgress({ phase: "video", frame: 0, frames: 0 });
+    const unlisten = await listen<VideoProgress>("video-export-progress", ({ payload }) => setVideoProgress(payload));
     try {
       await api.exportVideo(deck.id, dest, options);
       await revealItemInDir(dest);
@@ -161,7 +159,7 @@ function DeckTools({ deck }: { deck: Deck }) {
         disabled={deck.slides.length === 0 || exporting}
         busy={exporting}
         progress={videoProgress}
-        shownSlides={deck.slides.filter((s) => !s.hidden).length}
+        shownSlides={deck.slides.filter((s) => !s.hidden)}
         onHtml={() => void exportDeck()}
         onPdf={() => void exportPdf()}
         onImages={() => void exportImages()}
@@ -191,6 +189,13 @@ function DeckTools({ deck }: { deck: Deck }) {
   );
 }
 
+/** What the Export button says while a video export runs. */
+function progressLabel(progress: VideoProgress): string {
+  if (progress.phase === "narration")
+    return `Speaking ${Math.min(progress.frame + 1, progress.frames)}/${progress.frames}`;
+  return `Exporting ${progress.frames > 0 ? Math.floor((progress.frame / progress.frames) * 100) : 0}%`;
+}
+
 /**
  * The Export button and its choices: one shareable HTML file, a PDF, a PNG per slide, or a
  * video (which first asks how to make it).
@@ -198,9 +203,9 @@ function DeckTools({ deck }: { deck: Deck }) {
 function ExportMenu(props: {
   disabled: boolean;
   busy: boolean;
-  /** How much of a video export is done, 0–1, while one runs. */
-  progress: number | null;
-  shownSlides: number;
+  /** How far a video export has got, while one runs. */
+  progress: VideoProgress | null;
+  shownSlides: Slide[];
   onHtml: () => void;
   onPdf: () => void;
   onImages: () => void;
@@ -244,11 +249,7 @@ function ExportMenu(props: {
         className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-40"
       >
         {props.busy ? <Loader2 className="size-3.5 animate-spin" /> : <Share className="size-3.5" />}
-        {props.progress !== null
-          ? `Exporting ${Math.floor(props.progress * 100)}%`
-          : props.busy
-            ? "Exporting…"
-            : "Export"}
+        {props.progress !== null ? progressLabel(props.progress) : props.busy ? "Exporting…" : "Export"}
         <ChevronDown className="size-3 text-muted-foreground" />
       </button>
       {open && (

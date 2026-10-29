@@ -6,8 +6,12 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setFullscreen }) }));
+const playNarration = vi.fn();
+vi.mock("../lib/narrationAudio", () => ({ playNarration: (...args: unknown[]) => playNarration(...args) }));
 
 import { LASER_SIZE, TRAIL_FADE_MS, TRAIL_HOLD_MS } from "../lib/ink";
+import { saveVideoOptions } from "../lib/video";
+import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { fakeCanvas2D } from "../test/fakeCanvas";
 import { DECK_HTML, deckFor } from "../test/fixtures";
@@ -83,6 +87,100 @@ describe("Presenter", () => {
     expect(post).toHaveBeenLastCalledWith({ type: "slop:go", key: "ArrowRight" }, "*");
     fireEvent.click(screen.getByLabelText("Previous slide"));
     expect(post).toHaveBeenLastCalledWith({ type: "slop:go", key: "ArrowLeft" }, "*");
+  });
+
+  describe("playing by itself", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      playNarration.mockReset();
+      useNarration.setState({ audio: {}, audioDeck: null });
+      saveVideoOptions({
+        secondsPerSlide: 3,
+        fps: 30,
+        animate: true,
+        narration: true,
+        pauseBefore: 0.5,
+        pauseAfter: 1,
+      });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      localStorage.clear();
+    });
+    const nexts = (post: { mock: { calls: unknown[][] } }) =>
+      post.mock.calls.filter(([m]) => (m as { key?: string }).key === "ArrowRight").length;
+
+    it("shows each slide for the set time, then moves on, stopping after the last", async () => {
+      render(<Presenter />);
+      const post = vi.spyOn(frame().contentWindow!, "postMessage");
+      fromFrame({ type: "slop:slide", id: "intro", index: 0 });
+      fireEvent.click(screen.getByLabelText("Play"));
+      await act(async () => vi.advanceTimersByTime(2900));
+      expect(nexts(post)).toBe(0);
+      await act(async () => vi.advanceTimersByTime(100));
+      expect(nexts(post)).toBe(1);
+      fromFrame({ type: "slop:slide", id: "outro", index: 2 });
+      await act(async () => vi.advanceTimersByTime(3000));
+      expect(nexts(post)).toBe(1);
+      expect(screen.getByLabelText("Play")).toBeTruthy();
+      expect(playNarration).not.toHaveBeenCalled();
+    });
+
+    it("speaks a slide's narration between its pauses, staying until they end", async () => {
+      let end!: () => void;
+      const stop = vi.fn();
+      playNarration.mockImplementation(async () => ({ ended: new Promise<void>((r) => (end = r)), stop }));
+      useNarration.setState({
+        audioDeck: deckFor(DECK_HTML).id,
+        audio: { intro: { slide: "intro", state: "ready", seconds: 10 } },
+      });
+      render(<Presenter />);
+      const post = vi.spyOn(frame().contentWindow!, "postMessage");
+      fromFrame({ type: "slop:slide", id: "intro", index: 0 });
+      fireEvent.click(screen.getByLabelText("Play"));
+      await act(async () => vi.advanceTimersByTime(400));
+      expect(playNarration).not.toHaveBeenCalled();
+      await act(async () => vi.advanceTimersByTime(100));
+      expect(playNarration).toHaveBeenCalledWith(deckFor(DECK_HTML).id, "intro");
+      // Longer than the set time: the slide waits for the narration.
+      await act(async () => vi.advanceTimersByTime(9500));
+      expect(nexts(post)).toBe(0);
+      await act(async () => end());
+      await act(async () => vi.advanceTimersByTime(900));
+      expect(nexts(post)).toBe(0);
+      await act(async () => vi.advanceTimersByTime(100));
+      expect(nexts(post)).toBe(1);
+    });
+
+    it("pausing stops the narration and the show stays", async () => {
+      const stop = vi.fn();
+      playNarration.mockImplementation(async () => ({ ended: new Promise<void>(() => {}), stop }));
+      useNarration.setState({
+        audioDeck: deckFor(DECK_HTML).id,
+        audio: { intro: { slide: "intro", state: "ready", seconds: 10 } },
+      });
+      render(<Presenter />);
+      const post = vi.spyOn(frame().contentWindow!, "postMessage");
+      fromFrame({ type: "slop:slide", id: "intro", index: 0 });
+      fireEvent.click(screen.getByLabelText("Play"));
+      await act(async () => vi.advanceTimersByTime(600));
+      fireEvent.click(screen.getByLabelText("Pause"));
+      expect(stop).toHaveBeenCalled();
+      await act(async () => vi.advanceTimersByTime(60_000));
+      expect(nexts(post)).toBe(0);
+    });
+
+    it("leaves out-of-date audio and narration the settings turned off unspoken", async () => {
+      useNarration.setState({
+        audioDeck: deckFor(DECK_HTML).id,
+        audio: { intro: { slide: "intro", state: "stale", seconds: 10 } },
+      });
+      render(<Presenter />);
+      fromFrame({ type: "slop:slide", id: "intro", index: 0 });
+      fireEvent.click(screen.getByLabelText("Play"));
+      await act(async () => vi.advanceTimersByTime(5000));
+      expect(playNarration).not.toHaveBeenCalled();
+    });
   });
 
   it("ignores messages that are not from the show", () => {

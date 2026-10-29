@@ -16,6 +16,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: (...args: unknown[]) => revealItemInDir(...args) }));
 
+import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { DeckToolbar } from "./DeckToolbar";
@@ -34,6 +35,7 @@ beforeEach(() => {
   unlisten.mockReset();
   listen.mockResolvedValue(unlisten);
   localStorage.removeItem("slopslide.video");
+  useNarration.setState({ speech: null, audio: {}, audioDeck: null, render: null, download: null });
   useApp.setState({
     workspace: WORKSPACE,
     openedFile: OPENED,
@@ -345,7 +347,7 @@ describe("video export", () => {
     expect(invoke).toHaveBeenCalledWith("export_video", {
       id: "/decks/talk/deck.html",
       dest: "/Users/me/Desktop/Talk.mp4",
-      options: { secondsPerSlide: 2.5, fps: 60, animate: false },
+      options: { secondsPerSlide: 2.5, fps: 60, animate: false, narration: true, pauseBefore: 0.5, pauseAfter: 1 },
     });
     expect(revealItemInDir).toHaveBeenCalledWith("/Users/me/Desktop/Talk.mp4");
     expect(unlisten).toHaveBeenCalled();
@@ -392,7 +394,73 @@ describe("video export", () => {
     render(<DeckToolbar />);
     openPanel();
     await act(async () => fireEvent.click(saveButton()));
-    expect(invoke).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalledWith("export_video", expect.anything());
+  });
+
+  /** The deck with narration on its first two slides; the first one's audio ready. */
+  function narrated(speech: { available: boolean; modelReady: boolean }) {
+    const deck = deckFor(DECK_HTML);
+    const words = (n: number) => Array(n).fill("word").join(" ");
+    useApp.setState({
+      deck: {
+        ...deck,
+        slides: deck.slides.map((s, i) => ({ ...s, narration: i === 0 ? "Hello there." : i === 1 ? words(150) : "" })),
+      },
+    });
+    invoke.mockImplementation(async (command: string) =>
+      command === "speech_status"
+        ? { ...speech, modelBytes: 1, downloading: false, rendering: null, voices: [], languages: [] }
+        : undefined,
+    );
+    useNarration.setState({
+      audioDeck: deck.id,
+      audio: {
+        intro: { slide: "intro", state: "ready", seconds: 20 },
+        "#2": { slide: "#2", state: "missing", seconds: null },
+      },
+    });
+  }
+
+  it("speaks narration, each slide staying until its narration and the pauses end", async () => {
+    narrated({ available: true, modelReady: true });
+    render(<DeckToolbar />);
+    openPanel();
+    await act(async () => {});
+    // 0.5 + 20 + 1 s, about 0.5 + 60 + 1 s for the 150 words not yet spoken, and 5 s.
+    expect(screen.getByText(/3 slides, about 1:28 long/)).toBeTruthy();
+    expect(screen.getByText(/1 slide is spoken first/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Pause before narration"), { target: { value: "0" } });
+    fireEvent.change(screen.getByLabelText("Pause after narration"), { target: { value: "0" } });
+    expect(screen.getByText(/3 slides, about 1:25 long/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Pause after narration"), { target: { value: "11" } });
+    expect(screen.getByRole("alert").textContent).toMatch(/0 to 10 seconds/);
+    // Without narration, every slide gets the set time.
+    fireEvent.click(screen.getByRole("checkbox", { name: /Speak narration/ }));
+    expect(screen.queryByLabelText("Pause before narration")).toBeNull();
+    expect(screen.getByText(/3 slides, 0:15 long/)).toBeTruthy();
+  });
+
+  it("asks for the voice model when narration still has to be spoken", async () => {
+    narrated({ available: true, modelReady: false });
+    render(<DeckToolbar />);
+    openPanel();
+    await act(async () => {});
+    expect(screen.getByRole("alert").textContent).toMatch(/Download the voice model/);
+    expect(saveButton().disabled).toBe(true);
+    fireEvent.click(screen.getByRole("checkbox", { name: /Speak narration/ }));
+    expect(saveButton().disabled).toBe(false);
+  });
+
+  it("says so while narration is spoken first", async () => {
+    save.mockResolvedValue("/Users/me/Desktop/Talk.mp4");
+    invoke.mockImplementation((command: string) =>
+      command === "export_video" ? new Promise<void>(() => {}) : Promise.resolve(),
+    );
+    render(<DeckToolbar />);
+    openPanel();
+    await act(async () => fireEvent.click(saveButton()));
+    act(() => progressListener()({ payload: { phase: "narration", frame: 1, frames: 4 } as never }));
+    expect(screen.getByRole("button", { name: /Speaking 2\/4/ })).toBeTruthy();
   });
 
   it("shows progress, and cancels quietly", async () => {

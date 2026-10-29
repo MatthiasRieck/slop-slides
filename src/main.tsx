@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 
 import { App } from "./App";
 import "./index.css";
+import { initNarrationEvents } from "./narrationStore";
 import { initEventBridge } from "./store";
 
 // Follow the OS appearance.
@@ -16,6 +17,7 @@ if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
   installBrowserMock();
 }
 void initEventBridge();
+void initNarrationEvents();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

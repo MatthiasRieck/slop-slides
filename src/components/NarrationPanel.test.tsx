@@ -1,11 +1,13 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+const invoke = vi.fn();
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 
-import type { Deck } from "../lib/api";
+import type { Deck, SlideAudio, SpeechStatus } from "../lib/api";
+import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { NARRATION_SAVE_DELAY, NarrationPanel } from "./NarrationPanel";
@@ -22,9 +24,39 @@ function deckWith(narration: Record<string, string>, locked: string[] = []): Dec
 
 const box = () => screen.getByRole("textbox", { name: "Narration" }) as HTMLTextAreaElement;
 
+const SPEECH: SpeechStatus = {
+  available: true,
+  modelReady: true,
+  modelBytes: 2_498_383_610,
+  downloading: false,
+  rendering: null,
+  voices: [
+    { id: "ryan", name: "Ryan", description: "Dynamic male voice", native: "en" },
+    { id: "sohee", name: "Sohee", description: "Warm female voice", native: "ko" },
+  ],
+  languages: [
+    { id: "en", name: "English" },
+    { id: "ko", name: "Korean" },
+  ],
+};
+
+/** The backend answering speech_status with `speech`, and other commands with `answers`. */
+function backend(speech: SpeechStatus | null, answers: Record<string, unknown> = {}) {
+  invoke.mockImplementation(async (command: string) => (command === "speech_status" ? speech : answers[command]));
+}
+
+function audioOf(entries: SlideAudio[]) {
+  useNarration.setState({
+    audioDeck: deckFor(DECK_HTML).id,
+    audio: Object.fromEntries(entries.map((a) => [a.slide, a])),
+  });
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   setNarration.mockClear();
+  invoke.mockReset();
+  useNarration.setState({ speech: null, audio: {}, audioDeck: null, render: null, download: null });
   useApp.setState({ deck: deckWith({ intro: "Welcome, everyone." }), selected: "intro", setNarration });
 });
 
@@ -94,5 +126,119 @@ describe("NarrationPanel", () => {
     useApp.setState({ deck: { ...deckFor(DECK_HTML), slides: [] } });
     rerender(<NarrationPanel />);
     expect(screen.getByText(/Add a slide/)).toBeTruthy();
+  });
+});
+
+describe("NarrationPanel speech", () => {
+  /** Renders the panel and lets it load the speech status. */
+  async function show() {
+    const view = render(<NarrationPanel />);
+    await act(async () => {});
+    return view;
+  }
+
+  it("picks the deck's voice and language", async () => {
+    backend(SPEECH);
+    const setNarrationVoice = vi.fn(async () => {});
+    const setNarrationLanguage = vi.fn(async () => {});
+    useApp.setState({
+      deck: { ...deckWith({ intro: "Hi." }), narration: { voice: "sohee", language: "ko" } },
+      setNarrationVoice,
+      setNarrationLanguage,
+    });
+    await show();
+    const voice = screen.getByRole("combobox", { name: "Narration voice" }) as HTMLSelectElement;
+    const language = screen.getByRole("combobox", { name: "Narration language" }) as HTMLSelectElement;
+    expect(voice.value).toBe("sohee");
+    expect(language.value).toBe("ko");
+    expect(screen.getByRole("option", { name: "Sohee — Warm female voice (Korean)" })).toBeTruthy();
+    fireEvent.change(voice, { target: { value: "ryan" } });
+    fireEvent.change(language, { target: { value: "en" } });
+    expect(setNarrationVoice).toHaveBeenCalledWith("ryan");
+    expect(setNarrationLanguage).toHaveBeenCalledWith("en");
+  });
+
+  it("offers to download the voice model, showing its progress", async () => {
+    let finish!: () => void;
+    backend({ ...SPEECH, modelReady: false });
+    invoke.mockImplementation((command: string) =>
+      command === "speech_status"
+        ? Promise.resolve({ ...SPEECH, modelReady: false })
+        : command === "download_speech_model"
+          ? new Promise<void>((resolve) => (finish = resolve))
+          : Promise.resolve(),
+    );
+    await show();
+    expect(screen.getByText(/2.5 GB/)).toBeTruthy();
+    const generate = screen.getByRole("button", { name: /Generate/ }) as HTMLButtonElement;
+    expect(generate.disabled).toBe(true);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Download voice model/ })));
+    expect(invoke).toHaveBeenCalledWith("download_speech_model");
+    act(() => useNarration.setState({ download: { received: 1_249_191_805, total: 2_498_383_610 } }));
+    expect(screen.getByRole("status").textContent).toContain("50%");
+    invoke.mockImplementation(async (command: string) => (command === "speech_status" ? SPEECH : undefined));
+    await act(async () => finish());
+    expect(screen.queryByRole("button", { name: /Download voice model/ })).toBeNull();
+    expect((screen.getByRole("button", { name: /Generate/ }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("says when this platform cannot speak", async () => {
+    backend({ ...SPEECH, available: false, modelReady: false });
+    await show();
+    expect(screen.getByText(/not available on this platform/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Download voice model/ })).toBeNull();
+  });
+
+  it("tells whether the slide's audio is there and up to date", async () => {
+    backend(SPEECH);
+    await show();
+    expect(screen.getByText("No audio yet")).toBeTruthy();
+    expect((screen.getByRole("button", { name: /Play/ }) as HTMLButtonElement).disabled).toBe(true);
+    act(() => audioOf([{ slide: "intro", state: "ready", seconds: 12.4 }]));
+    expect(screen.getByText("Audio 0:12")).toBeTruthy();
+    expect((screen.getByRole("button", { name: /Play/ }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByRole("button", { name: /Regenerate/ })).toBeTruthy();
+    act(() => audioOf([{ slide: "intro", state: "stale", seconds: 75 }]));
+    expect(screen.getByText("Audio 1:15, out of date")).toBeTruthy();
+  });
+
+  it("saves what was typed, then speaks the slide", async () => {
+    const said: SlideAudio[] = [{ slide: "intro", state: "ready", seconds: 2 }];
+    backend(SPEECH, { render_narration: said });
+    await show();
+    fireEvent.change(box(), { target: { value: "Welcome back." } });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Generate/ })));
+    expect(setNarration.mock.calls).toEqual([["intro", "Welcome back."]]);
+    expect(invoke).toHaveBeenCalledWith("render_narration", { id: deckFor(DECK_HTML).id, slides: ["intro"] });
+    expect(screen.getByText("Audio 0:02")).toBeTruthy();
+  });
+
+  it("has no audio controls for a slide without narration", async () => {
+    backend(SPEECH);
+    await show();
+    act(() => useApp.getState().select("outro"));
+    expect(screen.queryByRole("button", { name: /Generate$/ })).toBeNull();
+  });
+
+  it("speaks every slide that needs it, and can be cancelled", async () => {
+    backend(SPEECH);
+    useApp.setState({ deck: deckWith({ intro: "One.", outro: "Three." }) });
+    await show();
+    act(() =>
+      audioOf([
+        { slide: "intro", state: "stale", seconds: 1 },
+        { slide: "outro", state: "missing", seconds: null },
+      ]),
+    );
+    expect(screen.getByText("2 slides need audio")).toBeTruthy();
+    invoke.mockImplementation((command: string) =>
+      command === "render_narration" ? new Promise(() => {}) : Promise.resolve(SPEECH),
+    );
+    act(() => fireEvent.click(screen.getByRole("button", { name: /Generate all/ })));
+    expect(invoke).toHaveBeenCalledWith("render_narration", { id: deckFor(DECK_HTML).id, slides: null });
+    act(() => useNarration.setState({ render: { deck: deckFor(DECK_HTML).id, slide: "outro", done: 1, total: 2 } }));
+    expect(screen.getByText(/Speaking slide 2 of 2/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Cancel/ }));
+    expect(invoke).toHaveBeenCalledWith("cancel_narration");
   });
 });

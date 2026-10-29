@@ -617,28 +617,42 @@ async fn download(app: &AppHandle, model: &Model, dest: &Path) -> Result<()> {
 
 /// Streams the model to `part`; returns its SHA-256, hex.
 async fn fetch(app: &AppHandle, model: &Model, part: &Path) -> Result<String> {
+    let mut reported = 0u64;
+    fetch_to(model.url, part, |received, total| {
+        let total = total.unwrap_or(model.bytes);
+        // About every half percent, so the progress bar moves without flooding the frontend.
+        if received - reported >= total / 200 || received == total {
+            reported = received;
+            let _ = app.emit(DOWNLOAD_EVENT, DownloadProgress { received, total });
+        }
+    })
+    .await
+}
+
+/// Streams `url` to `part`, calling `progress` with the bytes received so far (and the
+/// download's size, when the server says) after each chunk; returns its SHA-256, hex.
+pub async fn fetch_to(
+    url: &str,
+    part: &Path,
+    mut progress: impl FnMut(u64, Option<u64>),
+) -> Result<String> {
     let failed =
         |e: reqwest::Error| Error::msg(format!("Downloading the speech model failed: {e}"));
-    let response = reqwest::get(model.url)
+    let response = reqwest::get(url)
         .await
         .and_then(|r| r.error_for_status())
         .map_err(failed)?;
-    let total = response.content_length().unwrap_or(model.bytes);
+    let total = response.content_length();
     let mut file = fs::File::create(part)?;
     let mut hasher = Sha256::new();
     let mut received = 0u64;
-    let mut reported = 0u64;
     let mut body = response.bytes_stream();
     while let Some(chunk) = body.next().await {
         let chunk = chunk.map_err(failed)?;
         file.write_all(&chunk)?;
         hasher.update(&chunk);
         received += chunk.len() as u64;
-        // About every half percent, so the progress bar moves without flooding the frontend.
-        if received - reported >= total / 200 || received == total {
-            reported = received;
-            let _ = app.emit(DOWNLOAD_EVENT, DownloadProgress { received, total });
-        }
+        progress(received, total);
     }
     file.sync_all()?;
     Ok(hex(&hasher.finalize()))

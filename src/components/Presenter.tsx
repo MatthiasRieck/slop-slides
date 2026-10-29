@@ -1,9 +1,13 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronLeft, ChevronRight, Maximize } from "lucide-react";
+import { ChevronLeft, ChevronRight, type LucideIcon, Maximize, Pause, Play } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import type { Deck } from "../lib/api";
 import { zoomBox } from "../lib/ink";
+import { type Playback, playNarration } from "../lib/narrationAudio";
 import { cn, fileUrl } from "../lib/utils";
+import { loadVideoOptions } from "../lib/video";
+import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { AnnotationLayer, PresenterToolbar, useAnnotations, useReveal } from "./PresenterTools";
 
@@ -12,7 +16,8 @@ import { AnnotationLayer, PresenterToolbar, useAnnotations, useReveal } from "./
  * anyone you share the file with sees), starting at the selected slide. On top sit the
  * presenter's tools: laser pointer, pen, highlighter and eraser. With `show`, the backend adds
  * the pasteboard (src-tauri/assets/pasteboard.js), so the slide can be zoomed with the mouse
- * wheel or a pinch and panned with a swipe or the middle button; 0 fits it again.
+ * wheel or a pinch and panned with a swipe or the middle button; 0 fits it again. Play runs
+ * the show by itself, speaking each slide's narration (see `useAutoplay`).
  */
 export function Presenter() {
   const deck = useApp((s) => s.deck);
@@ -21,6 +26,8 @@ export function Presenter() {
   const startRef = useRef(useApp.getState().selected);
   // Ink belongs to the slide it was drawn on; the player reports each slide by position.
   const [slideKey, setSlideKey] = useState("");
+  // The slide on screen, as the player reports it.
+  const [current, setCurrent] = useState<string | null>(null);
   const annotations = useAnnotations(slideKey);
   const handleKeyRef = useRef(annotations.handleKey);
   handleKeyRef.current = annotations.handleKey;
@@ -65,6 +72,7 @@ export function Presenter() {
       }
       if (event.data?.type === "slop:slide") {
         if (typeof event.data.index === "number") setSlideKey(String(event.data.index));
+        setCurrent(event.data.id ? String(event.data.id) : null);
         // Keep the editor's selection in step so leaving the show lands on the same slide.
         if (event.data.id) useApp.getState().select(String(event.data.id));
       }
@@ -77,6 +85,9 @@ export function Presenter() {
       void window_.setFullscreen(false);
     };
   }, []);
+
+  const go = (key: string) => frameRef.current?.contentWindow?.postMessage({ type: "slop:go", key }, "*");
+  const autoplay = useAutoplay(deck, current, () => go("ArrowRight"));
 
   if (!deck) return null;
   const hash = startRef.current ? `#${encodeURIComponent(startRef.current)}` : "";
@@ -113,22 +124,31 @@ export function Presenter() {
       <div data-testid="nav-zone" className="absolute right-0 bottom-0 z-10 flex gap-1 p-4" {...nav.zoneProps}>
         {(
           [
-            ["Previous slide", "ArrowLeft", ChevronLeft],
-            ["Next slide", "ArrowRight", ChevronRight],
-          ] as const
-        ).map(([label, key, Icon]) => (
+            { label: "Previous slide", title: "Previous slide", onClick: () => go("ArrowLeft"), Icon: ChevronLeft },
+            autoplay.playing
+              ? { label: "Pause", title: "Pause", onClick: autoplay.toggle, Icon: Pause }
+              : {
+                  label: "Play",
+                  title: "Play: speak each slide's narration and move on by itself",
+                  onClick: autoplay.toggle,
+                  Icon: Play,
+                },
+            { label: "Next slide", title: "Next slide", onClick: () => go("ArrowRight"), Icon: ChevronRight },
+          ] satisfies { label: string; title: string; onClick: () => void; Icon: LucideIcon }[]
+        ).map(({ label, title, onClick, Icon }) => (
           <button
-            key={key}
+            key={label}
             type="button"
-            title={label}
+            title={title}
             aria-label={label}
             // Keep keyboard focus where it was, so Space still advances the slide.
             onMouseDown={(event) => event.preventDefault()}
-            onClick={() => frameRef.current?.contentWindow?.postMessage({ type: "slop:go", key }, "*")}
+            onClick={onClick}
             data-visible={nav.visible}
             className={cn(
               "flex size-9 items-center justify-center rounded-xl border border-white/10 bg-neutral-900/85 text-white/80 shadow-lg backdrop-blur transition-opacity duration-200 hover:text-white [&_svg]:size-5",
-              nav.visible ? "opacity-100" : "opacity-0",
+              // While playing, the pause button stays in view.
+              nav.visible || label === "Pause" ? "opacity-100" : "opacity-0",
             )}
           >
             <Icon />
@@ -138,6 +158,58 @@ export function Presenter() {
       <PresenterToolbar annotations={annotations} onExit={() => useApp.getState().setPresenting(false)} />
     </div>
   );
+}
+
+/**
+ * Runs the show by itself while playing: each slide waits the pause before its narration,
+ * speaks it (its up-to-date audio, from the Narration tab), waits the pause after, and stays
+ * at least the set seconds per slide; then `next` moves on. The times are the video export's.
+ * Pausing stops the narration; playing again starts the slide's narration over. The show stops
+ * playing after the last slide.
+ */
+export function useAutoplay(deck: Deck | null, current: string | null, next: () => void) {
+  const [playing, setPlaying] = useState(false);
+  const nextRef = useRef(next);
+  nextRef.current = next;
+  useEffect(() => {
+    if (!playing || !deck || !current) return;
+    let cancelled = false;
+    let playback: Playback | null = null;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const wait = (ms: number) => new Promise<void>((resolve) => timers.push(setTimeout(resolve, Math.max(0, ms))));
+    const options = loadVideoOptions();
+    const started = Date.now();
+    const run = async () => {
+      const { audio, audioDeck } = useNarration.getState();
+      const ready = audioDeck === deck.id && audio[current]?.state === "ready";
+      if (ready && options.narration) {
+        await wait(options.pauseBefore * 1000);
+        if (cancelled) return;
+        try {
+          playback = await playNarration(deck.id, current);
+          if (cancelled) return playback.stop();
+          await playback.ended;
+        } catch {
+          // Audio that cannot play: the slide still gets its time.
+        }
+        if (cancelled) return;
+        await wait(options.pauseAfter * 1000);
+      }
+      const rest = options.secondsPerSlide * 1000 - (Date.now() - started);
+      if (rest > 0) await wait(rest);
+      if (cancelled) return;
+      const shown = deck.slides.filter((s) => !s.hidden);
+      if (shown[shown.length - 1]?.id === current) setPlaying(false);
+      else nextRef.current();
+    };
+    void run();
+    return () => {
+      cancelled = true;
+      for (const timer of timers) clearTimeout(timer);
+      playback?.stop();
+    };
+  }, [playing, deck, current]);
+  return { playing, toggle: () => setPlaying((p) => !p) };
 }
 
 /** Asks the show's pasteboard to fit the slide to the screen again. */

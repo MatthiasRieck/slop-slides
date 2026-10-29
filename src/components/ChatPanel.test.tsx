@@ -553,6 +553,29 @@ describe("ChatPanel: voice input", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("scrolls to follow the dictated text", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "voice_status") return { modelReady: true, modelBytes: 1, downloading: false, recording: false };
+      return [];
+    });
+    render(<ChatPanel />);
+    const el = textarea();
+    // A line per character, 10px each, in a 50px tall box.
+    Object.defineProperty(el, "scrollHeight", { configurable: true, get: () => el.value.length * 10 });
+    Object.defineProperty(el, "clientHeight", { configurable: true, get: () => 50 });
+    fireEvent.change(el, { target: { value: "abcdefghij" } });
+    el.setSelectionRange(10, 10);
+    el.scrollTop = 0;
+
+    fireEvent.click(screen.getByRole("button", { name: "Dictate a message" }));
+    await screen.findByRole("button", { name: /Stop dictating/ });
+    const onPartial = await waitFor(partial);
+    act(() => onPartial({ payload: "klmno" }));
+    // "abcdefghij klmno" ends 160px down, so its last line sits at the bottom of the box.
+    expect(el.value).toBe("abcdefghij klmno");
+    expect(el.scrollTop).toBe(110);
+  });
+
   it("restores the draft when dictation is discarded", async () => {
     invoke.mockImplementation(async (cmd: string) => {
       if (cmd === "voice_status") return { modelReady: true, modelBytes: 1, downloading: false, recording: false };

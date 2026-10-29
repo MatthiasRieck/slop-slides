@@ -374,6 +374,22 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     el.style.height = `${Math.min(Math.max(el.scrollHeight, 64), 240)}px`;
   }, [shownDraft, inputHeight]);
 
+  // The textarea doesn't have focus while dictating, so it doesn't follow the words coming in:
+  // keep the end of the dictated text in view, measured as the height of the text up to it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: follows the shown text
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el || !dictation?.text) return;
+    const { caret } = dictated(dictation.text);
+    const value = el.value;
+    el.value = value.slice(0, caret);
+    const bottom = el.scrollHeight;
+    el.value = value;
+    if (bottom > el.scrollTop + el.clientHeight || bottom < el.scrollTop) {
+      el.scrollTop = Math.max(0, bottom - el.clientHeight);
+    }
+  }, [shownDraft, inputHeight]);
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: refocus when the draft is sent or cleared
   useEffect(() => {
     textareaRef.current?.focus();

@@ -913,10 +913,12 @@ mod window_config_tests {
     #[test]
     fn traffic_lights_are_vertically_centered_in_the_top_bar() {
         // The top bar and home header are `h-12` (48px); macOS window buttons are 14px tall.
+        // tao grows the title bar container to button height + y, and AppKit keeps the
+        // buttons 9px up from its bottom edge, so a button's top edge lands at y - 9.
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         let position = &config["app"]["windows"][0]["trafficLightPosition"];
-        assert_eq!(position["y"].as_f64(), Some((48.0 - 14.0) / 2.0));
+        assert_eq!(position["y"].as_f64(), Some((48.0 - 14.0) / 2.0 + 9.0));
         // Leaves room before the `pl-[84px]` content padding.
         assert!(position["x"].as_f64().unwrap() + 54.0 < 84.0);
     }

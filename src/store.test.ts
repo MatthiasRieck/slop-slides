@@ -1855,6 +1855,39 @@ describe("editing slides on the stage", () => {
     expect(useApp.getState().slideUndo).toEqual([]);
   });
 
+  it("saves a slide's narration after any slide edits still being saved", async () => {
+    const useApp = await freshStore();
+    slideBackend();
+    backend({
+      update_slide: () => ({ deck: deckFor(DECK_HTML, "2"), previous: ORIGINAL }),
+      set_slide_narration: ({ slide, text }) => {
+        const deck = deckFor(DECK_HTML, "3");
+        return { ...deck, slides: deck.slides.map((s) => (s.id === slide ? { ...s, narration: text } : s)) };
+      },
+    });
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    const edit = useApp.getState().saveSlideEdit("intro", MOVED);
+    const narration = useApp.getState().setNarration("intro", "Welcome, everyone.");
+    await Promise.all([edit, narration]);
+    expect(invoke.mock.calls.map(([c]) => c)).toEqual(["update_slide", "set_slide_narration"]);
+    expect(calls("set_slide_narration")).toEqual([
+      { id: "/decks/talk/deck.html", slide: "intro", text: "Welcome, everyone." },
+    ]);
+    expect(useApp.getState().deck!.slides[0]).toMatchObject({ hash: "intro-3", narration: "Welcome, everyone." });
+  });
+
+  it("reports a narration that could not be saved", async () => {
+    const useApp = await freshStore();
+    backend({
+      set_slide_narration: () => {
+        throw "The slide `intro` is locked; unlock it to change it.";
+      },
+    });
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", error: null });
+    await useApp.getState().setNarration("intro", "Hi");
+    expect(useApp.getState().error).toContain("locked");
+  });
+
   it("ignores edits of slides that are gone", async () => {
     const useApp = await freshStore();
     useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });

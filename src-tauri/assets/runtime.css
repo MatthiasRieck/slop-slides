@@ -85,7 +85,8 @@ html[data-slop-player] .deck > .slide.active {
 .deck > .deck-section {
   display: none !important;
 }
-.slide .notes {
+.slide .notes,
+.slide .narration {
   display: none !important;
 }
 /* Review marks from the editor, drawn by the player over their slide; R shows and hides them. */

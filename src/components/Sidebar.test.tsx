@@ -7,6 +7,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 // The tabs' contents have their own tests.
 vi.mock("./ChatPanel", () => ({ ChatPanel: () => <div data-testid="chat" /> }));
 vi.mock("./FileTree", () => ({ FileTree: () => <div data-testid="files" /> }));
+vi.mock("./NarrationPanel", () => ({ NarrationPanel: () => <div data-testid="narration" /> }));
 
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
@@ -27,7 +28,7 @@ const tab = (name: string) => screen.getByRole("tab", { name });
 describe("Sidebar", () => {
   it("shows one tab at a time and switches between them", () => {
     render(<Sidebar />);
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Chat", "Files"]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Chat", "Narration", "Files"]);
     expect(tab("Chat").getAttribute("aria-selected")).toBe("true");
     expect(screen.queryByTestId("chat")).not.toBeNull();
     expect(screen.queryByTestId("files")).toBeNull();
@@ -41,6 +42,17 @@ describe("Sidebar", () => {
   it("shows workspace chat without an open deck", () => {
     useApp.setState({ deck: null });
     render(<Sidebar />);
+    expect(screen.queryByTestId("chat")).not.toBeNull();
+  });
+
+  it("has a narration tab only while a deck is open", () => {
+    useApp.setState({ sidebarTab: "narration" });
+    const { rerender } = render(<Sidebar />);
+    expect(tab("Narration").getAttribute("aria-selected")).toBe("true");
+    expect(screen.queryByTestId("narration")).not.toBeNull();
+    useApp.setState({ deck: null });
+    rerender(<Sidebar />);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Chat", "Files"]);
     expect(screen.queryByTestId("chat")).not.toBeNull();
   });
 });

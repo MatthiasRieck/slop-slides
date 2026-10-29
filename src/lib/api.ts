@@ -3,6 +3,7 @@ import type { Stroke } from "./ink";
 import type { Provider, ProviderInfo } from "./models";
 import type { Approval, ApprovalDecision, PermissionMode } from "./permissions";
 import type { SizeInfo, SlideSize } from "./slideSize";
+import type { VideoOptions } from "./video";
 
 /** What a workspace file is, which decides what it opens in (see src-tauri/src/workspace.rs). */
 export type FileKind = "directory" | "deck" | "slideshow" | "webpage" | "file";
@@ -277,6 +278,13 @@ export const api = {
   exportDeck: (id: string, dest: string) => invoke<void>("export_deck", { id, dest }),
   /** Prints the deck to `dest` as a PDF: one page per shown slide, with selectable text. */
   exportPdf: (id: string, dest: string) => invoke<void>("export_pdf", { id, dest }),
+  /**
+   * Records the deck to `dest` as an MP4, each shown slide on screen for the same time;
+   * `video-export-progress` events ({ frame, frames }) follow it.
+   */
+  exportVideo: (id: string, dest: string, options: VideoOptions) => invoke<void>("export_video", { id, dest, options }),
+  /** Stops the running video export, which then fails with VIDEO_CANCELLED. */
+  cancelVideoExport: () => invoke<void>("cancel_video_export"),
   /** Creates a new folder named after the deck inside `parent`; returns its path. */
   createImageExportDir: (id: string, parent: string) => invoke<string>("create_image_export_dir", { id, parent }),
   /**

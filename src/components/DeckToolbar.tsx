@@ -1,3 +1,4 @@
+import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
@@ -7,20 +8,25 @@ import {
   Code2,
   FileCode2,
   FileText,
+  Film,
   Images,
   Loader2,
   Play,
   Presentation,
   Share,
+  X,
   XCircle,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { api, type Deck, errorMessage } from "../lib/api";
 import { basename, cn } from "../lib/utils";
+import { VIDEO_CANCELLED, type VideoOptions } from "../lib/video";
 import { lintFixPrompt, type StageView, useApp } from "../store";
 import { FindButton } from "./FindReplace";
 import { SlideSizeButton } from "./SlideSize";
+import { Popover } from "./Templates";
+import { VideoExportPanel } from "./VideoExport";
 
 /**
  * The open deck's toolbar, above the slides (or its HTML): the title, find and replace, the
@@ -55,6 +61,8 @@ function DeckTools({ deck }: { deck: Deck }) {
 
   // An export the backend is still writing (printing a PDF takes a moment).
   const [exporting, setExporting] = useState(false);
+  // How much of a video export is done, 0–1; null when none is running.
+  const [videoProgress, setVideoProgress] = useState<number | null>(null);
 
   const fileName = deck.title.replace(/[\\/:*?"<>|]+/g, "").trim() || "presentation";
 
@@ -87,6 +95,31 @@ function DeckTools({ deck }: { deck: Deck }) {
     } catch (error) {
       useApp.getState().setError(`Could not save the PDF: ${errorMessage(error)}`);
     } finally {
+      setExporting(false);
+    }
+  };
+
+  const exportVideo = async (options: VideoOptions) => {
+    const dest = await save({
+      title: "Export as video",
+      defaultPath: `${fileName}.mp4`,
+      filters: [{ name: "MP4 video", extensions: ["mp4"] }],
+    });
+    if (!dest) return;
+    setExporting(true);
+    setVideoProgress(0);
+    const unlisten = await listen<{ frame: number; frames: number }>("video-export-progress", ({ payload }) =>
+      setVideoProgress(payload.frames > 0 ? payload.frame / payload.frames : 0),
+    );
+    try {
+      await api.exportVideo(deck.id, dest, options);
+      await revealItemInDir(dest);
+    } catch (error) {
+      const message = errorMessage(error);
+      if (message !== VIDEO_CANCELLED) useApp.getState().setError(`Could not save the video: ${message}`);
+    } finally {
+      unlisten();
+      setVideoProgress(null);
       setExporting(false);
     }
   };
@@ -127,10 +160,24 @@ function DeckTools({ deck }: { deck: Deck }) {
       <ExportMenu
         disabled={deck.slides.length === 0 || exporting}
         busy={exporting}
+        progress={videoProgress}
+        shownSlides={deck.slides.filter((s) => !s.hidden).length}
         onHtml={() => void exportDeck()}
         onPdf={() => void exportPdf()}
         onImages={() => void exportImages()}
+        onVideo={(options) => void exportVideo(options)}
       />
+      {videoProgress !== null && (
+        <button
+          type="button"
+          aria-label="Cancel video export"
+          title="Cancel video export"
+          onClick={() => void api.cancelVideoExport()}
+          className="-ml-1 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <X className="size-3.5" />
+        </button>
+      )}
       <button
         type="button"
         disabled={deck.slides.length === 0}
@@ -144,16 +191,25 @@ function DeckTools({ deck }: { deck: Deck }) {
   );
 }
 
-/** The Export button and its choices: one shareable HTML file, a PDF, or a PNG per slide. */
+/**
+ * The Export button and its choices: one shareable HTML file, a PDF, a PNG per slide, or a
+ * video (which first asks how to make it).
+ */
 function ExportMenu(props: {
   disabled: boolean;
   busy: boolean;
+  /** How much of a video export is done, 0–1, while one runs. */
+  progress: number | null;
+  shownSlides: number;
   onHtml: () => void;
   onPdf: () => void;
   onImages: () => void;
+  onVideo: (options: VideoOptions) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [videoOpen, setVideoOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -179,6 +235,7 @@ function ExportMenu(props: {
   return (
     <div ref={menuRef} className="relative">
       <button
+        ref={buttonRef}
         type="button"
         disabled={props.disabled}
         aria-haspopup="menu"
@@ -187,7 +244,11 @@ function ExportMenu(props: {
         className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-40"
       >
         {props.busy ? <Loader2 className="size-3.5 animate-spin" /> : <Share className="size-3.5" />}
-        {props.busy ? "Exporting…" : "Export"}
+        {props.progress !== null
+          ? `Exporting ${Math.floor(props.progress * 100)}%`
+          : props.busy
+            ? "Exporting…"
+            : "Export"}
         <ChevronDown className="size-3 text-muted-foreground" />
       </button>
       {open && (
@@ -210,7 +271,31 @@ function ExportMenu(props: {
             hint="One image per slide, in a new folder"
             onClick={choose(props.onImages)}
           />
+          <ExportItem
+            icon={Film}
+            label="Video"
+            hint="An MP4 with each slide shown for a set time"
+            onClick={choose(() => setVideoOpen(true))}
+          />
         </div>
+      )}
+      {videoOpen && (
+        <Popover
+          anchor={buttonRef}
+          placement="below"
+          width={300}
+          label="Export video"
+          onClose={() => setVideoOpen(false)}
+        >
+          <VideoExportPanel
+            slides={props.shownSlides}
+            onCancel={() => setVideoOpen(false)}
+            onExport={(options) => {
+              setVideoOpen(false);
+              props.onVideo(options);
+            }}
+          />
+        </Popover>
       )}
     </div>
   );

@@ -5,8 +5,10 @@ const invoke = vi.fn();
 const save = vi.fn();
 const openDialog = vi.fn();
 const revealItemInDir = vi.fn();
+const listen = vi.fn();
+const unlisten = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: (...args: unknown[]) => listen(...args) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   ask: vi.fn(),
   save: (...args: unknown[]) => save(...args),
@@ -28,6 +30,10 @@ beforeEach(() => {
   save.mockReset();
   openDialog.mockReset();
   revealItemInDir.mockReset();
+  listen.mockReset();
+  unlisten.mockReset();
+  listen.mockResolvedValue(unlisten);
+  localStorage.removeItem("slopslide.video");
   useApp.setState({
     workspace: WORKSPACE,
     openedFile: OPENED,
@@ -203,6 +209,7 @@ describe("deck actions", () => {
       "HTML fileOne self-contained file to share",
       "PDFOne page per slide, for printing or sharing",
       "PNG imagesOne image per slide, in a new folder",
+      "VideoAn MP4 with each slide shown for a set time",
     ]);
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
@@ -303,6 +310,125 @@ describe("deck actions", () => {
     render(<DeckToolbar />);
     expect(exportButton().disabled).toBe(true);
     expect(presentButton().disabled).toBe(true);
+  });
+});
+
+describe("video export", () => {
+  const exportButton = () => screen.getByRole("button", { name: /Export/ }) as HTMLButtonElement;
+  const seconds = () => screen.getByLabelText("Seconds per slide") as HTMLInputElement;
+  const saveButton = () => screen.getByRole("button", { name: "Save video…" }) as HTMLButtonElement;
+  function openPanel() {
+    fireEvent.click(exportButton());
+    fireEvent.click(screen.getByRole("menuitem", { name: /Video/ }));
+  }
+  /** The listener the toolbar gave for progress events. */
+  const progressListener = () => {
+    const call = listen.mock.calls.find(([event]) => event === "video-export-progress");
+    return call?.[1] as (event: { payload: { frame: number; frames: number } }) => void;
+  };
+
+  it("asks how long each slide is shown, then records the deck to the chosen file", async () => {
+    save.mockResolvedValue("/Users/me/Desktop/Talk.mp4");
+    render(<DeckToolbar />);
+    openPanel();
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(seconds().value).toBe("5");
+    expect(screen.getByText(/3 slides, 0:15 long/)).toBeTruthy();
+    fireEvent.change(seconds(), { target: { value: "2.5" } });
+    fireEvent.change(screen.getByLabelText("Frame rate"), { target: { value: "60" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Play animations/ }));
+    expect(screen.getByText(/3 slides, 0:08 long/)).toBeTruthy();
+    await act(async () => fireEvent.click(saveButton()));
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultPath: "Talk.mp4", filters: [{ name: "MP4 video", extensions: ["mp4"] }] }),
+    );
+    expect(invoke).toHaveBeenCalledWith("export_video", {
+      id: "/decks/talk/deck.html",
+      dest: "/Users/me/Desktop/Talk.mp4",
+      options: { secondsPerSlide: 2.5, fps: 60, animate: false },
+    });
+    expect(revealItemInDir).toHaveBeenCalledWith("/Users/me/Desktop/Talk.mp4");
+    expect(unlisten).toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Export video" })).toBeNull();
+  });
+
+  it("remembers the last choice", async () => {
+    save.mockResolvedValue(null);
+    render(<DeckToolbar />);
+    openPanel();
+    fireEvent.change(seconds(), { target: { value: "8" } });
+    await act(async () => fireEvent.click(saveButton()));
+    openPanel();
+    expect(seconds().value).toBe("8");
+  });
+
+  it("leaves hidden slides out of the count", () => {
+    const deck = deckFor(DECK_HTML);
+    useApp.setState({ deck: { ...deck, slides: deck.slides.map((s, i) => ({ ...s, hidden: i > 0 })) } });
+    render(<DeckToolbar />);
+    openPanel();
+    expect(screen.getByText(/1 slide, 0:05 long/)).toBeTruthy();
+  });
+
+  it("refuses a slide time the backend would", () => {
+    render(<DeckToolbar />);
+    openPanel();
+    fireEvent.change(seconds(), { target: { value: "0" } });
+    expect(screen.getByRole("alert").textContent).toMatch(/0.5 to 600 seconds/);
+    expect(saveButton().disabled).toBe(true);
+  });
+
+  it("cannot record a deck whose slides are all hidden", () => {
+    const deck = deckFor(DECK_HTML);
+    useApp.setState({ deck: { ...deck, slides: deck.slides.map((s) => ({ ...s, hidden: true })) } });
+    render(<DeckToolbar />);
+    openPanel();
+    expect(screen.getByRole("alert").textContent).toMatch(/Every slide is hidden/);
+    expect(saveButton().disabled).toBe(true);
+  });
+
+  it("does not record when the save dialog is cancelled", async () => {
+    save.mockResolvedValue(null);
+    render(<DeckToolbar />);
+    openPanel();
+    await act(async () => fireEvent.click(saveButton()));
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("shows progress, and cancels quietly", async () => {
+    let fail!: (reason: string) => void;
+    save.mockResolvedValue("/Users/me/Desktop/Talk.mp4");
+    invoke.mockImplementation((command: string) =>
+      command === "export_video" ? new Promise<void>((_, reject) => (fail = reject)) : Promise.resolve(),
+    );
+    render(<DeckToolbar />);
+    openPanel();
+    await act(async () => fireEvent.click(saveButton()));
+    expect(exportButton().textContent).toContain("Exporting 0%");
+    expect(exportButton().disabled).toBe(true);
+    act(() => progressListener()({ payload: { frame: 45, frames: 100 } }));
+    expect(exportButton().textContent).toContain("Exporting 45%");
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel video export" }));
+    expect(invoke).toHaveBeenCalledWith("cancel_video_export");
+    await act(async () => fail("the video export was cancelled"));
+    expect(useApp.getState().error).toBeNull();
+    expect(revealItemInDir).not.toHaveBeenCalled();
+    expect(exportButton().textContent).not.toContain("Exporting");
+    expect(exportButton().disabled).toBe(false);
+    expect(screen.queryByRole("button", { name: "Cancel video export" })).toBeNull();
+  });
+
+  it("reports a video that cannot be recorded", async () => {
+    save.mockResolvedValue("/Users/me/Desktop/Talk.mp4");
+    invoke.mockRejectedValue("the deck took too long to get ready for recording the video");
+    render(<DeckToolbar />);
+    openPanel();
+    await act(async () => fireEvent.click(saveButton()));
+    expect(useApp.getState().error).toBe(
+      "Could not save the video: the deck took too long to get ready for recording the video",
+    );
+    expect(unlisten).toHaveBeenCalled();
   });
 });
 

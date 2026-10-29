@@ -121,6 +121,13 @@ const CASES = [
   ],
   ["exportDeck", () => api.exportDeck("talk", "/out.html"), "export_deck", { id: "talk", dest: "/out.html" }],
   ["exportPdf", () => api.exportPdf("talk", "/out.pdf"), "export_pdf", { id: "talk", dest: "/out.pdf" }],
+  [
+    "exportVideo",
+    () => api.exportVideo("talk", "/out.mp4", { secondsPerSlide: 5, fps: 30, animate: true }),
+    "export_video",
+    { id: "talk", dest: "/out.mp4", options: { secondsPerSlide: 5, fps: 30, animate: true } },
+  ],
+  ["cancelVideoExport", () => api.cancelVideoExport(), "cancel_video_export", undefined],
   ["lintDeck", () => api.lintDeck("talk"), "lint_deck", { id: "talk" }],
   [
     "createImageExportDir",

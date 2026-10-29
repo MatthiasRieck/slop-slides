@@ -88,6 +88,7 @@ pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
     let mut helper = Helper {
         window: &window,
         signals,
+        task: "printing",
     };
     let printed = async {
         let ready = helper.answer("ready").await?;
@@ -210,7 +211,7 @@ fn box_top(pdf: &[u8], mut at: usize) -> Option<std::ops::Range<usize>> {
 }
 
 /// The room on screen for a window, in logical pixels: the main screen's work area.
-fn screen_area(app: &AppHandle) -> Option<(f64, f64)> {
+pub(crate) fn screen_area(app: &AppHandle) -> Option<(f64, f64)> {
     let monitor = app.primary_monitor().ok()??;
     let area = monitor
         .work_area()
@@ -221,7 +222,7 @@ fn screen_area(app: &AppHandle) -> Option<(f64, f64)> {
 
 /// The hidden window's size: the slides', shrunk to fit well inside `screen` if given. macOS
 /// keeps windows on screen, and a window cut down to fit would show part of the page.
-fn window_size(slide: (u32, u32), screen: Option<(f64, f64)>) -> (f64, f64) {
+pub(crate) fn window_size(slide: (u32, u32), screen: Option<(f64, f64)>) -> (f64, f64) {
     let (w, h) = (f64::from(slide.0), f64::from(slide.1));
     let scale = screen
         .filter(|(sw, sh)| *sw >= 1.0 && *sh >= 1.0)
@@ -229,15 +230,18 @@ fn window_size(slide: (u32, u32), screen: Option<(f64, f64)>) -> (f64, f64) {
     ((w * scale).floor().max(1.0), (h * scale).floor().max(1.0))
 }
 
-/// The hidden window's page helper (`assets/pdf.js`) and its answers.
-struct Helper<'a> {
-    window: &'a WebviewWindow,
-    signals: mpsc::UnboundedReceiver<Url>,
+/// The hidden window's page helper (`assets/pdf.js`, or `assets/video.js` for video.rs) and
+/// its answers.
+pub(crate) struct Helper<'a> {
+    pub window: &'a WebviewWindow,
+    pub signals: mpsc::UnboundedReceiver<Url>,
+    /// What the window is for, as the errors name it ("printing").
+    pub task: &'static str,
 }
 
 impl Helper<'_> {
     /// Runs `script` in the page, then waits for the answer named `step`.
-    async fn run(&mut self, script: &str, step: &str) -> Result<HashMap<String, String>> {
+    pub async fn run(&mut self, script: &str, step: &str) -> Result<HashMap<String, String>> {
         self.window
             .eval(script)
             .map_err(|e| Error::msg(format!("cannot reach the deck: {e}")))?;
@@ -245,11 +249,16 @@ impl Helper<'_> {
     }
 
     /// The next answer, which must be the one named `step`, as its query parameters.
-    async fn answer(&mut self, step: &str) -> Result<HashMap<String, String>> {
+    pub async fn answer(&mut self, step: &str) -> Result<HashMap<String, String>> {
         let url = tokio::time::timeout(TIMEOUT, self.signals.recv())
             .await
-            .map_err(|_| Error::msg("the deck took too long to get ready for printing"))?
-            .ok_or_else(|| Error::msg("the deck was closed before it was printed"))?;
+            .map_err(|_| {
+                Error::msg(format!(
+                    "the deck took too long to get ready for {}",
+                    self.task
+                ))
+            })?
+            .ok_or_else(|| Error::msg(format!("the deck was closed during {}", self.task)))?;
         let answer = parse_answer(&url);
         if !answer.contains_key(step) {
             return Err(Error::msg(format!(
@@ -304,14 +313,14 @@ fn decor_pixels(canvas_width: u32) -> u32 {
 }
 
 /// The query parameters of a helper's answer (`/.pdf-signal?shown=0&rect=…`).
-fn parse_answer(url: &Url) -> HashMap<String, String> {
+pub(crate) fn parse_answer(url: &Url) -> HashMap<String, String> {
     url.query_pairs()
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
         .collect()
 }
 
 /// Where a shown slide is: `rect=x,y,w,h` and `view=w,h`, in CSS pixels.
-fn geometry(
+pub(crate) fn geometry(
     answer: &HashMap<String, String>,
 ) -> Result<(crate::capture::Rect, crate::capture::Size)> {
     let numbers = |key: &str, n: usize| -> Option<Vec<f64>> {
@@ -343,7 +352,7 @@ fn geometry(
 /// player centres and scales it), and a capture from its exact edge would blend in a hairline
 /// of the black page around it; the image is stretched over the slide, so the lost edge (under
 /// a pixel) does not show.
-fn inside_whole_points(rect: crate::capture::Rect) -> crate::capture::Rect {
+pub(crate) fn inside_whole_points(rect: crate::capture::Rect) -> crate::capture::Rect {
     let (left, top) = (rect.x.ceil(), rect.y.ceil());
     let (right, bottom) = (
         (rect.x + rect.width).floor(),
@@ -358,12 +367,12 @@ fn inside_whole_points(rect: crate::capture::Rect) -> crate::capture::Rect {
 }
 
 /// `text` as a JavaScript string literal.
-fn js_string(text: &str) -> String {
+pub(crate) fn js_string(text: &str) -> String {
     serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into())
 }
 
 /// `dest` as an absolute path (the platforms want one), checking its folder exists.
-fn absolute_dest(dest: &Path) -> Result<PathBuf> {
+pub(crate) fn absolute_dest(dest: &Path) -> Result<PathBuf> {
     let dest = std::path::absolute(dest)?;
     match dest.parent() {
         Some(dir) if dir.is_dir() => Ok(dest),

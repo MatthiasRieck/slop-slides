@@ -11,6 +11,7 @@ mod find;
 mod html;
 mod lint;
 mod mcp;
+mod mp4;
 mod pdf;
 mod permissions;
 mod protocol;
@@ -20,6 +21,7 @@ mod safety;
 mod sessions;
 mod size;
 mod templates;
+mod video;
 mod voice;
 mod watcher;
 mod windows;
@@ -519,6 +521,36 @@ async fn export_pdf(app: AppHandle, id: String, dest: String) -> Result<()> {
     pdf::export(&app, &deck::deck_file(&id)?, Path::new(&dest)).await
 }
 
+/// Records the deck to `dest` as an MP4, each shown slide on screen for the same time, with
+/// `video-export-progress` events to `window` as it goes.
+#[tauri::command]
+async fn export_video(
+    app: AppHandle,
+    window: Window,
+    id: String,
+    dest: String,
+    options: video::Options,
+) -> Result<()> {
+    use tauri::Emitter;
+    let progress = |p: video::Progress| {
+        let _ = window.emit("video-export-progress", p);
+    };
+    video::export(
+        &app,
+        &deck::deck_file(&id)?,
+        Path::new(&dest),
+        options,
+        progress,
+    )
+    .await
+}
+
+/// Stops the running video export; it fails with "the video export was cancelled".
+#[tauri::command]
+fn cancel_video_export() {
+    video::cancel();
+}
+
 #[tauri::command]
 fn load_chat(id: String) -> Result<serde_json::Value> {
     deck::load_chat(sessions()?.current(&workspace::root(&id)?).as_deref())
@@ -711,6 +743,8 @@ pub fn run() {
             create_image_export_dir,
             export_slide_image,
             export_pdf,
+            export_video,
+            cancel_video_export,
             load_chat,
             session_provider,
             save_chat,

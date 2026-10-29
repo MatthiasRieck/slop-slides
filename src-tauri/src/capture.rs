@@ -415,26 +415,20 @@ mod platform {
             .ok_or_else(|| Error::msg("cannot encode the screenshot as PNG"))
     }
 
-    /// The pixels of `image` at its full resolution (its largest representation, as a PNG of
-    /// it holds), drawn once into an RGBA buffer: no image file is encoded or decoded. The
-    /// values stay in the snapshot's own colour space, as in its PNG.
+    /// The pixels of `image` at its full resolution (as its PNG holds them), drawn once into an
+    /// RGBA buffer: no PNG is encoded or decoded. The values stay in the snapshot's own colour
+    /// space, as in its PNG.
     pub fn pixels(image: &NSImage) -> Result<Image> {
         let fail = || Error::msg("cannot read the screenshot's pixels");
-        let (width, height) = image
-            .representations()
-            .iter()
-            .map(|rep| (rep.pixelsWide(), rep.pixelsHigh()))
-            .filter(|&(w, h)| w > 0 && h > 0)
-            .max_by_key(|&(w, h)| w * h)
-            .ok_or_else(fail)?;
-        let (width, height) = (width as usize, height as usize);
-        let mut proposed = NSRect::new(
-            NSPoint::new(0.0, 0.0),
-            NSSize::new(width as f64, height as f64),
-        );
-        // SAFETY: a valid rect, no context or hints: the image's best bitmap for that size.
-        let cg = unsafe { image.CGImageForProposedRect_context_hints(&mut proposed, None, None) }
-            .ok_or_else(fail)?;
+        // The snapshot rep's own size (and a CGImage for it) follows the screen's scale: on a
+        // 1x screen a 2x snapshot reads as its points. Its uncompressed TIFF keeps every pixel.
+        let tiff = image.TIFFRepresentation().ok_or_else(fail)?;
+        let bitmap = NSBitmapImageRep::imageRepWithData(&tiff).ok_or_else(fail)?;
+        let cg = bitmap.CGImage().ok_or_else(fail)?;
+        let (width, height) = (CGImage::width(Some(&cg)), CGImage::height(Some(&cg)));
+        if width == 0 || height == 0 {
+            return Err(fail());
+        }
         let space = CGImage::color_space(Some(&cg))
             .filter(|space| CGColorSpace::model(Some(space)) == CGColorSpaceModel::RGB)
             .or_else(CGColorSpace::new_device_rgb)
@@ -524,6 +518,17 @@ mod platform {
             let image = pixels(&ns_image(40, 24, &px, 2.0)).unwrap();
             assert_eq!((image.width, image.height), (40, 24), "pixels, not points");
             assert_eq!(image.rgba, px, "same rows, top first, RGBA order");
+        }
+
+        #[test]
+        fn reads_every_pixel_whatever_the_screen_scale() {
+            // The snapshot rep reports its size at the screen's scale, not the image's.
+            for scale in [1.0, 3.0] {
+                let px = gradient(36, 18);
+                let image = pixels(&ns_image(36, 18, &px, scale)).unwrap();
+                assert_eq!((image.width, image.height), (36, 18), "at {scale}x");
+                assert_eq!(image.rgba, px, "at {scale}x");
+            }
         }
 
         #[test]

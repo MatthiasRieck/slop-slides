@@ -357,6 +357,14 @@ interface AppState {
   addLayoutSlide: (template: string, slide: string) => Promise<void>;
   /** Puts a prompt in the composer to rebuild the selected slide on the template's layout. */
   changeLayout: (template: string, slide: string) => Promise<void>;
+  /** Puts the selected slide on the system clipboard, to paste into this deck or another one. */
+  copySlide: () => Promise<void>;
+  /**
+   * Inserts the slide on the system clipboard (copied here or in another window) after the
+   * selected one and selects it. Its images come along; styles from the other deck's CSS do not.
+   * Resolves to whether there was a slide to paste.
+   */
+  pasteSlide: () => Promise<boolean>;
   /** Saves the deck as a user template with placeholder content; null when it failed. */
   saveAsTemplate: (name: string) => Promise<TemplateSummary | null>;
   /**
@@ -813,6 +821,33 @@ export const useApp = create<AppState>((set, get) => ({
       promptAgent(addLayoutPrompt(template, slide, path, selected));
     } catch (error) {
       set({ error: errorMessage(error) });
+    }
+  },
+
+  copySlide: async () => {
+    const { deck, selected } = get();
+    if (!deck || !selected) return;
+    try {
+      await api.copySlide(deck.id, selected);
+    } catch (error) {
+      set({ error: errorMessage(error) });
+    }
+  },
+
+  pasteSlide: async () => {
+    const { deck, selected } = get();
+    if (!deck) return false;
+    try {
+      const created = await api.pasteSlide(deck.id, selected);
+      if (!created) return false;
+      if (get().deck?.id === deck.id) {
+        get().setDeck(created.deck);
+        get().select(created.slide);
+      }
+      return true;
+    } catch (error) {
+      set({ error: errorMessage(error) });
+      return false;
     }
   },
 

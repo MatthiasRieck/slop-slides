@@ -94,6 +94,8 @@ export type Pasted =
   | { kind: "element"; html: string }
   | { kind: "images"; images: string[] }
   | { kind: "text"; text: string }
+  /** A slide copied from the slide rail: it goes in as a new slide (see `pasteSlide`). */
+  | { kind: "slide" }
   | { kind: "nothing" };
 
 export interface CreatedSlide {
@@ -202,6 +204,8 @@ export interface VoiceDownloadProgress {
 }
 
 export const api = {
+  /** Opens another app window, on the start screen; each window has a folder of its own. */
+  newWindow: () => invoke<void>("new_window"),
   /** Opens a folder: the file tree shows it and the app serves and watches its files. */
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
   closeWorkspace: () => invoke<void>("close_workspace"),
@@ -249,8 +253,16 @@ export const api = {
   importAssets: (id: string, paths: string[]) => invoke<string[]>("import_assets", { id, paths }),
   /** Saves pasted file contents (base64) into the deck's assets; returns its `assets/…` ref. */
   saveAsset: (id: string, name: string, data: string) => invoke<string>("save_asset", { id, name, data }),
-  /** Puts an element copied in the slide editor on the system clipboard, with `text` for other apps. */
-  copyToClipboard: (html: string, text: string) => invoke<void>("copy_to_clipboard", { html, text }),
+  /**
+   * Puts an element copied in the slide editor of deck `id` on the system clipboard, with
+   * `text` for other apps. Naming the deck lets a paste into another deck bring its images.
+   */
+  copyToClipboard: (html: string, text: string, id: string | null = null) =>
+    invoke<void>("copy_to_clipboard", { html, text, id }),
+  /** Puts a whole slide on the system clipboard, to paste into this deck or another one. */
+  copySlide: (id: string, slide: string) => invoke<void>("copy_slide", { id, slide }),
+  /** Inserts the slide on the clipboard after `after` (with its images); null when there is none. */
+  pasteSlide: (id: string, after: string | null) => invoke<CreatedSlide | null>("paste_slide", { id, after }),
   /** The clipboard's plain text (empty without any), for pasting into text without its formatting. */
   readClipboardText: () => invoke<string>("read_clipboard_text"),
   /** What pasting into deck `id` brings in; pasted images are saved into its assets. */

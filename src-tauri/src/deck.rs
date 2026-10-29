@@ -18,6 +18,7 @@
 //! A deck opens directly in any browser as a slideshow; [`export`] inlines the assets so the
 //! single file can be shared on its own.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -426,6 +427,21 @@ pub fn add_template_slide(
     })
 }
 
+/// Inserts `markup`, a slide copied from deck `from` (this one or another), after `after`.
+/// Its assets come along into this deck's `assets/` (see [`bring_assets`]).
+pub fn paste_slide(
+    file: &Path,
+    after: Option<String>,
+    from: Option<&Path>,
+    markup: &str,
+) -> Result<(Deck, String)> {
+    let markup = match from {
+        Some(from) => bring_assets(markup, from, file)?,
+        None => markup.to_string(),
+    };
+    edit(file, |s| html::paste_slide(s, after.as_deref(), &markup))
+}
+
 pub fn duplicate(file: &Path, slide: &str) -> Result<(Deck, String)> {
     edit(file, |s| html::duplicate(s, slide))
 }
@@ -802,6 +818,45 @@ pub fn import_assets(file: &Path, paths: Vec<String>) -> Result<Vec<String>> {
     Ok(imported)
 }
 
+/// `markup` copied from the deck (or folder) `from`, for pasting into `to`: the `assets/…`
+/// files it references are copied into `to`'s assets and the references point at the copies.
+/// Nothing changes between decks sharing a folder; a file `to` already has with the same name
+/// and contents is used as it is, and references to missing files are left alone.
+pub fn bring_assets(markup: &str, from: &Path, to: &Path) -> Result<String> {
+    let dir = |p: &Path| if p.is_dir() { p } else { folder(p) }.to_path_buf();
+    let (from, to) = (dir(from), dir(to));
+    let same = |a: &Path, b: &Path| match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    };
+    if same(&from, &to) {
+        return Ok(markup.to_string());
+    }
+    let assets = to.join("assets");
+    let mut brought: HashMap<String, String> = HashMap::new();
+    let mut out = String::with_capacity(markup.len());
+    let mut at = 0;
+    for (range, rel) in html::asset_refs(markup) {
+        let new_ref = match brought.get(rel) {
+            Some(new_ref) => new_ref.clone(),
+            None => {
+                let Some(source) = resolve_in_deck(&from, rel).ok().filter(|p| p.is_file()) else {
+                    continue;
+                };
+                let bytes = fs::read(&source)?;
+                let new_ref = asset_ref(&same_or_new_asset(&assets, &source, &bytes)?);
+                brought.insert(rel.to_string(), new_ref.clone());
+                new_ref
+            }
+        };
+        out.push_str(&markup[at..range.start]);
+        out.push_str(&new_ref);
+        at = range.end;
+    }
+    out.push_str(&markup[at..]);
+    Ok(out)
+}
+
 /// Writes pasted file contents (base64) into `assets/`, named after `name`; returns its ref.
 pub fn save_asset(file: &Path, name: &str, data: &str) -> Result<String> {
     use base64::Engine;
@@ -824,6 +879,14 @@ pub fn write_asset(file: &Path, name: &str, bytes: &[u8]) -> Result<String> {
 
 /// A path in `assets` for a file named like `source`: slugged, lowercase extension, unused.
 fn free_asset_path(assets: &Path, source: &Path) -> PathBuf {
+    asset_paths(assets, source)
+        .find(|p| !p.exists())
+        .expect("unbounded")
+}
+
+/// Paths in `assets` for a file named like `source`, in the order they are taken: slugged,
+/// lowercase extension, then numbered.
+fn asset_paths<'a>(assets: &'a Path, source: &Path) -> impl Iterator<Item = PathBuf> + 'a {
     let stem = html::slugify(&source.file_stem().unwrap_or_default().to_string_lossy());
     let stem = if stem.is_empty() {
         "asset".to_string()
@@ -835,9 +898,25 @@ fn free_asset_path(assets: &Path, source: &Path) -> PathBuf {
         .map(|e| format!(".{}", e.to_string_lossy().to_lowercase()))
         .unwrap_or_default();
     std::iter::once(assets.join(format!("{stem}{ext}")))
-        .chain((2..).map(|n| assets.join(format!("{stem}-{n}{ext}"))))
-        .find(|p| !p.exists())
-        .expect("unbounded")
+        .chain((2..).map(move |n| assets.join(format!("{stem}-{n}{ext}"))))
+}
+
+/// The asset in `assets` holding `bytes` under a name like `source`'s, writing it unless
+/// an earlier copy is there.
+fn same_or_new_asset(assets: &Path, source: &Path, bytes: &[u8]) -> Result<PathBuf> {
+    fs::create_dir_all(assets)?;
+    for path in asset_paths(assets, source) {
+        match fs::read(&path) {
+            Ok(existing) if existing == bytes => return Ok(path),
+            Ok(_) => continue,
+            Err(_) if path.exists() => continue,
+            Err(_) => {
+                fs::write(&path, bytes)?;
+                return Ok(path);
+            }
+        }
+    }
+    unreachable!("unbounded")
 }
 
 fn asset_ref(path: &Path) -> String {
@@ -893,6 +972,77 @@ mod tests {
         assert!(resolve_in_deck(dir, "/etc/passwd").is_err());
         assert!(resolve_in_deck(dir, "assets/../../x").is_err());
         assert!(resolve_in_deck(dir, "assets/photo.png").is_ok());
+    }
+
+    /// Two decks in their own folders of a throwaway workspace: `from` with `assets/Photo.PNG`.
+    fn two_decks() -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("slopslide-bring-{}", uuid::Uuid::new_v4()));
+        for name in ["from", "to"] {
+            fs::create_dir_all(root.join(name)).unwrap();
+            fs::write(
+                root.join(name).join(DECK_FILE),
+                "<main class=\"deck\">\n    <section class=\"slide\" id=\"a\">A</section>\n</main>",
+            )
+            .unwrap();
+        }
+        fs::create_dir_all(root.join("from/assets")).unwrap();
+        fs::write(root.join("from/assets/Photo.PNG"), b"photo").unwrap();
+        (
+            root.join("from").join(DECK_FILE),
+            root.join("to").join(DECK_FILE),
+        )
+    }
+
+    #[test]
+    fn copied_markup_brings_its_assets_into_another_deck() {
+        let (from, to) = two_decks();
+        let markup = r#"<img src="assets/Photo.PNG?v=2"><div style="background: url('./assets/Photo.PNG')"></div><img src="assets/gone.png"><a href="https://x.dev/assets/y.png">y</a>"#;
+        let out = bring_assets(markup, &from, &to).unwrap();
+        assert_eq!(
+            out,
+            r#"<img src="assets/photo.png?v=2"><div style="background: url('assets/photo.png')"></div><img src="assets/gone.png"><a href="https://x.dev/assets/y.png">y</a>"#
+        );
+        let assets = folder(&to).join("assets");
+        assert_eq!(fs::read(assets.join("photo.png")).unwrap(), b"photo");
+
+        // Pasting it again reuses the copy; another image of the same name gets its own.
+        assert_eq!(bring_assets(markup, &from, &to).unwrap(), out);
+        assert!(!assets.join("photo-2.png").exists());
+        fs::write(folder(&from).join("assets/Photo.PNG"), b"another").unwrap();
+        let next = bring_assets(r#"<img src="assets/Photo.PNG">"#, &from, &to).unwrap();
+        assert_eq!(next, r#"<img src="assets/photo-2.png">"#);
+    }
+
+    #[test]
+    fn markup_pasted_within_its_folder_is_left_alone() {
+        let (from, _) = two_decks();
+        let markup = r#"<img src="assets/Photo.PNG">"#;
+        assert_eq!(bring_assets(markup, &from, &from).unwrap(), markup);
+        assert_eq!(bring_assets(markup, &from, folder(&from)).unwrap(), markup);
+        assert_eq!(
+            fs::read_dir(folder(&from).join("assets")).unwrap().count(),
+            1,
+            "nothing is copied"
+        );
+    }
+
+    #[test]
+    fn pastes_a_slide_from_another_deck_with_its_assets() {
+        let (from, to) = two_decks();
+        let markup = r#"<section class="slide" id="a"><img src="assets/Photo.PNG"></section>"#;
+        let (deck, id) = paste_slide(&to, Some("a".into()), Some(&from), markup).unwrap();
+        assert_eq!(id, "a-2");
+        assert_eq!(
+            deck.slides
+                .iter()
+                .map(|s| s.id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "a-2"]
+        );
+        let html = read_html(&to).unwrap();
+        assert!(html.contains(r#"<section class="slide" id="a-2"><img src="assets/photo.png">"#));
+        assert!(folder(&to).join("assets/photo.png").is_file());
+        assert!(paste_slide(&to, None, None, "<p>x</p>").is_err());
     }
 
     #[test]

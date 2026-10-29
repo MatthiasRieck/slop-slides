@@ -3,9 +3,11 @@
 //! opens it in the viewer its [`FileKind`] calls for: an HTML file that is a SlopSlide deck
 //! in the editor, any other HTML page as it is.
 //!
-//! The open workspace bounds what the `slop://` protocol serves ([`OpenWorkspace`]); the
+//! Each window opens one workspace; together they bound what the `slop://` protocol serves
+//! ([`OpenWorkspace`]). The
 //! folders opened before are remembered in `~/.slopslides/recent-workspaces.json`.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -189,22 +191,43 @@ pub fn open_file(root: &Path, rel: &str) -> Result<OpenedFile> {
     })
 }
 
-/// The folder the user has open, if any. `slop://` serves files from inside it only.
+/// The folder each window has open, by window label. `slop://` serves files from inside
+/// them only.
 #[derive(Default)]
-pub struct OpenWorkspace(Mutex<Option<PathBuf>>);
+pub struct OpenWorkspace(Mutex<HashMap<String, PathBuf>>);
 
 impl OpenWorkspace {
-    pub fn set(&self, root: Option<PathBuf>) {
-        *self.0.lock().unwrap() = root.map(|r| r.canonicalize().unwrap_or(r));
+    /// Opens `root` in `window`, or closes the window's folder for None.
+    pub fn set(&self, window: &str, root: Option<PathBuf>) {
+        let mut open = self.0.lock().unwrap();
+        match root {
+            Some(root) => open.insert(window.to_string(), root.canonicalize().unwrap_or(root)),
+            None => open.remove(window),
+        };
     }
 
-    pub fn get(&self) -> Option<PathBuf> {
-        self.0.lock().unwrap().clone()
+    pub fn get(&self, window: &str) -> Option<PathBuf> {
+        self.0.lock().unwrap().get(window).cloned()
     }
 
-    /// Whether `path` is an existing file inside the open workspace.
+    /// The window other than `except` that has `root` open.
+    pub fn window_with(&self, root: &Path, except: &str) -> Option<String> {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(window, open)| window.as_str() != except && **open == root)
+            .map(|(window, _)| window.clone())
+    }
+
+    /// Whether `path` is an existing file inside a folder some window has open.
     pub fn contains(&self, path: &Path) -> bool {
-        self.get().is_some_and(|root| inside(&root, path))
+        self.0
+            .lock()
+            .unwrap()
+            .values()
+            .any(|root| inside(root, path))
     }
 }
 
@@ -439,13 +462,42 @@ mod tests {
         let outer = t.write("secret.txt", "x");
         let open = OpenWorkspace::default();
         assert!(!open.contains(&inner), "nothing is open");
-        open.set(Some(t.0.join("ws")));
+        open.set("main", Some(t.0.join("ws")));
         assert!(open.contains(&inner));
         assert!(!open.contains(&outer));
         assert!(!open.contains(&t.0.join("ws/../secret.txt")));
         assert!(!open.contains(&t.0.join("ws/missing.html")));
-        open.set(None);
+        open.set("main", None);
         assert!(!open.contains(&inner));
+    }
+
+    #[test]
+    fn each_window_has_its_own_workspace() {
+        let t = Temp::new();
+        let a = t.write("a/talk/deck.html", DECK);
+        let b = t.write("b/talk/deck.html", DECK);
+        let open = OpenWorkspace::default();
+        open.set("main", Some(t.0.join("a")));
+        open.set("window-2", Some(t.0.join("b")));
+        assert_eq!(
+            open.get("main"),
+            Some(t.0.join("a").canonicalize().unwrap())
+        );
+        assert_eq!(
+            open.get("window-2"),
+            Some(t.0.join("b").canonicalize().unwrap())
+        );
+        assert_eq!(open.get("window-3"), None);
+        assert!(open.contains(&a) && open.contains(&b), "both are served");
+        assert_eq!(
+            open.window_with(&t.0.join("a"), "window-2").as_deref(),
+            Some("main")
+        );
+        assert_eq!(open.window_with(&t.0.join("a"), "main"), None, "not itself");
+        open.set("main", None);
+        assert!(!open.contains(&a));
+        assert!(open.contains(&b));
+        assert_eq!(open.window_with(&t.0.join("a"), "window-2"), None);
     }
 
     #[test]

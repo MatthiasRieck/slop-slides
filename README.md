@@ -9,7 +9,8 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   agent changes it anyway the app puts it back after the turn. Unlock it to change it.
   Sections group slides under a heading in this column (never in the presentation): the
   section button starts one at the selected slide; double-click a heading to rename it, drag
-  it to move the boundary, hover to remove it.
+  it to move the boundary, hover to remove it. Out of edit mode, ⌘C copies the selected slide
+  and ⌘V pastes a copied slide after the selected one.
 - **Middle:** the current slide on a fixed stage (1920×1080 unless the deck has another slide
   size), scaled to fit. Arrow keys navigate.
   The move button below it turns on edit mode: click an element to select it, drag it (or
@@ -37,6 +38,12 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   terminal or editor, macOS asks for that app instead). Speech is
   transcribed on your computer with [Whisper](https://github.com/ggml-org/whisper.cpp) (small,
   multilingual); its model (190 MB) is downloaded on first use to `~/.slopslides/models`.
+- **Windows:** File › New Window (⌘N; Ctrl+N on Windows and Linux) opens another window,
+  each with a folder of its own and its own chat. A folder already open in one window is
+  brought to the front instead of opening twice. Elements and whole slides copied in one
+  window paste into another; the images they show are copied into the receiving deck's
+  `assets/`. A pasted element keeps its size and text look, but styles that come from the
+  other deck's CSS (its classes, its theme) do not come along.
 - **Styles and layouts:** decks can follow a template, a deck of example layouts (title,
   section, bullets, split, stats, quote, closing) in one style, with its own entrance animation. 31 come
   with the app (Claymorphism, Swiss Design, Synthwave, Terminal Green, Wabi-Sabi, …); add your own as folders in

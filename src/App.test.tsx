@@ -17,6 +17,7 @@ vi.mock("./components/CodeView", () => ({
   CodeView: ({ active }: { active: boolean }) => <div data-testid="stub-code" data-active={String(active)} />,
 }));
 
+import { invoke } from "@tauri-apps/api/core";
 import { App } from "./App";
 import { useApp } from "./store";
 import { DECK_HTML, deckFor } from "./test/fixtures";
@@ -137,5 +138,17 @@ describe("lint status", () => {
     useApp.setState({ refreshLint });
     render(<App />);
     expect(refreshLint).not.toHaveBeenCalled();
+  });
+
+  it("opens another window with Ctrl+N", () => {
+    render(<App />);
+    fireEvent.keyDown(window, { key: "n", ctrlKey: true, shiftKey: true });
+    fireEvent.keyDown(window, { key: "n" });
+    expect(invoke).not.toHaveBeenCalledWith("new_window");
+    vi.mocked(invoke).mockResolvedValue(undefined);
+    const event = new KeyboardEvent("keydown", { key: "n", ctrlKey: true, cancelable: true });
+    act(() => void window.dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("new_window");
   });
 });

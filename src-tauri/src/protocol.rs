@@ -1,8 +1,8 @@
 //! `slop://` URI scheme. Serves files of the open workspace (decks, the pages the viewer
 //! shows, their assets) by their absolute path, as `slop://localhost/.file/<absolute path>`
 //! (`http://slop.localhost/...` on Windows), so a deck's relative `assets/…` references
-//! resolve exactly as they do when the file is opened in a browser. Files outside the open
-//! workspace are refused. Templates (see [`templates`]) are served as
+//! resolve exactly as they do when the file is opened in a browser. Files outside the
+//! workspaces the windows have open are refused. Templates (see [`templates`]) are served as
 //! `slop://localhost/.template/<template-id>/<path>`, for the layout and style previews, and
 //! files in a deck's session (sketches the chat shows) by their absolute path, as
 //! `slop://localhost/.session/<absolute path>`.
@@ -349,7 +349,7 @@ mod tests {
             Err(StatusCode::FORBIDDEN),
             "nothing is served without a workspace"
         );
-        open.set(Some(ws.clone()));
+        open.set("main", Some(ws.clone()));
         assert_eq!(
             read(ws.join("talk/q3.html")),
             Ok(("text/html; charset=utf-8", b"<html>".to_vec()))

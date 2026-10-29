@@ -2305,6 +2305,39 @@ describe("templates", () => {
     expect(useApp.getState().composerFill).toBeNull();
   });
 
+  it("copies the selected slide and pastes one from the clipboard after it", async () => {
+    const useApp = await storeWith(DECK);
+    const next = {
+      ...DECK,
+      slides: [DECK.slides[0], { ...DECK.slides[0], id: "pasted" }, ...DECK.slides.slice(1)],
+    };
+    backend({ paste_slide: () => ({ deck: next, slide: "pasted" }) });
+    await useApp.getState().copySlide();
+    expect(calls("copy_slide")).toEqual([{ id: DECK.id, slide: "intro" }]);
+    expect(await useApp.getState().pasteSlide()).toBe(true);
+    expect(calls("paste_slide")).toEqual([{ id: DECK.id, after: "intro" }]);
+    expect(useApp.getState()).toMatchObject({ deck: next, selected: "pasted" });
+
+    backend({ paste_slide: () => null });
+    expect(await useApp.getState().pasteSlide()).toBe(false);
+    expect(useApp.getState().selected).toBe("pasted");
+  });
+
+  it("pastes a slide at the end without a selection, and reports failures", async () => {
+    const useApp = await storeWith(DECK);
+    useApp.setState({ selected: null });
+    await useApp.getState().copySlide();
+    expect(calls("copy_slide")).toEqual([]);
+    backend({
+      paste_slide: () => {
+        throw "The clipboard holds no slide.";
+      },
+    });
+    expect(await useApp.getState().pasteSlide()).toBe(false);
+    expect(calls("paste_slide")).toEqual([{ id: DECK.id, after: null }]);
+    expect(useApp.getState().error).toBe("The clipboard holds no slide.");
+  });
+
   it("copies a layout into a deck that uses the template", async () => {
     const useApp = await storeWith({ ...DECK, template: "swiss" });
     const next = {

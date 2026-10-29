@@ -23,8 +23,10 @@ pub const WORKER_FLAG: &str = "--narration-worker";
 
 /// The most frames (12 a second) the engine may make for one piece before it is given up on:
 /// it did not find the end of what it was saying.
+#[cfg(narration_engine)]
 const MAX_FRAMES: i32 = 562;
 /// The same seed for every piece, so the same script in the same voice sounds the same.
+#[cfg(narration_engine)]
 const SEED: u32 = 42;
 
 /// Whether this build has the speech engine (see build.rs).

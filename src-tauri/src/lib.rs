@@ -12,6 +12,7 @@ mod html;
 mod lint;
 mod mcp;
 mod mp4;
+mod narration;
 mod pdf;
 mod permissions;
 mod protocol;
@@ -521,8 +522,9 @@ async fn export_pdf(app: AppHandle, id: String, dest: String) -> Result<()> {
     pdf::export(&app, &deck::deck_file(&id)?, Path::new(&dest)).await
 }
 
-/// Records the deck to `dest` as an MP4, each shown slide on screen for the same time, with
-/// `video-export-progress` events to `window` as it goes.
+/// Records the deck to `dest` as an MP4, each shown slide on screen for the same time (or,
+/// speaking its narration, until that ends), with `video-export-progress` events to `window`
+/// as it goes.
 #[tauri::command]
 async fn export_video(
     app: AppHandle,
@@ -662,6 +664,74 @@ fn cancel_recording(voice: State<voice::Voice>) {
     voice.cancel();
 }
 
+#[tauri::command]
+fn speech_status(narration: State<narration::Narration>) -> Result<narration::SpeechStatus> {
+    Ok(narration.status(&deck::app_home()?))
+}
+
+/// Downloads the narration voice model to `~/.slopslides/models` unless it is there, with
+/// `speech-download` progress events.
+#[tauri::command]
+async fn download_speech_model(
+    app: AppHandle,
+    narration: State<'_, narration::Narration>,
+) -> Result<()> {
+    narration.download(&app, &deck::app_home()?).await
+}
+
+/// Each slide's narration audio: whether it is there and up to date, and how long it plays.
+#[tauri::command]
+fn narration_audio(id: String) -> Result<Vec<narration::SlideAudio>> {
+    let file = deck::deck_file(&id)?;
+    Ok(narration::statuses(&file, &deck::load(&file)?))
+}
+
+/// Says the narration of the deck's `slides` (all for None) that has no up-to-date audio,
+/// with `narration-render` progress events to every window.
+#[tauri::command]
+async fn render_narration(
+    app: AppHandle,
+    narration: State<'_, narration::Narration>,
+    id: String,
+    slides: Option<Vec<String>>,
+) -> Result<Vec<narration::SlideAudio>> {
+    use tauri::Emitter;
+    let progress = |p: narration::RenderProgress| {
+        let _ = app.emit(narration::RENDER_EVENT, p);
+    };
+    narration
+        .render(
+            &deck::app_home()?,
+            &deck::deck_file(&id)?,
+            slides.as_deref(),
+            progress,
+        )
+        .await
+}
+
+/// Stops saying narration; the render fails with "the narration was cancelled".
+#[tauri::command]
+fn cancel_narration(narration: State<narration::Narration>) {
+    narration.cancel();
+}
+
+/// A slide's narration audio, as WAV bytes.
+#[tauri::command]
+fn narration_wav(id: String, slide: String) -> Result<tauri::ipc::Response> {
+    let file = narration::audio_file(&deck::deck_file(&id)?, &slide);
+    Ok(tauri::ipc::Response::new(std::fs::read(file)?))
+}
+
+#[tauri::command]
+fn set_narration_voice(id: String, voice: String) -> Result<Deck> {
+    deck::set_narration_voice(&deck::deck_file(&id)?, &voice)
+}
+
+#[tauri::command]
+fn set_narration_language(id: String, language: String) -> Result<Deck> {
+    deck::set_narration_language(&deck::deck_file(&id)?, &language)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // `slopslide --lint-mcp [deck dir]`: the agent's lint tool, started by the agent CLI in
@@ -672,6 +742,15 @@ pub fn run() {
             .get(2)
             .map_or_else(|| ".".into(), std::path::PathBuf::from);
         return mcp::serve(&dir);
+    }
+    // `slopslide --narration-worker <model dir>`: the speech engine's process (see
+    // narration/engine.rs), started by the app itself.
+    if args.get(1).map(String::as_str) == Some(narration::engine::WORKER_FLAG) {
+        let dir = args
+            .get(2)
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default();
+        std::process::exit(narration::engine::worker_main(&dir));
     }
     env::adopt_login_shell_env();
     let builder = tauri::Builder::default();
@@ -685,6 +764,7 @@ pub fn run() {
         .manage(OpenWorkspace::default())
         .manage(windows::PendingFolders::default())
         .manage(voice::Voice::default())
+        .manage(narration::Narration::default())
         .on_menu_event(|app, event| {
             if event.id() == windows::NEW_WINDOW_MENU {
                 if let Err(e) = windows::open_new(app) {
@@ -765,6 +845,14 @@ pub fn run() {
             start_recording,
             stop_recording,
             cancel_recording,
+            speech_status,
+            download_speech_model,
+            narration_audio,
+            render_narration,
+            cancel_narration,
+            narration_wav,
+            set_narration_voice,
+            set_narration_language,
         ])
         .build(tauri::generate_context!())
         .expect("error while running SlopSlide")

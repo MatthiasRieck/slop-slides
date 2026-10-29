@@ -1058,6 +1058,33 @@ pub fn set_slide_size(html: &str, size: SlideSize) -> String {
     set_app_meta(html, size::SIZE_META, content.as_deref())
 }
 
+/// The app setting naming the voice the deck's narration is said in (see
+/// [`crate::narration::VOICES`]).
+pub const NARRATION_VOICE_META: &str = "slopslide-narration-voice";
+/// The app setting naming the language the deck's narration is in (see
+/// [`crate::narration::LANGUAGES`]).
+pub const NARRATION_LANGUAGE_META: &str = "slopslide-narration-language";
+
+/// The voice the deck's `<meta>` names for its narration, if any.
+pub fn narration_voice(html: &str) -> Option<String> {
+    app_meta_content(html, NARRATION_VOICE_META)
+}
+
+/// Names the narration's voice in the deck's `<meta>` (right after `<title>`).
+pub fn set_narration_voice(html: &str, voice: &str) -> String {
+    set_app_meta(html, NARRATION_VOICE_META, Some(voice))
+}
+
+/// The language the deck's `<meta>` names for its narration, if any.
+pub fn narration_language(html: &str) -> Option<String> {
+    app_meta_content(html, NARRATION_LANGUAGE_META)
+}
+
+/// Names the narration's language in the deck's `<meta>` (right after `<title>`).
+pub fn set_narration_language(html: &str, language: &str) -> String {
+    set_app_meta(html, NARRATION_LANGUAGE_META, Some(language))
+}
+
 /// `html` without its slides and section markers: the deck's shell (styles, runtime).
 pub fn strip_slides(html: &str) -> String {
     let mut ranges: Vec<Range<usize>> = find_slides(html)

@@ -30,6 +30,7 @@ use crate::error::{Error, Result};
 use crate::find;
 use crate::html;
 use crate::lint;
+use crate::narration;
 use crate::review::{self, Review};
 use crate::sessions;
 use crate::size::{SizeInfo, SlideSize, SIZE_META};
@@ -91,6 +92,8 @@ pub struct Deck {
     pub template: Option<String>,
     /// Every slide's canvas (see [`crate::size`]).
     pub size: SizeInfo,
+    /// The voice and language its narration is said in (see [`crate::narration`]).
+    pub narration: narration::Settings,
 }
 
 /// `~/Documents/SlopSlide`, where decks lived before workspaces; the default workspace.
@@ -268,6 +271,7 @@ pub fn load(file: &Path) -> Result<Deck> {
         review: review::read(&source),
         template: html::template(&source),
         size: html::slide_size(&source).into(),
+        narration: narration::Settings::of(&source),
         sections: section_spans
             .iter()
             .enumerate()
@@ -476,6 +480,27 @@ pub fn set_slide_size(file: &Path, size: SlideSize) -> Result<Deck> {
     size.check().map_err(Error::Message)?;
     Ok(edit(file, |s| {
         Ok((html::ensure_runtime(&html::set_slide_size(s, size)), ()))
+    })?
+    .0)
+}
+
+/// Sets the voice the deck's narration is said in (one of [`narration::VOICES`]).
+pub fn set_narration_voice(file: &Path, voice: &str) -> Result<Deck> {
+    if narration::voice(voice).is_none() {
+        return Err(Error::msg(format!("unknown narration voice: {voice}")));
+    }
+    Ok(edit(file, |s| Ok((html::set_narration_voice(s, voice), ())))?.0)
+}
+
+/// Sets the language the deck's narration is in (one of [`narration::LANGUAGES`]).
+pub fn set_narration_language(file: &Path, language: &str) -> Result<Deck> {
+    if narration::language(language).is_none() {
+        return Err(Error::msg(format!(
+            "unknown narration language: {language}"
+        )));
+    }
+    Ok(edit(file, |s| {
+        Ok((html::set_narration_language(s, language), ()))
     })?
     .0)
 }
@@ -1294,6 +1319,33 @@ mod tests {
         let locked = deck.html();
         assert!(set_slide_narration(&deck.file(), "a", "No").is_err());
         assert_eq!(deck.html(), locked);
+    }
+
+    #[test]
+    fn the_narration_voice_and_language_are_kept_in_the_deck() {
+        let deck = TempDeck::new(EDITED);
+        let settings = |d: &Deck| (d.narration.voice.clone(), d.narration.language.clone());
+        assert_eq!(
+            settings(&load(&deck.file()).unwrap()),
+            ("ryan".into(), "en".into())
+        );
+        let voiced = set_narration_voice(&deck.file(), "sohee").unwrap();
+        assert_eq!(settings(&voiced), ("sohee".into(), "en".into()));
+        let spoken = set_narration_language(&deck.file(), "ko").unwrap();
+        assert_eq!(settings(&spoken), ("sohee".into(), "ko".into()));
+        assert!(deck
+            .html()
+            .contains("<meta name=\"slopslide-narration-voice\" content=\"sohee\">"));
+        assert!(deck
+            .html()
+            .contains("<meta name=\"slopslide-narration-language\" content=\"ko\">"));
+        // Setting it again replaces the tag.
+        set_narration_voice(&deck.file(), "ryan").unwrap();
+        assert_eq!(deck.html().matches("slopslide-narration-voice").count(), 1);
+        let html = deck.html();
+        assert!(set_narration_voice(&deck.file(), "nobody").is_err());
+        assert!(set_narration_language(&deck.file(), "xx").is_err());
+        assert_eq!(deck.html(), html);
     }
 
     #[test]

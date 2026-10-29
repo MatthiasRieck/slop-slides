@@ -74,6 +74,18 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   number of seconds. Entrance animations, slide fades and hero morphs play as they do when presenting,
   or each slide can be a still of its final frame. The deck plays in a hidden window whose
   animations follow the video's clock, so every frame is exact however long capturing it takes.
+  With **Speak narration**, each slide's narration is said over it (an Opus audio track) after
+  a short pause, and the slide stays until the narration and a pause after it end; the set
+  seconds become the least a slide is shown.
+- **Narration:** the sidebar's Narration tab holds what is said over each slide. It is spoken
+  on your computer by [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) 0.6B CustomVoice, in
+  one of its nine voices and ten languages, chosen per deck. Its model (2.5 GB, all voices
+  included) is downloaded on request to `~/.slopslides/models`. Each slide's audio is
+  `narration/<slide id>.wav` next to the deck; a slide whose narration, voice or language
+  changed is spoken again, the rest never. When presenting, the play button between the
+  arrows runs the show by itself, speaking each slide's narration with the video export's
+  timing. Speaking needs macOS or Linux (with OpenBLAS); Windows builds can write narration
+  but not speak it yet.
 
 Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.
 
@@ -83,9 +95,9 @@ Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.
   [OpenAI Codex](https://developers.openai.com/codex/cli), or GitHub Copilot. Select its
   model in the chat composer. To use a binary outside your PATH, set
   `SLOPSLIDE_CLAUDE_PATH`, `SLOPSLIDE_CODEX_PATH`, or `SLOPSLIDE_COPILOT_PATH`.
-- For development: Node 22+, pnpm, Rust (stable), CMake (to build whisper.cpp), and the
-  [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS; on Linux also
-  `libasound2-dev` for the microphone.
+- For development: Node 22+, pnpm, Rust (stable), CMake (to build whisper.cpp and libopus),
+  and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS; on
+  Linux also `libasound2-dev` for the microphone and `libopenblas-dev` for narration.
 
 ## Development
 
@@ -214,7 +226,12 @@ src-tauri/src/
                         adds the slide editor (assets/editor.js) for edit mode
   video.rs              MP4 export: plays the deck frame by frame in a hidden window
                         (assets/video.js) and encodes it as AV1 with rav1e
-  mp4.rs                the MP4 file video.rs writes: one AV1 track, held frames stored once
+  mp4.rs                the MP4 file video.rs writes: one AV1 track, held frames stored
+                        once, and an Opus track for narration
+  narration/            spoken narration: the voice model's download, each deck's audio
+                        (`narration/` next to it) and when it is out of date; engine.rs
+                        runs Qwen3-TTS (vendor/qwen3-tts, built by build.rs) in a worker
+                        process (`slopslide --narration-worker`)
   watcher.rs            file watcher → `deck-changed` events, so edits stream into the UI
 src-tauri/prompts/      the agent's system prompt and design references, compiled into the
                         app and injected into every session

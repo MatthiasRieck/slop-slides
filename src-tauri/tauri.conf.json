@@ -39,6 +39,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "linux": {
+      "deb": { "depends": ["libopenblas0"] },
+      "rpm": { "depends": ["openblas"] }
+    },
     "macOS": {
       "entitlements": "./Entitlements.plist",
       "hardenedRuntime": true,

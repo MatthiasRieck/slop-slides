@@ -18,8 +18,13 @@ export function wordCount(text: string): number {
   return text.split(/\s+/).filter(Boolean).length;
 }
 
+/** About how many seconds `text` takes to say. */
+export function wordsSeconds(text: string): number {
+  return (wordCount(text) / WORDS_PER_MINUTE) * 60;
+}
+
 /** About how long `text` takes to say, like `0:45`. */
 export function speakingTime(text: string): string {
-  const seconds = Math.round((wordCount(text) / WORDS_PER_MINUTE) * 60);
+  const seconds = Math.round(wordsSeconds(text));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }

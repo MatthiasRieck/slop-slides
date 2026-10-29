@@ -76,6 +76,15 @@ export interface Deck {
   template?: string | null;
   /** Every slide's canvas (its `slopslide-size` meta); 1920×1080 px when missing. */
   size?: SizeInfo;
+  /** The voice and language its narration is said in (its `slopslide-narration-*` metas). */
+  narration?: NarrationSettings;
+}
+
+export interface NarrationSettings {
+  /** One of SpeechStatus.voices' ids. */
+  voice: string;
+  /** One of SpeechStatus.languages' ids. */
+  language: string;
 }
 
 /** A deck of example layouts in one style; each slide is a layout for new or changed slides. */
@@ -200,6 +209,55 @@ export interface VoiceStatus {
   recording: boolean;
 }
 
+/** A built-in voice of the narration model (see src-tauri/src/narration/mod.rs). */
+export interface NarrationVoice {
+  id: string;
+  name: string;
+  description: string;
+  /** The language it speaks natively; others it speaks with an accent. */
+  native: string;
+}
+
+export interface NarrationLanguage {
+  /** ISO 639-1 code. */
+  id: string;
+  name: string;
+}
+
+/** What narration can do on this machine (see src-tauri/src/narration/mod.rs). */
+export interface SpeechStatus {
+  /** This build has the speech engine (not every platform does). */
+  available: boolean;
+  /** The voice model is downloaded. */
+  modelReady: boolean;
+  /** The model's download size. */
+  modelBytes: number;
+  downloading: boolean;
+  /** The deck whose narration is being said, if any. */
+  rendering: string | null;
+  voices: NarrationVoice[];
+  languages: NarrationLanguage[];
+}
+
+/** Whether a slide's audio matches its narration: none without narration, stale when made from another script, voice or language. */
+export type AudioState = "none" | "missing" | "stale" | "ready";
+
+export interface SlideAudio {
+  slide: string;
+  state: AudioState;
+  /** How long the audio there plays (stale audio too); null without any. */
+  seconds: number | null;
+}
+
+/** Payload of `narration-render` events. */
+export interface NarrationRenderProgress {
+  deck: string;
+  /** The slide being said now; null once all are done. */
+  slide: string | null;
+  done: number;
+  total: number;
+}
+
 /** Payload of `voice-download` events. */
 export interface VoiceDownloadProgress {
   received: number;
@@ -279,8 +337,8 @@ export const api = {
   /** Prints the deck to `dest` as a PDF: one page per shown slide, with selectable text. */
   exportPdf: (id: string, dest: string) => invoke<void>("export_pdf", { id, dest }),
   /**
-   * Records the deck to `dest` as an MP4, each shown slide on screen for the same time;
-   * `video-export-progress` events ({ frame, frames }) follow it.
+   * Records the deck to `dest` as an MP4, each shown slide on screen for the same time (longer
+   * to fit its narration, with `options.narration`); `video-export-progress` events follow it.
    */
   exportVideo: (id: string, dest: string, options: VideoOptions) => invoke<void>("export_video", { id, dest, options }),
   /** Stops the running video export, which then fails with VIDEO_CANCELLED. */
@@ -352,6 +410,22 @@ export const api = {
   /** Stops recording; resolves to what was said. */
   stopRecording: () => invoke<string>("stop_recording"),
   cancelRecording: () => invoke<void>("cancel_recording"),
+  speechStatus: () => invoke<SpeechStatus>("speech_status"),
+  /** Downloads the narration voice model to `~/.slopslides/models`, reporting `speech-download` events. */
+  downloadSpeechModel: () => invoke<void>("download_speech_model"),
+  /** Each slide's narration audio, in slide order. */
+  narrationAudio: (id: string) => invoke<SlideAudio[]>("narration_audio", { id }),
+  /**
+   * Says the narration of `slides` (all for null) that has no up-to-date audio, reporting
+   * `narration-render` events; resolves to every slide's audio. Fails with NARRATION_CANCELLED
+   * when cancelled.
+   */
+  renderNarration: (id: string, slides: string[] | null) => invoke<SlideAudio[]>("render_narration", { id, slides }),
+  cancelNarration: () => invoke<void>("cancel_narration"),
+  /** A slide's narration audio, as WAV bytes. */
+  narrationWav: (id: string, slide: string) => invoke<ArrayBuffer>("narration_wav", { id, slide }),
+  setNarrationVoice: (id: string, voice: string) => invoke<Deck>("set_narration_voice", { id, voice }),
+  setNarrationLanguage: (id: string, language: string) => invoke<Deck>("set_narration_language", { id, language }),
 };
 
 export function errorMessage(error: unknown): string {

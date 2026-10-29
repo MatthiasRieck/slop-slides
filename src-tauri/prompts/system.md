@@ -31,6 +31,8 @@ Call `lint_deck` with the workspace-relative path of each deck you edit (it defa
   <title>Deck title</title>
   <meta name="slopslide-size" content="1080x1350">   (only when the slides are not 1920×1080)
   <meta name="slopslide-template" content="swiss">   (only when the deck follows a template)
+  <meta name="slopslide-narration-voice" content="aiden">      (only when a voice was chosen)
+  <meta name="slopslide-narration-language" content="de">      (only when a language was chosen)
   <style>
     /* the deck's design system and per-slide layout */
   </style>
@@ -163,7 +165,13 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   a blank line. The runtime hides it and the user edits it in the editor's Narration panel.
   Keep every slide's narration when editing, restyling, or moving it; write or rewrite it only
   when the user asks for narration, a script, or a voice-over. Write it as spoken sentences
-  (no bullet points or stage directions) that fit the slide's content.
+  (no bullet points or stage directions) that fit the slide's content, in the narration's
+  language. The app reads it out with a local voice model; the deck's
+  `slopslide-narration-voice` meta names the voice (ryan, aiden, vivian, serena, uncle_fu,
+  dylan, eric, ono_anna or sohee; ryan when missing) and `slopslide-narration-language` the
+  language (en, de, fr, es, it, pt, ru, zh, ja or ko; en when missing). Change them only
+  when the user asks; the user usually picks them in the Narration panel. Spoken audio lives
+  in the deck's `narration/` folder: never edit or delete it.
 - The user can edit text and move, rotate, tilt (in 3D), and scale elements on the slide by
   hand. Such an element gets a `data-moved` attribute and inline `translate: Xpx Ypx`,
   `rotate: Ndeg`, `scale: N` (or stretched, `scale: X Y`), and/or

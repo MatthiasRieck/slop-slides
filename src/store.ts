@@ -330,6 +330,9 @@ interface AppState {
   saveSlideEdit: (slide: string, markup: string) => Promise<void>;
   /** Saves what is said over `slide` (empty removes it), after any slide edits still being saved. */
   setNarration: (slide: string, text: string) => Promise<void>;
+  /** Sets the voice (or language) the deck's narration is said in. */
+  setNarrationVoice: (voice: string) => Promise<void>;
+  setNarrationLanguage: (language: string) => Promise<void>;
   undoSlideEdit: () => Promise<void>;
   redoSlideEdit: () => Promise<void>;
   /** Undoes every edit made since entering edit mode, then leaves it. */
@@ -739,6 +742,10 @@ export const useApp = create<AppState>((set, get) => ({
     editQueue = editQueue.then(save);
     return editQueue;
   },
+
+  setNarrationVoice: (voice) => editDeck((id) => api.setNarrationVoice(id, voice)),
+
+  setNarrationLanguage: (language) => editDeck((id) => api.setNarrationLanguage(id, language)),
 
   undoSlideEdit: () => {
     editQueue = editQueue.then(() => stepSlideHistory("slideUndo", "slideRedo")).then(() => undefined);
@@ -1476,6 +1483,22 @@ function applyWorkspaceChanged(paths: string[]) {
     return applyDeckChanged(inFolder, basename(openedFile.path));
   }
   if (paths.includes(openedFile.path)) useApp.setState((s) => ({ fileRev: s.fileRev + 1 }));
+}
+
+/** Queues `change` to the open deck after the edits before it, and shows the deck it gives back. */
+function editDeck(change: (id: string) => Promise<Deck>): Promise<void> {
+  const save = async () => {
+    const { deck } = useApp.getState();
+    if (!deck) return;
+    try {
+      const next = await change(deck.id);
+      if (useApp.getState().deck?.id === deck.id) useApp.getState().setDeck(next);
+    } catch (error) {
+      useApp.setState({ error: errorMessage(error) });
+    }
+  };
+  editQueue = editQueue.then(save);
+  return editQueue;
 }
 
 /** `paths` are relative to the deck's folder; `file` is the deck file's name. */

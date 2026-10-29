@@ -10,6 +10,7 @@ use crate::html::{
     self, find_ci, has_class, parse_tag, ADDED_ATTR, AUTOFIT_ATTR, DROPPED_ATTR, EDITOR_ATTRS,
     HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR, NARRATION_CLASS, SECTION_CLASS, SECTION_TITLE_ATTR,
 };
+use crate::narration;
 use crate::review;
 use crate::size::{self, SlideSize};
 
@@ -112,6 +113,7 @@ pub fn lint(
     check_review(&mut l);
     check_template(&mut l);
     check_slide_size(&mut l);
+    check_narration_settings(&mut l);
     check_entrances(&mut l);
     check_morphs(&mut l);
     check_assets(&mut l, asset_exists);
@@ -724,6 +726,51 @@ fn check_slide_size(l: &mut Linter) {
                 size::MIN_PX,
                 size::MAX_PX
             ))
+        },
+    );
+}
+
+/// The narration's voice and language metas must name ones the speech model has.
+fn check_narration_settings(l: &mut Linter) {
+    let list = |ids: Vec<&str>| ids.join(", ");
+    check_app_meta(
+        l,
+        html::NARRATION_VOICE_META,
+        [
+            "narration-voice-invalid",
+            "narration-voice-duplicate",
+            "narration-voice-misplaced",
+        ],
+        |content| {
+            narration::voice(content).is_none().then(|| {
+                format!(
+                    "<meta name=\"{}\"> names no known voice (\"{}\"): use one of {}. Remove it for the default, {}.",
+                    html::NARRATION_VOICE_META,
+                    truncate(content, 40),
+                    list(narration::VOICES.iter().map(|v| v.id).collect()),
+                    narration::DEFAULT_VOICE
+                )
+            })
+        },
+    );
+    check_app_meta(
+        l,
+        html::NARRATION_LANGUAGE_META,
+        [
+            "narration-language-invalid",
+            "narration-language-duplicate",
+            "narration-language-misplaced",
+        ],
+        |content| {
+            narration::language(content).is_none().then(|| {
+                format!(
+                    "<meta name=\"{}\"> names no language the narration can be said in (\"{}\"): use one of {}. Remove it for the default, {}.",
+                    html::NARRATION_LANGUAGE_META,
+                    truncate(content, 40),
+                    list(narration::LANGUAGES.iter().map(|l| l.id).collect()),
+                    narration::DEFAULT_LANGUAGE
+                )
+            })
         },
     );
 }
@@ -1988,6 +2035,38 @@ mod tests {
         assert_eq!(rules(&commented), Vec::<&str>::new());
         let other = deck("").replace("<title>", "<meta name=\"description\" content=\"\"><title>");
         assert_eq!(rules(&other), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn checks_the_narration_voice_and_language_metas() {
+        let set = html::set_narration_language(
+            &html::set_narration_voice(
+                &deck(r#"<section class="slide" id="a"></section>"#),
+                "aiden",
+            ),
+            "de",
+        );
+        assert_eq!(rules(&set), Vec::<&str>::new());
+        assert_eq!(rules(&html::ensure_runtime(&set)), Vec::<&str>::new());
+        for bad in ["", "Aiden", "bob"] {
+            let html = set.replace("content=\"aiden\"", &format!("content=\"{bad}\""));
+            assert_eq!(rules(&html), ["narration-voice-invalid"], "{bad}");
+        }
+        for bad in ["", "german", "xx"] {
+            let html = set.replace("content=\"de\"", &format!("content=\"{bad}\""));
+            assert_eq!(rules(&html), ["narration-language-invalid"], "{bad}");
+        }
+        let message = &lint(&set.replace("aiden", "bob"), |_| true, &[])[0].message;
+        assert!(message.contains("ryan, aiden"), "{message}");
+        let twice = set.replace(
+            "<title>Talk</title>",
+            "<title>Talk</title><meta name=\"slopslide-narration-voice\" content=\"ryan\">",
+        );
+        assert_eq!(rules(&twice), ["narration-voice-duplicate"]);
+        let in_body = deck(
+            r#"<section class="slide" id="a"><meta name="slopslide-narration-language" content="en"></section>"#,
+        );
+        assert_eq!(rules(&in_body), ["narration-language-misplaced"]);
     }
 
     #[test]

@@ -41,6 +41,10 @@ sha2 = "0.10"
 whisper-rs = "0.16"
 arboard = { version = "3.7.0", default-features = false, features = ["image-data"] }
 
+# Video export (see src/video.rs): AV1, a royalty-free codec, encoded in Rust (no nasm or
+# system libraries needed).
+rav1e = { version = "0.8", default-features = false, features = ["threading"] }
+
 # Slide screenshots for sketches (see src/capture.rs) and PDF printing (src/pdf.rs); the same
 # versions wry already uses.
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -51,6 +55,10 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSBitmapImageRep", "NSImage", "NSImageRep", "NSPasteboard", "NSPrintInfo", "NSPrintOperation", "NSResponder", "NSView", "NSWindow"] }
 objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSError", "NSGeometry", "NSString", "NSURL", "NSValue"] }
 objc2-web-kit = { version = "0.3", features = ["block2", "objc2-app-kit", "objc2-core-foundation", "WKSnapshotConfiguration", "WKWebView"] }
+
+# rav1e's ARM assembly builds with the C compiler; its x86 assembly would need nasm.
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+rav1e = { version = "0.8", default-features = false, features = ["threading", "asm"] }
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.39"
@@ -64,3 +72,10 @@ webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 [dev-dependencies]
 ctor = "1.0.13"
 jsonschema = { version = "0.33.0", default-features = false }
+
+# The AV1 encoder is unusably slow unoptimized; optimize it in dev builds and tests too.
+[profile.dev.package.rav1e]
+opt-level = 3
+
+[profile.dev.package.v_frame]
+opt-level = 3

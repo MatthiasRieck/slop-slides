@@ -69,7 +69,11 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   it looks once its animations finish, with real, selectable text: the system webview prints
   the deck straight to the file. On Windows and Linux everything in it is vector. macOS
   WebKit cannot print transparency, so there each slide's decor (backgrounds, shapes, images)
-  goes in as one image under the text.
+  goes in as one image under the text. A **video** export saves an MP4 (AV1, a royalty-free
+  codec; the slide size up to 4K, 24, 30 or 60 fps) with each shown slide on screen for a set
+  number of seconds. Entrance animations, slide fades and hero morphs play as they do when presenting,
+  or each slide can be a still of its final frame. The deck plays in a hidden window whose
+  animations follow the video's clock, so every frame is exact however long capturing it takes.
 
 Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.
 
@@ -208,6 +212,9 @@ src-tauri/src/
   codex.rs              Codex app-server transport, permissions, and approval responses
   protocol.rs           `slop://` scheme serving deck files to the slide iframes;
                         adds the slide editor (assets/editor.js) for edit mode
+  video.rs              MP4 export: plays the deck frame by frame in a hidden window
+                        (assets/video.js) and encodes it as AV1 with rav1e
+  mp4.rs                the MP4 file video.rs writes: one AV1 track, held frames stored once
   watcher.rs            file watcher → `deck-changed` events, so edits stream into the UI
 src-tauri/prompts/      the agent's system prompt and design references, compiled into the
                         app and injected into every session

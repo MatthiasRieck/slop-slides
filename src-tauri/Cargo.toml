@@ -79,6 +79,11 @@ ctor = "1.0.13"
 jsonschema = { version = "0.33.0", default-features = false }
 
 # The AV1 encoder is unusably slow unoptimized; optimize it in dev builds and tests too.
+# The app also processes every captured pixel (scaling and RGB-to-YUV conversion).
+# Optimizing only rav1e leaves that work taking hundreds of milliseconds per HD frame.
+[profile.dev.package.slopslide]
+opt-level = 2
+
 [profile.dev.package.rav1e]
 opt-level = 3
 

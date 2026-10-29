@@ -788,6 +788,36 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    /// Run explicitly to measure the CPU export path without webview capture or narration.
+    #[test]
+    #[ignore = "1080p encoding benchmark; run with --ignored --nocapture"]
+    fn benchmark_video_encoding_1080p() {
+        use std::time::Instant;
+        let mut image = solid(1920, 1080, [24, 32, 28, 255]);
+        let mut video = VideoWriter::new(Cursor::new(Vec::new()), (1920, 1080), 30).unwrap();
+        let start = Instant::now();
+        for frame in 0..8 {
+            // Small moving detail over a still slide, like a deck's looping decoration.
+            for y in 800..900 {
+                for x in 1600..1700 {
+                    let i = (y * 1920 + x) * 4;
+                    image.rgba[i] = ((x + y + frame * 8) % 256) as u8;
+                }
+            }
+            let conversion = Instant::now();
+            std::hint::black_box(to_yuv(&image, 1920, 1080));
+            eprintln!("RGB conversion: {:?}", conversion.elapsed());
+            let encode = Instant::now();
+            video.push(&image).unwrap();
+            eprintln!("Conversion + encoder submission: {:?}", encode.elapsed());
+        }
+        video.finish(None).unwrap();
+        eprintln!(
+            "Eight 1080p frames including encoder flush: {:?}",
+            start.elapsed()
+        );
+    }
+
     fn options(seconds: f64, fps: u32) -> Options {
         Options {
             seconds_per_slide: seconds,

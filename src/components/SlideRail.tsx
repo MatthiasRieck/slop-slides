@@ -216,7 +216,7 @@ function SectionHeader(props: {
     <li
       ref={setNodeRef}
       data-testid="section-header"
-      style={{ transform: CSS.Transform.toString(transform), transition }}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn("group flex items-center gap-2 pt-1", isDragging && "z-10 opacity-80")}
       {...attributes}
       {...listeners}
@@ -344,7 +344,7 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
         setNodeRef(node);
         itemRef.current = node;
       }}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn("group flex gap-2", isDragging && "z-10 opacity-80")}
       {...attributes}
       {...listeners}

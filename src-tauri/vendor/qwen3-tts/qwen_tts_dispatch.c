@@ -72,7 +72,7 @@ static feat_t *row(feat_t *f, const char *id, const char *compiled, const char *
     return f;
 }
 
-static const char *yn(int v) { return v ? "yes" : "no"; }
+static const char *qwen_yesno(int v) { return v ? "yes" : "no"; }
 static const char *onoff(int v) { return v ? "ON" : "OFF"; }
 
 /* The class a tools/dispatch_expect.json entry is keyed by.  Coarse on purpose: it
@@ -300,7 +300,7 @@ int qwen_dispatch_map_report(void *out, const char *json_path) {
                            : !supported ? "compiled, but this CPU lacks AVX2"
                            : enabled ? "experimental signed-widening GEMV selected before other x86 GEMV paths"
                                      : "default OFF; set QWEN_AVX2_INT8_GEMV=1 for A/B";
-        row(&feats[n++], "matvec.int8.avx2-emulated-dot-gemv", yn(compiled), yn(supported),
+        row(&feats[n++], "matvec.int8.avx2-emulated-dot-gemv", qwen_yesno(compiled), qwen_yesno(supported),
             "QWEN_AVX2_INT8_GEMV", (compiled && supported && enabled) ? "ON" : "OFF", reason);
     }
 
@@ -315,7 +315,7 @@ int qwen_dispatch_map_report(void *out, const char *json_path) {
                            : !supported ? "compiled, but this CPU lacks AVX2"
                            : enabled ? "experimental Q4 integer GEMV selected before native/f32 Q4 paths"
                                      : "default OFF; set QWEN_AVX2_Q4_GEMV=1 for A/B";
-        row(&feats[n++], "matvec.q4.avx2-emulated-dot-gemv", yn(compiled), yn(supported),
+        row(&feats[n++], "matvec.q4.avx2-emulated-dot-gemv", qwen_yesno(compiled), qwen_yesno(supported),
             "QWEN_AVX2_Q4_GEMV", (compiled && supported && enabled) ? "ON" : "OFF", reason);
     }
 
@@ -343,7 +343,7 @@ int qwen_dispatch_map_report(void *out, const char *json_path) {
 #if defined(__AVX512BF16__)
         supported |= __builtin_cpu_supports("avx512bf16") ? 1 : 0;
 #endif
-        row(&feats[n++], "talker.prefill.matmat_bf16", yn(compiled), yn(supported),
+        row(&feats[n++], "talker.prefill.matmat_bf16", qwen_yesno(compiled), qwen_yesno(supported),
             "QWEN_PREFILL_MATMAT", onoff(on), why);
 #ifdef USE_BLAS
         row(&feats[n++], "talker.prefill.f32_blas_fallback", "yes", "yes", NULL, onoff(!on),
@@ -377,7 +377,7 @@ int qwen_dispatch_map_report(void *out, const char *json_path) {
         int req = qwen_cp_prefill2_requested();
         row(&feats[n++], "cp.prefill2",
 #if defined(__AVX512VNNI__)
-            "yes", yn(__builtin_cpu_supports("avx512vnni")),
+            "yes", qwen_yesno(__builtin_cpu_supports("avx512vnni")),
 #else
             "yes", "-",
 #endif
@@ -401,7 +401,7 @@ int qwen_dispatch_map_report(void *out, const char *json_path) {
         int on = (e && atoi(e) != 0);
         row(&feats[n++], "decoder.batch", "yes", "-", "QWEN_DECODER_BATCH", onoff(on),
             e ? "explicit env" : "unset here; the SERVER sets it to 1 at start unless the env says 0");
-        row(&feats[n++], "decoder.int8", yn(qwen_sd_int8_available()), yn(qwen_sd_int8_available()),
+        row(&feats[n++], "decoder.int8", qwen_yesno(qwen_sd_int8_available()), qwen_yesno(qwen_sd_int8_available()),
             "QWEN_SD_INT8", onoff(qwen_sd_int8_enabled()),
 #if defined(__AVX512VNNI__)
             "default ON with AVX-512 VNNI when the int8 decoder kernels are available"
@@ -409,20 +409,20 @@ int qwen_dispatch_map_report(void *out, const char *json_path) {
             "opt-in on this ISA (measured slower on the first frame elsewhere)"
 #endif
             );
-        row(&feats[n++], "decoder.res1_v2", yn(qwen_conv1d_int8_v2_available()),
-            yn(qwen_conv1d_int8_v2_available()), "QWEN_SD_RES1_V2",
+        row(&feats[n++], "decoder.res1_v2", qwen_yesno(qwen_conv1d_int8_v2_available()),
+            qwen_yesno(qwen_conv1d_int8_v2_available()), "QWEN_SD_RES1_V2",
             onoff(qwen_sd_res1_v2_active()),
             qwen_sd_res1_v2_active()
                 ? "direct dilated int8 DL-4 conv (VNNI / Arm dotprod; per-position activation scale, per-(channel,tap) weight scale). Any shape: it serves res1, res2, the rectangular initial/pre convs and wide channels; the in_ch<=768 square-only bound applies to the v1/Design-D paths, not here"
                 : "opt-in (QWEN_SD_RES1_V2=1); off: the residual convs run on the im2col panel kernel (v1 int8 where the square/768 shape allows, f32 otherwise)");
         row(&feats[n++], "decoder.pre_up_bf16", "yes",
-            yn(qwen_avx512_bf16_matmat_available() || qwen_kleidi_bf16_enabled()),
+            qwen_yesno(qwen_avx512_bf16_matmat_available() || qwen_kleidi_bf16_enabled()),
             "QWEN_SD_BF16_PREUP", onoff(qwen_sd_bf16_preup_active()),
             qwen_sd_bf16_preup_active()
                 ? "persistent BF16 pre-transformer weights; native AVX-512 BF16 or Arm KleidiAI prepared rows"
                 : "default OFF; f32 decoder pre-transformer path remains the control");
-        row(&feats[n++], "decoder.multislot", yn(qwen_conv1d_int8_v2_multi_available()),
-            yn(qwen_conv1d_int8_v2_multi_available()), "QWEN_SD_MULTISLOT",
+        row(&feats[n++], "decoder.multislot", qwen_yesno(qwen_conv1d_int8_v2_multi_available()),
+            qwen_yesno(qwen_conv1d_int8_v2_multi_available()), "QWEN_SD_MULTISLOT",
             onoff(qwen_sd_multislot_active()),
             qwen_sd_multislot_active()
                 ? "lane cohort DL-4 shared-weight sweep for 2..3 equal-length slots; rectangular in/out shapes supported"
@@ -432,8 +432,8 @@ int qwen_dispatch_map_report(void *out, const char *json_path) {
             qwen_sd_convt_stack_active()
                 ? "ConvT as one un-expanded GEMM per layer with the two-tap/carry/bias epilogue (exact; C12-WIN-11 A)"
                 : "opt-in (QWEN_SD_CONVT_STACK=1); off: per-tap GEMMs + scatter + full-length intermediate");
-        row(&feats[n++], "decoder.glue_fused", yn(qwen_conv1d_int8_v2_available()),
-            yn(qwen_conv1d_int8_v2_available()), "QWEN_SD_GLUE", onoff(qwen_sd_glue_active()),
+        row(&feats[n++], "decoder.glue_fused", qwen_yesno(qwen_conv1d_int8_v2_available()),
+            qwen_yesno(qwen_conv1d_int8_v2_available()), "QWEN_SD_GLUE", onoff(qwen_sd_glue_active()),
             qwen_sd_glue_active()
                 ? "residual unit fused on the DL-4 path (VNNI / Arm dotprod): context-aware conv, residual in the epilogue, no ext/full/cut/add passes"
                 : "opt-in (QWEN_SD_GLUE=1, needs QWEN_SD_RES1_V2=1); off: the control residual unit");
@@ -446,7 +446,7 @@ int qwen_dispatch_map_report(void *out, const char *json_path) {
 #else
             "no",
 #endif
-            yn(qwen_amx_int8_available()), "QWEN_SD_AMX_D", onoff(qwen_sd_amx_d_active()),
+            qwen_yesno(qwen_amx_int8_available()), "QWEN_SD_AMX_D", onoff(qwen_sd_amx_d_active()),
             qwen_sd_amx_d_active() ? "persistent AMX INT8 Design-D decoder representation is active"
                                    : "Design-D unavailable or not requested; decoder uses its resolved fallback");
         row(&feats[n++], "decoder.fused_residual",
@@ -455,11 +455,11 @@ int qwen_dispatch_map_report(void *out, const char *json_path) {
 #else
             "no",
 #endif
-            yn(qwen_amx_int8_available()), "QWEN_SD_FUSED_RESIDUAL",
+            qwen_yesno(qwen_amx_int8_available()), "QWEN_SD_FUSED_RESIDUAL",
             onoff(qwen_sd_fused_residual_active()),
             qwen_sd_fused_residual_active() ? "AMX Design-D fused residual is shape-gated at 1x1 same-width projections"
                                             : "not active; ordinary projection plus residual/fallback remains available");
-        row(&feats[n++], "decoder.stream_strip", "yes", yn(qwen_amx_int8_available()),
+        row(&feats[n++], "decoder.stream_strip", "yes", qwen_yesno(qwen_amx_int8_available()),
             "QWEN_SD_STREAM_STRIP", onoff(qwen_sd_stream_strip_active()),
             qwen_sd_stream_strip_active() ? "warm Design-D range slice is active"
                                           : "warm strip unavailable or not requested");
@@ -473,11 +473,11 @@ int qwen_dispatch_map_report(void *out, const char *json_path) {
 #else
             "no",
 #endif
-            yn(qwen_amx_int8_available() || qwen_amx_bf16_available()), "QWEN_AMX_PREPACK",
+            qwen_yesno(qwen_amx_int8_available() || qwen_amx_bf16_available()), "QWEN_AMX_PREPACK",
             onoff(qwen_amx_prepack_requested()), "opt-in; parent packs, prefork workers inherit");
         row(&feats[n++], "prepack.vnni",
 #if defined(__AVX512VNNI__)
-            "yes", yn(__builtin_cpu_supports("avx512vnni")),
+            "yes", qwen_yesno(__builtin_cpu_supports("avx512vnni")),
 #else
             "no", "-",
 #endif
@@ -490,8 +490,8 @@ int qwen_dispatch_map_report(void *out, const char *json_path) {
         /* Unconditional, because the interesting case is the build that has NO row below:
          * AVX2 and AVX-512F without VNNI have int8/q4 GEMM but no integer GEMV, and used to
          * say nothing at all while every B=1 call ran the f32 fused twin. */
-        row(&feats[n++], "matvec.int8.native", yn(qwen_int8_gemv_native()),
-            yn(qwen_int8_gemv_native()), NULL, onoff(qwen_int8_gemv_native()),
+        row(&feats[n++], "matvec.int8.native", qwen_yesno(qwen_int8_gemv_native()),
+            qwen_yesno(qwen_int8_gemv_native()), NULL, onoff(qwen_int8_gemv_native()),
             qwen_int8_gemv_native() ? "native integer GEMV"
                                     : "NO integer GEMV in this build: B=1 runs the f32 fused twin");
         row(&feats[n++], "matmat.int8.family", "-", "-", NULL, "see reason",
@@ -510,22 +510,22 @@ int qwen_dispatch_map_report(void *out, const char *json_path) {
                          "back to one GEMV per slot, silently"
                        : "no batched int8 kernel here at all: every B runs per-slot GEMV");
         }
-        row(&feats[n++], "matvec.q4.native", yn(qwen_q4_gemv_native()),
-            yn(qwen_q4_gemv_native()), NULL, onoff(qwen_q4_gemv_native()),
+        row(&feats[n++], "matvec.q4.native", qwen_yesno(qwen_q4_gemv_native()),
+            qwen_yesno(qwen_q4_gemv_native()), NULL, onoff(qwen_q4_gemv_native()),
             qwen_q4_gemv_native() ? "native q4 GEMV"
                                   : "NO q4 GEMV in this build: B=1 runs the f32 fused twin");
 #if defined(__AVX512BF16__)
-        row(&feats[n++], "matvec.bf16.dpbf16", "yes", yn(__builtin_cpu_supports("avx512bf16")),
+        row(&feats[n++], "matvec.bf16.dpbf16", "yes", qwen_yesno(__builtin_cpu_supports("avx512bf16")),
             "QWEN_NO_BF16DOT", onoff(qwen_bf16dot_enabled()), "default ON; QWEN_NO_BF16DOT=1 disables");
 #endif
 #if defined(__AVX512VNNI__)
         {
             const char *e = getenv("QWEN_NO_VNNI");
             int off = (e && e[0] == '1');
-            row(&feats[n++], "matvec.int8.vnni", "yes", yn(__builtin_cpu_supports("avx512vnni")),
+            row(&feats[n++], "matvec.int8.vnni", "yes", qwen_yesno(__builtin_cpu_supports("avx512vnni")),
                 "QWEN_NO_VNNI", onoff(!off), off ? "QWEN_NO_VNNI=1" : "default ON (vpdpbusd)");
             snprintf(tmp, sizeof tmp, "v%d", qwen_q4_vnni_variant());
-            row(&feats[n++], "matvec.q4.vnni_variant", "yes", yn(__builtin_cpu_supports("avx512vnni")),
+            row(&feats[n++], "matvec.q4.vnni_variant", "yes", qwen_yesno(__builtin_cpu_supports("avx512vnni")),
                 "QWEN_Q4_VNNI_V4", tmp, "v3 default (wins on Zen5); QWEN_Q4_VNNI_V4=1 -> v4; QWEN_Q4_VNNI_V3=0 -> v2");
         }
 #endif
@@ -542,7 +542,7 @@ int qwen_dispatch_map_report(void *out, const char *json_path) {
             qwen_arm_bfdot_on() ? "explicit QWEN_ARM_BFDOT=1" : "opt-in; default is the NEON 2-row fused bf16 matvec");
 #endif
 #if defined(__aarch64__)
-        row(&feats[n++], "q8repack.neon", "yes", yn(qwen_q8r_supported()),
+        row(&feats[n++], "q8repack.neon", "yes", qwen_yesno(qwen_q8r_supported()),
             "QWEN_NO_Q8REPACK", onoff(qwen_q8r_enabled()),
             !qwen_q8r_supported() ? "CPU has neither dotprod nor i8mm"
                                   : (qwen_q8r_enabled() ? "q8_0 4-row repack, SDOT (SMMLA where i8mm exists); default ON"
@@ -558,20 +558,20 @@ int qwen_dispatch_map_report(void *out, const char *json_path) {
 #else
             0;
 #endif
-        row(&feats[n++], "kleidi.enabled", yn(build), yn(qwen_kleidi_supported()), "QWEN_NO_KLEIDI",
+        row(&feats[n++], "kleidi.enabled", qwen_yesno(build), qwen_yesno(qwen_kleidi_supported()), "QWEN_NO_KLEIDI",
             onoff(qwen_kleidi_enabled()),
             !build ? "not compiled (needs an i8mm target)" :
             !qwen_kleidi_supported() ? "compiled, CPU lacks i8mm/bf16" : "default ON when supported");
         if (build) {
-            row(&feats[n++], "kleidi.int8", "yes", yn(qwen_kleidi_supported()), "QWEN_NO_KAI_I8",
+            row(&feats[n++], "kleidi.int8", "yes", qwen_yesno(qwen_kleidi_supported()), "QWEN_NO_KAI_I8",
                 onoff(qwen_kleidi_i8_enabled()), "SMMLA int8 GEMM/GEMV via KleidiAI");
-            row(&feats[n++], "kleidi.bf16", "yes", yn(qwen_kleidi_supported()), "QWEN_NO_KAI_BF16",
+            row(&feats[n++], "kleidi.bf16", "yes", qwen_yesno(qwen_kleidi_supported()), "QWEN_NO_KAI_BF16",
                 onoff(qwen_kleidi_bf16_enabled()), "BFMMLA bf16 GEMM/GEMV via KleidiAI");
-            row(&feats[n++], "kleidi.prefill", "yes", yn(qwen_kleidi_supported()), "QWEN_KAI_OPS",
+            row(&feats[n++], "kleidi.prefill", "yes", qwen_yesno(qwen_kleidi_supported()), "QWEN_KAI_OPS",
                 onoff(qwen_kleidi_prefill_enabled()), "bf16 prefill through KleidiAI (needs kleidi.bf16)");
-            row(&feats[n++], "kleidi.qkv_fused", "yes", yn(qwen_kleidi_supported()), "QWEN_KAI_QKV_FUSED",
+            row(&feats[n++], "kleidi.qkv_fused", "yes", qwen_yesno(qwen_kleidi_supported()), "QWEN_KAI_QKV_FUSED",
                 onoff(qwen_kleidi_qkv_fused_on()), "one packed LHS, Q/K/V tiles scheduled from it (default ON)");
-            row(&feats[n++], "kleidi.lhs_sym", "yes", yn(qwen_kleidi_supported()), "QWEN_KAI_LHS",
+            row(&feats[n++], "kleidi.lhs_sym", "yes", qwen_yesno(qwen_kleidi_supported()), "QWEN_KAI_LHS",
                 onoff(qwen_kleidi_lhs_sym()), "symmetric LHS quantisation (opt-in, QWEN_KAI_LHS=sym)");
             snprintf(tmp, sizeof tmp, "%d", qwen_kleidi_nchunk_value());
             row(&feats[n++], "kleidi.nchunk", "-", "-", "QWEN_KAI_NCHUNK", tmp,
@@ -597,8 +597,8 @@ int qwen_dispatch_map_report(void *out, const char *json_path) {
             row(&feats[n++], "pool.narrow", "-", "-", "QWEN_POOL_NARROW", onoff(narrow),
                 "clamp workers to nt-1 (main thread also works)");
         }
-        row(&feats[n++], "blas.owned_effective", yn(qwen_blas_own_get()),
-            yn(qwen_blas_own_effective()), "QWEN_BLAS_OWN",
+        row(&feats[n++], "blas.owned_effective", qwen_yesno(qwen_blas_own_get()),
+            qwen_yesno(qwen_blas_own_effective()), "QWEN_BLAS_OWN",
             onoff(qwen_blas_own_effective()),
             qwen_blas_own_effective()
                 ? "BLAS held at one thread; decoder SGEMMs partitioned on the engine pool"
@@ -704,7 +704,7 @@ int qwen_dispatch_map_report(void *out, const char *json_path) {
         snprintf(mc, sizeof mc, "%d(%d)", g->min_cols, g->compiled_min_cols);
         snprintf(sw, sizeof sw, "%s%s", g->on_env ? g->on_env : g->off_env, g->on_env ? " (opt-in)" : "");
         fprintf(f, "  %-18s %-24s %-8s %-9s %-4s %-9s %-13s %-13s %-22s %s\n",
-                gate_id(g->mmk), g->name, yn(g->compiled), yn(g->supported),
+                gate_id(g->mmk), g->name, qwen_yesno(g->compiled), qwen_yesno(g->supported),
                 g->compiled ? onoff(g->on) : "-", mb, mr, mc, sw,
                 g->compiled ? g->reason : "not compiled");
     }

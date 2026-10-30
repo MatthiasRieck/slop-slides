@@ -48,12 +48,14 @@ const ENGINE: &[&str] = &[
 ];
 
 /// Compiles the text-to-speech engine for narration (src/narration/engine.rs) where it runs:
-/// it needs POSIX (mmap, pthreads) and a BLAS, Accelerate on macOS and OpenBLAS on Linux.
+/// Accelerate on macOS, OpenBLAS on Linux, or static OpenBLAS + Win32 shims on Windows.
 /// Elsewhere, or with SLOPSLIDE_NO_NARRATION_ENGINE set, the app builds without it and
 /// narration says speech is unavailable in this build.
 fn narration_engine() {
     println!("cargo:rerun-if-changed=vendor/qwen3-tts");
-    println!("cargo:rerun-if-changed=native/tts.c");
+    println!("cargo:rerun-if-changed=native");
+    println!("cargo:rerun-if-env-changed=SLOPSLIDE_OPENBLAS_DIR");
+    println!("cargo:rerun-if-env-changed=SLOPSLIDE_REQUIRE_NARRATION_ENGINE");
     println!("cargo:rerun-if-env-changed=SLOPSLIDE_NO_NARRATION_ENGINE");
     if env::var_os("SLOPSLIDE_NO_NARRATION_ENGINE").is_some() {
         return;
@@ -77,15 +79,80 @@ fn narration_engine() {
         }
         "linux" => {
             let Ok(blas) = pkg_config::Config::new().probe("openblas") else {
-                println!(
-                    "cargo:warning=OpenBLAS (libopenblas-dev) not found: building without narration speech"
-                );
+                unavailable("OpenBLAS (libopenblas-dev) not found");
                 return;
             };
             build.define("USE_OPENBLAS", None);
             build.includes(&blas.include_paths);
         }
-        _ => return,
+        "windows"
+            if arch == "x86_64" && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") =>
+        {
+            let Some(root) = env::var_os("SLOPSLIDE_OPENBLAS_DIR") else {
+                unavailable("set SLOPSLIDE_OPENBLAS_DIR to an x64-windows-narration OpenBLAS installation (see docs/windows-narration.md)");
+                return;
+            };
+            let root = Path::new(&root);
+            // OpenBLAS 0.3.34 installs its headers in a namespaced subdirectory.
+            let include = root.join("include/openblas");
+            assert!(
+                include.join("cblas.h").is_file(),
+                "OpenBLAS header missing: {}",
+                include.join("cblas.h").display()
+            );
+            assert!(
+                root.join("lib/openblas.lib").is_file(),
+                "static OpenBLAS openblas.lib missing"
+            );
+            assert!(
+                !root.join("bin/openblas.dll").exists(),
+                "OpenBLAS must be built with the static narration triplet, not a DLL import library"
+            );
+            println!(
+                "cargo:rerun-if-changed={}",
+                root.join("lib/openblas.lib").display()
+            );
+            println!(
+                "cargo:rerun-if-changed={}",
+                root.join("share/openblas/copyright").display()
+            );
+            build.prefer_clang_cl_over_msvc(true);
+            assert!(
+                build.get_compiler().is_like_clang_cl(),
+                "Windows narration requires clang-cl (Visual Studio C++ Clang tools)"
+            );
+            build
+                .include(&include)
+                .include("native/windows")
+                .flag("/FInative/windows/compat.h")
+                .flag("/clang:-std=gnu11")
+                .flag("/clang:-Werror=implicit-function-declaration")
+                .define("QWEN_USE_PTHREADS", None)
+                .define("USE_OPENBLAS", None)
+                .define("_CRT_SECURE_NO_WARNINGS", None);
+            println!(
+                "cargo:rustc-link-search=native={}",
+                root.join("lib").display()
+            );
+            println!("cargo:rustc-link-lib=static=openblas");
+            // Include the exact dependency's redistribution notice in every Windows app.
+            let license = std::fs::read_to_string(root.join("share/openblas/copyright"))
+                .expect("OpenBLAS redistribution notice missing");
+            std::fs::write(out.join("openblas-license.txt"), license)
+                .expect("write OpenBLAS notice");
+            // Compile the shim without the engine's allocation macros or AVX flags.
+            cc::Build::new()
+                .prefer_clang_cl_over_msvc(true)
+                .include("native/windows")
+                .file("native/windows/compat.c")
+                .define("_CRT_SECURE_NO_WARNINGS", None)
+                .warnings(false)
+                .compile("qwen_windows");
+        }
+        _ => {
+            unavailable("narration supports macOS, Linux, and x86_64 Windows MSVC builds");
+            return;
+        }
     }
     build
         .define("USE_BLAS", None)
@@ -95,21 +162,39 @@ fn narration_engine() {
         .include(dir.join("vendor"))
         .include(dir.join("third_party/ingot/include"))
         .opt_level(3)
-        .flag("-ffast-math")
+        .flag(if os == "windows" {
+            "/clang:-ffast-math"
+        } else {
+            "-ffast-math"
+        })
         // Upstream code; its warnings are not ours to fix.
         .warnings(false)
         .flag_if_supported("-w");
     if arch == "x86_64" {
         // The engine picks its x86 kernels when compiling; AVX2 and FMA run on any x86 Mac
         // and PC from the last decade.
-        build.flag("-mavx2").flag("-mfma");
+        if os == "windows" {
+            build.flag("/clang:-mavx2").flag("/clang:-mfma");
+        } else {
+            build.flag("-mavx2").flag("-mfma");
+        }
     }
     build.files(ENGINE.iter().map(|f| dir.join(f)));
     build.file("native/tts.c");
+    if os == "windows" {
+        build.file("native/windows/test.c");
+    }
     build.compile("qwen_tts");
     if os == "linux" {
         println!("cargo:rustc-link-lib=m");
         println!("cargo:rustc-link-lib=pthread");
     }
     println!("cargo:rustc-cfg=narration_engine");
+}
+
+fn unavailable(reason: &str) {
+    if env::var_os("SLOPSLIDE_REQUIRE_NARRATION_ENGINE").is_some() {
+        panic!("narration engine required: {reason}");
+    }
+    println!("cargo:warning={reason}; building without narration speech");
 }

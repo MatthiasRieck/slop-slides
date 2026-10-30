@@ -286,7 +286,7 @@ pub struct Narration {
 impl Narration {
     pub fn status(&self, home: &Path) -> SpeechStatus {
         SpeechStatus {
-            available: engine::AVAILABLE,
+            available: engine::unavailable_reason().is_none(),
             model_ready: model_ready(home),
             model_bytes: model_bytes(),
             downloading: self.downloading.load(Ordering::SeqCst),
@@ -346,10 +346,8 @@ impl Narration {
         if todo.is_empty() {
             return Ok(statuses(file, &deck));
         }
-        if !engine::AVAILABLE {
-            return Err(Error::msg(
-                "This build of SlopSlide cannot speak narration on this platform.",
-            ));
+        if let Some(reason) = engine::unavailable_reason() {
+            return Err(Error::msg(reason));
         }
         if !model_ready(home) {
             return Err(Error::msg(
@@ -427,7 +425,7 @@ async fn say_all(
         );
         manifest.write(&dir)?;
     }
-    Ok(())
+    worker.shutdown().await
 }
 
 async fn download_model(app: &AppHandle, dir: &Path) -> Result<()> {

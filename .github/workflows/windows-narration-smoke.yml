@@ -1,0 +1,34 @@
+name: Windows narration real-model smoke
+on:
+  workflow_dispatch:
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/windows-narration
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm tauri build --no-bundle
+      - name: Load, render, measure, and stop real worker
+        run: python scripts/windows-narration-smoke.py --exe src-tauri/target/release/slopslide.exe --work '${{ runner.temp }}/narration smoke 空間' --download
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-narration-measurements-and-audio
+          path: |
+            ${{ runner.temp }}/narration smoke 空間/measurements.json
+            ${{ runner.temp }}/narration smoke 空間/*.wav
+            ${{ runner.temp }}/narration smoke 空間/worker-stderr.log

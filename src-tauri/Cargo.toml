@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-# The narration speech engine (vendor/qwen3-tts, see build.rs), and OpenBLAS on Linux.
+# The narration speech engine (vendor/qwen3-tts, see build.rs), and OpenBLAS on Linux/Windows.
 cc = "1"
 pkg-config = "0.3"
 

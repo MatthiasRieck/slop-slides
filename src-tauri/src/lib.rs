@@ -737,6 +737,10 @@ pub fn run() {
     // `slopslide --lint-mcp [deck dir]`: the agent's lint tool, started by the agent CLI in
     // the deck folder.
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--narration-license") {
+        println!("{}", narration::engine::license());
+        return;
+    }
     if args.get(1).map(String::as_str) == Some(mcp::FLAG) {
         let dir = args
             .get(2)

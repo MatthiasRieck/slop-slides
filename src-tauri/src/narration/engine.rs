@@ -32,6 +32,31 @@ const SEED: u32 = 42;
 /// Whether this build has the speech engine (see build.rs).
 pub const AVAILABLE: bool = cfg!(narration_engine);
 
+/// Report unsupported hardware before entering C code compiled with AVX2/FMA.
+pub fn unavailable_reason() -> Option<&'static str> {
+    if !AVAILABLE {
+        return Some("This build has no narration engine. Install an official supported SlopSlide build; source builds need the BLAS dependencies described in docs/windows-narration.md.");
+    }
+    #[cfg(target_arch = "x86_64")]
+    if !std::is_x86_feature_detected!("avx2") || !std::is_x86_feature_detected!("fma") {
+        return Some("Local narration requires a CPU with AVX2 and FMA support.");
+    }
+    None
+}
+
+/// Also exposed by --narration-license so the linked dependency's notice is shipped
+/// in the executable and can be read without opening the GUI.
+pub fn license() -> &'static str {
+    #[cfg(all(windows, narration_engine))]
+    {
+        include_str!(concat!(env!("OUT_DIR"), "/openblas-license.txt"))
+    }
+    #[cfg(not(all(windows, narration_engine)))]
+    {
+        "This build does not statically bundle OpenBLAS."
+    }
+}
+
 /// Something for the worker to say.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Request {
@@ -64,8 +89,14 @@ pub struct Worker {
 impl Worker {
     /// Starts a worker on the model in `model_dir` and waits until it has loaded it.
     pub async fn start(model_dir: &Path) -> Result<Self> {
+        if let Some(reason) = unavailable_reason() {
+            return Err(Error::msg(reason));
+        }
         let exe = std::env::current_exe()?;
-        let mut child = Command::new(exe)
+        let mut command = Command::new(exe);
+        #[cfg(windows)]
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW; retain the redirected pipes.
+        let mut child = command
             .arg(WORKER_FLAG)
             .arg(model_dir)
             .stdin(Stdio::piped())
@@ -110,6 +141,20 @@ impl Worker {
         }
     }
 
+    /// Close stdin so the worker unloads the model and exits normally.
+    pub async fn shutdown(mut self) -> Result<()> {
+        drop(self.stdin);
+        let status = tokio::time::timeout(std::time::Duration::from_secs(10), self.child.wait())
+            .await
+            .map_err(|_| Error::msg("the speech engine did not shut down"))??;
+        if !status.success() {
+            return Err(Error::msg(format!(
+                "the speech engine exited with {status}"
+            )));
+        }
+        Ok(())
+    }
+
     async fn answer(&mut self) -> Result<Answer> {
         let line = self.lines.next_line().await.ok().flatten();
         let line = line.ok_or_else(|| self.gone())?;
@@ -117,8 +162,12 @@ impl Worker {
     }
 
     fn gone(&mut self) -> Error {
+        let status = self.child.try_wait().ok().flatten();
         let _ = self.child.start_kill();
-        Error::msg("the speech engine stopped unexpectedly")
+        Error::msg(match status {
+            Some(status) => format!("the speech engine stopped unexpectedly ({status}); check available memory and re-download the voice model"),
+            None => "the speech engine stopped unexpectedly; check available memory and re-download the voice model".into(),
+        })
     }
 }
 
@@ -132,6 +181,13 @@ pub fn worker_main(model_dir: &Path) -> i32 {
         let _ = out.write_all(b"\n");
         let _ = out.flush();
     };
+    if let Some(reason) = unavailable_reason() {
+        send(Answer {
+            error: Some(reason.into()),
+            ..Answer::default()
+        });
+        return 1;
+    }
     let Some(engine) = Engine::load(model_dir) else {
         send(Answer {
             error: Some("cannot load the narration voice model; download it again".into()),
@@ -274,6 +330,66 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The test executable serves as the real worker too, before libtest parses args.
+    #[ctor::ctor(unsafe)]
+    fn worker_entry() {
+        let args: Vec<_> = std::env::args_os().collect();
+        if args.get(1).is_some_and(|arg| arg == WORKER_FLAG) {
+            std::process::exit(worker_main(Path::new(&args[2])));
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_model_in_unicode_path_reports_failure_and_exits() {
+        let dir = std::env::temp_dir().join(format!("missing voice 模型 {}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(30), Worker::start(&dir))
+            .await
+            .expect("worker must not hang on a missing model");
+        assert!(result.is_err());
+        std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)] // Deliberately validate the build-script cfg.
+    fn required_engine_is_compiled_in() {
+        if std::env::var_os("SLOPSLIDE_REQUIRE_NARRATION_ENGINE").is_some()
+            && std::env::var_os("SLOPSLIDE_NO_NARRATION_ENGINE").is_none()
+        {
+            assert!(AVAILABLE, "CI must test the enabled engine");
+        }
+    }
+
+    #[cfg(all(windows, narration_engine))]
+    #[test]
+    fn windows_native_paths_mapping_allocation_and_concurrent_pool() {
+        use std::io::{Seek, SeekFrom};
+        use std::os::windows::io::AsRawHandle;
+        extern "C" {
+            fn slop_windows_mark_sparse(handle: *mut std::ffi::c_void) -> i32;
+            fn slop_windows_regression(
+                dir: *const std::ffi::c_char,
+                file: *const std::ffi::c_char,
+            ) -> i32;
+        }
+        let dir = std::env::temp_dir().join(format!("narration 空間 {}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model ä.bin");
+        let mut file = std::fs::File::create(&path).unwrap();
+        assert_eq!(unsafe { slop_windows_mark_sparse(file.as_raw_handle()) }, 0);
+        file.seek(SeekFrom::Start((1u64 << 32) + 16)).unwrap();
+        file.write_all(b"tail").unwrap();
+        drop(file);
+        let cdir = std::ffi::CString::new(dir.to_str().unwrap()).unwrap();
+        let cpath = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        let result = unsafe { slop_windows_regression(cdir.as_ptr(), cpath.as_ptr()) };
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(
+            result, 0,
+            "native Windows regression failed at test.c line {result}"
+        );
+    }
 
     #[test]
     fn answers_are_one_short_json_object() {

@@ -26,6 +26,9 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+      - name: Install Windows narration dependencies
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/windows-narration
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |

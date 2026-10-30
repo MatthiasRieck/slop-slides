@@ -15,6 +15,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Install Windows narration dependencies
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/windows-narration
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -36,3 +39,9 @@ jobs:
       - name: Run all checks, including Codex protocol and subprocess regressions
         shell: bash
         run: ./check.sh
+      - name: Verify explicit no-engine build
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          SLOPSLIDE_NO_NARRATION_ENGINE: '1'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib narration --quiet

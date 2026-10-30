@@ -69,9 +69,14 @@ void qwen_ftz_on(void) {
 }
 
 static int g_n_threads = 1;
-#if defined(__GNUC__) && !defined(__APPLE__)
+#if (defined(__GNUC__) && !defined(__APPLE__)) || (defined(_WIN32) && defined(USE_OPENBLAS))
+#ifdef _WIN32
+extern void openblas_set_num_threads(int);
+extern int openblas_get_num_threads(void);
+#else
 extern void openblas_set_num_threads(int) __attribute__((weak));
 extern int  openblas_get_num_threads(void) __attribute__((weak));
+#endif
 #endif
 
 static int g_blas_own = -1;   /* -1 = not decided: env, else the default set by the server */
@@ -89,7 +94,7 @@ void qwen_blas_own(int on) {
  * OpenBLAS symbol), so there "own" never caps anything and slicing the SGEMM across the
  * engine pool would run on top of the BLAS's own team instead of replacing it. */
 int qwen_blas_own_effective(void) {
-#if defined(__GNUC__) && !defined(__APPLE__)
+#if (defined(__GNUC__) && !defined(__APPLE__)) || (defined(_WIN32) && defined(USE_OPENBLAS))
     /* An OPENBLAS_NUM_THREADS in the environment used to mean "we are not really in control",
      * which was true while qwen_blas_set_threads() returned early on seeing it.  It no longer
      * does: ownership overrides the variable and holds BLAS at one thread, so counting the env
@@ -100,7 +105,7 @@ int qwen_blas_own_effective(void) {
 #endif
 }
 int qwen_blas_threads_now(void) {
-#if defined(__GNUC__) && !defined(__APPLE__)
+#if (defined(__GNUC__) && !defined(__APPLE__)) || (defined(_WIN32) && defined(USE_OPENBLAS))
     return openblas_get_num_threads ? openblas_get_num_threads() : -1;
 #else
     return -1;
@@ -115,7 +120,7 @@ int qwen_blas_env_overridden(void) {
 }
 
 void qwen_blas_set_threads(int n) {
-#if defined(__GNUC__) && !defined(__APPLE__)
+#if (defined(__GNUC__) && !defined(__APPLE__)) || (defined(_WIN32) && defined(USE_OPENBLAS))
     const char *env = getenv("OPENBLAS_NUM_THREADS");
     if (qwen_blas_own_get()) {
         /* Engine ownership is structural, not advisory.  This used to RETURN when the variable
@@ -163,6 +168,10 @@ int qwen_get_num_cpus(void) {
 #if defined(__APPLE__)
     size_t len = sizeof(ncpus);
     sysctlbyname("hw.ncpu", &ncpus, &len, NULL, 0);
+#elif defined(_WIN32)
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    ncpus = (int)info.dwNumberOfProcessors;
 #elif defined(__linux__)
     ncpus = sysconf(_SC_NPROCESSORS_ONLN);
 #endif

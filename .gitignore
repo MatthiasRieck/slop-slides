@@ -5,3 +5,5 @@ src-tauri/gen/schemas
 .DS_Store
 *.log
 .signing.env
+
+.vcpkg-narration/

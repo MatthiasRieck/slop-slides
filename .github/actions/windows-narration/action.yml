@@ -1,0 +1,23 @@
+name: Windows narration dependencies
+description: Build static OpenBLAS and configure the clang-cl narration engine
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        repository: microsoft/vcpkg
+        ref: bcd3a4fa5419dbe6bfb23f7610062621b3f596f2
+        path: .vcpkg-narration
+    - uses: actions/cache@v4
+      with:
+        path: .vcpkg-narration/installed
+        key: narration-openblas-generic-v1-${{ runner.os }}-bcd3a4fa5419dbe6bfb23f7610062621b3f596f2
+    - shell: pwsh
+      run: |
+        & ./.vcpkg-narration/bootstrap-vcpkg.bat -disableMetrics
+        if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        & ./.vcpkg-narration/vcpkg.exe install 'openblas[threads]:x64-windows-narration' --overlay-triplets=scripts/vcpkg-triplets --host-triplet=x64-windows-narration --disable-metrics
+        if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        $root = Join-Path $env:GITHUB_WORKSPACE '.vcpkg-narration/installed/x64-windows-narration'
+        "SLOPSLIDE_OPENBLAS_DIR=$root" >> $env:GITHUB_ENV
+        'SLOPSLIDE_REQUIRE_NARRATION_ENGINE=1' >> $env:GITHUB_ENV

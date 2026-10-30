@@ -93,6 +93,7 @@ export function Presenter() {
   const hash = startRef.current ? `#${encodeURIComponent(startRef.current)}` : "";
   return (
     <div className="fixed inset-0 z-50 bg-black">
+      {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: The load handler focuses the presentation for keyboard navigation. */}
       <iframe
         ref={frameRef}
         title="Presentation"

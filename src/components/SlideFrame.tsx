@@ -102,6 +102,7 @@ export function SlideFrame({
         frames.map((url) => {
           const size = sizeFor(url);
           return (
+            /* biome-ignore lint/a11y/noNoninteractiveElementInteractions: The load handler swaps loaded frames and reports readiness; it is not user interaction. */
             <iframe
               key={url}
               src={url}

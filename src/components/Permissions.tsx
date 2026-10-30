@@ -77,7 +77,7 @@ export function PermissionPicker() {
       </button>
       {open && (
         <ComposerPopover anchor={root} onClose={close} width={256} className="p-1.5">
-          <div role="group" aria-label="Permission modes">
+          <fieldset aria-label="Permission modes">
             {error ? (
               <p role="alert" className="p-2 text-xs text-destructive">
                 {error}
@@ -103,7 +103,7 @@ export function PermissionPicker() {
                 The saved mode is unavailable. Select another mode.
               </p>
             )}
-          </div>
+          </fieldset>
         </ComposerPopover>
       )}
     </div>
@@ -137,7 +137,7 @@ export function ApprovalCard({ part }: { part: Extract<ChatPart, { kind: "approv
     decline: "Deny",
   };
   return (
-    <div className="rounded-lg border p-3 text-xs" aria-label="Approval request">
+    <section className="rounded-lg border p-3 text-xs" aria-label="Approval request">
       <p className="flex items-center gap-1.5 font-medium">
         <Shield className="size-3.5" />
         {part.approval.title}
@@ -180,7 +180,7 @@ export function ApprovalCard({ part }: { part: Extract<ChatPart, { kind: "approv
           {error}
         </p>
       )}
-    </div>
+    </section>
   );
 }
 

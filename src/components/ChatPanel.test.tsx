@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
@@ -405,14 +406,34 @@ describe("ChatPanel: composing", () => {
   it("switches models in the picker", () => {
     render(<ChatPanel />);
     fireEvent.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
-    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
-      expect.stringContaining("Claude Opus 5.5"),
-      expect.stringContaining("Claude Sonnet 5"),
-    ]);
-    fireEvent.click(screen.getByRole("option", { name: /Claude Sonnet 5/ }));
+    expect(
+      screen
+        .getAllByRole("button")
+        .filter((button) => button.hasAttribute("aria-pressed") && button.closest("[data-index]"))
+        .map((o) => o.textContent),
+    ).toEqual([expect.stringContaining("Claude Opus 5.5"), expect.stringContaining("Claude Sonnet 5")]);
+    fireEvent.click(screen.getByRole("button", { name: /Claude Sonnet 5/ }));
     expect(useApp.getState().selection).toMatchObject({ provider: "claude", model: "claude-sonnet-5" });
     expect(JSON.parse(localStorage.getItem("slopslide.selection")!)).toMatchObject({ model: "claude-sonnet-5" });
-    expect(screen.queryByRole("option")).toBeNull();
+    expect(document.querySelector("[data-index]")).toBeNull();
+  });
+
+  it("selects a model with Tab and Space, and activates favorites independently", async () => {
+    const user = userEvent.setup();
+    render(<ChatPanel />);
+    await user.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Search models" }));
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /Claude Opus 5\.5/, pressed: true }));
+    await user.tab();
+    await user.keyboard("{Enter}");
+    expect(useApp.getState().favoriteModels).toContain("claude:claude-opus-5-5");
+    expect(screen.getByRole("textbox", { name: "Search models" })).toBeTruthy();
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /Claude Sonnet 5/ }));
+    await user.keyboard(" ");
+    expect(useApp.getState().selection.model).toBe("claude-sonnet-5");
+    expect(screen.queryByRole("textbox", { name: "Search models" })).toBeNull();
   });
 
   it("limits provider tabs, search, and favorites to the current chat's provider", () => {
@@ -425,10 +446,14 @@ describe("ChatPanel: composing", () => {
         .every((button) => (button as HTMLButtonElement).disabled),
     ).toBe(true);
     fireEvent.click(screen.getByTitle("Favorites"));
-    expect(screen.getAllByRole("option")).toHaveLength(1);
-    expect(screen.getByRole("option", { name: /Claude Sonnet 5/ })).toBeTruthy();
+    expect(
+      screen
+        .getAllByRole("button")
+        .filter((button) => button.hasAttribute("aria-pressed") && button.closest("[data-index]")),
+    ).toHaveLength(1);
+    expect(screen.getByRole("button", { name: /Claude Sonnet 5/ })).toBeTruthy();
     fireEvent.change(screen.getByPlaceholderText("Search models..."), { target: { value: "astra" } });
-    expect(screen.queryByRole("option")).toBeNull();
+    expect(document.querySelector("[data-index]")).toBeNull();
     fireEvent.keyDown(screen.getByPlaceholderText("Search models..."), { key: "Enter" });
     expect(useApp.getState().selection.provider).toBe("claude");
   });
@@ -437,7 +462,7 @@ describe("ChatPanel: composing", () => {
     render(<ChatPanel />);
     fireEvent.click(screen.getByRole("button", { name: /Claude Opus 5\.5/ }));
     fireEvent.change(screen.getByPlaceholderText("Search models..."), { target: { value: "astra" } });
-    fireEvent.click(screen.getByRole("option", { name: /GPT-6-Astra/ }));
+    fireEvent.click(screen.getByRole("button", { name: /GPT-6-Astra/ }));
     expect(useApp.getState().selection).toMatchObject({ provider: "codex", model: "gpt-6-astra", effort: "high" });
   });
 
@@ -447,9 +472,13 @@ describe("ChatPanel: composing", () => {
     fireEvent.pointerDown(screen.getAllByTitle("Add to favorites")[0]!);
     fireEvent.click(screen.getAllByTitle("Add to favorites")[0]!);
     expect(useApp.getState().favoriteModels).toContain("claude:claude-opus-5-5");
-    expect(screen.getAllByRole("option")).toHaveLength(2);
+    expect(
+      screen
+        .getAllByRole("button")
+        .filter((button) => button.hasAttribute("aria-pressed") && button.closest("[data-index]")),
+    ).toHaveLength(2);
     fireEvent.pointerDown(screen.getByPlaceholderText("Ask for slides or changes…"));
-    expect(screen.queryByRole("option")).toBeNull();
+    expect(document.querySelector("[data-index]")).toBeNull();
   });
 
   it("explains a provider that is not installed", () => {
@@ -461,7 +490,7 @@ describe("ChatPanel: composing", () => {
     fireEvent.click(screen.getByTitle("Codex is not installed"));
     expect(screen.getByText("Codex is not installed")).toBeTruthy();
     expect(screen.getByText(/npm i -g @openai\/codex/)).toBeTruthy();
-    expect(screen.queryByRole("option")).toBeNull();
+    expect(document.querySelector("[data-index]")).toBeNull();
   });
 
   it("explains how to install GitHub Copilot", () => {

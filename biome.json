@@ -25,7 +25,11 @@
     "enabled": true,
     "rules": {
       "preset": "recommended",
-      "a11y": "off",
+      "a11y": {
+        "preset": "recommended",
+        "noAutofocus": "off",
+        "noNoninteractiveElementInteractions": "error"
+      },
       "style": {
         "noNonNullAssertion": "off"
       }

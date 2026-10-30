@@ -159,7 +159,7 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
   const status = !query && filter !== "favorites" ? info(filter) : undefined;
 
   return (
-    <div onKeyDown={onKeyDown} className="flex min-h-0 w-full">
+    <div className="flex min-h-0 w-full">
       <div className="flex w-12 shrink-0 flex-col items-center gap-1 border-r py-2">
         {rail.map((item) => {
           const selected = !query && filter === item.id;
@@ -198,6 +198,8 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
           <Search className="size-3.5 shrink-0 text-muted-foreground" />
           <input
             autoFocus
+            aria-label="Search models"
+            onKeyDown={onKeyDown}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search models..."
@@ -224,16 +226,19 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
                 <div
                   key={key}
                   data-index={index}
-                  role="option"
-                  aria-selected={index === active}
-                  onMouseMove={() => setActive(index)}
-                  onClick={() => choose(row)}
                   className={cn(
                     "group flex cursor-default items-center gap-2 rounded-lg px-2.5 py-2",
                     index === active && "bg-accent",
                   )}
                 >
-                  <div className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    onClick={() => choose(row)}
+                    onMouseMove={() => setActive(index)}
+                    onFocus={() => setActive(index)}
+                    aria-pressed={row.provider === selection.provider && row.id === selection.model}
+                    className="min-w-0 flex-1 rounded text-left focus-visible:outline focus-visible:outline-primary"
+                  >
                     <div className="flex items-center gap-1.5 text-sm text-foreground">
                       <span className="truncate">{row.label}</span>
                       {row.isDefault && (
@@ -246,7 +251,7 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
                       <ProviderIcon provider={row.provider} className="size-3" />
                       {PROVIDERS[row.provider].label}
                     </div>
-                  </div>
+                  </button>
                   {row.provider === selection.provider && row.id === selection.model && (
                     <Check className="size-3.5 shrink-0 text-primary" />
                   )}

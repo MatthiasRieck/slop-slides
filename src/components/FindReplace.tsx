@@ -120,7 +120,6 @@ function FindPanel() {
     <div className="flex min-h-0 flex-col gap-2 p-3 text-xs">
       <div className="flex items-center gap-1">
         <input
-          // biome-ignore lint/a11y/noAutofocus: the panel opens to type what to find
           autoFocus
           aria-label="Find"
           placeholder="Find in slides"

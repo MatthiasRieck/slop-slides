@@ -242,6 +242,8 @@ function SectionHeader(props: {
         />
       ) : (
         <>
+          {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: double-click is a shortcut for the adjacent keyboard-accessible Rename section button. */}
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: keyboard users rename with the adjacent Rename section button. */}
           <span
             title="Double-click to rename"
             onDoubleClick={() => onEditing(true)}

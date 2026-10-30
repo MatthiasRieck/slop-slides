@@ -119,6 +119,11 @@ routing and cancellation tests against a mock Codex app-server built into the Ru
 binary. The full chat approval flow is tested through events, the store, UI, IPC
 responses, and transcript persistence.
 
+Biome enables the recommended accessibility rules and `noNoninteractiveElementInteractions`.
+`noAutofocus` is disabled because desktop dialogs, rename fields, and model pickers
+intentionally focus their input when opened. Scoped suppressions explain supplemental
+mouse shortcuts, the input resize handle, and iframe load handlers.
+
 The Rust tests also validate every request and approval response we send to Codex against
 protocol schemas pinned from Codex **0.147.0** (the tested baseline) in
 `fixtures/codex-schemas/`. This catches protocol drift, including changes to MCP approval

@@ -502,6 +502,9 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           <ImageFan workspacePath={workspace.path} images={images} onOpen={() => setGridOpen(true)} />
         ))}
       <ContextMeter />
+      {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: clicking padding focuses the keyboard-accessible textarea. */}
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: this is a focus convenience, not a separate control. */}
+      {/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard users can tab directly to the textarea. */}
       <div
         onClick={(e) => {
           if (e.target === e.currentTarget) textareaRef.current?.focus();
@@ -511,6 +514,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           dragging && "border-primary ring-2 ring-primary/30",
         )}
       >
+        {/* biome-ignore lint/a11y/useSemanticElements: a focusable window splitter supports resizing; hr cannot contain the grip. */}
         <div
           role="separator"
           aria-label="Resize message input"

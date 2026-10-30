@@ -663,7 +663,6 @@ function LinkButton(props: {
           className="absolute top-full left-1/2 z-30 mt-1 flex w-64 -translate-x-1/2 flex-col gap-2 rounded-md border bg-card p-2 text-xs shadow-md"
         >
           <input
-            // biome-ignore lint/a11y/noAutofocus: the popover opens to type a link
             autoFocus
             aria-label="Link address"
             placeholder="https://… or someone@example.com"

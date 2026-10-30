@@ -275,7 +275,7 @@ export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annota
         setLaser(null);
       }}
     >
-      <svg className="absolute inset-0 size-full">
+      <svg role="img" aria-label="Presentation annotations" className="absolute inset-0 size-full">
         {[...strokes, ...(draft ? [draft] : [])].map((stroke, i) => {
           const { opacity } = INK_STYLE[stroke.tool];
           const width = INK_STYLE[stroke.tool].width * zoom;

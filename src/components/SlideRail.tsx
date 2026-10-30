@@ -253,7 +253,7 @@ function SectionHeader(props: {
             {section.title || "Untitled section"}
           </span>
           <span className="h-px flex-1 bg-border" />
-          <div className="hidden shrink-0 gap-0.5 group-hover:flex">
+          <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">
             <SectionAction title="Rename section" onClick={() => onEditing(true)}>
               <Pencil className="size-3" />
             </SectionAction>
@@ -382,7 +382,7 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
           <span
             data-testid="locked-mark"
             title="Locked: neither you nor the agent can change it"
-            className="pointer-events-none absolute bottom-1 left-1 rounded bg-black/60 p-1 text-white backdrop-blur"
+            className="pointer-events-none absolute bottom-1 left-1 rounded bg-black/70 p-1 text-white"
           >
             <Lock className="size-3" aria-label="Locked slide" />
           </span>
@@ -440,7 +440,7 @@ function RailAction(props: { title: string; onClick: () => void; children: React
         e.stopPropagation();
         props.onClick();
       }}
-      className="rounded bg-black/60 p-1 text-white backdrop-blur hover:bg-black/80"
+      className="rounded bg-black/70 p-1 text-white hover:bg-black/80"
     >
       {props.children}
     </button>

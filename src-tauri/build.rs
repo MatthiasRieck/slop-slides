@@ -93,9 +93,12 @@ fn narration_engine() {
                 return;
             };
             let root = Path::new(&root);
+            // OpenBLAS 0.3.34 installs its headers in a namespaced subdirectory.
+            let include = root.join("include/openblas");
             assert!(
-                root.join("include/cblas.h").is_file(),
-                "OpenBLAS cblas.h missing"
+                include.join("cblas.h").is_file(),
+                "OpenBLAS header missing: {}",
+                include.join("cblas.h").display()
             );
             assert!(
                 root.join("lib/openblas.lib").is_file(),
@@ -119,7 +122,7 @@ fn narration_engine() {
                 "Windows narration requires clang-cl (Visual Studio C++ Clang tools)"
             );
             build
-                .include(root.join("include"))
+                .include(&include)
                 .include("native/windows")
                 .flag("/FInative/windows/compat.h")
                 .flag("/clang:-std=gnu11")

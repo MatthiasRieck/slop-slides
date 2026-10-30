@@ -19,5 +19,11 @@ runs:
         & ./.vcpkg-narration/vcpkg.exe install 'openblas[threads]:x64-windows-narration' --overlay-triplets=scripts/vcpkg-triplets --host-triplet=x64-windows-narration --disable-metrics
         if ($LASTEXITCODE) { exit $LASTEXITCODE }
         $root = Join-Path $env:GITHUB_WORKSPACE '.vcpkg-narration/installed/x64-windows-narration'
+        foreach ($file in @('include/openblas/cblas.h', 'include/openblas/openblas_config.h', 'lib/openblas.lib', 'share/openblas/copyright')) {
+          $path = Join-Path $root $file
+          if (!(Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Required OpenBLAS file missing after vcpkg install: $path"
+          }
+        }
         "SLOPSLIDE_OPENBLAS_DIR=$root" >> $env:GITHUB_ENV
         'SLOPSLIDE_REQUIRE_NARRATION_ENGINE=1' >> $env:GITHUB_ENV

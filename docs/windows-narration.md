@@ -30,7 +30,7 @@ pnpm install --frozen-lockfile
 pnpm tauri build
 ```
 
-`SLOPSLIDE_OPENBLAS_DIR` must contain `include/cblas.h`, `lib/openblas.lib` and
+`SLOPSLIDE_OPENBLAS_DIR` must contain `include/openblas/cblas.h`, `lib/openblas.lib` and
 `share/openblas/copyright`. Use the checked-in narration triplet, not a DLL/import library. It statically
 links OpenBLAS with the dynamic MSVC CRT and fixes its CPU target to GENERIC (portable C). The MSVC port does not support
 OpenBLAS's GNU assembly kernels or dynamic-architecture feature. Qwen's own

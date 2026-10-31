@@ -308,7 +308,7 @@ export function ComposerComments() {
   return (
     <span
       className={cn(
-        "flex h-5 items-center gap-1 rounded-md border px-1.5 text-xs",
+        "flex h-5 items-center gap-1 rounded-md border px-1.5 text-xs whitespace-nowrap",
         count > 0 ? "border-primary/30 bg-primary/10 text-primary" : "text-muted-foreground",
       )}
     >
@@ -318,10 +318,12 @@ export function ComposerComments() {
         aria-expanded={listOpen}
         title="Show the comments that go out with your message"
         onClick={() => setListOpen((v) => !v)}
-        className="flex items-center gap-1 hover:text-foreground"
+        className="flex shrink-0 items-center gap-1 hover:text-foreground"
       >
         <MessageSquare className="size-3" />
-        {count} comment{count === 1 ? "" : "s"}
+        <span>
+          {count} <span className="sr-only @[16rem]:not-sr-only">comment{count === 1 ? "" : "s"}</span>
+        </span>
       </button>
       {/* biome-ignore lint/a11y/useSemanticElements: two pressed buttons read better here than a fieldset. */}
       <span role="group" aria-label="Which comments to send" className="flex items-center gap-0.5">

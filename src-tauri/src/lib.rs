@@ -146,7 +146,8 @@ fn list_screens(app: AppHandle) -> Result<Vec<screens::Screen>> {
 }
 
 /// Moves the show window to the `audience` screen and opens the presenter view on `presenter`.
-#[tauri::command]
+/// Off the main thread, which building a window from a command needs on Windows.
+#[tauri::command(async)]
 fn present_on(
     app: AppHandle,
     window: Window,
@@ -311,6 +312,12 @@ fn set_slide_narration(id: String, slide: String, text: String) -> Result<Deck> 
 #[tauri::command]
 fn set_slide_notes(id: String, slide: String, text: String) -> Result<Deck> {
     deck::set_slide_notes(&deck::deck_file(&id)?, &slide, &text)
+}
+
+/// Sets the seconds the presenter expects to spend on a slide; 0 removes them.
+#[tauri::command]
+fn set_slide_time(id: String, slide: String, seconds: u32) -> Result<Deck> {
+    deck::set_slide_time(&deck::deck_file(&id)?, &slide, seconds)
 }
 
 /// Gives every slide of the deck the canvas `size`.
@@ -905,6 +912,7 @@ pub fn run() {
             set_slide_locked,
             set_slide_narration,
             set_slide_notes,
+            set_slide_time,
             set_slide_size,
             add_section,
             rename_section,

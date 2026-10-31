@@ -25,7 +25,7 @@ import { useApp } from "../store";
 import { fakeCanvas2D } from "../test/fakeCanvas";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Presenter } from "./Presenter";
-import { formatElapsed, remaining } from "./PresenterPanel";
+import { fitWidth, formatElapsed, remaining } from "./PresenterPanel";
 import { PresenterWindow } from "./PresenterWindow";
 
 beforeEach(() => {
@@ -826,6 +826,20 @@ describe("presenter view", () => {
     expect(screen.getByTestId("total-left").textContent).toBe("20:00 left");
   });
 
+  it("counts down the time set on the slide, and the slides' times added up", () => {
+    localStorage.setItem("slopslide.presenterBudget", JSON.stringify({ total: 0, perSlide: 5 }));
+    const deck = deckFor(DECK_HTML);
+    const slides = deck.slides.map((s) => ({ ...s, time: s.id === "intro" ? 90 : 0 }));
+    useApp.setState({ deck: { ...deck, slides }, selected: "intro" });
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "n" });
+    expect(screen.getByTestId("slide-time").textContent).toBe("slide0:00 / 1:30");
+    expect(screen.getByTestId("total-left").textContent).toBe("1:30 left");
+    // A slide without a time of its own has the time per slide.
+    fromFrame({ type: "slop:slide", index: 1, id: "outro" });
+    expect(screen.getByTestId("slide-time").textContent).toBe("slide0:00 / 5:00");
+  });
+
   it("counts down the rest and then up past the end", () => {
     expect(remaining(0, 1)).toEqual({ text: "1:00", over: false });
     expect(remaining(59_500, 1)).toEqual({ text: "0:01", over: false });
@@ -856,11 +870,38 @@ describe("Presenter on several screens", () => {
   it("moves the show to its screen before going full screen, and closes the presenter view after", async () => {
     useApp.setState({ screens: choice });
     const { unmount } = render(<Presenter />);
-    expect(invoke).toHaveBeenCalledWith("present_on", { audience: 1, presenter: 0 });
+    expect(setFullscreen).not.toHaveBeenCalled();
     await act(async () => {});
+    expect(invoke).toHaveBeenCalledWith("present_on", { audience: 1, presenter: 0 });
     expect(setFullscreen).toHaveBeenCalledWith(true);
     unmount();
+    await act(async () => {});
     expect(invoke).toHaveBeenCalledWith("close_presenter_view");
+  });
+
+  it("places and closes in the order asked, however long each takes", async () => {
+    useApp.setState({ screens: choice });
+    let finishPlacing = () => {};
+    invoke.mockImplementationOnce(() => new Promise<void>((resolve) => (finishPlacing = resolve)));
+    const { unmount } = render(<Presenter />);
+    await act(async () => {});
+    unmount();
+    render(<Presenter />);
+    await act(async () => {});
+    expect(invoke.mock.calls.map(([name]) => name)).toEqual(["present_on"]);
+    await act(async () => finishPlacing());
+    expect(invoke.mock.calls.map(([name]) => name)).toEqual(["present_on", "close_presenter_view", "present_on"]);
+  });
+
+  it("stays out of full screen when the show ends while it is being placed", async () => {
+    useApp.setState({ screens: choice });
+    let finishPlacing = () => {};
+    invoke.mockImplementationOnce(() => new Promise<void>((resolve) => (finishPlacing = resolve)));
+    const { unmount } = render(<Presenter />);
+    await act(async () => {});
+    unmount();
+    await act(async () => finishPlacing());
+    expect(setFullscreen).not.toHaveBeenCalledWith(true);
   });
 
   it("keeps the presenter view off the audience's screen and feeds it to its own window", async () => {
@@ -914,6 +955,11 @@ describe("PresenterWindow", () => {
     expect(screen.getByText("Now")).toBeTruthy();
     expect(screen.getByText("Next")).toBeTruthy();
     expect(screen.getByTestId("presenter-notes").textContent).toBe(deck.slides[0]?.notes || "No notes for this slide.");
+  });
+
+  it("sizes the slides by the room's height as well as its width", () => {
+    expect(fitWidth({ width: 1920, height: 960 })).toBe("min(100cqw, 200cqh)");
+    expect(fitWidth({ width: 1000, height: 2000 })).toBe("min(100cqw, 50cqh)");
   });
 
   it("sends the keys pressed in it to the show, and Escape ends the show", async () => {

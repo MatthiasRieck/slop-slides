@@ -5,6 +5,9 @@ import type { Screen } from "../lib/api";
 import { arrange, choose, defaultChoice, type ScreenChoice } from "../lib/screens";
 import { cn } from "../lib/utils";
 
+/** How tall the drawing of the screens gets; it narrows to keep their shape. */
+const MAX_HEIGHT_REM = 16;
+
 /**
  * Shown when presenting with several screens attached: the screens drawn the way they sit on
  * the desk, to pick the one the audience sees the slides on and the one the presenter view
@@ -38,7 +41,10 @@ export function ScreenPicker(props: {
             Pick the screen for the audience and the screen for your presenter view.
           </p>
         </div>
-        <div className="relative mx-auto w-full" style={{ aspectRatio: String(aspect), maxHeight: "16rem" }}>
+        <div
+          className="relative mx-auto w-full"
+          style={{ aspectRatio: String(aspect), width: `min(100%, ${MAX_HEIGHT_REM * aspect}rem)` }}
+        >
           {boxes.map(({ screen, left, top, width, height }) => {
             const role =
               screen.index === choice.audience ? "audience" : screen.index === choice.presenter ? "presenter" : null;
@@ -57,7 +63,7 @@ export function ScreenPicker(props: {
               >
                 <span className="max-w-full truncate text-xs font-medium">{screen.name}</span>
                 <span className="text-[10px] text-muted-foreground tabular-nums">
-                  {screen.width}×{screen.height}
+                  {screen.pixelWidth}×{screen.pixelHeight}
                   {screen.primary ? " · main" : ""}
                 </span>
                 <div className="flex gap-1">

@@ -9,6 +9,7 @@ use serde::Serialize;
 use crate::html::{
     self, find_ci, has_class, parse_tag, ADDED_ATTR, AUTOFIT_ATTR, DROPPED_ATTR, EDITOR_ATTRS,
     HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR, NARRATION_CLASS, SECTION_CLASS, SECTION_TITLE_ATTR,
+    TIME_ATTR,
 };
 use crate::narration;
 use crate::review;
@@ -567,6 +568,20 @@ fn check_slides(l: &mut Linter) {
                 Severity::Warning,
                 at,
                 format!("Write `{LOCKED_ATTR}` without a value; any value still locks the slide."),
+            );
+        }
+        if let Some((_, value)) = slide
+            .time
+            .as_ref()
+            .filter(|(_, v)| html::parse_time(v).is_none())
+        {
+            l.report(
+                "time-value",
+                Severity::Warning,
+                at,
+                format!(
+                    "`{TIME_ATTR}=\"{value}\"` is ignored: it takes the whole seconds expected on the slide, like `{TIME_ATTR}=\"90\"`."
+                ),
             );
         }
     }
@@ -1590,6 +1605,25 @@ mod tests {
             )),
             ["hidden-value"]
         );
+    }
+
+    #[test]
+    fn flags_time_attributes_that_are_no_whole_seconds() {
+        assert_eq!(
+            rules(&deck(
+                "<section class=\"slide\" id=\"a\" data-time=\"90\"></section>"
+            )),
+            Vec::<&str>::new()
+        );
+        for value in ["1:30", "soon", "0", "-5", "1.5", ""] {
+            assert_eq!(
+                rules(&deck(&format!(
+                    "<section class=\"slide\" id=\"a\" data-time=\"{value}\"></section>"
+                ))),
+                ["time-value"],
+                "{value}"
+            );
+        }
     }
 
     #[test]

@@ -39,6 +39,8 @@ pub struct SlideSpan {
     pub hidden: Option<Range<usize>>,
     /// Byte range of the whole `data-locked` attribute, when the slide is locked.
     pub locked: Option<Range<usize>>,
+    /// Byte range of the whole `data-time` attribute, and its value, when the slide has one.
+    pub time: Option<(Range<usize>, String)>,
 }
 
 /// Marks a slide the player skips. The editor still shows it, muted.
@@ -47,6 +49,10 @@ pub const HIDDEN_ATTR: &str = "data-hidden";
 /// Marks a slide neither the user nor the agent may change. The editor refuses edits to it,
 /// and the app puts it back as it was if the agent changes or removes it in a turn.
 pub const LOCKED_ATTR: &str = "data-locked";
+
+/// How long the presenter expects to spend on a slide, in whole seconds. The presenter view
+/// counts it against the time on the slide.
+pub const TIME_ATTR: &str = "data-time";
 
 /// Marks an element the user moved, rotated or scaled by hand in the editor; it carries inline
 /// `translate` / `rotate` / `scale` styles until the agent tidies the slide's layout.
@@ -173,6 +179,11 @@ pub fn find_slides(html: &str) -> Vec<SlideSpan> {
                         tag_name_end: tag.name_end,
                         hidden: flag(HIDDEN_ATTR),
                         locked: flag(LOCKED_ATTR),
+                        time: tag
+                            .attrs
+                            .iter()
+                            .find(|(n, _, _, _)| n == TIME_ATTR)
+                            .map(|(_, v, _, r)| (r.clone(), v.clone())),
                     },
                     0,
                 ));
@@ -595,6 +606,33 @@ pub fn set_hidden(html: &str, id: &str, hidden: bool) -> Result<String, String> 
 /// Adds or removes the slide's `data-locked` attribute, like [`set_hidden`].
 pub fn set_locked(html: &str, id: &str, locked: bool) -> Result<String, String> {
     set_flag(html, id, LOCKED_ATTR, locked, |s| s.locked.clone())
+}
+
+/// The seconds a `data-time` value stands for: a whole number above zero.
+pub fn parse_time(value: &str) -> Option<u32> {
+    value.trim().parse().ok().filter(|seconds| *seconds > 0)
+}
+
+/// Sets the slide's `data-time` to `seconds`; 0 removes it.
+pub fn set_time(html: &str, id: &str, seconds: u32) -> Result<String, String> {
+    let slides = find_slides(html);
+    let span = span_of(&slides, id).ok_or_else(|| format!("Slide not found: {id}"))?;
+    let attr = format!("{TIME_ATTR}=\"{seconds}\"");
+    Ok(match (&span.time, seconds) {
+        (Some((range, _)), 0) => {
+            let start = html[..range.start].trim_end().len();
+            format!("{}{}", &html[..start], &html[range.end..])
+        }
+        (Some((range, _)), _) => {
+            format!("{}{attr}{}", &html[..range.start], &html[range.end..])
+        }
+        (None, 0) => html.to_string(),
+        (None, _) => format!(
+            "{} {attr}{}",
+            &html[..span.tag_name_end],
+            &html[span.tag_name_end..]
+        ),
+    })
 }
 
 fn set_flag(

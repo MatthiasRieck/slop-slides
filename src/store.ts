@@ -422,6 +422,8 @@ interface AppState {
   setNarration: (slide: string, text: string) => Promise<void>;
   /** Saves the speaker notes of `slide` (empty removes them), after any slide edits still being saved. */
   setNotes: (slide: string, text: string) => Promise<void>;
+  /** Sets the seconds expected on the slide; 0 removes them. */
+  setSlideTime: (slide: string, seconds: number) => Promise<void>;
   /** Sets the voice (or language) the deck's narration is said in. */
   setNarrationVoice: (voice: string) => Promise<void>;
   setNarrationLanguage: (language: string) => Promise<void>;
@@ -1005,6 +1007,8 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setNotes: (slide, text) => editDeck((id) => api.setSlideNotes(id, slide, text)),
+
+  setSlideTime: (slide, seconds) => editDeck((id) => api.setSlideTime(id, slide, seconds)),
 
   setNarrationVoice: (voice) => editDeck((id) => api.setNarrationVoice(id, voice)),
 

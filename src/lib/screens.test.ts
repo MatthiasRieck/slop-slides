@@ -10,7 +10,8 @@ const screen = (index: number, x: number, y: number, width = 1920, height = 1080
   y,
   width,
   height,
-  scale: 1,
+  pixelWidth: width,
+  pixelHeight: height,
   primary: index === 0,
 });
 
@@ -26,6 +27,13 @@ describe("arrange", () => {
     const { boxes } = arrange([screen(0, -1920, -1080), screen(1, 0, 0)]);
     expect(boxes[0]).toMatchObject({ left: 0, top: 0, width: 50, height: 50 });
     expect(boxes[1]).toMatchObject({ left: 50, top: 50 });
+  });
+
+  it("keeps screens that touch from overlapping", () => {
+    // A Retina laptop (1512×982 points) with an ultrawide to its right.
+    const { boxes } = arrange([screen(0, 0, 0, 1512, 982), screen(1, 1512, 0, 3440, 1440)]);
+    const [laptop, wide] = boxes;
+    expect((laptop?.left ?? 0) + (laptop?.width ?? 0)).toBeCloseTo(wide?.left ?? 0);
   });
 
   it("is empty without screens", () => {

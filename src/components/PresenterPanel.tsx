@@ -1,7 +1,7 @@
 import { RotateCcw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Deck, Slide } from "../lib/api";
-import { pixelsOf } from "../lib/slideSize";
+import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn } from "../lib/utils";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
@@ -66,6 +66,9 @@ export function PresenterPanel(props: {
   // Each slide's time starts when it comes on screen, and starts over with the show's timer.
   // biome-ignore lint/correctness/useExhaustiveDependencies: `id` and `startedAt` are the triggers.
   useEffect(() => setSlideStartedAt(Date.now()), [id, startedAt]);
+  // The times set on the slides come first: the slide's own, and all of them added up.
+  const planned = shown.reduce((sum, s) => sum + (s.time ?? 0), 0) / 60;
+  const times = { total: budget.total || planned, perSlide: slide?.time ? slide.time / 60 : budget.perSlide };
   const update = (change: Partial<Budget>) => {
     const next = { ...budget, ...change };
     setBudget(next);
@@ -80,7 +83,7 @@ export function PresenterPanel(props: {
       )}
     >
       <div className="flex items-center gap-1">
-        <ElapsedTime startedAt={startedAt} budget={budget} slideStartedAt={slideStartedAt} />
+        <ElapsedTime startedAt={startedAt} budget={times} slideStartedAt={slideStartedAt} />
         <span className="ml-2 text-xs text-white/60 tabular-nums">
           {slide && !slide.hidden ? `Slide ${shown.indexOf(slide) + 1} of ${shown.length}` : "Hidden slide"}
         </span>
@@ -99,15 +102,15 @@ export function PresenterPanel(props: {
         <BudgetInput label="Per slide" value={budget.perSlide} onChange={(perSlide) => update({ perSlide })} />
       </div>
       {props.window && slide && (
-        <div className="flex min-h-0 flex-[2] items-start gap-3">
+        <div className="flex min-h-0 flex-[2] gap-3">
           <div className="flex min-h-0 min-w-0 flex-[2] flex-col gap-1">
             <span className="text-xs text-white/60">Now</span>
-            <NextSlide deck={deck} slide={slide} />
+            <FittedSlide deck={deck} slide={slide} />
           </div>
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1">
             <span className="text-xs text-white/60">Next</span>
             {next ? (
-              <NextSlide deck={deck} slide={next} />
+              <FittedSlide deck={deck} slide={next} />
             ) : (
               <p className="rounded-lg bg-white/5 p-3 text-sm text-white/40">The end of the show.</p>
             )}
@@ -127,7 +130,7 @@ export function PresenterPanel(props: {
         <div className="flex shrink-0 flex-col gap-1">
           <span className="text-xs text-white/60">Next</span>
           {next ? (
-            <NextSlide deck={deck} slide={next} />
+            <SlidePreview deck={deck} slide={next} />
           ) : (
             <p className="rounded-lg bg-white/5 p-3 text-sm text-white/40">The end of the show.</p>
           )}
@@ -157,7 +160,23 @@ function BudgetInput(props: { label: string; value: number; onChange: (minutes: 
   );
 }
 
-function NextSlide({ deck, slide }: { deck: Deck; slide: Slide }) {
+/** How wide a slide of `size` can be to fit in its container (a size container) both ways. */
+export function fitWidth(size: Pixels): string {
+  return `min(100cqw, ${(100 * size.width) / size.height}cqh)`;
+}
+
+/** A slide as large as the room it is given allows, keeping its shape: it never overflows. */
+function FittedSlide({ deck, slide }: { deck: Deck; slide: Slide }) {
+  return (
+    <div className="min-h-0 flex-1" style={{ containerType: "size" }}>
+      <div data-testid="fitted-slide" style={{ width: fitWidth(pixelsOf({ size: deck.size })) }}>
+        <SlidePreview deck={deck} slide={slide} />
+      </div>
+    </div>
+  );
+}
+
+function SlidePreview({ deck, slide }: { deck: Deck; slide: Slide }) {
   const version = useSlideVersion(slide);
   return (
     <SlideFrame

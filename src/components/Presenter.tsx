@@ -15,6 +15,15 @@ import { AnnotationLayer, PresenterToolbar, useAnnotations, useReveal } from "./
 
 const PANEL_KEY = "slopslide.presenterPanel";
 
+// Placing the show on its screens and closing the presenter view run one after the other, in
+// the order asked: they take a moment off the main thread, and a show can end as it starts.
+let placing: Promise<unknown> = Promise.resolve();
+function inOrder<T>(command: () => Promise<T>): Promise<T> {
+  const run = placing.then(command);
+  placing = run.catch(() => {});
+  return run;
+}
+
 /**
  * Full-screen slideshow. Plays the deck file with its own embedded player (the same thing
  * anyone you share the file with sees), starting at the selected slide. On top sit the
@@ -49,11 +58,13 @@ export function Presenter() {
     const window_ = getCurrentWindow();
     // With several screens, the show first moves to the one picked (and the presenter view opens).
     const screens = useApp.getState().screens;
+    let ended = false;
     if (screens) {
-      api
-        .presentOn(screens.audience, screens.presenter)
+      inOrder(() => api.presentOn(screens.audience, screens.presenter))
         .catch((error) => useApp.getState().setError(errorMessage(error)))
-        .finally(() => void window_.setFullscreen(true));
+        .finally(() => {
+          if (!ended) void window_.setFullscreen(true);
+        });
     } else {
       void window_.setFullscreen(true);
     }
@@ -104,8 +115,9 @@ export function Presenter() {
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("message", onMessage);
+      ended = true;
       void window_.setFullscreen(false);
-      if (screens) void api.closePresenterView().catch(() => {});
+      if (screens) void inOrder(() => api.closePresenterView()).catch(() => {});
     };
   }, []);
 

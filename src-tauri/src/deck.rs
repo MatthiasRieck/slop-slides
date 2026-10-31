@@ -63,6 +63,8 @@ pub struct Slide {
     pub narration: String,
     /// What the presenter reads alongside it, as plain text; empty without any (see [`html::notes`]).
     pub notes: String,
+    /// The seconds the presenter expects to spend on it; 0 without any (see [`html::TIME_ATTR`]).
+    pub time: u32,
 }
 
 /// A named group of slides, started by a marker between slides in the deck file.
@@ -263,6 +265,11 @@ pub fn load(file: &Path) -> Result<Deck> {
             moved: html::has_moved(&source[span.range.clone()]),
             narration: html::narration(&source[span.range.clone()]),
             notes: html::notes(&source[span.range.clone()]),
+            time: span
+                .time
+                .as_ref()
+                .and_then(|(_, value)| html::parse_time(value))
+                .unwrap_or(0),
         })
         .collect();
     let path = file.to_string_lossy().into_owned();
@@ -526,6 +533,16 @@ pub fn set_slide_notes(file: &Path, slide: &str, text: &str) -> Result<Deck> {
     Ok(edit(file, |s| {
         ensure_unlocked(s, slide)?;
         Ok((html::set_notes(s, slide, text)?, ()))
+    })?
+    .0)
+}
+
+/// Sets the seconds the presenter expects to spend on a slide (see [`html::set_time`]); 0 removes
+/// them. A locked slide keeps its time too.
+pub fn set_slide_time(file: &Path, slide: &str, seconds: u32) -> Result<Deck> {
+    Ok(edit(file, |s| {
+        ensure_unlocked(s, slide)?;
+        Ok((html::set_time(s, slide, seconds)?, ()))
     })?
     .0)
 }
@@ -1380,6 +1397,34 @@ mod tests {
         let locked = deck.html();
         assert!(set_slide_narration(&deck.file(), "a", "No").is_err());
         assert_eq!(deck.html(), locked);
+    }
+
+    #[test]
+    fn a_slide_keeps_its_expected_time() {
+        let deck = TempDeck::new(EDITED);
+        let times = |d: &Deck| d.slides.iter().map(|s| s.time).collect::<Vec<_>>();
+        assert_eq!(times(&load(&deck.file()).unwrap()), [0, 0]);
+        let saved = set_slide_time(&deck.file(), "b", 90).unwrap();
+        assert_eq!(times(&saved), [0, 90]);
+        assert!(deck.html().contains("data-time=\"90\""));
+        let changed = set_slide_time(&deck.file(), "b", 45).unwrap();
+        assert_eq!(times(&changed), [0, 45]);
+        assert!(!deck.html().contains("data-time=\"90\""));
+        let cleared = set_slide_time(&deck.file(), "b", 0).unwrap();
+        assert_eq!(times(&cleared), [0, 0]);
+        assert_eq!(deck.html(), EDITED);
+
+        set_slide_locked(&deck.file(), None, "a", true).unwrap();
+        let locked = deck.html();
+        assert!(set_slide_time(&deck.file(), "a", 30).is_err());
+        assert_eq!(deck.html(), locked);
+        assert!(set_slide_time(&deck.file(), "nope", 30).is_err());
+    }
+
+    #[test]
+    fn a_time_that_is_no_number_counts_as_none() {
+        let deck = TempDeck::new(&EDITED.replacen("id=\"b\"", "id=\"b\" data-time=\"soon\"", 1));
+        assert_eq!(load(&deck.file()).unwrap().slides[1].time, 0);
     }
 
     #[test]

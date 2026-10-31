@@ -51,6 +51,8 @@ export interface Slide {
   narration?: string;
   /** What the presenter reads alongside it (its `<aside class="notes">`), as plain text; empty without any. */
   notes?: string;
+  /** The seconds the presenter expects to spend on it (its `data-time`); 0 or missing without any. */
+  time?: number;
 }
 
 /** What a change from the slide rail did; saving `previous` back over `source` undoes it. */
@@ -277,16 +279,18 @@ export interface VoiceDownloadProgress {
   total: number;
 }
 
-/** An attached screen, in physical pixels on the desktop (see src-tauri/src/screens.rs). */
+/** An attached screen (see src-tauri/src/screens.rs). */
 export interface Screen {
   /** Position in the list, which `presentOn` takes. */
   index: number;
   name: string;
+  /** Where it sits, in the desktop's units (one unit for all screens). */
   x: number;
   y: number;
   width: number;
   height: number;
-  scale: number;
+  pixelWidth: number;
+  pixelHeight: number;
   primary: boolean;
 }
 
@@ -330,6 +334,8 @@ export const api = {
   setSlideLocked: (id: string, slide: string, locked: boolean) =>
     invoke<Deck>("set_slide_locked", { id, slide, locked }),
   /** Sets what is said over the slide; empty `text` removes its narration. */
+  /** Sets the seconds expected on a slide; 0 removes them. */
+  setSlideTime: (id: string, slide: string, seconds: number) => invoke<Deck>("set_slide_time", { id, slide, seconds }),
   setSlideNarration: (id: string, slide: string, text: string) =>
     invoke<Deck>("set_slide_narration", { id, slide, text }),
   /** Sets the slide's speaker notes; empty `text` removes them. */

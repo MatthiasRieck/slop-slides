@@ -6,59 +6,114 @@
 
 use serde::Serialize;
 use tauri::{
-    AppHandle, Manager, Monitor, PhysicalPosition, WebviewUrl, WebviewWindowBuilder, Window,
+    AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, Position, WebviewUrl,
+    WebviewWindowBuilder, Window,
 };
 
 use crate::error::{Error, Result};
 
-/// Label of the presenter view window.
-pub const PRESENTER_LABEL: &str = "presenter";
+/// Labels of presenter view windows start with this; the capabilities grant them what the app
+/// windows get. Each gets a label of its own: destroying a window only queues that, so a label
+/// stays taken for a moment after, and the next show may be starting already.
+pub const LABEL_PREFIX: &str = "presenter-";
 
-/// A screen, in physical pixels on the desktop the system arranges them on.
+/// Whether the system lays out screens in points, each screen with its own scale, rather than
+/// in the physical pixels of one desktop.
+const LAID_OUT_IN_POINTS: bool = cfg!(target_os = "macos");
+
+/// A screen, where it sits on the desktop the system arranges them on.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Screen {
     /// Position in [`list`]'s order, which `present` takes.
     pub index: usize,
     pub name: String,
-    pub x: i32,
-    pub y: i32,
-    pub width: u32,
-    pub height: u32,
-    pub scale: f64,
+    /// Position and size in the units of the desktop (see [`on_desktop`]).
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    /// The screen's resolution.
+    pub pixel_width: u32,
+    pub pixel_height: u32,
     pub primary: bool,
 }
 
-fn describe(index: usize, monitor: &Monitor, primary: Option<&Monitor>) -> Screen {
+/// A monitor's position and size in one unit for all screens, so they can be compared. Tauri
+/// reports physical pixels, but where the system lays out screens in points, each screen's
+/// numbers are those points times its own scale: undoing that gives the real arrangement.
+fn on_desktop(
+    position: (i32, i32),
+    size: (u32, u32),
+    scale: f64,
+    points: bool,
+) -> (f64, f64, f64, f64) {
+    let unit = if points { scale } else { 1.0 };
+    (
+        f64::from(position.0) / unit,
+        f64::from(position.1) / unit,
+        f64::from(size.0) / unit,
+        f64::from(size.1) / unit,
+    )
+}
+
+fn describe(monitor: &Monitor, primary: Option<&Monitor>) -> Screen {
     let position = monitor.position();
     let size = monitor.size();
+    let (x, y, width, height) = on_desktop(
+        (position.x, position.y),
+        (size.width, size.height),
+        monitor.scale_factor(),
+        LAID_OUT_IN_POINTS,
+    );
     Screen {
-        index,
-        name: monitor
-            .name()
-            .cloned()
-            .unwrap_or_else(|| format!("Screen {}", index + 1)),
-        x: position.x,
-        y: position.y,
-        width: size.width,
-        height: size.height,
-        scale: monitor.scale_factor(),
+        index: 0,
+        name: monitor.name().cloned().unwrap_or_default(),
+        x,
+        y,
+        width,
+        height,
+        pixel_width: size.width,
+        pixel_height: size.height,
         primary: primary.is_some_and(|p| p.position() == position && p.size() == size),
     }
 }
 
-/// The attached screens, left to right then top to bottom, so the order matches how they sit.
+/// Puts screens left to right then top to bottom, as they sit, and numbers them.
+fn in_order(mut screens: Vec<Screen>) -> Vec<Screen> {
+    screens.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    for (index, screen) in screens.iter_mut().enumerate() {
+        screen.index = index;
+        if screen.name.is_empty() {
+            screen.name = format!("Screen {}", index + 1);
+        }
+    }
+    screens
+}
+
+/// The attached screens, in the order [`in_order`] gives them.
 pub fn list(app: &AppHandle) -> Result<Vec<Screen>> {
     let primary = app.primary_monitor().ok().flatten();
-    let mut monitors = app
+    let monitors = app
         .available_monitors()
         .map_err(|e| Error::msg(format!("cannot list the screens: {e}")))?;
-    monitors.sort_by_key(|m| (m.position().x, m.position().y));
-    Ok(monitors
-        .iter()
-        .enumerate()
-        .map(|(index, m)| describe(index, m, primary.as_ref()))
-        .collect())
+    Ok(in_order(
+        monitors
+            .iter()
+            .map(|m| describe(m, primary.as_ref()))
+            .collect(),
+    ))
+}
+
+/// Where a window goes to be on `screen`. Points have to be passed as such: a physical position
+/// would be divided by the scale of the screen the window is on now, not the one it goes to.
+fn origin(screen: &Screen, points: bool) -> Position {
+    if points {
+        LogicalPosition::new(screen.x, screen.y).into()
+    } else {
+        // Whole pixels: they were converted from whole pixels.
+        PhysicalPosition::new(screen.x as i32, screen.y as i32).into()
+    }
 }
 
 /// Checks that the show and the presenter view go on different, existing screens.
@@ -84,33 +139,38 @@ pub fn present(
 ) -> Result<()> {
     let screens = list(app)?;
     validate(screens.len(), audience, presenter)?;
-    let at = &screens[audience];
     window
-        .set_position(PhysicalPosition::new(at.x, at.y))
+        .set_position(origin(&screens[audience], LAID_OUT_IN_POINTS))
         .map_err(|e| Error::msg(format!("cannot move the show: {e}")))?;
     close_presenter_view(app);
-    if let Some(index) = presenter {
-        let at = &screens[index];
-        let scale = at.scale;
-        let view = WebviewWindowBuilder::new(
-            app,
-            PRESENTER_LABEL,
-            WebviewUrl::App("index.html?presenter".into()),
-        )
-        .title("Presenter view")
-        .position(f64::from(at.x) / scale, f64::from(at.y) / scale)
-        .inner_size(1000.0, 640.0)
-        .build()
-        .map_err(|e| Error::msg(format!("cannot open the presenter view: {e}")))?;
-        let _ = view.set_fullscreen(true);
-    }
+    let Some(presenter) = presenter else {
+        return Ok(());
+    };
+    let open = |e: tauri::Error| Error::msg(format!("cannot open the presenter view: {e}"));
+    // Hidden until it is on its screen, so it does not flash up on another.
+    let view = WebviewWindowBuilder::new(
+        app,
+        format!("{LABEL_PREFIX}{}", uuid::Uuid::new_v4().simple()),
+        WebviewUrl::App("index.html?presenter".into()),
+    )
+    .title("Presenter view")
+    .inner_size(1000.0, 640.0)
+    .visible(false)
+    .build()
+    .map_err(open)?;
+    view.set_position(origin(&screens[presenter], LAID_OUT_IN_POINTS))
+        .map_err(open)?;
+    view.show().map_err(open)?;
+    view.set_fullscreen(true).map_err(open)?;
     Ok(())
 }
 
-/// Closes the presenter view window, if open.
+/// Closes the presenter view windows there are.
 pub fn close_presenter_view(app: &AppHandle) {
-    if let Some(view) = app.get_webview_window(PRESENTER_LABEL) {
-        let _ = view.destroy();
+    for (label, view) in app.webview_windows() {
+        if label.starts_with(LABEL_PREFIX) {
+            let _ = view.destroy();
+        }
     }
 }
 
@@ -132,6 +192,66 @@ mod tests {
         let capabilities: serde_json::Value =
             serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
         let windows = capabilities["windows"].as_array().unwrap();
-        assert!(windows.iter().any(|w| w == PRESENTER_LABEL));
+        assert!(windows.iter().any(|w| *w == format!("{LABEL_PREFIX}*")));
+        assert!(!crate::windows::is_app_window(&format!("{LABEL_PREFIX}1")));
+    }
+
+    fn screen(x: f64, y: f64, name: &str) -> Screen {
+        Screen {
+            index: 9,
+            name: name.into(),
+            x,
+            y,
+            width: 100.0,
+            height: 100.0,
+            pixel_width: 100,
+            pixel_height: 100,
+            primary: false,
+        }
+    }
+
+    #[test]
+    fn points_undo_each_screens_own_scale() {
+        // A Retina laptop with an ultrawide to its right, as macOS reports them: they touch.
+        let laptop = on_desktop((0, 0), (3024, 1964), 2.0, true);
+        let wide = on_desktop((1512, 0), (3440, 1440), 1.0, true);
+        assert_eq!(laptop, (0.0, 0.0, 1512.0, 982.0));
+        assert_eq!(wide, (1512.0, 0.0, 3440.0, 1440.0));
+        assert_eq!(laptop.0 + laptop.2, wide.0, "side by side, not overlapping");
+        // A second Retina screen there has its position scaled too.
+        let retina = on_desktop((3024, -200), (3024, 1964), 2.0, true);
+        assert_eq!(retina, (1512.0, -100.0, 1512.0, 982.0));
+    }
+
+    #[test]
+    fn physical_pixels_are_the_desktop_already() {
+        let screen = on_desktop((3840, -100), (1920, 1080), 2.0, false);
+        assert_eq!(screen, (3840.0, -100.0, 1920.0, 1080.0));
+    }
+
+    #[test]
+    fn a_window_is_sent_to_a_screen_in_the_desktops_units() {
+        let at = screen(1512.0, -20.0, "wide");
+        assert_eq!(
+            origin(&at, true),
+            Position::Logical(LogicalPosition::new(1512.0, -20.0))
+        );
+        assert_eq!(
+            origin(&at, false),
+            Position::Physical(PhysicalPosition::new(1512, -20))
+        );
+    }
+
+    #[test]
+    fn screens_go_left_to_right_and_get_their_numbers() {
+        let screens = in_order(vec![
+            screen(100.0, 0.0, "right"),
+            screen(-100.0, 0.0, ""),
+            screen(0.0, 100.0, "below"),
+            screen(0.0, 0.0, "above"),
+        ]);
+        let names: Vec<&str> = screens.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Screen 1", "above", "below", "right"]);
+        assert!(screens.iter().enumerate().all(|(i, s)| s.index == i));
     }
 }

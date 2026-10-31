@@ -5,8 +5,28 @@ import type { Screen } from "../lib/api";
 import { ScreenPicker } from "./ScreenPicker";
 
 const screens: Screen[] = [
-  { index: 0, name: "Built-in", x: 0, y: 0, width: 1512, height: 982, scale: 2, primary: true },
-  { index: 1, name: "Projector", x: 1512, y: 0, width: 1920, height: 1080, scale: 1, primary: false },
+  {
+    index: 0,
+    name: "Built-in",
+    x: 0,
+    y: 0,
+    width: 1512,
+    height: 982,
+    pixelWidth: 3024,
+    pixelHeight: 1964,
+    primary: true,
+  },
+  {
+    index: 1,
+    name: "Projector",
+    x: 1512,
+    y: 0,
+    width: 1920,
+    height: 1080,
+    pixelWidth: 1920,
+    pixelHeight: 1080,
+    primary: false,
+  },
 ];
 
 describe("ScreenPicker", () => {
@@ -16,6 +36,7 @@ describe("ScreenPicker", () => {
     expect(screen.getByTestId("screen-0").dataset.role).toBe("presenter");
     expect(screen.getByTestId("screen-1").dataset.role).toBe("audience");
     expect(screen.getByText("1920×1080")).toBeTruthy();
+    expect(screen.getByText("3024×1964 · main")).toBeTruthy();
     fireEvent.click(screen.getByText("Start presenting"));
     expect(onStart).toHaveBeenCalledWith({ audience: 1, presenter: 0 });
   });

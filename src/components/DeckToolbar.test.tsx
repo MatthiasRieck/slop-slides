@@ -132,7 +132,17 @@ describe("deck actions", () => {
 
   it("presents right away with one screen", async () => {
     invoke.mockResolvedValue([
-      { index: 0, name: "Built-in", x: 0, y: 0, width: 1512, height: 982, scale: 2, primary: true },
+      {
+        index: 0,
+        name: "Built-in",
+        x: 0,
+        y: 0,
+        width: 1512,
+        height: 982,
+        pixelWidth: 3024,
+        pixelHeight: 1964,
+        primary: true,
+      },
     ]);
     render(<DeckActions />);
     await act(async () => fireEvent.click(presentButton()));
@@ -142,8 +152,28 @@ describe("deck actions", () => {
 
   it("asks which screens to use when several are attached", async () => {
     invoke.mockResolvedValue([
-      { index: 0, name: "Built-in", x: 0, y: 0, width: 1512, height: 982, scale: 2, primary: true },
-      { index: 1, name: "Projector", x: 1512, y: 0, width: 1920, height: 1080, scale: 1, primary: false },
+      {
+        index: 0,
+        name: "Built-in",
+        x: 0,
+        y: 0,
+        width: 1512,
+        height: 982,
+        pixelWidth: 3024,
+        pixelHeight: 1964,
+        primary: true,
+      },
+      {
+        index: 1,
+        name: "Projector",
+        x: 1512,
+        y: 0,
+        width: 1920,
+        height: 1080,
+        pixelWidth: 1920,
+        pixelHeight: 1080,
+        primary: false,
+      },
     ]);
     render(<DeckActions />);
     await act(async () => fireEvent.click(presentButton()));
@@ -155,8 +185,8 @@ describe("deck actions", () => {
 
   it("does not present when the picker is cancelled", async () => {
     invoke.mockResolvedValue([
-      { index: 0, name: "A", x: 0, y: 0, width: 100, height: 100, scale: 1, primary: true },
-      { index: 1, name: "B", x: 100, y: 0, width: 100, height: 100, scale: 1, primary: false },
+      { index: 0, name: "A", x: 0, y: 0, width: 100, height: 100, pixelWidth: 100, pixelHeight: 100, primary: true },
+      { index: 1, name: "B", x: 100, y: 0, width: 100, height: 100, pixelWidth: 100, pixelHeight: 100, primary: false },
     ]);
     render(<DeckActions />);
     await act(async () => fireEvent.click(presentButton()));

@@ -73,7 +73,7 @@ export function PermissionPicker() {
       >
         <Shield className="size-3.5 shrink-0" />
         <span className="hidden @[26rem]:inline">{PERMISSION_MODES[mode].label}</span>
-        <ChevronDown className="size-3" />
+        <ChevronDown className="hidden size-3 @[17rem]:block" />
       </button>
       {open && (
         <ComposerPopover anchor={root} onClose={close} width={256} className="p-1.5">

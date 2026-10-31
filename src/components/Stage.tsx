@@ -373,42 +373,43 @@ function EditBar(props: { canUndo: boolean; canRedo: boolean }) {
     "rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4";
   const app = useApp.getState;
   return (
-    <div className="ml-auto flex shrink-0 items-center gap-0.5">
-      <button
-        type="button"
-        aria-label="Undo"
-        title="Undo (⌘Z)"
-        disabled={!props.canUndo}
-        onClick={() => void app().undoSlideEdit()}
-        className={icon}
-      >
-        <Undo2 />
-      </button>
-      <button
-        type="button"
-        aria-label="Redo"
-        title="Redo (⇧⌘Z)"
-        disabled={!props.canRedo}
-        onClick={() => void app().redoSlideEdit()}
-        className={icon}
-      >
-        <Redo2 />
-      </button>
-      <div className="mx-1 h-4 w-px bg-border" />
-      <button
-        type="button"
-        title="Undo all edits made since entering edit mode"
-        onClick={() => void app().discardSlideEdits()}
-        className="flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-accent hover:text-foreground [&_svg]:size-3.5"
-      >
-        <X />
-        Discard
-      </button>
+    <div className="ml-auto flex shrink-0 flex-col gap-1">
+      <div className="flex items-center gap-0.5">
+        <button
+          type="button"
+          aria-label="Undo"
+          title="Undo (⌘Z)"
+          disabled={!props.canUndo}
+          onClick={() => void app().undoSlideEdit()}
+          className={icon}
+        >
+          <Undo2 />
+        </button>
+        <button
+          type="button"
+          aria-label="Redo"
+          title="Redo (⇧⌘Z)"
+          disabled={!props.canRedo}
+          onClick={() => void app().redoSlideEdit()}
+          className={icon}
+        >
+          <Redo2 />
+        </button>
+        <button
+          type="button"
+          title="Undo all edits made since entering edit mode"
+          onClick={() => void app().discardSlideEdits()}
+          className="ml-1 flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-accent hover:text-foreground [&_svg]:size-3.5"
+        >
+          <X />
+          Discard
+        </button>
+      </div>
       <button
         type="button"
         title="Keep the edits and leave edit mode (Esc)"
         onClick={() => app().setEditing(false)}
-        className="flex items-center gap-1 rounded-md bg-primary px-1.5 py-1 font-medium text-primary-foreground hover:bg-primary/90 [&_svg]:size-3.5"
+        className="flex items-center justify-center gap-1 rounded-md bg-primary px-1.5 py-1 font-medium text-primary-foreground hover:bg-primary/90 [&_svg]:size-3.5"
       >
         <Check />
         Accept
@@ -610,6 +611,9 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
         void useApp.getState().saveSlideEdit(data.slide, data.markup);
       } else if (data?.type === "slop:edit-overflow" && data.slide === selected && Array.isArray(data.items)) {
         setOverflow({ slide: data.slide, items: data.items.map(String) });
+      } else if (data?.type === "slop:edit-press") {
+        // A press in the preview never reaches this window, but for what is open here it is a press outside.
+        frame.current?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
       } else if (data?.type === "slop:edit-selection" && data.slide === selected) {
         setSelection({ slide: data.slide, selection: parseSelection(data.selection) });
       } else if (data?.type === "slop:edit-geometry" && data.slide === selected) {
@@ -664,10 +668,11 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
       }
     };
     // A press anywhere in the app but the edit toolbar ends typing in the slide, keeping the
-    // text; the toolbar restyles the text being typed (see editor.js).
+    // text; the toolbar restyles the text being typed (see editor.js), and a press on the frame
+    // is one passed on from the slide, where the editor sees it itself.
     const onPress = (event: PointerEvent) => {
       if (!useApp.getState().editing) return;
-      if ((event.target as Element | null)?.closest?.("[data-edit-toolbar]")) return;
+      if ((event.target as Element | null)?.closest?.("[data-edit-toolbar], iframe")) return;
       frame.current?.contentWindow?.postMessage({ type: "slop:edit-finish" }, "*");
     };
     window.addEventListener("message", onMessage);

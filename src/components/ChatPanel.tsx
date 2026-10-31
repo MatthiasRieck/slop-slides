@@ -787,7 +787,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           <span className="h-1 w-8 rounded-full bg-border group-hover:bg-muted-foreground group-focus-visible:bg-primary" />
         </div>
         {(files.length > 0 || slideNumber > 0 || element) && (
-          <div className="flex flex-wrap gap-1 px-3.5 pt-3">
+          <div className="@container flex flex-wrap gap-1 px-3.5 pt-3">
             {slideNumber > 0 && (
               <button
                 type="button"
@@ -893,7 +893,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
                 type="button"
                 onClick={pickFiles}
                 title="Attach images or files"
-                className="flex size-8 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+                className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
               >
                 <Paperclip className="size-4" />
               </button>
@@ -903,7 +903,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
                 type="button"
                 onClick={() => useApp.getState().interrupt()}
                 title="Stop"
-                className="flex size-8 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80"
+                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80"
               >
                 <Square className="size-3 fill-current" />
               </button>
@@ -913,7 +913,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
                 onClick={() => (dictation ? voiceInput.current?.finishAndSend() : submit())}
                 disabled={!dictation && !draft.trim()}
                 title={dictation ? "Stop and send" : "Send"}
-                className="flex size-8 items-center justify-center rounded-full bg-foreground text-background hover:opacity-90 disabled:opacity-30"
+                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background hover:opacity-90 disabled:opacity-30"
               >
                 <ArrowUp className="size-4" />
               </button>

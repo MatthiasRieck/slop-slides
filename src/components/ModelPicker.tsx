@@ -52,18 +52,18 @@ export function ModelPicker() {
   const close = useMemo(() => () => setOpen(false), []);
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className="relative min-w-0">
       <button
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         title={selection.label}
         aria-label={selection.label}
-        className={cn(triggerClass, "shrink-0")}
+        className={cn(triggerClass, "max-w-full")}
       >
-        <ProviderIcon provider={selection.provider} className="size-3.5" />
-        <span className="hidden font-medium text-foreground/90 @[26rem]:inline">{selection.label}</span>
-        <ChevronDown className="size-3 opacity-60" />
+        <ProviderIcon provider={selection.provider} className="size-3.5 shrink-0" />
+        <span className="hidden truncate font-medium text-foreground/90 @[26rem]:inline">{selection.label}</span>
+        <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[17rem]:block" />
       </button>
       {open && (
         <ComposerPopover anchor={rootRef} onClose={close} width={352} className="flex overflow-hidden">
@@ -354,7 +354,7 @@ export function EffortPicker() {
   ].filter((section) => section.options.length > 0);
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className="relative shrink-0">
       <button
         type="button"
         aria-expanded={open}
@@ -365,7 +365,7 @@ export function EffortPicker() {
       >
         <Gauge className="size-3.5 @[26rem]:hidden" />
         <span className="hidden @[26rem]:inline">{label}</span>
-        <ChevronDown className="size-3 opacity-60" />
+        <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[17rem]:block" />
       </button>
       {open && (
         <ComposerPopover anchor={rootRef} onClose={close} width={160} className="p-1.5">

@@ -59,12 +59,19 @@ export function Presenter() {
     // With several screens, the show first moves to the one picked (and the presenter view opens).
     const screens = useApp.getState().screens;
     let ended = false;
+    let placed = false;
     if (screens) {
-      inOrder(() => api.presentOn(screens.audience, screens.presenter))
-        .catch((error) => useApp.getState().setError(errorMessage(error)))
-        .finally(() => {
-          if (!ended) void window_.setFullscreen(true);
-        });
+      // A moment later: StrictMode runs this twice in dev, and closing a presenter view that
+      // macOS is still taking full screen makes the system beep.
+      queueMicrotask(() => {
+        if (ended) return;
+        placed = true;
+        inOrder(() => api.presentOn(screens.audience, screens.presenter))
+          .catch((error) => useApp.getState().setError(errorMessage(error)))
+          .finally(() => {
+            if (!ended) void window_.setFullscreen(true);
+          });
+      });
     } else {
       void window_.setFullscreen(true);
     }
@@ -117,7 +124,7 @@ export function Presenter() {
       window.removeEventListener("message", onMessage);
       ended = true;
       void window_.setFullscreen(false);
-      if (screens) void inOrder(() => api.closePresenterView()).catch(() => {});
+      if (placed) void inOrder(() => api.closePresenterView()).catch(() => {});
     };
   }, []);
 

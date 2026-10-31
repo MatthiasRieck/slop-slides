@@ -238,7 +238,7 @@ export function VoiceInput(props: DictationHandlers & { ref?: Ref<VoiceInputHand
         aria-pressed={phase === "recording"}
         disabled={phase === "starting" || phase === "transcribing"}
         className={cn(
-          "relative flex size-8 items-center justify-center rounded-full",
+          "relative flex size-8 shrink-0 items-center justify-center rounded-full",
           phase === "recording"
             ? "bg-red-500/15 text-red-500 hover:bg-red-500/25"
             : "text-muted-foreground hover:bg-accent hover:text-foreground",

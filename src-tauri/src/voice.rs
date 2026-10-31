@@ -17,7 +17,9 @@ use futures_util::StreamExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
+};
 
 use crate::error::{Error, Result};
 
@@ -58,7 +60,15 @@ const SEGMENT_SECONDS: f32 = 20.0;
 const SILENCE_RMS: f32 = 0.002;
 /// How much of the latest audio the teleprompter transcribes each time. It only needs to know
 /// where the speaker is now, so a talk can run for as long as it likes at the same cost.
-const FOLLOW_SECONDS: usize = 6;
+const FOLLOW_SECONDS: usize = 4;
+/// How long the teleprompter rests between passes, which leaves the machine time for the show.
+const FOLLOW_INTERVAL: Duration = Duration::from_millis(120);
+/// How much audio the model looks at while following (it takes 50 of these a second, 1500 by
+/// default): enough for what is transcribed, and much faster than looking at all 30 seconds.
+const FOLLOW_AUDIO_CONTEXT: i32 = FOLLOW_SECONDS as i32 * 50 + 20;
+/// Most tokens a pass may decode. On so short a clip the decoder sometimes repeats a phrase
+/// until it runs out of room, holding up the speaker's line by a second.
+const FOLLOW_MAX_TOKENS: i32 = 64;
 
 /// Emitted while the model downloads.
 pub const DOWNLOAD_EVENT: &str = "voice-download";
@@ -104,8 +114,16 @@ struct DownloadProgress {
 pub struct Voice {
     session: Mutex<Option<Session>>,
     /// Loaded on the first transcription and kept: loading takes a moment.
-    whisper: Arc<Mutex<Option<WhisperContext>>>,
+    whisper: Arc<Mutex<Option<Engine>>>,
     downloading: AtomicBool,
+}
+
+/// The loaded model.
+struct Engine {
+    context: WhisperContext,
+    /// What following a speaker keeps between passes: setting it up takes a moment, and it makes
+    /// Whisper's language detection look at no more audio than the pass after it.
+    following: Option<WhisperState>,
 }
 
 /// A recording and its live transcription.
@@ -270,7 +288,7 @@ impl Voice {
 /// Transcribes a recording while it runs, reporting the text so far.
 struct LiveWorker {
     app: AppHandle,
-    whisper: Arc<Mutex<Option<WhisperContext>>>,
+    whisper: Arc<Mutex<Option<Engine>>>,
     model: PathBuf,
     samples: Arc<Mutex<Vec<f32>>>,
     rate: u32,
@@ -281,7 +299,7 @@ struct LiveWorker {
 impl LiveWorker {
     fn run(self) {
         let mut done = 0;
-        while self.wait() {
+        while next_pass(&self.live, LIVE_INTERVAL) {
             let audio = resample(&self.samples.lock().unwrap(), self.rate, WHISPER_RATE);
             // Wait for at least a quarter second of new audio.
             if audio.len() < done + WHISPER_RATE as usize / 4 {
@@ -305,8 +323,15 @@ impl LiveWorker {
     /// Reports what was said in the last few seconds, over and over, keeping no more audio than
     /// that: whatever transcribing takes, the next pass starts from the present.
     fn follow(self) {
+        self.follow_speaker();
+        if let Some(engine) = self.whisper.lock().unwrap().as_mut() {
+            engine.following = None;
+        }
+    }
+
+    fn follow_speaker(&self) {
         let keep = FOLLOW_SECONDS * self.rate as usize;
-        while self.wait() {
+        while next_pass(&self.live, FOLLOW_INTERVAL) {
             let (full, audio) = {
                 let mut samples = self.samples.lock().unwrap();
                 keep_latest(&mut samples, keep);
@@ -317,7 +342,7 @@ impl LiveWorker {
                 let _ = self.app.emit(FOLLOW_FAILED_EVENT, SILENT_MICROPHONE);
                 return;
             }
-            match transcribe(&self.whisper, &self.model, &audio) {
+            match transcribe_latest(&self.whisper, &self.model, &audio) {
                 Ok(text) if !text.is_empty() && self.live.load(Ordering::SeqCst) => {
                     let _ = self.app.emit(HEARD_EVENT, text);
                 }
@@ -329,19 +354,19 @@ impl LiveWorker {
             }
         }
     }
+}
 
-    /// Waits for the next pass; false once the session is over.
-    fn wait(&self) -> bool {
-        let mut waited = Duration::ZERO;
-        while waited < LIVE_INTERVAL {
-            if !self.live.load(Ordering::SeqCst) {
-                return false;
-            }
-            std::thread::sleep(LEVEL_INTERVAL);
-            waited += LEVEL_INTERVAL;
+/// Waits `interval` for the next pass; false once the session is over.
+fn next_pass(live: &AtomicBool, interval: Duration) -> bool {
+    let mut waited = Duration::ZERO;
+    while waited < interval {
+        if !live.load(Ordering::SeqCst) {
+            return false;
         }
-        true
+        std::thread::sleep(LEVEL_INTERVAL);
+        waited += LEVEL_INTERVAL;
     }
+    true
 }
 
 /// Drops all but the last `keep` of `samples`.
@@ -358,7 +383,7 @@ pub fn silent(samples: &[f32]) -> bool {
 /// The whole text of `audio` (at [`WHISPER_RATE`]): `transcript`'s, extended by segments that
 /// end at pauses, and the rest. The segments are added to `transcript` for good.
 fn advance(
-    whisper: &Mutex<Option<WhisperContext>>,
+    whisper: &Mutex<Option<Engine>>,
     model: &Path,
     audio: &[f32],
     transcript: &mut Transcript,
@@ -605,21 +630,48 @@ fn rms(samples: &[f32]) -> f32 {
 }
 
 /// What is said in `audio` (at [`WHISPER_RATE`]); nothing for silence or a click.
-fn transcribe(
-    whisper: &Mutex<Option<WhisperContext>>,
-    model: &Path,
-    audio: &[f32],
-) -> Result<String> {
-    if (audio.len() as f32) < MIN_SECONDS * WHISPER_RATE as f32 || rms(audio) < SILENCE_RMS {
+fn transcribe(whisper: &Mutex<Option<Engine>>, model: &Path, audio: &[f32]) -> Result<String> {
+    if !may_hold_speech(audio) {
         return Ok(String::new());
     }
     let mut loaded = whisper.lock().unwrap();
-    let context = load(&mut loaded, model)?;
-    let mut audio = audio.to_vec();
-    let min = (PAD_SECONDS * WHISPER_RATE as f32) as usize;
-    if audio.len() < min {
-        audio.resize(min, 0.0);
+    let mut state = load(&mut loaded, model)?
+        .context
+        .create_state()
+        .map_err(whisper_error)?;
+    run(&mut state, params(), audio)
+}
+
+/// Like [`transcribe`], for the few seconds of audio the teleprompter wants heard right away:
+/// it takes a fraction of the time and only gets to give a rough answer.
+fn transcribe_latest(
+    whisper: &Mutex<Option<Engine>>,
+    model: &Path,
+    audio: &[f32],
+) -> Result<String> {
+    if !may_hold_speech(audio) {
+        return Ok(String::new());
     }
+    let mut loaded = whisper.lock().unwrap();
+    let engine = load(&mut loaded, model)?;
+    if engine.following.is_none() {
+        engine.following = Some(engine.context.create_state().map_err(whisper_error)?);
+    }
+    let state = engine.following.as_mut().expect("set above");
+    let mut params = params();
+    params.set_audio_ctx(FOLLOW_AUDIO_CONTEXT);
+    params.set_single_segment(true);
+    params.set_max_tokens(FOLLOW_MAX_TOKENS);
+    // No second try at a pass gone wrong: the next one is about to start.
+    params.set_temperature_inc(0.0);
+    run(state, params, audio)
+}
+
+fn may_hold_speech(audio: &[f32]) -> bool {
+    audio.len() as f32 >= MIN_SECONDS * WHISPER_RATE as f32 && rms(audio) >= SILENCE_RMS
+}
+
+fn params() -> FullParams<'static, 'static> {
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
     params.set_language(Some("auto"));
     params.set_n_threads(threads());
@@ -630,7 +682,15 @@ fn transcribe(
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
-    let mut state = context.create_state().map_err(whisper_error)?;
+    params
+}
+
+fn run(state: &mut WhisperState, params: FullParams, audio: &[f32]) -> Result<String> {
+    let mut audio = audio.to_vec();
+    let min = (PAD_SECONDS * WHISPER_RATE as f32) as usize;
+    if audio.len() < min {
+        audio.resize(min, 0.0);
+    }
     state.full(params, &audio).map_err(whisper_error)?;
     let text: Vec<String> = state
         .as_iter()
@@ -640,7 +700,7 @@ fn transcribe(
 }
 
 /// The loaded model, loading it first if needed.
-fn load<'a>(loaded: &'a mut Option<WhisperContext>, model: &Path) -> Result<&'a WhisperContext> {
+fn load<'a>(loaded: &'a mut Option<Engine>, model: &Path) -> Result<&'a mut Engine> {
     if loaded.is_none() {
         if !model.is_file() {
             return Err(Error::msg("The speech model is not downloaded."));
@@ -648,9 +708,12 @@ fn load<'a>(loaded: &'a mut Option<WhisperContext>, model: &Path) -> Result<&'a 
         whisper_rs::install_logging_hooks();
         let context = WhisperContext::new_with_params(model, WhisperContextParameters::default())
             .map_err(whisper_error)?;
-        *loaded = Some(context);
+        *loaded = Some(Engine {
+            context,
+            following: None,
+        });
     }
-    Ok(loaded.as_ref().expect("loaded above"))
+    Ok(loaded.as_mut().expect("loaded above"))
 }
 
 fn whisper_error(e: whisper_rs::WhisperError) -> Error {
@@ -912,7 +975,9 @@ mod tests {
     #[test]
     fn loading_a_missing_model_fails_without_caching_anything() {
         let mut loaded = None;
-        let err = load(&mut loaded, Path::new("/nonexistent/model.bin")).unwrap_err();
+        let err = load(&mut loaded, Path::new("/nonexistent/model.bin"))
+            .err()
+            .unwrap();
         assert_eq!(err.to_string(), "The speech model is not downloaded.");
         assert!(loaded.is_none());
     }
@@ -926,6 +991,22 @@ mod tests {
         assert_eq!(transcribe(&whisper, model, &[0.5; 100]).unwrap(), "");
         let speech = vec![0.2; WHISPER_RATE as usize * 3];
         assert!(transcribe(&whisper, model, &speech).is_err());
+        assert_eq!(transcribe_latest(&whisper, model, &quiet).unwrap(), "");
+        assert_eq!(transcribe_latest(&whisper, model, &[0.5; 100]).unwrap(), "");
+        assert!(transcribe_latest(&whisper, model, &speech).is_err());
+    }
+
+    // Following looks at all of the audio it keeps, and no more than the model can. Each unit of
+    // audio context covers two 10 ms frames.
+    const _: () = assert!(FOLLOW_AUDIO_CONTEXT as usize * 2 >= FOLLOW_SECONDS * 100);
+    const _: () = assert!(FOLLOW_AUDIO_CONTEXT <= 1500);
+
+    #[test]
+    fn a_pass_comes_after_the_interval_unless_the_session_ended() {
+        let started = std::time::Instant::now();
+        assert!(next_pass(&AtomicBool::new(true), FOLLOW_INTERVAL));
+        assert!(started.elapsed() >= FOLLOW_INTERVAL);
+        assert!(!next_pass(&AtomicBool::new(false), Duration::from_secs(60)));
     }
 
     #[test]

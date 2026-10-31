@@ -48,7 +48,7 @@ export function remaining(elapsedMs: number, minutes: number): { text: string; o
  * notes of the slide on screen and the next slide to be shown. Beside the slide it is a narrow
  * column; in a window of its own (`window`, on a second screen) it also shows the slide itself.
  * The teleprompter listens to the presenter and follows them through the slide's narration, or
- * its notes when it has none, highlighting what was said (see src/lib/teleprompter.ts).
+ * its notes when it has none, fading what was said (see src/lib/teleprompter.ts).
  */
 export function PresenterPanel(props: {
   deck: Deck;

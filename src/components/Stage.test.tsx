@@ -1300,6 +1300,16 @@ describe("Stage", () => {
           expect(post).toHaveBeenCalledWith({ type: "slop:edit-finish" }, "*");
         });
 
+        it("closes the toolbar's popups on a press in the slide, leaving the typing to the editor", () => {
+          const { frame, post } = enter();
+          select(frame, TEXT);
+          fireEvent.click(button("Text color"));
+          expect(screen.getByRole("dialog", { name: "Text color" })).toBeTruthy();
+          fromFrame(frame, { type: "slop:edit-press" });
+          expect(screen.queryByRole("dialog", { name: "Text color" })).toBeNull();
+          expect(post).not.toHaveBeenCalledWith({ type: "slop:edit-finish" }, "*");
+        });
+
         it("takes a typed font size on Enter and gives focus back to the slide", () => {
           const { frame, post } = enter();
           select(frame, TEXT);

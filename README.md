@@ -25,7 +25,8 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   Lines and arrows have a point at each end instead of a box: drag one to move that end,
   drag the small handle on the line to add a point that curves it, and double-click a point
   in between to remove it.
-  The edit toolbar above the slide styles text: font (the deck's fonts and system
+  The edit ribbon above the slide groups its tools in sections, which collapse to an icon that
+  opens them when the window gets narrow. It styles text: font (the deck's fonts and system
   fonts), size (±, or type one), color, bold / italic / underline (⌘B / ⌘I / ⌘U),
   strikethrough, superscript and subscript, line height and letter spacing, bulleted and
   numbered lists (Enter starts a new item, Tab / Shift+Tab indent and outdent), and links to

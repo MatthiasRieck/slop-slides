@@ -12,6 +12,7 @@ import {
   Bold,
   BringToFront,
   Circle,
+  ImagePlus,
   Italic,
   Link,
   List,
@@ -19,11 +20,13 @@ import {
   MessageSquare,
   Minus,
   MousePointer2,
+  Move,
   MoveUpRight,
   PaintBucket,
   PenLine,
   Plus,
   SendToBack,
+  Shapes,
   Slash,
   Space,
   Square,
@@ -69,6 +72,7 @@ import { cn } from "../lib/utils";
 import { ArrangeControls } from "./ArrangeControls";
 import { keepFocus, ToolButton, useOutsideClose } from "./EditControls";
 import { LookTools } from "./LookTools";
+import { RibbonRow, RibbonSection, useRibbonFit } from "./Ribbon";
 
 const TOOLS: { tool: EditTool; label: string; icon: ReactNode }[] = [
   { tool: "select", label: "Select and move (V)", icon: <MousePointer2 /> },
@@ -120,7 +124,7 @@ export interface LinkTarget {
 }
 
 /**
- * Edit mode's tools, in the row above the slide: add text, images, shapes, lines and freehand drawings, restyle the
+ * Edit mode's tools, in a ribbon above the slide, whose sections collapse to an icon as it narrows: add text, images, shapes, lines and freehand drawings, restyle the
  * selection (font, size, color, bold, italic, underline, strikethrough, superscript /
  * subscript, lists, links, spacing, alignment, how text fits, fill, border, opacity, shadow,
  * corner radius, image fit and flips), paint one element's look onto another, set the slide's
@@ -164,236 +168,267 @@ export function EditToolbar(props: {
   const fontSize = style.fontSize ?? 48;
   const selection = props.selection;
   const returnFocus = () => props.onReturnFocus?.();
+  const ribbon = useRibbonFit();
+  const { collapsedFrom } = ribbon;
 
   return (
     <div
+      ref={ribbon.ref}
       role="toolbar"
       aria-label="Edit tools"
       data-edit-toolbar=""
-      className="flex min-w-0 flex-[1_1_600px] flex-wrap items-center gap-0.5"
+      className="flex min-w-0 flex-[1_1_200px]"
     >
-      {TOOLS.map((t) => (
-        <ToolButton key={t.tool} label={t.label} active={props.tool === t.tool} onClick={() => props.onTool(t.tool)}>
-          {t.icon}
-        </ToolButton>
-      ))}
-      <Divider />
-      <select
-        aria-label="Size mode"
-        title="Resize changes the box; Stretch scales its contents"
-        value={props.sizeMode}
-        onChange={(event) => props.onSizeMode(event.target.value as "resize" | "stretch")}
-        className="rounded border bg-card px-1 py-1 text-xs"
-      >
-        <option value="resize">Resize</option>
-        <option value="stretch">Stretch</option>
-      </select>
-      <Divider />
-      <FontPicker
-        value={style.fontFamily ?? null}
-        fonts={props.fonts ?? []}
-        disabled={textOff}
-        onChange={(fontFamily) => props.onStyle({ fontFamily })}
-      />
-      <ColorButton
-        label="Text color"
-        icon={<Baseline />}
-        value={style.color ?? null}
-        disabled={textOff}
-        deck={props.colors}
-        onChange={(color) => props.onStyle({ color })}
-      />
-      <ToolButton
-        label="Smaller text"
-        disabled={textOff}
-        onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, -1) })}
-      >
-        <Minus />
-      </ToolButton>
-      <FontSizeInput
-        value={state?.text ? fontSize : null}
-        onChange={(size) => props.onStyle({ fontSize: size })}
-        onDone={returnFocus}
-      />
-      <ToolButton
-        label="Larger text"
-        disabled={textOff}
-        onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, 1) })}
-      >
-        <Plus />
-      </ToolButton>
-      <ToolButton
-        label="Bold (⌘B)"
-        active={!textOff && !!style.bold}
-        disabled={textOff}
-        onClick={() => props.onStyle({ bold: !style.bold })}
-      >
-        <Bold />
-      </ToolButton>
-      <ToolButton
-        label="Italic (⌘I)"
-        active={!textOff && !!style.italic}
-        disabled={textOff}
-        onClick={() => props.onStyle({ italic: !style.italic })}
-      >
-        <Italic />
-      </ToolButton>
-      <ToolButton
-        label="Underline (⌘U)"
-        active={!textOff && !!style.underline}
-        disabled={textOff}
-        onClick={() => props.onStyle({ underline: !style.underline })}
-      >
-        <Underline />
-      </ToolButton>
-      <ToolButton
-        label="Strikethrough"
-        active={!textOff && !!style.strike}
-        disabled={textOff}
-        onClick={() => props.onStyle({ strike: !style.strike })}
-      >
-        <Strikethrough />
-      </ToolButton>
-      {SCRIPTS.map((s) => (
-        <ToolButton
-          key={s.value}
-          label={s.label}
-          active={!textOff && !!selection && selection.script === s.value}
-          disabled={textOff || !selection}
-          onClick={() => props.onStyle({ script: selection?.script === s.value ? null : s.value })}
-        >
-          {s.icon}
-        </ToolButton>
-      ))}
-      <Divider />
-      {LISTS.map((l) => (
-        <ToolButton
-          key={l.value}
-          label={l.label}
-          active={!textOff && !!selection && selection.list === l.value}
-          disabled={textOff || !selection}
-          onClick={() => props.onList?.(l.value)}
-        >
-          {l.icon}
-        </ToolButton>
-      ))}
-      <LinkButton
-        value={selection?.link ?? null}
-        disabled={!selection}
-        slides={props.slides ?? []}
-        onChange={(href) => props.onLink?.(href)}
-        onDone={returnFocus}
-      />
-      <SpacingButton
-        lineHeight={style.lineHeight ?? null}
-        letterSpacing={style.letterSpacing ?? 0}
-        disabled={textOff}
-        onChange={props.onStyle}
-      />
-      <select
-        aria-label="When text does not fit"
-        title="When text does not fit its box: only show the overflow, shrink the text, or grow the box"
-        disabled={textOff || !selection}
-        value={selection?.autofit ?? ""}
-        onChange={(event) => props.onStyle({ autofit: (event.target.value || null) as Autofit | null })}
-        className="h-6 rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-30"
-      >
-        <option value="">Report overflow</option>
-        <option value="shrink">Shrink text</option>
-        <option value="grow">Grow box</option>
-      </select>
-      <Divider />
-      {ALIGN.map((a) => (
-        <ToolButton
-          key={a.value}
-          label={a.label}
-          active={!textOff && style.align === a.value}
-          disabled={textOff}
-          onClick={() => props.onStyle({ align: a.value })}
-        >
-          {a.icon}
-        </ToolButton>
-      ))}
-      {VALIGN.map((a) => (
-        <ToolButton
-          key={a.value}
-          label={a.label}
-          active={!textOff && !!state?.valign && style.valign === a.value}
-          disabled={textOff || !state?.valign}
-          onClick={() => props.onStyle({ valign: a.value })}
-        >
-          {a.icon}
-        </ToolButton>
-      ))}
-      <Divider />
-      <ColorButton
-        label="Fill"
-        icon={<PaintBucket />}
-        value={style.fill ?? null}
-        disabled={!state}
-        none
-        deck={props.colors}
-        onChange={(fill) => props.onStyle({ fill })}
-      />
-      <ColorButton
-        label={state?.vector ? "Line color" : "Border color"}
-        icon={<SquareDashed />}
-        value={style.stroke ?? null}
-        disabled={!state || !!selection?.clipped}
-        none
-        deck={props.colors}
-        onChange={(stroke) => props.onStyle({ stroke })}
-      />
-      <select
-        aria-label={state?.vector ? "Line width" : "Border width"}
-        title={state?.vector ? "Line width" : "Border width"}
-        disabled={!state || !!selection?.clipped}
-        value={String(style.strokeWidth ?? 0)}
-        onChange={(event) => props.onStyle({ strokeWidth: Number(event.target.value) })}
-        className="h-6 rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-30"
-      >
-        {[...new Set([...BORDER_WIDTHS, style.strokeWidth ?? 0])]
-          .sort((a, b) => a - b)
-          .map((w) => (
-            <option key={w} value={w}>
-              {w === 0 ? "No border" : `${w}px`}
-            </option>
+      <RibbonSection title="Insert" icon={<Shapes />} collapsed={collapsedFrom <= 0} closeOn={props.tool}>
+        {[TOOLS.slice(0, 6), TOOLS.slice(6)].map((row, index) => (
+          <RibbonRow key={row[0]?.tool}>
+            {row.map((t) => (
+              <ToolButton
+                key={t.tool}
+                label={t.label}
+                active={props.tool === t.tool}
+                onClick={() => props.onTool(t.tool)}
+              >
+                {t.icon}
+              </ToolButton>
+            ))}
+            {index === 1 && (
+              <ToolButton label="Add an image from a file" onClick={() => props.onPickImage?.(false)}>
+                <ImagePlus />
+              </ToolButton>
+            )}
+          </RibbonRow>
+        ))}
+      </RibbonSection>
+      <RibbonSection title="Text" icon={<Type />} collapsed={collapsedFrom <= 1} closeOn={props.tool}>
+        <RibbonRow>
+          <FontPicker
+            value={style.fontFamily ?? null}
+            fonts={props.fonts ?? []}
+            disabled={textOff}
+            onChange={(fontFamily) => props.onStyle({ fontFamily })}
+          />
+          <ToolButton
+            label="Smaller text"
+            disabled={textOff}
+            onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, -1) })}
+          >
+            <Minus />
+          </ToolButton>
+          <FontSizeInput
+            value={state?.text ? fontSize : null}
+            onChange={(size) => props.onStyle({ fontSize: size })}
+            onDone={returnFocus}
+          />
+          <ToolButton
+            label="Larger text"
+            disabled={textOff}
+            onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, 1) })}
+          >
+            <Plus />
+          </ToolButton>
+        </RibbonRow>
+        <RibbonRow>
+          <ToolButton
+            label="Bold (⌘B)"
+            active={!textOff && !!style.bold}
+            disabled={textOff}
+            onClick={() => props.onStyle({ bold: !style.bold })}
+          >
+            <Bold />
+          </ToolButton>
+          <ToolButton
+            label="Italic (⌘I)"
+            active={!textOff && !!style.italic}
+            disabled={textOff}
+            onClick={() => props.onStyle({ italic: !style.italic })}
+          >
+            <Italic />
+          </ToolButton>
+          <ToolButton
+            label="Underline (⌘U)"
+            active={!textOff && !!style.underline}
+            disabled={textOff}
+            onClick={() => props.onStyle({ underline: !style.underline })}
+          >
+            <Underline />
+          </ToolButton>
+          <ToolButton
+            label="Strikethrough"
+            active={!textOff && !!style.strike}
+            disabled={textOff}
+            onClick={() => props.onStyle({ strike: !style.strike })}
+          >
+            <Strikethrough />
+          </ToolButton>
+          {SCRIPTS.map((s) => (
+            <ToolButton
+              key={s.value}
+              label={s.label}
+              active={!textOff && !!selection && selection.script === s.value}
+              disabled={textOff || !selection}
+              onClick={() => props.onStyle({ script: selection?.script === s.value ? null : s.value })}
+            >
+              {s.icon}
+            </ToolButton>
           ))}
-      </select>
-      <Divider />
-      <ArrangeControls geometry={props.geometry ?? null} onArrange={props.onArrange} onDone={returnFocus} />
-      <Divider />
-      <LookTools
-        tool={props.tool}
-        selection={selection}
-        onTool={props.onTool}
-        onStyle={props.onStyle}
-        onPickImage={props.onPickImage}
-        onReturnFocus={returnFocus}
-      />
-      <ColorButton
-        label="Slide background"
-        icon={<Wallpaper />}
-        value={props.background ?? null}
-        none
-        deck={props.colors}
-        onChange={(color) => props.onBackground?.(color)}
-      />
-      <Divider />
-      {ORDER.map((o) => (
-        <ToolButton key={o.to} label={o.label} disabled={!props.selection} onClick={() => props.onOrder(o.to)}>
-          {o.icon}
-        </ToolButton>
-      ))}
-      <ToolButton label="Delete (⌫)" disabled={!props.selection} onClick={props.onDelete}>
-        <Trash2 />
-      </ToolButton>
+          <ColorButton
+            label="Text color"
+            icon={<Baseline />}
+            value={style.color ?? null}
+            disabled={textOff}
+            deck={props.colors}
+            onChange={(color) => props.onStyle({ color })}
+          />
+          <LinkButton
+            value={selection?.link ?? null}
+            disabled={!selection}
+            slides={props.slides ?? []}
+            onChange={(href) => props.onLink?.(href)}
+            onDone={returnFocus}
+          />
+        </RibbonRow>
+      </RibbonSection>
+      <RibbonSection title="Paragraph" icon={<AlignLeft />} collapsed={collapsedFrom <= 2} closeOn={props.tool}>
+        <RibbonRow>
+          {ALIGN.map((a) => (
+            <ToolButton
+              key={a.value}
+              label={a.label}
+              active={!textOff && style.align === a.value}
+              disabled={textOff}
+              onClick={() => props.onStyle({ align: a.value })}
+            >
+              {a.icon}
+            </ToolButton>
+          ))}
+          {LISTS.map((l) => (
+            <ToolButton
+              key={l.value}
+              label={l.label}
+              active={!textOff && !!selection && selection.list === l.value}
+              disabled={textOff || !selection}
+              onClick={() => props.onList?.(l.value)}
+            >
+              {l.icon}
+            </ToolButton>
+          ))}
+          <SpacingButton
+            lineHeight={style.lineHeight ?? null}
+            letterSpacing={style.letterSpacing ?? 0}
+            disabled={textOff}
+            onChange={props.onStyle}
+          />
+        </RibbonRow>
+        <RibbonRow>
+          {VALIGN.map((a) => (
+            <ToolButton
+              key={a.value}
+              label={a.label}
+              active={!textOff && !!state?.valign && style.valign === a.value}
+              disabled={textOff || !state?.valign}
+              onClick={() => props.onStyle({ valign: a.value })}
+            >
+              {a.icon}
+            </ToolButton>
+          ))}
+          <select
+            aria-label="When text does not fit"
+            title="When text does not fit its box: only show the overflow, shrink the text, or grow the box"
+            disabled={textOff || !selection}
+            value={selection?.autofit ?? ""}
+            onChange={(event) => props.onStyle({ autofit: (event.target.value || null) as Autofit | null })}
+            className="h-6 w-full min-w-0 flex-1 rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-30"
+          >
+            <option value="">Report overflow</option>
+            <option value="shrink">Shrink text</option>
+            <option value="grow">Grow box</option>
+          </select>
+        </RibbonRow>
+      </RibbonSection>
+      <RibbonSection title="Style" icon={<PaintBucket />} collapsed={collapsedFrom <= 3} closeOn={props.tool}>
+        <RibbonRow>
+          <ColorButton
+            label="Fill"
+            icon={<PaintBucket />}
+            value={style.fill ?? null}
+            disabled={!state}
+            none
+            deck={props.colors}
+            onChange={(fill) => props.onStyle({ fill })}
+          />
+          <ColorButton
+            label={state?.vector ? "Line color" : "Border color"}
+            icon={<SquareDashed />}
+            value={style.stroke ?? null}
+            disabled={!state || !!selection?.clipped}
+            none
+            deck={props.colors}
+            onChange={(stroke) => props.onStyle({ stroke })}
+          />
+          <select
+            aria-label={state?.vector ? "Line width" : "Border width"}
+            title={state?.vector ? "Line width" : "Border width"}
+            disabled={!state || !!selection?.clipped}
+            value={String(style.strokeWidth ?? 0)}
+            onChange={(event) => props.onStyle({ strokeWidth: Number(event.target.value) })}
+            className="h-6 w-24 rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-30"
+          >
+            {[...new Set([...BORDER_WIDTHS, style.strokeWidth ?? 0])]
+              .sort((a, b) => a - b)
+              .map((w) => (
+                <option key={w} value={w}>
+                  {w === 0 ? "No border" : `${w}px`}
+                </option>
+              ))}
+          </select>
+        </RibbonRow>
+        <RibbonRow>
+          <LookTools
+            tool={props.tool}
+            selection={selection}
+            onTool={props.onTool}
+            onStyle={props.onStyle}
+            onPickImage={props.onPickImage}
+            onReturnFocus={returnFocus}
+          />
+          <ColorButton
+            label="Slide background"
+            icon={<Wallpaper />}
+            value={props.background ?? null}
+            none
+            deck={props.colors}
+            onChange={(color) => props.onBackground?.(color)}
+          />
+        </RibbonRow>
+      </RibbonSection>
+      <RibbonSection title="Arrange" icon={<Move />} collapsed={collapsedFrom <= 4} closeOn={props.tool}>
+        <RibbonRow>
+          <select
+            aria-label="Size mode"
+            title="Resize changes the box; Stretch scales its contents"
+            value={props.sizeMode}
+            onChange={(event) => props.onSizeMode(event.target.value as "resize" | "stretch")}
+            className="h-6 w-full min-w-0 flex-1 rounded-md bg-transparent px-1 text-xs hover:bg-accent"
+          >
+            <option value="resize">Resize</option>
+            <option value="stretch">Stretch</option>
+          </select>
+          <ArrangeControls geometry={props.geometry ?? null} onArrange={props.onArrange} onDone={returnFocus} />
+        </RibbonRow>
+        <RibbonRow>
+          {ORDER.map((o) => (
+            <ToolButton key={o.to} label={o.label} disabled={!props.selection} onClick={() => props.onOrder(o.to)}>
+              {o.icon}
+            </ToolButton>
+          ))}
+          <ToolButton label="Delete (⌫)" disabled={!props.selection} onClick={props.onDelete}>
+            <Trash2 />
+          </ToolButton>
+        </RibbonRow>
+      </RibbonSection>
     </div>
   );
-}
-
-function Divider() {
-  return <div className="mx-1 h-4 w-px bg-border" />;
 }
 
 /** A color well: the deck's colors, preset swatches, a custom color, and with `none`, no color at all. */

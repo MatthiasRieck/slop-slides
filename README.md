@@ -41,8 +41,9 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   transcribed on your computer with [Whisper](https://github.com/ggml-org/whisper.cpp) (small,
   multilingual); its model (190 MB) is downloaded on first use to `~/.slopslides/models`.
 - **Windows:** File › New Window (⌘N; Ctrl+N on Windows and Linux) opens another window,
-  each with a folder of its own and its own chat. On macOS, opening the app again (a
-  double-click in Finder, a click on its Dock icon) opens another window too, and a folder
+  each with a folder of its own and its own chat. On macOS, a double-click on the app in
+  Finder or New Window in its Dock menu (right-click the icon) opens another window too, while
+  a click on the Dock icon only brings the app back. A folder
   dropped on the app's icon or opened with it from Finder (Open With) opens in a window: one
   on the start screen, else a new one. A folder already open in one window is brought to the
   front instead of opening twice. Elements and whole slides copied in one

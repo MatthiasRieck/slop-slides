@@ -759,7 +759,10 @@ pub fn run() {
     env::adopt_login_shell_env();
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
-    let builder = builder.menu(windows::menu);
+    let builder = builder.menu(windows::menu).setup(|app| {
+        windows::dock::add_menu(app.handle());
+        Ok(())
+    });
     builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -862,11 +865,13 @@ pub fn run() {
         .expect("error while running SlopSlide")
         .run(|app, event| match event {
             tauri::RunEvent::Exit => app.state::<voice::Voice>().shutdown(),
-            // Opening the app again (a double-click in Finder, a click on its Dock icon) opens
-            // another window.
+            // Opening the app again: a double-click in Finder, a click on its Dock icon.
             #[cfg(target_os = "macos")]
-            tauri::RunEvent::Reopen { .. } => {
-                if let Err(e) = windows::open_new(app) {
+            tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } => {
+                if let Err(e) = windows::reopened(app, has_visible_windows) {
                     eprintln!("{e}");
                 }
             }

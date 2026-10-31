@@ -82,6 +82,7 @@ function pasteboard({
     views: () => posted.filter((m) => (m as View).type === "slop:view") as View[],
     zooms: () => posted.filter((m) => (m as View).type === "slop:zoom") as View[],
     keys: () => posted.filter((m) => (m as View).type === "slop:key"),
+    posted: (type: string) => posted.filter((m) => (m as View).type === type) as Record<string, never>[],
     focusRequests: () => posted.filter((m) => (m as View).type === "slop:focus").length,
     pointer,
     drag(target: Element, dx: number, dy: number, button = 0) {
@@ -111,6 +112,121 @@ function pasteboard({
     },
   };
 }
+
+describe("comments", () => {
+  const box = (left: number, top: number, width: number, height: number) =>
+    ({ left, top, width, height, right: left + width, bottom: top + height }) as DOMRect;
+
+  /** A preview laid out by hand, as jsdom lays nothing out. `under` is what lies under the pointer. */
+  function commented() {
+    const page = pasteboard();
+    const { $, doc } = page;
+    $("#intro").getBoundingClientRect = () => box(100, 100, 1000, 500);
+    $("#intro h1").getBoundingClientRect = () => box(200, 200, 100, 50);
+    const stack = { under: [$("#intro h1"), $("#intro")] as Element[] };
+    (doc as unknown as { elementsFromPoint: () => Element[] }).elementsFromPoint = () => stack.under;
+    return { ...page, stack };
+  }
+  const h1 = { path: [0], tag: "h1", label: "Hello", at: [0.5, 0.5] };
+
+  it("reports the element clicked, with the point on the slide and on it", () => {
+    const { $, pointer, fromParent, posted } = commented();
+    fromParent({ type: "slop:comment-tool", on: true });
+    pointer("pointerdown", $("#intro h1"), 250, 225);
+    expect(posted("slop:comment-pick")).toEqual([
+      { type: "slop:comment-pick", slide: "intro", x: 0.15, y: 0.25, target: h1 },
+    ]);
+  });
+
+  it("is about the slide itself on its background, and about nothing outside it", () => {
+    const { $, doc, pointer, fromParent, posted, stack } = commented();
+    fromParent({ type: "slop:comment-tool", on: true });
+    stack.under = [$("#intro")];
+    pointer("pointerdown", $("#intro"), 600, 350);
+    expect(posted("slop:comment-pick")[0]).toMatchObject({ x: 0.5, y: 0.5, target: null });
+    pointer("pointerdown", doc.body, 50, 50);
+    expect(posted("slop:comment-pick")).toHaveLength(1);
+  });
+
+  it("looks through an invisible layer to what shows", () => {
+    const { $, doc, pointer, fromParent, posted, stack } = commented();
+    const cover = doc.createElement("div");
+    $("#intro").appendChild(cover);
+    stack.under = [cover, $("#intro h1"), $("#intro")];
+    fromParent({ type: "slop:comment-tool", on: true });
+    pointer("pointerdown", cover, 250, 225);
+    expect(posted("slop:comment-pick")[0]).toMatchObject({ target: { tag: "h1" } });
+  });
+
+  it("outlines what a click would comment on", () => {
+    const { $, doc, pointer, fromParent, stack } = commented();
+    fromParent({ type: "slop:comment-tool", on: true });
+    pointer("pointermove", $("#intro h1"), 250, 225);
+    const hover = doc.querySelector<HTMLElement>("[data-slop-comment-hover]")!;
+    expect([hover.style.display, hover.style.left, hover.style.width]).toEqual(["block", "200px", "100px"]);
+    stack.under = [$("#intro")];
+    pointer("pointermove", $("#intro"), 600, 350);
+    expect(hover.style.display).toBe("none");
+  });
+
+  it("takes the click from links, and pans again once off", () => {
+    const { $, doc, pointer, click, fromParent, posted, views, drag } = commented();
+    fromParent({ type: "slop:comment-tool", on: true });
+    expect(doc.documentElement.hasAttribute("data-slop-commenting")).toBe(true);
+    const clicked = new (doc.defaultView as unknown as typeof window).MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    });
+    $("#intro a").dispatchEvent(clicked);
+    expect(clicked.defaultPrevented).toBe(true);
+    fromParent({ type: "slop:comment-tool", on: false });
+    expect(doc.documentElement.hasAttribute("data-slop-commenting")).toBe(false);
+    pointer("pointerdown", $("#intro h1"), 250, 225);
+    pointer("pointerup", $("#intro h1"), 250, 225);
+    click($("#intro a"));
+    expect(posted("slop:comment-pick")).toEqual([]);
+    drag($("#intro"), 40, 0, 1);
+    expect(views().length).toBeGreaterThan(0);
+  });
+
+  it("finds a comment's element where it was, and places the pin on it", () => {
+    const { fromParent, posted } = commented();
+    fromParent({ type: "slop:comment-locate", comments: [{ id: "a", x: 0, y: 0, target: h1 }] });
+    expect(posted("slop:comment-spots")).toEqual([
+      { type: "slop:comment-spots", slide: "intro", spots: [{ id: "a", x: 0.15, y: 0.25, found: true }] },
+    ]);
+  });
+
+  it("follows an element that moved, by what it shows", () => {
+    const { $, doc, fromParent, posted } = commented();
+    const before = doc.createElement("p");
+    before.textContent = "New";
+    $("#intro").prepend(before);
+    fromParent({ type: "slop:comment-locate", comments: [{ id: "a", x: 0, y: 0, target: h1 }] });
+    expect(posted("slop:comment-spots")[0]).toMatchObject({ spots: [{ x: 0.15, found: true }] });
+  });
+
+  it("keeps the pin where it was when the element is gone, and says so", () => {
+    const { $, fromParent, posted } = commented();
+    $("#intro h1").textContent = "Changed";
+    fromParent({ type: "slop:comment-locate", comments: [{ id: "a", x: 0.3, y: 0.4, target: h1 }] });
+    expect(posted("slop:comment-spots")[0]).toMatchObject({ spots: [{ x: 0.3, y: 0.4, found: false }] });
+  });
+
+  it("finds a comment on the slide itself at its own place", () => {
+    const { fromParent, posted } = commented();
+    fromParent({ type: "slop:comment-locate", comments: [{ id: "a", x: 0.3, y: 0.4 }] });
+    expect(posted("slop:comment-spots")[0]).toMatchObject({ spots: [{ x: 0.3, y: 0.4, found: true }] });
+  });
+
+  it("looks again when an animation ends", () => {
+    const { $, window, fromParent, posted } = commented();
+    fromParent({ type: "slop:comment-locate", comments: [{ id: "a", x: 0, y: 0, target: h1 }] });
+    $("#intro h1").getBoundingClientRect = () => box(300, 200, 100, 50);
+    $("#intro h1").dispatchEvent(new window.Event("animationend", { bubbles: true }));
+    expect(posted("slop:comment-spots")[1]).toMatchObject({ spots: [{ x: 0.25 }] });
+  });
+});
 
 describe("search marks", () => {
   // jsdom has no CSS highlights.

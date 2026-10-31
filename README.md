@@ -80,6 +80,12 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   With **Speak narration**, each slide's narration is said over it (an Opus audio track) after
   a short pause, and the slide stays until the narration and a pause after it end; the set
   seconds become the least a slide is shown.
+- **Marks and comments:** the View mode's second row has a pen, a highlighter and an eraser for
+  marking up the slide, and the comment tool: click an element (or the slide) and write what
+  should change. Comments show as numbered pins that follow their element; click a pin to change
+  or delete it. Marks and comments are saved in the deck file and can be hidden together. The
+  composer attaches the comments to your next message, either this slide's or all slides', and
+  lists them so you can leave some out. Each goes out once, and again if you change it.
 - **Narration:** the Narration mode holds what is said over each slide. It is spoken
   on your computer by [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) 0.6B CustomVoice, in
   one of its nine voices and ten languages, chosen per deck. Its model (2.5 GB, all voices
@@ -221,6 +227,7 @@ src-tauri/src/
   size.rs               the deck's slide size (`slopslide-size` meta) and the stage CSS for it
   templates.rs          built-in and user templates (`~/.slopslides/templates`): listing,
                         new decks in a template's style, saving a deck as a template
+  comments.rs           the user's comments on slide elements, in a managed block in deck.html
   find.rs               find and replace in the text on a deck's slides (never markup)
   lint.rs               HTML lint for deck.html: well-formed markup plus the deck format
                         rules; shown as the status button in the top bar

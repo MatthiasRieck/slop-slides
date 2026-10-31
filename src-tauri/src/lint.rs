@@ -6,6 +6,7 @@ use std::collections::HashSet;
 
 use serde::Serialize;
 
+use crate::comments;
 use crate::html::{
     self, find_ci, has_class, parse_tag, ADDED_ATTR, AUTOFIT_ATTR, DROPPED_ATTR, EDITOR_ATTRS,
     HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR, NARRATION_CLASS, SECTION_CLASS, SECTION_TITLE_ATTR,
@@ -111,6 +112,7 @@ pub fn lint(
     check_slide_id_styles(&mut l);
     check_sections(&mut l);
     check_review(&mut l);
+    check_comments(&mut l);
     check_template(&mut l);
     check_slide_size(&mut l);
     check_narration_settings(&mut l);
@@ -676,6 +678,33 @@ fn check_review(l: &mut Linter) {
             Severity::Warning,
             at,
             "The slopslide:review block belongs at the end of <body>, outside the slides; move it back there unchanged.".into(),
+        );
+    }
+}
+
+/// The app-managed comments block (what the user wrote about slides): readable, and outside the
+/// slides.
+fn check_comments(l: &mut Linter) {
+    let html = l.html;
+    let Some(at) = html.find(comments::START) else {
+        return;
+    };
+    if let Err(problem) = comments::parse(html) {
+        l.report(
+            "comments-invalid",
+            Severity::Warning,
+            at,
+            format!(
+                "{problem} The slopslide:comments block holds the user's comments and is managed by the app: restore it as it was, or delete the whole block (from its start comment to its end comment) if the user asked to clear the comments."
+            ),
+        );
+    }
+    if l.slides.iter().any(|s| s.range.contains(&at)) {
+        l.report(
+            "comments-misplaced",
+            Severity::Warning,
+            at,
+            "The slopslide:comments block belongs at the end of <body>, outside the slides; move it back there unchanged.".into(),
         );
     }
 }
@@ -1250,6 +1279,46 @@ mod tests {
             color: "#ef4444".into(),
             points: vec![[0.5, 0.5]],
         }
+    }
+
+    fn commented() -> String {
+        let comment = comments::Comment {
+            id: "first".into(),
+            text: "Bigger".into(),
+            x: 0.5,
+            y: 0.5,
+            target: None,
+        };
+        comments::write(
+            &deck(r#"<section class="slide" id="intro"><p>Hi</p></section>"#),
+            &[("intro".to_string(), vec![comment])].into(),
+        )
+    }
+
+    #[test]
+    fn accepts_comments() {
+        let html = commented();
+        assert!(html.contains(comments::START));
+        assert_eq!(rules(&html), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn flags_damaged_or_misplaced_comments() {
+        let html = commented();
+        assert_eq!(
+            rules(&html.replace("\"Bigger\"", "\"\"")),
+            ["comments-invalid"]
+        );
+        assert_eq!(
+            rules(&html.replace(comments::END, "")),
+            ["comments-invalid"]
+        );
+        let block = &html[comments::block_range(&html).unwrap()];
+        let inside = deck(&format!(
+            r#"<section class="slide" id="intro"><p>Hi</p>{block}</section>"#
+        ));
+        let found = rules(&inside);
+        assert!(found.contains(&"comments-misplaced"), "{found:?}");
     }
 
     #[test]

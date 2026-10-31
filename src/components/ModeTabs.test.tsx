@@ -31,19 +31,12 @@ beforeEach(() => {
 describe("ModeTabs", () => {
   it("lists the modes, with View selected", () => {
     render(<ModeTabs />);
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
-      "View",
-      "Edit",
-      "Review",
-      "Narration",
-      "HTML",
-    ]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["View", "Edit", "Narration", "HTML"]);
     expect(selected()).toEqual(["View"]);
   });
 
   it.each([
     ["Edit", "edit"],
-    ["Review", "review"],
     ["Narration", "narration"],
     ["HTML", "code"],
   ])("switches to %s and back to View", (name, mode) => {
@@ -59,8 +52,8 @@ describe("ModeTabs", () => {
   it("leaves edit mode when switching to another mode", () => {
     render(<ModeTabs />);
     fireEvent.click(tab("Edit"));
-    fireEvent.click(tab("Review"));
-    expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "review" });
+    fireEvent.click(tab("Narration"));
+    expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "narration" });
   });
 
   it("cannot edit a locked slide, and says why", () => {
@@ -68,7 +61,7 @@ describe("ModeTabs", () => {
     render(<ModeTabs />);
     expect(tab("Edit").disabled).toBe(true);
     expect(tab("Edit").title).toContain("locked");
-    expect(tab("Review").disabled).toBe(false);
+    expect(tab("Narration").disabled).toBe(false);
   });
 
   it("has only View and HTML for a deck without slides", () => {

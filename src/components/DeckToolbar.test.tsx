@@ -573,7 +573,7 @@ describe("deck toolbar", () => {
   it.each([
     ["code", { view: "code" as const }],
     ["edit", { editing: true }],
-    ["review", { slideMode: "review" as const }],
+    ["narration", { slideMode: "narration" as const }],
   ])("offers the search in View mode only, not in %s", (_mode, state) => {
     useApp.setState({ lint: [], ...state });
     render(<DeckToolbar />);
@@ -587,11 +587,8 @@ describe("deck toolbar", () => {
     expect(screen.getByRole("toolbar", { name: "Deck" })).toBeTruthy();
   });
 
-  it.each([
-    ["edit", { editing: true }],
-    ["review", { slideMode: "review" as const }],
-  ])("leaves the row to the stage in %s mode", (_mode, state) => {
-    useApp.setState(state);
+  it("leaves the row to the stage in edit mode", () => {
+    useApp.setState({ editing: true });
     const { container } = render(<DeckToolbar />);
     expect(container.innerHTML).toBe("");
   });

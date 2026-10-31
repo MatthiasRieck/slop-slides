@@ -18,6 +18,13 @@
    toolbar finds on the slide, with the `active`th hit stronger. It reads the text as find.rs does,
    so both count the same hits. The marks are CSS highlights, which leave the slide's markup alone.
 
+   { type: "slop:comment-tool", on } turns picking elements for a comment on and off: the element
+   under the pointer is outlined, and a click on it reports { type: "slop:comment-pick", slide, x,
+   y, target }, with the point in fractions of the slide; target is null on the slide's background.
+   { type: "slop:comment-locate", comments } gives the comments on the slide, as { id, x, y, target
+   }. Each is looked up on the slide, then and whenever an animation ends, and the app gets where
+   their pins go as { type: "slop:comment-spots", slide, spots: [{ id, x, y, found }] }.
+
    The slide editor (editor.js) runs after this and builds on window.slopPasteboard.
 
    With ?show, the presenter plays the whole deck and this zooms and pans the slide being shown
@@ -269,6 +276,140 @@
     );
   }
 
+  // Comments are pinned to the element under them, and find it again after the slide changes.
+  var commenting = false;
+  var commentList = [];
+  // Outlines the element a click would comment on.
+  var commentHover = null;
+  var LABEL_LENGTH = 80;
+  var NOT_COMMENTED = "script, style, template, .notes, .narration, [data-slop-frame]";
+
+  /** Child-index path from the slide to `el`. */
+  function commentPath(el) {
+    var path = [];
+    for (var node = el; node !== slide; node = node.parentElement) {
+      path.unshift(Array.prototype.indexOf.call(node.parentElement.children, node));
+    }
+    return path;
+  }
+
+  /** The start of `el`'s text, or what describes a picture; empty for neither. */
+  function commentLabel(el) {
+    var text = (el.textContent || "").replace(/\s+/g, " ").trim();
+    if (!text) text = el.getAttribute("alt") || el.getAttribute("aria-label") || el.getAttribute("src") || "";
+    return text.slice(0, LABEL_LENGTH);
+  }
+
+  /** Whether `el` shows something of its own, unlike a layout box or an invisible cover. */
+  function showsSomething(el) {
+    if (/^(img|svg|video|canvas|picture|iframe|object|embed)$/i.test(el.tagName)) return true;
+    var own = Array.prototype.some.call(el.childNodes, function (node) {
+      return node.nodeType === 3 && node.data.trim();
+    });
+    if (own) return true;
+    var style = getComputedStyle(el);
+    var clear = style.backgroundColor === "transparent" || /^rgba\(.*,\s*0\)$/.test(style.backgroundColor);
+    return !clear || style.backgroundImage !== "none" || parseFloat(style.borderTopWidth) > 0;
+  }
+
+  /** The element a comment at the screen point (x, y) would be on; null for the slide itself. */
+  function commentableAt(x, y) {
+    var stack = document.elementsFromPoint(x, y).filter(function (el) {
+      return slide.contains(el) && el !== slide && !el.closest(NOT_COMMENTED);
+    });
+    return stack.filter(showsSomething)[0] || stack[0] || null;
+  }
+
+  /** The element `target` was made on: where it was if it still looks the same, else by its looks. */
+  function findTarget(target) {
+    var el = slide;
+    for (var i = 0; i < target.path.length && el; i++) el = el.children[target.path[i]];
+    var same = function (candidate) {
+      return candidate.tagName.toLowerCase() === target.tag && commentLabel(candidate) === target.label;
+    };
+    if (el && el !== slide && same(el)) return el;
+    // Without a label, the tag alone says too little to go by.
+    if (!target.label) return el && el !== slide && el.tagName.toLowerCase() === target.tag ? el : null;
+    return Array.prototype.filter.call(slide.querySelectorAll(target.tag), same)[0] || null;
+  }
+
+  function reportCommentSpots() {
+    if (!commentList.length) return;
+    var box = slide.getBoundingClientRect();
+    var spots = commentList.map(function (comment) {
+      var target = comment.target;
+      var el = target && findTarget(target);
+      if (!el) return { id: comment.id, x: comment.x, y: comment.y, found: !target };
+      var rect = el.getBoundingClientRect();
+      return {
+        id: comment.id,
+        x: (rect.left + target.at[0] * rect.width - box.left) / box.width,
+        y: (rect.top + target.at[1] * rect.height - box.top) / box.height,
+        found: true,
+      };
+    });
+    window.parent.postMessage({ type: "slop:comment-spots", slide: slide.id, spots: spots }, "*");
+  }
+
+  function setCommenting(on) {
+    commenting = !!on;
+    root.toggleAttribute("data-slop-commenting", commenting);
+    if (!commentHover) {
+      commentHover = document.createElement("div");
+      commentHover.setAttribute("data-slop-comment-hover", "");
+      document.body.appendChild(commentHover);
+    }
+    commentHover.style.display = "none";
+  }
+
+  function hoverComment(x, y) {
+    var el = commentableAt(x, y);
+    commentHover.style.display = el ? "block" : "none";
+    if (!el) return;
+    var rect = el.getBoundingClientRect();
+    commentHover.style.left = rect.left + "px";
+    commentHover.style.top = rect.top + "px";
+    commentHover.style.width = rect.width + "px";
+    commentHover.style.height = rect.height + "px";
+  }
+
+  function pickComment(x, y) {
+    var box = slide.getBoundingClientRect();
+    if (x < box.left || x > box.right || y < box.top || y > box.bottom) return;
+    var el = commentableAt(x, y);
+    var rect = el && el.getBoundingClientRect();
+    window.parent.postMessage(
+      {
+        type: "slop:comment-pick",
+        slide: slide.id,
+        x: (x - box.left) / box.width,
+        y: (y - box.top) / box.height,
+        target: el && {
+          path: commentPath(el),
+          tag: el.tagName.toLowerCase(),
+          label: commentLabel(el),
+          at: [(x - rect.left) / (rect.width || 1), (y - rect.top) / (rect.height || 1)],
+        },
+      },
+      "*",
+    );
+  }
+
+  if (!show) {
+    slide.addEventListener("animationend", reportCommentSpots);
+    slide.addEventListener("transitionend", reportCommentSpots);
+    // A comment takes the click, so links and controls on the slide stay put.
+    document.addEventListener(
+      "click",
+      function (event) {
+        if (!commenting) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      },
+      true,
+    );
+  }
+
   // The middle button (pressing the mouse wheel) always pans, even while typing; Space+drag pans
   // unless typing. Without the editor, the primary button pans too, except from text (to select
   // it, even under a layer the deck put over it) and controls; in a show it clicks through the
@@ -278,6 +419,12 @@
     pan = null;
     endSelecting();
     var primary = event.button === 0;
+    if (commenting && primary && !spaceDown) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      pickComment(event.clientX, event.clientY);
+      return;
+    }
     if (event.button !== 1 && !(primary && spaceDown && !api.busy())) {
       if (!primary || editor || show) return;
       if (event.target.closest("a, button, input, select, textarea, video, audio, [contenteditable]")) return;
@@ -298,6 +445,7 @@
     event.stopImmediatePropagation();
   });
   document.addEventListener("pointermove", function (event) {
+    if (commenting && !pan) hoverComment(event.clientX, event.clientY);
     if (selecting) {
       var caret = caretAt(event.clientX, event.clientY);
       if (caret && slide.contains(caret.node)) {
@@ -473,7 +621,10 @@
     var marks = document.createElement("style");
     marks.textContent =
       "::highlight(slop-search) { background-color: #fde047; color: #000; }" +
-      "::highlight(slop-search-active) { background-color: #fb923c; color: #000; }";
+      "::highlight(slop-search-active) { background-color: #fb923c; color: #000; }" +
+      "html[data-slop-commenting], html[data-slop-commenting] * { cursor: crosshair !important; user-select: none !important; -webkit-user-select: none !important; }" +
+      "[data-slop-comment-hover] { position: fixed; z-index: 2147483646; pointer-events: none; box-sizing: border-box; border-radius: 2px;" +
+      " outline: 2px solid var(--slop-accent, #2563eb); background: color-mix(in srgb, var(--slop-accent, #2563eb) 12%, transparent); }";
     document.head.appendChild(marks);
   }
 
@@ -481,6 +632,11 @@
     var data = event.data;
     if (event.source !== window.parent || !data) return;
     if (data.type === "slop:search") highlight(data);
+    if (data.type === "slop:comment-tool" && !show) setCommenting(data.on);
+    if (data.type === "slop:comment-locate" && Array.isArray(data.comments)) {
+      commentList = data.comments;
+      reportCommentSpots();
+    }
     if (data.type === "slop:camera") {
       if (data.home) setCamera(0, 0, 1);
       else if ([data.x, data.y, data.k].every(Number.isFinite)) setCamera(data.x, data.y, data.k);

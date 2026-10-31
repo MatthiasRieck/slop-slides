@@ -381,6 +381,64 @@ describe("ChatPanel: composing", () => {
     });
   });
 
+  describe("comments", () => {
+    const first = { id: "a", text: "Bigger", x: 0.5, y: 0.5 };
+    const second = { id: "b", text: "Remove this", x: 0.5, y: 0.5 };
+    const third = { id: "c", text: "Add a chart", x: 0.5, y: 0.5 };
+    const comments = { intro: [first, second], outro: [third] };
+    const count = (n: string) => screen.getByRole("button", { name: n });
+
+    beforeEach(() => useApp.setState({ comments, commentScope: "slide", commentsHeld: {} }));
+    afterEach(() => useApp.setState({ comments: {}, commentScope: "slide", commentsHeld: {} }));
+
+    it("shows nothing without comments", () => {
+      useApp.setState({ comments: {} });
+      render(<ChatPanel />);
+      expect(screen.queryByRole("group", { name: "Which comments to send" })).toBeNull();
+    });
+
+    it("attaches the slide's comments, or the whole presentation's", () => {
+      render(<ChatPanel />);
+      expect(count("2 comments")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "All slides" }));
+      expect(useApp.getState().commentScope).toBe("deck");
+      expect(count("3 comments")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "This slide" }));
+      expect(count("2 comments")).toBeTruthy();
+    });
+
+    it("lists them, to leave some out and take them along again", () => {
+      render(<ChatPanel />);
+      fireEvent.click(count("2 comments"));
+      const box = screen.getByRole("checkbox", { name: "Send: Bigger" });
+      expect((box as HTMLInputElement).checked).toBe(true);
+      fireEvent.click(box);
+      expect(count("1 comment")).toBeTruthy();
+      expect(useApp.getState().comments).toEqual(comments);
+      fireEvent.click(screen.getByRole("checkbox", { name: "Send: Bigger" }));
+      expect(count("2 comments")).toBeTruthy();
+    });
+
+    it("drops all of them from the message at once, keeping them on the slides", () => {
+      render(<ChatPanel />);
+      fireEvent.click(screen.getByRole("button", { name: "Don't send comments" }));
+      expect(count("0 comments")).toBeTruthy();
+      expect(useApp.getState().comments).toEqual(comments);
+      expect(screen.queryByRole("button", { name: "Don't send comments" })).toBeNull();
+      // A changed comment goes along again.
+      act(() => useApp.getState().updateComment("intro", "a", "Much bigger"));
+      expect(count("1 comment")).toBeTruthy();
+    });
+
+    it("is not sent while the review is hidden", () => {
+      useApp.setState({ reviewVisible: false });
+      render(<ChatPanel />);
+      expect(screen.queryByRole("group", { name: "Which comments to send" })).toBeNull();
+      act(() => useApp.getState().setReviewVisible(true));
+      expect(count("2 comments")).toBeTruthy();
+    });
+  });
+
   it("does not reference a slide when none is selected", () => {
     useApp.setState({ selected: null });
     render(<ChatPanel />);

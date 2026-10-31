@@ -1,4 +1,4 @@
-import { AudioLines, Code2, Eye, Highlighter, Pencil } from "lucide-react";
+import { AudioLines, Code2, Eye, Pencil } from "lucide-react";
 
 import { basename, cn } from "../lib/utils";
 import { type DeckMode, deckMode, useApp } from "../store";
@@ -6,7 +6,6 @@ import { type DeckMode, deckMode, useApp } from "../store";
 const MODES: { id: DeckMode; label: string; icon: typeof Eye }[] = [
   { id: "view", label: "View", icon: Eye },
   { id: "edit", label: "Edit", icon: Pencil },
-  { id: "review", label: "Review", icon: Highlighter },
   { id: "narration", label: "Narration", icon: AudioLines },
   { id: "code", label: "HTML", icon: Code2 },
 ];
@@ -21,15 +20,14 @@ export function ModeTabs() {
   const file = useApp((s) => basename(s.deck?.id ?? ""));
 
   const titles: Record<DeckMode, string> = {
-    view: "Show the slide",
+    view: "Show the slide, mark it up and comment on it; marks and comments go to the agent with your next message",
     edit: locked
       ? "This slide is locked; unlock it in the slide list to edit it"
       : "Edit the slide: click to select, drag to move, drag the handles to resize or rotate, double-click to edit text, drop images onto it to add them",
-    review: "Mark up the slide; the marks go to the agent with your next message",
     narration: narrated ? "Show this slide's narration" : "Write narration for this slide",
     code: `Show ${file}, scrolled to the selected slide`,
   };
-  const needsSlide = (id: DeckMode) => id === "edit" || id === "review" || id === "narration";
+  const needsSlide = (id: DeckMode) => id === "edit" || id === "narration";
 
   return (
     <div role="tablist" aria-label="Mode" className="flex items-center rounded-md border bg-muted p-0.5">

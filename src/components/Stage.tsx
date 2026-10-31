@@ -32,6 +32,7 @@ import { type Stroke, zoomBox } from "../lib/ink";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn, deckFileUrl } from "../lib/utils";
 import { deckMode, SKETCH_TARGET_ATTR, searchHighlight, useApp } from "../store";
+import { CommentEditor, CommentPins, useSlideComments } from "./Comments";
 import { EditToolbar } from "./EditToolbar";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { SketchToolbar } from "./SketchToolbar";
@@ -63,6 +64,10 @@ export function Stage() {
   const editFrames = useSlideEditing(areaRef, pasteboard.resetView);
   const postToEditor = editFrames.post;
   const overflow = editFrames.overflow;
+  const reviewShown = mode === "view" && reviewVisible;
+  const commentPins = useSlideComments(areaRef, postToEditor, reviewShown);
+  const pinAnchor = useRef<HTMLButtonElement>(null);
+  const setCommenting = commentPins.setCommenting;
   const view = pasteboard.view;
   const canvas = pixelsOf(deck);
   // The preview fills the whole area around the slide: an endless pasteboard to pan and zoom on.
@@ -88,17 +93,22 @@ export function Stage() {
   }, []);
 
   useSlideKeyboard();
-  useSketchKeyboard(annotations.tool !== "pointer", () => annotations.setTool("pointer"));
+  useSketchKeyboard(annotations.tool !== "pointer" || commentPins.commenting, () => {
+    annotations.setTool("pointer");
+    setCommenting(false);
+  });
 
   // Picking a pen shows the review marks, so the new ones are not drawn blind.
   useEffect(() => {
     if (annotations.tool !== "pointer") useApp.getState().setReviewVisible(true);
   }, [annotations.tool]);
-  // The sketch tools are review mode's: leaving it puts them away.
+  // The sketch tools and comments are View mode's: leaving it puts them away.
   const putToolAway = annotations.setTool;
   useEffect(() => {
-    if (mode !== "review") putToolAway("pointer");
-  }, [mode, putToolAway]);
+    if (mode === "view") return;
+    putToolAway("pointer");
+    setCommenting(false);
+  }, [mode, putToolAway, setCommenting]);
   // The editor in the preview adds what the toolbar's tool says, styled like its defaults.
   useEffect(() => {
     if (editing) postToEditor(toolMessage(editTool, editStyles));
@@ -149,9 +159,14 @@ export function Stage() {
           <EditBar canUndo={canUndo} canRedo={canRedo} />
         </ModeBar>
       )}
-      {slide && mode === "review" && (
+      {slide && mode === "view" && (
         <ModeBar>
-          <SketchToolbar annotations={annotations} />
+          <SketchToolbar
+            annotations={annotations}
+            commenting={commentPins.commenting}
+            onCommenting={commentPins.setCommenting}
+          />
+          {commentPins.commenting && <span>Click an element to comment on it. Esc finishes.</span>}
           <div className="flex-1" />
         </ModeBar>
       )}
@@ -180,6 +195,7 @@ export function Stage() {
               onFrameReady={(frame) => {
                 pasteboard.onFrameReady(frame);
                 editFrames.onFrameReady(frame);
+                commentPins.onFrameReady();
                 const search = searchHighlight(useApp.getState());
                 if (search.query) postToEditor({ type: "slop:search", ...search });
               }}
@@ -191,10 +207,20 @@ export function Stage() {
               style={inkBox(pasteboard.current, width / canvas.width)}
             >
               <AnnotationLayer annotations={annotations} zoom={pasteboard.current?.k} />
+              <CommentPins pins={commentPins} inking={annotations.tool !== "pointer"} anchor={pinAnchor} />
             </div>
           </div>
         ) : (
           <EmptyStage />
+        )}
+        {commentPins.open && (
+          <CommentEditor
+            key={commentPins.open.key}
+            comment={commentPins.open}
+            anchor={pinAnchor}
+            keepOpen={commentPins.keepOpen}
+            onClose={commentPins.close}
+          />
         )}
       </div>
       {deck.slides.length > 0 && (

@@ -11,12 +11,13 @@ import { SlideSizeButton } from "./SlideSize";
 /**
  * The row under the top bar, which holds the tools of the mode the deck is in. In View and HTML
  * it has the title, the slide size and lint, and in View the search; in Narration, the narration.
- * The stage draws this row itself in Edit and Review, whose tools work on the slide it shows.
+ * The stage draws this row itself in Edit, whose tools work on the slide it shows, and adds a row
+ * of its own under this one in View, for marks and comments.
  */
 export function DeckToolbar() {
   const deck = useApp((s) => s.deck);
   const mode = useApp(deckMode);
-  if (!deck || mode === "edit" || mode === "review") return null;
+  if (!deck || mode === "edit") return null;
   if (mode === "narration") return <NarrationPanel />;
   return <DeckTools deck={deck} />;
 }

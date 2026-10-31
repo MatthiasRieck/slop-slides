@@ -21,6 +21,80 @@ use crate::html::{find_ci, JS_START};
 pub const START: &str = "<!-- slopslide:review (managed by SlopSlide, do not edit) -->";
 pub const END: &str = "<!-- /slopslide:review -->";
 pub const SCRIPT_ID: &str = "slopslide-review";
+const BLOCK: Block = Block {
+    start: START,
+    end: END,
+    script_id: SCRIPT_ID,
+    name: "review",
+};
+
+/// An app-managed block of JSON at the end of `<body>`: the review marks, or the comments.
+pub struct Block {
+    pub start: &'static str,
+    pub end: &'static str,
+    pub script_id: &'static str,
+    /// What error messages call it.
+    pub name: &'static str,
+}
+
+impl Block {
+    /// The whole block, from its start comment to the end of its end comment.
+    pub fn range(&self, html: &str) -> Option<Range<usize>> {
+        let start = html.find(self.start)?;
+        let end = html[start..].find(self.end)? + start + self.end.len();
+        Some(start..end)
+    }
+
+    /// The JSON in the block; None when `html` has no block. Fails when the block is damaged.
+    pub fn json<'a>(&self, html: &'a str) -> Result<Option<&'a str>, String> {
+        let Some(range) = self.range(html) else {
+            if html.contains(self.start) {
+                return Err(format!(
+                    "The {} block has no closing {}.",
+                    self.name, self.end
+                ));
+            }
+            return Ok(None);
+        };
+        let block = &html[range];
+        find_ci(block, 0, "<script")
+            .and_then(|s| block[s..].find('>').map(|e| s + e + 1))
+            .and_then(|open| find_ci(block, open, "</script").map(|close| &block[open..close]))
+            .map(Some)
+            .ok_or_else(|| format!("The {} block has no <script> holding its data.", self.name))
+    }
+
+    /// `html` with the block holding `json`, or without the block when it is None.
+    pub fn put(&self, html: &str, json: Option<&str>) -> String {
+        let existing = self.range(html);
+        let Some(json) = json else {
+            let Some(range) = existing else {
+                return html.to_string();
+            };
+            // Take the line break and indent before the block with it, undoing the insertion.
+            let start = html[..range.start].trim_end().len();
+            return format!("{}{}", &html[..start], &html[range.end..]);
+        };
+        // JSON has `<` only inside strings, where the escape keeps `</script>` out of the markup.
+        let json = json.replace('<', "\\u003c");
+        let block = format!(
+            "{}\n  <script type=\"application/json\" id=\"{}\">{json}</script>\n  {}",
+            self.start, self.script_id, self.end
+        );
+        if let Some(range) = existing {
+            return format!("{}{block}{}", &html[..range.start], &html[range.end..]);
+        }
+        // On its own line just before the player script (so the data is there when the player
+        // starts), else before `</body>`.
+        let before = html.find(JS_START).unwrap_or_else(|| {
+            html.to_ascii_lowercase()
+                .rfind("</body")
+                .unwrap_or(html.len())
+        });
+        let at = html[..before].trim_end().len();
+        format!("{}\n  {block}{}", &html[..at], &html[at..])
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -43,24 +117,14 @@ pub type Review = BTreeMap<String, Vec<Stroke>>;
 
 /// The whole block, from its start comment to the end of its end comment.
 pub fn block_range(html: &str) -> Option<Range<usize>> {
-    let start = html.find(START)?;
-    let end = html[start..].find(END)? + start + END.len();
-    Some(start..end)
+    BLOCK.range(html)
 }
 
 /// The review marks in `html`; empty when there is no block. Fails when the block is damaged.
 pub fn parse(html: &str) -> Result<Review, String> {
-    let Some(range) = block_range(html) else {
-        if html.contains(START) {
-            return Err(format!("The review block has no closing {END}."));
-        }
+    let Some(json) = BLOCK.json(html)? else {
         return Ok(Review::new());
     };
-    let block = &html[range];
-    let json = find_ci(block, 0, "<script")
-        .and_then(|s| block[s..].find('>').map(|e| s + e + 1))
-        .and_then(|open| find_ci(block, open, "</script").map(|close| &block[open..close]))
-        .ok_or("The review block has no <script> holding the marks.")?;
     let review: Review =
         serde_json::from_str(json).map_err(|e| format!("The review marks are not valid: {e}"))?;
     if let Some((slide, _)) = review
@@ -98,34 +162,11 @@ pub fn write(html: &str, review: &Review) -> String {
         })
         .filter(|(_, strokes)| !strokes.is_empty())
         .collect();
-    let existing = block_range(html);
     if kept.is_empty() {
-        let Some(range) = existing else {
-            return html.to_string();
-        };
-        // Take the line break and indent before the block with it, undoing the insertion.
-        let start = html[..range.start].trim_end().len();
-        return format!("{}{}", &html[..start], &html[range.end..]);
+        return BLOCK.put(html, None);
     }
-    // JSON has `<` only inside strings, where the escape keeps `</script>` out of the markup.
-    let json = serde_json::to_string(&kept)
-        .expect("strokes serialize")
-        .replace('<', "\\u003c");
-    let block = format!(
-        "{START}\n  <script type=\"application/json\" id=\"{SCRIPT_ID}\">{json}</script>\n  {END}"
-    );
-    if let Some(range) = existing {
-        return format!("{}{block}{}", &html[..range.start], &html[range.end..]);
-    }
-    // On its own line just before the player script (so the marks are there when the player
-    // starts), else before `</body>`.
-    let before = html.find(JS_START).unwrap_or_else(|| {
-        html.to_ascii_lowercase()
-            .rfind("</body")
-            .unwrap_or(html.len())
-    });
-    let at = html[..before].trim_end().len();
-    format!("{}\n  {block}{}", &html[..at], &html[at..])
+    let json = serde_json::to_string(&kept).expect("strokes serialize");
+    BLOCK.put(html, Some(&json))
 }
 
 /// Drops the marks of slides that are gone; None when there is nothing to drop (or the

@@ -44,7 +44,7 @@ import {
 import { ComposerComments } from "./Comments";
 import { EffortPicker, ModelPicker, useDismiss } from "./ModelPicker";
 import { ApprovalCard, ApprovalReview, PermissionPicker } from "./Permissions";
-import { VoiceInput } from "./VoiceInput";
+import { VoiceInput, type VoiceInputHandle } from "./VoiceInput";
 
 const SUGGESTIONS = [
   "A 6-slide pitch for a neighborhood tool-sharing app, bold and warm",
@@ -552,6 +552,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   // Dictation goes in at the caret (or in place of the selection), which the textarea keeps
   // while the microphone button has focus. While it runs, the text so far shows in place.
   const [dictation, setDictation] = useState<{ start: number; end: number; text: string } | null>(null);
+  const voiceInput = useRef<VoiceInputHandle>(null);
   const dictated = (text: string) =>
     dictation ? insertTranscript(draft, text, dictation.start, dictation.end) : { draft, caret: draft.length };
   const shownDraft = dictation?.text ? dictated(dictation.text).draft : draft;
@@ -561,14 +562,15 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
       setDictation({ start: el?.selectionStart ?? draft.length, end: el?.selectionEnd ?? draft.length, text: "" });
     },
     onPartial: (text: string) => setDictation((d) => d && { ...d, text }),
-    onEnd: (text: string) => {
+    onEnd: (text: string, sendNow: boolean) => {
       setDictation(null);
-      if (!text || !dictation) return;
-      const result = dictated(text);
-      setDraft(result.draft);
+      const result = text && dictation ? dictated(text) : null;
+      if (!result && !sendNow) return;
+      if (result) setDraft(result.draft);
+      if (sendNow) send(result?.draft ?? draft);
       requestAnimationFrame(() => {
         textareaRef.current?.focus();
-        textareaRef.current?.setSelectionRange(result.caret, result.caret);
+        if (result && !sendNow) textareaRef.current?.setSelectionRange(result.caret, result.caret);
       });
     },
   };
@@ -691,9 +693,9 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     if (picked) await importPaths(Array.isArray(picked) ? picked : [picked]);
   };
 
-  const submit = () => {
-    const text = draft.trim();
-    if (!text || running || dictation) return;
+  const send = (message: string) => {
+    const text = message.trim();
+    if (!text || running) return;
     void useApp.getState().send(text, {
       includeSlide: includeSlide && slideNumber > 0,
       attachments,
@@ -705,6 +707,10 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     setScreenshot(null);
     setElement(null);
     setGridOpen(false);
+  };
+
+  const submit = () => {
+    if (!dictation) send(draft);
   };
 
   return (
@@ -871,20 +877,27 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
         />
         <div className="@container px-2 pt-2 pb-2">
           <div className="relative flex flex-nowrap items-center gap-1">
-            <ModelPicker />
-            <div className="mx-0.5 h-4 w-px bg-border" />
-            <EffortPicker />
-            <PermissionPicker />
-            <div className="min-w-0 flex-1" />
-            <VoiceInput {...dictationHandlers} />
-            <button
-              type="button"
-              onClick={pickFiles}
-              title="Attach images or files"
-              className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              <Paperclip className="size-4" />
-            </button>
+            {/* While dictating, the waveform that VoiceInput shows takes the place of the options. */}
+            {!dictation && (
+              <>
+                <ModelPicker />
+                <div className="mx-0.5 h-4 w-px bg-border" />
+                <EffortPicker />
+                <PermissionPicker />
+                <div className="min-w-0 flex-1" />
+              </>
+            )}
+            <VoiceInput ref={voiceInput} {...dictationHandlers} />
+            {!dictation && (
+              <button
+                type="button"
+                onClick={pickFiles}
+                title="Attach images or files"
+                className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <Paperclip className="size-4" />
+              </button>
+            )}
             {running ? (
               <button
                 type="button"
@@ -897,9 +910,9 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
             ) : (
               <button
                 type="button"
-                onClick={submit}
-                disabled={!draft.trim()}
-                title="Send"
+                onClick={() => (dictation ? voiceInput.current?.finishAndSend() : submit())}
+                disabled={!dictation && !draft.trim()}
+                title={dictation ? "Stop and send" : "Send"}
                 className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background hover:opacity-90 disabled:opacity-30"
               >
                 <ArrowUp className="size-4" />

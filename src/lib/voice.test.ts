@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatBytes, insertTranscript } from "./voice";
+import { formatBytes, insertTranscript, WAVEFORM_BAR, WAVEFORM_STEP, waveformBars } from "./voice";
 
 describe("insertTranscript", () => {
   it("fills an empty draft", () => {
@@ -29,5 +29,29 @@ describe("formatBytes", () => {
     expect(formatBytes(1_624_555_275)).toBe("1.6 GB");
     expect(formatBytes(2_048)).toBe("2 KB");
     expect(formatBytes(12)).toBe("12 B");
+  });
+});
+
+describe("waveformBars", () => {
+  it("puts the newest level at the right edge, the older ones to its left", () => {
+    const bars = waveformBars([0, 1], 100, 20);
+    expect(bars.map((b) => b.x)).toEqual([99 - WAVEFORM_STEP, 99]);
+    expect(bars[1]!.height).toBe(20);
+  });
+
+  it("leaves a dot for silence and caps loud input", () => {
+    expect(waveformBars([0], 100, 20)[0]!.height).toBe(WAVEFORM_BAR);
+    expect(waveformBars([3], 100, 20)[0]!.height).toBe(20);
+  });
+
+  it("moves the bars left as they scroll", () => {
+    expect(waveformBars([1], 100, 20, 0.5)[0]!.x).toBe(99 - WAVEFORM_STEP / 2);
+  });
+
+  it("drops bars past the left edge and fades out towards it", () => {
+    const bars = waveformBars(Array(100).fill(0.5), 100, 20);
+    expect(bars.length).toBe(25);
+    expect(bars.at(-1)!.opacity).toBe(1);
+    expect(bars[0]!.opacity).toBeLessThan(0.1);
   });
 });

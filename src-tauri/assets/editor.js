@@ -2352,6 +2352,15 @@
     if (el.parentElement) el.parentElement.removeChild(el);
   }
 
+  // Whatever is open in the app closes on a press outside it, which a press here is.
+  window.addEventListener(
+    "pointerdown",
+    function () {
+      window.parent.postMessage({ type: "slop:edit-press" }, "*");
+    },
+    true,
+  );
+
   document.addEventListener("pointerdown", function (event) {
     // The pasteboard takes the middle button and Space+drag before this sees them.
     if (event.button !== 0) return;

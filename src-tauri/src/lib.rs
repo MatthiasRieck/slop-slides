@@ -753,6 +753,19 @@ async fn download_voice_model(app: AppHandle, voice: State<'_, voice::Voice>) ->
     voice.download(&app, &deck::app_home()?).await
 }
 
+/// Listens for the teleprompter in the calling window, reporting recent words as `voice-heard`
+/// events until `cancel_recording`.
+#[tauri::command]
+async fn follow_speech(
+    app: AppHandle,
+    window: tauri::Window,
+    voice: State<'_, voice::Voice>,
+) -> Result<()> {
+    voice
+        .follow(app, &deck::app_home()?, window.label().to_string())
+        .await
+}
+
 /// Starts recording, transcribing live as `voice-partial` events.
 #[tauri::command]
 async fn start_recording(app: AppHandle, voice: State<'_, voice::Voice>) -> Result<()> {
@@ -888,6 +901,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 windows::closed(window);
+                window.state::<voice::Voice>().window_closed(window.label());
             }
         })
         .register_uri_scheme_protocol("slop", |ctx, request| {
@@ -963,6 +977,7 @@ pub fn run() {
             create_template,
             voice_status,
             download_voice_model,
+            follow_speech,
             start_recording,
             stop_recording,
             cancel_recording,

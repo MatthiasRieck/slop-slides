@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>SlopSlide listens while you dictate a message to the agent. Speech is transcribed on this Mac and never leaves it.</string>
+  <string>SlopSlide listens while you dictate a message to the agent or the teleprompter follows your talk. Speech is transcribed on this Mac and never leaves it.</string>
   <!-- Folders can be dropped on the app's icon or opened with it from Finder (Open With);
        each opens in a window as the workspace (see src/windows.rs). -->
   <key>CFBundleDocumentTypes</key>

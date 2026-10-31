@@ -1,9 +1,10 @@
-import { RotateCcw, X } from "lucide-react";
+import { Loader2, RotateCcw, ScrollText, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Deck, Slide } from "../lib/api";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn } from "../lib/utils";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
+import { FollowedScript, TeleprompterNotice, useTeleprompter } from "./Teleprompter";
 
 /** Time since the show started, like `4:07` or `1:04:07`. */
 export function formatElapsed(ms: number): string {
@@ -46,6 +47,8 @@ export function remaining(elapsedMs: number, minutes: number): { text: string; o
  * presenter set, if any), the time on this slide (against the time per slide), the speaker
  * notes of the slide on screen and the next slide to be shown. Beside the slide it is a narrow
  * column; in a window of its own (`window`, on a second screen) it also shows the slide itself.
+ * The teleprompter listens to the presenter and follows them through the slide's narration, or
+ * its notes when it has none, highlighting what was said (see src/lib/teleprompter.ts).
  */
 export function PresenterPanel(props: {
   deck: Deck;
@@ -74,6 +77,13 @@ export function PresenterPanel(props: {
     setBudget(next);
     localStorage.setItem(BUDGET_KEY, JSON.stringify(next));
   };
+  const teleprompter = useTeleprompter();
+  const following = teleprompter.phase === "following";
+  const script = following ? slide?.narration || slide?.notes : slide?.notes;
+  const notesClass = cn(
+    "min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap rounded-lg bg-white/5 p-3 leading-relaxed",
+    props.window ? "text-2xl" : "text-base",
+  );
   return (
     <aside
       aria-label="Presenter view"
@@ -88,6 +98,17 @@ export function PresenterPanel(props: {
           {slide && !slide.hidden ? `Slide ${shown.indexOf(slide) + 1} of ${shown.length}` : "Hidden slide"}
         </span>
         <span className="flex-1" />
+        <PanelButton
+          label={following ? "Stop the teleprompter" : "Teleprompter: follow what you say through the script"}
+          active={following}
+          onClick={() => void teleprompter.toggle()}
+        >
+          {teleprompter.phase === "starting" || teleprompter.phase === "downloading" ? (
+            <Loader2 className="animate-spin" />
+          ) : (
+            <ScrollText />
+          )}
+        </PanelButton>
         <PanelButton label="Restart the timer" onClick={props.onRestart}>
           <RotateCcw />
         </PanelButton>
@@ -117,15 +138,14 @@ export function PresenterPanel(props: {
           </div>
         </div>
       )}
-      <div
-        data-testid="presenter-notes"
-        className={cn(
-          "min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap rounded-lg bg-white/5 p-3 leading-relaxed",
-          props.window ? "text-2xl" : "text-base",
-        )}
-      >
-        {slide?.notes || <span className="text-white/40">No notes for this slide.</span>}
-      </div>
+      <TeleprompterNotice teleprompter={teleprompter} />
+      {following && script ? (
+        <FollowedScript key={`${id}:${script}`} text={script} className={notesClass} />
+      ) : (
+        <div data-testid="presenter-notes" className={notesClass}>
+          {script || <span className="text-white/40">No notes for this slide.</span>}
+        </div>
+      )}
       {!props.window && (
         <div className="flex shrink-0 flex-col gap-1">
           <span className="text-xs text-white/60">Next</span>
@@ -222,16 +242,20 @@ function ElapsedTime(props: { startedAt: number; slideStartedAt: number; budget:
   );
 }
 
-function PanelButton(props: { label: string; onClick: () => void; children: React.ReactNode }) {
+function PanelButton(props: { label: string; active?: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       type="button"
       title={props.label}
       aria-label={props.label}
+      aria-pressed={props.active}
       // Keep keyboard focus where it was, so Space still advances the slide.
       onMouseDown={(event) => event.preventDefault()}
       onClick={props.onClick}
-      className="flex size-7 items-center justify-center rounded-lg text-white/70 hover:bg-white/10 hover:text-white [&_svg]:size-4"
+      className={cn(
+        "flex size-7 items-center justify-center rounded-lg hover:bg-white/10 [&_svg]:size-4",
+        props.active ? "bg-red-500/15 text-red-400" : "text-white/70 hover:text-white",
+      )}
     >
       {props.children}
     </button>

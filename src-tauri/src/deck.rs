@@ -2300,6 +2300,20 @@ mod tests {
     }
 
     #[test]
+    fn the_teleprompter_example_lints_clean_and_has_a_script_to_follow() {
+        let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/teleprompter/deck.html");
+        let issues = lint(&file, None).unwrap();
+        assert!(issues.is_empty(), "{issues:?}");
+        let deck = load(&file).unwrap();
+        assert_eq!(deck.slides.len(), 8);
+        let slide = |id: &str| deck.slides.iter().find(|s| s.id == id).unwrap();
+        assert!(slide("origin").narration.contains("\n\n"));
+        assert!(slide("notes-only").narration.is_empty());
+        assert!(!slide("notes-only").notes.is_empty());
+        assert!(slide("end").notes.is_empty());
+    }
+
+    #[test]
     fn lint_checks_assets_on_disk() {
         let deck = TempDeck::new(
             "<!DOCTYPE html><html><head><title>T</title></head><body><main class=\"deck\"><section class=\"slide\" id=\"a\"><img src=\"assets/my%20dot.png\" alt=\"\"><img src=\"assets/missing.png\" alt=\"\"><img src=\"assets/../deck.html\" alt=\"\"></section></main></body></html>",

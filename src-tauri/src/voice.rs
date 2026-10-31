@@ -1,6 +1,6 @@
-//! Voice input for the chat composer: records the default microphone and transcribes it on
-//! this machine with whisper.cpp. The speech-to-text model is downloaded once, on first use,
-//! to `~/.slopslides/models/` and shared by every workspace.
+//! Voice input for the chat composer and the presenter's teleprompter: records the default
+//! microphone and transcribes it on this machine with whisper.cpp. The speech-to-text model is
+//! downloaded once, on first use, to `~/.slopslides/models/` and shared by every workspace.
 
 use std::fs;
 use std::io::Write;
@@ -56,6 +56,9 @@ const LIVE_INTERVAL: Duration = Duration::from_millis(700);
 const SEGMENT_SECONDS: f32 = 20.0;
 /// Audio quieter than this (root mean square) holds no speech; Whisper would make some up.
 const SILENCE_RMS: f32 = 0.002;
+/// How much of the latest audio the teleprompter transcribes each time. It only needs to know
+/// where the speaker is now, so a talk can run for as long as it likes at the same cost.
+const FOLLOW_SECONDS: usize = 6;
 
 /// Emitted while the model downloads.
 pub const DOWNLOAD_EVENT: &str = "voice-download";
@@ -63,6 +66,10 @@ pub const DOWNLOAD_EVENT: &str = "voice-download";
 pub const LEVEL_EVENT: &str = "voice-level";
 /// Emitted while recording: everything said so far.
 pub const PARTIAL_EVENT: &str = "voice-partial";
+/// Emitted while following a speaker: the words of the last few seconds.
+pub const HEARD_EVENT: &str = "voice-heard";
+/// Emitted when following a speaker fails for good: what went wrong.
+pub const FOLLOW_FAILED_EVENT: &str = "voice-follow-failed";
 
 /// `~/.slopslides/models`, where downloaded speech models live.
 pub fn models_dir(home: &Path) -> PathBuf {
@@ -103,6 +110,8 @@ pub struct Voice {
 
 /// A recording and its live transcription.
 struct Session {
+    /// Label of the window following a speaker with this session; dictation has none.
+    follower: Option<String>,
     recording: Recording,
     transcript: Arc<Mutex<Transcript>>,
     live: Arc<AtomicBool>,
@@ -151,6 +160,16 @@ impl Voice {
     /// Starts recording the default microphone (asking for access first, where the system
     /// requires it) and transcribing it live, reported as [`PARTIAL_EVENT`].
     pub async fn start(&self, app: AppHandle, home: &Path) -> Result<()> {
+        self.open(app, home, None).await
+    }
+
+    /// Starts listening for the teleprompter in `window`: until cancelled, reports the words of
+    /// the last few seconds as [`HEARD_EVENT`]. Nothing is kept.
+    pub async fn follow(&self, app: AppHandle, home: &Path, window: String) -> Result<()> {
+        self.open(app, home, Some(window)).await
+    }
+
+    async fn open(&self, app: AppHandle, home: &Path, follower: Option<String>) -> Result<()> {
         tauri::async_runtime::spawn_blocking(microphone_access)
             .await
             .map_err(|e| Error::msg(e.to_string()))??;
@@ -170,11 +189,16 @@ impl Voice {
             transcript: transcript.clone(),
             live: live.clone(),
         };
+        let following = follower.is_some();
         *session = Some(Session {
+            follower,
             recording,
             transcript,
             live,
-            live_thread: std::thread::spawn(move || worker.run()),
+            live_thread: std::thread::spawn(move || match following {
+                true => worker.follow(),
+                false => worker.run(),
+            }),
         });
         Ok(())
     }
@@ -185,7 +209,7 @@ impl Voice {
         let session = session.ok_or_else(|| Error::msg("Not recording."))?;
         session.live.store(false, Ordering::SeqCst);
         let (samples, rate) = session.recording.finish();
-        if samples.len() >= WHISPER_RATE as usize / 2 && samples.iter().all(|s| *s == 0.0) {
+        if silent(&samples) {
             return Err(Error::msg(SILENT_MICROPHONE));
         }
         let audio = resample(&samples, rate, WHISPER_RATE);
@@ -209,6 +233,16 @@ impl Voice {
         if let Some(session) = self.session.lock().unwrap().take() {
             session.live.store(false, Ordering::SeqCst);
             session.recording.finish();
+        }
+    }
+
+    /// Stops following a speaker for `window`, which closed: a window that is gone cannot ask,
+    /// and the microphone must not stay on.
+    pub fn window_closed(&self, window: &str) {
+        let session = self.session.lock().unwrap();
+        if session.as_ref().and_then(|s| s.follower.as_deref()) == Some(window) {
+            drop(session);
+            self.cancel();
         }
     }
 
@@ -247,15 +281,7 @@ struct LiveWorker {
 impl LiveWorker {
     fn run(self) {
         let mut done = 0;
-        loop {
-            let mut waited = Duration::ZERO;
-            while waited < LIVE_INTERVAL {
-                if !self.live.load(Ordering::SeqCst) {
-                    return;
-                }
-                std::thread::sleep(LEVEL_INTERVAL);
-                waited += LEVEL_INTERVAL;
-            }
+        while self.wait() {
             let audio = resample(&self.samples.lock().unwrap(), self.rate, WHISPER_RATE);
             // Wait for at least a quarter second of new audio.
             if audio.len() < done + WHISPER_RATE as usize / 4 {
@@ -275,6 +301,58 @@ impl LiveWorker {
             }
         }
     }
+
+    /// Reports what was said in the last few seconds, over and over, keeping no more audio than
+    /// that: whatever transcribing takes, the next pass starts from the present.
+    fn follow(self) {
+        let keep = FOLLOW_SECONDS * self.rate as usize;
+        while self.wait() {
+            let (full, audio) = {
+                let mut samples = self.samples.lock().unwrap();
+                keep_latest(&mut samples, keep);
+                let audio = resample(&samples, self.rate, WHISPER_RATE);
+                (samples.len() == keep && silent(&samples), audio)
+            };
+            if full {
+                let _ = self.app.emit(FOLLOW_FAILED_EVENT, SILENT_MICROPHONE);
+                return;
+            }
+            match transcribe(&self.whisper, &self.model, &audio) {
+                Ok(text) if !text.is_empty() && self.live.load(Ordering::SeqCst) => {
+                    let _ = self.app.emit(HEARD_EVENT, text);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    let _ = self.app.emit(FOLLOW_FAILED_EVENT, e.to_string());
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Waits for the next pass; false once the session is over.
+    fn wait(&self) -> bool {
+        let mut waited = Duration::ZERO;
+        while waited < LIVE_INTERVAL {
+            if !self.live.load(Ordering::SeqCst) {
+                return false;
+            }
+            std::thread::sleep(LEVEL_INTERVAL);
+            waited += LEVEL_INTERVAL;
+        }
+        true
+    }
+}
+
+/// Drops all but the last `keep` of `samples`.
+pub fn keep_latest(samples: &mut Vec<f32>, keep: usize) {
+    samples.drain(..samples.len().saturating_sub(keep));
+}
+
+/// Whether `samples` are long enough to tell and hold nothing at all: a microphone the system
+/// keeps the app from hearing delivers exact zeros, never mere quiet.
+pub fn silent(samples: &[f32]) -> bool {
+    samples.len() >= WHISPER_RATE as usize / 2 && samples.iter().all(|s| *s == 0.0)
 }
 
 /// The whole text of `audio` (at [`WHISPER_RATE`]): `transcript`'s, extended by segments that
@@ -897,6 +975,58 @@ mod tests {
         assert_eq!(join_text("", "Hello"), "Hello");
         assert_eq!(join_text("Hello", ""), "Hello");
         assert_eq!(join_text("Hello", "world"), "Hello world");
+    }
+
+    #[test]
+    fn following_keeps_only_the_latest_audio() {
+        let mut samples = vec![0.1, 0.2, 0.3, 0.4];
+        keep_latest(&mut samples, 3);
+        assert_eq!(samples, vec![0.2, 0.3, 0.4]);
+        keep_latest(&mut samples, 5);
+        assert_eq!(samples, vec![0.2, 0.3, 0.4]);
+    }
+
+    #[test]
+    fn only_exact_zeros_count_as_a_silent_microphone() {
+        let rate = WHISPER_RATE as usize;
+        assert!(silent(&vec![0.0; rate]));
+        assert!(!silent(&vec![0.0001; rate]));
+        assert!(!silent(&[0.0; 10]));
+    }
+
+    /// A session as `open` leaves it, without opening a microphone.
+    fn session(follower: Option<&str>) -> Session {
+        Session {
+            follower: follower.map(String::from),
+            recording: Recording {
+                stop: mpsc::channel().0,
+                thread: std::thread::spawn(|| {}),
+                samples: Arc::default(),
+                rate: WHISPER_RATE,
+            },
+            transcript: Arc::default(),
+            live: Arc::new(AtomicBool::new(true)),
+            live_thread: std::thread::spawn(|| {}),
+        }
+    }
+
+    #[test]
+    fn closing_the_following_window_turns_the_microphone_off() {
+        let voice = Voice::default();
+        *voice.session.lock().unwrap() = Some(session(Some("presenter-1")));
+        voice.window_closed("main");
+        assert!(voice.session.lock().unwrap().is_some());
+        voice.window_closed("presenter-1");
+        assert!(voice.session.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn closing_a_window_leaves_dictation_alone() {
+        let voice = Voice::default();
+        *voice.session.lock().unwrap() = Some(session(None));
+        voice.window_closed("main");
+        assert!(voice.session.lock().unwrap().is_some());
+        voice.cancel();
     }
 
     #[test]

@@ -195,8 +195,17 @@ function loadFavorites(): string[] {
 
 export type StageView = "slides" | "code";
 
+/** What the deck is open for; the top bar's tabs pick it (see components/ModeTabs.tsx). */
+export type DeckMode = "view" | "edit" | "review" | "narration" | "code";
+
+/** The mode of the deck: the HTML view and editing have their own state, the rest is `slideMode`. */
+export function deckMode(state: Pick<AppState, "view" | "editing" | "slideMode">): DeckMode {
+  if (state.view === "code") return "code";
+  return state.editing ? "edit" : state.slideMode;
+}
+
 /** The right sidebar's tabs, in order (see components/Sidebar.tsx). */
-export const SIDEBAR_TABS = ["chat", "narration", "files"] as const;
+export const SIDEBAR_TABS = ["chat", "files"] as const;
 export type SidebarTab = (typeof SIDEBAR_TABS)[number];
 const isSidebarTab = (value: unknown): value is SidebarTab => SIDEBAR_TABS.includes(value as SidebarTab);
 
@@ -272,6 +281,8 @@ interface AppState {
   imageExport: { dir: string; slides: string[] } | null;
   /** The stage lets the user edit text and move elements on the slide. */
   editing: boolean;
+  /** The mode shown over the rendered slide when not editing; see `deckMode`. */
+  slideMode: "view" | "review" | "narration";
   /** Bumped when a slide edit could not be saved, so the stage reloads the slide from disk. */
   editReload: number;
   /** The edit toolbar's tool: select, or what a drag on the slide adds. */
@@ -324,6 +335,8 @@ interface AppState {
   endImageExport: () => void;
   /** Enters or leaves edit mode, keeping the edits made so far. */
   setEditing: (editing: boolean) => void;
+  /** Switches the deck to a mode, leaving the one it is in. A locked slide cannot be edited. */
+  setMode: (mode: DeckMode) => void;
   setEditTool: (tool: EditTool) => void;
   setEditStyle: (family: ToolFamily, changes: EditStyle) => void;
   /** Saves `markup` as the new version of `slide`, after any edits still being saved. */
@@ -462,6 +475,7 @@ export const useApp = create<AppState>((set, get) => ({
   reviewVisible: localStorage.getItem(REVIEW_VISIBLE_KEY) !== "false",
   imageExport: null,
   editing: false,
+  slideMode: "view",
   editReload: 0,
   editTool: "select",
   editStyles: DEFAULT_EDIT_STYLES,
@@ -568,6 +582,7 @@ export const useApp = create<AppState>((set, get) => ({
       sketchesSent: {},
       imageExport: null,
       editing: false,
+      slideMode: "view",
       editTool: "select",
       slideUndo: [],
       slideRedo: [],
@@ -699,6 +714,13 @@ export const useApp = create<AppState>((set, get) => ({
     if (editing && selectedSlide()?.locked) return;
     // Each edit session starts with fresh history and the select tool; leaving keeps the edits.
     set({ editing, editTool: "select", slideUndo: [], slideRedo: [] });
+  },
+
+  setMode: (mode) => {
+    if (mode === "edit" && selectedSlide()?.locked) return;
+    get().setView(mode === "code" ? "code" : "slides");
+    get().setEditing(mode === "edit");
+    set({ slideMode: mode === "review" || mode === "narration" ? mode : "view" });
   },
 
   setEditTool: (editTool) => set({ editTool }),
@@ -1164,6 +1186,7 @@ async function loadDeckState(deck: Deck) {
     sketchesSent: {},
     imageExport: null,
     editing: false,
+    slideMode: "view",
     editTool: "select",
     slideUndo: [],
     slideRedo: [],

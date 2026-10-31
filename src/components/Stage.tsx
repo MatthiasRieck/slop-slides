@@ -1,21 +1,18 @@
 import {
   AlertTriangle,
-  AudioLines,
   Check,
   ChevronLeft,
   ChevronRight,
   LayoutTemplate,
   Lock,
   Maximize,
-  Pencil,
   Redo2,
   Sparkles,
-  Trash2,
   Undo2,
   Wand2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, errorMessage, type Slide } from "../lib/api";
 import { catchDrops, type DropPoint, imageSize, isImage } from "../lib/drop";
 import {
@@ -33,8 +30,9 @@ import {
 import { type Stroke, zoomBox } from "../lib/ink";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn, deckFileUrl } from "../lib/utils";
-import { SKETCH_TARGET_ATTR, useApp } from "../store";
+import { deckMode, SKETCH_TARGET_ATTR, useApp } from "../store";
 import { EditToolbar } from "./EditToolbar";
+import { FindButton } from "./FindReplace";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { SketchToolbar } from "./SketchToolbar";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
@@ -50,6 +48,7 @@ export function Stage() {
   const sketches = useApp((s) => s.sketches);
   const reviewVisible = useApp((s) => s.reviewVisible);
   const editing = useApp((s) => s.editing);
+  const mode = useApp(deckMode);
   const running = useApp((s) => s.running);
   const canUndo = useApp((s) => s.slideUndo.length > 0);
   const canRedo = useApp((s) => s.slideRedo.length > 0);
@@ -91,13 +90,15 @@ export function Stage() {
   useSlideKeyboard();
   useSketchKeyboard(annotations.tool !== "pointer", () => annotations.setTool("pointer"));
 
-  // Drawing and editing take turns: picking a pen leaves edit mode. It also shows the review
-  // marks, so the new ones are not drawn blind.
+  // Picking a pen shows the review marks, so the new ones are not drawn blind.
   useEffect(() => {
-    if (annotations.tool === "pointer") return;
-    useApp.getState().setEditing(false);
-    useApp.getState().setReviewVisible(true);
+    if (annotations.tool !== "pointer") useApp.getState().setReviewVisible(true);
   }, [annotations.tool]);
+  // The sketch tools are review mode's: leaving it puts them away.
+  const putToolAway = annotations.setTool;
+  useEffect(() => {
+    if (mode !== "review") putToolAway("pointer");
+  }, [mode, putToolAway]);
   // The editor in the preview adds what the toolbar's tool says, styled like its defaults.
   useEffect(() => {
     if (editing) postToEditor(toolMessage(editTool, editStyles));
@@ -108,10 +109,6 @@ export function Stage() {
     const family = selection ? familyOfKind(selection.kind) : familyOf(editTool);
     if (family && !selection?.editing) useApp.getState().setEditStyle(family, defaultsFrom(changes));
     if (selection) postToEditor({ type: "slop:edit-style", style: changes });
-  };
-  const toggleEditing = () => {
-    if (!editing) annotations.setTool("pointer");
-    useApp.getState().setEditing(!editing);
   };
 
   const index = deck?.slides.findIndex((s) => s.id === selected) ?? -1;
@@ -127,7 +124,7 @@ export function Stage() {
   return (
     <div className="flex h-full flex-col bg-canvas">
       {slide && editing && (
-        <div className="relative z-20 flex shrink-0 justify-center px-3 pt-2">
+        <ModeBar>
           <EditToolbar
             tool={editTool}
             selection={editFrames.selection}
@@ -144,7 +141,14 @@ export function Stage() {
             onOrder={(to) => postToEditor({ type: "slop:edit-order", to })}
             onDelete={editFrames.deleteSelection}
           />
-        </div>
+          <EditBar canUndo={canUndo} canRedo={canRedo} />
+        </ModeBar>
+      )}
+      {slide && mode === "review" && (
+        <ModeBar>
+          <SketchToolbar annotations={annotations} />
+          <div className="flex-1" />
+        </ModeBar>
       )}
       {/* Clips the ink, which zooms past the slide along with the pasteboard, so it stays off the bar below. */}
       <div
@@ -187,42 +191,8 @@ export function Stage() {
         )}
       </div>
       {deck.slides.length > 0 && (
-        <div className="grid h-10 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 text-xs text-muted-foreground">
-          <div className="flex min-w-0 items-center gap-0.5">
-            {slide && (
-              <>
-                <button
-                  type="button"
-                  aria-label="Edit text and move elements"
-                  title={
-                    locked
-                      ? "This slide is locked; unlock it in the slide list to edit it"
-                      : "Edit the slide: click to select, drag to move, drag the handles to resize or rotate, double-click to edit text, drop images onto it to add them; the toolbar above adds text, shapes and drawings and restyles the selection"
-                  }
-                  aria-pressed={editing}
-                  disabled={locked}
-                  onClick={toggleEditing}
-                  className={cn(
-                    "rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4",
-                    editing && "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground",
-                  )}
-                >
-                  <Pencil />
-                </button>
-                <div className="mx-1 h-4 w-px bg-border" />
-                {editing ? (
-                  <EditBar
-                    canUndo={canUndo}
-                    canRedo={canRedo}
-                    canDelete={!!editFrames.selection}
-                    onDelete={editFrames.deleteSelection}
-                  />
-                ) : (
-                  <SketchToolbar annotations={annotations} />
-                )}
-              </>
-            )}
-          </div>
+        <div className="grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] items-center gap-2 px-3 text-xs text-muted-foreground">
+          <div />
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -246,7 +216,7 @@ export function Stage() {
               <ChevronRight className="size-4" />
             </button>
           </div>
-          <div className="flex min-w-0 items-center justify-end">
+          <div className="flex items-center justify-end">
             {view && (
               <button
                 type="button"
@@ -296,7 +266,6 @@ export function Stage() {
                 Tidy layout
               </button>
             )}
-            {slide && <NarrationButton hasNarration={!!slide.narration} />}
           </div>
         </div>
       )}
@@ -304,26 +273,16 @@ export function Stage() {
   );
 }
 
-/** Shows the slide's narration in the sidebar, or goes back to the chat when it is showing. */
-function NarrationButton(props: { hasNarration: boolean }) {
-  const showing = useApp((s) => s.sidebarOpen && s.sidebarTab === "narration");
+/**
+ * The stage's own tools row, in the place of the deck toolbar, for the modes that work on the
+ * slide. Find and replace stays in reach: ⌘F is the find button's.
+ */
+function ModeBar({ children }: { children: ReactNode }) {
   return (
-    <button
-      type="button"
-      title={props.hasNarration ? "Show this slide's narration" : "Write narration for this slide"}
-      aria-pressed={showing}
-      onClick={() => useApp.getState().setSidebarTab(showing ? "chat" : "narration")}
-      className={cn(
-        "ml-1 flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-accent hover:text-foreground",
-        showing && "bg-accent text-foreground",
-      )}
-    >
-      <AudioLines className="size-3.5" />
-      Narration
-      {props.hasNarration && (
-        <span data-testid="has-narration" className="size-1.5 rounded-full bg-primary" aria-hidden />
-      )}
-    </button>
+    <div className="relative z-20 flex min-h-10 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b bg-background px-3 py-1 text-xs text-muted-foreground">
+      {children}
+      <FindButton />
+    </div>
   );
 }
 
@@ -354,13 +313,13 @@ function ChangeLayoutButton(props: { disabled: boolean }) {
   );
 }
 
-/** Shown in place of the sketch tools while editing: history, deleting, and leaving edit mode. */
-function EditBar(props: { canUndo: boolean; canRedo: boolean; canDelete: boolean; onDelete: () => void }) {
+/** The end of the edit tools: history, and leaving edit mode. */
+function EditBar(props: { canUndo: boolean; canRedo: boolean }) {
   const icon =
     "rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4";
   const app = useApp.getState;
   return (
-    <div className="flex min-w-0 items-center gap-0.5">
+    <div className="ml-auto flex shrink-0 items-center gap-0.5">
       <button
         type="button"
         aria-label="Undo"
@@ -380,16 +339,6 @@ function EditBar(props: { canUndo: boolean; canRedo: boolean; canDelete: boolean
         className={icon}
       >
         <Redo2 />
-      </button>
-      <button
-        type="button"
-        aria-label="Delete selected element"
-        title="Delete the selected element (⌫)"
-        disabled={!props.canDelete}
-        onClick={props.onDelete}
-        className={icon}
-      >
-        <Trash2 />
       </button>
       <div className="mx-1 h-4 w-px bg-border" />
       <button

@@ -18,7 +18,11 @@ const field = "h-7 w-full min-w-0 rounded-md border bg-background px-1.5 text-xs
 const button =
   "flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium hover:bg-accent disabled:opacity-40 disabled:hover:bg-transparent [&_svg]:size-3.5";
 
-/** The sidebar's narration tab: what is said over the current slide, to view, edit and hear. */
+/**
+ * Narration mode's tools, in a band above the slide: what is said over the current slide, to
+ * view, edit and hear. The text stays a readable width however wide the stage is, with the
+ * voice beside it.
+ */
 export function NarrationPanel() {
   const deck = useApp((s) => s.deck);
   const selected = useApp((s) => s.selected);
@@ -30,18 +34,20 @@ export function NarrationPanel() {
   const slide = deck?.slides[index];
   if (!deck || !slide) {
     return (
-      <p className="p-4 text-sm text-muted-foreground">
+      <p className="shrink-0 border-b bg-background p-4 text-sm text-muted-foreground">
         {deck ? "Add a slide to write its narration." : "Open a deck to write narration for its slides."}
       </p>
     );
   }
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <SpeechSettings deck={deck} />
+    <section aria-label="Narration tools" className="flex h-52 shrink-0 justify-center border-b bg-background">
       {/* One editor per slide: switching slides saves the last one's pending text as it unmounts. */}
       <NarrationEditor key={slide.id} deck={deck} slide={slide} index={index} total={deck.slides.length} />
-      <DeckAudio deck={deck} />
-    </div>
+      <div className="flex w-72 shrink-0 flex-col justify-between overflow-y-auto border-l">
+        <SpeechSettings deck={deck} />
+        <DeckAudio deck={deck} />
+      </div>
+    </section>
   );
 }
 
@@ -55,7 +61,7 @@ function SpeechSettings({ deck }: { deck: Deck }) {
   const languageName = (id: string) => speech.languages.find((l) => l.id === id)?.name ?? id;
   const percent = download && download.total > 0 ? Math.round((download.received / download.total) * 100) : 0;
   return (
-    <div className="flex flex-col gap-2 border-b p-3 text-xs">
+    <div className="flex flex-col gap-2 p-3 text-xs">
       <div className="flex gap-2">
         <label className="flex min-w-0 flex-[3] flex-col gap-1">
           <span className="text-muted-foreground">Voice</span>
@@ -157,10 +163,14 @@ function NarrationEditor(props: { deck: Deck; slide: Slide; index: number; total
 
   const words = wordCount(draft);
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2 p-3">
+    <div className="flex min-w-0 max-w-3xl flex-1 flex-col gap-2 p-3">
       <div className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
         <span className="min-w-0 truncate">
           Slide {index + 1} of {total} · <span className="font-mono">{slide.id}</span>
+        </span>
+        <span className="ml-auto shrink-0 tabular-nums">
+          {words} {words === 1 ? "word" : "words"} ·{" "}
+          <span title="Estimated at 150 words per minute">~{speakingTime(draft)}</span>
         </span>
         {slide.locked && (
           <span className="flex shrink-0 items-center gap-1">
@@ -178,12 +188,6 @@ function NarrationEditor(props: { deck: Deck; slide: Slide; index: number; total
         placeholder={slide.locked ? "No narration." : "What is said while this slide is shown…"}
         className="selectable min-h-0 flex-1 resize-none rounded-md border bg-card p-3 text-sm leading-relaxed outline-none focus:border-primary"
       />
-      <div className="flex justify-between text-xs text-muted-foreground tabular-nums">
-        <span>
-          {words} {words === 1 ? "word" : "words"}
-        </span>
-        <span title="Estimated at 150 words per minute">~{speakingTime(draft)}</span>
-      </div>
       <SlideAudioControls deck={deck} slide={slide.id} hasText={draft.trim() !== ""} flush={flush} />
     </div>
   );

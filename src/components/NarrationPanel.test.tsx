@@ -69,7 +69,7 @@ describe("NarrationPanel", () => {
     render(<NarrationPanel />);
     expect(box().value).toBe("Welcome, everyone.");
     expect(screen.getByText(/Slide 1 of 3/)).toBeTruthy();
-    expect(screen.getByText("2 words")).toBeTruthy();
+    expect(screen.getByText(/2 words/)).toBeTruthy();
     act(() => useApp.getState().select("outro"));
     expect(box().value).toBe("");
     expect(screen.getByText(/Slide 3 of 3/)).toBeTruthy();

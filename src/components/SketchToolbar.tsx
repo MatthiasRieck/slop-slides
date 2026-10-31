@@ -7,7 +7,7 @@ import { useApp } from "../store";
 import type { Annotations } from "./PresenterTools";
 
 /**
- * Pen, highlighter and eraser for marking up the slide in the editor. The marks are saved in
+ * Review mode's tools: pen, highlighter and eraser for marking up the slide. The marks are saved in
  * the deck file as a review, which can be shown and hidden, and sent to the agent as a screenshot
  * with the next chat message.
  */
@@ -58,7 +58,7 @@ export function SketchToolbar({ annotations }: { annotations: Annotations }) {
               onClick={() => setColor(color)}
               className={cn(
                 "size-3.5 rounded-full border border-black/15 dark:border-white/30",
-                colors[tool] === color && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-canvas",
+                colors[tool] === color && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-background",
               )}
               style={{ background: color }}
             />

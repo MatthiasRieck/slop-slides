@@ -33,6 +33,8 @@ beforeEach(() => {
     openedFile: OPENED,
     deck: deckFor(DECK_HTML),
     view: "slides",
+    editing: false,
+    slideMode: "view",
     sidebarOpen: true,
     railOpen: true,
     codeDirty: false,
@@ -130,21 +132,35 @@ describe("workspace bar", () => {
 
 describe("layout", () => {
   const order = () =>
-    Array.from(document.querySelectorAll("header > button, header > nav")).map(
-      (el) => el.getAttribute("aria-label") ?? el.getAttribute("title"),
+    Array.from(document.querySelectorAll("header nav, header [role=tablist], header button:not([role=tab])")).map(
+      (el) => el.getAttribute("aria-label") ?? el.getAttribute("title") ?? el.textContent,
     );
 
-  it("puts the slide rail toggle first, then the breadcrumbs, then the file and folder actions", () => {
+  it("puts the rail and breadcrumbs first, then the modes, the deck's actions and the file actions", () => {
     render(<TopBar />);
-    expect(order()).toEqual(["Hide slides", "Breadcrumbs", "Show in folder", "Close deck.html", "Hide sidebar"]);
+    expect(order()).toEqual([
+      "Hide slides",
+      "Breadcrumbs",
+      "Mode",
+      "Export",
+      "Present",
+      "Show in folder",
+      "Close deck.html",
+      "Hide sidebar",
+    ]);
   });
 
-  it("leaves the deck's tools to the deck toolbar", () => {
+  it("leaves the tools of each mode to the row below", () => {
     render(<TopBar />);
-    for (const name of [/Present/, /Export/, "Slides", "HTML", "Slide size"]) {
-      expect(screen.queryByRole("button", { name })).toBeNull();
-    }
+    for (const name of ["Find and replace", "Slide size"]) expect(screen.queryByRole("button", { name })).toBeNull();
     expect(document.querySelector("header input")).toBeNull();
+  });
+
+  it("has no modes or deck actions without a deck", () => {
+    useApp.setState({ deck: null });
+    render(<TopBar />);
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Export/ })).toBeNull();
   });
 });
 

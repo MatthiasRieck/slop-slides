@@ -28,6 +28,9 @@ beforeEach(() => {
     presenting: false,
     sketches: {},
     reviewVisible: true,
+    view: "slides",
+    editing: false,
+    slideMode: "view",
   });
 });
 
@@ -65,30 +68,6 @@ describe("Stage", () => {
     render(<Stage />);
     expect(screen.getByText("Start with a conversation")).toBeTruthy();
     expect(screen.queryByText(/\d+ \/ \d+/)).toBeNull();
-  });
-
-  it("opens the slide's narration in the sidebar and goes back to the chat", () => {
-    useApp.setState({ sidebarOpen: false, sidebarTab: "chat" });
-    render(<Stage />);
-    const button = screen.getByRole("button", { name: /Narration/ });
-    expect(screen.queryByTestId("has-narration")).toBeNull();
-    fireEvent.click(button);
-    expect(useApp.getState()).toMatchObject({ sidebarOpen: true, sidebarTab: "narration" });
-    expect(button.getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(button);
-    expect(useApp.getState().sidebarTab).toBe("chat");
-    expect(button.getAttribute("aria-pressed")).toBe("false");
-  });
-
-  it("marks a slide that has narration", () => {
-    const deck = deckFor(DECK_HTML);
-    useApp.setState({
-      deck: { ...deck, slides: deck.slides.map((s, i) => (i === 0 ? { ...s, narration: "Hi" } : s)) },
-    });
-    render(<Stage />);
-    expect(screen.queryByTestId("has-narration")).not.toBeNull();
-    act(() => useApp.getState().select("outro"));
-    expect(screen.queryByTestId("has-narration")).toBeNull();
   });
 
   it("opens the template layouts to change the slide's layout", () => {
@@ -305,6 +284,7 @@ describe("Stage", () => {
 
     beforeEach(() => {
       vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 500));
+      useApp.setState({ slideMode: "review" });
     });
     afterEach(() => vi.restoreAllMocks());
 
@@ -449,8 +429,7 @@ describe("Stage", () => {
   describe("editing the slide", () => {
     const NoLayout = globalThis.ResizeObserver;
     const { saveSlideEdit, undoSlideEdit, redoSlideEdit, discardSlideEdits, tidyLayout } = useApp.getState();
-    const editButton = () => screen.getByRole("button", { name: "Edit text and move elements" });
-    const editing = () => editButton().getAttribute("aria-pressed") === "true";
+    const toggleEditing = () => act(() => useApp.getState().setMode(useApp.getState().editing ? "view" : "edit"));
     const stageFrame = (container: HTMLElement) => container.querySelector("iframe")!;
     const MARKUP = `<section class="slide" id="intro"><h1 data-moved="" style="translate: 9px 0px;">Hello</h1></section>`;
 
@@ -479,48 +458,56 @@ describe("Stage", () => {
       vi.restoreAllMocks();
     });
 
-    it("locks the edit button, Layout and Tidy layout on a locked slide, and leaves edit mode for one", () => {
+    it("locks Layout and Tidy layout on a locked slide, and leaves edit mode for one", () => {
       const locked = deckFor(DECK_HTML.replace(`id="outro"`, `id="outro" data-locked`));
       useApp.setState({ deck: locked, templates: [] });
       render(<Stage />);
-      fireEvent.click(editButton());
+      toggleEditing();
       expect(useApp.getState().editing).toBe(true);
       expect(screen.queryByText("Locked")).toBeNull();
 
       act(() => useApp.getState().select("outro"));
       expect(useApp.getState().editing).toBe(false);
-      expect((editButton() as HTMLButtonElement).disabled).toBe(true);
-      expect(editButton().title).toContain("locked");
       expect(screen.getByText("Locked")).toBeTruthy();
       expect((screen.getByRole("button", { name: /^Layout$/ }) as HTMLButtonElement).disabled).toBe(true);
       expect((screen.getByRole("button", { name: /Tidy layout/ }) as HTMLButtonElement).disabled).toBe(true);
     });
 
-    it("shows a pencil icon on the edit button", () => {
-      render(<Stage />);
-      expect(editButton().querySelector("svg.lucide-pencil")).not.toBeNull();
-      expect(editButton().querySelector("svg.lucide-move")).toBeNull();
-    });
-
-    it("toggles edit mode, which loads the slide editor into the preview", () => {
+    it("loads the slide editor into the preview in edit mode", () => {
       const { container } = render(<Stage />);
       expect(stageFrame(container).getAttribute("src")).not.toContain("edit=");
-      fireEvent.click(editButton());
-      expect(editing()).toBe(true);
+      toggleEditing();
       expect(useApp.getState().editing).toBe(true);
       const sources = [...container.querySelectorAll("iframe")].map((f) => f.getAttribute("src"));
       expect(sources.some((src) => src?.includes("&static&pan&edit=0"))).toBe(true);
-      fireEvent.click(editButton());
+      toggleEditing();
       expect(useApp.getState().editing).toBe(false);
     });
 
-    it("takes turns with the sketch tools", () => {
+    it("shows each mode's tools above the slide, and only there", () => {
+      render(<Stage />);
+      const sketch = () => screen.queryByRole("toolbar", { name: "Sketch tools" });
+      const edit = () => screen.queryByRole("toolbar", { name: "Edit tools" });
+      expect([sketch(), edit()]).toEqual([null, null]);
+      act(() => useApp.getState().setMode("review"));
+      expect(sketch()).not.toBeNull();
+      expect(edit()).toBeNull();
+      act(() => useApp.getState().setMode("edit"));
+      expect(sketch()).toBeNull();
+      expect(edit()).not.toBeNull();
+      for (const name of ["Find and replace", "Undo", "Redo"])
+        expect(screen.getByRole("button", { name })).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: /Accept/ }));
+      expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "view" });
+      expect([sketch(), edit()]).toEqual([null, null]);
+    });
+
+    it("puts a sketch tool away when leaving review mode", () => {
+      useApp.setState({ slideMode: "review" });
       render(<Stage />);
       fireEvent.click(screen.getByRole("button", { name: "Draw on the slide" }));
-      fireEvent.click(editButton());
-      expect(editing()).toBe(true);
-      expect(screen.queryByRole("button", { name: "Draw on the slide" })).toBeNull();
-      fireEvent.click(screen.getByRole("button", { name: /Accept/ }));
+      act(() => useApp.getState().setMode("view"));
+      act(() => useApp.getState().setMode("review"));
       expect(screen.getByRole("button", { name: "Draw on the slide" }).getAttribute("aria-pressed")).toBe("false");
     });
 
@@ -529,7 +516,7 @@ describe("Stage", () => {
       const slide = () => container.querySelector("[data-sketch-target]")!;
       expect(slide().hasAttribute("data-editing")).toBe(false);
       expect(screen.queryByRole("toolbar", { name: "Edit tools" })).toBeNull();
-      fireEvent.click(editButton());
+      toggleEditing();
       expect(slide().hasAttribute("data-editing")).toBe(true);
       // The ring around the slide is drawn by the preview, so it pans and zooms with the slide.
       expect(slide().className).not.toContain("ring");
@@ -554,7 +541,7 @@ describe("Stage", () => {
       };
       const enter = () => {
         const view = render(<Stage />);
-        fireEvent.click(editButton());
+        toggleEditing();
         const frame = stageFrame(view.container);
         fireEvent.load(frame);
         return { ...view, frame, post: vi.spyOn(frame.contentWindow!, "postMessage") };
@@ -650,8 +637,8 @@ describe("Stage", () => {
       it("starts each edit session with the select tool", () => {
         enter();
         fireEvent.click(button("Add text (T)"));
-        fireEvent.click(editButton());
-        fireEvent.click(editButton());
+        toggleEditing();
+        toggleEditing();
         expect(useApp.getState().editTool).toBe("select");
       });
 
@@ -930,7 +917,7 @@ describe("Stage", () => {
       const discard = vi.fn().mockResolvedValue(undefined);
       useApp.setState({ undoSlideEdit: undo, redoSlideEdit: redo, discardSlideEdits: discard });
       render(<Stage />);
-      fireEvent.click(editButton());
+      toggleEditing();
       const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
       expect(button("Undo").disabled).toBe(true);
       expect(button("Redo").disabled).toBe(true);
@@ -948,32 +935,30 @@ describe("Stage", () => {
       const save = vi.fn().mockResolvedValue(undefined);
       useApp.setState({ saveSlideEdit: save });
       const { container } = render(<Stage />);
-      fireEvent.click(editButton());
+      toggleEditing();
       const frame = stageFrame(container);
       fromFrame(frame, { type: "slop:edit-commit", slide: "intro", markup: MARKUP, select: [0] });
       expect(save).toHaveBeenCalledWith("intro", MARKUP);
       // Not from another slide, a stray window, or outside edit mode.
       fromFrame(frame, { type: "slop:edit-commit", slide: "outro", markup: MARKUP, select: null });
       fromFrame(null, { type: "slop:edit-commit", slide: "intro", markup: MARKUP, select: null });
-      fireEvent.click(editButton());
+      toggleEditing();
       fromFrame(frame, { type: "slop:edit-commit", slide: "intro", markup: MARKUP, select: null });
       expect(save).toHaveBeenCalledTimes(1);
     });
 
-    it("deletes the editor's selection from the edit bar, enabled only while something is selected", () => {
+    it("deletes the editor's selection from the edit tools, enabled only while something is selected", () => {
       const { container } = render(<Stage />);
-      fireEvent.click(editButton());
+      toggleEditing();
       const frame = stageFrame(container);
       fireEvent.load(frame);
-      const remove = () => screen.getByRole("button", { name: "Delete selected element" }) as HTMLButtonElement;
+      const remove = () => screen.getByRole("button", { name: "Delete (⌫)" }) as HTMLButtonElement;
       expect(remove().disabled).toBe(true);
       fromFrame(frame, { type: "slop:edit-selection", slide: "outro", selected: true, selection: { kind: "element" } });
       fromFrame(null, { type: "slop:edit-selection", slide: "intro", selected: true, selection: { kind: "element" } });
       expect(remove().disabled).toBe(true);
       fromFrame(frame, { type: "slop:edit-selection", slide: "intro", selected: true, selection: { kind: "element" } });
       expect(remove().disabled).toBe(false);
-      // The edit toolbar's delete button follows the same selection.
-      expect((screen.getByRole("button", { name: "Delete (⌫)" }) as HTMLButtonElement).disabled).toBe(false);
       const post = vi.spyOn(frame.contentWindow!, "postMessage");
       fireEvent.click(remove());
       expect(post).toHaveBeenCalledWith({ type: "slop:edit-delete" }, "*");
@@ -1003,7 +988,7 @@ describe("Stage", () => {
       it("puts images dropped on the slide while editing onto it, where they landed", async () => {
         vi.mocked(invoke).mockResolvedValue(["assets/photo.png"]);
         const { container } = render(<Stage />);
-        fireEvent.click(editButton());
+        toggleEditing();
         const { post } = laidOut(container);
         expect(dropCovered({ x: 480, y: 290 })).toBe(true);
         let rest: string[] = [];
@@ -1033,7 +1018,7 @@ describe("Stage", () => {
         const { container, unmount } = render(<Stage />);
         expect(claimDrop(["/tmp/photo.png"], { x: 100, y: 100 })).toEqual(["/tmp/photo.png"]);
         expect(dropCovered({ x: 100, y: 100 })).toBe(false);
-        fireEvent.click(editButton());
+        toggleEditing();
         laidOut(container);
         expect(dropCovered({ x: 1200, y: 100 })).toBe(false);
         expect(claimDrop(["/tmp/photo.png"], { x: 1200, y: 100 })).toEqual(["/tmp/photo.png"]);
@@ -1048,15 +1033,15 @@ describe("Stage", () => {
         let finish: (refs: string[]) => void = () => {};
         vi.mocked(invoke).mockImplementation(() => new Promise((resolve) => (finish = resolve)));
         const { container } = render(<Stage />);
-        fireEvent.click(editButton());
+        toggleEditing();
         const { post } = laidOut(container);
         act(() => void claimDrop(["/tmp/photo.png"], { x: 100, y: 100 }));
-        fireEvent.click(editButton());
+        toggleEditing();
         await act(async () => finish(["assets/photo.png"]));
         expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-insert-images" }), "*");
 
         vi.mocked(invoke).mockRejectedValue("disk full");
-        fireEvent.click(editButton());
+        toggleEditing();
         laidOut(container);
         await act(async () => void claimDrop(["/tmp/photo.png"], { x: 100, y: 100 }));
         await waitFor(() => expect(useApp.getState().error).toBe("disk full"));
@@ -1078,7 +1063,7 @@ describe("Stage", () => {
       it("puts what the editor copied on the system clipboard", async () => {
         vi.mocked(invoke).mockResolvedValue(undefined);
         const { container } = render(<Stage />);
-        fireEvent.click(editButton());
+        toggleEditing();
         const { frame } = loaded(container);
         fromFrame(frame, {
           type: "slop:edit-copied",
@@ -1100,7 +1085,7 @@ describe("Stage", () => {
 
       it("asks the editor to copy or cut with ⌘C / ⌘X pressed in the app, unless text is selected there", () => {
         const { container } = render(<Stage />);
-        fireEvent.click(editButton());
+        toggleEditing();
         const { post } = loaded(container);
         fireEvent.keyDown(document.body, { key: "c", metaKey: true });
         fireEvent.keyDown(document.body, { key: "x", ctrlKey: true });
@@ -1122,7 +1107,7 @@ describe("Stage", () => {
       it("pastes an element copied in the editor back into it", async () => {
         vi.mocked(invoke).mockResolvedValue({ kind: "element", html: "<!--slopslides:{}--><p>Hi</p>" });
         const { container } = render(<Stage />);
-        fireEvent.click(editButton());
+        toggleEditing();
         const { frame, post } = loaded(container);
         fromFrame(frame, { type: "slop:key", key: "v", mod: true });
         expect(invoke).toHaveBeenCalledWith("paste_from_clipboard", { id: useApp.getState().deck!.id });
@@ -1137,7 +1122,7 @@ describe("Stage", () => {
           editStyles: { ...DEFAULT_EDIT_STYLES, text: { ...DEFAULT_EDIT_STYLES.text, fontSize: 64 } },
         });
         const { container } = render(<Stage />);
-        fireEvent.click(editButton());
+        toggleEditing();
         const { post } = loaded(container);
         fireEvent.keyDown(document.body, { key: "v", metaKey: true });
         await waitFor(() =>
@@ -1152,7 +1137,7 @@ describe("Stage", () => {
       it("pastes images, leaving where they go to the editor", async () => {
         vi.mocked(invoke).mockResolvedValue({ kind: "images", images: ["assets/pasted-image.png"] });
         const { container } = render(<Stage />);
-        fireEvent.click(editButton());
+        toggleEditing();
         const { frame, post } = loaded(container);
         fromFrame(frame, { type: "slop:key", key: "V", mod: true });
         await waitFor(() =>
@@ -1173,7 +1158,7 @@ describe("Stage", () => {
           command === "paste_slide" ? { deck: pasted, slide: "pasted" } : { kind: "slide" },
         );
         const { container } = render(<Stage />);
-        fireEvent.click(editButton());
+        toggleEditing();
         const { post } = loaded(container);
         await act(async () => void fireEvent.keyDown(document.body, { key: "v", metaKey: true }));
         await waitFor(() => expect(useApp.getState().selected).toBe("pasted"));
@@ -1184,7 +1169,7 @@ describe("Stage", () => {
       it("pastes no element outside edit mode, into a typing field, or when the clipboard is empty, and reports failures", async () => {
         vi.mocked(invoke).mockResolvedValue({ kind: "nothing" });
         const { container } = render(<Stage />);
-        fireEvent.click(editButton());
+        toggleEditing();
         const { post } = loaded(container);
         const input = document.createElement("textarea");
         document.body.appendChild(input);
@@ -1203,7 +1188,7 @@ describe("Stage", () => {
     it("selects the edited element again once the slide reloads", () => {
       useApp.setState({ saveSlideEdit: vi.fn().mockResolvedValue(undefined) });
       const { container } = render(<Stage />);
-      fireEvent.click(editButton());
+      toggleEditing();
       const frame = stageFrame(container);
       fromFrame(frame, { type: "slop:edit-commit", slide: "intro", markup: MARKUP, select: [0, 2] });
       const post = vi.spyOn(frame.contentWindow!, "postMessage");
@@ -1217,7 +1202,7 @@ describe("Stage", () => {
       const { container } = render(<Stage />);
       fireEvent.keyDown(document.body, { key: "z", metaKey: true });
       expect(undo).not.toHaveBeenCalled();
-      fireEvent.click(editButton());
+      toggleEditing();
       fireEvent.keyDown(document.body, { key: "z", ctrlKey: true });
       fromFrame(stageFrame(container), { type: "slop:key", key: "z", mod: true });
       expect(undo).toHaveBeenCalledTimes(2);
@@ -1230,7 +1215,7 @@ describe("Stage", () => {
       const redo = vi.fn().mockResolvedValue(undefined);
       useApp.setState({ undoSlideEdit: undo, redoSlideEdit: redo });
       const { container } = render(<Stage />);
-      fireEvent.click(editButton());
+      toggleEditing();
       fireEvent.keyDown(document.body, { key: "Z", metaKey: true, shiftKey: true });
       fireEvent.keyDown(document.body, { key: "y", ctrlKey: true });
       fromFrame(stageFrame(container), { type: "slop:key", key: "z", mod: true, shift: true });
@@ -1260,7 +1245,7 @@ describe("Stage", () => {
         border: expect.any(String),
       };
       expect(viewPost).toHaveBeenCalledWith(colors, "*");
-      fireEvent.click(editButton());
+      toggleEditing();
       expect(slideBox().style.width).toBe("960px");
       const frame = [...container.querySelectorAll("iframe")].at(-1)!;
       expect(frame.getAttribute("src")).toContain("edit=");
@@ -1268,7 +1253,7 @@ describe("Stage", () => {
       const post = vi.spyOn(frame.contentWindow!, "postMessage");
       fireEvent.load(frame);
       expect(post).toHaveBeenCalledWith(colors, "*");
-      fireEvent.click(editButton());
+      toggleEditing();
       expect(slideBox().style.width).toBe("960px");
     });
 
@@ -1289,7 +1274,7 @@ describe("Stage", () => {
       const resetButton = () => screen.queryByRole("button", { name: /^\d+%$/ });
       const enterEditing = () => {
         const utils = render(<Stage />);
-        fireEvent.click(editButton());
+        toggleEditing();
         const frames = utils.container.querySelectorAll("iframe");
         const frame = frames[frames.length - 1]!;
         return { ...utils, frame };
@@ -1330,13 +1315,13 @@ describe("Stage", () => {
         const viewPost = vi.spyOn(viewer.contentWindow!, "postMessage");
         fireEvent.click(resetButton()!);
         expect(viewPost).toHaveBeenCalledWith({ type: "slop:camera", home: true }, "*");
-        fireEvent.click(editButton());
+        toggleEditing();
         expect(resetButton()!.textContent).toBe("200%");
         const editor = [...container.querySelectorAll("iframe")].at(-1)!;
         const post = vi.spyOn(editor.contentWindow!, "postMessage");
         fireEvent.load(editor);
         expect(post).toHaveBeenCalledWith({ type: "slop:camera", x: 40, y: -20, k: 2 }, "*");
-        fireEvent.click(editButton());
+        toggleEditing();
         expect(resetButton()!.textContent).toBe("200%");
       });
 
@@ -1421,7 +1406,7 @@ describe("Stage", () => {
       useApp.setState({ tidyLayout: tidy });
       const { container } = render(<Stage />);
       expect(screen.queryByText("Overflow")).toBeNull();
-      fireEvent.click(editButton());
+      toggleEditing();
       const items = ['<h1> "Hello" runs past the bottom edge by 40px'];
       fromFrame(stageFrame(container), { type: "slop:edit-overflow", slide: "intro", items });
       expect(screen.getByText("Overflow").getAttribute("title")).toContain(items[0]);
@@ -1433,13 +1418,13 @@ describe("Stage", () => {
 
     it("ignores overflow reports for another slide or from other windows, and drops them leaving edit mode", () => {
       const { container } = render(<Stage />);
-      fireEvent.click(editButton());
+      toggleEditing();
       fromFrame(stageFrame(container), { type: "slop:edit-overflow", slide: "other", items: ["x"] });
       fromFrame(null, { type: "slop:edit-overflow", slide: "intro", items: ["x"] });
       expect(screen.queryByText("Overflow")).toBeNull();
       fromFrame(stageFrame(container), { type: "slop:edit-overflow", slide: "intro", items: ["x"] });
       expect(screen.getByText("Overflow")).toBeTruthy();
-      fireEvent.click(editButton());
+      toggleEditing();
       expect(screen.queryByText("Overflow")).toBeNull();
     });
   });

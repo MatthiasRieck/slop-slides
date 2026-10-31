@@ -19,12 +19,11 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: (...args: unknown
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { DeckActions } from "./DeckActions";
 import { DeckToolbar } from "./DeckToolbar";
 
 const WORKSPACE = { path: "/decks", name: "decks" };
 const OPENED = { path: "talk/deck.html", absolute: "/decks/talk/deck.html", kind: "deck" as const };
-
-const toggle = (name: "Slides" | "HTML") => screen.getByRole("button", { name }) as HTMLButtonElement;
 
 beforeEach(() => {
   invoke.mockReset();
@@ -41,44 +40,14 @@ beforeEach(() => {
     openedFile: OPENED,
     deck: deckFor(DECK_HTML),
     view: "slides",
+    editing: false,
+    slideMode: "view",
     sidebarOpen: true,
     railOpen: true,
     codeDirty: false,
     presenting: false,
     error: null,
     imageExport: null,
-  });
-});
-
-describe("Slides / HTML toggle", () => {
-  it("marks the current view as pressed", () => {
-    render(<DeckToolbar />);
-    expect(toggle("Slides").getAttribute("aria-pressed")).toBe("true");
-    expect(toggle("HTML").getAttribute("aria-pressed")).toBe("false");
-  });
-
-  it("switches to the HTML view and back", () => {
-    render(<DeckToolbar />);
-    fireEvent.click(toggle("HTML"));
-    expect(useApp.getState().view).toBe("code");
-    expect(toggle("HTML").getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(toggle("Slides"));
-    expect(useApp.getState().view).toBe("slides");
-    expect(localStorage.getItem("slopslide.view")).toBe("slides");
-  });
-
-  it("shows an unsaved-changes dot on the HTML button", () => {
-    render(<DeckToolbar />);
-    expect(screen.queryByTitle("Unsaved changes")).toBeNull();
-    act(() => useApp.setState({ codeDirty: true }));
-    const dot = screen.getByTitle("Unsaved changes");
-    expect(toggle("HTML").contains(dot)).toBe(true);
-  });
-
-  it("explains each view in its tooltip", () => {
-    render(<DeckToolbar />);
-    expect(toggle("HTML").title).toMatch(/deck\.html/);
-    expect(toggle("Slides").title).toMatch(/rendered slide/);
   });
 });
 
@@ -163,7 +132,7 @@ describe("deck actions", () => {
 
   it("exports to the chosen file and reveals it", async () => {
     save.mockResolvedValue("/Users/me/Desktop/Talk.html");
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     await exportAs("HTML file");
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: "Talk.html" }));
     expect(invoke).toHaveBeenCalledWith("export_deck", {
@@ -180,14 +149,14 @@ describe("deck actions", () => {
   ])("suggests a file name safe on every OS for %j", async (title, expected) => {
     useApp.setState({ deck: { ...deckFor(DECK_HTML), title } });
     save.mockResolvedValue(null);
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     await exportAs("HTML file");
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: expected }));
   });
 
   it("does nothing when the save dialog is cancelled", async () => {
     save.mockResolvedValue(null);
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     await exportAs("HTML file");
     expect(invoke).not.toHaveBeenCalled();
     expect(revealItemInDir).not.toHaveBeenCalled();
@@ -196,14 +165,14 @@ describe("deck actions", () => {
   it("reports a failed export", async () => {
     save.mockResolvedValue("/read-only/Talk.html");
     invoke.mockRejectedValue("Permission denied (os error 13)");
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     await exportAs("HTML file");
     expect(useApp.getState().error).toBe("Permission denied (os error 13)");
     expect(revealItemInDir).not.toHaveBeenCalled();
   });
 
   it("opens and closes the export menu", () => {
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     expect(screen.queryByRole("menu")).toBeNull();
     fireEvent.click(exportButton());
     expect(exportButton().getAttribute("aria-expanded")).toBe("true");
@@ -225,7 +194,7 @@ describe("deck actions", () => {
     invoke.mockImplementation(async (command: string) =>
       command === "create_image_export_dir" ? "/Users/me/Desktop/Talk" : undefined,
     );
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     await exportAs("PNG images");
     expect(openDialog).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
     expect(invoke).toHaveBeenCalledWith("create_image_export_dir", {
@@ -238,7 +207,7 @@ describe("deck actions", () => {
 
   it("prints a PDF to the chosen file and reveals it", async () => {
     save.mockResolvedValue("/Users/me/Desktop/Talk.pdf");
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     await exportAs("PDF");
     expect(save).toHaveBeenCalledWith(
       expect.objectContaining({ defaultPath: "Talk.pdf", filters: [{ name: "PDF document", extensions: ["pdf"] }] }),
@@ -256,7 +225,7 @@ describe("deck actions", () => {
     let finish!: () => void;
     save.mockResolvedValue("/Users/me/Desktop/Talk.pdf");
     invoke.mockImplementation(() => new Promise<void>((resolve) => (finish = resolve)));
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     await exportAs("PDF");
     expect(exportButton().textContent).toContain("Exporting…");
     expect(exportButton().disabled).toBe(true);
@@ -268,7 +237,7 @@ describe("deck actions", () => {
 
   it("does not export a PDF when the save dialog is cancelled", async () => {
     save.mockResolvedValue(null);
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     await exportAs("PDF");
     expect(invoke).not.toHaveBeenCalled();
     expect(revealItemInDir).not.toHaveBeenCalled();
@@ -277,7 +246,7 @@ describe("deck actions", () => {
   it("reports a PDF that cannot be printed", async () => {
     save.mockResolvedValue("/Users/me/Desktop/Talk.pdf");
     invoke.mockRejectedValue("the deck took too long to load");
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     await exportAs("PDF");
     expect(useApp.getState().error).toBe("Could not save the PDF: the deck took too long to load");
     expect(revealItemInDir).not.toHaveBeenCalled();
@@ -286,7 +255,7 @@ describe("deck actions", () => {
 
   it("does nothing when no folder is chosen", async () => {
     openDialog.mockResolvedValue(null);
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     await exportAs("PNG images");
     expect(invoke).not.toHaveBeenCalled();
     expect(useApp.getState().imageExport).toBeNull();
@@ -295,21 +264,21 @@ describe("deck actions", () => {
   it("reports a folder that cannot be created", async () => {
     openDialog.mockResolvedValue("/read-only");
     invoke.mockRejectedValue("Permission denied (os error 13)");
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     await exportAs("PNG images");
     expect(useApp.getState().error).toBe("Permission denied (os error 13)");
     expect(useApp.getState().imageExport).toBeNull();
   });
 
   it("starts the presentation", () => {
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     fireEvent.click(presentButton());
     expect(useApp.getState().presenting).toBe(true);
   });
 
   it("cannot export or present an empty deck", () => {
     useApp.setState({ deck: { ...deckFor(DECK_HTML), slides: [] } });
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     expect(exportButton().disabled).toBe(true);
     expect(presentButton().disabled).toBe(true);
   });
@@ -331,7 +300,7 @@ describe("video export", () => {
 
   it("asks how long each slide is shown, then records the deck to the chosen file", async () => {
     save.mockResolvedValue("/Users/me/Desktop/Talk.mp4");
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     openPanel();
     expect(screen.queryByRole("menu")).toBeNull();
     expect(seconds().value).toBe("5");
@@ -356,7 +325,7 @@ describe("video export", () => {
 
   it("remembers the last choice", async () => {
     save.mockResolvedValue(null);
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     openPanel();
     fireEvent.change(seconds(), { target: { value: "8" } });
     await act(async () => fireEvent.click(saveButton()));
@@ -367,13 +336,13 @@ describe("video export", () => {
   it("leaves hidden slides out of the count", () => {
     const deck = deckFor(DECK_HTML);
     useApp.setState({ deck: { ...deck, slides: deck.slides.map((s, i) => ({ ...s, hidden: i > 0 })) } });
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     openPanel();
     expect(screen.getByText(/1 slide, 0:05 long/)).toBeTruthy();
   });
 
   it("refuses a slide time the backend would", () => {
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     openPanel();
     fireEvent.change(seconds(), { target: { value: "0" } });
     expect(screen.getByRole("alert").textContent).toMatch(/0.5 to 600 seconds/);
@@ -383,7 +352,7 @@ describe("video export", () => {
   it("cannot record a deck whose slides are all hidden", () => {
     const deck = deckFor(DECK_HTML);
     useApp.setState({ deck: { ...deck, slides: deck.slides.map((s) => ({ ...s, hidden: true })) } });
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     openPanel();
     expect(screen.getByRole("alert").textContent).toMatch(/Every slide is hidden/);
     expect(saveButton().disabled).toBe(true);
@@ -391,7 +360,7 @@ describe("video export", () => {
 
   it("does not record when the save dialog is cancelled", async () => {
     save.mockResolvedValue(null);
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     openPanel();
     await act(async () => fireEvent.click(saveButton()));
     expect(invoke).not.toHaveBeenCalledWith("export_video", expect.anything());
@@ -423,7 +392,7 @@ describe("video export", () => {
 
   it("speaks narration, each slide staying until its narration and the pauses end", async () => {
     narrated({ available: true, modelReady: true });
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     openPanel();
     await act(async () => {});
     // 0.5 + 20 + 1 s, about 0.5 + 60 + 1 s for the 150 words not yet spoken, and 5 s.
@@ -442,7 +411,7 @@ describe("video export", () => {
 
   it("asks for the voice model when narration still has to be spoken", async () => {
     narrated({ available: true, modelReady: false });
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     openPanel();
     await act(async () => {});
     expect(screen.getByRole("alert").textContent).toMatch(/Download the voice model/);
@@ -456,7 +425,7 @@ describe("video export", () => {
     invoke.mockImplementation((command: string) =>
       command === "export_video" ? new Promise<void>(() => {}) : Promise.resolve(),
     );
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     openPanel();
     await act(async () => fireEvent.click(saveButton()));
     act(() => progressListener()({ payload: { phase: "narration", frame: 1, frames: 4 } as never }));
@@ -469,7 +438,7 @@ describe("video export", () => {
     invoke.mockImplementation((command: string) =>
       command === "export_video" ? new Promise<void>((_, reject) => (fail = reject)) : Promise.resolve(),
     );
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     openPanel();
     await act(async () => fireEvent.click(saveButton()));
     expect(exportButton().textContent).toContain("Exporting 0%");
@@ -490,7 +459,7 @@ describe("video export", () => {
   it("reports a video that cannot be recorded", async () => {
     save.mockResolvedValue("/Users/me/Desktop/Talk.mp4");
     invoke.mockRejectedValue("the deck took too long to get ready for recording the video");
-    render(<DeckToolbar />);
+    render(<DeckActions />);
     openPanel();
     await act(async () => fireEvent.click(saveButton()));
     expect(useApp.getState().error).toBe(
@@ -589,6 +558,28 @@ describe("deck toolbar", () => {
     const labels = Array.from(toolbar.querySelectorAll("button")).map(
       (b) => b.getAttribute("aria-label") ?? b.textContent,
     );
-    expect(labels).toEqual(["Find and replace", "Slide size", "Lint OK", "Slides", "HTML", "Export", "Present"]);
+    expect(labels).toEqual(["Find and replace", "Slide size", "Lint OK"]);
+  });
+
+  it("stays for the HTML view", () => {
+    useApp.setState({ view: "code" });
+    render(<DeckToolbar />);
+    expect(screen.getByRole("toolbar", { name: "Deck" })).toBeTruthy();
+  });
+
+  it.each([
+    ["edit", { editing: true }],
+    ["review", { slideMode: "review" as const }],
+  ])("leaves the row to the stage in %s mode", (_mode, state) => {
+    useApp.setState(state);
+    const { container } = render(<DeckToolbar />);
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("becomes the narration in narration mode", () => {
+    useApp.setState({ slideMode: "narration", selected: "intro" });
+    render(<DeckToolbar />);
+    expect(screen.queryByRole("toolbar", { name: "Deck" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Narration" })).toBeTruthy();
   });
 });

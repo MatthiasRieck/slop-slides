@@ -1,4 +1,4 @@
-import { Eraser, Eye, EyeOff, Highlighter, PenLine, Trash2, Undo2 } from "lucide-react";
+import { Eraser, Eye, EyeOff, Highlighter, MessageSquarePlus, PenLine, Trash2, Undo2 } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { INK_COLORS } from "../lib/ink";
@@ -7,28 +7,51 @@ import { useApp } from "../store";
 import type { Annotations } from "./PresenterTools";
 
 /**
- * Review mode's tools: pen, highlighter and eraser for marking up the slide. The marks are saved in
- * the deck file as a review, which can be shown and hidden, and sent to the agent as a screenshot
- * with the next chat message.
+ * View mode's tools: pen, highlighter and eraser for marking up the slide, and comments on its
+ * elements. Marks and comments are saved in the deck file as a review, which can be shown and
+ * hidden, and go to the agent with the next chat message: the marks as a screenshot, the comments
+ * as the composer says.
  */
-export function SketchToolbar({ annotations }: { annotations: Annotations }) {
+export function SketchToolbar(props: {
+  annotations: Annotations;
+  commenting: boolean;
+  onCommenting: (on: boolean) => void;
+}) {
+  const { annotations, commenting, onCommenting } = props;
   const { tool, setTool, colors, setColor, strokes, undo, clear } = annotations;
   const reviewVisible = useApp((s) => s.reviewVisible);
-  const hasReview = useApp((s) => Object.values(s.sketches).some((marks) => marks.length > 0));
+  const hasReview = useApp((s) =>
+    [...Object.values(s.sketches), ...Object.values(s.comments)].some((items) => items.length > 0),
+  );
   const toggleReview = () => {
     // Hidden marks can't be drawn on, so the tools go away with them.
-    if (reviewVisible) setTool("pointer");
+    if (reviewVisible) {
+      setTool("pointer");
+      onCommenting(false);
+    }
     useApp.getState().setReviewVisible(!reviewVisible);
   };
   const inking = tool === "pen" || tool === "highlighter";
   // Clicking the active tool puts it away, so the slide is clickable again.
-  const toggle = (next: typeof tool) => setTool(tool === next ? "pointer" : next);
+  const toggle = (next: typeof tool) => {
+    onCommenting(false);
+    setTool(tool === next ? "pointer" : next);
+  };
+  const toggleCommenting = () => {
+    setTool("pointer");
+    // New comments should not vanish as soon as they are written.
+    useApp.getState().setReviewVisible(true);
+    onCommenting(!commenting);
+  };
 
   return (
     <div role="toolbar" aria-label="Sketch tools" className="flex items-center gap-0.5">
       {hasReview && (
         <>
-          <SketchButton label={reviewVisible ? "Hide review marks" : "Show review marks"} onClick={toggleReview}>
+          <SketchButton
+            label={reviewVisible ? "Hide review marks and comments" : "Show review marks and comments"}
+            onClick={toggleReview}
+          >
             {reviewVisible ? <Eye /> : <EyeOff />}
           </SketchButton>
           <div className="mx-1 h-4 w-px bg-border" />
@@ -46,6 +69,9 @@ export function SketchToolbar({ annotations }: { annotations: Annotations }) {
       </SketchButton>
       <SketchButton label="Erase marks" active={tool === "eraser"} onClick={() => toggle("eraser")}>
         <Eraser />
+      </SketchButton>
+      <SketchButton label="Comment on an element" active={commenting} onClick={toggleCommenting}>
+        <MessageSquarePlus />
       </SketchButton>
       {inking && (
         <div className="mx-1 flex items-center gap-1">

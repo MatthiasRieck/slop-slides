@@ -2,6 +2,7 @@ mod agent;
 mod capture;
 mod clipboard;
 mod codex;
+mod comments;
 mod copilot;
 mod deck;
 mod env;
@@ -243,6 +244,11 @@ fn load_deck(id: String) -> Result<Deck> {
 #[tauri::command]
 fn save_review(id: String, review: review::Review) -> Result<()> {
     deck::save_review(&deck::deck_file(&id)?, &review)
+}
+
+#[tauri::command]
+fn save_comments(id: String, comments: comments::Comments) -> Result<()> {
+    deck::save_comments(&deck::deck_file(&id)?, &comments)
 }
 
 #[tauri::command]
@@ -871,6 +877,7 @@ pub fn run() {
             load_deck,
             rename_deck,
             save_review,
+            save_comments,
             reorder_slides,
             add_slide,
             duplicate_slides,

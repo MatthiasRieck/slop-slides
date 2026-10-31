@@ -335,8 +335,8 @@ describe("stage view", () => {
     const mode = () => deckMode(useApp.getState());
     useApp.getState().setMode("edit");
     expect(mode()).toBe("edit");
-    useApp.getState().setMode("review");
-    expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "review" });
+    useApp.getState().setMode("narration");
+    expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "narration" });
     useApp.getState().setMode("code");
     expect(useApp.getState()).toMatchObject({ view: "code", slideMode: "view" });
     expect(localStorage.getItem("slopslide.view")).toBe("code");
@@ -350,9 +350,9 @@ describe("stage view", () => {
   it("setMode stays put rather than edit a locked slide", async () => {
     const { useApp, deckMode } = await freshModule();
     const locked = { ...DECK, slides: DECK.slides.map((s) => ({ ...s, locked: true })) };
-    useApp.setState({ deck: locked, selected: "intro", view: "slides", editing: false, slideMode: "review" });
+    useApp.setState({ deck: locked, selected: "intro", view: "slides", editing: false, slideMode: "narration" });
     useApp.getState().setMode("edit");
-    expect(deckMode(useApp.getState())).toBe("review");
+    expect(deckMode(useApp.getState())).toBe("narration");
   });
 
   it("setView switches and persists", async () => {
@@ -1086,6 +1086,89 @@ describe("sending a message", () => {
     });
   });
 
+  describe("comments", () => {
+    const target = { path: [0], tag: "h2", label: "Hello", at: [0.5, 0.5] as [number, number] };
+    const first = { id: "a", text: "Bigger\nand bolder", x: 0.5, y: 0.5, target };
+    const second = { id: "b", text: "Too busy", x: 0.25, y: 0.5 };
+    const comments = { intro: [first], outro: [second] };
+    const prompts = () => calls("send_message").map((c) => (c.args as { prompt: string }).prompt);
+    const finish = (useApp: Awaited<ReturnType<typeof freshStore>>) => useApp.setState({ running: false });
+
+    it("sends the selected slide's comments by default", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "intro", comments });
+      await useApp.getState().send("Go", { includeSlide: true, attachments: [] });
+      expect(prompts()[0]).toContain("Comments from the user");
+      expect(prompts()[0]).toContain('on <h2> at `#intro > :nth-child(1)` showing "Hello": "Bigger\\nand bolder"');
+      expect(prompts()[0]).not.toContain("Too busy");
+      expect(useApp.getState().messages[0]).toMatchObject({ comments: [{ id: "a", slide: "intro", slideNumber: 1 }] });
+    });
+
+    it("sends the whole presentation's when asked to, in deck order", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "outro", comments, commentScope: "deck" });
+      await useApp.getState().send("Go", { includeSlide: true, attachments: [] });
+      const text = prompts()[0]!;
+      expect(text.indexOf("Bigger")).toBeGreaterThan(-1);
+      expect(text.indexOf("Bigger")).toBeLessThan(text.indexOf("Too busy"));
+    });
+
+    it("goes out with no slide referenced too", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "intro", comments });
+      await useApp.getState().send("Go", { includeSlide: false, attachments: [] });
+      expect(prompts()[0]).toContain("Bigger");
+    });
+
+    it("sends a comment once, and again once it changed or was picked", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "intro", comments });
+      await useApp.getState().send("One", { includeSlide: true, attachments: [] });
+      finish(useApp);
+      await useApp.getState().send("Two", { includeSlide: true, attachments: [] });
+      finish(useApp);
+      expect(prompts()[1]).not.toContain("Comments from the user");
+      expect(useApp.getState().comments).toEqual(comments);
+      useApp.getState().updateComment("intro", "a", "Smaller");
+      await useApp.getState().send("Three", { includeSlide: true, attachments: [] });
+      finish(useApp);
+      expect(prompts()[2]).toContain("Smaller");
+      const changed = useApp.getState().comments.intro![0]!;
+      useApp.getState().setCommentHeld(changed, false);
+      await useApp.getState().send("Four", { includeSlide: true, attachments: [] });
+      expect(prompts()[3]).toContain("Smaller");
+    });
+
+    it("leaves out comments held back and hidden ones", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "intro", comments });
+      useApp.getState().setCommentHeld(first, true);
+      await useApp.getState().send("One", { includeSlide: true, attachments: [] });
+      finish(useApp);
+      useApp.setState({ commentsHeld: {}, reviewVisible: false });
+      await useApp.getState().send("Two", { includeSlide: true, attachments: [] });
+      expect(prompts().join()).not.toContain("Bigger");
+      useApp.setState({ reviewVisible: true });
+    });
+
+    it("saves what is pending before the agent starts", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "intro", comments: {} });
+      useApp.getState().addComment("intro", second);
+      await useApp.getState().send("Go", { includeSlide: true, attachments: [] });
+      expect(calls("save_comments")).toHaveLength(1);
+      const order = invoke.mock.calls.map(([c]) => c);
+      expect(order.indexOf("save_comments")).toBeLessThan(order.indexOf("send_message"));
+    });
+
+    it("forgets the comments with the deck", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "intro", comments, commentsHeld: { a: "x" } });
+      await useApp.getState().closeDeck();
+      expect(useApp.getState()).toMatchObject({ comments: {}, commentsHeld: {} });
+    });
+  });
+
   it("clearSketch and setSketches edit ink per slide", async () => {
     const useApp = await freshStore();
     const ink = [{ tool: "pen" as const, color: "#fff", points: [[0, 0]] as [number, number][] }];
@@ -1149,7 +1232,7 @@ describe("sending a message", () => {
       useApp.setState({ deck: DECK });
       useApp.getState().setSketches(() => ({ intro: ink }));
       await flushReviewSave();
-      expect(useApp.getState().error).toBe("Could not save the review marks: disk full");
+      expect(useApp.getState().error).toBe("Could not save the review marks and comments: disk full");
     });
 
     it("are loaded with the deck", async () => {
@@ -1622,6 +1705,36 @@ describe("deck file changes", () => {
     // Once saved, the file matches what was saved and nothing is taken on.
     await vi.advanceTimersByTimeAsync(400);
     expect(calls("save_review")).toHaveLength(1);
+  });
+
+  it("takes on comments changed outside the app", async () => {
+    const comment = { id: "a", text: "Bigger", x: 0.5, y: 0.5 };
+    let comments: Deck["comments"] = { intro: [comment] };
+    const { useApp, changed } = await watching(() => ({ ...DECK, comments }));
+    useApp.setState({ comments: {} });
+    changed(["deck.html"]);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(useApp.getState().comments).toEqual({ intro: [comment] });
+    comments = undefined;
+    changed(["deck.html"]);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(useApp.getState().comments).toEqual({});
+  });
+
+  it("saves comments once the user pauses, and only when they changed", async () => {
+    const comment = { id: "a", text: "Bigger", x: 0.5, y: 0.5 };
+    const { useApp, changed } = await watching(() => ({ ...DECK, comments: {} }));
+    useApp.getState().addComment("intro", comment);
+    useApp.getState().updateComment("intro", "a", "Much bigger");
+    changed(["deck.html"]);
+    await vi.advanceTimersByTimeAsync(130);
+    expect(useApp.getState().comments.intro).toEqual([{ ...comment, text: "Much bigger" }]);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(calls("save_comments").map((c) => c.comments)).toEqual([{ intro: [{ ...comment, text: "Much bigger" }] }]);
+    expect(calls("save_review")).toHaveLength(0);
+    useApp.getState().removeComment("intro", "a");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(calls("save_comments")[1]!.comments).toEqual({});
   });
 
   it("reloads every preview when attached assets change", async () => {

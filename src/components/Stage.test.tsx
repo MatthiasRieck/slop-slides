@@ -363,7 +363,6 @@ describe("Stage", () => {
 
     beforeEach(() => {
       vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 500));
-      useApp.setState({ slideMode: "review" });
     });
     afterEach(() => vi.restoreAllMocks());
 
@@ -465,27 +464,195 @@ describe("Stage", () => {
       const mark = { tool: "pen" as const, color: "#ef4444", points: [[0.5, 0.5]] as [number, number][] };
       act(() => useApp.setState({ sketches: { intro: [mark] } }));
       render(<Stage />);
-      const toggle = tool("Hide review marks");
+      const toggle = tool("Hide review marks and comments");
       expect(toggle.compareDocumentPosition(tool("Draw on the slide")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
     it("shows and hides the review marks", () => {
       const mark = { tool: "pen" as const, color: "#ef4444", points: [[0.5, 0.5]] as [number, number][] };
       render(<Stage />);
-      expect(screen.queryByRole("button", { name: "Hide review marks" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Hide review marks and comments" })).toBeNull();
       // Marks on any slide offer the toggle, even when the current slide has none.
       act(() => useApp.setState({ sketches: { "#2": [mark] } }));
       fireEvent.click(tool("Draw on the slide"));
       draw([[10, 10]]);
       expect(layer().querySelectorAll("[data-stroke]")).toHaveLength(1);
-      fireEvent.click(tool("Hide review marks"));
+      fireEvent.click(tool("Hide review marks and comments"));
       expect(useApp.getState().reviewVisible).toBe(false);
       expect(pressed("Draw on the slide")).toBe(false);
       expect(layer().querySelectorAll("[data-stroke]")).toHaveLength(0);
       expect(screen.queryByRole("button", { name: "Undo mark" })).toBeNull();
       expect(useApp.getState().sketches.intro).toHaveLength(1);
-      fireEvent.click(tool("Show review marks"));
+      fireEvent.click(tool("Show review marks and comments"));
       expect(layer().querySelectorAll("[data-stroke]")).toHaveLength(1);
+    });
+
+    describe("comments", () => {
+      const comment = { id: "first", text: "Bigger", x: 0.25, y: 0.5 };
+      const frameOf = (container: HTMLElement) => container.querySelector("iframe")!;
+      const fromFrame = (container: HTMLElement, data: unknown) =>
+        act(() => {
+          window.dispatchEvent(new MessageEvent("message", { data, source: frameOf(container).contentWindow }));
+        });
+      const pick = (container: HTMLElement) =>
+        fromFrame(container, {
+          type: "slop:comment-pick",
+          slide: "intro",
+          x: 0.4,
+          y: 0.2,
+          target: { path: [1], tag: "h2", label: "Hello", at: [0.5, 0.5] },
+        });
+      const input = () => screen.getByRole("textbox", { name: "Comment text" });
+      let restoreObserver: typeof ResizeObserver;
+
+      beforeEach(() => {
+        restoreObserver = globalThis.ResizeObserver;
+        // Lay the stage out so the slide preview loads.
+        globalThis.ResizeObserver = class {
+          constructor(private callback: ResizeObserverCallback) {}
+          observe(target: Element) {
+            this.callback(
+              [{ target, contentRect: { width: 960, height: 540 } } as unknown as ResizeObserverEntry],
+              this as unknown as ResizeObserver,
+            );
+          }
+          unobserve() {}
+          disconnect() {}
+        } as unknown as typeof ResizeObserver;
+        useApp.setState({ comments: {}, commentsHeld: {}, reviewVisible: true });
+      });
+      afterEach(() => {
+        globalThis.ResizeObserver = restoreObserver;
+        useApp.setState({ comments: {}, reviewVisible: true });
+      });
+
+      it("turns picking on in the preview, also after a reload, and off with Escape", () => {
+        const { container } = render(<Stage />);
+        fireEvent.load(frameOf(container));
+        const post = vi.spyOn(frameOf(container).contentWindow!, "postMessage");
+        fireEvent.click(tool("Comment on an element"));
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:comment-tool", on: true }, "*");
+        post.mockClear();
+        fireEvent.load(frameOf(container));
+        expect(post).toHaveBeenCalledWith({ type: "slop:comment-tool", on: true }, "*");
+        fromFrame(container, { type: "slop:key", key: "Escape" });
+        expect(pressed("Comment on an element")).toBe(false);
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:comment-tool", on: false }, "*");
+      });
+
+      it("takes turns with the pens", () => {
+        render(<Stage />);
+        fireEvent.click(tool("Draw on the slide"));
+        fireEvent.click(tool("Comment on an element"));
+        expect([pressed("Draw on the slide"), pressed("Comment on an element")]).toEqual([false, true]);
+        fireEvent.click(tool("Draw on the slide"));
+        expect([pressed("Draw on the slide"), pressed("Comment on an element")]).toEqual([true, false]);
+      });
+
+      it("adds a comment on the element picked", () => {
+        const { container } = render(<Stage />);
+        fireEvent.click(tool("Comment on an element"));
+        pick(container);
+        expect(screen.getByRole("dialog", { name: "New comment" }).textContent).toContain("Hello");
+        fireEvent.change(input(), { target: { value: "  Make it bigger " } });
+        fireEvent.keyDown(input(), { key: "Enter" });
+        expect(useApp.getState().comments.intro).toEqual([
+          {
+            id: expect.any(String),
+            text: "Make it bigger",
+            x: 0.4,
+            y: 0.2,
+            target: { path: [1], tag: "h2", label: "Hello", at: [0.5, 0.5] },
+          },
+        ]);
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(screen.getAllByTestId("comment-pin").map((p) => p.textContent)).toEqual(["1"]);
+      });
+
+      it("keeps a comment being written when another element is picked", () => {
+        const { container } = render(<Stage />);
+        fireEvent.click(tool("Comment on an element"));
+        pick(container);
+        fireEvent.change(input(), { target: { value: "First" } });
+        pick(container);
+        expect(useApp.getState().comments.intro?.map((c) => c.text)).toEqual(["First"]);
+        expect((input() as HTMLTextAreaElement).value).toBe("");
+      });
+
+      it("drops a new comment on Escape", () => {
+        const { container } = render(<Stage />);
+        fireEvent.click(tool("Comment on an element"));
+        pick(container);
+        fireEvent.change(input(), { target: { value: "Never mind" } });
+        fireEvent.keyDown(input(), { key: "Escape" });
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(useApp.getState().comments.intro ?? []).toEqual([]);
+        expect(pressed("Comment on an element")).toBe(true);
+      });
+
+      it("edits and removes a comment from its pin", () => {
+        useApp.setState({ comments: { intro: [comment] } });
+        render(<Stage />);
+        fireEvent.click(screen.getByRole("button", { name: "Comment 1" }));
+        expect((input() as HTMLTextAreaElement).value).toBe("Bigger");
+        fireEvent.change(input(), { target: { value: "Smaller" } });
+        fireEvent.click(screen.getByRole("button", { name: "Save" }));
+        expect(useApp.getState().comments.intro).toEqual([{ ...comment, text: "Smaller" }]);
+        fireEvent.click(screen.getByRole("button", { name: "Comment 1" }));
+        fireEvent.click(screen.getByRole("button", { name: "Delete comment" }));
+        expect(useApp.getState().comments.intro).toEqual([]);
+        expect(screen.queryByTestId("comment-pin")).toBeNull();
+      });
+
+      it("saves what is written when the slide changes", () => {
+        useApp.setState({ comments: { intro: [comment] } });
+        render(<Stage />);
+        fireEvent.click(screen.getByRole("button", { name: "Comment 1" }));
+        fireEvent.change(input(), { target: { value: "Smaller" } });
+        act(() => useApp.getState().selectRelative(1));
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(useApp.getState().comments.intro?.[0]?.text).toBe("Smaller");
+      });
+
+      it("has the preview find the comments, and puts the pins where it says", () => {
+        useApp.setState({ comments: { intro: [comment] } });
+        const { container } = render(<Stage />);
+        const post = vi.spyOn(frameOf(container).contentWindow!, "postMessage");
+        fireEvent.load(frameOf(container));
+        expect(post).toHaveBeenCalledWith({ type: "slop:comment-locate", comments: [comment] }, "*");
+        const pin = screen.getByRole("button", { name: "Comment 1" });
+        expect(pin.style.left).toBe("25%");
+        fromFrame(container, {
+          type: "slop:comment-spots",
+          slide: "intro",
+          spots: [{ id: "first", x: 0.75, y: 0.1, found: false }],
+        });
+        expect(pin.style.left).toBe("75%");
+        expect(pin.title).toContain("gone");
+        // Another slide's answer, from a preview on its way out, does not count.
+        fromFrame(container, { type: "slop:comment-spots", slide: "outro", spots: [{ id: "first", x: 0, y: 0 }] });
+        expect(pin.style.left).toBe("75%");
+      });
+
+      it("shows pins in View only, and not while the review is hidden", () => {
+        useApp.setState({ comments: { intro: [comment] } });
+        render(<Stage />);
+        act(() => useApp.getState().setMode("narration"));
+        expect(screen.queryByTestId("comment-pin")).toBeNull();
+        act(() => useApp.getState().setMode("view"));
+        expect(screen.getByTestId("comment-pin")).toBeTruthy();
+        fireEvent.click(tool("Hide review marks and comments"));
+        expect(screen.queryByTestId("comment-pin")).toBeNull();
+      });
+
+      it("lets ink pass under the pins", () => {
+        useApp.setState({ comments: { intro: [comment] } });
+        render(<Stage />);
+        const pin = screen.getByTestId("comment-pin");
+        expect(pin.className).toContain("pointer-events-auto");
+        fireEvent.click(tool("Draw on the slide"));
+        expect(pin.className).toContain("pointer-events-none");
+      });
     });
 
     it("picking a pen shows hidden review marks", () => {
@@ -581,8 +748,6 @@ describe("Stage", () => {
       render(<Stage />);
       const sketch = () => screen.queryByRole("toolbar", { name: "Sketch tools" });
       const edit = () => screen.queryByRole("toolbar", { name: "Edit tools" });
-      expect([sketch(), edit()]).toEqual([null, null]);
-      act(() => useApp.getState().setMode("review"));
       expect(sketch()).not.toBeNull();
       expect(edit()).toBeNull();
       act(() => useApp.getState().setMode("edit"));
@@ -591,7 +756,8 @@ describe("Stage", () => {
       for (const name of ["Undo", "Redo"]) expect(screen.getByRole("button", { name })).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: /Accept/ }));
       expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "view" });
-      expect([sketch(), edit()]).toEqual([null, null]);
+      expect(sketch()).not.toBeNull();
+      expect(edit()).toBeNull();
     });
 
     it("marks what the search finds in the preview, again whenever the preview reloads", () => {
@@ -616,12 +782,11 @@ describe("Stage", () => {
       expect(post).toHaveBeenLastCalledWith({ ...marks, query: "", active: -1 }, "*");
     });
 
-    it("puts a sketch tool away when leaving review mode", () => {
-      useApp.setState({ slideMode: "review" });
+    it("puts a sketch tool away when leaving view mode", () => {
       render(<Stage />);
       fireEvent.click(screen.getByRole("button", { name: "Draw on the slide" }));
+      act(() => useApp.getState().setMode("narration"));
       act(() => useApp.getState().setMode("view"));
-      act(() => useApp.getState().setMode("review"));
       expect(screen.getByRole("button", { name: "Draw on the slide" }).getAttribute("aria-pressed")).toBe("false");
     });
 

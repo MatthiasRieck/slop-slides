@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { SlideComment } from "./comments";
 import type { Stroke } from "./ink";
 import type { Provider, ProviderInfo } from "./models";
 import type { Approval, ApprovalDecision, PermissionMode } from "./permissions";
@@ -83,6 +84,8 @@ export interface Deck {
   shellHash: string;
   /** Review marks the user drew, by slide id, stored in the deck file. */
   review?: Record<string, Stroke[]>;
+  /** Comments on slides, by slide id, stored in the deck file. */
+  comments?: Record<string, SlideComment[]>;
   /** Id of the template the deck's design comes from (its `slopslide-template` meta). */
   template?: string | null;
   /** Every slide's canvas (its `slopslide-size` meta); 1920×1080 px when missing. */
@@ -300,6 +303,9 @@ export const api = {
   loadDeck: (id: string) => invoke<Deck>("load_deck", { id }),
   /** Stores the review marks (by slide id) in the deck file. */
   saveReview: (id: string, review: Record<string, Stroke[]>) => invoke<void>("save_review", { id, review }),
+  /** Stores the comments (by slide id) in the deck file. */
+  saveComments: (id: string, comments: Record<string, SlideComment[]>) =>
+    invoke<void>("save_comments", { id, comments }),
   renameDeck: (id: string, title: string) => invoke<Deck>("rename_deck", { id, title }),
   /** `slides` lists every slide id and section key (see `sectionKey`) in the new order. */
   reorderSlides: (id: string, slides: string[]) => invoke<RailEdit>("reorder_slides", { id, slides }),

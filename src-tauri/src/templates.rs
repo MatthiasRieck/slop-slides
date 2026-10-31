@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::comments;
 use crate::deck::{self, DECK_FILE};
 use crate::error::{Error, Result};
 use crate::html;
@@ -208,6 +209,7 @@ pub fn stage(session: &Path, root: &Path, id: &str) -> Result<String> {
 pub fn deck_shell(source: &str, id: &str, title: &str) -> String {
     let shell = html::strip_slides(source);
     let shell = review::write(&shell, &Default::default());
+    let shell = comments::write(&shell, &Default::default());
     let shell = html::set_title(&shell, title);
     html::ensure_runtime(&html::set_template(&shell, Some(id)))
 }
@@ -231,6 +233,7 @@ pub fn create_from_deck(deck_file: &Path, root: &Path, name: &str) -> Result<Tem
     }
     let cleaned = html::with_placeholder_text(&source);
     let cleaned = review::write(&cleaned, &Default::default());
+    let cleaned = comments::write(&cleaned, &Default::default());
     let cleaned = html::set_template(&html::set_title(&cleaned, name), None);
     let dir = root.join(&id);
     fs::create_dir_all(&dir)?;
@@ -519,6 +522,7 @@ mod tests {
         let text = &html[slides[0].range.start..slides[1].range.end];
         assert!(!text.contains("Cover") && !text.contains("List"), "{text}");
         assert!(!html.contains(review::START), "review marks are dropped");
+        assert!(!html.contains(comments::START), "comments are dropped");
         assert_eq!(html::template(&html), None);
         assert!(html.contains(html::JS_START), "the runtime stays");
         assert_eq!(

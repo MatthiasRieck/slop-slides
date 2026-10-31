@@ -19,6 +19,7 @@ import {
   type WorkspaceChanged,
   type WorkspaceInfo,
 } from "./lib/api";
+import { type CommentScope, commentLine, type PlacedComment, placeComments, type SlideComment } from "./lib/comments";
 import { type ContextUsage, latestContext, mergeContext } from "./lib/context";
 import { DEFAULT_EDIT_STYLES, type EditElement, type EditStyle, type EditTool, type ToolFamily } from "./lib/editTools";
 import { inkBounds, type Stroke } from "./lib/ink";
@@ -63,6 +64,8 @@ export interface UserMessage {
   attachments: string[];
   /** The user drew on the slide before sending; absent in chats saved before sketches. */
   sketch?: Sketch | null;
+  /** The comments on slides sent along; absent in chats saved before comments. */
+  comments?: PlacedComment[];
   /** Absolute path of a screenshot of the slide sent along (for tidying hand edits). */
   screenshot?: string | null;
   /** The element on the slide the message is about. */
@@ -201,12 +204,26 @@ function loadFavorites(): string[] {
 export type StageView = "slides" | "code";
 
 /** What the deck is open for; the top bar's tabs pick it (see components/ModeTabs.tsx). */
-export type DeckMode = "view" | "edit" | "review" | "narration" | "notes" | "code";
+export type DeckMode = "view" | "edit" | "narration" | "notes" | "code";
 
 /** The mode of the deck: the HTML view and editing have their own state, the rest is `slideMode`. */
 export function deckMode(state: Pick<AppState, "view" | "editing" | "slideMode">): DeckMode {
   if (state.view === "code") return "code";
   return state.editing ? "edit" : state.slideMode;
+}
+
+/** The comments the composer offers to send: the selected slide's or the deck's, in deck order. */
+export function commentsInScope(
+  state: Pick<AppState, "deck" | "selected" | "comments" | "commentScope" | "reviewVisible">,
+): PlacedComment[] {
+  if (!state.deck || !state.reviewVisible) return [];
+  const placed = placeComments(state.comments, state.deck.slides);
+  return state.commentScope === "deck" ? placed : placed.filter((c) => c.slide === state.selected);
+}
+
+/** Whether a comment stays out of the next message: it has not changed since it last went out. */
+export function heldComment(state: Pick<AppState, "commentsHeld">, comment: SlideComment): boolean {
+  return state.commentsHeld[comment.id] === comment.text;
 }
 
 /** The search in View mode's toolbar (see components/FindReplace.tsx). */
@@ -318,15 +335,24 @@ interface AppState {
   sketches: Record<string, Stroke[]>;
   /** The marks each slide had when they were last sent (or skipped), so they go out once. */
   sketchesSent: Record<string, Stroke[]>;
-  /** Review marks are shown on the stage (and sent to the agent). */
+  /** Review marks and comments are shown on the stage (and sent to the agent). */
   reviewVisible: boolean;
+  /** Comments on slides, by slide id. Saved in the deck file. */
+  comments: Record<string, SlideComment[]>;
+  /** Which comments the next message takes along. */
+  commentScope: CommentScope;
+  /**
+   * What comments said when they were last sent or left out, by id: they go out again once
+   * changed, or when the user picks them in the composer.
+   */
+  commentsHeld: Record<string, string>;
   /** Slides being saved as images into `dir`, one at a time; null when not exporting. */
   imageExport: { dir: string; slides: string[] } | null;
   /** The stage lets the user edit text and move elements on the slide. */
   search: SlideSearch;
   editing: boolean;
   /** The mode shown over the rendered slide when not editing; see `deckMode`. */
-  slideMode: "view" | "review" | "narration" | "notes";
+  slideMode: "view" | "narration" | "notes";
   /** Bumped when a slide edit could not be saved, so the stage reloads the slide from disk. */
   editReload: number;
   /** The edit toolbar's tool: select, or what a drag on the slide adds. */
@@ -405,6 +431,13 @@ interface AppState {
   /** Keeps the slide's current marks out of the next message. */
   skipSketch: (slide: string) => void;
   setReviewVisible: (visible: boolean) => void;
+  addComment: (slide: string, comment: SlideComment) => void;
+  updateComment: (slide: string, id: string, text: string) => void;
+  removeComment: (slide: string, id: string) => void;
+  setCommentScope: (scope: CommentScope) => void;
+  /** Leaves a comment out of the next messages, or takes it along again. */
+  setCommentHeld: (comment: SlideComment, held: boolean) => void;
+  holdComments: (comments: SlideComment[]) => void;
   startImageExport: (dir: string) => void;
   endImageExport: () => void;
   /** Enters or leaves edit mode, keeping the edits made so far. */
@@ -572,6 +605,9 @@ export const useApp = create<AppState>((set, get) => ({
   sketches: {},
   sketchesSent: {},
   reviewVisible: localStorage.getItem(REVIEW_VISIBLE_KEY) !== "false",
+  comments: {},
+  commentScope: "slide",
+  commentsHeld: {},
   imageExport: null,
   search: NO_SEARCH,
   editing: false,
@@ -683,6 +719,8 @@ export const useApp = create<AppState>((set, get) => ({
       composerFill: null,
       sketches: {},
       sketchesSent: {},
+      comments: {},
+      commentsHeld: {},
       imageExport: null,
       editing: false,
       slideMode: "view",
@@ -937,6 +975,36 @@ export const useApp = create<AppState>((set, get) => ({
     set({ reviewVisible });
   },
 
+  addComment: (slide, comment) => {
+    set((s) => ({ comments: { ...s.comments, [slide]: [...(s.comments[slide] ?? []), comment] } }));
+    scheduleReviewSave();
+  },
+
+  updateComment: (slide, id, text) => {
+    set((s) => ({
+      comments: { ...s.comments, [slide]: (s.comments[slide] ?? []).map((c) => (c.id === id ? { ...c, text } : c)) },
+    }));
+    scheduleReviewSave();
+  },
+
+  removeComment: (slide, id) => {
+    set((s) => ({ comments: { ...s.comments, [slide]: (s.comments[slide] ?? []).filter((c) => c.id !== id) } }));
+    scheduleReviewSave();
+  },
+
+  setCommentScope: (commentScope) => set({ commentScope }),
+
+  setCommentHeld: (comment, held) =>
+    set((s) => {
+      const { [comment.id]: _, ...rest } = s.commentsHeld;
+      return { commentsHeld: held ? { ...rest, [comment.id]: comment.text } : rest };
+    }),
+
+  holdComments: (comments) =>
+    set((s) => ({
+      commentsHeld: { ...s.commentsHeld, ...Object.fromEntries(comments.map((c) => [c.id, c.text])) },
+    })),
+
   startImageExport: (dir) => {
     const { deck } = get();
     if (deck && deck.slides.length > 0) set({ imageExport: { dir, slides: deck.slides.map((s) => s.id) } });
@@ -955,7 +1023,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (mode === "edit" && selectedSlide()?.locked) return;
     get().setView(mode === "code" ? "code" : "slides");
     get().setEditing(mode === "edit");
-    set({ slideMode: mode === "review" || mode === "narration" || mode === "notes" ? mode : "view" });
+    set({ slideMode: mode === "narration" || mode === "notes" ? mode : "view" });
   },
 
   setEditTool: (editTool) => set({ editTool }),
@@ -1201,6 +1269,7 @@ export const useApp = create<AppState>((set, get) => ({
     // Marks go out once, while they are on show; they stay on the slide as a review.
     const unsent = !!slide && get().reviewVisible && strokes !== get().sketchesSent[slide];
     const bounds = unsent && deck ? inkBounds(strokes, pixelsOf(deck)) : null;
+    const comments = commentsInScope(get()).filter((c) => !heldComment(get(), c));
     let user: UserMessage = {
       id: newId(),
       role: "user",
@@ -1208,14 +1277,18 @@ export const useApp = create<AppState>((set, get) => ({
       slide,
       attachments,
       sketch: bounds ? { image: null, bounds } : null,
+      ...(comments.length > 0 && { comments }),
       ...(screenshot && { screenshot }),
       ...(element && { element }),
       createdAt: Date.now(),
     };
     const assistant = newReply(selection.provider);
     set((s) => ({ messages: [...s.messages, user, assistant], running: true }));
+    // They go out once; a comment changed later goes out again.
+    get().holdComments(comments);
     // Let any edit still being saved land first, so the agent sees the final version.
     await editQueue;
+    await flushReviewSave();
     if (deck && slide && user.sketch) {
       // Screenshot the slide with the ink on it.
       const image = await captureSlide(deck.id);
@@ -1502,6 +1575,7 @@ function restoreWorkspaceChat(path: string, chat: unknown, running: boolean, pro
 
 async function loadDeckState(deck: Deck) {
   savedReview = reviewKey(deck.review ?? {});
+  savedComments = reviewKey(deck.comments ?? {});
   useApp.setState({
     deck,
     selected: deck.slides[0]?.id ?? null,
@@ -1511,6 +1585,8 @@ async function loadDeckState(deck: Deck) {
     composerFill: null,
     sketches: deck.review ?? {},
     sketchesSent: {},
+    comments: deck.comments ?? {},
+    commentsHeld: {},
     imageExport: null,
     search: NO_SEARCH,
     editing: false,
@@ -1528,9 +1604,11 @@ let reviewSave: { deckId: string; timer: ReturnType<typeof setTimeout> } | null 
 let reviewSaving = 0;
 /** The review marks as the deck file holds them, as far as the app knows (see `reviewKey`). */
 let savedReview = reviewKey({});
+/** The same for the comments. */
+let savedComments = reviewKey({});
 
-/** Compares review marks independent of slide order; slides without marks don't count. */
-function reviewKey(review: Record<string, Stroke[]>): string {
+/** Compares review marks or comments independent of slide order; slides without any don't count. */
+function reviewKey(review: Record<string, unknown[]>): string {
   return JSON.stringify(
     Object.entries(review)
       .filter(([, strokes]) => strokes.length > 0)
@@ -1539,18 +1617,26 @@ function reviewKey(review: Record<string, Stroke[]>): string {
 }
 
 /**
- * Takes on review marks changed outside the app's own saves (the agent clearing them, an
- * edit in the HTML view), unless the user's latest marks are still being saved.
+ * Takes on review marks and comments changed outside the app's own saves (the agent clearing
+ * them, an edit in the HTML view), unless the user's latest ones are still being saved.
  */
 function adoptReview(deck: Deck) {
+  if (reviewSave || reviewSaving > 0) return;
   const review = deck.review ?? {};
   const key = reviewKey(review);
-  if (reviewSave || reviewSaving > 0 || key === savedReview) return;
-  savedReview = key;
-  if (key !== reviewKey(useApp.getState().sketches)) useApp.setState({ sketches: review, sketchesSent: {} });
+  if (key !== savedReview) {
+    savedReview = key;
+    if (key !== reviewKey(useApp.getState().sketches)) useApp.setState({ sketches: review, sketchesSent: {} });
+  }
+  const comments = deck.comments ?? {};
+  const commentsKey = reviewKey(comments);
+  if (commentsKey !== savedComments) {
+    savedComments = commentsKey;
+    if (commentsKey !== reviewKey(useApp.getState().comments)) useApp.setState({ comments });
+  }
 }
 
-/** Saves the review marks to the deck file once drawing pauses. */
+/** Saves the review marks and comments to the deck file once the user pauses. */
 function scheduleReviewSave() {
   const deck = useApp.getState().deck;
   if (!deck) return;
@@ -1559,23 +1645,29 @@ function scheduleReviewSave() {
   reviewSave = { deckId: deck.id, timer: setTimeout(() => void flushReviewSave(), REVIEW_SAVE_DELAY) };
 }
 
-/** Saves review marks still waiting for drawing to pause, right away. */
+/** Saves review marks and comments still waiting for the user to pause, right away. */
 export async function flushReviewSave() {
   if (!reviewSave) return;
   const { deckId, timer } = reviewSave;
   clearTimeout(timer);
   reviewSave = null;
-  const { deck, sketches } = useApp.getState();
+  const { deck, sketches, comments } = useApp.getState();
   if (deck?.id !== deckId) return;
   const review = Object.fromEntries(Object.entries(sketches).filter(([, strokes]) => strokes.length > 0));
-  // Drawing and undoing back to where the file is leaves nothing to save.
-  if (reviewKey(review) === savedReview) return;
+  const notes = Object.fromEntries(Object.entries(comments).filter(([, list]) => list.length > 0));
   reviewSaving++;
   try {
-    await api.saveReview(deckId, review);
-    savedReview = reviewKey(review);
+    // Drawing and undoing back to where the file is leaves nothing to save.
+    if (reviewKey(review) !== savedReview) {
+      await api.saveReview(deckId, review);
+      savedReview = reviewKey(review);
+    }
+    if (reviewKey(notes) !== savedComments) {
+      await api.saveComments(deckId, notes);
+      savedComments = reviewKey(notes);
+    }
   } catch (error) {
-    useApp.setState({ error: `Could not save the review marks: ${errorMessage(error)}` });
+    useApp.setState({ error: `Could not save the review marks and comments: ${errorMessage(error)}` });
   } finally {
     reviewSaving--;
   }
@@ -1665,6 +1757,11 @@ function buildPrompt(
   }
   if (message.attachments.length > 0) {
     context.push(`Attached files: ${message.attachments.join(", ")}`);
+  }
+  if (deck && message.comments?.length) {
+    const size = pixelsOf(deck);
+    const lines = message.comments.map((c) => commentLine(c, size, deck.slides.length));
+    context.push(`Comments from the user on elements of the deck:\n${lines.join("\n")}`);
   }
   if (deck && message.sketch) {
     const { image, bounds } = message.sketch;

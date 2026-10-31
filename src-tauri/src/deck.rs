@@ -26,6 +26,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
+use crate::comments::{self, Comments};
 use crate::error::{Error, Result};
 use crate::find;
 use crate::html;
@@ -90,6 +91,8 @@ pub struct Deck {
     pub shell_hash: String,
     /// What the user drew on slides, by slide id (see [`review`]).
     pub review: Review,
+    /// What the user wrote about elements on slides, by slide id (see [`comments`]).
+    pub comments: Comments,
     /// Id of the template the deck's design comes from (see [`crate::templates`]).
     pub template: Option<String>,
     /// Every slide's canvas (see [`crate::size`]).
@@ -202,11 +205,13 @@ pub fn app_home() -> Result<PathBuf> {
     Ok(root)
 }
 
-/// `html` without review marks of slides it no longer has; None when there are none to drop.
+/// `html` without review marks and comments of slides it no longer has; None when there are
+/// none to drop.
 fn prune_review(html: &str) -> Option<String> {
     let slides = html::find_slides(html);
     let ids = slides.iter().filter_map(|s| s.id.as_deref()).collect();
-    review::prune(html, &ids)
+    let marks = review::prune(html, &ids);
+    comments::prune(marks.as_deref().unwrap_or(html), &ids).or(marks)
 }
 
 /// A template a new deck takes its design from: its id and deck.html.
@@ -272,6 +277,7 @@ pub fn load(file: &Path) -> Result<Deck> {
         path,
         shell_hash: html::shell_hash(&source, &spans, &section_spans),
         review: review::read(&source),
+        comments: comments::read(&source),
         template: html::template(&source),
         size: html::slide_size(&source).into(),
         narration: narration::Settings::of(&source),
@@ -385,6 +391,18 @@ fn edit<T>(file: &Path, f: impl FnOnce(&str) -> EditResult<T>) -> Result<(Deck, 
 pub fn save_review(file: &Path, review: &Review) -> Result<()> {
     let source = read_html(file)?;
     let updated = review::write(&source, review);
+    let updated = prune_review(&updated).unwrap_or(updated);
+    if updated != source {
+        write_html(file, &updated)?;
+    }
+    Ok(())
+}
+
+/// Stores the user's comments in deck.html, dropping those of slides that are gone. Leaves the
+/// file alone when nothing changed, so the watcher stays quiet.
+pub fn save_comments(file: &Path, comments: &Comments) -> Result<()> {
+    let source = read_html(file)?;
+    let updated = comments::write(&source, comments);
     let updated = prune_review(&updated).unwrap_or(updated);
     if updated != source {
         write_html(file, &updated)?;
@@ -681,7 +699,7 @@ pub fn delete_section(file: &Path, index: usize) -> Result<Deck> {
     Ok(edit(file, |s| Ok((html::delete_section(s, index)?, ())))?.0)
 }
 
-/// Deletes `slides` along with their review marks, all in one write; none if any is locked.
+/// Deletes `slides` along with their review marks and comments, all in one write; none if any is locked.
 pub fn delete_slides(file: &Path, session: &Path, slides: &[String]) -> Result<RailEdit> {
     let source = read_html(file)?;
     for slide in slides {
@@ -1936,6 +1954,64 @@ mod tests {
 
         save_review(&deck.file(), &Review::new()).unwrap();
         assert_eq!(deck.html(), THREE, "clearing every mark removes the block");
+    }
+
+    fn notes(ids: &[&str]) -> Comments {
+        ids.iter()
+            .map(|id| {
+                let comment = comments::Comment {
+                    id: format!("on-{id}"),
+                    text: "Bigger".into(),
+                    x: 0.5,
+                    y: 0.5,
+                    target: None,
+                };
+                (id.to_string(), vec![comment])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn comments_are_saved_in_the_deck_and_loaded_back() {
+        let deck = TempDeck::new(THREE);
+        save_comments(&deck.file(), &notes(&["b", "gone"])).unwrap();
+        assert_eq!(load(&deck.file()).unwrap().comments, notes(&["b"]));
+        assert!(deck.html().contains(comments::START));
+        save_comments(&deck.file(), &Comments::new()).unwrap();
+        assert!(!deck.html().contains(comments::START));
+    }
+
+    #[test]
+    fn comments_leave_slide_and_shell_hashes_alone() {
+        let deck = TempDeck::new(THREE);
+        let before = load(&deck.file()).unwrap();
+        save_comments(&deck.file(), &notes(&["a", "c"])).unwrap();
+        let after = load(&deck.file()).unwrap();
+        assert_eq!(after.shell_hash, before.shell_hash);
+        let hashes = |d: &Deck| d.slides.iter().map(|s| s.hash.clone()).collect::<Vec<_>>();
+        assert_eq!(hashes(&after), hashes(&before));
+    }
+
+    #[test]
+    fn deleting_a_slide_drops_its_comments() {
+        let deck = TempDeck::new(THREE);
+        save_comments(&deck.file(), &notes(&["a", "b"])).unwrap();
+        let deleted = delete_slides(&deck.file(), &deck.session(), &ids(&["b"])).unwrap();
+        assert_eq!(deleted.deck.comments, notes(&["a"]));
+        assert_eq!(load(&deck.file()).unwrap().comments, notes(&["a"]));
+    }
+
+    #[test]
+    fn normalizing_drops_marks_and_comments_of_slides_that_are_gone() {
+        let html = comments::write(
+            &review::write(THREE, &marks(&["a", "gone"])),
+            &notes(&["b", "gone"]),
+        );
+        let deck = TempDeck::new(&html);
+        normalize(&deck.file()).unwrap();
+        let loaded = load(&deck.file()).unwrap();
+        assert_eq!(loaded.review, marks(&["a"]));
+        assert_eq!(loaded.comments, notes(&["b"]));
     }
 
     #[test]

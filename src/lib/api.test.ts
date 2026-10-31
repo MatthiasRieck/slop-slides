@@ -29,6 +29,12 @@ const CASES = [
     "save_review",
     { id: "talk", review: { intro: [{ tool: "pen", color: "#fff", points: [[0.5, 0.5]] }] } },
   ],
+  [
+    "saveComments",
+    () => api.saveComments("talk", { intro: [{ id: "a", text: "Bigger", x: 0.5, y: 0.5 }] }),
+    "save_comments",
+    { id: "talk", comments: { intro: [{ id: "a", text: "Bigger", x: 0.5, y: 0.5 }] } },
+  ],
   ["reorderSlides", () => api.reorderSlides("talk", ["b", "a"]), "reorder_slides", { id: "talk", slides: ["b", "a"] }],
   ["addSlide", () => api.addSlide("talk", null), "add_slide", { id: "talk", after: null }],
   ["duplicateSlides", () => api.duplicateSlides("talk", ["a"]), "duplicate_slides", { id: "talk", slides: ["a"] }],

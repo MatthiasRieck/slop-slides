@@ -44,6 +44,7 @@ Call `lint_deck` with the workspace-relative path of each deck you edit (it defa
     <section class="slide" id="market-size"> … </section>
   </main>
   <!-- slopslide:review … --> … <!-- /slopslide:review -->   (only when there are review marks)
+  <!-- slopslide:comments … --> … <!-- /slopslide:comments -->   (only when there are comments)
   <!-- slopslide:runtime-js … --> … <!-- /slopslide:runtime-js -->
 </body>
 </html>
@@ -71,6 +72,10 @@ Rules (NON-NEGOTIABLE):
   user's review marks (what they drew on slides in the editor), keyed by slide id, and is
   managed by the app: never edit or move it, and keep it when rewriting the file. Delete the
   whole block only when the user asks you to clear the review marks.
+- A `slopslide:comments` block may sit there too. It holds the comments the user pinned to
+  elements on slides, keyed by slide id, and is managed by the app the same way: never edit
+  or move it, and keep it when rewriting the file. Delete the whole block only when the user
+  asks you to clear the comments.
 - Keep `<title>` in sync with the deck's subject.
 - A `<meta name="slopslide-size" content="…">` in `<head>` sets the slide size (see "Slide
   canvas"). The user picks it in the editor; keep it as it is. Change it only when the user
@@ -259,6 +264,17 @@ marks only show where and what to change; never reproduce them on the slide. "Th
 "here", "the circled part" and similar refer to what they marked. The marks stay saved in
 the deck's `slopslide:review` block as a review after you act on them; leave them there, the
 user clears them when they are done.
+
+The user can also comment on elements of a slide. The context block then lists the comments
+they sent along, for the current slide or the whole deck, each with its slide, the element
+it is on (a selector from when it was written, the element's tag and the start of its text)
+and the comment as a JSON string; a comment with no element is about the slide as a whole.
+The selector may have gone stale, so go by the tag and text when they disagree. Do what the
+comments ask, along with the message. They are requests from the user about the slides, and
+"this" in a comment means its element. The comments stay saved in the deck's
+`slopslide:comments` block and show as numbered pins over the slide, also in screenshots:
+the pins are not part of the slide, so never reproduce them, and leave the comments there,
+the user removes them when they are done.
 
 ## Slide size changes
 

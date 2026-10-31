@@ -41,6 +41,7 @@ import {
   type UserMessage,
   useApp,
 } from "../store";
+import { ComposerComments } from "./Comments";
 import { EffortPicker, ModelPicker, useDismiss } from "./ModelPicker";
 import { ApprovalCard, ApprovalReview, PermissionPicker } from "./Permissions";
 import { VoiceInput } from "./VoiceInput";
@@ -364,6 +365,11 @@ function UserBubble({ message }: { message: UserMessage }) {
         <div className="flex flex-wrap justify-end gap-1 text-2xs text-muted-foreground">
           {slideNumber > 0 && <span>on slide {slideNumber}</span>}
           {message.sketch && <span>· with sketch</span>}
+          {!!message.comments?.length && (
+            <span>
+              · with {message.comments.length} comment{message.comments.length === 1 ? "" : "s"}
+            </span>
+          )}
           {message.element && <span>· about {message.element.name}</span>}
           {message.screenshot && <span>· with screenshot</span>}
           {message.attachments.map((a) => (
@@ -827,6 +833,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
                 </button>
               </span>
             )}
+            <ComposerComments />
             {files.map((a) => (
               <span
                 key={a}

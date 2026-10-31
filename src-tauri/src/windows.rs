@@ -1,8 +1,9 @@
 //! App windows. Each window has a workspace of its own (see [`OpenWorkspace`]), so several
-//! folders can be open side by side; File › New Window (⌘N, Ctrl+N elsewhere) opens another,
-//! and so does opening the app again (on macOS: a double-click in Finder, a click on its Dock
-//! icon). On macOS, folders opened with the app from Finder (dropped on its icon, Open With)
-//! open in a window too: see `open_folder`.
+//! folders can be open side by side; File › New Window (⌘N, Ctrl+N elsewhere) opens another.
+//! On macOS so does opening the app again (a double-click in Finder) and the New Window item of
+//! its Dock menu, while a click on its Dock icon only brings it back: see `reopened`. Folders
+//! opened with the app from Finder (dropped on its icon, Open With) open in a window too: see
+//! `open_folder`.
 
 use std::collections::HashMap;
 #[cfg(any(target_os = "macos", test))]
@@ -109,13 +110,7 @@ fn target(
 /// it open already, else one on the start screen, else a new one.
 #[cfg(target_os = "macos")]
 pub fn open_folder(app: &AppHandle, root: PathBuf) -> Result<()> {
-    let mut windows: Vec<String> = app
-        .webview_windows()
-        .into_keys()
-        .filter(|label| is_app_window(label))
-        .collect();
-    // The first window first, then the others in the order they were opened.
-    windows.sort_by_key(|label| (label != "main", label.clone()));
+    let windows = app_windows(app);
     let pending = app.state::<PendingFolders>();
     match target(&app.state::<OpenWorkspace>(), &pending, &windows, &root) {
         Target::Focus(window) => focus(app, &window),
@@ -134,6 +129,53 @@ pub fn open_folder(app: &AppHandle, root: PathBuf) -> Result<()> {
     }
     let _ = app.emit(PENDING_EVENT, ());
     Ok(())
+}
+
+/// What opening the app again does.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, PartialEq)]
+enum Reopen {
+    /// Nothing: macOS has brought the app's windows to the front.
+    Nothing,
+    /// Brings back this window: all of them are minimized.
+    Restore(String),
+    /// Opens a new window.
+    New,
+}
+
+/// What a reopen does, given the app windows (`windows`, in the order to prefer them): a click
+/// on the Dock icon comes back to the app, any other way of opening it asks for a window.
+#[cfg(any(target_os = "macos", test))]
+fn reopen(from_dock: bool, has_visible_windows: bool, windows: &[String]) -> Reopen {
+    match windows.first() {
+        Some(window) if from_dock && !has_visible_windows => Reopen::Restore(window.clone()),
+        Some(_) if from_dock => Reopen::Nothing,
+        _ => Reopen::New,
+    }
+}
+
+/// The app was opened again while running. Called while macOS delivers the event, which
+/// [`dock::sent_reopen`] reads.
+#[cfg(target_os = "macos")]
+pub fn reopened(app: &AppHandle, has_visible_windows: bool) -> Result<()> {
+    match reopen(dock::sent_reopen(), has_visible_windows, &app_windows(app)) {
+        Reopen::Nothing => {}
+        Reopen::Restore(window) => focus(app, &window),
+        Reopen::New => open_new(app)?,
+    }
+    Ok(())
+}
+
+/// The app windows: the first one first, then the others in the order they were opened.
+#[cfg(target_os = "macos")]
+fn app_windows(app: &AppHandle) -> Vec<String> {
+    let mut windows: Vec<String> = app
+        .webview_windows()
+        .into_keys()
+        .filter(|label| is_app_window(label))
+        .collect();
+    windows.sort_by_key(|label| (label != "main", label.clone()));
+    windows
 }
 
 #[cfg(target_os = "macos")]
@@ -232,9 +274,120 @@ pub fn menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     Ok(menu)
 }
 
+/// The Dock: who sent a reopen, and the menu of the app's icon. Tauri has neither, so this adds
+/// the menu to the application delegate (the one [`tauri`] installs) at runtime.
+#[cfg(target_os = "macos")]
+pub mod dock {
+    use std::sync::OnceLock;
+
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyObject, Imp, Sel};
+    use objc2::{ffi, sel, MainThreadMarker, MainThreadOnly};
+    use objc2_app_kit::{NSApplication, NSMenu, NSMenuItem, NSRunningApplication};
+    use objc2_foundation::{ns_string, NSAppleEventManager};
+    use tauri::AppHandle;
+
+    /// `keySenderPIDAttr`: the Apple event attribute with the process that sent the event.
+    const SENDER_PID: u32 = u32::from_be_bytes(*b"spid");
+
+    /// Whether the reopen event being delivered comes from the Dock, as a click on its icon
+    /// does. Finder and `open` send the same event; with no sender to go by this counts as the
+    /// Dock, since a window too few is better than one nobody asked for.
+    pub fn sent_reopen() -> bool {
+        let sender = NSAppleEventManager::sharedAppleEventManager()
+            .currentAppleEvent()
+            .and_then(|event| event.attributeDescriptorForKeyword(SENDER_PID));
+        let Some(sender) = sender else {
+            return true;
+        };
+        NSRunningApplication::runningApplicationWithProcessIdentifier(sender.int32Value())
+            .and_then(|sender| sender.bundleIdentifier())
+            .is_some_and(|id| id.to_string() == "com.apple.dock")
+    }
+
+    /// The app, for [`new_window`], which macOS calls with no way to pass it along.
+    static APP: OnceLock<AppHandle> = OnceLock::new();
+
+    extern "C-unwind" fn menu(delegate: &AnyObject, _: Sel, _: *mut AnyObject) -> *mut NSMenu {
+        let mtm = MainThreadMarker::new().expect("macOS asks for the Dock menu on the main thread");
+        let menu = NSMenu::new(mtm);
+        let item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                ns_string!("New Window"),
+                Some(sel!(slopNewWindow:)),
+                ns_string!(""),
+            )
+        };
+        unsafe { item.setTarget(Some(delegate)) };
+        menu.addItem(&item);
+        Retained::autorelease_return(menu)
+    }
+
+    extern "C-unwind" fn new_window(_: &AnyObject, _: Sel, _: *mut AnyObject) {
+        if let Some(Err(e)) = APP.get().map(super::open_new) {
+            eprintln!("{e}");
+        }
+    }
+
+    /// Gives the app's Dock icon a menu with New Window. Called on the main thread once the
+    /// app is up.
+    pub fn add_menu(app: &AppHandle) {
+        let (Some(mtm), true) = (MainThreadMarker::new(), APP.set(app.clone()).is_ok()) else {
+            return;
+        };
+        let Some(delegate) = NSApplication::sharedApplication(mtm).delegate() else {
+            return;
+        };
+        let delegate: &AnyObject = delegate.as_ref();
+        let class = std::ptr::from_ref(delegate.class()).cast_mut();
+        let menu = menu as extern "C-unwind" fn(_, _, _) -> _;
+        let new_window = new_window as extern "C-unwind" fn(_, _, _);
+        // Safety: both functions match the signature and the type encoding of their selector.
+        unsafe {
+            ffi::class_addMethod(
+                class,
+                sel!(applicationDockMenu:),
+                std::mem::transmute::<*const (), Imp>(menu as *const ()),
+                c"@@:@".as_ptr(),
+            );
+            ffi::class_addMethod(
+                class,
+                sel!(slopNewWindow:),
+                std::mem::transmute::<*const (), Imp>(new_window as *const ()),
+                c"v@:@".as_ptr(),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_click_on_the_dock_icon_comes_back_to_the_app_without_a_new_window() {
+        let windows = vec!["main".to_string(), "window-2".to_string()];
+        assert_eq!(reopen(true, true, &windows), Reopen::Nothing);
+        assert_eq!(
+            reopen(true, false, &windows),
+            Reopen::Restore("main".into()),
+            "all minimized"
+        );
+        assert_eq!(
+            reopen(true, false, &[]),
+            Reopen::New,
+            "no window to come back to"
+        );
+    }
+
+    #[test]
+    fn opening_the_app_any_other_way_opens_a_new_window() {
+        let windows = vec!["main".to_string()];
+        assert_eq!(reopen(false, true, &windows), Reopen::New);
+        assert_eq!(reopen(false, false, &windows), Reopen::New);
+        assert_eq!(reopen(false, false, &[]), Reopen::New);
+    }
 
     #[test]
     fn app_windows_are_the_first_and_the_new_ones() {

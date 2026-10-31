@@ -445,6 +445,12 @@ describe("slide editor", () => {
       expect(e.commits().at(-1)!.markup).not.toContain("contenteditable");
     });
 
+    it("tells the app about a press, so what is open there closes", () => {
+      const e = editor();
+      e.down(e.$(".card p"));
+      expect(e.posted()).toContainEqual({ type: "slop:edit-press" });
+    });
+
     it("reports the dropped image to the edit toolbar as media", () => {
       const e = editor();
       drop(e, [{ src: "assets/logo.png", w: 200, h: 100 }]);

@@ -1,4 +1,4 @@
-import { Blend, FlipHorizontal2, FlipVertical2, Image, ImagePlus, Paintbrush, Replace } from "lucide-react";
+import { Blend, FlipHorizontal2, FlipVertical2, Image, Paintbrush, Replace } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { type EditSelection, type EditStyle, type EditTool, FIT_POSITIONS, type ImageFit } from "../lib/editTools";
@@ -13,8 +13,8 @@ const FITS: { value: ImageFit; label: string }[] = [
 
 /**
  * The toolbar's tools for how an element looks, beyond text, fill and border: opacity, shadow and
- * corner radius; the format painter; adding an image, and fitting, flipping and describing the
- * selected one. Mounted in EditToolbar.
+ * corner radius; the format painter; fitting, flipping and describing the selected image. Mounted
+ * in EditToolbar.
  */
 export function LookTools(props: {
   tool: EditTool;
@@ -36,9 +36,6 @@ export function LookTools(props: {
         onClick={() => props.onTool(painting ? "select" : "paint")}
       >
         <Paintbrush />
-      </ToolButton>
-      <ToolButton label="Add an image from a file" onClick={() => props.onPickImage?.(false)}>
-        <ImagePlus />
       </ToolButton>
       <ImageButton
         selection={selection?.image ? selection : null}

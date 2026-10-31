@@ -1,4 +1,5 @@
 import { act, createEvent, fireEvent, render, screen } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setFullscreen = vi.fn(async () => {});
@@ -924,11 +925,15 @@ describe("presenter view", () => {
       expect(button().getAttribute("aria-pressed")).toBe("false");
     });
 
-    it("highlights what was said, keeping the text as it is", async () => {
+    it("fades what was said without marking it, keeping the text as it is", async () => {
       await turnOn();
       hear("welcome everyone to the quarterly results");
       expect(notes()).toBe(script);
       expect(said()).toBe("Welcome everyone to the quarterly results");
+      const spoken = [...screen.getByTestId("presenter-notes").querySelectorAll("span")];
+      for (const span of spoken) {
+        expect(span.className).toBe(span.hasAttribute("data-said") ? "text-white/40" : "");
+      }
     });
 
     it("scrolls the speaker's line into place", async () => {
@@ -1013,6 +1018,17 @@ describe("Presenter on several screens", () => {
     unmount();
     await act(async () => {});
     expect(invoke).toHaveBeenCalledWith("close_presenter_view");
+  });
+
+  it("opens the presenter view once under StrictMode's double-mounted effects", async () => {
+    useApp.setState({ screens: choice });
+    render(
+      <StrictMode>
+        <Presenter />
+      </StrictMode>,
+    );
+    await act(async () => {});
+    expect(invoke.mock.calls.map(([name]) => name)).toEqual(["present_on"]);
   });
 
   it("places and closes in the order asked, however long each takes", async () => {

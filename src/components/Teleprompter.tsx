@@ -13,12 +13,7 @@ export type TeleprompterPhase = "off" | "offer" | "downloading" | "starting" | "
 /** Where the speaker's line stays as the script scrolls: a third of the way down. */
 const LINE_AT = 1 / 3;
 
-const pieceClass = (piece: Piece) =>
-  cn(
-    "box-decoration-clone",
-    piece.said && "rounded-sm bg-emerald-400/20 text-white/70",
-    piece.current && "bg-emerald-400/45 text-white",
-  );
+const pieceClass = (piece: Piece) => (piece.said ? "text-white/40" : "");
 
 /**
  * Turns the teleprompter on and off: the microphone is on only while it is following, and the
@@ -164,8 +159,8 @@ export function TeleprompterNotice({ teleprompter }: { teleprompter: ReturnType<
 }
 
 /**
- * The script of one slide (Markdown) as the speaker gets through it: what was said is highlighted
- * and the text scrolls along, wherever they go in it. Give it a new `key` for another script.
+ * The script of one slide (Markdown) as the speaker gets through it: what was said fades and the
+ * text scrolls along, wherever they go in it. Give it a new `key` for another script.
  */
 export function FollowedScript({ text, className }: { text: string; className?: string }) {
   const script = useMemo(() => toScript(markdownText(text)), [text]);

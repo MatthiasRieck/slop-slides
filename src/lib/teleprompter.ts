@@ -164,7 +164,7 @@ export function pieces(script: Script, track: Track): Piece[] {
   };
   script.words.forEach((word, i) => {
     const said = track.said[i] ?? false;
-    // The highlight runs on through the space between two words said.
+    // What was said runs on through the space between two words said.
     add(word.start, said && i > 0 && track.said[i - 1] === true);
     add(word.end, said, i === track.position - 1);
   });

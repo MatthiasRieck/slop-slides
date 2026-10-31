@@ -49,6 +49,9 @@ import { railSelection, useApp } from "../store";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { LayoutPicker, Popover, StylePicker } from "./Templates";
 
+/** How a slide in the rail eases into and out of being hidden or locked. */
+const MARK_TRANSITION = "transition duration-200";
+
 export function SlideRail() {
   const deck = useApp((s) => s.deck);
   const selected = useApp((s) => s.selected);
@@ -679,7 +682,7 @@ function Thumbnail(props: {
     >
       <span
         className={cn(
-          "w-4 shrink-0 pt-0.5 text-right text-2xs tabular-nums text-muted-foreground",
+          "w-4 shrink-0 pt-0.5 text-right text-2xs tabular-nums text-muted-foreground transition-opacity duration-200",
           selected && "font-semibold text-foreground",
           slide.hidden && "opacity-60",
         )}
@@ -709,19 +712,20 @@ function Thumbnail(props: {
             version={version}
             size={pixelsOf({ size: deckSize })}
             thumbnail
-            className={cn(slide.hidden && "opacity-35 grayscale")}
+            className={cn(MARK_TRANSITION, slide.hidden && "opacity-35 grayscale")}
           />
         </button>
-        {slide.hidden && <HiddenMark />}
-        {slide.locked && (
-          <span
-            data-testid="locked-mark"
-            title="Locked: neither you nor the agent can change it"
-            className="pointer-events-none absolute bottom-1 left-1 rounded bg-black/70 p-1 text-white"
-          >
-            <Lock className="size-3" aria-label="Locked slide" />
-          </span>
-        )}
+        <RailMark shown={slide.hidden} className="inset-0 flex items-center justify-center text-foreground/80">
+          <HiddenMark />
+        </RailMark>
+        <RailMark
+          shown={slide.locked}
+          testId="locked-mark"
+          title="Locked: neither you nor the agent can change it"
+          className="bottom-1 left-1 rounded bg-black/70 p-1 text-white"
+        >
+          <Lock className="size-3" aria-label="Locked slide" />
+        </RailMark>
         <div className="absolute right-1 top-1 hidden gap-0.5 group-hover:flex">
           <RailAction title={slide.locked ? "Unlock slide" : "Lock slide"} onClick={toggleLocked}>
             {slide.locked ? <LockOpen className="size-3" /> : <Lock className="size-3" />}
@@ -746,25 +750,49 @@ function Thumbnail(props: {
   );
 }
 
-/** A closed eye over a hidden slide's thumbnail. */
+/** A mark over a slide's thumbnail. It stays mounted so that it can fade out the way it came in. */
+function RailMark(props: {
+  shown: boolean;
+  testId?: string;
+  title?: string;
+  className: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      data-testid={props.testId}
+      data-shown={props.shown}
+      aria-hidden={!props.shown}
+      title={props.title}
+      className={cn(
+        "pointer-events-none absolute",
+        MARK_TRANSITION,
+        props.className,
+        !props.shown && "scale-75 opacity-0",
+      )}
+    >
+      {props.children}
+    </div>
+  );
+}
+
+/** A closed eye, for a hidden slide. */
 function HiddenMark() {
   return (
-    <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-foreground/80">
-      <svg
-        data-testid="hidden-mark"
-        aria-label="Hidden slide"
-        role="img"
-        viewBox="2 8 20 11"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        className="h-1/3 max-h-8 drop-shadow"
-      >
-        <path d="M3 10q9 8 18 0" />
-        <path d="M6.6 12.6 5 15.6M10.2 13.8l-.6 3.4M13.8 13.8l.6 3.4M17.4 12.6l1.6 3" />
-      </svg>
-    </div>
+    <svg
+      data-testid="hidden-mark"
+      aria-label="Hidden slide"
+      role="img"
+      viewBox="2 8 20 11"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      className="h-1/3 max-h-8 drop-shadow"
+    >
+      <path d="M3 10q9 8 18 0" />
+      <path d="M6.6 12.6 5 15.6M10.2 13.8l-.6 3.4M13.8 13.8l.6 3.4M17.4 12.6l1.6 3" />
+    </svg>
   );
 }
 

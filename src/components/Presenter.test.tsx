@@ -888,11 +888,15 @@ describe("presenter view", () => {
       expect(button().getAttribute("aria-pressed")).toBe("false");
     });
 
-    it("highlights what was said, keeping the text as it is", async () => {
+    it("fades what was said without marking it, keeping the text as it is", async () => {
       await turnOn();
       hear("welcome everyone to the quarterly results");
       expect(notes()).toBe(script);
       expect(said()).toBe("Welcome everyone to the quarterly results");
+      const spoken = [...screen.getByTestId("presenter-notes").querySelectorAll("span")];
+      for (const span of spoken) {
+        expect(span.className).toBe(span.hasAttribute("data-said") ? "text-white/40" : "");
+      }
     });
 
     it("scrolls the speaker's line into place", async () => {

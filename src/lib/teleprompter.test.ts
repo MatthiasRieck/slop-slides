@@ -197,7 +197,7 @@ describe("pieces", () => {
     expect(pieces(script, startTrack(script))).toEqual([{ text: SCRIPT, said: false, current: false }]);
   });
 
-  it("runs the highlight across spaces, and picks out the last word", () => {
+  it("runs what was said across spaces, and picks out the last word", () => {
     const short = toScript("One two three four five.");
     const track: Track = { position: 3, said: [true, true, true, false, false] };
     expect(pieces(short, track)).toEqual([

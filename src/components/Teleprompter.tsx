@@ -155,8 +155,8 @@ export function TeleprompterNotice({ teleprompter }: { teleprompter: ReturnType<
 }
 
 /**
- * The script of one slide as the speaker gets through it: what was said is highlighted and the
- * text scrolls along, wherever they go in it. Give it a new `key` for another script.
+ * The script of one slide as the speaker gets through it: what was said fades and the text
+ * scrolls along, wherever they go in it. Give it a new `key` for another script.
  */
 export function FollowedScript({ text, className }: { text: string; className?: string }) {
   const script = useMemo(() => toScript(text), [text]);
@@ -186,11 +186,7 @@ export function FollowedScript({ text, className }: { text: string; className?: 
           key={i}
           data-said={piece.said || undefined}
           data-current={piece.current || undefined}
-          className={cn(
-            "box-decoration-clone",
-            piece.said && "rounded-sm bg-emerald-400/20 text-white/70",
-            piece.current && "bg-emerald-400/45 text-white",
-          )}
+          className={piece.said ? "text-white/40" : undefined}
         >
           {piece.text}
         </span>

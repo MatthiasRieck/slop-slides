@@ -6,11 +6,12 @@ import { basename, cn } from "../lib/utils";
 import { deckMode, lintFixPrompt, useApp } from "../store";
 import { SlideSearch } from "./FindReplace";
 import { NarrationPanel } from "./NarrationPanel";
+import { NotesPanel } from "./NotesPanel";
 import { SlideSizeButton } from "./SlideSize";
 
 /**
  * The row under the top bar, which holds the tools of the mode the deck is in. In View and HTML
- * it has the title, the slide size and lint, and in View the search; in Narration, the narration.
+ * it has the title, the slide size and lint, and in View the search; in Narration and Notes, those.
  * The stage draws this row itself in Edit, whose tools work on the slide it shows, and adds a row
  * of its own under this one in View, for marks and comments.
  */
@@ -19,6 +20,7 @@ export function DeckToolbar() {
   const mode = useApp(deckMode);
   if (!deck || mode === "edit") return null;
   if (mode === "narration") return <NarrationPanel />;
+  if (mode === "notes") return <NotesPanel />;
   return <DeckTools deck={deck} />;
 }
 

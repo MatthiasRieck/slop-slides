@@ -1674,7 +1674,6 @@ mod tests {
     mod process {
         use super::*;
         use std::fs;
-        use std::os::unix::fs::PermissionsExt;
         use std::sync::Arc;
         use std::time::Duration;
 
@@ -1709,8 +1708,7 @@ mod tests {
                      {body}\n"
                 );
                 let claude = dir.join("claude");
-                fs::write(&claude, script).unwrap();
-                fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+                crate::test_support::write_script(&claude, &script);
                 Fixture {
                     dir,
                     events: Arc::default(),
@@ -2000,7 +1998,7 @@ fi
             deck::write_session(&fx.session_dir(), "claude-session", Some("gone")).unwrap();
             assert!(!fx.run("Hi", None).await);
             let runs = fx.invocations();
-            assert_eq!(runs.len(), 2, "retried once");
+            assert_eq!(runs.len(), 2, "retried once: {:?}", fx.errors());
             assert!(has_flag(&runs[0], "--resume", "gone"));
             assert!(!runs[1].contains(&"--resume".to_string()));
             assert_eq!(fx.session().as_deref(), Some("new-session"));

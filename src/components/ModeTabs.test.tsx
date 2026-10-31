@@ -31,7 +31,13 @@ beforeEach(() => {
 describe("ModeTabs", () => {
   it("lists the modes, with View selected", () => {
     render(<ModeTabs />);
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["View", "Edit", "Narration", "HTML"]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
+      "View",
+      "Edit",
+      "Narration",
+      "Notes",
+      "HTML",
+    ]);
     expect(selected()).toEqual(["View"]);
   });
 

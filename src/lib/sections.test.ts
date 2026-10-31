@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Deck } from "./api";
-import { applyOrder, railItems, sectionKey, startsSection } from "./sections";
+import { applyOrder, dropRows, railItems, sectionKey, startsSection, stepRows } from "./sections";
 
 const deck = (sections: [string, number][], ids = ["a", "b", "c"]): Deck => ({
   id: "talk",
@@ -93,5 +93,43 @@ describe("startsSection / sectionKey", () => {
 
   it("formats keys like the backend", () => {
     expect(sectionKey(3)).toBe("section:3");
+  });
+});
+
+describe("stepRows", () => {
+  const rows = ["a", "section:0", "b", "c", "d"];
+
+  it("steps a slide past a section marker, into the next section", () => {
+    expect(stepRows(rows, ["b"], -1)).toEqual(["a", "b", "section:0", "c", "d"]);
+    expect(stepRows(rows, ["a"], 1)).toEqual(["section:0", "a", "b", "c", "d"]);
+  });
+
+  it("keeps slides picked together in order, and those with a gap apart", () => {
+    expect(stepRows(rows, ["b", "c"], 1)).toEqual(["a", "section:0", "d", "b", "c"]);
+    expect(stepRows(rows, ["c", "d"], -1)).toEqual(["a", "section:0", "c", "d", "b"]);
+    expect(stepRows(rows, ["a", "c"], -1)).toEqual(["a", "section:0", "c", "b", "d"]);
+  });
+
+  it("leaves rows already at the end", () => {
+    expect(stepRows(rows, ["a"], -1)).toEqual(rows);
+    expect(stepRows(rows, ["c", "d"], 1)).toEqual(rows);
+  });
+});
+
+describe("dropRows", () => {
+  const rows = ["a", "b", "c", "d"];
+
+  it("moves one row like a drag does, past the row dropped on", () => {
+    expect(dropRows(rows, ["a"], "a", "c")).toEqual(["b", "c", "a", "d"]);
+    expect(dropRows(rows, ["d"], "d", "b")).toEqual(["a", "d", "b", "c"]);
+  });
+
+  it("takes picked rows along as a block, in deck order", () => {
+    expect(dropRows(rows, ["a", "c"], "c", "d")).toEqual(["b", "d", "a", "c"]);
+    expect(dropRows(rows, ["b", "d"], "d", "a")).toEqual(["b", "d", "a", "c"]);
+  });
+
+  it("does nothing when dropped on a row of the block", () => {
+    expect(dropRows(rows, ["a", "c"], "a", "c")).toEqual(rows);
   });
 });

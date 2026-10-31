@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_EDIT_STYLES,
   defaultsFrom,
+  EDIT_TOOL_KEYS,
   type EditSelection,
   familyOf,
   familyOfKind,
@@ -10,8 +11,11 @@ import {
   fontChoices,
   linkedSlide,
   normalizeHref,
+  parseDeckColors,
+  parseElement,
   parseFontSize,
   parseFonts,
+  parseHexColor,
   parseSelection,
   SYSTEM_FONTS,
   stepFontSize,
@@ -42,6 +46,16 @@ const SELECTION: EditSelection = {
   fill: null,
   stroke: null,
   strokeWidth: 0,
+  opacity: 0.5,
+  shadow: 12,
+  radius: 8,
+  clipped: false,
+  image: false,
+  fit: null,
+  fitPosition: null,
+  alt: null,
+  flipX: false,
+  flipY: false,
 };
 
 describe("edit tools", () => {
@@ -136,6 +150,16 @@ describe("edit tools", () => {
       fill: "#abcdef",
       stroke: null,
       strokeWidth: 0,
+      opacity: 1,
+      shadow: 0,
+      radius: null,
+      clipped: false,
+      image: false,
+      fit: null,
+      fitPosition: null,
+      alt: null,
+      flipX: false,
+      flipY: false,
     });
   });
 
@@ -194,5 +218,86 @@ describe("edit tools", () => {
     expect(linkedSlide("#the%20end")).toBe("the end");
     expect(linkedSlide("https://example.com")).toBeNull();
     expect(linkedSlide(null)).toBeNull();
+  });
+
+  it("sorts the new tools into families: lines draw, cut-out shapes are shapes, the painter adds nothing", () => {
+    expect(familyOf("line")).toBe("draw");
+    expect(familyOf("arrow")).toBe("draw");
+    expect(familyOf("triangle")).toBe("shape");
+    expect(familyOf("star")).toBe("shape");
+    expect(familyOf("bubble")).toBe("shape");
+    expect(familyOf("paint")).toBeNull();
+    expect(toolbarState(null, "paint", DEFAULT_EDIT_STYLES)).toBeNull();
+    expect(toolbarState(null, "arrow", DEFAULT_EDIT_STYLES)?.vector).toBe(true);
+  });
+
+  it("keeps an element's own look out of the defaults for new elements", () => {
+    expect(
+      defaultsFrom({ fill: "#ff0000", opacity: 0.5, shadow: 8, radius: 4, fit: "cover", alt: "x", flipX: true }),
+    ).toEqual({ fill: "#ff0000" });
+  });
+
+  it("parses the look and image fields of a selection report", () => {
+    const parsed = parseSelection({
+      kind: "media",
+      opacity: 0.4,
+      shadow: 6,
+      radius: 12,
+      clipped: true,
+      image: true,
+      fit: "cover",
+      fitPosition: "50% 0%",
+      alt: "A cat",
+      flipX: true,
+      flipY: false,
+    });
+    expect(parsed).toMatchObject({
+      opacity: 0.4,
+      shadow: 6,
+      radius: 12,
+      clipped: true,
+      image: true,
+      fit: "cover",
+      fitPosition: "50% 0%",
+      alt: "A cat",
+      flipX: true,
+      flipY: false,
+    });
+    expect(parseSelection({ kind: "element", fit: "tile", radius: "2px" })).toMatchObject({
+      opacity: 1,
+      shadow: 0,
+      radius: null,
+      fit: null,
+      alt: null,
+      image: false,
+    });
+  });
+
+  it("takes only well-formed deck colors", () => {
+    expect(
+      parseDeckColors([{ name: "brand", value: "#AABBCC" }, { name: "bad", value: "red" }, { value: "#000000" }, null]),
+    ).toEqual([{ name: "brand", value: "#aabbcc" }]);
+    expect(parseDeckColors("nope")).toEqual([]);
+    expect(parseHexColor("#123456")).toBe("#123456");
+    expect(parseHexColor(null)).toBeNull();
+  });
+
+  it("offers line and arrow shortcuts", () => {
+    expect(EDIT_TOOL_KEYS.l).toBe("line");
+    expect(EDIT_TOOL_KEYS.a).toBe("arrow");
+  });
+});
+
+describe("parseElement", () => {
+  it("reads what the editor reports about an element", () => {
+    const element = { path: "#a > p:nth-child(1)", markup: "<p>Hi</p>", name: '<p> "Hi"', added: true };
+    expect(parseElement(element)).toEqual(element);
+    expect(parseElement({ ...element, added: "yes" })?.added).toBe(false);
+  });
+
+  it("takes nothing else for one", () => {
+    expect(parseElement(null)).toBeNull();
+    expect(parseElement("p")).toBeNull();
+    expect(parseElement({ path: "#a", markup: 1, name: "p" })).toBeNull();
   });
 });

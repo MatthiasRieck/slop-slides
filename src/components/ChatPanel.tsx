@@ -2,12 +2,16 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowUp,
   Check,
+  Copy,
   FileText,
   FoldVertical,
   Globe,
+  History,
   Loader2,
+  MousePointerClick,
   Paperclip,
   Pencil,
   PenLine,
@@ -25,6 +29,7 @@ import remarkGfm from "remark-gfm";
 import { api, errorMessage } from "../lib/api";
 import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowTokens } from "../lib/context";
 import { claimDrop, dropCovered, dropPoint, isImage } from "../lib/drop";
+import type { EditElement } from "../lib/editTools";
 import { PROVIDERS, type Provider } from "../lib/models";
 import { basename, cn, dirname, isSessionFile, workspaceChatFileUrl } from "../lib/utils";
 import { insertTranscript } from "../lib/voice";
@@ -55,34 +60,185 @@ export function ChatPanel() {
   const deckEmpty = useApp((s) => (s.deck?.slides.length ?? 0) === 0);
   const composerFill = useApp((s) => s.composerFill);
   const [draft, setDraft] = useState("");
+  const revision = useApp((s) => s.chatRevision);
+  const workspacePath = useApp((s) => s.workspace?.path);
+  const [switching, setSwitching] = useState(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each conversation starts with its own empty draft
+  useEffect(() => {
+    setDraft("");
+  }, [revision, workspacePath]);
 
   // Other parts of the app (e.g. the lint status) can hand the composer a prepared message.
   useEffect(() => {
-    if (composerFill) setDraft(composerFill.text);
+    if (composerFill?.text) setDraft(composerFill.text);
   }, [composerFill]);
 
   return (
     <div className="flex h-full flex-col bg-background">
-      {messages.length > 0 && (
-        <div className="flex h-8 shrink-0 items-center justify-end px-3">
-          <button
-            type="button"
-            title="New conversation (files are kept)"
-            disabled={running}
-            onClick={() => void useApp.getState().resetChat()}
-            className="flex items-center gap-1 rounded-md px-1.5 py-1 text-2xs text-muted-foreground hover:bg-accent hover:text-foreground"
-          >
-            <RotateCcw className="size-3" />
-            New chat
-          </button>
-        </div>
-      )}
-      {cliMissing && <MissingCli provider={provider} />}
-      <MessageList messages={messages} running={running}>
-        {messages.length === 0 && <EmptyChat deckEmpty={deckEmpty} onPick={(text) => setDraft(text)} />}
-      </MessageList>
-      <Composer draft={draft} setDraft={setDraft} />
+      <ThreadNavigation switching={switching} setSwitching={setSwitching} />
+      <div className="flex min-h-0 flex-1 flex-col" inert={switching}>
+        {cliMissing && <MissingCli provider={provider} />}
+        <MessageList key={`${workspacePath}-${revision}`} messages={messages} running={running}>
+          {messages.length === 0 && <EmptyChat deckEmpty={deckEmpty} onPick={(text) => setDraft(text)} />}
+        </MessageList>
+        <Composer key={`composer-${workspacePath}-${revision}`} draft={draft} setDraft={setDraft} />
+      </div>
     </div>
+  );
+}
+
+function ThreadNavigation({ switching, setSwitching }: { switching: boolean; setSwitching: (value: boolean) => void }) {
+  const workspace = useApp((s) => s.workspace);
+  const running = useApp((s) => s.running);
+  const [open, setOpen] = useState(false);
+  const [threads, setThreads] = useState<Awaited<ReturnType<typeof api.listChatThreads>>>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+  useDismiss(ref, open, () => setOpen(false));
+  useEffect(() => {
+    if (!open || !workspace) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    void api
+      .listChatThreads(workspace.path)
+      .then((items) => {
+        if (!cancelled) setThreads(items);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(errorMessage(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, workspace]);
+  const matches = (thread: (typeof threads)[number]) =>
+    `${thread.title} ${thread.association ?? ""}`.toLowerCase().includes(query.toLowerCase());
+  const navigate = async (thread?: string) => {
+    setSwitching(true);
+    setError(null);
+    try {
+      if (thread) await useApp.getState().selectChatThread(thread);
+      else await useApp.getState().resetChat();
+      setOpen(false);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setSwitching(false);
+    }
+  };
+  return (
+    <div ref={ref} className="relative z-20 shrink-0 border-b px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          disabled={!workspace || switching}
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <History className="size-3.5" /> Past chats
+        </button>
+        <button
+          type="button"
+          title="New conversation (files are kept)"
+          disabled={!workspace || running || switching}
+          onClick={() => void navigate()}
+          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
+        >
+          <RotateCcw className="size-3.5" /> New chat
+        </button>
+      </div>
+      {error && (
+        <p role="alert" className="mt-2 text-xs text-destructive">
+          {error}
+        </p>
+      )}
+      {open && (
+        <section
+          className="absolute inset-x-3 top-full mt-1 rounded-xl border bg-card p-2 shadow-lg"
+          aria-label="Past conversations"
+        >
+          <p className="px-2 pb-2 text-xs text-muted-foreground">Chats in {workspace?.name}</p>
+          <input
+            aria-label="Search conversations"
+            placeholder="Search chats, decks, or folders…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="mb-2 w-full rounded-md border bg-background px-2 py-1.5 text-sm outline-none focus:border-ring"
+          />
+          {running && <p className="px-2 py-1 text-xs text-muted-foreground">Stop the current turn to switch chats.</p>}
+          {loading ? (
+            <p role="status" className="p-2 text-xs text-muted-foreground">
+              Loading conversations…
+            </p>
+          ) : (
+            <div className="max-h-72 overflow-y-auto">
+              {threads.filter(matches).map((thread) => (
+                <button
+                  key={thread.id}
+                  type="button"
+                  disabled={running || switching || thread.current}
+                  onClick={() => void navigate(thread.id)}
+                  className="flex w-full items-center gap-2 rounded-lg p-2 text-left hover:bg-accent disabled:opacity-60"
+                  aria-current={thread.current ? "page" : undefined}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm">{thread.title}</p>
+                    <p
+                      className="truncate text-2xs text-muted-foreground"
+                      title={thread.association ?? workspace?.path}
+                    >
+                      {thread.association && thread.association !== "." ? thread.association : workspace?.name}
+                    </p>
+                    <p className="text-2xs text-muted-foreground">
+                      {thread.createdAt ? new Date(thread.createdAt).toLocaleDateString() : "Empty chat"} ·{" "}
+                      {thread.messageCount} messages
+                    </p>
+                  </div>
+                  {thread.current && <Check className="size-3.5 shrink-0" />}
+                </button>
+              ))}
+              {!threads.some(matches) && <p className="p-2 text-xs text-muted-foreground">No conversations found.</p>}
+            </div>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
+function CopyMessage({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  return (
+    <button
+      type="button"
+      title={failed ? "Could not copy. Try again." : copied ? "Copied" : "Copy message"}
+      aria-label={copied ? "Copied" : "Copy message"}
+      onClick={() => {
+        void navigator.clipboard
+          .writeText(text)
+          .then(() => {
+            setCopied(true);
+            setFailed(false);
+          })
+          .catch(() => setFailed(true));
+      }}
+      className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent group-hover:opacity-100 focus-visible:opacity-100"
+    >
+      {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+    </button>
   );
 }
 
@@ -127,6 +283,7 @@ function EmptyChat({ deckEmpty, onPick }: { deckEmpty: boolean; onPick: (text: s
 function MessageList(props: { messages: ChatMessage[]; running: boolean; children?: React.ReactNode }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  const [showLatest, setShowLatest] = useState(false);
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -139,10 +296,11 @@ function MessageList(props: { messages: ChatMessage[]; running: boolean; childre
       onScroll={(e) => {
         const el = e.currentTarget;
         pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+        setShowLatest(!pinned.current);
       }}
-      className="min-h-0 flex-1 overflow-y-auto px-3"
+      className="relative min-h-0 flex-1 overflow-y-auto px-4 pt-4"
     >
-      <div className="flex flex-col gap-4 pb-4">
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 pb-6">
         {props.children}
         {props.messages.map((message) =>
           message.role === "user" ? (
@@ -152,19 +310,58 @@ function MessageList(props: { messages: ChatMessage[]; running: boolean; childre
           ),
         )}
       </div>
+      {showLatest && (
+        <div className="sticky bottom-3 flex justify-center">
+          <button
+            type="button"
+            aria-label="Jump to latest message"
+            onClick={() => {
+              const el = scrollRef.current;
+              if (el) el.scrollTop = el.scrollHeight;
+              pinned.current = true;
+              setShowLatest(false);
+            }}
+            className="flex items-center gap-1 rounded-full border bg-card px-3 py-1.5 text-xs shadow-sm"
+          >
+            <ArrowDown className="size-3" /> Latest
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
 function UserBubble({ message }: { message: UserMessage }) {
+  const [expanded, setExpanded] = useState(false);
+  const collapsible = message.text.length > 900 || message.text.split("\n").length > 12;
   const deck = useApp((s) => s.deck);
   const slideNumber = message.slide && deck ? deck.slides.findIndex((s) => s.id === message.slide) + 1 : 0;
   return (
-    <div className="flex flex-col items-end gap-1">
-      <div className="selectable max-w-[90%] whitespace-pre-wrap rounded-xl rounded-br-sm bg-accent px-3 py-2 text-sm leading-relaxed">
-        {message.text}
+    <div className="group flex min-w-0 flex-col items-end gap-1">
+      <div className="selectable min-w-0 max-w-[85%] rounded-2xl bg-accent p-3 text-sm leading-relaxed">
+        <div
+          className={cn(
+            "markdown whitespace-pre-wrap break-words",
+            collapsible &&
+              !expanded &&
+              "max-h-44 overflow-hidden [mask-image:linear-gradient(to_bottom,black_75%,transparent)]",
+          )}
+        >
+          <Markdown remarkPlugins={[remarkGfm]}>{message.text}</Markdown>
+        </div>
+        {collapsible && (
+          <button
+            type="button"
+            aria-expanded={expanded}
+            onClick={() => setExpanded(!expanded)}
+            className="mt-2 text-xs text-muted-foreground hover:text-foreground"
+          >
+            {expanded ? "Show less" : "Show full message"}
+          </button>
+        )}
       </div>
-      {(slideNumber > 0 || message.attachments.length > 0 || message.screenshot) && (
+      <CopyMessage text={message.text} />
+      {(slideNumber > 0 || message.attachments.length > 0 || message.screenshot || message.element) && (
         <div className="flex flex-wrap justify-end gap-1 text-2xs text-muted-foreground">
           {slideNumber > 0 && <span>on slide {slideNumber}</span>}
           {message.sketch && <span>· with sketch</span>}
@@ -173,6 +370,7 @@ function UserBubble({ message }: { message: UserMessage }) {
               · with {message.comments.length} comment{message.comments.length === 1 ? "" : "s"}
             </span>
           )}
+          {message.element && <span>· about {message.element.name}</span>}
           {message.screenshot && <span>· with screenshot</span>}
           {message.attachments.map((a) => (
             <span key={a}>· {a.replace(/^assets\//, "")}</span>
@@ -186,7 +384,7 @@ function UserBubble({ message }: { message: UserMessage }) {
 function AssistantBlock({ message }: { message: AssistantMessage }) {
   const streaming = message.status === "streaming";
   return (
-    <div className="flex flex-col gap-2">
+    <div className="group min-w-0 flex flex-col gap-2">
       {message.parts.map((part, i) =>
         part.kind === "text" ? (
           part.text.trim() && (
@@ -220,6 +418,16 @@ function AssistantBlock({ message }: { message: AssistantMessage }) {
         <div className="selectable flex gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-2.5 text-xs leading-relaxed text-destructive">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
           <span className="whitespace-pre-wrap break-words">{message.error}</span>
+        </div>
+      )}
+      {!streaming && message.parts.some((p) => p.kind === "text" && p.text.trim()) && (
+        <div>
+          <CopyMessage
+            text={message.parts
+              .filter((p) => p.kind === "text")
+              .map((p) => p.text)
+              .join("\n\n")}
+          />
         </div>
       )}
       {message.status === "interrupted" && <span className="text-2xs text-muted-foreground">Stopped</span>}
@@ -316,6 +524,8 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const [attachments, setAttachments] = useState<string[]>([]);
   // A slide screenshot handed over with a prepared message (Tidy layout), shown with the images.
   const [screenshot, setScreenshot] = useState<string | null>(null);
+  // The element on the slide a prepared message is about.
+  const [element, setElement] = useState<EditElement | null>(null);
   const [dragging, setDragging] = useState(false);
   const [gridOpen, setGridOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -403,7 +613,10 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
 
   const composerFill = useApp((s) => s.composerFill);
   useEffect(() => {
-    if (composerFill) setScreenshot(composerFill.screenshot ?? null);
+    if (composerFill) {
+      setScreenshot(composerFill.screenshot ?? null);
+      setElement(composerFill.element ?? null);
+    }
     textareaRef.current?.focus();
   }, [composerFill]);
 
@@ -481,17 +694,21 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const submit = () => {
     const text = draft.trim();
     if (!text || running || dictation) return;
-    void useApp
-      .getState()
-      .send(text, { includeSlide: includeSlide && slideNumber > 0, attachments, ...(screenshot && { screenshot }) });
+    void useApp.getState().send(text, {
+      includeSlide: includeSlide && slideNumber > 0,
+      attachments,
+      ...(screenshot && { screenshot }),
+      ...(element && { element }),
+    });
     setDraft("");
     setAttachments([]);
     setScreenshot(null);
+    setElement(null);
     setGridOpen(false);
   };
 
   return (
-    <div className="relative shrink-0 px-3 pb-3">
+    <div className="relative mx-auto w-full max-w-3xl shrink-0 px-3 pb-3">
       {workspace &&
         images.length > 0 &&
         (gridOpen ? (
@@ -516,7 +733,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           if (e.target === e.currentTarget) textareaRef.current?.focus();
         }}
         className={cn(
-          "relative z-10 rounded-2xl border bg-card shadow-composer transition-colors focus-within:border-input",
+          "relative z-10 rounded-2xl border bg-card/95 shadow-composer backdrop-blur-xl transition-colors focus-within:border-ring/50",
           dragging && "border-primary ring-2 ring-primary/30",
         )}
       >
@@ -563,7 +780,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
         >
           <span className="h-1 w-8 rounded-full bg-border group-hover:bg-muted-foreground group-focus-visible:bg-primary" />
         </div>
-        {(files.length > 0 || slideNumber > 0) && (
+        {(files.length > 0 || slideNumber > 0 || element) && (
           <div className="flex flex-wrap gap-1 px-3.5 pt-3">
             {slideNumber > 0 && (
               <button
@@ -580,6 +797,23 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
                 <Presentation className="size-3" />
                 Slide {slideNumber}
               </button>
+            )}
+            {element && (
+              <span
+                title={`The agent gets this element's markup:\n${element.path}`}
+                className="flex h-5 min-w-0 items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 text-xs text-primary"
+              >
+                <MousePointerClick className="size-3 shrink-0" />
+                <span className="truncate">{element.name}</span>
+                <button
+                  type="button"
+                  aria-label="Don't send element"
+                  onClick={() => setElement(null)}
+                  className="hover:text-foreground"
+                >
+                  <X className="size-3" />
+                </button>
+              </span>
             )}
             {sendsSketch && (
               <span
@@ -635,7 +869,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           placeholder={dictation ? "Listening…" : running ? "The agent is working…" : "Ask for slides or changes…"}
           className="block max-h-[max(64px,min(240px,40vh))] min-h-16 w-full resize-none bg-transparent px-3.5 pt-3 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/70"
         />
-        <div className="@container px-2 pt-1 pb-2">
+        <div className="@container px-2 pt-2 pb-2">
           <div className="relative flex flex-nowrap items-center gap-1">
             <ModelPicker />
             <div className="mx-0.5 h-4 w-px bg-border" />
@@ -666,7 +900,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
                 onClick={submit}
                 disabled={!draft.trim()}
                 title="Send"
-                className="flex size-8 items-center justify-center rounded-full bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-30"
+                className="flex size-8 items-center justify-center rounded-full bg-foreground text-background hover:opacity-90 disabled:opacity-30"
               >
                 <ArrowUp className="size-4" />
               </button>

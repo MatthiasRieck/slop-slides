@@ -37,12 +37,12 @@ const CASES = [
   ],
   ["reorderSlides", () => api.reorderSlides("talk", ["b", "a"]), "reorder_slides", { id: "talk", slides: ["b", "a"] }],
   ["addSlide", () => api.addSlide("talk", null), "add_slide", { id: "talk", after: null }],
-  ["duplicateSlide", () => api.duplicateSlide("talk", "a"), "duplicate_slide", { id: "talk", slide: "a" }],
+  ["duplicateSlides", () => api.duplicateSlides("talk", ["a"]), "duplicate_slides", { id: "talk", slides: ["a"] }],
   [
-    "setSlideHidden",
-    () => api.setSlideHidden("talk", "a", true),
-    "set_slide_hidden",
-    { id: "talk", slide: "a", hidden: true },
+    "setSlidesHidden",
+    () => api.setSlidesHidden("talk", ["a"], true),
+    "set_slides_hidden",
+    { id: "talk", slides: ["a"], hidden: true },
   ],
   [
     "setSlideLocked",
@@ -75,7 +75,13 @@ const CASES = [
     { id: "talk", index: 1, title: "Wrap up" },
   ],
   ["deleteSection", () => api.deleteSection("talk", 1), "delete_section", { id: "talk", index: 1 }],
-  ["deleteSlide", () => api.deleteSlide("talk", "a"), "delete_slide", { id: "talk", slide: "a" }],
+  ["deleteSlides", () => api.deleteSlides("talk", ["a"]), "delete_slides", { id: "talk", slides: ["a"] }],
+  [
+    "setSlideNotes",
+    () => api.setSlideNotes("talk", "a", "Pause here"),
+    "set_slide_notes",
+    { id: "talk", slide: "a", text: "Pause here" },
+  ],
   [
     "updateSlide",
     () => api.updateSlide("talk", "a", "<section>", "h1"),
@@ -173,6 +179,13 @@ const CASES = [
   ["loadChat", () => api.loadChat("talk"), "load_chat", { id: "talk" }],
   ["saveChat", () => api.saveChat("talk", [1]), "save_chat", { id: "talk", chat: [1] }],
   ["resetChat", () => api.resetChat("talk"), "reset_chat", { id: "talk" }],
+  ["listChatThreads", () => api.listChatThreads("/ws"), "list_chat_threads", { id: "/ws" }],
+  [
+    "selectChatThread",
+    () => api.selectChatThread("/ws", "past-thread"),
+    "select_chat_thread",
+    { id: "/ws", thread: "past-thread" },
+  ],
   [
     "sendMessage",
     () =>

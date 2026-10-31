@@ -250,6 +250,145 @@ describe("slide editor", () => {
     expect(last.markup).not.toContain("contenteditable");
   });
 
+  describe("spell-check", () => {
+    it("is on only for the text being edited", () => {
+      const e = editor();
+      const title = e.$("h1");
+      e.down(title);
+      e.up(title);
+      e.key("Enter");
+      expect(title.getAttribute("spellcheck")).toBe("true");
+      title.textContent = "Helo";
+      e.key("Escape");
+      expect(title.hasAttribute("spellcheck")).toBe(false);
+      expect(e.commits().at(-1)!.markup).toContain("Helo");
+      expect(e.commits().at(-1)!.markup).not.toContain("spellcheck");
+    });
+
+    it("never lands in the saved markup", () => {
+      const e = editor();
+      e.$(".card p").setAttribute("spellcheck", "true");
+      e.drag(e.$("h1"), 20, 0);
+      expect(e.commits()).toHaveLength(1);
+      expect(e.commits()[0]!.markup).not.toContain("spellcheck");
+    });
+  });
+
+  describe("context menu", () => {
+    const menus = (e: ReturnType<typeof editor>) =>
+      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-menu") as {
+        slide: string;
+        x: number;
+        y: number;
+        element: { path: string; markup: string; name: string; added: boolean } | null;
+      }[];
+    const rightClick = (e: ReturnType<typeof editor>, target: Element, init: MouseEventInit = {}) => {
+      const event = new e.window.MouseEvent("contextmenu", {
+        clientX: 120,
+        clientY: 80,
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      target.dispatchEvent(event);
+      return event;
+    };
+
+    it("selects what is under it and tells the app about it", () => {
+      const e = editor();
+      const second = e.$(".card p:nth-child(2)");
+      const event = rightClick(e, second);
+      expect(event.defaultPrevented).toBe(true);
+      expect(e.selected()).toEqual([second]);
+      expect(menus(e)).toHaveLength(1);
+      const menu = menus(e)[0]!;
+      expect(menu).toMatchObject({ slide: "intro", x: 120, y: 80 });
+      expect(menu.element).toEqual({
+        path: "#intro > div:nth-child(2) > p:nth-child(2)",
+        markup: `<p style="color: red">Two</p>`,
+        name: `<p> "Two"`,
+        added: false,
+      });
+      expect(e.$("#intro").querySelector(menu.element!.path.replace("#intro > ", ":scope > "))).toBe(second);
+    });
+
+    it("keeps a selected parent when the click lands inside it", () => {
+      const e = editor();
+      const card = e.$(".card");
+      const first = e.$(".card p");
+      e.down(first);
+      e.up(first);
+      e.key("Escape");
+      expect(e.selected()).toEqual([card]);
+      rightClick(e, first);
+      expect(e.selected()).toEqual([card]);
+    });
+
+    it("reports nothing selected on an empty spot, for pasting", () => {
+      const e = editor();
+      e.down(e.$("h1"));
+      e.up(e.$("h1"));
+      rightClick(e, e.$("#intro"));
+      expect(e.selected()).toEqual([]);
+      expect(menus(e)[0]!.element).toBeNull();
+    });
+
+    it("says when the element was added by hand", () => {
+      const e = editor();
+      const dropped = e.$(".shape");
+      dropped.setAttribute("data-dropped", "");
+      rightClick(e, dropped);
+      expect(menus(e)[0]!.element?.added).toBe(true);
+      const added = e.$("h1");
+      added.setAttribute("data-added", "text");
+      rightClick(e, added);
+      expect(menus(e)[1]!.element?.added).toBe(true);
+    });
+
+    it("leaves the webview's own menu in the text being typed, and finishes typing elsewhere", () => {
+      const e = editor();
+      const title = e.$("h1");
+      e.down(title);
+      e.up(title);
+      e.key("Enter");
+      expect(rightClick(e, title).defaultPrevented).toBe(false);
+      expect(menus(e)).toEqual([]);
+      expect(rightClick(e, e.$(".shape")).defaultPrevented).toBe(true);
+      expect(title.hasAttribute("contenteditable")).toBe(false);
+      expect(menus(e)).toHaveLength(1);
+    });
+
+    it("stays out of the way of a drawing tool", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "rect" });
+      expect(rightClick(e, e.$("h1")).defaultPrevented).toBe(true);
+      expect(menus(e)).toEqual([]);
+    });
+
+    it("drops the drag a Control-click started", () => {
+      const e = editor();
+      const title = e.$("h1");
+      e.down(title);
+      rightClick(e, title, { ctrlKey: true });
+      e.move(title, 160, 160);
+      e.up(title, 160, 160);
+      expect(title.getAttribute("style") ?? "").not.toContain("translate");
+      expect(e.commits()).toEqual([]);
+    });
+
+    it("saves a nudge first, so the screenshot and the markup agree", () => {
+      const e = editor();
+      const title = e.$("h1");
+      e.down(title);
+      e.up(title);
+      e.key("ArrowRight");
+      expect(e.commits()).toEqual([]);
+      rightClick(e, title);
+      expect(e.commits()).toHaveLength(1);
+      expect(menus(e)[0]!.element?.markup).toContain("translate");
+    });
+  });
+
   describe("dropped images", () => {
     const drop = (e: ReturnType<typeof editor>, images: unknown, x = 960, y = 540) =>
       e.fromParent({ type: "slop:edit-insert-images", images, x, y });
@@ -1691,6 +1830,16 @@ describe("slide editor", () => {
           fill: "#3b82f6",
           stroke: "#ff0000",
           strokeWidth: 8,
+          opacity: 1,
+          shadow: 0,
+          radius: 0,
+          clipped: false,
+          image: false,
+          fit: null,
+          fitPosition: null,
+          alt: null,
+          flipX: false,
+          flipY: false,
         },
       });
       e.down(e.$("svg"));
@@ -2290,6 +2439,415 @@ describe("slide editor", () => {
         slide: "intro",
         fonts: [{ name: "Playfair Display", stack: `"Playfair Display", Georgia, serif` }],
       });
+    });
+  });
+});
+
+describe("slide editor: shapes, styling and media", () => {
+  const SHAPE_STYLE = { color: "#ffffff", fontSize: 40, align: "center", valign: "middle", fill: "#3b82f6" };
+  const LINE_STYLE = { fill: null, stroke: "#ef4444", strokeWidth: 6 };
+  const IMAGE = `<!DOCTYPE html><html><head><style>
+    :root { --brand: #ff0000; --brand-dark: rgb(0, 0, 255); --ink: var(--brand); --gap: 8px; --slop-accent: #123456; }
+    .deck { --panel: #00ff00; --panel-copy: #00FF00; }
+  </style></head><body><main class="deck"><section class="slide" id="intro">
+    <img id="photo" src="assets/a.png" alt="old" style="width: 400px; height: 200px">
+    <p id="note">Note</p>
+  </section></main></body></html>`;
+
+  const at = (e: ReturnType<typeof editor>, type: string, x: number, y: number, init: PointerEventInit = {}) =>
+    e.doc.body.dispatchEvent(
+      new e.window.PointerEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true, ...init }),
+    );
+  const dragOut = (e: ReturnType<typeof editor>, from: number[], to: number[], init: PointerEventInit = {}) => {
+    at(e, "pointerdown", from[0]!, from[1]!);
+    at(e, "pointermove", to[0]!, to[1]!, init);
+    at(e, "pointerup", to[0]!, to[1]!);
+  };
+  const toolTold = (e: ReturnType<typeof editor>) =>
+    e.posted().filter((m) => (m as { type: string }).type === "slop:edit-tool");
+  const lastSelection = (e: ReturnType<typeof editor>) =>
+    (
+      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-selection") as {
+        selection: Record<string, unknown>;
+      }[]
+    ).at(-1)!.selection;
+  const added = (e: ReturnType<typeof editor>) => [...e.doc.querySelectorAll<HTMLElement>("#intro [data-added]")];
+  const style = (e: ReturnType<typeof editor>, changes: unknown) =>
+    e.fromParent({ type: "slop:edit-style", style: changes });
+
+  describe("lines and arrows", () => {
+    it("drags out a straight line as a drawing, then selects it and goes back to the select tool", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "line", style: LINE_STYLE });
+      dragOut(e, [100, 100], [300, 200]);
+      const [svg] = added(e);
+      expect(svg!.getAttribute("data-added")).toBe("drawing");
+      expect(svg!.style).toMatchObject({ left: "97px", top: "97px", width: "206px", height: "106px" });
+      expect(svg!.getAttribute("viewBox")).toBe("0 0 206 106");
+      const path = svg!.querySelector("path")!;
+      expect(path.getAttribute("d")).toBe("M3 3 L203 103");
+      expect(path.getAttribute("stroke")).toBe("#ef4444");
+      expect(e.selected()).toEqual([svg]);
+      expect(toolTold(e)).toEqual([{ type: "slop:edit-tool", slide: "intro", tool: "select" }]);
+      expect(e.commits()).toHaveLength(1);
+      expect(e.commits()[0]!.select).toEqual([5]);
+      expect(lastSelection(e)).toMatchObject({ kind: "drawing", vector: true, stroke: "#ef4444", strokeWidth: 6 });
+    });
+
+    it("gives an arrow a head at the end it was dragged to, inside its box", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "arrow", style: LINE_STYLE });
+      dragOut(e, [100, 100], [400, 100]);
+      const svg = added(e)[0]!;
+      // The shaft, then the head: two strokes in one path, so restyling and resizing treat them as one.
+      expect(svg.querySelector("path")!.getAttribute("d")).toBe("M3 15 L303 15 M282 3 L303 15 L282 27");
+      expect(svg.querySelectorAll("path")).toHaveLength(1);
+      expect(svg.getAttribute("viewBox")).toBe("0 0 306 30");
+    });
+
+    it("snaps to 45° with Shift", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "line", style: LINE_STYLE });
+      dragOut(e, [100, 100], [300, 120], { shiftKey: true });
+      expect(added(e)[0]!.querySelector("path")!.getAttribute("d")).toBe("M3 3 L204 3");
+      const f = editor();
+      f.fromParent({ type: "slop:edit-tool", tool: "line", style: LINE_STYLE });
+      dragOut(f, [100, 100], [300, 280], { shiftKey: true });
+      expect(added(f)[0]!.querySelector("path")!.getAttribute("d")).toBe("M3 3 L193 193");
+    });
+
+    it("adds a line of the default length on a click", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "line", style: LINE_STYLE });
+      at(e, "pointerdown", 100, 100);
+      at(e, "pointerup", 100, 100);
+      expect(added(e)[0]!.querySelector("path")!.getAttribute("d")).toBe("M3 3 L323 3");
+    });
+
+    it("drops the line being dragged out on Escape", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "arrow", style: LINE_STYLE });
+      at(e, "pointerdown", 100, 100);
+      at(e, "pointermove", 200, 200);
+      e.key("Escape");
+      expect(added(e)).toEqual([]);
+      expect(e.commits()).toEqual([]);
+    });
+
+    it("restyles a line like a drawing", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "line", style: LINE_STYLE });
+      dragOut(e, [100, 100], [300, 200]);
+      style(e, { stroke: "#00ff00", strokeWidth: 2 });
+      const path = e.$("[data-added] path");
+      expect(path.getAttribute("stroke")).toBe("#00ff00");
+      expect(path.getAttribute("stroke-width")).toBe("2");
+    });
+  });
+
+  describe("cut-out shapes", () => {
+    it.each(["triangle", "star", "bubble"])("drags out a %s that holds text, with no border", (tool) => {
+      const e = editor();
+      e.fromParent({
+        type: "slop:edit-tool",
+        tool,
+        style: { ...SHAPE_STYLE, stroke: "#000000", strokeWidth: 4 },
+      });
+      dragOut(e, [100, 100], [400, 300]);
+      const [shape] = added(e);
+      expect(shape!.getAttribute("data-added")).toBe("shape");
+      expect(shape!.tagName.toLowerCase()).toBe("div");
+      expect(shape!.style.getPropertyValue("clip-path")).toMatch(/^polygon\(/);
+      expect(e.selected()).toEqual([shape]);
+      expect(lastSelection(e)).toMatchObject({
+        kind: "shape",
+        text: true,
+        clipped: true,
+        radius: null,
+        stroke: null,
+        strokeWidth: 0,
+      });
+      expect(e.commits()[0]!.markup).toContain("clip-path: polygon(");
+    });
+
+    it("ignores border, shadow and radius, which the cut would only slice", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "star", style: SHAPE_STYLE });
+      dragOut(e, [100, 100], [400, 300]);
+      style(e, { stroke: "#000000", strokeWidth: 4, shadow: 20, radius: 10 });
+      const shape = added(e)[0]!;
+      expect(shape.style.getPropertyValue("box-shadow")).toBe("");
+      expect(shape.style.getPropertyValue("border-radius")).toBe("0px");
+      expect(lastSelection(e)).toMatchObject({ strokeWidth: 0, shadow: 0, radius: null });
+    });
+  });
+
+  describe("opacity, shadow and corner radius", () => {
+    it("sets, reports and clears them on any element", () => {
+      const e = editor();
+      const card = e.$(".card");
+      e.down(card);
+      style(e, { opacity: 0.5, shadow: 24, radius: 16 });
+      expect(card.style.opacity).toBe("0.5");
+      expect(card.style.getPropertyValue("box-shadow")).toContain("0px 8px 24px");
+      expect(card.style.getPropertyValue("border-radius")).toBe("16px");
+      expect(lastSelection(e)).toMatchObject({ opacity: 0.5, shadow: 24, radius: 16 });
+      expect(e.commits().at(-1)!.markup).toContain("opacity: 0.5");
+      style(e, { opacity: 1, shadow: 0, radius: 0 });
+      expect(card.getAttribute("style")).toBeNull();
+      expect(lastSelection(e)).toMatchObject({ opacity: 1, shadow: 0, radius: 0 });
+    });
+
+    it("keeps an element clickable: opacity stops short of zero", () => {
+      const e = editor();
+      e.down(e.$(".card"));
+      style(e, { opacity: 0 });
+      expect(e.$(".card").style.opacity).toBe("0.05");
+    });
+
+    it("overrides what the deck's styles set when clearing", () => {
+      const e = editor({
+        markup: DECK.replace("<head>", "<head><style>.card { opacity: 0.5; box-shadow: 0px 2px 6px black; }</style>"),
+      });
+      e.down(e.$(".card"));
+      expect(lastSelection(e)).toMatchObject({ opacity: 0.5, shadow: 6 });
+      style(e, { opacity: 1, shadow: 0 });
+      expect(e.$(".card").style.opacity).toBe("1");
+      expect(e.$(".card").style.getPropertyValue("box-shadow")).toBe("none");
+    });
+
+    it("shades a drawing with a filter that follows its line, and gives it no corners", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "line", style: LINE_STYLE });
+      dragOut(e, [100, 100], [300, 200]);
+      style(e, { shadow: 12, radius: 8 });
+      const svg = added(e)[0]!;
+      expect(svg.style.getPropertyValue("filter")).toContain("drop-shadow(");
+      expect(svg.style.getPropertyValue("box-shadow")).toBe("");
+      expect(lastSelection(e)).toMatchObject({ shadow: 12, radius: null });
+      style(e, { shadow: 0 });
+      expect(svg.style.getPropertyValue("filter")).toBe("");
+    });
+
+    it("reports an ellipse's radius in pixels", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "ellipse", style: SHAPE_STYLE });
+      dragOut(e, [100, 100], [400, 300]);
+      expect(lastSelection(e).radius).toBe(100);
+    });
+  });
+
+  describe("deck colors", () => {
+    const colors = (e: ReturnType<typeof editor>) =>
+      (e.posted().find((m) => (m as { type: string }).type === "slop:edit-colors") as { colors: unknown }).colors;
+
+    it("reports the colors in the deck's CSS variables once, skipping non-colors, the app's own and repeats", () => {
+      const e = editor({ markup: IMAGE });
+      expect(colors(e)).toEqual([
+        { name: "brand", value: "#ff0000" },
+        { name: "brand-dark", value: "#0000ff" },
+        { name: "panel", value: "#00ff00" },
+      ]);
+    });
+
+    it("reports none for a deck without variables", () => {
+      expect(colors(editor())).toEqual([]);
+    });
+
+    it("leaves nothing behind in the document", () => {
+      const e = editor({ markup: IMAGE });
+      expect(e.doc.querySelectorAll("body > span")).toHaveLength(0);
+    });
+  });
+
+  describe("images", () => {
+    const photo = (e: ReturnType<typeof editor>) => e.$("#photo") as HTMLImageElement;
+
+    it("reports an image's fit, position, alt text and flips; other elements have none", () => {
+      const e = editor({ markup: IMAGE });
+      e.down(photo(e));
+      expect(lastSelection(e)).toMatchObject({
+        kind: "media",
+        image: true,
+        fit: "fill",
+        alt: "old",
+        flipX: false,
+        flipY: false,
+      });
+      e.down(e.$("#note"));
+      expect(lastSelection(e)).toMatchObject({ image: false, fit: null, alt: null });
+    });
+
+    it("sets fit, position and alt text", () => {
+      const e = editor({ markup: IMAGE });
+      e.down(photo(e));
+      style(e, { fit: "cover", fitPosition: "50% 0%", alt: "A cat" });
+      expect(photo(e).style.getPropertyValue("object-fit")).toBe("cover");
+      expect(photo(e).style.getPropertyValue("object-position")).toBe("50% 0%");
+      expect(photo(e).getAttribute("alt")).toBe("A cat");
+      expect(lastSelection(e)).toMatchObject({ fit: "cover", fitPosition: "50% 0%", alt: "A cat" });
+      expect(e.commits().at(-1)!.markup).toContain('alt="A cat"');
+    });
+
+    it("refuses values that are not fits or positions, and leaves other elements alone", () => {
+      const e = editor({ markup: IMAGE });
+      e.down(photo(e));
+      style(e, { fit: "tile", fitPosition: "red; color: blue" });
+      expect(photo(e).style.getPropertyValue("object-fit")).toBe("");
+      expect(photo(e).style.getPropertyValue("object-position")).toBe("");
+      e.down(e.$("#note"));
+      style(e, { fit: "cover", alt: "x", flipX: true });
+      expect(e.$("#note").getAttribute("alt")).toBeNull();
+      expect(e.$("#note").getAttribute("style")).toBeNull();
+    });
+
+    it("flips horizontally and vertically, keeping a tilt in front", () => {
+      const e = editor({ markup: IMAGE });
+      e.down(photo(e));
+      style(e, { flipX: true });
+      expect(photo(e).style.transform).toBe("scaleX(-1)");
+      style(e, { flipY: true });
+      expect(photo(e).style.transform).toBe("scaleX(-1) scaleY(-1)");
+      expect(lastSelection(e)).toMatchObject({ flipX: true, flipY: true });
+      // A flip is a style, not a hand move.
+      expect(photo(e).hasAttribute("data-moved")).toBe(false);
+      style(e, { flipX: false, flipY: false });
+      expect(photo(e).style.transform).toBe("");
+      photo(e).style.setProperty("transform", "perspective(1000px) rotateX(10deg) rotateY(0deg)", "important");
+      style(e, { flipX: true });
+      expect(photo(e).style.transform).toBe("perspective(1000px) rotateX(10deg) rotateY(0deg) scaleX(-1)");
+      expect(photo(e).hasAttribute("data-moved")).toBe(true);
+    });
+
+    it("replaces the file, keeping the image's box and cropping to it", () => {
+      const e = editor({ markup: IMAGE });
+      e.down(photo(e));
+      e.fromParent({ type: "slop:edit-replace-image", src: "assets/b.png" });
+      expect(photo(e).getAttribute("src")).toBe("assets/b.png");
+      expect(photo(e).style).toMatchObject({ width: "400px", height: "200px" });
+      expect(photo(e).style.getPropertyValue("object-fit")).toBe("cover");
+      expect(e.commits().at(-1)!.markup).toContain('src="assets/b.png"');
+    });
+
+    it("keeps a fit the image already has when replacing", () => {
+      const e = editor({ markup: IMAGE });
+      e.down(photo(e));
+      style(e, { fit: "contain" });
+      e.fromParent({ type: "slop:edit-replace-image", src: "assets/b.png" });
+      expect(photo(e).style.getPropertyValue("object-fit")).toBe("contain");
+    });
+
+    it("replaces only images, and only with the deck's assets", () => {
+      const e = editor({ markup: IMAGE });
+      e.down(e.$("#note"));
+      e.fromParent({ type: "slop:edit-replace-image", src: "assets/b.png" });
+      e.down(photo(e));
+      e.fromParent({ type: "slop:edit-replace-image", src: "https://example.test/b.png" });
+      expect(photo(e).getAttribute("src")).toBe("assets/a.png");
+      expect(e.commits()).toEqual([]);
+    });
+  });
+
+  describe("slide background", () => {
+    const told = (e: ReturnType<typeof editor>) =>
+      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-background") as { color: string | null }[];
+
+    it("reports it on load, sets it on the slide, and drops it again", () => {
+      const e = editor();
+      expect(told(e).at(-1)).toEqual({ type: "slop:edit-background", slide: "intro", color: null });
+      e.fromParent({ type: "slop:edit-background", color: "#ff0000" });
+      expect(e.$("#intro").style.getPropertyValue("background-image")).toBe("none");
+      expect(told(e).at(-1)!.color).toBe("#ff0000");
+      expect(e.commits().at(-1)!.markup).toMatch(/^<section class="slide" id="intro" style="background-color: [^"]*"/);
+      e.fromParent({ type: "slop:edit-background", color: null });
+      expect(e.$("#intro").hasAttribute("style")).toBe(false);
+      expect(told(e).at(-1)!.color).toBeNull();
+    });
+
+    it("refuses anything but a color", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-background", color: "url(x); color: red" });
+      expect(e.$("#intro").hasAttribute("style")).toBe(false);
+      expect(e.commits()).toEqual([]);
+    });
+  });
+
+  describe("format painter", () => {
+    const paint = (e: ReturnType<typeof editor>, from: Element, to: Element) => {
+      e.down(from);
+      e.up(from);
+      e.fromParent({ type: "slop:edit-tool", tool: "paint" });
+      e.down(to);
+      e.up(to);
+    };
+
+    it("gives the next element clicked the look of the selection, then goes back to the select tool", () => {
+      const e = editor();
+      const from = e.$(".card p:last-child");
+      from.style.fontSize = "30px";
+      from.style.fontWeight = "700";
+      from.style.backgroundColor = "#00ff00";
+      from.style.opacity = "0.5";
+      from.style.setProperty("border-radius", "12px");
+      e.fromParent({ type: "slop:edit-select", path: [1, 1] });
+      const to = e.$(".card p");
+      e.fromParent({ type: "slop:edit-tool", tool: "paint" });
+      expect(e.doc.documentElement.getAttribute("data-slop-tool")).toBe("paint");
+      e.down(to);
+      e.up(to);
+      expect(lastSelection(e)).toMatchObject({
+        color: "#ff0000",
+        fontSize: 30,
+        bold: true,
+        fill: "#00ff00",
+        opacity: 0.5,
+        radius: 12,
+      });
+      expect(e.selected()).toEqual([to]);
+      expect(e.doc.documentElement.hasAttribute("data-slop-tool")).toBe(false);
+      expect(toolTold(e)).toEqual([{ type: "slop:edit-tool", slide: "intro", tool: "select" }]);
+      expect(e.commits()).toHaveLength(1);
+      expect(e.commits()[0]!.select).toEqual([1, 0]);
+    });
+
+    it("only puts itself away on a click on empty space", () => {
+      const e = editor();
+      e.down(e.$("h1"));
+      e.up(e.$("h1"));
+      e.fromParent({ type: "slop:edit-tool", tool: "paint" });
+      e.down(e.$("#intro"));
+      e.up(e.$("#intro"));
+      expect(toolTold(e)).toHaveLength(1);
+      expect(e.commits()).toEqual([]);
+    });
+
+    it("keeps a line's stroke when painting from an element that has none", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "line", style: LINE_STYLE });
+      dragOut(e, [100, 100], [300, 200]);
+      const svg = added(e)[0]!;
+      e.$("h1").style.opacity = "0.5";
+      paint(e, e.$("h1"), svg.querySelector("path")!);
+      expect(svg.querySelector("path")!.getAttribute("stroke")).toBe("#ef4444");
+      expect(svg.style.opacity).toBe("0.5");
+      expect(svg.style.color).toBe("");
+    });
+
+    it("does nothing without anything to copy from", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "paint" });
+      e.down(e.$("h1"));
+      expect(e.commits()).toEqual([]);
+      expect(toolTold(e)).toHaveLength(1);
+    });
+
+    it("is put away by Escape", () => {
+      const e = editor();
+      e.down(e.$("h1"));
+      e.up(e.$("h1"));
+      e.fromParent({ type: "slop:edit-tool", tool: "paint" });
+      e.key("Escape");
+      expect(e.doc.documentElement.hasAttribute("data-slop-tool")).toBe(false);
     });
   });
 });

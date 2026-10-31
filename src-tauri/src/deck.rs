@@ -62,6 +62,8 @@ pub struct Slide {
     pub locked: bool,
     /// What is said over the slide, as plain text; empty without any (see [`html::narration`]).
     pub narration: String,
+    /// What the presenter reads alongside it, as plain text; empty without any (see [`html::notes`]).
+    pub notes: String,
 }
 
 /// A named group of slides, started by a marker between slides in the deck file.
@@ -265,6 +267,7 @@ pub fn load(file: &Path) -> Result<Deck> {
             locked: span.locked.is_some(),
             moved: html::has_moved(&source[span.range.clone()]),
             narration: html::narration(&source[span.range.clone()]),
+            notes: html::notes(&source[span.range.clone()]),
         })
         .collect();
     let path = file.to_string_lossy().into_owned();
@@ -412,8 +415,32 @@ pub fn rename(file: &Path, title: &str) -> Result<Deck> {
     Ok(edit(file, |s| Ok((html::set_title(s, &title), ())))?.0)
 }
 
-pub fn reorder(file: &Path, slides: Vec<String>) -> Result<Deck> {
-    Ok(edit(file, |s| Ok((html::reorder(s, &slides)?, ())))?.0)
+/// What a change from the slide rail did, with the deck's source before and after, so it can be
+/// undone by saving `previous` back over `source` (see [`save_source`]).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RailEdit {
+    pub deck: Deck,
+    pub previous: String,
+    pub source: String,
+    /// Ids of the slides it added.
+    pub created: Vec<String>,
+}
+
+fn rail_edit(file: &Path, f: impl FnOnce(&str) -> EditResult<Vec<String>>) -> Result<RailEdit> {
+    let previous = read_html(file)?;
+    let (source, created) = f(&previous).map_err(Error::Message)?;
+    write_html(file, &source)?;
+    Ok(RailEdit {
+        deck: load(file)?,
+        previous,
+        source,
+        created,
+    })
+}
+
+pub fn reorder(file: &Path, slides: Vec<String>) -> Result<RailEdit> {
+    rail_edit(file, |s| Ok((html::reorder(s, &slides)?, Vec::new())))
 }
 
 pub fn add_blank(file: &Path, after: Option<String>) -> Result<(Deck, String)> {
@@ -467,19 +494,38 @@ pub fn paste_slide(
     edit(file, |s| html::paste_slide(s, after.as_deref(), &markup))
 }
 
-pub fn duplicate(file: &Path, slide: &str) -> Result<(Deck, String)> {
-    edit(file, |s| html::duplicate(s, slide))
+/// Puts a copy of each of `slides` right after it, all in one write.
+pub fn duplicate_slides(file: &Path, slides: &[String]) -> Result<RailEdit> {
+    rail_edit(file, |s| {
+        let mut out = s.to_string();
+        let mut created = Vec::with_capacity(slides.len());
+        for slide in slides {
+            let (next, id) = html::duplicate(&out, slide)?;
+            out = next;
+            created.push(id);
+        }
+        Ok((out, created))
+    })
 }
 
-pub fn set_slide_hidden(
+/// Hides or shows `slides`, all in one write.
+pub fn set_slides_hidden(
     file: &Path,
     session: Option<&Path>,
-    slide: &str,
+    slides: &[String],
     hidden: bool,
-) -> Result<Deck> {
-    let deck = edit(file, |s| Ok((html::set_hidden(s, slide, hidden)?, ())))?.0;
-    refresh_guard(file, session, slide)?;
-    Ok(deck)
+) -> Result<RailEdit> {
+    let done = rail_edit(file, |s| {
+        let mut out = s.to_string();
+        for slide in slides {
+            out = html::set_hidden(&out, slide, hidden)?;
+        }
+        Ok((out, Vec::new()))
+    })?;
+    for slide in slides {
+        refresh_guard(file, session, slide)?;
+    }
+    Ok(done)
 }
 
 /// Sets what is said over a slide (see [`html::set_narration`]); empty `text` removes it.
@@ -488,6 +534,16 @@ pub fn set_slide_narration(file: &Path, slide: &str, text: &str) -> Result<Deck>
     Ok(edit(file, |s| {
         ensure_unlocked(s, slide)?;
         Ok((html::set_narration(s, slide, text)?, ()))
+    })?
+    .0)
+}
+
+/// Sets a slide's speaker notes (see [`html::set_notes`]); empty `text` removes them. A locked
+/// slide keeps its notes too.
+pub fn set_slide_notes(file: &Path, slide: &str, text: &str) -> Result<Deck> {
+    Ok(edit(file, |s| {
+        ensure_unlocked(s, slide)?;
+        Ok((html::set_notes(s, slide, text)?, ()))
     })?
     .0)
 }
@@ -643,15 +699,20 @@ pub fn delete_section(file: &Path, index: usize) -> Result<Deck> {
     Ok(edit(file, |s| Ok((html::delete_section(s, index)?, ())))?.0)
 }
 
-/// Deletes a slide along with its review marks and comments.
-pub fn delete_slide(file: &Path, session: &Path, slide: &str) -> Result<Deck> {
-    ensure_unlocked(&read_html(file)?, slide).map_err(Error::Message)?;
+/// Deletes `slides` along with their review marks and comments, all in one write; none if any is locked.
+pub fn delete_slides(file: &Path, session: &Path, slides: &[String]) -> Result<RailEdit> {
+    let source = read_html(file)?;
+    for slide in slides {
+        ensure_unlocked(&source, slide).map_err(Error::Message)?;
+    }
     snapshot(file, session)?;
-    Ok(edit(file, |s| {
-        let updated = html::delete(s, slide)?;
-        Ok((prune_review(&updated).unwrap_or(updated), ()))
-    })?
-    .0)
+    rail_edit(file, |s| {
+        let mut out = s.to_string();
+        for slide in slides {
+            out = html::delete(&out, slide)?;
+        }
+        Ok((prune_review(&out).unwrap_or(out), Vec::new()))
+    })
 }
 
 /// Replaces one slide with markup edited on the stage. `base` is the slide's hash the edit
@@ -1399,7 +1460,7 @@ mod tests {
         let markup = "<section class=\"slide\" id=\"a\" data-locked>mine</section>";
         let err = update_slide(&deck.file(), &deck.session(), "a", markup, &base).unwrap_err();
         assert!(err.to_string().contains("locked"), "{err}");
-        let err = delete_slide(&deck.file(), &deck.session(), "a").unwrap_err();
+        let err = delete_slides(&deck.file(), &deck.session(), &ids(&["a"])).unwrap_err();
         assert!(err.to_string().contains("locked"), "{err}");
         assert_eq!(deck.html(), LOCKED);
         assert!(deck.snapshots().is_empty());
@@ -1408,10 +1469,10 @@ mod tests {
         let base = load(&deck.file()).unwrap().slides[1].hash.clone();
         let other = "<section class=\"slide\" id=\"b\">B!</section>";
         update_slide(&deck.file(), &deck.session(), "b", other, &base).unwrap();
-        set_slide_hidden(&deck.file(), Some(&deck.session()), "a", true).unwrap();
+        set_slides_hidden(&deck.file(), Some(&deck.session()), &ids(&["a"]), true).unwrap();
         let moved = reorder(&deck.file(), vec!["b".into(), "a".into()]).unwrap();
-        assert_eq!(slide_ids(&moved), ["b", "a"]);
-        delete_slide(&deck.file(), &deck.session(), "b").unwrap();
+        assert_eq!(slide_ids(&moved.deck), ["b", "a"]);
+        delete_slides(&deck.file(), &deck.session(), &ids(&["b"])).unwrap();
     }
 
     #[test]
@@ -1490,7 +1551,7 @@ mod tests {
         // The user unlocks `a`, locks `b` and hides it while the agent works.
         set_slide_locked(&deck.file(), Some(&deck.session()), "a", false).unwrap();
         set_slide_locked(&deck.file(), Some(&deck.session()), "b", true).unwrap();
-        set_slide_hidden(&deck.file(), Some(&deck.session()), "b", true).unwrap();
+        set_slides_hidden(&deck.file(), Some(&deck.session()), &ids(&["b"]), true).unwrap();
         let ids: Vec<_> = read_guard(&deck.file(), Some(&deck.session()))
             .into_iter()
             .map(|l| l.id)
@@ -1935,8 +1996,8 @@ mod tests {
     fn deleting_a_slide_drops_its_comments() {
         let deck = TempDeck::new(THREE);
         save_comments(&deck.file(), &notes(&["a", "b"])).unwrap();
-        let deleted = delete_slide(&deck.file(), &deck.session(), "b").unwrap();
-        assert_eq!(deleted.comments, notes(&["a"]));
+        let deleted = delete_slides(&deck.file(), &deck.session(), &ids(&["b"])).unwrap();
+        assert_eq!(deleted.deck.comments, notes(&["a"]));
         assert_eq!(load(&deck.file()).unwrap().comments, notes(&["a"]));
     }
 
@@ -2020,7 +2081,7 @@ mod tests {
         let deck = TempDeck::new(THREE);
         let order = vec!["c".to_string(), "a".to_string(), "b".to_string()];
         assert_eq!(
-            slide_ids(&reorder(&deck.file(), order).unwrap()),
+            slide_ids(&reorder(&deck.file(), order).unwrap().deck),
             ["c", "a", "b"]
         );
         assert_eq!(slide_ids(&load(&deck.file()).unwrap()), ["c", "a", "b"]);
@@ -2048,33 +2109,145 @@ mod tests {
     #[test]
     fn duplicate_and_delete_slides_on_disk() {
         let deck = TempDeck::new(THREE);
-        let (copied, id) = duplicate(&deck.file(), "b").unwrap();
-        assert_eq!(id, "b-copy");
-        assert_eq!(slide_ids(&copied), ["a", "b", "b-copy", "c"]);
+        let copied = duplicate_slides(&deck.file(), &ids(&["b"])).unwrap();
+        assert_eq!(copied.created, ["b-copy"]);
+        assert_eq!(slide_ids(&copied.deck), ["a", "b", "b-copy", "c"]);
         assert!(deck.html().contains("id=\"b-copy\">B</section>"));
 
         let before_delete = deck.html();
-        let deleted = delete_slide(&deck.file(), &deck.session(), "b").unwrap();
-        assert_eq!(slide_ids(&deleted), ["a", "b-copy", "c"]);
+        let deleted = delete_slides(&deck.file(), &deck.session(), &ids(&["b"])).unwrap();
+        assert_eq!(slide_ids(&deleted.deck), ["a", "b-copy", "c"]);
         assert_eq!(
             deck.snapshots(),
             [before_delete],
             "deleting keeps a snapshot to recover from"
         );
 
-        assert!(duplicate(&deck.file(), "nope").is_err());
-        assert!(delete_slide(&deck.file(), &deck.session(), "nope").is_err());
+        assert!(duplicate_slides(&deck.file(), &ids(&["nope"])).is_err());
+        assert!(delete_slides(&deck.file(), &deck.session(), &ids(&["nope"])).is_err());
+    }
+
+    fn ids(slides: &[&str]) -> Vec<String> {
+        slides.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn rail_edits_change_many_slides_in_one_write() {
+        let deck = TempDeck::new(THREE);
+        let hidden = set_slides_hidden(&deck.file(), None, &ids(&["a", "c"]), true).unwrap();
+        assert_eq!(
+            hidden
+                .deck
+                .slides
+                .iter()
+                .map(|s| s.hidden)
+                .collect::<Vec<_>>(),
+            [true, false, true]
+        );
+        let copied = duplicate_slides(&deck.file(), &ids(&["a", "c"])).unwrap();
+        assert_eq!(copied.created, ["a-copy", "c-copy"]);
+        assert_eq!(slide_ids(&copied.deck), ["a", "a-copy", "b", "c", "c-copy"]);
+        let deleted = delete_slides(&deck.file(), &deck.session(), &ids(&["a", "b"])).unwrap();
+        assert_eq!(slide_ids(&deleted.deck), ["a-copy", "c", "c-copy"]);
+        assert_eq!(deck.snapshots().len(), 1, "one delete, one snapshot");
+    }
+
+    #[test]
+    fn a_rail_edit_is_undone_by_saving_its_previous_source_back() {
+        let deck = TempDeck::new(THREE);
+        save_review(&deck.file(), &marks(&["a", "b"])).unwrap();
+        let before = deck.html();
+        let deleted = delete_slides(&deck.file(), &deck.session(), &ids(&["b"])).unwrap();
+        assert_eq!(deleted.previous, before);
+        assert_eq!(deleted.source, deck.html());
+
+        let restored = save_source(
+            &deck.file(),
+            &deck.session(),
+            &deleted.previous,
+            Some(&deleted.source),
+            false,
+        )
+        .unwrap();
+        assert_eq!(slide_ids(&restored), ["a", "b", "c"]);
+        assert_eq!(restored.review, marks(&["a", "b"]));
+        assert_eq!(deck.html(), before);
+
+        let moved = reorder(&deck.file(), ids(&["c", "b", "a"])).unwrap();
+        set_slide_notes(&deck.file(), "a", "Changed since").unwrap();
+        assert!(
+            save_source(
+                &deck.file(),
+                &deck.session(),
+                &moved.previous,
+                Some(&moved.source),
+                false
+            )
+            .is_err(),
+            "an undo refuses to overwrite what came after the edit"
+        );
+    }
+
+    #[test]
+    fn a_rail_delete_with_a_locked_or_missing_slide_changes_nothing() {
+        let deck = TempDeck::new(THREE);
+        set_slide_locked(&deck.file(), None, "b", true).unwrap();
+        let before = deck.html();
+        let err = delete_slides(&deck.file(), &deck.session(), &ids(&["a", "b"])).unwrap_err();
+        assert!(err.to_string().contains("locked"), "{err}");
+        assert!(delete_slides(&deck.file(), &deck.session(), &ids(&["a", "nope"])).is_err());
+        assert!(set_slides_hidden(&deck.file(), None, &ids(&["a", "nope"]), true).is_err());
+        assert!(duplicate_slides(&deck.file(), &ids(&["a", "nope"])).is_err());
+        assert_eq!(deck.html(), before);
+    }
+
+    #[test]
+    fn hiding_many_slides_keeps_a_running_turns_guard_in_step() {
+        let deck = TempDeck::new(THREE);
+        set_slide_locked(&deck.file(), None, "a", true).unwrap();
+        set_slide_locked(&deck.file(), None, "c", true).unwrap();
+        guard_locked(&deck.file(), &deck.session()).unwrap();
+        set_slides_hidden(&deck.file(), Some(&deck.session()), &ids(&["a", "c"]), true).unwrap();
+        assert_eq!(
+            release_guard(&deck.file(), &deck.session()).unwrap(),
+            Vec::<String>::new()
+        );
+        assert!(load(&deck.file()).unwrap().slides[2].hidden);
+    }
+
+    #[test]
+    fn notes_are_loaded_saved_and_refused_on_locked_slides() {
+        let deck = TempDeck::new(EDITED);
+        let notes = |d: &Deck| d.slides.iter().map(|s| s.notes.clone()).collect::<Vec<_>>();
+        assert_eq!(notes(&load(&deck.file()).unwrap()), ["", ""]);
+        let saved = set_slide_notes(&deck.file(), "b", "Mention the budget.").unwrap();
+        assert_eq!(notes(&saved), ["", "Mention the budget."]);
+        assert_eq!(saved.slides[1].narration, "");
+        assert!(deck
+            .html()
+            .contains("<aside class=\"notes\">Mention the budget.</aside>"));
+        assert_eq!(
+            notes(&set_slide_notes(&deck.file(), "b", "").unwrap()),
+            ["", ""]
+        );
+        assert_eq!(deck.html(), EDITED);
+
+        set_slide_locked(&deck.file(), None, "a", true).unwrap();
+        let locked = deck.html();
+        let err = set_slide_notes(&deck.file(), "a", "No").unwrap_err();
+        assert!(err.to_string().contains("locked"), "{err}");
+        assert_eq!(deck.html(), locked);
     }
 
     #[test]
     fn deleting_a_slide_drops_its_review_marks() {
         let deck = TempDeck::new(THREE);
         save_review(&deck.file(), &marks(&["a", "b"])).unwrap();
-        let deleted = delete_slide(&deck.file(), &deck.session(), "b").unwrap();
-        assert_eq!(deleted.review, marks(&["a"]));
+        let deleted = delete_slides(&deck.file(), &deck.session(), &ids(&["b"])).unwrap();
+        assert_eq!(deleted.deck.review, marks(&["a"]));
         assert_eq!(load(&deck.file()).unwrap().review, marks(&["a"]));
 
-        delete_slide(&deck.file(), &deck.session(), "a").unwrap();
+        delete_slides(&deck.file(), &deck.session(), &ids(&["a"])).unwrap();
         assert!(
             !deck.html().contains(review::START),
             "deleting the last marked slide removes the block"
@@ -2402,7 +2575,7 @@ mod tests {
     fn reorder_slides_and_sections_together() {
         let deck = TempDeck::new(SECTIONED);
         let order = ["a", "b", "section:0", "c"].map(String::from).to_vec();
-        let out = reorder(&deck.file(), order).unwrap();
+        let out = reorder(&deck.file(), order).unwrap().deck;
         assert_eq!(slide_ids(&out), ["a", "b", "c"]);
         assert_eq!(sections(&out), [(0, "Part two", 2)]);
         assert!(reorder(&deck.file(), vec!["a".into(), "b".into(), "c".into()]).is_err());

@@ -166,6 +166,58 @@ describe("ChatPanel: header", () => {
   });
 });
 
+describe("past conversations", () => {
+  it("searches saved chats and restores a selected transcript", async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "list_chat_threads")
+        return [
+          { id: "current", title: "Current conversation", current: true, createdAt: 1, messageCount: 2 },
+          {
+            id: "past",
+            title: "Quarterly pitch",
+            association: "quarterly/pitch.html",
+            current: false,
+            createdAt: 1,
+            messageCount: 1,
+          },
+        ];
+      if (command === "select_chat_thread")
+        return {
+          chat: [{ id: "old-user", role: "user", text: "Earlier prompt", slide: null, attachments: [], createdAt: 1 }],
+          provider: "claude",
+        };
+      return [];
+    });
+    render(<ChatPanel />);
+    type("Unsent draft");
+    fireEvent.click(screen.getByRole("button", { name: "Past chats" }));
+    const past = await screen.findByRole("button", { name: /Quarterly pitch/ });
+    expect((screen.getByRole("button", { name: /Current conversation/ }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByRole("textbox", { name: "Search conversations" }), {
+      target: { value: "quarterly/pitch.html" },
+    });
+    expect(screen.queryByRole("button", { name: /Current conversation/ })).toBeNull();
+    await act(async () => fireEvent.click(past));
+    expect(screen.getByText("Earlier prompt")).toBeTruthy();
+    expect(textarea().value).toBe("");
+    expect(screen.queryByRole("region", { name: "Past conversations" })).toBeNull();
+    expect(invoke).toHaveBeenCalledWith("select_chat_thread", { id: "/decks/talk", thread: "past" });
+  });
+
+  it("keeps navigation disabled during a turn and reports history load errors", async () => {
+    useApp.setState({ running: true });
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "list_chat_threads") throw new Error("History unavailable");
+      return [];
+    });
+    render(<ChatPanel />);
+    expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Past chats" }));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "History unavailable");
+    expect(screen.getByText("Stop the current turn to switch chats.")).toBeTruthy();
+  });
+});
+
 describe("ChatPanel: empty chat", () => {
   it("offers starter prompts for an empty deck, which fill the composer", () => {
     useApp.setState({ deck: { ...deckFor(DECK_HTML), slides: [] }, selected: null });
@@ -180,7 +232,7 @@ describe("ChatPanel: empty chat", () => {
     render(<ChatPanel />);
     expect(screen.getByText(/Ask for changes/)).toBeTruthy();
     expect(screen.queryByText(/neighborhood tool-sharing app/)).toBeNull();
-    expect(screen.queryByTitle(/New conversation/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Past chats" })).toBeTruthy();
   });
 
   it("warns when the selected model's CLI is not installed", () => {
@@ -1233,6 +1285,42 @@ describe("composer fill", () => {
     type("Next");
     fireEvent.keyDown(textarea(), { key: "Enter" });
     expect(send).toHaveBeenLastCalledWith("Next", { includeSlide: true, attachments: [] });
+  });
+
+  describe("a handed-over element", () => {
+    const ELEMENT = { path: "#intro > h1:nth-child(1)", markup: "<h1>Hi</h1>", name: '<h1> "Hi"', added: false };
+
+    it("shows, keeps the draft, and goes along with the message", () => {
+      useApp.setState({ composerFill: null });
+      render(<ChatPanel />);
+      type("Make this a chart");
+      act(() => useApp.getState().fillComposer("", { element: ELEMENT }));
+      expect((textarea() as HTMLTextAreaElement).value).toBe("Make this a chart");
+      expect(screen.getByText(ELEMENT.name)).toBeTruthy();
+      fireEvent.keyDown(textarea(), { key: "Enter" });
+      expect(send).toHaveBeenCalledWith("Make this a chart", { includeSlide: true, attachments: [], element: ELEMENT });
+      expect(screen.queryByText(ELEMENT.name)).toBeNull();
+    });
+
+    it("can be taken off, and a plain fill clears it", () => {
+      useApp.setState({ composerFill: null });
+      render(<ChatPanel />);
+      act(() => useApp.getState().fillComposer("Tidy it", { element: ELEMENT }));
+      fireEvent.click(screen.getByRole("button", { name: "Don't send element" }));
+      expect(screen.queryByText(ELEMENT.name)).toBeNull();
+      act(() => useApp.getState().fillComposer("Tidy it", { element: ELEMENT }));
+      act(() => useApp.getState().fillComposer("Fix it"));
+      expect(screen.queryByText(ELEMENT.name)).toBeNull();
+    });
+
+    it("shows on the sent message", () => {
+      useApp.setState({
+        messages: [{ id: "u", role: "user", text: "Hi", slide: null, attachments: [], element: ELEMENT, createdAt: 1 }],
+      });
+      render(<ChatPanel />);
+      expect(screen.getByText(`· about ${ELEMENT.name}`)).toBeTruthy();
+      useApp.setState({ messages: [] });
+    });
   });
 
   it("lets the user remove the screenshot, and a plain fill clears it", () => {

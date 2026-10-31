@@ -1748,6 +1748,21 @@ mod tests {
     }
 
     #[test]
+    fn hand_styling_needs_no_rules_of_its_own() {
+        // Cut-out shapes and arrows are added elements like any other, and the look the toolbar
+        // sets (opacity, shadow, radius, image fit and flips, a slide's background) is inline style.
+        let found = lint(
+            &deck(
+                "<section class=\"slide\" id=\"a\" style=\"background-color: #ff0000; background-image: none\">\n<div data-added=\"shape\" style=\"position: absolute; clip-path: polygon(50% 0%, 100% 100%, 0% 100%)\">Hi</div>\n<svg data-added=\"drawing\" viewBox=\"0 0 30 30\" style=\"position: absolute; filter: drop-shadow(0px 4px 12px rgba(0, 0, 0, 0.35))\"><path d=\"M3 15 L27 15 M15 3 L27 15 L15 27\" stroke=\"#111111\"/></svg>\n<img src=\"https://example.test/a.png\" alt=\"A cat\" style=\"opacity: 0.5; box-shadow: 0px 8px 24px black; border-radius: 16px; object-fit: cover; object-position: 50% 0%; transform: scaleX(-1) !important\">\n</section>",
+            ),
+            |_| true,
+            &[],
+        );
+        let rules: Vec<_> = found.iter().map(|i| i.rule).collect();
+        assert_eq!(rules, ["added-element", "added-element", "remote-image"]);
+    }
+
+    #[test]
     fn flags_elements_added_by_hand() {
         let found = lint(
             &deck(
@@ -1896,6 +1911,12 @@ mod tests {
         assert_eq!(
             rules(&deck(
                 "<section class=\"slide\" id=\"a\" data-slop-typing><p>Hi</p></section>"
+            )),
+            ["editor-leftover"]
+        );
+        assert_eq!(
+            rules(&deck(
+                "<section class=\"slide\" id=\"a\"><p spellcheck=\"true\">Hi</p></section>"
             )),
             ["editor-leftover"]
         );

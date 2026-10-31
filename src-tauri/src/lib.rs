@@ -23,6 +23,8 @@ mod safety;
 mod sessions;
 mod size;
 mod templates;
+#[cfg(all(test, unix))]
+mod test_support;
 mod video;
 mod voice;
 mod watcher;
@@ -35,7 +37,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State, Window};
 
 use agent::{AgentManager, SendArgs};
-use deck::Deck;
+use deck::{Deck, RailEdit};
 use error::Result;
 use sessions::Sessions;
 use watcher::WorkspaceWatcher;
@@ -255,7 +257,7 @@ fn rename_deck(id: String, title: String) -> Result<Deck> {
 }
 
 #[tauri::command]
-fn reorder_slides(id: String, slides: Vec<String>) -> Result<Deck> {
+fn reorder_slides(id: String, slides: Vec<String>) -> Result<RailEdit> {
     deck::reorder(&deck::deck_file(&id)?, slides)
 }
 
@@ -266,21 +268,31 @@ fn add_slide(id: String, after: Option<String>) -> Result<CreatedSlide> {
 }
 
 #[tauri::command]
-fn duplicate_slide(id: String, slide: String) -> Result<CreatedSlide> {
-    let (deck, slide) = deck::duplicate(&deck::deck_file(&id)?, &slide)?;
-    Ok(CreatedSlide { deck, slide })
+fn duplicate_slides(id: String, slides: Vec<String>) -> Result<RailEdit> {
+    deck::duplicate_slides(&deck::deck_file(&id)?, &slides)
 }
 
 #[tauri::command]
-fn set_slide_hidden(window: Window, id: String, slide: String, hidden: bool) -> Result<Deck> {
+fn set_slides_hidden(
+    window: Window,
+    id: String,
+    slides: Vec<String>,
+    hidden: bool,
+) -> Result<RailEdit> {
     let file = deck::deck_file(&id)?;
-    deck::set_slide_hidden(&file, current_session(&window)?.as_deref(), &slide, hidden)
+    deck::set_slides_hidden(&file, current_session(&window)?.as_deref(), &slides, hidden)
 }
 
 /// Sets what is said over a slide; empty `text` removes its narration.
 #[tauri::command]
 fn set_slide_narration(id: String, slide: String, text: String) -> Result<Deck> {
     deck::set_slide_narration(&deck::deck_file(&id)?, &slide, &text)
+}
+
+/// Sets a slide's speaker notes; empty `text` removes them.
+#[tauri::command]
+fn set_slide_notes(id: String, slide: String, text: String) -> Result<Deck> {
+    deck::set_slide_notes(&deck::deck_file(&id)?, &slide, &text)
 }
 
 /// Gives every slide of the deck the canvas `size`.
@@ -311,9 +323,9 @@ fn delete_section(id: String, index: usize) -> Result<Deck> {
 }
 
 #[tauri::command]
-fn delete_slide(window: Window, id: String, slide: String) -> Result<Deck> {
+fn delete_slides(window: Window, id: String, slides: Vec<String>) -> Result<RailEdit> {
     let file = deck::deck_file(&id)?;
-    deck::delete_slide(&file, &session(&window)?, &slide)
+    deck::delete_slides(&file, &session(&window)?, &slides)
 }
 
 /// Saves a slide edited on the stage (text edits, moved elements). `base` is its hash when
@@ -581,6 +593,63 @@ fn save_chat(id: String, chat: serde_json::Value) -> Result<()> {
     )
 }
 
+#[tauri::command]
+fn list_chat_threads(id: String) -> Result<Vec<serde_json::Value>> {
+    let sessions = sessions()?;
+    let root = workspace::root(&id)?;
+    let current = sessions.current(&root);
+    sessions
+        .list_scoped(&root)
+        .into_iter()
+        .rev()
+        .map(|path| {
+            let chat = deck::load_chat(Some(&path))?;
+            let messages = chat.as_array();
+            let first = messages.and_then(|items| items.iter().find(|m| m["role"] == "user"));
+            let title = first
+                .and_then(|m| m["text"].as_str())
+                .unwrap_or("New conversation");
+            Ok(serde_json::json!({
+                "id": path.file_name().unwrap().to_string_lossy(),
+                "title": title.chars().take(100).collect::<String>(),
+                "createdAt": first.and_then(|m| m["createdAt"].as_u64()),
+                "current": current.as_ref() == Some(&path),
+                "messageCount": messages.map_or(0, Vec::len),
+                "association": sessions::association_of(&path).map(|associated| {
+                    let relative = associated.strip_prefix(&root).unwrap_or(&associated);
+                    if relative.as_os_str().is_empty() { ".".to_string() }
+                    else { relative.to_string_lossy().replace('\\', "/") }
+                }),
+            }))
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn select_chat_thread(
+    agent: State<AgentManager>,
+    id: String,
+    thread: String,
+) -> Result<serde_json::Value> {
+    if agent.is_running(&id) {
+        return Err(error::Error::msg(
+            "Stop the current turn before switching conversations.",
+        ));
+    }
+    let sessions = sessions()?;
+    let root = workspace::root(&id)?;
+    let path = sessions
+        .list_scoped(&root)
+        .into_iter()
+        .find(|path| path.file_name().is_some_and(|name| name == thread.as_str()))
+        .ok_or_else(|| error::Error::msg("Conversation not found in this workspace."))?;
+    // Read before selecting: a damaged transcript must not change the active conversation.
+    let chat = deck::load_chat(Some(&path))?;
+    let provider = sessions::provider(&path)?;
+    sessions.select(&root, &thread)?;
+    Ok(serde_json::json!({ "chat": chat, "provider": provider }))
+}
+
 /// Starts a new chat in a new session; the old conversation stays in its own.
 #[tauri::command]
 fn reset_chat(agent: State<AgentManager>, id: String) -> Result<()> {
@@ -811,15 +880,16 @@ pub fn run() {
             save_comments,
             reorder_slides,
             add_slide,
-            duplicate_slide,
-            set_slide_hidden,
+            duplicate_slides,
+            set_slides_hidden,
             set_slide_locked,
             set_slide_narration,
+            set_slide_notes,
             set_slide_size,
             add_section,
             rename_section,
             delete_section,
-            delete_slide,
+            delete_slides,
             update_slide,
             save_deck_source,
             import_assets,
@@ -843,6 +913,8 @@ pub fn run() {
             session_provider,
             save_chat,
             reset_chat,
+            list_chat_threads,
+            select_chat_thread,
             send_message,
             interrupt_agent,
             permission_modes,

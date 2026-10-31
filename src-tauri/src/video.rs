@@ -11,7 +11,8 @@
 //! capturing more. A hidden page skips view transitions, so the helper plays hero morphs
 //! itself, with animations that follow the same clock. Without animations (`?static&print`) each slide is captured once.
 //!
-//! Frames are encoded on a thread of their own as AV1, a royalty-free codec, with rav1e
+//! Captured pixels go to the encoder as they are, with no image file in between. Frames are
+//! encoded on a thread of their own as AV1, a royalty-free codec, with rav1e
 //! (written in Rust, so every platform encodes the same way), and written to the MP4 (see
 //! mp4.rs) as they come. A frame held on screen is stored once, lasting as long as it shows.
 //! The narration is one Opus audio track, royalty-free too, encoded once the frames are.
@@ -34,7 +35,7 @@ use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::capture::{decode_png, Image, Rect, Size};
+use crate::capture::{Image, Rect, Size};
 use crate::error::{Error, Result};
 use crate::mp4::{AudioTrack, Mp4Writer};
 use crate::narration::{self, Narration};
@@ -65,8 +66,10 @@ const SPEED: u8 = 10;
 const QUANTIZER: usize = 80;
 /// The AV1 OBU type that starts each temporal unit.
 const OBU_TEMPORAL_DELIMITER: u8 = 2;
-/// Frames waiting to be encoded; captures stop while the encoder catches up.
+/// Most jobs waiting to be encoded; captures stop while the encoder catches up.
 const QUEUE: usize = 4;
+/// Most bytes of raw frames the queue may hold: about 64 MB, four 1080p frames but two at 4K.
+const QUEUE_BYTES: usize = 64 << 20;
 /// What the hidden window is for, as its errors name it.
 const TASK: &str = "recording the video";
 /// The error an export the user cancelled ends with.
@@ -439,7 +442,7 @@ async fn record(
                         .run(&format!("window.__slopVideo.frame({at:.3})"), "frame")
                         .await?;
                     settled = answer.get("busy").map(String::as_str) == Some("0");
-                    Job::Png(capture(helper.window, rect, viewport, size.0).await?)
+                    Job::Frame(capture(helper.window, rect, viewport, size.0).await?)
                 };
                 jobs.send(job).await.map_err(|_| encoder_gone())?;
                 progress(Progress {
@@ -459,23 +462,18 @@ async fn record(
     played.and(written)
 }
 
-/// A PNG of `rect` of the window, `width` pixels wide.
-async fn capture(
-    window: &WebviewWindow,
-    rect: Rect,
-    viewport: Size,
-    width: u32,
-) -> Result<Vec<u8>> {
+/// The pixels of `rect` of the window, `width` pixels wide.
+async fn capture(window: &WebviewWindow, rect: Rect, viewport: Size, width: u32) -> Result<Image> {
     #[cfg(target_os = "macos")]
-    return crate::capture::render_region(window.as_ref(), rect, viewport, width).await;
+    return crate::capture::render_region_image(window.as_ref(), rect, viewport, width).await;
     #[cfg(not(target_os = "macos"))]
-    return crate::capture::snapshot(window.as_ref(), rect, viewport, width).await;
+    return crate::capture::snapshot_image(window.as_ref(), rect, viewport, width).await;
 }
 
 /// What the encoder does next.
 enum Job {
     /// Encode this captured frame.
-    Png(Vec<u8>),
+    Frame(Image),
     /// Show the last frame for one more frame.
     Repeat,
     /// Make the next frame a keyframe.
@@ -490,7 +488,7 @@ fn spawn_encoder(
     fps: u32,
     audio: Option<Vec<f32>>,
 ) -> Result<(mpsc::Sender<Job>, oneshot::Receiver<Result<()>>)> {
-    let (jobs, mut queue) = mpsc::channel::<Job>(QUEUE);
+    let (jobs, mut queue) = mpsc::channel::<Job>(queue_depth(size));
     let (done, encoded) = oneshot::channel();
     let out = BufWriter::new(File::create(&dest)?);
     std::thread::Builder::new()
@@ -500,7 +498,7 @@ fn spawn_encoder(
                 let mut video = VideoWriter::new(out, size, fps)?;
                 while let Some(job) = queue.blocking_recv() {
                     match job {
-                        Job::Png(png) => video.push(&decode_png(&png)?)?,
+                        Job::Frame(image) => video.push(&image)?,
                         Job::Repeat => video.repeat()?,
                         Job::Keyframe => video.keyframe(),
                     }
@@ -511,6 +509,14 @@ fn spawn_encoder(
             let _ = done.send(result);
         })?;
     Ok((jobs, encoded))
+}
+
+/// How many jobs may wait for the encoder, for frames of the video's `size`. Frames queue as
+/// raw RGBA, so big ones queue fewer, [`QUEUE_BYTES`] in all; at least two keep the capture
+/// and the encoder working at once.
+fn queue_depth((width, height): (u32, u32)) -> usize {
+    let frame = (width as usize * height as usize * 4).max(1);
+    (QUEUE_BYTES / frame).clamp(2, QUEUE)
 }
 
 /// Encodes frames as AV1 into an MP4, one video track. A frame shown again only lasts longer:
@@ -1087,6 +1093,19 @@ mod tests {
             without_temporal_delimiters(&[0x0a, 0x05, 1]),
             [0x0a, 0x05, 1]
         );
+    }
+
+    #[test]
+    fn the_queue_holds_fewer_big_frames() {
+        assert_eq!(queue_depth((1280, 720)), QUEUE);
+        assert_eq!(queue_depth((1920, 1080)), QUEUE);
+        assert_eq!(queue_depth((2560, 1440)), 4);
+        assert_eq!(queue_depth((3840, 2160)), 2);
+        assert_eq!(queue_depth((8192, 8192)), 2, "never fewer than two");
+        for size in [(1920, 1080), (3840, 2160)] {
+            let bytes = queue_depth(size) * size.0 as usize * size.1 as usize * 4;
+            assert!(bytes <= QUEUE_BYTES, "{size:?} queues {bytes} bytes");
+        }
     }
 
     #[test]

@@ -57,8 +57,11 @@ whisper-rs = { version = "0.16", features = ["metal"] }
 objc2-av-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "AVCaptureDevice", "AVMediaFormat"] }  # microphone permission
 block2 = "0.6"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSBitmapImageRep", "NSImage", "NSImageRep", "NSPasteboard", "NSPrintInfo", "NSPrintOperation", "NSResponder", "NSView", "NSWindow"] }
-objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSError", "NSGeometry", "NSString", "NSURL", "NSValue"] }
+objc2-app-kit = { version = "0.3", features = ["objc2-core-graphics", "NSBitmapImageRep", "NSGraphicsContext", "NSImage", "NSImageRep", "NSPasteboard", "NSPrintInfo", "NSPrintOperation", "NSResponder", "NSView", "NSWindow"] }
+# Video frames go from the snapshot's CGImage straight to pixels (src/capture.rs).
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGImage"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSData", "NSDictionary", "NSError", "NSGeometry", "NSString", "NSURL", "NSValue"] }
 objc2-web-kit = { version = "0.3", features = ["block2", "objc2-app-kit", "objc2-core-foundation", "WKSnapshotConfiguration", "WKWebView"] }
 
 # rav1e's ARM assembly builds with the C compiler; its x86 assembly would need nasm.

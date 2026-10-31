@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!-- slopslide:runtime-css (managed by SlopSlide, do not edit) -->
+  <style>
+/* SlopSlide player: fixed stage (--slop-w × --slop-h, 1920×1080 unless the deck names another
+   size) scaled to the window, one slide at a time. The app appends the size-dependent rules.
+   The player sets data-slop-player on <html> from a script in <head>, before the body
+   renders. Viewers without JavaScript (iOS Quick Look, e.g. decks opened from chat apps)
+   never get it and show every slide top to bottom instead. */
+html,
+body {
+  margin: 0;
+  background: #000;
+}
+html[data-slop-thumbnail],
+html[data-slop-thumbnail] body {
+  background: transparent;
+}
+/* Slides are fixed canvases: stop mobile Safari enlarging text it finds too small, which
+   would overflow the slides when the stage is scaled down to a phone. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+html[data-slop-player],
+html[data-slop-player] body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+.deck {
+  width: var(--slop-w, 1920px);
+  margin: 0 auto;
+  overflow: hidden;
+}
+html[data-slop-player] .deck {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: var(--slop-h, 1080px);
+  margin: 0;
+  transform-origin: 0 0;
+}
+/* Stage geometry and slide switching are !important: deck styles often set
+   `.slide { position: relative }` or similar, which would stack the slides. */
+.deck > .slide {
+  position: relative !important;
+  inset: auto !important;
+  width: var(--slop-w, 1920px) !important;
+  height: var(--slop-h, 1080px) !important;
+  margin: 0 0 24px !important;
+  overflow: hidden;
+}
+/* Without the player, deck styles must not hide slides or stop the page scrolling. */
+html:not([data-slop-player]),
+html:not([data-slop-player]) body {
+  height: auto !important;
+  overflow: visible !important;
+}
+html:not([data-slop-player]) .deck > .slide {
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+html:not([data-slop-player]) .deck > .slide[data-hidden] {
+  display: none !important;
+}
+html:not([data-slop-player]) .slide .reveal {
+  opacity: 1 !important;
+  animation: none !important;
+}
+html[data-slop-player] .deck > .slide {
+  position: absolute !important;
+  inset: 0 !important;
+  margin: 0 !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.35s ease, visibility 0s linear 0.35s;
+}
+html[data-slop-player] .deck > .slide.active {
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transition: opacity 0.35s ease;
+  z-index: 1;
+}
+/* Section markers only label the editor's slide rail; the player never shows them. */
+.deck > .deck-section {
+  display: none !important;
+}
+.slide .notes,
+.slide .narration {
+  display: none !important;
+}
+/* Review marks from the editor, drawn by the player over their slide; R shows and hides them. */
+.slide > .slop-review {
+  display: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  pointer-events: none;
+  z-index: 2147483647;
+}
+html[data-slop-review] .slide > .slop-review {
+  display: block;
+}
+.slide img,
+.slide video,
+.slide canvas,
+.slide svg {
+  max-width: 100%;
+  max-height: 100%;
+}
+/* Entrances only say where an element comes from: animating `translate`, `scale`, and
+   `rotate` (not `transform`) and leaving them out of the last frame lands each element on
+   its own styles, rotations and hand edits included. A deck restyles the entrance by
+   setting `animation` on `.slide.active .reveal`; the stagger below outranks that rule, so
+   the shorthand does not reset it. */
+@keyframes slop-reveal {
+  from {
+    opacity: 0;
+    translate: 0 28px;
+  }
+  to {
+    opacity: 1;
+  }
+}
+html[data-slop-player] .slide .reveal {
+  opacity: 0;
+}
+.slide.active .reveal {
+  animation: slop-reveal 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.slide.active .reveal.reveal-delay-1 { animation-delay: 0.12s; }
+.slide.active .reveal.reveal-delay-2 { animation-delay: 0.24s; }
+.slide.active .reveal.reveal-delay-3 { animation-delay: 0.36s; }
+.slide.active .reveal.reveal-delay-4 { animation-delay: 0.48s; }
+/* Editor thumbnails render the final frame of every animation. */
+html[data-slop-static] *,
+html[data-slop-static] *::before,
+html[data-slop-static] *::after {
+  animation-delay: 0s !important;
+  animation-duration: 0s !important;
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-delay: 0s !important;
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+/* Print / save as PDF: one slide per page (the app's size rules set the page size), printed as
+   shown, backgrounds and all, rather than in the browser's ink-saving colors. */
+@media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  html,
+  body,
+  html[data-slop-player],
+  html[data-slop-player] body {
+    height: auto;
+    overflow: visible;
+  }
+  .deck,
+  html[data-slop-player] .deck {
+    position: static;
+    height: auto;
+    margin: 0;
+    transform: none !important;
+  }
+  .deck > .slide,
+  html[data-slop-player] .deck > .slide {
+    position: relative !important;
+    margin: 0 !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    break-after: page;
+  }
+  .deck > .slide[data-hidden] {
+    display: none !important;
+  }
+  .slide .reveal {
+    opacity: 1 !important;
+    animation: none !important;
+  }
+}
+
+/* Matched heroes move between click states; slide fades must not delay the snapshot. */
+html:active-view-transition .deck > .slide {
+  transition: none !important;
+}
+::view-transition-group(*) {
+  animation-duration: 550ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 220ms;
+}
+/* Stage size: 1920x1080 (the deck's slopslide-size meta). */
+:root {
+  --slop-w: 1920px;
+  --slop-h: 1080px;
+}
+@media print {
+  @page {
+    size: 1920px 1080px;
+    margin: 0;
+  }
+}
+@media screen and (max-width: 1919.98px) { html:not([data-slop-player]) .deck { zoom: 0.95; } }
+@media screen and (max-width: 1823.98px) { html:not([data-slop-player]) .deck { zoom: 0.9; } }
+@media screen and (max-width: 1727.98px) { html:not([data-slop-player]) .deck { zoom: 0.85; } }
+@media screen and (max-width: 1631.98px) { html:not([data-slop-player]) .deck { zoom: 0.8; } }
+@media screen and (max-width: 1535.98px) { html:not([data-slop-player]) .deck { zoom: 0.75; } }
+@media screen and (max-width: 1439.98px) { html:not([data-slop-player]) .deck { zoom: 0.7; } }
+@media screen and (max-width: 1343.98px) { html:not([data-slop-player]) .deck { zoom: 0.65; } }
+@media screen and (max-width: 1247.98px) { html:not([data-slop-player]) .deck { zoom: 0.6; } }
+@media screen and (max-width: 1151.98px) { html:not([data-slop-player]) .deck { zoom: 0.55; } }
+@media screen and (max-width: 1055.98px) { html:not([data-slop-player]) .deck { zoom: 0.5; } }
+@media screen and (max-width: 959.98px) { html:not([data-slop-player]) .deck { zoom: 0.45; } }
+@media screen and (max-width: 863.98px) { html:not([data-slop-player]) .deck { zoom: 0.4; } }
+@media screen and (max-width: 767.98px) { html:not([data-slop-player]) .deck { zoom: 0.35; } }
+@media screen and (max-width: 671.98px) { html:not([data-slop-player]) .deck { zoom: 0.3; } }
+@media screen and (max-width: 575.98px) { html:not([data-slop-player]) .deck { zoom: 0.25; } }
+@media screen and (max-width: 479.98px) { html:not([data-slop-player]) .deck { zoom: 0.2; } }
+@media screen and (max-width: 383.98px) { html:not([data-slop-player]) .deck { zoom: 0.15; } }
+@media screen and (max-width: 287.98px) { html:not([data-slop-player]) .deck { zoom: 0.1; } }
+  </style>
+  <script>document.documentElement.setAttribute("data-slop-player", "");</script>
+  <!-- /slopslide:runtime-css -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A short tour of the Moon</title>
+  <style>
+    :root {
+      --bg: #10131c;
+      --panel: #1b2030;
+      --ink: #f3f1ea;
+      --muted: #a7adbd;
+      --accent: #f2c14e;
+      --font-display: Georgia, "Times New Roman", serif;
+      --font-body: "Helvetica Neue", Arial, sans-serif;
+    }
+    .slide {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 48px;
+      padding: 120px 140px;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font-body);
+      font-size: 36px;
+      line-height: 1.4;
+    }
+    .slide h1, .slide h2, .slide p, .slide ul { margin: 0; }
+    .slide h1, .slide h2 { font-family: var(--font-display); font-weight: 700; line-height: 1.05; }
+    .slide h1 { font-size: 136px; }
+    .slide h2 { font-size: 88px; }
+    .slide p { color: var(--muted); max-width: 1400px; }
+    .slide .eyebrow { font-size: 26px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
+    .slide ul { display: flex; flex-direction: column; gap: 28px; padding: 0; list-style: none; max-width: 1450px; }
+    .slide li { padding-left: 48px; color: var(--muted); position: relative; }
+    .slide li::before { content: ""; position: absolute; left: 0; top: 0.5em; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); }
+    .slide .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 56px; }
+    .slide .stat { display: flex; flex-direction: column; gap: 16px; padding: 40px; border-radius: 24px; background: var(--panel); }
+    .slide .value { font-family: var(--font-display); font-size: 88px; font-weight: 700; line-height: 1; color: var(--accent); }
+    .slide .label { font-size: 30px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <main class="deck">
+    <section class="slide" id="title">
+      <div class="eyebrow">Teleprompter test deck</div>
+      <h1>A short tour of the Moon</h1>
+      <p>Seven slides to read aloud, skip around in and paraphrase.</p>
+      <aside class="narration">Good evening, and thank you for joining this short tour of the Moon. Over the next few minutes we will look at where it came from, why it changes shape in the sky, and why people still want to go back.</aside>
+      <aside class="notes">Test: read the narration word for word. The highlight should keep up with you.</aside>
+    </section>
+
+    <section class="slide" id="origin">
+      <div class="eyebrow">Long script</div>
+      <h2>How the Moon was made</h2>
+      <ul>
+        <li>A young Earth and a planet the size of Mars</li>
+        <li>A giant collision and a ring of molten rock</li>
+        <li>The Moon forms from that ring</li>
+      </ul>
+      <aside class="narration">Most scientists believe the Moon was born in a catastrophe. About four and a half billion years ago, the young Earth was struck by another world roughly the size of Mars. Astronomers call that lost planet Theia, after a goddess from Greek mythology.
+
+The collision was so violent that both bodies partly melted. Enormous amounts of glowing rock were thrown into space, and that debris settled into a hot ring circling the Earth.
+
+Gravity then did the patient work. Small clumps pulled in their neighbours, the clumps merged into larger ones, and before long a single large body was orbiting our planet. Some models suggest this happened in only a few thousand years, while others suggest it took much longer.
+
+The best evidence came home with the Apollo astronauts. The rocks they collected are remarkably similar to rocks from the mantle of the Earth, but they contain very little water and very few light elements. That is exactly what you would expect from material that was heated and vaporised in a giant impact.
+
+So every time you look up at the Moon, you are looking at a piece of the early Earth, flung into orbit by the most dramatic event in the history of our planet.</aside>
+      <aside class="notes">Test: this script is long enough to scroll. Read on and watch it keep your line a third of the way down. Then skip straight to the last paragraph, "So every time you look up", and check that the paragraphs in between stay unmarked.</aside>
+    </section>
+
+    <section class="slide" id="phases">
+      <div class="eyebrow">Paraphrase</div>
+      <h2>Why it changes shape</h2>
+      <ul>
+        <li>Half of the Moon is always lit by the Sun</li>
+        <li>We see that half from a changing angle</li>
+        <li>The cycle takes about twenty nine and a half days</li>
+      </ul>
+      <aside class="narration">A common belief is that the phases of the Moon are caused by the shadow of the Earth, but that is not the case. Half of the Moon is always lit by the Sun. What changes is how much of that bright half we can see from where we are standing.
+
+When the Moon sits between us and the Sun, its dark side faces us and we call it a new moon. Two weeks later it has moved to the far side of its orbit, the whole bright half faces us, and we call it a full moon.</aside>
+      <aside class="notes">Test: say it in your own words. For example: "Lots of people think Earth's shadow causes the phases, but that's wrong. One half of the Moon is always in sunlight." The highlight should still follow you.</aside>
+    </section>
+
+    <section class="slide" id="repeat">
+      <div class="eyebrow">Repeated phrases</div>
+      <h2>Going back</h2>
+      <p>Each reason starts with the same words.</p>
+      <aside class="narration">We should go back to the Moon because it teaches us about the early solar system. Its surface has hardly changed in billions of years, so it keeps a record that Earth has long since erased.
+
+We should go back to the Moon because it holds frozen water. Ice in the dark craters near the south pole could one day supply drinking water, air and rocket fuel.
+
+We should go back to the Moon because it is the nearest place to learn how to live on another world. A rescue is only three days away, which makes it a far safer classroom than Mars.</aside>
+      <aside class="notes">Test: read the second paragraph, then the third. "We should go back to the Moon because" appears three times, so the highlight should take the next one and not leap to another.</aside>
+    </section>
+
+    <section class="slide" id="numbers">
+      <div class="eyebrow">Numbers</div>
+      <h2>The Moon in numbers</h2>
+      <div class="stats">
+        <div class="stat"><div class="value">384,400 km</div><div class="label">Average distance</div></div>
+        <div class="stat"><div class="value">27.3 days</div><div class="label">One orbit</div></div>
+        <div class="stat"><div class="value">12</div><div class="label">People who walked on it</div></div>
+      </div>
+      <aside class="narration">The Moon orbits at an average distance of 384,400 kilometres, and it takes 27.3 days to go around the Earth once. In all of history, only 12 people have ever walked on its surface, and the last of them left in December 1972.</aside>
+      <aside class="notes">Test: Whisper may write numbers differently from the script. The words around them should keep the highlight going.</aside>
+    </section>
+
+    <section class="slide" id="notes-only">
+      <div class="eyebrow">Notes, no narration</div>
+      <h2>Tides</h2>
+      <p>The pull of the Moon raises the oceans twice a day.</p>
+      <aside class="notes">This slide has speaker notes but no narration, so the teleprompter follows these notes instead. The gravity of the Moon pulls hardest on the side of the Earth that faces it, and that stretches the oceans into two gentle bulges. As our planet turns beneath those bulges, most coasts see two high tides and two low tides every day.</aside>
+    </section>
+
+    <section class="slide" id="german">
+      <div class="eyebrow">Another language</div>
+      <h2>Der Mond auf Deutsch</h2>
+      <p>Der Text wird in jeder Sprache verfolgt, die Whisper versteht.</p>
+      <aside class="narration">Der Mond ist der einzige natürliche Begleiter der Erde. Er zeigt uns immer dieselbe Seite, weil er sich in genau der Zeit einmal um sich selbst dreht, die er für einen Umlauf um die Erde braucht. Deshalb hat vor dem Jahr neunzehnhundertneunundfünfzig niemand seine Rückseite gesehen.</aside>
+      <aside class="notes">Test: read this in German. Accents do not matter for the matching.</aside>
+    </section>
+
+    <section class="slide" id="end">
+      <h1>Thank you</h1>
+      <p>This slide has no script, so the teleprompter has nothing to follow here.</p>
+    </section>
+  </main>
+  <!-- slopslide:runtime-js (managed by SlopSlide, do not edit) -->
+  <script>
+/* SlopSlide player. Keys: ←/→, space, PageUp/PageDown, Home/End, F for full screen, R for review marks. */
+(function () {
+  var root = document.documentElement;
+  // The runtime-css block sets this before the body renders; without it the stylesheet lists
+  // the slides for viewers that run no JavaScript.
+  root.setAttribute("data-slop-player", "");
+  var params = new URLSearchParams(location.search);
+  var embed = params.has("embed");
+  var framed = window.parent !== window;
+  if (params.has("static")) root.setAttribute("data-slop-static", "");
+  if (embed && params.has("static")) root.setAttribute("data-slop-thumbnail", "");
+
+  var deck = document.querySelector(".deck");
+  var all = Array.prototype.filter.call(document.querySelectorAll(".slide"), function (el) {
+    return !el.parentElement || !el.parentElement.closest(".slide");
+  });
+  // Hidden slides (data-hidden) are skipped by the show; the editor still embeds them.
+  var slides = embed
+    ? all
+    : all.filter(function (el) {
+        return !el.hasAttribute("data-hidden");
+      });
+  if (!deck || slides.length === 0) return;
+  var current = -1;
+  // The stage's size in slide pixels (the deck's slide size, 1920×1080 unless it names another).
+  var W = deck.offsetWidth || 1920;
+  var H = deck.offsetHeight || 1080;
+
+  function fit() {
+    var scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    var x = (window.innerWidth - W * scale) / 2;
+    var y = (window.innerHeight - H * scale) / 2;
+    deck.style.transform = "translate(" + x + "px," + y + "px) scale(" + scale + ")";
+  }
+
+  function indexFor(ref) {
+    if (!ref) return 0;
+    // A hidden slide's id lands on the next shown slide (or the last one).
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].id !== ref) continue;
+      for (var j = i; j < all.length; j++) {
+        var index = slides.indexOf(all[j]);
+        if (index >= 0) return index;
+      }
+      return slides.length - 1;
+    }
+    // The editor addresses slides without an id by position, as "#2".
+    var n = parseInt(ref.replace(/^#/, ""), 10);
+    return isNaN(n) ? 0 : Math.min(slides.length - 1, Math.max(0, n - 1));
+  }
+
+  var transition = null;
+  function morphNames(slide, enabled) {
+    var seen = Object.create(null);
+    Array.prototype.forEach.call(slide.querySelectorAll("[data-morph]"), function (el) {
+      var key = el.getAttribute("data-morph");
+      // Invalid or duplicate names must not break the whole browser transition.
+      var valid = /^[a-z][a-z0-9-]*$/.test(key) && !seen[key];
+      seen[key] = true;
+      el.style.viewTransitionName = enabled && valid ? "slop-" + key : "";
+    });
+  }
+
+  function show(index) {
+    index = Math.min(slides.length - 1, Math.max(0, index));
+    if (index === current) return;
+    var previous = current;
+    current = index;
+    if (transition) transition.skipTransition();
+    var motion = !window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var canMorph = previous >= 0 && !embed && !params.has("static") && motion &&
+      document.startViewTransition && slides[index].querySelector("[data-morph]") &&
+      slides[previous].querySelector("[data-morph]");
+    function update() {
+      if (current !== index) return;
+      slides.forEach(function (el, i) {
+        morphNames(el, !!canMorph && i === index);
+        el.classList.toggle("active", i === index);
+      });
+    }
+    if (canMorph) {
+      morphNames(slides[previous], true);
+      var next = document.startViewTransition(update);
+      transition = next;
+      // A rejected snapshot (e.g. duplicate author CSS names) still switches the slide.
+      next.ready.catch(function () {});
+      next.finished.catch(function () {}).then(function () {
+        if (transition !== next) return;
+        transition = null;
+        slides.forEach(function (el) { morphNames(el, false); });
+      });
+    } else update();
+    if (embed) return;
+    var id = slides[index].id || String(index + 1);
+    try {
+      history.replaceState(null, "", "#" + id);
+    } catch (e) {
+      // Sandboxed frames and some file:// contexts refuse URL updates; navigation still works.
+    }
+    if (framed) window.parent.postMessage({ type: "slop:slide", id: slides[index].id || null, index: index }, "*");
+  }
+
+  // Review marks drawn in the editor (the slopslide:review block), hidden until R or ?review
+  // shows them. The editor draws them itself, so embedded previews leave them out.
+  var review = null;
+  var reviewData = document.getElementById("slopslide-review");
+  if (reviewData && !embed) {
+    try {
+      review = JSON.parse(reviewData.textContent);
+    } catch (e) {
+      review = null;
+    }
+  }
+  var SVG = "http://www.w3.org/2000/svg";
+  // Widths in screen pixels, as the editor draws them.
+  var INK = { pen: { width: 4, opacity: 1 }, highlighter: { width: 28, opacity: 0.4 } };
+
+  // SVG path data for a smooth curve through a stroke's points (fractions of the slide), as the
+  // app draws it: from the first point to halfway to the next, then from halfway to halfway,
+  // bent by each point between as a quadratic Bézier control point, to the last point.
+  function smoothPath(points) {
+    var xy = points.map(function (p) {
+      return [p[0] * W, p[1] * H];
+    });
+    var at = function (x, y) {
+      return Math.round(x * 10) / 10 + " " + Math.round(y * 10) / 10;
+    };
+    var halfway = function (i) {
+      return at((xy[i][0] + xy[i + 1][0]) / 2, (xy[i][1] + xy[i + 1][1]) / 2);
+    };
+    var last = xy.length - 1;
+    if (last < 2) {
+      return xy
+        .map(function (p, i) {
+          return (i ? "L" : "M") + at(p[0], p[1]);
+        })
+        .join("");
+    }
+    var d = "M" + at(xy[0][0], xy[0][1]) + "L" + halfway(0);
+    for (var i = 1; i < last; i++) {
+      d += "Q" + at(xy[i][0], xy[i][1]) + " " + (i === last - 1 ? at(xy[last][0], xy[last][1]) : halfway(i));
+    }
+    return d;
+  }
+
+  function drawReview(slide, strokes) {
+    var svg = document.createElementNS(SVG, "svg");
+    svg.setAttribute("class", "slop-review");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("aria-hidden", "true");
+    strokes.forEach(function (stroke) {
+      var ink = stroke && INK[stroke.tool];
+      var points = stroke && stroke.points;
+      if (!ink || !Array.isArray(points) || points.length === 0) return;
+      var d = smoothPath(points);
+      // A tap never moves; a tiny step makes the round cap draw it as a dot.
+      if (points.every(function (p) { return p[0] === points[0][0] && p[1] === points[0][1]; })) d += "l0.01 0";
+      var path = document.createElementNS(SVG, "path");
+      path.setAttribute("d", d);
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", String(stroke.color));
+      path.setAttribute("stroke-width", String(ink.width));
+      path.setAttribute("stroke-opacity", String(ink.opacity));
+      path.setAttribute("stroke-linecap", "round");
+      path.setAttribute("stroke-linejoin", "round");
+      path.setAttribute("vector-effect", "non-scaling-stroke");
+      svg.appendChild(path);
+    });
+    slide.appendChild(svg);
+  }
+
+  /** Shows or hides the review marks; false when the deck has none. */
+  function toggleReview(on) {
+    if (!review || typeof review !== "object") return false;
+    if (on) {
+      all.forEach(function (slide) {
+        var strokes = slide.id && review[slide.id];
+        if (Array.isArray(strokes) && !slide.querySelector(":scope > .slop-review")) drawReview(slide, strokes);
+      });
+    }
+    if (on) root.setAttribute("data-slop-review", "");
+    else root.removeAttribute("data-slop-review");
+    return true;
+  }
+  if (params.has("review")) toggleReview(true);
+
+  // Text boxes with data-autofit="shrink" shrink their text until it fits their box. Every
+  // font size in the box scales by the same factor, set inline; `original` gives back what the
+  // inline font size was before, so the slide editor saves the markup without the fit.
+  var FIT_MIN = 0.2;
+  var FIT_STEPS = 10;
+  var fitted = typeof Map === "function" ? new Map() : null;
+  var fitScales = typeof Map === "function" ? new Map() : null;
+
+  function overflows(el) {
+    return el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1;
+  }
+
+  function fitNodes(el) {
+    return [el].concat(
+      Array.prototype.filter.call(el.querySelectorAll("*"), function (node) {
+        return !node.closest("svg") || node.tagName.toLowerCase() === "svg";
+      }),
+    );
+  }
+
+  /** Puts back the font sizes `fitText` changed in `el`. */
+  function unfitText(el) {
+    if (!fitted) return;
+    fitNodes(el).forEach(function (node) {
+      var before = fitted.get(node);
+      if (!before) return;
+      fitted.delete(node);
+      if (before.value) node.style.setProperty("font-size", before.value, before.priority);
+      else node.style.removeProperty("font-size");
+      if (!node.getAttribute("style")) node.removeAttribute("style");
+    });
+    fitScales.delete(el);
+  }
+
+  /** Shrinks the text of a `data-autofit="shrink"` box until it fits; false when it already does. */
+  function fitText(el) {
+    if (!fitted) return false;
+    unfitText(el);
+    if (el.getAttribute("data-autofit") !== "shrink" || (!el.clientHeight && !el.clientWidth) || !overflows(el)) {
+      return false;
+    }
+    var nodes = fitNodes(el);
+    var sizes = nodes.map(function (node) {
+      return parseFloat(getComputedStyle(node).fontSize) || 0;
+    });
+    nodes.forEach(function (node) {
+      fitted.set(node, {
+        value: node.style.getPropertyValue("font-size"),
+        priority: node.style.getPropertyPriority("font-size"),
+      });
+    });
+    var scaleTo = function (k) {
+      nodes.forEach(function (node, i) {
+        if (sizes[i]) node.style.setProperty("font-size", Math.round(sizes[i] * k * 100) / 100 + "px", "important");
+      });
+    };
+    var lo = FIT_MIN;
+    var hi = 1;
+    for (var step = 0; step < FIT_STEPS; step++) {
+      var mid = (lo + hi) / 2;
+      scaleTo(mid);
+      if (overflows(el)) hi = mid;
+      else lo = mid;
+    }
+    scaleTo(lo);
+    fitScales.set(el, lo);
+    return true;
+  }
+
+  function fitAll() {
+    Array.prototype.forEach.call(document.querySelectorAll('.slide [data-autofit="shrink"]'), fitText);
+  }
+
+  window.slopAutofit = {
+    fit: fitText,
+    unfit: unfitText,
+    fitAll: fitAll,
+    /** What `node`'s inline font size was before a fit: { value, priority }, or null when not fitted. */
+    original: function (node) {
+      return (fitted && fitted.get(node)) || null;
+    },
+    /** How far the box `el` is shrunk (1 when it is not). */
+    scale: function (el) {
+      return (fitScales && fitScales.get(el)) || 1;
+    },
+  };
+
+  window.addEventListener("resize", fit);
+  fit();
+  show(indexFor(embed ? params.get("slide") : decodeURIComponent(location.hash.slice(1))));
+  fitAll();
+  window.addEventListener("load", fitAll);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitAll);
+
+  function navigate(key) {
+    if (key === "ArrowRight" || key === "ArrowDown" || key === "PageDown" || key === " ") show(current + 1);
+    else if (key === "ArrowLeft" || key === "ArrowUp" || key === "PageUp") show(current - 1);
+    else if (key === "Home") show(0);
+    else if (key === "End") show(slides.length - 1);
+    else if ((key === "f" || key === "F") && !framed) {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else root.requestFullscreen && root.requestFullscreen();
+    } else return false;
+    return true;
+  }
+
+  window.addEventListener("keydown", function (event) {
+    if (framed) {
+      var mod = event.metaKey || event.ctrlKey;
+      window.parent.postMessage({ type: "slop:key", key: event.key, mod: mod, shift: event.shiftKey }, "*");
+    }
+    if (embed) return;
+    var plain = !event.metaKey && !event.ctrlKey && !event.altKey;
+    if ((event.key === "r" || event.key === "R") && plain) {
+      if (toggleReview(!root.hasAttribute("data-slop-review"))) event.preventDefault();
+    } else if (navigate(event.key)) event.preventDefault();
+  });
+
+  if (embed) return;
+  // The presenter forwards keys pressed while its drawing tools have focus.
+  window.addEventListener("message", function (event) {
+    if (framed && event.data && event.data.type === "slop:go") navigate(String(event.data.key));
+  });
+  window.addEventListener("hashchange", function () {
+    show(indexFor(decodeURIComponent(location.hash.slice(1))));
+  });
+  document.addEventListener("click", function (event) {
+    if (event.target.closest("a, button, input, select, textarea, video, [contenteditable]")) return;
+    show(event.clientX < window.innerWidth / 4 ? current - 1 : current + 1);
+  });
+  var touchX = null;
+  document.addEventListener("touchstart", function (event) {
+    touchX = event.touches[0].clientX;
+  });
+  document.addEventListener("touchend", function (event) {
+    if (touchX === null) return;
+    var dx = event.changedTouches[0].clientX - touchX;
+    if (Math.abs(dx) > 40) show(current + (dx < 0 ? 1 : -1));
+    touchX = null;
+  });
+})();
+  </script>
+  <!-- /slopslide:runtime-js -->
+</body>
+</html>

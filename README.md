@@ -72,6 +72,11 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   of what is on it (on macOS this needs the Screen Recording permission; without it the picker
   shows the arrangement alone, as it does on Linux), to choose where the slides and the
   presenter view go.
+  The teleprompter button in the presenter view (N) listens to you and follows you through the
+  slide's narration, or its notes when it has none: what you said is highlighted and the text
+  scrolls along, even when you paraphrase or jump to another part. Words you jump over stay
+  unmarked. It moves the script only; you still change the slides. Speech stays on your
+  computer, transcribed with the same Whisper model as dictation.
 - **Export:** saves the deck as **one self-contained HTML file** (attached images embedded)
   that plays in any browser: arrows/space/click to navigate, `F` for full screen, `#slide-id`
   links, print to PDF. The same menu saves a **PDF** or **PNG images** (one per slide, in a

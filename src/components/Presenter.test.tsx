@@ -855,6 +855,106 @@ describe("presenter view", () => {
     expect(formatElapsed(36_000_000)).toBe("10:00:00");
   });
 
+  describe("teleprompter", () => {
+    const button = () => screen.getByRole("button", { name: /teleprompter/i });
+    const said = () =>
+      [...screen.getByTestId("presenter-notes").querySelectorAll("[data-said]")].map((e) => e.textContent).join("");
+    const script = "Welcome everyone to the quarterly results. Revenue grew in every region this year.";
+    const slides = (narration?: string) =>
+      deck().slides.map((s) => (s.id === "intro" ? { ...s, notes: script, narration } : s));
+    const model = { modelReady: true, modelBytes: 190_000_000, downloading: false, recording: false };
+    const commands = () => invoke.mock.calls.map(([name]) => name);
+
+    beforeEach(() => {
+      invoke.mockImplementation(async (name: string) => (name === "voice_status" ? model : undefined));
+      useApp.setState({ deck: { ...deck(), slides: slides() } });
+    });
+    async function turnOn() {
+      render(<Presenter />);
+      fireEvent.keyDown(document.body, { key: "n" });
+      await act(async () => fireEvent.click(button()));
+    }
+    const hear = (text: string) => act(() => listeners.get("voice-heard")?.({ payload: text }));
+
+    it("leaves the microphone alone until asked, and turns it off again", async () => {
+      await act(async () => void render(<Presenter />));
+      fireEvent.keyDown(document.body, { key: "n" });
+      expect(commands()).not.toContain("follow_speech");
+      await act(async () => fireEvent.click(button()));
+      expect(commands()).toContain("follow_speech");
+      expect(button().getAttribute("aria-pressed")).toBe("true");
+      await act(async () => fireEvent.click(button()));
+      expect(commands()).toContain("cancel_recording");
+      expect(button().getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("highlights what was said, keeping the text as it is", async () => {
+      await turnOn();
+      hear("welcome everyone to the quarterly results");
+      expect(notes()).toBe(script);
+      expect(said()).toBe("Welcome everyone to the quarterly results");
+    });
+
+    it("scrolls the speaker's line into place", async () => {
+      const scrollTo = vi.fn();
+      Object.assign(HTMLElement.prototype, { scrollTo });
+      await turnOn();
+      hear("welcome everyone to the quarterly results");
+      expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: "smooth" }));
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollTo;
+    });
+
+    it("follows the narration when the slide has one", async () => {
+      useApp.setState({ deck: { ...deck(), slides: slides("Good morning and thanks for coming.") } });
+      await turnOn();
+      expect(notes()).toBe("Good morning and thanks for coming.");
+    });
+
+    it("starts over on each slide and keeps listening", async () => {
+      await turnOn();
+      hear("welcome everyone to the quarterly results");
+      fromFrame({ type: "slop:slide", id: "outro", index: 2 });
+      expect(notes()).toBe("Notes of outro");
+      expect(said()).toBe("");
+      expect(commands()).not.toContain("cancel_recording");
+    });
+
+    it("turns the microphone off with the presenter view", async () => {
+      await turnOn();
+      fireEvent.keyDown(document.body, { key: "n" });
+      expect(commands()).toContain("cancel_recording");
+    });
+
+    it("offers the speech model first and goes on to listen once it is there", async () => {
+      invoke.mockImplementation(async (name: string) =>
+        name === "voice_status" ? { ...model, modelReady: false } : undefined,
+      );
+      await turnOn();
+      expect(screen.getByText("Download the speech model?")).toBeTruthy();
+      expect(commands()).not.toContain("follow_speech");
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Download" })));
+      expect(commands()).toEqual(expect.arrayContaining(["download_voice_model", "follow_speech"]));
+    });
+
+    it("says why when it cannot listen", async () => {
+      invoke.mockImplementation(async (name: string) => {
+        if (name === "follow_speech") throw "Already recording.";
+        return name === "voice_status" ? model : undefined;
+      });
+      await turnOn();
+      expect(screen.getByRole("alert").textContent).toBe("Already recording.");
+      expect(button().getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("gives up and says why when listening fails", async () => {
+      await turnOn();
+      act(() => listeners.get("voice-follow-failed")?.({ payload: "The microphone only delivered silence." }));
+      expect(screen.getByRole("alert").textContent).toBe("The microphone only delivered silence.");
+      expect(commands()).toContain("cancel_recording");
+      expect(button().getAttribute("aria-pressed")).toBe("false");
+    });
+  });
+
   it("keeps the slide's focus when its buttons are pressed", () => {
     render(<Presenter />);
     fireEvent.keyDown(document.body, { key: "n" });

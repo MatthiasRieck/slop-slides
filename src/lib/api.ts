@@ -473,6 +473,8 @@ export const api = {
   voiceStatus: () => invoke<VoiceStatus>("voice_status"),
   /** Downloads the speech model to `~/.slopslides/models`, reporting `voice-download` events. */
   downloadVoiceModel: () => invoke<void>("download_voice_model"),
+  /** Listens for the teleprompter, reporting recent words as `voice-heard` events; `cancelRecording` ends it. */
+  followSpeech: () => invoke<void>("follow_speech"),
   /** Records the microphone, reporting its level as `voice-level` events. */
   startRecording: () => invoke<void>("start_recording"),
   /** Stops recording; resolves to what was said. */

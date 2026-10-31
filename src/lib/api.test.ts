@@ -248,6 +248,7 @@ const CASES = [
   ["voiceStatus", () => api.voiceStatus(), "voice_status", undefined],
   ["downloadVoiceModel", () => api.downloadVoiceModel(), "download_voice_model", undefined],
   ["startRecording", () => api.startRecording(), "start_recording", undefined],
+  ["followSpeech", () => api.followSpeech(), "follow_speech", undefined],
   ["stopRecording", () => api.stopRecording(), "stop_recording", undefined],
   ["cancelRecording", () => api.cancelRecording(), "cancel_recording", undefined],
   ["speechStatus", () => api.speechStatus(), "speech_status", undefined],

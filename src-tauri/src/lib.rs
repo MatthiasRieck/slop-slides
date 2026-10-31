@@ -22,6 +22,8 @@ mod safety;
 mod sessions;
 mod size;
 mod templates;
+#[cfg(all(test, unix))]
+mod test_support;
 mod video;
 mod voice;
 mod watcher;

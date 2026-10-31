@@ -101,7 +101,7 @@ fn in_order(mut screens: Vec<Screen>) -> Vec<Screen> {
     screens
 }
 
-/// The attached screens, in the order [`in_order`] gives them.
+/// The attached screens, in the order [`in_order`] gives them, named as tauri names them.
 pub fn list(app: &AppHandle) -> Result<Vec<Screen>> {
     let primary = app.primary_monitor().ok().flatten();
     let monitors = app
@@ -115,6 +115,25 @@ pub fn list(app: &AppHandle) -> Result<Vec<Screen>> {
     ))
 }
 
+/// Gives each screen the name the system has for the monitor at its position, as tauri's mean
+/// little to a person ("Monitor #41057"). A screen no name is found for keeps its own.
+fn with_names(mut screens: Vec<Screen>, names: &[((i32, i32), String)]) -> Vec<Screen> {
+    for screen in &mut screens {
+        let position = (screen.x.round() as i32, screen.y.round() as i32);
+        let name = names.iter().find(|(at, _)| *at == position);
+        if let Some((_, name)) = name.filter(|(_, name)| !name.is_empty()) {
+            screen.name.clone_from(name);
+        }
+    }
+    screens
+}
+
+/// [`list`] with the names the system settings show, for the picker. Must run on the main thread,
+/// as commands that aren't async do: macOS only tells them there.
+pub fn list_named(app: &AppHandle) -> Result<Vec<Screen>> {
+    Ok(with_names(list(app)?, &shots::names()))
+}
+
 #[cfg(any(target_os = "macos", windows))]
 mod shots {
     use base64::Engine;
@@ -125,6 +144,15 @@ mod shots {
     /// Widest screenshot in the picker, in pixels: enough for a sharp tile on a high density
     /// screen.
     const PREVIEW_WIDTH: u32 = 640;
+
+    /// Each monitor's position on the desktop and the name the system has for it.
+    pub fn names() -> Vec<((i32, i32), String)> {
+        let monitors = xcap::Monitor::all().unwrap_or_default();
+        monitors
+            .iter()
+            .filter_map(|m| Some(((m.x().ok()?, m.y().ok()?), m.friendly_name().ok()?)))
+            .collect()
+    }
 
     /// Screenshots of the attached monitors as PNG data URLs, in the order [`super::in_order`]
     /// gives the screens, with `None` for one that could not be taken. `grabbed` is called once
@@ -154,6 +182,16 @@ mod shots {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        /// Reads the real monitors: run by hand with `--ignored --nocapture`.
+        #[test]
+        #[ignore]
+        fn names_the_attached_monitors() {
+            let names = names();
+            println!("{names:?}");
+            assert!(!names.is_empty());
+            assert!(names.iter().all(|(_, name)| !name.is_empty()));
+        }
 
         /// Takes real screenshots: run by hand with `--ignored`, on a machine with a screen.
         #[test]
@@ -186,6 +224,10 @@ mod shots {
 /// don't compile against the PipeWire of Ubuntu 22.04, which the Linux builds are made on.
 #[cfg(not(any(target_os = "macos", windows)))]
 mod shots {
+    pub fn names() -> Vec<((i32, i32), String)> {
+        Vec::new()
+    }
+
     pub fn capture_all(_grabbed: impl FnOnce()) -> Vec<Option<String>> {
         Vec::new()
     }
@@ -371,6 +413,32 @@ mod tests {
     fn the_picker_goes_without_screenshots_where_they_cant_be_taken() {
         let shots = shots::capture_all(|| panic!("nothing was captured"));
         assert_eq!(for_screens(2, shots), vec![None, None]);
+    }
+
+    #[test]
+    fn the_systems_names_go_to_the_screen_at_their_position() {
+        let screens = in_order(vec![
+            screen(0.0, 0.0, "Monitor #41057"),
+            screen(1512.0, -20.0, "Monitor #41349"),
+            screen(3000.0, 0.0, "Monitor #1"),
+            screen(4000.0, 0.0, "Monitor #2"),
+        ]);
+        let names = [
+            ((1512, -20), "DELL U3421WE".to_string()),
+            ((0, 0), "Built-in Retina Display".to_string()),
+            ((4000, 0), String::new()),
+        ];
+        let named = with_names(screens, &names);
+        let names: Vec<&str> = named.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Built-in Retina Display",
+                "DELL U3421WE",
+                "Monitor #1",
+                "Monitor #2"
+            ]
+        );
     }
 
     #[test]

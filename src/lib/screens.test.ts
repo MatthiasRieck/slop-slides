@@ -46,8 +46,11 @@ describe("choose", () => {
     expect(defaultChoice([screen(0, 0, 0), screen(1, 1920, 0)])).toEqual({ audience: 1, presenter: 0 });
   });
 
-  it("swaps the two when one takes the other's screen", () => {
-    expect(choose({ audience: 1, presenter: 0 }, "audience", 0)).toEqual({ audience: 0, presenter: 1 });
+  it("drops the presenter view when the slides take its screen", () => {
+    expect(choose({ audience: 1, presenter: 0 }, "audience", 0)).toEqual({ audience: 0, presenter: null });
+  });
+
+  it("keeps the slides when the presenter view is put on their screen", () => {
     expect(choose({ audience: 1, presenter: 0 }, "presenter", 1)).toEqual({ audience: 1, presenter: 0 });
   });
 

@@ -35,22 +35,44 @@ describe("ScreenPicker", () => {
     render(<ScreenPicker screens={screens} onStart={onStart} onCancel={() => {}} />);
     expect(screen.getByTestId("screen-0").dataset.role).toBe("presenter");
     expect(screen.getByTestId("screen-1").dataset.role).toBe("audience");
-    expect(screen.getByText("Screen 1")).toBeTruthy();
-    expect(screen.getByText("Screen 2")).toBeTruthy();
-    expect(screen.getByText("Audience · slides")).toBeTruthy();
-    expect(screen.getByText("Presenter · notes")).toBeTruthy();
-    expect(screen.getByText("1920×1080")).toBeTruthy();
-    expect(screen.getByText("3024×1964 · main")).toBeTruthy();
     fireEvent.click(screen.getByText("Start presenting"));
     expect(onStart).toHaveBeenCalledWith({ audience: 1, presenter: 0 });
   });
 
-  it("swaps the roles when the show is put on the presenter's screen", () => {
+  it("only says what a screen is called and how big it is", () => {
+    render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} />);
+    expect(screen.getByTestId("screen-0").textContent).toBe("Built-in3024×1964");
+    expect(screen.getByTestId("screen-1").textContent).toBe("Projector1920×1080");
+  });
+
+  it("has each role on one screen", () => {
+    const threeScreens = [...screens, { ...screens[1], index: 2, name: "Side", x: 3432 } as Screen];
+    render(<ScreenPicker screens={threeScreens} onStart={() => {}} onCancel={() => {}} />);
+    fireEvent.click(screen.getByLabelText("Slides on Projector"));
+    fireEvent.click(screen.getByLabelText("Presenter view on Side"));
+    const pressed = screen.getAllByRole("button", { pressed: true }).map((b) => b.getAttribute("aria-label"));
+    expect(pressed).toEqual(["Slides on Projector", "Presenter view on Side"]);
+  });
+
+  it("takes the notes off a screen the slides are put on, for them to go on another", () => {
     const onStart = vi.fn();
     render(<ScreenPicker screens={screens} onStart={onStart} onCancel={() => {}} />);
     fireEvent.click(screen.getByLabelText("Slides on Built-in"));
+    expect(screen.getByTestId("screen-0").dataset.role).toBe("audience");
+    expect(screen.getByTestId("screen-1").dataset.role).toBe("");
+    expect((screen.getByLabelText("No presenter view") as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByLabelText("Presenter view on Projector"));
     fireEvent.click(screen.getByText("Start presenting"));
     expect(onStart).toHaveBeenCalledWith({ audience: 0, presenter: 1 });
+  });
+
+  it("can't put the notes on the slides' screen", () => {
+    render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} />);
+    const button = screen.getByLabelText("Presenter view on Projector") as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+    expect(screen.getByTestId("screen-1").dataset.role).toBe("audience");
+    expect((screen.getByLabelText("Presenter view on Built-in") as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("can go without a presenter view", () => {
@@ -71,7 +93,7 @@ describe("ScreenPicker", () => {
   it("works without screenshots", () => {
     render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} />);
     expect(screen.queryByRole("img")).toBeNull();
-    expect(screen.getByText("Screen 1")).toBeTruthy();
+    expect(screen.getByText("Built-in")).toBeTruthy();
   });
 
   it("shows a placeholder on every screen while the screenshots are taken", () => {

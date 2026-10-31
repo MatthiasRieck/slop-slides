@@ -143,7 +143,7 @@ fn new_window(app: AppHandle) -> Result<()> {
 /// The attached screens, for choosing where to present.
 #[tauri::command]
 fn list_screens(app: AppHandle) -> Result<Vec<screens::Screen>> {
-    screens::list(&app)
+    screens::list_named(&app)
 }
 
 /// A screenshot of each attached screen, for telling them apart in the picker. `grabbed` hears

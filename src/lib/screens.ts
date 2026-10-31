@@ -41,12 +41,13 @@ export function defaultChoice(screens: Screen[]): ScreenChoice {
 }
 
 /**
- * Picks `index` for the audience or the presenter view. The two can't share a screen: taking the
- * other's screen swaps them, or does nothing when there is no presenter view to swap with.
+ * Picks `index` for the audience or the presenter view, each of which is on one screen at a time.
+ * The two can't share a screen: the slides push the presenter view off theirs, and as the slides
+ * always need a screen, the presenter view can't take theirs.
  */
 export function choose(choice: ScreenChoice, role: "audience" | "presenter", index: number): ScreenChoice {
   if (role === "audience") {
-    return { audience: index, presenter: choice.presenter === index ? choice.audience : choice.presenter };
+    return { audience: index, presenter: choice.presenter === index ? null : choice.presenter };
   }
   if (index === choice.audience) return choice;
   return { ...choice, presenter: index };

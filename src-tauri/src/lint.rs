@@ -1797,6 +1797,20 @@ mod tests {
     }
 
     #[test]
+    fn curved_lines_need_no_rules_of_their_own() {
+        // A line the user bent is a drawing like a straight one: one path, the arrow's head in it.
+        let found = lint(
+            &deck(
+                "<section class=\"slide\" id=\"a\">\n<svg data-added=\"drawing\" viewBox=\"0 0 206 106\" style=\"position: absolute; left: 97px; top: 97px; width: 206px; height: 106px; overflow: visible\"><path d=\"M3 3 C36.3 3 69.7 103 103 103 C136.3 103 169.7 3 203 3 M182 15 L203 3 L182 -9\" stroke=\"#111111\" stroke-width=\"6\" fill=\"none\"/></svg>\n</section>",
+            ),
+            |_| true,
+            &[],
+        );
+        let rules: Vec<_> = found.iter().map(|i| i.rule).collect();
+        assert_eq!(rules, ["added-element"]);
+    }
+
+    #[test]
     fn flags_elements_added_by_hand() {
         let found = lint(
             &deck(

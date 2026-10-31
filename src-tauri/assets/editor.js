@@ -8,6 +8,10 @@
    Resize keeps text and borders at their size; drawings spread their points. The toolbar
    can switch to Stretch, which scales the contents too. On the first box resize, an in-flow
    element leaves an invisible placeholder in its original slot so its siblings stay put.
+   A line or arrow has no box: a handle at each end and on each point it bends at moves that
+   point (snapping like a resize; Shift snaps to 45° from the point before it, ⌘ / Ctrl moves
+   freely), dragging the small handle on a stretch of the line adds a point there, which curves
+   it, and double-clicking a point in between removes it.
    Double-click (or Enter) edits its text, Escape selects the parent (see "Editing text" below).
    Dragging and resizing snap to the slide's edges and center and to other elements' edges and
    centers, with guide lines (hold ⌘ / Ctrl to move freely; Shift-resizes, and turned elements'
@@ -55,8 +59,9 @@
      straight line, Shift snaps to 45°) or "paint" (the format painter: takes the selection's look
      and gives it to the next element clicked). `style` is what new elements get. Added elements
      are absolutely positioned on the slide with inline styles and carry `data-added` ("text",
-     "shape" or "drawing", which lines and arrows are too: one <path>, an arrow's head a second
-     stroke in it). After a text box, shape, line or painted element the tool goes back to
+     "shape" or "drawing", which lines and arrows are too: one <path>, `M L` when straight and
+     `M C C …` through its points when curved, an arrow's head a last stroke in it, `M L L`).
+     After a text box, shape, line or painted element the tool goes back to
      "select", and Escape puts any tool away; the editor tells the app with
      { type: "slop:edit-tool", slide, tool }.
    - { type: "slop:edit-style", style } restyles the selection: text color, size, font, bold,
@@ -170,6 +175,8 @@
   var ARROW_HEAD_MIN = 24;
   var ARROW_HEAD_PER_WIDTH = 4;
   var ARROW_HEAD_ANGLE = Math.PI / 6;
+  // Spots checked along each stretch of a curved line for the box around it.
+  var LINE_SAMPLES = 16;
   // Shapes cut out of a box, as percentages of it; their padding keeps the text in the shape.
   var CUTOUTS = {
     triangle: { clip: "polygon(50% 0%, 100% 100%, 0% 100%)", padding: "25% 16px 16px" },
@@ -216,6 +223,13 @@
     " left: 50%; top: -48px; cursor: grab; }" +
     "[data-slop-ui] > [data-handle=tilt] { width: 14px; height: 14px; margin: 2px 0 0 18px; left: 50%; top: -48px;" +
     " transform: rotate(45deg); cursor: move; }" +
+    // A line's points, in place of the frame and handles.
+    "[data-slop-points] { position: fixed; inset: 0; z-index: 2147483647; pointer-events: none; }" +
+    "[data-slop-points] > * { position: absolute; box-sizing: border-box; pointer-events: auto; touch-action: none; cursor: move;" +
+    " width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: #fff; border: 2px solid #3b82f6;" +
+    " box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }" +
+    "[data-slop-points] > [data-point=add] { width: 10px; height: 10px; margin: -5px 0 0 -5px; background: #3b82f6;" +
+    " border-color: #fff; cursor: crosshair; }" +
     "[data-slop-overflow] { position: fixed; inset: 0; z-index: 2147483646; pointer-events: none; }" +
     "[data-slop-overflow][data-quiet] { display: none; }" +
     "[data-slop-overflow] > * { position: absolute; box-sizing: border-box; }" +
@@ -267,6 +281,10 @@
   document.body.appendChild(ui);
   var plane = ui.querySelector("[data-plane]");
 
+  var pointUi = document.createElement("div");
+  pointUi.setAttribute("data-slop-points", "");
+  document.body.appendChild(pointUi);
+
   var wires = document.createElement("div");
   wires.setAttribute("data-slop-overflow", "");
   document.body.appendChild(wires);
@@ -289,6 +307,8 @@
   var drag = null;
   var nudgeTimer = null;
   var lastDown = { el: null, at: 0 };
+  // The last press on one of a line's points, to tell a double-click.
+  var lastPoint = { index: -1, at: 0 };
   // Where the pointer is over this window, in its pixels; null once it leaves.
   var pointer = null;
   var overflowFrame = 0;
@@ -732,7 +752,7 @@
     scheduleOverflow();
     scheduleGeometry();
     placeFrames();
-    if (!selected || editing || extras.length || !slide.contains(selected)) {
+    if (placePoints() || !selected || editing || extras.length || !slide.contains(selected)) {
       ui.style.display = "none";
       return;
     }
@@ -958,13 +978,18 @@
     moveTo(el, drag.offset.x + shift.x - (nw - w) / 2, drag.offset.y + shift.y - (nh - h) / 2);
   }
 
+  /** The element's viewBox as [x, y, w, h], or null without a usable one. */
+  function viewBoxOf(el) {
+    var box = (el.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(parseFloat);
+    return box.length === 4 && box.every(isFinite) && box[2] > 0 && box[3] > 0 ? box : null;
+  }
+
   /** A drawing's viewBox and its shapes' geometry, as they were when the stretch started. */
   function vectorShapes(el) {
-    var box = (el.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(parseFloat);
     var vectors = vectorsOf(el);
     return {
       el: el,
-      viewBox: box.length === 4 && box.every(isFinite) && box[2] > 0 && box[3] > 0 ? box : null,
+      viewBox: viewBoxOf(el),
       // The line's half width pads the box around the points (see finishDrawing).
       pad: vectors.length ? Math.ceil((parseFloat(vectors[0].getAttribute("stroke-width")) || 0) / 2) : 0,
       items: vectors.map(function (vector) {
@@ -1018,6 +1043,9 @@
         if (a[name] !== undefined) item.el.setAttribute(name, String(roundTenth(map.y(parseFloat(a[name]) || 0))));
       });
     });
+    // A line's curve and head are redrawn through its spread points, not spread with them.
+    var line = lineOf(shapes.el);
+    if (line) line.path.setAttribute("d", lineData(line.points, line.arrow, line.width, 0, 0));
   }
 
   function roundTenth(n) {
@@ -1028,6 +1056,12 @@
   // What each parameter of a path command is: X / Y a point's coordinate, x / y a length
   // along that axis, - anything else (an angle or a flag).
   var PATH_PARAMS = { M: "XY", L: "XY", T: "XY", C: "XY", S: "XY", Q: "XY", H: "X", V: "Y", A: "xy---XY", Z: "" };
+  // A line's path (see lineData): its stroke, straight or curved, and then an arrow's head.
+  var PATH_POINT = "\\s*" + NUMBER.source + "[\\s,]+" + NUMBER.source + "\\s*";
+  var LINE_PATH = new RegExp(
+    "^\\s*(M" + PATH_POINT + "(?:L" + PATH_POINT + "|(?:C" + PATH_POINT + PATH_POINT + PATH_POINT + ")+))" +
+      "(M" + PATH_POINT + "L" + PATH_POINT + "L" + PATH_POINT + ")?$",
+  );
 
   /** Path data with every point moved by `map` (and relative steps and radii scaled by it). */
   function spreadPath(d, map) {
@@ -2220,6 +2254,9 @@
         if (has("stroke")) vector.setAttribute("stroke", changes.stroke || "none");
         if (has("strokeWidth")) vector.setAttribute("stroke-width", String(Math.max(0, changes.strokeWidth || 0)));
       });
+      // An arrow's head and the box around a line go with its width.
+      var line = has("strokeWidth") ? lineOf(el) : null;
+      if (line) writeLine(el, slidePoints(el, line), line.arrow);
     } else {
       if (has("fill")) el.style.backgroundColor = changes.fill || "transparent";
       if ((has("stroke") || has("strokeWidth")) && !isCutOut(el)) {
@@ -2416,8 +2453,12 @@
       return;
     }
     if (!drag) {
-      var onHandle = ui.contains(event.target);
+      var onHandle = ui.contains(event.target) || pointUi.contains(event.target);
       hover(editing || onHandle || tool !== "select" ? null : pickable(event.target, event.clientX, event.clientY));
+      return;
+    }
+    if (drag.mode === "point") {
+      pointTo(event);
       return;
     }
     if (drag.mode !== "move") {
@@ -2443,8 +2484,11 @@
     var el = drag.el;
     // A click on one of several selected elements leaves just that one selected.
     var click = !moved && drag.mode === "move" && extras.length > 0;
+    var point = drag.mode === "point";
     drag = null;
     clearDragMarks();
+    // The handles to add points are away during a drag.
+    if (point) placeHandles();
     if (moved) {
       refit(el);
       commit();
@@ -3354,7 +3398,10 @@
   function showReadout(event) {
     var now = geometry();
     if (!now || drag.mode === "tilt") return;
-    readout.textContent = drag.mode === "rotate" ? now.rotation + "°" : "X " + now.x + "  Y " + now.y + "  W " + now.w + "  H " + now.h;
+    readout.textContent =
+      drag.mode === "rotate" ? now.rotation + "°"
+      : drag.mode === "point" ? "X " + drag.at.x + "  Y " + drag.at.y
+      : "X " + now.x + "  Y " + now.y + "  W " + now.w + "  H " + now.h;
     readout.style.cssText = "left:" + (event.clientX + 14) + "px;top:" + (event.clientY + 18) + "px";
   }
 
@@ -3545,16 +3592,262 @@
   /** `from` to `to` as strokes (point lists); an arrow's second stroke is its head, at `to`. */
   function lineStrokes(from, to, arrow, width) {
     var strokes = [[[from.x, from.y], [to.x, to.y]]];
-    var length = Math.sqrt(Math.pow(to.x - from.x, 2) + Math.pow(to.y - from.y, 2));
-    if (!arrow || !length) return strokes;
+    var head = arrow ? arrowHead(strokes[0], width) : null;
+    if (head) strokes.push(head);
+    return strokes;
+  }
+
+  function distance(a, b) {
+    return Math.sqrt(Math.pow(b[0] - a[0], 2) + Math.pow(b[1] - a[1], 2));
+  }
+
+  /**
+   * The smooth curve through `points`, as Bézier segments [from, control, control, to]. It goes
+   * through each point along the line between its neighbors, and each control point reaches a
+   * third of the way along its segment, so points close together do not make it overshoot.
+   */
+  function curveThrough(points) {
+    var last = points.length - 1;
+    var along = function (i) {
+      var a = points[Math.max(i - 1, 0)];
+      var b = points[Math.min(i + 1, last)];
+      var length = distance(a, b) || 1;
+      return [(b[0] - a[0]) / length, (b[1] - a[1]) / length];
+    };
+    return points.slice(1).map(function (to, i) {
+      var from = points[i];
+      var reach = distance(from, to) / 3;
+      var start = along(i);
+      var end = along(i + 1);
+      return [from, [from[0] + start[0] * reach, from[1] + start[1] * reach], [to[0] - end[0] * reach, to[1] - end[1] * reach], to];
+    });
+  }
+
+  /** The spot `t` of the way (0 to 1) along a Bézier segment. */
+  function curveAt(segment, t) {
+    var u = 1 - t;
+    var weights = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t];
+    return [0, 1].map(function (axis) {
+      return segment.reduce(function (sum, point, i) {
+        return sum + point[axis] * weights[i];
+      }, 0);
+    });
+  }
+
+  /** An arrow's head at the end of the line through `points`, facing the way the line ends; null if it has no length. */
+  function arrowHead(points, width) {
+    var last = points.length - 1;
+    var tip = points[last];
+    var length = points.slice(1).reduce(function (sum, point, i) {
+      return sum + distance(points[i], point);
+    }, 0);
+    if (!length) return null;
     var size = Math.min(Math.max(ARROW_HEAD_MIN, ARROW_HEAD_PER_WIDTH * width), length);
-    var angle = Math.atan2(to.y - from.y, to.x - from.x);
+    var from = last > 1 ? curveThrough(points)[last - 1][2] : points[last - 1];
+    var angle = Math.atan2(tip[1] - from[1], tip[0] - from[0]);
     var barb = function (side) {
       var a = angle + Math.PI + side * ARROW_HEAD_ANGLE;
-      return [Math.round(to.x + size * Math.cos(a)), Math.round(to.y + size * Math.sin(a))];
+      return [Math.round(tip[0] + size * Math.cos(a)), Math.round(tip[1] + size * Math.sin(a))];
     };
-    strokes.push([barb(1), [to.x, to.y], barb(-1)]);
-    return strokes;
+    return [barb(1), tip, barb(-1)];
+  }
+
+  /** The path of a line through `points`, moved by (-dx, -dy): straight with two, else curved. */
+  function lineData(points, arrow, width, dx, dy) {
+    var local = function (list) {
+      return list.map(function (p) {
+        return [roundTenth(p[0] - dx), roundTenth(p[1] - dy)];
+      });
+    };
+    var own = local(points);
+    var data = pathData(own, 0, 0);
+    if (own.length > 2) {
+      data = "M" + own[0].join(" ") + curveThrough(own).map(function (segment) {
+        return " C" + segment.slice(1).map(function (p) {
+          return roundTenth(p[0]) + " " + roundTenth(p[1]);
+        }).join(" ");
+      }).join("");
+    }
+    var head = arrow ? arrowHead(points, width) : null;
+    return head ? data + " " + pathData(local(head), 0, 0) : data;
+  }
+
+  /** What makes `el` a line: its path, points (in the viewBox), head and width. Null for anything else. */
+  function lineOf(el) {
+    if (!el || !el.getAttribute || !viewBoxOf(el)) return null;
+    var vectors = vectorsOf(el);
+    if (vectors.length !== 1 || vectors[0].tagName.toLowerCase() !== "path") return null;
+    var parts = (vectors[0].getAttribute("d") || "").trim().match(LINE_PATH);
+    if (!parts) return null;
+    var numbers = parts[1].match(NUMBER).map(parseFloat);
+    var step = parts[1].indexOf("C") >= 0 ? 6 : 2;
+    var points = [numbers.slice(0, 2)];
+    for (var i = step; i < numbers.length; i += step) points.push(numbers.slice(i, i + 2));
+    // A tap of the freehand tool leaves a dot.
+    if (points.length === 2 && !distance(points[0], points[1])) return null;
+    return { path: vectors[0], points: points, arrow: !!parts[2], width: parseFloat(vectors[0].getAttribute("stroke-width")) || 0 };
+  }
+
+  /** `line`'s points in slide pixels, wherever turning and scaling `el` took them. */
+  function slidePoints(el, line) {
+    var box = viewBoxOf(el);
+    var frame = frameOf(el);
+    var kx = (frame.right - frame.left) / box[2];
+    var ky = (frame.bottom - frame.top) / box[3];
+    return line.points.map(function (p) {
+      var at = turn((p[0] - box[0] - box[2] / 2) * kx, (p[1] - box[1] - box[3] / 2) * ky, angleOf(el));
+      return [(frame.left + frame.right) / 2 + at.x, (frame.top + frame.bottom) / 2 + at.y];
+    });
+  }
+
+  /** Redraws line `el` through `points` (in slide pixels), its box fitted around it, unturned. */
+  function writeLine(el, points, arrow) {
+    var path = vectorsOf(el)[0];
+    var width = parseFloat(path.getAttribute("stroke-width")) || 0;
+    var spots = points.slice();
+    if (points.length > 2) {
+      curveThrough(points).forEach(function (segment) {
+        for (var i = 1; i < LINE_SAMPLES; i++) spots.push(curveAt(segment, i / LINE_SAMPLES));
+      });
+    }
+    spots = spots.concat((arrow && arrowHead(points, width)) || []);
+    var bound = function (axis, pick, round) {
+      return round(pick.apply(null, spots.map(function (p) {
+        return p[axis];
+      })));
+    };
+    var pad = Math.ceil(width / 2);
+    var left = bound(0, Math.min, Math.floor) - pad;
+    var top = bound(1, Math.min, Math.floor) - pad;
+    var w = Math.max(1, bound(0, Math.max, Math.ceil) + pad - left);
+    var h = Math.max(1, bound(1, Math.max, Math.ceil) + pad - top);
+    // Turning and scaling go around the center, so the box's unscaled corner is where it lays out.
+    var frame = frameOf(el);
+    var size = sizeOf(el);
+    var computed = getComputedStyle(el);
+    place(
+      el,
+      (parseFloat(computed.left) || 0) + left - ((frame.left + frame.right) / 2 - size.w / 2),
+      (parseFloat(computed.top) || 0) + top - ((frame.top + frame.bottom) / 2 - size.h / 2),
+      w,
+      h,
+    );
+    el.setAttribute("viewBox", "0 0 " + w + " " + h);
+    path.setAttribute("d", lineData(points, arrow, width, left, top));
+    if (angleOf(el)) rotateTo(el, 0);
+    var scale = scaleOf(el);
+    if (scale.x !== 1 || scale.y !== 1) scaleTo(el, 1, 1);
+  }
+
+  /** Puts the handles on the selected line's points; false when no line is selected to show them. */
+  function placePoints() {
+    pointUi.textContent = "";
+    var el = selected;
+    var line = el && !editing && !extras.length && slide.contains(el) ? lineOf(el) : null;
+    var tilt = line ? tiltOf(el) : null;
+    // A tilted line keeps its box: its points are not where the handles would go.
+    if (!line || tilt.x || tilt.y) return false;
+    var origin = slide.getBoundingClientRect();
+    var k = zoom();
+    var points = slidePoints(el, line).map(function (p) {
+      return [origin.left + p[0] * k, origin.top + p[1] * k];
+    });
+    var handle = function (kind, index, at, title) {
+      var node = document.createElement("div");
+      node.setAttribute("data-point", kind);
+      node.setAttribute("data-index", String(index));
+      node.title = title;
+      node.style.left = at[0] + "px";
+      node.style.top = at[1] + "px";
+      pointUi.appendChild(node);
+    };
+    var dragging = drag && drag.mode === "point";
+    if (!dragging) {
+      curveThrough(points).forEach(function (segment, i) {
+        handle("add", i + 1, curveAt(segment, 0.5), "Drag to bend the line here");
+      });
+    }
+    points.forEach(function (p, i) {
+      var end = i === 0 || i === points.length - 1;
+      handle("point", i, p, "Drag to move (Shift snaps to 45°, ⌘ moves freely)" + (end ? "" : ", double-click to remove"));
+    });
+    return true;
+  }
+
+  pointUi.addEventListener("pointerdown", function (event) {
+    var kind = event.target.getAttribute && event.target.getAttribute("data-point");
+    var line = lineOf(selected);
+    if (event.button !== 0 || !kind || !line) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (nudgeTimer) commit();
+    var index = Number(event.target.getAttribute("data-index"));
+    var points = slidePoints(selected, line);
+    var now = Date.now();
+    var double = kind === "point" && index === lastPoint.index && now - lastPoint.at < DOUBLE_CLICK_MS;
+    lastPoint = { index: kind === "point" && !double ? index : -1, at: now };
+    if (double) {
+      if (index > 0 && index < points.length - 1) {
+        points.splice(index, 1);
+        writeLine(selected, points, line.arrow);
+        placeHandles();
+        commit();
+      }
+      return;
+    }
+    drag = {
+      mode: "point",
+      el: selected,
+      points: points,
+      arrow: line.arrow,
+      index: index,
+      insert: kind === "add",
+      x: event.clientX,
+      y: event.clientY,
+      zoom: zoom(),
+      moved: false,
+    };
+    try {
+      pointUi.setPointerCapture(event.pointerId);
+    } catch (e) {
+      // Synthetic events have no active pointer to capture.
+    }
+  });
+
+  pointUi.addEventListener("dblclick", function (event) {
+    event.stopPropagation();
+  });
+
+  /** Moves the dragged point of a line to the pointer; a new point goes in on the first move. */
+  function pointTo(event) {
+    if (!drag.moved) {
+      if (Math.abs(event.clientX - drag.x) < DRAG_THRESHOLD && Math.abs(event.clientY - drag.y) < DRAG_THRESHOLD) return;
+      drag.moved = true;
+      lastPoint = { index: -1, at: 0 };
+      hover(null);
+      drag.targets = snapTargets([drag.el]);
+      if (drag.insert) drag.points.splice(drag.index, 0, null);
+    }
+    var points = drag.points;
+    var other = points[drag.index ? drag.index - 1 : 1];
+    var at = slidePoint(event.clientX, event.clientY);
+    guides.textContent = "";
+    if (event.shiftKey) {
+      at = snapLine({ x: other[0], y: other[1] }, at);
+    } else if (!event.metaKey && !event.ctrlKey) {
+      var tolerance = SNAP_PX / drag.zoom;
+      var sx = snapAxis([at.x], drag.targets.x, tolerance);
+      var sy = snapAxis([at.y], drag.targets.y, tolerance);
+      at = { x: at.x + sx.by, y: at.y + sy.by };
+      drawGuides(sx.hits, sy.hits, { left: at.x, top: at.y, right: at.x, bottom: at.y });
+    }
+    // Both ends on one spot would leave no line.
+    if (points.length === 2 && at.x === other[0] && at.y === other[1]) return;
+    points[drag.index] = [at.x, at.y];
+    drag.at = at;
+    writeLine(drag.el, points, drag.arrow);
+    placeHandles();
+    showReadout(event);
   }
 
   function strokesData(strokes, dx, dy) {

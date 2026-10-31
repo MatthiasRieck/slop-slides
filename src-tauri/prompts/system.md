@@ -340,8 +340,10 @@ changes (text color, size, weight, alignment, fill, border, opacity, shadow, cor
 an image's fit and flip, a slide's background, `z-index` stacking) are what they chose; keep them when editing, and when tidying move them into the slide's rules. An element
 they added carries `data-added` (`text` for a text box, `shape` for a rectangle, ellipse,
 triangle, star or speech bubble, which may hold text, `drawing` for an `<svg>` with a freehand
-line, a straight line or an arrow) and is absolutely positioned on the slide with inline `left`,
-`top`, `width`, and `height`. A triangle, star or speech bubble is a box cut out with an inline
+line, a straight or curved line or an arrow) and is absolutely positioned on the slide with inline `left`,
+`top`, `width`, and `height`. A line or arrow keeps its one `<path>` as the editor drew it
+(`M … L …` when straight, `M … C … C …` when curved, an arrow's head a last `M … L … L …`), which
+is what lets the user drag its points. A triangle, star or speech bubble is a box cut out with an inline
 `clip-path: polygon(…)`; keep it. When tidying, keep each one where it
 appears and as it looks (its text, colors, border, and stacking), give it a class and move its
 styles into the slide's rules (or fit it into the layout where that is cleaner), then remove

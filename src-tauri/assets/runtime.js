@@ -8,6 +8,7 @@
   var embed = params.has("embed");
   var framed = window.parent !== window;
   if (params.has("static")) root.setAttribute("data-slop-static", "");
+  if (embed && params.has("static")) root.setAttribute("data-slop-thumbnail", "");
 
   var deck = document.querySelector(".deck");
   var all = Array.prototype.filter.call(document.querySelectorAll(".slide"), function (el) {

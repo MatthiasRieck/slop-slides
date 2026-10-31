@@ -11,6 +11,10 @@ body {
   margin: 0;
   background: #000;
 }
+html[data-slop-thumbnail],
+html[data-slop-thumbnail] body {
+  background: transparent;
+}
 /* Slides are fixed canvases: stop mobile Safari enlarging text it finds too small, which
    would overflow the slides when the stage is scaled down to a phone. */
 html {
@@ -259,6 +263,7 @@ footer {position:absolute;bottom:60px;font-size:22px;color:#b4bcae}
   var embed = params.has("embed");
   var framed = window.parent !== window;
   if (params.has("static")) root.setAttribute("data-slop-static", "");
+  if (embed && params.has("static")) root.setAttribute("data-slop-thumbnail", "");
 
   var deck = document.querySelector(".deck");
   var all = Array.prototype.filter.call(document.querySelectorAll(".slide"), function (el) {

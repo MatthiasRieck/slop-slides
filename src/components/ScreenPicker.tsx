@@ -11,10 +11,13 @@ const MAX_HEIGHT_REM = 16;
 /**
  * Shown when presenting with several screens attached: the screens drawn the way they sit on
  * the desk, to pick the one the audience sees the slides on and the one the presenter view
- * (notes, next slide, timers) goes to.
+ * (notes, next slide, timers) goes to. A screenshot of a screen, where there is one, makes it
+ * easy to recognize.
  */
 export function ScreenPicker(props: {
   screens: Screen[];
+  /** A screenshot for each screen, by its index. */
+  previews?: (string | null)[];
   onStart: (choice: ScreenChoice) => void;
   onCancel: () => void;
 }) {
@@ -48,6 +51,7 @@ export function ScreenPicker(props: {
           {boxes.map(({ screen, left, top, width, height }) => {
             const role =
               screen.index === choice.audience ? "audience" : screen.index === choice.presenter ? "presenter" : null;
+            const preview = props.previews?.[screen.index];
             return (
               <div
                 key={screen.index}
@@ -61,30 +65,40 @@ export function ScreenPicker(props: {
                 )}
                 style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%` }}
               >
-                <span className="text-sm font-semibold tabular-nums">Screen {screen.index + 1}</span>
-                <span className="max-w-full truncate text-xs font-medium">{screen.name}</span>
-                <span className="text-[10px] font-medium">
-                  {role === "audience" ? "Audience · slides" : role === "presenter" ? "Presenter · notes" : "Unused"}
-                </span>
-                <span className="text-[10px] text-muted-foreground tabular-nums">
-                  {screen.pixelWidth}×{screen.pixelHeight}
-                  {screen.primary ? " · main" : ""}
-                </span>
-                <div className="flex gap-1">
-                  <RoleButton
-                    label={`Slides on ${screen.name}`}
-                    active={role === "audience"}
-                    onClick={() => setChoice(choose(choice, "audience", screen.index))}
-                  >
-                    <MonitorPlay /> Slides
-                  </RoleButton>
-                  <RoleButton
-                    label={`Presenter view on ${screen.name}`}
-                    active={role === "presenter"}
-                    onClick={() => setChoice(choose(choice, "presenter", screen.index))}
-                  >
-                    <StickyNote /> Notes
-                  </RoleButton>
+                {preview && (
+                  <img src={preview} alt={`${screen.name} now`} className="absolute inset-0 size-full object-cover" />
+                )}
+                <div
+                  className={cn(
+                    "relative flex max-w-full flex-col items-center gap-1.5 rounded p-1",
+                    preview && "bg-background/85",
+                  )}
+                >
+                  <span className="text-sm font-semibold tabular-nums">Screen {screen.index + 1}</span>
+                  <span className="max-w-full truncate text-xs font-medium">{screen.name}</span>
+                  <span className="text-[10px] font-medium">
+                    {role === "audience" ? "Audience · slides" : role === "presenter" ? "Presenter · notes" : "Unused"}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground tabular-nums">
+                    {screen.pixelWidth}×{screen.pixelHeight}
+                    {screen.primary ? " · main" : ""}
+                  </span>
+                  <div className="flex gap-1">
+                    <RoleButton
+                      label={`Slides on ${screen.name}`}
+                      active={role === "audience"}
+                      onClick={() => setChoice(choose(choice, "audience", screen.index))}
+                    >
+                      <MonitorPlay /> Slides
+                    </RoleButton>
+                    <RoleButton
+                      label={`Presenter view on ${screen.name}`}
+                      active={role === "presenter"}
+                      onClick={() => setChoice(choose(choice, "presenter", screen.index))}
+                    >
+                      <StickyNote /> Notes
+                    </RoleButton>
+                  </div>
                 </div>
               </div>
             );

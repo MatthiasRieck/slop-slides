@@ -67,7 +67,10 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   (16:9, 4:3, 4:5, 9:16, A4, US Letter). It is stored in deck.html as
   `<meta name="slopslide-size" content="1080x1350">`; for a deck with slides it puts a
   message in the chat asking the agent to lay them out again for the new size.
-- **Present:** full-screen slideshow (arrows/space/click to advance, `Esc` to exit).
+- **Present:** full-screen slideshow (arrows/space/click to advance, `Esc` to exit). With
+  several screens attached, a picker shows them as they are arranged, each with a screenshot
+  of what is on it (on macOS this needs the Screen Recording permission; without it the picker
+  shows the arrangement alone), to choose where the slides and the presenter view go.
 - **Export:** saves the deck as **one self-contained HTML file** (attached images embedded)
   that plays in any browser: arrows/space/click to navigate, `F` for full screen, `#slide-id`
   links, print to PDF. The same menu saves a **PDF** or **PNG images** (one per slide, in a
@@ -109,7 +112,8 @@ Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.
   `SLOPSLIDE_CLAUDE_PATH`, `SLOPSLIDE_CODEX_PATH`, or `SLOPSLIDE_COPILOT_PATH`.
 - For development: Node 22+, pnpm, Rust (stable), CMake (to build whisper.cpp and libopus),
   and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS; on
-  Linux also `libasound2-dev` for the microphone and `libopenblas-dev` for narration.
+  Linux also `libasound2-dev` for the microphone, `libopenblas-dev` for narration, and
+  `libpipewire-0.3-dev`, `libxcb1-dev`, `libxcb-randr0-dev`, `libwayland-dev`, `libegl1-mesa-dev`, `libgbm-dev` and `clang` for screen previews.
 
 ## Development
 

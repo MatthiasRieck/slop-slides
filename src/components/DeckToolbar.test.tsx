@@ -183,6 +183,44 @@ describe("deck actions", () => {
     expect(useApp.getState().screens).toEqual({ audience: 1, presenter: 0 });
   });
 
+  describe("screenshots in the picker", () => {
+    const attached = [
+      { index: 0, name: "A", x: 0, y: 0, width: 100, height: 100, pixelWidth: 100, pixelHeight: 100, primary: true },
+      { index: 1, name: "B", x: 100, y: 0, width: 100, height: 100, pixelWidth: 100, pixelHeight: 100, primary: false },
+    ];
+
+    it("takes them before it opens, so that it isn't in them", async () => {
+      let finish: (shots: (string | null)[]) => void = () => {};
+      invoke.mockImplementation((command: string) =>
+        command === "screen_previews" ? new Promise((resolve) => (finish = resolve)) : Promise.resolve(attached),
+      );
+      render(<DeckActions />);
+      await act(async () => fireEvent.click(presentButton()));
+      expect(screen.queryByText("Start presenting")).toBeNull();
+      await act(async () => finish(["data:image/png;base64,AAAA", null]));
+      expect(screen.getByText("Start presenting")).toBeTruthy();
+      expect(screen.getByAltText("A now").getAttribute("src")).toBe("data:image/png;base64,AAAA");
+      expect(screen.queryByAltText("B now")).toBeNull();
+    });
+
+    it("opens without them when they cannot be taken", async () => {
+      invoke.mockImplementation((command: string) =>
+        command === "screen_previews" ? Promise.reject("nope") : Promise.resolve(attached),
+      );
+      render(<DeckActions />);
+      await act(async () => fireEvent.click(presentButton()));
+      expect(screen.getByText("Start presenting")).toBeTruthy();
+      expect(screen.queryByRole("img")).toBeNull();
+    });
+
+    it("are not taken with one screen", async () => {
+      invoke.mockResolvedValue([attached[0]]);
+      render(<DeckActions />);
+      await act(async () => fireEvent.click(presentButton()));
+      expect(invoke.mock.calls.map(([command]) => command)).not.toContain("screen_previews");
+    });
+  });
+
   it("does not present when the picker is cancelled", async () => {
     invoke.mockResolvedValue([
       { index: 0, name: "A", x: 0, y: 0, width: 100, height: 100, pixelWidth: 100, pixelHeight: 100, primary: true },

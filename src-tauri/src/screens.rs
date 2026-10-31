@@ -3,14 +3,27 @@
 //! lets the user pick (see `ScreenPicker`). The presenter view is the same frontend loaded
 //! with `?presenter`: it renders from what the show window sends it and never opens a
 //! workspace itself (slides are served to any window while a workspace has them open).
+//!
+//! The picker shows a screenshot of each screen, to tell them apart by what is on them. They
+//! are only ever held in the picker: nothing is written to disk.
 
+use std::time::Duration;
+
+use base64::Engine;
 use serde::Serialize;
 use tauri::{
     AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, Position, WebviewUrl,
     WebviewWindowBuilder, Window,
 };
 
+use crate::capture::{self, Image};
 use crate::error::{Error, Result};
+
+/// Widest screenshot in the picker, in pixels: enough for a sharp tile on a high density screen.
+const PREVIEW_WIDTH: u32 = 640;
+/// How long the picker waits for screenshots. It opens without them after this: a system may
+/// be asking the user for permission, and presenting must not depend on that.
+const PREVIEW_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Labels of presenter view windows start with this; the capabilities grant them what the app
 /// windows get. Each gets a label of its own: destroying a window only queues that, so a label
@@ -103,6 +116,56 @@ pub fn list(app: &AppHandle) -> Result<Vec<Screen>> {
             .map(|m| describe(m, primary.as_ref()))
             .collect(),
     ))
+}
+
+/// Screenshots of the attached monitors as PNG data URLs, in the order [`in_order`] gives the
+/// screens, with `None` for one that could not be taken.
+fn capture_all() -> Vec<Option<String>> {
+    let Ok(mut monitors) = xcap::Monitor::all() else {
+        return Vec::new();
+    };
+    monitors.sort_by_key(|m| (m.x().unwrap_or(0), m.y().unwrap_or(0)));
+    monitors.iter().map(|m| preview(m).ok()).collect()
+}
+
+fn preview(monitor: &xcap::Monitor) -> Result<String> {
+    let shot = monitor
+        .capture_image()
+        .map_err(|e| Error::msg(format!("cannot capture the screen: {e}")))?;
+    let image = Image {
+        width: shot.width(),
+        height: shot.height(),
+        rgba: shot.into_raw(),
+    };
+    let png = capture::encode_png(&capture::downscale(&image, PREVIEW_WIDTH))?;
+    let data = base64::engine::general_purpose::STANDARD.encode(png);
+    Ok(format!("data:image/png;base64,{data}"))
+}
+
+/// One entry per screen. Shots of another number of monitors than there are screens (one was
+/// just plugged in, or the capture failed) can't be told apart, so none are used: a shot on
+/// the wrong screen would be worse than none.
+fn for_screens(count: usize, shots: Vec<Option<String>>) -> Vec<Option<String>> {
+    if shots.len() == count {
+        shots
+    } else {
+        vec![None; count]
+    }
+}
+
+/// What each screen in [`list`] shows now, as far as the system lets us see it. Never fails:
+/// the picker works without screenshots.
+pub async fn previews(app: &AppHandle) -> Vec<Option<String>> {
+    let count = list(app).map_or(0, |screens| screens.len());
+    let shots = tokio::time::timeout(
+        PREVIEW_TIMEOUT,
+        tauri::async_runtime::spawn_blocking(capture_all),
+    )
+    .await;
+    match shots {
+        Ok(Ok(shots)) => for_screens(count, shots),
+        _ => vec![None; count],
+    }
 }
 
 /// Where a window goes to be on `screen`. Points have to be passed as such: a physical position
@@ -240,6 +303,59 @@ mod tests {
             origin(&at, false),
             Position::Physical(PhysicalPosition::new(1512, -20))
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn timing_probe() {
+        for round in 0..3 {
+            let t = std::time::Instant::now();
+            let monitors = xcap::Monitor::all().unwrap();
+            println!("round {round} list {:?}", t.elapsed());
+            for m in &monitors {
+                let t = std::time::Instant::now();
+                let shot = m.capture_image().unwrap();
+                let grab = t.elapsed();
+                let t = std::time::Instant::now();
+                let image = Image { width: shot.width(), height: shot.height(), rgba: shot.into_raw() };
+                let small = capture::downscale(&image, PREVIEW_WIDTH);
+                let scaled = t.elapsed();
+                let t = std::time::Instant::now();
+                let png = capture::encode_png(&small).unwrap();
+                println!("{}x{} grab {grab:?} scale {scaled:?} png {:?} ({} bytes)", image.width, image.height, t.elapsed(), png.len());
+            }
+        }
+    }
+
+    /// Takes real screenshots: run by hand with `--ignored`, on a machine with a screen.
+    #[test]
+    #[ignore]
+    fn captures_the_attached_monitors() {
+        let shots = capture_all();
+        assert!(!shots.is_empty());
+        for shot in &shots {
+            let shot = shot.as_deref().expect("a screenshot of each monitor");
+            println!("{}", shot.len());
+            let data = shot.strip_prefix("data:image/png;base64,").unwrap();
+            let png = base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .unwrap();
+            let image = capture::decode_png(&png).unwrap();
+            println!("{}x{}", image.width, image.height);
+            assert!(image.width <= PREVIEW_WIDTH);
+            assert!(
+                image.rgba.chunks(4).any(|p| p[..3] != [0, 0, 0]),
+                "not all black"
+            );
+        }
+    }
+
+    #[test]
+    fn screenshots_are_only_used_when_each_has_its_screen() {
+        let shots = vec![Some("a".to_string()), None];
+        assert_eq!(for_screens(2, shots.clone()), shots);
+        assert_eq!(for_screens(3, shots), vec![None, None, None]);
+        assert_eq!(for_screens(2, Vec::new()), vec![None, None]);
     }
 
     #[test]

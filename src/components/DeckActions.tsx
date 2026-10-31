@@ -25,11 +25,15 @@ function Actions({ deck }: { deck: Deck }) {
   const [videoProgress, setVideoProgress] = useState<VideoProgress | null>(null);
   // The attached screens while the picker is open (presenting with several of them).
   const [screens, setScreens] = useState<Screen[] | null>(null);
+  const [previews, setPreviews] = useState<(string | null)[]>([]);
 
   const present = async () => {
     const attached = await api.listScreens().catch(() => []);
-    if (attached.length > 1) setScreens(attached);
-    else useApp.getState().setPresenting(true);
+    if (attached.length > 1) {
+      // Taken before the picker opens, so that it isn't in them.
+      setPreviews(await api.screenPreviews().catch(() => []));
+      setScreens(attached);
+    } else useApp.getState().setPresenting(true);
   };
 
   const fileName = deck.title.replace(/[\\/:*?"<>|]+/g, "").trim() || "presentation";
@@ -135,6 +139,7 @@ function Actions({ deck }: { deck: Deck }) {
       {screens && (
         <ScreenPicker
           screens={screens}
+          previews={previews}
           onCancel={() => setScreens(null)}
           onStart={(choice) => {
             setScreens(null);

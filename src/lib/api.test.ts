@@ -118,6 +118,7 @@ const CASES = [
   ["setSlideTime", () => api.setSlideTime("talk", "a", 90), "set_slide_time", { id: "talk", slide: "a", seconds: 90 }],
   ["newWindow", () => api.newWindow(), "new_window", undefined],
   ["listScreens", () => api.listScreens(), "list_screens", undefined],
+  ["screenPreviews", () => api.screenPreviews(), "screen_previews", undefined],
   ["presentOn", () => api.presentOn(1, 0), "present_on", { audience: 1, presenter: 0 }],
   ["presentOn", () => api.presentOn(1, null), "present_on", { audience: 1, presenter: null }],
   ["closePresenterView", () => api.closePresenterView(), "close_presenter_view", undefined],

@@ -300,6 +300,8 @@ export interface Screen {
 export const api = {
   /** The attached screens, left to right. */
   listScreens: () => invoke<Screen[]>("list_screens"),
+  /** A screenshot (data URL) of each screen in `listScreens`, or null where there is none. */
+  screenPreviews: () => invoke<(string | null)[]>("screen_previews"),
   /** Moves this window to the `audience` screen and opens the presenter view on `presenter`. */
   presentOn: (audience: number, presenter: number | null) => invoke<void>("present_on", { audience, presenter }),
   /** Closes the presenter view window, if open. */

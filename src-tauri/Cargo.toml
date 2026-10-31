@@ -34,6 +34,8 @@ log = "0.4"
 base64 = "0.23.1"
 cssparser = "0.37"
 png = "0.18"
+# What each screen shows, in the picker for presenting (see src/screens.rs).
+xcap = "0.9"
 
 # Voice input in the chat composer (see src/voice.rs): microphone capture, the speech-to-text
 # model's download, and whisper.cpp to run it.

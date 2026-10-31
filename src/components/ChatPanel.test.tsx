@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -457,6 +457,16 @@ describe("ChatPanel: composing", () => {
       expect(count("3 comments")).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: "This slide" }));
       expect(count("2 comments")).toBeTruthy();
+    });
+
+    it("keeps the chip on one line, dropping the word in a narrow composer", () => {
+      render(<ChatPanel />);
+      const chip = count("2 comments");
+      expect(chip.parentElement!.className).toContain("whitespace-nowrap");
+      expect(chip.parentElement!.parentElement!.className).toContain("@container");
+      const word = within(chip).getByText("comments");
+      expect(word.className).toContain("sr-only");
+      expect(word.className).toContain("@[16rem]:not-sr-only");
     });
 
     it("lists them, to leave some out and take them along again", () => {

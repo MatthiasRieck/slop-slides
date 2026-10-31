@@ -781,7 +781,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
           <span className="h-1 w-8 rounded-full bg-border group-hover:bg-muted-foreground group-focus-visible:bg-primary" />
         </div>
         {(files.length > 0 || slideNumber > 0 || element) && (
-          <div className="flex flex-wrap gap-1 px-3.5 pt-3">
+          <div className="@container flex flex-wrap gap-1 px-3.5 pt-3">
             {slideNumber > 0 && (
               <button
                 type="button"

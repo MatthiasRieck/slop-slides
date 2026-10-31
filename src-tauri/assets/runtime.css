@@ -8,6 +8,10 @@ body {
   margin: 0;
   background: #000;
 }
+html[data-slop-thumbnail],
+html[data-slop-thumbnail] body {
+  background: transparent;
+}
 /* Slides are fixed canvases: stop mobile Safari enlarging text it finds too small, which
    would overflow the slides when the stage is scaled down to a phone. */
 html {

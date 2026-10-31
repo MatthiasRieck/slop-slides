@@ -8,11 +8,14 @@ import { cn } from "../lib/utils";
 /** How tall the drawing of the screens gets; it narrows to keep their shape. */
 const MAX_HEIGHT_REM = 16;
 
+/** The small print on a screen, which stays readable over a screenshot. */
+const LABEL = "relative max-w-full truncate rounded bg-background/85 px-1.5 py-px text-[10px] font-medium";
+
 /**
  * Shown when presenting with several screens attached: the screens drawn the way they sit on
- * the desk, to pick the one the audience sees the slides on and the one the presenter view
- * (notes, next slide, timers) goes to. A screenshot of a screen, where there is one, makes it
- * easy to recognize.
+ * the desk, with a button on each for the audience's slides and one for the presenter view
+ * (notes, next slide, timers). Each is on one screen at a time. A screenshot of a screen, where
+ * there is one, makes it easy to recognize.
  */
 export function ScreenPicker(props: {
   screens: Screen[];
@@ -58,7 +61,7 @@ export function ScreenPicker(props: {
                 data-testid={`screen-${screen.index}`}
                 data-role={role ?? ""}
                 className={cn(
-                  "absolute flex flex-col items-center justify-center gap-1.5 overflow-hidden rounded-md border-2 p-1 text-center",
+                  "absolute flex flex-col items-center justify-center gap-1 overflow-hidden rounded-md border-2 p-1 text-center",
                   role === "audience" && "border-primary bg-primary/10",
                   role === "presenter" && "border-amber-500 bg-amber-500/10",
                   !role && "border-border bg-muted/40",
@@ -78,38 +81,29 @@ export function ScreenPicker(props: {
                     />
                   </>
                 )}
-                <div
-                  className={cn(
-                    "relative flex max-w-full flex-col items-center gap-1.5 rounded p-1",
-                    preview && "bg-background/85",
-                  )}
-                >
-                  <span className="text-sm font-semibold tabular-nums">Screen {screen.index + 1}</span>
-                  <span className="max-w-full truncate text-xs font-medium">{screen.name}</span>
-                  <span className="text-[10px] font-medium">
-                    {role === "audience" ? "Audience · slides" : role === "presenter" ? "Presenter · notes" : "Unused"}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground tabular-nums">
-                    {screen.pixelWidth}×{screen.pixelHeight}
-                    {screen.primary ? " · main" : ""}
-                  </span>
-                  <div className="flex gap-1">
-                    <RoleButton
-                      label={`Slides on ${screen.name}`}
-                      active={role === "audience"}
-                      onClick={() => setChoice(choose(choice, "audience", screen.index))}
-                    >
-                      <MonitorPlay /> Slides
-                    </RoleButton>
-                    <RoleButton
-                      label={`Presenter view on ${screen.name}`}
-                      active={role === "presenter"}
-                      onClick={() => setChoice(choose(choice, "presenter", screen.index))}
-                    >
-                      <StickyNote /> Notes
-                    </RoleButton>
-                  </div>
+                <span className={LABEL}>{screen.name}</span>
+                <div className="relative flex gap-1.5">
+                  <RoleButton
+                    label={`Slides on ${screen.name}`}
+                    shows="audience"
+                    active={role === "audience"}
+                    onClick={() => setChoice(choose(choice, "audience", screen.index))}
+                  >
+                    <MonitorPlay />
+                  </RoleButton>
+                  <RoleButton
+                    label={`Presenter view on ${screen.name}`}
+                    shows="presenter"
+                    active={role === "presenter"}
+                    disabled={role === "audience"}
+                    onClick={() => setChoice(choose(choice, "presenter", screen.index))}
+                  >
+                    <StickyNote />
+                  </RoleButton>
                 </div>
+                <span className={cn(LABEL, "tabular-nums")}>
+                  {screen.pixelWidth}×{screen.pixelHeight}
+                </span>
               </div>
             );
           })}
@@ -148,16 +142,28 @@ export function ScreenPicker(props: {
   );
 }
 
-function RoleButton(props: { label: string; active: boolean; onClick: () => void; children: React.ReactNode }) {
+function RoleButton(props: {
+  label: string;
+  shows: "audience" | "presenter";
+  active: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <button
       type="button"
       aria-label={props.label}
       aria-pressed={props.active}
+      title={props.label}
+      disabled={props.disabled}
       onClick={props.onClick}
       className={cn(
-        "flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] [&_svg]:size-3",
-        props.active ? "bg-foreground text-background" : "bg-background/70 text-muted-foreground hover:text-foreground",
+        "flex size-8 items-center justify-center rounded-md shadow-sm [&_svg]:size-4",
+        props.active && props.shows === "audience" && "bg-primary text-primary-foreground",
+        props.active && props.shows === "presenter" && "bg-amber-500 text-black",
+        !props.active && "bg-background/85 text-muted-foreground hover:enabled:text-foreground",
+        props.disabled && "cursor-not-allowed opacity-50",
       )}
     >
       {props.children}

@@ -32,6 +32,9 @@ beforeEach(() => {
 const items = () => [...document.querySelectorAll<HTMLElement>("ol > li")];
 const item = (index: number) => within(items()[index]!);
 
+/** What the backend answers a rail change with. */
+const edited = (deck: unknown, created: string[] = []) => ({ deck, previous: "<old>", source: "<new>", created });
+
 const HIDDEN_HTML = DECK_HTML.replace(`id="outro"`, `id="outro" data-hidden`);
 const thumbnail = (li: HTMLElement) => li.querySelector("button > div") as HTMLElement;
 
@@ -168,19 +171,19 @@ describe("SlideRail", () => {
   });
 
   it("duplicates a slide and selects the copy", async () => {
-    invoke.mockResolvedValue({ deck: withSlides("intro", "#2", "outro", "outro-copy"), slide: "outro-copy" });
+    invoke.mockResolvedValue(edited(withSlides("intro", "#2", "outro", "outro-copy"), ["outro-copy"]));
     render(<SlideRail />);
     await act(async () => fireEvent.click(item(2).getByTitle("Duplicate")));
-    expect(invoke).toHaveBeenCalledWith("duplicate_slide", { id: "/decks/talk/deck.html", slide: "outro" });
+    expect(invoke).toHaveBeenCalledWith("duplicate_slides", { id: "/decks/talk/deck.html", slides: ["outro"] });
     expect(useApp.getState().selected).toBe("outro-copy");
   });
 
   it("deleting the selected slide selects the next one", async () => {
     useApp.setState({ selected: "#2" });
-    invoke.mockResolvedValue(withSlides("intro", "outro"));
+    invoke.mockResolvedValue(edited(withSlides("intro", "outro")));
     render(<SlideRail />);
     await act(async () => fireEvent.click(item(1).getByTitle("Delete")));
-    expect(invoke).toHaveBeenCalledWith("delete_slide", { id: "/decks/talk/deck.html", slide: "#2" });
+    expect(invoke).toHaveBeenCalledWith("delete_slides", { id: "/decks/talk/deck.html", slides: ["#2"] });
     expect(useApp.getState().selected).toBe("outro");
     expect(items()).toHaveLength(2);
   });
@@ -188,7 +191,7 @@ describe("SlideRail", () => {
   it("deleting a slide drops its sketch", async () => {
     const stroke = { tool: "pen" as const, color: "#ef4444", points: [[0.1, 0.2]] as [number, number][] };
     useApp.setState({ sketches: { intro: [stroke], outro: [stroke] } });
-    invoke.mockResolvedValue(withSlides("intro", "#2"));
+    invoke.mockResolvedValue(edited(withSlides("intro", "#2")));
     render(<SlideRail />);
     await act(async () => fireEvent.click(item(2).getByTitle("Delete")));
     expect(useApp.getState().sketches).toEqual({ intro: [stroke] });
@@ -277,12 +280,12 @@ describe("hidden slides in the rail", () => {
 
   it("hides a shown slide", async () => {
     const next = deckFor(HIDDEN_HTML.replace(`id="intro"`, `id="intro" data-hidden`), "2");
-    invoke.mockResolvedValue(next);
+    invoke.mockResolvedValue(edited(next));
     render(<SlideRail />);
     await act(async () => fireEvent.click(within(items()[0]!).getByTitle("Hide slide")));
-    expect(invoke).toHaveBeenCalledWith("set_slide_hidden", {
+    expect(invoke).toHaveBeenCalledWith("set_slides_hidden", {
       id: "/decks/talk/deck.html",
-      slide: "intro",
+      slides: ["intro"],
       hidden: true,
     });
     expect(useApp.getState().deck).toBe(next);
@@ -290,12 +293,12 @@ describe("hidden slides in the rail", () => {
   });
 
   it("shows a hidden slide again", async () => {
-    invoke.mockResolvedValue(deckFor(DECK_HTML, "2"));
+    invoke.mockResolvedValue(edited(deckFor(DECK_HTML, "2")));
     render(<SlideRail />);
     await act(async () => fireEvent.click(within(items()[2]!).getByTitle("Show slide")));
-    expect(invoke).toHaveBeenCalledWith("set_slide_hidden", {
+    expect(invoke).toHaveBeenCalledWith("set_slides_hidden", {
       id: "/decks/talk/deck.html",
-      slide: "outro",
+      slides: ["outro"],
       hidden: false,
     });
     expect(screen.queryByTestId("hidden-mark")).toBeNull();
@@ -374,6 +377,151 @@ const SECTIONED_HTML = DECK_HTML.replace(
   `<div class="deck-section" data-title="Middle"></div>\n<section class="slide">`,
 );
 const headers = () => [...document.querySelectorAll<HTMLElement>("[data-testid=section-header]")];
+
+describe("picking several slides", () => {
+  const deck = (locked: string[] = []): Deck => ({
+    ...withSlides("a", "b", "c", "d"),
+    slides: withSlides("a", "b", "c", "d").slides.map((s) => ({ ...s, locked: locked.includes(s.id) })),
+  });
+  const button = (index: number) => items()[index]!.querySelector("button")!;
+  const picked = () => useApp.getState().railSelected;
+  const bulk = () => within(screen.getByRole("toolbar", { name: "Selected slides" }));
+
+  beforeEach(() => useApp.setState({ deck: deck(), selected: "a", railSelected: [], deckUndo: [], deckRedo: [] }));
+  afterEach(() => useApp.getState().clearSearch());
+
+  it("⌘-click adds and removes slides, and the stage follows the last one added", () => {
+    render(<SlideRail />);
+    fireEvent.click(button(2), { metaKey: true });
+    expect(picked()).toEqual(["a", "c"]);
+    expect(useApp.getState().selected).toBe("c");
+    expect(button(0).getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(button(2), { metaKey: true });
+    expect(picked()).toEqual([]);
+    expect(useApp.getState().selected).toBe("a");
+  });
+
+  it("⇧-click picks the range from the selected slide, either way", () => {
+    useApp.setState({ selected: "b" });
+    render(<SlideRail />);
+    fireEvent.click(button(3), { shiftKey: true });
+    expect(picked()).toEqual(["b", "c", "d"]);
+    fireEvent.click(button(0), { shiftKey: true });
+    expect(picked()).toEqual(["a", "b"]);
+    expect(useApp.getState().selected).toBe("b");
+    expect(screen.getByText("2 selected")).toBeTruthy();
+  });
+
+  it("a plain click goes back to one slide", () => {
+    render(<SlideRail />);
+    fireEvent.click(button(2), { shiftKey: true });
+    fireEvent.click(button(1));
+    expect(picked()).toEqual([]);
+    expect(useApp.getState().selected).toBe("b");
+    expect(screen.queryByRole("toolbar", { name: "Selected slides" })).toBeNull();
+  });
+
+  it("⇧-click while searching only picks the slides found", () => {
+    render(<SlideRail />);
+    act(() => {
+      useApp.getState().setSearch({ query: "x" });
+      useApp.getState().setSearchMatches([
+        { slide: "a", index: 0, locked: false, notes: false, before: "", text: "x", after: "" },
+        { slide: "c", index: 2, locked: false, notes: false, before: "", text: "x", after: "" },
+      ]);
+    });
+    fireEvent.click(button(3), { shiftKey: true });
+    expect(picked()).toEqual(["a", "c"]);
+  });
+
+  it("deletes the picked slides at once, skipping locked ones, and selects a neighbor", async () => {
+    useApp.setState({ deck: deck(["b"]), railSelected: ["a", "b", "c"], selected: "c" });
+    invoke.mockResolvedValue(edited(withSlides("b", "d")));
+    render(<SlideRail />);
+    expect(bulk().getByTitle("Delete slides (not the 1 locked)")).toBeTruthy();
+    await act(async () => fireEvent.click(bulk().getByTitle(/^Delete slides/)));
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith("delete_slides", { id: DECK.id, slides: ["a", "c"] });
+    expect(useApp.getState().selected).toBe("d");
+    expect(picked()).toEqual([]);
+  });
+
+  it("offers no deleting or hiding when every picked slide is locked", () => {
+    useApp.setState({ deck: deck(["a", "b"]), railSelected: ["a", "b"] });
+    render(<SlideRail />);
+    expect((bulk().getByTitle(/^Delete slides/) as HTMLButtonElement).disabled).toBe(true);
+    expect((bulk().getByTitle(/^Hide slides/) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("hides the picked slides, or shows them when all are hidden", async () => {
+    useApp.setState({ railSelected: ["a", "b"] });
+    invoke.mockResolvedValue(edited(deck()));
+    render(<SlideRail />);
+    await act(async () => fireEvent.click(bulk().getByTitle("Hide slides")));
+    expect(invoke).toHaveBeenCalledWith("set_slides_hidden", { id: DECK.id, slides: ["a", "b"], hidden: true });
+
+    act(() =>
+      useApp.setState({
+        deck: { ...deck(), slides: deck().slides.map((s) => ({ ...s, hidden: s.id < "c" })) },
+        railSelected: ["a", "b"],
+      }),
+    );
+    await act(async () => fireEvent.click(bulk().getByTitle("Show slides")));
+    expect(invoke).toHaveBeenCalledWith("set_slides_hidden", { id: DECK.id, slides: ["a", "b"], hidden: false });
+  });
+
+  it("duplicates the picked slides and picks the copies", async () => {
+    useApp.setState({ railSelected: ["c", "a"] });
+    invoke.mockResolvedValue(edited(withSlides("a", "a-copy", "b", "c", "c-copy", "d"), ["a-copy", "c-copy"]));
+    render(<SlideRail />);
+    await act(async () => fireEvent.click(bulk().getByTitle("Duplicate slides")));
+    expect(invoke).toHaveBeenCalledWith("duplicate_slides", { id: DECK.id, slides: ["a", "c"] });
+    expect(picked()).toEqual(["a-copy", "c-copy"]);
+    expect(useApp.getState().selected).toBe("c-copy");
+  });
+
+  it("moves the picked slides a row, and shows it before the backend answers", async () => {
+    useApp.setState({ railSelected: ["b", "c"] });
+    invoke.mockResolvedValue(edited(withSlides("b", "c", "a", "d")));
+    render(<SlideRail />);
+    await act(async () => fireEvent.click(bulk().getByTitle("Move up (⌘↑)")));
+    expect(invoke).toHaveBeenCalledWith("reorder_slides", { id: DECK.id, slides: ["b", "c", "a", "d"] });
+    expect(picked()).toEqual(["b", "c"]);
+  });
+
+  it("can undo and redo from the rail once something changed", async () => {
+    invoke.mockResolvedValue(edited(deck()));
+    render(<SlideRail />);
+    expect(screen.queryByTitle(/^Undo the last/)).toBeNull();
+    await act(async () => fireEvent.click(item(0).getByTitle("Hide slide")));
+    invoke.mockResolvedValue(deck());
+    await act(async () => fireEvent.click(screen.getByTitle(/^Undo the last/)));
+    expect(invoke).toHaveBeenLastCalledWith("save_deck_source", { id: DECK.id, source: "<old>", base: "<new>" });
+    expect((screen.getByTitle(/^Undo the last/) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => fireEvent.click(screen.getByTitle(/^Redo the slide/)));
+    expect(invoke).toHaveBeenLastCalledWith("save_deck_source", { id: DECK.id, source: "<new>", base: "<old>" });
+  });
+});
+
+describe("double-clicking a thumbnail", () => {
+  const button = (index: number) => items()[index]!.querySelector("button")!;
+  beforeEach(() => useApp.setState({ deck: withSlides("a", "b"), selected: "a", editing: false, view: "slides" }));
+  afterEach(() => useApp.getState().setMode("view"));
+
+  it("edits that slide", () => {
+    render(<SlideRail />);
+    fireEvent.doubleClick(button(1));
+    expect(useApp.getState()).toMatchObject({ selected: "b", editing: true });
+  });
+
+  it("selects a locked slide without editing it", () => {
+    const deck = withSlides("a", "b");
+    useApp.setState({ deck: { ...deck, slides: deck.slides.map((s) => ({ ...s, locked: s.id === "b" })) } });
+    render(<SlideRail />);
+    fireEvent.doubleClick(button(1));
+    expect(useApp.getState()).toMatchObject({ selected: "b", editing: false });
+  });
+});
 
 describe("sections in the rail", () => {
   beforeEach(() => {

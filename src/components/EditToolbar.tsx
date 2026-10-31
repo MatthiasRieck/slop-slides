@@ -16,28 +16,35 @@ import {
   Link,
   List,
   ListOrdered,
+  MessageSquare,
   Minus,
   MousePointer2,
+  MoveUpRight,
   PaintBucket,
   PenLine,
   Plus,
   SendToBack,
+  Slash,
   Space,
   Square,
   SquareDashed,
   SquareRoundCorner,
+  Star,
   Strikethrough,
   Subscript,
   Superscript,
   Trash2,
+  Triangle,
   Type,
   Underline,
+  Wallpaper,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-
+import type { ArrangeMessage, EditGeometry } from "../lib/arrange";
 import {
   type Autofit,
   BORDER_WIDTHS,
+  type DeckColor,
   EDIT_COLORS,
   type EditSelection,
   type EditStyle,
@@ -59,6 +66,9 @@ import {
   type VerticalAlign,
 } from "../lib/editTools";
 import { cn } from "../lib/utils";
+import { ArrangeControls } from "./ArrangeControls";
+import { keepFocus, ToolButton, useOutsideClose } from "./EditControls";
+import { LookTools } from "./LookTools";
 
 const TOOLS: { tool: EditTool; label: string; icon: ReactNode }[] = [
   { tool: "select", label: "Select and move (V)", icon: <MousePointer2 /> },
@@ -66,7 +76,12 @@ const TOOLS: { tool: EditTool; label: string; icon: ReactNode }[] = [
   { tool: "rect", label: "Add a rectangle (R)", icon: <Square /> },
   { tool: "rounded", label: "Add a rounded rectangle", icon: <SquareRoundCorner /> },
   { tool: "ellipse", label: "Add an ellipse (O)", icon: <Circle /> },
+  { tool: "triangle", label: "Add a triangle", icon: <Triangle /> },
+  { tool: "star", label: "Add a star", icon: <Star /> },
+  { tool: "bubble", label: "Add a speech bubble", icon: <MessageSquare /> },
   { tool: "draw", label: "Draw freehand (D)", icon: <PenLine /> },
+  { tool: "line", label: "Add a line (L, Shift snaps to 45°)", icon: <Slash /> },
+  { tool: "arrow", label: "Add an arrow (A, Shift snaps to 45°)", icon: <MoveUpRight /> },
 ];
 
 const ALIGN: { value: TextAlign; label: string; icon: ReactNode }[] = [
@@ -105,10 +120,11 @@ export interface LinkTarget {
 }
 
 /**
- * Edit mode's tools, in the row above the slide: add text, shapes and freehand drawings, restyle the
+ * Edit mode's tools, in the row above the slide: add text, images, shapes, lines and freehand drawings, restyle the
  * selection (font, size, color, bold, italic, underline, strikethrough, superscript /
- * subscript, lists, links, spacing, alignment, how text fits, fill, border), move it up or
- * down the stack, or delete it. While typing, the text styles go to the selected text. With
+ * subscript, lists, links, spacing, alignment, how text fits, fill, border, opacity, shadow,
+ * corner radius, image fit and flips), paint one element's look onto another, set the slide's
+ * background, move the selection up or down the stack, or delete it. While typing, the text styles go to the selected text. With
  * nothing selected, the styles are those of what the current tool adds.
  *
  * Its buttons keep focus in the slide, so the text being edited keeps its selection; after a
@@ -122,15 +138,25 @@ export function EditToolbar(props: {
   styles: Record<ToolFamily, EditStyle>;
   /** The fonts the deck's styles use. */
   fonts?: FontChoice[];
+  /** The colors in the deck's CSS variables. */
+  colors?: DeckColor[];
+  /** The current slide's background color. */
+  background?: string | null;
   /** The deck's slides, for links between them. */
   slides?: LinkTarget[];
   onTool: (tool: EditTool) => void;
   onStyle: (changes: EditStyle) => void;
   onList?: (list: ListKind) => void;
   onLink?: (href: string | null) => void;
+  onBackground?: (color: string | null) => void;
+  /** Picks image files: to add to the slide, or to put in the selected image. */
+  onPickImage?: (replace: boolean) => void;
   onReturnFocus?: () => void;
   onOrder: (to: StackOrder) => void;
   onDelete: () => void;
+  /** Where the selection is, for the arrange controls. */
+  geometry?: EditGeometry | null;
+  onArrange?: (message: ArrangeMessage) => void;
 }) {
   const state = toolbarState(props.selection, props.tool, props.styles);
   const style = state?.style ?? {};
@@ -174,6 +200,7 @@ export function EditToolbar(props: {
         icon={<Baseline />}
         value={style.color ?? null}
         disabled={textOff}
+        deck={props.colors}
         onChange={(color) => props.onStyle({ color })}
       />
       <ToolButton
@@ -305,20 +332,22 @@ export function EditToolbar(props: {
         value={style.fill ?? null}
         disabled={!state}
         none
+        deck={props.colors}
         onChange={(fill) => props.onStyle({ fill })}
       />
       <ColorButton
         label={state?.vector ? "Line color" : "Border color"}
         icon={<SquareDashed />}
         value={style.stroke ?? null}
-        disabled={!state}
+        disabled={!state || !!selection?.clipped}
         none
+        deck={props.colors}
         onChange={(stroke) => props.onStyle({ stroke })}
       />
       <select
         aria-label={state?.vector ? "Line width" : "Border width"}
         title={state?.vector ? "Line width" : "Border width"}
-        disabled={!state}
+        disabled={!state || !!selection?.clipped}
         value={String(style.strokeWidth ?? 0)}
         onChange={(event) => props.onStyle({ strokeWidth: Number(event.target.value) })}
         className="h-6 rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-30"
@@ -331,6 +360,25 @@ export function EditToolbar(props: {
             </option>
           ))}
       </select>
+      <Divider />
+      <ArrangeControls geometry={props.geometry ?? null} onArrange={props.onArrange} onDone={returnFocus} />
+      <Divider />
+      <LookTools
+        tool={props.tool}
+        selection={selection}
+        onTool={props.onTool}
+        onStyle={props.onStyle}
+        onPickImage={props.onPickImage}
+        onReturnFocus={returnFocus}
+      />
+      <ColorButton
+        label="Slide background"
+        icon={<Wallpaper />}
+        value={props.background ?? null}
+        none
+        deck={props.colors}
+        onChange={(color) => props.onBackground?.(color)}
+      />
       <Divider />
       {ORDER.map((o) => (
         <ToolButton key={o.to} label={o.label} disabled={!props.selection} onClick={() => props.onOrder(o.to)}>
@@ -348,44 +396,14 @@ function Divider() {
   return <div className="mx-1 h-4 w-px bg-border" />;
 }
 
-/** Keeps focus (and the text selection) in the slide when a toolbar button is pressed. */
-function keepFocus(event: React.MouseEvent) {
-  event.preventDefault();
-}
-
-function ToolButton(props: {
-  label: string;
-  active?: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={props.label}
-      title={props.label}
-      aria-pressed={props.active}
-      disabled={props.disabled}
-      onMouseDown={keepFocus}
-      onClick={props.onClick}
-      className={cn(
-        "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4",
-        props.active && "bg-accent text-foreground",
-      )}
-    >
-      {props.children}
-    </button>
-  );
-}
-
-/** A color well: preset swatches, a custom color, and with `none`, no color at all. */
+/** A color well: the deck's colors, preset swatches, a custom color, and with `none`, no color at all. */
 function ColorButton(props: {
   label: string;
   icon: ReactNode;
   value: string | null;
   disabled?: boolean;
   none?: boolean;
+  deck?: DeckColor[];
   onChange: (color: string | null) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -444,6 +462,26 @@ function ColorButton(props: {
           aria-label={props.label}
           className="absolute top-full left-1/2 z-30 mt-1 -translate-x-1/2 rounded-md border bg-card p-2 shadow-md"
         >
+          {!!props.deck?.length && (
+            <fieldset aria-label="Deck colors" className="mb-2 grid w-max grid-cols-6 gap-1 border-b pb-2">
+              {props.deck.map((color) => (
+                <button
+                  key={color.name}
+                  type="button"
+                  aria-label={`Deck color ${color.name}`}
+                  title={color.name}
+                  aria-pressed={props.value === color.value}
+                  onMouseDown={keepFocus}
+                  onClick={() => pick(color.value)}
+                  className={cn(
+                    "size-5 rounded-full border border-black/15 dark:border-white/30",
+                    props.value === color.value && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-card",
+                  )}
+                  style={{ background: color.value }}
+                />
+              ))}
+            </fieldset>
+          )}
           <div className="grid w-max grid-cols-6 gap-1">
             {props.none && (
               <button
@@ -492,20 +530,6 @@ function ColorButton(props: {
       )}
     </div>
   );
-}
-
-/** Closes a popover on a press outside `ref`. */
-function useOutsideClose(open: boolean, ref: React.RefObject<HTMLElement | null>, close: () => void) {
-  const closeRef = useRef(close);
-  closeRef.current = close;
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: PointerEvent) => {
-      if (!ref.current?.contains(event.target as Node)) closeRef.current();
-    };
-    window.addEventListener("pointerdown", onDown);
-    return () => window.removeEventListener("pointerdown", onDown);
-  }, [open, ref]);
 }
 
 /** The font list: the deck's own fonts, then system fonts; "Default" leaves it to the deck. */

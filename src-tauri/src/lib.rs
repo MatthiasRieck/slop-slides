@@ -34,7 +34,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State, Window};
 
 use agent::{AgentManager, SendArgs};
-use deck::Deck;
+use deck::{Deck, RailEdit};
 use error::Result;
 use sessions::Sessions;
 use watcher::WorkspaceWatcher;
@@ -249,7 +249,7 @@ fn rename_deck(id: String, title: String) -> Result<Deck> {
 }
 
 #[tauri::command]
-fn reorder_slides(id: String, slides: Vec<String>) -> Result<Deck> {
+fn reorder_slides(id: String, slides: Vec<String>) -> Result<RailEdit> {
     deck::reorder(&deck::deck_file(&id)?, slides)
 }
 
@@ -260,21 +260,31 @@ fn add_slide(id: String, after: Option<String>) -> Result<CreatedSlide> {
 }
 
 #[tauri::command]
-fn duplicate_slide(id: String, slide: String) -> Result<CreatedSlide> {
-    let (deck, slide) = deck::duplicate(&deck::deck_file(&id)?, &slide)?;
-    Ok(CreatedSlide { deck, slide })
+fn duplicate_slides(id: String, slides: Vec<String>) -> Result<RailEdit> {
+    deck::duplicate_slides(&deck::deck_file(&id)?, &slides)
 }
 
 #[tauri::command]
-fn set_slide_hidden(window: Window, id: String, slide: String, hidden: bool) -> Result<Deck> {
+fn set_slides_hidden(
+    window: Window,
+    id: String,
+    slides: Vec<String>,
+    hidden: bool,
+) -> Result<RailEdit> {
     let file = deck::deck_file(&id)?;
-    deck::set_slide_hidden(&file, current_session(&window)?.as_deref(), &slide, hidden)
+    deck::set_slides_hidden(&file, current_session(&window)?.as_deref(), &slides, hidden)
 }
 
 /// Sets what is said over a slide; empty `text` removes its narration.
 #[tauri::command]
 fn set_slide_narration(id: String, slide: String, text: String) -> Result<Deck> {
     deck::set_slide_narration(&deck::deck_file(&id)?, &slide, &text)
+}
+
+/// Sets a slide's speaker notes; empty `text` removes them.
+#[tauri::command]
+fn set_slide_notes(id: String, slide: String, text: String) -> Result<Deck> {
+    deck::set_slide_notes(&deck::deck_file(&id)?, &slide, &text)
 }
 
 /// Gives every slide of the deck the canvas `size`.
@@ -305,9 +315,9 @@ fn delete_section(id: String, index: usize) -> Result<Deck> {
 }
 
 #[tauri::command]
-fn delete_slide(window: Window, id: String, slide: String) -> Result<Deck> {
+fn delete_slides(window: Window, id: String, slides: Vec<String>) -> Result<RailEdit> {
     let file = deck::deck_file(&id)?;
-    deck::delete_slide(&file, &session(&window)?, &slide)
+    deck::delete_slides(&file, &session(&window)?, &slides)
 }
 
 /// Saves a slide edited on the stage (text edits, moved elements). `base` is its hash when
@@ -804,15 +814,16 @@ pub fn run() {
             save_review,
             reorder_slides,
             add_slide,
-            duplicate_slide,
-            set_slide_hidden,
+            duplicate_slides,
+            set_slides_hidden,
             set_slide_locked,
             set_slide_narration,
+            set_slide_notes,
             set_slide_size,
             add_section,
             rename_section,
             delete_section,
-            delete_slide,
+            delete_slides,
             update_slide,
             save_deck_source,
             import_assets,

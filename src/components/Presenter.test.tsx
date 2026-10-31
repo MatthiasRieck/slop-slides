@@ -16,8 +16,10 @@ import { useApp } from "../store";
 import { fakeCanvas2D } from "../test/fakeCanvas";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Presenter } from "./Presenter";
+import { formatElapsed } from "./PresenterPanel";
 
 beforeEach(() => {
+  localStorage.removeItem("slopslide.presenterPanel");
   setFullscreen.mockClear();
   useApp.setState({ deck: deckFor(DECK_HTML), selected: "outro", presenting: true, revealRev: 0 });
 });
@@ -706,6 +708,95 @@ describe("Presenter tools", () => {
     render(<Presenter />);
     const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
     tool(/^Pen/).dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+});
+
+describe("presenter view", () => {
+  const panel = () => screen.queryByRole("complementary", { name: "Presenter view" });
+  const notes = () => screen.getByTestId("presenter-notes").textContent;
+  const deck = (hidden: string[] = []) => {
+    const base = deckFor(DECK_HTML);
+    return {
+      ...base,
+      slides: base.slides.map((s) => ({ ...s, notes: `Notes of ${s.id}`, hidden: hidden.includes(s.id) })),
+    };
+  };
+  beforeEach(() => useApp.setState({ deck: deck(), selected: "intro" }));
+  afterEach(() => vi.useRealTimers());
+
+  it("stays closed until asked for, then remembers", () => {
+    const { unmount } = render(<Presenter />);
+    expect(panel()).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Presenter view" }));
+    expect(panel()).toBeTruthy();
+    unmount();
+    render(<Presenter />);
+    expect(panel()).toBeTruthy();
+  });
+
+  it("N toggles it, from the app or from inside the slide", () => {
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "n" });
+    expect(panel()).toBeTruthy();
+    fromFrame({ type: "slop:key", key: "N" });
+    expect(panel()).toBeNull();
+    fireEvent.keyDown(document.body, { key: "n", metaKey: true });
+    expect(panel()).toBeNull();
+  });
+
+  it("shows the notes of the slide on screen and follows the show", () => {
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "n" });
+    expect(notes()).toBe("Notes of intro");
+    fromFrame({ type: "slop:slide", id: "outro", index: 2 });
+    expect(notes()).toBe("Notes of outro");
+  });
+
+  it("says when a slide has no notes", () => {
+    useApp.setState({ deck: deckFor(DECK_HTML) });
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "n" });
+    expect(notes()).toBe("No notes for this slide.");
+  });
+
+  it("previews the next shown slide, skipping hidden ones, and says when there is none", () => {
+    useApp.setState({ deck: deck(["#2"]) });
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "n" });
+    expect(screen.getByText("Slide 1 of 2")).toBeTruthy();
+    fromFrame({ type: "slop:slide", id: "outro", index: 1 });
+    expect(screen.getByText("Slide 2 of 2")).toBeTruthy();
+    expect(screen.getByText("The end of the show.")).toBeTruthy();
+  });
+
+  it("counts the time since the show started, even while closed, and restarts", () => {
+    vi.useFakeTimers();
+    render(<Presenter />);
+    act(() => void vi.advanceTimersByTime(65_000));
+    fireEvent.keyDown(document.body, { key: "n" });
+    expect(screen.getByRole("timer").textContent).toBe("1:05");
+    act(() => void vi.advanceTimersByTime(2_000));
+    expect(screen.getByRole("timer").textContent).toBe("1:07");
+    fireEvent.click(screen.getByRole("button", { name: "Restart the timer" }));
+    expect(screen.getByRole("timer").textContent).toBe("0:00");
+    act(() => void vi.advanceTimersByTime(3_000));
+    expect(screen.getByRole("timer").textContent).toBe("0:03");
+  });
+
+  it("formats the time", () => {
+    expect(formatElapsed(-5)).toBe("0:00");
+    expect(formatElapsed(59_999)).toBe("0:59");
+    expect(formatElapsed(247_000)).toBe("4:07");
+    expect(formatElapsed(3_847_000)).toBe("1:04:07");
+    expect(formatElapsed(36_000_000)).toBe("10:00:00");
+  });
+
+  it("keeps the slide's focus when its buttons are pressed", () => {
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "n" });
+    const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    screen.getByRole("button", { name: "Restart the timer" }).dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
   });
 });

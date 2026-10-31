@@ -71,6 +71,7 @@ pub const AUTOFIT_ATTR: &str = "data-autofit";
 /// in deck.html; the editor strips them before saving.
 pub const EDITOR_ATTRS: &[&str] = &[
     "contenteditable",
+    "spellcheck",
     "data-slop-selected",
     "data-slop-hover",
     "data-slop-editing",
@@ -772,7 +773,11 @@ pub fn has_moved(slide: &str) -> bool {
 /// `<aside class="narration">` that is a direct child of the slide. The player never shows it.
 pub const NARRATION_CLASS: &str = "narration";
 
-/// A narration element inside one slide's markup.
+/// A slide's speaker notes: plain text in one `<aside class="notes">`, for the presenter alone.
+/// The app reads and writes them the way it does narration; the player never shows them.
+pub const NOTES_CLASS: &str = "notes";
+
+/// A narration or notes element inside one slide's markup.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NarrationSpan {
     /// The whole `<aside …>…</aside>`; it runs to the end of `slide` when never closed.
@@ -783,6 +788,11 @@ pub struct NarrationSpan {
 
 /// Every narration element in `slide` (the markup of one slide), in document order.
 pub fn narration_spans(slide: &str) -> Vec<NarrationSpan> {
+    aside_spans(slide, NARRATION_CLASS)
+}
+
+/// Every `<aside>` of `class` in `slide`, in document order.
+fn aside_spans(slide: &str, class: &str) -> Vec<NarrationSpan> {
     // An element never closed runs to the slide's end tag, not past it.
     let limit = slide
         .to_ascii_lowercase()
@@ -790,7 +800,7 @@ pub fn narration_spans(slide: &str) -> Vec<NarrationSpan> {
         .unwrap_or(slide.len());
     let mut spans: Vec<NarrationSpan> = Vec::new();
     for (start, tag) in tags(slide) {
-        if tag.closing || tag.name != "aside" || !has_class(&tag, NARRATION_CLASS) {
+        if tag.closing || tag.name != "aside" || !has_class(&tag, class) {
             continue;
         }
         if start >= limit || spans.last().is_some_and(|s| s.range.contains(&start)) {
@@ -812,7 +822,16 @@ pub fn narration_spans(slide: &str) -> Vec<NarrationSpan> {
 /// The slide's narration as plain text: tags dropped, entities decoded, each line trimmed and
 /// blank lines between paragraphs kept (one at most). Empty when it has none.
 pub fn narration(slide: &str) -> String {
-    let Some(span) = narration_spans(slide).into_iter().next() else {
+    aside_text(slide, NARRATION_CLASS)
+}
+
+/// The slide's speaker notes as plain text, read like [`narration`].
+pub fn notes(slide: &str) -> String {
+    aside_text(slide, NOTES_CLASS)
+}
+
+fn aside_text(slide: &str, class: &str) -> String {
+    let Some(span) = aside_spans(slide, class).into_iter().next() else {
         return String::new();
     };
     let inner = &slide[span.inner];
@@ -855,15 +874,24 @@ pub fn narration(slide: &str) -> String {
 /// the end of the slide, or removes it when `text` is empty. Leaves the markup untouched when
 /// the narration is already `text`.
 pub fn set_narration(html: &str, id: &str, text: &str) -> Result<String, String> {
+    set_aside(html, id, NARRATION_CLASS, text)
+}
+
+/// Sets slide `id`'s speaker notes to `text`, the way [`set_narration`] does its narration.
+pub fn set_notes(html: &str, id: &str, text: &str) -> Result<String, String> {
+    set_aside(html, id, NOTES_CLASS, text)
+}
+
+fn set_aside(html: &str, id: &str, class: &str, text: &str) -> Result<String, String> {
     let slides = find_slides(html);
     let span = span_of(&slides, id).ok_or_else(|| format!("Slide not found: {id}"))?;
     let slide = &html[span.range.clone()];
     let text = text.trim();
-    if narration(slide) == text && narration_spans(slide).len() <= 1 {
+    let existing = aside_spans(slide, class);
+    if aside_text(slide, class) == text && existing.len() <= 1 {
         return Ok(html.to_string());
     }
     let offset = span.range.start;
-    let existing = narration_spans(slide);
     // Only the first one counts; extra ones go.
     let mut out = html.to_string();
     for extra in existing.iter().skip(1).rev() {
@@ -895,7 +923,7 @@ pub fn set_narration(html: &str, id: &str, text: &str) -> Result<String, String>
             out.insert_str(
                 at,
                 &format!(
-                    "\n{indent}  <aside class=\"{NARRATION_CLASS}\">{}</aside>",
+                    "\n{indent}  <aside class=\"{class}\">{}</aside>",
                     escape(text)
                 ),
             );
@@ -2615,6 +2643,33 @@ mod tests {
         let inline = set_narration(html, "b", "B text").unwrap();
         assert!(
             inline.contains("<p>B</p>\n    <aside class=\"narration\">B text</aside></section>")
+        );
+    }
+
+    #[test]
+    fn reads_sets_and_removes_a_slides_notes_apart_from_its_narration() {
+        let html = "<main class=\"deck\">\n  <section class=\"slide\" id=\"a\">\n    <h1>Hi</h1>\n    <aside class=\"narration\">Said</aside>\n  </section>\n</main>";
+        let added = set_notes(html, "a", " Mention <b> & pause\nthen go ").unwrap();
+        assert!(added.contains("    <aside class=\"notes\">Mention &lt;b&gt; &amp; pause\nthen go</aside>\n  </section>"));
+        let slide = slide_markup(&added, "a").unwrap();
+        assert_eq!(notes(slide), "Mention <b> & pause\nthen go");
+        assert_eq!(narration(slide), "Said");
+        assert_eq!(
+            set_notes(&added, "a", "Mention <b> & pause\nthen go").unwrap(),
+            added
+        );
+        assert_eq!(set_notes(&added, "a", "").unwrap(), html);
+        assert_eq!(notes(html), "");
+        assert!(set_notes(html, "missing", "x").is_err());
+    }
+
+    #[test]
+    fn notes_of_other_classes_and_tags_are_left_alone() {
+        let html = "<main class=\"deck\"><section class=\"slide\" id=\"a\"><p class=\"notes\">Shown</p><aside class=\"side notes\">Hi <b>there</b></aside><aside class=\"notes\">Two</aside></section></main>";
+        assert_eq!(notes(slide_markup(html, "a").unwrap()), "Hi there");
+        assert_eq!(
+            set_notes(html, "a", "New").unwrap(),
+            "<main class=\"deck\"><section class=\"slide\" id=\"a\"><p class=\"notes\">Shown</p><aside class=\"side notes\">New</aside></section></main>"
         );
     }
 

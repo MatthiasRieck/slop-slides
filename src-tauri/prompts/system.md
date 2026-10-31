@@ -179,11 +179,15 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   "Hand edits" below).
   They can also restyle elements (inline `color`, `font-size`, `font-family`, `font-weight`,
   `font-style`, `text-decoration-line`, `letter-spacing`, `line-height`, `text-align`,
-  `background-color`, `border`, and `position: relative` with a `z-index` to change the
-  stacking order), restyle words inside text (inline `<span style="…">`, `<sup>`, `<sub>`),
+  `background-color`, `border`, `opacity`, `box-shadow`, `filter: drop-shadow(…)` on an
+  `<svg>`, `border-radius`, on an image `object-fit`, `object-position` and a flipping
+  `transform: scaleX(-1)` / `scaleY(-1)` (`!important`, after any tilt), and `position: relative` with a `z-index` to change
+  the stacking order), set one slide's background (inline `background-color` and `background-image: none` on its `<section>`),
+  restyle words inside text (inline `<span style="…">`, `<sup>`, `<sub>`),
   turn text into lists (`<ul>` / `<ol>` with inline `margin`, `padding-left` and
   `list-style-type`), link text or elements (see links below), and add text boxes, shapes,
-  and freehand drawings, which carry `data-added="text"`, `"shape"`, or `"drawing"`.
+  lines, arrows and freehand drawings, which carry `data-added="text"`, `"shape"`, or
+  `"drawing"`.
 - Links: `<a href="#slide-id">` goes to that slide when clicked in the presentation (the
   player follows the hash); web links carry `target="_blank" rel="noopener"` so the
   presentation stays open. To link an element without text (an image, a shape) without
@@ -199,7 +203,7 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   `assets/<file>` and arrives as `<img src="assets/<file>" alt="" data-dropped data-moved
   style="position: absolute; left: 0px; top: 0px; width: Npx; translate: Xpx Ypx">` at the
   end of the slide, on top of everything else (see "Hand edits" below).
-  Never add `data-moved`, `data-added`, `data-dropped`, `data-resize-placeholder`, `data-delete-placeholder`, `contenteditable`, or `data-slop-*`
+  Never add `data-moved`, `data-added`, `data-dropped`, `data-resize-placeholder`, `data-delete-placeholder`, `contenteditable`, `spellcheck`, or `data-slop-*`
   attributes yourself.
 - A slide with the `data-hidden` attribute is hidden: the user muted it in the editor and
   the player skips it when presenting. Keep the attribute when editing such a slide;
@@ -313,11 +317,13 @@ placeholder (including its hidden contents) and rework the surrounding layout so
 closes cleanly. The `delete-placeholder` lint warning lists these.
 
 The user can also restyle elements and add their own with the editor's toolbar. Inline style
-changes (text color, size, weight, alignment, fill, border, `z-index` stacking) are what they
-chose; keep them when editing, and when tidying move them into the slide's rules. An element
-they added carries `data-added` (`text` for a text box, `shape` for a rectangle or ellipse,
-which may hold text, `drawing` for a freehand `<svg>`) and is absolutely positioned on the
-slide with inline `left`, `top`, `width`, and `height`. When tidying, keep each one where it
+changes (text color, size, weight, alignment, fill, border, opacity, shadow, corner radius,
+an image's fit and flip, a slide's background, `z-index` stacking) are what they chose; keep them when editing, and when tidying move them into the slide's rules. An element
+they added carries `data-added` (`text` for a text box, `shape` for a rectangle, ellipse,
+triangle, star or speech bubble, which may hold text, `drawing` for an `<svg>` with a freehand
+line, a straight line or an arrow) and is absolutely positioned on the slide with inline `left`,
+`top`, `width`, and `height`. A triangle, star or speech bubble is a box cut out with an inline
+`clip-path: polygon(…)`; keep it. When tidying, keep each one where it
 appears and as it looks (its text, colors, border, and stacking), give it a class and move its
 styles into the slide's rules (or fit it into the layout where that is cleaner), then remove
 `data-added`. The `added-element` lint warning lists every one still waiting for this.

@@ -12,6 +12,7 @@ import {
   type FindOptions,
   type LintIssue,
   type OpenedFile,
+  type RailEdit,
   type ReplacedText,
   type Slide,
   type TemplateSummary,
@@ -19,7 +20,7 @@ import {
   type WorkspaceInfo,
 } from "./lib/api";
 import { type ContextUsage, latestContext, mergeContext } from "./lib/context";
-import { DEFAULT_EDIT_STYLES, type EditStyle, type EditTool, type ToolFamily } from "./lib/editTools";
+import { DEFAULT_EDIT_STYLES, type EditElement, type EditStyle, type EditTool, type ToolFamily } from "./lib/editTools";
 import { inkBounds, type Stroke } from "./lib/ink";
 import {
   defaultModel,
@@ -38,6 +39,7 @@ import {
   type PermissionMode,
   type PermissionModes,
 } from "./lib/permissions";
+import { applyOrder, railItems, stepRows } from "./lib/sections";
 import { DEFAULT_SIZE, pixelsOf, resizePrompt, type SlideSize, sameSize } from "./lib/slideSize";
 import { basename, dirname, layoutLabel } from "./lib/utils";
 
@@ -63,6 +65,8 @@ export interface UserMessage {
   sketch?: Sketch | null;
   /** Absolute path of a screenshot of the slide sent along (for tidying hand edits). */
   screenshot?: string | null;
+  /** The element on the slide the message is about. */
+  element?: EditElement | null;
   /** Set when the message ran a command instead of prompting the agent. */
   command?: "compact";
   createdAt: number;
@@ -197,7 +201,7 @@ function loadFavorites(): string[] {
 export type StageView = "slides" | "code";
 
 /** What the deck is open for; the top bar's tabs pick it (see components/ModeTabs.tsx). */
-export type DeckMode = "view" | "edit" | "review" | "narration" | "code";
+export type DeckMode = "view" | "edit" | "review" | "narration" | "notes" | "code";
 
 /** The mode of the deck: the HTML view and editing have their own state, the rest is `slideMode`. */
 export function deckMode(state: Pick<AppState, "view" | "editing" | "slideMode">): DeckMode {
@@ -303,9 +307,10 @@ interface AppState {
   lint: LintIssue[] | null;
   /**
    * Text to put in the chat composer, with a counter so the same text can be sent twice.
-   * `screenshot` is a slide screenshot shown with the text and sent along with the message.
+   * `screenshot` is a slide screenshot shown with the text and sent along with the message, and
+   * `element` an element of the slide the message is about. Without text, the draft stays.
    */
-  composerFill: { text: string; rev: number; screenshot?: string } | null;
+  composerFill: { text: string; rev: number; screenshot?: string; element?: EditElement } | null;
   /**
    * Ink drawn on slides in the editor, by slide id. Saved in the deck file as review marks, and
    * sent along with the next message about the slide while it has changed since last sent.
@@ -321,7 +326,7 @@ interface AppState {
   search: SlideSearch;
   editing: boolean;
   /** The mode shown over the rendered slide when not editing; see `deckMode`. */
-  slideMode: "view" | "review" | "narration";
+  slideMode: "view" | "review" | "narration" | "notes";
   /** Bumped when a slide edit could not be saved, so the stage reloads the slide from disk. */
   editReload: number;
   /** The edit toolbar's tool: select, or what a drag on the slide adds. */
@@ -334,6 +339,12 @@ interface AppState {
   templates: TemplateSummary[] | undefined;
   /** Undone slide edits that can be redone, newest last. */
   slideRedo: SlideUndo[];
+  /** The slides picked in the rail when there are several; empty when it is just `selected`. */
+  railSelected: string[];
+  /** Slide rail changes that can be undone, newest last. They outlive edit mode, unlike `slideUndo`. */
+  deckUndo: DeckUndo[];
+  /** Undone slide rail changes that can be redone, newest last. */
+  deckRedo: DeckUndo[];
 
   /** Opens a folder in the file tree, reopening the file last open in it. */
   openWorkspace: (path: string) => Promise<void>;
@@ -352,6 +363,25 @@ interface AppState {
   selectRelative: (delta: number) => void;
   setSearch: (changes: Partial<Pick<SlideSearch, "query" | "options">>) => void;
   setSearchMatches: (matches: FindMatch[]) => void;
+  /**
+   * A click on a slide in the rail with a modifier: `toggle` (⌘) adds or removes the slide,
+   * `range` (⇧) picks everything from the selected slide to it, which stays on the stage.
+   */
+  extendRailSelection: (slide: string, how: "toggle" | "range") => void;
+  /** Back to just the selected slide. */
+  clearRailSelection: () => void;
+  /** Deletes `slides`, leaving locked ones alone, and selects a slide next to them if need be. */
+  deleteSlides: (slides: string[]) => Promise<void>;
+  setSlidesHidden: (slides: string[], hidden: boolean) => Promise<void>;
+  /** Copies `slides`, each right after itself, and selects the copies. */
+  duplicateSlides: (slides: string[]) => Promise<void>;
+  /** Puts the rail's rows (see `sectionKey`) into `order`, showing it right away. */
+  reorderRail: (order: string[]) => Promise<void>;
+  /** Moves the picked slides one rail row up (-1) or down (1), section markers included. */
+  moveSlides: (delta: -1 | 1) => Promise<void>;
+  /** Puts the deck back as it was before the last rail change, unless it changed again since. */
+  undoDeckEdit: () => Promise<void>;
+  redoDeckEdit: () => Promise<void>;
   /** Goes to the next (1) or previous (-1) match, around the deck. */
   stepSearch: (delta: 1 | -1) => void;
   clearSearch: () => void;
@@ -369,7 +399,7 @@ interface AppState {
   setPresenting: (presenting: boolean) => void;
   setError: (error: string | null) => void;
   refreshLint: () => Promise<void>;
-  fillComposer: (text: string, options?: { screenshot?: string | null }) => void;
+  fillComposer: (text: string, options?: { screenshot?: string | null; element?: EditElement }) => void;
   setSketches: (update: (all: Record<string, Stroke[]>) => Record<string, Stroke[]>) => void;
   clearSketch: (slide: string) => void;
   /** Keeps the slide's current marks out of the next message. */
@@ -387,6 +417,8 @@ interface AppState {
   saveSlideEdit: (slide: string, markup: string) => Promise<void>;
   /** Saves what is said over `slide` (empty removes it), after any slide edits still being saved. */
   setNarration: (slide: string, text: string) => Promise<void>;
+  /** Saves the speaker notes of `slide` (empty removes them), after any slide edits still being saved. */
+  setNotes: (slide: string, text: string) => Promise<void>;
   /** Sets the voice (or language) the deck's narration is said in. */
   setNarrationVoice: (voice: string) => Promise<void>;
   setNarrationLanguage: (language: string) => Promise<void>;
@@ -435,12 +467,19 @@ interface AppState {
    * `overflow` lists elements the slide editor found running past the slide or cut off.
    */
   tidyLayout: (overflow?: string[]) => Promise<void>;
+  /** Readies the composer for a question about `element`, with a screenshot of the slide showing it selected. */
+  askAboutElement: (element: EditElement) => Promise<void>;
+  /** Like `tidyLayout`, but has the agent give only `element` a place in the layout. */
+  tidyElement: (element: EditElement) => Promise<void>;
   /**
    * Gives every slide the canvas `size`, then (when the deck has slides) puts a prompt in the
    * composer asking the agent to lay the slides out again for it.
    */
   resizeSlides: (size: SlideSize) => Promise<void>;
-  send: (text: string, options: { includeSlide: boolean; attachments: string[]; screenshot?: string }) => Promise<void>;
+  send: (
+    text: string,
+    options: { includeSlide: boolean; attachments: string[]; screenshot?: string; element?: EditElement },
+  ) => Promise<void>;
   /** Has the agent summarize the conversation so far, freeing up its context. */
   compact: () => Promise<void>;
   interrupt: () => void;
@@ -455,7 +494,17 @@ interface SlideUndo {
   after: string;
 }
 
+/** A rail change: `previous` is the deck file to save back, as long as it still is `source`. */
+interface DeckUndo {
+  previous: string;
+  source: string;
+}
+
 const UNDO_KEPT = 50;
+/** How much of an element's markup goes in the prompt; the agent can read the rest in the deck. */
+const ELEMENT_MARKUP_KEPT = 4000;
+/** Rail history keeps whole deck files, so it stays shorter. */
+const DECK_UNDO_KEPT = 20;
 
 export const TIDY_PROMPT =
   "Tidy up the layout of this slide. I edited it by hand: keep my text, the styles I picked and what I added, and keep things where I moved them, at the size and angle I gave them, but rebuild the layout cleanly and fix any overflow or clipping.";
@@ -464,6 +513,9 @@ export const tidyPrompt = (overflow: string[] = []) =>
   overflow.length
     ? `${TIDY_PROMPT}\n\nThe editor found overflow:\n${overflow.map((o) => `- ${o}`).join("\n")}`
     : TIDY_PROMPT;
+
+export const TIDY_ELEMENT_PROMPT =
+  "Give this element a proper place in the slide's layout. I added it by hand: keep its content and the styles I picked, keep it about where I put it, and replace the hand-edit markers and offsets with clean markup. Leave the rest of the slide as it is, moving other elements only as far as needed to make room.";
 
 /** How a prompt names a template's layout: its readable name, the slide and file to read. */
 const layoutRef = (template: TemplateSummary, slide: string, path: string) =>
@@ -526,6 +578,9 @@ export const useApp = create<AppState>((set, get) => ({
   editStyles: DEFAULT_EDIT_STYLES,
   slideUndo: [],
   slideRedo: [],
+  railSelected: [],
+  deckUndo: [],
+  deckRedo: [],
   templates: undefined,
 
   openWorkspace: async (path) => {
@@ -631,24 +686,116 @@ export const useApp = create<AppState>((set, get) => ({
       editTool: "select",
       slideUndo: [],
       slideRedo: [],
+      ...NO_RAIL_STATE,
     });
     return true;
   },
 
   setDeck: (deck) => {
-    const { selected } = get();
+    const { selected, railSelected } = get();
     const stillThere = deck.slides.some((s) => s.id === selected);
-    set({ deck, selected: stillThere ? selected : (deck.slides[0]?.id ?? null) });
+    set({
+      deck,
+      selected: stillThere ? selected : (deck.slides[0]?.id ?? null),
+      railSelected: railSelected.filter((id) => deck.slides.some((s) => s.id === id)),
+    });
   },
 
-  select: (slide) => set((s) => ({ selected: slide, revealRev: s.revealRev + 1 })),
+  select: (slide) => set((s) => ({ selected: slide, railSelected: [], revealRev: s.revealRev + 1 })),
 
   selectRelative: (delta) => {
     const { deck, selected } = get();
     if (!deck || deck.slides.length === 0) return;
     const index = deck.slides.findIndex((s) => s.id === selected);
     const next = Math.min(deck.slides.length - 1, Math.max(0, index + delta));
-    set((s) => ({ selected: deck.slides[next]?.id ?? null, revealRev: s.revealRev + 1 }));
+    set((s) => ({ selected: deck.slides[next]?.id ?? null, railSelected: [], revealRev: s.revealRev + 1 }));
+  },
+
+  extendRailSelection: (slide, how) => {
+    const { deck, selected, search } = get();
+    if (!deck) return;
+    const picked = railSelection(get());
+    if (how === "range") {
+      const ids = deck.slides.map((s) => s.id);
+      const [from, to] = [ids.indexOf(selected ?? slide), ids.indexOf(slide)].sort((a, b) => a - b) as [number, number];
+      // A search only shows some slides; those are the ones to pick.
+      const shown = search.matches && new Set(search.matches.map((m) => m.slide));
+      const range = ids.slice(from, to + 1).filter((id) => !shown || shown.has(id));
+      set({ railSelected: range.length > 1 ? range : [] });
+    } else if (!picked.includes(slide)) {
+      set((s) => ({ railSelected: [...picked, slide], selected: slide, revealRev: s.revealRev + 1 }));
+    } else if (picked.length > 1) {
+      const rest = picked.filter((id) => id !== slide);
+      set((s) => ({
+        railSelected: rest.length > 1 ? rest : [],
+        selected: rest.includes(s.selected ?? "") ? s.selected : (rest.at(-1) ?? null),
+      }));
+    }
+  },
+
+  clearRailSelection: () => set({ railSelected: [] }),
+
+  deleteSlides: async (slides) => {
+    const { deck } = get();
+    const doomed = new Set(deck?.slides.filter((s) => slides.includes(s.id) && !s.locked).map((s) => s.id));
+    if (!deck || doomed.size === 0) return;
+    await editRail(async (id) => {
+      const edit = await api.deleteSlides(id, [...doomed]);
+      // The deck file drops the slides' review marks with them; forget them here too.
+      for (const slide of doomed) get().clearSketch(slide);
+      const { selected } = get();
+      const here = deck.slides.findIndex((s) => s.id === selected);
+      if (selected && doomed.has(selected)) {
+        const left = (s: Slide) => !doomed.has(s.id);
+        const neighbor = deck.slides.slice(here + 1).find(left) ?? deck.slides.slice(0, here).findLast(left);
+        get().select(neighbor?.id ?? null);
+      }
+      return edit;
+    });
+    set({ railSelected: [] });
+  },
+
+  setSlidesHidden: async (slides, hidden) => {
+    if (slides.length > 0) await editRail((id) => api.setSlidesHidden(id, slides, hidden));
+  },
+
+  duplicateSlides: async (slides) => {
+    if (slides.length === 0) return;
+    const edit = await editRail((id) => api.duplicateSlides(id, slides));
+    if (!edit) return;
+    get().select(edit.created.at(-1) ?? null);
+    if (edit.created.length > 1) set({ railSelected: edit.created });
+  },
+
+  reorderRail: async (order) => {
+    const { deck } = get();
+    if (!deck) return;
+    get().setDeck(applyOrder(deck, order));
+    const edit = await editRail((id) => api.reorderSlides(id, order));
+    if (edit) return;
+    try {
+      if (get().deck?.id === deck.id) get().setDeck(await api.loadDeck(deck.id));
+    } catch (error) {
+      set({ error: errorMessage(error) });
+    }
+  },
+
+  moveSlides: async (delta) => {
+    const { deck, search } = get();
+    if (!deck || search.matches) return;
+    const keys = railItems(deck).map((item) => item.key);
+    const order = stepRows(keys, railSelection(get()), delta);
+    if (order.some((key, i) => key !== keys[i])) await get().reorderRail(order);
+  },
+
+  undoDeckEdit: () => {
+    editQueue = editQueue.then(() => stepDeckHistory("deckUndo", "deckRedo"));
+    return editQueue;
+  },
+
+  redoDeckEdit: () => {
+    editQueue = editQueue.then(() => stepDeckHistory("deckRedo", "deckUndo"));
+    return editQueue;
   },
 
   setSearch: (changes) =>
@@ -757,8 +904,15 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
-  fillComposer: (text, { screenshot } = {}) =>
-    set((s) => ({ composerFill: { text, rev: (s.composerFill?.rev ?? 0) + 1, ...(screenshot && { screenshot }) } })),
+  fillComposer: (text, { screenshot, element } = {}) =>
+    set((s) => ({
+      composerFill: {
+        text,
+        rev: (s.composerFill?.rev ?? 0) + 1,
+        ...(screenshot && { screenshot }),
+        ...(element && { element }),
+      },
+    })),
 
   setSketches: (update) => {
     set((s) => ({ sketches: update(s.sketches) }));
@@ -798,7 +952,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (mode === "edit" && selectedSlide()?.locked) return;
     get().setView(mode === "code" ? "code" : "slides");
     get().setEditing(mode === "edit");
-    set({ slideMode: mode === "review" || mode === "narration" ? mode : "view" });
+    set({ slideMode: mode === "review" || mode === "narration" || mode === "notes" ? mode : "view" });
   },
 
   setEditTool: (editTool) => set({ editTool }),
@@ -842,6 +996,8 @@ export const useApp = create<AppState>((set, get) => ({
     editQueue = editQueue.then(save);
     return editQueue;
   },
+
+  setNotes: (slide, text) => editDeck((id) => api.setSlideNotes(id, slide, text)),
 
   setNarrationVoice: (voice) => editDeck((id) => api.setNarrationVoice(id, voice)),
 
@@ -1011,6 +1167,12 @@ export const useApp = create<AppState>((set, get) => ({
     promptAgent(tidyPrompt(overflow), { screenshot });
   },
 
+  askAboutElement: (element) => promptAboutElement("", element),
+
+  tidyElement: async (element) => {
+    await promptAboutElement(TIDY_ELEMENT_PROMPT, element, { leaveEditing: true });
+  },
+
   resizeSlides: async (size) => {
     const { deck, running } = get();
     if (!deck || running) return;
@@ -1026,7 +1188,7 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
-  send: async (text, { includeSlide, attachments, screenshot }) => {
+  send: async (text, { includeSlide, attachments, screenshot, element }) => {
     const { workspace, openedFile, deck, selected, running, selection } = get();
     if (!workspace || running) return;
     // Typed as a message, the command still compacts rather than reaching the agent as text.
@@ -1044,6 +1206,7 @@ export const useApp = create<AppState>((set, get) => ({
       attachments,
       sketch: bounds ? { image: null, bounds } : null,
       ...(screenshot && { screenshot }),
+      ...(element && { element }),
       createdAt: Date.now(),
     };
     const assistant = newReply(selection.provider);
@@ -1095,6 +1258,14 @@ export const useApp = create<AppState>((set, get) => ({
     set({ messages: [], running: false, sessionProvider: null });
   },
 }));
+
+const NO_RAIL_STATE = { railSelected: [], deckUndo: [], deckRedo: [] };
+
+/** The slides the rail's actions apply to, in deck order. */
+export function railSelection(state: Pick<AppState, "deck" | "selected" | "railSelected">): string[] {
+  const picked = state.railSelected.length > 0 ? state.railSelected : state.selected ? [state.selected] : [];
+  return (state.deck?.slides ?? []).map((s) => s.id).filter((id) => picked.includes(id));
+}
 
 /** Existing chats use their last provider; pre-provider histories were Claude chats. */
 export function chatProvider(state: Pick<AppState, "messages" | "sessionProvider" | "selection">): Provider | null {
@@ -1176,6 +1347,49 @@ async function stepSlideHistory(from: "slideUndo" | "slideRedo", to: "slideUndo"
   }
 }
 
+/**
+ * Saves the newest entry of one rail history (undo or redo) back over the deck and records how
+ * to reverse that in the other. Refused, by the save, once the deck file changed again.
+ */
+async function stepDeckHistory(from: "deckUndo" | "deckRedo", to: "deckUndo" | "deckRedo") {
+  const { deck, [from]: history } = useApp.getState();
+  const last = history.at(-1);
+  if (!deck || !last) return;
+  useApp.setState({ [from]: history.slice(0, -1) });
+  try {
+    const next = await api.saveDeckSource(deck.id, last.previous, last.source);
+    if (useApp.getState().deck?.id !== deck.id) return;
+    useApp.getState().setDeck(next);
+    adoptReview(next);
+    useApp.setState((s) => ({ [to]: [...s[to], { previous: last.source, source: last.previous }] }));
+  } catch (error) {
+    const verb = from === "deckUndo" ? "undone" : "redone";
+    useApp.setState({ error: `That slide list change cannot be ${verb}: ${errorMessage(error)}` });
+  }
+}
+
+/** Queues a rail change after the edits before it, shows its deck and adds it to the rail history. */
+function editRail(change: (id: string) => Promise<RailEdit>): Promise<RailEdit | null> {
+  const save = async () => {
+    const { deck } = useApp.getState();
+    if (!deck) return null;
+    try {
+      const edit = await change(deck.id);
+      if (useApp.getState().deck?.id !== deck.id) return edit;
+      useApp.getState().setDeck(edit.deck);
+      const entry = { previous: edit.previous, source: edit.source };
+      useApp.setState((s) => ({ deckUndo: [...s.deckUndo, entry].slice(-DECK_UNDO_KEPT), deckRedo: [] }));
+      return edit;
+    } catch (error) {
+      useApp.setState({ error: errorMessage(error) });
+      return null;
+    }
+  };
+  const done = editQueue.then(save);
+  editQueue = done.then(() => undefined);
+  return done;
+}
+
 async function confirmDiscardEdits(): Promise<boolean> {
   const name = basename(useApp.getState().deck?.id ?? "") || "the deck";
   const message = `You have unsaved changes to ${name}. Discard them?`;
@@ -1191,10 +1405,21 @@ function findTemplate(id: string): TemplateSummary | undefined {
 }
 
 /** Hands the composer a prepared message, showing the chat if it is hidden. */
-function promptAgent(text: string, options?: { screenshot?: string | null }) {
+function promptAgent(text: string, options?: { screenshot?: string | null; element?: EditElement }) {
   const { sidebarOpen, sidebarTab, setSidebarTab, fillComposer } = useApp.getState();
   if (!sidebarOpen || sidebarTab !== "chat") setSidebarTab("chat");
   fillComposer(text, options);
+}
+
+/** Hands the composer `text` about `element`, with a screenshot once any edit still being saved has landed. */
+async function promptAboutElement(text: string, element: EditElement, { leaveEditing = false } = {}) {
+  const { deck } = useApp.getState();
+  if (!deck || selectedSlide()?.locked) return;
+  await editQueue;
+  const screenshot = await captureSlide(deck.id);
+  if (useApp.getState().deck?.id !== deck.id) return;
+  if (leaveEditing) useApp.getState().setEditing(false);
+  promptAgent(text, { screenshot, element });
 }
 
 function loadSidebarTab(): SidebarTab {
@@ -1269,6 +1494,7 @@ async function loadDeckState(deck: Deck) {
     editTool: "select",
     slideUndo: [],
     slideRedo: [],
+    ...NO_RAIL_STATE,
   });
 }
 
@@ -1427,7 +1653,13 @@ function buildPrompt(
     );
   }
   if (message.screenshot) {
-    context.push(`Screenshot: ${message.screenshot} (screenshot of the slide with the user's hand edits)`);
+    const shown = message.element ? "with the selected element outlined" : "with the user's hand edits";
+    context.push(`Screenshot: ${message.screenshot} (screenshot of the slide ${shown})`);
+  }
+  if (message.element) {
+    const { path, markup } = message.element;
+    const shortened = markup.length > ELEMENT_MARKUP_KEPT ? `${markup.slice(0, ELEMENT_MARKUP_KEPT)}…` : markup;
+    context.push(`Selected element: ${path} (CSS selector)`, `Its markup: ${shortened}`);
   }
   if (template) {
     context.push(`Deck template: ${template} (copy of the deck's template, for its layouts)`);

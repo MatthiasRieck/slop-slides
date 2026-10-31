@@ -9,19 +9,36 @@
    can switch to Stretch, which scales the contents too. On the first box resize, an in-flow
    element leaves an invisible placeholder in its original slot so its siblings stay put.
    Double-click (or Enter) edits its text, Escape selects the parent (see "Editing text" below).
+   Dragging and resizing snap to the slide's edges and center and to other elements' edges and
+   centers, with guide lines (hold ⌘ / Ctrl to move freely; Shift-resizes, and turned elements'
+   resizes, do not snap), and a readout by the pointer shows the position and size.
+   Shift- or ⌘-click adds to the selection or takes out of it, and dragging from empty space on
+   the slide (or from a see-through wrapper that is not selected) draws a marquee around what to
+   select (with Shift or ⌘, adding to the selection). ⌘A selects everything on the slide and Tab
+   / Shift+Tab go through its elements. Several selected elements move, nudge, restyle, restack,
+   delete, copy and duplicate together; their handles make way for a frame around each.
+   ⌘D (or { type: "slop:edit-duplicate" } from the app) duplicates the selection, offset so the
+   copy shows; Alt-drag leaves the original and drags a copy.
    Delete (or Backspace, or
    { type: "slop:edit-delete" } from the app) removes it; an in-flow element leaves an invisible
    `data-delete-placeholder` in its slot (or takes over its resize placeholder) so the rest of
    the layout stays put.
    Every change is posted to the app as the slide's new markup:
-   { type: "slop:edit-commit", slide, markup, select }.
+   { type: "slop:edit-commit", slide, markup, select, also }; `select` and `also` are the paths of
+   the selection's primary element and of the others, which the app selects again after the
+   reload with { type: "slop:edit-select", path, also }.
+
+   A right-click selects what is under it and asks the app for its menu: { type: "slop:edit-menu",
+   slide, x, y, element: { path, markup, name, added } | null }, with (x, y) in the preview's pixels.
+
    Images dropped on the slide come from the app (which saved them as assets) as
    { type: "slop:edit-insert-images", images: [{ src, w, h }], x, y }: each is placed on top,
    centered on the drop point (x, y in this window's pixels), and marked `data-dropped` until
    the agent gives it a place in the layout.
    ⌘C / ⌘X (or { type: "slop:edit-copy", cut } from the app) copy / cut the selection: it is
    posted as { type: "slop:edit-copied", slide, html, text } for the app to put on the system
-   clipboard, `html` being its markup behind a header saying where it came from. ⌘V goes to the
+   clipboard, `html` being its markup behind a header saying where it came from (for several
+   elements, the header's `group` lists each one's). ⌘V goes to the
    app, which reads the clipboard and sends back what to paste. Whatever is pasted goes on top
    of the slide, absolutely positioned so the layout stays put, centered on the pointer when it
    is over the slide and otherwise in the middle of the view:
@@ -32,17 +49,31 @@
 
    The app's edit toolbar drives the rest with messages:
    - { type: "slop:edit-tool", tool, style } picks a tool: "select", "text" (click or drag out a
-     text box), "rect" / "rounded" / "ellipse" (drag out a shape, Shift keeps it even) or "draw"
-     (freehand). `style` is what new elements get. Added elements are absolutely positioned on
-     the slide with inline styles and carry `data-added` ("text", "shape" or "drawing"). After a
-     text box or shape the tool goes back to "select", and Escape puts any tool away; the editor
-     tells the app with { type: "slop:edit-tool", slide, tool }.
+     text box), "rect" / "rounded" / "ellipse" / "triangle" / "star" / "bubble" (drag out a shape,
+     Shift keeps it even; the last three are boxes cut out with a `clip-path`, so they hold text
+     but show no border, shadow or corner radius), "draw" (freehand), "line" / "arrow" (drag out a
+     straight line, Shift snaps to 45°) or "paint" (the format painter: takes the selection's look
+     and gives it to the next element clicked). `style` is what new elements get. Added elements
+     are absolutely positioned on the slide with inline styles and carry `data-added` ("text",
+     "shape" or "drawing", which lines and arrows are too: one <path>, an arrow's head a second
+     stroke in it). After a text box, shape, line or painted element the tool goes back to
+     "select", and Escape puts any tool away; the editor tells the app with
+     { type: "slop:edit-tool", slide, tool }.
    - { type: "slop:edit-style", style } restyles the selection: text color, size, font, bold,
      italic, underline, strikethrough, superscript / subscript (`script`), letter spacing, line
      height, alignment (vertical only in flex boxes, which added text boxes and shapes are),
      fill and border (a drawing's fill and stroke), and `autofit`: "shrink" (data-autofit, the
      runtime shrinks the text until it fits the box), "grow" (the box's height becomes a
-     min-height, so it grows with its text) or null (overflow is only reported).
+     min-height, so it grows with its text) or null (overflow is only reported). Any element also
+     takes `opacity` (0.05 to 1, so it stays clickable), `shadow` (blur in pixels, 0 for none; SVG
+     gets a drop-shadow filter) and `radius` (corner radius in pixels), and an image `fit`
+     ("contain", "cover" or "fill"), `fitPosition` ("50% 0%"), `alt`, `flipX` and `flipY` (an
+     inline `transform`, after any tilt).
+   - { type: "slop:edit-replace-image", src } points the selected image at another `assets/…`
+     file, keeping its box (and cropping to it with `object-fit: cover`, unless it has a fit).
+   - { type: "slop:edit-background", color } sets the slide's own background, or with null, goes
+     back to the deck's. The editor reports it, on load and when it changes, the same way:
+     { type: "slop:edit-background", slide, color }.
    - { type: "slop:edit-list", list: "ul" | "ol" } turns its text into a bulleted or numbered
      list (one item per line), switches the list's kind, or with the same kind turns it back
      into lines.
@@ -54,9 +85,19 @@
      elements it overlaps, with an inline z-index.
    - { type: "slop:edit-size-mode", mode: "resize" | "stretch" } sets how handles change size.
    - { type: "slop:edit-delete" } removes it.
+   - { type: "slop:edit-select-all" } selects everything on the slide, like ⌘A.
+   - { type: "slop:edit-align", to } lines several elements up with their bounds, or one with the
+     slide: "left", "center", "right", "top", "middle" or "bottom".
+   - { type: "slop:edit-distribute", axis: "h" | "v" } evens out the gaps between three or more.
+   - { type: "slop:edit-geometry", x, y, w, h, rotation } sets any of them, in slide pixels from
+     the slide's top left. Several elements only take x and y, which move them together.
+   Whenever the selection or its place changes, it reports { type: "slop:edit-geometry", slide,
+   geometry: { count, x, y, w, h, rotation } } (null when nothing is selected): the unturned box
+   of one element, or the bounds of several, with a null rotation.
    Whenever the selection changes it reports whether anything is selected and what the toolbar
    shows for it: { type: "slop:edit-selection", slide, selected, selection }. It reports the
-   fonts the deck uses once: { type: "slop:edit-fonts", slide, fonts: [{ name, stack }] }.
+   fonts the deck uses once: { type: "slop:edit-fonts", slide, fonts: [{ name, stack }] }, and
+   the colors in its CSS variables: { type: "slop:edit-colors", slide, colors: [{ name, value }] }.
 
    Editing text: while typing, the toolbar's text styles, ⌘B / ⌘I / ⌘U and links apply to the
    selected text (wrapped in inline <span> styles, <sup> / <sub> or <a>); with only a caret, to
@@ -69,8 +110,8 @@
    text with { type: "slop:edit-paste-request", slide, plain: true } and the app answers with
    { type: "slop:edit-insert-text", text }.
 
-   It runs on the pasteboard (pasteboard.js), which pans and zooms the view; dragging empty space
-   pans too. The slide no longer clips, so content that runs past its edge stays visible (dimmed
+   It runs on the pasteboard (pasteboard.js), which pans and zooms the view; dragging the empty
+   space around the slide pans too (on the slide, Space+drag or the middle button). The slide no longer clips, so content that runs past its edge stays visible (dimmed
    outside the slide, in the color of the panel around it), and the slide's frame turns into the
    app's accent color. Content moved far away can always be panned to and dragged back.
    Anything that runs past the slide's edge or is cut off by its own box is outlined with a red
@@ -82,7 +123,7 @@
   if (!slide || !pasteboard || window.parent === window) return;
 
   // Attributes the editor adds while it works; stripped from the markup it saves.
-  var EDITOR_ATTRS = ["contenteditable", "data-slop-selected", "data-slop-hover", "data-slop-editing", "data-slop-typing"];
+  var EDITOR_ATTRS = ["contenteditable", "spellcheck", "data-slop-selected", "data-slop-hover", "data-slop-editing", "data-slop-typing"];
   var MOVED = "data-moved";
   var PLACEHOLDER = "data-resize-placeholder";
   var DELETED = "data-delete-placeholder";
@@ -104,8 +145,8 @@
   // Marks an element the user added (a text box, shape or drawing); it stays in the markup.
   var ADDED = "data-added";
   var SVG_NS = "http://www.w3.org/2000/svg";
-  var TOOLS = ["select", "text", "rect", "rounded", "ellipse", "draw"];
-  var RADIUS = { rect: "0px", rounded: "24px", ellipse: "50%" };
+  var TOOLS = ["select", "text", "rect", "rounded", "ellipse", "triangle", "star", "bubble", "draw", "line", "arrow", "paint"];
+  var RADIUS = { rect: "0px", rounded: "24px", ellipse: "50%", triangle: "0px", star: "0px", bubble: "0px" };
   var SHAPE_SIZE = { w: 320, h: 200 };
   var DRAW_STEP = 2;
   var BORDER_WIDTH = 4;
@@ -125,6 +166,30 @@
   var LOOK = ["color", "fontFamily", "fontSize", "fontWeight", "fontStyle", "lineHeight", "letterSpacing", "textAlign", "textTransform"];
   // A long pasted text wraps at this share of the slide's width.
   var PASTE_TEXT_WIDTH = 0.6;
+  // An arrow's head: this long (at least, and per unit of line width), this far off the line.
+  var ARROW_HEAD_MIN = 24;
+  var ARROW_HEAD_PER_WIDTH = 4;
+  var ARROW_HEAD_ANGLE = Math.PI / 6;
+  // Shapes cut out of a box, as percentages of it; their padding keeps the text in the shape.
+  var CUTOUTS = {
+    triangle: { clip: "polygon(50% 0%, 100% 100%, 0% 100%)", padding: "25% 16px 16px" },
+    star: { clip: "polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)" },
+    bubble: {
+      clip:
+        "polygon(8% 0%, 92% 0%, 96% 1.1%, 98.9% 4%, 100% 8%, 100% 72%, 98.9% 76%, 96% 78.9%, 92% 80%, 45% 80%, 22% 100%," +
+        " 25% 80%, 8% 80%, 4% 78.9%, 1.1% 76%, 0% 72%, 0% 8%, 1.1% 4%, 4% 1.1%)",
+      padding: "16px 16px 20%",
+    },
+  };
+  // Fully transparent elements can no longer be picked.
+  var MIN_OPACITY = 0.05;
+  var SHADOW_COLOR = "rgba(0, 0, 0, 0.35)";
+  // The blur in a CSS shadow's lengths; a drop-shadow() the editor adds to an element's filter.
+  var SHADOW_LENGTHS = /-?[\d.]+px\s+-?[\d.]+px\s+([\d.]+)px/;
+  var SHADOW_FILTER = /drop-shadow\((?:[^()]|\([^()]*\))*\)/;
+  var MAX_DECK_COLORS = 12;
+  // What the format painter takes from text.
+  var PAINTED_TEXT = ["color", "fontSize", "bold", "italic", "underline", "strike", "letterSpacing", "lineHeight", "align"];
 
   var style = document.createElement("style");
   style.textContent =
@@ -161,6 +226,7 @@
     // A drawing or shape tool draws wherever the pointer goes.
     "html[data-slop-tool], html[data-slop-tool] * { cursor: crosshair !important; }" +
     "html[data-slop-tool=text], html[data-slop-tool=text] * { cursor: text !important; }" +
+    "html[data-slop-tool=paint], html[data-slop-tool=paint] * { cursor: copy !important; }" +
     "[data-slop-ui] > [data-stem] { pointer-events: none; width: 2px; height: 32px; margin: 0 0 0 -1px;" +
     " left: 50%; top: -32px; border: 0; box-shadow: none; background: #3b82f6; }" +
     // While typing, overlays (like invisible hover zones) let clicks through to the text.
@@ -236,6 +302,8 @@
   var toolStyle = {};
   // The text box, shape or drawing being dragged out with a tool.
   var create = null;
+  // The look the format painter took, until it is clicked onto an element.
+  var painting = null;
   // The handles keep to the selection as the view pans and zooms.
   pasteboard.onChange(placeHandles);
   // Space and 0 are text while typing, and Space+drag selects it.
@@ -272,13 +340,14 @@
   }
 
   function commit() {
+    if (batching) return;
     clearTimeout(nudgeTimer);
     nudgeTimer = null;
     var markup = serialize();
     if (markup === saved) return;
     saved = markup;
     window.parent.postMessage(
-      { type: "slop:edit-commit", slide: slide.id, markup: markup, select: pathOf(selected) },
+      { type: "slop:edit-commit", slide: slide.id, markup: markup, select: pathOf(selected), also: extras.map(pathOf) },
       "*",
     );
   }
@@ -305,6 +374,11 @@
     if (style.visibility === "hidden" || style.opacity === "0") return false;
     if (el.hasAttribute(ADDED)) return true;
     if (el.textContent.trim() || /^(img|svg|video|canvas|picture|iframe|object|embed)$/i.test(el.tagName)) return true;
+    return paintsBox(style);
+  }
+
+  /** Whether a box with this computed style shows a background, a border, or a shadow. */
+  function paintsBox(style) {
     var bg = style.backgroundColor;
     var clear = !bg || bg === "transparent" || /rgba\(.*,\s*0\)$/.test(bg);
     var border = ["Top", "Right", "Bottom", "Left"].some(function (side) {
@@ -353,7 +427,8 @@
   }
 
   function select(el) {
-    if (el === selected) return;
+    if (el === selected && !extras.length) return;
+    clearExtras();
     mark(selected, "data-slop-selected", false);
     selected = el;
     mark(selected, "data-slop-selected", true);
@@ -482,6 +557,7 @@
     // A shrunk box reports the sizes it was given, not the ones it shrank to.
     var fit = autofit ? autofit.scale(el.closest('[data-autofit="shrink"]') || el) : 1;
     var spacing = parseFloat(text.letterSpacing);
+    var look = lookOf(el, style);
     return {
       kind: kind,
       text: kind !== "drawing" && kind !== "media",
@@ -506,6 +582,16 @@
       fill: first ? paintOf(first, "fill") : toHex(style.backgroundColor),
       stroke: first ? paintOf(first, "stroke") : borderWidth ? toHex(style.borderTopColor) : null,
       strokeWidth: first ? parseFloat(first.getAttribute("stroke-width")) || 0 : borderWidth,
+      opacity: look.opacity,
+      shadow: look.shadow,
+      radius: look.radius,
+      clipped: look.clipped,
+      image: look.image,
+      fit: look.fit,
+      fitPosition: look.fitPosition,
+      alt: look.alt,
+      flipX: look.flipX,
+      flipY: look.flipY,
     };
   }
 
@@ -644,7 +730,9 @@
   /** Lays the handles over the selection's box, turned with it; they keep their size on screen. */
   function placeHandles() {
     scheduleOverflow();
-    if (!selected || editing || !slide.contains(selected)) {
+    scheduleGeometry();
+    placeFrames();
+    if (!selected || editing || extras.length || !slide.contains(selected)) {
       ui.style.display = "none";
       return;
     }
@@ -735,7 +823,8 @@
       tiltTo(drag.el, snap(drag.tilt.x - pulled.y * TILT_PER_PX), snap(drag.tilt.y + pulled.x * TILT_PER_PX));
       return;
     }
-    stretchTo(event.clientX - drag.start.x, event.clientY - drag.start.y, event.shiftKey, event.altKey);
+    var to = snapResize(event);
+    stretchTo(to.x, to.y, event.shiftKey, event.altKey);
   }
 
   /**
@@ -1016,14 +1105,18 @@
     });
   }
 
+  /** `el` in a few words: its tag and the start of its text. */
+  function nameOf(el) {
+    var text = el.textContent.replace(/\s+/g, " ").trim();
+    return "<" + el.tagName.toLowerCase() + ">" + (text ? ' "' + text.slice(0, 40) + (text.length > 40 ? "…" : "") + '"' : "");
+  }
+
   function describeOverflow(hit) {
-    var text = hit.el.textContent.replace(/\s+/g, " ").trim();
-    var name = "<" + hit.el.tagName.toLowerCase() + ">" + (text ? ' "' + text.slice(0, 40) + (text.length > 40 ? "…" : "") + '"' : "");
     var what = hit.past.map(function (p) {
       return "runs past the " + p.side + " edge by " + p.by + "px";
     });
     if (hit.cut) what.push("is cut off by its own box");
-    return name + " " + what.join(" and ");
+    return nameOf(hit.el) + " " + what.join(" and ");
   }
 
   function drawOverflow(hits) {
@@ -1063,6 +1156,7 @@
     editing = el;
     textRange = null;
     el.setAttribute("contenteditable", "true");
+    el.setAttribute("spellcheck", "true");
     el.setAttribute("data-slop-editing", "");
     slide.setAttribute("data-slop-typing", "");
     el.focus();
@@ -1085,6 +1179,7 @@
     if (!editing) return;
     var el = editing;
     el.removeAttribute("contenteditable");
+    el.removeAttribute("spellcheck");
     el.removeAttribute("data-slop-editing");
     slide.removeAttribute("data-slop-typing");
     editing = null;
@@ -1432,7 +1527,7 @@
     var changes = {};
     changes[key] = !now[key];
     if (editing) styleText(changes);
-    else applyStyle(changes);
+    else applyToSelection(changes);
   }
 
   /** Lines of `el`'s content, as fragments: split at line breaks and blocks, list items one each. */
@@ -1860,6 +1955,7 @@
   /** Picks a tool; `tell` lets the app know, when the editor switched by itself. */
   function useTool(next, tell) {
     tool = TOOLS.indexOf(next) >= 0 ? next : "select";
+    painting = tool === "paint" && selected ? paintableStyle(selected) : null;
     if (tool === "select") {
       document.documentElement.removeAttribute("data-slop-tool");
     } else {
@@ -1932,11 +2028,13 @@
   }
 
   function newShape(kind, x, y, w, h) {
-    return addElement(
+    var el = addElement(
       "shape",
       "position: absolute; left: " + x + "px; top: " + y + "px; width: " + w + "px; height: " + h + "px; margin: 0;" +
         " box-sizing: border-box; padding: 16px; border-radius: " + RADIUS[kind] + ";" + textCss(),
     );
+    if (CUTOUTS[kind]) cutOut(el, CUTOUTS[kind]);
+    return el;
   }
 
   function newDrawing(at) {
@@ -1961,6 +2059,10 @@
 
   /** Starts adding an element with the current tool at the pointer. */
   function startCreating(event) {
+    if (tool === "paint") {
+      paintOnto(pickable(event.target, event.clientX, event.clientY));
+      return;
+    }
     var at = slidePoint(event.clientX, event.clientY);
     if (tool === "text") {
       // The text tool types into a text box or shape that is already there.
@@ -1972,8 +2074,8 @@
       }
     }
     select(null);
-    create = { tool: tool, x: event.clientX, y: event.clientY, at: at, el: null, moved: false };
-    if (tool === "draw") {
+    create = { tool: tool, x: event.clientX, y: event.clientY, at: at, el: null, moved: false, line: isLine(tool) };
+    if (tool === "draw" || create.line) {
       create.drawing = newDrawing(at);
       create.el = create.drawing.svg;
       create.drawing.path.setAttribute("d", pathData(create.drawing.points, 0, 0));
@@ -1986,6 +2088,10 @@
     if (!create.moved && Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
     create.moved = true;
     var at = slidePoint(event.clientX, event.clientY);
+    if (create.line) {
+      drawLine(create, event.shiftKey ? snapLine(create.at, at) : at);
+      return;
+    }
     if (create.drawing) {
       var points = create.drawing.points;
       var last = points[points.length - 1];
@@ -2008,7 +2114,13 @@
     var done = create;
     create = null;
     if (done.drawing) {
+      if (done.line) {
+        if (!done.moved) drawLine(done, { x: done.at.x + SHAPE_SIZE.w, y: done.at.y });
+        useTool("select", true);
+        select(done.el);
+      }
       finishDrawing(done.drawing);
+      placeHandles();
       return;
     }
     var el = done.el;
@@ -2024,10 +2136,11 @@
 
   /** Fits the drawing's box around its line, so it moves, scales and rotates like any element. */
   function finishDrawing(drawing) {
-    var xs = drawing.points.map(function (p) {
+    var points = drawing.strokes ? drawing.strokes[0].concat(drawing.strokes[1] || []) : drawing.points;
+    var xs = points.map(function (p) {
       return p[0];
     });
-    var ys = drawing.points.map(function (p) {
+    var ys = points.map(function (p) {
       return p[1];
     });
     var pad = Math.ceil((parseFloat(drawing.path.getAttribute("stroke-width")) || 0) / 2);
@@ -2037,7 +2150,7 @@
     var h = Math.max.apply(null, ys) - top + pad;
     place(drawing.svg, left, top, w, h);
     drawing.svg.setAttribute("viewBox", "0 0 " + w + " " + h);
-    drawing.path.setAttribute("d", pathData(drawing.points, left, top));
+    drawing.path.setAttribute("d", drawing.strokes ? strokesData(drawing.strokes, left, top) : pathData(drawing.points, left, top));
     commit();
   }
 
@@ -2109,7 +2222,7 @@
       });
     } else {
       if (has("fill")) el.style.backgroundColor = changes.fill || "transparent";
-      if (has("stroke") || has("strokeWidth")) {
+      if ((has("stroke") || has("strokeWidth")) && !isCutOut(el)) {
         var now = describe(el);
         var color = has("stroke") ? changes.stroke : now.stroke;
         var width = has("strokeWidth") ? changes.strokeWidth : now.strokeWidth;
@@ -2119,6 +2232,7 @@
         el.style.border = borderCss(color, width);
       }
     }
+    applyLook(el, changes);
     if (!el.getAttribute("style")) el.removeAttribute("style");
     if (editing) tidy(el);
     refit(el);
@@ -2181,10 +2295,15 @@
   }
 
   function removeSelected() {
-    var el = selected;
-    if (!el) return;
+    var group = allSelected();
+    if (!group.length) return;
     finishEditing();
     select(null);
+    group.forEach(removeElement);
+    commit();
+  }
+
+  function removeElement(el) {
     // Keep its slot so the rest of the layout does not reflow; a resized element already has one.
     var placeholder = placeholderOf(el);
     if (placeholder) {
@@ -2194,7 +2313,6 @@
       el.parentElement.insertBefore(slotFor(el, DELETED), el);
     }
     if (el.parentElement) el.parentElement.removeChild(el);
-    commit();
   }
 
   document.addEventListener("pointerdown", function (event) {
@@ -2210,10 +2328,20 @@
       return;
     }
     var el = pickable(event.target, event.clientX, event.clientY);
+    if (addsToSelection(event)) {
+      event.preventDefault();
+      lastDown = { el: null, at: 0 };
+      if (el) toggleSelected(el);
+      else startMarquee(event, null, true);
+      return;
+    }
+    // On a Mac, Ctrl-click is a right click, which leaves the selection it lands on alone.
+    if (event.ctrlKey && isSelected(el)) return;
     var now = Date.now();
     var double = el && el === lastDown.el && now - lastDown.at < DOUBLE_CLICK_MS;
     lastDown = { el: el, at: double ? 0 : now };
-    select(el);
+    if (!isSelected(el) && (!el || isBackdrop(el)) && startMarquee(event, el, false)) return;
+    if (!isSelected(el)) select(el);
     if (!el) {
       pasteboard.startPan(event);
       return;
@@ -2236,10 +2364,55 @@
     }
   });
 
+  /** A CSS selector for `el` that also finds it in the saved slide. */
+  function selectorOf(el) {
+    var parts = [];
+    for (var node = el; node !== slide; node = node.parentElement) {
+      var index = Array.prototype.indexOf.call(node.parentElement.children, node) + 1;
+      parts.unshift(node.tagName.toLowerCase() + ":nth-child(" + index + ")");
+    }
+    return ["#" + slide.id].concat(parts).join(" > ");
+  }
+
+  // A right-click selects what is under it and the app shows its menu. While typing, the
+  // webview's own menu stays, for its spelling suggestions.
+  document.addEventListener("contextmenu", function (event) {
+    if (editing && editing.contains(event.target)) return;
+    event.preventDefault();
+    if (tool !== "select") return;
+    // On macOS, Control-click starts out as a primary press.
+    endDrag();
+    finishEditing();
+    if (nudgeTimer) commit();
+    var el = pickable(event.target, event.clientX, event.clientY);
+    // A member of a multi-selection, or what is inside the selection (it may be a parent, picked
+    // with Escape), leaves it selected.
+    if (!isSelected(el) && (!selected || !el || !selected.contains(el))) select(el);
+    window.parent.postMessage(
+      {
+        type: "slop:edit-menu",
+        slide: slide.id,
+        x: event.clientX,
+        y: event.clientY,
+        element: selected && {
+          path: selectorOf(selected),
+          markup: cleanCopy(selected).outerHTML,
+          name: nameOf(selected),
+          added: !!selected.closest("[" + ADDED + "], [" + DROPPED + "]"),
+        },
+      },
+      "*",
+    );
+  });
+
   document.addEventListener("pointermove", function (event) {
     pointer = { x: event.clientX, y: event.clientY };
     if (create) {
       createTo(event);
+      return;
+    }
+    if (marquee) {
+      marqueeTo(event);
       return;
     }
     if (!drag) {
@@ -2250,6 +2423,7 @@
     if (drag.mode !== "move") {
       drag.moved = true;
       transformTo(event);
+      showReadout(event);
       return;
     }
     var dx = event.clientX - drag.x;
@@ -2258,19 +2432,24 @@
     drag.moved = true;
     lastDown = { el: null, at: 0 };
     hover(null);
-    moveTo(drag.el, drag.from.x + dx / drag.zoom, drag.from.y + dy / drag.zoom);
+    moveDrag(event, dx, dy);
   });
 
   function endDrag() {
     if (create) finishCreating();
+    if (marquee) finishMarquee();
     if (!drag) return;
     var moved = drag.moved;
     var el = drag.el;
+    // A click on one of several selected elements leaves just that one selected.
+    var click = !moved && drag.mode === "move" && extras.length > 0;
     drag = null;
+    clearDragMarks();
     if (moved) {
       refit(el);
       commit();
     }
+    if (click) select(el);
   }
   document.addEventListener("pointerup", endDrag);
   document.addEventListener("pointercancel", endDrag);
@@ -2376,10 +2555,27 @@
    * positioned) and its box and text styles, for pasting it elsewhere.
    */
   function copySelected(cut) {
-    var el = selected;
-    if (!el || !slide.contains(el)) return;
+    if (!selected || !slide.contains(selected)) return;
     finishEditing();
     if (nudgeTimer) commit();
+    var group = inDocumentOrder(allSelected());
+    if (!group.length) return;
+    var headers = group.map(clipHeader);
+    var header = headers.length > 1 ? Object.assign({}, headers[0], { group: headers }) : headers[0];
+    // `>` only appears inside JSON strings, where `\u003e` stands for it, so `-->` cannot end the comment early.
+    var markup = group.map(function (el) {
+      return cleanCopy(el).outerHTML;
+    }).join("");
+    var html = CLIP_MARKER + JSON.stringify(header).replace(/>/g, "\\u003e") + "-->" + markup;
+    var text = group.map(function (el) {
+      return (typeof el.innerText === "string" ? el.innerText : el.textContent).trim();
+    }).join("\n");
+    window.parent.postMessage({ type: "slop:edit-copied", slide: slide.id, html: html, text: text }, "*");
+    if (cut) removeSelected();
+  }
+
+  /** What a copy of `el` needs to know of where it came from (see copySelected). */
+  function clipHeader(el) {
     var computed = getComputedStyle(el);
     var center = centerOf(el);
     var size = sizeOf(el);
@@ -2389,7 +2585,7 @@
     LOOK.forEach(function (prop) {
       if (computed[prop]) look[prop] = computed[prop];
     });
-    var header = {
+    return {
       slide: slide.id,
       path: pathOf(el),
       free: /^(absolute|fixed)$/.test(computed.position),
@@ -2401,11 +2597,6 @@
       },
       look: look,
     };
-    // `>` only appears inside JSON strings, where `\u003e` stands for it, so `-->` cannot end the comment early.
-    var html = CLIP_MARKER + JSON.stringify(header).replace(/>/g, "\\u003e") + "-->" + cleanCopy(el).outerHTML;
-    var text = (typeof el.innerText === "string" ? el.innerText : el.textContent).trim();
-    window.parent.postMessage({ type: "slop:edit-copied", slide: slide.id, html: html, text: text }, "*");
-    if (cut) removeSelected();
   }
 
   /** The header and element of markup copied by copySelected; null for anything else. */
@@ -2423,7 +2614,7 @@
     template.innerHTML = html.slice(end + 3).trim();
     var el = template.content.firstElementChild;
     if (!el || !header || typeof header !== "object") return null;
-    return { header: header, el: el, markup: el.outerHTML };
+    return { header: header, el: el, els: Array.prototype.slice.call(template.content.children), markup: el.outerHTML };
   }
 
   /**
@@ -2442,6 +2633,10 @@
     if (!clip) return;
     finishEditing();
     if (nudgeTimer) commit();
+    if (Array.isArray(clip.header.group) && clip.header.group.length === clip.els.length && clip.els.length > 1) {
+      pasteGroup(clip);
+      return;
+    }
     var el = document.importNode(clip.el, true);
     // Ids stay unique; a copy takes one only when the original is gone.
     withDescendants(el).forEach(function (node) {
@@ -2462,20 +2657,22 @@
   /** Moves a pasted copy down and right of any element of its kind already at the same spot. */
   function cascade(el) {
     var at = offsetOf(el);
-    var taken = function (x, y) {
-      return Array.prototype.some.call(el.parentElement.children, function (other) {
-        if (other === el || other.tagName !== el.tagName) return false;
-        var o = offsetOf(other);
-        return other.style.left === el.style.left && other.style.top === el.style.top && o.x === x && o.y === y;
-      });
-    };
     var x = at.x;
     var y = at.y;
-    for (var i = 0; i < 50 && taken(x, y); i++) {
+    for (var i = 0; i < 50 && spotTaken(el, x, y, [el]); i++) {
       x += DROP_CASCADE;
       y += DROP_CASCADE;
     }
     moveTo(el, x, y);
+  }
+
+  /** Whether an element of `el`'s kind, other than those in `skip`, sits where `el` would at offset (x, y). */
+  function spotTaken(el, x, y, skip) {
+    return Array.prototype.some.call(el.parentElement.children, function (other) {
+      if (skip.indexOf(other) >= 0 || other.tagName !== el.tagName) return false;
+      var o = offsetOf(other);
+      return other.style.left === el.style.left && other.style.top === el.style.top && o.x === x && o.y === y;
+    });
   }
 
   /** Puts a copied element on the slide with its top left at `at`, sized and styled as it looked. */
@@ -2524,6 +2721,652 @@
     place(el, Math.round(center.x - size.w / 2), Math.round(center.y - size.h / 2), null, null);
     select(el);
     commit();
+  }
+
+  // ----- Selection and arrangement: several selected elements, the marquee, ⌘A and Tab, duplicates,
+  // smart guides, align and distribute, and numeric geometry (see the top of this file). -----
+
+  // The selected elements other than `selected`, which stays the primary one.
+  var extras = [];
+  // The marquee being dragged out: where it started and what stays selected.
+  var marquee = null;
+  // While on, `commit` waits, so changing several elements saves (and undoes) as one.
+  var batching = false;
+  var reportedGeometry = "null";
+  var geometryFrame = 0;
+  // How close, in screen pixels, a dragged edge or center comes before it snaps.
+  var SNAP_PX = 6;
+  // Never part of the slide's visible content.
+  var NOT_CONTENT = /^(script|style|template|link|meta|title)$/i;
+  var ASIDES = ".notes, .narration, .slop-review, " + SLOTS;
+  var ALIGN_TO = ["left", "center", "right", "top", "middle", "bottom"];
+
+  style.textContent +=
+    "[data-slop-multi], [data-slop-guides] { position: fixed; inset: 0; z-index: 2147483646; pointer-events: none; }" +
+    "[data-slop-multi] > *, [data-slop-guides] > * { position: absolute; box-sizing: border-box; }" +
+    "[data-slop-multi] > * { outline: 2px solid #3b82f6; }" +
+    "[data-slop-guides] > * { background: #ec4899; }" +
+    "[data-slop-marquee], [data-slop-readout] { position: fixed; z-index: 2147483647; pointer-events: none; box-sizing: border-box; }" +
+    "[data-slop-marquee] { border: 1px solid #3b82f6; background: rgba(59, 130, 246, 0.12); }" +
+    "[data-slop-readout] { padding: 2px 6px; border-radius: 4px; background: rgba(17, 17, 17, 0.85); color: #fff;" +
+    " font: 12px/1.4 system-ui, sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; }";
+
+  function overlay(attr) {
+    var el = document.createElement("div");
+    el.setAttribute(attr, "");
+    document.body.appendChild(el);
+    return el;
+  }
+  var frames = overlay("data-slop-multi");
+  var guides = overlay("data-slop-guides");
+  var marqueeBox = overlay("data-slop-marquee");
+  var readout = overlay("data-slop-readout");
+  marqueeBox.style.display = readout.style.display = "none";
+
+  /** The selected elements, the primary one first. */
+  function allSelected() {
+    return (selected ? [selected] : []).concat(extras).filter(function (el) {
+      return slide.contains(el);
+    });
+  }
+
+  function isSelected(el) {
+    return !!el && (el === selected || extras.indexOf(el) >= 0);
+  }
+
+  function clearExtras() {
+    extras.forEach(function (el) {
+      mark(el, "data-slop-selected", false);
+    });
+    extras = [];
+  }
+
+  /** Selects just `list`, the first one primary; an element goes along with one that holds it. */
+  function selectMany(list) {
+    var unique = list.filter(function (el, i) {
+      return el && list.indexOf(el) === i && !list.some(function (other) {
+        return other && other !== el && other.contains(el);
+      });
+    });
+    if (unique.length === allSelected().length && unique.every(isSelected)) return;
+    select(unique[0] || null);
+    extras = unique.slice(1);
+    extras.forEach(function (el) {
+      mark(el, "data-slop-selected", true);
+    });
+    placeHandles();
+    report();
+  }
+
+  /** Shift- or ⌘-click: takes `el` out of the selection, or adds it instead of what holds it or it holds. */
+  function toggleSelected(el) {
+    var group = allSelected();
+    selectMany(isSelected(el)
+      ? group.filter(function (other) {
+          return other !== el;
+        })
+      : group.filter(function (other) {
+          return !other.contains(el) && !el.contains(other);
+        }).concat(el));
+  }
+
+  /** Whether this press changes the selection instead of replacing it. On a Mac, Ctrl-click is a right click. */
+  function addsToSelection(event) {
+    return event.shiftKey || event.metaKey || (event.ctrlKey && !/Mac/.test(navigator.platform));
+  }
+
+  /**
+   * Runs `change` once per selected element, with each in turn as `selected` for code that works
+   * on one, and saves them together.
+   */
+  function forEachSelected(change) {
+    if (!extras.length) {
+      change(selected);
+      return;
+    }
+    var primary = selected;
+    var group = allSelected();
+    batching = true;
+    group.forEach(function (el) {
+      selected = el;
+      change(el);
+    });
+    selected = primary;
+    batching = false;
+    placeHandles();
+    report();
+    commit();
+  }
+
+  function applyToSelection(changes) {
+    forEachSelected(function () {
+      applyStyle(changes);
+    });
+  }
+
+  function inDocumentOrder(list) {
+    return list.slice().sort(function (a, b) {
+      return a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+    });
+  }
+
+  /** Whether `el` is only a see-through wrapper around other elements: no text or box of its own. */
+  function isBackdrop(el) {
+    if (el.hasAttribute(ADDED) || paintsBox(getComputedStyle(el))) return false;
+    var ownText = Array.prototype.some.call(el.childNodes, function (node) {
+      return node.nodeType === 3 && node.data.trim();
+    });
+    return !ownText && Array.prototype.some.call(el.children, function (child) {
+      return selectable(child) === child;
+    });
+  }
+
+  /** Whether `el` is a thing on the slide of its own, to select with others. */
+  function arrangeable(el) {
+    return selectable(el) === el && paints(el) && !isBackdrop(el);
+  }
+
+  /** Goes through what shows inside `root`; a true from `visit` skips what is in that element. */
+  function walkContent(root, visit) {
+    Array.prototype.forEach.call(root.children, function (el) {
+      if (NOT_CONTENT.test(el.tagName) || el.matches(ASIDES) || getComputedStyle(el).display === "none") return;
+      if (!visit(el)) walkContent(el, visit);
+    });
+  }
+
+  function slideWidth() {
+    return slide.offsetWidth || 1920;
+  }
+
+  function slideHeight() {
+    return slide.offsetHeight || 1080;
+  }
+
+  /** The bounds of `el` on screen, in slide pixels from the slide's top left. */
+  function boxOf(el) {
+    var rect = el.getBoundingClientRect();
+    var origin = slide.getBoundingClientRect();
+    var k = zoom();
+    return {
+      left: (rect.left - origin.left) / k,
+      top: (rect.top - origin.top) / k,
+      right: (rect.right - origin.left) / k,
+      bottom: (rect.bottom - origin.top) / k,
+    };
+  }
+
+  function boundsOf(list) {
+    var boxes = list.map(boxOf);
+    var side = function (pick, name) {
+      return pick.apply(null, boxes.map(function (box) {
+        return box[name];
+      }));
+    };
+    return { left: side(Math.min, "left"), top: side(Math.min, "top"), right: side(Math.max, "right"), bottom: side(Math.max, "bottom") };
+  }
+
+  /** The box of `el` before it is turned, in slide pixels from the slide's top left. */
+  function frameOf(el) {
+    var center = centerOf(el);
+    var origin = slide.getBoundingClientRect();
+    var size = sizeOf(el);
+    var scale = scaleOf(el);
+    var k = zoom();
+    var w = size.w * scale.x;
+    var h = size.h * scale.y;
+    var left = (center.x - origin.left) / k - w / 2;
+    var top = (center.y - origin.top) / k - h / 2;
+    return { left: left, top: top, right: left + w, bottom: top + h };
+  }
+
+  /** A frame around each of several selected elements, turned with it. */
+  function placeFrames() {
+    frames.textContent = "";
+    if (!extras.length || editing) return;
+    var k = zoom();
+    allSelected().forEach(function (el) {
+      var center = centerOf(el);
+      var size = sizeOf(el);
+      var scale = scaleOf(el);
+      var w = size.w * scale.x * k;
+      var h = size.h * scale.y * k;
+      var frame = document.createElement("div");
+      frame.style.cssText = "left:" + (center.x - w / 2) + "px;top:" + (center.y - h / 2) + "px;width:" + w + "px;height:" + h + "px;transform:rotate(" + angleOf(el) + "deg)";
+      frames.appendChild(frame);
+    });
+  }
+
+  /** Starts a marquee at the pointer if it is on the slide; `picked` is what a click there selects. */
+  function startMarquee(event, picked, add) {
+    var rect = slide.getBoundingClientRect();
+    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return false;
+    if (!rect.width || !rect.height) return false;
+    event.preventDefault();
+    hover(null);
+    marquee = { x: event.clientX, y: event.clientY, picked: picked, add: add, base: add ? allSelected() : [], moved: false };
+    try {
+      document.documentElement.setPointerCapture(event.pointerId);
+    } catch (e) {
+      // Synthetic events have no active pointer to capture.
+    }
+    return true;
+  }
+
+  /** The outermost elements fully inside `area`, in slide pixels. */
+  function elementsIn(area) {
+    var found = [];
+    walkContent(slide, function (el) {
+      if (!arrangeable(el)) return false;
+      var box = boxOf(el);
+      var inside = box.right > box.left && box.bottom > box.top && box.left >= area.left && box.right <= area.right && box.top >= area.top && box.bottom <= area.bottom;
+      if (inside) found.push(el);
+      return inside;
+    });
+    return found;
+  }
+
+  function marqueeTo(event) {
+    var dx = event.clientX - marquee.x;
+    var dy = event.clientY - marquee.y;
+    if (!marquee.moved && Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
+    marquee.moved = true;
+    lastDown = { el: null, at: 0 };
+    var left = Math.min(marquee.x, event.clientX);
+    var top = Math.min(marquee.y, event.clientY);
+    var w = Math.abs(dx);
+    var h = Math.abs(dy);
+    marqueeBox.style.cssText = "left:" + left + "px;top:" + top + "px;width:" + w + "px;height:" + h + "px";
+    var origin = slide.getBoundingClientRect();
+    var k = zoom();
+    var x = (left - origin.left) / k;
+    var y = (top - origin.top) / k;
+    selectMany(marquee.base.concat(elementsIn({ left: x, top: y, right: x + w / k, bottom: y + h / k })));
+  }
+
+  function finishMarquee() {
+    var done = marquee;
+    marquee = null;
+    marqueeBox.style.display = "none";
+    if (!done.moved && !done.add) select(done.picked);
+  }
+
+  /** ⌘A: everything on the slide, wrappers giving way to what they hold. */
+  function selectAll() {
+    if (tool !== "select") return;
+    finishEditing();
+    if (nudgeTimer) commit();
+    var found = [];
+    walkContent(slide, function (el) {
+      if (!arrangeable(el)) return false;
+      found.push(el);
+      return true;
+    });
+    selectMany(found);
+  }
+
+  /** Tab: the next element in the slide's order, inner ones too, or with -1 the one before. */
+  function cycleSelection(step) {
+    if (nudgeTimer) commit();
+    var list = [];
+    walkContent(slide, function (el) {
+      if (arrangeable(el)) list.push(el);
+      return false;
+    });
+    if (!list.length) return;
+    var at = list.indexOf(selected);
+    select(list[at < 0 ? (step > 0 ? 0 : list.length - 1) : (at + step + list.length) % list.length]);
+  }
+
+  /**
+   * Puts a copy of each selected element on top of the slide, `offset` slide pixels away and
+   * looking as it does, and selects the copies. The caller saves.
+   */
+  function duplicateSelected(offset) {
+    finishEditing();
+    if (nudgeTimer) commit();
+    selectMany(inDocumentOrder(allSelected()).map(function (el) {
+      var header = clipHeader(el);
+      var copy = cleanCopy(el);
+      withDescendants(copy).forEach(function (node) {
+        node.removeAttribute("id");
+      });
+      slide.appendChild(copy);
+      placeFree(copy, header, { x: header.box.x + offset, y: header.box.y + offset });
+      return copy;
+    }));
+  }
+
+  /** ⌘D: duplicates the selection, offset so the copy shows. */
+  function duplicate() {
+    if (!selected) return;
+    duplicateSelected(DROP_CASCADE);
+    commit();
+  }
+
+  /** Pastes several copied elements, keeping how they lie to each other, centered where pastes go. */
+  function pasteGroup(clip) {
+    var boxes = clip.header.group.map(function (item) {
+      return item.box && typeof item.box === "object" ? item.box : {};
+    });
+    var num = function (n) {
+      return isFinite(n) ? n : 0;
+    };
+    var left = Math.min.apply(null, boxes.map(function (b) { return num(b.x); }));
+    var top = Math.min.apply(null, boxes.map(function (b) { return num(b.y); }));
+    var right = Math.max.apply(null, boxes.map(function (b) { return num(b.x) + num(b.w); }));
+    var bottom = Math.max.apply(null, boxes.map(function (b) { return num(b.y) + num(b.h); }));
+    var at = pastePoint();
+    var center = slidePoint(at.x, at.y);
+    var els = clip.els.map(function (source, i) {
+      var el = document.importNode(source, true);
+      withDescendants(el).forEach(function (node) {
+        if (node.id && document.getElementById(node.id)) node.removeAttribute("id");
+      });
+      slide.appendChild(el);
+      placeFree(el, clip.header.group[i], {
+        x: center.x - (right - left) / 2 + num(boxes[i].x) - left,
+        y: center.y - (bottom - top) / 2 + num(boxes[i].y) - top,
+      });
+      return el;
+    });
+    // The group shifts as one when a copy already sits at one of its spots.
+    var shift = 0;
+    var taken = function () {
+      return els.some(function (el) {
+        return spotTaken(el, shift, shift, els);
+      });
+    };
+    for (var i = 0; i < 50 && taken(); i++) shift += DROP_CASCADE;
+    els.forEach(function (el) {
+      moveTo(el, shift, shift);
+    });
+    selectMany(els);
+    commit();
+  }
+
+  function moveBy(el, dx, dy) {
+    var at = offsetOf(el);
+    moveTo(el, at.x + dx, at.y + dy);
+  }
+
+  /** Lines up several elements with their bounds, or one with the slide. */
+  function alignSelection(to) {
+    if (ALIGN_TO.indexOf(to) < 0) return;
+    finishEditing();
+    if (nudgeTimer) commit();
+    var group = allSelected();
+    if (!group.length) return;
+    var area = group.length > 1 ? boundsOf(group) : { left: 0, top: 0, right: slideWidth(), bottom: slideHeight() };
+    group.forEach(function (el) {
+      var box = boxOf(el);
+      var dx = to === "left" ? area.left - box.left : to === "right" ? area.right - box.right : to === "center" ? (area.left + area.right - box.left - box.right) / 2 : 0;
+      var dy = to === "top" ? area.top - box.top : to === "bottom" ? area.bottom - box.bottom : to === "middle" ? (area.top + area.bottom - box.top - box.bottom) / 2 : 0;
+      moveBy(el, dx, dy);
+    });
+    commit();
+  }
+
+  /** Evens out the gaps between three or more elements along an axis, the outer two staying put. */
+  function distributeSelection(axis) {
+    finishEditing();
+    if (nudgeTimer) commit();
+    var group = allSelected();
+    if (group.length < 3) return;
+    var across = axis === "h";
+    var start = across ? "left" : "top";
+    var end = across ? "right" : "bottom";
+    var items = group.map(function (el) {
+      return { el: el, box: boxOf(el) };
+    }).sort(function (a, b) {
+      return a.box[start] + a.box[end] - b.box[start] - b.box[end];
+    });
+    var used = items.reduce(function (sum, item) {
+      return sum + item.box[end] - item.box[start];
+    }, 0);
+    var at = items[0].box[start];
+    var gap = (items[items.length - 1].box[end] - at - used) / (items.length - 1);
+    items.forEach(function (item) {
+      var by = at - item.box[start];
+      moveBy(item.el, across ? by : 0, across ? 0 : by);
+      at += item.box[end] - item.box[start] + gap;
+    });
+    commit();
+  }
+
+  /** What the app shows for the selection's place and size; null with nothing selected. */
+  function geometry() {
+    var group = allSelected();
+    if (!group.length) return null;
+    var box = group.length > 1 ? boundsOf(group) : frameOf(group[0]);
+    return {
+      count: group.length,
+      x: Math.round(box.left),
+      y: Math.round(box.top),
+      w: Math.round(box.right - box.left),
+      h: Math.round(box.bottom - box.top),
+      rotation: group.length > 1 ? null : angleOf(group[0]),
+    };
+  }
+
+  function reportGeometry() {
+    geometryFrame = 0;
+    var now = geometry();
+    var key = JSON.stringify(now);
+    if (key === reportedGeometry) return;
+    reportedGeometry = key;
+    window.parent.postMessage({ type: "slop:edit-geometry", slide: slide.id, geometry: now }, "*");
+  }
+
+  function scheduleGeometry() {
+    if (!geometryFrame) geometryFrame = window.requestAnimationFrame(reportGeometry);
+  }
+
+  /** Gives `el` the size (w, h; null keeps one) in slide pixels, its top left staying put. */
+  function setSize(el, w, h) {
+    var size = sizeOf(el);
+    var scale = scaleOf(el);
+    if (!size.w || !size.h) return;
+    var sx = w === null ? scale.x : w / size.w;
+    var sy = h === null ? scale.y : h / size.h;
+    var shift = { x: (size.w * (sx - scale.x)) / 2, y: (size.h * (sy - scale.y)) / 2 };
+    var resize = sizeMode === "resize";
+    var offset = offsetOf(el);
+    drag = {
+      el: el,
+      size: size,
+      scale: scale,
+      offset: offset,
+      zoom: zoom(),
+      vectors: resize && el.getAttribute(ADDED) === "drawing" ? vectorShapes(el) : null,
+    };
+    if (resize) {
+      resizeTo(sx, sy, shift);
+    } else {
+      scaleTo(el, sx, sy);
+      moveTo(el, offset.x + shift.x, offset.y + shift.y);
+    }
+    drag = null;
+  }
+
+  /** Applies typed numbers (see slop:edit-geometry at the top of this file). */
+  function setGeometry(data) {
+    finishEditing();
+    if (nudgeTimer) commit();
+    var given = function (n) {
+      return typeof n === "number" && isFinite(n);
+    };
+    if (!geometry()) return;
+    if (!extras.length) {
+      if (given(data.w) || given(data.h)) setSize(selected, given(data.w) && data.w > 0 ? data.w : null, given(data.h) && data.h > 0 ? data.h : null);
+      if (given(data.rotation)) rotateTo(selected, data.rotation);
+    }
+    var now = geometry();
+    var dx = given(data.x) ? data.x - now.x : 0;
+    var dy = given(data.y) ? data.y - now.y : 0;
+    if (dx || dy) {
+      allSelected().forEach(function (el) {
+        moveBy(el, dx, dy);
+      });
+    }
+    refit(selected);
+    commit();
+  }
+
+  /** The lines to snap to on each axis: the slide's and other elements' edges and centers. */
+  function snapTargets(moving) {
+    var lines = { x: [], y: [] };
+    var add = function (left, top, right, bottom) {
+      [left, (left + right) / 2, right].forEach(function (at) {
+        lines.x.push({ at: at, from: top, to: bottom });
+      });
+      [top, (top + bottom) / 2, bottom].forEach(function (at) {
+        lines.y.push({ at: at, from: left, to: right });
+      });
+    };
+    add(0, 0, slideWidth(), slideHeight());
+    walkContent(slide, function (el) {
+      var own = moving.some(function (other) {
+        return other.contains(el);
+      });
+      if (own) return true;
+      if (!arrangeable(el)) return false;
+      var box = boxOf(el);
+      if (box.right > box.left && box.bottom > box.top) add(box.left, box.top, box.right, box.bottom);
+      return false;
+    });
+    return lines;
+  }
+
+  /** The nudge that brings the nearest of `edges` onto a line within `tolerance`, and the lines it hits. */
+  function snapAxis(edges, lines, tolerance) {
+    var by = null;
+    edges.forEach(function (edge) {
+      lines.forEach(function (line) {
+        var d = line.at - edge;
+        if (Math.abs(d) <= tolerance && (by === null || Math.abs(d) < Math.abs(by))) by = d;
+      });
+    });
+    if (by === null) return { by: 0, hits: [] };
+    return {
+      by: by,
+      hits: lines.filter(function (line) {
+        return edges.some(function (edge) {
+          return Math.abs(line.at - (edge + by)) < 0.5;
+        });
+      }),
+    };
+  }
+
+  function drawGuides(xs, ys, box) {
+    guides.textContent = "";
+    var origin = slide.getBoundingClientRect();
+    var k = zoom();
+    var line = function (left, top, w, h) {
+      var el = document.createElement("div");
+      el.style.cssText = "left:" + left + "px;top:" + top + "px;width:" + w + "px;height:" + h + "px";
+      guides.appendChild(el);
+    };
+    xs.forEach(function (hit) {
+      var from = Math.min(hit.from, box.top);
+      line(origin.left + hit.at * k, origin.top + from * k, 1, (Math.max(hit.to, box.bottom) - from) * k);
+    });
+    ys.forEach(function (hit) {
+      var from = Math.min(hit.from, box.left);
+      line(origin.left + from * k, origin.top + hit.at * k, (Math.max(hit.to, box.right) - from) * k, 1);
+    });
+  }
+
+  function clearDragMarks() {
+    guides.textContent = "";
+    readout.style.display = "none";
+  }
+
+  /** The (dx, dy) in slide pixels a move ends up with once its bounds snapped, with guide lines. */
+  function snapMove(dx, dy, event) {
+    var box = drag.box;
+    if (event.metaKey || event.ctrlKey || box.right <= box.left || box.bottom <= box.top) {
+      guides.textContent = "";
+      return { x: dx, y: dy };
+    }
+    var tolerance = SNAP_PX / drag.zoom;
+    var sx = snapAxis([box.left + dx, (box.left + box.right) / 2 + dx, box.right + dx], drag.targets.x, tolerance);
+    var sy = snapAxis([box.top + dy, (box.top + box.bottom) / 2 + dy, box.bottom + dy], drag.targets.y, tolerance);
+    var x = dx + sx.by;
+    var y = dy + sy.by;
+    drawGuides(sx.hits, sy.hits, { left: box.left + x, top: box.top + y, right: box.right + x, bottom: box.bottom + y });
+    return { x: x, y: y };
+  }
+
+  /** The screen distance a handle drag goes once the dragged edges snapped, with guide lines. */
+  function snapResize(event) {
+    var dx = event.clientX - drag.start.x;
+    var dy = event.clientY - drag.start.y;
+    if (!drag.box) {
+      drag.box = frameOf(drag.el);
+      drag.targets = snapTargets([drag.el]);
+    }
+    var box = drag.box;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || drag.angle % 360 || box.right <= box.left || box.bottom <= box.top) {
+      guides.textContent = "";
+      return { x: dx, y: dy };
+    }
+    var d = drag.dir;
+    var z = drag.zoom;
+    var tolerance = SNAP_PX / z;
+    var edgeX = (d.x > 0 ? box.right : box.left) + dx / z;
+    var edgeY = (d.y > 0 ? box.bottom : box.top) + dy / z;
+    var none = { by: 0, hits: [] };
+    var sx = d.x ? snapAxis([edgeX], drag.targets.x, tolerance) : none;
+    var sy = d.y ? snapAxis([edgeY], drag.targets.y, tolerance) : none;
+    drawGuides(sx.hits, sy.hits, {
+      left: d.x < 0 ? edgeX + sx.by : box.left,
+      top: d.y < 0 ? edgeY + sy.by : box.top,
+      right: d.x > 0 ? edgeX + sx.by : box.right,
+      bottom: d.y > 0 ? edgeY + sy.by : box.bottom,
+    });
+    return { x: dx + sx.by * z, y: dy + sy.by * z };
+  }
+
+  /** The first step of a move: the group to move, a copy of it with Alt, and what to snap to. */
+  function startMove(event) {
+    if (event.altKey) {
+      duplicateSelected(0);
+      drag.el = selected;
+    }
+    var group = allSelected();
+    drag.group = group.map(function (el) {
+      return { el: el, from: offsetOf(el) };
+    });
+    drag.box = boundsOf(group);
+    drag.targets = snapTargets(group);
+  }
+
+  function moveDrag(event, dx, dy) {
+    if (!drag.group) startMove(event);
+    var by = snapMove(dx / drag.zoom, dy / drag.zoom, event);
+    drag.group.forEach(function (item) {
+      moveTo(item.el, item.from.x + by.x, item.from.y + by.y);
+    });
+    showReadout(event);
+  }
+
+  /** The position and size (or turn) next to the pointer while dragging. */
+  function showReadout(event) {
+    var now = geometry();
+    if (!now || drag.mode === "tilt") return;
+    readout.textContent = drag.mode === "rotate" ? now.rotation + "°" : "X " + now.x + "  Y " + now.y + "  W " + now.w + "  H " + now.h;
+    readout.style.cssText = "left:" + (event.clientX + 14) + "px;top:" + (event.clientY + 18) + "px";
+  }
+
+  /** Handles the app's messages for this section; true when `data` was one. */
+  function arrangeMessage(data) {
+    if (data.type === "slop:edit-duplicate") duplicate();
+    else if (data.type === "slop:edit-select-all") selectAll();
+    else if (data.type === "slop:edit-align") alignSelection(String(data.to));
+    else if (data.type === "slop:edit-distribute") distributeSelection(String(data.axis));
+    else if (data.type === "slop:edit-geometry") setGeometry(data);
+    else return false;
+    return true;
   }
 
   // Capture phase, so keys the editor handles never reach the player (which forwards keys
@@ -2585,8 +3428,21 @@
           event.stopImmediatePropagation();
           return;
         }
+        if (letter === "a" || letter === "d") {
+          if (letter === "a") selectAll();
+          else duplicate();
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
         // The app pastes: the player forwards the key. Nothing here takes a native paste.
         if (letter === "v") event.preventDefault();
+      }
+      if (event.key === "Tab" && !mod && tool === "select") {
+        cycleSelection(event.shiftKey ? -1 : 1);
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
       }
       if (!selected) return;
       if (event.metaKey || event.ctrlKey) {
@@ -2597,12 +3453,13 @@
       var step = event.shiftKey ? 10 : 1;
       var nudge = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[event.key];
       if (nudge) {
-        var at = offsetOf(selected);
-        moveTo(selected, at.x + nudge[0], at.y + nudge[1]);
+        allSelected().forEach(function (el) {
+          moveBy(el, nudge[0], nudge[1]);
+        });
         clearTimeout(nudgeTimer);
         nudgeTimer = setTimeout(commit, NUDGE_SAVE_MS);
       } else if (event.key === "Escape") {
-        select(selected.parentElement === slide ? null : selected.parentElement);
+        select(extras.length || selected.parentElement === slide ? null : selected.parentElement);
       } else if (event.key === "Enter") {
         startEditing(selected);
       } else if (event.key === "Backspace" || event.key === "Delete") {
@@ -2619,9 +3476,11 @@
   window.addEventListener("message", function (event) {
     var data = event.data;
     if (event.source !== window.parent || !data) return;
+    if (arrangeMessage(data)) return;
     if (data.type === "slop:edit-select") {
       finishEditing();
       select(atPath(data.path));
+      if (Array.isArray(data.also)) selectMany([selected].concat(data.also.map(atPath)));
       // Clearing the selection for a screenshot hides the wires too, until the next interaction.
       if (data.quiet) mark(wires, "data-quiet", true);
     } else if (data.type === "slop:edit-size-mode") {
@@ -2641,7 +3500,7 @@
       }
     } else if (data.type === "slop:edit-style" && data.style && typeof data.style === "object") {
       if (editing) styleText(data.style);
-      else applyStyle(data.style);
+      else applyToSelection(data.style);
     } else if (data.type === "slop:edit-list") {
       toggleList(String(data.list));
     } else if (data.type === "slop:edit-link" && (data.href === null || typeof data.href === "string")) {
@@ -2652,7 +3511,9 @@
       if (editing) insertAtCaret(textFragment(data.text));
     } else if (data.type === "slop:edit-order") {
       finishEditing();
-      restack(String(data.to));
+      forEachSelected(function () {
+        restack(String(data.to));
+      });
     } else if (data.type === "slop:edit-delete") {
       finishEditing();
       if (selected) removeSelected();
@@ -2667,8 +3528,276 @@
       pasteElement(data.html);
     } else if (data.type === "slop:edit-paste-text" && typeof data.text === "string") {
       pasteText(data.text, data.style);
+    } else if (data.type === "slop:edit-replace-image" && typeof data.src === "string") {
+      replaceImage(data.src);
+    } else if (data.type === "slop:edit-background" && (data.color === null || typeof data.color === "string")) {
+      setBackground(data.color);
     }
   });
+
+  // ---- Shapes, styling and media: lines and arrows, cut-out shapes, the look of any element,
+  // images, the slide's background, deck colors and the format painter.
+
+  function isLine(name) {
+    return name === "line" || name === "arrow";
+  }
+
+  /** `from` to `to` as strokes (point lists); an arrow's second stroke is its head, at `to`. */
+  function lineStrokes(from, to, arrow, width) {
+    var strokes = [[[from.x, from.y], [to.x, to.y]]];
+    var length = Math.sqrt(Math.pow(to.x - from.x, 2) + Math.pow(to.y - from.y, 2));
+    if (!arrow || !length) return strokes;
+    var size = Math.min(Math.max(ARROW_HEAD_MIN, ARROW_HEAD_PER_WIDTH * width), length);
+    var angle = Math.atan2(to.y - from.y, to.x - from.x);
+    var barb = function (side) {
+      var a = angle + Math.PI + side * ARROW_HEAD_ANGLE;
+      return [Math.round(to.x + size * Math.cos(a)), Math.round(to.y + size * Math.sin(a))];
+    };
+    strokes.push([barb(1), [to.x, to.y], barb(-1)]);
+    return strokes;
+  }
+
+  function strokesData(strokes, dx, dy) {
+    return strokes.map(function (points) {
+      return pathData(points, dx, dy);
+    }).join(" ");
+  }
+
+  /** Redraws the line being added so it ends at `to`. */
+  function drawLine(line, to) {
+    var drawing = line.drawing;
+    var width = parseFloat(drawing.path.getAttribute("stroke-width")) || BORDER_WIDTH;
+    drawing.strokes = lineStrokes(line.at, to, line.tool === "arrow", width);
+    drawing.path.setAttribute("d", strokesData(drawing.strokes, 0, 0));
+  }
+
+  /** `to`, turned around `from` to the nearest 45°. */
+  function snapLine(from, to) {
+    var dx = to.x - from.x;
+    var dy = to.y - from.y;
+    var length = Math.sqrt(dx * dx + dy * dy);
+    var angle = (Math.round((Math.atan2(dy, dx) * 4) / Math.PI) * Math.PI) / 4;
+    return { x: Math.round(from.x + length * Math.cos(angle)), y: Math.round(from.y + length * Math.sin(angle)) };
+  }
+
+  /** Cuts a box to a shape, which only its fill and text survive: not a border, nor a shadow. */
+  function cutOut(el, shape) {
+    el.style.setProperty("clip-path", shape.clip);
+    el.style.border = "none";
+    if (shape.padding) el.style.padding = shape.padding;
+  }
+
+  function isCutOut(el) {
+    return /polygon/.test(getComputedStyle(el).getPropertyValue("clip-path") || "");
+  }
+
+  function isImage(el) {
+    return !!el && /^img$/i.test(el.tagName);
+  }
+
+  /** The look `describe` reports beyond text, fill and border. */
+  function lookOf(el, style) {
+    var size = sizeOf(el);
+    var svg = el.namespaceURI === SVG_NS;
+    var clipped = isCutOut(el);
+    var corner = style.getPropertyValue("border-radius") || "0";
+    var radius = parseFloat(corner) || 0;
+    if (/%/.test(corner)) radius = (radius / 100) * Math.min(size.w, size.h);
+    var blur = (style.getPropertyValue(svg ? "filter" : "box-shadow") || "").match(SHADOW_LENGTHS);
+    var image = isImage(el);
+    var flips = el.style.transform || "";
+    return {
+      opacity: Math.round((parseFloat(style.opacity === "" ? "1" : style.opacity) || 0) * 100) / 100,
+      shadow: blur && !clipped ? Math.round(parseFloat(blur[1])) : 0,
+      radius: svg || clipped ? null : Math.round(radius),
+      clipped: clipped,
+      image: image,
+      fit: image ? style.getPropertyValue("object-fit") || "fill" : null,
+      fitPosition: image ? style.getPropertyValue("object-position") || "50% 50%" : null,
+      alt: image ? el.getAttribute("alt") || "" : null,
+      flipX: /scaleX\(-1\)/.test(flips),
+      flipY: /scaleY\(-1\)/.test(flips),
+    };
+  }
+
+  /** Sets a style inline; null drops it, or where the deck's styles set one, overrides it with `neutral`. */
+  function setOwn(el, prop, value, neutral) {
+    el.style.removeProperty(prop);
+    var sheet = getComputedStyle(el).getPropertyValue(prop);
+    var own = value === null && sheet && sheet !== neutral ? neutral : value;
+    if (own !== null) el.style.setProperty(prop, own);
+  }
+
+  /** A shadow that blurs `blur` pixels and falls a third of that. */
+  function shadowValue(blur) {
+    return "0px " + Math.round(blur / 3) + "px " + blur + "px " + SHADOW_COLOR;
+  }
+
+  function setShadow(el, blur) {
+    if (el.namespaceURI !== SVG_NS) {
+      setOwn(el, "box-shadow", blur > 0 ? shadowValue(blur) : null, "none");
+      return;
+    }
+    var others = (el.style.getPropertyValue("filter") || "").replace(SHADOW_FILTER, "");
+    var filter = ((blur > 0 ? "drop-shadow(" + shadowValue(blur) + ") " : "") + others).trim();
+    if (filter) el.style.setProperty("filter", filter);
+    else el.style.removeProperty("filter");
+  }
+
+  /** Mirrors `el` with an inline `transform`, after any tilt and `!important` like it. */
+  function flipTo(el, x, y) {
+    var inline = el.style.transform || "";
+    var tilt = inline.match(TILT);
+    var rest = inline.replace(TILT, "").replace(/scale[XY]\(-1\)\s*/g, "").trim();
+    var value = [tilt ? tilt[0].trim() : "", x ? "scaleX(-1)" : "", y ? "scaleY(-1)" : "", rest].filter(Boolean).join(" ");
+    setInline(el, "transform", value || null, "important");
+  }
+
+  /** Gives an image's box a fixed size, for when what it shows no longer sets it. */
+  function pinSize(el) {
+    var computed = getComputedStyle(el);
+    ["width", "height"].forEach(function (name) {
+      if (/px$/.test(computed[name])) el.style[name] = computed[name];
+    });
+  }
+
+  /** Applies the keys of `changes` that `lookOf` reports, to `el`. */
+  function applyLook(el, changes) {
+    var has = function (key) {
+      return Object.prototype.hasOwnProperty.call(changes, key);
+    };
+    if (has("opacity") && isFinite(changes.opacity)) {
+      var opacity = Math.round(Math.min(1, Math.max(MIN_OPACITY, changes.opacity)) * 100) / 100;
+      setOwn(el, "opacity", opacity < 1 ? String(opacity) : null, "1");
+    }
+    var cut = isCutOut(el);
+    if (has("shadow") && changes.shadow >= 0 && !cut) setShadow(el, Math.round(changes.shadow));
+    if (has("radius") && changes.radius >= 0 && !cut && el.namespaceURI !== SVG_NS) {
+      setOwn(el, "border-radius", changes.radius > 0 ? Math.round(changes.radius) + "px" : null, "0px");
+    }
+    if (!isImage(el)) return;
+    if (has("fit") && /^(contain|cover|fill)$/.test(changes.fit)) {
+      pinSize(el);
+      el.style.setProperty("object-fit", changes.fit);
+    }
+    if (has("fitPosition") && /^\d+% \d+%$/.test(changes.fitPosition)) el.style.setProperty("object-position", changes.fitPosition);
+    if (has("alt") && typeof changes.alt === "string") el.setAttribute("alt", changes.alt);
+    if (has("flipX") || has("flipY")) {
+      var now = lookOf(el, getComputedStyle(el));
+      flipTo(el, has("flipX") ? !!changes.flipX : now.flipX, has("flipY") ? !!changes.flipY : now.flipY);
+    }
+  }
+
+  /** Puts another `assets/…` file in the selected image, whose box stays as it is. */
+  function replaceImage(src) {
+    var el = selected;
+    if (!isImage(el) || !slide.contains(el) || !/^assets\//.test(src)) return;
+    pinSize(el);
+    if (!el.style.getPropertyValue("object-fit")) el.style.setProperty("object-fit", "cover");
+    el.removeAttribute("srcset");
+    el.setAttribute("src", src);
+    placeHandles();
+    report();
+    commit();
+  }
+
+  function reportBackground() {
+    var color = toHex(getComputedStyle(slide).backgroundColor);
+    window.parent.postMessage({ type: "slop:edit-background", slide: slide.id, color: color }, "*");
+  }
+
+  /** The slide's own background, over any image or gradient the deck gives it; null drops it. */
+  function setBackground(color) {
+    if (color !== null && !toHex(color)) return;
+    if (color) {
+      slide.style.setProperty("background-color", color);
+      slide.style.setProperty("background-image", "none");
+    } else {
+      slide.style.removeProperty("background-color");
+      slide.style.removeProperty("background-image");
+    }
+    if (!slide.getAttribute("style")) slide.removeAttribute("style");
+    reportBackground();
+    commit();
+  }
+
+  /** What the format painter takes from `el`, as changes for `applyStyle`: all, and for text. */
+  function paintableStyle(el) {
+    var now = describe(el);
+    var shared = { opacity: now.opacity, shadow: now.shadow };
+    if (now.radius !== null) shared.radius = now.radius;
+    var paint = { fill: now.fill, stroke: now.stroke, strokeWidth: now.strokeWidth };
+    var text = {};
+    if (now.text) {
+      PAINTED_TEXT.forEach(function (key) {
+        text[key] = now[key];
+      });
+      text.fontFamily = getComputedStyle(el).fontFamily;
+    }
+    return { vector: now.vector, shared: shared, paint: paint, text: text };
+  }
+
+  /** Gives `el` the look the format painter took (fill and line only between likes), and puts it away. */
+  function paintOnto(el) {
+    var taken = painting;
+    useTool("select", true);
+    if (!el || !taken) return;
+    var target = describe(el);
+    var changes = {};
+    [taken.shared, target.vector === taken.vector ? taken.paint : {}, target.text ? taken.text : {}].forEach(function (part) {
+      Object.keys(part).forEach(function (key) {
+        changes[key] = part[key];
+      });
+    });
+    select(el);
+    applyStyle(changes);
+  }
+
+  /** The colors in the deck's CSS variables, for the color popover's deck swatches. */
+  function deckColors() {
+    var names = [];
+    var scoped = {};
+    var visit = function (rules) {
+      Array.prototype.forEach.call(rules || [], function (rule) {
+        var props = rule.style || [];
+        for (var i = 0; i < props.length; i++) {
+          var name = props[i];
+          if (!/^--/.test(name) || /^--slop-/.test(name) || names.indexOf(name) >= 0) continue;
+          names.push(name);
+          scoped[name] = props.getPropertyValue(name);
+        }
+        if (rule.cssRules) visit(rule.cssRules);
+      });
+    };
+    Array.prototype.forEach.call(document.styleSheets, function (sheet) {
+      if (sheet.ownerNode === style) return;
+      try {
+        visit(sheet.cssRules);
+      } catch (e) {
+        // A stylesheet from another origin (a web font service) cannot be read.
+      }
+    });
+    var probe = document.createElement("span");
+    probe.setAttribute("data-slop-ui", "");
+    document.body.appendChild(probe);
+    var seen = {};
+    var colors = [];
+    names.forEach(function (name) {
+      var value = String(getComputedStyle(slide).getPropertyValue(name) || scoped[name] || "").trim();
+      probe.style.color = "";
+      probe.style.color = value;
+      var hex = value && probe.style.color ? toHex(getComputedStyle(probe).color) : null;
+      if (!hex || seen[hex] || colors.length >= MAX_DECK_COLORS) return;
+      seen[hex] = true;
+      colors.push({ name: name.slice(2), value: hex });
+    });
+    document.body.removeChild(probe);
+    return colors;
+  }
+
+  function reportColors() {
+    window.parent.postMessage({ type: "slop:edit-colors", slide: slide.id, colors: deckColors() }, "*");
+  }
 
   /** The font stacks the deck's styles name, by their first family, for the toolbar's font list. */
   function deckFonts() {
@@ -2709,5 +3838,7 @@
     window.parent.postMessage({ type: "slop:edit-fonts", slide: slide.id, fonts: deckFonts() }, "*");
   }
   reportFonts();
+  reportColors();
+  reportBackground();
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(reportFonts);
 })();

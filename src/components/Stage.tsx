@@ -1,3 +1,4 @@
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   AlertTriangle,
   Check,
@@ -15,25 +16,34 @@ import {
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api, errorMessage, type Slide } from "../lib/api";
+import { type EditGeometry, parseGeometry } from "../lib/arrange";
 import { catchDrops, type DropPoint, imageSize, isImage } from "../lib/drop";
 import {
+  type DeckColor,
   defaultsFrom,
   EDIT_TOOL_KEYS,
+  type EditElement,
   type EditSelection,
   type EditStyle,
   type EditTool,
   type FontChoice,
   familyOf,
   familyOfKind,
+  IMAGE_FILE_TYPES,
+  parseDeckColors,
+  parseElement,
   parseFonts,
+  parseHexColor,
   parseSelection,
 } from "../lib/editTools";
 import { type Stroke, zoomBox } from "../lib/ink";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn, deckFileUrl } from "../lib/utils";
 import { deckMode, SKETCH_TARGET_ATTR, searchHighlight, useApp } from "../store";
+import { EditContextMenu, type EditMenuAction } from "./EditContextMenu";
 import { EditToolbar } from "./EditToolbar";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
+import { ShortcutHelp } from "./ShortcutHelp";
 import { SketchToolbar } from "./SketchToolbar";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { LayoutPicker, Popover } from "./Templates";
@@ -137,14 +147,20 @@ export function Stage() {
             sizeMode={editFrames.sizeMode}
             onSizeMode={editFrames.setSizeMode}
             fonts={editFrames.fonts}
+            colors={editFrames.colors}
+            background={editFrames.background}
             slides={deck?.slides.map((s, i) => ({ id: s.id, label: `${i + 1}. ${s.id}` })) ?? []}
             onTool={(tool) => useApp.getState().setEditTool(tool)}
             onStyle={restyle}
             onList={(list) => postToEditor({ type: "slop:edit-list", list })}
             onLink={(href) => postToEditor({ type: "slop:edit-link", href })}
+            onBackground={(color) => postToEditor({ type: "slop:edit-background", color })}
+            onPickImage={editFrames.pickImage}
             onReturnFocus={editFrames.focus}
             onOrder={(to) => postToEditor({ type: "slop:edit-order", to })}
             onDelete={editFrames.deleteSelection}
+            geometry={editFrames.geometry}
+            onArrange={postToEditor}
           />
           <EditBar canUndo={canUndo} canRedo={canRedo} />
         </ModeBar>
@@ -197,6 +213,15 @@ export function Stage() {
           <EmptyStage />
         )}
       </div>
+      {editFrames.menu && (
+        <EditContextMenu
+          {...editFrames.menu}
+          running={running}
+          onAction={editFrames.runMenuAction}
+          onClose={editFrames.closeMenu}
+        />
+      )}
+      {editing && <ShortcutHelp />}
       {deck.slides.length > 0 && (
         <div className="grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] items-center gap-2 px-3 text-xs text-muted-foreground">
           <div />
@@ -479,47 +504,62 @@ interface PasteboardView {
 function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetView: () => void) {
   const [sizeMode, setSizeMode] = useState<"resize" | "stretch">("resize");
   // What to select again once the edited slide reloads.
-  const restore = useRef<{ slide: string; path: number[] } | null>(null);
+  const restore = useRef<{ slide: string; path: number[]; also: number[][] } | null>(null);
   const frame = useRef<HTMLIFrameElement | null>(null);
   const [overflow, setOverflow] = useState<{ slide: string; items: string[] } | null>(null);
   // What the editor has selected, and on which slide.
   const [selection, setSelection] = useState<{ slide: string; selection: EditSelection | null } | null>(null);
   // The fonts the deck's styles use, for the toolbar's font list.
   const [fonts, setFonts] = useState<FontChoice[]>(NO_FONTS);
+  // Where the selection is, and on which slide.
+  const [geometry, setGeometry] = useState<{ slide: string; geometry: EditGeometry | null } | null>(null);
+  const [colors, setColors] = useState<DeckColor[]>(NO_COLORS);
+  const [background, setBackground] = useState<string | null>(null);
+  // The menu a right-click in the editor opened, in the app's pixels.
+  const [menu, setMenu] = useState<{ x: number; y: number; element: EditElement | null } | null>(null);
+
+  const paste = useCallback(async () => {
+    const { deck, editing, selected } = useApp.getState();
+    if (!deck || !editing || !selected) return;
+    try {
+      const pasted = await api.pasteFromClipboard(deck.id);
+      const loaded = frame.current;
+      const now = useApp.getState();
+      if (!now.editing || now.selected !== selected || !loaded?.contentWindow) return;
+      if (pasted.kind === "element") {
+        loaded.contentWindow.postMessage({ type: "slop:edit-paste", html: pasted.html }, "*");
+      } else if (pasted.kind === "text") {
+        loaded.contentWindow.postMessage(
+          { type: "slop:edit-paste-text", text: pasted.text, style: now.editStyles.text },
+          "*",
+        );
+      } else if (pasted.kind === "slide") {
+        await useApp.getState().pasteSlide();
+      } else if (pasted.kind === "images") {
+        const images = await Promise.all(
+          pasted.images.map(async (src) => ({ src, ...(await imageSize(deckFileUrl(deck.id, src))) })),
+        );
+        // The editor puts them where the pointer is, or in the middle of the view.
+        loaded.contentWindow.postMessage({ type: "slop:edit-paste-images", images }, "*");
+      }
+    } catch (error) {
+      useApp.getState().setError(errorMessage(error));
+    }
+  }, []);
 
   useEffect(() => {
-    const paste = async () => {
-      const { deck, editing, selected } = useApp.getState();
-      if (!deck || !editing || !selected) return;
-      try {
-        const pasted = await api.pasteFromClipboard(deck.id);
-        const loaded = frame.current;
-        const now = useApp.getState();
-        if (!now.editing || now.selected !== selected || !loaded?.contentWindow) return;
-        if (pasted.kind === "element") {
-          loaded.contentWindow.postMessage({ type: "slop:edit-paste", html: pasted.html }, "*");
-        } else if (pasted.kind === "text") {
-          loaded.contentWindow.postMessage(
-            { type: "slop:edit-paste-text", text: pasted.text, style: now.editStyles.text },
-            "*",
-          );
-        } else if (pasted.kind === "slide") {
-          await useApp.getState().pasteSlide();
-        } else if (pasted.kind === "images") {
-          const images = await Promise.all(
-            pasted.images.map(async (src) => ({ src, ...(await imageSize(deckFileUrl(deck.id, src))) })),
-          );
-          // The editor puts them where the pointer is, or in the middle of the view.
-          loaded.contentWindow.postMessage({ type: "slop:edit-paste-images", images }, "*");
-        }
-      } catch (error) {
-        useApp.getState().setError(errorMessage(error));
-      }
-    };
     /** ⌘C / ⌘X / ⌘V while editing; `fromApp` when pressed outside the slide. True when handled. */
     const runClipboardKey = (key: string, shift: boolean, fromApp: boolean) => {
       const lower = key.toLowerCase();
       if (shift) return false;
+      // ⌘A and ⌘D pressed outside the slide still mean the slide's elements.
+      if (fromApp && (lower === "a" || lower === "d") && !window.getSelection()?.toString()) {
+        frame.current?.contentWindow?.postMessage(
+          { type: lower === "a" ? "slop:edit-select-all" : "slop:edit-duplicate" },
+          "*",
+        );
+        return true;
+      }
       if (lower === "v") {
         void paste();
         return true;
@@ -538,17 +578,34 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
       const { editing, selected } = useApp.getState();
       if (!editing || !fromStage(event.source)) return;
       if (data?.type === "slop:edit-commit" && data.slide === selected && typeof data.markup === "string") {
-        restore.current = Array.isArray(data.select) ? { slide: data.slide, path: data.select } : null;
+        restore.current = Array.isArray(data.select)
+          ? { slide: data.slide, path: data.select, also: Array.isArray(data.also) ? data.also : [] }
+          : null;
         void useApp.getState().saveSlideEdit(data.slide, data.markup);
       } else if (data?.type === "slop:edit-overflow" && data.slide === selected && Array.isArray(data.items)) {
         setOverflow({ slide: data.slide, items: data.items.map(String) });
       } else if (data?.type === "slop:edit-selection" && data.slide === selected) {
         setSelection({ slide: data.slide, selection: parseSelection(data.selection) });
+      } else if (data?.type === "slop:edit-geometry" && data.slide === selected) {
+        setGeometry({ slide: data.slide, geometry: parseGeometry(data.geometry) });
       } else if (data?.type === "slop:edit-tool" && data.slide === selected && typeof data.tool === "string") {
         // The editor put its tool away by itself (after adding a shape, or on Escape).
         if (data.tool in TOOL_NAMES) useApp.getState().setEditTool(data.tool as EditTool);
       } else if (data?.type === "slop:edit-fonts" && data.slide === selected) {
         setFonts(parseFonts(data.fonts));
+      } else if (data?.type === "slop:edit-colors" && data.slide === selected) {
+        setColors(parseDeckColors(data.colors));
+      } else if (data?.type === "slop:edit-background" && data.slide === selected) {
+        setBackground(parseHexColor(data.color));
+      } else if (data?.type === "slop:edit-menu" && data.slide === selected) {
+        // The preview is scaled down to fit; the editor gives the point in its own pixels.
+        const rect = frame.current?.getBoundingClientRect();
+        const k = rect && frame.current?.clientWidth ? rect.width / frame.current.clientWidth : 1;
+        setMenu({
+          x: (rect?.left ?? 0) + Number(data.x) * k,
+          y: (rect?.top ?? 0) + Number(data.y) * k,
+          element: parseElement(data.element),
+        });
       } else if (data?.type === "slop:edit-paste-request" && data.slide === selected) {
         // ⌘⇧V while typing: the clipboard's text, without its formatting.
         api
@@ -595,7 +652,7 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pointerdown", onPress, true);
     };
-  }, [areaRef]);
+  }, [areaRef, paste]);
 
   // Images dropped on the stage while editing are saved as assets and put on the slide where
   // they landed; anything else dropped there goes on to the chat.
@@ -641,6 +698,27 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
 
   const post = useCallback((data: unknown) => frame.current?.contentWindow?.postMessage(data, "*"), []);
 
+  const closeMenu = () => {
+    setMenu(null);
+    frame.current?.focus();
+  };
+  const runMenuAction = (action: EditMenuAction) => {
+    const element = menu?.element;
+    closeMenu();
+    if (action === "cut" || action === "copy") post({ type: "slop:edit-copy", cut: action === "cut" });
+    else if (action === "paste") void paste();
+    else if (action === "duplicate") post({ type: "slop:edit-duplicate" });
+    else if (action === "delete") post({ type: "slop:edit-delete" });
+    else if (action === "ask" || action === "tidy") {
+      if (!element) return;
+      // The screenshot shows the whole slide, with the element selected and the menu gone.
+      resetView();
+      const { askAboutElement, tidyElement } = useApp.getState();
+      const handOver = action === "ask" ? askAboutElement : tidyElement;
+      requestAnimationFrame(() => requestAnimationFrame(() => void handOver(element)));
+    } else post({ type: "slop:edit-order", to: action });
+  };
+
   return {
     sizeMode,
     setSizeMode: (mode: "resize" | "stretch") => {
@@ -650,10 +728,43 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
     overflow: editing && overflow?.slide === current ? overflow.items : NO_OVERFLOW,
     /** What the editor has selected, as its toolbar shows it. */
     selection: editing && selection?.slide === current ? selection.selection : null,
+    /** Where the selection is, for the arrange controls. */
+    geometry: editing && geometry?.slide === current ? geometry.geometry : null,
+    /** The open context menu, and what it does. */
+    menu: editing ? menu : null,
+    closeMenu,
+    runMenuAction,
     /** Sends a message to the slide editor in the preview. */
     post,
     /** The fonts the deck uses. */
     fonts,
+    /** The colors in the deck's CSS variables. */
+    colors,
+    /** The current slide's background color. */
+    background,
+    /** Picks image files: to add to the slide, or with `replace`, to put in the selected image. */
+    pickImage: async (replace: boolean) => {
+      const { deck, selected } = useApp.getState();
+      if (!deck || !selected) return;
+      try {
+        const picked = await open({
+          multiple: !replace,
+          filters: [{ name: "Images", extensions: IMAGE_FILE_TYPES }],
+        });
+        const paths = [picked ?? []].flat();
+        if (paths.length === 0) return;
+        const refs = await api.importAssets(deck.id, paths);
+        const images = await Promise.all(
+          refs.map(async (src) => ({ src, ...(await imageSize(deckFileUrl(deck.id, src))) })),
+        );
+        const now = useApp.getState();
+        if (!now.editing || now.selected !== selected) return;
+        if (replace && images[0]) post({ type: "slop:edit-replace-image", src: images[0].src });
+        else post({ type: "slop:edit-paste-images", images });
+      } catch (error) {
+        useApp.getState().setError(errorMessage(error));
+      }
+    },
     /** Gives focus back to the slide, as after typing a value into the toolbar. */
     focus: () => frame.current?.focus(),
     deleteSelection: () => post({ type: "slop:edit-delete" }),
@@ -662,6 +773,8 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
       // A fresh editor starts with the select tool and nothing selected; it reports a restored
       // selection itself.
       setSelection(null);
+      setGeometry(null);
+      setMenu(null);
       const { editing, selected, editTool, editStyles } = useApp.getState();
       if (editing) {
         post({ type: "slop:edit-size-mode", mode: sizeMode });
@@ -669,7 +782,8 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
       }
       const again = restore.current;
       if (editing && again && again.slide === selected) {
-        loaded.contentWindow?.postMessage({ type: "slop:edit-select", path: again.path }, "*");
+        const also = again.also.length > 0 ? { also: again.also } : {};
+        loaded.contentWindow?.postMessage({ type: "slop:edit-select", path: again.path, ...also }, "*");
       }
     },
     // Takes the selection, wires and any panning out of the preview, for a screenshot of just the slide.
@@ -683,13 +797,20 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
 
 const NO_OVERFLOW: string[] = [];
 const NO_FONTS: FontChoice[] = [];
+const NO_COLORS: DeckColor[] = [];
 const TOOL_NAMES: Record<EditTool, true> = {
   select: true,
   text: true,
   rect: true,
   rounded: true,
   ellipse: true,
+  triangle: true,
+  star: true,
+  bubble: true,
   draw: true,
+  line: true,
+  arrow: true,
+  paint: true,
 };
 
 /** Picks the editor's tool, with the style of what it adds. */
@@ -790,11 +911,28 @@ function useSlideKeyboard() {
       else return false;
       return true;
     };
+    // Out of edit mode, whose keys these are on the slide: the slide rail's history and moves
+    // (⌘↑ / ⌘↓, also out of a section), and Delete and Escape for the slides picked in it.
+    const rail = (key: string, mod: boolean, shift: boolean) => {
+      const app = useApp.getState();
+      if (app.editing || app.presenting) return false;
+      const lower = key.toLowerCase();
+      if (mod && lower === "z" && !shift) void app.undoDeckEdit();
+      else if (mod && ((lower === "z" && shift) || lower === "y")) void app.redoDeckEdit();
+      else if (mod && key === "ArrowUp") void app.moveSlides(-1);
+      else if (mod && key === "ArrowDown") void app.moveSlides(1);
+      else if (!mod && app.railSelected.length > 0 && (key === "Delete" || key === "Backspace"))
+        void app.deleteSlides(app.railSelected);
+      else if (!mod && app.railSelected.length > 0 && key === "Escape") app.clearRailSelection();
+      else return false;
+      return true;
+    };
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, [contenteditable]")) return;
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && clipboard(event.key, event.shiftKey, true))
-        event.preventDefault();
+      const mod = event.metaKey || event.ctrlKey;
+      if (mod && !event.altKey && clipboard(event.key, event.shiftKey, true)) event.preventDefault();
+      else if (!event.altKey && rail(event.key, mod, event.shiftKey)) event.preventDefault();
       else if (navigate(event.key)) event.preventDefault();
     };
     const onMessage = (event: MessageEvent) => {
@@ -805,8 +943,11 @@ function useSlideKeyboard() {
       );
       if (!slide) return;
       if (type === "slop:focus") slide.focus();
-      else if (!(event.data.mod && clipboard(String(event.data.key), Boolean(event.data.shift), false)))
-        navigate(String(event.data.key));
+      else {
+        const key = String(event.data.key);
+        const [mod, shift] = [Boolean(event.data.mod), Boolean(event.data.shift)];
+        if (!(mod && clipboard(key, shift, false)) && !rail(key, mod, shift)) navigate(key);
+      }
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("message", onMessage);

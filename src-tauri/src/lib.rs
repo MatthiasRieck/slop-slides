@@ -575,6 +575,63 @@ fn save_chat(id: String, chat: serde_json::Value) -> Result<()> {
     )
 }
 
+#[tauri::command]
+fn list_chat_threads(id: String) -> Result<Vec<serde_json::Value>> {
+    let sessions = sessions()?;
+    let root = workspace::root(&id)?;
+    let current = sessions.current(&root);
+    sessions
+        .list_scoped(&root)
+        .into_iter()
+        .rev()
+        .map(|path| {
+            let chat = deck::load_chat(Some(&path))?;
+            let messages = chat.as_array();
+            let first = messages.and_then(|items| items.iter().find(|m| m["role"] == "user"));
+            let title = first
+                .and_then(|m| m["text"].as_str())
+                .unwrap_or("New conversation");
+            Ok(serde_json::json!({
+                "id": path.file_name().unwrap().to_string_lossy(),
+                "title": title.chars().take(100).collect::<String>(),
+                "createdAt": first.and_then(|m| m["createdAt"].as_u64()),
+                "current": current.as_ref() == Some(&path),
+                "messageCount": messages.map_or(0, Vec::len),
+                "association": sessions::association_of(&path).map(|associated| {
+                    let relative = associated.strip_prefix(&root).unwrap_or(&associated);
+                    if relative.as_os_str().is_empty() { ".".to_string() }
+                    else { relative.to_string_lossy().replace('\\', "/") }
+                }),
+            }))
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn select_chat_thread(
+    agent: State<AgentManager>,
+    id: String,
+    thread: String,
+) -> Result<serde_json::Value> {
+    if agent.is_running(&id) {
+        return Err(error::Error::msg(
+            "Stop the current turn before switching conversations.",
+        ));
+    }
+    let sessions = sessions()?;
+    let root = workspace::root(&id)?;
+    let path = sessions
+        .list_scoped(&root)
+        .into_iter()
+        .find(|path| path.file_name().is_some_and(|name| name == thread.as_str()))
+        .ok_or_else(|| error::Error::msg("Conversation not found in this workspace."))?;
+    // Read before selecting: a damaged transcript must not change the active conversation.
+    let chat = deck::load_chat(Some(&path))?;
+    let provider = sessions::provider(&path)?;
+    sessions.select(&root, &thread)?;
+    Ok(serde_json::json!({ "chat": chat, "provider": provider }))
+}
+
 /// Starts a new chat in a new session; the old conversation stays in its own.
 #[tauri::command]
 fn reset_chat(agent: State<AgentManager>, id: String) -> Result<()> {
@@ -836,6 +893,8 @@ pub fn run() {
             session_provider,
             save_chat,
             reset_chat,
+            list_chat_threads,
+            select_chat_thread,
             send_message,
             interrupt_agent,
             permission_modes,

@@ -661,6 +661,10 @@ describe("ChatPanel: composing", () => {
 });
 
 describe("ChatPanel: voice input", () => {
+  beforeEach(() => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+  });
+
   const partial = async () => {
     const { listen } = await import("@tauri-apps/api/event");
     const call = vi.mocked(listen).mock.calls.findLast(([name]) => name === "voice-partial");
@@ -732,6 +736,58 @@ describe("ChatPanel: voice input", () => {
     expect(textarea().value).toBe("Keep this");
     expect(textarea().readOnly).toBe(false);
     expect(invoke).toHaveBeenCalledWith("cancel_recording");
+  });
+
+  const dictate = async (transcript: string) => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "voice_status") return { modelReady: true, modelBytes: 1, downloading: false, recording: false };
+      if (cmd === "stop_recording") return transcript;
+      return [];
+    });
+    render(<ChatPanel />);
+  };
+  const startDictating = async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Dictate a message" }));
+    await screen.findByRole("button", { name: /Stop dictating/ });
+  };
+
+  it("swaps the composer's options for a waveform while dictating", async () => {
+    await dictate("");
+    expect(screen.getByRole("button", { name: "Attach images or files" })).toBeTruthy();
+    await startDictating();
+    expect(screen.getByTestId("voice-waveform")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Attach images or files" })).toBeNull();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByTestId("voice-waveform")).toBeNull();
+    expect(screen.getByRole("button", { name: "Attach images or files" })).toBeTruthy();
+  });
+
+  it("stops and sends the dictated text from the send button", async () => {
+    await dictate("really big");
+    fireEvent.change(textarea(), { target: { value: "Make the title" } });
+    await startDictating();
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop and send" }));
+    await waitFor(() => expect(send).toHaveBeenCalledOnce());
+    expect(send).toHaveBeenCalledWith("Make the title really big", expect.anything());
+    expect(invoke).toHaveBeenCalledWith("stop_recording");
+    await waitFor(() => expect(textarea().value).toBe(""));
+    expect(textarea().readOnly).toBe(false);
+  });
+
+  it("sends the draft when nothing was said, but not an empty message", async () => {
+    await dictate("");
+    await startDictating();
+    fireEvent.click(screen.getByRole("button", { name: "Stop and send" }));
+    await waitFor(() => expect(textarea().readOnly).toBe(false));
+    expect(send).not.toHaveBeenCalled();
+
+    fireEvent.change(textarea(), { target: { value: "Keep this" } });
+    await startDictating();
+    fireEvent.click(screen.getByRole("button", { name: "Stop and send" }));
+    await waitFor(() => expect(send).toHaveBeenCalledOnce());
+    expect(send).toHaveBeenCalledWith("Keep this", expect.anything());
   });
 });
 

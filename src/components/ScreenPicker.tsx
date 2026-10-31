@@ -1,4 +1,4 @@
-import { MonitorPlay, StickyNote } from "lucide-react";
+import { Loader2, MonitorPlay, StickyNote } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { Screen } from "../lib/api";
@@ -16,8 +16,8 @@ const MAX_HEIGHT_REM = 16;
  */
 export function ScreenPicker(props: {
   screens: Screen[];
-  /** A screenshot for each screen, by its index. */
-  previews?: (string | null)[];
+  /** A screenshot for each screen, by its index; null while they are being taken. */
+  previews?: (string | null)[] | null;
   onStart: (choice: ScreenChoice) => void;
   onCancel: () => void;
 }) {
@@ -67,6 +67,16 @@ export function ScreenPicker(props: {
               >
                 {preview && (
                   <img src={preview} alt={`${screen.name} now`} className="absolute inset-0 size-full object-cover" />
+                )}
+                {props.previews === null && (
+                  <>
+                    <div className="absolute inset-0 animate-pulse bg-muted" />
+                    <Loader2
+                      role="status"
+                      aria-label={`Taking a screenshot of ${screen.name}`}
+                      className="absolute top-1 right-1 size-3.5 animate-spin text-muted-foreground"
+                    />
+                  </>
                 )}
                 <div
                   className={cn(

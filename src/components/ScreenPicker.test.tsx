@@ -74,6 +74,24 @@ describe("ScreenPicker", () => {
     expect(screen.getByText("Screen 1")).toBeTruthy();
   });
 
+  it("shows a placeholder on every screen while the screenshots are taken", () => {
+    const { rerender } = render(
+      <ScreenPicker screens={screens} previews={null} onStart={() => {}} onCancel={() => {}} />,
+    );
+    expect(screen.getByLabelText("Taking a screenshot of Built-in")).toBeTruthy();
+    expect(screen.getByLabelText("Taking a screenshot of Projector")).toBeTruthy();
+    rerender(<ScreenPicker screens={screens} previews={[null, "data:,"]} onStart={() => {}} onCancel={() => {}} />);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByAltText("Projector now")).toBeTruthy();
+  });
+
+  it("can be used before the screenshots are there", () => {
+    const onStart = vi.fn();
+    render(<ScreenPicker screens={screens} previews={null} onStart={onStart} onCancel={() => {}} />);
+    fireEvent.click(screen.getByText("Start presenting"));
+    expect(onStart).toHaveBeenCalledWith({ audience: 1, presenter: 0 });
+  });
+
   it("cancels with Escape", () => {
     const onCancel = vi.fn();
     render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={onCancel} />);

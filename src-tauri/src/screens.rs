@@ -5,23 +5,20 @@
 //! workspace itself (slides are served to any window while a workspace has them open).
 //!
 //! The picker shows a screenshot of each screen, to tell them apart by what is on them. They
-//! are only ever held in the picker: nothing is written to disk.
+//! are only ever held in the picker: nothing is written to disk. On Linux it goes without (see
+//! [`shots`]).
 
 use std::time::Duration;
 
-use base64::Engine;
 use serde::Serialize;
 use tauri::{
-    AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, Position, WebviewUrl,
-    WebviewWindowBuilder, Window,
+    ipc::Channel, AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, Position,
+    WebviewUrl, WebviewWindowBuilder, Window,
 };
 
-use crate::capture::{self, Image};
 use crate::error::{Error, Result};
 
-/// Widest screenshot in the picker, in pixels: enough for a sharp tile on a high density screen.
-const PREVIEW_WIDTH: u32 = 640;
-/// How long the picker waits for screenshots. It opens without them after this: a system may
+/// How long the picker waits for screenshots. It goes on without them after this: a system may
 /// be asking the user for permission, and presenting must not depend on that.
 const PREVIEW_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -118,28 +115,80 @@ pub fn list(app: &AppHandle) -> Result<Vec<Screen>> {
     ))
 }
 
-/// Screenshots of the attached monitors as PNG data URLs, in the order [`in_order`] gives the
-/// screens, with `None` for one that could not be taken.
-fn capture_all() -> Vec<Option<String>> {
-    let Ok(mut monitors) = xcap::Monitor::all() else {
-        return Vec::new();
-    };
-    monitors.sort_by_key(|m| (m.x().unwrap_or(0), m.y().unwrap_or(0)));
-    monitors.iter().map(|m| preview(m).ok()).collect()
+#[cfg(any(target_os = "macos", windows))]
+mod shots {
+    use base64::Engine;
+
+    use crate::capture::{self, Image};
+    use crate::error::Result;
+
+    /// Widest screenshot in the picker, in pixels: enough for a sharp tile on a high density
+    /// screen.
+    const PREVIEW_WIDTH: u32 = 640;
+
+    /// Screenshots of the attached monitors as PNG data URLs, in the order [`super::in_order`]
+    /// gives the screens, with `None` for one that could not be taken. `grabbed` is called once
+    /// the screens are captured and only shrinking and encoding are left: what is drawn on them
+    /// from then on is not in the screenshots.
+    pub fn capture_all(grabbed: impl FnOnce()) -> Vec<Option<String>> {
+        let Ok(mut monitors) = xcap::Monitor::all() else {
+            return Vec::new();
+        };
+        monitors.sort_by_key(|m| (m.x().unwrap_or(0), m.y().unwrap_or(0)));
+        let shots: Vec<_> = monitors.iter().map(|m| m.capture_image().ok()).collect();
+        grabbed();
+        shots.into_iter().map(|shot| preview(shot?).ok()).collect()
+    }
+
+    fn preview(shot: xcap::image::RgbaImage) -> Result<String> {
+        let image = Image {
+            width: shot.width(),
+            height: shot.height(),
+            rgba: shot.into_raw(),
+        };
+        let png = capture::encode_png(&capture::downscale(&image, PREVIEW_WIDTH))?;
+        let data = base64::engine::general_purpose::STANDARD.encode(png);
+        Ok(format!("data:image/png;base64,{data}"))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// Takes real screenshots: run by hand with `--ignored`, on a machine with a screen.
+        #[test]
+        #[ignore]
+        fn captures_the_attached_monitors() {
+            let mut grabbed = 0;
+            let shots = capture_all(|| grabbed += 1);
+            assert!(!shots.is_empty());
+            assert_eq!(grabbed, 1);
+            for shot in &shots {
+                let shot = shot.as_deref().expect("a screenshot of each monitor");
+                println!("{}", shot.len());
+                let data = shot.strip_prefix("data:image/png;base64,").unwrap();
+                let png = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .unwrap();
+                let image = capture::decode_png(&png).unwrap();
+                println!("{}x{}", image.width, image.height);
+                assert!(image.width <= PREVIEW_WIDTH);
+                assert!(
+                    image.rgba.chunks(4).any(|p| p[..3] != [0, 0, 0]),
+                    "not all black"
+                );
+            }
+        }
+    }
 }
 
-fn preview(monitor: &xcap::Monitor) -> Result<String> {
-    let shot = monitor
-        .capture_image()
-        .map_err(|e| Error::msg(format!("cannot capture the screen: {e}")))?;
-    let image = Image {
-        width: shot.width(),
-        height: shot.height(),
-        rgba: shot.into_raw(),
-    };
-    let png = capture::encode_png(&capture::downscale(&image, PREVIEW_WIDTH))?;
-    let data = base64::engine::general_purpose::STANDARD.encode(png);
-    Ok(format!("data:image/png;base64,{data}"))
+/// No screenshots on Linux: xcap always builds PipeWire bindings, for recording video, and those
+/// don't compile against the PipeWire of Ubuntu 22.04, which the Linux builds are made on.
+#[cfg(not(any(target_os = "macos", windows)))]
+mod shots {
+    pub fn capture_all(_grabbed: impl FnOnce()) -> Vec<Option<String>> {
+        Vec::new()
+    }
 }
 
 /// One entry per screen. Shots of another number of monitors than there are screens (one was
@@ -155,11 +204,15 @@ fn for_screens(count: usize, shots: Vec<Option<String>>) -> Vec<Option<String>> 
 
 /// What each screen in [`list`] shows now, as far as the system lets us see it. Never fails:
 /// the picker works without screenshots.
-pub async fn previews(app: &AppHandle) -> Vec<Option<String>> {
+pub async fn previews(app: &AppHandle, grabbed: Channel<()>) -> Vec<Option<String>> {
     let count = list(app).map_or(0, |screens| screens.len());
     let shots = tokio::time::timeout(
         PREVIEW_TIMEOUT,
-        tauri::async_runtime::spawn_blocking(capture_all),
+        tauri::async_runtime::spawn_blocking(move || {
+            shots::capture_all(|| {
+                let _ = grabbed.send(());
+            })
+        }),
     )
     .await;
     match shots {
@@ -306,56 +359,18 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
-    fn timing_probe() {
-        for round in 0..3 {
-            let t = std::time::Instant::now();
-            let monitors = xcap::Monitor::all().unwrap();
-            println!("round {round} list {:?}", t.elapsed());
-            for m in &monitors {
-                let t = std::time::Instant::now();
-                let shot = m.capture_image().unwrap();
-                let grab = t.elapsed();
-                let t = std::time::Instant::now();
-                let image = Image { width: shot.width(), height: shot.height(), rgba: shot.into_raw() };
-                let small = capture::downscale(&image, PREVIEW_WIDTH);
-                let scaled = t.elapsed();
-                let t = std::time::Instant::now();
-                let png = capture::encode_png(&small).unwrap();
-                println!("{}x{} grab {grab:?} scale {scaled:?} png {:?} ({} bytes)", image.width, image.height, t.elapsed(), png.len());
-            }
-        }
-    }
-
-    /// Takes real screenshots: run by hand with `--ignored`, on a machine with a screen.
-    #[test]
-    #[ignore]
-    fn captures_the_attached_monitors() {
-        let shots = capture_all();
-        assert!(!shots.is_empty());
-        for shot in &shots {
-            let shot = shot.as_deref().expect("a screenshot of each monitor");
-            println!("{}", shot.len());
-            let data = shot.strip_prefix("data:image/png;base64,").unwrap();
-            let png = base64::engine::general_purpose::STANDARD
-                .decode(data)
-                .unwrap();
-            let image = capture::decode_png(&png).unwrap();
-            println!("{}x{}", image.width, image.height);
-            assert!(image.width <= PREVIEW_WIDTH);
-            assert!(
-                image.rgba.chunks(4).any(|p| p[..3] != [0, 0, 0]),
-                "not all black"
-            );
-        }
-    }
-
-    #[test]
     fn screenshots_are_only_used_when_each_has_its_screen() {
         let shots = vec![Some("a".to_string()), None];
         assert_eq!(for_screens(2, shots.clone()), shots);
         assert_eq!(for_screens(3, shots), vec![None, None, None]);
         assert_eq!(for_screens(2, Vec::new()), vec![None, None]);
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    #[test]
+    fn the_picker_goes_without_screenshots_where_they_cant_be_taken() {
+        let shots = shots::capture_all(|| panic!("nothing was captured"));
+        assert_eq!(for_screens(2, shots), vec![None, None]);
     }
 
     #[test]

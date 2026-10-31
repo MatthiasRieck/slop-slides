@@ -1,4 +1,5 @@
 import { act, createEvent, fireEvent, render, screen } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setFullscreen = vi.fn(async () => {});
@@ -977,6 +978,17 @@ describe("Presenter on several screens", () => {
     unmount();
     await act(async () => {});
     expect(invoke).toHaveBeenCalledWith("close_presenter_view");
+  });
+
+  it("opens the presenter view once under StrictMode's double-mounted effects", async () => {
+    useApp.setState({ screens: choice });
+    render(
+      <StrictMode>
+        <Presenter />
+      </StrictMode>,
+    );
+    await act(async () => {});
+    expect(invoke.mock.calls.map(([name]) => name)).toEqual(["present_on"]);
   });
 
   it("places and closes in the order asked, however long each takes", async () => {

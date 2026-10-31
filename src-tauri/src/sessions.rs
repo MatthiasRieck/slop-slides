@@ -1,4 +1,4 @@
-//! Conversations belong to a workspace folder. The newest session is current.
+//! Conversations belong to a workspace folder. The newest session records the active thread.
 //! `meta.json` stores {"workspace": "<canonical folder>"}; chat, provider ids,
 //! sketches and templates live here, with snapshots/<relative deck path>/<stamp>.html
 //! and locked.json keyed by relative deck path.
@@ -86,9 +86,54 @@ impl Sessions {
         found
     }
 
+    /// All folder and legacy deck conversations underneath the opened root.
+    pub fn list_scoped(&self, workspace: &Path) -> Vec<PathBuf> {
+        let root = canonical(workspace);
+        let Ok(entries) = fs::read_dir(&self.root) else {
+            return Vec::new();
+        };
+        let mut found: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|session| {
+                association_of(session).is_some_and(|path| canonical(&path).starts_with(&root))
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
     /// The workspace's current session, if it has one.
     pub fn current(&self, workspace: &Path) -> Option<PathBuf> {
-        self.list(workspace).pop()
+        let listed = self.list(workspace);
+        let newest = listed.last()?;
+        if let Ok(selected) = fs::read_to_string(newest.join("active-session")) {
+            if let Some(path) = self.list_scoped(workspace).into_iter().find(|path| {
+                path.file_name()
+                    .is_some_and(|name| name == selected.as_str())
+            }) {
+                return Some(path);
+            }
+        }
+        Some(newest.clone())
+    }
+
+    /// Select only a session belonging to this workspace; never accept arbitrary paths.
+    pub fn select(&self, workspace: &Path, thread: &str) -> Result<()> {
+        let scoped = self.list_scoped(workspace);
+        if !scoped
+            .iter()
+            .any(|path| path.file_name().is_some_and(|name| name == thread))
+        {
+            return Err(Error::msg("Conversation not found in this workspace."));
+        }
+        // Keep the selection on this root's own session, so opening a parent folder
+        // does not change the active conversation of a separately opened subfolder.
+        let anchor = match self.list(workspace).pop() {
+            Some(path) => path,
+            None => self.start(workspace)?,
+        };
+        fs::write(anchor.join("active-session"), thread)?;
+        Ok(())
     }
 
     /// The workspace's current session, starting one if it has none.
@@ -110,6 +155,7 @@ impl Sessions {
         fs::create_dir_all(&dir)?;
         let meta = json!({ "workspace": canonical(workspace) });
         fs::write(dir.join(META_FILE), meta.to_string())?;
+        self.select(workspace, dir.file_name().unwrap().to_str().unwrap())?;
         Ok(dir)
     }
 
@@ -120,6 +166,16 @@ impl Sessions {
             _ => false,
         }
     }
+}
+
+/// The folder or slide deck originally associated with a conversation.
+pub fn association_of(session: &Path) -> Option<PathBuf> {
+    let raw = fs::read_to_string(session.join(META_FILE)).ok()?;
+    let meta: Value = serde_json::from_str(&raw).ok()?;
+    meta["workspace"]
+        .as_str()
+        .or_else(|| meta["deck"].as_str())
+        .map(PathBuf::from)
 }
 
 /// The workspace folder a session belongs to; legacy deck sessions have no workspace.
@@ -233,6 +289,64 @@ mod tests {
         let second = sessions.start(&deck).unwrap();
         assert_eq!(sessions.list(&deck), [first.clone(), second.clone()]);
         assert_eq!(sessions.current(&deck), Some(second));
+        assert!(first.is_dir());
+    }
+
+    #[test]
+    fn root_history_includes_nested_folders_and_legacy_decks_only() {
+        let t = Temp::new();
+        let root = t.deck("talks");
+        let nested = root.join("quarterly");
+        fs::create_dir_all(&nested).unwrap();
+        let sessions = t.sessions();
+        let folder_chat = sessions.start(&nested).unwrap();
+        let deck_chat = sessions.start(&nested).unwrap();
+        let deck = nested.join("pitch.html");
+        fs::write(&deck, "<html></html>").unwrap();
+        fs::write(deck_chat.join(META_FILE), json!({"deck": deck}).to_string()).unwrap();
+        let outside = sessions.start(&t.deck("talks-other")).unwrap();
+        let listed = sessions.list_scoped(&root);
+        assert!(listed.contains(&folder_chat));
+        assert!(listed.contains(&deck_chat));
+        assert!(!listed.contains(&outside));
+        assert_eq!(
+            sessions.current(&root),
+            None,
+            "do not silently adopt a nested chat"
+        );
+        let folder_current = sessions.current(&nested);
+        sessions
+            .select(&root, deck_chat.file_name().unwrap().to_str().unwrap())
+            .unwrap();
+        assert_eq!(t.sessions().current(&root), Some(deck_chat.clone()));
+        assert_eq!(
+            sessions.current(&nested),
+            folder_current,
+            "parent selection is independent"
+        );
+        assert!(sessions
+            .select(&root, outside.file_name().unwrap().to_str().unwrap())
+            .is_err());
+        let fresh = sessions.start(&root).unwrap();
+        assert_eq!(sessions.current(&root), Some(fresh));
+        assert!(sessions.list_scoped(&root).contains(&deck_chat));
+    }
+
+    #[test]
+    fn selected_threads_survive_reopening_and_cannot_cross_workspaces() {
+        let t = Temp::new();
+        let workspace = t.deck("talk");
+        let sessions = t.sessions();
+        let first = sessions.start(&workspace).unwrap();
+        let second = sessions.start(&workspace).unwrap();
+        let id = first.file_name().unwrap().to_str().unwrap();
+        sessions.select(&workspace, id).unwrap();
+        assert_eq!(t.sessions().current(&workspace), Some(first.clone()));
+        assert!(sessions.select(&t.deck("other"), id).is_err());
+        assert!(sessions.select(&workspace, "../escape").is_err());
+        assert!(second.is_dir());
+        let third = sessions.start(&workspace).unwrap();
+        assert_eq!(sessions.current(&workspace), Some(third));
         assert!(first.is_dir());
     }
 

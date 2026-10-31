@@ -130,6 +130,7 @@
 }
 
 .markdown {
+  overflow-wrap: anywhere;
   font-size: 0.875rem;
   line-height: 1.6;
 }
@@ -169,6 +170,33 @@
 .markdown strong {
   font-weight: 600;
 }
+
+.markdown :is(h1, h2, h3, h4, h5, h6) {
+  font-weight: 600;
+  line-height: 1.35;
+  margin-top: 1.1em;
+}
+.markdown h1 { font-size: 1.3em; }
+.markdown h2 { font-size: 1.15em; }
+.markdown > :first-child { margin-top: 0; }
+.markdown blockquote {
+  border-left: 2px solid var(--border);
+  padding-left: 0.85em;
+  color: var(--muted-foreground);
+}
+.markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+.markdown :is(th, td) {
+  border: 1px solid var(--border);
+  padding: 0.4em 0.65em;
+  text-align: left;
+}
+.markdown th { background: var(--accent); font-weight: 600; }
+.markdown hr { margin-block: 1em; border-color: var(--border); }
 
 /* Syntax colors for the HTML view (CodeMirror + @lezer/highlight's classHighlighter). */
 .cm-editor {

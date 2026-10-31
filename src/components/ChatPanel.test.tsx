@@ -166,6 +166,58 @@ describe("ChatPanel: header", () => {
   });
 });
 
+describe("past conversations", () => {
+  it("searches saved chats and restores a selected transcript", async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "list_chat_threads")
+        return [
+          { id: "current", title: "Current conversation", current: true, createdAt: 1, messageCount: 2 },
+          {
+            id: "past",
+            title: "Quarterly pitch",
+            association: "quarterly/pitch.html",
+            current: false,
+            createdAt: 1,
+            messageCount: 1,
+          },
+        ];
+      if (command === "select_chat_thread")
+        return {
+          chat: [{ id: "old-user", role: "user", text: "Earlier prompt", slide: null, attachments: [], createdAt: 1 }],
+          provider: "claude",
+        };
+      return [];
+    });
+    render(<ChatPanel />);
+    type("Unsent draft");
+    fireEvent.click(screen.getByRole("button", { name: "Past chats" }));
+    const past = await screen.findByRole("button", { name: /Quarterly pitch/ });
+    expect((screen.getByRole("button", { name: /Current conversation/ }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByRole("textbox", { name: "Search conversations" }), {
+      target: { value: "quarterly/pitch.html" },
+    });
+    expect(screen.queryByRole("button", { name: /Current conversation/ })).toBeNull();
+    await act(async () => fireEvent.click(past));
+    expect(screen.getByText("Earlier prompt")).toBeTruthy();
+    expect(textarea().value).toBe("");
+    expect(screen.queryByRole("region", { name: "Past conversations" })).toBeNull();
+    expect(invoke).toHaveBeenCalledWith("select_chat_thread", { id: "/decks/talk", thread: "past" });
+  });
+
+  it("keeps navigation disabled during a turn and reports history load errors", async () => {
+    useApp.setState({ running: true });
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "list_chat_threads") throw new Error("History unavailable");
+      return [];
+    });
+    render(<ChatPanel />);
+    expect((screen.getByRole("button", { name: "New chat" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Past chats" }));
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "History unavailable");
+    expect(screen.getByText("Stop the current turn to switch chats.")).toBeTruthy();
+  });
+});
+
 describe("ChatPanel: empty chat", () => {
   it("offers starter prompts for an empty deck, which fill the composer", () => {
     useApp.setState({ deck: { ...deckFor(DECK_HTML), slides: [] }, selected: null });
@@ -180,7 +232,7 @@ describe("ChatPanel: empty chat", () => {
     render(<ChatPanel />);
     expect(screen.getByText(/Ask for changes/)).toBeTruthy();
     expect(screen.queryByText(/neighborhood tool-sharing app/)).toBeNull();
-    expect(screen.queryByTitle(/New conversation/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Past chats" })).toBeTruthy();
   });
 
   it("warns when the selected model's CLI is not installed", () => {

@@ -1237,6 +1237,27 @@ describe("sending a message", () => {
     });
   });
 
+  it("saves the current thread before restoring another provider conversation", async () => {
+    const useApp = await freshStore(false);
+    const past = [userMessage("Earlier conversation"), assistantMessage({ provider: "codex", status: "streaming" })];
+    backend({ select_chat_thread: () => ({ chat: past, provider: "codex" }) });
+    useApp.setState({
+      workspace: { path: "/decks/talk", name: "talk" },
+      messages: [userMessage("Current")],
+      running: true,
+    });
+    await useApp.getState().selectChatThread("old-thread");
+    expect(calls("select_chat_thread")).toEqual([]);
+    useApp.setState({ running: false });
+    await useApp.getState().selectChatThread("old-thread");
+    expect(calls("save_chat")).toEqual([{ id: "/decks/talk", chat: [userMessage("Current")] }]);
+    expect(calls("select_chat_thread")).toEqual([{ id: "/decks/talk", thread: "old-thread" }]);
+    expect(useApp.getState().messages[0]).toEqual(past[0]);
+    expect(useApp.getState().messages[1]).toMatchObject({ status: "interrupted" });
+    expect(useApp.getState().sessionProvider).toBe("codex");
+    expect(useApp.getState().selection.provider).toBe("codex");
+  });
+
   it("resetChat clears the workspace transcript", async () => {
     const useApp = await freshStore(false);
     await useApp.getState().resetChat();

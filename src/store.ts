@@ -484,6 +484,8 @@ interface AppState {
   compact: () => Promise<void>;
   interrupt: () => void;
   resetChat: () => Promise<void>;
+  selectChatThread: (thread: string) => Promise<void>;
+  chatRevision: number;
 }
 
 interface SlideUndo {
@@ -549,6 +551,7 @@ export const useApp = create<AppState>((set, get) => ({
   sidebarTab: loadSidebarTab(),
   railOpen: localStorage.getItem("slopslide.railOpen") !== "false",
   assetsRev: 0,
+  chatRevision: 0,
   messages: [],
   sessionProvider: null,
   running: false,
@@ -1251,11 +1254,28 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
+  selectChatThread: async (thread) => {
+    const { workspace, running, messages } = get();
+    if (!workspace || running) return;
+    await api.saveChat(workspace.path, messages);
+    const { chat, provider } = await api.selectChatThread(workspace.path, thread);
+    if (get().workspace?.path !== workspace.path) return;
+    restoreWorkspaceChat(workspace.path, chat, false, provider);
+    set((s) => ({ chatRevision: s.chatRevision + 1, composerFill: null }));
+  },
+
   resetChat: async () => {
     const { workspace, running } = get();
     if (!workspace || running) return;
     await api.resetChat(workspace.path);
-    set({ messages: [], running: false, sessionProvider: null });
+    if (get().workspace?.path !== workspace.path) return;
+    set((s) => ({
+      messages: [],
+      running: false,
+      sessionProvider: null,
+      composerFill: null,
+      chatRevision: s.chatRevision + 1,
+    }));
   },
 }));
 
@@ -1456,6 +1476,10 @@ async function loadWorkspaceChat(path: string) {
     api.agentRunning(path),
     api.sessionProvider(path),
   ]);
+  restoreWorkspaceChat(path, chat, running, provider);
+}
+
+function restoreWorkspaceChat(path: string, chat: unknown, running: boolean, provider: Provider | null) {
   if (useApp.getState().workspace?.path !== path) return;
   const messages = Array.isArray(chat) ? (chat as ChatMessage[]) : [];
   useApp.setState({

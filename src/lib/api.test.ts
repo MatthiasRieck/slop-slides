@@ -173,6 +173,13 @@ const CASES = [
   ["loadChat", () => api.loadChat("talk"), "load_chat", { id: "talk" }],
   ["saveChat", () => api.saveChat("talk", [1]), "save_chat", { id: "talk", chat: [1] }],
   ["resetChat", () => api.resetChat("talk"), "reset_chat", { id: "talk" }],
+  ["listChatThreads", () => api.listChatThreads("/ws"), "list_chat_threads", { id: "/ws" }],
+  [
+    "selectChatThread",
+    () => api.selectChatThread("/ws", "past-thread"),
+    "select_chat_thread",
+    { id: "/ws", thread: "past-thread" },
+  ],
   [
     "sendMessage",
     () =>

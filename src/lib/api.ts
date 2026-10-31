@@ -387,6 +387,19 @@ export const api = {
   sessionProvider: (id: string) => invoke<Provider | null>("session_provider", { id }),
   loadChat: (id: string) => invoke<unknown>("load_chat", { id }),
   saveChat: (id: string, chat: unknown) => invoke<void>("save_chat", { id, chat }),
+  listChatThreads: (id: string) =>
+    invoke<
+      {
+        id: string;
+        title: string;
+        createdAt: number | null;
+        current: boolean;
+        messageCount: number;
+        association: string | null;
+      }[]
+    >("list_chat_threads", { id }),
+  selectChatThread: (id: string, thread: string) =>
+    invoke<{ chat: unknown; provider: Provider | null }>("select_chat_thread", { id, thread }),
   resetChat: (id: string) => invoke<void>("reset_chat", { id }),
   sendMessage: (
     workspace: string,

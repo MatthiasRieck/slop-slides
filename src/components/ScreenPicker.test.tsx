@@ -35,6 +35,10 @@ describe("ScreenPicker", () => {
     render(<ScreenPicker screens={screens} onStart={onStart} onCancel={() => {}} />);
     expect(screen.getByTestId("screen-0").dataset.role).toBe("presenter");
     expect(screen.getByTestId("screen-1").dataset.role).toBe("audience");
+    expect(screen.getByText("Screen 1")).toBeTruthy();
+    expect(screen.getByText("Screen 2")).toBeTruthy();
+    expect(screen.getByText("Audience · slides")).toBeTruthy();
+    expect(screen.getByText("Presenter · notes")).toBeTruthy();
     expect(screen.getByText("1920×1080")).toBeTruthy();
     expect(screen.getByText("3024×1964 · main")).toBeTruthy();
     fireEvent.click(screen.getByText("Start presenting"));

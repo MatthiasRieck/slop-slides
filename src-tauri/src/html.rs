@@ -808,11 +808,11 @@ pub fn has_moved(slide: &str) -> bool {
     })
 }
 
-/// A slide's narration, the script read out over it (say, by text to speech): plain text in one
-/// `<aside class="narration">` that is a direct child of the slide. The player never shows it.
+/// A slide's narration, the script read out over it (say, by text to speech): Markdown text in
+/// one `<aside class="narration">` that is a direct child of the slide. The player never shows it.
 pub const NARRATION_CLASS: &str = "narration";
 
-/// A slide's speaker notes: plain text in one `<aside class="notes">`, for the presenter alone.
+/// A slide's speaker notes: Markdown text in one `<aside class="notes">`, for the presenter alone.
 /// The app reads and writes them the way it does narration; the player never shows them.
 pub const NOTES_CLASS: &str = "notes";
 
@@ -858,15 +858,32 @@ fn aside_spans(slide: &str, class: &str) -> Vec<NarrationSpan> {
     spans
 }
 
-/// The slide's narration as plain text: tags dropped, entities decoded, each line trimmed and
-/// blank lines between paragraphs kept (one at most). Empty when it has none.
+/// The slide's narration as text: tags dropped, entities decoded, no space at the ends of lines
+/// or from the markup's indentation, and blank lines between paragraphs kept (one at most). The
+/// indentation that is left means something in Markdown. Empty when it has none.
 pub fn narration(slide: &str) -> String {
     aside_text(slide, NARRATION_CLASS)
 }
 
-/// The slide's speaker notes as plain text, read like [`narration`].
+/// The slide's speaker notes as text, read like [`narration`].
 pub fn notes(slide: &str) -> String {
     aside_text(slide, NOTES_CLASS)
+}
+
+const INDENT: [char; 2] = [' ', '\t'];
+
+/// How much of each line of `inner` is the markup's indentation: only text that starts on a line
+/// of its own is indented with the markup, and then all of it is.
+fn markup_indent(inner: &str) -> usize {
+    let mut lines = inner.lines();
+    if lines.next().is_some_and(|first| !first.trim().is_empty()) {
+        return 0;
+    }
+    lines
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.len() - line.trim_start_matches(INDENT).len())
+        .min()
+        .unwrap_or(0)
 }
 
 fn aside_text(slide: &str, class: &str) -> String {
@@ -874,6 +891,7 @@ fn aside_text(slide: &str, class: &str) -> String {
         return String::new();
     };
     let inner = &slide[span.inner];
+    let indent = markup_indent(inner);
     let mut text = String::new();
     let mut rest = inner;
     while let Some(open) = rest.find('<') {
@@ -895,7 +913,8 @@ fn aside_text(slide: &str, class: &str) -> String {
     let decoded = decode_entities(&text);
     let mut out = String::new();
     let mut blank = false;
-    for line in decoded.lines().map(str::trim) {
+    for line in decoded.lines().map(str::trim_end) {
+        let line = &line[indent.min(line.len() - line.trim_start_matches(INDENT).len())..];
         if line.is_empty() {
             blank = !out.is_empty();
             continue;
@@ -2656,6 +2675,25 @@ mod tests {
             narration("<section class=\"slide\" id=\"a\"><aside class=\"narration\">open"),
             "open"
         );
+    }
+
+    #[test]
+    fn keeps_the_indentation_markdown_needs_but_not_the_markups() {
+        let aside = |inner: &str| {
+            format!("<section class=\"slide\" id=\"a\"><aside class=\"notes\">{inner}</aside></section>")
+        };
+        let list = "- One\n  - Inner\n\n      code";
+        assert_eq!(notes(&aside(list)), list);
+        assert_eq!(
+            notes(&aside(
+                "\n      - One\n        - Inner\n\n      Next  \n    "
+            )),
+            "- One\n  - Inner\n\nNext"
+        );
+        let html = "<section class=\"slide\" id=\"a\"></section>";
+        let saved = set_notes(html, "a", list).unwrap();
+        assert_eq!(notes(&saved), list);
+        assert_eq!(set_notes(&saved, "a", list).unwrap(), saved);
     }
 
     #[test]

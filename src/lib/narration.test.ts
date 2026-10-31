@@ -3,10 +3,11 @@ import { describe, expect, it } from "vitest";
 import { normalizeNarration, speakingTime, wordCount } from "./narration";
 
 describe("normalizeNarration", () => {
-  it("trims lines and keeps one blank line between paragraphs", () => {
-    expect(normalizeNarration("  Hello there \n\n\n\n  Next part\r\nsame part  \n")).toBe(
+  it("trims line ends and keeps one blank line between paragraphs", () => {
+    expect(normalizeNarration("  Hello there \n\n\n\nNext part\r\nsame part  \n")).toBe(
       "Hello there\n\nNext part\nsame part",
     );
+    expect(normalizeNarration("- One\n  - Inner")).toBe("- One\n  - Inner");
     expect(normalizeNarration(" \n ")).toBe("");
   });
 });

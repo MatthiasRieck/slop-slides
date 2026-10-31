@@ -197,6 +197,13 @@
 }
 .markdown th { background: var(--accent); font-weight: 600; }
 .markdown hr { margin-block: 1em; border-color: var(--border); }
+.markdown.script {
+  font-size: inherit;
+  line-height: inherit;
+}
+.markdown.script p {
+  white-space: pre-line;
+}
 
 /* Syntax colors for the HTML view (CodeMirror + @lezer/highlight's classHighlighter). */
 .cm-editor {

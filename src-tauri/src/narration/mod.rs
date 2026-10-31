@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
@@ -602,6 +603,45 @@ fn settings(file: &Path) -> (&'static Voice, &'static Language) {
     )
 }
 
+/// What is said of a narration, which is Markdown: its words, without the marks around them.
+/// Plain text comes out as it went in, so its audio stays up to date.
+pub fn spoken(narration: &str) -> String {
+    let options =
+        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+    let mut out = String::new();
+    let separate = |out: &mut String, separator: &str| {
+        let end = out.trim_end().len();
+        if end > 0 && out[end..].matches('\n').count() < separator.len() {
+            out.truncate(end);
+            out.push_str(separator);
+        }
+    };
+    for event in Parser::new_ext(narration, options) {
+        match event {
+            Event::Text(text) | Event::Code(text) | Event::Html(text) | Event::InlineHtml(text) => {
+                out.push_str(&text)
+            }
+            Event::SoftBreak | Event::HardBreak => out.push('\n'),
+            Event::Start(Tag::Item)
+            | Event::End(TagEnd::Item | TagEnd::TableRow | TagEnd::TableHead) => {
+                separate(&mut out, "\n")
+            }
+            Event::End(TagEnd::TableCell) => out.push(' '),
+            Event::End(
+                TagEnd::Paragraph
+                | TagEnd::Heading(_)
+                | TagEnd::BlockQuote(_)
+                | TagEnd::CodeBlock
+                | TagEnd::HtmlBlock
+                | TagEnd::List(_)
+                | TagEnd::Table,
+            ) => separate(&mut out, "\n\n"),
+            _ => {}
+        }
+    }
+    out.trim_end().to_string()
+}
+
 /// The slides whose narration has no up-to-date audio.
 fn jobs(file: &Path, deck: &Deck) -> Vec<Job> {
     let (voice, language) = settings(file);
@@ -612,10 +652,10 @@ fn jobs(file: &Path, deck: &Deck) -> Vec<Job> {
         .filter(|(_, a)| matches!(a.state, AudioState::Missing | AudioState::Stale))
         .map(|(slide, _)| Job {
             slide: slide.id.clone(),
-            text: slide.narration.clone(),
+            text: spoken(&slide.narration),
             voice: voice.id,
             language: language.engine,
-            fingerprint: fingerprint(&slide.narration, voice.id, language.id),
+            fingerprint: fingerprint(&spoken(&slide.narration), voice.id, language.id),
         })
         .collect()
 }
@@ -630,15 +670,13 @@ pub fn statuses(file: &Path, deck: &Deck) -> Vec<SlideAudio> {
             let path = audio_file(file, &slide.id);
             let entry = manifest.slides.get(&slide.id).filter(|_| path.is_file());
             let seconds = entry.map(|e| e.seconds);
-            let state = if slide.narration.trim().is_empty() {
+            let text = spoken(&slide.narration);
+            let state = if text.is_empty() {
                 AudioState::None
             } else {
                 match entry {
                     None => AudioState::Missing,
-                    Some(e)
-                        if e.fingerprint
-                            == fingerprint(&slide.narration, voice.id, language.id) =>
-                    {
+                    Some(e) if e.fingerprint == fingerprint(&text, voice.id, language.id) => {
                         AudioState::Ready
                     }
                     Some(_) => AudioState::Stale,
@@ -768,6 +806,53 @@ mod tests {
         );
         let unknown = html("<meta name=\"slopslide-narration-voice\" content=\"bob\">");
         assert_eq!(Settings::of(&unknown).voice, "ryan");
+    }
+
+    #[test]
+    fn only_the_words_of_markdown_are_said() {
+        assert_eq!(
+            spoken("Plain text.\nSame part\n\nNext < part."),
+            "Plain text.\nSame part\n\nNext < part."
+        );
+        assert_eq!(
+            spoken("# Title\n\nSay **this** and `that`, [here](https://a.b).\n\n- One\n  - Inner\n- Two\n\n> Quote"),
+            "Title\n\nSay this and that, here.\n\nOne\nInner\n\nTwo\n\nQuote"
+        );
+        assert_eq!(spoken("| A | B |\n|---|---|\n| 1 | 2 |"), "A B\n1 2");
+        assert_eq!(spoken("Say <hi> & wave"), "Say <hi> & wave");
+        assert_eq!(spoken("---"), "");
+    }
+
+    #[test]
+    fn formatting_narration_keeps_its_audio_and_marks_alone_are_no_narration() {
+        let dir = temp_dir();
+        let file = deck_with(
+            &dir,
+            "talk",
+            "",
+            r#"<section class="slide" id="a"><aside class="narration">Say **this**.</aside></section><section class="slide" id="b"><aside class="narration">---</aside></section>"#,
+        );
+        let settings = Settings::of(&fs::read_to_string(&file).unwrap());
+        let (voice, language) = (settings.voice, settings.language);
+        let audio = audio_dir(&file);
+        fs::create_dir_all(&audio).unwrap();
+        fs::write(audio_file(&file, "a"), "").unwrap();
+        Manifest {
+            slides: BTreeMap::from([(
+                "a".to_string(),
+                Entry {
+                    fingerprint: fingerprint("Say this.", &voice, &language),
+                    seconds: 1.0,
+                },
+            )]),
+        }
+        .write(&audio)
+        .unwrap();
+        let states: Vec<_> = statuses(&file, &deck::load(&file).unwrap())
+            .into_iter()
+            .map(|a| a.state)
+            .collect();
+        assert_eq!(states, [AudioState::Ready, AudioState::None]);
     }
 
     #[test]

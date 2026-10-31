@@ -75,6 +75,15 @@ describe("NarrationPanel", () => {
     expect(screen.getByText(/Slide 3 of 3/)).toBeTruthy();
   });
 
+  it("counts the words said, not the Markdown around them, and previews them formatted", () => {
+    render(<NarrationPanel />);
+    fireEvent.change(box(), { target: { value: "- **Welcome** everyone" } });
+    expect(screen.getByText(/2 words/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    const preview = screen.getByRole("document", { name: "Narration preview" });
+    expect(preview.querySelector("li strong")?.textContent).toBe("Welcome");
+  });
+
   it("saves once typing pauses", () => {
     render(<NarrationPanel />);
     fireEvent.change(box(), { target: { value: "Welcome" } });

@@ -856,6 +856,24 @@ describe("presenter view", () => {
     expect(formatElapsed(36_000_000)).toBe("10:00:00");
   });
 
+  it("shows notes as formatted Markdown, without links that would leave the app", () => {
+    useApp.setState({
+      deck: {
+        ...deck(),
+        slides: deck().slides.map((s) =>
+          s.id === "intro" ? { ...s, notes: "Say **this**\nthen [that](https://a.b)\n\n- One" } : s,
+        ),
+      },
+    });
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "n" });
+    const box = screen.getByTestId("presenter-notes");
+    expect(box.querySelector("strong")?.textContent).toBe("this");
+    expect(box.querySelector("li")?.textContent).toBe("One");
+    expect(box.querySelector("a")).toBeNull();
+    expect(box.textContent).toContain("then that");
+  });
+
   describe("teleprompter", () => {
     const button = () => screen.getByRole("button", { name: /teleprompter/i });
     const said = () =>
@@ -876,6 +894,24 @@ describe("presenter view", () => {
       await act(async () => fireEvent.click(button()));
     }
     const hear = (text: string) => act(() => listeners.get("voice-heard")?.({ payload: text }));
+
+    it("follows through formatted text, keeping the formatting and leaving the marks out", async () => {
+      useApp.setState({
+        deck: {
+          ...deck(),
+          slides: deck().slides.map((s) =>
+            s.id === "intro" ? { ...s, narration: "## Welcome everyone\n\n- to the **quarterly** results" } : s,
+          ),
+        },
+      });
+      await turnOn();
+      hear("welcome everyone to the quarterly results");
+      const box = screen.getByTestId("presenter-notes");
+      expect(box.querySelector("h2")?.textContent).toBe("Welcome everyone");
+      expect(box.querySelector("li strong [data-said]")?.textContent).toBe("quarterly");
+      expect(said()).toBe("Welcome everyoneto the quarterly results");
+      expect(box.textContent).not.toContain("*");
+    });
 
     it("leaves the microphone alone until asked, and turns it off again", async () => {
       await act(async () => void render(<Presenter />));

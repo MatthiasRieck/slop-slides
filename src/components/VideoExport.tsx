@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { Slide, SlideAudio } from "../lib/api";
+import { markdownText } from "../lib/markdown";
 import { wordsSeconds } from "../lib/narration";
 import { cn } from "../lib/utils";
 import {
@@ -79,7 +80,9 @@ export function VideoExportPanel(props: {
   const lengths = props.slides.map((s) => {
     if (!(s.narration ?? "").trim()) return null;
     const ready = audio[s.id];
-    return ready?.state === "ready" && ready.seconds !== null ? ready.seconds : wordsSeconds(s.narration ?? "");
+    return ready?.state === "ready" && ready.seconds !== null
+      ? ready.seconds
+      : wordsSeconds(markdownText(s.narration ?? ""));
   });
   const estimated = speaks && pending.length > 0;
   const count = props.slides.length;

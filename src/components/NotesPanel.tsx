@@ -1,21 +1,24 @@
 import { Lock } from "lucide-react";
+import { useState } from "react";
 
 import type { Deck, Slide } from "../lib/api";
 import { useDraftText } from "../lib/useDraftText";
 import { useApp } from "../store";
+import { ScriptField, ScriptPreviewToggle } from "./ScriptMarkdown";
 
 /** How long typing pauses before the notes are saved to the deck. */
 export const NOTES_SAVE_DELAY = 800;
 
 /**
  * Notes mode's tools, in a band above the slide: the speaker notes of the current slide, to view
- * and edit. Only the presenter sees them, in the show's presenter view.
+ * and edit, in Markdown. Only the presenter sees them, in the show's presenter view.
  */
 export function NotesPanel() {
   const deck = useApp((s) => s.deck);
   const selected = useApp((s) => s.selected);
   const index = deck?.slides.findIndex((s) => s.id === selected) ?? -1;
   const slide = deck?.slides[index];
+  const [preview, setPreview] = useState(false);
   if (!deck || !slide) {
     return (
       <p className="shrink-0 border-b bg-background p-4 text-sm text-muted-foreground">
@@ -26,13 +29,19 @@ export function NotesPanel() {
   return (
     <section aria-label="Speaker notes" className="flex h-52 shrink-0 justify-center border-b bg-background">
       {/* One editor per slide: switching slides saves the last one's pending text as it unmounts. */}
-      <NotesEditor key={slide.id} deck={deck} slide={slide} index={index} />
+      <NotesEditor key={slide.id} deck={deck} slide={slide} index={index} preview={preview} onPreview={setPreview} />
     </section>
   );
 }
 
-function NotesEditor(props: { deck: Deck; slide: Slide; index: number }) {
-  const { deck, slide, index } = props;
+function NotesEditor(props: {
+  deck: Deck;
+  slide: Slide;
+  index: number;
+  preview: boolean;
+  onPreview: (preview: boolean) => void;
+}) {
+  const { deck, slide, index, preview } = props;
   const { draft, change, flush } = useDraftText(slide.notes ?? "", NOTES_SAVE_DELAY, (text) =>
     useApp.getState().setNotes(slide.id, text),
   );
@@ -42,6 +51,7 @@ function NotesEditor(props: { deck: Deck; slide: Slide; index: number }) {
         <span className="min-w-0 truncate">
           Slide {index + 1} of {deck.slides.length} · <span className="font-mono">{slide.id}</span>
         </span>
+        <ScriptPreviewToggle preview={preview} onChange={props.onPreview} />
         {slide.locked && (
           <span className="flex shrink-0 items-center gap-1">
             <Lock className="size-3" />
@@ -49,14 +59,14 @@ function NotesEditor(props: { deck: Deck; slide: Slide; index: number }) {
           </span>
         )}
       </div>
-      <textarea
-        aria-label="Speaker notes"
-        value={draft}
-        readOnly={slide.locked}
-        onChange={(event) => change(event.target.value)}
+      <ScriptField
+        label="Speaker notes"
+        draft={draft}
+        preview={preview}
+        readOnly={!!slide.locked}
+        onChange={change}
         onBlur={() => void flush()}
         placeholder={slide.locked ? "No notes." : "What to remember while this slide is shown…"}
-        className="selectable min-h-0 flex-1 resize-none rounded-md border bg-card p-3 text-sm leading-relaxed outline-none focus:border-primary"
       />
     </div>
   );

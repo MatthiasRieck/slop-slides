@@ -163,11 +163,14 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   The presenter and standalone player morph in supporting browsers, falling back to slide
   fades elsewhere; reduced motion and editor thumbnails skip morphing.
 - Speaker notes, if requested, go in `<aside class="notes">…</aside>` inside the slide
-  (hidden by the runtime).
+  (hidden by the runtime). They are Markdown text, formatted in the presenter view: no HTML,
+  entities for `&` and `<`, and start the aside's text right after its tag or indent all of it
+  evenly, as indentation means something in Markdown.
 - Narration is what is said over a slide (a voice-over script, later read out by text to
   speech). It is one `<aside class="narration">…</aside>`, a direct child of the slide (put it
-  last), holding plain text only: no markup, entities for `&` and `<`, paragraphs separated by
-  a blank line. The runtime hides it and the user edits it in the editor's Narration panel.
+  last), holding Markdown text like the notes: no HTML, entities for `&` and `<`, paragraphs
+  separated by a blank line. Formatting is shown to the presenter and never said, so only the
+  words count: use it to stress a word or two. The runtime hides it and the user edits it in the editor's Narration panel.
   Keep every slide's narration when editing, restyling, or moving it; write or rewrite it only
   when the user asks for narration, a script, or a voice-over. Write it as spoken sentences
   (no bullet points or stage directions) that fit the slide's content, in the narration's

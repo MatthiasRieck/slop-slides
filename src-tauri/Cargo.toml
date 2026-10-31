@@ -49,6 +49,8 @@ arboard = { version = "3.7.0", default-features = false, features = ["image-data
 rav1e = { version = "0.8", default-features = false, features = ["threading"] }
 # Narration in the video: Opus, royalty-free like AV1 (libopus, built from source).
 opus = "0.4"
+# Saying narration, which is Markdown, without its marks (see src/narration/mod.rs).
+pulldown-cmark = { version = "0.13.6", default-features = false }
 
 # Slide screenshots for sketches (see src/capture.rs) and PDF printing (src/pdf.rs); the same
 # versions wry already uses.

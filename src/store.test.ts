@@ -119,6 +119,9 @@ describe("sidebar", () => {
     expect(useApp.getState()).toMatchObject({ sidebarTab: "files", sidebarOpen: true });
     useApp = await freshStore();
     expect(useApp.getState().sidebarTab).toBe("files");
+    // Narration was a sidebar tab before it became a mode.
+    localStorage.setItem("slopslide.sidebarTab", "narration");
+    expect((await freshStore()).getState().sidebarTab).toBe("chat");
     localStorage.setItem("slopslide.sidebarTab", "bogus");
     useApp = await freshStore();
     expect(useApp.getState().sidebarTab).toBe("chat");
@@ -324,6 +327,32 @@ describe("stage view", () => {
     localStorage.setItem("slopslide.view", "bogus");
     const useApp = await freshStore();
     expect(useApp.getState().view).toBe("slides");
+  });
+
+  it("setMode switches between modes, one at a time, and keeps the HTML view across launches", async () => {
+    const { useApp, deckMode } = await freshModule();
+    useApp.setState({ deck: DECK, selected: "intro", view: "slides", editing: false, slideMode: "view" });
+    const mode = () => deckMode(useApp.getState());
+    useApp.getState().setMode("edit");
+    expect(mode()).toBe("edit");
+    useApp.getState().setMode("review");
+    expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "review" });
+    useApp.getState().setMode("code");
+    expect(useApp.getState()).toMatchObject({ view: "code", slideMode: "view" });
+    expect(localStorage.getItem("slopslide.view")).toBe("code");
+    useApp.getState().setMode("narration");
+    expect(mode()).toBe("narration");
+    expect(localStorage.getItem("slopslide.view")).toBe("slides");
+    useApp.getState().setMode("view");
+    expect(mode()).toBe("view");
+  });
+
+  it("setMode stays put rather than edit a locked slide", async () => {
+    const { useApp, deckMode } = await freshModule();
+    const locked = { ...DECK, slides: DECK.slides.map((s) => ({ ...s, locked: true })) };
+    useApp.setState({ deck: locked, selected: "intro", view: "slides", editing: false, slideMode: "review" });
+    useApp.getState().setMode("edit");
+    expect(deckMode(useApp.getState())).toBe("review");
   });
 
   it("setView switches and persists", async () => {

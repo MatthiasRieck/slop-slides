@@ -105,7 +105,7 @@ export interface LinkTarget {
 }
 
 /**
- * The tools above the slide in edit mode: add text, shapes and freehand drawings, restyle the
+ * Edit mode's tools, in the row above the slide: add text, shapes and freehand drawings, restyle the
  * selection (font, size, color, bold, italic, underline, strikethrough, superscript /
  * subscript, lists, links, spacing, alignment, how text fits, fill, border), move it up or
  * down the stack, or delete it. While typing, the text styles go to the selected text. With
@@ -144,7 +144,7 @@ export function EditToolbar(props: {
       role="toolbar"
       aria-label="Edit tools"
       data-edit-toolbar=""
-      className="flex flex-wrap items-center justify-center gap-0.5 rounded-lg border bg-card px-1 py-0.5 shadow-sm"
+      className="flex min-w-0 flex-[1_1_600px] flex-wrap items-center gap-0.5"
     >
       {TOOLS.map((t) => (
         <ToolButton key={t.tool} label={t.label} active={props.tool === t.tool} onClick={() => props.onTool(t.tool)}>

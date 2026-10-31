@@ -77,7 +77,7 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   With **Speak narration**, each slide's narration is said over it (an Opus audio track) after
   a short pause, and the slide stays until the narration and a pause after it end; the set
   seconds become the least a slide is shown.
-- **Narration:** the sidebar's Narration tab holds what is said over each slide. It is spoken
+- **Narration:** the Narration mode holds what is said over each slide. It is spoken
   on your computer by [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) 0.6B CustomVoice, in
   one of its nine voices and ten languages, chosen per deck. Its model (2.5 GB, all voices
   included) is downloaded on request to `~/.slopslides/models`. Each slide's audio is

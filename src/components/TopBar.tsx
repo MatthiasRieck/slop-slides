@@ -3,11 +3,14 @@ import { FolderOpen, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightO
 
 import { basename, cn, isMac } from "../lib/utils";
 import { useApp } from "../store";
+import { DeckActions } from "./DeckActions";
+import { ModeTabs } from "./ModeTabs";
 
 /**
- * The workspace's bar: the slide rail toggle (for a deck), breadcrumbs from the workspace folder
- * to the open file, then revealing and closing the file (back to the workspace) and the sidebar toggle.
- * The deck's own tools live in the toolbar above the slides (DeckToolbar).
+ * The workspace's bar: the slide rail toggle (for a deck) and breadcrumbs from the workspace
+ * folder to the open file; for a deck, its mode tabs in the middle, then export and present;
+ * then revealing and closing the file (back to the workspace) and the sidebar toggle. The
+ * tools of each mode live in the row above the slides (DeckToolbar).
  */
 export function TopBar() {
   const workspace = useApp((s) => s.workspace);
@@ -18,26 +21,38 @@ export function TopBar() {
   return (
     <header
       data-tauri-drag-region
-      className={cn("flex h-12 shrink-0 items-center gap-1 border-b bg-background pr-3", isMac ? "pl-[84px]" : "pl-3")}
-    >
-      {hasDeck && <RailToggle />}
-      <Breadcrumbs workspace={workspace.name} path={openedFile?.path ?? null} />
-      <div data-tauri-drag-region className="flex-1 self-stretch" />
-      {openedFile && (
-        <>
-          <RevealButton path={openedFile.absolute} />
-          <button
-            type="button"
-            onClick={() => void useApp.getState().closeDeck()}
-            title={`Close ${basename(openedFile.path)}`}
-            aria-label={`Close ${basename(openedFile.path)}`}
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-          >
-            <X className="size-4" />
-          </button>
-        </>
+      className={cn(
+        "relative z-30 grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] items-center gap-3 border-b bg-background pr-3",
+        isMac ? "pl-[84px]" : "pl-3",
       )}
-      <SidebarToggle />
+    >
+      <div data-tauri-drag-region className="flex min-w-0 items-center gap-1 self-stretch">
+        {hasDeck && <RailToggle />}
+        <Breadcrumbs workspace={workspace.name} path={openedFile?.path ?? null} />
+      </div>
+      {hasDeck ? <ModeTabs /> : <div />}
+      <div data-tauri-drag-region className="flex items-center justify-end gap-1 self-stretch">
+        {hasDeck && (
+          <div className="mr-2">
+            <DeckActions />
+          </div>
+        )}
+        {openedFile && (
+          <>
+            <RevealButton path={openedFile.absolute} />
+            <button
+              type="button"
+              onClick={() => void useApp.getState().closeDeck()}
+              title={`Close ${basename(openedFile.path)}`}
+              aria-label={`Close ${basename(openedFile.path)}`}
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <X className="size-4" />
+            </button>
+          </>
+        )}
+        <SidebarToggle />
+      </div>
     </header>
   );
 }

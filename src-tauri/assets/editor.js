@@ -1225,11 +1225,19 @@
       if (selected === el) select(null);
       el.parentElement.removeChild(el);
     } else {
+      dropTrailingBreaks(el);
       refit(el);
     }
     placeHandles();
     if (selected === el) report();
     commit();
+  }
+
+  /** Enter at the end of the text leaves line breaks for the caret that would stay as blank lines. */
+  function dropTrailingBreaks(el) {
+    while (el.lastChild && (el.lastChild.nodeName === "BR" || (el.lastChild.nodeType === 3 && !el.lastChild.data))) {
+      el.removeChild(el.lastChild);
+    }
   }
 
   /** The text selection (or caret) in the element being edited, or the last one it had. */
@@ -1766,7 +1774,7 @@
     placeHandles();
   }
 
-  /** Shift+Enter: a line break at the caret. */
+  /** Enter, or Shift+Enter in a list: a line break at the caret. */
   function insertLineBreak() {
     if (document.execCommand && document.execCommand("insertLineBreak")) return;
     insertAtCaret(document.createElement("br"));
@@ -3442,10 +3450,10 @@
           event.preventDefault();
           editRange();
           window.parent.postMessage({ type: "slop:edit-paste-request", slide: slide.id, plain: true }, "*");
-        } else if (event.key === "Escape" || (event.key === "Enter" && !event.shiftKey && (mod || !item))) {
+        } else if (event.key === "Escape" || (event.key === "Enter" && mod && !event.shiftKey)) {
           event.preventDefault();
           finishEditing();
-        } else if (event.key === "Enter" && !event.shiftKey) {
+        } else if (event.key === "Enter" && item && !event.shiftKey) {
           event.preventDefault();
           newItem(item);
         } else if (event.key === "Enter") {

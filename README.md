@@ -15,8 +15,8 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
 - **Middle:** the current slide on a fixed stage (1920×1080 unless the deck has another slide
   size), scaled to fit. Arrow keys navigate.
   The move button below it turns on edit mode: click an element to select it, drag it (or
-  use the arrow keys) to move it, double-click (or press Enter) to edit its text, Escape to
-  select the parent, Delete (or the trash button in the edit bar) to remove
+  use the arrow keys) to move it, double-click (or press Enter) to edit its text (Enter
+  starts a new line, Escape or ⌘Enter finishes), Escape to select the parent, Delete (or the trash button in the edit bar) to remove
   it, ⌘C / ⌘X / ⌘V to copy, cut and paste elements (also between slides), and ⌘Z / Ctrl+Z
   to undo. ⌘V also pastes images and text copied in other apps, like a browser. Pastes go
   on top of the slide, under the pointer (or in the middle of the view), without moving the

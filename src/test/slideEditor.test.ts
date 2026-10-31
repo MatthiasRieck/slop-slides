@@ -734,11 +734,52 @@ describe("slide editor", () => {
     expect(e.keys()).toEqual([]);
     expect(p.isConnected).toBe(true);
     p.textContent = "Uno";
-    e.key("Enter");
+    e.key("Escape");
     expect(p.hasAttribute("contenteditable")).toBe(false);
     const [commit] = e.commits();
     expect(commit!.markup).toContain(`<div class="card"><p>Uno</p>`);
     expect(commit!.markup).not.toMatch(/contenteditable|data-slop/);
+  });
+
+  const placeCaret = (e: ReturnType<typeof editor>, text: Text, at: number) => {
+    const range = e.doc.createRange();
+    range.setStart(text, at);
+    range.collapse(true);
+    e.window.getSelection()!.removeAllRanges();
+    e.window.getSelection()!.addRange(range);
+  };
+
+  it("breaks the line with Enter and finishes the text with Escape or the modifier", () => {
+    for (const finish of [{ key: "Escape" }, { key: "Enter", metaKey: true }, { key: "Enter", ctrlKey: true }]) {
+      const e = editor();
+      const p = e.$(".card p");
+      e.down(p);
+      e.key("Enter");
+      p.textContent = "Uno dos";
+      placeCaret(e, p.firstChild as Text, 3);
+      expect(e.key("Enter").defaultPrevented).toBe(true);
+      expect(e.key("Enter", { shiftKey: true }).defaultPrevented).toBe(true);
+      expect(p.getAttribute("contenteditable")).toBe("true");
+      expect(e.commits()).toEqual([]);
+      const { key, ...init } = finish;
+      e.key(key, init);
+      expect(p.hasAttribute("contenteditable")).toBe(false);
+      expect(e.commits()[0]!.markup).toContain("<p>Uno<br><br> dos</p>");
+    }
+  });
+
+  it("leaves no blank lines behind when Enter ended the text", () => {
+    const e = editor();
+    const p = e.$(".card p");
+    e.down(p);
+    e.key("Enter");
+    p.textContent = "Uno";
+    placeCaret(e, p.firstChild as Text, 3);
+    e.key("Enter");
+    e.key("Enter");
+    expect(p.querySelectorAll("br")).toHaveLength(2);
+    e.key("Escape");
+    expect(e.commits()[0]!.markup).toContain("<p>Uno</p>");
   });
 
   it("keeps focus in the text it starts editing, and lets clicks through overlays while typing", () => {
@@ -761,7 +802,7 @@ describe("slide editor", () => {
     expect(e.window.getComputedStyle(e.$(".overlay")).pointerEvents).toBe("none");
     expect(e.window.getComputedStyle(p).pointerEvents).toBe("auto");
     p.textContent = "Uno";
-    e.key("Enter");
+    e.key("Escape");
     expect(e.$("#intro").hasAttribute("data-slop-typing")).toBe(false);
     expect(e.commits()[0]!.markup).not.toMatch(/data-slop/);
   });
@@ -1698,7 +1739,7 @@ describe("slide editor", () => {
       expect(box!.style.width).toBe("");
       expect(e.commits()).toEqual([]);
       box!.textContent = "Note to self";
-      e.key("Enter");
+      e.key("Escape");
       expect(e.commits()[0]!.markup).toContain(">Note to self</div></section>");
       // A dragged-out text box wraps at the width it was given; one left empty goes away unsaved.
       e.fromParent({ type: "slop:edit-tool", tool: "text", style: TEXT_STYLE });
@@ -1723,7 +1764,7 @@ describe("slide editor", () => {
       expect(added(e)).toHaveLength(1);
       expect(toolTold(e).at(-1)!.tool).toBe("select");
       shape.textContent = "Inside";
-      e.key("Enter");
+      e.key("Escape");
       expect(e.commits().at(-1)!.markup).toContain(">Inside</div></section>");
       // An empty shape can be typed into too.
       const other = added(e)[0]!;
@@ -2261,6 +2302,22 @@ describe("slide editor", () => {
         e.fromParent({ type: "slop:edit-list", list: "ol" });
         expect(lines.innerHTML).toBe("One<br>Two<br>Three");
         expect(e.commits()).toHaveLength(3);
+      });
+
+      it("breaks the line in an item with Shift+Enter and finishes the list with the modifier", () => {
+        const e = editor({ markup: TEXT_DECK });
+        const lines = e.$("#lines");
+        e.down(lines);
+        e.fromParent({ type: "slop:edit-list", list: "ul" });
+        e.key("Enter");
+        selectText(e, lines, 2);
+        e.key("Enter", { shiftKey: true });
+        expect(lines.querySelectorAll("li")).toHaveLength(3);
+        expect(lines.querySelector("li")!.innerHTML).toBe("On<br>e");
+        expect(lines.getAttribute("contenteditable")).toBe("true");
+        e.key("Enter", { metaKey: true });
+        expect(lines.querySelectorAll("li")).toHaveLength(3);
+        expect(lines.hasAttribute("contenteditable")).toBe(false);
       });
 
       it("starts a new item with Enter, indents with Tab and outdents with Shift+Tab", () => {

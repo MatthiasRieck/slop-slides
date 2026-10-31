@@ -33,7 +33,9 @@ export const SECTIONS: { title: string; keys: [string, string][] }[] = [
     keys: [
       ["Enter", "Edit the selected element's text"],
       ["⌘B / ⌘I / ⌘U", "Bold / italic / underline"],
-      ["⇧Enter", "Line break"],
+      ["Enter while typing", "Line break, or a new list item"],
+      ["⇧Enter while typing", "Line break, also in a list"],
+      ["⌘Enter", "Finish the text"],
       ["⌘⇧V", "Paste as plain text"],
     ],
   },

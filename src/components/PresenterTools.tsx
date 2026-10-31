@@ -216,7 +216,9 @@ export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annota
   };
 
   const onPointerDown = (event: ReactPointerEvent) => {
-    if (event.button !== 0) return;
+    if (!active || event.button !== 0) return;
+    // Capturing the pointer alone still lets native selection highlight the slide/frame.
+    event.preventDefault();
     if (tool === "laser") {
       event.currentTarget.setPointerCapture?.(event.pointerId);
       tracing.current = true;
@@ -265,6 +267,8 @@ export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annota
         pointerEvents: active ? "auto" : "none",
         cursor: tool === "laser" ? "none" : tool === "eraser" ? "cell" : active ? "crosshair" : undefined,
         touchAction: "none",
+        userSelect: "none",
+        WebkitUserSelect: "none",
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

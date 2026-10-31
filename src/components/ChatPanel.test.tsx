@@ -349,6 +349,23 @@ describe("ChatPanel: composing", () => {
     const label = screen.getByText(useApp.getState().selection.label);
     expect(label.className).toContain("hidden");
     expect(label.className).toContain("@[26rem]:inline");
+    expect(label.className).toContain("truncate");
+    for (const chevron of toolbar.querySelectorAll(".lucide-chevron-down")) {
+      expect(chevron.getAttribute("class")).toContain("@[17rem]:block");
+    }
+  });
+
+  it("keeps the toolbar's round buttons from being squeezed", () => {
+    render(<ChatPanel />);
+    expect(screen.getByRole("button", { name: useApp.getState().selection.label }).parentElement!.className).toContain(
+      "min-w-0",
+    );
+    expect(screen.getByLabelText("Permissions").parentElement!.className).toContain("shrink-0");
+    for (const title of ["Send", "Attach images or files", "Dictate a message"]) {
+      expect(screen.getByTitle(title).className).toContain("shrink-0");
+    }
+    act(() => useApp.setState({ running: true }));
+    expect(screen.getByTitle("Stop").className).toContain("shrink-0");
   });
 
   it("sends on Enter with the current slide and clears the draft", () => {

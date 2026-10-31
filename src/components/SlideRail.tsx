@@ -3,8 +3,10 @@ import {
   closestCenter,
   DndContext,
   type DragEndEvent,
+  DragOverlay,
   type DragStartEvent,
   getClientRect,
+  MeasuringStrategy,
   PointerSensor,
   useSensor,
   useSensors,
@@ -32,7 +34,15 @@ import {
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { api, type Deck, errorMessage, type Section, type Slide } from "../lib/api";
-import { dropRows, dropSection, railItems, sectionBlocks, sectionKey, startsSection } from "../lib/sections";
+import {
+  dropRows,
+  dropSection,
+  type RailItem,
+  railItems,
+  sectionBlocks,
+  sectionKey,
+  startsSection,
+} from "../lib/sections";
 import { pixelsOf } from "../lib/slideSize";
 import { cn } from "../lib/utils";
 import { railSelection, useApp } from "../store";
@@ -53,37 +63,36 @@ export function SlideRail() {
   // While a search runs the rail lists what it found. The rest stay mounted, hidden, so ending it
   // doesn't reload every thumbnail, and can't be dragged: an order needs all the slides in view.
   const found = useMemo(() => matches && new Set(matches.map((m) => m.slide)), [matches]);
-  // The section being dragged, and how far down the rail its row was when picked up. Until it is
-  // dropped the rail shows one row per section, closed up around that row so it stays in hand.
-  const [moving, setMoving] = useState<{ key: string; top: number } | null>(null);
-  const landing = useRef<{ key: string; top: number } | null>(null);
+  // The section being dragged, where its row was when picked up, and how tall a slide's row is.
+  // Until it is dropped the slides are folded away, the rail closing up around that row.
+  const [moving, setMoving] = useState<SectionMove | null>(null);
+  // The folded slides open again after the drop; dnd-kit must not animate them from where they were.
+  const [settling, setSettling] = useState(false);
+  const landing = useRef<SectionMove | null>(null);
+  const stopHolding = useRef<() => void>(undefined);
   const list = useRef<HTMLOListElement>(null);
   useEffect(() => releaseIframes, []);
+  useEffect(() => () => stopHolding.current?.(), []);
   useLayoutEffect(() => {
     const rows = list.current;
-    const scroller = rows?.parentElement;
-    const top = moving && rowTop(rows, moving.key);
-    if (!moving || !rows || !scroller || top == null) return;
-    const shift = top - moving.top;
-    if (shift < 0) rows.style.paddingTop = `${-shift}px`;
-    else if (shift > 0) {
-      const needed = scroller.scrollTop + shift + scroller.clientHeight;
-      rows.style.paddingBottom = `${Math.max(needed - rows.offsetHeight, 0)}px`;
-      scroller.scrollTop += shift;
+    if (!rows) return;
+    if (moving) {
+      foldSlides(rows, moving.slideHeight, false);
+      stopHolding.current?.();
+      stopHolding.current = holdRow(rows, moving.key, moving.top, moving.top);
+      return;
     }
-    return () => {
+    const dropped = landing.current;
+    if (!dropped) return;
+    landing.current = null;
+    const end = openTop(rows, dropped);
+    foldSlides(rows, dropped.slideHeight, true);
+    stopHolding.current?.();
+    stopHolding.current = holdRow(rows, dropped.key, dropped.top, end, () => {
       rows.style.paddingTop = "";
       rows.style.paddingBottom = "";
-    };
-  }, [moving]);
-  // Opening the sections again leaves the dropped one where the pointer let go of it.
-  useLayoutEffect(() => {
-    const dropped = landing.current;
-    if (moving || !dropped) return;
-    landing.current = null;
-    const scroller = list.current?.parentElement;
-    const top = rowTop(list.current, dropped.key);
-    if (scroller && top != null) scroller.scrollTop += top - dropped.top;
+      setSettling(false);
+    });
   }, [moving]);
   if (!deck) return null;
 
@@ -98,7 +107,8 @@ export function SlideRail() {
     holdIframes();
     const key = String(active.id);
     const top = blocks.some((block) => block.key === key) ? rowTop(list.current, key) : null;
-    if (top != null) setMoving({ key, top });
+    const slideHeight = list.current?.querySelector<HTMLElement>("[data-rail-slide]")?.offsetHeight ?? 0;
+    if (top != null) setMoving({ key, top, slideHeight });
   };
 
   // Only the sections' rows are open to a drop while a section moves; the rest take no space.
@@ -110,14 +120,15 @@ export function SlideRail() {
     );
 
   /** Opens the sections again, with the one dragged ending up `at` this place among them. */
-  const putDown = (at: number, top: number | undefined) => {
-    landing.current = top === undefined ? null : { key: sectionKey(at), top };
+  const putDown = (move: SectionMove, at: number, top: number) => {
+    landing.current = { ...move, key: sectionKey(at), top };
+    setSettling(true);
     setMoving(null);
   };
 
   const onDragCancel = () => {
     releaseIframes();
-    if (moving) putDown(keys.indexOf(moving.key), moving.top);
+    if (moving) putDown(moving, keys.indexOf(moving.key), moving.top);
   };
 
   const onDragEnd = async ({ active, over }: DragEndEvent) => {
@@ -125,7 +136,8 @@ export function SlideRail() {
     const key = String(active.id);
     if (moving) {
       const order = dropSection(items, key, String(over?.id ?? key));
-      putDown(order.filter((row) => keys.includes(row)).indexOf(key), active.rect.current.translated?.top);
+      const at = order.filter((row) => keys.includes(row)).indexOf(key);
+      putDown(moving, at, active.rect.current.translated?.top ?? moving.top);
       if (over && over.id !== active.id) await useApp.getState().reorderRail(order);
       return;
     }
@@ -226,6 +238,8 @@ export function SlideRail() {
             sensors={sensors}
             collisionDetection={collisionDetection}
             modifiers={[restrictToVerticalAxis]}
+            autoScroll={{ layoutShiftCompensation: false }}
+            measuring={{ droppable: { strategy: moving ? MeasuringStrategy.Always : MeasuringStrategy.WhileDragging } }}
             onDragStart={onDragStart}
             onDragEnd={onDragEnd}
             onDragCancel={onDragCancel}
@@ -243,7 +257,9 @@ export function SlideRail() {
                       deckId={deck.id}
                       slide={item.slide}
                       index={item.index}
-                      filteredOut={!!moving || (!!found && !found.has(item.slide.id))}
+                      filteredOut={!!found && !found.has(item.slide.id)}
+                      folded={!!moving}
+                      still={!!moving || settling}
                     />
                   ) : (
                     <SectionHeader
@@ -252,6 +268,7 @@ export function SlideRail() {
                       deckId={deck.id}
                       section={item.section}
                       filteredOut={!!found}
+                      still={!!moving || settling}
                       slides={moving ? blocks.find((block) => block.key === item.key)!.rows.length - 1 : undefined}
                       editing={editingSection === item.section.index}
                       onEditing={(editing) => setEditingSection(editing ? item.section.index : null)}
@@ -260,6 +277,23 @@ export function SlideRail() {
                 )}
               </ol>
             </SortableContext>
+            {/* Follows the pointer on its own: the rail scrolls and moves under it as the slides fold. */}
+            {moving && (
+              <DragOverlay dropAnimation={null}>
+                <div
+                  data-testid="section-overlay"
+                  className="flex items-center gap-2 rounded bg-sidebar pb-1 pl-6 pr-1 pt-1 ring-1 ring-border"
+                >
+                  <span className="min-w-0 truncate text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+                    {sectionTitle(items, moving.key)}
+                  </span>
+                  <span className="h-px flex-1 bg-border" />
+                  <span className="shrink-0 text-2xs text-muted-foreground">
+                    {slideCount((blocks.find((block) => block.key === moving.key)?.rows.length ?? 1) - 1)}
+                  </span>
+                </div>
+              </DragOverlay>
+            )}
           </DndContext>
         )}
       </div>
@@ -384,10 +418,68 @@ function releaseIframes() {
   document.getElementById(IFRAME_HOLD_ID)?.remove();
 }
 
+type SectionMove = { key: string; top: number; slideHeight: number };
+
+const FOLD = { duration: 240, easing: "cubic-bezier(0.4, 0, 0.2, 1)" };
+const noLayoutAnimation = () => false;
+
+/** Shrinks the slides' rows to nothing, or grows them back. The -mt-3 takes back the list's gap. */
+function foldSlides(rows: HTMLElement, height: number, opening: boolean) {
+  const open = { height: `${height}px`, marginTop: "0px", opacity: 1, overflow: "hidden" };
+  const shut = { height: "0px", marginTop: "-12px", opacity: 0, overflow: "hidden" };
+  for (const slide of rows.querySelectorAll("[data-rail-slide]"))
+    slide.animate(opening ? [shut, open] : [open, shut], FOLD);
+  if (opening) return;
+  for (const label of rows.querySelectorAll("[data-fold-label]")) label.animate([{ opacity: 0 }, { opacity: 1 }], FOLD);
+}
+
+/** Scrolls or pads the rail so the row `key` sits at `top` in the window. */
+function placeRow(rows: HTMLElement, key: string, top: number) {
+  const scroller = rows.parentElement;
+  const at = rowTop(rows, key);
+  if (!scroller || at == null) return;
+  const padded = Number.parseFloat(rows.style.paddingTop || "0");
+  const scroll = scroller.scrollTop - padded + at - top;
+  const content = rows.offsetHeight - padded - Number.parseFloat(rows.style.paddingBottom || "0");
+  rows.style.paddingTop = `${Math.max(-scroll, 0)}px`;
+  rows.style.paddingBottom = `${Math.max(scroll + scroller.clientHeight - content, 0)}px`;
+  scroller.scrollTop = Math.max(scroll, 0);
+}
+
+/** Where the row of a section put down ends up once the slides are open and nothing is padded. */
+function openTop(rows: HTMLElement, { key, top }: SectionMove) {
+  const scroller = rows.parentElement;
+  rows.style.paddingTop = "";
+  rows.style.paddingBottom = "";
+  const at = rowTop(rows, key);
+  if (!scroller || at == null) return top;
+  const row = at + scroller.scrollTop;
+  return row - Math.min(Math.max(row - top, 0), scroller.scrollHeight - scroller.clientHeight);
+}
+
+/** Keeps the row `key` in place, on its way `from` one height `to` another, while the slides fold. */
+function holdRow(rows: HTMLElement, key: string, from: number, to: number, done?: () => void) {
+  const start = performance.now();
+  let frame = 0;
+  const step = () => {
+    const t = Math.min((performance.now() - start) / FOLD.duration, 1);
+    placeRow(rows, key, from + (to - from) * t * t * (3 - 2 * t));
+    if (t < 1) frame = requestAnimationFrame(step);
+    else done?.();
+  };
+  step();
+  return () => cancelAnimationFrame(frame);
+}
+
 /** Where the section row `key` sits in the window, whatever a drag is doing to it. */
 function rowTop(list: HTMLElement | null, key: string) {
   const row = list?.querySelector(`[data-section-key="${key}"]`);
   return row ? getClientRect(row, { ignoreTransform: true }).top : null;
+}
+
+function sectionTitle(items: RailItem[], key: string) {
+  const row = items.find((item) => item.key === key);
+  return (row?.kind === "section" && row.section.title) || "Untitled section";
 }
 
 const slideCount = (count: number) => `${count} ${count === 1 ? "slide" : "slides"}`;
@@ -395,7 +487,11 @@ const slideCount = (count: number) => `${count} ${count === 1 ? "slide" : "slide
 /** Stands in for the slides before the first section, which stay put while sections move. */
 function LooseSlides({ count }: { count: number }) {
   return (
-    <li data-testid="loose-slides" className="flex items-center gap-2 pt-1 text-2xs text-muted-foreground">
+    <li
+      data-testid="loose-slides"
+      data-fold-label
+      className="flex items-center gap-2 pt-1 text-2xs text-muted-foreground"
+    >
       <span className="w-4 shrink-0" />
       {slideCount(count)}
     </li>
@@ -410,12 +506,15 @@ function SectionHeader(props: {
   filteredOut: boolean;
   /** How many slides are folded under the row while sections are being moved. */
   slides?: number;
+  /** Keeps dnd-kit from sliding the row anywhere while the slides fold and open. */
+  still: boolean;
   editing: boolean;
   onEditing: (editing: boolean) => void;
 }) {
   const { deckId, section, editing, onEditing } = props;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: props.itemKey,
+    animateLayoutChanges: props.still ? noLayoutAnimation : undefined,
   });
 
   const commit = async (title: string) => {
@@ -443,10 +542,7 @@ function SectionHeader(props: {
       data-testid="section-header"
       data-section-key={props.itemKey}
       style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={cn(
-        props.filteredOut ? "hidden" : "group flex items-center gap-2 pt-1",
-        isDragging && "z-10 rounded bg-sidebar pb-1 ring-1 ring-border",
-      )}
+      className={cn(props.filteredOut ? "hidden" : "group flex items-center gap-2 pt-1", isDragging && "opacity-0")}
       {...attributes}
       {...listeners}
     >
@@ -485,7 +581,9 @@ function SectionHeader(props: {
           </span>
           <span className="h-px flex-1 bg-border" />
           {props.slides !== undefined ? (
-            <span className="shrink-0 pr-1 text-2xs text-muted-foreground">{slideCount(props.slides)}</span>
+            <span data-fold-label className="shrink-0 pr-1 text-2xs text-muted-foreground">
+              {slideCount(props.slides)}
+            </span>
           ) : (
             <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">
               <SectionAction title="Rename section" onClick={() => onEditing(true)}>
@@ -519,13 +617,21 @@ function SectionAction(props: { title: string; onClick: () => void; children: Re
   );
 }
 
-function Thumbnail(props: { deckId: string; slide: Slide; index: number; filteredOut: boolean }) {
-  const { deckId, slide, index, filteredOut } = props;
+function Thumbnail(props: {
+  deckId: string;
+  slide: Slide;
+  index: number;
+  filteredOut: boolean;
+  folded: boolean;
+  still: boolean;
+}) {
+  const { deckId, slide, index, filteredOut, folded } = props;
   const selected = useApp((s) => s.selected === slide.id);
   const picked = useApp((s) => s.railSelected.includes(slide.id));
   const version = useSlideVersion(slide);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: slide.id,
+    animateLayoutChanges: props.still ? noLayoutAnimation : undefined,
   });
   const itemRef = useRef<HTMLLIElement | null>(null);
 
@@ -561,8 +667,13 @@ function Thumbnail(props: { deckId: string; slide: Slide; index: number; filtere
         setNodeRef(node);
         itemRef.current = node;
       }}
+      data-rail-slide
       style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={cn(filteredOut ? "hidden" : "group flex gap-2", isDragging && "z-10 opacity-80")}
+      className={cn(
+        filteredOut ? "hidden" : "group flex gap-2",
+        folded && "pointer-events-none -mt-3 h-0 overflow-hidden opacity-0",
+        isDragging && "z-10 opacity-80",
+      )}
       {...attributes}
       {...listeners}
     >

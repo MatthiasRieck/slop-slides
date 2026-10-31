@@ -38,7 +38,7 @@ export function ScreenPicker(props: {
         <div>
           <h2 className="text-base font-semibold">Present on</h2>
           <p className="text-xs text-muted-foreground">
-            Pick the screen for the audience and the screen for your presenter view.
+            Screens match the arrangement in your system display settings. Pick where your slides and notes appear.
           </p>
         </div>
         <div
@@ -61,7 +61,11 @@ export function ScreenPicker(props: {
                 )}
                 style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%` }}
               >
+                <span className="text-sm font-semibold tabular-nums">Screen {screen.index + 1}</span>
                 <span className="max-w-full truncate text-xs font-medium">{screen.name}</span>
+                <span className="text-[10px] font-medium">
+                  {role === "audience" ? "Audience · slides" : role === "presenter" ? "Presenter · notes" : "Unused"}
+                </span>
                 <span className="text-[10px] text-muted-foreground tabular-nums">
                   {screen.pixelWidth}×{screen.pixelHeight}
                   {screen.primary ? " · main" : ""}

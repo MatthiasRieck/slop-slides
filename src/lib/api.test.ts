@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (...args: unknown[]) => invoke(...args),
+  Channel: class {
+    constructor(public onmessage: () => void) {}
+  },
+}));
 
 import { api, errorMessage } from "./api";
 import { DEFAULT_VIDEO_OPTIONS } from "./video";
@@ -118,6 +123,7 @@ const CASES = [
   ["setSlideTime", () => api.setSlideTime("talk", "a", 90), "set_slide_time", { id: "talk", slide: "a", seconds: 90 }],
   ["newWindow", () => api.newWindow(), "new_window", undefined],
   ["listScreens", () => api.listScreens(), "list_screens", undefined],
+  ["screenPreviews", () => api.screenPreviews(() => {}), "screen_previews", { grabbed: expect.anything() }],
   ["presentOn", () => api.presentOn(1, 0), "present_on", { audience: 1, presenter: 0 }],
   ["presentOn", () => api.presentOn(1, null), "present_on", { audience: 1, presenter: null }],
   ["closePresenterView", () => api.closePresenterView(), "close_presenter_view", undefined],
@@ -264,6 +270,14 @@ const CASES = [
     { id: "talk", language: "de" },
   ],
 ] as const;
+
+it("tells when the screens are captured", () => {
+  const onGrabbed = vi.fn();
+  void api.screenPreviews(onGrabbed);
+  expect(invoke.mock.calls[0]?.[0]).toBe("screen_previews");
+  invoke.mock.calls[0]?.[1].grabbed.onmessage();
+  expect(onGrabbed).toHaveBeenCalled();
+});
 
 describe("api", () => {
   it.each(CASES)("%s invokes %s", async (_, call, command, args) => {

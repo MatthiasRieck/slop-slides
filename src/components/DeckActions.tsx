@@ -12,6 +12,9 @@ import { Popover } from "./Templates";
 import { VideoExportPanel } from "./VideoExport";
 
 /** Export and present, in the top bar next to the mode tabs. */
+/** The longest the screen picker waits for the screens to be captured before opening anyway. */
+const PICKER_MAX_WAIT_MS = 150;
+
 export function DeckActions() {
   const deck = useApp((s) => s.deck);
   if (!deck) return null;
@@ -25,11 +28,30 @@ function Actions({ deck }: { deck: Deck }) {
   const [videoProgress, setVideoProgress] = useState<VideoProgress | null>(null);
   // The attached screens while the picker is open (presenting with several of them).
   const [screens, setScreens] = useState<Screen[] | null>(null);
+  // Their screenshots; null while they are being taken.
+  const [previews, setPreviews] = useState<(string | null)[] | null>(null);
 
   const present = async () => {
     const attached = await api.listScreens().catch(() => []);
-    if (attached.length > 1) setScreens(attached);
-    else useApp.getState().setPresenting(true);
+    if (attached.length <= 1) {
+      useApp.getState().setPresenting(true);
+      return;
+    }
+    // The picker opens as soon as the screens are captured, so that it isn't in the screenshots,
+    // and they come in while it is open. It doesn't wait long for that: capturing can get stuck
+    // on the system asking for permission. Only once, or it would come back after a cancel.
+    let opened = false;
+    const open = () => {
+      if (opened) return;
+      opened = true;
+      clearTimeout(timer);
+      setScreens(attached);
+    };
+    const timer = setTimeout(open, PICKER_MAX_WAIT_MS);
+    setPreviews(null);
+    const taken = await api.screenPreviews(open).catch(() => []);
+    open();
+    setPreviews(taken);
   };
 
   const fileName = deck.title.replace(/[\\/:*?"<>|]+/g, "").trim() || "presentation";
@@ -135,6 +157,7 @@ function Actions({ deck }: { deck: Deck }) {
       {screens && (
         <ScreenPicker
           screens={screens}
+          previews={previews}
           onCancel={() => setScreens(null)}
           onStart={(choice) => {
             setScreens(null);

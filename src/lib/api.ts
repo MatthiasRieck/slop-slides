@@ -277,7 +277,26 @@ export interface VoiceDownloadProgress {
   total: number;
 }
 
+/** An attached screen, in physical pixels on the desktop (see src-tauri/src/screens.rs). */
+export interface Screen {
+  /** Position in the list, which `presentOn` takes. */
+  index: number;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale: number;
+  primary: boolean;
+}
+
 export const api = {
+  /** The attached screens, left to right. */
+  listScreens: () => invoke<Screen[]>("list_screens"),
+  /** Moves this window to the `audience` screen and opens the presenter view on `presenter`. */
+  presentOn: (audience: number, presenter: number | null) => invoke<void>("present_on", { audience, presenter }),
+  /** Closes the presenter view window, if open. */
+  closePresenterView: () => invoke<void>("close_presenter_view"),
   /** Opens another app window, on the start screen; each window has a folder of its own. */
   newWindow: () => invoke<void>("new_window"),
   /** The folder opened from Finder that is waiting to open in this window, once; null without one. */

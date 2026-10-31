@@ -1,8 +1,9 @@
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ChevronLeft, ChevronRight, type LucideIcon, Maximize, PanelRight, Pause, Play } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import type { Deck } from "../lib/api";
+import { api, type Deck, errorMessage } from "../lib/api";
 import { zoomBox } from "../lib/ink";
 import { type Playback, playNarration } from "../lib/narrationAudio";
 import { cn, fileUrl } from "../lib/utils";
@@ -46,7 +47,16 @@ export function Presenter() {
 
   useEffect(() => {
     const window_ = getCurrentWindow();
-    void window_.setFullscreen(true);
+    // With several screens, the show first moves to the one picked (and the presenter view opens).
+    const screens = useApp.getState().screens;
+    if (screens) {
+      api
+        .presentOn(screens.audience, screens.presenter)
+        .catch((error) => useApp.getState().setError(errorMessage(error)))
+        .finally(() => void window_.setFullscreen(true));
+    } else {
+      void window_.setFullscreen(true);
+    }
     const exit = () => useApp.getState().setPresenting(false);
     /** Tool shortcuts first; Escape puts a tool away before it ends the show. */
     const handle = (key: string, mod: boolean) => {
@@ -95,10 +105,14 @@ export function Presenter() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("message", onMessage);
       void window_.setFullscreen(false);
+      if (screens) void api.closePresenterView().catch(() => {});
     };
   }, []);
 
   const go = (key: string) => frameRef.current?.contentWindow?.postMessage({ type: "slop:go", key }, "*");
+  // The presenter view in a window of its own (on another screen) is fed from here.
+  const separate = useApp((s) => s.screens?.presenter != null);
+  usePresenterFeed(separate ? deck : null, current ?? startRef.current, go);
   const autoplay = useAutoplay(deck, current, () => go("ArrowRight"));
 
   if (!deck) return null;
@@ -177,7 +191,7 @@ export function Presenter() {
         </div>
         <PresenterToolbar annotations={annotations} onExit={() => useApp.getState().setPresenting(false)} />
       </div>
-      {panelOpen && (
+      {panelOpen && !separate && (
         <PresenterPanel
           deck={deck}
           slide={current ?? startRef.current}
@@ -188,6 +202,40 @@ export function Presenter() {
       )}
     </div>
   );
+}
+
+/** What the show tells the presenter view window: the deck and the slide on screen. */
+export interface PresenterState {
+  deck: Deck;
+  slide: string | null;
+}
+
+/**
+ * Keeps the presenter view window up to date (it asks for the state when it opens, and gets it
+ * again on every change) and passes on the keys pressed there to the show. Does nothing without
+ * a deck.
+ */
+function usePresenterFeed(deck: Deck | null, slide: string | null, go: (key: string) => void) {
+  const state = useRef<PresenterState | null>(null);
+  state.current = deck ? { deck, slide } : null;
+  const goRef = useRef(go);
+  goRef.current = go;
+  const active = deck !== null;
+  useEffect(() => {
+    if (deck) void emit("presenter:state", { deck, slide });
+  }, [deck, slide]);
+  useEffect(() => {
+    if (!active) return;
+    const sub = Promise.all([
+      listen("presenter:ready", () => state.current && void emit("presenter:state", state.current)),
+      listen<string>("presenter:key", (event) => goRef.current(event.payload)),
+      listen("presenter:exit", () => useApp.getState().setPresenting(false)),
+    ]);
+    return () =>
+      void sub.then((offs) => {
+        for (const off of offs) off();
+      });
+  }, [active]);
 }
 
 /**

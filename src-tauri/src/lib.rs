@@ -19,6 +19,7 @@ mod protocol;
 mod providers;
 mod review;
 mod safety;
+mod screens;
 mod sessions;
 mod size;
 mod templates;
@@ -136,6 +137,29 @@ fn take_pending_folder(window: Window, pending: State<windows::PendingFolders>) 
 #[tauri::command]
 fn new_window(app: AppHandle) -> Result<()> {
     windows::open_new(&app)
+}
+
+/// The attached screens, for choosing where to present.
+#[tauri::command]
+fn list_screens(app: AppHandle) -> Result<Vec<screens::Screen>> {
+    screens::list(&app)
+}
+
+/// Moves the show window to the `audience` screen and opens the presenter view on `presenter`.
+#[tauri::command]
+fn present_on(
+    app: AppHandle,
+    window: Window,
+    audience: usize,
+    presenter: Option<usize>,
+) -> Result<()> {
+    screens::present(&app, &window, audience, presenter)
+}
+
+/// Closes the presenter view window when the show ends.
+#[tauri::command]
+fn close_presenter_view(app: AppHandle) {
+    screens::close_presenter_view(&app);
 }
 
 #[tauri::command]
@@ -858,6 +882,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             new_window,
+            list_screens,
+            present_on,
+            close_presenter_view,
             take_pending_folder,
             open_workspace,
             close_workspace,

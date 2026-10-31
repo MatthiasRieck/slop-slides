@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { Deck, Slide } from "../lib/api";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn } from "../lib/utils";
+import { ScriptMarkdown } from "./ScriptMarkdown";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { FollowedScript, TeleprompterNotice, useTeleprompter } from "./Teleprompter";
 
@@ -81,7 +82,9 @@ export function PresenterPanel(props: {
   const following = teleprompter.phase === "following";
   const script = following ? slide?.narration || slide?.notes : slide?.notes;
   const notesClass = cn(
-    "min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap rounded-lg bg-white/5 p-3 leading-relaxed",
+    "min-h-0 flex-1 overflow-y-auto rounded-lg bg-white/5 p-3 leading-relaxed",
+    // Formatted text keeps to the dark panel whatever the app's theme.
+    "[--accent:rgb(255_255_255/0.1)] [--border:rgb(255_255_255/0.2)] [--muted-foreground:rgb(255_255_255/0.6)]",
     props.window ? "text-2xl" : "text-base",
   );
   return (
@@ -143,7 +146,7 @@ export function PresenterPanel(props: {
         <FollowedScript key={`${id}:${script}`} text={script} className={notesClass} />
       ) : (
         <div data-testid="presenter-notes" className={notesClass}>
-          {script || <span className="text-white/40">No notes for this slide.</span>}
+          {script ? <ScriptMarkdown text={script} /> : <span className="text-white/40">No notes for this slide.</span>}
         </div>
       )}
       {!props.window && (

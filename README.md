@@ -101,6 +101,8 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   or delete it. Marks and comments are saved in the deck file and can be hidden together. The
   composer attaches the comments to your next message, either this slide's or all slides', and
   lists them so you can leave some out. Each goes out once, and again if you change it.
+- **Notes and narration in Markdown:** both are written in Markdown, with a preview in their
+  panels; the presenter view shows them formatted and narration is spoken without the marks.
 - **Narration:** the Narration mode holds what is said over each slide. It is spoken
   on your computer by [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) 0.6B CustomVoice, in
   one of its nine voices and ten languages, chosen per deck. Its model (2.5 GB, all voices

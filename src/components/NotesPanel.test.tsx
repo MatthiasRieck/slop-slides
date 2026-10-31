@@ -36,6 +36,17 @@ describe("NotesPanel", () => {
     expect(screen.getByText(/Slide 1 of 3/)).toBeTruthy();
   });
 
+  it("previews the notes formatted, and goes back to editing them", () => {
+    useApp.setState({ deck: deckWith({ intro: "Say **hello**." }) });
+    render(<NotesPanel />);
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    const preview = screen.getByRole("document", { name: "Speaker notes preview" });
+    expect(preview.querySelector("strong")?.textContent).toBe("hello");
+    expect(screen.queryByRole("textbox")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(box().value).toBe("Say **hello**.");
+  });
+
   it("saves once typing pauses", () => {
     render(<NotesPanel />);
     fireEvent.change(box(), { target: { value: "Say" } });

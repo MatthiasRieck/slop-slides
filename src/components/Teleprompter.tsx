@@ -2,14 +2,23 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api, errorMessage, type VoiceDownloadProgress } from "../lib/api";
-import { follow, pieces, startTrack, toScript } from "../lib/teleprompter";
+import { markdownText, rehypePieces } from "../lib/markdown";
+import { follow, type Piece, pieces, startTrack, toScript } from "../lib/teleprompter";
 import { cn } from "../lib/utils";
 import { formatBytes } from "../lib/voice";
+import { ScriptMarkdown } from "./ScriptMarkdown";
 
 export type TeleprompterPhase = "off" | "offer" | "downloading" | "starting" | "following";
 
 /** Where the speaker's line stays as the script scrolls: a third of the way down. */
 const LINE_AT = 1 / 3;
+
+const pieceClass = (piece: Piece) =>
+  cn(
+    "box-decoration-clone",
+    piece.said && "rounded-sm bg-emerald-400/20 text-white/70",
+    piece.current && "bg-emerald-400/45 text-white",
+  );
 
 /**
  * Turns the teleprompter on and off: the microphone is on only while it is following, and the
@@ -155,11 +164,11 @@ export function TeleprompterNotice({ teleprompter }: { teleprompter: ReturnType<
 }
 
 /**
- * The script of one slide as the speaker gets through it: what was said is highlighted and the
- * text scrolls along, wherever they go in it. Give it a new `key` for another script.
+ * The script of one slide (Markdown) as the speaker gets through it: what was said is highlighted
+ * and the text scrolls along, wherever they go in it. Give it a new `key` for another script.
  */
 export function FollowedScript({ text, className }: { text: string; className?: string }) {
-  const script = useMemo(() => toScript(text), [text]);
+  const script = useMemo(() => toScript(markdownText(text)), [text]);
   const [track, setTrack] = useState(() => startTrack(script));
   const box = useRef<HTMLDivElement>(null);
 
@@ -180,21 +189,7 @@ export function FollowedScript({ text, className }: { text: string; className?: 
 
   return (
     <div ref={box} data-testid="presenter-notes" className={cn("relative", className)}>
-      {pieces(script, track).map((piece, i) => (
-        <span
-          // biome-ignore lint/suspicious/noArrayIndexKey: the pieces are the text in order, nothing to keep apart
-          key={i}
-          data-said={piece.said || undefined}
-          data-current={piece.current || undefined}
-          className={cn(
-            "box-decoration-clone",
-            piece.said && "rounded-sm bg-emerald-400/20 text-white/70",
-            piece.current && "bg-emerald-400/45 text-white",
-          )}
-        >
-          {piece.text}
-        </span>
-      ))}
+      <ScriptMarkdown text={text} rehypePlugins={[[rehypePieces, pieces(script, track), pieceClass]]} />
     </div>
   );
 }

@@ -2,13 +2,14 @@
 const WORDS_PER_MINUTE = 150;
 
 /**
- * `text` the way the deck stores a narration (see `narration` in src-tauri/src/html.rs): each
- * line trimmed, at most one blank line between paragraphs, nothing around it.
+ * `text` the way the deck stores a narration (see `narration` in src-tauri/src/html.rs): no
+ * space at the ends of lines (at their start it means something in Markdown), at most one blank
+ * line between paragraphs, nothing around it.
  */
 export function normalizeNarration(text: string): string {
   return text
     .split(/\r?\n/)
-    .map((line) => line.trim())
+    .map((line) => line.trimEnd())
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();

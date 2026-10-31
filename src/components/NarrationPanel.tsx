@@ -2,12 +2,14 @@ import { AudioLines, Download, Loader2, Lock, Play, Square, X } from "lucide-rea
 import { useEffect, useState } from "react";
 
 import { type Deck, errorMessage, type Slide, type SlideAudio } from "../lib/api";
+import { markdownText } from "../lib/markdown";
 import { speakingTime, wordCount } from "../lib/narration";
 import { formatDuration, type Playback, playNarration } from "../lib/narrationAudio";
 import { useDraftText } from "../lib/useDraftText";
 import { formatBytes } from "../lib/voice";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
+import { ScriptField, ScriptPreviewToggle } from "./ScriptMarkdown";
 
 /** How long typing pauses before the narration is saved to the deck. */
 export const NARRATION_SAVE_DELAY = 800;
@@ -25,6 +27,7 @@ const button =
  * voice beside it.
  */
 export function NarrationPanel() {
+  const [preview, setPreview] = useState(false);
   const deck = useApp((s) => s.deck);
   const selected = useApp((s) => s.selected);
   const loadSpeech = useNarration((s) => s.loadSpeech);
@@ -43,7 +46,15 @@ export function NarrationPanel() {
   return (
     <section aria-label="Narration tools" className="flex h-52 shrink-0 justify-center border-b bg-background">
       {/* One editor per slide: switching slides saves the last one's pending text as it unmounts. */}
-      <NarrationEditor key={slide.id} deck={deck} slide={slide} index={index} total={deck.slides.length} />
+      <NarrationEditor
+        key={slide.id}
+        deck={deck}
+        slide={slide}
+        index={index}
+        total={deck.slides.length}
+        preview={preview}
+        onPreview={setPreview}
+      />
       <div className="flex w-72 shrink-0 flex-col justify-between overflow-y-auto border-l">
         <SpeechSettings deck={deck} />
         <DeckAudio deck={deck} />
@@ -124,13 +135,22 @@ function SpeechSettings({ deck }: { deck: Deck }) {
   );
 }
 
-function NarrationEditor(props: { deck: Deck; slide: Slide; index: number; total: number }) {
-  const { deck, slide, index, total } = props;
+function NarrationEditor(props: {
+  deck: Deck;
+  slide: Slide;
+  index: number;
+  total: number;
+  preview: boolean;
+  onPreview: (preview: boolean) => void;
+}) {
+  const { deck, slide, index, total, preview } = props;
   const { draft, change, flush } = useDraftText(slide.narration ?? "", NARRATION_SAVE_DELAY, (text) =>
     useApp.getState().setNarration(slide.id, text),
   );
 
-  const words = wordCount(draft);
+  // Only the words are said, not the Markdown around them.
+  const spoken = markdownText(draft);
+  const words = wordCount(spoken);
   return (
     <div className="flex min-w-0 max-w-3xl flex-1 flex-col gap-2 p-3">
       <div className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
@@ -139,8 +159,9 @@ function NarrationEditor(props: { deck: Deck; slide: Slide; index: number; total
         </span>
         <span className="ml-auto shrink-0 tabular-nums">
           {words} {words === 1 ? "word" : "words"} ·{" "}
-          <span title="Estimated at 150 words per minute">~{speakingTime(draft)}</span>
+          <span title="Estimated at 150 words per minute">~{speakingTime(spoken)}</span>
         </span>
+        <ScriptPreviewToggle preview={preview} onChange={props.onPreview} />
         {slide.locked && (
           <span className="flex shrink-0 items-center gap-1">
             <Lock className="size-3" />
@@ -148,14 +169,14 @@ function NarrationEditor(props: { deck: Deck; slide: Slide; index: number; total
           </span>
         )}
       </div>
-      <textarea
-        aria-label="Narration"
-        value={draft}
-        readOnly={slide.locked}
-        onChange={(event) => change(event.target.value)}
+      <ScriptField
+        label="Narration"
+        draft={draft}
+        preview={preview}
+        readOnly={!!slide.locked}
+        onChange={change}
         onBlur={() => void flush()}
         placeholder={slide.locked ? "No narration." : "What is said while this slide is shown…"}
-        className="selectable min-h-0 flex-1 resize-none rounded-md border bg-card p-3 text-sm leading-relaxed outline-none focus:border-primary"
       />
       <SlideAudioControls deck={deck} slide={slide.id} hasText={draft.trim() !== ""} flush={flush} />
     </div>

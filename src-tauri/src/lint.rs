@@ -589,7 +589,7 @@ fn check_slides(l: &mut Linter) {
     }
 }
 
-/// Narration: one plain-text `<aside class="narration">` per slide, read out as it is.
+/// Narration: one `<aside class="narration">` of Markdown text per slide, no HTML in it.
 fn check_narration(l: &mut Linter) {
     let slides = l.slides.clone();
     for slide in &slides {
@@ -613,7 +613,7 @@ fn check_narration(l: &mut Linter) {
                     "narration-markup",
                     Severity::Warning,
                     slide.range.start + span.range.start,
-                    "Narration is plain text read out loud; remove the markup inside it (keep its text, separate paragraphs with a blank line).".into(),
+                    "Narration is text read out loud, formatted in Markdown if at all; remove the HTML inside it (keep its text, separate paragraphs with a blank line).".into(),
                 );
             }
         }
@@ -1753,6 +1753,14 @@ mod tests {
     fn accepts_one_plain_narration_per_slide() {
         let found = rules(&deck(
             "<section class=\"slide\" id=\"a\"><h1>A</h1>\n<aside class=\"narration\">Say &amp; this.<br>\n\nThen that.</aside></section>",
+        ));
+        assert_eq!(found, Vec::<&str>::new());
+    }
+
+    #[test]
+    fn accepts_markdown_in_narration() {
+        let found = rules(&deck(
+            "<section class=\"slide\" id=\"a\"><h1>A</h1>\n<aside class=\"narration\"># Say **this**\n\n- `one` &lt; two\n  - [three](https://a.b)</aside></section>",
         ));
         assert_eq!(found, Vec::<&str>::new());
     }

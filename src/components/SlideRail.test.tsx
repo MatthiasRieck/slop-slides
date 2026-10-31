@@ -510,7 +510,8 @@ describe("moving a section", () => {
     sections: [section(0, "One", 1), section(1, "Two", 3)],
   };
   const header = (title: string) => headers().find((li) => li.textContent?.includes(title))!;
-  const slideRows = () => items().filter((li) => !li.dataset.testid && !li.classList.contains("hidden"));
+  const slideRows = () => items().filter((li) => "railSlide" in li.dataset && !li.classList.contains("h-0"));
+  const animate = vi.fn();
   const pickUp = (li: HTMLElement) =>
     act(() => {
       fireEvent.pointerDown(li, { isPrimary: true, button: 0, clientX: 10, clientY: 10 });
@@ -523,6 +524,8 @@ describe("moving a section", () => {
 
   beforeEach(() => {
     useApp.setState({ deck, selected: "a", railSelected: [] });
+    animate.mockClear();
+    HTMLElement.prototype.animate = animate;
     // jsdom has no layout: put the two section rows one above the other.
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
       const title = this.textContent ?? "";
@@ -543,8 +546,23 @@ describe("moving a section", () => {
     pickUp(header("Two"));
     expect(slideRows()).toHaveLength(0);
     expect(items().filter((li) => li.querySelector("iframe, button > div"))).toHaveLength(5);
+    expect(items().some((li) => li.classList.contains("hidden"))).toBe(false);
     expect(headers().map((li) => li.textContent)).toEqual(["One2 slides", "Two2 slides"]);
     expect(screen.getByTestId("loose-slides").textContent).toBe("1 slide");
+    expect(screen.getByTestId("section-overlay").textContent).toBe("Two2 slides");
+  });
+
+  it("animates the slides shut, and open again from their place when dropped", async () => {
+    render(<SlideRail />);
+    pickUp(header("Two"));
+    const shrinking = animate.mock.calls.filter(([frames]) => frames[0].height !== undefined);
+    expect(shrinking).toHaveLength(5);
+    expect(shrinking[0]![0].at(-1)).toMatchObject({ height: "0px", opacity: 0 });
+    animate.mockClear();
+    await letGo();
+    expect(animate).toHaveBeenCalledTimes(5);
+    expect(animate.mock.calls[0]![0][0]).toMatchObject({ height: "0px", opacity: 0 });
+    expect(animate.mock.calls[0]![0][1]).toMatchObject({ opacity: 1 });
   });
 
   it("does not fold anything while a slide is dragged", () => {

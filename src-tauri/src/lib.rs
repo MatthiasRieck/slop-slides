@@ -146,6 +146,13 @@ fn list_screens(app: AppHandle) -> Result<Vec<screens::Screen>> {
     screens::list(&app)
 }
 
+/// A screenshot of each attached screen, for telling them apart in the picker. `grabbed` hears
+/// when the screens are captured, which is well before the screenshots are ready.
+#[tauri::command]
+async fn screen_previews(app: AppHandle, grabbed: tauri::ipc::Channel<()>) -> Vec<Option<String>> {
+    screens::previews(&app, grabbed).await
+}
+
 /// Moves the show window to the `audience` screen and opens the presenter view on `presenter`.
 /// Off the main thread, which building a window from a command needs on Windows.
 #[tauri::command(async)]
@@ -910,6 +917,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             new_window,
             list_screens,
+            screen_previews,
             present_on,
             close_presenter_view,
             take_pending_folder,

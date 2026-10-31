@@ -7,7 +7,12 @@ const openDialog = vi.fn();
 const revealItemInDir = vi.fn();
 const listen = vi.fn();
 const unlisten = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (...args: unknown[]) => invoke(...args),
+  Channel: class {
+    constructor(public onmessage: () => void) {}
+  },
+}));
 vi.mock("@tauri-apps/api/event", () => ({ listen: (...args: unknown[]) => listen(...args) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   ask: vi.fn(),
@@ -181,6 +186,81 @@ describe("deck actions", () => {
     fireEvent.click(screen.getByText("Start presenting"));
     expect(useApp.getState().presenting).toBe(true);
     expect(useApp.getState().screens).toEqual({ audience: 1, presenter: 0 });
+  });
+
+  describe("screenshots in the picker", () => {
+    const attached = [
+      { index: 0, name: "A", x: 0, y: 0, width: 100, height: 100, pixelWidth: 100, pixelHeight: 100, primary: true },
+      { index: 1, name: "B", x: 100, y: 0, width: 100, height: 100, pixelWidth: 100, pixelHeight: 100, primary: false },
+    ];
+
+    /** Has the backend take screenshots until told to finish; `grabbed` reports the capture. */
+    const capturing = () => {
+      const run = { grabbed: () => {}, finish: (_: (string | null)[]) => {} };
+      invoke.mockImplementation((command: string, args?: { grabbed: { onmessage: () => void } }) => {
+        if (command !== "screen_previews") return Promise.resolve(attached);
+        run.grabbed = () => args?.grabbed.onmessage();
+        return new Promise((resolve) => (run.finish = resolve));
+      });
+      return run;
+    };
+
+    it("opens once the screens are captured, so that it isn't in them, and fills in after", async () => {
+      const run = capturing();
+      render(<DeckActions />);
+      await act(async () => fireEvent.click(presentButton()));
+      expect(screen.queryByText("Start presenting")).toBeNull();
+      act(() => run.grabbed());
+      expect(screen.getByText("Start presenting")).toBeTruthy();
+      expect(screen.getAllByRole("status")).toHaveLength(2);
+      await act(async () => run.finish(["data:image/png;base64,AAAA", null]));
+      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.getByAltText("A now").getAttribute("src")).toBe("data:image/png;base64,AAAA");
+      expect(screen.queryByAltText("B now")).toBeNull();
+    });
+
+    it("opens anyway when capturing takes too long", async () => {
+      vi.useFakeTimers();
+      try {
+        capturing();
+        render(<DeckActions />);
+        await act(async () => fireEvent.click(presentButton()));
+        expect(screen.queryByText("Start presenting")).toBeNull();
+        await act(async () => vi.advanceTimersByTime(150));
+        expect(screen.getByText("Start presenting")).toBeTruthy();
+        expect(screen.getAllByRole("status")).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("stays closed when cancelled before the screenshots are there", async () => {
+      const run = capturing();
+      render(<DeckActions />);
+      await act(async () => fireEvent.click(presentButton()));
+      act(() => run.grabbed());
+      fireEvent.click(screen.getByText("Cancel"));
+      await act(async () => run.finish(["data:,", "data:,"]));
+      expect(screen.queryByText("Start presenting")).toBeNull();
+    });
+
+    it("drops the placeholders when they cannot be taken", async () => {
+      invoke.mockImplementation((command: string) =>
+        command === "screen_previews" ? Promise.reject("nope") : Promise.resolve(attached),
+      );
+      render(<DeckActions />);
+      await act(async () => fireEvent.click(presentButton()));
+      expect(screen.getByText("Start presenting")).toBeTruthy();
+      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.queryByRole("img")).toBeNull();
+    });
+
+    it("are not taken with one screen", async () => {
+      invoke.mockResolvedValue([attached[0]]);
+      render(<DeckActions />);
+      await act(async () => fireEvent.click(presentButton()));
+      expect(invoke.mock.calls.map(([command]) => command)).not.toContain("screen_previews");
+    });
   });
 
   it("does not present when the picker is cancelled", async () => {

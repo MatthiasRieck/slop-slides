@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type { SlideComment } from "./comments";
 import type { Stroke } from "./ink";
 import type { Provider, ProviderInfo } from "./models";
@@ -300,6 +300,13 @@ export interface Screen {
 export const api = {
   /** The attached screens, left to right. */
   listScreens: () => invoke<Screen[]>("list_screens"),
+  /**
+   * A screenshot (data URL) of each screen in `listScreens`, or null where there is none.
+   * `onGrabbed` is called when the screens are captured: what appears on them later isn't in the
+   * screenshots, which take a moment longer.
+   */
+  screenPreviews: (onGrabbed: () => void) =>
+    invoke<(string | null)[]>("screen_previews", { grabbed: new Channel<null>(onGrabbed) }),
   /** Moves this window to the `audience` screen and opens the presenter view on `presenter`. */
   presentOn: (audience: number, presenter: number | null) => invoke<void>("present_on", { audience, presenter }),
   /** Closes the presenter view window, if open. */

@@ -1,15 +1,31 @@
 import { closestCenter, DndContext, type DragEndEvent, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
-import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Copy, Eye, EyeOff, Lock, LockOpen, Palette, Pencil, Plus, SquareSplitVertical, Trash2, X } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Copy,
+  Eye,
+  EyeOff,
+  Lock,
+  LockOpen,
+  Palette,
+  Pencil,
+  Plus,
+  Redo2,
+  SquareSplitVertical,
+  Trash2,
+  Undo2,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { api, errorMessage, type Section, type Slide } from "../lib/api";
-import { applyOrder, railItems, startsSection } from "../lib/sections";
+import { api, type Deck, errorMessage, type Section, type Slide } from "../lib/api";
+import { dropRows, railItems, startsSection } from "../lib/sections";
 import { pixelsOf } from "../lib/slideSize";
 import { cn } from "../lib/utils";
-import { useApp } from "../store";
+import { railSelection, useApp } from "../store";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { LayoutPicker, Popover, StylePicker } from "./Templates";
 
@@ -38,14 +54,11 @@ export function SlideRail() {
   const onDragEnd = async ({ active, over }: DragEndEvent) => {
     releaseIframes();
     if (!over || active.id === over.id) return;
-    const order = arrayMove(keys, keys.indexOf(String(active.id)), keys.indexOf(String(over.id)));
-    useApp.getState().setDeck(applyOrder(deck, order));
-    try {
-      useApp.getState().setDeck(await api.reorderSlides(deck.id, order));
-    } catch (error) {
-      useApp.getState().setError(errorMessage(error));
-      useApp.getState().setDeck(await api.loadDeck(deck.id));
-    }
+    const key = String(active.id);
+    // Dragging one of the picked slides takes the others along.
+    const picked = railSelection(useApp.getState());
+    const moved = picked.length > 1 && picked.includes(key) ? picked : [key];
+    await useApp.getState().reorderRail(dropRows(keys, moved, key, String(over.id)));
   };
 
   const addSlide = async () => {
@@ -77,6 +90,7 @@ export function SlideRail() {
           Slides · {found ? `${found.size} of ${deck.slides.length}` : deck.slides.length}
         </span>
         <div className="flex items-center gap-0.5">
+          <RailHistory />
           <button
             type="button"
             onClick={addSection}
@@ -126,6 +140,7 @@ export function SlideRail() {
           <LayoutPicker mode="add" onBlank={() => void addSlide()} onDone={() => setPicker(null)} />
         </Popover>
       )}
+      <BulkActions deck={deck} />
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-1.5">
         {deck.slides.length === 0 ? (
           <p className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">
@@ -171,6 +186,104 @@ export function SlideRail() {
           </DndContext>
         )}
       </div>
+    </div>
+  );
+}
+
+const headerButton =
+  "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
+
+/** Undo and redo of what was done in the rail, once there is something to step through. */
+function RailHistory() {
+  const canUndo = useApp((s) => s.deckUndo.length > 0);
+  const canRedo = useApp((s) => s.deckRedo.length > 0);
+  if (!canUndo && !canRedo) return null;
+  return (
+    <>
+      <button
+        type="button"
+        title="Undo the last slide list change (⌘Z)"
+        disabled={!canUndo}
+        onClick={() => void useApp.getState().undoDeckEdit()}
+        className={headerButton}
+      >
+        <Undo2 className="size-4" />
+      </button>
+      <button
+        type="button"
+        title="Redo the slide list change (⇧⌘Z)"
+        disabled={!canRedo}
+        onClick={() => void useApp.getState().redoDeckEdit()}
+        className={headerButton}
+      >
+        <Redo2 className="size-4" />
+      </button>
+    </>
+  );
+}
+
+/** What can be done to the slides picked with ⇧/⌘-click. Locked ones are not deleted or hidden. */
+function BulkActions({ deck }: { deck: Deck }) {
+  const count = useApp((s) => s.railSelected.length);
+  const searching = useApp((s) => !!s.search.matches);
+  if (count < 2) return null;
+  const app = useApp.getState();
+  const picked = railSelection(app);
+  const free = deck.slides.filter((s) => picked.includes(s.id) && !s.locked);
+  const ids = free.map((s) => s.id);
+  const show = free.length > 0 && free.every((s) => s.hidden);
+  const locked = picked.length - free.length;
+  const skips = locked > 0 ? ` (not the ${locked} locked)` : "";
+  return (
+    <div role="toolbar" aria-label="Selected slides" className="flex h-8 shrink-0 items-center gap-0.5 border-y px-3">
+      <span className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">{picked.length} selected</span>
+      <button
+        type="button"
+        title="Move up (⌘↑)"
+        disabled={searching}
+        onClick={() => void app.moveSlides(-1)}
+        className={headerButton}
+      >
+        <ArrowUp className="size-3.5" />
+      </button>
+      <button
+        type="button"
+        title="Move down (⌘↓)"
+        disabled={searching}
+        onClick={() => void app.moveSlides(1)}
+        className={headerButton}
+      >
+        <ArrowDown className="size-3.5" />
+      </button>
+      <button
+        type="button"
+        title={`${show ? "Show" : "Hide"} slides${skips}`}
+        disabled={free.length === 0}
+        onClick={() => void app.setSlidesHidden(ids, !show)}
+        className={headerButton}
+      >
+        {show ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+      </button>
+      <button
+        type="button"
+        title="Duplicate slides"
+        onClick={() => void app.duplicateSlides(picked)}
+        className={headerButton}
+      >
+        <Copy className="size-3.5" />
+      </button>
+      <button
+        type="button"
+        title={`Delete slides${skips}`}
+        disabled={free.length === 0}
+        onClick={() => void app.deleteSlides(ids)}
+        className={headerButton}
+      >
+        <Trash2 className="size-3.5" />
+      </button>
+      <button type="button" title="Clear selection" onClick={app.clearRailSelection} className={headerButton}>
+        <X className="size-3.5" />
+      </button>
     </div>
   );
 }
@@ -307,6 +420,7 @@ function SectionAction(props: { title: string; onClick: () => void; children: Re
 function Thumbnail(props: { deckId: string; slide: Slide; index: number; filteredOut: boolean }) {
   const { deckId, slide, index, filteredOut } = props;
   const selected = useApp((s) => s.selected === slide.id);
+  const picked = useApp((s) => s.railSelected.includes(slide.id));
   const version = useSlideVersion(slide);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: slide.id,
@@ -316,24 +430,6 @@ function Thumbnail(props: { deckId: string; slide: Slide; index: number; filtere
   useEffect(() => {
     if (selected) itemRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [selected]);
-
-  const duplicate = async () => {
-    try {
-      const created = await api.duplicateSlide(deckId, slide.id);
-      useApp.getState().setDeck(created.deck);
-      useApp.getState().select(created.slide);
-    } catch (error) {
-      useApp.getState().setError(errorMessage(error));
-    }
-  };
-
-  const toggleHidden = async () => {
-    try {
-      useApp.getState().setDeck(await api.setSlideHidden(deckId, slide.id, !slide.hidden));
-    } catch (error) {
-      useApp.getState().setError(errorMessage(error));
-    }
-  };
 
   const deckSize = useApp((s) => s.deck?.size);
 
@@ -345,18 +441,16 @@ function Thumbnail(props: { deckId: string; slide: Slide; index: number; filtere
     }
   };
 
-  const remove = async () => {
-    try {
-      const before = useApp.getState().deck?.slides ?? [];
-      const neighbor = (before[index + 1] ?? before[index - 1])?.id ?? null;
-      const next = await api.deleteSlide(deckId, slide.id);
-      // The deck file drops the slide's review marks with it; forget them here too.
-      useApp.getState().clearSketch(slide.id);
-      if (selected) useApp.getState().select(neighbor);
-      useApp.getState().setDeck(next);
-    } catch (error) {
-      useApp.getState().setError(errorMessage(error));
-    }
+  const onClick = (event: React.MouseEvent) => {
+    const app = useApp.getState();
+    if (event.shiftKey) app.extendRailSelection(slide.id, "range");
+    else if (event.metaKey || event.ctrlKey) app.extendRailSelection(slide.id, "toggle");
+    else app.select(slide.id);
+  };
+
+  const onDoubleClick = () => {
+    useApp.getState().select(slide.id);
+    useApp.getState().setMode("edit");
   };
 
   return (
@@ -382,11 +476,18 @@ function Thumbnail(props: { deckId: string; slide: Slide; index: number; filtere
       <div className="relative min-w-0 flex-1">
         <button
           type="button"
-          onClick={() => useApp.getState().select(slide.id)}
+          title={slide.locked ? undefined : "Double-click to edit"}
+          aria-pressed={picked || selected}
+          onClick={onClick}
+          onDoubleClick={onDoubleClick}
           className={cn(
             "block w-full overflow-hidden rounded-md transition-shadow",
             // The offset gap keeps the ring visible against dark slides.
-            selected ? "ring-2 ring-primary ring-offset-2 ring-offset-sidebar" : "hover:ring-1 hover:ring-input",
+            selected
+              ? "ring-2 ring-primary ring-offset-2 ring-offset-sidebar"
+              : picked
+                ? "ring-2 ring-primary/50 ring-offset-2 ring-offset-sidebar"
+                : "hover:ring-1 hover:ring-input",
           )}
         >
           <SlideFrame
@@ -412,14 +513,17 @@ function Thumbnail(props: { deckId: string; slide: Slide; index: number; filtere
           <RailAction title={slide.locked ? "Unlock slide" : "Lock slide"} onClick={toggleLocked}>
             {slide.locked ? <LockOpen className="size-3" /> : <Lock className="size-3" />}
           </RailAction>
-          <RailAction title={slide.hidden ? "Show slide" : "Hide slide"} onClick={toggleHidden}>
+          <RailAction
+            title={slide.hidden ? "Show slide" : "Hide slide"}
+            onClick={() => void useApp.getState().setSlidesHidden([slide.id], !slide.hidden)}
+          >
             {slide.hidden ? <Eye className="size-3" /> : <EyeOff className="size-3" />}
           </RailAction>
-          <RailAction title="Duplicate" onClick={duplicate}>
+          <RailAction title="Duplicate" onClick={() => void useApp.getState().duplicateSlides([slide.id])}>
             <Copy className="size-3" />
           </RailAction>
           {!slide.locked && (
-            <RailAction title="Delete" onClick={remove}>
+            <RailAction title="Delete" onClick={() => void useApp.getState().deleteSlides([slide.id])}>
               <Trash2 className="size-3" />
             </RailAction>
           )}

@@ -19,7 +19,9 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   it, ⌘C / ⌘X / ⌘V to copy, cut and paste elements (also between slides), and ⌘Z / Ctrl+Z
   to undo. ⌘V also pastes images and text copied in other apps, like a browser. Pastes go
   on top of the slide, under the pointer (or in the middle of the view), without moving the
-  layout. The edit toolbar above the slide styles text: font (the deck's fonts and system
+  layout. Right-click an element for these actions and its stacking order, to ask the agent
+  about it, or to have the agent tidy just an element you added. `?` lists the shortcuts.
+  The edit toolbar above the slide styles text: font (the deck's fonts and system
   fonts), size (±, or type one), color, bold / italic / underline (⌘B / ⌘I / ⌘U),
   strikethrough, superscript and subscript, line height and letter spacing, bulleted and
   numbered lists (Enter starts a new item, Tab / Shift+Tab indent and outdent), and links to

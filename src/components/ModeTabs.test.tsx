@@ -36,6 +36,7 @@ describe("ModeTabs", () => {
       "Edit",
       "Review",
       "Narration",
+      "Notes",
       "HTML",
     ]);
     expect(selected()).toEqual(["View"]);

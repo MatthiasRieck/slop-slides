@@ -329,8 +329,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn lists_models_over_app_server() {
-        use std::os::unix::fs::PermissionsExt;
-
         let script = r#"#!/bin/sh
 read -r _; echo '{"method":"thread/started","params":{}}'; echo '{"id":1,"result":{"userAgent":"mock/0"}}'
 read -r _
@@ -339,8 +337,7 @@ read -r _; echo '{"id":3,"result":{"data":[{"model":"gpt-b","displayName":"gpt-b
 "#;
         let path =
             std::env::temp_dir().join(format!("slopslide-mock-codex-{}", std::process::id()));
-        std::fs::write(&path, script).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_script(&path, script);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

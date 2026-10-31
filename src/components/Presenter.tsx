@@ -1,5 +1,5 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronLeft, ChevronRight, type LucideIcon, Maximize, Pause, Play } from "lucide-react";
+import { ChevronLeft, ChevronRight, type LucideIcon, Maximize, PanelRight, Pause, Play } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { Deck } from "../lib/api";
@@ -9,7 +9,10 @@ import { cn, fileUrl } from "../lib/utils";
 import { loadVideoOptions } from "../lib/video";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
+import { PresenterPanel } from "./PresenterPanel";
 import { AnnotationLayer, PresenterToolbar, useAnnotations, useReveal } from "./PresenterTools";
+
+const PANEL_KEY = "slopslide.presenterPanel";
 
 /**
  * Full-screen slideshow. Plays the deck file with its own embedded player (the same thing
@@ -17,7 +20,9 @@ import { AnnotationLayer, PresenterToolbar, useAnnotations, useReveal } from "./
  * presenter's tools: laser pointer, pen, highlighter and eraser. With `show`, the backend adds
  * the pasteboard (src-tauri/assets/pasteboard.js), so the slide can be zoomed with the mouse
  * wheel or a pinch and panned with a swipe or the middle button; 0 fits it again. Play runs
- * the show by itself, speaking each slide's narration (see `useAutoplay`).
+ * the show by itself, speaking each slide's narration (see `useAutoplay`). N opens the presenter
+ * view beside the slide (see `PresenterPanel`), in this same window: it is for a screen the
+ * audience doesn't see.
  */
 export function Presenter() {
   const deck = useApp((s) => s.deck);
@@ -35,6 +40,9 @@ export function Presenter() {
   const [zoom, setZoom] = useState({ x: 0, y: 0, k: 1 });
   const nav = useReveal(annotations.peek);
   const moved = !(zoom.x === 0 && zoom.y === 0 && zoom.k === 1);
+  const [panelOpen, setPanelOpen] = useState(() => localStorage.getItem(PANEL_KEY) === "true");
+  const [startedAt, setStartedAt] = useState(() => Date.now());
+  useEffect(() => localStorage.setItem(PANEL_KEY, String(panelOpen)), [panelOpen]);
 
   useEffect(() => {
     const window_ = getCurrentWindow();
@@ -49,6 +57,10 @@ export function Presenter() {
       }
       if (key === "0" && !mod) {
         fitSlide(frameRef.current);
+        return true;
+      }
+      if (key.toLowerCase() === "n" && !mod) {
+        setPanelOpen((open) => !open);
         return true;
       }
       return false;
@@ -92,71 +104,88 @@ export function Presenter() {
   if (!deck) return null;
   const hash = startRef.current ? `#${encodeURIComponent(startRef.current)}` : "";
   return (
-    <div className="fixed inset-0 z-50 bg-black">
-      {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: The load handler focuses the presentation for keyboard navigation. */}
-      <iframe
-        ref={frameRef}
-        title="Presentation"
-        src={`${fileUrl(deck.id, `v=${deck.shellHash}&show`)}${hash}`}
-        sandbox="allow-scripts"
-        onLoad={(event) => event.currentTarget.focus()}
-        className="size-full border-0"
-      />
-      <div
-        data-testid="annotation-zoom"
-        className="pointer-events-none absolute"
-        style={zoomBox(zoom.x, zoom.y, zoom.k)}
-      >
-        <AnnotationLayer annotations={annotations} zoom={zoom.k} />
-      </div>
-      {moved && (
-        <button
-          type="button"
-          title="Back to the slide, fit to the screen (0)"
-          // Keep keyboard focus where it was, so Space still advances the slide.
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => fitSlide(frameRef.current)}
-          className="absolute right-32 bottom-4 z-10 flex items-center gap-1.5 rounded-xl border border-white/10 bg-neutral-900/85 px-2.5 py-1.5 text-xs text-white/80 tabular-nums shadow-lg backdrop-blur hover:text-white [&_svg]:size-3.5"
+    <div className="fixed inset-0 z-50 flex bg-black">
+      <div className="relative min-w-0 flex-1 overflow-hidden">
+        {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: The load handler focuses the presentation for keyboard navigation. */}
+        <iframe
+          ref={frameRef}
+          title="Presentation"
+          src={`${fileUrl(deck.id, `v=${deck.shellHash}&show`)}${hash}`}
+          sandbox="allow-scripts"
+          onLoad={(event) => event.currentTarget.focus()}
+          className="size-full border-0"
+        />
+        <div
+          data-testid="annotation-zoom"
+          className="pointer-events-none absolute"
+          style={zoomBox(zoom.x, zoom.y, zoom.k)}
         >
-          <Maximize />
-          {Math.round(zoom.k * 100)}%
-        </button>
-      )}
-      <div data-testid="nav-zone" className="absolute right-0 bottom-0 z-10 flex gap-1 p-4" {...nav.zoneProps}>
-        {(
-          [
-            { label: "Previous slide", title: "Previous slide", onClick: () => go("ArrowLeft"), Icon: ChevronLeft },
-            autoplay.playing
-              ? { label: "Pause", title: "Pause", onClick: autoplay.toggle, Icon: Pause }
-              : {
-                  label: "Play",
-                  title: "Play: speak each slide's narration and move on by itself",
-                  onClick: autoplay.toggle,
-                  Icon: Play,
-                },
-            { label: "Next slide", title: "Next slide", onClick: () => go("ArrowRight"), Icon: ChevronRight },
-          ] satisfies { label: string; title: string; onClick: () => void; Icon: LucideIcon }[]
-        ).map(({ label, title, onClick, Icon }) => (
+          <AnnotationLayer annotations={annotations} zoom={zoom.k} />
+        </div>
+        {moved && (
           <button
-            key={label}
             type="button"
-            title={title}
-            aria-label={label}
+            title="Back to the slide, fit to the screen (0)"
             // Keep keyboard focus where it was, so Space still advances the slide.
             onMouseDown={(event) => event.preventDefault()}
-            onClick={onClick}
-            data-visible={nav.visible}
-            className={cn(
-              "flex size-9 items-center justify-center rounded-xl border border-white/10 bg-neutral-900/85 text-white/80 shadow-lg backdrop-blur transition-opacity duration-200 hover:text-white [&_svg]:size-5",
-              // While playing, the pause button stays in view.
-              nav.visible || label === "Pause" ? "opacity-100" : "opacity-0",
-            )}
+            onClick={() => fitSlide(frameRef.current)}
+            className="absolute right-44 bottom-4 z-10 flex items-center gap-1.5 rounded-xl border border-white/10 bg-neutral-900/85 px-2.5 py-1.5 text-xs text-white/80 tabular-nums shadow-lg backdrop-blur hover:text-white [&_svg]:size-3.5"
           >
-            <Icon />
+            <Maximize />
+            {Math.round(zoom.k * 100)}%
           </button>
-        ))}
+        )}
+        <div data-testid="nav-zone" className="absolute right-0 bottom-0 z-10 flex gap-1 p-4" {...nav.zoneProps}>
+          {(
+            [
+              { label: "Previous slide", title: "Previous slide", onClick: () => go("ArrowLeft"), Icon: ChevronLeft },
+              autoplay.playing
+                ? { label: "Pause", title: "Pause", onClick: autoplay.toggle, Icon: Pause }
+                : {
+                    label: "Play",
+                    title: "Play: speak each slide's narration and move on by itself",
+                    onClick: autoplay.toggle,
+                    Icon: Play,
+                  },
+              { label: "Next slide", title: "Next slide", onClick: () => go("ArrowRight"), Icon: ChevronRight },
+              {
+                label: "Presenter view",
+                title: "Presenter view: notes, the next slide and the time (N)",
+                onClick: () => setPanelOpen((open) => !open),
+                Icon: PanelRight,
+              },
+            ] satisfies { label: string; title: string; onClick: () => void; Icon: LucideIcon }[]
+          ).map(({ label, title, onClick, Icon }) => (
+            <button
+              key={label}
+              type="button"
+              title={title}
+              aria-label={label}
+              // Keep keyboard focus where it was, so Space still advances the slide.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={onClick}
+              data-visible={nav.visible}
+              className={cn(
+                "flex size-9 items-center justify-center rounded-xl border border-white/10 bg-neutral-900/85 text-white/80 shadow-lg backdrop-blur transition-opacity duration-200 hover:text-white [&_svg]:size-5",
+                // While playing, the pause button stays in view.
+                nav.visible || label === "Pause" ? "opacity-100" : "opacity-0",
+              )}
+            >
+              <Icon />
+            </button>
+          ))}
+        </div>
+        <PresenterToolbar annotations={annotations} onExit={() => useApp.getState().setPresenting(false)} />
       </div>
-      <PresenterToolbar annotations={annotations} onExit={() => useApp.getState().setPresenting(false)} />
+      {panelOpen && (
+        <PresenterPanel
+          deck={deck}
+          slide={current ?? startRef.current}
+          startedAt={startedAt}
+          onRestart={() => setStartedAt(Date.now())}
+          onClose={() => setPanelOpen(false)}
+        />
+      )}
     </div>
   );
 }

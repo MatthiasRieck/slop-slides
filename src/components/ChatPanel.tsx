@@ -11,6 +11,7 @@ import {
   Globe,
   History,
   Loader2,
+  MousePointerClick,
   Paperclip,
   Pencil,
   PenLine,
@@ -28,6 +29,7 @@ import remarkGfm from "remark-gfm";
 import { api, errorMessage } from "../lib/api";
 import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowTokens } from "../lib/context";
 import { claimDrop, dropCovered, dropPoint, isImage } from "../lib/drop";
+import type { EditElement } from "../lib/editTools";
 import { PROVIDERS, type Provider } from "../lib/models";
 import { basename, cn, dirname, isSessionFile, workspaceChatFileUrl } from "../lib/utils";
 import { insertTranscript } from "../lib/voice";
@@ -67,7 +69,7 @@ export function ChatPanel() {
 
   // Other parts of the app (e.g. the lint status) can hand the composer a prepared message.
   useEffect(() => {
-    if (composerFill) setDraft(composerFill.text);
+    if (composerFill?.text) setDraft(composerFill.text);
   }, [composerFill]);
 
   return (
@@ -358,10 +360,11 @@ function UserBubble({ message }: { message: UserMessage }) {
         )}
       </div>
       <CopyMessage text={message.text} />
-      {(slideNumber > 0 || message.attachments.length > 0 || message.screenshot) && (
+      {(slideNumber > 0 || message.attachments.length > 0 || message.screenshot || message.element) && (
         <div className="flex flex-wrap justify-end gap-1 text-2xs text-muted-foreground">
           {slideNumber > 0 && <span>on slide {slideNumber}</span>}
           {message.sketch && <span>· with sketch</span>}
+          {message.element && <span>· about {message.element.name}</span>}
           {message.screenshot && <span>· with screenshot</span>}
           {message.attachments.map((a) => (
             <span key={a}>· {a.replace(/^assets\//, "")}</span>
@@ -515,6 +518,8 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const [attachments, setAttachments] = useState<string[]>([]);
   // A slide screenshot handed over with a prepared message (Tidy layout), shown with the images.
   const [screenshot, setScreenshot] = useState<string | null>(null);
+  // The element on the slide a prepared message is about.
+  const [element, setElement] = useState<EditElement | null>(null);
   const [dragging, setDragging] = useState(false);
   const [gridOpen, setGridOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -602,7 +607,10 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
 
   const composerFill = useApp((s) => s.composerFill);
   useEffect(() => {
-    if (composerFill) setScreenshot(composerFill.screenshot ?? null);
+    if (composerFill) {
+      setScreenshot(composerFill.screenshot ?? null);
+      setElement(composerFill.element ?? null);
+    }
     textareaRef.current?.focus();
   }, [composerFill]);
 
@@ -680,12 +688,16 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   const submit = () => {
     const text = draft.trim();
     if (!text || running || dictation) return;
-    void useApp
-      .getState()
-      .send(text, { includeSlide: includeSlide && slideNumber > 0, attachments, ...(screenshot && { screenshot }) });
+    void useApp.getState().send(text, {
+      includeSlide: includeSlide && slideNumber > 0,
+      attachments,
+      ...(screenshot && { screenshot }),
+      ...(element && { element }),
+    });
     setDraft("");
     setAttachments([]);
     setScreenshot(null);
+    setElement(null);
     setGridOpen(false);
   };
 
@@ -762,7 +774,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
         >
           <span className="h-1 w-8 rounded-full bg-border group-hover:bg-muted-foreground group-focus-visible:bg-primary" />
         </div>
-        {(files.length > 0 || slideNumber > 0) && (
+        {(files.length > 0 || slideNumber > 0 || element) && (
           <div className="flex flex-wrap gap-1 px-3.5 pt-3">
             {slideNumber > 0 && (
               <button
@@ -779,6 +791,23 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
                 <Presentation className="size-3" />
                 Slide {slideNumber}
               </button>
+            )}
+            {element && (
+              <span
+                title={`The agent gets this element's markup:\n${element.path}`}
+                className="flex h-5 min-w-0 items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 text-xs text-primary"
+              >
+                <MousePointerClick className="size-3 shrink-0" />
+                <span className="truncate">{element.name}</span>
+                <button
+                  type="button"
+                  aria-label="Don't send element"
+                  onClick={() => setElement(null)}
+                  className="hover:text-foreground"
+                >
+                  <X className="size-3" />
+                </button>
+              </span>
             )}
             {sendsSketch && (
               <span

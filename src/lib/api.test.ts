@@ -31,12 +31,12 @@ const CASES = [
   ],
   ["reorderSlides", () => api.reorderSlides("talk", ["b", "a"]), "reorder_slides", { id: "talk", slides: ["b", "a"] }],
   ["addSlide", () => api.addSlide("talk", null), "add_slide", { id: "talk", after: null }],
-  ["duplicateSlide", () => api.duplicateSlide("talk", "a"), "duplicate_slide", { id: "talk", slide: "a" }],
+  ["duplicateSlides", () => api.duplicateSlides("talk", ["a"]), "duplicate_slides", { id: "talk", slides: ["a"] }],
   [
-    "setSlideHidden",
-    () => api.setSlideHidden("talk", "a", true),
-    "set_slide_hidden",
-    { id: "talk", slide: "a", hidden: true },
+    "setSlidesHidden",
+    () => api.setSlidesHidden("talk", ["a"], true),
+    "set_slides_hidden",
+    { id: "talk", slides: ["a"], hidden: true },
   ],
   [
     "setSlideLocked",
@@ -69,7 +69,13 @@ const CASES = [
     { id: "talk", index: 1, title: "Wrap up" },
   ],
   ["deleteSection", () => api.deleteSection("talk", 1), "delete_section", { id: "talk", index: 1 }],
-  ["deleteSlide", () => api.deleteSlide("talk", "a"), "delete_slide", { id: "talk", slide: "a" }],
+  ["deleteSlides", () => api.deleteSlides("talk", ["a"]), "delete_slides", { id: "talk", slides: ["a"] }],
+  [
+    "setSlideNotes",
+    () => api.setSlideNotes("talk", "a", "Pause here"),
+    "set_slide_notes",
+    { id: "talk", slide: "a", text: "Pause here" },
+  ],
   [
     "updateSlide",
     () => api.updateSlide("talk", "a", "<section>", "h1"),

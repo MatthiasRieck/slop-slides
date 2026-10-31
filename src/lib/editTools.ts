@@ -3,7 +3,19 @@
  * slide editor (src-tauri/assets/editor.js) applies them in the slide's preview.
  */
 
-export type EditTool = "select" | "text" | "rect" | "rounded" | "ellipse" | "draw";
+export type EditTool =
+  | "select"
+  | "text"
+  | "rect"
+  | "rounded"
+  | "ellipse"
+  | "triangle"
+  | "star"
+  | "bubble"
+  | "draw"
+  | "line"
+  | "arrow"
+  | "paint";
 
 /** Tools whose new elements share style defaults. */
 export type ToolFamily = "text" | "shape" | "draw";
@@ -15,6 +27,8 @@ export type ListKind = "ul" | "ol";
 export type Script = "sup" | "sub";
 /** How a text box handles text that does not fit: shrink the text, or grow the box. */
 export type Autofit = "shrink" | "grow";
+/** How an image fills its box. */
+export type ImageFit = "contain" | "cover" | "fill";
 
 /** A style for new elements, or the changes to apply to the selection. Null colors mean none. */
 export interface EditStyle {
@@ -38,6 +52,18 @@ export interface EditStyle {
   /** Border color, or a drawing's stroke. */
   stroke?: string | null;
   strokeWidth?: number;
+  /** 0.05 to 1. */
+  opacity?: number;
+  /** Blur of its shadow in pixels; 0 for none. */
+  shadow?: number;
+  /** Corner radius in pixels; null where it has none (drawings, cut-out shapes). */
+  radius?: number | null;
+  fit?: ImageFit | null;
+  /** Which part of an image shows when it does not fill its box, like "50% 0%". */
+  fitPosition?: string | null;
+  alt?: string | null;
+  flipX?: boolean;
+  flipY?: boolean;
 }
 
 /** What the slide editor reports about the selected element (see `describe` in editor.js). */
@@ -74,10 +100,42 @@ export interface EditSelection {
   fill: string | null;
   stroke: string | null;
   strokeWidth: number;
+  opacity: number;
+  shadow: number;
+  radius: number | null;
+  /** A box cut out to a shape (triangle, star, speech bubble): no border, shadow or corner radius. */
+  clipped: boolean;
+  /** An <img>, so the image controls apply. */
+  image: boolean;
+  fit: ImageFit | null;
+  fitPosition: string | null;
+  alt: string | null;
+  flipX: boolean;
+  flipY: boolean;
+}
+
+/** The element a right-click selected, as the slide editor reports it (see `slop:edit-menu` in editor.js). */
+export interface EditElement {
+  /** A CSS selector for it, starting at its slide. */
+  path: string;
+  /** Its markup without the editor's marks. */
+  markup: string;
+  /** Its tag and the start of its text. */
+  name: string;
+  /** The user added it by hand (`data-added` / `data-dropped`), so it has no place in the layout yet. */
+  added: boolean;
 }
 
 /** Single-key shortcuts in edit mode. */
-export const EDIT_TOOL_KEYS: Record<string, EditTool> = { v: "select", t: "text", r: "rect", o: "ellipse", d: "draw" };
+export const EDIT_TOOL_KEYS: Record<string, EditTool> = {
+  v: "select",
+  t: "text",
+  r: "rect",
+  o: "ellipse",
+  d: "draw",
+  l: "line",
+  a: "arrow",
+};
 
 export const DEFAULT_EDIT_STYLES: Record<ToolFamily, EditStyle> = {
   text: {
@@ -131,7 +189,8 @@ export function stepFontSize(size: number, step: 1 | -1): number {
 
 export function familyOf(tool: EditTool): ToolFamily | null {
   if (tool === "text" || tool === "draw") return tool;
-  return tool === "select" ? null : "shape";
+  if (tool === "line" || tool === "arrow") return "draw";
+  return tool === "select" || tool === "paint" ? null : "shape";
 }
 
 /** The family whose defaults a selected element of `kind` updates; null for the deck's own elements. */
@@ -164,11 +223,23 @@ export function toolbarState(selection: EditSelection | null, tool: EditTool, st
   };
 }
 
+/** A color the slide editor reported, or null when it is none. */
+export function parseHexColor(value: unknown): string | null {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : null;
+}
+
 /** A selection report from the slide editor, or null when it is malformed (or nothing is selected). */
+export function parseElement(value: unknown): EditElement | null {
+  if (!value || typeof value !== "object") return null;
+  const { path, markup, name, added } = value as Record<string, unknown>;
+  if (typeof path !== "string" || typeof markup !== "string" || typeof name !== "string") return null;
+  return { path, markup, name, added: added === true };
+}
+
 export function parseSelection(value: unknown): EditSelection | null {
   if (!value || typeof value !== "object") return null;
   const v = value as Record<string, unknown>;
-  const color = (c: unknown) => (typeof c === "string" && /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase() : null);
+  const color = parseHexColor;
   const num = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? n : null);
   if (typeof v.kind !== "string") return null;
   return {
@@ -195,12 +266,34 @@ export function parseSelection(value: unknown): EditSelection | null {
     fill: color(v.fill),
     stroke: color(v.stroke),
     strokeWidth: num(v.strokeWidth) ?? 0,
+    opacity: num(v.opacity) ?? 1,
+    shadow: num(v.shadow) ?? 0,
+    radius: num(v.radius),
+    clipped: v.clipped === true,
+    image: v.image === true,
+    fit: v.fit === "contain" || v.fit === "cover" || v.fit === "fill" ? v.fit : null,
+    fitPosition: typeof v.fitPosition === "string" ? v.fitPosition : null,
+    alt: typeof v.alt === "string" ? v.alt : null,
+    flipX: v.flipX === true,
+    flipY: v.flipY === true,
   };
 }
 
 /** What a restyle also makes the default for the next element of its kind: its look, not its links or fit. */
 export function defaultsFrom(changes: EditStyle): EditStyle {
-  const { script: _script, autofit: _autofit, ...look } = changes;
+  const {
+    script: _script,
+    autofit: _autofit,
+    opacity: _opacity,
+    shadow: _shadow,
+    radius: _radius,
+    fit: _fit,
+    fitPosition: _fitPosition,
+    alt: _alt,
+    flipX: _flipX,
+    flipY: _flipY,
+    ...look
+  } = changes;
   return look;
 }
 
@@ -250,6 +343,37 @@ export function fontChoices(deck: FontChoice[]): { deck: FontChoice[]; system: F
   const names = new Set(deck.map((f) => f.name.toLowerCase()));
   return { deck, system: SYSTEM_FONTS.filter((f) => !names.has(f.name.toLowerCase())) };
 }
+
+/** A color from the deck's CSS variables. */
+export interface DeckColor {
+  name: string;
+  value: string;
+}
+
+/** The deck colors the slide editor reported (see `deckColors` in editor.js). */
+export function parseDeckColors(value: unknown): DeckColor[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((c) => {
+    const color = parseHexColor(c?.value);
+    return color && typeof c.name === "string" ? [{ name: c.name, value: color }] : [];
+  });
+}
+
+/** Where an image can sit in its box, row by row, as `object-position` values. */
+export const FIT_POSITIONS = [
+  "0% 0%",
+  "50% 0%",
+  "100% 0%",
+  "0% 50%",
+  "50% 50%",
+  "100% 50%",
+  "0% 100%",
+  "50% 100%",
+  "100% 100%",
+] as const;
+
+/** The file types the toolbar's image picker offers (see `IMAGE_EXTENSIONS` in drop.ts). */
+export const IMAGE_FILE_TYPES = ["png", "jpg", "jpeg", "gif", "webp", "svg", "avif"];
 
 export const LINE_HEIGHTS = [0.9, 1, 1.1, 1.2, 1.35, 1.5, 1.75, 2] as const;
 export const LETTER_SPACINGS = [-2, -1, 0, 1, 2, 4, 8, 12] as const;

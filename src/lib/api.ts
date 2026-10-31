@@ -49,6 +49,17 @@ export interface Slide {
   moved: boolean;
   /** What is said over the slide (its `<aside class="narration">`), as plain text; empty without any. */
   narration?: string;
+  /** What the presenter reads alongside it (its `<aside class="notes">`), as plain text; empty without any. */
+  notes?: string;
+}
+
+/** What a change from the slide rail did; saving `previous` back over `source` undoes it. */
+export interface RailEdit {
+  deck: Deck;
+  previous: string;
+  source: string;
+  /** Ids of the slides it added. */
+  created: string[];
 }
 
 /** A named group of slides, started by a marker between slides in the deck file. */
@@ -291,22 +302,26 @@ export const api = {
   saveReview: (id: string, review: Record<string, Stroke[]>) => invoke<void>("save_review", { id, review }),
   renameDeck: (id: string, title: string) => invoke<Deck>("rename_deck", { id, title }),
   /** `slides` lists every slide id and section key (see `sectionKey`) in the new order. */
-  reorderSlides: (id: string, slides: string[]) => invoke<Deck>("reorder_slides", { id, slides }),
+  reorderSlides: (id: string, slides: string[]) => invoke<RailEdit>("reorder_slides", { id, slides }),
   addSlide: (id: string, after: string | null) => invoke<CreatedSlide>("add_slide", { id, after }),
-  duplicateSlide: (id: string, slide: string) => invoke<CreatedSlide>("duplicate_slide", { id, slide }),
-  setSlideHidden: (id: string, slide: string, hidden: boolean) =>
-    invoke<Deck>("set_slide_hidden", { id, slide, hidden }),
+  /** Puts a copy of each of `slides` right after it. */
+  duplicateSlides: (id: string, slides: string[]) => invoke<RailEdit>("duplicate_slides", { id, slides }),
+  setSlidesHidden: (id: string, slides: string[], hidden: boolean) =>
+    invoke<RailEdit>("set_slides_hidden", { id, slides, hidden }),
   setSlideLocked: (id: string, slide: string, locked: boolean) =>
     invoke<Deck>("set_slide_locked", { id, slide, locked }),
   /** Sets what is said over the slide; empty `text` removes its narration. */
   setSlideNarration: (id: string, slide: string, text: string) =>
     invoke<Deck>("set_slide_narration", { id, slide, text }),
+  /** Sets the slide's speaker notes; empty `text` removes them. */
+  setSlideNotes: (id: string, slide: string, text: string) => invoke<Deck>("set_slide_notes", { id, slide, text }),
   /** Gives every slide the canvas `size` (the slides' content stays as it is). */
   setSlideSize: (id: string, size: SlideSize) => invoke<Deck>("set_slide_size", { id, size }),
   addSection: (id: string, before: string | null, title: string) => invoke<Deck>("add_section", { id, before, title }),
   renameSection: (id: string, index: number, title: string) => invoke<Deck>("rename_section", { id, index, title }),
   deleteSection: (id: string, index: number) => invoke<Deck>("delete_section", { id, index }),
-  deleteSlide: (id: string, slide: string) => invoke<Deck>("delete_slide", { id, slide }),
+  /** Deletes `slides` along with their review marks; none of them if any is locked. */
+  deleteSlides: (id: string, slides: string[]) => invoke<RailEdit>("delete_slides", { id, slides }),
   /** Replaces one slide's markup; refused when the slide's hash is no longer `base`. */
   updateSlide: (id: string, slide: string, markup: string, base: string) =>
     invoke<UpdatedSlide>("update_slide", { id, slide, markup, base }),

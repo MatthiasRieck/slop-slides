@@ -1,9 +1,10 @@
 import { AudioLines, Download, Loader2, Lock, Play, Square, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { type Deck, errorMessage, type Slide, type SlideAudio } from "../lib/api";
-import { normalizeNarration, speakingTime, wordCount } from "../lib/narration";
+import { speakingTime, wordCount } from "../lib/narration";
 import { formatDuration, type Playback, playNarration } from "../lib/narrationAudio";
+import { useDraftText } from "../lib/useDraftText";
 import { formatBytes } from "../lib/voice";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
@@ -125,41 +126,9 @@ function SpeechSettings({ deck }: { deck: Deck }) {
 
 function NarrationEditor(props: { deck: Deck; slide: Slide; index: number; total: number }) {
   const { deck, slide, index, total } = props;
-  const saved = slide.narration ?? "";
-  const [draft, setDraft] = useState(saved);
-  const draftRef = useRef(saved);
-  /** Typed but not saved yet. */
-  const dirty = useRef(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Changed elsewhere (the agent, the HTML view): show it, unless the user is typing over it.
-  useEffect(() => {
-    if (dirty.current || normalizeNarration(draftRef.current) === saved) return;
-    draftRef.current = saved;
-    setDraft(saved);
-  }, [saved]);
-
-  const flush = useCallback(async () => {
-    if (timer.current !== null) clearTimeout(timer.current);
-    timer.current = null;
-    if (!dirty.current) return;
-    dirty.current = false;
-    await useApp.getState().setNarration(slide.id, draftRef.current);
-  }, [slide.id]);
-  useEffect(
-    () => () => {
-      void flush();
-    },
-    [flush],
+  const { draft, change, flush } = useDraftText(slide.narration ?? "", NARRATION_SAVE_DELAY, (text) =>
+    useApp.getState().setNarration(slide.id, text),
   );
-
-  const change = (text: string) => {
-    draftRef.current = text;
-    setDraft(text);
-    dirty.current = true;
-    if (timer.current !== null) clearTimeout(timer.current);
-    timer.current = setTimeout(() => void flush(), NARRATION_SAVE_DELAY);
-  };
 
   const words = wordCount(draft);
   return (

@@ -1229,6 +1229,42 @@ describe("composer fill", () => {
     expect(send).toHaveBeenLastCalledWith("Next", { includeSlide: true, attachments: [] });
   });
 
+  describe("a handed-over element", () => {
+    const ELEMENT = { path: "#intro > h1:nth-child(1)", markup: "<h1>Hi</h1>", name: '<h1> "Hi"', added: false };
+
+    it("shows, keeps the draft, and goes along with the message", () => {
+      useApp.setState({ composerFill: null });
+      render(<ChatPanel />);
+      type("Make this a chart");
+      act(() => useApp.getState().fillComposer("", { element: ELEMENT }));
+      expect((textarea() as HTMLTextAreaElement).value).toBe("Make this a chart");
+      expect(screen.getByText(ELEMENT.name)).toBeTruthy();
+      fireEvent.keyDown(textarea(), { key: "Enter" });
+      expect(send).toHaveBeenCalledWith("Make this a chart", { includeSlide: true, attachments: [], element: ELEMENT });
+      expect(screen.queryByText(ELEMENT.name)).toBeNull();
+    });
+
+    it("can be taken off, and a plain fill clears it", () => {
+      useApp.setState({ composerFill: null });
+      render(<ChatPanel />);
+      act(() => useApp.getState().fillComposer("Tidy it", { element: ELEMENT }));
+      fireEvent.click(screen.getByRole("button", { name: "Don't send element" }));
+      expect(screen.queryByText(ELEMENT.name)).toBeNull();
+      act(() => useApp.getState().fillComposer("Tidy it", { element: ELEMENT }));
+      act(() => useApp.getState().fillComposer("Fix it"));
+      expect(screen.queryByText(ELEMENT.name)).toBeNull();
+    });
+
+    it("shows on the sent message", () => {
+      useApp.setState({
+        messages: [{ id: "u", role: "user", text: "Hi", slide: null, attachments: [], element: ELEMENT, createdAt: 1 }],
+      });
+      render(<ChatPanel />);
+      expect(screen.getByText(`· about ${ELEMENT.name}`)).toBeTruthy();
+      useApp.setState({ messages: [] });
+    });
+  });
+
   it("lets the user remove the screenshot, and a plain fill clears it", () => {
     useApp.setState({ composerFill: null });
     render(<ChatPanel />);

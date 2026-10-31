@@ -994,8 +994,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn lists_models_over_framed_stdio() {
-        use std::os::unix::fs::PermissionsExt;
-
         let script = r#"#!/usr/bin/env python3
 import json, sys
 def read():
@@ -1023,8 +1021,7 @@ read()
 "#;
         let path =
             std::env::temp_dir().join(format!("slopslide-mock-copilot-{}", std::process::id()));
-        std::fs::write(&path, script).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_script(&path, script);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1041,7 +1038,6 @@ read()
     #[cfg(unix)]
     #[test]
     fn asks_the_user_over_framed_stdio() {
-        use std::os::unix::fs::PermissionsExt;
         use std::sync::Mutex;
 
         let dir = std::env::temp_dir().join(format!("slopslide-ask-{}", uuid::Uuid::new_v4()));
@@ -1090,8 +1086,7 @@ while True:
         send({"jsonrpc": "2.0", "id": request["id"], "result": {}})
 "#;
         let bin = dir.join("copilot");
-        std::fs::write(&bin, script).unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_script(&bin, script);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1255,7 +1250,6 @@ while True:
     #[cfg(unix)]
     #[test]
     fn compacts_over_framed_stdio() {
-        use std::os::unix::fs::PermissionsExt;
         use std::sync::Mutex;
 
         let dir = std::env::temp_dir().join(format!("slopslide-compact-{}", uuid::Uuid::new_v4()));
@@ -1293,8 +1287,7 @@ while True:
         send({"jsonrpc": "2.0", "id": request["id"], "result": {}})
 "#;
         let bin = dir.join("copilot");
-        std::fs::write(&bin, script).unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_script(&bin, script);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

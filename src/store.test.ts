@@ -2150,6 +2150,91 @@ describe("editing slides on the stage", () => {
       expect(tidyPrompt()).toBe(tidyPrompt([]));
     });
 
+    const ELEMENT = {
+      path: "#intro > h1:nth-child(1)",
+      markup: "<h1>Welcome</h1>",
+      name: '<h1> "Welcome"',
+      added: true,
+    };
+
+    it("readies the composer for a question about an element, staying in edit mode", async () => {
+      const { useApp } = await freshModule();
+      backend({ capture_sketch: () => "/home/.slopslides/sessions/1-ab/sketches/5.png" });
+      useApp.setState({ deck: DECK, selected: "intro", sidebarOpen: false, composerFill: null, editing: true });
+      await useApp.getState().askAboutElement(ELEMENT);
+      expect(calls("send_message")).toHaveLength(0);
+      expect(useApp.getState()).toMatchObject({
+        sidebarOpen: true,
+        editing: true,
+        composerFill: { text: "", screenshot: "/home/.slopslides/sessions/1-ab/sketches/5.png", element: ELEMENT },
+      });
+    });
+
+    it("prepares a tidy of just the element, leaving edit mode like Tidy layout", async () => {
+      const { useApp, TIDY_ELEMENT_PROMPT } = await freshModule();
+      backend({ capture_sketch: () => "/home/.slopslides/sessions/1-ab/sketches/6.png" });
+      useApp.setState({ deck: DECK, selected: "intro", composerFill: null, editing: true });
+      await useApp.getState().tidyElement(ELEMENT);
+      expect(useApp.getState()).toMatchObject({
+        editing: false,
+        composerFill: {
+          text: TIDY_ELEMENT_PROMPT,
+          screenshot: "/home/.slopslides/sessions/1-ab/sketches/6.png",
+          element: ELEMENT,
+        },
+      });
+    });
+
+    it("does not hand over an element of a locked slide", async () => {
+      const { useApp } = await freshModule();
+      useApp.setState({
+        deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)),
+        selected: "intro",
+        composerFill: null,
+      });
+      await useApp.getState().askAboutElement(ELEMENT);
+      await useApp.getState().tidyElement(ELEMENT);
+      expect(calls("capture_sketch")).toEqual([]);
+      expect(useApp.getState().composerFill).toBeNull();
+    });
+
+    it("tells the agent which element the message is about", async () => {
+      const { useApp } = await freshModule();
+      useApp.setState({ deck: DECK, selected: "intro" });
+      await useApp.getState().send("Make this a chart", {
+        includeSlide: true,
+        attachments: [],
+        screenshot: "/home/.slopslides/sessions/1-ab/sketches/7.png",
+        element: ELEMENT,
+      });
+      expect(useApp.getState().messages[0]).toMatchObject({ role: "user", element: ELEMENT });
+      expect((calls("send_message")[0]!.args as { prompt: string }).prompt).toBe(
+        [
+          "[context]",
+          "Open file: deck.html (deck)",
+          'Current slide: <section id="intro"> in deck.html (slide 1 of 3)',
+          "Screenshot: /home/.slopslides/sessions/1-ab/sketches/7.png (screenshot of the slide with the selected element outlined)",
+          "Selected element: #intro > h1:nth-child(1) (CSS selector)",
+          "Its markup: <h1>Welcome</h1>",
+          "[/context]",
+          "",
+          "Make this a chart",
+        ].join("\n"),
+      );
+    });
+
+    it("shortens long markup in the prompt", async () => {
+      const { useApp } = await freshModule();
+      useApp.setState({ deck: DECK, selected: "intro" });
+      const markup = `<svg>${"x".repeat(5000)}</svg>`;
+      await useApp
+        .getState()
+        .send("Simplify", { includeSlide: true, attachments: [], element: { ...ELEMENT, markup } });
+      const { prompt } = calls("send_message")[0]!.args as { prompt: string };
+      expect(prompt).toContain(`Its markup: ${markup.slice(0, 4000)}…\n`);
+      expect(prompt).not.toContain(markup);
+    });
+
     it("sends the screenshot handed over with the message", async () => {
       const { useApp, TIDY_PROMPT } = await freshModule();
       useApp.setState({ deck: DECK, selected: "intro" });
@@ -2630,5 +2715,177 @@ describe("workspace conversations", () => {
       payload: { workspace: "/decks/talk", event: { type: "textDelta", text: "Still here" } },
     });
     expect((useApp.getState().messages[1] as AssistantMessage).parts).toEqual([{ kind: "text", text: "Still here" }]);
+  });
+});
+
+describe("slide rail changes", () => {
+  const id = "/decks/talk/deck.html";
+  const edited = (previous: string, source: string, deck: Deck = deckFor(DECK_HTML)) => ({
+    deck,
+    previous,
+    source,
+    created: [],
+  });
+
+  async function hide(useApp: Awaited<ReturnType<typeof freshStore>>, previous: string, source: string) {
+    backend({ set_slides_hidden: () => edited(previous, source) });
+    await useApp.getState().setSlidesHidden(["intro"], true);
+  }
+
+  it("records each change, newest last, and a new one drops what could be redone", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", deckRedo: [{ previous: "x", source: "y" }] });
+    await hide(useApp, "<0>", "<1>");
+    await hide(useApp, "<1>", "<2>");
+    expect(useApp.getState().deckUndo).toEqual([
+      { previous: "<0>", source: "<1>" },
+      { previous: "<1>", source: "<2>" },
+    ]);
+    expect(useApp.getState().deckRedo).toEqual([]);
+  });
+
+  it("undo saves the file back over what the change wrote, and redo reverses that", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    await hide(useApp, "<0>", "<1>");
+    const restored = deckFor(DECK_HTML, "restored");
+    backend({ save_deck_source: () => restored });
+    await useApp.getState().undoDeckEdit();
+    expect(calls("save_deck_source")).toEqual([{ id, source: "<0>", base: "<1>" }]);
+    expect(useApp.getState().deck).toBe(restored);
+    expect(useApp.getState()).toMatchObject({ deckUndo: [], deckRedo: [{ previous: "<1>", source: "<0>" }] });
+    await useApp.getState().redoDeckEdit();
+    expect(calls("save_deck_source")[1]).toEqual({ id, source: "<1>", base: "<0>" });
+    expect(useApp.getState()).toMatchObject({ deckUndo: [{ previous: "<0>", source: "<1>" }], deckRedo: [] });
+  });
+
+  it("says so when the deck changed since, and drops the entry", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    await hide(useApp, "<0>", "<1>");
+    invoke.mockRejectedValue("deck.html changed on disk since you started editing");
+    await useApp.getState().undoDeckEdit();
+    expect(useApp.getState().error).toBe(
+      "That slide list change cannot be undone: deck.html changed on disk since you started editing",
+    );
+    expect(useApp.getState()).toMatchObject({ deckUndo: [], deckRedo: [] });
+  });
+
+  it("undoing with nothing to undo saves nothing", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    await useApp.getState().undoDeckEdit();
+    await useApp.getState().redoDeckEdit();
+    expect(calls("save_deck_source")).toEqual([]);
+  });
+
+  it("restores the review marks of a slide brought back", async () => {
+    const useApp = await freshStore();
+    const stroke = { tool: "pen" as const, color: "#ef4444", points: [[0.1, 0.2]] as [number, number][] };
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", sketches: {} });
+    await hide(useApp, "<0>", "<1>");
+    backend({ save_deck_source: () => ({ ...deckFor(DECK_HTML), review: { intro: [stroke] } }) });
+    await useApp.getState().undoDeckEdit();
+    expect(useApp.getState().sketches).toEqual({ intro: [stroke] });
+  });
+
+  it("survives edit mode but not closing the deck", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    await hide(useApp, "<0>", "<1>");
+    useApp.getState().setEditing(true);
+    useApp.getState().setEditing(false);
+    expect(useApp.getState().deckUndo).toHaveLength(1);
+    await useApp.getState().closeDeck();
+    expect(useApp.getState().deckUndo).toEqual([]);
+  });
+
+  it("keeps a limited history", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    for (let i = 0; i < 25; i++) await hide(useApp, `<${i}>`, `<${i + 1}>`);
+    expect(useApp.getState().deckUndo).toHaveLength(20);
+    expect(useApp.getState().deckUndo.at(-1)).toEqual({ previous: "<24>", source: "<25>" });
+  });
+
+  it("waits for slide edits still being saved", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    const order: string[] = [];
+    backend({
+      update_slide: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        order.push("edit");
+        return { deck: deckFor(DECK_HTML), previous: "x" };
+      },
+      set_slides_hidden: () => {
+        order.push("hide");
+        return edited("<0>", "<1>");
+      },
+    });
+    void useApp.getState().saveSlideEdit("intro", "<section></section>");
+    await useApp.getState().setSlidesHidden(["intro"], true);
+    expect(order).toEqual(["edit", "hide"]);
+  });
+
+  it("puts the optimistic order back from disk when a move fails", async () => {
+    const useApp = await freshStore();
+    const deck = deckFor(DECK_HTML);
+    useApp.setState({ deck, selected: "intro" });
+    backend({
+      reorder_slides: () => {
+        throw "The slides changed while reordering; try again.";
+      },
+      load_deck: () => deck,
+    });
+    await useApp.getState().moveSlides(1);
+    expect(useApp.getState().deck).toBe(deck);
+    expect(useApp.getState().error).toBe("The slides changed while reordering; try again.");
+    expect(useApp.getState().deckUndo).toEqual([]);
+  });
+
+  it("does not move past the end, or while a search shows only some slides", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    await useApp.getState().moveSlides(-1);
+    useApp.getState().setSearch({ query: "x" });
+    useApp.getState().setSearchMatches([]);
+    await useApp.getState().moveSlides(1);
+    expect(calls("reorder_slides")).toEqual([]);
+  });
+
+  it("forgets picked slides that are gone", async () => {
+    const useApp = await freshStore();
+    const deck = deckFor(DECK_HTML);
+    useApp.setState({ deck, selected: "intro", railSelected: ["intro", "gone"] });
+    useApp.getState().setDeck(deck);
+    expect(useApp.getState().railSelected).toEqual(["intro"]);
+  });
+
+  it("deletes nothing when all that was asked for is locked", async () => {
+    const useApp = await freshStore();
+    const deck = deckFor(DECK_HTML);
+    useApp.setState({ deck: { ...deck, slides: deck.slides.map((s) => ({ ...s, locked: true })) } });
+    await useApp.getState().deleteSlides(["intro"]);
+    expect(calls("delete_slides")).toEqual([]);
+  });
+
+  it("saves speaker notes after edits still being saved, and shows the deck", async () => {
+    const useApp = await freshStore();
+    const next = deckFor(DECK_HTML, "noted");
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", slideMode: "view" });
+    backend({ set_slide_notes: () => next });
+    await useApp.getState().setNotes("intro", "Pause here");
+    expect(calls("set_slide_notes")).toEqual([{ id, slide: "intro", text: "Pause here" }]);
+    expect(useApp.getState().deck).toBe(next);
+  });
+
+  it("notes are a mode of their own", async () => {
+    const { useApp, deckMode } = await freshModule();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    useApp.getState().setMode("notes");
+    expect(deckMode(useApp.getState())).toBe("notes");
+    useApp.getState().setMode("view");
+    expect(deckMode(useApp.getState())).toBe("view");
   });
 });

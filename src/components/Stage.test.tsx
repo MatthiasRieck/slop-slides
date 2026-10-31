@@ -495,11 +495,32 @@ describe("Stage", () => {
       act(() => useApp.getState().setMode("edit"));
       expect(sketch()).toBeNull();
       expect(edit()).not.toBeNull();
-      for (const name of ["Find and replace", "Undo", "Redo"])
-        expect(screen.getByRole("button", { name })).toBeTruthy();
+      for (const name of ["Undo", "Redo"]) expect(screen.getByRole("button", { name })).toBeTruthy();
       fireEvent.click(screen.getByRole("button", { name: /Accept/ }));
       expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "view" });
       expect([sketch(), edit()]).toEqual([null, null]);
+    });
+
+    it("marks what the search finds in the preview, again whenever the preview reloads", () => {
+      const { container } = render(<Stage />);
+      const frame = stageFrame(container);
+      fireEvent.load(frame);
+      const post = vi.spyOn(frame.contentWindow!, "postMessage");
+      const marks = { type: "slop:search", query: "hello", matchCase: false, wholeWord: false, active: 0 };
+      act(() => {
+        useApp.getState().setSearch({ query: "hello" });
+        useApp
+          .getState()
+          .setSearchMatches([
+            { slide: "intro", index: 0, locked: false, notes: false, before: "", text: "Hello", after: "" },
+          ]);
+      });
+      expect(post).toHaveBeenLastCalledWith(marks, "*");
+      post.mockClear();
+      fireEvent.load(frame);
+      expect(post).toHaveBeenCalledWith(marks, "*");
+      act(() => useApp.getState().clearSearch());
+      expect(post).toHaveBeenLastCalledWith({ ...marks, query: "", active: -1 }, "*");
     });
 
     it("puts a sketch tool away when leaving review mode", () => {

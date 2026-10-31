@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
@@ -7,36 +7,45 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) })
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 
 import type { FindMatch, ReplacedText } from "../lib/api";
-import { useApp } from "../store";
+import { searchHighlight, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { FindButton } from "./FindReplace";
+import { SlideSearch } from "./FindReplace";
 
 const DECK = deckFor(DECK_HTML);
-const MATCHES: FindMatch[] = [
-  { slide: "intro", index: 0, locked: false, before: "Say ", text: "Hello", after: " world" },
-  { slide: "outro", index: 2, locked: false, before: "", text: "hello", after: " again" },
-  { slide: "outro", index: 2, locked: true, before: "and ", text: "hello", after: "" },
-];
+const SLIDES = DECK.slides.map((s) => s.id);
+const match = (slide: string, index: number, more: Partial<FindMatch> = {}): FindMatch => ({
+  slide,
+  index,
+  locked: false,
+  notes: false,
+  before: "",
+  text: "hello",
+  after: "",
+  ...more,
+});
+const MATCHES = [match("intro", 0), match("outro", 2), match("outro", 2, { locked: true })];
 
 const button = (name: string | RegExp) => screen.getByRole("button", { name }) as HTMLButtonElement;
-const open = () => {
-  render(<FindButton />);
-  fireEvent.click(button("Find and replace"));
-};
-const type = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
+const field = () => screen.getByLabelText("Search slides") as HTMLInputElement;
+const search = (value: string) => fireEvent.change(field(), { target: { value } });
+const status = () => screen.getByRole("status");
+const found = (matches: FindMatch[]) =>
+  invoke.mockImplementation(async (cmd: string) => (cmd === "find_in_deck" ? matches : null));
 
 beforeEach(() => {
   invoke.mockReset();
+  useApp.getState().clearSearch();
   useApp.setState({ deck: DECK, selected: "intro", view: "slides", error: null });
 });
 
-describe("find and replace", () => {
-  it("finds as you type, with case and whole-word options, and lists where", async () => {
-    invoke.mockImplementation(async (cmd: string) => (cmd === "find_in_deck" ? MATCHES : null));
-    open();
-    expect(screen.getByRole("status").textContent).toMatch(/Searches the text/);
-    type("Find", "hello");
-    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("3 matches on 2 slides"));
+describe("search", () => {
+  it("searches as you type, with case and whole-word options, and ends with the toolbar", async () => {
+    found(MATCHES);
+    const { unmount } = render(<SlideSearch />);
+    expect(screen.queryByRole("status")).toBeNull();
+    search("hello");
+    await waitFor(() => expect(status().textContent).toBe("1 / 3"));
+    expect(status().title).toBe("3 matches on 2 slides");
     expect(invoke).toHaveBeenLastCalledWith("find_in_deck", {
       id: DECK.id,
       query: "hello",
@@ -51,14 +60,113 @@ describe("find and replace", () => {
         options: { matchCase: true, wholeWord: true },
       }),
     );
-    const list = screen.getByRole("list", { name: "Matches" });
-    expect(list.querySelectorAll("mark")).toHaveLength(3);
-    expect(list.textContent).toContain("Say Hello world");
-    expect(screen.getByLabelText("Locked: it will not change")).toBeTruthy();
-    // A match goes to its slide.
-    fireEvent.click(within(list).getAllByRole("button")[1]!);
+    unmount();
+    expect(useApp.getState().search).toMatchObject({ query: "", matches: null });
+  });
+
+  it("steps through the matches around the deck, going to their slides", async () => {
+    found(MATCHES);
+    render(<SlideSearch />);
+    expect(button("Next match").disabled).toBe(true);
+    search("hello");
+    await waitFor(() => expect(status().textContent).toBe("1 / 3"));
+    fireEvent.click(button("Next match"));
+    expect(status().textContent).toBe("2 / 3");
+    expect(useApp.getState().selected).toBe("outro");
+    fireEvent.keyDown(field(), { key: "Enter" });
+    fireEvent.keyDown(field(), { key: "Enter" });
+    expect(status().textContent).toBe("1 / 3");
+    expect(useApp.getState().selected).toBe("intro");
+    fireEvent.keyDown(field(), { key: "Enter", shiftKey: true });
+    expect(status().textContent).toBe("3 / 3");
+    fireEvent.click(button("Previous match"));
+    expect(status().textContent).toBe("2 / 3");
+  });
+
+  it("focuses a slide's first match when the slide is picked, and leaves the slide alone while typing", async () => {
+    found(MATCHES);
+    render(<SlideSearch />);
+    search("hello");
+    await waitFor(() => expect(status().textContent).toBe("1 / 3"));
+    expect(useApp.getState().selected).toBe("intro");
+    act(() => useApp.getState().select("outro"));
+    expect(status().textContent).toBe("2 / 3");
+  });
+
+  it("goes to the nearest match from a slide without any", async () => {
+    found([match("intro", 0), match("outro", 2)]);
+    render(<SlideSearch />);
+    useApp.setState({ selected: SLIDES[1]! });
+    search("hello");
+    await waitFor(() => expect(status().textContent).toBe("2"));
+    fireEvent.click(button("Previous match"));
+    expect(useApp.getState().selected).toBe("intro");
+    act(() => useApp.getState().select(SLIDES[1]!));
+    fireEvent.click(button("Next match"));
     expect(useApp.getState().selected).toBe("outro");
   });
+
+  it("says when the match in focus is in the notes, and when nothing matches", async () => {
+    found([match("intro", 0, { notes: true })]);
+    render(<SlideSearch />);
+    search("hello");
+    await waitFor(() => expect(status().textContent).toBe("1 / 1 in notes"));
+    found([]);
+    search("nothing");
+    await waitFor(() => expect(status().textContent).toBe("No matches"));
+  });
+
+  it("clears with the button or Escape", async () => {
+    found(MATCHES);
+    render(<SlideSearch />);
+    search("hello");
+    await waitFor(() => expect(status()).toBeTruthy());
+    fireEvent.click(button("Clear search"));
+    expect(field().value).toBe("");
+    expect(useApp.getState().search.matches).toBeNull();
+    search("hello");
+    await waitFor(() => expect(status()).toBeTruthy());
+    fireEvent.keyDown(field(), { key: "Escape" });
+    expect(field().value).toBe("");
+  });
+
+  it("gets focus with ⌘F, in the app or in the slide", () => {
+    render(<SlideSearch />);
+    fireEvent.keyDown(window, { key: "f", metaKey: true });
+    expect(document.activeElement).toBe(field());
+    field().blur();
+    act(
+      () => void window.dispatchEvent(new MessageEvent("message", { data: { type: "slop:key", key: "f", mod: true } })),
+    );
+    expect(document.activeElement).toBe(field());
+  });
+
+  it("tells the stage where to mark, counting the matches on the slide", () => {
+    useApp.setState({ selected: "outro" });
+    act(() => {
+      useApp.getState().setSearch({ query: "hello" });
+      useApp.getState().setSearchMatches(MATCHES);
+      useApp.getState().stepSearch(1);
+    });
+    expect(searchHighlight(useApp.getState())).toEqual({
+      query: "hello",
+      matchCase: false,
+      wholeWord: false,
+      active: 1,
+    });
+    act(() => useApp.getState().select(SLIDES[1]!));
+    expect(searchHighlight(useApp.getState()).active).toBe(-1);
+  });
+});
+
+describe("replace", () => {
+  const open = async (query = "hello") => {
+    render(<SlideSearch />);
+    search(query);
+    await waitFor(() => expect(status()).toBeTruthy());
+    fireEvent.click(button("Replace"));
+  };
+  const type = (value: string) => fireEvent.change(screen.getByLabelText("Replace with"), { target: { value } });
 
   it("replaces on this slide or everywhere, says what changed, and undoes it", async () => {
     const replaced: ReplacedText = {
@@ -75,9 +183,8 @@ describe("find and replace", () => {
       if (cmd === "save_deck_source") return DECK;
       return null;
     });
-    open();
-    type("Find", "hello");
-    type("Replace with", "Hi");
+    await open();
+    type("Hi");
     await waitFor(() => expect(button("Replace all").disabled).toBe(false));
     fireEvent.click(button("Replace on this slide"));
     await waitFor(() =>
@@ -103,10 +210,8 @@ describe("find and replace", () => {
   });
 
   it("cannot replace where only locked slides match, or on a slide without matches", async () => {
-    invoke.mockImplementation(async (cmd: string) => (cmd === "find_in_deck" ? [MATCHES[2]] : null));
-    open();
-    type("Find", "hello");
-    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("1 match on 1 slide"));
+    found([MATCHES[2]!]);
+    await open();
     expect(button("Replace all").disabled).toBe(true);
     expect(button("Replace on this slide").disabled).toBe(true);
   });
@@ -116,27 +221,10 @@ describe("find and replace", () => {
       if (cmd === "find_in_deck") return MATCHES;
       throw "disk full";
     });
-    open();
-    type("Find", "hello");
+    await open();
     await waitFor(() => expect(button("Replace all").disabled).toBe(false));
     fireEvent.click(button("Replace all"));
     await waitFor(() => expect(useApp.getState().error).toBe("disk full"));
-    expect(screen.getByRole("dialog", { name: "Find and replace" })).toBeTruthy();
-  });
-
-  it("opens with ⌘F, in the app or in the slide, but leaves the HTML view its own search", () => {
-    render(<FindButton />);
-    fireEvent.keyDown(window, { key: "f", metaKey: true });
-    expect(screen.getByRole("dialog", { name: "Find and replace" })).toBeTruthy();
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("dialog")).toBeNull();
-    act(
-      () => void window.dispatchEvent(new MessageEvent("message", { data: { type: "slop:key", key: "f", mod: true } })),
-    );
-    expect(screen.getByRole("dialog", { name: "Find and replace" })).toBeTruthy();
-    fireEvent.keyDown(window, { key: "Escape" });
-    act(() => useApp.setState({ view: "code" }));
-    fireEvent.keyDown(window, { key: "f", ctrlKey: true });
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Replace" })).toBeTruthy();
   });
 });

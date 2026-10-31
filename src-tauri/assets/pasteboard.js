@@ -14,6 +14,10 @@
    A press on the preview while it lacks keyboard focus posts { type: "slop:focus" }, and the
    app focuses the preview.
 
+   { type: "slop:search", query, matchCase, wholeWord, active } marks what the search in the app's
+   toolbar finds on the slide, with the `active`th hit stronger. It reads the text as find.rs does,
+   so both count the same hits. The marks are CSS highlights, which leave the slide's markup alone.
+
    The slide editor (editor.js) runs after this and builds on window.slopPasteboard.
 
    With ?show, the presenter plays the whole deck and this zooms and pans the slide being shown
@@ -389,9 +393,94 @@
     if (spaceDown) setPanning(false);
   });
 
+  // What find.rs doesn't count as text on a slide.
+  var NOT_TEXT = "script, style, textarea, title, template, [data-resize-placeholder], [data-delete-placeholder]";
+
+  /** The characters of `text` as find.rs compares them, each with where it starts and ends. */
+  function readText(text, exact) {
+    var chars = [];
+    var at = 0;
+    Array.from(text).forEach(function (c) {
+      var end = at + c.length;
+      var last = chars[chars.length - 1];
+      if (/[ \t\n\f\r]/.test(c)) {
+        if (last && last.space) last.end = end;
+        else chars.push({ c: " ", raw: " ", space: true, start: at, end: end });
+      } else {
+        chars.push({ c: fold(c, exact), raw: c, space: false, start: at, end: end });
+      }
+      at = end;
+    });
+    return chars;
+  }
+
+  function fold(c, exact) {
+    var lower = c.toLowerCase();
+    return exact || Array.from(lower).length !== 1 ? c : lower;
+  }
+
+  function isWord(c) {
+    return !!c && /[\p{Alphabetic}\p{N}_]/u.test(c.raw);
+  }
+
+  /** Ranges of the text on the slide that `query` matches, in reading order. */
+  function searchHits(query, matchCase, wholeWord) {
+    var needle = readText(query, matchCase).map(function (c) {
+      return c.c;
+    });
+    var hits = [];
+    if (!needle.length) return hits;
+    var walker = document.createTreeWalker(slide, NodeFilter.SHOW_TEXT);
+    for (var node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.parentElement.closest(NOT_TEXT)) continue;
+      var chars = readText(node.data, matchCase);
+      for (var i = 0; i + needle.length <= chars.length; i++) {
+        var end = i + needle.length;
+        var same = needle.every(function (c, k) {
+          return chars[i + k].c === c;
+        });
+        if (!same || (wholeWord && (isWord(chars[i - 1]) || isWord(chars[end])))) continue;
+        var range = document.createRange();
+        range.setStart(node, chars[i].start);
+        range.setEnd(node, chars[end - 1].end);
+        hits.push(range);
+        i = end - 1;
+      }
+    }
+    return hits;
+  }
+
+  var searchMarks = null;
+
+  function highlight(data) {
+    // Older WebKits have no CSS highlights: the slide shows no marks, and the search still works.
+    if (typeof Highlight === "undefined" || !CSS.highlights) return;
+    if (!searchMarks) {
+      searchMarks = { all: new Highlight(), strong: new Highlight() };
+      CSS.highlights.set("slop-search", searchMarks.all);
+      CSS.highlights.set("slop-search-active", searchMarks.strong);
+    }
+    // Refilled, never replaced: WebKit keeps painting a highlight that another one replaced.
+    searchMarks.all.clear();
+    searchMarks.strong.clear();
+    var hits = data.query ? searchHits(String(data.query), !!data.matchCase, !!data.wholeWord) : [];
+    hits.forEach(function (hit, i) {
+      (i === data.active ? searchMarks.strong : searchMarks.all).add(hit);
+    });
+  }
+
+  if (!show) {
+    var marks = document.createElement("style");
+    marks.textContent =
+      "::highlight(slop-search) { background-color: #fde047; color: #000; }" +
+      "::highlight(slop-search-active) { background-color: #fb923c; color: #000; }";
+    document.head.appendChild(marks);
+  }
+
   window.addEventListener("message", function (event) {
     var data = event.data;
     if (event.source !== window.parent || !data) return;
+    if (data.type === "slop:search") highlight(data);
     if (data.type === "slop:camera") {
       if (data.home) setCamera(0, 0, 1);
       else if ([data.x, data.y, data.k].every(Number.isFinite)) setCamera(data.x, data.y, data.k);

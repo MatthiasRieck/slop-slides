@@ -1,12 +1,12 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 
-import type { Deck } from "../lib/api";
+import type { Deck, FindMatch, Section } from "../lib/api";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { SlideRail } from "./SlideRail";
@@ -36,6 +36,61 @@ const HIDDEN_HTML = DECK_HTML.replace(`id="outro"`, `id="outro" data-hidden`);
 const thumbnail = (li: HTMLElement) => li.querySelector("button > div") as HTMLElement;
 
 describe("SlideRail", () => {
+  describe("while searching", () => {
+    const found = (slide: string): FindMatch => ({
+      slide,
+      index: 0,
+      locked: false,
+      notes: false,
+      before: "",
+      text: "x",
+      after: "",
+    });
+    const shown = () => items().filter((li) => !li.classList.contains("hidden"));
+    afterEach(() => useApp.getState().clearSearch());
+
+    it("lists only the slides with a match and leaves their numbers alone", () => {
+      const deck = withSlides("a", "b", "c");
+      useApp.setState({ deck, selected: "a" });
+      render(<SlideRail />);
+      act(() => useApp.getState().setSearch({ query: "x" }));
+      expect(shown()).toHaveLength(3);
+      act(() => useApp.getState().setSearchMatches([found("b"), found("b"), found("c")]));
+      expect(shown().map((li) => li.textContent)).toEqual(["2", "3"]);
+      expect(screen.getByText("Slides · 2 of 3")).toBeTruthy();
+      act(() => useApp.getState().setSearch({ query: "" }));
+      expect(shown()).toHaveLength(3);
+    });
+
+    it("says so when nothing matches, and drops the section headers", () => {
+      useApp.setState({
+        deck: { ...withSlides("a", "b"), sections: [{ index: 0, title: "One", before: 0 } as Section] },
+        selected: "a",
+      });
+      render(<SlideRail />);
+      expect(screen.getByTestId("section-header").classList.contains("hidden")).toBe(false);
+      act(() => {
+        useApp.getState().setSearch({ query: "x" });
+        useApp.getState().setSearchMatches([]);
+      });
+      expect(shown()).toHaveLength(0);
+      expect(screen.getByText("No slide contains this text.")).toBeTruthy();
+      expect(screen.getByTestId("section-header").classList.contains("hidden")).toBe(true);
+    });
+
+    it("stops the slides being dragged, which would reorder only those shown", () => {
+      useApp.setState({ deck: withSlides("a", "b"), selected: "a" });
+      render(<SlideRail />);
+      const draggable = () => items()[0]!.getAttribute("aria-disabled");
+      expect(draggable()).toBe("false");
+      act(() => {
+        useApp.getState().setSearch({ query: "x" });
+        useApp.getState().setSearchMatches([found("a"), found("b")]);
+      });
+      expect(draggable()).toBe("true");
+    });
+  });
+
   it("numbers every slide and shows the count", () => {
     render(<SlideRail />);
     expect(screen.getByText("Slides · 3")).toBeTruthy();

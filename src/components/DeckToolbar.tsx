@@ -4,13 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { api, type Deck, errorMessage } from "../lib/api";
 import { basename, cn } from "../lib/utils";
 import { deckMode, lintFixPrompt, useApp } from "../store";
-import { FindButton } from "./FindReplace";
+import { SlideSearch } from "./FindReplace";
 import { NarrationPanel } from "./NarrationPanel";
 import { SlideSizeButton } from "./SlideSize";
 
 /**
  * The row under the top bar, which holds the tools of the mode the deck is in. In View and HTML
- * it has the title, find and replace, the slide size and lint; in Narration, the narration.
+ * it has the title, the slide size and lint, and in View the search; in Narration, the narration.
  * The stage draws this row itself in Edit and Review, whose tools work on the slide it shows.
  */
 export function DeckToolbar() {
@@ -22,6 +22,7 @@ export function DeckToolbar() {
 }
 
 function DeckTools({ deck }: { deck: Deck }) {
+  const mode = useApp(deckMode);
   const [title, setTitle] = useState(deck.title);
   // Escape blurs the field, and blur commits; this keeps that blur from saving the edit.
   const cancelled = useRef(false);
@@ -61,7 +62,7 @@ function DeckTools({ deck }: { deck: Deck }) {
         className="min-w-0 max-w-md flex-1 truncate rounded-md bg-transparent px-1.5 py-1 text-sm font-medium outline-none hover:bg-accent focus:bg-accent"
       />
       <div className="flex-1" />
-      <FindButton />
+      {mode === "view" && <SlideSearch />}
       <SlideSizeButton />
       <LintStatus />
     </div>

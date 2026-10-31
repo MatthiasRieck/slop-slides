@@ -26,8 +26,10 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   web pages, email addresses or other slides. While typing, these apply to the selected words;
   otherwise to the whole element. A text box can shrink its text or grow to fit instead of
   overflowing. Pasting into text keeps bold, italic, links and line breaks (⌘⇧V pastes plain
-  text). The search button in the deck toolbar (⌘F) finds and replaces text across all
-  slides and their notes, leaving locked slides alone. Moved
+  text). The search field in the View toolbar (⌘F) searches the text of all slides and their
+  notes as you type: the slide list shows only the slides that contain it, the slide you pick
+  highlights it, and the arrows (or Enter and ⇧Enter) go through the matches. The button next to
+  it replaces them, leaving locked slides alone. Moved
   elements keep a
   temporary offset; **Tidy layout** then sends the agent a screenshot so it rebuilds the
   slide's layout around where you put things.

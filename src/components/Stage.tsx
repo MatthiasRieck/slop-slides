@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { api, errorMessage, type Slide } from "../lib/api";
 import { catchDrops, type DropPoint, imageSize, isImage } from "../lib/drop";
 import {
@@ -30,9 +31,8 @@ import {
 import { type Stroke, zoomBox } from "../lib/ink";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn, deckFileUrl } from "../lib/utils";
-import { deckMode, SKETCH_TARGET_ATTR, useApp } from "../store";
+import { deckMode, SKETCH_TARGET_ATTR, searchHighlight, useApp } from "../store";
 import { EditToolbar } from "./EditToolbar";
-import { FindButton } from "./FindReplace";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { SketchToolbar } from "./SketchToolbar";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
@@ -103,6 +103,11 @@ export function Stage() {
   useEffect(() => {
     if (editing) postToEditor(toolMessage(editTool, editStyles));
   }, [editing, editTool, editStyles, postToEditor]);
+  // The preview marks what the toolbar's search finds on this slide.
+  const highlight = useApp(useShallow(searchHighlight));
+  useEffect(() => {
+    postToEditor({ type: "slop:search", ...highlight });
+  }, [highlight, postToEditor]);
   const restyle = (changes: EditStyle) => {
     const selection = editFrames.selection;
     // Restyling also sets how the next one of its kind looks; styling a few words does not.
@@ -175,6 +180,8 @@ export function Stage() {
               onFrameReady={(frame) => {
                 pasteboard.onFrameReady(frame);
                 editFrames.onFrameReady(frame);
+                const search = searchHighlight(useApp.getState());
+                if (search.query) postToEditor({ type: "slop:search", ...search });
               }}
             />
             {/* Ink sits on the slide, wherever the pasteboard has moved it. */}
@@ -273,15 +280,11 @@ export function Stage() {
   );
 }
 
-/**
- * The stage's own tools row, in the place of the deck toolbar, for the modes that work on the
- * slide. Find and replace stays in reach: ⌘F is the find button's.
- */
+/** The stage's own tools row, in the place of the deck toolbar, for the modes that work on the slide. */
 function ModeBar({ children }: { children: ReactNode }) {
   return (
     <div className="relative z-20 flex min-h-10 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b bg-background px-3 py-1 text-xs text-muted-foreground">
       {children}
-      <FindButton />
     </div>
   );
 }

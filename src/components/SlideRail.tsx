@@ -3,7 +3,7 @@ import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Copy, Eye, EyeOff, Lock, LockOpen, Palette, Pencil, Plus, SquareSplitVertical, Trash2, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api, errorMessage, type Section, type Slide } from "../lib/api";
 import { applyOrder, railItems, startsSection } from "../lib/sections";
@@ -23,6 +23,10 @@ export function SlideRail() {
   const templates = useApp((s) => s.templates);
   const styleTitle = templates?.find((t) => t.id === deck?.template)?.title;
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const matches = useApp((s) => s.search.matches);
+  // While a search runs the rail lists what it found. The rest stay mounted, hidden, so ending it
+  // doesn't reload every thumbnail, and can't be dragged: an order needs all the slides in view.
+  const found = useMemo(() => matches && new Set(matches.map((m) => m.slide)), [matches]);
   useEffect(() => releaseIframes, []);
   if (!deck) return null;
 
@@ -70,7 +74,7 @@ export function SlideRail() {
     <div className="flex h-full flex-col bg-sidebar">
       <div className="flex h-10 shrink-0 items-center justify-between px-3">
         <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
-          Slides · {deck.slides.length}
+          Slides · {found ? `${found.size} of ${deck.slides.length}` : deck.slides.length}
         </span>
         <div className="flex items-center gap-0.5">
           <button
@@ -136,17 +140,27 @@ export function SlideRail() {
             onDragEnd={onDragEnd}
             onDragCancel={releaseIframes}
           >
-            <SortableContext items={keys} strategy={verticalListSortingStrategy}>
+            {found?.size === 0 && (
+              <p className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">No slide contains this text.</p>
+            )}
+            <SortableContext items={keys} strategy={verticalListSortingStrategy} disabled={!!found}>
               <ol className="flex flex-col gap-3">
                 {items.map((item) =>
                   item.kind === "slide" ? (
-                    <Thumbnail key={item.key} deckId={deck.id} slide={item.slide} index={item.index} />
+                    <Thumbnail
+                      key={item.key}
+                      deckId={deck.id}
+                      slide={item.slide}
+                      index={item.index}
+                      filteredOut={!!found && !found.has(item.slide.id)}
+                    />
                   ) : (
                     <SectionHeader
                       key={item.key}
                       itemKey={item.key}
                       deckId={deck.id}
                       section={item.section}
+                      filteredOut={!!found}
                       editing={editingSection === item.section.index}
                       onEditing={(editing) => setEditingSection(editing ? item.section.index : null)}
                     />
@@ -185,6 +199,7 @@ function SectionHeader(props: {
   itemKey: string;
   deckId: string;
   section: Section;
+  filteredOut: boolean;
   editing: boolean;
   onEditing: (editing: boolean) => void;
 }) {
@@ -217,7 +232,10 @@ function SectionHeader(props: {
       ref={setNodeRef}
       data-testid="section-header"
       style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={cn("group flex items-center gap-2 pt-1", isDragging && "z-10 opacity-80")}
+      className={cn(
+        props.filteredOut ? "hidden" : "group flex items-center gap-2 pt-1",
+        isDragging && "z-10 opacity-80",
+      )}
       {...attributes}
       {...listeners}
     >
@@ -286,7 +304,8 @@ function SectionAction(props: { title: string; onClick: () => void; children: Re
   );
 }
 
-function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; index: number }) {
+function Thumbnail(props: { deckId: string; slide: Slide; index: number; filteredOut: boolean }) {
+  const { deckId, slide, index, filteredOut } = props;
   const selected = useApp((s) => s.selected === slide.id);
   const version = useSlideVersion(slide);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -347,7 +366,7 @@ function Thumbnail({ deckId, slide, index }: { deckId: string; slide: Slide; ind
         itemRef.current = node;
       }}
       style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={cn("group flex gap-2", isDragging && "z-10 opacity-80")}
+      className={cn(filteredOut ? "hidden" : "group flex gap-2", isDragging && "z-10 opacity-80")}
       {...attributes}
       {...listeners}
     >

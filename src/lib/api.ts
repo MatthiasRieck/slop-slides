@@ -135,6 +135,8 @@ export interface FindMatch {
   index: number;
   /** Locked slides are found but never changed. */
   locked: boolean;
+  /** In the slide's notes or narration, which the slide doesn't show. */
+  notes: boolean;
   before: string;
   text: string;
   after: string;

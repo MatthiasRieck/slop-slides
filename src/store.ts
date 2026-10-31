@@ -8,6 +8,7 @@ import {
   api,
   type Deck,
   errorMessage,
+  type FindMatch,
   type FindOptions,
   type LintIssue,
   type OpenedFile,
@@ -204,6 +205,43 @@ export function deckMode(state: Pick<AppState, "view" | "editing" | "slideMode">
   return state.editing ? "edit" : state.slideMode;
 }
 
+/** The search in View mode's toolbar (see components/FindReplace.tsx). */
+export interface SlideSearch {
+  query: string;
+  options: FindOptions;
+  /** What the query finds, in deck order; null until it has searched. */
+  matches: FindMatch[] | null;
+  /** The match stepped to, if it is still on the selected slide; see `activeMatch`. */
+  active: number;
+}
+
+const NO_SEARCH: SlideSearch = {
+  query: "",
+  options: { matchCase: false, wholeWord: false },
+  matches: null,
+  active: -1,
+};
+
+/** The match in focus, as an index into the matches: on the selected slide, or -1 if it has none. */
+export function activeMatch(state: Pick<AppState, "search" | "selected">): number {
+  const { matches, active } = state.search;
+  if (!matches) return -1;
+  if (matches[active]?.slide === state.selected) return active;
+  return matches.findIndex((m) => m.slide === state.selected);
+}
+
+/** What the slide on the stage highlights; `active` counts the matches on that slide. */
+export function searchHighlight(state: Pick<AppState, "search" | "selected">) {
+  const { query, options, matches } = state.search;
+  const first = matches?.findIndex((m) => m.slide === state.selected) ?? -1;
+  return {
+    query: query.trim() ? query : "",
+    matchCase: options.matchCase,
+    wholeWord: options.wholeWord,
+    active: first < 0 ? -1 : activeMatch(state) - first,
+  };
+}
+
 /** The right sidebar's tabs, in order (see components/Sidebar.tsx). */
 export const SIDEBAR_TABS = ["chat", "files"] as const;
 export type SidebarTab = (typeof SIDEBAR_TABS)[number];
@@ -280,6 +318,7 @@ interface AppState {
   /** Slides being saved as images into `dir`, one at a time; null when not exporting. */
   imageExport: { dir: string; slides: string[] } | null;
   /** The stage lets the user edit text and move elements on the slide. */
+  search: SlideSearch;
   editing: boolean;
   /** The mode shown over the rendered slide when not editing; see `deckMode`. */
   slideMode: "view" | "review" | "narration";
@@ -311,6 +350,11 @@ interface AppState {
   setDeck: (deck: Deck) => void;
   select: (slide: string | null) => void;
   selectRelative: (delta: number) => void;
+  setSearch: (changes: Partial<Pick<SlideSearch, "query" | "options">>) => void;
+  setSearchMatches: (matches: FindMatch[]) => void;
+  /** Goes to the next (1) or previous (-1) match, around the deck. */
+  stepSearch: (delta: 1 | -1) => void;
+  clearSearch: () => void;
   setView: (view: StageView) => void;
   setCodeDirty: (dirty: boolean) => void;
   setSidebarOpen: (open: boolean) => void;
@@ -474,6 +518,7 @@ export const useApp = create<AppState>((set, get) => ({
   sketchesSent: {},
   reviewVisible: localStorage.getItem(REVIEW_VISIBLE_KEY) !== "false",
   imageExport: null,
+  search: NO_SEARCH,
   editing: false,
   slideMode: "view",
   editReload: 0,
@@ -605,6 +650,39 @@ export const useApp = create<AppState>((set, get) => ({
     const next = Math.min(deck.slides.length - 1, Math.max(0, index + delta));
     set((s) => ({ selected: deck.slides[next]?.id ?? null, revealRev: s.revealRev + 1 }));
   },
+
+  setSearch: (changes) =>
+    set((s) => {
+      const search = { ...s.search, ...changes, active: -1 };
+      return { search: search.query.trim() ? search : { ...search, matches: null } };
+    }),
+
+  setSearchMatches: (matches) => set((s) => ({ search: { ...s.search, matches } })),
+
+  stepSearch: (delta) => {
+    const state = get();
+    const matches = state.search.matches;
+    if (!matches?.length) return;
+    const count = matches.length;
+    const from = activeMatch(state);
+    let next = (from + delta + count) % count;
+    // The selected slide has none: the nearest one that way, past either end to the other.
+    if (from < 0) {
+      const here = state.deck?.slides.findIndex((s) => s.id === state.selected) ?? -1;
+      next =
+        delta > 0
+          ? Math.max(
+              0,
+              matches.findIndex((m) => m.index > here),
+            )
+          : (matches.findLastIndex((m) => m.index < here) + count) % count;
+    }
+    const slide = matches[next]?.slide ?? null;
+    set({ search: { ...state.search, active: next } });
+    if (slide !== state.selected) state.select(slide);
+  },
+
+  clearSearch: () => set({ search: NO_SEARCH }),
 
   setView: (view) => {
     localStorage.setItem("slopslide.view", view);
@@ -1185,6 +1263,7 @@ async function loadDeckState(deck: Deck) {
     sketches: deck.review ?? {},
     sketchesSent: {},
     imageExport: null,
+    search: NO_SEARCH,
     editing: false,
     slideMode: "view",
     editTool: "select",

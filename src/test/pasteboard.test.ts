@@ -112,6 +112,85 @@ function pasteboard({
   };
 }
 
+describe("search marks", () => {
+  // jsdom has no CSS highlights.
+  function marked(html: string) {
+    const page = pasteboard();
+    const { window, doc, $ } = page;
+    const sets = new Map<string, Set<Range>>();
+    const registered: string[] = [];
+    const win = window as unknown as Record<string, unknown>;
+    win.Highlight = Set;
+    win.CSS = {
+      highlights: {
+        set: (name: string, ranges: Set<Range>) => {
+          registered.push(name);
+          sets.set(name, ranges);
+        },
+      },
+    };
+    $("#intro").innerHTML = html;
+    return {
+      doc,
+      search: (query: string, more: object = {}) =>
+        page.fromParent({ type: "slop:search", query, matchCase: false, wholeWord: false, active: 0, ...more }),
+      registered,
+      all: () => [...(sets.get("slop-search") ?? [])].map(String),
+      strong: () => [...(sets.get("slop-search-active") ?? [])].map(String),
+    };
+  }
+
+  it("marks every hit in the slide, the active one stronger, as the toolbar steps", () => {
+    const { search, all, strong } = marked("<h1>Plan</h1><p>the plan, planning</p>");
+    search("plan");
+    expect(strong()).toEqual(["Plan"]);
+    expect(all()).toEqual(["plan", "plan"]);
+    search("plan", { active: 2 });
+    expect(strong()).toEqual(["plan"]);
+    expect(all()).toEqual(["Plan", "plan"]);
+    search("");
+    expect([...all(), ...strong()]).toEqual([]);
+  });
+
+  it("reads text as find.rs does", () => {
+    const { search, all, strong } = marked(
+      `<p>R&amp;D next
+         quarter</p><p>Hello <em>there</em></p><style>.plan {}</style><div data-delete-placeholder>plan</div>`,
+    );
+    search("r&d next quarter");
+    expect(strong()).toEqual(["R&D next\n         quarter"]);
+    search("hello there");
+    expect(strong()).toEqual([]);
+    search("plan");
+    expect([...all(), ...strong()]).toEqual([]);
+  });
+
+  it("honors match case and whole words", () => {
+    const { search, all, strong } = marked("<p>Plan plan planning</p>");
+    search("plan", { matchCase: true, active: -1 });
+    expect(all()).toEqual(["plan", "plan"]);
+    expect(strong()).toEqual([]);
+    search("plan", { wholeWord: true, active: -1 });
+    expect(all()).toEqual(["Plan", "plan"]);
+  });
+
+  it("refills its highlights rather than replacing them, which WebKit would leave painted", () => {
+    const { search, registered, all, strong } = marked("<p>hat hit</p>");
+    search("h");
+    search("hi");
+    expect(registered).toEqual(["slop-search", "slop-search-active"]);
+    expect(strong()).toEqual(["hi"]);
+    expect(all()).toEqual([]);
+  });
+
+  it("leaves the slide's markup alone", () => {
+    const { search, doc } = marked("<p>plan</p>");
+    const before = doc.body.innerHTML;
+    search("plan");
+    expect(doc.body.innerHTML).toBe(before);
+  });
+});
+
 describe("pasteboard", () => {
   it("does nothing outside the app's preview", () => {
     const p = pasteboard({ framed: false });

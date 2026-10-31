@@ -558,7 +558,27 @@ describe("deck toolbar", () => {
     const labels = Array.from(toolbar.querySelectorAll("button")).map(
       (b) => b.getAttribute("aria-label") ?? b.textContent,
     );
-    expect(labels).toEqual(["Find and replace", "Slide size", "Lint OK"]);
+    expect(labels).toEqual([
+      "Match case",
+      "Whole words",
+      "Previous match",
+      "Next match",
+      "Replace",
+      "Slide size",
+      "Lint OK",
+    ]);
+    expect(screen.getByRole("textbox", { name: "Search slides" })).toBeTruthy();
+  });
+
+  it.each([
+    ["code", { view: "code" as const }],
+    ["edit", { editing: true }],
+    ["review", { slideMode: "review" as const }],
+  ])("offers the search in View mode only, not in %s", (_mode, state) => {
+    useApp.setState({ lint: [], ...state });
+    render(<DeckToolbar />);
+    expect(screen.queryByRole("textbox", { name: "Search slides" })).toBeNull();
+    useApp.setState({ view: "slides", editing: false, slideMode: "view" });
   });
 
   it("stays for the HTML view", () => {

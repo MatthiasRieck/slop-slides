@@ -4,6 +4,7 @@
 //! the source wraps over two lines is still found. A match stays within one run of text: a
 //! phrase with a tag inside it (`Hello <em>there</em>`) is not found as a whole.
 //!
+//! Text in a slide's notes and narration is found too, and said to be there, as no slide shows it.
 //! Locked slides are found but never changed. The invisible copies the slide editor leaves
 //! behind (`data-resize-placeholder`, `data-delete-placeholder`) are skipped.
 
@@ -30,6 +31,8 @@ pub struct Match {
     /// The slide's position in the deck, from 0.
     pub index: usize,
     pub locked: bool,
+    /// In the slide's notes or narration, which the slide doesn't show.
+    pub notes: bool,
     pub before: String,
     pub text: String,
     pub after: String,
@@ -56,6 +59,8 @@ const VOID: &[&str] = &[
     "track", "wbr",
 ];
 const PLACEHOLDERS: &[&str] = &["data-resize-placeholder", "data-delete-placeholder"];
+/// Classes of a slide's elements the player never shows.
+const OFF_SLIDE: &[&str] = &["notes", "narration"];
 
 /// The slide's text as characters, each with the source bytes it came from.
 type Chars = Vec<(char, Range<usize>)>;
@@ -70,7 +75,9 @@ pub fn find(source: &str, query: &str, options: Options) -> Vec<Match> {
     for (index, slide) in html::find_slides(source).iter().enumerate() {
         let Some(id) = slide.id.clone() else { continue };
         let locked = slide.locked.is_some();
+        let off_slide = off_slide_ranges(source, slide.range.clone());
         for run in text_runs(source, slide.range.clone()) {
+            let notes = off_slide.iter().any(|r| r.contains(&run.start));
             let chars = decode(source, run);
             for at in matches(&chars, &needle, options) {
                 let text = |r: Range<usize>| chars[r].iter().map(|(c, _)| *c).collect::<String>();
@@ -78,6 +85,7 @@ pub fn find(source: &str, query: &str, options: Options) -> Vec<Match> {
                     slide: id.clone(),
                     index,
                     locked,
+                    notes,
                     before: text(at.start.saturating_sub(CONTEXT)..at.start)
                         .trim_start()
                         .to_string(),
@@ -215,6 +223,42 @@ fn text_runs(source: &str, range: Range<usize>) -> Vec<Range<usize>> {
         i = end;
     }
     runs
+}
+
+/// Byte ranges of the elements in `range` (one slide) with the classes in [`OFF_SLIDE`].
+fn off_slide_ranges(source: &str, range: Range<usize>) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut i = range.start;
+    while let Some(at) = source[i..range.end].find('<').map(|e| i + e) {
+        let Some(tag) = parse_tag(source, at) else {
+            i = at + 1;
+            continue;
+        };
+        i = tag.end;
+        let off_slide = tag.attrs.iter().any(|(name, value, ..)| {
+            name == "class" && value.split_whitespace().any(|c| OFF_SLIDE.contains(&c))
+        });
+        if tag.closing || !off_slide {
+            continue;
+        }
+        // Up to the tag that closes it, counting those of its name nested inside.
+        let mut depth = 1;
+        while depth > 0 && i < range.end {
+            let Some(next) = source[i..range.end].find('<').map(|e| i + e) else {
+                i = range.end;
+                break;
+            };
+            i = next + 1;
+            if let Some(inner) = parse_tag(source, next) {
+                i = inner.end;
+                if inner.name == tag.name {
+                    depth = if inner.closing { depth - 1 } else { depth + 1 };
+                }
+            }
+        }
+        ranges.push(at..i);
+    }
+    ranges
 }
 
 /// The text of `run` as read: character references decoded, whitespace runs as one space.
@@ -393,10 +437,29 @@ mod tests {
             texts(&found),
             [("intro", "Plan"), ("intro", "plan"), ("next", "Plan")]
         );
+        assert_eq!(
+            found.iter().map(|m| m.notes).collect::<Vec<_>>(),
+            [false, true, false]
+        );
         assert_eq!(found[1].before, "Explain the ");
         assert_eq!(found[1].after, ".");
         assert_eq!(found[2].index, 1);
         assert!(find(&source, "", CASE).is_empty());
+    }
+
+    #[test]
+    fn says_which_matches_only_notes_and_narration_hold() {
+        let source = deck(
+            r#"<section class="slide" id="a"><aside class="notes extra"><div><aside>plan</aside> plan</div> plan</aside><p>plan</p>
+<div class="narration">plan</div><p class="noted">plan</p></section>"#,
+        );
+        assert_eq!(
+            find(&source, "plan", CASE)
+                .iter()
+                .map(|m| m.notes)
+                .collect::<Vec<_>>(),
+            [true, true, true, false, true, false]
+        );
     }
 
     #[test]

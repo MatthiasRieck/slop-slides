@@ -313,6 +313,20 @@ describe("Stage", () => {
       expect(target.querySelector("iframe, [style*='aspect-ratio']")).toBeTruthy();
     });
 
+    it.each(["Draw on the slide", "Highlight on the slide", "Erase marks"])(
+      "%s prevents native selection while annotating",
+      (name) => {
+        render(<Stage />);
+        fireEvent.click(tool(name));
+        // A canceled press prevents the browser's compatibility mousedown/selection action.
+        expect(fireEvent.pointerDown(layer(), { button: 0, buttons: 1, pointerId: 1, cancelable: true })).toBe(false);
+        fireEvent.pointerUp(layer(), { pointerId: 1 });
+        expect(layer().style.userSelect).toBe("none");
+        // Leave the middle button available for pasteboard navigation.
+        expect(fireEvent.pointerDown(layer(), { button: 1, cancelable: true })).toBe(true);
+      },
+    );
+
     it("keeps the drawing in the store, per slide", () => {
       render(<Stage />);
       fireEvent.click(tool("Draw on the slide"));

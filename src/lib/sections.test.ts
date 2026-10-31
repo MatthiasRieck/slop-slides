@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import type { Deck } from "./api";
-import { applyOrder, dropRows, railItems, sectionKey, startsSection, stepRows } from "./sections";
+import {
+  applyOrder,
+  dropRows,
+  dropSection,
+  railItems,
+  sectionBlocks,
+  sectionKey,
+  startsSection,
+  stepRows,
+} from "./sections";
 
 const deck = (sections: [string, number][], ids = ["a", "b", "c"]): Deck => ({
   id: "talk",
@@ -131,5 +140,95 @@ describe("dropRows", () => {
 
   it("does nothing when dropped on a row of the block", () => {
     expect(dropRows(rows, ["a", "c"], "a", "c")).toEqual(rows);
+  });
+});
+
+describe("sectionBlocks", () => {
+  const blocks = (d: Deck) => sectionBlocks(railItems(d));
+
+  it("gives each section its marker and slides, leaving out the slides before the first", () => {
+    expect(
+      blocks(
+        deck([
+          ["One", 1],
+          ["Two", 2],
+        ]),
+      ),
+    ).toEqual([
+      { key: "section:0", rows: ["section:0", "b"] },
+      { key: "section:1", rows: ["section:1", "c"] },
+    ]);
+  });
+
+  it("keeps an empty section as a block of its own", () => {
+    expect(
+      blocks(
+        deck([
+          ["One", 0],
+          ["Two", 0],
+          ["End", 3],
+        ]),
+      ),
+    ).toEqual([
+      { key: "section:0", rows: ["section:0"] },
+      { key: "section:1", rows: ["section:1", "a", "b", "c"] },
+      { key: "section:2", rows: ["section:2"] },
+    ]);
+  });
+
+  it("is empty without sections", () => {
+    expect(blocks(deck([]))).toEqual([]);
+  });
+});
+
+describe("dropSection", () => {
+  const sectioned = deck(
+    [
+      ["One", 1],
+      ["Two", 3],
+      ["Three", 4],
+    ],
+    ["a", "b", "c", "d", "e"],
+  );
+  const items = railItems(sectioned);
+
+  it("moves a section up with its slides, past the other sections", () => {
+    expect(dropSection(items, "section:2", "section:0")).toEqual([
+      "a",
+      "section:2",
+      "e",
+      "section:0",
+      "b",
+      "c",
+      "section:1",
+      "d",
+    ]);
+  });
+
+  it("moves a section down below the one it lands on", () => {
+    expect(dropSection(items, "section:0", "section:1")).toEqual([
+      "a",
+      "section:1",
+      "d",
+      "section:0",
+      "b",
+      "c",
+      "section:2",
+      "e",
+    ]);
+  });
+
+  it("changes nothing when dropped on itself", () => {
+    expect(dropSection(items, "section:1", "section:1")).toEqual(keys(sectioned));
+  });
+
+  it("gives the deck its new order, slides staying in their sections", () => {
+    const next = applyOrder(sectioned, dropSection(items, "section:2", "section:0"));
+    expect(next.slides.map((s) => s.id)).toEqual(["a", "e", "b", "c", "d"]);
+    expect(next.sections.map((s) => [s.title, s.before])).toEqual([
+      ["Three", 1],
+      ["One", 2],
+      ["Two", 4],
+    ]);
   });
 });

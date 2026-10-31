@@ -1,4 +1,14 @@
-import { closestCenter, DndContext, type DragEndEvent, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
+import {
+  type CollisionDetection,
+  closestCenter,
+  DndContext,
+  type DragEndEvent,
+  type DragStartEvent,
+  getClientRect,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -19,10 +29,10 @@ import {
   Undo2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { api, type Deck, errorMessage, type Section, type Slide } from "../lib/api";
-import { dropRows, railItems, startsSection } from "../lib/sections";
+import { dropRows, dropSection, railItems, sectionBlocks, sectionKey, startsSection } from "../lib/sections";
 import { pixelsOf } from "../lib/slideSize";
 import { cn } from "../lib/utils";
 import { railSelection, useApp } from "../store";
@@ -43,18 +53,83 @@ export function SlideRail() {
   // While a search runs the rail lists what it found. The rest stay mounted, hidden, so ending it
   // doesn't reload every thumbnail, and can't be dragged: an order needs all the slides in view.
   const found = useMemo(() => matches && new Set(matches.map((m) => m.slide)), [matches]);
+  // The section being dragged, and how far down the rail its row was when picked up. Until it is
+  // dropped the rail shows one row per section, closed up around that row so it stays in hand.
+  const [moving, setMoving] = useState<{ key: string; top: number } | null>(null);
+  const landing = useRef<{ key: string; top: number } | null>(null);
+  const list = useRef<HTMLOListElement>(null);
   useEffect(() => releaseIframes, []);
+  useLayoutEffect(() => {
+    const rows = list.current;
+    const scroller = rows?.parentElement;
+    const top = moving && rowTop(rows, moving.key);
+    if (!moving || !rows || !scroller || top == null) return;
+    const shift = top - moving.top;
+    if (shift < 0) rows.style.paddingTop = `${-shift}px`;
+    else if (shift > 0) {
+      const needed = scroller.scrollTop + shift + scroller.clientHeight;
+      rows.style.paddingBottom = `${Math.max(needed - rows.offsetHeight, 0)}px`;
+      scroller.scrollTop += shift;
+    }
+    return () => {
+      rows.style.paddingTop = "";
+      rows.style.paddingBottom = "";
+    };
+  }, [moving]);
+  // Opening the sections again leaves the dropped one where the pointer let go of it.
+  useLayoutEffect(() => {
+    const dropped = landing.current;
+    if (moving || !dropped) return;
+    landing.current = null;
+    const scroller = list.current?.parentElement;
+    const top = rowTop(list.current, dropped.key);
+    if (scroller && top != null) scroller.scrollTop += top - dropped.top;
+  }, [moving]);
   if (!deck) return null;
 
   const items = railItems(deck);
-  const keys = items.map((item) => item.key);
+  const blocks = sectionBlocks(items);
+  const keys = moving ? blocks.map((block) => block.key) : items.map((item) => item.key);
+  const looseSlides = items.findIndex((item) => item.kind === "section");
   const selectedIndex = deck.slides.findIndex((s) => s.id === selected);
   const canAddSection = selectedIndex >= 0 && !startsSection(deck, selectedIndex);
 
+  const onDragStart = ({ active }: DragStartEvent) => {
+    holdIframes();
+    const key = String(active.id);
+    const top = blocks.some((block) => block.key === key) ? rowTop(list.current, key) : null;
+    if (top != null) setMoving({ key, top });
+  };
+
+  // Only the sections' rows are open to a drop while a section moves; the rest take no space.
+  const collisionDetection: CollisionDetection = (args) =>
+    closestCenter(
+      moving
+        ? { ...args, droppableContainers: args.droppableContainers.filter((c) => keys.includes(`${c.id}`)) }
+        : args,
+    );
+
+  /** Opens the sections again, with the one dragged ending up `at` this place among them. */
+  const putDown = (at: number, top: number | undefined) => {
+    landing.current = top === undefined ? null : { key: sectionKey(at), top };
+    setMoving(null);
+  };
+
+  const onDragCancel = () => {
+    releaseIframes();
+    if (moving) putDown(keys.indexOf(moving.key), moving.top);
+  };
+
   const onDragEnd = async ({ active, over }: DragEndEvent) => {
     releaseIframes();
-    if (!over || active.id === over.id) return;
     const key = String(active.id);
+    if (moving) {
+      const order = dropSection(items, key, String(over?.id ?? key));
+      putDown(order.filter((row) => keys.includes(row)).indexOf(key), active.rect.current.translated?.top);
+      if (over && over.id !== active.id) await useApp.getState().reorderRail(order);
+      return;
+    }
+    if (!over || active.id === over.id) return;
     // Dragging one of the picked slides takes the others along.
     const picked = railSelection(useApp.getState());
     const moved = picked.length > 1 && picked.includes(key) ? picked : [key];
@@ -149,17 +224,18 @@ export function SlideRail() {
         ) : (
           <DndContext
             sensors={sensors}
-            collisionDetection={closestCenter}
+            collisionDetection={collisionDetection}
             modifiers={[restrictToVerticalAxis]}
-            onDragStart={holdIframes}
+            onDragStart={onDragStart}
             onDragEnd={onDragEnd}
-            onDragCancel={releaseIframes}
+            onDragCancel={onDragCancel}
           >
             {found?.size === 0 && (
               <p className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">No slide contains this text.</p>
             )}
             <SortableContext items={keys} strategy={verticalListSortingStrategy} disabled={!!found}>
-              <ol className="flex flex-col gap-3">
+              <ol ref={list} className="flex flex-col gap-3">
+                {moving && looseSlides > 0 && <LooseSlides count={looseSlides} />}
                 {items.map((item) =>
                   item.kind === "slide" ? (
                     <Thumbnail
@@ -167,7 +243,7 @@ export function SlideRail() {
                       deckId={deck.id}
                       slide={item.slide}
                       index={item.index}
-                      filteredOut={!!found && !found.has(item.slide.id)}
+                      filteredOut={!!moving || (!!found && !found.has(item.slide.id))}
                     />
                   ) : (
                     <SectionHeader
@@ -176,6 +252,7 @@ export function SlideRail() {
                       deckId={deck.id}
                       section={item.section}
                       filteredOut={!!found}
+                      slides={moving ? blocks.find((block) => block.key === item.key)!.rows.length - 1 : undefined}
                       editing={editingSection === item.section.index}
                       onEditing={(editing) => setEditingSection(editing ? item.section.index : null)}
                     />
@@ -307,12 +384,32 @@ function releaseIframes() {
   document.getElementById(IFRAME_HOLD_ID)?.remove();
 }
 
+/** Where the section row `key` sits in the window, whatever a drag is doing to it. */
+function rowTop(list: HTMLElement | null, key: string) {
+  const row = list?.querySelector(`[data-section-key="${key}"]`);
+  return row ? getClientRect(row, { ignoreTransform: true }).top : null;
+}
+
+const slideCount = (count: number) => `${count} ${count === 1 ? "slide" : "slides"}`;
+
+/** Stands in for the slides before the first section, which stay put while sections move. */
+function LooseSlides({ count }: { count: number }) {
+  return (
+    <li data-testid="loose-slides" className="flex items-center gap-2 pt-1 text-2xs text-muted-foreground">
+      <span className="w-4 shrink-0" />
+      {slideCount(count)}
+    </li>
+  );
+}
+
 /** Divider row that names a section. Only the editor shows it; the player never does. */
 function SectionHeader(props: {
   itemKey: string;
   deckId: string;
   section: Section;
   filteredOut: boolean;
+  /** How many slides are folded under the row while sections are being moved. */
+  slides?: number;
   editing: boolean;
   onEditing: (editing: boolean) => void;
 }) {
@@ -344,10 +441,11 @@ function SectionHeader(props: {
     <li
       ref={setNodeRef}
       data-testid="section-header"
+      data-section-key={props.itemKey}
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn(
         props.filteredOut ? "hidden" : "group flex items-center gap-2 pt-1",
-        isDragging && "z-10 opacity-80",
+        isDragging && "z-10 rounded bg-sidebar pb-1 ring-1 ring-border",
       )}
       {...attributes}
       {...listeners}
@@ -386,14 +484,18 @@ function SectionHeader(props: {
             {section.title || "Untitled section"}
           </span>
           <span className="h-px flex-1 bg-border" />
-          <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">
-            <SectionAction title="Rename section" onClick={() => onEditing(true)}>
-              <Pencil className="size-3" />
-            </SectionAction>
-            <SectionAction title="Remove section" onClick={remove}>
-              <X className="size-3" />
-            </SectionAction>
-          </div>
+          {props.slides !== undefined ? (
+            <span className="shrink-0 pr-1 text-2xs text-muted-foreground">{slideCount(props.slides)}</span>
+          ) : (
+            <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">
+              <SectionAction title="Rename section" onClick={() => onEditing(true)}>
+                <Pencil className="size-3" />
+              </SectionAction>
+              <SectionAction title="Remove section" onClick={remove}>
+                <X className="size-3" />
+              </SectionAction>
+            </div>
+          )}
         </>
       )}
     </li>

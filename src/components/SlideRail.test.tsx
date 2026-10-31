@@ -37,6 +37,7 @@ const edited = (deck: unknown, created: string[] = []) => ({ deck, previous: "<o
 
 const HIDDEN_HTML = DECK_HTML.replace(`id="outro"`, `id="outro" data-hidden`);
 const thumbnail = (li: HTMLElement) => li.querySelector("button > div") as HTMLElement;
+const markShown = (mark: HTMLElement) => mark.closest("[data-shown]")?.getAttribute("data-shown") === "true";
 
 describe("SlideRail", () => {
   describe("while searching", () => {
@@ -267,7 +268,19 @@ describe("hidden slides in the rail", () => {
     expect(within(outro).getByText("3").className).toMatch(/opacity-60/);
 
     expect(thumbnail(intro).className).not.toMatch(/opacity-35/);
-    expect(within(intro).queryByTestId("hidden-mark")).toBeNull();
+    expect(markShown(within(intro).getByTestId("hidden-mark"))).toBe(false);
+  });
+
+  it("animates a slide's muting and its closed eye", () => {
+    render(<SlideRail />);
+    const [intro, , outro] = items() as [HTMLElement, HTMLElement, HTMLElement];
+    for (const li of [intro, outro]) {
+      expect(thumbnail(li).className).toMatch(/\btransition\b/);
+      expect(li.querySelector("span")?.className).toMatch(/\btransition\b/);
+      expect(within(li).getByTestId("hidden-mark").parentElement?.className).toMatch(/\btransition\b/);
+    }
+    expect(within(outro).getByTestId("hidden-mark").parentElement?.className).not.toMatch(/opacity-0/);
+    expect(within(intro).getByTestId("hidden-mark").parentElement?.className).toMatch(/opacity-0/);
   });
 
   it("still renders hidden slides in place, keeping their number", () => {
@@ -289,7 +302,7 @@ describe("hidden slides in the rail", () => {
       hidden: true,
     });
     expect(useApp.getState().deck).toBe(next);
-    expect(within(items()[0]!).getByTestId("hidden-mark")).toBeTruthy();
+    expect(markShown(within(items()[0]!).getByTestId("hidden-mark"))).toBe(true);
   });
 
   it("shows a hidden slide again", async () => {
@@ -301,7 +314,11 @@ describe("hidden slides in the rail", () => {
       slides: ["outro"],
       hidden: false,
     });
-    expect(screen.queryByTestId("hidden-mark")).toBeNull();
+    // Still there, so that it can fade out.
+    const mark = within(items()[2]!).getByTestId("hidden-mark");
+    expect(markShown(mark)).toBe(false);
+    expect(mark.parentElement?.getAttribute("aria-hidden")).toBe("true");
+    expect(thumbnail(items()[2]!).className).not.toMatch(/opacity-35/);
   });
 
   it("reports a failed toggle", async () => {
@@ -322,9 +339,9 @@ describe("locked slides in the rail", () => {
 
   it("marks locked slides and offers to unlock them", () => {
     render(<SlideRail />);
-    expect(item(2).getByTestId("locked-mark")).toBeTruthy();
+    expect(markShown(item(2).getByTestId("locked-mark"))).toBe(true);
     expect(item(2).getByTitle("Unlock slide")).toBeTruthy();
-    expect(item(0).queryByTestId("locked-mark")).toBeNull();
+    expect(markShown(item(0).getByTestId("locked-mark"))).toBe(false);
     expect(item(0).getByTitle("Lock slide")).toBeTruthy();
   });
 
@@ -347,7 +364,7 @@ describe("locked slides in the rail", () => {
       locked: true,
     });
     expect(useApp.getState().deck).toBe(next);
-    expect(item(0).getByTestId("locked-mark")).toBeTruthy();
+    expect(markShown(item(0).getByTestId("locked-mark"))).toBe(true);
     expect(item(0).queryByTitle("Delete")).toBeNull();
   });
 
@@ -360,7 +377,10 @@ describe("locked slides in the rail", () => {
       slide: "outro",
       locked: false,
     });
-    expect(screen.queryByTestId("locked-mark")).toBeNull();
+    // Still there, so that it can fade out.
+    expect(markShown(item(2).getByTestId("locked-mark"))).toBe(false);
+    expect(item(2).getByTestId("locked-mark").getAttribute("aria-hidden")).toBe("true");
+    expect(item(2).getByTestId("locked-mark").className).toMatch(/\btransition\b/);
     expect(item(2).getByTitle("Delete")).toBeTruthy();
   });
 

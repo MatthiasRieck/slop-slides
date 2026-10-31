@@ -47,6 +47,40 @@ export function startsSection(deck: Deck, index: number): boolean {
   return deck.sections.some((s) => s.before === index);
 }
 
+/** A section's rows: its marker, then the slides up to the next marker. */
+export type SectionBlock = { key: string; rows: string[] };
+
+/** The sections in `items`. Slides before the first marker belong to none, so they are left out. */
+export function sectionBlocks(items: RailItem[]): SectionBlock[] {
+  const blocks: SectionBlock[] = [];
+  for (const item of items) {
+    if (item.kind === "section") blocks.push({ key: item.key, rows: [] });
+    blocks.at(-1)?.rows.push(item.key);
+  }
+  return blocks;
+}
+
+/**
+ * The rail's rows after the section `active` is dragged onto section `over`, taking its slides
+ * along. Slides before the first section stay first: they have no section to travel with.
+ */
+export function dropSection(items: RailItem[], active: string, over: string): string[] {
+  const blocks = sectionBlocks(items);
+  const loose = items
+    .slice(
+      0,
+      items.findIndex((item) => item.kind === "section"),
+    )
+    .map((item) => item.key);
+  const order = dropRows(
+    blocks.map((block) => block.key),
+    [active],
+    active,
+    over,
+  );
+  return [...loose, ...order.flatMap((key) => blocks.find((block) => block.key === key)?.rows ?? [])];
+}
+
 /**
  * `keys` with each of the `moved` rows one row up (-1) or down (1), past the nearest row not
  * moved. A section marker is a row too, so a slide steps out of its section and into the next.

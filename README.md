@@ -9,7 +9,8 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   agent changes it anyway the app puts it back after the turn. Unlock it to change it.
   Sections group slides under a heading in this column (never in the presentation): the
   section button starts one at the selected slide; double-click a heading to rename it, drag
-  it to move the boundary, hover to remove it. Out of edit mode, ⌘C copies the selected slide
+  it to move the whole section (every section folds to its heading while you do, and slides before
+  the first section stay put), hover to remove it. Drag a slide across a heading to move the boundary. Out of edit mode, ⌘C copies the selected slide
   and ⌘V pastes a copied slide after the selected one.
 - **Middle:** the current slide on a fixed stage (1920×1080 unless the deck has another slide
   size), scaled to fit. Arrow keys navigate.

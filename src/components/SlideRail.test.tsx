@@ -503,6 +503,105 @@ describe("picking several slides", () => {
   });
 });
 
+describe("moving a section", () => {
+  const section = (index: number, title: string, before: number) => ({ index, title, before }) as Section;
+  const deck: Deck = {
+    ...withSlides("a", "b", "c", "d", "e"),
+    sections: [section(0, "One", 1), section(1, "Two", 3)],
+  };
+  const header = (title: string) => headers().find((li) => li.textContent?.includes(title))!;
+  const slideRows = () => items().filter((li) => !li.dataset.testid && !li.classList.contains("hidden"));
+  const pickUp = (li: HTMLElement) =>
+    act(() => {
+      fireEvent.pointerDown(li, { isPrimary: true, button: 0, clientX: 10, clientY: 10 });
+      fireEvent.pointerMove(document, { isPrimary: true, clientX: 10, clientY: 40 });
+    });
+  const letGo = async () =>
+    act(async () => {
+      fireEvent.pointerUp(document, { isPrimary: true, clientX: 10, clientY: 40 });
+    });
+
+  beforeEach(() => {
+    useApp.setState({ deck, selected: "a", railSelected: [] });
+    // jsdom has no layout: put the two section rows one above the other.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      const title = this.textContent ?? "";
+      const top = title.startsWith("One") ? 40 : title.startsWith("Two") ? 80 : 0;
+      return { top, bottom: top + 20, left: 0, right: 100, width: 100, height: 20, x: 0, y: top } as DOMRect;
+    });
+  });
+  // A drag swallows the next click until a tick after it ends.
+  afterEach(async () => {
+    await letGo();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    vi.restoreAllMocks();
+  });
+
+  it("folds every section to its heading while one is dragged, keeping the thumbnails mounted", () => {
+    render(<SlideRail />);
+    expect(slideRows()).toHaveLength(5);
+    pickUp(header("Two"));
+    expect(slideRows()).toHaveLength(0);
+    expect(items().filter((li) => li.querySelector("iframe, button > div"))).toHaveLength(5);
+    expect(headers().map((li) => li.textContent)).toEqual(["One2 slides", "Two2 slides"]);
+    expect(screen.getByTestId("loose-slides").textContent).toBe("1 slide");
+  });
+
+  it("does not fold anything while a slide is dragged", () => {
+    render(<SlideRail />);
+    pickUp(items()[0]!);
+    expect(slideRows()).toHaveLength(5);
+    expect(screen.queryByTestId("loose-slides")).toBeNull();
+  });
+
+  it("names no loose slides when the deck opens with a section", () => {
+    useApp.setState({ deck: { ...deck, sections: [section(0, "One", 0)] } });
+    render(<SlideRail />);
+    pickUp(header("One"));
+    expect(screen.queryByTestId("loose-slides")).toBeNull();
+    expect(header("One").textContent).toBe("One5 slides");
+  });
+
+  it("opens the sections again without saving when dropped in place", async () => {
+    render(<SlideRail />);
+    act(() => {
+      fireEvent.pointerDown(header("Two"), { isPrimary: true, button: 0, clientX: 10, clientY: 10 });
+      fireEvent.pointerMove(document, { isPrimary: true, clientX: 10, clientY: 16 });
+    });
+    await letGo();
+    expect(slideRows()).toHaveLength(5);
+    expect(screen.queryByTestId("loose-slides")).toBeNull();
+    expect(headers().map((li) => li.textContent)).toEqual(["One", "Two"]);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("opens the sections again when the drag is cancelled", () => {
+    render(<SlideRail />);
+    pickUp(header("Two"));
+    act(() => {
+      fireEvent.keyDown(document, { key: "Escape", code: "Escape" });
+    });
+    expect(slideRows()).toHaveLength(5);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("takes the section's slides along when it lands on another section", async () => {
+    invoke.mockResolvedValue(edited({ ...deck, sections: [section(0, "Two", 1), section(1, "One", 3)] }));
+    render(<SlideRail />);
+    pickUp(header("Two"));
+    await act(async () => {
+      fireEvent.pointerMove(document, { isPrimary: true, clientX: 10, clientY: -30 });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    await letGo();
+    expect(invoke).toHaveBeenCalledWith("reorder_slides", {
+      id: deck.id,
+      slides: ["a", "section:1", "d", "e", "section:0", "b", "c"],
+    });
+    expect(headers().map((li) => li.textContent)).toEqual(["Two", "One"]);
+  });
+});
+
 describe("double-clicking a thumbnail", () => {
   const button = (index: number) => items()[index]!.querySelector("button")!;
   beforeEach(() => useApp.setState({ deck: withSlides("a", "b"), selected: "a", editing: false, view: "slides" }));

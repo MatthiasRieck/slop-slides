@@ -2545,6 +2545,221 @@ describe("slide editor: shapes, styling and media", () => {
     });
   });
 
+  describe("a line's points", () => {
+    const drawn = (tool: string, from: number[], to: number[]) => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool, style: LINE_STYLE });
+      dragOut(e, from, to);
+      const svg = added(e)[0]!;
+      keepBox(e, svg);
+      e.window.dispatchEvent(new e.window.Event("resize"));
+      return { e, svg, path: svg.querySelector("path")! };
+    };
+    /** Lays `svg` out where its styles say, around its center however it is turned. */
+    const keepBox = (e: ReturnType<typeof editor>, svg: HTMLElement) => {
+      const px = (v: string) => Number.parseFloat(v) || 0;
+      svg.getBoundingClientRect = () =>
+        new e.window.DOMRect(px(svg.style.left), px(svg.style.top), px(svg.style.width), px(svg.style.height));
+    };
+    const handles = (e: ReturnType<typeof editor>, kind: string) => [
+      ...e.doc.querySelectorAll<HTMLElement>(`[data-slop-points] [data-point=${kind}]`),
+    ];
+    const spot = (el: HTMLElement) => [Number.parseFloat(el.style.left), Number.parseFloat(el.style.top)];
+    const pull = (e: ReturnType<typeof editor>, handle: HTMLElement, to: number[], init: PointerEventInit = {}) => {
+      const [x, y] = spot(handle);
+      handle.dispatchEvent(
+        new e.window.PointerEvent("pointerdown", {
+          clientX: x,
+          clientY: y,
+          button: 0,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      at(e, "pointermove", to[0]!, to[1]!, init);
+      at(e, "pointerup", to[0]!, to[1]!, init);
+    };
+    const press = (e: ReturnType<typeof editor>, handle: HTMLElement) => {
+      const down = new e.window.PointerEvent("pointerdown", { button: 0, bubbles: true, cancelable: true });
+      handle.dispatchEvent(down);
+      e.doc.body.dispatchEvent(new e.window.PointerEvent("pointerup", { button: 0, bubbles: true }));
+    };
+
+    it("shows its ends and where to bend it instead of a box", () => {
+      const { e } = drawn("line", [100, 100], [300, 200]);
+      expect(handles(e, "point").map(spot)).toEqual([
+        [100, 100],
+        [300, 200],
+      ]);
+      expect(handles(e, "add").map(spot)).toEqual([[200, 150]]);
+      expect(e.$("[data-slop-ui]").style.display).toBe("none");
+    });
+
+    it("moves one end while the other stays put, keeping the line's width", () => {
+      const { e, svg, path } = drawn("line", [100, 100], [300, 200]);
+      const before = e.commits().length;
+      pull(e, handles(e, "point")[1]!, [500, 50], { metaKey: true });
+      expect(svg.style).toMatchObject({ left: "97px", top: "47px", width: "406px", height: "56px", scale: "" });
+      expect(svg.getAttribute("viewBox")).toBe("0 0 406 56");
+      expect(path.getAttribute("d")).toBe("M3 53 L403 3");
+      expect(path.getAttribute("stroke-width")).toBe("6");
+      expect(handles(e, "point").map(spot)).toEqual([
+        [100, 100],
+        [500, 50],
+      ]);
+      expect(e.commits()).toHaveLength(before + 1);
+    });
+
+    it("turns an arrow's head with the end it is on", () => {
+      const { e, path } = drawn("arrow", [100, 100], [400, 100]);
+      pull(e, handles(e, "point")[1]!, [100, 400], { metaKey: true });
+      expect(path.getAttribute("d")).toMatch(/^M\S+ 3 L\S+ 303 M\S+ 282 L\S+ 303 L\S+ 282$/);
+    });
+
+    it("leaves a click on a handle alone", () => {
+      const { e, path } = drawn("line", [100, 100], [300, 200]);
+      const before = e.commits().length;
+      press(e, handles(e, "add")[0]!);
+      expect(path.getAttribute("d")).toBe("M3 3 L203 103");
+      expect(e.commits()).toHaveLength(before);
+    });
+
+    it("curves through a point dragged out of the line, which then moves like its ends", () => {
+      const { e, svg, path } = drawn("line", [100, 100], [300, 100]);
+      pull(e, handles(e, "add")[0]!, [200, 300], { metaKey: true });
+      expect(path.getAttribute("d")).toMatch(/^M\S+ \S+ C\S+ \S+ \S+ \S+ \S+ \S+ C\S+ \S+ \S+ \S+ \S+ \S+$/);
+      expect(handles(e, "point").map(spot)).toEqual([
+        [100, 100],
+        [200, 300],
+        [300, 100],
+      ]);
+      // A stretch of its own on each side of the new point.
+      expect(handles(e, "add")).toHaveLength(2);
+      expect(Number.parseFloat(svg.style.height)).toBeGreaterThanOrEqual(206);
+      pull(e, handles(e, "point")[1]!, [200, 400], { metaKey: true });
+      expect(handles(e, "point").map(spot)[1]).toEqual([200, 400]);
+    });
+
+    it("fits the box around a curve that bulges past its points", () => {
+      const { e, svg } = drawn("line", [100, 100], [300, 100]);
+      pull(e, handles(e, "add")[0]!, [140, 300], { metaKey: true });
+      pull(e, handles(e, "add")[1]!, [290, 290], { metaKey: true });
+      const right = Number.parseFloat(svg.style.left) + Number.parseFloat(svg.style.width);
+      expect(right).toBeGreaterThan(303);
+    });
+
+    it("points an arrow's head along the curve as it ends", () => {
+      const { e, path } = drawn("arrow", [100, 100], [300, 100]);
+      pull(e, handles(e, "add")[0]!, [300, 300], { metaKey: true });
+      // The line comes up to its end, so the barbs trail below the tip, either side of it.
+      const head = /M(\S+) (\S+) L(\S+) (\S+) L(\S+) (\S+)$/.exec(path.getAttribute("d")!)!.slice(1).map(Number);
+      const [x1, y1, tipX, tipY, x2, y2] = head as [number, number, number, number, number, number];
+      expect(y1).toBeGreaterThan(tipY);
+      expect(y2).toBeGreaterThan(tipY);
+      expect(x1).toBeLessThan(tipX);
+      expect(x2).toBeGreaterThan(tipX);
+    });
+
+    it("removes a point on a double-click, going back to straight, but keeps the ends", () => {
+      const { e, path } = drawn("line", [100, 100], [300, 100]);
+      pull(e, handles(e, "add")[0]!, [200, 300], { metaKey: true });
+      press(e, handles(e, "point")[0]!);
+      press(e, handles(e, "point")[0]!);
+      expect(handles(e, "point")).toHaveLength(3);
+      const before = e.commits().length;
+      press(e, handles(e, "point")[1]!);
+      press(e, handles(e, "point")[1]!);
+      expect(handles(e, "point")).toHaveLength(2);
+      expect(path.getAttribute("d")).toBe("M3 3 L203 3");
+      expect(e.commits()).toHaveLength(before + 1);
+    });
+
+    it("snaps to 45° from the point before with Shift, and to the slide's center without", () => {
+      const { e, path } = drawn("line", [100, 100], [300, 200]);
+      pull(e, handles(e, "point")[1]!, [300, 120], { shiftKey: true });
+      expect(path.getAttribute("d")).toBe("M3 3 L204 3");
+      pull(e, handles(e, "point")[1]!, [957, 300]);
+      expect(handles(e, "point").map(spot)[1]).toEqual([960, 300]);
+    });
+
+    it("never lets both ends land on one spot", () => {
+      const { e, path } = drawn("line", [100, 100], [300, 200]);
+      pull(e, handles(e, "point")[1]!, [100, 100], { metaKey: true });
+      expect(path.getAttribute("d")).toBe("M3 3 L203 103");
+    });
+
+    it("works on lines already in a deck, and bakes in how they were turned and scaled", () => {
+      const markup = DECK.replace(
+        '<div class="shape"',
+        '<svg id="old" data-added="drawing" viewBox="0 0 206 6" style="position: absolute; left: 100px; top: 100px; width: 206px; height: 6px; rotate: 90deg; overflow: visible;"><path d="M3 3 L203 3 M182 -9 L203 3 L182 15" stroke="#111111" stroke-width="6" fill="none"></path></svg><div class="shape"',
+      );
+      const e = editor({ markup });
+      const svg = e.$("#old");
+      keepBox(e, svg);
+      svg.dispatchEvent(
+        new e.window.PointerEvent("pointerdown", { clientX: 203, clientY: 103, button: 0, bubbles: true }),
+      );
+      at(e, "pointerup", 203, 103);
+      // Around its center, (203, 103), the line now runs from top to bottom.
+      expect(handles(e, "point").map(spot)).toEqual([
+        [203, 3],
+        [203, 203],
+      ]);
+      pull(e, handles(e, "point")[1]!, [403, 3], { metaKey: true });
+      expect(svg.style.rotate).toBe("");
+      expect(svg.style).toMatchObject({ left: "200px", top: "-12px", width: "206px" });
+      expect(svg.querySelector("path")!.getAttribute("d")).toMatch(/^M3 15 L203 15 M/);
+    });
+
+    it("spreads a curve through its points when given a size, keeping the arrow's head", () => {
+      const { e, svg, path } = drawn("arrow", [100, 100], [300, 100]);
+      pull(e, handles(e, "add")[0]!, [200, 300], { metaKey: true });
+      const head = path.getAttribute("d")!.split(" M")[1]!;
+      const [, w] = /0 0 (\d+)/.exec(svg.getAttribute("viewBox")!)!;
+      e.fromParent({ type: "slop:edit-geometry", w: Number(w) });
+      expect(path.getAttribute("d")!.split(" M")[1]).toBe(head);
+      e.fromParent({ type: "slop:edit-geometry", w: Number(w) + 200 });
+      expect(handles(e, "point")).toHaveLength(3);
+      expect(path.getAttribute("d")).toMatch(/ C.* C.* M\S+ \S+ L\S+ \S+ L\S+ \S+$/);
+    });
+
+    it("sizes an arrow's head and its box with the line's width", () => {
+      const { e, svg, path } = drawn("arrow", [100, 100], [400, 100]);
+      style(e, { strokeWidth: 16 });
+      expect(path.getAttribute("d")).toBe("M8 40 L308 40 M253 8 L308 40 L253 72");
+      expect(svg.style.top).toBe("60px");
+    });
+
+    it("leaves freehand drawings their box", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "draw", style: LINE_STYLE });
+      at(e, "pointerdown", 10, 20);
+      at(e, "pointermove", 50, 40);
+      at(e, "pointermove", 90, 20);
+      at(e, "pointerup", 90, 20);
+      e.fromParent({ type: "slop:edit-tool", tool: "select" });
+      const svg = added(e)[0]!;
+      e.down(svg);
+      e.up(svg);
+      expect(handles(e, "point")).toEqual([]);
+      expect(e.$("[data-slop-ui]").style.display).toBe("");
+    });
+
+    it("gives a tilted line its box back, to reset the tilt", () => {
+      const { e, svg } = drawn("line", [100, 100], [300, 200]);
+      svg.style.setProperty("transform", "perspective(1000px) rotateX(20deg) rotateY(0deg)");
+      e.fromParent({ type: "slop:edit-select-all" });
+      e.fromParent({ type: "slop:edit-select", path: [5] });
+      expect(handles(e, "point")).toEqual([]);
+    });
+
+    it("hides the points while several elements are selected", () => {
+      const { e } = drawn("line", [100, 100], [300, 200]);
+      e.fromParent({ type: "slop:edit-select-all" });
+      expect(handles(e, "point")).toEqual([]);
+    });
+  });
+
   describe("cut-out shapes", () => {
     it.each(["triangle", "star", "bubble"])("drags out a %s that holds text, with no border", (tool) => {
       const e = editor();

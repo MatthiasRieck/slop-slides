@@ -22,6 +22,9 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   on top of the slide, under the pointer (or in the middle of the view), without moving the
   layout. Right-click an element for these actions and its stacking order, to ask the agent
   about it, or to have the agent tidy just an element you added. `?` lists the shortcuts.
+  Lines and arrows have a point at each end instead of a box: drag one to move that end,
+  drag the small handle on the line to add a point that curves it, and double-click a point
+  in between to remove it.
   The edit toolbar above the slide styles text: font (the deck's fonts and system
   fonts), size (±, or type one), color, bold / italic / underline (⌘B / ⌘I / ⌘U),
   strikethrough, superscript and subscript, line height and letter spacing, bulleted and

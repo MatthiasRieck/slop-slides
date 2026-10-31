@@ -8,6 +8,7 @@ import { SlideSearch } from "./FindReplace";
 import { NarrationPanel } from "./NarrationPanel";
 import { NotesPanel } from "./NotesPanel";
 import { SlideSizeButton } from "./SlideSize";
+import { SlideTime } from "./SlideTime";
 
 /**
  * The row under the top bar, which holds the tools of the mode the deck is in. In View and HTML
@@ -65,6 +66,7 @@ function DeckTools({ deck }: { deck: Deck }) {
         className="min-w-0 max-w-md flex-1 truncate rounded-md bg-transparent px-1.5 py-1 text-sm font-medium outline-none hover:bg-accent focus:bg-accent"
       />
       <div className="flex-1" />
+      {mode === "view" && <SlideTime deck={deck} />}
       {mode === "view" && <SlideSearch />}
       <SlideSizeButton />
       <LintStatus />

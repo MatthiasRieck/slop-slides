@@ -52,6 +52,8 @@ export interface Slide {
   narration?: string;
   /** What the presenter reads alongside it (its `<aside class="notes">`), as plain text; empty without any. */
   notes?: string;
+  /** The seconds the presenter expects to spend on it (its `data-time`); 0 or missing without any. */
+  time?: number;
 }
 
 /** What a change from the slide rail did; saving `previous` back over `source` undoes it. */
@@ -280,7 +282,28 @@ export interface VoiceDownloadProgress {
   total: number;
 }
 
+/** An attached screen (see src-tauri/src/screens.rs). */
+export interface Screen {
+  /** Position in the list, which `presentOn` takes. */
+  index: number;
+  name: string;
+  /** Where it sits, in the desktop's units (one unit for all screens). */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  pixelWidth: number;
+  pixelHeight: number;
+  primary: boolean;
+}
+
 export const api = {
+  /** The attached screens, left to right. */
+  listScreens: () => invoke<Screen[]>("list_screens"),
+  /** Moves this window to the `audience` screen and opens the presenter view on `presenter`. */
+  presentOn: (audience: number, presenter: number | null) => invoke<void>("present_on", { audience, presenter }),
+  /** Closes the presenter view window, if open. */
+  closePresenterView: () => invoke<void>("close_presenter_view"),
   /** Opens another app window, on the start screen; each window has a folder of its own. */
   newWindow: () => invoke<void>("new_window"),
   /** The folder opened from Finder that is waiting to open in this window, once; null without one. */
@@ -317,6 +340,8 @@ export const api = {
   setSlideLocked: (id: string, slide: string, locked: boolean) =>
     invoke<Deck>("set_slide_locked", { id, slide, locked }),
   /** Sets what is said over the slide; empty `text` removes its narration. */
+  /** Sets the seconds expected on a slide; 0 removes them. */
+  setSlideTime: (id: string, slide: string, seconds: number) => invoke<Deck>("set_slide_time", { id, slide, seconds }),
   setSlideNarration: (id: string, slide: string, text: string) =>
     invoke<Deck>("set_slide_narration", { id, slide, text }),
   /** Sets the slide's speaker notes; empty `text` removes them. */

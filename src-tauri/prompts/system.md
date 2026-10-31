@@ -219,6 +219,9 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   `<section>` byte for byte as it is; you may only move it when reordering slides. The app
   puts back any locked slide you change after your turn, and `lint_deck` reports it.
   Never add `data-locked` yourself.
+- A slide's `data-time` attribute is how long the presenter expects to spend on it, in whole
+  seconds (`data-time="90"`). The presenter view counts it down; the audience never sees it.
+  Keep it when editing the slide; set or change it only when asked.
 
 ## Design standard
 

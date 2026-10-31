@@ -4,9 +4,10 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { ChevronDown, FileCode2, FileText, Film, Images, Loader2, Play, Share, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
-import { api, type Deck, errorMessage, type Slide } from "../lib/api";
+import { api, type Deck, errorMessage, type Screen, type Slide } from "../lib/api";
 import { VIDEO_CANCELLED, type VideoOptions, type VideoProgress } from "../lib/video";
 import { useApp } from "../store";
+import { ScreenPicker } from "./ScreenPicker";
 import { Popover } from "./Templates";
 import { VideoExportPanel } from "./VideoExport";
 
@@ -22,6 +23,14 @@ function Actions({ deck }: { deck: Deck }) {
   const [exporting, setExporting] = useState(false);
   // How far a video export has got; null when none is running.
   const [videoProgress, setVideoProgress] = useState<VideoProgress | null>(null);
+  // The attached screens while the picker is open (presenting with several of them).
+  const [screens, setScreens] = useState<Screen[] | null>(null);
+
+  const present = async () => {
+    const attached = await api.listScreens().catch(() => []);
+    if (attached.length > 1) setScreens(attached);
+    else useApp.getState().setPresenting(true);
+  };
 
   const fileName = deck.title.replace(/[\\/:*?"<>|]+/g, "").trim() || "presentation";
 
@@ -117,12 +126,22 @@ function Actions({ deck }: { deck: Deck }) {
       <button
         type="button"
         disabled={deck.slides.length === 0}
-        onClick={() => useApp.getState().setPresenting(true)}
+        onClick={() => void present()}
         className="flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground shadow-sm hover:opacity-90 disabled:opacity-40"
       >
         <Play className="size-3.5 fill-current" />
         Present
       </button>
+      {screens && (
+        <ScreenPicker
+          screens={screens}
+          onCancel={() => setScreens(null)}
+          onStart={(choice) => {
+            setScreens(null);
+            useApp.getState().setPresenting(true, choice);
+          }}
+        />
+      )}
     </div>
   );
 }

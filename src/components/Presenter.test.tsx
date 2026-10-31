@@ -2,8 +2,17 @@ import { act, createEvent, fireEvent, render, screen } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setFullscreen = vi.fn(async () => {});
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+const invoke = vi.fn();
+const emit = vi.fn(async () => {});
+const listeners = new Map<string, (event: { payload: unknown }) => void>();
+vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
+vi.mock("@tauri-apps/api/event", () => ({
+  emit: (...args: unknown[]) => emit(...(args as [])),
+  listen: vi.fn(async (name: string, handler: (event: { payload: unknown }) => void) => {
+    listeners.set(name, handler);
+    return () => listeners.delete(name);
+  }),
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setFullscreen }) }));
 const playNarration = vi.fn();
@@ -16,12 +25,18 @@ import { useApp } from "../store";
 import { fakeCanvas2D } from "../test/fakeCanvas";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Presenter } from "./Presenter";
-import { formatElapsed } from "./PresenterPanel";
+import { fitWidth, formatElapsed, remaining } from "./PresenterPanel";
+import { PresenterWindow } from "./PresenterWindow";
 
 beforeEach(() => {
+  invoke.mockReset();
+  invoke.mockResolvedValue(undefined);
+  emit.mockClear();
+  listeners.clear();
+  localStorage.removeItem("slopslide.presenterBudget");
   localStorage.removeItem("slopslide.presenterPanel");
   setFullscreen.mockClear();
-  useApp.setState({ deck: deckFor(DECK_HTML), selected: "outro", presenting: true, revealRev: 0 });
+  useApp.setState({ deck: deckFor(DECK_HTML), selected: "outro", presenting: true, screens: null, revealRev: 0 });
 });
 
 const frame = () => screen.getByTitle("Presentation") as HTMLIFrameElement;
@@ -784,6 +799,54 @@ describe("presenter view", () => {
     expect(screen.getByRole("timer").textContent).toBe("0:03");
   });
 
+  it("shows the time left against the total time and the time on the slide against its own", () => {
+    vi.useFakeTimers();
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "n" });
+    fireEvent.change(screen.getByLabelText("Total time in minutes"), { target: { value: "1" } });
+    fireEvent.change(screen.getByLabelText("Per slide in minutes"), { target: { value: "0.5" } });
+    act(() => void vi.advanceTimersByTime(20_000));
+    expect(screen.getByTestId("total-left").textContent).toBe("0:40 left");
+    expect(screen.getByTestId("slide-time").textContent).toBe("slide0:20 / 0:30");
+    act(() => void vi.advanceTimersByTime(50_000));
+    expect(screen.getByTestId("total-left").textContent).toBe("+0:10 over");
+    // A new slide starts its own time, the show's keeps running.
+    fromFrame({ type: "slop:slide", index: 1, id: "outro" });
+    expect(screen.getByTestId("slide-time").textContent).toBe("slide0:00 / 0:30");
+    expect(screen.getByRole("timer").textContent).toBe("1:10");
+    expect(JSON.parse(localStorage.getItem("slopslide.presenterBudget") ?? "")).toEqual({ total: 1, perSlide: 0.5 });
+  });
+
+  it("remembers the times and shows no budget without one", () => {
+    localStorage.setItem("slopslide.presenterBudget", JSON.stringify({ total: 20, perSlide: -3 }));
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "n" });
+    expect((screen.getByLabelText("Total time in minutes") as HTMLInputElement).value).toBe("20");
+    expect((screen.getByLabelText("Per slide in minutes") as HTMLInputElement).value).toBe("");
+    expect(screen.getByTestId("total-left").textContent).toBe("20:00 left");
+  });
+
+  it("counts down the time set on the slide, and the slides' times added up", () => {
+    localStorage.setItem("slopslide.presenterBudget", JSON.stringify({ total: 0, perSlide: 5 }));
+    const deck = deckFor(DECK_HTML);
+    const slides = deck.slides.map((s) => ({ ...s, time: s.id === "intro" ? 90 : 0 }));
+    useApp.setState({ deck: { ...deck, slides }, selected: "intro" });
+    render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "n" });
+    expect(screen.getByTestId("slide-time").textContent).toBe("slide0:00 / 1:30");
+    expect(screen.getByTestId("total-left").textContent).toBe("1:30 left");
+    // A slide without a time of its own has the time per slide.
+    fromFrame({ type: "slop:slide", index: 1, id: "outro" });
+    expect(screen.getByTestId("slide-time").textContent).toBe("slide0:00 / 5:00");
+  });
+
+  it("counts down the rest and then up past the end", () => {
+    expect(remaining(0, 1)).toEqual({ text: "1:00", over: false });
+    expect(remaining(59_500, 1)).toEqual({ text: "0:01", over: false });
+    expect(remaining(60_000, 1)).toEqual({ text: "0:00", over: false });
+    expect(remaining(65_000, 1)).toEqual({ text: "+0:05", over: true });
+  });
+
   it("formats the time", () => {
     expect(formatElapsed(-5)).toBe("0:00");
     expect(formatElapsed(59_999)).toBe("0:59");
@@ -798,5 +861,113 @@ describe("presenter view", () => {
     const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
     screen.getByRole("button", { name: "Restart the timer" }).dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
+  });
+});
+
+describe("Presenter on several screens", () => {
+  const choice = { audience: 1, presenter: 0 };
+
+  it("moves the show to its screen before going full screen, and closes the presenter view after", async () => {
+    useApp.setState({ screens: choice });
+    const { unmount } = render(<Presenter />);
+    expect(setFullscreen).not.toHaveBeenCalled();
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledWith("present_on", { audience: 1, presenter: 0 });
+    expect(setFullscreen).toHaveBeenCalledWith(true);
+    unmount();
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledWith("close_presenter_view");
+  });
+
+  it("places and closes in the order asked, however long each takes", async () => {
+    useApp.setState({ screens: choice });
+    let finishPlacing = () => {};
+    invoke.mockImplementationOnce(() => new Promise<void>((resolve) => (finishPlacing = resolve)));
+    const { unmount } = render(<Presenter />);
+    await act(async () => {});
+    unmount();
+    render(<Presenter />);
+    await act(async () => {});
+    expect(invoke.mock.calls.map(([name]) => name)).toEqual(["present_on"]);
+    await act(async () => finishPlacing());
+    expect(invoke.mock.calls.map(([name]) => name)).toEqual(["present_on", "close_presenter_view", "present_on"]);
+  });
+
+  it("stays out of full screen when the show ends while it is being placed", async () => {
+    useApp.setState({ screens: choice });
+    let finishPlacing = () => {};
+    invoke.mockImplementationOnce(() => new Promise<void>((resolve) => (finishPlacing = resolve)));
+    const { unmount } = render(<Presenter />);
+    await act(async () => {});
+    unmount();
+    await act(async () => finishPlacing());
+    expect(setFullscreen).not.toHaveBeenCalledWith(true);
+  });
+
+  it("keeps the presenter view off the audience's screen and feeds it to its own window", async () => {
+    useApp.setState({ screens: choice });
+    localStorage.setItem("slopslide.presenterPanel", "true");
+    render(<Presenter />);
+    await act(async () => {});
+    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(emit).toHaveBeenCalledWith("presenter:state", expect.objectContaining({ slide: "outro" }));
+    fromFrame({ type: "slop:slide", index: 0, id: "intro" });
+    expect(emit).toHaveBeenLastCalledWith("presenter:state", expect.objectContaining({ slide: "intro" }));
+    emit.mockClear();
+    listeners.get("presenter:ready")?.({ payload: null });
+    expect(emit).toHaveBeenCalledWith("presenter:state", expect.objectContaining({ slide: "intro" }));
+  });
+
+  it("takes keys and the end of the show from the presenter view", async () => {
+    useApp.setState({ screens: choice });
+    render(<Presenter />);
+    await act(async () => {});
+    const post = vi.spyOn(frame().contentWindow as Window, "postMessage");
+    listeners.get("presenter:key")?.({ payload: "ArrowRight" });
+    expect(post).toHaveBeenCalledWith({ type: "slop:go", key: "ArrowRight" }, "*");
+    act(() => listeners.get("presenter:exit")?.({ payload: null }));
+    expect(useApp.getState().presenting).toBe(false);
+  });
+
+  it("without a presenter view only moves the show", async () => {
+    useApp.setState({ screens: { audience: 1, presenter: null } });
+    render(<Presenter />);
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledWith("present_on", { audience: 1, presenter: null });
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("goes full screen where it is when presenting on one screen", () => {
+    render(<Presenter />);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(setFullscreen).toHaveBeenCalledWith(true);
+  });
+});
+
+describe("PresenterWindow", () => {
+  it("asks for the show and displays the slide, notes and next slide it is sent", async () => {
+    render(<PresenterWindow />);
+    await act(async () => {});
+    expect(emit).toHaveBeenCalledWith("presenter:ready");
+    const deck = deckFor(DECK_HTML);
+    act(() => listeners.get("presenter:state")?.({ payload: { deck, slide: deck.slides[0]?.id } }));
+    expect(screen.getByRole("complementary")).toBeTruthy();
+    expect(screen.getByText("Now")).toBeTruthy();
+    expect(screen.getByText("Next")).toBeTruthy();
+    expect(screen.getByTestId("presenter-notes").textContent).toBe(deck.slides[0]?.notes || "No notes for this slide.");
+  });
+
+  it("sizes the slides by the room's height as well as its width", () => {
+    expect(fitWidth({ width: 1920, height: 960 })).toBe("min(100cqw, 200cqh)");
+    expect(fitWidth({ width: 1000, height: 2000 })).toBe("min(100cqw, 50cqh)");
+  });
+
+  it("sends the keys pressed in it to the show, and Escape ends the show", async () => {
+    render(<PresenterWindow />);
+    await act(async () => {});
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(emit).toHaveBeenCalledWith("presenter:key", "ArrowRight");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(emit).toHaveBeenCalledWith("presenter:exit");
   });
 });

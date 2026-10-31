@@ -130,6 +130,78 @@ describe("deck actions", () => {
     await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: new RegExp(item) })));
   }
 
+  it("presents right away with one screen", async () => {
+    invoke.mockResolvedValue([
+      {
+        index: 0,
+        name: "Built-in",
+        x: 0,
+        y: 0,
+        width: 1512,
+        height: 982,
+        pixelWidth: 3024,
+        pixelHeight: 1964,
+        primary: true,
+      },
+    ]);
+    render(<DeckActions />);
+    await act(async () => fireEvent.click(presentButton()));
+    expect(useApp.getState().presenting).toBe(true);
+    expect(useApp.getState().screens).toBeNull();
+  });
+
+  it("asks which screens to use when several are attached", async () => {
+    invoke.mockResolvedValue([
+      {
+        index: 0,
+        name: "Built-in",
+        x: 0,
+        y: 0,
+        width: 1512,
+        height: 982,
+        pixelWidth: 3024,
+        pixelHeight: 1964,
+        primary: true,
+      },
+      {
+        index: 1,
+        name: "Projector",
+        x: 1512,
+        y: 0,
+        width: 1920,
+        height: 1080,
+        pixelWidth: 1920,
+        pixelHeight: 1080,
+        primary: false,
+      },
+    ]);
+    render(<DeckActions />);
+    await act(async () => fireEvent.click(presentButton()));
+    expect(useApp.getState().presenting).toBe(false);
+    fireEvent.click(screen.getByText("Start presenting"));
+    expect(useApp.getState().presenting).toBe(true);
+    expect(useApp.getState().screens).toEqual({ audience: 1, presenter: 0 });
+  });
+
+  it("does not present when the picker is cancelled", async () => {
+    invoke.mockResolvedValue([
+      { index: 0, name: "A", x: 0, y: 0, width: 100, height: 100, pixelWidth: 100, pixelHeight: 100, primary: true },
+      { index: 1, name: "B", x: 100, y: 0, width: 100, height: 100, pixelWidth: 100, pixelHeight: 100, primary: false },
+    ]);
+    render(<DeckActions />);
+    await act(async () => fireEvent.click(presentButton()));
+    fireEvent.click(screen.getByText("Cancel"));
+    expect(useApp.getState().presenting).toBe(false);
+    expect(screen.queryByText("Start presenting")).toBeNull();
+  });
+
+  it("presents on this screen when the screens cannot be listed", async () => {
+    invoke.mockRejectedValue("nope");
+    render(<DeckActions />);
+    await act(async () => fireEvent.click(presentButton()));
+    expect(useApp.getState().presenting).toBe(true);
+  });
+
   it("exports to the chosen file and reveals it", async () => {
     save.mockResolvedValue("/Users/me/Desktop/Talk.html");
     render(<DeckActions />);
@@ -270,9 +342,10 @@ describe("deck actions", () => {
     expect(useApp.getState().imageExport).toBeNull();
   });
 
-  it("starts the presentation", () => {
+  it("starts the presentation", async () => {
+    invoke.mockResolvedValue([]);
     render(<DeckActions />);
-    fireEvent.click(presentButton());
+    await act(async () => fireEvent.click(presentButton()));
     expect(useApp.getState().presenting).toBe(true);
   });
 

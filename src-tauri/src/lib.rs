@@ -20,6 +20,7 @@ mod protocol;
 mod providers;
 mod review;
 mod safety;
+mod screens;
 mod sessions;
 mod size;
 mod templates;
@@ -137,6 +138,30 @@ fn take_pending_folder(window: Window, pending: State<windows::PendingFolders>) 
 #[tauri::command]
 fn new_window(app: AppHandle) -> Result<()> {
     windows::open_new(&app)
+}
+
+/// The attached screens, for choosing where to present.
+#[tauri::command]
+fn list_screens(app: AppHandle) -> Result<Vec<screens::Screen>> {
+    screens::list(&app)
+}
+
+/// Moves the show window to the `audience` screen and opens the presenter view on `presenter`.
+/// Off the main thread, which building a window from a command needs on Windows.
+#[tauri::command(async)]
+fn present_on(
+    app: AppHandle,
+    window: Window,
+    audience: usize,
+    presenter: Option<usize>,
+) -> Result<()> {
+    screens::present(&app, &window, audience, presenter)
+}
+
+/// Closes the presenter view window when the show ends.
+#[tauri::command]
+fn close_presenter_view(app: AppHandle) {
+    screens::close_presenter_view(&app);
 }
 
 #[tauri::command]
@@ -293,6 +318,12 @@ fn set_slide_narration(id: String, slide: String, text: String) -> Result<Deck> 
 #[tauri::command]
 fn set_slide_notes(id: String, slide: String, text: String) -> Result<Deck> {
     deck::set_slide_notes(&deck::deck_file(&id)?, &slide, &text)
+}
+
+/// Sets the seconds the presenter expects to spend on a slide; 0 removes them.
+#[tauri::command]
+fn set_slide_time(id: String, slide: String, seconds: u32) -> Result<Deck> {
+    deck::set_slide_time(&deck::deck_file(&id)?, &slide, seconds)
 }
 
 /// Gives every slide of the deck the canvas `size`.
@@ -864,6 +895,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             new_window,
+            list_screens,
+            present_on,
+            close_presenter_view,
             take_pending_folder,
             open_workspace,
             close_workspace,
@@ -885,6 +919,7 @@ pub fn run() {
             set_slide_locked,
             set_slide_narration,
             set_slide_notes,
+            set_slide_time,
             set_slide_size,
             add_section,
             rename_section,

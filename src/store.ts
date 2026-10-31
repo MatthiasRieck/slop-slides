@@ -40,6 +40,7 @@ import {
   type PermissionMode,
   type PermissionModes,
 } from "./lib/permissions";
+import type { ScreenChoice } from "./lib/screens";
 import { applyOrder, railItems, stepRows } from "./lib/sections";
 import { DEFAULT_SIZE, pixelsOf, resizePrompt, type SlideSize, sameSize } from "./lib/slideSize";
 import { basename, dirname, layoutLabel } from "./lib/utils";
@@ -317,6 +318,8 @@ interface AppState {
   /** `provider:model` keys starred in the model picker. */
   favoriteModels: string[];
   presenting: boolean;
+  /** Where the show goes when several screens are attached; null: the screen it is on. */
+  screens: ScreenChoice | null;
   /** Installed agent CLIs and their models; `undefined` while loading. */
   providers: ProviderInfo[] | undefined;
   error: string | null;
@@ -422,7 +425,7 @@ interface AppState {
   setContextWindow: (contextWindow: string) => void;
   refreshProviders: () => Promise<void>;
   toggleFavoriteModel: (key: string) => void;
-  setPresenting: (presenting: boolean) => void;
+  setPresenting: (presenting: boolean, screens?: ScreenChoice | null) => void;
   setError: (error: string | null) => void;
   refreshLint: () => Promise<void>;
   fillComposer: (text: string, options?: { screenshot?: string | null; element?: EditElement }) => void;
@@ -452,6 +455,8 @@ interface AppState {
   setNarration: (slide: string, text: string) => Promise<void>;
   /** Saves the speaker notes of `slide` (empty removes them), after any slide edits still being saved. */
   setNotes: (slide: string, text: string) => Promise<void>;
+  /** Sets the seconds expected on the slide; 0 removes them. */
+  setSlideTime: (slide: string, seconds: number) => Promise<void>;
   /** Sets the voice (or language) the deck's narration is said in. */
   setNarrationVoice: (voice: string) => Promise<void>;
   setNarrationLanguage: (language: string) => Promise<void>;
@@ -598,6 +603,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
   favoriteModels: loadFavorites(),
   presenting: false,
+  screens: null,
   providers: undefined,
   error: null,
   lint: null,
@@ -928,7 +934,7 @@ export const useApp = create<AppState>((set, get) => ({
     set({ favoriteModels: next });
   },
 
-  setPresenting: (presenting) => set({ presenting }),
+  setPresenting: (presenting, screens = null) => set({ presenting, screens }),
 
   setError: (error) => set({ error }),
 
@@ -1069,6 +1075,8 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setNotes: (slide, text) => editDeck((id) => api.setSlideNotes(id, slide, text)),
+
+  setSlideTime: (slide, seconds) => editDeck((id) => api.setSlideTime(id, slide, seconds)),
 
   setNarrationVoice: (voice) => editDeck((id) => api.setNarrationVoice(id, voice)),
 

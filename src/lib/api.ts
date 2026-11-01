@@ -490,6 +490,8 @@ export const api = {
     viewport: { width: number; height: number },
     width: number,
   ) => invoke<string>("export_slide_image", { dir, index, total, rect, viewport, width }),
+  /** Whether the deck is in a git repository, which takes git being installed. */
+  deckInRepository: (id: string) => invoke<boolean>("deck_in_repository", { id }),
   /** How the deck differs from the last commit. */
   deckChanges: (id: string) => invoke<DeckChanges>("deck_changes", { id }),
   stageChange: (id: string, change: Change) => invoke<void>("stage_change", { id, change }),

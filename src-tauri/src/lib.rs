@@ -543,6 +543,12 @@ fn export_deck(id: String, dest: String) -> Result<()> {
     deck::export(&deck::deck_file(&id)?, std::path::Path::new(&dest))
 }
 
+/// Whether the deck is in a git repository. Off the main thread: it runs git.
+#[tauri::command(async)]
+fn deck_in_repository(id: String) -> Result<bool> {
+    git::in_repository(&deck::deck_file(&id)?)
+}
+
 /// What changed in the deck since the last commit. Off the main thread: it runs git.
 #[tauri::command(async)]
 fn deck_changes(id: String) -> Result<git::DeckChanges> {
@@ -1088,6 +1094,7 @@ pub fn run() {
             find_in_deck,
             replace_in_deck,
             export_deck,
+            deck_in_repository,
             deck_changes,
             stage_change,
             unstage_change,

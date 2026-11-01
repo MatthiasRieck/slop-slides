@@ -391,9 +391,10 @@ describe("ChangesView", () => {
     expect(calls()).toBe(4);
   });
 
-  it("explains a deck outside a repository", async () => {
+  it("shows nothing for a deck that just left its repository", async () => {
     await show(changes({ tracking: "noRepository", commit: null, slides: [] }));
-    expect(screen.getByText("This deck is not in a git repository")).toBeTruthy();
+    expect(screen.queryByTestId("slide-comparison")).toBeNull();
+    expect(screen.queryByText("No slides")).toBeNull();
   });
 
   it("shows a deck never committed as all new", async () => {

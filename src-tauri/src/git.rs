@@ -579,12 +579,21 @@ fn with_slides_of(shell: &str, slides: &str) -> String {
     }
 }
 
+/// Whether the deck `file` is in a git repository; never when git is not installed.
+pub fn in_repository(file: &Path) -> Result<bool> {
+    Ok(in_work_tree(split(file)?.0))
+}
+
+fn in_work_tree(dir: &Path) -> bool {
+    git(dir, &["rev-parse", "--is-inside-work-tree"]).is_some()
+}
+
 /// What changed in the deck `file` since the last commit.
 pub fn changes(file: &Path) -> Result<DeckChanges> {
     let source = deck::read_html(file)?;
     let (dir, name) = split(file)?;
     let slides = snapshots(&source);
-    if git(dir, &["rev-parse", "--is-inside-work-tree"]).is_none() {
+    if !in_work_tree(dir) {
         return Ok(uncompared(Tracking::NoRepository, &slides));
     }
     let (Some(commit), Some(committed)) = (head_commit(dir), read_at_head(file)) else {
@@ -1137,7 +1146,15 @@ mod tests {
         let found = changes(&file).unwrap();
         assert_eq!(found.tracking, Tracking::NoRepository);
         assert!(found.slides.is_empty());
+        assert!(!in_repository(&file).unwrap());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_deck_in_a_folder_of_a_repository_is_in_it_before_any_commit() {
+        let repo = Repo::new();
+        repo.write("talk/deck.html", &deck(&["a=A"]));
+        assert!(in_repository(&repo.deck()).unwrap());
     }
 
     #[test]

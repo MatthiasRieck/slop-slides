@@ -97,6 +97,8 @@ export function installBrowserMock() {
           return ["ask", "fullAccess"];
         case "lint_deck":
           return [];
+        case "deck_in_repository":
+          return true;
         case "deck_changes":
           return fromServer("changes", { id: String(a.id) });
         case "save_deck_source":

@@ -151,6 +151,36 @@ describe("the list", () => {
   });
 });
 
+describe("checkRepository", () => {
+  const OTHER = "/talks/other/deck.html";
+  const found = (value: Promise<boolean>) => vi.mocked(invoke).mockReturnValue(value);
+
+  it("remembers a deck in a repository, and forgets it when that is gone", async () => {
+    found(Promise.resolve(true));
+    await useChanges.getState().checkRepository(DECK);
+    expect(useChanges.getState().repository).toBe(DECK);
+    found(Promise.resolve(false));
+    await useChanges.getState().checkRepository(DECK);
+    expect(useChanges.getState().repository).toBeNull();
+  });
+
+  it("counts a failed check as no repository, without an error", async () => {
+    useApp.setState({ error: null });
+    useChanges.setState({ repository: DECK });
+    found(Promise.reject("the deck is gone"));
+    await useChanges.getState().checkRepository(DECK);
+    expect(useChanges.getState().repository).toBeNull();
+    expect(useApp.getState().error).toBeNull();
+  });
+
+  it("ignores an answer about a deck that is no longer open", async () => {
+    useChanges.setState({ repository: DECK });
+    found(Promise.resolve(false));
+    await useChanges.getState().checkRepository(OTHER);
+    expect(useChanges.getState().repository).toBe(DECK);
+  });
+});
+
 describe("changing the repository", () => {
   const STYLES = { kind: "styles" } as const;
   const called = () => vi.mocked(invoke).mock.calls.map(([cmd]) => cmd);

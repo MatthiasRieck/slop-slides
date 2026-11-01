@@ -274,7 +274,7 @@ export interface SpeechStatus {
   languages: NarrationLanguage[];
 }
 
-/** Whether a slide's audio matches its narration: none without narration, stale when made from another script, voice or language. */
+/** Whether a slide's audio matches its narration: none without narration or recording, stale when made from another script, voice or language. */
 export type AudioState = "none" | "missing" | "stale" | "ready";
 
 export interface SlideAudio {
@@ -282,7 +282,12 @@ export interface SlideAudio {
   state: AudioState;
   /** How long the audio there plays (stale audio too); null without any. */
   seconds: number | null;
+  /** It is the presenter's own recording: up to date whatever the script says. */
+  recorded?: boolean;
 }
+
+/** What recording narration in the presenter view keeps: the words, or the voice. */
+export type NarrationRecordMode = "text" | "audio";
 
 /** Payload of `narration-render` events. */
 export interface NarrationRenderProgress {
@@ -503,6 +508,19 @@ export const api = {
   /** Stops recording; resolves to what was said. */
   stopRecording: () => invoke<string>("stop_recording"),
   cancelRecording: () => invoke<void>("cancel_recording"),
+  /**
+   * Records the deck's narration from `slide` on: what is said is added to the slide on screen,
+   * reporting `voice-level` and `narration-recorded` events (`narration-record-failed` when it
+   * goes wrong). `narrationRecordingSlide` says when the slide changes.
+   */
+  startNarrationRecording: (id: string, slide: string, mode: NarrationRecordMode) =>
+    invoke<void>("start_narration_recording", { id, slide, mode }),
+  narrationRecordingSlide: (slide: string) => invoke<void>("narration_recording_slide", { slide }),
+  /** Ends the narration recording; resolves once all of it is kept. */
+  stopNarrationRecording: () => invoke<void>("stop_narration_recording"),
+  /** Deletes a slide's recorded narration; resolves to every slide's audio. */
+  deleteRecordedNarration: (id: string, slide: string) =>
+    invoke<SlideAudio[]>("delete_recorded_narration", { id, slide }),
   speechStatus: () => invoke<SpeechStatus>("speech_status"),
   /** Downloads the narration voice model to `~/.slopslides/models`, reporting `speech-download` events. */
   downloadSpeechModel: () => invoke<void>("download_speech_model"),

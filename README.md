@@ -81,6 +81,15 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   along, even when you paraphrase or jump to another part. Words you jump over stay as they
   are. It moves the script only; you still change the slides. Speech stays on your computer,
   transcribed with the same Whisper model as dictation.
+  Two more buttons there record the narration while you talk through the deck. **Text** adds
+  what you say to the narration of the slide on screen; **audio** adds your voice to that
+  slide's narration audio, which then plays in place of the voice model (in the show and in
+  videos) until you delete it in the Narration mode. Go back and forth through the slides as
+  you like: what you say is always added to the end of the slide on screen, and going back
+  to a slide starts a new paragraph. The raw text keeps every stutter; **Clean up** in the Narration
+  mode (for one slide or all of them) puts a request in the chat for the agent to turn it into clean, fluent
+  sentences. Text needs the Whisper model, and nothing is kept for locked slides. The
+  microphone does one thing at a time: teleprompter, text or audio.
 - **PowerPoint:** **Import PowerPoint…** turns a `.pptx` into a new deck: slides, layouts and
   themes, text, images, shapes, tables, speaker notes, sections and hidden slides. The deck is
   HTML from then on; the file itself is left as it is and never written back. Animations are

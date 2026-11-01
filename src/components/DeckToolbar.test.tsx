@@ -591,6 +591,35 @@ describe("video export", () => {
     expect(screen.getByText(/3 slides, 0:15 long/)).toBeTruthy();
   });
 
+  it("speaks a recording on a slide without written narration, with no voice model", async () => {
+    const deck = deckFor(DECK_HTML);
+    useApp.setState({ deck: { ...deck, slides: deck.slides.map((s) => ({ ...s, narration: "" })) } });
+    invoke.mockImplementation(async (command: string) =>
+      command === "speech_status"
+        ? {
+            available: true,
+            modelReady: false,
+            modelBytes: 1,
+            downloading: false,
+            rendering: null,
+            voices: [],
+            languages: [],
+          }
+        : undefined,
+    );
+    useNarration.setState({
+      audioDeck: deck.id,
+      audio: { intro: { slide: "intro", state: "ready", seconds: 20, recorded: true } },
+    });
+    render(<DeckActions />);
+    openPanel();
+    await act(async () => {});
+    expect(screen.queryByText(/No shown slide has narration/)).toBeNull();
+    expect(screen.getByLabelText("Pause before narration")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(saveButton().disabled).toBe(false);
+  });
+
   it("asks for the voice model when narration still has to be spoken", async () => {
     narrated({ available: true, modelReady: false });
     render(<DeckActions />);

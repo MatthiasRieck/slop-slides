@@ -907,6 +907,133 @@ describe("presenter view", () => {
     expect(box.textContent).toContain("then that");
   });
 
+  describe("recording narration", () => {
+    const model = { modelReady: true, modelBytes: 190_000_000, downloading: false, recording: false };
+    const record = (name: RegExp) => screen.getByRole("button", { name });
+    const text = () => record(/recording the text|narration as text/i);
+    const audio = () => record(/recording the audio|narration as audio/i);
+    const calls = (name: string) => invoke.mock.calls.filter(([n]) => n === name).map(([, args]) => args);
+    const open = () => {
+      render(<Presenter />);
+      fromFrame({ type: "slop:slide", id: "intro", index: 0 });
+      fireEvent.keyDown(document.body, { key: "n" });
+    };
+
+    beforeEach(() => {
+      invoke.mockImplementation(async (name: string) => (name === "voice_status" ? model : undefined));
+    });
+
+    it("records text from the slide on screen, and tells the backend each slide as it comes", async () => {
+      open();
+      await act(async () => fireEvent.click(text()));
+      expect(calls("start_narration_recording")).toEqual([{ id: deck().id, slide: "intro", mode: "text" }]);
+      expect(text().getAttribute("aria-pressed")).toBe("true");
+      expect(screen.getByRole("status").textContent).toContain("Recording text");
+      await act(async () => fromFrame({ type: "slop:slide", id: "outro", index: 2 }));
+      await act(async () => fromFrame({ type: "slop:slide", id: "intro", index: 0 }));
+      expect(calls("narration_recording_slide").map((a) => (a as { slide: string }).slide)).toEqual([
+        "intro",
+        "outro",
+        "intro",
+      ]);
+      await act(async () => fireEvent.click(text()));
+      expect(calls("stop_narration_recording")).toHaveLength(1);
+      expect(text().getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("shows the narration growing while recording text", async () => {
+      open();
+      await act(async () => fireEvent.click(text()));
+      expect(notes()).toBe("What you say over this slide shows up here.");
+      useApp.setState({
+        deck: {
+          ...deck(),
+          slides: deck().slides.map((s) => (s.id === "intro" ? { ...s, narration: "Um, hello." } : s)),
+        },
+      });
+      await act(async () => {});
+      expect(notes()).toBe("Um, hello.");
+    });
+
+    it("records audio without the speech model", async () => {
+      invoke.mockImplementation(async (name: string) =>
+        name === "voice_status" ? { ...model, modelReady: false } : undefined,
+      );
+      open();
+      await act(async () => fireEvent.click(audio()));
+      expect(calls("voice_status")).toHaveLength(0);
+      expect(calls("start_narration_recording")).toEqual([{ id: deck().id, slide: "intro", mode: "audio" }]);
+      expect(screen.getByRole("status").textContent).toContain("Recording audio");
+    });
+
+    it("offers the speech model first when recording text, and records once it is there", async () => {
+      invoke.mockImplementation(async (name: string) =>
+        name === "voice_status" ? { ...model, modelReady: false } : undefined,
+      );
+      open();
+      await act(async () => fireEvent.click(text()));
+      expect(screen.getByText(/transcribed on this computer/)).toBeTruthy();
+      expect(calls("start_narration_recording")).toHaveLength(0);
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Download" })));
+      expect(calls("download_voice_model")).toHaveLength(1);
+      expect(calls("start_narration_recording")).toHaveLength(1);
+    });
+
+    it("uses the microphone for one thing at a time", async () => {
+      open();
+      await act(async () => fireEvent.click(text()));
+      expect((audio() as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByRole("button", { name: /teleprompter/i }) as HTMLButtonElement).disabled).toBe(true);
+      await act(async () => fireEvent.click(text()));
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: /teleprompter/i })));
+      expect((text() as HTMLButtonElement).disabled).toBe(true);
+      expect((audio() as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it("keeps what was recorded when the presenter view closes", async () => {
+      open();
+      await act(async () => fireEvent.click(audio()));
+      await act(async () => fireEvent.keyDown(document.body, { key: "n" }));
+      expect(calls("stop_narration_recording")).toHaveLength(1);
+      expect(invoke.mock.calls.map(([name]) => name)).not.toContain("cancel_recording");
+    });
+
+    it("shows what went wrong and ends the recording", async () => {
+      open();
+      await act(async () => fireEvent.click(text()));
+      await act(async () => listeners.get("narration-record-failed")?.({ payload: "The microphone is silent." }));
+      expect(screen.getByRole("alert").textContent).toBe("The microphone is silent.");
+      expect(calls("stop_narration_recording")).toHaveLength(1);
+      expect(text().getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("says when it cannot start", async () => {
+      invoke.mockImplementation(async (name: string) => {
+        if (name === "start_narration_recording") throw "Already recording.";
+        return name === "voice_status" ? model : undefined;
+      });
+      open();
+      await act(async () => fireEvent.click(audio()));
+      expect(screen.getByRole("alert").textContent).toBe("Already recording.");
+    });
+
+    it("warns that nothing is kept on a locked slide", async () => {
+      useApp.setState({
+        deck: { ...deck(), slides: deck().slides.map((s) => (s.id === "intro" ? { ...s, locked: true } : s)) },
+      });
+      open();
+      await act(async () => fireEvent.click(text()));
+      expect(screen.getByRole("status").textContent).toContain("locked");
+    });
+
+    it("shows how loud the microphone is", async () => {
+      open();
+      await act(async () => fireEvent.click(audio()));
+      await act(async () => listeners.get("voice-level")?.({ payload: 0.5 }));
+      expect(screen.getByTestId("recording-level").style.transform).toBe("scale(1.5)");
+    });
+  });
+
   describe("teleprompter", () => {
     const button = () => screen.getByRole("button", { name: /teleprompter/i });
     const said = () =>

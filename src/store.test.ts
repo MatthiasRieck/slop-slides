@@ -3002,3 +3002,13 @@ describe("slide rail changes", () => {
     expect(deckMode(useApp.getState())).toBe("view");
   });
 });
+
+describe("cleaning up recorded narration", () => {
+  it("fills the composer with the request and leaves sending it to the user", async () => {
+    const useApp = await freshStore();
+    const fillComposer = vi.fn();
+    useApp.setState({ fillComposer, sidebarOpen: true, sidebarTab: "chat" });
+    useApp.getState().cleanNarration("intro");
+    expect(fillComposer.mock.calls[0]?.[0]).toContain("the narration of slide `intro`");
+  });
+});

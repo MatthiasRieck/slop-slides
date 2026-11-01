@@ -128,6 +128,7 @@ export function installBrowserMock() {
         case "download_voice_model":
         case "follow_speech":
         case "start_recording":
+        case "start_narration_recording":
           throw new Error("Voice input requires the desktop app.");
         case "speech_status":
           return {

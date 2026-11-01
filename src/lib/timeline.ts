@@ -73,13 +73,14 @@ export function layoutTimeline(
 
 /**
  * How long each slide's narration lasts for the timeline, by slide id: the audio there is, or,
- * until it is spoken, an estimate; null without narration.
+ * until it is spoken, an estimate; null without narration or a recording.
  */
 export function spokenSeconds(slides: Slide[], audio: Record<string, SlideAudio>): Record<string, number | null> {
   return Object.fromEntries(
     slides.map((slide) => {
       const text = (slide.narration ?? "").trim();
       const seconds = audio[slide.id]?.seconds ?? null;
+      if (audio[slide.id]?.recorded) return [slide.id, seconds];
       return [slide.id, text === "" ? null : (seconds ?? wordsSeconds(markdownText(text)))];
     }),
   );

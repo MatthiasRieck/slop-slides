@@ -8,6 +8,10 @@
 //! `narration/<slide id>.wav`, and `narration/manifest.json` keeps the fingerprint of the
 //! script, voice and language it was made from, so a changed slide is said again and an
 //! unchanged one never is.
+//!
+//! A slide's audio can also be the presenter's own voice, recorded in the presenter view (see
+//! [`crate::voice::Voice::record_narration`]) and marked so in the manifest. It is the slide's
+//! audio whatever its script says, and is never said again; deleting it brings the model back.
 
 pub mod audio;
 pub mod engine;
@@ -416,15 +420,16 @@ async fn say_all(
             }
         };
         fs::rename(&part, &dest)?;
-        let mut manifest = Manifest::read(&dir);
-        manifest.slides.insert(
-            job.slide.clone(),
-            Entry {
-                fingerprint: job.fingerprint.clone(),
-                seconds: samples as f64 / f64::from(audio::RATE),
-            },
-        );
-        manifest.write(&dir)?;
+        Manifest::update(&dir, |manifest| {
+            manifest.slides.insert(
+                job.slide.clone(),
+                Entry {
+                    fingerprint: job.fingerprint.clone(),
+                    seconds: samples as f64 / f64::from(audio::RATE),
+                    recorded: false,
+                },
+            );
+        })?;
     }
     worker.shutdown().await
 }
@@ -540,9 +545,16 @@ struct Manifest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Entry {
+    /// Empty for a recording, which is made from no script.
     fingerprint: String,
     seconds: f64,
+    /// The presenter's own voice rather than the model's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    recorded: bool,
 }
+
+/// Held while changing a manifest: a recording and a render may finish slides at the same time.
+static MANIFEST_CHANGE: Mutex<()> = Mutex::new(());
 
 impl Manifest {
     /// The manifest in `dir`; an empty one when it is missing or unreadable.
@@ -551,6 +563,14 @@ impl Manifest {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default()
+    }
+
+    /// Changes the manifest in `dir`.
+    fn update(dir: &Path, change: impl FnOnce(&mut Self)) -> Result<()> {
+        let _one_at_a_time = MANIFEST_CHANGE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut manifest = Self::read(dir);
+        change(&mut manifest);
+        manifest.write(dir)
     }
 
     fn write(&self, dir: &Path) -> Result<()> {
@@ -566,7 +586,7 @@ impl Manifest {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AudioState {
-    /// The slide has no narration.
+    /// The slide has no narration and no recording.
     None,
     /// It has narration, but no audio yet.
     Missing,
@@ -582,6 +602,8 @@ pub struct SlideAudio {
     pub state: AudioState,
     /// How long the audio there is plays, in seconds (out of date audio too).
     pub seconds: Option<f64>,
+    /// It is the presenter's own recording.
+    pub recorded: bool,
 }
 
 /// A slide's narration to say.
@@ -671,24 +693,73 @@ pub fn statuses(file: &Path, deck: &Deck) -> Vec<SlideAudio> {
             let entry = manifest.slides.get(&slide.id).filter(|_| path.is_file());
             let seconds = entry.map(|e| e.seconds);
             let text = spoken(&slide.narration);
-            let state = if text.is_empty() {
-                AudioState::None
-            } else {
-                match entry {
-                    None => AudioState::Missing,
-                    Some(e) if e.fingerprint == fingerprint(&text, voice.id, language.id) => {
-                        AudioState::Ready
-                    }
-                    Some(_) => AudioState::Stale,
+            let recorded = entry.is_some_and(|e| e.recorded);
+            let state = match entry {
+                _ if recorded => AudioState::Ready,
+                _ if text.is_empty() => AudioState::None,
+                None => AudioState::Missing,
+                Some(e) if e.fingerprint == fingerprint(&text, voice.id, language.id) => {
+                    AudioState::Ready
                 }
+                Some(_) => AudioState::Stale,
             };
             SlideAudio {
                 slide: slide.id.clone(),
                 state,
                 seconds,
+                recorded,
             }
         })
         .collect()
+}
+
+/// Adds `samples` (mono, at `rate`) to the end of the slide's recording. Audio the model made
+/// is replaced: the two voices don't go together.
+pub fn append_recording(file: &Path, slide: &str, samples: &[f32], rate: u32) -> Result<()> {
+    let dir = audio_dir(file);
+    fs::create_dir_all(&dir)?;
+    let dest = audio_file(file, slide);
+    let manifest = Manifest::read(&dir);
+    let recorded = manifest.slides.get(slide).is_some_and(|e| e.recorded);
+    let mut all = if recorded && dest.is_file() {
+        let (kept, kept_rate) = audio::read_wav(&dest)?;
+        voice::resample(&kept, kept_rate, audio::RATE)
+    } else {
+        Vec::new()
+    };
+    all.extend(voice::resample(samples, rate, audio::RATE));
+    let part = dest.with_extension("wav.part");
+    audio::write_wav(&part, &all, audio::RATE)?;
+    fs::rename(&part, &dest)?;
+    Manifest::update(&dir, |manifest| {
+        manifest.slides.insert(
+            slide.to_string(),
+            Entry {
+                fingerprint: String::new(),
+                seconds: all.len() as f64 / f64::from(audio::RATE),
+                recorded: true,
+            },
+        );
+    })
+}
+
+/// Deletes the slide's recording, if it has one; audio the model made stays.
+pub fn delete_recording(file: &Path, slide: &str) -> Result<()> {
+    let dir = audio_dir(file);
+    if !Manifest::read(&dir)
+        .slides
+        .get(slide)
+        .is_some_and(|e| e.recorded)
+    {
+        return Ok(());
+    }
+    match fs::remove_file(audio_file(file, slide)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+        _ => {}
+    }
+    Manifest::update(&dir, |manifest| {
+        manifest.slides.remove(slide);
+    })
 }
 
 /// The up-to-date audio of each slide that has it, by slide id: its samples at `rate`.
@@ -843,6 +914,7 @@ mod tests {
                 Entry {
                     fingerprint: fingerprint("Say this.", &voice, &language),
                     seconds: 1.0,
+                    recorded: false,
                 },
             )]),
         }
@@ -920,6 +992,7 @@ mod tests {
             Entry {
                 fingerprint: fingerprint("Say A.", "ryan", "en"),
                 seconds: 0.5,
+                recorded: false,
             },
         );
         manifest.slides.insert(
@@ -927,6 +1000,7 @@ mod tests {
             Entry {
                 fingerprint: fingerprint("Old B.", "ryan", "en"),
                 seconds: 1.0,
+                recorded: false,
             },
         );
         manifest.write(&audio).unwrap();
@@ -967,6 +1041,90 @@ mod tests {
         // A missing audio file is missing, whatever the manifest says.
         fs::remove_file(audio.join("a.wav")).unwrap();
         assert_eq!(states(&deck)[0], AudioState::Missing);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn recordings_grow_replace_the_models_audio_and_stay_up_to_date() {
+        let dir = temp_dir();
+        let slides = r#"<section class="slide" id="a"><aside class="narration">Say A.</aside></section><section class="slide" id="b"></section>"#;
+        let file = deck_with(&dir, "deck.html", "", slides);
+        let deck = deck::load(&file).unwrap();
+        let audio = audio_dir(&file);
+        fs::create_dir_all(&audio).unwrap();
+        // What the model said of a's script is replaced by the first take.
+        audio::write_wav(&audio_file(&file, "a"), &[0.1; 48_000], audio::RATE).unwrap();
+        Manifest::update(&audio, |m| {
+            m.slides.insert(
+                "a".into(),
+                Entry {
+                    fingerprint: fingerprint("Say A.", "ryan", "en"),
+                    seconds: 2.0,
+                    recorded: false,
+                },
+            );
+        })
+        .unwrap();
+        delete_recording(&file, "a").unwrap();
+        assert!(audio_file(&file, "a").is_file(), "not a recording");
+
+        append_recording(&file, "a", &[0.5; 48_000], 48_000).unwrap();
+        let found = statuses(&file, &deck);
+        assert_eq!(found[0].state, AudioState::Ready);
+        assert!(found[0].recorded);
+        assert_eq!(found[0].seconds, Some(1.0));
+
+        // The next takes are added, at whatever rate the microphone has.
+        append_recording(&file, "a", &[0.5; 12_000], audio::RATE).unwrap();
+        let (samples, rate) = audio::read_wav(&audio_file(&file, "a")).unwrap();
+        assert_eq!((samples.len(), rate), (36_000, audio::RATE));
+        assert_eq!(statuses(&file, &deck)[0].seconds, Some(1.5));
+
+        // Whatever happens to the script, it is the slide's audio, and is not said again.
+        let edited = deck_with(
+            &dir,
+            "deck.html",
+            "<meta name=\"slopslide-narration-voice\" content=\"aiden\">",
+            &slides.replace("Say A.", "Say something else."),
+        );
+        let deck = deck::load(&edited).unwrap();
+        assert_eq!(statuses(&edited, &deck)[0].state, AudioState::Ready);
+        assert!(jobs(&edited, &deck).is_empty());
+
+        // A slide with a recording and no script has audio all the same.
+        append_recording(&edited, "b", &[0.5; 24_000], audio::RATE).unwrap();
+        let found = statuses(&edited, &deck);
+        assert_eq!(
+            (found[1].state, found[1].recorded),
+            (AudioState::Ready, true)
+        );
+        assert_eq!(ready_audio(&edited, &deck).len(), 2);
+
+        // Deleted, the model takes over again.
+        delete_recording(&edited, "a").unwrap();
+        delete_recording(&edited, "b").unwrap();
+        delete_recording(&edited, "b").unwrap();
+        assert!(!audio_file(&edited, "a").exists());
+        let found = statuses(&edited, &deck);
+        assert_eq!(found[0].state, AudioState::Missing);
+        assert_eq!(found[1].state, AudioState::None);
+        assert!(!found[0].recorded);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn manifests_from_before_recordings_still_read() {
+        let dir = temp_dir();
+        fs::write(
+            dir.join(MANIFEST),
+            r#"{"slides":{"a":{"fingerprint":"f","seconds":1.5}}}"#,
+        )
+        .unwrap();
+        assert!(!Manifest::read(&dir).slides["a"].recorded);
+        // And a manifest without recordings stays as it was.
+        Manifest::update(&dir, |_| {}).unwrap();
+        let json = fs::read_to_string(dir.join(MANIFEST)).unwrap();
+        assert!(!json.contains("recorded"), "{json}");
         fs::remove_dir_all(dir).unwrap();
     }
 

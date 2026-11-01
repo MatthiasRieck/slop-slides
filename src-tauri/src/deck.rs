@@ -568,6 +568,26 @@ pub fn set_slide_narration(file: &Path, slide: &str, text: &str) -> Result<Deck>
     .0)
 }
 
+/// Adds `text` to what is said over a slide (see [`html::append_narration`]). A locked slide
+/// keeps its narration.
+pub fn append_slide_narration(
+    file: &Path,
+    slide: &str,
+    text: &str,
+    paragraph: bool,
+) -> Result<Deck> {
+    Ok(edit(file, |s| {
+        ensure_unlocked(s, slide)?;
+        Ok((html::append_narration(s, slide, text, paragraph)?, ()))
+    })?
+    .0)
+}
+
+/// Whether the slide is locked.
+pub fn slide_locked(file: &Path, slide: &str) -> Result<bool> {
+    Ok(html::is_locked(&read_html(file)?, slide))
+}
+
 /// Sets a slide's speaker notes (see [`html::set_notes`]); empty `text` removes them. A locked
 /// slide keeps its notes too.
 pub fn set_slide_notes(file: &Path, slide: &str, text: &str) -> Result<Deck> {
@@ -1533,6 +1553,22 @@ mod tests {
     fn a_time_that_is_no_number_counts_as_none() {
         let deck = TempDeck::new(&EDITED.replacen("id=\"b\"", "id=\"b\" data-time=\"soon\"", 1));
         assert_eq!(load(&deck.file()).unwrap().slides[1].time, 0);
+    }
+
+    #[test]
+    fn narration_is_added_to_and_refused_on_locked_slides() {
+        let deck = TempDeck::new(EDITED);
+        let saved = append_slide_narration(&deck.file(), "b", "First.", true).unwrap();
+        assert_eq!(saved.slides[1].narration, "First.");
+        let saved = append_slide_narration(&deck.file(), "b", "Second.", false).unwrap();
+        assert_eq!(saved.slides[1].narration, "First. Second.");
+        assert!(!slide_locked(&deck.file(), "b").unwrap());
+
+        set_slide_locked(&deck.file(), None, "b", true).unwrap();
+        assert!(slide_locked(&deck.file(), "b").unwrap());
+        let locked = deck.html();
+        assert!(append_slide_narration(&deck.file(), "b", "No.", true).is_err());
+        assert_eq!(deck.html(), locked);
     }
 
     #[test]

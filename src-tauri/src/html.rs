@@ -1007,6 +1007,25 @@ pub fn set_narration(html: &str, id: &str, text: &str) -> Result<String, String>
     set_aside(html, id, NARRATION_CLASS, text)
 }
 
+/// Adds `text` to the end of slide `id`'s narration: a paragraph of its own with `paragraph`,
+/// else going on from the last word.
+pub fn append_narration(
+    html: &str,
+    id: &str,
+    text: &str,
+    paragraph: bool,
+) -> Result<String, String> {
+    let slides = find_slides(html);
+    let span = span_of(&slides, id).ok_or_else(|| format!("Slide not found: {id}"))?;
+    let said = narration(&html[span.range.clone()]);
+    let joined = match (said.is_empty(), paragraph) {
+        (true, _) => text.to_string(),
+        (false, true) => format!("{said}\n\n{text}"),
+        (false, false) => format!("{said} {text}"),
+    };
+    set_narration(html, id, &joined)
+}
+
 /// Sets slide `id`'s speaker notes to `text`, the way [`set_narration`] does its narration.
 pub fn set_notes(html: &str, id: &str, text: &str) -> Result<String, String> {
     set_aside(html, id, NOTES_CLASS, text)
@@ -2855,6 +2874,20 @@ mod tests {
             set_notes(html, "a", "New").unwrap(),
             "<main class=\"deck\"><section class=\"slide\" id=\"a\"><p class=\"notes\">Shown</p><aside class=\"side notes\">New</aside></section></main>"
         );
+    }
+
+    #[test]
+    fn appends_to_a_slides_narration() {
+        let deck = r#"<section class="slide" id="a"><h1>A</h1></section>"#;
+        let said = |html: &str| narration(html);
+        let first = append_narration(deck, "a", "Well, so, um.", true).unwrap();
+        assert_eq!(said(&first), "Well, so, um.");
+        let on = append_narration(&first, "a", "Next bit.", false).unwrap();
+        assert_eq!(said(&on), "Well, so, um. Next bit.");
+        let back = append_narration(&on, "a", "R&D <costs>.", true).unwrap();
+        assert_eq!(said(&back), "Well, so, um. Next bit.\n\nR&D <costs>.");
+        assert_eq!(back.matches("class=\"narration\"").count(), 1);
+        assert!(append_narration(deck, "nope", "x", true).is_err());
     }
 
     #[test]

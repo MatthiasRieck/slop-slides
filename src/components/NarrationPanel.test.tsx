@@ -6,6 +6,8 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 
+import { ask } from "@tauri-apps/plugin-dialog";
+
 import type { Deck, SlideAudio, SpeechStatus } from "../lib/api";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
@@ -249,5 +251,63 @@ describe("NarrationPanel speech", () => {
     expect(screen.getByText(/Speaking slide 2 of 2/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Cancel/ }));
     expect(invoke).toHaveBeenCalledWith("cancel_narration");
+  });
+
+  describe("recordings and cleaning up", () => {
+    const recording: SlideAudio = { slide: "intro", state: "ready", seconds: 72, recorded: true };
+
+    beforeEach(() => {
+      useApp.setState({ deck: deckWith({ intro: "Um, so, hello." }), selected: "intro" });
+    });
+
+    it("shows a recording as the presenter's own, to delete rather than regenerate", async () => {
+      vi.mocked(ask).mockResolvedValue(true);
+      useNarration.setState({ audioDeck: deckFor(DECK_HTML).id, audio: { intro: recording } });
+      invoke.mockImplementation(async (name: string) =>
+        name === "delete_recorded_narration"
+          ? [{ slide: "intro", state: "missing", seconds: null, recorded: false }]
+          : SPEECH,
+      );
+      await act(async () => void render(<NarrationPanel />));
+      expect(screen.getByText("Your recording 1:12")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /generate/i })).toBeNull();
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Delete recording" })));
+      expect(invoke).toHaveBeenCalledWith("delete_recorded_narration", { id: deckFor(DECK_HTML).id, slide: "intro" });
+      expect(screen.getByRole("button", { name: "Generate" })).toBeTruthy();
+    });
+
+    it("keeps the recording unless the deletion is confirmed", async () => {
+      vi.mocked(ask).mockResolvedValue(false);
+      useNarration.setState({ audioDeck: deckFor(DECK_HTML).id, audio: { intro: recording } });
+      await act(async () => void render(<NarrationPanel />));
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Delete recording" })));
+      expect(invoke).not.toHaveBeenCalledWith("delete_recorded_narration", expect.anything());
+    });
+
+    it("offers a slide's recording even when it has no script", async () => {
+      useApp.setState({ deck: deckWith({}), selected: "intro" });
+      useNarration.setState({ audioDeck: deckFor(DECK_HTML).id, audio: { intro: recording } });
+      await act(async () => void render(<NarrationPanel />));
+      expect(screen.getByText("Your recording 1:12")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Clean up" })).toBeNull();
+    });
+
+    it("asks the agent to clean up the slide or the whole deck, leaving the sending to the user", async () => {
+      const original = useApp.getState().cleanNarration;
+      const cleanNarration = vi.fn();
+      useApp.setState({ cleanNarration });
+      await act(async () => void render(<NarrationPanel />));
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Clean up" })));
+      expect(cleanNarration).toHaveBeenLastCalledWith("intro");
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Clean up all narration" })));
+      expect(cleanNarration).toHaveBeenLastCalledWith(null);
+      useApp.setState({ cleanNarration: original });
+    });
+
+    it("has nothing to clean up without narration or on locked slides", async () => {
+      useApp.setState({ deck: deckWith({ intro: "Hello." }, ["intro"]), selected: "intro" });
+      await act(async () => void render(<NarrationPanel />));
+      expect(screen.queryByRole("button", { name: /clean up/i })).toBeNull();
+    });
   });
 });

@@ -1,20 +1,14 @@
 import { act, createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { emit, invoke, listen } from "../test/tauri";
 
 const setFullscreen = vi.fn(async () => {});
-const invoke = vi.fn();
-const emit = vi.fn(async () => {});
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  emit: (...args: unknown[]) => emit(...(args as [])),
-  listen: vi.fn(async (name: string, handler: (event: { payload: unknown }) => void) => {
-    listeners.set(name, handler);
-    return () => listeners.delete(name);
-  }),
-}));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
+listen.mockImplementation(async (name: string, handler: (event: { payload: unknown }) => void) => {
+  listeners.set(name, handler);
+  return () => listeners.delete(name);
+});
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setFullscreen }) }));
 const playNarration = vi.fn();
 vi.mock("../lib/narrationAudio", () => ({ playNarration: (...args: unknown[]) => playNarration(...args) }));

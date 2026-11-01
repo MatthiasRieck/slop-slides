@@ -41,9 +41,12 @@ import {
   type UserMessage,
   useApp,
 } from "../store";
+import { ToolButton } from "./Button";
 import { ComposerComments } from "./Comments";
-import { EffortPicker, ModelPicker, useDismiss } from "./ModelPicker";
+import { EffortPicker, ModelPicker } from "./ModelPicker";
 import { ApprovalCard, ApprovalReview, PermissionPicker } from "./Permissions";
+import { useDismiss } from "./Popover";
+import { SectionLabel } from "./SectionLabel";
 import { VoiceInput, type VoiceInputHandle } from "./VoiceInput";
 
 const SUGGESTIONS = [
@@ -96,7 +99,7 @@ function ThreadNavigation({ switching, setSwitching }: { switching: boolean; set
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const ref = useRef<HTMLDivElement>(null);
-  useDismiss(ref, open, () => setOpen(false));
+  useDismiss(open, ref, () => setOpen(false), { escape: true, capture: true });
   useEffect(() => {
     if (!open || !workspace) return;
     let cancelled = false;
@@ -984,7 +987,7 @@ function ImageGrid(props: {
 }) {
   const { workspacePath, images, onClose } = props;
   const ref = useRef<HTMLDivElement>(null);
-  useDismiss(ref, true, onClose);
+  useDismiss(true, ref, onClose, { escape: true, capture: true });
   return (
     <div
       ref={ref}
@@ -993,17 +996,12 @@ function ImageGrid(props: {
       className="absolute bottom-full left-3 right-3 z-20 mb-1 rounded-xl border bg-card p-2 shadow-composer"
     >
       <div className="flex items-center justify-between px-1 pb-2">
-        <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+        <SectionLabel>
           {images.length} image{images.length === 1 ? "" : "s"}
-        </span>
-        <button
-          type="button"
-          aria-label="Close"
-          onClick={onClose}
-          className="rounded-md p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
+        </SectionLabel>
+        <ToolButton variant="panel" size="xs" aria-label="Close" onClick={onClose}>
           <X className="size-3.5" />
-        </button>
+        </ToolButton>
       </div>
       <div className="grid max-h-72 grid-cols-3 gap-2 overflow-y-auto">
         {images.map((path) => (

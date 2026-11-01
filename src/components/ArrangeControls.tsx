@@ -19,7 +19,7 @@ import {
   Rotate3d,
   RotateCcw,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 
 import {
   type AlignTo,
@@ -29,7 +29,9 @@ import {
   parseGeometryValue,
   TILT_STEP,
 } from "../lib/arrange";
-import { ToolButton, useOutsideClose } from "./EditControls";
+import { ToolButton } from "./Button";
+import { DraftInput } from "./Field";
+import { DropdownPanel, useDismiss } from "./Popover";
 
 const ALIGN: { to: AlignTo; label: string; icon: ReactNode }[] = [
   { to: "left", label: "left edges", icon: <AlignStartVertical /> },
@@ -63,11 +65,6 @@ const TILTS: { side: string; x: number; y: number; icon: ReactNode }[] = [
   { side: "bottom right", x: -1, y: 1, icon: <ArrowDownRight /> },
 ];
 
-/** Keeps focus (and the text selection) in the slide when a button is pressed. */
-function keepFocus(event: React.MouseEvent) {
-  event.preventDefault();
-}
-
 /**
  * The selection's place on the slide: align and distribute several elements, align one with the
  * slide, and exact position, size and rotation. Several elements have bounds to move, but no
@@ -83,78 +80,56 @@ export function ArrangeControls(props: {
   const { geometry } = props;
   const many = (geometry?.count ?? 0) > 1;
 
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: PointerEvent) => {
-      if (!ref.current?.contains(event.target as Node)) setOpen(false);
-    };
-    window.addEventListener("pointerdown", onDown);
-    return () => window.removeEventListener("pointerdown", onDown);
-  }, [open]);
+  useDismiss(open, ref, () => setOpen(false));
   if (!geometry && open) setOpen(false);
 
-  const button =
-    "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4";
   return (
     <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-label="Arrange"
+      <ToolButton
+        keepFocus
+        label="Arrange"
         title="Align, distribute, position and size"
         aria-expanded={open}
         disabled={!geometry}
-        onMouseDown={keepFocus}
         onClick={() => setOpen(!open)}
-        className={button}
       >
         <Move />
-      </button>
+      </ToolButton>
       {open && geometry && (
-        <div
-          role="dialog"
-          aria-label="Arrange"
-          className="absolute top-full left-1/2 z-30 mt-1 flex w-max -translate-x-1/2 flex-col gap-2 rounded-md border bg-card p-2 text-xs shadow-md"
-        >
+        <DropdownPanel role="dialog" aria-label="Arrange" className="flex w-max flex-col gap-2 text-xs">
           <div className="flex items-center gap-0.5">
             {ALIGN.map((a) => {
               const label = many ? `Align ${a.label}` : `Align with the slide's ${a.label}`;
               return (
-                <button
+                <ToolButton
                   key={a.to}
-                  type="button"
-                  aria-label={label}
-                  title={label}
-                  onMouseDown={keepFocus}
+                  keepFocus
+                  label={label}
                   onClick={() => props.onArrange?.({ type: "slop:edit-align", to: a.to })}
-                  className={button}
                 >
                   {a.icon}
-                </button>
+                </ToolButton>
               );
             })}
             <div className="mx-1 h-4 w-px bg-border" />
-            <button
-              type="button"
-              aria-label="Distribute horizontally"
+            <ToolButton
+              keepFocus
+              label="Distribute horizontally"
               title="Even out the gaps side to side (three or more elements)"
               disabled={geometry.count < 3}
-              onMouseDown={keepFocus}
               onClick={() => props.onArrange?.({ type: "slop:edit-distribute", axis: "h" })}
-              className={button}
             >
               <AlignHorizontalDistributeCenter />
-            </button>
-            <button
-              type="button"
-              aria-label="Distribute vertically"
+            </ToolButton>
+            <ToolButton
+              keepFocus
+              label="Distribute vertically"
               title="Even out the gaps top to bottom (three or more elements)"
               disabled={geometry.count < 3}
-              onMouseDown={keepFocus}
               onClick={() => props.onArrange?.({ type: "slop:edit-distribute", axis: "v" })}
-              className={button}
             >
               <AlignVerticalDistributeCenter />
-            </button>
+            </ToolButton>
           </div>
           <div className="flex items-center gap-1.5">
             {FIELDS.map((f) => (
@@ -169,7 +144,7 @@ export function ArrangeControls(props: {
             ))}
           </div>
           {many && <p className="text-muted-foreground">{geometry.count} elements selected</p>}
-        </div>
+        </DropdownPanel>
       )}
     </div>
   );
@@ -183,10 +158,11 @@ export function ArrangeControls(props: {
 export function TiltControls(props: { geometry: EditGeometry | null; onArrange?: (message: ArrangeMessage) => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  useOutsideClose(open, ref, () => setOpen(false));
+  useDismiss(open, ref, () => setOpen(false));
   const off = !props.geometry;
   const tilt = (t: (typeof TILTS)[number]) => (
     <ToolButton
+      keepFocus
       key={t.side}
       label={`Rotate ${t.side} ${TILT_STEP}° in 3D`}
       disabled={off}
@@ -197,17 +173,14 @@ export function TiltControls(props: { geometry: EditGeometry | null; onArrange?:
   );
   return (
     <div ref={ref} className="relative">
-      <ToolButton label="3D rotate" active={open} disabled={off && !open} onClick={() => setOpen(!open)}>
+      <ToolButton keepFocus label="3D rotate" active={open} disabled={off && !open} onClick={() => setOpen(!open)}>
         <Rotate3d />
       </ToolButton>
       {open && (
-        <div
-          role="dialog"
-          aria-label="3D rotate"
-          className="absolute top-full left-1/2 z-30 mt-1 grid w-max -translate-x-1/2 grid-cols-3 gap-0.5 rounded-md border bg-card p-1 shadow-md"
-        >
+        <DropdownPanel role="dialog" aria-label="3D rotate" className="grid w-max grid-cols-3 gap-0.5 p-1">
           {TILTS.slice(0, 4).map(tilt)}
           <ToolButton
+            keepFocus
             label="Reset the 3D rotation"
             disabled={off}
             onClick={() => props.onArrange?.({ type: "slop:edit-tilt", reset: true })}
@@ -215,7 +188,7 @@ export function TiltControls(props: { geometry: EditGeometry | null; onArrange?:
             <RotateCcw />
           </ToolButton>
           {TILTS.slice(4).map(tilt)}
-        </div>
+        </DropdownPanel>
       )}
     </div>
   );
@@ -231,37 +204,17 @@ function GeometryInput(props: {
   onChange: (value: number) => void;
   onDone: () => void;
 }) {
-  const shown = props.value === null ? "" : String(props.value);
-  const [draft, setDraft] = useState(shown);
-  useEffect(() => setDraft(shown), [shown]);
-  const apply = () => {
-    const value = parseGeometryValue(props.field, draft);
-    if (value === null || value === props.value) setDraft(shown);
-    else props.onChange(value);
-  };
   return (
     <label title={props.title} className="flex items-center gap-1 text-muted-foreground">
       {props.label}
-      <input
-        type="text"
-        inputMode="numeric"
+      <DraftInput
         aria-label={props.title}
         disabled={props.disabled}
-        placeholder="–"
-        value={draft}
-        onChange={(event) => setDraft(event.target.value.replace(/[^\d.-]/g, ""))}
-        onBlur={apply}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            apply();
-            props.onDone();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            setDraft(shown);
-            props.onDone();
-          }
-        }}
+        value={props.value}
+        parse={(text) => parseGeometryValue(props.field, text)}
+        sanitize={(text) => text.replace(/[^\d.-]/g, "")}
+        onChange={props.onChange}
+        onDone={props.onDone}
         className="h-6 w-12 rounded-md border bg-transparent px-1 text-center text-foreground tabular-nums disabled:opacity-30"
       />
     </label>

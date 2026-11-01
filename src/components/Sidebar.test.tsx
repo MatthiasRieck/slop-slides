@@ -1,9 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 // The tabs' contents have their own tests.
 vi.mock("./ChatPanel", () => ({ ChatPanel: () => <div data-testid="chat" /> }));
 vi.mock("./FileTree", () => ({ FileTree: () => <div data-testid="files" /> }));

@@ -20,6 +20,8 @@ import { MAX_FEATHER, normalAngle } from "../lib/compare";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn, headSlideUrl } from "../lib/utils";
 import { useApp } from "../store";
+import { ToolButton } from "./Button";
+import { SectionLabel } from "./SectionLabel";
 import { SlideComparison } from "./SlideComparison";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
@@ -37,9 +39,6 @@ const MARKS: Record<Exclude<SlideStatus, "unchanged">, Mark> = {
   },
   moved: { label: "Moved", icon: ArrowUpDown, color: "bg-info text-info-foreground", ring: "ring-info" },
 };
-
-const BAR_BUTTON =
-  "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
 
 /** The marks of a row: a slide can have changed and moved. */
 function marksOf(row: SlideChange): Mark[] {
@@ -89,9 +88,7 @@ export function ChangesRail() {
     <div className="flex h-full flex-col bg-sidebar">
       <div className="flex h-10 shrink-0 items-center justify-between gap-2 px-3">
         <div className="flex min-w-0 items-center gap-1">
-          {counts.length === 0 && (
-            <span className="truncate text-2xs font-medium uppercase tracking-wide text-muted-foreground">Changes</span>
-          )}
+          {counts.length === 0 && <SectionLabel className="truncate">Changes</SectionLabel>}
           {counts.map((status) => {
             const { icon: Icon, color, label } = MARKS[status];
             return (
@@ -106,18 +103,14 @@ export function ChangesRail() {
             );
           })}
         </div>
-        <button
-          type="button"
+        <ToolButton
+          variant="panel"
           title={onlyChanges ? "Show every slide" : "Show only the slides that changed"}
-          aria-pressed={onlyChanges}
+          active={onlyChanges}
           onClick={() => useChanges.getState().setOnlyChanges(!onlyChanges)}
-          className={cn(
-            "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground",
-            onlyChanges && "bg-accent text-foreground",
-          )}
         >
           <ListFilter className="size-4" />
-        </button>
+        </ToolButton>
       </div>
       {changes && changes.tracking !== "noRepository" && <CommitBox deck={deck.id} changes={changes} />}
       <ol className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 pb-4 pt-1.5">
@@ -176,24 +169,22 @@ function CommitBox({ deck, changes }: { deck: string; changes: DeckChanges }) {
         >
           Commit{stagedFiles > 0 ? ` ${stagedFiles} ${stagedFiles === 1 ? "file" : "files"}` : ""}
         </button>
-        <button
-          type="button"
+        <ToolButton
+          variant="panel"
           title="Stage everything in this deck"
           disabled={!hasUnstaged}
           onClick={() => void useChanges.getState().stageAll(deck)}
-          className={BAR_BUTTON}
         >
           <Plus className="size-3.5" />
-        </button>
-        <button
-          type="button"
+        </ToolButton>
+        <ToolButton
+          variant="panel"
           title="Unstage everything in this deck's folder"
           disabled={stagedFiles === stagedElsewhere}
           onClick={() => void useChanges.getState().unstageAll(deck)}
-          className={BAR_BUTTON}
         >
           <Minus className="size-3.5" />
-        </button>
+        </ToolButton>
       </div>
       {stagedElsewhere > 0 && (
         <p className="text-2xs leading-snug text-muted-foreground">
@@ -474,23 +465,17 @@ function ComparisonBar({ changes, deck, enabled }: { changes: DeckChanges; deck:
         disabled={!enabled}
         onChange={(feather) => setDivider({ feather })}
       />
-      <button
-        type="button"
+      <ToolButton
+        variant="panel"
         title="Put the divider back in the middle, without a feather"
         disabled={!enabled}
         onClick={resetDivider}
-        className={BAR_BUTTON}
       >
         <RotateCcw className="size-3.5" />
-      </button>
-      <button
-        type="button"
-        title="Compare again"
-        onClick={() => void useChanges.getState().refresh(deck)}
-        className="rounded-md p-1 hover:bg-accent hover:text-foreground"
-      >
+      </ToolButton>
+      <ToolButton variant="plain" title="Compare again" onClick={() => void useChanges.getState().refresh(deck)}>
         <RefreshCw className="size-3.5" />
-      </button>
+      </ToolButton>
     </div>
   );
 }

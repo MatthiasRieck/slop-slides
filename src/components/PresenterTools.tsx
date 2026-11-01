@@ -1,12 +1,5 @@
 import { Eraser, Highlighter, MousePointer2, PenLine, Trash2, Undo2, Wand2, X } from "lucide-react";
-import {
-  type ReactNode,
-  type PointerEvent as ReactPointerEvent,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 
 import {
@@ -30,6 +23,7 @@ import {
   visibleArea,
 } from "../lib/ink";
 import { cn } from "../lib/utils";
+import { ToolButton } from "./Button";
 
 /** How long the toolbar stays visible after a keyboard shortcut changes something. */
 const PEEK_MS = 1500;
@@ -359,6 +353,7 @@ export function PresenterToolbar({ annotations, onExit }: { annotations: Annotat
   const { visible, zoneProps } = useReveal(peek);
   const inking = tool === "pen" || tool === "highlighter";
 
+  // The buttons keep keyboard focus where it was, so Space still advances the slide instead of re-clicking.
   return (
     <div data-testid="presenter-toolbar-zone" className="absolute bottom-0 left-0 z-10 p-4" {...zoneProps}>
       <div
@@ -370,19 +365,49 @@ export function PresenterToolbar({ annotations, onExit }: { annotations: Annotat
           visible ? "opacity-100" : "opacity-0",
         )}
       >
-        <ToolButton label="Pointer (Esc)" active={tool === "pointer"} onClick={() => setTool("pointer")}>
+        <ToolButton
+          variant="presenter"
+          keepFocus
+          label="Pointer (Esc)"
+          active={tool === "pointer"}
+          onClick={() => setTool("pointer")}
+        >
           <MousePointer2 />
         </ToolButton>
-        <ToolButton label="Laser pointer (L)" active={tool === "laser"} onClick={() => setTool("laser")}>
+        <ToolButton
+          variant="presenter"
+          keepFocus
+          label="Laser pointer (L)"
+          active={tool === "laser"}
+          onClick={() => setTool("laser")}
+        >
           <Wand2 />
         </ToolButton>
-        <ToolButton label="Pen (P)" active={tool === "pen"} onClick={() => setTool("pen")}>
+        <ToolButton
+          variant="presenter"
+          keepFocus
+          label="Pen (P)"
+          active={tool === "pen"}
+          onClick={() => setTool("pen")}
+        >
           <PenLine />
         </ToolButton>
-        <ToolButton label="Highlighter (H)" active={tool === "highlighter"} onClick={() => setTool("highlighter")}>
+        <ToolButton
+          variant="presenter"
+          keepFocus
+          label="Highlighter (H)"
+          active={tool === "highlighter"}
+          onClick={() => setTool("highlighter")}
+        >
           <Highlighter />
         </ToolButton>
-        <ToolButton label="Eraser (E)" active={tool === "eraser"} onClick={() => setTool("eraser")}>
+        <ToolButton
+          variant="presenter"
+          keepFocus
+          label="Eraser (E)"
+          active={tool === "eraser"}
+          onClick={() => setTool("eraser")}
+        >
           <Eraser />
         </ToolButton>
         {inking && (
@@ -405,43 +430,22 @@ export function PresenterToolbar({ annotations, onExit }: { annotations: Annotat
           </div>
         )}
         <div className="mx-1 h-5 w-px bg-foreground/15" />
-        <ToolButton label="Undo (⌘Z)" disabled={strokes.length === 0} onClick={undo}>
+        <ToolButton variant="presenter" keepFocus label="Undo (⌘Z)" disabled={strokes.length === 0} onClick={undo}>
           <Undo2 />
         </ToolButton>
-        <ToolButton label="Clear slide (C)" disabled={strokes.length === 0} onClick={clear}>
+        <ToolButton
+          variant="presenter"
+          keepFocus
+          label="Clear slide (C)"
+          disabled={strokes.length === 0}
+          onClick={clear}
+        >
           <Trash2 />
         </ToolButton>
-        <ToolButton label="End show (Esc)" onClick={onExit}>
+        <ToolButton variant="presenter" keepFocus label="End show (Esc)" onClick={onExit}>
           <X />
         </ToolButton>
       </div>
     </div>
-  );
-}
-
-function ToolButton(props: {
-  label: string;
-  active?: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={props.label}
-      title={props.label}
-      aria-pressed={props.active}
-      disabled={props.disabled}
-      // Keep keyboard focus where it was, so Space still advances the slide instead of re-clicking.
-      onMouseDown={(event) => event.preventDefault()}
-      onClick={props.onClick}
-      className={cn(
-        "flex size-8 items-center justify-center rounded-lg text-foreground/80 hover:bg-foreground/10 hover:text-foreground disabled:pointer-events-none disabled:opacity-35 [&_svg]:size-4",
-        props.active && "bg-foreground/20 text-foreground",
-      )}
-    >
-      {props.children}
-    </button>
   );
 }

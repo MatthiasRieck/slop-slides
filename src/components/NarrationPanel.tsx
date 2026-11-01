@@ -1,5 +1,5 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { AudioLines, Download, Loader2, Lock, Play, Sparkles, Square, Trash2, X } from "lucide-react";
+import { AudioLines, Download, Loader2, Play, Sparkles, Square, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { type Deck, errorMessage, type Slide, type SlideAudio } from "../lib/api";
@@ -10,7 +10,10 @@ import { useDraftText } from "../lib/useDraftText";
 import { formatBytes } from "../lib/voice";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
-import { ScriptField, ScriptPreviewToggle } from "./ScriptMarkdown";
+import { Button } from "./Button";
+import { Field, wideSelectClass } from "./Field";
+import { ScriptField } from "./ScriptMarkdown";
+import { SlideBand, SlideBandHeader } from "./SlideBand";
 import { SlideTime } from "./SlideTime";
 
 /** How long typing pauses before the narration is saved to the deck. */
@@ -18,10 +21,6 @@ export const NARRATION_SAVE_DELAY = 800;
 
 /** No audio known yet; one object, so selecting it does not re-render. */
 const NO_AUDIO: Record<string, SlideAudio> = {};
-
-const field = "h-7 w-full min-w-0 rounded-md border bg-background px-1.5 text-xs";
-const button =
-  "flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium hover:bg-accent disabled:opacity-40 disabled:hover:bg-transparent [&_svg]:size-3.5";
 
 /**
  * Narration mode's tools, in a band above the slide: what is said over the current slide, to
@@ -38,31 +37,28 @@ export function NarrationPanel() {
   }, [loadSpeech]);
   const index = deck?.slides.findIndex((s) => s.id === selected) ?? -1;
   const slide = deck?.slides[index];
-  if (!deck || !slide) {
-    return (
-      <p className="shrink-0 border-b bg-background p-4 text-sm text-muted-foreground">
-        {deck ? "Add a slide to write its narration." : "Open a deck to write narration for its slides."}
-      </p>
-    );
-  }
   return (
-    <section aria-label="Narration tools" className="flex h-52 shrink-0 justify-center border-b bg-background">
-      {/* One editor per slide: switching slides saves the last one's pending text as it unmounts. */}
-      <NarrationEditor
-        key={slide.id}
-        deck={deck}
-        slide={slide}
-        index={index}
-        total={deck.slides.length}
-        preview={preview}
-        onPreview={setPreview}
-      />
-      <div className="flex w-72 shrink-0 flex-col justify-between overflow-y-auto border-l">
-        <SpeechSettings deck={deck} />
-        <CleanUpAll deck={deck} />
-        <DeckAudio deck={deck} />
-      </div>
-    </section>
+    <SlideBand label="Narration tools" noun="narration" deck={deck} slide={slide}>
+      {(deck, slide) => (
+        <>
+          {/* One editor per slide: switching slides saves the last one's pending text as it unmounts. */}
+          <NarrationEditor
+            key={slide.id}
+            deck={deck}
+            slide={slide}
+            index={index}
+            total={deck.slides.length}
+            preview={preview}
+            onPreview={setPreview}
+          />
+          <div className="flex w-72 shrink-0 flex-col justify-between overflow-y-auto border-l">
+            <SpeechSettings deck={deck} />
+            <CleanUpAll deck={deck} />
+            <DeckAudio deck={deck} />
+          </div>
+        </>
+      )}
+    </SlideBand>
   );
 }
 
@@ -78,13 +74,12 @@ function SpeechSettings({ deck }: { deck: Deck }) {
   return (
     <div className="flex flex-col gap-2 p-3 text-xs">
       <div className="flex gap-2">
-        <label className="flex min-w-0 flex-[3] flex-col gap-1">
-          <span className="text-muted-foreground">Voice</span>
+        <Field label="Voice" className="flex min-w-0 flex-[3] flex-col gap-1">
           <select
             aria-label="Narration voice"
             value={settings.voice}
             onChange={(event) => void useApp.getState().setNarrationVoice(event.target.value)}
-            className={field}
+            className={wideSelectClass}
           >
             {speech.voices.map((voice) => (
               <option key={voice.id} value={voice.id}>
@@ -92,14 +87,13 @@ function SpeechSettings({ deck }: { deck: Deck }) {
               </option>
             ))}
           </select>
-        </label>
-        <label className="flex min-w-0 flex-[2] flex-col gap-1">
-          <span className="text-muted-foreground">Language</span>
+        </Field>
+        <Field label="Language" className="flex min-w-0 flex-[2] flex-col gap-1">
           <select
             aria-label="Narration language"
             value={settings.language}
             onChange={(event) => void useApp.getState().setNarrationLanguage(event.target.value)}
-            className={field}
+            className={wideSelectClass}
           >
             {speech.languages.map((language) => (
               <option key={language.id} value={language.id}>
@@ -107,7 +101,7 @@ function SpeechSettings({ deck }: { deck: Deck }) {
               </option>
             ))}
           </select>
-        </label>
+        </Field>
       </div>
       {!speech.available ? (
         <p className="text-muted-foreground">Speaking narration is not available on this platform yet.</p>
@@ -126,10 +120,10 @@ function SpeechSettings({ deck }: { deck: Deck }) {
                 </div>
               </div>
             ) : (
-              <button type="button" className={`${button} self-start`} onClick={() => void downloadModel()}>
+              <Button size="md" onClick={() => void downloadModel()} className="self-start">
                 <Download />
                 Download voice model
-              </button>
+              </Button>
             )}
           </div>
         )
@@ -156,23 +150,13 @@ function NarrationEditor(props: {
   const words = wordCount(spoken);
   return (
     <div className="flex min-w-0 max-w-3xl flex-1 flex-col gap-2 p-3">
-      <div className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
-        <span className="min-w-0 truncate">
-          Slide {index + 1} of {total} · <span className="font-mono">{slide.id}</span>
-        </span>
+      <SlideBandHeader slide={slide} index={index} total={total} preview={preview} onPreview={props.onPreview}>
         <span className="ml-auto shrink-0 tabular-nums">
           {words} {words === 1 ? "word" : "words"} ·{" "}
           <span title="Estimated at 150 words per minute">~{speakingTime(spoken)}</span>
         </span>
         <SlideTime deck={deck} />
-        <ScriptPreviewToggle preview={preview} onChange={props.onPreview} />
-        {slide.locked && (
-          <span className="flex shrink-0 items-center gap-1">
-            <Lock className="size-3" />
-            Locked
-          </span>
-        )}
-      </div>
+      </SlideBandHeader>
       <ScriptField
         label="Narration"
         draft={draft}
@@ -249,48 +233,44 @@ function SlideAudioControls(props: {
       </span>
       <div className="flex shrink-0 gap-1">
         {props.hasText && !props.locked && (
-          <button
-            type="button"
-            className={button}
+          <Button
+            size="md"
             onClick={() => void clean()}
             title="Ask the agent to turn this slide's recorded words into clean, fluent sentences"
           >
             <Sparkles />
             Clean up
-          </button>
+          </Button>
         )}
-        <button
-          type="button"
-          className={button}
+        <Button
+          size="md"
           disabled={!audio?.seconds || busy}
           onClick={() => void play()}
           title={audio?.state === "stale" ? "Play the out-of-date audio" : "Play the audio"}
         >
           {playback ? <Square /> : <Play />}
           {playback ? "Stop" : "Play"}
-        </button>
+        </Button>
         {recorded ? (
-          <button
-            type="button"
-            className={button}
+          <Button
+            size="md"
             disabled={props.locked}
             onClick={() => void remove()}
             title="Delete your recording of this slide"
           >
             <Trash2 />
             Delete recording
-          </button>
+          </Button>
         ) : (
-          <button
-            type="button"
-            className={button}
+          <Button
+            size="md"
             disabled={!canSpeak || render !== null}
             onClick={() => void generate()}
             title={canSpeak ? "Speak this slide's narration" : "Download the voice model first"}
           >
             <AudioLines />
             {audio?.state === "ready" ? "Regenerate" : "Generate"}
-          </button>
+          </Button>
         )}
       </div>
     </div>
@@ -319,15 +299,14 @@ function CleanUpAll({ deck }: { deck: Deck }) {
   if (!deck.slides.some((s) => s.narration && !s.locked)) return null;
   return (
     <div className="border-t p-3">
-      <button
-        type="button"
-        className={button}
+      <Button
+        size="md"
         onClick={() => useApp.getState().cleanNarration(null)}
         title="Ask the agent to turn the recorded words of all slides into clean, fluent sentences"
       >
         <Sparkles />
         Clean up all narration
-      </button>
+      </Button>
     </div>
   );
 }
@@ -351,10 +330,10 @@ function DeckAudio({ deck }: { deck: Deck }) {
             Speaking slide {render.done + 1} of {render.total}…
           </span>
         </span>
-        <button type="button" className={button} onClick={() => void useNarration.getState().cancelRender()}>
+        <Button size="md" onClick={() => void useNarration.getState().cancelRender()}>
           <X />
           Cancel
-        </button>
+        </Button>
       </div>
     );
   }
@@ -364,15 +343,14 @@ function DeckAudio({ deck }: { deck: Deck }) {
       <span className="text-muted-foreground">
         {pending} {pending === 1 ? "slide needs" : "slides need"} audio
       </span>
-      <button
-        type="button"
-        className={button}
+      <Button
+        size="md"
         disabled={render !== null}
         onClick={() => void useNarration.getState().renderAudio(deck.id, null)}
       >
         <AudioLines />
         Generate all
-      </button>
+      </Button>
     </div>
   );
 }

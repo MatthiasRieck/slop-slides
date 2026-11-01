@@ -2,9 +2,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(), open: vi.fn() }));
 // jsdom loads no images; dropped ones measure as 1200×800.
 vi.mock("../lib/drop", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/drop")>()),
@@ -1699,6 +1696,8 @@ describe("Stage", () => {
         ]);
         const sent = [[5, -5], [5, 0], [5, 5], [0, -5], null, [0, 5], [-5, -5], [-5, 0], [-5, 5]];
         grid.forEach((b, i) => {
+          // Pressing it leaves focus, and any text selection, in the slide.
+          expect(fireEvent.mouseDown(b)).toBe(false);
           fireEvent.click(b);
           const step = sent[i];
           expect(post).toHaveBeenLastCalledWith(

@@ -6,7 +6,7 @@ import { api, errorMessage, type VoiceDownloadProgress } from "../lib/api";
 import { cn } from "../lib/utils";
 import { formatBytes, WAVEFORM_BAR, WAVEFORM_STEP, waveformBars } from "../lib/voice";
 import { useApp } from "../store";
-import { ComposerPopover } from "./ComposerPopover";
+import { Popover } from "./Popover";
 
 type Phase = "idle" | "offer" | "downloading" | "starting" | "recording" | "transcribing";
 
@@ -266,7 +266,16 @@ export function VoiceInput(props: DictationHandlers & { ref?: Ref<VoiceInputHand
         )}
       </button>
       {(phase === "offer" || phase === "downloading") && (
-        <ComposerPopover anchor={button} onClose={closeOffer} width={280} className="p-3 text-xs">
+        <Popover
+          anchor={button}
+          onClose={closeOffer}
+          width={280}
+          variant="menu"
+          portal
+          follow
+          capture
+          className="p-3 text-xs"
+        >
           {phase === "offer" ? (
             <>
               <p className="font-medium text-foreground">Download the speech model?</p>
@@ -309,7 +318,7 @@ export function VoiceInput(props: DictationHandlers & { ref?: Ref<VoiceInputHand
               </p>
             </>
           )}
-        </ComposerPopover>
+        </Popover>
       )}
     </>
   );

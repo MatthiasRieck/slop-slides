@@ -3,6 +3,7 @@ import { FolderOpen, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightO
 
 import { basename, cn, isMac } from "../lib/utils";
 import { useApp } from "../store";
+import { ToolButton } from "./Button";
 import { DeckActions } from "./DeckActions";
 import { LintStatus } from "./LintStatus";
 import { ModeTabs } from "./ModeTabs";
@@ -42,15 +43,15 @@ export function TopBar() {
         {openedFile && (
           <>
             <RevealButton path={openedFile.absolute} />
-            <button
-              type="button"
+            <ToolButton
+              variant="panel"
+              size="md"
               onClick={() => void useApp.getState().closeDeck()}
               title={`Close ${basename(openedFile.path)}`}
               aria-label={`Close ${basename(openedFile.path)}`}
-              className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <X className="size-4" />
-            </button>
+            </ToolButton>
           </>
         )}
         <SidebarToggle />
@@ -85,14 +86,14 @@ function Breadcrumbs({ workspace, path }: { workspace: string; path: string | nu
 
 function RevealButton({ path }: { path: string }) {
   return (
-    <button
-      type="button"
+    <ToolButton
+      variant="panel"
+      size="md"
       onClick={() => void revealItemInDir(path)}
       title={isMac ? "Show in Finder" : "Show in folder"}
-      className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
     >
       <FolderOpen className="size-4" />
-    </button>
+    </ToolButton>
   );
 }
 
@@ -102,16 +103,16 @@ function RailToggle() {
   const Icon = railOpen ? PanelLeftClose : PanelLeftOpen;
   const label = railOpen ? "Hide slides" : "Show slides";
   return (
-    <button
-      type="button"
+    <ToolButton
+      variant="panel"
+      size="md"
       title={label}
       aria-label={label}
       aria-pressed={railOpen}
       onClick={() => useApp.getState().setRailOpen(!railOpen)}
-      className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
     >
       <Icon className="size-4" />
-    </button>
+    </ToolButton>
   );
 }
 
@@ -121,15 +122,15 @@ function SidebarToggle() {
   const Icon = sidebarOpen ? PanelRightClose : PanelRightOpen;
   const label = sidebarOpen ? "Hide sidebar" : "Show sidebar";
   return (
-    <button
-      type="button"
+    <ToolButton
+      variant="panel"
+      size="md"
       title={label}
       aria-label={label}
       aria-pressed={sidebarOpen}
       onClick={() => useApp.getState().setSidebarOpen(!sidebarOpen)}
-      className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
     >
       <Icon className="size-4" />
-    </button>
+    </ToolButton>
   );
 }

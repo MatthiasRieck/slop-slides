@@ -8,9 +8,9 @@ use serde::Serialize;
 
 use crate::comments;
 use crate::html::{
-    self, find_ci, has_class, parse_tag, ADDED_ATTR, AUTOFIT_ATTR, DROPPED_ATTR, EDITOR_ATTRS,
-    HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR, NARRATION_CLASS, SECTION_CLASS, SECTION_TITLE_ATTR,
-    TIME_ATTR,
+    self, find_ci, has_class, parse_tag, ADDED_ATTR, AUTOFIT_ATTR, DROPPED_ATTR, DURATION_ATTR,
+    EDITOR_ATTRS, HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR, NARRATION_CLASS, NARRATION_START_ATTR,
+    SECTION_CLASS, SECTION_TITLE_ATTR, TIME_ATTR,
 };
 use crate::narration;
 use crate::review;
@@ -583,6 +583,36 @@ fn check_slides(l: &mut Linter) {
                 at,
                 format!(
                     "`{TIME_ATTR}=\"{value}\"` is ignored: it takes the whole seconds expected on the slide, like `{TIME_ATTR}=\"90\"`."
+                ),
+            );
+        }
+        if let Some((_, value)) = slide
+            .duration
+            .as_ref()
+            .filter(|(_, v)| html::parse_duration(v).is_none())
+        {
+            l.report(
+                "duration-value",
+                Severity::Warning,
+                at,
+                format!(
+                    "`{DURATION_ATTR}=\"{value}\"` is ignored: it takes the seconds the slide is shown, {} to {}, like `{DURATION_ATTR}=\"12.5\"`. The user sets it on the narration timeline; keep it as it was.",
+                    html::MIN_DURATION,
+                    html::MAX_DURATION
+                ),
+            );
+        }
+        if let Some((_, value)) = slide
+            .narration_start
+            .as_ref()
+            .filter(|(_, v)| html::parse_narration_start(v).is_none())
+        {
+            l.report(
+                "narration-start-value",
+                Severity::Warning,
+                at,
+                format!(
+                    "`{NARRATION_START_ATTR}=\"{value}\"` is ignored: it takes the seconds from the slide's start to its narration's, negative when it starts earlier, like `{NARRATION_START_ATTR}=\"0.5\"`. The user sets it on the narration timeline; keep it as it was."
                 ),
             );
         }
@@ -1658,6 +1688,30 @@ mod tests {
                 .iter()
                 .all(|i| i.rule == "slide-id-style" && i.severity == Severity::Error));
         }
+    }
+
+    #[test]
+    fn flags_timing_the_app_cannot_read() {
+        assert_eq!(
+            rules(&deck(
+                "<section class=\"slide\" id=\"a\" data-duration=\"12.5\" data-narration-start=\"-1.5\"></section>"
+            )),
+            Vec::<&str>::new()
+        );
+        for value in ["soon", "0.1", "-3", ""] {
+            assert_eq!(
+                rules(&deck(&format!(
+                    "<section class=\"slide\" id=\"a\" data-duration=\"{value}\"></section>"
+                ))),
+                ["duration-value"]
+            );
+        }
+        assert_eq!(
+            rules(&deck(
+                "<section class=\"slide\" id=\"a\" data-narration-start=\"later\"></section>"
+            )),
+            ["narration-start-value"]
+        );
     }
 
     #[test]

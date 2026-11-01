@@ -7,11 +7,12 @@ export interface Playback {
   stop: () => void;
 }
 
-/** Plays a slide's narration audio (its WAV file in the deck's `narration/` folder). */
-export async function playNarration(deck: string, slide: string): Promise<Playback> {
+/** Plays a slide's narration audio (its WAV file in the deck's `narration/` folder), `from` seconds in. */
+export async function playNarration(deck: string, slide: string, from = 0): Promise<Playback> {
   const bytes = await api.narrationWav(deck, slide);
   const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
   const audio = new Audio(url);
+  audio.currentTime = from;
   let finish = () => {};
   const ended = new Promise<void>((resolve) => {
     finish = () => {

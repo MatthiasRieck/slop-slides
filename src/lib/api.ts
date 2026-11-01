@@ -54,6 +54,17 @@ export interface Slide {
   notes?: string;
   /** The seconds the presenter expects to spend on it (its `data-time`); 0 or missing without any. */
   time?: number;
+  /** How long the narration timeline shows it, in seconds (its `data-duration`); automatic without any. */
+  duration?: number | null;
+  /** When its narration starts, in seconds after the slide does (its `data-narration-start`); earlier when negative. */
+  narrationStart?: number | null;
+}
+
+/** What a slide's timing on the narration timeline becomes; null removes that part of it. */
+export interface SlideTiming {
+  slide: string;
+  duration: number | null;
+  narrationStart: number | null;
 }
 
 /** What a change from the slide rail did; saving `previous` back over `source` undoes it. */
@@ -349,6 +360,8 @@ export const api = {
   /** Sets what is said over the slide; empty `text` removes its narration. */
   /** Sets the seconds expected on a slide; 0 removes them. */
   setSlideTime: (id: string, slide: string, seconds: number) => invoke<Deck>("set_slide_time", { id, slide, seconds }),
+  /** Sets the timing of slides on the narration timeline, all in one write. */
+  setSlideTiming: (id: string, timing: SlideTiming[]) => invoke<RailEdit>("set_slide_timing", { id, timing }),
   setSlideNarration: (id: string, slide: string, text: string) =>
     invoke<Deck>("set_slide_narration", { id, slide, text }),
   /** Sets the slide's speaker notes; empty `text` removes them. */
@@ -494,6 +507,8 @@ export const api = {
   cancelNarration: () => invoke<void>("cancel_narration"),
   /** A slide's narration audio, as WAV bytes. */
   narrationWav: (id: string, slide: string) => invoke<ArrayBuffer>("narration_wav", { id, slide }),
+  /** How loud a slide's narration audio is along its length, 0 to 1, for drawing its waveform. */
+  narrationPeaks: (id: string, slide: string) => invoke<number[]>("narration_peaks", { id, slide }),
   setNarrationVoice: (id: string, voice: string) => invoke<Deck>("set_narration_voice", { id, voice }),
   setNarrationLanguage: (id: string, language: string) => invoke<Deck>("set_narration_language", { id, language }),
 };

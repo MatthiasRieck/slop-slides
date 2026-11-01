@@ -121,6 +121,13 @@ const CASES = [
   ["copySlide", () => api.copySlide("talk", "a"), "copy_slide", { id: "talk", slide: "a" }],
   ["pasteSlide", () => api.pasteSlide("talk", "a"), "paste_slide", { id: "talk", after: "a" }],
   ["setSlideTime", () => api.setSlideTime("talk", "a", 90), "set_slide_time", { id: "talk", slide: "a", seconds: 90 }],
+  [
+    "setSlideTiming",
+    () => api.setSlideTiming("talk", [{ slide: "a", duration: 4, narrationStart: null }]),
+    "set_slide_timing",
+    { id: "talk", timing: [{ slide: "a", duration: 4, narrationStart: null }] },
+  ],
+  ["narrationPeaks", () => api.narrationPeaks("talk", "a"), "narration_peaks", { id: "talk", slide: "a" }],
   ["newWindow", () => api.newWindow(), "new_window", undefined],
   ["listScreens", () => api.listScreens(), "list_screens", undefined],
   ["screenPreviews", () => api.screenPreviews(() => {}), "screen_previews", { grabbed: expect.anything() }],

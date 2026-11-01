@@ -15,6 +15,7 @@ import {
   type RailEdit,
   type ReplacedText,
   type Slide,
+  type SlideTiming,
   type TemplateSummary,
   type WorkspaceChanged,
   type WorkspaceInfo,
@@ -457,6 +458,8 @@ interface AppState {
   setNotes: (slide: string, text: string) => Promise<void>;
   /** Sets the seconds expected on the slide; 0 removes them. */
   setSlideTime: (slide: string, seconds: number) => Promise<void>;
+  /** Saves slides' timing on the narration timeline, as one change the rail's history can undo. */
+  setSlideTiming: (timing: SlideTiming[]) => Promise<void>;
   /** Sets the voice (or language) the deck's narration is said in. */
   setNarrationVoice: (voice: string) => Promise<void>;
   setNarrationLanguage: (language: string) => Promise<void>;
@@ -1077,6 +1080,10 @@ export const useApp = create<AppState>((set, get) => ({
   setNotes: (slide, text) => editDeck((id) => api.setSlideNotes(id, slide, text)),
 
   setSlideTime: (slide, seconds) => editDeck((id) => api.setSlideTime(id, slide, seconds)),
+
+  setSlideTiming: async (timing) => {
+    if (timing.length > 0) await editRail((id) => api.setSlideTiming(id, timing));
+  },
 
   setNarrationVoice: (voice) => editDeck((id) => api.setNarrationVoice(id, voice)),
 

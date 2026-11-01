@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 
 import type { Slide, SlideAudio } from "../lib/api";
-import { markdownText } from "../lib/markdown";
-import { wordsSeconds } from "../lib/narration";
+import { formatDuration } from "../lib/narrationAudio";
+import { layoutTimeline, spokenSeconds } from "../lib/timeline";
 import { cn } from "../lib/utils";
 import {
   FRAME_RATES,
@@ -14,7 +14,6 @@ import {
   saveVideoOptions,
   secondsProblem,
   type VideoOptions,
-  videoLength,
 } from "../lib/video";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
@@ -76,17 +75,11 @@ export function VideoExportPanel(props: {
     props.onExport(options());
   };
 
-  // Each narrated slide's length: its audio's, or, until it is spoken, an estimate.
-  const lengths = props.slides.map((s) => {
-    if (!(s.narration ?? "").trim()) return null;
-    const ready = audio[s.id];
-    return ready?.state === "ready" && ready.seconds !== null
-      ? ready.seconds
-      : wordsSeconds(markdownText(s.narration ?? ""));
-  });
+  const timed = narration ? props.slides.filter((s) => s.duration != null).length : 0;
   const estimated = speaks && pending.length > 0;
   const count = props.slides.length;
-  const summary = `${count} ${count === 1 ? "slide" : "slides"}, ${estimated ? "about " : ""}${videoLength(lengths, options())} long. Hidden slides are left out.`;
+  const length = formatDuration(layoutTimeline(props.slides, spokenSeconds(props.slides, audio), options()).end);
+  const summary = `${count} ${count === 1 ? "slide" : "slides"}, ${estimated ? "about " : ""}${length} long. Hidden slides are left out.`;
 
   return (
     <form
@@ -154,7 +147,7 @@ export function VideoExportPanel(props: {
           <span className="text-2xs text-muted-foreground">
             {narrated.length === 0
               ? "No shown slide has narration."
-              : `Each slide stays until its narration ends.${pending.length > 0 ? ` ${pending.length} ${pending.length === 1 ? "slide is" : "slides are"} spoken first.` : ""}`}
+              : `${timed > 0 ? "Slides timed on the narration timeline keep to it; the others stay until their narration ends." : "Each slide stays until its narration ends."}${pending.length > 0 ? ` ${pending.length} ${pending.length === 1 ? "slide is" : "slides are"} spoken first.` : ""}`}
           </span>
         </span>
       </label>

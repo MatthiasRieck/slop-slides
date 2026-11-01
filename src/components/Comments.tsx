@@ -12,8 +12,7 @@ import {
 } from "../lib/comments";
 import { cn } from "../lib/utils";
 import { commentsInScope, heldComment, useApp } from "../store";
-import { ComposerPopover } from "./ComposerPopover";
-import { Popover } from "./Templates";
+import { Popover } from "./Popover";
 
 /** The comment being written or changed; a new one has no id yet. */
 interface OpenComment {
@@ -370,11 +369,15 @@ function CommentList({ anchor, onClose }: { anchor: RefObject<HTMLElement | null
   );
   const comments = commentsInScope(state);
   return (
-    <ComposerPopover
+    <Popover
       anchor={anchor}
       onClose={onClose}
       width={300}
-      className="z-50 overflow-y-auto rounded-xl border bg-card p-1 text-foreground shadow-composer"
+      variant="menu"
+      portal
+      follow
+      capture
+      className="p-1 shadow-composer"
     >
       {comments.length === 0 && <p className="p-2 text-xs text-muted-foreground">No comments on this slide.</p>}
       {comments.map((comment) => {
@@ -395,6 +398,6 @@ function CommentList({ anchor, onClose }: { anchor: RefObject<HTMLElement | null
           </label>
         );
       })}
-    </ComposerPopover>
+    </Popover>
   );
 }

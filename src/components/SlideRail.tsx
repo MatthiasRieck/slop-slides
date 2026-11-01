@@ -45,8 +45,9 @@ import {
 import { pixelsOf } from "../lib/slideSize";
 import { cn } from "../lib/utils";
 import { railSelection, useApp } from "../store";
+import { Popover } from "./Popover";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
-import { LayoutPicker, Popover } from "./Templates";
+import { LayoutPicker } from "./Templates";
 
 /** How a slide in the rail eases into and out of being hidden or locked. */
 const MARK_TRANSITION = "transition duration-200";

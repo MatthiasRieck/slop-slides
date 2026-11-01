@@ -1,6 +1,6 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Check, FolderOpen, Loader2, Plus, Save } from "lucide-react";
-import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { TemplateSummary } from "../lib/api";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
@@ -31,62 +31,6 @@ export function TemplateSlide(props: { template: string; slide: string; size?: P
       url={templateSlideUrl(props.template, props.slide)}
       className={props.className}
     />
-  );
-}
-
-/**
- * A panel floating next to `anchor`, kept on screen. It sits on top of everything (the rail
- * and the stage bar would clip it) and closes on Escape or a click elsewhere.
- */
-export function Popover(props: {
-  anchor: RefObject<HTMLElement | null>;
-  placement: "below" | "above";
-  width: number;
-  label: string;
-  onClose: () => void;
-  children: ReactNode;
-}) {
-  const { anchor, placement, width, onClose } = props;
-  const panelRef = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState<React.CSSProperties>({ visibility: "hidden" });
-
-  useLayoutEffect(() => {
-    const rect = anchor.current?.getBoundingClientRect();
-    if (!rect) return;
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-    setPosition(
-      placement === "below"
-        ? { left, top: rect.bottom + 6, maxHeight: window.innerHeight - rect.bottom - 16 }
-        : { left, bottom: window.innerHeight - rect.top + 6, maxHeight: rect.top - 16 },
-    );
-  }, [anchor, placement, width]);
-
-  useEffect(() => {
-    const onPointer = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (!panelRef.current?.contains(target) && !anchor.current?.contains(target)) onClose();
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("pointerdown", onPointer);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerdown", onPointer);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [anchor, onClose]);
-
-  return (
-    <div
-      ref={panelRef}
-      role="dialog"
-      aria-label={props.label}
-      style={{ position: "fixed", width, ...position }}
-      className="z-50 flex flex-col overflow-hidden rounded-xl border bg-card text-foreground shadow-lg"
-    >
-      {props.children}
-    </div>
   );
 }
 

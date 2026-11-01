@@ -42,8 +42,9 @@ import {
   useApp,
 } from "../store";
 import { ComposerComments } from "./Comments";
-import { EffortPicker, ModelPicker, useDismiss } from "./ModelPicker";
+import { EffortPicker, ModelPicker } from "./ModelPicker";
 import { ApprovalCard, ApprovalReview, PermissionPicker } from "./Permissions";
+import { useDismiss } from "./Popover";
 import { VoiceInput, type VoiceInputHandle } from "./VoiceInput";
 
 const SUGGESTIONS = [
@@ -96,7 +97,7 @@ function ThreadNavigation({ switching, setSwitching }: { switching: boolean; set
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const ref = useRef<HTMLDivElement>(null);
-  useDismiss(ref, open, () => setOpen(false));
+  useDismiss(open, ref, () => setOpen(false), { escape: true, capture: true });
   useEffect(() => {
     if (!open || !workspace) return;
     let cancelled = false;
@@ -984,7 +985,7 @@ function ImageGrid(props: {
 }) {
   const { workspacePath, images, onClose } = props;
   const ref = useRef<HTMLDivElement>(null);
-  useDismiss(ref, true, onClose);
+  useDismiss(true, ref, onClose, { escape: true, capture: true });
   return (
     <div
       ref={ref}

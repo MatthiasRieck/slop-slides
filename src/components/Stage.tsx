@@ -44,11 +44,12 @@ import { CommentEditor, CommentPins, useSlideComments } from "./Comments";
 import { EditContextMenu, type EditMenuAction } from "./EditContextMenu";
 import { EditToolbar } from "./EditToolbar";
 import { SlideSearch } from "./FindReplace";
+import { Popover } from "./Popover";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { ShortcutHelp } from "./ShortcutHelp";
 import { SketchToolbar } from "./SketchToolbar";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
-import { LayoutPicker, Popover } from "./Templates";
+import { LayoutPicker } from "./Templates";
 
 /** The stage area's padding (Tailwind p-8), which the pasteboard covers too. */
 const AREA_PADDING = 32;

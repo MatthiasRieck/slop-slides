@@ -17,9 +17,9 @@ import {
 } from "../lib/video";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
+import { CheckboxRow, Field, NumberField, selectClass } from "./Field";
 
 const NO_AUDIO: Record<string, SlideAudio> = {};
-const input = "h-7 w-full min-w-0 rounded-md border bg-background px-1.5 tabular-nums";
 
 /**
  * Picks how a video export is made: how long each slide is shown, the frame rate, whether
@@ -91,27 +91,20 @@ export function VideoExportPanel(props: {
     >
       <div className="text-sm font-medium">Export video</div>
       <div className="flex items-end gap-2">
-        <label className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className="text-muted-foreground">{speaks ? "Seconds per slide, at least" : "Seconds per slide"}</span>
-          <input
-            aria-label="Seconds per slide"
-            type="number"
-            inputMode="decimal"
-            min={MIN_SECONDS}
-            max={MAX_SECONDS}
-            step="any"
-            value={seconds}
-            onChange={(event) => setSeconds(event.target.value)}
-            className={input}
-          />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-muted-foreground">Frame rate</span>
+        <NumberField
+          label={speaks ? "Seconds per slide, at least" : "Seconds per slide"}
+          aria-label="Seconds per slide"
+          min={MIN_SECONDS}
+          max={MAX_SECONDS}
+          value={seconds}
+          onChange={setSeconds}
+        />
+        <Field label="Frame rate" className="flex flex-col gap-1">
           <select
             aria-label="Frame rate"
             value={fps}
             onChange={(event) => setFps(Number(event.target.value))}
-            className="h-7 rounded-md border bg-background px-1.5"
+            className={selectClass}
           >
             {FRAME_RATES.map((rate) => (
               <option key={rate} value={rate}>
@@ -119,68 +112,42 @@ export function VideoExportPanel(props: {
               </option>
             ))}
           </select>
-        </label>
+        </Field>
       </div>
-      <label className="flex items-start gap-2">
-        <input
-          type="checkbox"
-          checked={animate}
-          onChange={(event) => setAnimate(event.target.checked)}
-          className="mt-0.5"
-        />
-        <span className="flex flex-col">
-          <span className="font-medium">Play animations</span>
-          <span className="text-2xs text-muted-foreground">
-            Entrances, slide fades and morphs, as when presenting. Off, each slide is a still of its final frame.
-          </span>
-        </span>
-      </label>
-      <label className="flex items-start gap-2">
-        <input
-          type="checkbox"
-          checked={narration}
-          onChange={(event) => setNarration(event.target.checked)}
-          className="mt-0.5"
-        />
-        <span className="flex flex-col">
-          <span className="font-medium">Speak narration</span>
-          <span className="text-2xs text-muted-foreground">
-            {narrated.length === 0
-              ? "No shown slide has narration."
-              : `${timed > 0 ? "Slides timed on the narration timeline keep to it; the others stay until their narration ends." : "Each slide stays until its narration ends."}${pending.length > 0 ? ` ${pending.length} ${pending.length === 1 ? "slide is" : "slides are"} spoken first.` : ""}`}
-          </span>
-        </span>
-      </label>
+      <CheckboxRow
+        title="Play animations"
+        description="Entrances, slide fades and morphs, as when presenting. Off, each slide is a still of its final frame."
+        checked={animate}
+        onChange={setAnimate}
+      />
+      <CheckboxRow
+        title="Speak narration"
+        description={
+          narrated.length === 0
+            ? "No shown slide has narration."
+            : `${timed > 0 ? "Slides timed on the narration timeline keep to it; the others stay until their narration ends." : "Each slide stays until its narration ends."}${pending.length > 0 ? ` ${pending.length} ${pending.length === 1 ? "slide is" : "slides are"} spoken first.` : ""}`
+        }
+        checked={narration}
+        onChange={setNarration}
+      />
       {speaks && (
         <div className="flex gap-2">
-          <label className="flex min-w-0 flex-1 flex-col gap-1">
-            <span className="text-muted-foreground">Pause before (s)</span>
-            <input
-              aria-label="Pause before narration"
-              type="number"
-              inputMode="decimal"
-              min={0}
-              max={MAX_PAUSE}
-              step="any"
-              value={before}
-              onChange={(event) => setBefore(event.target.value)}
-              className={input}
-            />
-          </label>
-          <label className="flex min-w-0 flex-1 flex-col gap-1">
-            <span className="text-muted-foreground">Pause after (s)</span>
-            <input
-              aria-label="Pause after narration"
-              type="number"
-              inputMode="decimal"
-              min={0}
-              max={MAX_PAUSE}
-              step="any"
-              value={after}
-              onChange={(event) => setAfter(event.target.value)}
-              className={input}
-            />
-          </label>
+          <NumberField
+            label="Pause before (s)"
+            aria-label="Pause before narration"
+            min={0}
+            max={MAX_PAUSE}
+            value={before}
+            onChange={setBefore}
+          />
+          <NumberField
+            label="Pause after (s)"
+            aria-label="Pause after narration"
+            min={0}
+            max={MAX_PAUSE}
+            value={after}
+            onChange={setAfter}
+          />
         </div>
       )}
       <p

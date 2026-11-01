@@ -16,6 +16,9 @@ const EMU_PER_INCH: f64 = 914_400.0;
 const WIDESCREEN_EMU: f64 = 12_192_000.0;
 /// One CSS pixel in EMU, at 96 pixels per inch.
 const EMU_PER_CSS_PX: f64 = EMU_PER_INCH / 96.0;
+/// PowerPoint's name for the section holding the slides before the first one the user named.
+/// It wants every slide in a section; a deck does not, so this one is left out on import.
+const DEFAULT_SECTION: &str = "Default Section";
 /// The longest side of an imported slide's canvas, in pixels.
 const CANVAS_LONG_SIDE: f64 = 1920.0;
 

@@ -56,6 +56,9 @@ function helper(slides: string, css = "") {
   Object.assign(window, { __slopPptxSignal: (answer: string) => answers.push(answer) });
   // jsdom has no layout.
   window.Element.prototype.getBoundingClientRect = function (this: Element) {
+    // The empty mark measuring the top of a line: lines start where their block does.
+    if ((this as HTMLElement).style?.verticalAlign === "top" && this.parentElement)
+      return box(this.parentElement) as DOMRect;
     return box(this) as DOMRect;
   };
   window.Range.prototype.getBoundingClientRect = function (this: Range) {
@@ -86,6 +89,26 @@ function helper(slides: string, css = "") {
     return JSON.parse(bytes.toString("utf8"));
   };
   return { window, doc: window.document, api, answers, settle, scan };
+}
+
+/** Gives `selector::before` and `::after` the `content`, which jsdom does not compute. */
+function withPseudos(window: JSDOM["window"], selector: string, before: string, after: string) {
+  const computed = window.getComputedStyle.bind(window);
+  window.getComputedStyle = ((el: Element, which?: string) => {
+    if (!which || !el.matches(selector)) return computed(el, which);
+    const element = computed(el);
+    return {
+      content: which === "::before" ? before : after,
+      backgroundColor: "rgba(0, 0, 0, 0)",
+      backgroundImage: "none",
+      position: "static",
+      display: "inline",
+      whiteSpace: "normal",
+      color: "rgb(255, 0, 0)",
+      fontFamily: element.fontFamily,
+      fontSize: element.fontSize,
+    };
+  }) as typeof window.getComputedStyle;
 }
 
 /** jsdom keeps `border-radius` as written; browsers report these. */
@@ -245,6 +268,109 @@ describe("PowerPoint helper", () => {
     expect(at(numbers.paragraphs as Record<string, unknown>[], 0)).toMatchObject({
       bullet: { number: "lower-roman", start: 3 },
     });
+  });
+
+  it("numbers list items split over text boxes by their place in the list", async () => {
+    const { slides } = await helper(
+      SLIDE(
+        `<ol data-box="0 0 100 90" start="2" style="list-style-type: decimal">
+           <li data-box="30 0 70 30">Two<ul><li data-box="60 10 40 10" style="list-style-type: disc">Deep</li></ul></li>
+           <li data-box="30 30 70 30">Three</li>
+           <li data-box="30 60 70 30" value="9">Nine</li>
+         </ol>`,
+      ),
+    ).scan();
+    const shown = at(slides, 0).items.flatMap(
+      (item) => item.paragraphs as { bullet?: { start?: number; number?: string } }[],
+    );
+    expect(shown.filter((p) => p.bullet?.number).map((p) => p.bullet?.start)).toEqual([2, 3, 9]);
+  });
+
+  it("marks sub- and superscript, however deep the text inside them", async () => {
+    const { slides } = await helper(
+      SLIDE(
+        `<p data-box="0 0 500 40">H<sub>2<b>x</b></sub>O<sup style="vertical-align: super">n</sup><span style="vertical-align: 6px; font-size: 20px">up</span></p>`,
+      ),
+    ).scan();
+    const runs = at(at(slides, 0).items[0]?.paragraphs as { runs: { text: string; baseline: number }[] }[], 0).runs;
+    expect(runs.map((r) => [r.text, r.baseline])).toEqual([
+      ["H", 0],
+      ["2", -25],
+      ["x", -25],
+      ["O", 0],
+      ["n", 30],
+      ["up", 20],
+    ]);
+  });
+
+  it("takes in the text of pseudo-elements beside the text, from the start of the block", async () => {
+    const h = helper(
+      SLIDE(
+        `<p class="c" data-box="100 50 500 40" style="padding-left: 10px"><b data-box="200 50 100 40">Bold</b> rest</p>`,
+      ),
+    );
+    withPseudos(h.window, ".c", '"→ "', '" ←"');
+    const { slides } = await h.scan();
+    const item = at(at(slides, 0).items, 0);
+    const runs = at(item.paragraphs as { runs: { text: string; color: number[] }[] }[], 0).runs;
+    expect(runs.map((r) => r.text).join("")).toBe("→ Bold rest ←");
+    expect(at(runs, 0).color).toEqual([255, 0, 0, 1]);
+    expect(item).toMatchObject({ x: 110, w: 490 });
+  });
+
+  it("gives pseudo-element text to the first and last text only, around a block between", async () => {
+    const h = helper(
+      SLIDE(
+        `<div class="c" data-box="0 0 500 200">Top<div data-box="0 50 500 40" style="display: block">Mid</div>End</div>`,
+      ),
+    );
+    withPseudos(h.window, ".c", '"A"', '"Z"');
+    const { slides } = await h.scan();
+    const words = at(slides, 0).items.map((item) =>
+      at(item.paragraphs as { runs: { text: string }[] }[], 0)
+        .runs.map((r) => r.text)
+        .join(""),
+    );
+    expect(words).toEqual(["ATop", "Mid", "EndZ"]);
+  });
+
+  it("places text by its line, leaves the page as it was, and keeps to whole pixels", async () => {
+    const h = helper(SLIDE(`<p data-box="10 20.4 500 40" style="line-height: 40px">Hello</p>`));
+    const { slides } = await h.scan();
+    expect(at(at(slides, 0).items, 0)).toMatchObject({ y: 20 });
+    expect(h.doc.querySelector("p")?.children).toHaveLength(0);
+  });
+
+  it("estimates the line in flex boxes, where a measuring mark would become an item", async () => {
+    const h = helper(SLIDE(`<div data-box="10 20 500 30" style="display: flex; line-height: 30px">Hello</div>`));
+    const { slides } = await h.scan();
+    // The mock's glyphs are 10 tall in a line of 30.
+    expect(at(at(slides, 0).items, 0)).toMatchObject({ y: 10 });
+  });
+
+  it("lets wrapped text keep its block's width past the space hanging off a line", async () => {
+    const h = helper(SLIDE(`<p data-box="0 0 784 90" style="font-size: 34px">Wrapping text</p>`));
+    h.window.Range.prototype.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 793, bottom: 90, width: 793, height: 90, x: 0, y: 0 }) as DOMRect;
+    h.window.Range.prototype.getClientRects = () =>
+      [
+        { left: 0, top: 0, bottom: 40, width: 793, height: 40 },
+        { left: 0, top: 45, bottom: 85, width: 500, height: 40 },
+      ] as unknown as DOMRectList;
+    const { slides } = await h.scan();
+    expect(at(at(slides, 0).items, 0)).toMatchObject({ x: 0, w: 784, wrap: true });
+  });
+
+  it("pictures a 3D transform with room for what it paints outside its box", async () => {
+    const h = helper(
+      SLIDE(
+        `<div data-box="400 400 200 100" style="width: 200px; height: 100px; background: linear-gradient(red, blue); transform: matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1)"></div>`,
+      ),
+    );
+    await h.scan();
+    h.api.isolate(0, "#000000");
+    await h.settle();
+    expect(at(h.answers, h.answers.length - 1)).toContain("rect=350,350,300,200");
   });
 
   it("keeps attached images as files, and pictures anything else", async () => {

@@ -197,6 +197,8 @@ pub(super) struct Run {
     pub color: Option<Rgba>,
     pub spacing: f64,
     pub highlight: Option<Rgba>,
+    /// Percent raised; PowerPoint draws such text at two thirds of its size.
+    pub baseline: f64,
     pub link: Option<String>,
 }
 
@@ -223,6 +225,8 @@ pub(super) struct ImageItem {
     pub rotation: f64,
     #[serde(default)]
     pub flip_h: bool,
+    #[serde(default)]
+    pub border: Option<Border>,
     #[serde(default)]
     pub crop: Option<Crop>,
     #[serde(default)]
@@ -646,6 +650,19 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
         "<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>".to_string()
     }
 
+    fn line_xml(&self, border: &Border, opacity: f64) -> String {
+        let dash = match border.dash.as_deref() {
+            Some("dashed") => "<a:prstDash val=\"dash\"/>",
+            Some("dotted") => "<a:prstDash val=\"sysDot\"/>",
+            _ => "",
+        };
+        format!(
+            "<a:ln w=\"{}\">{}{dash}</a:ln>",
+            self.emu(border.width).max(1),
+            solid_xml(border.color, opacity)
+        )
+    }
+
     fn box_xml(&mut self, item: &BoxItem) -> String {
         let id = self.id();
         let fill = match item.fill.as_ref() {
@@ -656,18 +673,7 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
             _ => "<a:noFill/>".to_string(),
         };
         let line = match &item.border {
-            Some(border) => {
-                let dash = match border.dash.as_deref() {
-                    Some("dashed") => "<a:prstDash val=\"dash\"/>",
-                    Some("dotted") => "<a:prstDash val=\"sysDot\"/>",
-                    _ => "",
-                };
-                format!(
-                    "<a:ln w=\"{}\">{}{dash}</a:ln>",
-                    self.emu(border.width).max(1),
-                    solid_xml(border.color, item.opacity)
-                )
-            }
+            Some(border) => self.line_xml(border, item.opacity),
             None => "<a:ln><a:noFill/></a:ln>".to_string(),
         };
         let effect = item.shadow.as_ref().map_or(String::new(), |s| {
@@ -709,7 +715,8 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
     fn run_props(&mut self, tag: &str, run: &Run) -> String {
         let mut attrs = String::from(" lang=\"en-US\"");
         if run.size > 0.0 {
-            let size = (self.points(run.size) * 100.0)
+            let shrink = if run.baseline != 0.0 { 1.5 } else { 1.0 };
+            let size = (self.points(run.size) * shrink * 100.0)
                 .round()
                 .clamp(100.0, 400_000.0) as i64;
             let _ = write!(attrs, " sz=\"{size}\"");
@@ -729,6 +736,10 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
                 .round()
                 .clamp(-400_000.0, 400_000.0);
             let _ = write!(attrs, " spc=\"{}\"", spacing as i64);
+        }
+        if run.baseline != 0.0 {
+            let baseline = (run.baseline * 1000.0).round().clamp(-100_000.0, 100_000.0);
+            let _ = write!(attrs, " baseline=\"{}\"", baseline as i64);
         }
         attrs.push_str(" dirty=\"0\"");
         let mut inner = String::new();
@@ -904,7 +915,10 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
     fn image_xml(&mut self, item: &ImageItem) -> Option<String> {
         let rel = self.asset_rel(&item.src)?;
         let xfrm = self.xfrm(item.x, item.y, item.w, item.h, item.rotation, item.flip_h);
-        let geometry = self.geometry(item.w, item.h, item.radius, item.ellipse);
+        let mut geometry = self.geometry(item.w, item.h, item.radius, item.ellipse);
+        if let Some(border) = &item.border {
+            geometry.push_str(&self.line_xml(border, item.opacity));
+        }
         Some(self.picture_xml(
             &rel,
             &item.alt,
@@ -1163,7 +1177,7 @@ fn sections_xml(scene: &Scene, meta: &Meta) -> String {
             Some(name) => groups.push(((*name).to_string(), vec![index])),
             None => match groups.last_mut() {
                 Some(group) => group.1.push(index),
-                None => groups.push(("Default Section".to_string(), vec![index])),
+                None => groups.push((super::DEFAULT_SECTION.to_string(), vec![index])),
             },
         }
     }

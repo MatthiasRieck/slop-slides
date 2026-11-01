@@ -211,9 +211,37 @@
     return d === "inline-block" && !hasBox(cs);
   }
 
+  /** How far an element's blur, shadows and 3D transform paint outside its box, in CSS pixels. */
+  function effectReach(cs) {
+    // WebKit can paint a 3D transform past the box it reports for it.
+    var reach = /^matrix3d/.test(cs.transform || "") ? Math.max(num(cs.width), num(cs.height)) * 0.25 : 0;
+    var blurs = (cs.filter || "").match(/-?[\d.]+px/g) || [];
+    blurs.forEach(function (length) {
+      reach = Math.max(reach, Math.abs(num(length)) * 3);
+    });
+    splitTop(cs.boxShadow && cs.boxShadow !== "none" ? cs.boxShadow : "").forEach(function (layer) {
+      if (/\binset\b/.test(layer)) return;
+      var total = 0;
+      (layer.match(/-?[\d.]+px/g) || []).forEach(function (length) {
+        total += Math.abs(num(length));
+      });
+      reach = Math.max(reach, total);
+    });
+    return reach;
+  }
+
+  /** `r` grown by `reach`, then cut to a `width` × `height` area. */
+  function reachOf(r, reach, width, height) {
+    var left = Math.max(r.x - reach, 0);
+    var top = Math.max(r.y - reach, 0);
+    var right = Math.min(r.x + r.w + reach, width);
+    var bottom = Math.min(r.y + r.h + reach, height);
+    return { x: left, y: top, w: right - left, h: bottom - top };
+  }
+
   /** A shot of `el` (or, `decor`, of its own box without its children) as a picture on the slide. */
-  function addShot(el, decor, opaque) {
-    shots.push({ el: el, decor: !!decor, opaque: !!opaque, slide: el.closest(".slide") });
+  function addShot(el, decor, opaque, reach) {
+    shots.push({ el: el, decor: !!decor, opaque: !!opaque, reach: reach || 0, slide: el.closest(".slide") });
     return shots.length - 1;
   }
 
@@ -248,7 +276,9 @@
   };
 
   Scanner.prototype.shot = function (el, r, ctx, decor) {
-    this.push({ kind: "shot", shot: addShot(el, decor), x: r.x, y: r.y, w: r.w, h: r.h }, ctx);
+    var reach = effectReach(getComputedStyle(el));
+    var c = reachOf(r, reach, this.width, this.height);
+    this.push({ kind: "shot", shot: addShot(el, decor, false, reach), x: c.x, y: c.y, w: c.w, h: c.h }, ctx);
   };
 
   /** A rectangle for `el` before rotation: the same centre, its layout size. */
@@ -376,8 +406,12 @@
     var src = el.getAttribute("src") || "";
     var clip = ctx.clip;
     var escapes = clip && (r.x < clip.x - 1 || r.y < clip.y - 1 || r.x + r.w > clip.x + clip.w + 1 || r.y + r.h > clip.y + clip.h + 1);
-    if (!IMAGE_FILE.test(src) || escapes || !el.naturalWidth) {
+    if (!IMAGE_FILE.test(src) || !el.naturalWidth) {
       if (el.naturalWidth || !IMAGE_FILE.test(src)) this.shot(el, r, ctx);
+      return;
+    }
+    if (escapes && t.rotation) {
+      this.shot(el, r, ctx);
       return;
     }
     var nw = el.naturalWidth;
@@ -400,11 +434,43 @@
         r = { x: r.x + (r.w - dw) * px, y: r.y + (r.h - dh) * py, w: dw, h: dh };
       }
     }
+    if (escapes) {
+      // Cut by a parent: PowerPoint crops the picture the same way. On top of any crop above.
+      var seen = crop || { l: 0, r: 0, t: 0, b: 0 };
+      var showX = 1 - seen.l - seen.r;
+      var showY = 1 - seen.t - seen.b;
+      var left = Math.max(clip.x, r.x);
+      var top = Math.max(clip.y, r.y);
+      var right = Math.min(clip.x + clip.w, r.x + r.w);
+      var bottom = Math.min(clip.y + clip.h, r.y + r.h);
+      if (right <= left || bottom <= top) return;
+      crop = {
+        l: seen.l + (showX * (left - r.x)) / r.w,
+        r: seen.r + (showX * (r.x + r.w - right)) / r.w,
+        t: seen.t + (showY * (top - r.y)) / r.h,
+        b: seen.b + (showY * (r.y + r.h - bottom)) / r.h,
+      };
+      r = { x: left, y: top, w: right - left, h: bottom - top };
+      var parent = el.parentElement ? radiusOf(getComputedStyle(el.parentElement), r) : null;
+      if (parent && parent.same && parent.value > 0) cs = getComputedStyle(el.parentElement);
+    }
     var radius = radiusOf(cs, r);
+    // Rounded by the parent that clips it, when it fills that parent.
+    if (!radius.value && ctx.clipRadius && clip && Math.abs(r.w - clip.w) <= 2 && Math.abs(r.h - clip.h) <= 2) {
+      radius = { same: true, value: ctx.clipRadius, percent: null };
+    }
+    var borderWidth = num(cs.borderTopWidth);
+    var outline = null;
+    if (borderWidth > 0 && cs.borderTopStyle !== "none" && uniformBorder(cs) && color(cs.borderTopColor)[3] > 0) {
+      outline = { color: color(cs.borderTopColor), width: borderWidth * ctx.scale, dash: null };
+      var half = (borderWidth * ctx.scale) / 2;
+      r = { x: r.x + half, y: r.y + half, w: r.w - 2 * half, h: r.h - 2 * half };
+    }
     this.push(
       {
         kind: "image",
         src: src,
+        border: outline,
         alt: el.getAttribute("alt") || "",
         x: r.x,
         y: r.y,
@@ -421,8 +487,22 @@
     );
   };
 
-  /** Runs for a text node, in the style of the element holding it. */
-  function textRuns(text, cs, ctx, link, runs) {
+  /**
+   * How far `cs` raises its text, as a percent of the size PowerPoint would shrink it from: raised
+   * text there is drawn at two thirds of the size it is given, and raised by a share of that size.
+   */
+  function raisedBy(cs) {
+    var align = cs.verticalAlign || "baseline";
+    if (align === "super") return 30;
+    if (align === "sub") return -25;
+    var full = num(cs.fontSize, 16) * 1.5;
+    if (/px$/.test(align)) return (num(align) / full) * 100;
+    if (/%$/.test(align)) return (num(align) * num(cs.lineHeight, num(cs.fontSize, 16))) / full;
+    return 0;
+  }
+
+  /** Runs for a text node, in the style of the element holding it, raised by `baseline`. */
+  function textRuns(text, cs, ctx, link, runs, baseline) {
     var keep = /^pre|break-spaces/.test(cs.whiteSpace);
     var body = keep ? text : text.replace(/\s+/g, " ");
     if (cs.textTransform === "uppercase") body = body.toUpperCase();
@@ -452,21 +532,22 @@
         color: ink,
         spacing: cs.letterSpacing === "normal" ? 0 : num(cs.letterSpacing) * ctx.scale,
         highlight: mark[3] > 0.05 ? mark : null,
+        baseline: baseline || 0,
         link: link,
       });
     });
   }
 
-  function pseudoRun(el, which, ctx, link, runs) {
+  function pseudoRun(el, which, ctx, link, runs, baseline) {
     if (pseudo(el, which) !== "run") return;
     var cs = getComputedStyle(el, which);
-    textRuns(cs.content.slice(1, -1), cs, ctx, link, runs);
+    textRuns(cs.content.slice(1, -1), cs, ctx, link, runs, baseline);
   }
 
   /** Collects `node` and what is inside it as runs. */
-  function collect(node, ctx, link, runs) {
+  function collect(node, ctx, link, runs, baseline) {
     if (node.nodeType === 3) {
-      textRuns(node.nodeValue, getComputedStyle(node.parentElement), ctx, link, runs);
+      textRuns(node.nodeValue, getComputedStyle(node.parentElement), ctx, link, runs, baseline);
       return;
     }
     if (node.nodeType !== 1) return;
@@ -478,11 +559,12 @@
     var cs = getComputedStyle(node);
     if (cs.display === "none" || NEVER[tag]) return;
     if (tag === "a") link = node.getAttribute("href") || link;
-    pseudoRun(node, "::before", ctx, link, runs);
+    baseline = raisedBy(cs) || baseline;
+    pseudoRun(node, "::before", ctx, link, runs, baseline);
     Array.prototype.forEach.call(node.childNodes, function (child) {
-      collect(child, ctx, link, runs);
+      collect(child, ctx, link, runs, baseline);
     });
-    pseudoRun(node, "::after", ctx, link, runs);
+    pseudoRun(node, "::after", ctx, link, runs, baseline);
   }
 
   /** Runs without the space collapsed away at the ends of a line. */
@@ -507,6 +589,47 @@
     return { number: type };
   }
 
+  /** The number a list item shows, or null when it shows none of its own. */
+  function ordinal(li) {
+    var list = li.parentElement;
+    if (!list || list.tagName.toLowerCase() !== "ol") return null;
+    var number = num(list.getAttribute("start"), 1);
+    var counting = false;
+    Array.prototype.some.call(list.children, function (item) {
+      if (item.tagName.toLowerCase() !== "li") return item === li;
+      if (counting) number += 1;
+      counting = true;
+      var value = item.getAttribute("value");
+      if (value !== null && value !== undefined && value !== "") number = num(value, number);
+      return item === li;
+    });
+    return number;
+  }
+
+  /**
+   * The box of an empty mark at the top of the line holding `node`, a child of `parent`. Line tops
+   * can't be told from the glyphs: browsers round the leading in ways of their own. In a flex or
+   * grid box the mark would become an item, so there's no measuring.
+   */
+  function lineTop(parent, cs, node) {
+    if (!/^(block|list-item|table-cell|inline-block|flow-root)$/.test(cs.display)) return null;
+    var mark = document.createElement("span");
+    mark.style.cssText = "display: inline-block; width: 0; height: 0; vertical-align: top";
+    parent.insertBefore(mark, node);
+    var box = mark.getBoundingClientRect();
+    parent.removeChild(mark);
+    return box;
+  }
+
+  /** The top of the first line of `rects`, and the height of its tallest text. */
+  function firstLine(rects) {
+    var shown = Array.prototype.filter.call(rects, function (rect) { return rect.width > 0; });
+    if (!shown.length) return null;
+    return shown.reduce(function (best, rect) {
+      return rect.top < shown[0].bottom && rect.height > best.height ? rect : best;
+    }, shown[0]);
+  }
+
   function paragraph(owner, cs, runs, ctx) {
     var line = num(cs.lineHeight, 0);
     return {
@@ -525,12 +648,19 @@
     return tops.length;
   }
 
-  /** A text box for the inline `nodes`, which sit in `parent`. */
-  Scanner.prototype.text = function (parent, cs, nodes, ctx) {
+  /**
+   * A text box for the inline `nodes`, which sit in `parent`; `first` and `last` tell whether
+   * they open and close it, and so stand beside the text of its pseudo-elements.
+   */
+  Scanner.prototype.text = function (parent, cs, nodes, ctx, first, last) {
     var runs = [];
+    var before = first && pseudo(parent, "::before") === "run";
+    var after = last && pseudo(parent, "::after") === "run";
+    if (before) pseudoRun(parent, "::before", ctx, ctx.link, runs);
     nodes.forEach(function (node) {
       collect(node, ctx, ctx.link, runs);
     });
+    if (after) pseudoRun(parent, "::after", ctx, ctx.link, runs);
     tidy(runs);
     if (!runs.some(function (run) { return run.text; })) return;
     var range = document.createRange();
@@ -541,22 +671,38 @@
     if (ctx.rotated) r = ctx.rotated;
     if (r.w <= 0 && r.h <= 0) return;
     var size = runs[0].size || 16;
-    var lines = range.getClientRects ? linesIn(range.getClientRects(), size) : 1;
+    var rects = range.getClientRects ? range.getClientRects() : [];
+    var lines = linesIn(rects, size);
     var wrap = lines > 1;
-    if (wrap) {
+    var para = paragraph(parent, cs, runs, ctx);
+    // A range measures glyphs, but a line of text stands in its line box: taller or shorter than
+    // the glyphs by the leading. Placing the glyph box would shift the text a little every trip.
+    // Whole pixels too, or what a browser rounds away would add up over repeated round trips.
+    var glyphs = firstLine(rects);
+    if (para.lineHeight && glyphs && !ctx.rotated) {
+      var glyphHeight = glyphs.height / this.ratio;
+      var mark = lineTop(parent, cs, nodes[0]);
+      var line = mark ? this.rect(mark).y : this.rect(glyphs).y + (glyphHeight - para.lineHeight) / 2;
+      r = { x: r.x, y: Math.round(line), w: r.w, h: r.h + para.lineHeight - glyphHeight };
+    }
+    if (wrap || before || after) {
       var p = this.rect(parent.getBoundingClientRect());
       var padL = num(cs.paddingLeft) * ctx.scale;
       var padR = num(cs.paddingRight) * ctx.scale;
       var inner = { x: p.x + padL + num(cs.borderLeftWidth), w: p.w - padL - padR - num(cs.borderLeftWidth) - num(cs.borderRightWidth) };
-      if (inner.w >= r.w) {
+      // A range counts the space hanging at the end of a line, so it can pass the width it wraps at.
+      if (before || after || inner.w >= r.w - size) {
         r = { x: inner.x, y: r.y, w: inner.w, h: r.h };
       }
     }
-    var para = paragraph(parent, cs, runs, ctx);
     var bullet = bulletOf(parent);
     if (bullet) {
       var hang = Math.min(size * 1.4, 64);
       para.bullet = bullet;
+      if (bullet.number) {
+        var shown = ordinal(parent);
+        if (shown > 1) bullet.start = shown;
+      }
       para.marginLeft = hang;
       para.indent = -hang;
       r = { x: r.x - hang, y: r.y, w: r.w + hang, h: r.h };
@@ -592,9 +738,11 @@
     Array.prototype.forEach.call(el.children, function (li) {
       var cs = getComputedStyle(li);
       var runs = [];
+      pseudoRun(li, "::before", ctx, ctx.link, runs);
       Array.prototype.forEach.call(li.childNodes, function (node) {
         collect(node, ctx, ctx.link, runs);
       });
+      pseudoRun(li, "::after", ctx, ctx.link, runs);
       tidy(runs);
       var box = self.rect(li.getBoundingClientRect());
       var para = paragraph(li, cs, runs, ctx);
@@ -618,12 +766,51 @@
     this.push({ kind: "text", x: r.x, y: r.y, w: r.w, h: r.h, rotation: ctx.rotation, wrap: true, paragraphs: paragraphs }, ctx);
   };
 
+  /** Whether `el`'s children are all paragraphs of plain text. */
+  function plainParagraphs(el) {
+    var items = Array.prototype.slice.call(el.children);
+    return (
+      items.length > 0 &&
+      items.every(function (child) {
+        var cs = getComputedStyle(child);
+        return child.tagName.toLowerCase() === "p" && !hasBox(cs) && Array.prototype.every.call(child.childNodes, isInline);
+      }) &&
+      !Array.prototype.some.call(el.childNodes, function (node) {
+        return node.nodeType === 3 && hasText(node);
+      })
+    );
+  }
+
+  /** Paragraphs turned with their parent: one text box, which PowerPoint can turn the same way. */
+  Scanner.prototype.turned = function (el, cs, r, ctx) {
+    var paragraphs = [];
+    Array.prototype.forEach.call(el.children, function (child) {
+      var runs = [];
+      Array.prototype.forEach.call(child.childNodes, function (node) {
+        collect(node, ctx, ctx.link, runs);
+      });
+      tidy(runs);
+      paragraphs.push(paragraph(child, getComputedStyle(child), runs, ctx));
+    });
+    var left = num(cs.paddingLeft) * ctx.scale;
+    var top = num(cs.paddingTop) * ctx.scale;
+    var inner = {
+      x: r.x + left,
+      y: r.y + top,
+      w: r.w - left - num(cs.paddingRight) * ctx.scale,
+      h: r.h - top - num(cs.paddingBottom) * ctx.scale,
+    };
+    this.push({ kind: "text", x: inner.x, y: inner.y, w: inner.w, h: inner.h, rotation: ctx.rotation, wrap: paragraphs.length > 1, paragraphs: paragraphs }, ctx);
+  };
+
   /** The children of `el`: lines of text in order with the elements between them. */
   Scanner.prototype.content = function (el, cs, ctx) {
     var self = this;
     var group = [];
-    var flush = function () {
-      if (group.length) self.text(el, cs, group, ctx);
+    var opening = true;
+    var flush = function (last) {
+      if (group.length) self.text(el, cs, group, ctx, opening, last);
+      if (group.length) opening = false;
       group = [];
     };
     Array.prototype.forEach.call(el.childNodes, function (child) {
@@ -634,11 +821,12 @@
       if (child.nodeType !== 1) return;
       if (isInline(child)) group.push(child);
       else {
-        flush();
+        flush(false);
+        opening = false;
         self.walk(child, ctx);
       }
     });
-    flush();
+    flush(true);
   };
 
   Scanner.prototype.walk = function (el, ctx) {
@@ -658,6 +846,7 @@
       rotation: ctx.rotation,
       rotated: ctx.rotated,
       clip: ctx.clip,
+      clipRadius: ctx.clipRadius,
       link: tag === "a" ? el.getAttribute("href") || ctx.link : ctx.link,
     };
     var hidden = cs.visibility === "hidden" || cs.visibility === "collapse";
@@ -673,7 +862,8 @@
     var blockChildren = Array.prototype.some.call(el.childNodes, function (child) {
       return child.nodeType === 1 && !isInline(child);
     });
-    if (PICTURED[tag] || !t.simple || effects || (t.rotation && blockChildren && tag !== "img")) {
+    var turnsAsText = t.rotation && plainParagraphs(el);
+    if (PICTURED[tag] || !t.simple || effects || (t.rotation && blockChildren && tag !== "img" && !turnsAsText)) {
       if (!this.off(r) && !hidden) this.shot(el, r, next);
       return;
     }
@@ -691,7 +881,15 @@
       var art = pseudo(el, "::before") === "art" || pseudo(el, "::after") === "art";
       if (!this.off(r) && (art || !this.box(el, cs, shape, t, next))) this.shot(el, r, next, true);
     }
-    if (cs.overflow !== "visible" && cs.overflowX !== "visible") next.clip = r;
+    if (cs.overflow !== "visible" && cs.overflowX !== "visible") {
+      next.clip = r;
+      var corners = radiusOf(cs, r);
+      next.clipRadius = corners.same ? corners.value * next.scale : 0;
+    }
+    if (turnsAsText) {
+      this.turned(el, cs, shape, next);
+      return;
+    }
     if ((tag === "ul" || tag === "ol") && simpleList(el)) {
       this.list(el, r, next);
       return;
@@ -733,7 +931,7 @@
 
   function scanSlide(slide) {
     var scanner = new Scanner(slide);
-    var ctx = { opacity: 1, z: 0, scale: 1, rotation: 0, rotated: null, clip: null, link: null };
+    var ctx = { opacity: 1, z: 0, scale: 1, rotation: 0, rotated: null, clip: null, clipRadius: 0, link: null };
     var background = backgroundOf(slide);
     scanner.content(slide, getComputedStyle(slide), ctx);
     // A stable sort by stacking order: later in the document paints on top.
@@ -827,20 +1025,27 @@
         root.removeAttribute("data-slop-pptx-paper");
       }
       shot.el.setAttribute("data-slop-pptx-shot", shot.decor ? "decor" : "all");
-      setTimeout(function () {
+      // A hidden window decodes images only when asked; a capture would find them missing.
+      var images = shot.el.tagName.toLowerCase() === "img" ? [shot.el] : Array.prototype.slice.call(shot.el.querySelectorAll("img"));
+      var decoded = images.map(function (img) {
+        return img.decode ? img.decode().catch(function () {}) : null;
+      });
+      var report = function () {
         var r = shot.el.getBoundingClientRect();
         var s = shot.slide.getBoundingClientRect();
-        var left = Math.max(r.left, s.left);
-        var top = Math.max(r.top, s.top);
-        var right = Math.min(r.right, s.right);
-        var bottom = Math.min(r.bottom, s.bottom);
+        // The same area as the scan's: the picture goes back exactly there.
+        var ratio = shot.slide.offsetWidth ? s.width / shot.slide.offsetWidth : 1;
+        var area = reachOf({ x: r.left - s.left, y: r.top - s.top, w: r.width, h: r.height }, shot.reach * ratio, s.width, s.height);
         signal(
           "isolated=" + index +
-            "&rect=" + [left, top, right - left, bottom - top].join(",") +
+            "&rect=" + [s.left + area.x, s.top + area.y, area.w, area.h].join(",") +
             "&view=" + [window.innerWidth, window.innerHeight].join(",") +
-            "&scale=" + (shot.slide.offsetWidth ? s.width / shot.slide.offsetWidth : 1),
+            "&scale=" + ratio,
         );
-      }, 120);
+      };
+      Promise.all(decoded).then(function () {
+        setTimeout(report, 120);
+      });
     },
   };
 

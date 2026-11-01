@@ -873,9 +873,11 @@ fn an_export_imports_back_with_its_words_notes_and_sections() {
         html::notes(&converted.html[slides[0].range.clone()]),
         "Line one\n\nLine <two>"
     );
-    assert_eq!(html::find_sections(&converted.html).len(), 2);
+    // PowerPoint's own "Default Section" for the slides before the first does not come back.
+    assert_eq!(html::find_sections(&converted.html).len(), 1);
     assert!(converted.html.contains(r#"data-title="Wrap up""#));
-    assert!(converted.html.contains("left: 96px; top: 48px"));
+    // The first box has a 3px outline, drawn inside its box by CSS and across its edge by PowerPoint.
+    assert!(converted.html.contains("left: 94.5px; top: 46.5px"));
     assert!(converted.html.contains("font-size: 60px"));
     assert_eq!(lint_issues(&converted), []);
 }
@@ -901,4 +903,180 @@ fn matte_recovers_colour_and_transparency() {
         rgba: vec![0, 0, 0, 255],
     };
     assert!(matte(&white, &other).is_err());
+}
+
+/// A deck of one slide holding `item`, exported and imported again, photo included.
+fn through_export(item: Item) -> import::Converted {
+    let scene = Scene {
+        slides: vec![SceneSlide {
+            id: "one".into(),
+            items: vec![item],
+            ..scene().slides[0].clone()
+        }],
+        shots: vec![],
+    };
+    let bytes = package(&scene, &meta(), &HashMap::new(), |src| {
+        (src == "assets/photo.jpg").then(|| b"jpeg".to_vec())
+    })
+    .unwrap();
+    convert(bytes, "x").unwrap()
+}
+
+fn text_item(paragraph: Paragraph) -> Item {
+    Item::Text(TextItem {
+        w: 800.0,
+        h: 80.0,
+        wrap: true,
+        paragraphs: vec![paragraph],
+        ..TextItem::default()
+    })
+}
+
+fn raised() -> Item {
+    text_item(Paragraph {
+        runs: vec![
+            run("E=mc"),
+            Run {
+                baseline: 30.0,
+                ..run("2")
+            },
+        ],
+        ..Paragraph::default()
+    })
+}
+
+#[test]
+fn raised_text_is_sized_for_powerpoint_to_shrink_and_comes_back_the_same() {
+    let scene = Scene {
+        slides: vec![SceneSlide {
+            id: "one".into(),
+            items: vec![raised()],
+            ..scene().slides[0].clone()
+        }],
+        shots: vec![],
+    };
+    let parts = read_parts(package(&scene, &meta(), &HashMap::new(), |_| None).unwrap());
+    let slide = text_of(&parts, "ppt/slides/slide1.xml");
+    assert!(slide.contains(r#"sz="4500""#), "30pt becomes 45pt");
+    assert!(slide.contains(r#"baseline="30000""#));
+
+    let html = through_export(raised()).html;
+    assert!(html.contains("font-size: 60px"), "the size it was");
+    assert!(html.contains("vertical-align: 0.45em; line-height: 0"));
+    assert!(!html.contains("font-size: 90px"));
+}
+
+#[test]
+fn highlights_come_back_behind_their_words() {
+    let html = through_export(text_item(Paragraph {
+        runs: vec![Run {
+            highlight: Some([255.0, 229.0, 138.0, 1.0]),
+            ..run("marked")
+        }],
+        ..Paragraph::default()
+    }))
+    .html;
+    assert!(html.contains("background-color: #ffe58a"));
+}
+
+#[test]
+fn a_paragraph_is_sized_like_its_text_so_wrapped_lines_keep_their_height() {
+    let html = through_export(text_item(Paragraph {
+        line_height: Some(84.0),
+        runs: vec![run("Long text")],
+        ..Paragraph::default()
+    }))
+    .html;
+    let block = html.split("<p ").nth(1).unwrap();
+    let block = &block[..block.find('>').unwrap()];
+    assert!(block.contains("line-height: 84px"), "{block}");
+    assert!(block.contains("font-size: 60px"), "{block}");
+    assert!(block.contains("font-family: &quot;Inter&quot;"), "{block}");
+}
+
+#[test]
+fn numbers_carry_on_across_separate_text_boxes() {
+    let number = |start| Bullet {
+        number: Some("decimal".into()),
+        start,
+        ..Bullet::default()
+    };
+    let html = through_export(text_item(Paragraph {
+        bullet: Some(number(Some(3))),
+        runs: vec![run("Third")],
+        ..Paragraph::default()
+    }))
+    .html;
+    assert!(html.contains(r#"<ol start="3""#), "{html}");
+}
+
+#[test]
+fn rounded_and_outlined_pictures_keep_their_look_and_size() {
+    let picture = ImageItem {
+        src: "assets/photo.jpg".into(),
+        x: 100.0,
+        y: 100.0,
+        w: 400.0,
+        h: 200.0,
+        radius: 20.0,
+        border: Some(Border {
+            color: [255.0, 255.0, 255.0, 1.0],
+            width: 6.0,
+            dash: None,
+        }),
+        opacity: 1.0,
+        ..ImageItem::default()
+    };
+    let scene = Scene {
+        slides: vec![SceneSlide {
+            id: "one".into(),
+            items: vec![Item::Image(picture.clone())],
+            ..scene().slides[0].clone()
+        }],
+        shots: vec![],
+    };
+    let parts =
+        read_parts(package(&scene, &meta(), &HashMap::new(), |_| Some(b"jpeg".to_vec())).unwrap());
+    let slide = text_of(&parts, "ppt/slides/slide1.xml");
+    assert!(slide.contains(r#"prst="roundRect""#));
+    assert!(slide.contains("<a:ln w="), "{slide}");
+
+    let html = through_export(Item::Image(picture)).html;
+    assert!(html.contains("border-radius: 20px"), "{html}");
+    assert!(html.contains("border: 6px solid #ffffff"), "{html}");
+    assert!(html.contains("box-sizing: border-box"), "{html}");
+}
+
+#[test]
+fn an_outline_centred_on_a_shapes_edge_grows_the_css_box_it_is_drawn_inside() {
+    let html = through_export(Item::Box(BoxItem {
+        x: 100.0,
+        y: 100.0,
+        w: 400.0,
+        h: 200.0,
+        fill: Some(Fill {
+            color: Some([255.0, 255.0, 255.0, 1.0]),
+            gradient: None,
+        }),
+        border: Some(Border {
+            color: [0.0, 0.0, 0.0, 1.0],
+            width: 4.0,
+            dash: None,
+        }),
+        opacity: 1.0,
+        ..BoxItem::default()
+    }))
+    .html;
+    assert!(
+        html.contains("left: 98px; top: 98px; width: 404px; height: 204px"),
+        "{html}"
+    );
+}
+
+#[test]
+fn cropped_pictures_may_be_taller_than_their_frame() {
+    assert!(convert(exported(), "x")
+        .unwrap()
+        .html
+        .contains(".ppt-crop img { position: absolute; max-width: none; max-height: none; }"));
 }

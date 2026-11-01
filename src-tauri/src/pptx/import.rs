@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use super::xml::{self, Node};
-use super::CANVAS_LONG_SIDE;
+use super::{CANVAS_LONG_SIDE, DEFAULT_SECTION};
 use crate::deck;
 use crate::error::{Error, Result};
 use crate::html;
@@ -41,7 +41,7 @@ const SHELL_CSS: &str = r#"
     .ppt-text ul, .ppt-text ol { margin: 0; padding: 0; }
     .ppt-text a { color: inherit; }
     .ppt-crop { overflow: hidden; }
-    .ppt-crop img { position: absolute; max-width: none; }
+    .ppt-crop img { position: absolute; max-width: none; max-height: none; }
     .ppt-table { border-collapse: collapse; table-layout: fixed; }
     .ppt-table td { vertical-align: top; overflow-wrap: break-word; }
     .ppt-table p { margin: 0; }
@@ -448,6 +448,8 @@ struct RunStyle {
     /// Percent of the size raised (or lowered).
     baseline: Option<f64>,
     color: Option<Color>,
+    /// The colour behind the text.
+    highlight: Option<Color>,
     font: Option<String>,
 }
 
@@ -538,6 +540,9 @@ fn apply_run(style: &mut RunStyle, node: &Node, ctx: &Palette) {
         if let Some(color) = ctx.color(fill) {
             style.color = Some(color);
         }
+    }
+    if let Some(color) = node.child("highlight").and_then(|h| ctx.color(h)) {
+        style.highlight = Some(color);
     }
     if let Some(fill) = node.child("gradFill") {
         if let Some(color) = fill.find("gs").and_then(|gs| ctx.color(gs)) {
@@ -1120,8 +1125,11 @@ impl Converter {
 
     fn run_css(&self, style: &RunStyle, scale: f64) -> String {
         let mut css = Vec::new();
+        let raised = style.baseline.filter(|b| *b != 0.0);
+        // PowerPoint draws raised text smaller, at two thirds of its size.
+        let shrink = if raised.is_some() { 2.0 / 3.0 } else { 1.0 };
         if let Some(size) = style.size {
-            let px = self.pt(size * scale);
+            let px = self.pt(size * scale * shrink);
             css.push(format!("font-size: {px}px"));
         }
         if let Some(bold) = style.bold {
@@ -1152,8 +1160,15 @@ impl Converter {
         if let Some(font) = &style.font {
             css.push(format!("font-family: {}", font_family(font)));
         }
-        if let Some(baseline) = style.baseline.filter(|b| *b != 0.0) {
-            css.push(format!("vertical-align: {}%", round(baseline, 1)));
+        if let Some(color) = style.highlight {
+            css.push(format!("background-color: {}", color.css()));
+        }
+        // No line height, so that the raised text does not make its line taller.
+        if let Some(baseline) = raised {
+            css.push(format!(
+                "vertical-align: {}em; line-height: 0",
+                round(baseline / 100.0 / shrink, 3)
+            ));
         }
         css.join("; ")
     }
@@ -1305,6 +1320,16 @@ impl Converter {
                 css.push(format!("margin-bottom: {}px", self.pt(after)));
             }
 
+            // The block is sized like its text, or its strut would make wrapped lines taller.
+            let strut = self.run_css(
+                &RunStyle {
+                    size: first.size,
+                    font: first.font.clone(),
+                    ..RunStyle::default()
+                },
+                font_scale,
+            );
+
             let bullet = style
                 .bullet
                 .clone()
@@ -1321,6 +1346,8 @@ impl Converter {
                 }
                 if empty {
                     css.push(format!("font-size: {}px", self.pt(size)));
+                } else if !strut.is_empty() {
+                    css.push(strut);
                 }
                 let attr = if css.is_empty() {
                     String::new()
@@ -1383,6 +1410,7 @@ impl Converter {
                 &RunStyle {
                     size: first.size,
                     color: first.color,
+                    font: first.font.clone(),
                     ..RunStyle::default()
                 },
                 font_scale,
@@ -1619,6 +1647,7 @@ impl Converter {
         let gradient_id = format!("ppt-gradient-{}", self.gradients);
         let has_paint = fill != Fill::None || line.is_some();
         let mut css_extra = String::new();
+        let mut has_css_border = false;
         if has_paint {
             let svg_path = match (geometry, custom) {
                 (_, Some(c)) => self.custom_path(c, bx),
@@ -1653,6 +1682,7 @@ impl Converter {
                     }
                 }
                 if let Some(l) = &line {
+                    has_css_border = true;
                     css_extra.push_str(&format!(
                         "; border: {}px {} {}",
                         self.px(l.width).max(1.0),
@@ -1740,7 +1770,21 @@ impl Converter {
             } else {
                 "ppt-el ppt-text"
             };
-            let mut css = self.box_css(if text_html.is_empty() { bx } else { text_only });
+            // PowerPoint centres an outline on the shape's edge; CSS draws it inside the box.
+            let outset = |b: Box2| match line
+                .as_ref()
+                .filter(|_| !css_extra.is_empty() && has_css_border)
+            {
+                Some(l) => Box2 {
+                    x: b.x - l.width / 2.0,
+                    y: b.y - l.width / 2.0,
+                    w: b.w + l.width,
+                    h: b.h + l.width,
+                    ..b
+                },
+                None => b,
+            };
+            let mut css = self.box_css(outset(if text_html.is_empty() { bx } else { text_only }));
             css.push_str(&css_extra);
             if !text_css.is_empty() {
                 css.push_str("; ");
@@ -1829,12 +1873,46 @@ impl Converter {
             .and_then(|c| c.attr("descr"))
             .map(escape)
             .unwrap_or_default();
-        let mut css = self.box_css(bx);
+        let mut extra = String::new();
         if let Some(amount) = blip.child("alphaModFix").and_then(|a| a.num("amt")) {
-            css.push_str(&format!("; opacity: {}", round(amount / 100_000.0, 3)));
+            extra.push_str(&format!("; opacity: {}", round(amount / 100_000.0, 3)));
         }
-        if pic.at(&["spPr", "prstGeom"]).and_then(|g| g.attr("prst")) == Some("ellipse") {
-            css.push_str("; border-radius: 50%");
+        match pic.at(&["spPr", "prstGeom"]).and_then(|g| g.attr("prst")) {
+            Some("ellipse") => extra.push_str("; border-radius: 50%"),
+            Some("roundRect") => {
+                let share = adjust(pic.child("spPr").unwrap_or(pic), "adj", 0.16667);
+                let radius = bx.w.abs().min(bx.h.abs()) * share;
+                extra.push_str(&format!("; border-radius: {}px", self.px(radius)));
+            }
+            _ => {}
+        }
+        let extra_css = Some(extra);
+        let outline = {
+            let palette = chain.palette();
+            self.line_of(pic.at(&["spPr", "ln"]), None, &palette)
+        };
+        let mut bx = bx;
+        if let Some(line) = &outline {
+            // On the edge in PowerPoint; inside the box in CSS.
+            bx = Box2 {
+                x: bx.x - line.width / 2.0,
+                y: bx.y - line.width / 2.0,
+                w: bx.w + line.width,
+                h: bx.h + line.width,
+                ..bx
+            };
+        }
+        let mut css = self.box_css(bx);
+        if let Some(rest) = extra_css.as_deref() {
+            css.push_str(rest);
+        }
+        if let Some(line) = &outline {
+            css.push_str(&format!(
+                "; border: {}px {} {}; box-sizing: border-box",
+                self.px(line.width).max(1.0),
+                line.dash.unwrap_or("solid"),
+                line.color.css()
+            ));
         }
         let crop = |name: &str| {
             fill.child("srcRect")
@@ -2564,7 +2642,10 @@ pub(super) fn convert(bytes: Vec<u8>, fallback: &str) -> Result<Converted> {
             converter.tree_html(&chain, slide, tree, Frame::IDENTITY, &mut shapes, true, 0);
         }
 
-        if let Some(name) = sections.get(sld_id) {
+        let section = sections
+            .get(sld_id)
+            .filter(|name| index > 0 || name.as_str() != DEFAULT_SECTION);
+        if let Some(name) = section {
             body.push_str(&format!(
                 "    <div class=\"deck-section\" data-title=\"{}\"></div>\n",
                 escape(name)

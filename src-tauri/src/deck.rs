@@ -31,6 +31,7 @@ use crate::error::{Error, Result};
 use crate::find;
 use crate::html;
 use crate::lint;
+use crate::music;
 use crate::narration;
 use crate::review::{self, Review};
 use crate::sessions;
@@ -101,6 +102,8 @@ pub struct Deck {
     pub size: SizeInfo,
     /// The voice and language its narration is said in (see [`crate::narration`]).
     pub narration: narration::Settings,
+    /// The background music played under the show (see [`crate::music`]).
+    pub music: Option<music::Settings>,
 }
 
 /// `~/Documents/SlopSlide`, where decks lived before workspaces; the default workspace.
@@ -288,6 +291,7 @@ pub fn load(file: &Path) -> Result<Deck> {
         template: html::template(&source),
         size: html::slide_size(&source).into(),
         narration: narration::Settings::of(&source),
+        music: music::Settings::of(&source),
         sections: section_spans
             .iter()
             .enumerate()
@@ -594,6 +598,48 @@ pub fn set_narration_language(file: &Path, language: &str) -> Result<Deck> {
         Ok((html::set_narration_language(s, language), ()))
     })?
     .0)
+}
+
+/// Makes the audio file `source` the deck's background music, copied to its assets. The runtime
+/// is brought up to date, as decks made before there was music have a player that ignores it.
+pub fn set_music(file: &Path, source: &Path) -> Result<Deck> {
+    if !music::supported(&source.to_string_lossy()) {
+        return Err(Error::msg(format!(
+            "Background music must be one of: {}.",
+            music::EXTENSIONS.join(", ")
+        )));
+    }
+    let bytes = fs::read(source)?;
+    let asset = same_or_new_asset(&folder(file).join("assets"), source, &bytes)?;
+    let asset = asset_ref(&asset);
+    Ok(edit(file, |s| {
+        Ok((html::ensure_runtime(&html::set_music(s, Some(&asset))), ()))
+    })?
+    .0)
+}
+
+/// Takes the music out of the deck. Its file stays in the assets, so undoing brings it back.
+pub fn remove_music(file: &Path) -> Result<Deck> {
+    Ok(edit(file, |s| Ok((html::set_music(s, None), ())))?.0)
+}
+
+/// Sets the music's volume, in percent.
+pub fn set_music_volume(file: &Path, volume: u8) -> Result<Deck> {
+    if volume > 100 {
+        return Err(Error::msg(format!("invalid music volume: {volume}")));
+    }
+    Ok(edit(file, |s| Ok((html::set_music_volume(s, volume), ())))?.0)
+}
+
+/// The deck's music as a file and its volume, if it has any.
+pub fn music_track(file: &Path) -> Result<Option<(PathBuf, u8)>> {
+    let source = read_html(file)?;
+    let Some(rel) = html::music(&source) else {
+        return Ok(None);
+    };
+    let rel = percent_encoding::percent_decode_str(&rel).decode_utf8_lossy();
+    let path = resolve_in_deck(folder(file), &rel)?;
+    Ok(Some((path, html::music_volume(&source))))
 }
 
 /// Locks or unlocks a slide. Neither the user nor the agent can change a locked slide.
@@ -927,6 +973,10 @@ pub fn mime_for(path: &str) -> &'static str {
         "mp4" => "video/mp4",
         "webm" => "video/webm",
         "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "wav" => "audio/wav",
+        "flac" => "audio/flac",
+        "ogg" => "audio/ogg",
         "woff" => "font/woff",
         "woff2" => "font/woff2",
         "ttf" => "font/ttf",
@@ -2353,6 +2403,84 @@ mod tests {
     }
 
     #[test]
+    fn music_is_copied_to_the_assets_and_named_in_the_deck() {
+        let deck = TempDeck::new(
+            "<html><head><title>T</title></head><body><main class=\"deck\"><section class=\"slide\" id=\"a\"></section></main></body></html>",
+        );
+        let source = deck.0.join("My Song.MP3");
+        fs::write(&source, b"tune").unwrap();
+
+        let set = set_music(&deck.file(), &source).unwrap();
+        let settings = set.music.unwrap();
+        assert_eq!(settings.file, "assets/my-song.mp3");
+        assert_eq!(settings.volume, music::DEFAULT_VOLUME);
+        assert_eq!(
+            fs::read(deck.0.join("assets/my-song.mp3")).unwrap(),
+            b"tune"
+        );
+        assert!(
+            deck.html().contains("slopslide:runtime-js"),
+            "player that plays it"
+        );
+        assert!(lint(&deck.file(), None)
+            .unwrap()
+            .iter()
+            .all(|i| !i.rule.starts_with("music")));
+
+        let again = set_music(&deck.file(), &source).unwrap();
+        assert_eq!(again.music.unwrap().file, "assets/my-song.mp3", "one copy");
+
+        let louder = set_music_volume(&deck.file(), 80).unwrap();
+        assert_eq!(louder.music.unwrap().volume, 80);
+        assert!(set_music_volume(&deck.file(), 101).is_err());
+        assert_eq!(
+            music_track(&deck.file()).unwrap(),
+            Some((deck.0.join("assets/my-song.mp3"), 80))
+        );
+
+        assert_eq!(remove_music(&deck.file()).unwrap().music, None);
+        assert_eq!(music_track(&deck.file()).unwrap(), None);
+        assert!(!deck.html().contains("<meta name=\"slopslide-music"));
+        assert!(deck.0.join("assets/my-song.mp3").exists(), "for undo");
+    }
+
+    #[test]
+    fn music_must_be_a_supported_file_type() {
+        let deck = TempDeck::new("<html><head></head><body></body></html>");
+        let source = deck.0.join("song.aiff");
+        fs::write(&source, b"tune").unwrap();
+        let message = set_music(&deck.file(), &source).unwrap_err().to_string();
+        assert!(message.contains("mp3, m4a, wav, flac, ogg"), "{message}");
+        assert!(!deck.html().contains("<meta name=\"slopslide-music"));
+    }
+
+    #[test]
+    fn music_outside_the_deck_folder_is_not_read() {
+        let deck = TempDeck::new(
+            "<html><head><meta name=\"slopslide-music\" content=\"../secret.mp3\"></head><body></body></html>",
+        );
+        assert!(music_track(&deck.file()).is_err());
+    }
+
+    #[test]
+    fn export_inlines_the_music() {
+        let deck = TempDeck::new(
+            "<html><head><title>T</title><meta name=\"slopslide-music\" content=\"assets/song.mp3\"></head><body><main class=\"deck\"><section class=\"slide\" id=\"a\"></section></main></body></html>",
+        );
+        fs::create_dir_all(deck.0.join("assets")).unwrap();
+        fs::write(deck.0.join("assets/song.mp3"), b"tune").unwrap();
+        let dest = deck.0.join("out.html");
+        export(&deck.file(), &dest).unwrap();
+        let out = fs::read_to_string(&dest).unwrap();
+        assert!(
+            out.contains(
+                "<meta name=\"slopslide-music\" content=\"data:audio/mpeg;base64,dHVuZQ==\">"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
     fn export_inlines_assets_and_installs_the_runtime() {
         let deck = TempDeck::new(
             "<html><head></head><body><main class=\"deck\"><section class=\"slide\" id=\"a\"><img src=\"assets/dot.png\"><img src=\"assets/missing.png\"><img src=\"assets/../../escape.png\"></section></main></body></html>",
@@ -2390,6 +2518,11 @@ mod tests {
         assert_eq!(mime_for("assets/font.woff2"), "font/woff2");
         assert_eq!(mime_for("assets/clip.webm"), "video/webm");
         assert_eq!(mime_for("assets/data.json"), "application/json");
+        assert_eq!(mime_for("assets/song.mp3"), "audio/mpeg");
+        assert_eq!(mime_for("assets/song.M4A"), "audio/mp4");
+        assert_eq!(mime_for("assets/song.wav"), "audio/wav");
+        assert_eq!(mime_for("assets/song.flac"), "audio/flac");
+        assert_eq!(mime_for("assets/song.ogg"), "audio/ogg");
         assert_eq!(mime_for("assets/x.tar.gz"), "application/octet-stream");
         assert_eq!(mime_for("assets/no-extension"), "application/octet-stream");
         assert_eq!(mime_for(""), "application/octet-stream");

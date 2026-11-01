@@ -51,6 +51,8 @@ describe("Presenter", () => {
     render(<Presenter />);
     expect(frame().getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?v=shell-1&show#outro");
     expect(frame().getAttribute("sandbox")).toBe("allow-scripts");
+    // The deck's background music starts with the show, without a click in the frame.
+    expect(frame().getAttribute("allow")).toBe("autoplay");
   });
 
   it("encodes positional slide ids in the hash", () => {

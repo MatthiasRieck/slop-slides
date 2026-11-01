@@ -33,6 +33,8 @@ Call `lint_deck` with the workspace-relative path of each deck you edit (it defa
   <meta name="slopslide-template" content="swiss">   (only when the deck follows a template)
   <meta name="slopslide-narration-voice" content="aiden">      (only when a voice was chosen)
   <meta name="slopslide-narration-language" content="de">      (only when a language was chosen)
+  <meta name="slopslide-music" content="assets/song.mp3">      (only when the deck has music)
+  <meta name="slopslide-music-volume" content="30">            (only when another volume was chosen)
   <style>
     /* the deck's design system and per-slide layout */
   </style>
@@ -180,6 +182,13 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   language (en, de, fr, es, it, pt, ru, zh, ja or ko; en when missing). Change them only
   when the user asks; the user usually picks them in the Narration panel. Spoken audio lives
   in the deck's `narration/` folder: never edit or delete it.
+- Background music is one audio file played on a loop under the whole presentation, also in
+  exported decks and videos. The `slopslide-music` meta names it as `assets/<file>`, of type
+  mp3, m4a, wav, flac or ogg (Vorbis); `slopslide-music-volume` gives its volume as a
+  whole percentage from 0 to 100, 30 when missing. Add them only when the user asks for
+  music, with a file from the user (copy it into the deck's `assets/`, never hotlink or make
+  one up), and keep them when editing or restyling. Never add `<audio>` elements or scripts
+  for it; the runtime plays it. The user usually picks it in the Narration panel.
 - The user can edit text and move, rotate, tilt (in 3D), and scale elements on the slide by
   hand. Such an element gets a `data-moved` attribute and inline `translate: Xpx Ypx`,
   `rotate: Ndeg`, `scale: N` (or stretched, `scale: X Y`), and/or

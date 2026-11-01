@@ -146,6 +146,10 @@ export function installBrowserMock() {
         case "set_narration_voice":
         case "set_narration_language":
           throw new Error("Narration requires the desktop app.");
+        case "set_music":
+        case "remove_music":
+        case "set_music_volume":
+          throw new Error("Background music requires the desktop app.");
         case "load_chat":
           return JSON.parse(localStorage.getItem(`mock-chat-${String(a.id)}`) ?? "null");
         default:

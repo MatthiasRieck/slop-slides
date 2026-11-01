@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
+use crate::music;
 use crate::size::{self, SlideSize};
 
 const RUNTIME_CSS: &str = include_str!("../assets/runtime.css");
@@ -1169,6 +1170,39 @@ pub fn narration_language(html: &str) -> Option<String> {
 /// Names the narration's language in the deck's `<meta>` (right after `<title>`).
 pub fn set_narration_language(html: &str, language: &str) -> String {
     set_app_meta(html, NARRATION_LANGUAGE_META, Some(language))
+}
+
+/// The app setting naming the deck's background music, `assets/<file>` (see [`crate::music`]).
+pub const MUSIC_META: &str = "slopslide-music";
+/// The app setting giving the music's volume, in whole percent.
+pub const MUSIC_VOLUME_META: &str = "slopslide-music-volume";
+
+/// The music file the deck's `<meta>` names, relative to the deck, if any.
+pub fn music(html: &str) -> Option<String> {
+    app_meta_content(html, MUSIC_META)
+}
+
+/// Names the deck's music in its `<meta>` (right after `<title>`). None removes the music and
+/// its volume.
+pub fn set_music(html: &str, file: Option<&str>) -> String {
+    let html = set_app_meta(html, MUSIC_META, file);
+    match file {
+        Some(_) => html,
+        None => set_app_meta(&html, MUSIC_VOLUME_META, None),
+    }
+}
+
+/// The music's volume in percent, as the player reads it: the default without a valid `<meta>`.
+pub fn music_volume(html: &str) -> u8 {
+    app_meta_content(html, MUSIC_VOLUME_META)
+        .and_then(|content| content.parse::<u8>().ok())
+        .map_or(music::DEFAULT_VOLUME, |volume| volume.min(100))
+}
+
+/// Sets the music's volume in percent in its `<meta>`; the default removes the tag.
+pub fn set_music_volume(html: &str, volume: u8) -> String {
+    let content = (volume != music::DEFAULT_VOLUME).then(|| volume.to_string());
+    set_app_meta(html, MUSIC_VOLUME_META, content.as_deref())
 }
 
 /// `html` without its slides and section markers: the deck's shell (styles, runtime).
@@ -2437,6 +2471,36 @@ mod tests {
     const THREE_SLIDES: &str = "<html><body><main class=\"deck\">\n  <section class=\"slide\" id=\"a\">A</section>\n  <section class=\"slide\" id=\"b\">B</section>\n  <section class=\"slide\" id=\"c\">C</section>\n</main></body></html>";
 
     const STYLED: &str = "<!DOCTYPE html><html><head>\n  <title>Talk</title>\n  <style>.x {}</style>\n</head><body>\n  <main class=\"deck\">\n    <section class=\"slide\" id=\"a\"><h1>Big &amp; bold</h1><p>Revenue grew 42% in Q3.</p></section>\n    <div class=\"deck-section\" data-title=\"Part\"></div>\n    <section class=\"slide\" id=\"b\"><style>.y { content: \"keep\" }</style><!-- note --><p>NASA said: hello</p></section>\n  </main>\n</body></html>";
+
+    #[test]
+    fn reads_and_writes_the_music_metas() {
+        let bare = "<html><head><title>T</title></head><body></body></html>";
+        assert_eq!(music(bare), None);
+        assert_eq!(music_volume(bare), music::DEFAULT_VOLUME);
+
+        let set = set_music_volume(&set_music(bare, Some("assets/song.mp3")), 55);
+        assert_eq!(music(&set).as_deref(), Some("assets/song.mp3"));
+        assert_eq!(music_volume(&set), 55);
+        assert!(set.contains("<meta name=\"slopslide-music\" content=\"assets/song.mp3\">"));
+        assert!(set.contains("<meta name=\"slopslide-music-volume\" content=\"55\">"));
+
+        let default = set_music_volume(&set, music::DEFAULT_VOLUME);
+        assert!(!default.contains(MUSIC_VOLUME_META), "{default}");
+
+        let replaced = set_music(&set, Some("assets/other.flac"));
+        assert_eq!(music(&replaced).as_deref(), Some("assets/other.flac"));
+        assert_eq!(music_volume(&replaced), 55, "the volume stays");
+        assert_eq!(set_music(&set, None), bare, "no trace of the music");
+
+        for (bad, read) in [
+            ("loud", music::DEFAULT_VOLUME),
+            ("400", music::DEFAULT_VOLUME),
+            ("250", 100),
+        ] {
+            let html = set.replace("content=\"55\"", &format!("content=\"{bad}\""));
+            assert_eq!(music_volume(&html), read, "{bad}");
+        }
+    }
 
     #[test]
     fn reads_and_writes_the_template_meta() {

@@ -95,7 +95,8 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   animations follow the video's clock, so every frame is exact however long capturing it takes.
   With **Speak narration**, each slide's narration is said over it (an Opus audio track) after
   a short pause, and the slide stays until the narration and a pause after it end; the set
-  seconds become the least a slide is shown.
+  seconds become the least a slide is shown. The deck's background music plays under it,
+  looped and fading out at the end (mono, like the narration track).
 - **Marks and comments:** the View mode's second row has a pen, a highlighter and an eraser for
   marking up the slide, and the comment tool: click an element (or the slide) and write what
   should change. Comments show as numbered pins that follow their element; click a pin to change
@@ -113,6 +114,10 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   arrows runs the show by itself, speaking each slide's narration with the video export's
   timing. Speaking needs macOS or Linux (with OpenBLAS); Windows builds can write narration
   but not speak it yet.
+- **Background music:** the Narration mode can add one audio file (MP3, M4A, WAV, FLAC or Ogg
+  Vorbis) to a deck, with its volume. It is copied to the deck's `assets/` and loops under
+  the show when presenting, in exported HTML files and in videos; M mutes it. Browsers may
+  hold it back until the first key press or click on an exported file.
 
 Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.
 

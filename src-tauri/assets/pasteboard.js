@@ -9,8 +9,8 @@
    invisible layer the deck spreads over the slide), and from links and other controls. The slide's frame (outline and shadow) moves with it.
    The view is reported as { type: "slop:view", slide, x, y, k } (pan in px, zoom) and restored
    with { type: "slop:camera", x, y, k } or { type: "slop:camera", home: true }. The app also
-   sends { type: "slop:canvas", color, accent }: the color of the panel around the slide and its
-   accent color, which the editor uses to dim what lies outside the slide and mark edit mode.
+   sends { type: "slop:canvas", color, accent, ... }: the color of the panel around the slide and
+   the palette's colors (src/index.css) as `--slop-*`, for what the preview and the editor draw.
    A press on the preview while it lacks keyboard focus posts { type: "slop:focus" }, and the
    app focuses the preview.
 
@@ -49,6 +49,20 @@
 
   var deck = slide.parentElement;
   var root = document.documentElement;
+  // What { type: "slop:canvas" } can carry, and the variable each one sets.
+  var PALETTE = {
+    accent: "--slop-accent",
+    border: "--slop-border",
+    danger: "--slop-danger",
+    guide: "--slop-guide",
+    handle: "--slop-handle",
+    handleForeground: "--slop-handle-foreground",
+    overlay: "--slop-overlay",
+    overlayForeground: "--slop-overlay-foreground",
+    scrim: "--slop-scrim",
+    search: "--slop-search",
+    searchActive: "--slop-search-active",
+  };
   // The stage's size in slide pixels: the deck's slide size.
   var STAGE_W = deck.offsetWidth || 1920;
   var STAGE_H = deck.offsetHeight || 1080;
@@ -70,7 +84,7 @@
     style.textContent =
       "html, body { background: transparent !important; }" +
       "[data-slop-frame] { position: fixed; z-index: 2147483645; pointer-events: none; box-sizing: border-box;" +
-      " box-shadow: 0 20px 50px -24px rgba(0, 0, 0, 0.45); outline: 1px solid var(--slop-border, rgba(0, 0, 0, 0.1)); }";
+      " box-shadow: 0 20px 50px -24px var(--slop-scrim); outline: 1px solid var(--slop-border); }";
     document.head.appendChild(style);
     frame = document.createElement("div");
     frame.setAttribute("data-slop-frame", "");
@@ -620,11 +634,15 @@
   if (!show) {
     var marks = document.createElement("style");
     marks.textContent =
-      "::highlight(slop-search) { background-color: #fde047; color: #000; }" +
-      "::highlight(slop-search-active) { background-color: #fb923c; color: #000; }" +
+      // Until the app sends its palette.
+      ":root { --slop-canvas: #f5f5f5; --slop-accent: oklch(0.488 0.217 264); --slop-border: #e5e5e5; --slop-danger: #e7000b;" +
+      " --slop-guide: #ec4899; --slop-handle: #fff; --slop-handle-foreground: #000; --slop-overlay: rgb(23 23 23 / 85%);" +
+      " --slop-overlay-foreground: #fff; --slop-scrim: rgb(0 0 0 / 50%); --slop-search: #fde047; --slop-search-active: #fb923c; }" +
+      "::highlight(slop-search) { background-color: var(--slop-search); color: var(--slop-handle-foreground); }" +
+      "::highlight(slop-search-active) { background-color: var(--slop-search-active); color: var(--slop-handle-foreground); }" +
       "html[data-slop-commenting], html[data-slop-commenting] * { cursor: crosshair !important; user-select: none !important; -webkit-user-select: none !important; }" +
       "[data-slop-comment-hover] { position: fixed; z-index: 2147483646; pointer-events: none; box-sizing: border-box; border-radius: 2px;" +
-      " outline: 2px solid var(--slop-accent, #2563eb); background: color-mix(in srgb, var(--slop-accent, #2563eb) 12%, transparent); }";
+      " outline: 2px solid var(--slop-accent); background: color-mix(in srgb, var(--slop-accent) 12%, transparent); }";
     document.head.appendChild(marks);
   }
 
@@ -642,8 +660,9 @@
       else if ([data.x, data.y, data.k].every(Number.isFinite)) setCamera(data.x, data.y, data.k);
     } else if (data.type === "slop:canvas") {
       if (typeof data.color === "string") root.style.setProperty("--slop-canvas", data.color);
-      if (typeof data.accent === "string") root.style.setProperty("--slop-accent", data.accent);
-      if (typeof data.border === "string") root.style.setProperty("--slop-border", data.border);
+      Object.keys(PALETTE).forEach(function (key) {
+        if (typeof data[key] === "string") root.style.setProperty(PALETTE[key], data[key]);
+      });
     }
   });
 })();

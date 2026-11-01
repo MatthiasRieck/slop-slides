@@ -604,6 +604,32 @@ describe("pasteboard", () => {
     ]).toEqual(["rgb(1, 2, 3)", "rgb(4, 5, 6)", "rgb(7, 8, 9)"]);
   });
 
+  it("sets every palette color the app sends, and has its own until then", () => {
+    const p = pasteboard();
+    const css = [...p.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
+    const palette: Record<string, string> = {
+      danger: "--slop-danger",
+      guide: "--slop-guide",
+      handle: "--slop-handle",
+      handleForeground: "--slop-handle-foreground",
+      overlay: "--slop-overlay",
+      overlayForeground: "--slop-overlay-foreground",
+      scrim: "--slop-scrim",
+      search: "--slop-search",
+      searchActive: "--slop-search-active",
+    };
+    p.fromParent({
+      type: "slop:canvas",
+      ...Object.fromEntries(Object.keys(palette).map((key) => [key, "rgb(1, 2, 3)"])),
+    });
+    for (const variable of Object.values(palette)) {
+      expect(css).toContain(`${variable}: `);
+      expect(p.doc.documentElement.style.getPropertyValue(variable)).toBe("rgb(1, 2, 3)");
+    }
+    p.fromParent({ type: "slop:canvas", danger: 3 });
+    expect(p.doc.documentElement.style.getPropertyValue("--slop-danger")).toBe("rgb(1, 2, 3)");
+  });
+
   describe("in a show", () => {
     // The window is 2560×1440, so the player fits the slide at 4/3 scale, filling it.
     it("starts with the slide fit to the window, drawing nothing around it", () => {

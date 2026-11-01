@@ -83,7 +83,7 @@ export function SketchToolbar(props: {
               aria-pressed={colors[tool] === color}
               onClick={() => setColor(color)}
               className={cn(
-                "size-3.5 rounded-full border border-black/15 dark:border-white/30",
+                "size-3.5 rounded-full border border-foreground/20",
                 colors[tool] === color && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-background",
               )}
               style={{ background: color }}

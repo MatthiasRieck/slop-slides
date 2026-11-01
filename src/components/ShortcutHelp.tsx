@@ -101,7 +101,7 @@ export function ShortcutHelp() {
   return (
     <div
       data-testid="shortcut-help-backdrop"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) close();
       }}

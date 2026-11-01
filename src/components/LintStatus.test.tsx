@@ -47,7 +47,7 @@ describe("lint status", () => {
   it("uses the warning style when there are only warnings", () => {
     useApp.setState({ lint: [issues[1]!, issues[1]!] });
     render(<LintStatus />);
-    expect(screen.getByRole("button", { name: /Lint: 2 warnings/ }).className).toContain("text-amber-600");
+    expect(screen.getByRole("button", { name: /Lint: 2 warnings/ }).className).toContain("text-warning");
   });
 
   it("fills the chat composer with fix instructions when clicked", () => {

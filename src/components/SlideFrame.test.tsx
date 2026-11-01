@@ -147,7 +147,7 @@ describe("SlideFrame", () => {
     const box = () => container.firstElementChild as HTMLElement;
     expect(frames(container)[0]!.getAttribute("src")).not.toContain("pan");
     expect(box().style.overflow).toBe("hidden");
-    expect(box().style.background).toBe("rgb(0, 0, 0)");
+    expect(box().style.background).toBe("var(--stage)");
     rerender(<SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" thumbnail arena={arena} />);
     const thumb = frames(container).at(-1)!;
     expect(thumb.getAttribute("src")).not.toContain("pan");

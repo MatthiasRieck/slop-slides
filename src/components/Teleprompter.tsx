@@ -13,7 +13,7 @@ export type TeleprompterPhase = "off" | "offer" | "downloading" | "starting" | "
 /** Where the speaker's line stays as the script scrolls: a third of the way down. */
 const LINE_AT = 1 / 3;
 
-const pieceClass = (piece: Piece) => (piece.said ? "text-white/40" : "");
+const pieceClass = (piece: Piece) => (piece.said ? "text-foreground/40" : "");
 
 /**
  * Turns the teleprompter on and off: the microphone is on only while it is following, and the
@@ -135,15 +135,15 @@ export function TeleprompterNotice({
   const { phase, modelBytes, progress, error } = teleprompter;
   if (error)
     return (
-      <p role="alert" className="shrink-0 rounded-lg bg-red-500/15 p-2 text-red-300 text-xs">
+      <p role="alert" className="shrink-0 rounded-lg bg-destructive/15 p-2 text-destructive text-xs">
         {error}
       </p>
     );
   if (phase === "offer")
     return (
-      <div className="shrink-0 rounded-lg bg-white/5 p-2 text-xs">
+      <div className="shrink-0 rounded-lg bg-foreground/5 p-2 text-xs">
         <p className="font-medium">Download the speech model?</p>
-        <p className="mt-1 text-white/60">
+        <p className="mt-1 text-foreground/60">
           {purpose} The model ({formatBytes(modelBytes)}) is downloaded once to ~/.slopslides/models.
         </p>
         <div className="mt-2 flex justify-end gap-1.5">
@@ -151,7 +151,7 @@ export function TeleprompterNotice({
             type="button"
             onMouseDown={(event) => event.preventDefault()}
             onClick={teleprompter.decline}
-            className="rounded-md px-2 py-1 text-white/70 hover:bg-white/10 hover:text-white"
+            className="rounded-md px-2 py-1 text-foreground/70 hover:bg-foreground/10 hover:text-foreground"
           >
             Not now
           </button>
@@ -159,7 +159,7 @@ export function TeleprompterNotice({
             type="button"
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => void teleprompter.download()}
-            className="rounded-md bg-white px-2 py-1 text-neutral-950 hover:opacity-90"
+            className="rounded-md bg-foreground px-2 py-1 text-background hover:opacity-90"
           >
             Download
           </button>
@@ -168,7 +168,7 @@ export function TeleprompterNotice({
     );
   if (phase === "downloading")
     return (
-      <p className="shrink-0 rounded-lg bg-white/5 p-2 text-white/60 text-xs tabular-nums">
+      <p className="shrink-0 rounded-lg bg-foreground/5 p-2 text-foreground/60 text-xs tabular-nums">
         Downloading the speech model…
         {progress ? ` ${formatBytes(progress.received)} of ${formatBytes(progress.total)}` : ""}
       </p>

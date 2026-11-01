@@ -38,7 +38,7 @@ export function PresenterWindow() {
 
   if (!state)
     return (
-      <div className="flex h-screen items-center justify-center bg-neutral-950 text-white/50 text-sm">
+      <div className="dark flex h-screen items-center justify-center bg-background text-foreground/50 text-sm">
         Waiting for the show…
       </div>
     );

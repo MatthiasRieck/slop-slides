@@ -29,7 +29,7 @@ export function LintStatus() {
         type="button"
         title={`${file} passes lint. Click to check again.`}
         onClick={() => void useApp.getState().refreshLint()}
-        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-emerald-600 hover:bg-accent"
+        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-success hover:bg-accent"
       >
         <CheckCircle2 className="size-3.5" />
         Lint OK
@@ -57,7 +57,7 @@ export function LintStatus() {
       onClick={() => useApp.getState().fillComposer(lintFixPrompt(lint, file))}
       className={cn(
         "flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium hover:bg-accent disabled:opacity-50",
-        errors > 0 ? "text-destructive" : "text-amber-600",
+        errors > 0 ? "text-destructive" : "text-warning",
       )}
     >
       <Icon className="size-3.5" />

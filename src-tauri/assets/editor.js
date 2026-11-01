@@ -204,15 +204,15 @@
     // The slide shows what runs past its edge.
     ".deck, .deck > .slide.active { overflow: visible !important; }" +
     ".deck > .slide.active, .deck > .slide.active * { -webkit-user-select: none; user-select: none; }" +
-    "[data-slop-hover] { outline: 3px dashed rgba(59, 130, 246, 0.7) !important; outline-offset: 4px; }" +
+    "[data-slop-hover] { outline: 3px dashed color-mix(in srgb, var(--slop-accent) 70%, transparent) !important; outline-offset: 4px; }" +
     // The selection frame is drawn by the handle overlay, so it keeps its size on screen.
     "[data-slop-selected] { cursor: move !important; }" +
-    "[data-slop-editing] { outline: 3px solid #3b82f6 !important; outline-offset: 4px; }" +
+    "[data-slop-editing] { outline: 3px solid var(--slop-accent) !important; outline-offset: 4px; }" +
     "[data-slop-ui] { position: fixed; z-index: 2147483647; pointer-events: none; box-sizing: border-box;" +
-    " outline: 2px solid #3b82f6; }" +
+    " outline: 2px solid var(--slop-accent); }" +
     "[data-slop-ui] * { position: absolute; box-sizing: border-box; }" +
-    "[data-slop-ui] [data-handle] { pointer-events: auto; background: #fff;" +
-    " border: 2px solid #3b82f6; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); touch-action: none;" +
+    "[data-slop-ui] [data-handle] { pointer-events: auto; background: var(--slop-handle);" +
+    " border: 2px solid var(--slop-accent); box-shadow: 0 1px 3px var(--slop-scrim); touch-action: none;" +
     " width: 16px; height: 16px; }" +
     "[data-slop-ui] [data-handle=scale] { border-radius: 3px; }" +
     "[data-slop-ui] [data-axis] { border-radius: 8px; }" +
@@ -226,23 +226,23 @@
     // A line's points, in place of the frame and handles.
     "[data-slop-points] { position: fixed; inset: 0; z-index: 2147483647; pointer-events: none; }" +
     "[data-slop-points] > * { position: absolute; box-sizing: border-box; pointer-events: auto; touch-action: none; cursor: move;" +
-    " width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: #fff; border: 2px solid #3b82f6;" +
-    " box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); }" +
-    "[data-slop-points] > [data-point=add] { width: 10px; height: 10px; margin: -5px 0 0 -5px; background: #3b82f6;" +
-    " border-color: #fff; cursor: crosshair; }" +
+    " width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: var(--slop-handle); border: 2px solid var(--slop-accent);" +
+    " box-shadow: 0 1px 3px var(--slop-scrim); }" +
+    "[data-slop-points] > [data-point=add] { width: 10px; height: 10px; margin: -5px 0 0 -5px; background: var(--slop-accent);" +
+    " border-color: var(--slop-handle); cursor: crosshair; }" +
     "[data-slop-overflow] { position: fixed; inset: 0; z-index: 2147483646; pointer-events: none; }" +
     "[data-slop-overflow][data-quiet] { display: none; }" +
     "[data-slop-overflow] > * { position: absolute; box-sizing: border-box; }" +
-    "[data-slop-overflow] > [data-wire] { outline: 3px dashed #ef4444; outline-offset: -1px; background: rgba(239, 68, 68, 0.08); }" +
+    "[data-slop-overflow] > [data-wire] { outline: 3px dashed var(--slop-danger); outline-offset: -1px; background: color-mix(in srgb, var(--slop-danger) 8%, transparent); }" +
     // The slide's frame marks edit mode, and dims everything outside the slide.
-    "[data-slop-frame] { outline: 2px solid var(--slop-accent, #3b82f6); outline-offset: 4px; box-shadow: 0 0 0 9999px" +
-    " color-mix(in srgb, var(--slop-canvas, #f4f4f5) 55%, transparent); }" +
+    "[data-slop-frame] { outline: 2px solid var(--slop-accent); outline-offset: 4px; box-shadow: 0 0 0 9999px" +
+    " color-mix(in srgb, var(--slop-canvas) 55%, transparent); }" +
     // A drawing or shape tool draws wherever the pointer goes.
     "html[data-slop-tool], html[data-slop-tool] * { cursor: crosshair !important; }" +
     "html[data-slop-tool=text], html[data-slop-tool=text] * { cursor: text !important; }" +
     "html[data-slop-tool=paint], html[data-slop-tool=paint] * { cursor: copy !important; }" +
     "[data-slop-ui] > [data-stem] { pointer-events: none; width: 2px; height: 32px; margin: 0 0 0 -1px;" +
-    " left: 50%; top: -32px; border: 0; box-shadow: none; background: #3b82f6; }" +
+    " left: 50%; top: -32px; border: 0; box-shadow: none; background: var(--slop-accent); }" +
     // While typing, overlays (like invisible hover zones) let clicks through to the text.
     ".deck > .slide.active[data-slop-typing] * { pointer-events: none !important; }" +
     ".deck > .slide.active[data-slop-typing] [data-slop-editing]," +
@@ -2720,11 +2720,11 @@
   style.textContent +=
     "[data-slop-multi], [data-slop-guides] { position: fixed; inset: 0; z-index: 2147483646; pointer-events: none; }" +
     "[data-slop-multi] > *, [data-slop-guides] > * { position: absolute; box-sizing: border-box; }" +
-    "[data-slop-multi] > * { outline: 2px solid #3b82f6; }" +
-    "[data-slop-guides] > * { background: #ec4899; }" +
+    "[data-slop-multi] > * { outline: 2px solid var(--slop-accent); }" +
+    "[data-slop-guides] > * { background: var(--slop-guide); }" +
     "[data-slop-marquee], [data-slop-readout] { position: fixed; z-index: 2147483647; pointer-events: none; box-sizing: border-box; }" +
-    "[data-slop-marquee] { border: 1px solid #3b82f6; background: rgba(59, 130, 246, 0.12); }" +
-    "[data-slop-readout] { padding: 2px 6px; border-radius: 4px; background: rgba(17, 17, 17, 0.85); color: #fff;" +
+    "[data-slop-marquee] { border: 1px solid var(--slop-accent); background: color-mix(in srgb, var(--slop-accent) 12%, transparent); }" +
+    "[data-slop-readout] { padding: 2px 6px; border-radius: 4px; background: var(--slop-overlay); color: var(--slop-overlay-foreground);" +
     " font: 12px/1.4 system-ui, sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; }";
 
   function overlay(attr) {

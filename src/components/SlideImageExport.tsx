@@ -102,7 +102,7 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
     <div
       role="dialog"
       aria-label="Saving slide images"
-      className="fixed inset-0 z-50 flex flex-col bg-neutral-950 text-white"
+      className="dark fixed inset-0 z-50 flex flex-col bg-background text-foreground"
     >
       <div ref={areaRef} className="flex min-h-0 flex-1 items-center justify-center p-6">
         {slide && (
@@ -117,7 +117,7 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
           </div>
         )}
       </div>
-      <div className="flex h-12 shrink-0 items-center justify-center gap-3 text-sm text-white/80">
+      <div className="flex h-12 shrink-0 items-center justify-center gap-3 text-sm text-foreground/80">
         <Loader2 className="size-4 shrink-0 animate-spin will-change-transform" />
         <span className="tabular-nums" style={{ minWidth: `${14 + 2 * String(total).length}ch` }}>
           Saving slide {Math.min(index + 1, total)} of {total}…
@@ -125,7 +125,7 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
         <button
           type="button"
           onClick={cancel}
-          className="rounded-md border border-white/20 px-2.5 py-1 text-xs font-medium hover:bg-white/10"
+          className="rounded-md border border-foreground/20 px-2.5 py-1 text-xs font-medium hover:bg-foreground/10"
         >
           Cancel
         </button>

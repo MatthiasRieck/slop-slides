@@ -138,7 +138,7 @@ export function Presenter() {
   if (!deck) return null;
   const hash = startRef.current ? `#${encodeURIComponent(startRef.current)}` : "";
   return (
-    <div className="fixed inset-0 z-50 flex bg-black">
+    <div className="fixed inset-0 z-50 flex bg-stage">
       <div className="relative min-w-0 flex-1 overflow-hidden">
         {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: The load handler focuses the presentation for keyboard navigation. */}
         <iframe
@@ -163,7 +163,7 @@ export function Presenter() {
             // Keep keyboard focus where it was, so Space still advances the slide.
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => fitSlide(frameRef.current)}
-            className="absolute right-44 bottom-4 z-10 flex items-center gap-1.5 rounded-xl border border-white/10 bg-neutral-900/85 px-2.5 py-1.5 text-xs text-white/80 tabular-nums shadow-lg backdrop-blur hover:text-white [&_svg]:size-3.5"
+            className="dark absolute right-44 bottom-4 z-10 flex items-center gap-1.5 rounded-xl border border-foreground/10 bg-overlay px-2.5 py-1.5 text-xs text-foreground/80 tabular-nums shadow-lg backdrop-blur hover:text-foreground [&_svg]:size-3.5"
           >
             <Maximize />
             {Math.round(zoom.k * 100)}%
@@ -200,7 +200,7 @@ export function Presenter() {
               onClick={onClick}
               data-visible={nav.visible}
               className={cn(
-                "flex size-9 items-center justify-center rounded-xl border border-white/10 bg-neutral-900/85 text-white/80 shadow-lg backdrop-blur transition-opacity duration-200 hover:text-white [&_svg]:size-5",
+                "dark flex size-9 items-center justify-center rounded-xl border border-foreground/10 bg-overlay text-foreground/80 shadow-lg backdrop-blur transition-opacity duration-200 hover:text-foreground [&_svg]:size-5",
                 // While playing, the pause button stays in view.
                 nav.visible || label === "Pause" ? "opacity-100" : "opacity-0",
               )}

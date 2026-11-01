@@ -2,24 +2,64 @@
 
 @custom-variant dark (&:is(.dark, .dark *));
 
-/* Palette adapted from T3 Code: quiet neutrals, one blue accent, hairline borders. */
+/*
+ * The app's one palette, adapted from T3 Code: quiet neutrals, one blue accent, hairline borders.
+ * Components use these tokens, never raw colors or Tailwind's color scales; src/test/palette.test.ts
+ * holds them to it. A subtree that stays dark in either theme (the presenter's panel and tools)
+ * takes the `dark` class and uses the same tokens.
+ *
+ * The exceptions: colors that land in a deck (src/lib/palette.ts), and the scripts that run inside a
+ * slide's frame, which get these tokens as `--slop-*` from Stage.tsx (src-tauri/assets/pasteboard.js).
+ */
 :root {
   --radius: 0.625rem;
+
+  /* Surfaces and text. */
   --background: oklch(0.992 0 0);
-  --foreground: var(--color-zinc-800);
+  --foreground: var(--color-neutral-800);
   --card: var(--color-white);
-  --muted: var(--color-zinc-50);
-  --muted-foreground: var(--color-zinc-500);
-  --accent: var(--color-zinc-100);
-  --accent-foreground: var(--color-zinc-900);
+  --muted: var(--color-neutral-50);
+  --muted-foreground: var(--color-neutral-500);
+  --accent: var(--color-neutral-100);
+  --accent-foreground: var(--color-neutral-900);
   --primary: oklch(0.488 0.217 264);
   --primary-foreground: var(--color-white);
-  --border: var(--color-zinc-200);
-  --input: var(--color-zinc-300);
-  --sidebar: var(--color-zinc-50);
-  --canvas: var(--color-zinc-100);
-  --destructive: oklch(0.577 0.245 27.325);
-  --scrollbar-thumb: rgb(217 217 217);
+  --border: var(--color-neutral-200);
+  --input: var(--color-neutral-300);
+  --sidebar: var(--color-neutral-50);
+  --canvas: var(--color-neutral-100);
+
+  /* What something means. Each works as text on the surfaces above, and as a fill under its foreground. */
+  --success: var(--color-emerald-700);
+  --success-foreground: var(--color-white);
+  --warning: var(--color-amber-700);
+  --warning-foreground: var(--color-white);
+  --destructive: var(--color-red-600);
+  --destructive-foreground: var(--color-white);
+  --info: var(--color-sky-700);
+  --info-foreground: var(--color-white);
+
+  /* Syntax colors for the HTML view. */
+  --tok-tag: var(--success);
+  --tok-attr: var(--info);
+  --tok-string: var(--color-blue-800);
+  --tok-comment: var(--muted-foreground);
+  --tok-keyword: var(--destructive);
+  --tok-class: var(--warning);
+  --tok-variable: var(--color-violet-600);
+  --tok-punct: var(--muted-foreground);
+
+  /* On and around slides, whose colors are the deck's: the same in either theme. */
+  --stage: var(--color-black);
+  --paper: var(--color-white);
+  --scrim: --alpha(var(--color-black) / 50%);
+  --overlay: --alpha(var(--color-neutral-900) / 85%);
+  --overlay-foreground: var(--color-white);
+  --handle: var(--color-white);
+  --handle-foreground: var(--color-black);
+  --guide: var(--color-pink-500);
+  --search: var(--color-yellow-300);
+  --search-active: var(--color-orange-400);
 }
 
 .dark {
@@ -35,7 +75,18 @@
   --input: --alpha(var(--color-white) / 9%);
   --sidebar: color-mix(in srgb, var(--color-neutral-950) 97%, var(--color-white));
   --canvas: color-mix(in srgb, var(--color-neutral-950) 99%, var(--color-white));
-  --scrollbar-thumb: rgb(255 255 255 / 9%);
+
+  --success: var(--color-emerald-400);
+  --success-foreground: var(--color-neutral-950);
+  --warning: var(--color-amber-400);
+  --warning-foreground: var(--color-neutral-950);
+  --destructive: var(--color-red-400);
+  --destructive-foreground: var(--color-neutral-950);
+  --info: var(--color-sky-400);
+  --info-foreground: var(--color-neutral-950);
+
+  --tok-string: var(--color-blue-300);
+  --tok-variable: var(--color-violet-300);
 }
 
 @theme {
@@ -59,13 +110,27 @@
   --color-input: var(--input);
   --color-sidebar: var(--sidebar);
   --color-canvas: var(--canvas);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-stage: var(--stage);
+  --color-paper: var(--paper);
+  --color-scrim: var(--scrim);
+  --color-overlay: var(--overlay);
+  --color-overlay-foreground: var(--overlay-foreground);
+  --color-handle: var(--handle);
+  --color-handle-foreground: var(--handle-foreground);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
-  --shadow-composer: 0 12px 28px -18px rgb(0 0 0 / 40%);
+  --shadow-composer: 0 12px 28px -18px var(--scrim);
 }
 
 @layer base {
@@ -96,7 +161,7 @@
     height: 6px;
   }
   ::-webkit-scrollbar-thumb {
-    background: var(--scrollbar-thumb);
+    background: var(--input);
     border-radius: 999px;
   }
   ::-webkit-scrollbar-track {
@@ -206,26 +271,6 @@
 }
 
 /* Syntax colors for the HTML view (CodeMirror + @lezer/highlight's classHighlighter). */
-.cm-editor {
-  --tok-tag: #116329;
-  --tok-attr: #0550ae;
-  --tok-string: #0a3069;
-  --tok-comment: #6e7781;
-  --tok-keyword: #cf222e;
-  --tok-class: #953800;
-  --tok-variable: #8250df;
-  --tok-punct: #57606a;
-}
-.dark .cm-editor {
-  --tok-tag: #7ee787;
-  --tok-attr: #79c0ff;
-  --tok-string: #a5d6ff;
-  --tok-comment: #8b949e;
-  --tok-keyword: #ff7b72;
-  --tok-class: #ffa657;
-  --tok-variable: #d2a8ff;
-  --tok-punct: #8b949e;
-}
 .cm-editor .tok-typeName { color: var(--tok-tag); }
 .cm-editor .tok-propertyName { color: var(--tok-attr); }
 .cm-editor .tok-string,

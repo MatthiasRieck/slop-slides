@@ -3,7 +3,7 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "re
 
 import { popupShift, sectionsToCollapse } from "../lib/ribbon";
 import { cn } from "../lib/utils";
-import { keepFocus } from "./EditControls";
+import { keepFocus } from "./Button";
 import { useDismiss } from "./Popover";
 
 /**

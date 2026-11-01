@@ -4,6 +4,7 @@ import { File, FileUp, FolderOpen, MonitorPlay } from "lucide-react";
 import type { OpenedFile } from "../lib/api";
 import { basename, fileUrl, isMac } from "../lib/utils";
 import { useApp } from "../store";
+import { Button } from "./Button";
 import { NewDeckForm } from "./Home";
 
 /**
@@ -64,23 +65,20 @@ function NoViewer({ file }: { file: OpenedFile }) {
           : "There is no preview for this kind of file yet."}
       </p>
       {powerPoint && (
-        <button
-          type="button"
+        <Button
+          variant="primary"
+          size="lg"
           onClick={() => void useApp.getState().importPptx(file.absolute)}
-          className="mt-1 flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
+          className="mt-1"
         >
           <FileUp className="size-3.5" />
           Import as deck
-        </button>
+        </Button>
       )}
-      <button
-        type="button"
-        onClick={() => void revealItemInDir(file.absolute)}
-        className="mt-1 flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-accent"
-      >
+      <Button size="lg" onClick={() => void revealItemInDir(file.absolute)} className="mt-1">
         <FolderOpen className="size-3.5" />
         {isMac ? "Show in Finder" : "Show in folder"}
-      </button>
+      </Button>
     </div>
   );
 }

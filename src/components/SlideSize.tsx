@@ -17,6 +17,7 @@ import {
 } from "../lib/slideSize";
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
+import { Button } from "./Button";
 import { Field, NumberField, selectClass } from "./Field";
 
 const ORIENTATIONS: { id: Orientation; label: string; icon: typeof Square }[] = [
@@ -152,22 +153,18 @@ function SlideSizePanel(props: { current: SlideSize }) {
         </p>
       )}
       <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          disabled={unchanged}
-          onClick={() => show(current)}
-          className="rounded-md border px-2.5 py-1 font-medium hover:bg-accent disabled:opacity-40"
-        >
+        <Button size="lg" disabled={unchanged} onClick={() => show(current)}>
           Reset
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="primary"
+          size="lg"
           type="submit"
           disabled={!!problem || unchanged || running}
           title={running ? "Wait for the agent to finish to change the slide size" : undefined}
-          className="rounded-md bg-primary px-2.5 py-1 font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
         >
           Apply
-        </button>
+        </Button>
       </div>
     </form>
   );

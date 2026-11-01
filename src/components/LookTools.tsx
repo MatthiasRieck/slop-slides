@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { type EditSelection, type EditStyle, type EditTool, FIT_POSITIONS, type ImageFit } from "../lib/editTools";
 import { cn } from "../lib/utils";
-import { keepFocus, ToolButton } from "./EditControls";
+import { keepFocus, ToolButton } from "./Button";
 import { DropdownPanel, useDismiss } from "./Popover";
 
 const FITS: { value: ImageFit; label: string }[] = [
@@ -31,6 +31,7 @@ export function LookTools(props: {
     <>
       <AppearanceButton selection={selection} onStyle={props.onStyle} onDone={props.onReturnFocus} />
       <ToolButton
+        keepFocus
         label="Copy this look to the next element clicked"
         active={painting}
         disabled={!selection && !painting}
@@ -62,8 +63,6 @@ function usePopover(onClose?: () => void) {
   return { open, setOpen, ref };
 }
 
-const popoverButton =
-  "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4";
 const popoverPanel = "grid w-max grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5 text-xs";
 
 /** Opacity, shadow and corner radius of the selection. */
@@ -80,18 +79,16 @@ function AppearanceButton(props: {
   };
   return (
     <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-label="Appearance"
+      <ToolButton
+        keepFocus
+        label="Appearance"
         title="Opacity, shadow and corner radius"
         aria-expanded={open}
         disabled={!s}
-        onMouseDown={keepFocus}
         onClick={() => setOpen(!open)}
-        className={popoverButton}
       >
         <Blend />
-      </button>
+      </ToolButton>
       {open && s && (
         <DropdownPanel role="dialog" aria-label="Appearance" className={popoverPanel}>
           <Slider
@@ -192,29 +189,37 @@ function ImageButton(props: {
   useEffect(() => setAlt(s?.alt ?? ""), [s?.alt]);
   return (
     <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-label="Image"
+      <ToolButton
+        keepFocus
+        label="Image"
         title="Replace, fit, flip and describe the image"
         aria-expanded={open}
         disabled={!s}
-        onMouseDown={keepFocus}
         onClick={() => setOpen(!open)}
-        className={popoverButton}
       >
         <Image />
-      </button>
+      </ToolButton>
       {open && s && (
         <DropdownPanel role="dialog" aria-label="Image" className={popoverPanel}>
           <span className="text-muted-foreground">Image</span>
           <span className="flex items-center gap-0.5">
-            <ToolButton label="Replace the image, keeping its size and place" onClick={props.onReplace}>
+            <ToolButton keepFocus label="Replace the image, keeping its size and place" onClick={props.onReplace}>
               <Replace />
             </ToolButton>
-            <ToolButton label="Flip horizontally" active={s.flipX} onClick={() => props.onStyle({ flipX: !s.flipX })}>
+            <ToolButton
+              keepFocus
+              label="Flip horizontally"
+              active={s.flipX}
+              onClick={() => props.onStyle({ flipX: !s.flipX })}
+            >
               <FlipHorizontal2 />
             </ToolButton>
-            <ToolButton label="Flip vertically" active={s.flipY} onClick={() => props.onStyle({ flipY: !s.flipY })}>
+            <ToolButton
+              keepFocus
+              label="Flip vertically"
+              active={s.flipY}
+              onClick={() => props.onStyle({ flipY: !s.flipY })}
+            >
               <FlipVertical2 />
             </ToolButton>
           </span>

@@ -18,7 +18,7 @@ import {
   type GeometryField,
   parseGeometryValue,
 } from "../lib/arrange";
-import { keepFocus } from "./EditControls";
+import { ToolButton } from "./Button";
 import { DraftInput } from "./Field";
 import { DropdownPanel, useDismiss } from "./Popover";
 
@@ -57,64 +57,53 @@ export function ArrangeControls(props: {
   useDismiss(open, ref, () => setOpen(false));
   if (!geometry && open) setOpen(false);
 
-  const button =
-    "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4";
   return (
     <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-label="Arrange"
+      <ToolButton
+        keepFocus
+        label="Arrange"
         title="Align, distribute, position and size"
         aria-expanded={open}
         disabled={!geometry}
-        onMouseDown={keepFocus}
         onClick={() => setOpen(!open)}
-        className={button}
       >
         <Move />
-      </button>
+      </ToolButton>
       {open && geometry && (
         <DropdownPanel role="dialog" aria-label="Arrange" className="flex w-max flex-col gap-2 text-xs">
           <div className="flex items-center gap-0.5">
             {ALIGN.map((a) => {
               const label = many ? `Align ${a.label}` : `Align with the slide's ${a.label}`;
               return (
-                <button
+                <ToolButton
                   key={a.to}
-                  type="button"
-                  aria-label={label}
-                  title={label}
-                  onMouseDown={keepFocus}
+                  keepFocus
+                  label={label}
                   onClick={() => props.onArrange?.({ type: "slop:edit-align", to: a.to })}
-                  className={button}
                 >
                   {a.icon}
-                </button>
+                </ToolButton>
               );
             })}
             <div className="mx-1 h-4 w-px bg-border" />
-            <button
-              type="button"
-              aria-label="Distribute horizontally"
+            <ToolButton
+              keepFocus
+              label="Distribute horizontally"
               title="Even out the gaps side to side (three or more elements)"
               disabled={geometry.count < 3}
-              onMouseDown={keepFocus}
               onClick={() => props.onArrange?.({ type: "slop:edit-distribute", axis: "h" })}
-              className={button}
             >
               <AlignHorizontalDistributeCenter />
-            </button>
-            <button
-              type="button"
-              aria-label="Distribute vertically"
+            </ToolButton>
+            <ToolButton
+              keepFocus
+              label="Distribute vertically"
               title="Even out the gaps top to bottom (three or more elements)"
               disabled={geometry.count < 3}
-              onMouseDown={keepFocus}
               onClick={() => props.onArrange?.({ type: "slop:edit-distribute", axis: "v" })}
-              className={button}
             >
               <AlignVerticalDistributeCenter />
-            </button>
+            </ToolButton>
           </div>
           <div className="flex items-center gap-1.5">
             {FIELDS.map((f) => (

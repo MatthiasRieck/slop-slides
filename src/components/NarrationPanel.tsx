@@ -10,6 +10,7 @@ import { useDraftText } from "../lib/useDraftText";
 import { formatBytes } from "../lib/voice";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
+import { Button } from "./Button";
 import { Field, wideSelectClass } from "./Field";
 import { ScriptField } from "./ScriptMarkdown";
 import { SlideBand, SlideBandHeader } from "./SlideBand";
@@ -20,9 +21,6 @@ export const NARRATION_SAVE_DELAY = 800;
 
 /** No audio known yet; one object, so selecting it does not re-render. */
 const NO_AUDIO: Record<string, SlideAudio> = {};
-
-const button =
-  "flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium hover:bg-accent disabled:opacity-40 disabled:hover:bg-transparent [&_svg]:size-3.5";
 
 /**
  * Narration mode's tools, in a band above the slide: what is said over the current slide, to
@@ -122,10 +120,10 @@ function SpeechSettings({ deck }: { deck: Deck }) {
                 </div>
               </div>
             ) : (
-              <button type="button" className={`${button} self-start`} onClick={() => void downloadModel()}>
+              <Button size="md" onClick={() => void downloadModel()} className="self-start">
                 <Download />
                 Download voice model
-              </button>
+              </Button>
             )}
           </div>
         )
@@ -235,48 +233,44 @@ function SlideAudioControls(props: {
       </span>
       <div className="flex shrink-0 gap-1">
         {props.hasText && !props.locked && (
-          <button
-            type="button"
-            className={button}
+          <Button
+            size="md"
             onClick={() => void clean()}
             title="Ask the agent to turn this slide's recorded words into clean, fluent sentences"
           >
             <Sparkles />
             Clean up
-          </button>
+          </Button>
         )}
-        <button
-          type="button"
-          className={button}
+        <Button
+          size="md"
           disabled={!audio?.seconds || busy}
           onClick={() => void play()}
           title={audio?.state === "stale" ? "Play the out-of-date audio" : "Play the audio"}
         >
           {playback ? <Square /> : <Play />}
           {playback ? "Stop" : "Play"}
-        </button>
+        </Button>
         {recorded ? (
-          <button
-            type="button"
-            className={button}
+          <Button
+            size="md"
             disabled={props.locked}
             onClick={() => void remove()}
             title="Delete your recording of this slide"
           >
             <Trash2 />
             Delete recording
-          </button>
+          </Button>
         ) : (
-          <button
-            type="button"
-            className={button}
+          <Button
+            size="md"
             disabled={!canSpeak || render !== null}
             onClick={() => void generate()}
             title={canSpeak ? "Speak this slide's narration" : "Download the voice model first"}
           >
             <AudioLines />
             {audio?.state === "ready" ? "Regenerate" : "Generate"}
-          </button>
+          </Button>
         )}
       </div>
     </div>
@@ -305,15 +299,14 @@ function CleanUpAll({ deck }: { deck: Deck }) {
   if (!deck.slides.some((s) => s.narration && !s.locked)) return null;
   return (
     <div className="border-t p-3">
-      <button
-        type="button"
-        className={button}
+      <Button
+        size="md"
         onClick={() => useApp.getState().cleanNarration(null)}
         title="Ask the agent to turn the recorded words of all slides into clean, fluent sentences"
       >
         <Sparkles />
         Clean up all narration
-      </button>
+      </Button>
     </div>
   );
 }
@@ -337,10 +330,10 @@ function DeckAudio({ deck }: { deck: Deck }) {
             Speaking slide {render.done + 1} of {render.total}…
           </span>
         </span>
-        <button type="button" className={button} onClick={() => void useNarration.getState().cancelRender()}>
+        <Button size="md" onClick={() => void useNarration.getState().cancelRender()}>
           <X />
           Cancel
-        </button>
+        </Button>
       </div>
     );
   }
@@ -350,15 +343,14 @@ function DeckAudio({ deck }: { deck: Deck }) {
       <span className="text-muted-foreground">
         {pending} {pending === 1 ? "slide needs" : "slides need"} audio
       </span>
-      <button
-        type="button"
-        className={button}
+      <Button
+        size="md"
         disabled={render !== null}
         onClick={() => void useNarration.getState().renderAudio(deck.id, null)}
       >
         <AudioLines />
         Generate all
-      </button>
+      </Button>
     </div>
   );
 }

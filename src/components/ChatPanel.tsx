@@ -41,6 +41,7 @@ import {
   type UserMessage,
   useApp,
 } from "../store";
+import { ToolButton } from "./Button";
 import { ComposerComments } from "./Comments";
 import { EffortPicker, ModelPicker } from "./ModelPicker";
 import { ApprovalCard, ApprovalReview, PermissionPicker } from "./Permissions";
@@ -998,14 +999,9 @@ function ImageGrid(props: {
         <SectionLabel>
           {images.length} image{images.length === 1 ? "" : "s"}
         </SectionLabel>
-        <button
-          type="button"
-          aria-label="Close"
-          onClick={onClose}
-          className="rounded-md p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
+        <ToolButton variant="panel" size="xs" aria-label="Close" onClick={onClose}>
           <X className="size-3.5" />
-        </button>
+        </ToolButton>
       </div>
       <div className="grid max-h-72 grid-cols-3 gap-2 overflow-y-auto">
         {images.map((path) => (

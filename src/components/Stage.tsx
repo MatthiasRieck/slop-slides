@@ -40,6 +40,7 @@ import { type Stroke, zoomBox } from "../lib/ink";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn, deckFileUrl } from "../lib/utils";
 import { deckMode, SKETCH_TARGET_ATTR, searchHighlight, useApp } from "../store";
+import { Button, ToolButton } from "./Button";
 import { CommentEditor, CommentPins, useSlideComments } from "./Comments";
 import { EditContextMenu, type EditMenuAction } from "./EditContextMenu";
 import { EditToolbar } from "./EditToolbar";
@@ -255,39 +256,38 @@ export function Stage() {
         <div className="grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] items-center gap-2 px-3 text-xs text-muted-foreground">
           <div />
           <div className="flex items-center gap-2">
-            <button
-              type="button"
+            <ToolButton
+              variant="plain"
               aria-label="Previous slide"
               onClick={() => useApp.getState().selectRelative(-1)}
               disabled={index <= 0}
-              className="rounded-md p-1 hover:bg-accent hover:text-foreground disabled:opacity-30"
             >
               <ChevronLeft className="size-4" />
-            </button>
+            </ToolButton>
             <span className="tabular-nums">
               {index + 1} / {deck.slides.length}
             </span>
-            <button
-              type="button"
+            <ToolButton
+              variant="plain"
               aria-label="Next slide"
               onClick={() => useApp.getState().selectRelative(1)}
               disabled={index >= deck.slides.length - 1}
-              className="rounded-md p-1 hover:bg-accent hover:text-foreground disabled:opacity-30"
             >
               <ChevronRight className="size-4" />
-            </button>
+            </ToolButton>
           </div>
           <div className="flex items-center justify-end">
             {view && (
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
                 title="Back to the slide, centered at full size (0)"
                 onClick={pasteboard.resetView}
-                className="mr-1 flex items-center gap-1 rounded-md px-1.5 py-1 tabular-nums hover:bg-accent hover:text-foreground"
+                className="mr-1 tabular-nums"
               >
                 <Maximize className="size-3.5" />
                 {Math.round(view.k * 100)}%
-              </button>
+              </Button>
             )}
             {overflow.length > 0 && (
               <span
@@ -309,8 +309,9 @@ export function Stage() {
             )}
             {slide && <ChangeLayoutButton disabled={running || locked} />}
             {slide && (
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
                 title="Prepare a message, with a screenshot, asking the agent to rebuild this slide's layout, fixing overflow and clipping and keeping the elements you moved, rotated or scaled"
                 disabled={running || locked}
                 onClick={() => {
@@ -318,14 +319,11 @@ export function Stage() {
                   // Give the preview a frame to drop its selection outline before the screenshot.
                   requestAnimationFrame(() => requestAnimationFrame(() => void useApp.getState().tidyLayout(overflow)));
                 }}
-                className={cn(
-                  "flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
-                  (slide.moved || overflow.length > 0) && "font-medium text-foreground",
-                )}
+                className={cn((slide.moved || overflow.length > 0) && "font-medium text-foreground")}
               >
                 <Wand2 className="size-3.5" />
                 Tidy layout
-              </button>
+              </Button>
             )}
           </div>
         </div>
@@ -349,18 +347,19 @@ function ChangeLayoutButton(props: { disabled: boolean }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   return (
     <>
-      <button
+      <Button
         ref={buttonRef}
-        type="button"
+        variant="ghost"
+        size="sm"
         title="Rebuild this slide on a template layout"
         aria-expanded={open}
         disabled={props.disabled}
         onClick={() => setOpen((v) => !v)}
-        className="mr-1 flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+        className="mr-1"
       >
         <LayoutTemplate className="size-3.5" />
         Layout
-      </button>
+      </Button>
       {open && (
         <Popover anchor={buttonRef} placement="above" width={560} label="Change layout" onClose={() => setOpen(false)}>
           <LayoutPicker mode="change" onDone={() => setOpen(false)} />
@@ -372,41 +371,38 @@ function ChangeLayoutButton(props: { disabled: boolean }) {
 
 /** The end of the edit tools: history, and leaving edit mode. */
 function EditBar(props: { canUndo: boolean; canRedo: boolean }) {
-  const icon =
-    "rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4";
   const app = useApp.getState;
   return (
     <div className="ml-auto flex shrink-0 flex-col gap-1">
       <div className="flex items-center gap-0.5">
-        <button
-          type="button"
-          aria-label="Undo"
+        <ToolButton
+          variant="plain"
+          label="Undo"
           title="Undo (⌘Z)"
           disabled={!props.canUndo}
           onClick={() => void app().undoSlideEdit()}
-          className={icon}
         >
           <Undo2 />
-        </button>
-        <button
-          type="button"
-          aria-label="Redo"
+        </ToolButton>
+        <ToolButton
+          variant="plain"
+          label="Redo"
           title="Redo (⇧⌘Z)"
           disabled={!props.canRedo}
           onClick={() => void app().redoSlideEdit()}
-          className={icon}
         >
           <Redo2 />
-        </button>
-        <button
-          type="button"
+        </ToolButton>
+        <Button
+          variant="ghost"
+          size="sm"
           title="Undo all edits made since entering edit mode"
           onClick={() => void app().discardSlideEdits()}
-          className="ml-1 flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-accent hover:text-foreground [&_svg]:size-3.5"
+          className="ml-1"
         >
           <X />
           Discard
-        </button>
+        </Button>
       </div>
       <button
         type="button"

@@ -71,7 +71,8 @@ import {
 import { SWATCHES } from "../lib/palette";
 import { cn } from "../lib/utils";
 import { ArrangeControls } from "./ArrangeControls";
-import { keepFocus, ToolButton, useOutsideClose } from "./EditControls";
+import { ToolButton } from "./Button";
+import { keepFocus, useOutsideClose } from "./EditControls";
 import { LookTools } from "./LookTools";
 import { RibbonRow, RibbonSection, useRibbonFit } from "./Ribbon";
 
@@ -185,6 +186,7 @@ export function EditToolbar(props: {
           <RibbonRow key={row[0]?.tool}>
             {row.map((t) => (
               <ToolButton
+                keepFocus
                 key={t.tool}
                 label={t.label}
                 active={props.tool === t.tool}
@@ -194,7 +196,7 @@ export function EditToolbar(props: {
               </ToolButton>
             ))}
             {index === 1 && (
-              <ToolButton label="Add an image from a file" onClick={() => props.onPickImage?.(false)}>
+              <ToolButton keepFocus label="Add an image from a file" onClick={() => props.onPickImage?.(false)}>
                 <ImagePlus />
               </ToolButton>
             )}
@@ -210,6 +212,7 @@ export function EditToolbar(props: {
             onChange={(fontFamily) => props.onStyle({ fontFamily })}
           />
           <ToolButton
+            keepFocus
             label="Smaller text"
             disabled={textOff}
             onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, -1) })}
@@ -222,6 +225,7 @@ export function EditToolbar(props: {
             onDone={returnFocus}
           />
           <ToolButton
+            keepFocus
             label="Larger text"
             disabled={textOff}
             onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, 1) })}
@@ -231,6 +235,7 @@ export function EditToolbar(props: {
         </RibbonRow>
         <RibbonRow>
           <ToolButton
+            keepFocus
             label="Bold (⌘B)"
             active={!textOff && !!style.bold}
             disabled={textOff}
@@ -239,6 +244,7 @@ export function EditToolbar(props: {
             <Bold />
           </ToolButton>
           <ToolButton
+            keepFocus
             label="Italic (⌘I)"
             active={!textOff && !!style.italic}
             disabled={textOff}
@@ -247,6 +253,7 @@ export function EditToolbar(props: {
             <Italic />
           </ToolButton>
           <ToolButton
+            keepFocus
             label="Underline (⌘U)"
             active={!textOff && !!style.underline}
             disabled={textOff}
@@ -255,6 +262,7 @@ export function EditToolbar(props: {
             <Underline />
           </ToolButton>
           <ToolButton
+            keepFocus
             label="Strikethrough"
             active={!textOff && !!style.strike}
             disabled={textOff}
@@ -264,6 +272,7 @@ export function EditToolbar(props: {
           </ToolButton>
           {SCRIPTS.map((s) => (
             <ToolButton
+              keepFocus
               key={s.value}
               label={s.label}
               active={!textOff && !!selection && selection.script === s.value}
@@ -294,6 +303,7 @@ export function EditToolbar(props: {
         <RibbonRow>
           {ALIGN.map((a) => (
             <ToolButton
+              keepFocus
               key={a.value}
               label={a.label}
               active={!textOff && style.align === a.value}
@@ -305,6 +315,7 @@ export function EditToolbar(props: {
           ))}
           {LISTS.map((l) => (
             <ToolButton
+              keepFocus
               key={l.value}
               label={l.label}
               active={!textOff && !!selection && selection.list === l.value}
@@ -324,6 +335,7 @@ export function EditToolbar(props: {
         <RibbonRow>
           {VALIGN.map((a) => (
             <ToolButton
+              keepFocus
               key={a.value}
               label={a.label}
               active={!textOff && !!state?.valign && style.valign === a.value}
@@ -419,11 +431,17 @@ export function EditToolbar(props: {
         </RibbonRow>
         <RibbonRow>
           {ORDER.map((o) => (
-            <ToolButton key={o.to} label={o.label} disabled={!props.selection} onClick={() => props.onOrder(o.to)}>
+            <ToolButton
+              keepFocus
+              key={o.to}
+              label={o.label}
+              disabled={!props.selection}
+              onClick={() => props.onOrder(o.to)}
+            >
               {o.icon}
             </ToolButton>
           ))}
-          <ToolButton label="Delete (⌫)" disabled={!props.selection} onClick={props.onDelete}>
+          <ToolButton keepFocus label="Delete (⌫)" disabled={!props.selection} onClick={props.onDelete}>
             <Trash2 />
           </ToolButton>
         </RibbonRow>
@@ -696,22 +714,17 @@ function LinkButton(props: {
 
   return (
     <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-label="Link"
+      <ToolButton
+        keepFocus
+        label="Link"
         title={props.value ? `Link: ${props.value}` : "Add a link"}
-        aria-pressed={!!props.value}
+        active={!!props.value}
         aria-expanded={open}
         disabled={props.disabled}
-        onMouseDown={keepFocus}
         onClick={toggle}
-        className={cn(
-          "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4",
-          props.value && "bg-accent text-foreground",
-        )}
       >
         <Link />
-      </button>
+      </ToolButton>
       {open && (
         <form
           role="dialog"
@@ -794,18 +807,16 @@ function SpacingButton(props: {
   const select = "h-6 rounded border bg-transparent px-1";
   return (
     <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-label="Spacing"
+      <ToolButton
+        keepFocus
+        label="Spacing"
         title="Line height and letter spacing"
         aria-expanded={open}
         disabled={props.disabled}
-        onMouseDown={keepFocus}
         onClick={() => setOpen(!open)}
-        className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4"
       >
         <Space />
-      </button>
+      </ToolButton>
       {open && (
         <div
           role="dialog"

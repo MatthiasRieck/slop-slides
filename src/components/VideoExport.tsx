@@ -17,6 +17,7 @@ import {
 } from "../lib/video";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
+import { Button } from "./Button";
 
 const NO_AUDIO: Record<string, SlideAudio> = {};
 const input = "h-7 w-full min-w-0 rounded-md border bg-background px-1.5 tabular-nums";
@@ -190,20 +191,12 @@ export function VideoExportPanel(props: {
         {problem ?? summary}
       </p>
       <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={props.onCancel}
-          className="rounded-md border px-2.5 py-1 font-medium hover:bg-accent"
-        >
+        <Button size="lg" onClick={props.onCancel}>
           Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={!!problem}
-          className="rounded-md bg-primary px-2.5 py-1 font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
-        >
+        </Button>
+        <Button variant="primary" size="lg" type="submit" disabled={!!problem}>
           Save video…
-        </button>
+        </Button>
       </div>
     </form>
   );

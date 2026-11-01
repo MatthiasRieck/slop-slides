@@ -19,6 +19,7 @@ import { cn } from "../lib/utils";
 import { loadVideoOptions } from "../lib/video";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
+import { Button } from "./Button";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
 const NO_AUDIO: Record<string, SlideAudio> = {};
@@ -30,9 +31,6 @@ const DRAG_START = 3;
 const STEP = 0.1;
 /** How narrow a slide can be and still have room for its picture, in pixels. */
 const PICTURE_WIDTH = 72;
-
-const button =
-  "flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs font-medium hover:bg-accent disabled:opacity-40 disabled:hover:bg-transparent [&_svg]:size-3.5";
 
 /** What to save for what is pressed to move by some seconds. */
 type Move = (by: number) => SlideTiming[];
@@ -187,43 +185,35 @@ function Tracks(props: {
   return (
     <section aria-label="Narration timeline" className="flex h-44 shrink-0 flex-col border-t bg-background">
       <div className="flex shrink-0 items-center gap-1.5 border-b px-2 py-1 text-xs">
-        <button type="button" className={button} onClick={play}>
+        <Button size="xs" onClick={play}>
           {stop ? <Pause /> : <Play />}
           {stop ? "Pause" : "Play"}
-        </button>
+        </Button>
         <span className="tabular-nums text-muted-foreground">
           {formatDuration(now)} / {formatDuration(shown.end)}
         </span>
         <span className="ml-auto" />
         {reset.length > 0 && (
-          <button
-            type="button"
-            className={button}
+          <Button
+            size="xs"
             title="Let every slide follow its narration again"
             onClick={() => void useApp.getState().setSlideTiming(reset)}
           >
             <RotateCcw />
             Reset timing
-          </button>
+          </Button>
         )}
-        <button
-          type="button"
-          aria-label="Zoom out"
-          className={button}
-          disabled={zoom === ZOOMS[0]}
-          onClick={() => setZoom((z) => z / 2)}
-        >
+        <Button size="xs" aria-label="Zoom out" disabled={zoom === ZOOMS[0]} onClick={() => setZoom((z) => z / 2)}>
           <Minus />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          size="xs"
           aria-label="Zoom in"
-          className={button}
           disabled={zoom === ZOOMS[ZOOMS.length - 1]}
           onClick={() => setZoom((z) => z * 2)}
         >
           <Plus />
-        </button>
+        </Button>
       </div>
       {/* Clear of the panels' resize handles, which take a press a few pixels either side of them. */}
       <div className="mx-1.5 min-h-0 flex-1 overflow-x-auto overflow-y-hidden">

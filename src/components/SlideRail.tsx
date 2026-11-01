@@ -45,6 +45,7 @@ import {
 import { pixelsOf } from "../lib/slideSize";
 import { cn } from "../lib/utils";
 import { railSelection, useApp } from "../store";
+import { ToolButton } from "./Button";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { LayoutPicker, Popover } from "./Templates";
 
@@ -177,8 +178,8 @@ export function SlideRail() {
         </span>
         <div className="flex items-center gap-0.5">
           <RailHistory />
-          <button
-            type="button"
+          <ToolButton
+            variant="panel"
             onClick={addSection}
             disabled={!canAddSection}
             title={
@@ -186,20 +187,18 @@ export function SlideRail() {
                 ? "This slide already starts a section"
                 : "Start a section at this slide"
             }
-            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
           >
             <SquareSplitVertical className="size-4" />
-          </button>
-          <button
+          </ToolButton>
+          <ToolButton
             ref={addButton}
-            type="button"
+            variant="panel"
             onClick={() => setAddingSlide((open) => !open)}
             aria-expanded={addingSlide}
             title="New slide"
-            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             <Plus className="size-4" />
-          </button>
+          </ToolButton>
         </div>
       </div>
       {addingSlide && (
@@ -287,9 +286,6 @@ export function SlideRail() {
   );
 }
 
-const headerButton =
-  "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
-
 /** Undo and redo of what was done in the rail, once there is something to step through. */
 function RailHistory() {
   const canUndo = useApp((s) => s.deckUndo.length > 0);
@@ -297,24 +293,22 @@ function RailHistory() {
   if (!canUndo && !canRedo) return null;
   return (
     <>
-      <button
-        type="button"
+      <ToolButton
+        variant="panel"
         title="Undo the last slide list change (⌘Z)"
         disabled={!canUndo}
         onClick={() => void useApp.getState().undoDeckEdit()}
-        className={headerButton}
       >
         <Undo2 className="size-4" />
-      </button>
-      <button
-        type="button"
+      </ToolButton>
+      <ToolButton
+        variant="panel"
         title="Redo the slide list change (⇧⌘Z)"
         disabled={!canRedo}
         onClick={() => void useApp.getState().redoDeckEdit()}
-        className={headerButton}
       >
         <Redo2 className="size-4" />
-      </button>
+      </ToolButton>
     </>
   );
 }
@@ -334,53 +328,34 @@ function BulkActions({ deck }: { deck: Deck }) {
   return (
     <div role="toolbar" aria-label="Selected slides" className="flex h-8 shrink-0 items-center gap-0.5 border-y px-3">
       <span className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">{picked.length} selected</span>
-      <button
-        type="button"
-        title="Move up (⌘↑)"
-        disabled={searching}
-        onClick={() => void app.moveSlides(-1)}
-        className={headerButton}
-      >
+      <ToolButton variant="panel" title="Move up (⌘↑)" disabled={searching} onClick={() => void app.moveSlides(-1)}>
         <ArrowUp className="size-3.5" />
-      </button>
-      <button
-        type="button"
-        title="Move down (⌘↓)"
-        disabled={searching}
-        onClick={() => void app.moveSlides(1)}
-        className={headerButton}
-      >
+      </ToolButton>
+      <ToolButton variant="panel" title="Move down (⌘↓)" disabled={searching} onClick={() => void app.moveSlides(1)}>
         <ArrowDown className="size-3.5" />
-      </button>
-      <button
-        type="button"
+      </ToolButton>
+      <ToolButton
+        variant="panel"
         title={`${show ? "Show" : "Hide"} slides${skips}`}
         disabled={free.length === 0}
         onClick={() => void app.setSlidesHidden(ids, !show)}
-        className={headerButton}
       >
         {show ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
-      </button>
-      <button
-        type="button"
-        title="Duplicate slides"
-        onClick={() => void app.duplicateSlides(picked)}
-        className={headerButton}
-      >
+      </ToolButton>
+      <ToolButton variant="panel" title="Duplicate slides" onClick={() => void app.duplicateSlides(picked)}>
         <Copy className="size-3.5" />
-      </button>
-      <button
-        type="button"
+      </ToolButton>
+      <ToolButton
+        variant="panel"
         title={`Delete slides${skips}`}
         disabled={free.length === 0}
         onClick={() => void app.deleteSlides(ids)}
-        className={headerButton}
       >
         <Trash2 className="size-3.5" />
-      </button>
-      <button type="button" title="Clear selection" onClick={app.clearRailSelection} className={headerButton}>
+      </ToolButton>
+      <ToolButton variant="panel" title="Clear selection" onClick={app.clearRailSelection}>
         <X className="size-3.5" />
-      </button>
+      </ToolButton>
     </div>
   );
 }

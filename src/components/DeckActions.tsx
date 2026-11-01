@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type Deck, errorMessage, type Screen, type Slide } from "../lib/api";
 import { VIDEO_CANCELLED, type VideoOptions, type VideoProgress } from "../lib/video";
 import { useApp } from "../store";
+import { Button, ToolButton } from "./Button";
 import { ScreenPicker } from "./ScreenPicker";
 import { Popover } from "./Templates";
 import { VideoExportPanel } from "./VideoExport";
@@ -154,25 +155,26 @@ function Actions({ deck }: { deck: Deck }) {
         onVideo={(options) => void exportVideo(options)}
       />
       {videoProgress !== null && (
-        <button
-          type="button"
+        <ToolButton
+          variant="panel"
+          className="-ml-1"
           aria-label="Cancel video export"
           title="Cancel video export"
           onClick={() => void api.cancelVideoExport()}
-          className="-ml-1 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
         >
           <X className="size-3.5" />
-        </button>
+        </ToolButton>
       )}
-      <button
-        type="button"
+      <Button
+        variant="primary"
+        size="xl"
         disabled={deck.slides.length === 0}
         onClick={() => void present()}
-        className="flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground shadow-sm hover:opacity-90 disabled:opacity-40"
+        className="shadow-sm"
       >
         <Play className="size-3.5 fill-current" />
         Present
-      </button>
+      </Button>
       {screens && (
         <ScreenPicker
           screens={screens}
@@ -239,19 +241,18 @@ function ExportMenu(props: {
 
   return (
     <div ref={menuRef} className="relative">
-      <button
+      <Button
         ref={buttonRef}
-        type="button"
+        size="xl"
         disabled={props.disabled}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-40"
       >
         {props.busy ? <Loader2 className="size-3.5 animate-spin" /> : <Share className="size-3.5" />}
         {props.progress !== null ? progressLabel(props.progress) : props.busy ? "Exporting…" : "Export"}
         <ChevronDown className="size-3 text-muted-foreground" />
-      </button>
+      </Button>
       {open && (
         <div role="menu" className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card p-1 shadow-lg">
           <ExportItem

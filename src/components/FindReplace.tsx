@@ -2,8 +2,8 @@ import { CaseSensitive, ChevronDown, ChevronUp, Replace, Search, Undo2, WholeWor
 import { useEffect, useRef, useState } from "react";
 
 import { api, type ReplacedText } from "../lib/api";
-import { cn } from "../lib/utils";
 import { activeMatch, useApp } from "../store";
+import { ToolButton } from "./Button";
 import { Popover } from "./Templates";
 
 /** How long typing settles before it searches. */
@@ -104,33 +104,34 @@ export function SlideSearch() {
           </span>
         )}
         {query && (
-          <button
-            type="button"
-            aria-label="Clear search"
+          <ToolButton
+            size="xs"
+            label="Clear search"
             title="Clear search (Esc)"
             onClick={() => {
               setSearch({ query: "" });
               input.current?.focus();
             }}
-            className="rounded-md p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground [&_svg]:size-3.5"
           >
-            <X />
-          </button>
+            <X className="size-3.5" />
+          </ToolButton>
         )}
-        <Toggle
+        <ToolButton
+          size="xs"
           label="Match case"
           active={options.matchCase}
           onClick={() => setSearch({ options: { ...options, matchCase: !options.matchCase } })}
         >
           <CaseSensitive />
-        </Toggle>
-        <Toggle
+        </ToolButton>
+        <ToolButton
+          size="xs"
           label="Whole words"
           active={options.wholeWord}
           onClick={() => setSearch({ options: { ...options, wholeWord: !options.wholeWord } })}
         >
           <WholeWord />
-        </Toggle>
+        </ToolButton>
       </div>
       <button
         type="button"
@@ -166,17 +167,16 @@ function ReplaceButton() {
   const anchor = useRef<HTMLButtonElement>(null);
   return (
     <>
-      <button
+      <ToolButton
         ref={anchor}
-        type="button"
-        aria-label="Replace"
+        size="md"
+        label="Replace"
         title="Replace what the search finds"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground [&_svg]:size-4"
       >
         <Replace />
-      </button>
+      </ToolButton>
       {open && (
         <Popover anchor={anchor} placement="below" width={360} label="Replace" onClose={() => setOpen(false)}>
           <ReplacePanel />
@@ -260,24 +260,6 @@ function ReplacePanel() {
         </div>
       )}
     </div>
-  );
-}
-
-function Toggle(props: { label: string; active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      aria-label={props.label}
-      title={props.label}
-      aria-pressed={props.active}
-      onClick={props.onClick}
-      className={cn(
-        "rounded-md p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground [&_svg]:size-4",
-        props.active && "bg-accent text-foreground",
-      )}
-    >
-      {props.children}
-    </button>
   );
 }
 

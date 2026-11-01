@@ -18,6 +18,7 @@ import {
   type GeometryField,
   parseGeometryValue,
 } from "../lib/arrange";
+import { ToolButton } from "./Button";
 
 const ALIGN: { to: AlignTo; label: string; icon: ReactNode }[] = [
   { to: "left", label: "left edges", icon: <AlignStartVertical /> },
@@ -35,11 +36,6 @@ const FIELDS: { field: GeometryField; label: string; title: string }[] = [
   { field: "h", label: "H", title: "Height" },
   { field: "rotation", label: "°", title: "Rotation in degrees" },
 ];
-
-/** Keeps focus (and the text selection) in the slide when a button is pressed. */
-function keepFocus(event: React.MouseEvent) {
-  event.preventDefault();
-}
 
 /**
  * The selection's place on the slide: align and distribute several elements, align one with the
@@ -66,22 +62,18 @@ export function ArrangeControls(props: {
   }, [open]);
   if (!geometry && open) setOpen(false);
 
-  const button =
-    "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4";
   return (
     <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-label="Arrange"
+      <ToolButton
+        keepFocus
+        label="Arrange"
         title="Align, distribute, position and size"
         aria-expanded={open}
         disabled={!geometry}
-        onMouseDown={keepFocus}
         onClick={() => setOpen(!open)}
-        className={button}
       >
         <Move />
-      </button>
+      </ToolButton>
       {open && geometry && (
         <div
           role="dialog"
@@ -92,42 +84,35 @@ export function ArrangeControls(props: {
             {ALIGN.map((a) => {
               const label = many ? `Align ${a.label}` : `Align with the slide's ${a.label}`;
               return (
-                <button
+                <ToolButton
                   key={a.to}
-                  type="button"
-                  aria-label={label}
-                  title={label}
-                  onMouseDown={keepFocus}
+                  keepFocus
+                  label={label}
                   onClick={() => props.onArrange?.({ type: "slop:edit-align", to: a.to })}
-                  className={button}
                 >
                   {a.icon}
-                </button>
+                </ToolButton>
               );
             })}
             <div className="mx-1 h-4 w-px bg-border" />
-            <button
-              type="button"
-              aria-label="Distribute horizontally"
+            <ToolButton
+              keepFocus
+              label="Distribute horizontally"
               title="Even out the gaps side to side (three or more elements)"
               disabled={geometry.count < 3}
-              onMouseDown={keepFocus}
               onClick={() => props.onArrange?.({ type: "slop:edit-distribute", axis: "h" })}
-              className={button}
             >
               <AlignHorizontalDistributeCenter />
-            </button>
-            <button
-              type="button"
-              aria-label="Distribute vertically"
+            </ToolButton>
+            <ToolButton
+              keepFocus
+              label="Distribute vertically"
               title="Even out the gaps top to bottom (three or more elements)"
               disabled={geometry.count < 3}
-              onMouseDown={keepFocus}
               onClick={() => props.onArrange?.({ type: "slop:edit-distribute", axis: "v" })}
-              className={button}
             >
               <AlignVerticalDistributeCenter />
-            </button>
+            </ToolButton>
           </div>
           <div className="flex items-center gap-1.5">
             {FIELDS.map((f) => (

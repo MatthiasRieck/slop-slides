@@ -17,7 +17,7 @@ const RAW_COLOR = /#[0-9a-f]{6}\b|#[0-9a-f]{3}\b|\b(?:rgba?|hsla?|oklch)\(/gi;
 const sources = (dir: string): string[] =>
   readdirSync(dir, { withFileTypes: true, recursive: true })
     .filter((f) => f.isFile() && /\.tsx?$/.test(f.name) && !/\.test\.tsx?$/.test(f.name))
-    .map((f) => join(f.parentPath, f.name))
+    .map((f) => join(f.parentPath, f.name).replaceAll("\\", "/"))
     .filter((path) => !path.startsWith("src/test") && !path.endsWith("src/lib/palette.ts"));
 
 const tokensIn = (css: string) => [...css.matchAll(/^\s*(--[a-z-]+):/gm)].map((m) => m[1]!);

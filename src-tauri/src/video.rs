@@ -2,6 +2,8 @@
 //! its entrance animations, slide fades and hero morphs playing as the presenter shows them.
 //! With narration, each slide's narration (see narration/) is said over it, after a pause,
 //! and the slide stays until a pause after it ends: longer than the set time, if need be.
+//! The narration timeline can set otherwise: how long a slide shows and when its narration
+//! starts, which can then run over into the slides around it ([`Options::timeline`]).
 //! Narration without up-to-date audio is said first.
 //!
 //! A hidden window plays the deck (`?print`, its runtime current, as pdf.rs prints it) and the
@@ -137,10 +139,74 @@ impl Options {
         }
     }
 
+    /// How the video's `slides` play out. A slide shows for its `duration`, or else works out
+    /// its length with [`Self::slide_frames`]; its narration starts `narration_start` (or the
+    /// pause before) into it. Narration never talks over the narration before it, and the
+    /// last slide stays until the last word. src/lib/timeline.ts lays it out the same way.
+    pub fn timeline(&self, slides: &[Timing]) -> Timeline {
+        let fps = f64::from(self.fps);
+        let mut frames = Vec::with_capacity(slides.len());
+        let mut starts = Vec::with_capacity(slides.len());
+        let mut shown = 0;
+        let mut voice = 0.0_f64;
+        for slide in slides {
+            let offset = slide.narration_start.unwrap_or(self.pause_before);
+            let length = match slide.duration {
+                Some(seconds) => ((seconds * fps).round() as u32).max(1),
+                None => Options {
+                    pause_before: offset.max(0.0),
+                    ..*self
+                }
+                .slide_frames(slide.narration),
+            };
+            let start = slide.narration.map(|seconds| {
+                let start = (f64::from(shown) / fps + offset).max(voice);
+                voice = start + seconds;
+                start
+            });
+            frames.push(length);
+            starts.push(start);
+            shown += length;
+        }
+        if let Some(last) = frames.last_mut() {
+            *last += ((voice * fps).ceil() as u32).saturating_sub(shown);
+        }
+        Timeline { frames, starts }
+    }
+
     /// When frame `n` is shown, in milliseconds of video.
     fn millis(&self, n: u32) -> f64 {
         f64::from(n) * 1000.0 / f64::from(self.fps)
     }
+}
+
+/// A shown slide's part in the video's timing.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Timing {
+    /// How long its narration lasts, in seconds; None without any.
+    pub narration: Option<f64>,
+    /// How long the narration timeline shows it, in seconds, when it set that.
+    pub duration: Option<f64>,
+    /// When its narration starts, in seconds after the slide, when the timeline set that.
+    pub narration_start: Option<f64>,
+}
+
+/// How a video's slides play out: see [`Options::timeline`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Timeline {
+    /// How many frames each slide shows for.
+    pub frames: Vec<u32>,
+    /// When each slide's narration starts in the video, in seconds; None without any.
+    pub starts: Vec<Option<f64>>,
+}
+
+/// A shown slide as the export gets it: its narration audio, at [`narration::audio::RATE`], and
+/// what the narration timeline set for it.
+#[derive(Debug, Default)]
+struct Cue {
+    clip: Option<Vec<f32>>,
+    duration: Option<f64>,
+    narration_start: Option<f64>,
 }
 
 /// What the export is doing.
@@ -209,7 +275,7 @@ pub async fn export(
 ) -> Result<()> {
     options.check()?;
     let _running = Running::start()?;
-    let clips = match options.narration {
+    let cues = match options.narration {
         true => narrate(app, file, &progress).await?,
         false => Vec::new(),
     };
@@ -260,7 +326,7 @@ pub async fn export(
         &dest,
         video_size(canvas.0, canvas.1),
         options,
-        &clips,
+        &cues,
         progress,
     )
     .await;
@@ -272,12 +338,8 @@ pub async fn export(
 }
 
 /// Says the shown slides' narration that has no up-to-date audio yet, then gives each shown
-/// slide's narration audio, at [`narration::audio::RATE`], in order.
-async fn narrate(
-    app: &AppHandle,
-    file: &Path,
-    progress: &impl Fn(Progress),
-) -> Result<Vec<Option<Vec<f32>>>> {
+/// slide's narration audio and timing, in order.
+async fn narrate(app: &AppHandle, file: &Path, progress: &impl Fn(Progress)) -> Result<Vec<Cue>> {
     use tauri::Manager;
     let shown: Vec<String> = deck::load(file)?
         .slides
@@ -306,11 +368,13 @@ async fn narrate(
         .slides
         .iter()
         .filter(|s| !s.hidden)
-        .map(|s| {
-            ready.remove(&s.id).map(|(samples, rate)| match rate {
+        .map(|s| Cue {
+            clip: ready.remove(&s.id).map(|(samples, rate)| match rate {
                 narration::audio::RATE => samples,
                 rate => voice::resample(&samples, rate, narration::audio::RATE),
-            })
+            }),
+            duration: s.duration,
+            narration_start: s.narration_start,
         })
         .collect())
 }
@@ -322,31 +386,16 @@ async fn cancelled() {
     }
 }
 
-/// The video's soundtrack, at [`AudioTrack::RATE`]: each slide's narration `clips` (at
-/// [`narration::audio::RATE`]) placed `pause_before` into the slide, which lasts its `frames`.
-pub fn soundtrack(
-    frames: &[u32],
-    fps: u32,
-    clips: &[Option<Vec<f32>>],
-    pause_before: f64,
-) -> Vec<f32> {
+/// The video's soundtrack, at [`AudioTrack::RATE`], as long as its `frames`: `clips` (at
+/// [`narration::audio::RATE`]), each starting at its time in seconds.
+pub fn soundtrack(frames: u32, fps: u32, clips: &[(f64, &[f32])]) -> Vec<f32> {
     let rate = f64::from(AudioTrack::RATE);
-    let at = |frame: u32| (f64::from(frame) / f64::from(fps) * rate).round() as usize;
-    let total: u32 = frames.iter().sum();
-    let mut out = vec![0.0; at(total)];
-    let mut start = 0;
-    for (n, clip) in frames
-        .iter()
-        .zip(clips.iter().chain(std::iter::repeat(&None)))
-    {
-        let end = at(start + n);
-        if let Some(clip) = clip {
-            let from = (at(start) + (pause_before * rate).round() as usize).min(end);
-            let clip = voice::resample(clip, narration::audio::RATE, AudioTrack::RATE);
-            let len = clip.len().min(end - from);
-            out[from..from + len].copy_from_slice(&clip[..len]);
-        }
-        start += n;
+    let mut out = vec![0.0; (f64::from(frames) / f64::from(fps) * rate).round() as usize];
+    for (start, clip) in clips {
+        let from = ((start * rate).round() as usize).min(out.len());
+        let clip = voice::resample(clip, narration::audio::RATE, AudioTrack::RATE);
+        let len = clip.len().min(out.len() - from);
+        out[from..from + len].copy_from_slice(&clip[..len]);
     }
     out
 }
@@ -387,7 +436,7 @@ async fn record(
     dest: &Path,
     size: (u32, u32),
     options: Options,
-    clips: &[Option<Vec<f32>>],
+    cues: &[Cue],
     progress: impl Fn(Progress),
 ) -> Result<()> {
     let ready = helper.answer("ready").await?;
@@ -400,18 +449,27 @@ async fn record(
     }
     let (rect, viewport) = pdf::geometry(&ready)?;
     let rect = pdf::inside_whole_points(rect);
-    let lengths: Vec<u32> = (0..slides as usize)
+    let timings: Vec<Timing> = (0..slides as usize)
         .map(|i| {
-            let clip = clips.get(i).and_then(Option::as_ref);
-            let seconds = clip.map(|c| c.len() as f64 / f64::from(narration::audio::RATE));
-            options.slide_frames(seconds)
+            cues.get(i).map_or_else(Timing::default, |cue| Timing {
+                narration: cue
+                    .clip
+                    .as_ref()
+                    .map(|c| c.len() as f64 / f64::from(narration::audio::RATE)),
+                duration: cue.duration,
+                narration_start: cue.narration_start,
+            })
         })
         .collect();
+    let timeline = options.timeline(&timings);
+    let lengths = timeline.frames;
     let frames = lengths.iter().sum();
-    let audio = clips
+    let clips: Vec<(f64, &[f32])> = cues
         .iter()
-        .any(Option::is_some)
-        .then(|| soundtrack(&lengths, options.fps, clips, options.pause_before));
+        .zip(&timeline.starts)
+        .filter_map(|(cue, start)| Some(((*start)?, cue.clip.as_deref()?)))
+        .collect();
+    let audio = (!clips.is_empty()).then(|| soundtrack(frames, options.fps, &clips));
 
     let (jobs, encoded) = spawn_encoder(dest.to_path_buf(), size, options.fps, audio)?;
     let encoder_gone = || Error::msg("the video encoder stopped");
@@ -913,31 +971,126 @@ mod tests {
         assert_eq!(o.slide_frames(Some(10.01)), 346);
     }
 
+    fn spoken(seconds: f64) -> Timing {
+        Timing {
+            narration: Some(seconds),
+            ..Timing::default()
+        }
+    }
+
     #[test]
-    fn the_soundtrack_says_each_narration_after_its_pause() {
+    fn without_a_set_timing_the_timeline_fits_each_slide_to_its_narration() {
+        let o = Options {
+            pause_before: 0.5,
+            pause_after: 1.0,
+            narration: true,
+            ..options(3.0, 30)
+        };
+        let t = o.timeline(&[spoken(10.0), Timing::default(), spoken(1.0)]);
+        assert_eq!(t.frames, [345, 90, 90]);
+        assert_eq!(t.starts, [Some(0.5), None, Some(14.5 + 0.5)]);
+    }
+
+    #[test]
+    fn a_set_timing_shows_the_slide_for_it_and_lets_narration_run_over() {
+        let o = Options {
+            pause_before: 0.5,
+            narration: true,
+            ..options(3.0, 30)
+        };
+        let t = o.timeline(&[
+            // Cut short: its narration goes on over the next slide.
+            Timing {
+                duration: Some(2.0),
+                ..spoken(5.0)
+            },
+            // Its narration starts before it does, right as the first one ends.
+            Timing {
+                duration: Some(6.0),
+                narration_start: Some(3.5),
+                ..spoken(1.0)
+            },
+        ]);
+        assert_eq!(t.frames, [60, 180]);
+        assert_eq!(t.starts, [Some(0.5), Some(5.5)]);
+    }
+
+    #[test]
+    fn narration_waits_for_the_narration_before_it() {
+        let o = Options {
+            narration: true,
+            ..options(1.0, 30)
+        };
+        let t = o.timeline(&[
+            Timing {
+                duration: Some(1.0),
+                ..spoken(5.0)
+            },
+            spoken(1.0),
+        ]);
+        assert_eq!(t.starts, [Some(0.0), Some(5.0)]);
+    }
+
+    #[test]
+    fn the_last_slide_stays_until_the_last_word() {
+        let o = Options {
+            narration: true,
+            ..options(1.0, 30)
+        };
+        let t = o.timeline(&[Timing {
+            duration: Some(1.0),
+            ..spoken(4.0)
+        }]);
+        assert_eq!(t.frames, [120]);
+        assert!(o.timeline(&[]).frames.is_empty());
+    }
+
+    #[test]
+    fn a_narration_start_replaces_the_pause_when_the_length_is_automatic() {
+        let o = Options {
+            pause_before: 0.5,
+            pause_after: 1.0,
+            narration: true,
+            ..options(1.0, 30)
+        };
+        let late = Timing {
+            narration_start: Some(2.0),
+            ..spoken(1.0)
+        };
+        let early = Timing {
+            narration_start: Some(-1.0),
+            ..spoken(1.0)
+        };
+        assert_eq!(o.timeline(&[late]).frames, [120]);
+        // Before the slide starts means the video's start, for the first slide.
+        assert_eq!(o.timeline(&[early]).starts, [Some(0.0)]);
+    }
+
+    #[test]
+    fn the_soundtrack_says_each_clip_at_its_time() {
         let rate = narration::audio::RATE as usize;
         let out_rate = AudioTrack::RATE as usize;
-        // Three one-second slides at 30 fps; the first and last narrated.
-        let clips = vec![Some(vec![0.5; rate / 2]), None, Some(vec![0.25; rate * 2])];
-        let track = soundtrack(&[30, 30, 30], 30, &clips, 0.25);
+        let short = vec![0.5; rate / 2];
+        let long = vec![0.25; rate * 2];
+        // Three seconds at 30 fps.
+        let track = soundtrack(90, 30, &[(0.25, &short), (2.25, &long)]);
         assert_eq!(track.len(), 3 * out_rate, "as long as the video");
         let quarter = out_rate / 4;
-        assert!(
-            track[..quarter].iter().all(|s| *s == 0.0),
-            "the pause before"
-        );
+        assert!(track[..quarter].iter().all(|s| *s == 0.0), "before it");
         assert!(track[quarter + 10..quarter + out_rate / 2 - 10]
             .iter()
             .all(|s| (*s - 0.5).abs() < 1e-6));
         assert!(track[out_rate..2 * out_rate + quarter]
             .iter()
             .all(|s| *s == 0.0));
-        // Narration longer than its slide is cut where the slide ends.
+        // Past the video's end, it is cut.
         assert!(track[2 * out_rate + quarter + 10..]
             .iter()
             .all(|s| (*s - 0.25).abs() < 1e-6));
-        // Slides past the clips are silent.
-        assert_eq!(soundtrack(&[30, 30], 30, &[], 0.0), vec![0.0; 2 * out_rate]);
+        assert!(soundtrack(30, 30, &[(5.0, &short)])
+            .iter()
+            .all(|s| *s == 0.0));
+        assert_eq!(soundtrack(60, 30, &[]), vec![0.0; 2 * out_rate]);
     }
 
     #[test]

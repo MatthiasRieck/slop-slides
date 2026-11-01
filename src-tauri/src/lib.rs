@@ -333,6 +333,12 @@ fn set_slide_time(id: String, slide: String, seconds: u32) -> Result<Deck> {
     deck::set_slide_time(&deck::deck_file(&id)?, &slide, seconds)
 }
 
+/// Sets the timing of slides on the narration timeline, all in one write.
+#[tauri::command]
+fn set_slide_timing(id: String, timing: Vec<deck::SlideTiming>) -> Result<RailEdit> {
+    deck::set_slide_timing(&deck::deck_file(&id)?, &timing)
+}
+
 /// Gives every slide of the deck the canvas `size`.
 #[tauri::command]
 fn set_slide_size(id: String, size: size::SlideSize) -> Result<Deck> {
@@ -579,8 +585,8 @@ async fn export_pdf(app: AppHandle, id: String, dest: String) -> Result<()> {
 }
 
 /// Records the deck to `dest` as an MP4, each shown slide on screen for the same time (or,
-/// speaking its narration, until that ends), with `video-export-progress` events to `window`
-/// as it goes.
+/// speaking its narration, as long as the narration timeline says), with
+/// `video-export-progress` events to `window` as it goes.
 #[tauri::command]
 async fn export_video(
     app: AppHandle,
@@ -848,6 +854,14 @@ fn narration_wav(id: String, slide: String) -> Result<tauri::ipc::Response> {
     Ok(tauri::ipc::Response::new(std::fs::read(file)?))
 }
 
+/// How loud a slide's narration audio is along its length, for drawing its waveform.
+#[tauri::command]
+async fn narration_peaks(id: String, slide: String) -> Result<Vec<f32>> {
+    let file = narration::audio_file(&deck::deck_file(&id)?, &slide);
+    let (samples, rate) = narration::audio::read_wav(&file)?;
+    Ok(narration::audio::peaks(&samples, rate))
+}
+
 #[tauri::command]
 fn set_narration_voice(id: String, voice: String) -> Result<Deck> {
     deck::set_narration_voice(&deck::deck_file(&id)?, &voice)
@@ -942,6 +956,7 @@ pub fn run() {
             set_slide_narration,
             set_slide_notes,
             set_slide_time,
+            set_slide_timing,
             set_slide_size,
             add_section,
             rename_section,
@@ -995,6 +1010,7 @@ pub fn run() {
             render_narration,
             cancel_narration,
             narration_wav,
+            narration_peaks,
             set_narration_voice,
             set_narration_language,
         ])

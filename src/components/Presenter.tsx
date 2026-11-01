@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { api, type Deck, errorMessage } from "../lib/api";
 import { zoomBox } from "../lib/ink";
-import { type Playback, playNarration } from "../lib/narrationAudio";
+import { layoutTimeline } from "../lib/timeline";
+import { playTimeline } from "../lib/timelinePlayback";
 import { cn, fileUrl } from "../lib/utils";
 import { loadVideoOptions } from "../lib/video";
 import { useNarration } from "../narrationStore";
@@ -258,54 +259,49 @@ function usePresenterFeed(deck: Deck | null, slide: string | null, go: (key: str
 }
 
 /**
- * Runs the show by itself while playing: each slide waits the pause before its narration,
- * speaks it (its up-to-date audio, from the Narration tab), waits the pause after, and stays
- * at least the set seconds per slide; then `next` moves on. The times are the video export's.
- * Pausing stops the narration; playing again starts the slide's narration over. The show stops
- * playing after the last slide.
+ * Runs the show by itself while playing, on the video export's timeline (see `layoutTimeline`):
+ * each slide shows for its time, then `next` moves on, and narration (up-to-date audio only,
+ * from the Narration tab) plays at its time, carrying on across slides when it runs over.
+ * Pausing stops the narration; playing again starts over from the start of the slide. Moving to
+ * another slide meanwhile goes on from there. The show stops playing after the last slide.
  */
 export function useAutoplay(deck: Deck | null, current: string | null, next: () => void) {
   const [playing, setPlaying] = useState(false);
+  // Bumped to start over from the slide on screen, when something else moved to it.
+  const [from, setFrom] = useState(0);
   const nextRef = useRef(next);
   nextRef.current = next;
+  const currentRef = useRef(current);
+  currentRef.current = current;
+  // The slide the timeline is on; another one on screen means someone else moved the show.
+  const onTimeline = useRef<string | null>(null);
   useEffect(() => {
-    if (!playing || !deck || !current) return;
-    let cancelled = false;
-    let playback: Playback | null = null;
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    const wait = (ms: number) => new Promise<void>((resolve) => timers.push(setTimeout(resolve, Math.max(0, ms))));
-    const options = loadVideoOptions();
-    const started = Date.now();
-    const run = async () => {
-      const { audio, audioDeck } = useNarration.getState();
-      const ready = audioDeck === deck.id && audio[current]?.state === "ready";
-      if (ready && options.narration) {
-        await wait(options.pauseBefore * 1000);
-        if (cancelled) return;
-        try {
-          playback = await playNarration(deck.id, current);
-          if (cancelled) return playback.stop();
-          await playback.ended;
-        } catch {
-          // Audio that cannot play: the slide still gets its time.
-        }
-        if (cancelled) return;
-        await wait(options.pauseAfter * 1000);
-      }
-      const rest = options.secondsPerSlide * 1000 - (Date.now() - started);
-      if (rest > 0) await wait(rest);
-      if (cancelled) return;
-      const shown = deck.slides.filter((s) => !s.hidden);
-      if (shown[shown.length - 1]?.id === current) setPlaying(false);
-      else nextRef.current();
-    };
-    void run();
-    return () => {
-      cancelled = true;
-      for (const timer of timers) clearTimeout(timer);
-      playback?.stop();
-    };
-  }, [playing, deck, current]);
+    if (playing && current && current !== onTimeline.current) setFrom((n) => n + 1);
+  }, [playing, current]);
+  useEffect(() => {
+    const slide = currentRef.current;
+    onTimeline.current = slide;
+    if (!playing || !deck || !slide || from < 0) return;
+    const { audio, audioDeck } = useNarration.getState();
+    const shown = deck.slides.filter((s) => !s.hidden);
+    const spoken = Object.fromEntries(
+      shown.map((s) => {
+        const said = audioDeck === deck.id && audio[s.id]?.state === "ready";
+        return [s.id, said ? (audio[s.id]?.seconds ?? null) : null];
+      }),
+    );
+    const timeline = layoutTimeline(shown, spoken, loadVideoOptions());
+    const start = timeline.slides.find((s) => s.id === slide)?.start;
+    // A hidden slide has no place on the timeline.
+    if (start === undefined) return void nextRef.current();
+    return playTimeline(deck.id, timeline, start, {
+      slide: (index) => {
+        onTimeline.current = timeline.slides[index]?.id ?? null;
+        nextRef.current();
+      },
+      ended: () => setPlaying(false),
+    });
+  }, [playing, deck, from]);
   return { playing, toggle: () => setPlaying((p) => !p) };
 }
 

@@ -225,6 +225,10 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
 - A slide's `data-time` attribute is how long the presenter expects to spend on it, in whole
   seconds (`data-time="90"`). The presenter view counts it down; the audience never sees it.
   Keep it when editing the slide; set or change it only when asked.
+- A slide's `data-duration` (how long it shows, in seconds, `0.5` to `3600`) and
+  `data-narration-start` (when its narration starts, in seconds after the slide does, negative
+  when earlier) come from the user's narration timeline; video exports and the self-running
+  show keep to them. Keep them when editing the slide, and do not set or change them.
 
 ## Design standard
 

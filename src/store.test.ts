@@ -1,17 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ask, invoke, listen } from "./test/tauri";
 
-const invoke = vi.fn();
-const ask = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
 /** Handlers registered through `listen`, by event name. */
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async (name: string, handler: (event: { payload: unknown }) => void) => {
-    listeners.set(name, handler);
-    return () => {};
-  }),
-}));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: (...args: unknown[]) => ask(...args) }));
+listen.mockImplementation(async (name: string, handler: (event: { payload: unknown }) => void) => {
+  listeners.set(name, handler);
+  return () => {};
+});
 
 import type { AgentEvent, Deck } from "./lib/api";
 import type { ProviderInfo } from "./lib/models";

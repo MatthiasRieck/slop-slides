@@ -1,12 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const invoke = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invoke(...args),
-  Channel: class {
-    constructor(public onmessage: () => void) {}
-  },
-}));
+import { invoke } from "../test/tauri";
 
 import { api, errorMessage } from "./api";
 import { DEFAULT_VIDEO_OPTIONS } from "./video";

@@ -1,16 +1,13 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { invoke, listen } from "../test/tauri";
 
-const invoke = vi.fn();
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async (name: string, handler: (event: { payload: unknown }) => void) => {
-    listeners.set(name, handler);
-    return () => listeners.delete(name);
-  }),
-}));
+listen.mockImplementation(async (name: string, handler: (event: { payload: unknown }) => void) => {
+  listeners.set(name, handler);
+  return () => listeners.delete(name);
+});
 
 import { useApp } from "../store";
 import { fakeCanvas2D } from "../test/fakeCanvas";

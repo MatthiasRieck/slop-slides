@@ -1,15 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const invoke = vi.fn();
-const openDialog = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn(), open: (...args: unknown[]) => openDialog(...args) }));
-
+import { beforeEach, describe, expect, it } from "vitest";
 import type { RecentWorkspace } from "../lib/api";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { invoke, open as openDialog } from "../test/tauri";
 import { Home } from "./Home";
 
 const NOW = Date.now();

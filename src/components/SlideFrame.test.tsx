@@ -1,10 +1,6 @@
 import { act, fireEvent, render, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
-
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";

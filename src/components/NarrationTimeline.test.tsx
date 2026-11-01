@@ -1,10 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { invoke } from "../test/tauri";
 
-const invoke = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 vi.mock("../lib/timelinePlayback", () => ({ playTimeline: vi.fn() }));
 
 import type { Deck, RailEdit, Slide } from "../lib/api";

@@ -1,17 +1,11 @@
+import { ask } from "@tauri-apps/plugin-dialog";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const invoke = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
-
-import { ask } from "@tauri-apps/plugin-dialog";
-
 import type { Deck, SlideAudio, SpeechStatus } from "../lib/api";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { invoke } from "../test/tauri";
 import { NARRATION_SAVE_DELAY, NarrationPanel } from "./NarrationPanel";
 
 const setNarration = vi.fn(async (_slide: string, _text: string) => {});

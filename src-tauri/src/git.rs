@@ -1,19 +1,26 @@
-//! Version control: what changed in a deck since its last commit, slide by slide, and the files
-//! of that commit for the before and after comparison (see [`crate::protocol`]). Reads through
-//! the user's `git`, like a terminal would; nothing here changes the repository.
+//! Version control: what changed in a deck since its last commit, slide by slide, the files of
+//! that commit for the before and after comparison (see [`crate::protocol`]), and staging,
+//! restoring and committing those changes. Works through the user's `git`, like a terminal would.
 //!
 //! Slides are matched by id, and then by content: slides get their ids when a deck opens, so a
 //! slide committed without one is still the same slide. What is left is added or removed.
+//!
+//! Git stages whole files, so staging one slide writes the deck as the index has it with just
+//! that slide changed to the index, leaving the file on disk alone. Restoring goes the other
+//! way: the deck on disk, and the index, take the slide from the commit.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
+use crate::comments;
 use crate::deck;
 use crate::error::{Error, Result};
 use crate::html;
+use crate::review;
 use crate::size::SizeInfo;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -49,6 +56,14 @@ pub struct SlideChange {
     pub old_id: Option<String>,
     /// What changed that the slide's picture may not show, such as its speaker notes.
     pub details: Vec<String>,
+    /// It is elsewhere in the deck than at the commit, whatever else changed.
+    pub moved: bool,
+    /// Its number in the deck at the commit; None for an added slide.
+    pub old_number: Option<usize>,
+    /// The index has the slide as it is now.
+    pub staged: bool,
+    /// The index has the slide where it is now.
+    pub move_staged: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -71,25 +86,82 @@ pub struct DeckChanges {
     pub old_size: Option<SizeInfo>,
     /// The deck's slides in order, with the removed ones where they used to be.
     pub slides: Vec<SlideChange>,
+    /// The index has the shared styles as they are now.
+    pub styles_staged: bool,
+    /// How many files the next commit takes in.
+    pub staged_files: usize,
+    /// How many of those are outside the deck's folder.
+    pub staged_elsewhere: usize,
+    /// The deck or its folder has something the index does not.
+    pub has_unstaged: bool,
 }
 
-/// `git <args>` in `dir`: its output, or None when it failed or git is not there. Optional locks
-/// are off because the user's own git may be running in the repository at the same time.
-fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
+/// A deck's source changed, or why it could not be.
+type Edited = std::result::Result<String, String>;
+
+/// A change to stage or restore, by the ids the list has for it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum Change {
+    /// A slide's content: `id` is its id in the deck, `old_id` at the commit.
+    Slide {
+        id: Option<String>,
+        old_id: Option<String>,
+    },
+    /// Where a slide is.
+    Move { id: String, old_id: String },
+    /// What the slides share.
+    Styles,
+}
+
+fn command(dir: &Path, args: &[&str]) -> Command {
     let mut command = Command::new("git");
-    command
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null());
+    command.args(args).current_dir(dir);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    let output = command.output().ok()?;
+    command
+}
+
+/// `git <args>` in `dir`: its output, or None when it failed or git is not there. Optional locks
+/// are off because the user's own git may be running in the repository at the same time.
+fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
+    let output = command(dir, args)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
     output.status.success().then_some(output.stdout)
+}
+
+/// `git <args>` that changes the repository, with `input` on its stdin: its output, or what git
+/// says went wrong.
+fn git_write(dir: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>> {
+    let mut child = command(dir, args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| Error::msg(format!("could not run git: {e}")))?;
+    let mut stdin = child.stdin.take().expect("stdin is piped");
+    let input = input.to_vec();
+    let writer = std::thread::spawn(move || stdin.write_all(&input));
+    let output = child.wait_with_output()?;
+    let _ = writer.join();
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+    let said = [&output.stderr, &output.stdout]
+        .map(|text| String::from_utf8_lossy(text).trim().to_string());
+    let said = said.into_iter().find(|text| !text.is_empty());
+    Err(Error::msg(said.unwrap_or_else(|| "git failed".into())))
 }
 
 /// The closest folder of `file` that exists; a file of a commit may be gone by now, folder and all.
@@ -136,16 +208,369 @@ fn changed_files(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// What changed in the deck `file` since the last commit.
-pub fn changes(file: &Path) -> Result<DeckChanges> {
-    let source = deck::read_html(file)?;
+/// The NUL-separated paths git printed.
+fn paths(out: Option<Vec<u8>>) -> Vec<String> {
+    String::from_utf8_lossy(&out.unwrap_or_default())
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// The files around `dir`, relative to it, that differ from the index.
+fn unstaged_files(dir: &Path) -> Vec<String> {
+    let args = ["diff", "--name-only", "-z", "--relative", "--", "."];
+    paths(git(dir, &args))
+}
+
+/// What the next commit takes in: every file of it, and those around `dir`.
+fn staged_files(dir: &Path) -> (usize, usize) {
+    let all = ["diff", "--cached", "--name-only", "-z"];
+    let here = [
+        "diff",
+        "--cached",
+        "--name-only",
+        "-z",
+        "--relative",
+        "--",
+        ".",
+    ];
+    (paths(git(dir, &all)).len(), paths(git(dir, &here)).len())
+}
+
+/// The deck as the index has it; None when it does not have it.
+fn read_index(file: &Path) -> Option<String> {
+    let (dir, name) = split(file).ok()?;
+    let out = git(dir, &["cat-file", "--filters", &format!(":./{name}")])?;
+    Some(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// The deck's folder and file name.
+fn split(file: &Path) -> Result<(&Path, &str)> {
     let dir = file
         .parent()
         .ok_or_else(|| Error::msg("the deck is not in a folder"))?;
-    let name = file
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("");
+    let name = file.file_name().and_then(|name| name.to_str());
+    Ok((
+        dir,
+        name.ok_or_else(|| Error::msg("the deck's name is not text"))?,
+    ))
+}
+
+/// What the deck's file is staged as from now on, without touching it on disk.
+fn write_index(file: &Path, text: &str) -> Result<()> {
+    let (dir, name) = split(file)?;
+    let listed = git(dir, &["ls-files", "-s", "--", name]).unwrap_or_default();
+    let listed = String::from_utf8_lossy(&listed);
+    let mode = listed
+        .split(' ')
+        .next()
+        .filter(|m| !m.is_empty())
+        .unwrap_or("100644");
+    let path = format!("--path={name}");
+    let args = ["hash-object", "-w", "--stdin", &path];
+    let blob = git_write(dir, &args, text.as_bytes())?;
+    let blob = String::from_utf8_lossy(&blob);
+    let prefix = git(dir, &["rev-parse", "--show-prefix"]).unwrap_or_default();
+    let prefix = String::from_utf8_lossy(&prefix);
+    let entry = format!(
+        "{mode},{},{}{name}",
+        blob.trim(),
+        prefix.trim_end_matches('\n')
+    );
+    git_write(dir, &["update-index", "--add", "--cacheinfo", &entry], b"")?;
+    Ok(())
+}
+
+/// The three versions of a deck.
+struct Versions {
+    head: String,
+    index: String,
+    work: String,
+}
+
+fn versions(file: &Path) -> Result<Versions> {
+    let head =
+        read_at_head(file).ok_or_else(|| Error::msg("The last commit does not have this deck."))?;
+    let head = String::from_utf8_lossy(&head).into_owned();
+    Ok(Versions {
+        index: read_index(file).unwrap_or_else(|| head.clone()),
+        work: deck::read_html(file)?,
+        head,
+    })
+}
+
+/// Adds the changed or new files around the deck that `text` refers to, so that a commit of it
+/// does not point at images it does not have.
+fn stage_assets(file: &Path, text: &str) -> Result<()> {
+    let (dir, name) = split(file)?;
+    let args = ["ls-files", "-m", "-o", "-d", "--exclude-standard", "-z"];
+    let files = paths(git(dir, &args));
+    let used: Vec<&str> = files
+        .iter()
+        .map(String::as_str)
+        .filter(|path| *path != name && text.contains(path))
+        .collect();
+    if used.is_empty() {
+        return Ok(());
+    }
+    git_write(dir, &[&["add", "-A", "--"], used.as_slice()].concat(), b"")?;
+    Ok(())
+}
+
+/// Puts the changed files around the deck that `text` refers to back as they were committed.
+fn restore_assets(file: &Path, text: &str) -> Result<()> {
+    let (dir, name) = split(file)?;
+    let files = changed_files(dir);
+    let used: Vec<&str> = files
+        .iter()
+        .map(String::as_str)
+        .filter(|path| *path != name && text.contains(path))
+        .collect();
+    if used.is_empty() {
+        return Ok(());
+    }
+    let args = ["restore", "--source=HEAD", "--staged", "--worktree", "--"];
+    git_write(dir, &[args.as_slice(), used.as_slice()].concat(), b"")?;
+    Ok(())
+}
+
+/// Stages `change`: the index takes it from the deck.
+pub fn stage(file: &Path, change: &Change) -> Result<()> {
+    let v = versions(file)?;
+    let index = match change {
+        Change::Slide { id, old_id } => adopt_slide(
+            &v.index,
+            &v.work,
+            id.as_deref(),
+            (&v.head, old_id.as_deref()),
+        ),
+        Change::Move { id, .. } => move_slide(&v.index, &v.work, id),
+        Change::Styles => Ok(with_slides_of(&v.work, &v.index)),
+    }
+    .map_err(Error::Message)?;
+    write_index(file, &index)?;
+    match change {
+        Change::Slide { id: Some(id), .. } => stage_assets(file, slide_of(&v.work, id)),
+        Change::Styles => stage_assets(file, &strip_slides(&v.work)),
+        _ => Ok(()),
+    }
+}
+
+/// Takes `change` out of the index again; the deck keeps it.
+pub fn unstage(file: &Path, change: &Change) -> Result<()> {
+    let v = versions(file)?;
+    write_index(file, &without_change(&v, &v.index, change)?)
+}
+
+/// `base` with `change` as it was committed.
+fn without_change(v: &Versions, base: &str, change: &Change) -> Result<String> {
+    match change {
+        Change::Slide { id, old_id } => {
+            adopt_slide(base, &v.head, old_id.as_deref(), (&v.work, id.as_deref()))
+        }
+        Change::Move { old_id, .. } => move_slide(base, &v.head, old_id),
+        Change::Styles => Ok(with_slides_of(&v.head, base)),
+    }
+    .map_err(Error::Message)
+}
+
+/// The deck on disk with `change` undone, and what its restore needs of the commit.
+pub fn restored(file: &Path, change: &Change) -> Result<String> {
+    let v = versions(file)?;
+    let work = without_change(&v, &v.work, change)?;
+    Ok(match change {
+        // Comments and review marks are not styles, though they live outside the slides.
+        Change::Styles => comments::write(
+            &review::write(&html::ensure_runtime(&work), &review::read(&v.work)),
+            &comments::read(&v.work),
+        ),
+        _ => work,
+    })
+}
+
+/// Takes `change` out of the index and puts the files it used back; the deck is already written.
+pub fn finish_restore(file: &Path, change: &Change, before: &str) -> Result<()> {
+    let v = Versions {
+        work: before.to_string(),
+        ..versions(file)?
+    };
+    write_index(file, &without_change(&v, &v.index, change)?)?;
+    match change {
+        Change::Slide {
+            old_id: Some(id), ..
+        } => restore_assets(file, slide_of(&v.head, id)),
+        Change::Styles => restore_assets(file, &strip_slides(&v.head)),
+        _ => Ok(()),
+    }
+}
+
+/// Stages the whole deck and every changed file it refers to.
+pub fn stage_all(file: &Path) -> Result<()> {
+    let (dir, name) = split(file)?;
+    git_write(dir, &["add", "--", name], b"")?;
+    stage_assets(file, &deck::read_html(file)?)
+}
+
+/// Unstages everything around the deck.
+pub fn unstage_all(file: &Path) -> Result<()> {
+    let (dir, _) = split(file)?;
+    git_write(dir, &["reset", "-q", "--", "."], b"")?;
+    Ok(())
+}
+
+/// Commits what is staged.
+pub fn commit(file: &Path, message: &str) -> Result<()> {
+    let (dir, _) = split(file)?;
+    let message = message.trim();
+    if message.is_empty() {
+        return Err(Error::msg("Write a commit message first."));
+    }
+    git_write(dir, &["commit", "-q", "-m", message], b"")?;
+    Ok(())
+}
+
+/// The markup of the slide `id`, or nothing when `source` does not have it.
+fn slide_of<'a>(source: &'a str, id: &str) -> &'a str {
+    let slides = html::find_slides(source);
+    let at = snapshots(source).iter().position(|slide| slide.id == id);
+    at.map_or("", |at| &source[slides[at].range.clone()])
+}
+
+/// The slide of `base` that is the slide `id` of `version`.
+fn locate(base: &str, version: &str, id: &str) -> Option<usize> {
+    let slides = snapshots(version);
+    let at = slides.iter().position(|slide| slide.id == id)?;
+    match_slides(&snapshots(base), &slides)[at]
+}
+
+/// `base` with `markup` put in where it goes by the order of `from`, whose slide `at` it is:
+/// after the closest slide before it that `base` also has. The slide `leaving` of `base` goes out.
+fn place(base: &str, from: &str, at: usize, markup: &str, leaving: Option<usize>) -> Edited {
+    let spans = html::find_slides(base);
+    let matches = match_slides(&snapshots(base), &snapshots(from));
+    let before = matches[..at]
+        .iter()
+        .rev()
+        .flatten()
+        .copied()
+        .find(|&slide| Some(slide) != leaving);
+    let next = spans
+        .iter()
+        .enumerate()
+        .find(|(index, _)| Some(*index) != leaving)
+        .map(|(_, span)| span);
+    let (spot, piece) = match (before.map(|slide| &spans[slide]), next) {
+        (Some(span), _) => {
+            let indent = html::indent_before(base, span.range.start);
+            (span.range.end, format!("\n{indent}{markup}"))
+        }
+        (None, Some(span)) => {
+            let indent = html::indent_before(base, span.range.start);
+            (span.range.start, format!("{markup}\n{indent}"))
+        }
+        (None, None) if leaving.is_some() => return Ok(base.to_string()),
+        (None, None) => (html::end_of_deck(base)?, format!("\n    {markup}")),
+    };
+    let Some(out) = leaving.map(|slide| out_range(base, &spans[slide])) else {
+        return Ok(format!("{}{piece}{}", &base[..spot], &base[spot..]));
+    };
+    Ok(if spot >= out.end {
+        format!(
+            "{}{}{piece}{}",
+            &base[..out.start],
+            &base[out.end..spot],
+            &base[spot..]
+        )
+    } else {
+        format!(
+            "{}{piece}{}{}",
+            &base[..spot],
+            &base[spot..out.start],
+            &base[out.end..]
+        )
+    })
+}
+
+/// A slide with the whitespace before it.
+fn out_range(source: &str, span: &html::SlideSpan) -> std::ops::Range<usize> {
+    source[..span.range.start].trim_end().len()..span.range.end
+}
+
+/// `base` with one slide made as it is in `from`, where it goes by `id`, or taken out when `from`
+/// does not have it. `other` is that slide's version and id elsewhere, to find it in `base` by.
+fn adopt_slide(base: &str, from: &str, id: Option<&str>, other: (&str, Option<&str>)) -> Edited {
+    let spans = html::find_slides(base);
+    let elsewhere = || other.1.and_then(|other_id| locate(base, other.0, other_id));
+    let Some(id) = id else {
+        return Ok(match elsewhere() {
+            Some(slide) => {
+                let out = out_range(base, &spans[slide]);
+                format!("{}{}", &base[..out.start], &base[out.end..])
+            }
+            None => base.to_string(),
+        });
+    };
+    let slides = snapshots(from);
+    let at = slides
+        .iter()
+        .position(|slide| slide.id == id)
+        .ok_or_else(|| format!("Slide not found: {id}"))?;
+    Ok(match locate(base, from, id).or_else(elsewhere) {
+        Some(slide) => {
+            let range = spans[slide].range.clone();
+            format!(
+                "{}{}{}",
+                &base[..range.start],
+                slides[at].markup,
+                &base[range.end..]
+            )
+        }
+        None => place(base, from, at, &slides[at].markup, None)?,
+    })
+}
+
+/// `base` with the slide `id` of `from` where `from` has it, as far as `base` has the same slides.
+fn move_slide(base: &str, from: &str, id: &str) -> Edited {
+    let at = snapshots(from)
+        .iter()
+        .position(|slide| slide.id == id)
+        .ok_or_else(|| format!("Slide not found: {id}"))?;
+    let Some(slide) = locate(base, from, id) else {
+        return Ok(base.to_string());
+    };
+    let span = &html::find_slides(base)[slide];
+    place(base, from, at, &base[span.range.clone()], Some(slide))
+}
+
+/// Where a deck's slides and section markers are, from the first to the last.
+fn slides_range(source: &str) -> Option<std::ops::Range<usize>> {
+    let slides = html::find_slides(source).into_iter().map(|s| s.range);
+    let sections = html::find_sections(source).into_iter().map(|s| s.range);
+    let ranges: Vec<_> = slides.chain(sections).collect();
+    let start = ranges.iter().map(|r| r.start).min()?;
+    let end = ranges.iter().map(|r| r.end).max()?;
+    Some(start..end)
+}
+
+/// Everything of `shell` but its slides and section markers, which are those of `slides`.
+fn with_slides_of(shell: &str, slides: &str) -> String {
+    let content = slides_range(slides).map_or("", |range| &slides[range]);
+    match slides_range(shell) {
+        Some(range) => format!("{}{content}{}", &shell[..range.start], &shell[range.end..]),
+        None => match html::end_of_deck(shell) {
+            Ok(at) if !content.is_empty() => {
+                format!("{}\n    {content}{}", &shell[..at], &shell[at..])
+            }
+            _ => shell.to_string(),
+        },
+    }
+}
+
+/// What changed in the deck `file` since the last commit.
+pub fn changes(file: &Path) -> Result<DeckChanges> {
+    let source = deck::read_html(file)?;
+    let (dir, name) = split(file)?;
     let slides = snapshots(&source);
     if git(dir, &["rev-parse", "--is-inside-work-tree"]).is_none() {
         return Ok(uncompared(Tracking::NoRepository, &slides));
@@ -154,19 +579,64 @@ pub fn changes(file: &Path) -> Result<DeckChanges> {
         return Ok(uncompared(Tracking::NotCommitted, &slides));
     };
     let committed = String::from_utf8_lossy(&committed);
-    let assets: Vec<String> = changed_files(dir)
-        .into_iter()
-        .filter(|path| path != name)
-        .collect();
+    let others = |files: Vec<String>| -> Vec<String> {
+        files.into_iter().filter(|path| path != name).collect()
+    };
+    let assets = others(changed_files(dir));
     let old = snapshots(&committed);
+    let index = read_index(file).unwrap_or_else(|| committed.to_string());
+    let staged = snapshots(&index);
+    let unstaged = others(unstaged_files(dir));
+    let styles_changed = shell(&committed) != shell(&source)
+        || assets.iter().any(|a| strip_slides(&source).contains(a));
+    let mut list = compare(&old, &slides, &assets);
+    mark_staged(
+        &mut list,
+        &compare(&staged, &slides, &unstaged),
+        &index,
+        &committed,
+    );
+    let (staged_files, staged_here) = staged_files(dir);
     Ok(DeckChanges {
         tracking: Tracking::Committed,
         commit: Some(commit),
-        styles_changed: shell(&committed) != shell(&source)
-            || assets.iter().any(|a| strip_slides(&source).contains(a)),
+        styles_changed,
         old_size: Some(html::slide_size(&committed).into()),
-        slides: compare(&old, &slides, &assets),
+        slides: list,
+        styles_staged: styles_changed
+            && shell(&index) == shell(&source)
+            && !unstaged.iter().any(|a| strip_slides(&source).contains(a)),
+        staged_files,
+        staged_elsewhere: staged_files - staged_here,
+        has_unstaged: index != source || !unstaged.is_empty() || !others(untracked(dir)).is_empty(),
     })
+}
+
+/// New files around `dir`, relative to it, that are not ignored.
+fn untracked(dir: &Path) -> Vec<String> {
+    paths(git(dir, &["ls-files", "-o", "--exclude-standard", "-z"]))
+}
+
+/// Says of each row of `list`, the deck against the commit, whether the index has that change
+/// already: when the deck against the index, in `against_index`, no longer shows it.
+fn mark_staged(
+    list: &mut [SlideChange],
+    against_index: &[SlideChange],
+    index: &str,
+    committed: &str,
+) {
+    for row in list.iter_mut() {
+        let Some(id) = &row.id else {
+            let old_id = row.old_id.as_deref().unwrap_or("");
+            row.staged = locate(index, committed, old_id).is_none();
+            continue;
+        };
+        let now = against_index.iter().find(|r| r.id.as_ref() == Some(id));
+        let same =
+            now.is_some_and(|r| matches!(r.status, SlideStatus::Unchanged | SlideStatus::Moved));
+        row.staged = same && matches!(row.status, SlideStatus::Added | SlideStatus::Modified);
+        row.move_staged = row.moved && now.is_some_and(|r| !r.moved);
+    }
 }
 
 fn uncompared(tracking: Tracking, slides: &[Snapshot]) -> DeckChanges {
@@ -179,6 +649,10 @@ fn uncompared(tracking: Tracking, slides: &[Snapshot]) -> DeckChanges {
             Tracking::NoRepository => Vec::new(),
             _ => compare(&[], slides, &[]),
         },
+        styles_staged: false,
+        staged_files: 0,
+        staged_elsewhere: 0,
+        has_unstaged: false,
     }
 }
 
@@ -330,17 +804,17 @@ fn compare(old: &[Snapshot], new: &[Snapshot], assets: &[String]) -> Vec<SlideCh
             id: None,
             old_id: Some(slide.id.clone()),
             details: Vec::new(),
+            moved: false,
+            old_number: Some(index + 1),
+            staged: false,
+            move_staged: false,
         });
     }
 
     let mut list = removed.remove(&None).unwrap_or_default();
     for (index, slide) in new.iter().enumerate() {
-        list.push(change(
-            slide,
-            matches[index].map(|i| &old[i]),
-            kept[index],
-            assets,
-        ));
+        let was = matches[index].map(|i| (i, &old[i]));
+        list.push(change(slide, was, kept[index], assets));
         list.extend(removed.remove(&Some(index)).unwrap_or_default());
     }
     list
@@ -348,18 +822,23 @@ fn compare(old: &[Snapshot], new: &[Snapshot], assets: &[String]) -> Vec<SlideCh
 
 fn change(
     slide: &Snapshot,
-    old: Option<&Snapshot>,
+    old: Option<(usize, &Snapshot)>,
     in_place: bool,
     assets: &[String],
 ) -> SlideChange {
-    let Some(old) = old else {
-        return SlideChange {
-            key: slide.id.clone(),
-            status: SlideStatus::Added,
-            id: Some(slide.id.clone()),
-            old_id: None,
-            details: Vec::new(),
-        };
+    let row = |status, old_id, details, moved, old_number| SlideChange {
+        key: slide.id.clone(),
+        status,
+        id: Some(slide.id.clone()),
+        old_id,
+        details,
+        moved,
+        old_number,
+        staged: false,
+        move_staged: false,
+    };
+    let Some((index, old)) = old else {
+        return row(SlideStatus::Added, None, Vec::new(), false, None);
     };
     let parts = slide.parts.iter().zip(&old.parts);
     let details: Vec<String> = parts
@@ -374,13 +853,13 @@ fn change(
     } else {
         SlideStatus::Moved
     };
-    SlideChange {
-        key: slide.id.clone(),
+    row(
         status,
-        id: Some(slide.id.clone()),
-        old_id: Some(old.id.clone()),
+        Some(old.id.clone()),
         details,
-    }
+        !in_place,
+        Some(index + 1),
+    )
 }
 
 #[cfg(test)]
@@ -483,10 +962,14 @@ mod tests {
     }
 
     #[test]
-    fn a_changed_slide_counts_as_modified_even_when_it_moved() {
-        let old = deck(&["a=A", "b=B"]);
-        let new = deck(&["b=Bee", "a=A"]);
-        assert_eq!(statuses(&old, &new)[0], (Modified, "b".into()));
+    fn a_changed_slide_that_moved_is_both() {
+        let old = deck(&["a=A", "b=B", "c=C"]);
+        let new = deck(&["c=Cee", "a=A", "b=B"]);
+        let list = compare(&snapshots(&old), &snapshots(&new), &[]);
+        assert_eq!(list[0].status, Modified);
+        assert!(list[0].moved, "the edit must not hide the move");
+        assert_eq!(list[0].old_number, Some(3));
+        assert!(!list[1].moved);
     }
 
     #[test]
@@ -744,5 +1227,308 @@ mod tests {
             "the file and its folder are gone from the disk"
         );
         assert_eq!(read_at_head(&repo.0.join("talk/untracked.png")), None);
+    }
+
+    fn slide(id: &str) -> Change {
+        Change::Slide {
+            id: Some(id.into()),
+            old_id: Some(id.into()),
+        }
+    }
+
+    fn moved(id: &str) -> Change {
+        Change::Move {
+            id: id.into(),
+            old_id: id.into(),
+        }
+    }
+
+    fn index_of(repo: &Repo) -> String {
+        read_index(&repo.deck()).unwrap()
+    }
+
+    fn work_of(repo: &Repo) -> String {
+        fs::read_to_string(repo.deck()).unwrap()
+    }
+
+    fn ids(source: &str) -> Vec<String> {
+        snapshots(source).into_iter().map(|s| s.id).collect()
+    }
+
+    fn committed(slides: &[&str], now: &[&str]) -> Repo {
+        let repo = Repo::new();
+        repo.write("talk/deck.html", &deck(slides));
+        repo.commit("First");
+        repo.write("talk/deck.html", &deck(now));
+        repo
+    }
+
+    /// Applies the deck `restored` wrote, as the app does.
+    fn restore(repo: &Repo, change: &Change) {
+        let before = work_of(repo);
+        let after = restored(&repo.deck(), change).unwrap();
+        fs::write(repo.deck(), after).unwrap();
+        finish_restore(&repo.deck(), change, &before).unwrap();
+    }
+
+    #[test]
+    fn stages_one_modified_slide_and_leaves_the_rest() {
+        let repo = committed(&["a=A", "b=B"], &["a=Ay", "b=Bee"]);
+        stage(&repo.deck(), &slide("a")).unwrap();
+        assert!(index_of(&repo).contains("<h1>Ay</h1>"));
+        assert!(index_of(&repo).contains("<h1>B</h1>"), "b stays unstaged");
+        assert_eq!(
+            work_of(&repo),
+            deck(&["a=Ay", "b=Bee"]),
+            "the file is left alone"
+        );
+
+        let found = changes(&repo.deck()).unwrap();
+        assert!(found.slides[0].staged);
+        assert!(!found.slides[1].staged);
+        assert_eq!(found.staged_files, 1);
+        assert!(found.has_unstaged);
+
+        unstage(&repo.deck(), &slide("a")).unwrap();
+        assert_eq!(index_of(&repo), deck(&["a=A", "b=B"]));
+    }
+
+    #[test]
+    fn stages_an_added_slide_in_its_place() {
+        let repo = committed(&["a=A", "b=B"], &["a=A", "new=N", "b=Bee"]);
+        let added = Change::Slide {
+            id: Some("new".into()),
+            old_id: None,
+        };
+        stage(&repo.deck(), &added).unwrap();
+        assert_eq!(ids(&index_of(&repo)), ["a", "new", "b"]);
+        assert!(changes(&repo.deck()).unwrap().slides[1].staged);
+        unstage(&repo.deck(), &added).unwrap();
+        assert_eq!(index_of(&repo), deck(&["a=A", "b=B"]));
+    }
+
+    #[test]
+    fn stages_an_added_first_slide_first() {
+        let repo = committed(&["a=A"], &["new=N", "a=A"]);
+        stage(
+            &repo.deck(),
+            &Change::Slide {
+                id: Some("new".into()),
+                old_id: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(index_of(&repo), deck(&["new=N", "a=A"]));
+    }
+
+    #[test]
+    fn stages_a_removal() {
+        let repo = committed(&["a=A", "b=B", "c=C"], &["a=A", "c=C"]);
+        let gone = Change::Slide {
+            id: None,
+            old_id: Some("b".into()),
+        };
+        stage(&repo.deck(), &gone).unwrap();
+        assert_eq!(index_of(&repo), deck(&["a=A", "c=C"]));
+        let found = changes(&repo.deck()).unwrap();
+        assert_eq!(found.slides[1].status, Removed);
+        assert!(found.slides[1].staged);
+        unstage(&repo.deck(), &gone).unwrap();
+        assert_eq!(index_of(&repo), deck(&["a=A", "b=B", "c=C"]));
+    }
+
+    #[test]
+    fn stages_a_move_apart_from_the_slides_content() {
+        let repo = committed(&["a=A", "b=B", "c=C"], &["c=Cee", "a=A", "b=B"]);
+        stage(&repo.deck(), &moved("c")).unwrap();
+        assert_eq!(index_of(&repo), deck(&["c=C", "a=A", "b=B"]));
+        let found = changes(&repo.deck()).unwrap();
+        assert!(found.slides[0].move_staged);
+        assert!(!found.slides[0].staged, "only its place is staged");
+
+        stage(&repo.deck(), &slide("c")).unwrap();
+        assert!(changes(&repo.deck()).unwrap().slides[0].staged);
+        unstage(&repo.deck(), &moved("c")).unwrap();
+        assert_eq!(index_of(&repo), deck(&["a=A", "b=B", "c=Cee"]));
+    }
+
+    #[test]
+    fn restores_a_move_and_keeps_the_edit() {
+        let repo = committed(&["a=A", "b=B", "c=C"], &["c=Cee", "a=A", "b=B"]);
+        restore(&repo, &moved("c"));
+        assert_eq!(work_of(&repo), deck(&["a=A", "b=B", "c=Cee"]));
+    }
+
+    #[test]
+    fn restores_a_modified_slide_and_keeps_its_new_place() {
+        let repo = committed(&["a=A", "b=B"], &["b=Bee", "a=A"]);
+        restore(&repo, &slide("b"));
+        assert_eq!(work_of(&repo), deck(&["b=B", "a=A"]));
+    }
+
+    #[test]
+    fn restores_removed_and_added_slides() {
+        let repo = committed(&["a=A", "b=B", "c=C"], &["a=A", "c=C", "new=N"]);
+        restore(
+            &repo,
+            &Change::Slide {
+                id: None,
+                old_id: Some("b".into()),
+            },
+        );
+        assert_eq!(ids(&work_of(&repo)), ["a", "b", "c", "new"]);
+        restore(
+            &repo,
+            &Change::Slide {
+                id: Some("new".into()),
+                old_id: None,
+            },
+        );
+        assert_eq!(work_of(&repo), deck(&["a=A", "b=B", "c=C"]));
+    }
+
+    #[test]
+    fn restoring_takes_a_staged_change_out_of_the_index_too() {
+        let repo = committed(&["a=A", "b=B"], &["a=Ay", "b=Bee"]);
+        stage(&repo.deck(), &slide("a")).unwrap();
+        restore(&repo, &slide("a"));
+        assert_eq!(index_of(&repo), deck(&["a=A", "b=B"]));
+        assert_eq!(work_of(&repo), deck(&["a=A", "b=Bee"]));
+    }
+
+    #[test]
+    fn stages_and_restores_the_styles_without_the_slides() {
+        let repo = Repo::new();
+        repo.write("talk/deck.html", &deck(&["a=A"]));
+        repo.commit("First");
+        repo.write("talk/deck.html", &deck_styled("blue", &["a=Ay"]));
+
+        stage(&repo.deck(), &Change::Styles).unwrap();
+        assert_eq!(index_of(&repo), deck_styled("blue", &["a=A"]));
+        assert!(changes(&repo.deck()).unwrap().styles_staged);
+        unstage(&repo.deck(), &Change::Styles).unwrap();
+        assert_eq!(index_of(&repo), deck(&["a=A"]));
+
+        restore(&repo, &Change::Styles);
+        let work = work_of(&repo);
+        assert!(work.contains("color: red") && work.contains("<h1>Ay</h1>"));
+    }
+
+    #[test]
+    fn staging_a_slide_brings_the_images_it_shows() {
+        let repo = committed(
+            &["a=A", "b=B"],
+            &[
+                "a=<img src='assets/new.png'>",
+                "b=<img src='assets/other.png'>",
+            ],
+        );
+        repo.write("talk/assets/new.png", "new");
+        repo.write("talk/assets/other.png", "other");
+        stage(&repo.deck(), &slide("a")).unwrap();
+        let file = repo.deck();
+        let (dir, _) = split(&file).unwrap();
+        let staged = paths(git(
+            dir,
+            &["diff", "--cached", "--name-only", "-z", "--relative"],
+        ));
+        assert!(staged.contains(&"assets/new.png".to_string()));
+        assert!(!staged.contains(&"assets/other.png".to_string()));
+    }
+
+    #[test]
+    fn restoring_a_slide_brings_back_its_committed_image() {
+        let repo = Repo::new();
+        repo.write("talk/deck.html", &deck(&["a=<img src='assets/a.png'>"]));
+        repo.write("talk/assets/a.png", "old");
+        repo.commit("First");
+        repo.write("talk/assets/a.png", "new");
+        restore(&repo, &slide("a"));
+        assert_eq!(
+            fs::read_to_string(repo.0.join("talk/assets/a.png")).unwrap(),
+            "old"
+        );
+    }
+
+    #[test]
+    fn commits_only_what_is_staged() {
+        let repo = committed(&["a=A", "b=B"], &["a=Ay", "b=Bee"]);
+        stage(&repo.deck(), &slide("a")).unwrap();
+        commit(&repo.deck(), "  Reword a  ").unwrap();
+        let found = changes(&repo.deck()).unwrap();
+        assert_eq!(found.commit.unwrap().subject, "Reword a");
+        assert_eq!(found.slides[0].status, Unchanged);
+        assert_eq!(found.slides[1].status, Modified);
+        assert_eq!(found.staged_files, 0);
+    }
+
+    #[test]
+    fn stage_all_takes_the_deck_and_its_new_images_and_unstage_all_undoes_it() {
+        let repo = committed(&["a=A"], &["a=<img src='assets/new.png'>", "b=B"]);
+        repo.write("talk/assets/new.png", "new");
+        stage_all(&repo.deck()).unwrap();
+        let found = changes(&repo.deck()).unwrap();
+        assert_eq!(found.staged_files, 2);
+        assert!(!found.has_unstaged);
+        assert!(found.slides.iter().all(|s| s.staged));
+
+        unstage_all(&repo.deck()).unwrap();
+        assert_eq!(changes(&repo.deck()).unwrap().staged_files, 0);
+    }
+
+    #[test]
+    fn stage_all_works_for_a_first_commit() {
+        let repo = Repo::new();
+        repo.write("talk/deck.html", &deck(&["a=A"]));
+        stage_all(&repo.deck()).unwrap();
+        commit(&repo.deck(), "First").unwrap();
+        assert_eq!(changes(&repo.deck()).unwrap().tracking, Tracking::Committed);
+    }
+
+    #[test]
+    fn says_when_the_commit_takes_in_other_folders() {
+        let repo = committed(&["a=A"], &["a=Ay"]);
+        repo.write("elsewhere.txt", "x");
+        repo.run(&["add", "elsewhere.txt"]);
+        stage_all(&repo.deck()).unwrap();
+        let found = changes(&repo.deck()).unwrap();
+        assert_eq!((found.staged_files, found.staged_elsewhere), (2, 1));
+    }
+
+    #[test]
+    fn a_commit_needs_a_message_and_reports_what_git_says() {
+        let repo = committed(&["a=A"], &["a=Ay"]);
+        assert!(commit(&repo.deck(), "  ").is_err());
+        let refused = commit(&repo.deck(), "Nothing staged")
+            .unwrap_err()
+            .to_string();
+        assert!(!refused.is_empty());
+        assert_eq!(
+            changes(&repo.deck()).unwrap().commit.unwrap().subject,
+            "First"
+        );
+    }
+
+    #[test]
+    fn keeps_comments_when_restoring_the_styles() {
+        let repo = Repo::new();
+        repo.write("talk/deck.html", &deck(&["a=A"]));
+        repo.commit("First");
+        let with_marks = review::write(
+            &deck_styled("blue", &["a=A"]),
+            &[(
+                "a".to_string(),
+                vec![review::Stroke {
+                    tool: review::InkTool::Pen,
+                    color: "#000".into(),
+                    points: vec![[0.1, 0.1]],
+                }],
+            )]
+            .into_iter()
+            .collect(),
+        );
+        repo.write("talk/deck.html", &with_marks);
+        restore(&repo, &Change::Styles);
+        assert_eq!(review::read(&work_of(&repo)).len(), 1);
     }
 }

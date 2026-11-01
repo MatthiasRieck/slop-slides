@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -14,12 +14,22 @@ import { deckMode, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ChangesRail, ChangesView } from "./ChangesView";
 
-const row = (status: SlideStatus, id: string, details: string[] = []): SlideChange => ({
+const row = (
+  status: SlideStatus,
+  id: string,
+  details: string[] = [],
+  more: Partial<SlideChange> = {},
+): SlideChange => ({
   key: status === "removed" ? `removed:${id}` : id,
   status,
   id: status === "removed" ? null : id,
   oldId: status === "added" ? null : id,
   details,
+  moved: false,
+  oldNumber: status === "added" ? null : 1,
+  staged: false,
+  moveStaged: false,
+  ...more,
 });
 
 const LIST = [row("modified", "intro"), row("removed", "gone"), row("unchanged", "#2"), row("added", "outro")];
@@ -30,6 +40,10 @@ const changes = (overrides: Partial<DeckChanges> = {}): DeckChanges => ({
   stylesChanged: false,
   oldSize: null,
   slides: LIST,
+  stylesStaged: false,
+  stagedFiles: 0,
+  stagedElsewhere: 0,
+  hasUnstaged: true,
   ...overrides,
 });
 
@@ -69,7 +83,16 @@ beforeEach(() => {
   vi.mocked(invoke).mockReset();
   vi.unstubAllGlobals();
   roomy();
-  useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", view: "slides", editing: false, slideMode: "view" });
+  useApp.setState({
+    deck: deckFor(DECK_HTML),
+    selected: "intro",
+    view: "slides",
+    editing: false,
+    slideMode: "view",
+    error: null,
+    deckUndo: [],
+    deckRedo: [],
+  });
   useChanges.setState({ changes: null, deck: null, picked: null, onlyChanges: false, divider: DEFAULT_DIVIDER });
 });
 
@@ -105,6 +128,7 @@ describe("ChangesRail", () => {
   it("counts the changes", async () => {
     await show();
     expect(screen.getByTitle("1 modified").textContent).toBe("1");
+    expect(screen.getByTitle("1 modified").querySelector("svg")).toBeTruthy();
     expect(screen.getByTitle("1 removed")).toBeTruthy();
     expect(screen.queryByTitle("1 moved")).toBeNull();
   });
@@ -119,6 +143,175 @@ describe("ChangesRail", () => {
     await show(changes({ slides: [row("unchanged", "intro")] }));
     fireEvent.click(screen.getByTitle("Show only the slides that changed"));
     expect(screen.getByText("No slide changed.")).toBeTruthy();
+  });
+});
+
+describe("marks", () => {
+  it("marks a change with an icon in the middle, not a word", async () => {
+    await show();
+    expect(screen.getAllByTestId("change-mark").map((m) => m.title)).toEqual(["Modified", "Removed", "Added"]);
+    expect(screen.getAllByTestId("change-mark").every((m) => m.textContent === "")).toBe(true);
+  });
+
+  it("shows both marks on a slide that changed and moved, and where it came from", async () => {
+    await show(changes({ slides: [row("modified", "intro", [], { moved: true, oldNumber: 3 })] }));
+    expect(screen.getAllByTestId("change-mark").map((m) => m.title)).toEqual(["Modified", "Moved"]);
+    expect(screen.getByText("was 3")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Slide 1, modified and moved" })).toBeTruthy();
+  });
+
+  it("marks a slide staged only once all of its changes are", async () => {
+    const both = { moved: true, oldNumber: 3 };
+    await show(changes({ slides: [row("modified", "intro", [], { ...both, staged: true })] }));
+    expect(screen.queryByTestId("staged-mark")).toBeNull();
+    cleanup();
+    await show(changes({ slides: [row("modified", "intro", [], { ...both, staged: true, moveStaged: true })] }));
+    expect(screen.getByTestId("staged-mark")).toBeTruthy();
+  });
+});
+
+describe("staging", () => {
+  const sent = (cmd: string) => vi.mocked(invoke).mock.calls.filter(([name]) => name === cmd);
+  const group = (name: string) => within(screen.getByRole("group", { name }));
+
+  it("puts stage on the left of the status icon and restore on its right", async () => {
+    await show();
+    const parts = [...screen.getByRole("group", { name: "Modified" }).children];
+    expect(parts.map((part) => part.getAttribute("aria-label") ?? part.getAttribute("title"))).toEqual([
+      "Stage",
+      "Modified",
+      "Restore",
+    ]);
+  });
+
+  it("gives an edit and a move their own buttons", async () => {
+    await show(changes({ slides: [row("modified", "intro", [], { moved: true, oldNumber: 3 })] }));
+    await act(async () => {
+      fireEvent.click(group("Moved").getByRole("button", { name: "Stage" }));
+    });
+    expect(sent("stage_change")[0]?.[1]).toMatchObject({ change: { kind: "move" } });
+    expect(group("Modified").getByRole("button", { name: "Stage" })).toBeTruthy();
+  });
+
+  it("stages a slide without having to pick it first", async () => {
+    await show();
+    await act(async () => {
+      fireEvent.click(group("Added").getByRole("button", { name: "Stage" }));
+    });
+    expect(sent("stage_change")[0]?.[1]).toMatchObject({ change: { kind: "slide", id: "outro", oldId: null } });
+    expect(useChanges.getState().picked).toBe("intro");
+  });
+
+  it("stages and restores a slide", async () => {
+    await show();
+    await act(async () => {
+      fireEvent.click(group("Modified").getByRole("button", { name: "Stage" }));
+    });
+    expect(sent("stage_change")[0]?.[1]).toMatchObject({ change: { kind: "slide", id: "intro", oldId: "intro" } });
+    vi.mocked(invoke).mockImplementation(async (cmd) =>
+      cmd === "restore_change" ? { deck: deckFor(DECK_HTML), previous: "old", source: "new", created: [] } : changes(),
+    );
+    await act(async () => {
+      fireEvent.click(group("Modified").getByRole("button", { name: "Restore" }));
+    });
+    expect(sent("restore_change")).toHaveLength(1);
+    expect(useApp.getState().deckUndo.at(-1)).toEqual({ previous: "old", source: "new" });
+  });
+
+  it("offers to unstage what is staged", async () => {
+    await show(changes({ slides: [row("modified", "intro", [], { staged: true })] }));
+    await act(async () => {
+      fireEvent.click(group("Modified").getByRole("button", { name: "Unstage" }));
+    });
+    expect(sent("unstage_change")).toHaveLength(1);
+  });
+
+  it("stages and restores a move on its own", async () => {
+    await show(changes({ slides: [row("moved", "intro", [], { moved: true, oldNumber: 3 })] }));
+    expect(screen.queryByRole("group", { name: "Modified" })).toBeNull();
+    await act(async () => {
+      fireEvent.click(group("Moved").getByRole("button", { name: "Stage" }));
+    });
+    expect(sent("stage_change")[0]?.[1]).toMatchObject({ change: { kind: "move", id: "intro", oldId: "intro" } });
+  });
+
+  it("stages the shared styles", async () => {
+    await show(changes({ stylesChanged: true }));
+    await act(async () => {
+      fireEvent.click(group("Shared styles").getByRole("button", { name: "Stage" }));
+    });
+    expect(sent("stage_change")[0]?.[1]).toMatchObject({ change: { kind: "styles" } });
+  });
+
+  it("does not restore a locked slide", async () => {
+    const deck = deckFor(DECK_HTML.replace('id="intro"', 'id="intro" data-locked'));
+    useApp.setState({ deck });
+    await show();
+    expect((group("Modified").getByRole("button", { name: "Restore" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("has nothing to stage slide by slide before a first commit", async () => {
+    await show(changes({ tracking: "notCommitted", commit: null, slides: [row("added", "intro")] }));
+    expect(group("Added").queryByRole("button", { name: "Stage" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Commit message" })).toBeTruthy();
+  });
+});
+
+describe("committing", () => {
+  const button = () => screen.getByRole("button", { name: /^Commit/ }) as HTMLButtonElement;
+  const message = () => screen.getByRole("textbox", { name: "Commit message" }) as HTMLTextAreaElement;
+
+  it("needs something staged and a message", async () => {
+    await show();
+    fireEvent.change(message(), { target: { value: "Fix" } });
+    expect(button().disabled).toBe(true);
+    cleanup();
+    await show(changes({ stagedFiles: 2 }));
+    expect(button().textContent).toBe("Commit 2 files");
+    expect(button().disabled).toBe(true);
+    fireEvent.change(message(), { target: { value: "Fix" } });
+    expect(button().disabled).toBe(false);
+  });
+
+  it("commits and clears the message", async () => {
+    await show(changes({ stagedFiles: 1 }));
+    fireEvent.change(message(), { target: { value: "Reword the intro" } });
+    await act(async () => {
+      fireEvent.click(button());
+    });
+    const call = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === "commit_changes");
+    expect(call?.[1]).toMatchObject({ message: "Reword the intro" });
+    expect(message().value).toBe("");
+  });
+
+  it("keeps the message when the commit fails, and says why", async () => {
+    await show(changes({ stagedFiles: 1 }));
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "commit_changes") throw "hook said no";
+      return changes({ stagedFiles: 1 });
+    });
+    fireEvent.change(message(), { target: { value: "Fix" } });
+    await act(async () => {
+      fireEvent.keyDown(message(), { key: "Enter", metaKey: true });
+    });
+    expect(message().value).toBe("Fix");
+    expect(useApp.getState().error).toContain("hook said no");
+  });
+
+  it("warns when the commit takes in files from elsewhere", async () => {
+    await show(changes({ stagedFiles: 3, stagedElsewhere: 2 }));
+    expect(screen.getByText(/Also commits 2 staged files/)).toBeTruthy();
+  });
+
+  it("stages and unstages everything", async () => {
+    await show(changes({ stagedFiles: 1 }));
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("Stage everything in this deck"));
+      fireEvent.click(screen.getByTitle("Unstage everything in this deck's folder"));
+    });
+    const calls = vi.mocked(invoke).mock.calls.map(([cmd]) => cmd);
+    expect(calls).toContain("stage_all");
+    expect(calls).toContain("unstage_all");
   });
 });
 

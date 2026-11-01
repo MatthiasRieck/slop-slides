@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import { api, type DeckChanges, errorMessage, type SlideChange } from "./lib/api";
+import { api, type Change, type DeckChanges, errorMessage, type SlideChange } from "./lib/api";
 import { DEFAULT_DIVIDER, type Divider } from "./lib/compare";
 import { useApp } from "./store";
 
@@ -24,6 +24,15 @@ interface ChangesState {
   /** Picks the next (1) or previous (-1) row of the list. */
   step: (by: 1 | -1) => void;
   setOnlyChanges: (onlyChanges: boolean) => void;
+  /** Stages a change, leaving the deck on disk as it is. */
+  stage: (deck: string, change: Change) => Promise<void>;
+  unstage: (deck: string, change: Change) => Promise<void>;
+  /** Puts a change back as it was committed; the slide list's undo brings it back. */
+  restore: (deck: string, change: Change) => Promise<void>;
+  stageAll: (deck: string) => Promise<void>;
+  unstageAll: (deck: string) => Promise<void>;
+  /** Commits what is staged; false when that failed. */
+  commit: (deck: string, message: string) => Promise<boolean>;
   setDivider: (changes: Partial<Divider>) => void;
   resetDivider: () => void;
 }
@@ -50,46 +59,76 @@ function keepPicked(changes: DeckChanges, picked: string | null, selected: strin
   return start?.key ?? slides[0]?.key ?? null;
 }
 
-export const useChanges = create<ChangesState>((set, get) => ({
-  changes: null,
-  deck: null,
-  picked: null,
-  onlyChanges: false,
-  divider: DEFAULT_DIVIDER,
-
-  refresh: async (deck) => {
-    const ticket = ++lastRefresh;
+export const useChanges = create<ChangesState>((set, get) => {
+  /** Does something to the repository, then reads the changes again; false when it failed. */
+  const run = async (deck: string, action: () => Promise<unknown>) => {
     try {
-      const changes = await api.deckChanges(deck);
-      if (ticket !== lastRefresh) return;
-      const previous = get().deck === deck ? get().picked : null;
-      const picked = keepPicked(changes, previous, useApp.getState().selected);
-      set({ changes, deck, picked });
+      await action();
+      return true;
     } catch (error) {
-      if (ticket === lastRefresh) useApp.getState().setError(errorMessage(error));
+      useApp.getState().setError(errorMessage(error));
+      return false;
+    } finally {
+      await get().refresh(deck);
     }
-  },
+  };
+  return {
+    changes: null,
+    deck: null,
+    picked: null,
+    onlyChanges: false,
+    divider: DEFAULT_DIVIDER,
 
-  pick: (key) => {
-    set({ picked: key });
-    const id = get().changes?.slides.find((row) => row.key === key)?.id;
-    if (id) useApp.getState().select(id);
-  },
+    refresh: async (deck) => {
+      const ticket = ++lastRefresh;
+      try {
+        const changes = await api.deckChanges(deck);
+        if (ticket !== lastRefresh) return;
+        const previous = get().deck === deck ? get().picked : null;
+        const picked = keepPicked(changes, previous, useApp.getState().selected);
+        set({ changes, deck, picked });
+      } catch (error) {
+        if (ticket === lastRefresh) useApp.getState().setError(errorMessage(error));
+      }
+    },
 
-  step: (by) => {
-    const rows = visibleRows(get());
-    const at = rows.findIndex((row) => row.key === get().picked);
-    const next = rows[at < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, at + by))];
-    if (next) get().pick(next.key);
-  },
+    pick: (key) => {
+      set({ picked: key });
+      const id = get().changes?.slides.find((row) => row.key === key)?.id;
+      if (id) useApp.getState().select(id);
+    },
 
-  setOnlyChanges: (onlyChanges) => {
-    set({ onlyChanges });
-    const rows = visibleRows(get());
-    const first = rows[0];
-    if (first && !rows.some((row) => row.key === get().picked)) get().pick(first.key);
-  },
+    step: (by) => {
+      const rows = visibleRows(get());
+      const at = rows.findIndex((row) => row.key === get().picked);
+      const next = rows[at < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, at + by))];
+      if (next) get().pick(next.key);
+    },
 
-  setDivider: (changes) => set((s) => ({ divider: { ...s.divider, ...changes } })),
-  resetDivider: () => set({ divider: DEFAULT_DIVIDER }),
-}));
+    setOnlyChanges: (onlyChanges) => {
+      set({ onlyChanges });
+      const rows = visibleRows(get());
+      const first = rows[0];
+      if (first && !rows.some((row) => row.key === get().picked)) get().pick(first.key);
+    },
+
+    stage: async (deck, change) => void (await run(deck, () => api.stageChange(deck, change))),
+    unstage: async (deck, change) => void (await run(deck, () => api.unstageChange(deck, change))),
+
+    restore: async (deck, change) => {
+      const edit = await useApp.getState().editRail((id) => api.restoreChange(id, change));
+      await get().refresh(deck);
+      // Restoring an added slide takes away the slide that was selected.
+      const { selected, select } = useApp.getState();
+      const slides = edit?.deck.slides;
+      if (slides && !slides.some((slide) => slide.id === selected)) select(slides[0]?.id ?? null);
+    },
+
+    stageAll: async (deck) => void (await run(deck, () => api.stageAll(deck))),
+    unstageAll: async (deck) => void (await run(deck, () => api.unstageAll(deck))),
+    commit: (deck, message) => run(deck, () => api.commitChanges(deck, message)),
+
+    setDivider: (changes) => set((s) => ({ divider: { ...s.divider, ...changes } })),
+    resetDivider: () => set({ divider: DEFAULT_DIVIDER }),
+  };
+});

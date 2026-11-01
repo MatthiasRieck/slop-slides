@@ -318,7 +318,21 @@ export interface SlideChange {
   oldId: string | null;
   /** What changed that the slide's picture may not show, such as its speaker notes. */
   details: string[];
+  /** It is elsewhere in the deck than at the commit, whatever else changed. */
+  moved: boolean;
+  /** Its number in the deck at the commit; null for an added slide. */
+  oldNumber: number | null;
+  /** The index has the slide as it is now. */
+  staged: boolean;
+  /** The index has the slide where it is now. */
+  moveStaged: boolean;
 }
+
+/** A change to stage or restore. */
+export type Change =
+  | { kind: "slide"; id: string | null; oldId: string | null }
+  | { kind: "move"; id: string; oldId: string }
+  | { kind: "styles" };
 
 /** The deck compared with the last commit. */
 export interface DeckChanges {
@@ -331,6 +345,14 @@ export interface DeckChanges {
   oldSize: SizeInfo | null;
   /** The deck's slides in order, with the removed ones where they used to be. */
   slides: SlideChange[];
+  /** The index has the shared styles as they are now. */
+  stylesStaged: boolean;
+  /** How many files the next commit takes in. */
+  stagedFiles: number;
+  /** How many of those are outside the deck's folder. */
+  stagedElsewhere: number;
+  /** The deck or its folder has something the index does not. */
+  hasUnstaged: boolean;
 }
 
 export interface Screen {
@@ -470,6 +492,16 @@ export const api = {
   ) => invoke<string>("export_slide_image", { dir, index, total, rect, viewport, width }),
   /** How the deck differs from the last commit. */
   deckChanges: (id: string) => invoke<DeckChanges>("deck_changes", { id }),
+  stageChange: (id: string, change: Change) => invoke<void>("stage_change", { id, change }),
+  unstageChange: (id: string, change: Change) => invoke<void>("unstage_change", { id, change }),
+  /** Puts a change back as it was committed, in the deck and the index. */
+  restoreChange: (id: string, change: Change) => invoke<RailEdit>("restore_change", { id, change }),
+  /** Stages the whole deck and the changed files it refers to. */
+  stageAll: (id: string) => invoke<void>("stage_all", { id }),
+  /** Unstages everything in the deck's folder. */
+  unstageAll: (id: string) => invoke<void>("unstage_all", { id }),
+  /** Commits what is staged. */
+  commitChanges: (id: string, message: string) => invoke<void>("commit_changes", { id, message }),
   lintDeck: (id: string) => invoke<LintIssue[]>("lint_deck", { id }),
   /**
    * Screenshots `rect` of the window; returns an absolute session image path. Both are in CSS

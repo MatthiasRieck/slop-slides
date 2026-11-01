@@ -76,7 +76,15 @@ const slidesOf = (html: string) =>
 /** Roughly src-tauri/src/git.rs: the slides by id, the removed ones after the slide they followed. */
 function deckChanges(file: string) {
   const committed = atHead(file)?.toString("utf8");
-  const none = { commit: null, stylesChanged: false, oldSize: null };
+  const none = {
+    commit: null,
+    stylesChanged: false,
+    oldSize: null,
+    stylesStaged: false,
+    stagedFiles: 0,
+    stagedElsewhere: 0,
+    hasUnstaged: true,
+  };
   const now = slidesOf(fs.readFileSync(file, "utf8"));
   const row = (status: string, id: string | null, oldId: string | null) => ({
     key: id ?? `removed:${oldId}`,
@@ -84,6 +92,10 @@ function deckChanges(file: string) {
     id,
     oldId,
     details: [],
+    moved: false,
+    oldNumber: null,
+    staged: false,
+    moveStaged: false,
   });
   if (committed === undefined) {
     return { ...none, tracking: "notCommitted", slides: now.map((s) => row("added", s.id, null)) };

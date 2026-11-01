@@ -520,7 +520,7 @@ fn span_of<'a>(slides: &'a [SlideSpan], id: &str) -> Option<&'a SlideSpan> {
 }
 
 /// Whitespace between the previous line break and `at`, used to indent inserted slides.
-fn indent_before(html: &str, at: usize) -> &str {
+pub(crate) fn indent_before(html: &str, at: usize) -> &str {
     let line_start = html[..at].rfind('\n').map_or(0, |p| p + 1);
     let indent = &html[line_start..at];
     if indent.trim().is_empty() {
@@ -580,7 +580,7 @@ pub fn delete(html: &str, id: &str) -> Result<String, String> {
 }
 
 /// Where new content goes in a deck without slides: just before the end of `<main>`.
-fn end_of_deck(html: &str) -> Result<usize, String> {
+pub(crate) fn end_of_deck(html: &str) -> Result<usize, String> {
     let lower = html.to_ascii_lowercase();
     let at = lower
         .rfind("</main")

@@ -41,14 +41,22 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   temporary offset; **Tidy layout** then sends the agent a screenshot so it rebuilds the
   slide's layout around where you put things.
 - **Git:** the Git tab shows what changed in the deck since the last commit, staged or not. The
-  slide list marks each slide added, modified or moved, and removed slides stay in it where
-  they used to be (the filter button leaves out the slides that did not change). Click a
-  modified slide to compare its two versions: drag across the slide to move the divider, drag
-  its round handle to rotate it (Shift for steps of 15°), and set Angle and Feather above the
-  slide. A feather of 0 is a sharp edge, 50 fades from one version to the other over 50 slide
-  pixels. Slides show the images of their own version. What a picture cannot show, like
-  speaker notes, is named under the slide. It only reads the repository; it needs `git` and a
-  commit that has the deck.
+  slide list marks each slide with an icon in the middle of its thumbnail: a green plus for
+  added, an orange pen for modified, a red trash can for removed and a blue arrow for moved
+  (with the number it used to have). A slide that was edited and moved shows both, and removed
+  slides stay in the list where they used to be (the filter button leaves out the slides that
+  did not change). Click a modified slide to compare its two versions: drag across the slide to
+  move the divider, drag its round handle to rotate it (Shift for steps of 15°), and set Angle
+  and Feather above the slide. A feather of 0 is a sharp edge, 50 fades from one version to the
+  other over 50 slide pixels. Slides show the images of their own version. What a picture
+  cannot show, like speaker notes, is named under the slide.
+  Left of each of those icons, a button stages that change (or unstages it), and right of it a
+  button restores it, so a slide's edit and its move go separately; the buttons for the deck's
+  shared styles are above the slide. Staging one slide leaves the others out of the next commit,
+  and brings along the images it shows. Restoring puts that one change back as it was committed;
+  ⌘Z takes it back. The box above the list commits what is staged, and its + and − buttons stage
+  and unstage the whole deck (changes to sections only go in that way). It needs `git`. Before a
+  deck's first commit, only the whole deck can be staged.
 - **Right:** chat with the agent. It knows which slide you're on, and you can attach images
   (paperclip, or drop files anywhere on the window). The microphone button dictates: click to
   start, and what you say shows up at the cursor as you speak; click again to keep it (Esc

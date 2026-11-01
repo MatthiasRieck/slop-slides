@@ -405,6 +405,8 @@ interface AppState {
   clearRailSelection: () => void;
   /** Deletes `slides`, leaving locked ones alone, and selects a slide next to them if need be. */
   deleteSlides: (slides: string[]) => Promise<void>;
+  /** Runs a change to the deck file as one the slide list can undo; null when it failed. */
+  editRail: (change: (id: string) => Promise<RailEdit>) => Promise<RailEdit | null>;
   setSlidesHidden: (slides: string[], hidden: boolean) => Promise<void>;
   /** Copies `slides`, each right after itself, and selects the copies. */
   duplicateSlides: (slides: string[]) => Promise<void>;
@@ -803,6 +805,8 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   clearRailSelection: () => set({ railSelected: [] }),
+
+  editRail: (change) => editRail(change),
 
   deleteSlides: async (slides) => {
     const { deck } = get();

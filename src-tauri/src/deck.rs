@@ -789,6 +789,23 @@ pub fn delete_slides(file: &Path, session: &Path, slides: &[String]) -> Result<R
     })
 }
 
+/// Writes `source` over the deck, as a change that can be undone. Locked `slides` refuse it, and
+/// review marks and comments of slides that went with it are dropped.
+pub fn restore(
+    file: &Path,
+    session: &Path,
+    slide: Option<&str>,
+    source: String,
+) -> Result<RailEdit> {
+    if let Some(slide) = slide {
+        ensure_unlocked(&read_html(file)?, slide).map_err(Error::Message)?;
+    }
+    snapshot(file, session)?;
+    rail_edit(file, |_| {
+        Ok((prune_review(&source).unwrap_or(source), Vec::new()))
+    })
+}
+
 /// Replaces one slide with markup edited on the stage. `base` is the slide's hash the edit
 /// started from; the save is refused when the slide has changed since. Returns the slide's
 /// previous markup, so the edit can be undone by saving it back.

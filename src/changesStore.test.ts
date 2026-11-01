@@ -18,6 +18,10 @@ const row = (status: SlideStatus, id: string): SlideChange => ({
   id: status === "removed" ? null : id,
   oldId: status === "added" ? null : id,
   details: [],
+  moved: false,
+  oldNumber: null,
+  staged: false,
+  moveStaged: false,
 });
 
 const changes = (...slides: SlideChange[]): DeckChanges => ({
@@ -26,6 +30,10 @@ const changes = (...slides: SlideChange[]): DeckChanges => ({
   stylesChanged: false,
   oldSize: null,
   slides,
+  stylesStaged: false,
+  stagedFiles: 0,
+  stagedElsewhere: 0,
+  hasUnstaged: true,
 });
 
 const answer = (value: DeckChanges) => vi.mocked(invoke).mockResolvedValue(value);
@@ -140,6 +148,46 @@ describe("the list", () => {
     useChanges.getState().pick("outro");
     useChanges.getState().setOnlyChanges(true);
     expect(useChanges.getState().picked).toBe("a");
+  });
+});
+
+describe("changing the repository", () => {
+  const STYLES = { kind: "styles" } as const;
+  const called = () => vi.mocked(invoke).mock.calls.map(([cmd]) => cmd);
+
+  it("reads the changes again after staging", async () => {
+    answer(changes(row("modified", "a")));
+    await useChanges.getState().stage(DECK, STYLES);
+    expect(called()).toEqual(["stage_change", "deck_changes"]);
+  });
+
+  it("reports a failure, and still reads the changes again", async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "unstage_change") throw "index.lock exists";
+      return changes();
+    });
+    await useChanges.getState().unstage(DECK, STYLES);
+    expect(useApp.getState().error).toContain("index.lock exists");
+    expect(called()).toContain("deck_changes");
+  });
+
+  it("selects another slide when a restore took the selected one away", async () => {
+    useApp.setState({ selected: "added" });
+    vi.mocked(invoke).mockImplementation(async (cmd) =>
+      cmd === "restore_change" ? { deck: deckFor(DECK_HTML), previous: "", source: "", created: [] } : changes(),
+    );
+    await useChanges.getState().restore(DECK, { kind: "slide", id: "added", oldId: null });
+    expect(useApp.getState().selected).toBe("intro");
+  });
+
+  it("says whether the commit worked", async () => {
+    answer(changes());
+    expect(await useChanges.getState().commit(DECK, "Fix")).toBe(true);
+    vi.mocked(invoke).mockImplementation(async (cmd) => {
+      if (cmd === "commit_changes") throw "no";
+      return changes();
+    });
+    expect(await useChanges.getState().commit(DECK, "Fix")).toBe(false);
   });
 });
 

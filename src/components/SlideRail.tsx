@@ -45,6 +45,7 @@ import {
 import { pixelsOf } from "../lib/slideSize";
 import { cn } from "../lib/utils";
 import { railSelection, useApp } from "../store";
+import { SectionLabel } from "./SectionLabel";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { LayoutPicker, Popover } from "./Templates";
 
@@ -172,9 +173,7 @@ export function SlideRail() {
   return (
     <div className="flex h-full flex-col bg-sidebar">
       <div className="flex h-10 shrink-0 items-center justify-between px-3">
-        <span className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">
-          Slides · {found ? `${found.size} of ${deck.slides.length}` : deck.slides.length}
-        </span>
+        <SectionLabel>Slides · {found ? `${found.size} of ${deck.slides.length}` : deck.slides.length}</SectionLabel>
         <div className="flex items-center gap-0.5">
           <RailHistory />
           <button
@@ -270,9 +269,7 @@ export function SlideRail() {
                   data-testid="section-overlay"
                   className="flex items-center gap-2 rounded bg-sidebar pb-1 pl-6 pr-1 pt-1 ring-1 ring-border"
                 >
-                  <span className="min-w-0 truncate text-2xs font-medium uppercase tracking-wide text-muted-foreground">
-                    {sectionTitle(items, moving.key)}
-                  </span>
+                  <SectionLabel className="min-w-0 truncate">{sectionTitle(items, moving.key)}</SectionLabel>
                   <span className="h-px flex-1 bg-border" />
                   <span className="shrink-0 text-2xs text-muted-foreground">
                     {slideCount((blocks.find((block) => block.key === moving.key)?.rows.length ?? 1) - 1)}
@@ -553,18 +550,14 @@ function SectionHeader(props: {
         />
       ) : (
         <>
-          {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: double-click is a shortcut for the adjacent keyboard-accessible Rename section button. */}
-          {/* biome-ignore lint/a11y/noStaticElementInteractions: keyboard users rename with the adjacent Rename section button. */}
-          <span
+          {/* Double-click is a shortcut for the adjacent keyboard-accessible Rename section button. */}
+          <SectionLabel
             title="Double-click to rename"
             onDoubleClick={() => onEditing(true)}
-            className={cn(
-              "min-w-0 truncate text-2xs font-medium uppercase tracking-wide text-muted-foreground",
-              !section.title && "italic",
-            )}
+            className={cn("min-w-0 truncate", !section.title && "italic")}
           >
             {section.title || "Untitled section"}
-          </span>
+          </SectionLabel>
           <span className="h-px flex-1 bg-border" />
           {props.slides !== undefined ? (
             <span data-fold-label className="shrink-0 pr-1 text-2xs text-muted-foreground">

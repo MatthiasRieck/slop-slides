@@ -20,6 +20,7 @@ import { MAX_FEATHER, normalAngle } from "../lib/compare";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn, headSlideUrl } from "../lib/utils";
 import { useApp } from "../store";
+import { SectionLabel } from "./SectionLabel";
 import { SlideComparison } from "./SlideComparison";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
@@ -89,9 +90,7 @@ export function ChangesRail() {
     <div className="flex h-full flex-col bg-sidebar">
       <div className="flex h-10 shrink-0 items-center justify-between gap-2 px-3">
         <div className="flex min-w-0 items-center gap-1">
-          {counts.length === 0 && (
-            <span className="truncate text-2xs font-medium uppercase tracking-wide text-muted-foreground">Changes</span>
-          )}
+          {counts.length === 0 && <SectionLabel className="truncate">Changes</SectionLabel>}
           {counts.map((status) => {
             const { icon: Icon, color, label } = MARKS[status];
             return (

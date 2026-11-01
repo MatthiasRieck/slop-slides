@@ -11,6 +11,7 @@ import { formatBytes } from "../lib/voice";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { ScriptField, ScriptPreviewToggle } from "./ScriptMarkdown";
+import { SlideTime } from "./SlideTime";
 
 /** How long typing pauses before the narration is saved to the deck. */
 export const NARRATION_SAVE_DELAY = 800;
@@ -163,6 +164,7 @@ function NarrationEditor(props: {
           {words} {words === 1 ? "word" : "words"} ·{" "}
           <span title="Estimated at 150 words per minute">~{speakingTime(spoken)}</span>
         </span>
+        <SlideTime deck={deck} />
         <ScriptPreviewToggle preview={preview} onChange={props.onPreview} />
         {slide.locked && (
           <span className="flex shrink-0 items-center gap-1">

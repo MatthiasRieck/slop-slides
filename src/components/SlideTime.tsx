@@ -9,7 +9,7 @@ import { formatElapsed } from "./PresenterPanel";
 const asText = (seconds: number | undefined) => (seconds ? formatElapsed(seconds * 1000) : "");
 
 /**
- * View mode's field for the time the presenter expects to spend on the selected slide, which
+ * Narration mode's field for the time the presenter expects to spend on the selected slide, which
  * the presenter view counts down, and what the times of the slides shown add up to.
  */
 export function SlideTime({ deck }: { deck: Deck }) {
@@ -32,7 +32,7 @@ export function SlideTime({ deck }: { deck: Deck }) {
   };
 
   return (
-    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+    <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
       <Timer className="size-3.5" />
       <input
         key={slide.id}

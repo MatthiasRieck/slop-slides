@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.fn();
@@ -9,7 +9,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 import type { Deck } from "../lib/api";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { SlideSizeButton } from "./SlideSize";
+import { SlideSizeSettings } from "./SlideSize";
 
 const DECK = deckFor(DECK_HTML);
 const sizedDeck = (
@@ -28,18 +28,14 @@ beforeEach(() => {
   useApp.setState({ deck: DECK, running: false, resizeSlides });
 });
 
-const open = () => fireEvent.click(screen.getByRole("button", { name: "Slide size" }));
 const field = (name: "Width" | "Height") => screen.getByRole("spinbutton", { name }) as HTMLInputElement;
 const unit = () => screen.getByRole("combobox", { name: "Unit" }) as HTMLSelectElement;
 const apply = () => screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
 const pressed = (name: string) => screen.getByRole("button", { name }).getAttribute("aria-pressed");
 
 describe("slide size", () => {
-  it("shows the deck's size and opens a panel with it", () => {
-    render(<SlideSizeButton />);
-    expect(screen.getByRole("button", { name: "Slide size" }).textContent).toBe("1920 × 1080 px");
-    open();
-    expect(screen.getByRole("dialog", { name: "Slide size" })).toBeTruthy();
+  it("shows the deck's size", () => {
+    render(<SlideSizeSettings />);
     expect(field("Width").value).toBe("1920");
     expect(field("Height").value).toBe("1080");
     expect(unit().value).toBe("px");
@@ -49,8 +45,7 @@ describe("slide size", () => {
   });
 
   it("turns the slides to portrait and applies the new size", () => {
-    render(<SlideSizeButton />);
-    open();
+    render(<SlideSizeSettings />);
     fireEvent.click(screen.getByRole("button", { name: "Portrait" }));
     expect(field("Width").value).toBe("1080");
     expect(field("Height").value).toBe("1920");
@@ -58,20 +53,17 @@ describe("slide size", () => {
     expect(pressed("Story 9:16")).toBe("true");
     fireEvent.click(apply());
     expect(resizeSlides).toHaveBeenCalledWith({ width: 1080, height: 1920, unit: "px" });
-    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("makes the slides square", () => {
-    render(<SlideSizeButton />);
-    open();
+    render(<SlideSizeSettings />);
     fireEvent.click(screen.getByRole("button", { name: "Square" }));
     fireEvent.click(apply());
     expect(resizeSlides).toHaveBeenCalledWith({ width: 1080, height: 1080, unit: "px" });
   });
 
   it("takes a width and height in inches or centimetres", () => {
-    render(<SlideSizeButton />);
-    open();
+    render(<SlideSizeSettings />);
     fireEvent.change(unit(), { target: { value: "in" } });
     // The size stays, shown in inches.
     expect(field("Width").value).toBe("20");
@@ -86,8 +78,7 @@ describe("slide size", () => {
   });
 
   it("offers common sizes", () => {
-    render(<SlideSizeButton />);
-    open();
+    render(<SlideSizeSettings />);
     fireEvent.click(screen.getByRole("button", { name: "A4" }));
     expect(unit().value).toBe("cm");
     expect(field("Width").value).toBe("21");
@@ -97,8 +88,7 @@ describe("slide size", () => {
   });
 
   it("refuses sizes that are empty, too small or too large", () => {
-    render(<SlideSizeButton />);
-    open();
+    render(<SlideSizeSettings />);
     fireEvent.change(field("Width"), { target: { value: "" } });
     expect(screen.getByRole("alert").textContent).toBe("Enter a width and a height.");
     expect(apply().disabled).toBe(true);
@@ -112,34 +102,41 @@ describe("slide size", () => {
     expect(resizeSlides).not.toHaveBeenCalled();
   });
 
-  it("starts from a size given in another unit, and cancels without changes", () => {
+  it("starts from a size given in another unit, and resets without changes", () => {
     useApp.setState({ deck: sizedDeck({ width: 21, height: 29.7, unit: "cm" }, [794, 1123]) });
-    render(<SlideSizeButton />);
-    expect(screen.getByRole("button", { name: "Slide size" }).textContent).toBe("21 × 29.7 cm");
-    open();
+    render(<SlideSizeSettings />);
     expect(unit().value).toBe("cm");
     expect(pressed("Portrait")).toBe("true");
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.change(field("Width"), { target: { value: "30" } });
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    expect(field("Width").value).toBe("21");
+    expect((screen.getByRole("button", { name: "Reset" }) as HTMLButtonElement).disabled).toBe(true);
     expect(resizeSlides).not.toHaveBeenCalled();
   });
 
+  it("follows a size changed elsewhere, as by the agent", () => {
+    render(<SlideSizeSettings />);
+    act(() => useApp.setState({ deck: sizedDeck({ width: 1080, height: 1080, unit: "px" }, [1080, 1080]) }));
+    expect(field("Width").value).toBe("1080");
+    expect(apply().disabled).toBe(true);
+  });
+
   it("explains that the agent re-lays out a deck with slides", () => {
-    const { unmount } = render(<SlideSizeButton />);
-    open();
+    const { unmount } = render(<SlideSizeSettings />);
     expect(screen.getByText(/asking the agent to lay them out again/)).toBeTruthy();
     unmount();
     useApp.setState({ deck: { ...DECK, slides: [] } });
-    render(<SlideSizeButton />);
-    open();
+    render(<SlideSizeSettings />);
     expect(screen.queryByText(/asking the agent/)).toBeNull();
   });
 
   it("waits for the agent to finish", () => {
     useApp.setState({ running: true });
-    render(<SlideSizeButton />);
-    const button = screen.getByRole("button", { name: "Slide size" }) as HTMLButtonElement;
-    expect(button.disabled).toBe(true);
-    expect(button.title).toContain("Wait for the agent");
+    render(<SlideSizeSettings />);
+    fireEvent.click(screen.getByRole("button", { name: "Portrait" }));
+    expect(apply().disabled).toBe(true);
+    expect(apply().title).toContain("Wait for the agent");
+    fireEvent.submit(apply().closest("form")!);
+    expect(resizeSlides).not.toHaveBeenCalled();
   });
 });

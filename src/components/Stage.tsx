@@ -43,6 +43,7 @@ import { deckMode, SKETCH_TARGET_ATTR, searchHighlight, useApp } from "../store"
 import { CommentEditor, CommentPins, useSlideComments } from "./Comments";
 import { EditContextMenu, type EditMenuAction } from "./EditContextMenu";
 import { EditToolbar } from "./EditToolbar";
+import { SlideSearch } from "./FindReplace";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { ShortcutHelp } from "./ShortcutHelp";
 import { SketchToolbar } from "./SketchToolbar";
@@ -184,6 +185,7 @@ export function Stage() {
           />
           {commentPins.commenting && <span>Click an element to comment on it. Esc finishes.</span>}
           <div className="flex-1" />
+          <SlideSearch />
         </ModeBar>
       )}
       {/* Clips the ink, which zooms past the slide along with the pasteboard, so it stays off the bar below. */}
@@ -331,7 +333,7 @@ export function Stage() {
   );
 }
 
-/** The stage's own tools row, in the place of the deck toolbar, for the modes that work on the slide. */
+/** The stage's own tools row, for the modes that work on the slide it shows. */
 function ModeBar({ children }: { children: ReactNode }) {
   return (
     <div className="relative z-20 flex min-h-10 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b bg-background px-3 py-1 text-xs text-muted-foreground">

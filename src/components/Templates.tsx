@@ -182,19 +182,13 @@ export function LayoutPicker(props: { mode: "add" | "change"; onDone: () => void
 }
 
 /** Restyles the deck like a template, or saves the deck as a template. */
-export function StylePicker(props: { onDone: () => void }) {
+export function StylePicker() {
   const deck = useApp((s) => s.deck);
   const running = useApp((s) => s.running);
   const templates = useTemplates();
   if (!deck) return null;
   return (
-    <StylePanel
-      templates={templates}
-      current={deck.template ?? null}
-      empty={deck.slides.length === 0}
-      busy={running}
-      onPicked={props.onDone}
-    />
+    <StylePanel templates={templates} current={deck.template ?? null} empty={deck.slides.length === 0} busy={running} />
   );
 }
 
@@ -203,13 +197,8 @@ function StylePanel(props: {
   current: string | null;
   empty: boolean;
   busy: boolean;
-  onPicked: () => void;
 }) {
   const { templates, current } = props;
-  const pick = (template: TemplateSummary) => {
-    void useApp.getState().applyStyle(template.id);
-    props.onPicked();
-  };
 
   return (
     <>
@@ -233,7 +222,7 @@ function StylePanel(props: {
                   disabled={props.busy && !props.empty}
                   aria-label={`${t.title} style`}
                   aria-current={t.id === current || undefined}
-                  onClick={() => pick(t)}
+                  onClick={() => void useApp.getState().applyStyle(t.id)}
                   className="group flex w-full flex-col gap-1 text-left disabled:opacity-50"
                 >
                   <div

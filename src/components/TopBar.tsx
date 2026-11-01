@@ -4,13 +4,14 @@ import { FolderOpen, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightO
 import { basename, cn, isMac } from "../lib/utils";
 import { useApp } from "../store";
 import { DeckActions } from "./DeckActions";
+import { LintStatus } from "./LintStatus";
 import { ModeTabs } from "./ModeTabs";
 
 /**
  * The workspace's bar: the slide rail toggle (for a deck) and breadcrumbs from the workspace
- * folder to the open file; for a deck, its mode tabs in the middle, then export and present;
- * then revealing and closing the file (back to the workspace) and the sidebar toggle. The
- * tools of each mode live in the row above the slides (DeckToolbar).
+ * folder to the open file; for a deck, its mode tabs in the middle, then lint, export and
+ * present; then revealing and closing the file (back to the workspace) and the sidebar toggle.
+ * The tools of each mode live above the slide (DeckToolbar, Stage).
  */
 export function TopBar() {
   const workspace = useApp((s) => s.workspace);
@@ -33,7 +34,8 @@ export function TopBar() {
       {hasDeck ? <ModeTabs /> : <div />}
       <div data-tauri-drag-region className="flex items-center justify-end gap-1 self-stretch">
         {hasDeck && (
-          <div className="mr-2">
+          <div className="mr-2 flex items-center gap-1">
+            <LintStatus />
             <DeckActions />
           </div>
         )}

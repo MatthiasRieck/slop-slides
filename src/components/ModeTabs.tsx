@@ -1,4 +1,4 @@
-import { AudioLines, Code2, Eye, Pencil, Settings2, StickyNote } from "lucide-react";
+import { AudioLines, Code2, Eye, GitCompare, Pencil, Settings2, StickyNote } from "lucide-react";
 
 import { basename, cn } from "../lib/utils";
 import { type DeckMode, deckMode, useApp } from "../store";
@@ -9,6 +9,7 @@ const MODES: { id: DeckMode; label: string; icon: typeof Eye }[] = [
   { id: "narration", label: "Narration", icon: AudioLines },
   { id: "notes", label: "Notes", icon: StickyNote },
   { id: "settings", label: "Settings", icon: Settings2 },
+  { id: "git", label: "Git", icon: GitCompare },
   { id: "code", label: "HTML", icon: Code2 },
 ];
 
@@ -29,6 +30,7 @@ export function ModeTabs() {
     narration: narrated ? "Show this slide's narration" : "Write narration for this slide",
     notes: "Write speaker notes for this slide; only the presenter sees them",
     settings: "Change the slide size and the deck's style",
+    git: "See what changed since the last commit, and compare each slide before and after",
     code: `Show ${file}, scrolled to the selected slide`,
   };
   const needsSlide = (id: DeckMode) => id === "edit" || id === "narration" || id === "notes";

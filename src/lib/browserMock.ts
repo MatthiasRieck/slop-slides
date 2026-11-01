@@ -97,6 +97,8 @@ export function installBrowserMock() {
           return ["ask", "fullAccess"];
         case "lint_deck":
           return [];
+        case "deck_changes":
+          return fromServer("changes", { id: String(a.id) });
         case "save_deck_source":
           throw new Error("Saving is not available in the browser preview.");
         case "save_asset":

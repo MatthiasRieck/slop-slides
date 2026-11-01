@@ -9,6 +9,7 @@ mod env;
 mod error;
 mod extensions;
 mod find;
+mod git;
 mod html;
 mod lint;
 mod mcp;
@@ -542,6 +543,54 @@ fn export_deck(id: String, dest: String) -> Result<()> {
     deck::export(&deck::deck_file(&id)?, std::path::Path::new(&dest))
 }
 
+/// What changed in the deck since the last commit. Off the main thread: it runs git.
+#[tauri::command(async)]
+fn deck_changes(id: String) -> Result<git::DeckChanges> {
+    git::changes(&deck::deck_file(&id)?)
+}
+
+#[tauri::command(async)]
+fn stage_change(id: String, change: git::Change) -> Result<()> {
+    git::stage(&deck::deck_file(&id)?, &change)
+}
+
+#[tauri::command(async)]
+fn unstage_change(id: String, change: git::Change) -> Result<()> {
+    git::unstage(&deck::deck_file(&id)?, &change)
+}
+
+/// Puts a change back as it was committed, in the deck and the index; the slide list's undo
+/// takes the deck's part back.
+#[tauri::command(async)]
+fn restore_change(window: Window, id: String, change: git::Change) -> Result<RailEdit> {
+    let file = deck::deck_file(&id)?;
+    let before = deck::read_html(&file)?;
+    let source = git::restored(&file, &change)?;
+    let slide = match &change {
+        git::Change::Slide { id, .. } => id.as_deref(),
+        git::Change::Move { id, .. } => Some(id.as_str()),
+        git::Change::Styles => None,
+    };
+    let edit = deck::restore(&file, &session(&window)?, slide, source)?;
+    git::finish_restore(&file, &change, &before)?;
+    Ok(edit)
+}
+
+#[tauri::command(async)]
+fn stage_all(id: String) -> Result<()> {
+    git::stage_all(&deck::deck_file(&id)?)
+}
+
+#[tauri::command(async)]
+fn unstage_all(id: String) -> Result<()> {
+    git::unstage_all(&deck::deck_file(&id)?)
+}
+
+#[tauri::command(async)]
+fn commit_changes(id: String, message: String) -> Result<()> {
+    git::commit(&deck::deck_file(&id)?, &message)
+}
+
 #[tauri::command]
 fn lint_deck(window: Window, id: String) -> Result<Vec<lint::Issue>> {
     let file = deck::deck_file(&id)?;
@@ -1039,6 +1088,13 @@ pub fn run() {
             find_in_deck,
             replace_in_deck,
             export_deck,
+            deck_changes,
+            stage_change,
+            unstage_change,
+            restore_change,
+            stage_all,
+            unstage_all,
+            commit_changes,
             lint_deck,
             capture_sketch,
             create_image_export_dir,

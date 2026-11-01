@@ -1,6 +1,7 @@
 // Dev-only Vite plugin: lets the UI run in a plain browser (no Tauri) against the real deck
 // library as its only workspace, read-only. Used for visual checks; the desktop app uses the
 // `slop://` protocol.
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -52,6 +53,69 @@ function templateHtml(id: string): string | null {
   const js = `<script>\n${asset("runtime.js")}</script>`;
   return at < 0 ? withCss + js : withCss.slice(0, at) + js + withCss.slice(at);
 }
+/** Roughly src-tauri/src/git.rs: a file as of the last commit; null when it has none. */
+function atHead(file: string): Buffer | null {
+  try {
+    const dir = path.dirname(file);
+    return execFileSync("git", ["cat-file", "blob", `HEAD:./${path.basename(file)}`], {
+      cwd: dir,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** Slides by id, with their markup. */
+const slidesOf = (html: string) =>
+  [...html.matchAll(/<section\b[^>]*\bid="([^"]+)"[^>]*>[\s\S]*?<\/section>/g)].map((m) => ({
+    id: m[1]!,
+    markup: m[0],
+  }));
+
+/** Roughly src-tauri/src/git.rs: the slides by id, the removed ones after the slide they followed. */
+function deckChanges(file: string) {
+  const committed = atHead(file)?.toString("utf8");
+  const none = {
+    commit: null,
+    stylesChanged: false,
+    oldSize: null,
+    stylesStaged: false,
+    stagedFiles: 0,
+    stagedElsewhere: 0,
+    hasUnstaged: true,
+  };
+  const now = slidesOf(fs.readFileSync(file, "utf8"));
+  const row = (status: string, id: string | null, oldId: string | null) => ({
+    key: id ?? `removed:${oldId}`,
+    status,
+    id,
+    oldId,
+    details: [],
+    moved: false,
+    oldNumber: null,
+    staged: false,
+    moveStaged: false,
+  });
+  if (committed === undefined) {
+    return { ...none, tracking: "notCommitted", slides: now.map((s) => row("added", s.id, null)) };
+  }
+  const old = slidesOf(committed);
+  const rows = now.map((slide) => {
+    const before = old.find((s) => s.id === slide.id);
+    const status = !before ? "added" : before.markup === slide.markup ? "unchanged" : "modified";
+    return row(status, slide.id, before?.id ?? null);
+  });
+  old.forEach((slide, index) => {
+    if (now.some((s) => s.id === slide.id)) return;
+    const after = rows.findIndex((r) => r.id === old[index - 1]?.id);
+    rows.splice(after + 1, 0, row("removed", null, slide.id));
+  });
+  const subject = execFileSync("git", ["log", "-1", "--format=%h%x00%s"], { cwd: path.dirname(file) });
+  const [hash, title] = subject.toString("utf8").trim().split("\0");
+  return { ...none, tracking: "committed", commit: { hash, subject: title }, slides: rows };
+}
+
 const hash = (text: string) => createHash("sha1").update(text).digest("hex").slice(0, 12);
 
 /** A workspace-relative path inside the library; null for anything outside it. */
@@ -128,6 +192,10 @@ export function browserPreview(): Plugin {
           const file = url.searchParams.get("id") ?? "";
           return json(file.startsWith(library + path.sep) && fs.existsSync(file) ? readDeck(file) : null);
         }
+        if (url.pathname === "/__api/changes") {
+          const file = url.searchParams.get("id") ?? "";
+          return json(file.startsWith(library + path.sep) && fs.existsSync(file) ? deckChanges(file) : null);
+        }
         if (url.pathname === "/__api/templates") {
           res.setHeader("content-type", "application/json");
           return res.end(JSON.stringify(listTemplates()));
@@ -142,6 +210,18 @@ export function browserPreview(): Plugin {
           }
           res.setHeader("content-type", "text/html; charset=utf-8");
           return res.end(html);
+        }
+        // Files as of the last commit, like src-tauri/src/protocol.rs: what it does not have
+        // comes from the workspace.
+        const head = /^\/__deck\/\.head\/(.+)$/.exec(url.pathname);
+        if (head) {
+          const file = path.resolve("/", decodeURIComponent(head[1]!));
+          const committed = file.startsWith(library + path.sep) ? atHead(file) : null;
+          if (committed) {
+            if (file.endsWith(".html")) res.setHeader("content-type", "text/html; charset=utf-8");
+            return res.end(committed);
+          }
+          url.pathname = url.pathname.replace("/.head/", "/.file/");
         }
         // Workspace files come by absolute path: `/__deck/.file/<path without its leading />`.
         const served = /^\/__deck\/\.file\/(.+)$/.exec(url.pathname);

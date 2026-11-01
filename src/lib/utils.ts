@@ -21,6 +21,7 @@ function servedUrl(prefix: string, path: string, query?: string): string {
 /** First path segments the backend serves files under (see src-tauri/src/protocol.rs). */
 const FILE_PREFIX = ".file";
 const SESSION_PREFIX = ".session";
+const HEAD_PREFIX = ".head";
 
 /** An absolute path as the backend takes it in URLs: `/`-separated, without the leading `/`. */
 const urlPath = (absolute: string) => absolute.replaceAll("\\", "/").replace(/^\//, "");
@@ -85,6 +86,15 @@ export function slideUrl(
   const editing = edit === undefined ? "" : `&edit=${encodeURIComponent(edit)}`;
   const query = `embed&slide=${encodeURIComponent(slideId)}&v=${version}${still ? "&static" : ""}${pan ? "&pan" : ""}${editing}`;
   return fileUrl(deckId, query);
+}
+
+/**
+ * One slide of the deck as of the last commit, as a still preview. `print` brings its player
+ * runtime up to date, as the commit's may be too old for the embedded preview.
+ */
+export function headSlideUrl(deckId: string, slideId: string, commit: string): string {
+  const query = `embed&slide=${encodeURIComponent(slideId)}&v=${commit}&static&print`;
+  return servedUrl(HEAD_PREFIX, urlPath(deckId), query);
 }
 
 /** First path segment the backend serves templates under (see src-tauri/src/protocol.rs). */

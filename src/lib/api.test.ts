@@ -161,6 +161,28 @@ const CASES = [
     { id: "talk", dest: "/out.mp4", options: DEFAULT_VIDEO_OPTIONS },
   ],
   ["cancelVideoExport", () => api.cancelVideoExport(), "cancel_video_export", undefined],
+  ["deckChanges", () => api.deckChanges("talk"), "deck_changes", { id: "talk" }],
+  [
+    "stageChange",
+    () => api.stageChange("talk", { kind: "styles" }),
+    "stage_change",
+    { id: "talk", change: { kind: "styles" } },
+  ],
+  [
+    "unstageChange",
+    () => api.unstageChange("talk", { kind: "styles" }),
+    "unstage_change",
+    { id: "talk", change: { kind: "styles" } },
+  ],
+  [
+    "restoreChange",
+    () => api.restoreChange("talk", { kind: "move", id: "a", oldId: "a" }),
+    "restore_change",
+    { id: "talk", change: { kind: "move", id: "a", oldId: "a" } },
+  ],
+  ["stageAll", () => api.stageAll("talk"), "stage_all", { id: "talk" }],
+  ["unstageAll", () => api.unstageAll("talk"), "unstage_all", { id: "talk" }],
+  ["commitChanges", () => api.commitChanges("talk", "Fix"), "commit_changes", { id: "talk", message: "Fix" }],
   ["lintDeck", () => api.lintDeck("talk"), "lint_deck", { id: "talk" }],
   [
     "createImageExportDir",

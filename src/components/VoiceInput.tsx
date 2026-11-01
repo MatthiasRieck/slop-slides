@@ -32,7 +32,6 @@ export interface VoiceInputHandle {
 /** How often the waveform takes in a new level, like the backend's `LEVEL_INTERVAL`. */
 const WAVEFORM_INTERVAL = 60;
 /** The recording color (Tailwind's red-500), as a canvas can't take a class. */
-const WAVEFORM_COLOR = "#ef4444";
 
 /**
  * The microphone's level over time, coming out of the stop button on its right. Once `live`
@@ -47,6 +46,7 @@ function Waveform(props: { level: number; live: boolean }) {
     const el = canvas.current;
     const context = el?.getContext("2d");
     if (!el || !context) return;
+    const color = getComputedStyle(el).color;
     const levels: number[] = [];
     let last = performance.now();
     let peak = 0;
@@ -71,7 +71,7 @@ function Waveform(props: { level: number; live: boolean }) {
       }
       context.setTransform(scale, 0, 0, scale, 0, 0);
       context.clearRect(0, 0, width, height);
-      context.strokeStyle = WAVEFORM_COLOR;
+      context.strokeStyle = color;
       context.lineCap = "round";
       context.lineWidth = WAVEFORM_BAR;
       const scroll = Math.max(0, (now - last) / WAVEFORM_INTERVAL);
@@ -91,7 +91,12 @@ function Waveform(props: { level: number; live: boolean }) {
 
   return (
     <div className="relative h-6 min-w-0 flex-1">
-      <canvas ref={canvas} aria-hidden data-testid="voice-waveform" className="absolute inset-0 size-full" />
+      <canvas
+        ref={canvas}
+        aria-hidden
+        data-testid="voice-waveform"
+        className="absolute inset-0 size-full text-destructive"
+      />
     </div>
   );
 }
@@ -240,7 +245,7 @@ export function VoiceInput(props: DictationHandlers & { ref?: Ref<VoiceInputHand
         className={cn(
           "relative flex size-8 shrink-0 items-center justify-center rounded-full",
           phase === "recording"
-            ? "bg-red-500/15 text-red-500 hover:bg-red-500/25"
+            ? "bg-destructive/15 text-destructive hover:bg-destructive/25"
             : "text-muted-foreground hover:bg-accent hover:text-foreground",
         )}
       >
@@ -248,7 +253,7 @@ export function VoiceInput(props: DictationHandlers & { ref?: Ref<VoiceInputHand
           <span
             aria-hidden
             data-testid="voice-level"
-            className="pointer-events-none absolute inset-0 rounded-full border-2 border-red-500/60 transition-transform duration-75"
+            className="pointer-events-none absolute inset-0 rounded-full border-2 border-destructive/60 transition-transform duration-75"
             style={{ transform: `scale(${1 + level * 0.35})` }}
           />
         )}

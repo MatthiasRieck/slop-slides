@@ -3,6 +3,8 @@
  * slide editor (src-tauri/assets/editor.js) applies them in the slide's preview.
  */
 
+import { SWATCHES } from "./palette";
+
 export type EditTool =
   | "select"
   | "text"
@@ -139,7 +141,7 @@ export const EDIT_TOOL_KEYS: Record<string, EditTool> = {
 
 export const DEFAULT_EDIT_STYLES: Record<ToolFamily, EditStyle> = {
   text: {
-    color: "#111111",
+    color: SWATCHES.ink,
     fontSize: 48,
     bold: false,
     italic: false,
@@ -150,32 +152,20 @@ export const DEFAULT_EDIT_STYLES: Record<ToolFamily, EditStyle> = {
     strokeWidth: 0,
   },
   shape: {
-    color: "#ffffff",
+    color: SWATCHES.white,
     fontSize: 40,
     bold: false,
     italic: false,
     align: "center",
     valign: "middle",
-    fill: "#3b82f6",
+    fill: SWATCHES.blue,
     stroke: null,
     strokeWidth: 0,
   },
-  draw: { fill: null, stroke: "#111111", strokeWidth: 6 },
+  draw: { fill: null, stroke: SWATCHES.ink, strokeWidth: 6 },
 };
 
-export const EDIT_COLORS = [
-  "#111111",
-  "#6b7280",
-  "#ffffff",
-  "#ef4444",
-  "#f97316",
-  "#facc15",
-  "#22c55e",
-  "#14b8a6",
-  "#3b82f6",
-  "#8b5cf6",
-  "#ec4899",
-] as const;
+export const EDIT_COLORS = Object.values(SWATCHES);
 
 export const BORDER_WIDTHS = [0, 1, 2, 4, 6, 8, 12, 16] as const;
 

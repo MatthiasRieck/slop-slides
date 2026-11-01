@@ -27,10 +27,15 @@ type Mark = { label: string; icon: LucideIcon; color: string; ring: string };
 
 /** What each kind of change looks like, everywhere in this mode. */
 const MARKS: Record<Exclude<SlideStatus, "unchanged">, Mark> = {
-  added: { label: "Added", icon: Plus, color: "bg-emerald-600", ring: "ring-emerald-600" },
-  modified: { label: "Modified", icon: Pencil, color: "bg-orange-500", ring: "ring-orange-500" },
-  removed: { label: "Removed", icon: Trash2, color: "bg-red-600", ring: "ring-red-600" },
-  moved: { label: "Moved", icon: ArrowUpDown, color: "bg-sky-600", ring: "ring-sky-600" },
+  added: { label: "Added", icon: Plus, color: "bg-success text-success-foreground", ring: "ring-success" },
+  modified: { label: "Modified", icon: Pencil, color: "bg-warning text-warning-foreground", ring: "ring-warning" },
+  removed: {
+    label: "Removed",
+    icon: Trash2,
+    color: "bg-destructive text-destructive-foreground",
+    ring: "ring-destructive",
+  },
+  moved: { label: "Moved", icon: ArrowUpDown, color: "bg-info text-info-foreground", ring: "ring-info" },
 };
 
 const BAR_BUTTON =
@@ -93,10 +98,7 @@ export function ChangesRail() {
               <span
                 key={status}
                 title={`${count(status)} ${label.toLowerCase()}`}
-                className={cn(
-                  "flex items-center gap-0.5 rounded px-1 text-2xs font-medium tabular-nums text-white",
-                  color,
-                )}
+                className={cn("flex items-center gap-0.5 rounded px-1 text-2xs font-medium tabular-nums", color)}
               >
                 <Icon className="size-2.5" />
                 {count(status)}
@@ -266,7 +268,7 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
           </div>
         )}
         {row.moved && row.oldNumber !== null && (
-          <span className="pointer-events-none absolute bottom-1 left-1 rounded bg-sky-600 px-1 py-px text-2xs font-medium text-white">
+          <span className="pointer-events-none absolute bottom-1 left-1 rounded bg-info px-1 py-px text-2xs font-medium text-info-foreground">
             was {row.oldNumber}
           </span>
         )}
@@ -274,7 +276,7 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
           <span
             data-testid="staged-mark"
             title="Staged"
-            className="pointer-events-none absolute right-1 top-1 rounded-full bg-black/70 p-0.5 text-white"
+            className="pointer-events-none absolute right-1 top-1 rounded-full bg-overlay p-0.5 text-overlay-foreground"
           >
             <Check className="size-3" />
           </span>
@@ -305,7 +307,7 @@ function MarkRow(props: { mark: Mark; deck: string; actions: ReturnType<typeof a
       <span
         data-testid="change-mark"
         title={label}
-        className={cn("flex size-7 items-center justify-center rounded-full text-white shadow-md", color)}
+        className={cn("flex size-7 items-center justify-center rounded-full shadow-md", color)}
       >
         <Icon className="size-4" />
       </span>
@@ -341,7 +343,7 @@ function MarkButton(props: {
       title={props.title}
       disabled={props.disabled}
       onClick={props.onClick}
-      className="pointer-events-auto flex size-6 items-center justify-center rounded-full bg-white text-black shadow-md ring-1 ring-black/20 hover:bg-zinc-200 disabled:pointer-events-none disabled:opacity-40"
+      className="pointer-events-auto flex size-6 items-center justify-center rounded-full bg-handle text-handle-foreground shadow-md ring-1 ring-scrim/40 hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
     >
       {props.children}
     </button>
@@ -591,7 +593,7 @@ function SlideArea({ deck, changes, row }: { deck: Deck; changes: DeckChanges; r
             (comparable(row, changes) ? (
               <SlideComparison box={box} scale={scale} before={before} after={after} />
             ) : (
-              <div className="flex items-center overflow-hidden bg-black" style={box}>
+              <div className="flex items-center overflow-hidden bg-stage" style={box}>
                 {after ?? before}
               </div>
             ))}

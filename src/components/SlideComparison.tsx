@@ -94,27 +94,28 @@ export function SlideComparison(props: {
   const mask = revealMask(divider, box, scale);
 
   return (
-    <div className="relative bg-black" style={box} data-testid="slide-comparison">
+    <div className="relative bg-stage" style={box} data-testid="slide-comparison">
       <div className="absolute inset-0 flex items-center overflow-hidden">{props.before}</div>
       <div
         data-testid="comparison-after"
         data-mask={mask}
-        className="absolute inset-0 flex items-center overflow-hidden bg-black"
+        className="absolute inset-0 flex items-center overflow-hidden bg-stage"
         style={{ maskImage: mask, WebkitMaskImage: mask }}
       >
         {props.after}
       </div>
       <svg aria-hidden className="pointer-events-none absolute inset-0 size-full overflow-visible">
+        <line x1={lineStart.x} y1={lineStart.y} x2={lineEnd.x} y2={lineEnd.y} stroke="var(--scrim)" strokeWidth={4} />
+        <line x1={lineStart.x} y1={lineStart.y} x2={lineEnd.x} y2={lineEnd.y} stroke="var(--handle)" strokeWidth={2} />
         <line
-          x1={lineStart.x}
-          y1={lineStart.y}
-          x2={lineEnd.x}
-          y2={lineEnd.y}
-          stroke="rgb(0 0 0 / 0.45)"
-          strokeWidth={4}
+          x1={point.x}
+          y1={point.y}
+          x2={knob.x}
+          y2={knob.y}
+          stroke="var(--handle)"
+          strokeWidth={2}
+          strokeDasharray="3 3"
         />
-        <line x1={lineStart.x} y1={lineStart.y} x2={lineEnd.x} y2={lineEnd.y} stroke="white" strokeWidth={2} />
-        <line x1={point.x} y1={point.y} x2={knob.x} y2={knob.y} stroke="white" strokeWidth={2} strokeDasharray="3 3" />
       </svg>
       <div
         ref={surface}
@@ -141,7 +142,7 @@ export function SlideComparison(props: {
           title="Drag to move the divider"
           onKeyDown={onMoveKey}
           style={{ left: point.x, top: point.y, rotate: `${divider.angle}deg` }}
-          className="absolute flex size-8 -translate-x-1/2 -translate-y-1/2 cursor-grab items-center justify-center rounded-full bg-white text-black shadow-md ring-1 ring-black/20"
+          className="absolute flex size-8 -translate-x-1/2 -translate-y-1/2 cursor-grab items-center justify-center rounded-full bg-handle text-handle-foreground shadow-md ring-1 ring-scrim/40"
         >
           <GripVertical className="size-4" />
         </button>
@@ -156,7 +157,7 @@ export function SlideComparison(props: {
           onKeyDown={onRotateKey}
           onPointerDown={(event) => start(event, { kind: "rotate", side })}
           style={{ left: knob.x, top: knob.y }}
-          className="absolute size-5 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-white bg-primary shadow-md"
+          className="absolute size-5 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-handle bg-primary shadow-md"
         />
       </div>
     </div>
@@ -168,7 +169,7 @@ function Name({ at, children }: { at: { x: number; y: number }; children: ReactN
   return (
     <span
       style={{ left: at.x, top: at.y }}
-      className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded bg-black/70 px-1.5 py-0.5 text-2xs font-medium text-white"
+      className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 rounded bg-overlay px-1.5 py-0.5 text-2xs font-medium text-overlay-foreground"
     >
       {children}
     </span>

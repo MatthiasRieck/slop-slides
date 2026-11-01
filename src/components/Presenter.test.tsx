@@ -1092,7 +1092,7 @@ describe("presenter view", () => {
       expect(said()).toBe("Welcome everyone to the quarterly results");
       const spoken = [...screen.getByTestId("presenter-notes").querySelectorAll("span")];
       for (const span of spoken) {
-        expect(span.className).toBe(span.hasAttribute("data-said") ? "text-white/40" : "");
+        expect(span.className).toBe(span.hasAttribute("data-said") ? "text-foreground/40" : "");
       }
     });
 

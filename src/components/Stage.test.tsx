@@ -1836,6 +1836,15 @@ describe("Stage", () => {
         color: expect.any(String),
         accent: expect.any(String),
         border: expect.any(String),
+        danger: expect.any(String),
+        guide: expect.any(String),
+        handle: expect.any(String),
+        handleForeground: expect.any(String),
+        overlay: expect.any(String),
+        overlayForeground: expect.any(String),
+        scrim: expect.any(String),
+        search: expect.any(String),
+        searchActive: expect.any(String),
       };
       expect(viewPost).toHaveBeenCalledWith(colors, "*");
       toggleEditing();

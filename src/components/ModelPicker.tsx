@@ -270,7 +270,7 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
                     }}
                     className={cn(
                       "shrink-0 rounded p-0.5 text-muted-foreground/60 hover:text-foreground",
-                      isFavorite && "text-amber-500 hover:text-amber-400",
+                      isFavorite && "text-warning hover:text-warning/80",
                     )}
                   >
                     <Star className={cn("size-3.5", isFavorite && "fill-current")} />
@@ -293,7 +293,7 @@ function ProviderStatus({ info }: { info: ProviderInfo }) {
       {info.installed ? (
         <>
           <p className="flex items-center gap-1.5 text-sm text-foreground">
-            <AlertTriangle className="size-3.5 text-amber-500" />
+            <AlertTriangle className="size-3.5 text-warning" />
             Could not list {cli} models
           </p>
           <p className="selectable text-xs leading-relaxed text-muted-foreground">{info.error}</p>

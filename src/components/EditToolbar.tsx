@@ -68,6 +68,7 @@ import {
   toolbarState,
   type VerticalAlign,
 } from "../lib/editTools";
+import { SWATCHES } from "../lib/palette";
 import { cn } from "../lib/utils";
 import { ArrangeControls } from "./ArrangeControls";
 import { keepFocus, ToolButton, useOutsideClose } from "./EditControls";
@@ -487,7 +488,7 @@ function ColorButton(props: {
         {props.icon}
         <span
           data-testid={`${props.label} swatch`}
-          className="mt-0.5 h-1 w-4 rounded-sm border border-black/15 dark:border-white/30"
+          className="mt-0.5 h-1 w-4 rounded-sm border border-foreground/20"
           style={{ background: props.value ?? "transparent" }}
         />
       </button>
@@ -509,7 +510,7 @@ function ColorButton(props: {
                   onMouseDown={keepFocus}
                   onClick={() => pick(color.value)}
                   className={cn(
-                    "size-5 rounded-full border border-black/15 dark:border-white/30",
+                    "size-5 rounded-full border border-foreground/20",
                     props.value === color.value && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-card",
                   )}
                   style={{ background: color.value }}
@@ -544,7 +545,7 @@ function ColorButton(props: {
                 onMouseDown={keepFocus}
                 onClick={() => pick(color)}
                 className={cn(
-                  "size-5 rounded-full border border-black/15 dark:border-white/30",
+                  "size-5 rounded-full border border-foreground/20",
                   props.value === color && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-card",
                 )}
                 style={{ background: color }}
@@ -556,7 +557,7 @@ function ColorButton(props: {
               ref={custom}
               type="color"
               aria-label={`Custom ${props.label.toLowerCase()}`}
-              defaultValue={props.value ?? "#000000"}
+              defaultValue={props.value ?? SWATCHES.ink}
               className="h-5 w-8 cursor-pointer rounded border-0 bg-transparent p-0"
             />
             Custom

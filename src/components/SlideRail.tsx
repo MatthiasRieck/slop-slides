@@ -705,7 +705,7 @@ function Thumbnail(props: {
           shown={slide.locked}
           testId="locked-mark"
           title="Locked: neither you nor the agent can change it"
-          className="bottom-1 left-1 rounded bg-black/70 p-1 text-white"
+          className="bottom-1 left-1 rounded bg-overlay p-1 text-overlay-foreground"
         >
           <Lock className="size-3" aria-label="Locked slide" />
         </RailMark>
@@ -789,7 +789,7 @@ function RailAction(props: { title: string; onClick: () => void; children: React
         e.stopPropagation();
         props.onClick();
       }}
-      className="rounded bg-black/70 p-1 text-white hover:bg-black/80"
+      className="rounded bg-overlay p-1 text-overlay-foreground hover:opacity-90"
     >
       {props.children}
     </button>

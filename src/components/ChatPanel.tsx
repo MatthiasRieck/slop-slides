@@ -245,7 +245,7 @@ function CopyMessage({ text }: { text: string }) {
 function MissingCli({ provider }: { provider: Provider }) {
   const { cli, install } = PROVIDERS[provider];
   return (
-    <div className="mx-3 mb-2 flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs leading-relaxed text-amber-800 dark:text-amber-200">
+    <div className="mx-3 mb-2 flex gap-2 rounded-lg border border-warning/30 bg-warning/10 p-2.5 text-xs leading-relaxed text-warning ">
       <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
       <span>
         {cli} is not installed. {install} Or pick another model below.
@@ -463,7 +463,7 @@ function ToolRow({ part }: { part: Extract<ChatPart, { kind: "tool" }> }) {
         {target && <span className="font-mono text-[0.95em] text-foreground/80"> {target}</span>}
         {slide && <span className="font-mono text-[0.95em] text-foreground/80"> · #{slide}</span>}
       </span>
-      {part.status === "done" && slide && <Check className="size-3 shrink-0 text-emerald-500" />}
+      {part.status === "done" && slide && <Check className="size-3 shrink-0 text-success" />}
     </button>
   );
 }
@@ -1020,7 +1020,7 @@ function ImageGrid(props: {
               aria-label={`Remove ${assetName(path)}`}
               title="Remove"
               onClick={() => props.onRemove(path)}
-              className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-black/60 text-white opacity-80 hover:opacity-100 group-hover:opacity-100"
+              className="absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-overlay text-overlay-foreground opacity-80 hover:opacity-100 group-hover:opacity-100"
             >
               <X className="size-3" />
             </button>
@@ -1085,7 +1085,7 @@ function ContextMeter() {
         <div
           className={cn(
             "h-full rounded-full transition-[width] duration-500",
-            percent === null || percent < 70 ? "bg-primary/70" : percent < 90 ? "bg-amber-500" : "bg-destructive",
+            percent === null || percent < 70 ? "bg-primary/70" : percent < 90 ? "bg-warning" : "bg-destructive",
           )}
           style={{ width: `${percent ?? 0}%` }}
         />

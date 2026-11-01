@@ -95,7 +95,7 @@ export function SlideFrame({
         aspectRatio: `${stageW} / ${stageH}`,
         overflow: bleeds ? "visible" : "hidden",
         // The pasteboard paints the slide wherever it is panned to, and nothing around it.
-        background: bleeds || thumbnail ? "transparent" : "#000",
+        background: bleeds || thumbnail ? "transparent" : "var(--stage)",
       }}
     >
       {scale > 0 &&

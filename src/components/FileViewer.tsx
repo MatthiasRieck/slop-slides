@@ -46,7 +46,7 @@ function PageView({ file }: { file: OpenedFile }) {
         src={fileUrl(file.absolute, `v=${rev}`)}
         // Its own scripts run, but it gets no access to the app.
         sandbox="allow-scripts allow-forms allow-popups allow-modals"
-        className="min-h-0 w-full flex-1 bg-white"
+        className="min-h-0 w-full flex-1 bg-paper"
       />
     </div>
   );

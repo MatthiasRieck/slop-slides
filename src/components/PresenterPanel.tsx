@@ -96,22 +96,20 @@ export function PresenterPanel(props: {
   const busyRecording =
     recorder.phase === "starting" || recorder.phase === "downloading" || recorder.phase === "saving";
   const notesClass = cn(
-    "min-h-0 flex-1 overflow-y-auto rounded-lg bg-white/5 p-3 leading-relaxed",
-    // Formatted text keeps to the dark panel whatever the app's theme.
-    "[--accent:rgb(255_255_255/0.1)] [--border:rgb(255_255_255/0.2)] [--muted-foreground:rgb(255_255_255/0.6)]",
+    "min-h-0 flex-1 overflow-y-auto rounded-lg bg-foreground/5 p-3 leading-relaxed",
     props.window ? "text-2xl" : "text-base",
   );
   return (
     <aside
       aria-label="Presenter view"
       className={cn(
-        "flex shrink-0 flex-col gap-3 bg-neutral-950 p-3 text-white",
-        props.window ? "size-full p-5" : "w-96 max-w-[40%] border-l border-white/10",
+        "dark flex shrink-0 flex-col gap-3 bg-background p-3 text-foreground",
+        props.window ? "size-full p-5" : "w-96 max-w-[40%] border-l border-foreground/10",
       )}
     >
       <div className="flex items-center gap-1">
         <ElapsedTime startedAt={startedAt} budget={times} slideStartedAt={slideStartedAt} />
-        <span className="ml-2 text-xs text-white/60 tabular-nums">
+        <span className="ml-2 text-xs text-foreground/60 tabular-nums">
           {slide && !slide.hidden ? `Slide ${shown.indexOf(slide) + 1} of ${shown.length}` : "Hidden slide"}
         </span>
         <span className="flex-1" />
@@ -172,22 +170,22 @@ export function PresenterPanel(props: {
           </PanelButton>
         )}
       </div>
-      <div className="flex shrink-0 gap-3 text-xs text-white/60">
+      <div className="flex shrink-0 gap-3 text-xs text-foreground/60">
         <BudgetInput label="Total time" value={budget.total} onChange={(total) => update({ total })} />
         <BudgetInput label="Per slide" value={budget.perSlide} onChange={(perSlide) => update({ perSlide })} />
       </div>
       {props.window && slide && (
         <div className="flex min-h-0 flex-[2] gap-3">
           <div className="flex min-h-0 min-w-0 flex-[2] flex-col gap-1">
-            <span className="text-xs text-white/60">Now</span>
+            <span className="text-xs text-foreground/60">Now</span>
             <FittedSlide deck={deck} slide={slide} />
           </div>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-1">
-            <span className="text-xs text-white/60">Next</span>
+            <span className="text-xs text-foreground/60">Next</span>
             {next ? (
               <FittedSlide deck={deck} slide={next} />
             ) : (
-              <p className="rounded-lg bg-white/5 p-3 text-sm text-white/40">The end of the show.</p>
+              <p className="rounded-lg bg-foreground/5 p-3 text-sm text-foreground/40">The end of the show.</p>
             )}
           </div>
         </div>
@@ -205,7 +203,7 @@ export function PresenterPanel(props: {
           {script ? (
             <ScriptMarkdown text={script} />
           ) : (
-            <span className="text-white/40">
+            <span className="text-foreground/40">
               {recordingText ? "What you say over this slide shows up here." : "No notes for this slide."}
             </span>
           )}
@@ -213,11 +211,11 @@ export function PresenterPanel(props: {
       )}
       {!props.window && (
         <div className="flex shrink-0 flex-col gap-1">
-          <span className="text-xs text-white/60">Next</span>
+          <span className="text-xs text-foreground/60">Next</span>
           {next ? (
             <SlidePreview deck={deck} slide={next} />
           ) : (
-            <p className="rounded-lg bg-white/5 p-3 text-sm text-white/40">The end of the show.</p>
+            <p className="rounded-lg bg-foreground/5 p-3 text-sm text-foreground/40">The end of the show.</p>
           )}
         </div>
       )}
@@ -239,7 +237,7 @@ function BudgetInput(props: { label: string; value: number; onChange: (minutes: 
         onChange={(event) => props.onChange(Math.max(0, Number(event.target.value) || 0))}
         // Typing here must not move the slides.
         onKeyDown={(event) => event.stopPropagation()}
-        className="w-14 rounded-md border border-white/15 bg-white/5 px-1.5 py-0.5 text-white tabular-nums outline-none focus:border-white/40"
+        className="w-14 rounded-md border border-foreground/15 bg-foreground/5 px-1.5 py-0.5 text-foreground tabular-nums outline-none focus:border-foreground/40"
       />
     </label>
   );
@@ -293,15 +291,15 @@ function ElapsedTime(props: { startedAt: number; slideStartedAt: number; budget:
       {total && (
         <span
           data-testid="total-left"
-          className={cn("text-sm tabular-nums", total.over ? "text-red-400" : "text-white/70")}
+          className={cn("text-sm tabular-nums", total.over ? "text-destructive" : "text-foreground/70")}
         >
           {total.over ? `${total.text} over` : `${total.text} left`}
         </span>
       )}
-      <span data-testid="slide-time" className="text-sm text-white/70 tabular-nums">
-        <span className="mr-1 text-white/40">slide</span>
-        <span className={slide?.over ? "text-red-400" : undefined}>{formatElapsed(onSlide)}</span>
-        {slide && <span className="text-white/40"> / {formatElapsed(props.budget.perSlide * 60_000)}</span>}
+      <span data-testid="slide-time" className="text-sm text-foreground/70 tabular-nums">
+        <span className="mr-1 text-foreground/40">slide</span>
+        <span className={slide?.over ? "text-destructive" : undefined}>{formatElapsed(onSlide)}</span>
+        {slide && <span className="text-foreground/40"> / {formatElapsed(props.budget.perSlide * 60_000)}</span>}
       </span>
     </div>
   );
@@ -325,8 +323,8 @@ function PanelButton(props: {
       onMouseDown={(event) => event.preventDefault()}
       onClick={props.onClick}
       className={cn(
-        "flex size-7 items-center justify-center rounded-lg hover:bg-white/10 disabled:pointer-events-none disabled:opacity-35 [&_svg]:size-4",
-        props.active ? "bg-red-500/15 text-red-400" : "text-white/70 hover:text-white",
+        "flex size-7 items-center justify-center rounded-lg hover:bg-foreground/10 disabled:pointer-events-none disabled:opacity-35 [&_svg]:size-4",
+        props.active ? "bg-destructive/15 text-destructive" : "text-foreground/70 hover:text-foreground",
       )}
     >
       {props.children}

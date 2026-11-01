@@ -1,5 +1,7 @@
 /** Annotation tools (presenter ink, slide sketches): the pure parts, shared by the overlay and its tests. */
 
+import { rgbChannels, SWATCHES } from "./palette";
+
 export type Tool = "pointer" | "laser" | "pen" | "highlighter" | "eraser";
 export type InkTool = "pen" | "highlighter";
 
@@ -13,8 +15,8 @@ export interface Stroke {
 /** Single-key shortcuts while presenting. Pressing the active tool's key puts it away. */
 export const TOOL_KEYS: Record<string, Tool> = { l: "laser", p: "pen", h: "highlighter", e: "eraser" };
 
-export const INK_COLORS = ["#ef4444", "#facc15", "#22c55e", "#3b82f6", "#ffffff"] as const;
-export const DEFAULT_COLORS: Record<InkTool, string> = { pen: "#ef4444", highlighter: "#facc15" };
+export const INK_COLORS = [SWATCHES.red, SWATCHES.yellow, SWATCHES.green, SWATCHES.blue, SWATCHES.white];
+export const DEFAULT_COLORS: Record<InkTool, string> = { pen: SWATCHES.red, highlighter: SWATCHES.yellow };
 
 /** Stroke width in screen pixels, and opacity, per tool. */
 export const INK_STYLE: Record<InkTool, { width: number; opacity: number }> = {
@@ -189,7 +191,7 @@ export function trailSegments(
 
 /** Size of the laser dot, and so the width of a fresh laser trail, in screen pixels. */
 export const LASER_SIZE = 16;
-export const LASER_RGB = "239 68 68";
+export const LASER_RGB = rgbChannels(SWATCHES.red);
 /** The laser's red glow, as an inner and an outer halo: blur, spread and opacity. */
 export const LASER_GLOW = [
   { blur: 8, spread: 4, opacity: 0.7 },

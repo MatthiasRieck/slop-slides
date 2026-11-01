@@ -122,13 +122,16 @@ export function RecordingStatus(props: { recorder: ReturnType<typeof useNarratio
   const { phase, mode } = props.recorder;
   if (phase === "saving")
     return (
-      <p role="status" className="shrink-0 rounded-lg bg-white/5 p-2 text-white/60 text-xs">
+      <p role="status" className="shrink-0 rounded-lg bg-foreground/5 p-2 text-foreground/60 text-xs">
         Saving the recording…
       </p>
     );
   if (phase !== "recording") return null;
   return (
-    <div role="status" className="flex shrink-0 items-center gap-2 rounded-lg bg-red-500/15 p-2 text-red-200 text-xs">
+    <div
+      role="status"
+      className="flex shrink-0 items-center gap-2 rounded-lg bg-destructive/15 p-2 text-destructive text-xs"
+    >
       <LevelDot />
       {props.locked
         ? "This slide is locked: what you say over it is not kept."
@@ -149,7 +152,7 @@ function LevelDot() {
     <span
       aria-hidden
       data-testid="recording-level"
-      className="size-2.5 shrink-0 rounded-full bg-red-500 transition-transform duration-75"
+      className="size-2.5 shrink-0 rounded-full bg-destructive transition-transform duration-75"
       style={{ transform: `scale(${1 + level})` }}
     />
   );

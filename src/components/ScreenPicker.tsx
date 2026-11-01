@@ -35,7 +35,7 @@ export function ScreenPicker(props: {
   }, [props.onCancel]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim">
       <dialog
         open
         aria-label="Choose screens"
@@ -63,7 +63,7 @@ export function ScreenPicker(props: {
                 className={cn(
                   "absolute flex flex-col items-center justify-center gap-1 overflow-hidden rounded-md border-2 p-1 text-center",
                   role === "audience" && "border-primary bg-primary/10",
-                  role === "presenter" && "border-amber-500 bg-amber-500/10",
+                  role === "presenter" && "border-warning bg-warning/10",
                   !role && "border-border bg-muted/40",
                 )}
                 style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%` }}
@@ -161,7 +161,7 @@ function RoleButton(props: {
       className={cn(
         "flex size-8 items-center justify-center rounded-md shadow-sm [&_svg]:size-4",
         props.active && props.shows === "audience" && "bg-primary text-primary-foreground",
-        props.active && props.shows === "presenter" && "bg-amber-500 text-black",
+        props.active && props.shows === "presenter" && "bg-warning text-warning-foreground",
         !props.active && "bg-background/85 text-muted-foreground hover:enabled:text-foreground",
         props.disabled && "cursor-not-allowed opacity-50",
       )}

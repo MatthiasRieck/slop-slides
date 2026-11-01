@@ -65,7 +65,7 @@ export function ComposerPopover({
     <div
       ref={popup}
       style={position}
-      className={`fixed z-50 overflow-y-auto rounded-xl border bg-card text-foreground shadow-xl shadow-black/20 ${className}`}
+      className={`fixed z-50 overflow-y-auto rounded-xl border bg-card text-foreground shadow-xl shadow-scrim/40 ${className}`}
     >
       {children}
     </div>,

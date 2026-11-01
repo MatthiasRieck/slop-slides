@@ -317,8 +317,15 @@ export function AnnotationLayer({ annotations, zoom = 1 }: { annotations: Annota
       {laser && (
         <div
           data-testid="laser"
-          className="pointer-events-none absolute -translate-1/2 rounded-full bg-red-500"
-          style={{ left: laser.x, top: laser.y, width: LASER_SIZE, height: LASER_SIZE, boxShadow: laserShadow }}
+          className="pointer-events-none absolute -translate-1/2 rounded-full"
+          style={{
+            left: laser.x,
+            top: laser.y,
+            width: LASER_SIZE,
+            height: LASER_SIZE,
+            background: `rgb(${LASER_RGB})`,
+            boxShadow: laserShadow,
+          }}
         />
       )}
     </div>
@@ -359,7 +366,7 @@ export function PresenterToolbar({ annotations, onExit }: { annotations: Annotat
         aria-label="Presenter tools"
         data-visible={visible}
         className={cn(
-          "flex items-center gap-1 rounded-xl border border-white/10 bg-neutral-900/85 p-1.5 text-white shadow-lg backdrop-blur transition-opacity duration-200",
+          "dark flex items-center gap-1 rounded-xl border border-foreground/10 bg-overlay p-1.5 text-foreground shadow-lg backdrop-blur transition-opacity duration-200",
           visible ? "opacity-100" : "opacity-0",
         )}
       >
@@ -389,15 +396,15 @@ export function PresenterToolbar({ annotations, onExit }: { annotations: Annotat
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => setColor(color)}
                 className={cn(
-                  "size-5 rounded-full border border-white/30",
-                  colors[tool] === color && "ring-2 ring-white ring-offset-1 ring-offset-neutral-900",
+                  "size-5 rounded-full border border-foreground/20",
+                  colors[tool] === color && "ring-2 ring-foreground ring-offset-1 ring-offset-background",
                 )}
                 style={{ background: color }}
               />
             ))}
           </div>
         )}
-        <div className="mx-1 h-5 w-px bg-white/15" />
+        <div className="mx-1 h-5 w-px bg-foreground/15" />
         <ToolButton label="Undo (⌘Z)" disabled={strokes.length === 0} onClick={undo}>
           <Undo2 />
         </ToolButton>
@@ -430,8 +437,8 @@ function ToolButton(props: {
       onMouseDown={(event) => event.preventDefault()}
       onClick={props.onClick}
       className={cn(
-        "flex size-8 items-center justify-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:opacity-35 [&_svg]:size-4",
-        props.active && "bg-white/20 text-white",
+        "flex size-8 items-center justify-center rounded-lg text-foreground/80 hover:bg-foreground/10 hover:text-foreground disabled:pointer-events-none disabled:opacity-35 [&_svg]:size-4",
+        props.active && "bg-foreground/20 text-foreground",
       )}
     >
       {props.children}

@@ -138,8 +138,8 @@ const theme = EditorView.theme({
     backgroundColor: "color-mix(in srgb, var(--primary) 22%, transparent) !important",
   },
   ".cm-selectionMatch": { backgroundColor: "color-mix(in srgb, var(--primary) 14%, transparent)" },
-  ".cm-searchMatch": { backgroundColor: "color-mix(in srgb, #facc15 35%, transparent)" },
-  ".cm-searchMatch-selected": { backgroundColor: "color-mix(in srgb, #f97316 45%, transparent)" },
+  ".cm-searchMatch": { backgroundColor: "color-mix(in srgb, var(--search) 35%, transparent)" },
+  ".cm-searchMatch-selected": { backgroundColor: "color-mix(in srgb, var(--search-active) 45%, transparent)" },
   ".cm-slide-line": {
     backgroundColor: "color-mix(in srgb, var(--primary) 7%, transparent)",
     boxShadow: "inset 2px 0 0 var(--primary)",
@@ -425,8 +425,8 @@ export function CodeView({ active }: { active: boolean }) {
         </button>
       </div>
       {conflict && (
-        <div className="flex shrink-0 items-center gap-2 border-b bg-amber-500/10 px-3 py-1.5 text-xs">
-          <AlertTriangle className="size-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+        <div className="flex shrink-0 items-center gap-2 border-b bg-warning/10 px-3 py-1.5 text-xs">
+          <AlertTriangle className="size-3.5 shrink-0 text-warning " />
           <span className="flex-1">{fileName} changed on disk while you were editing.</span>
           <button
             type="button"

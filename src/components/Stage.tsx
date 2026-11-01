@@ -291,7 +291,7 @@ export function Stage() {
             {overflow.length > 0 && (
               <span
                 title={`Runs past the slide or is cut off:\n${overflow.join("\n")}`}
-                className="mr-1 flex items-center gap-1 rounded-md px-1.5 py-1 text-amber-600 dark:text-amber-400"
+                className="mr-1 flex items-center gap-1 rounded-md px-1.5 py-1 text-warning "
               >
                 <AlertTriangle className="size-3.5" />
                 Overflow
@@ -448,7 +448,7 @@ function CurrentSlide(props: {
   );
 }
 
-/** The panel's color, and the app's accent and border colors, resolved so the preview can use them. */
+/** The panel's color, and the palette's colors for the preview's own marks, resolved for its frame. */
 function canvasColors(canvas: HTMLElement) {
   const panel = canvas.parentElement ?? canvas;
   const probe = document.createElement("span");
@@ -461,6 +461,15 @@ function canvasColors(canvas: HTMLElement) {
     color: getComputedStyle(panel).backgroundColor,
     accent: resolve("--primary"),
     border: resolve("--border"),
+    danger: resolve("--destructive"),
+    guide: resolve("--guide"),
+    handle: resolve("--handle"),
+    handleForeground: resolve("--handle-foreground"),
+    overlay: resolve("--overlay"),
+    overlayForeground: resolve("--overlay-foreground"),
+    scrim: resolve("--scrim"),
+    search: resolve("--search"),
+    searchActive: resolve("--search-active"),
   };
   probe.remove();
   return colors;

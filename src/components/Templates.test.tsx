@@ -12,7 +12,7 @@ import type { TemplateSummary } from "../lib/api";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { SlideRail } from "./SlideRail";
-import { LayoutPicker } from "./Templates";
+import { LayoutPicker, StylePicker } from "./Templates";
 
 const DECK = deckFor(DECK_HTML);
 const MINE: TemplateSummary = {
@@ -180,43 +180,32 @@ describe("SlideRail pickers", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("closes a picker on a click outside, and switches between them", () => {
+  it("leaves the style to Settings mode", () => {
+    render(<SlideRail />);
+    expect(screen.queryByTitle(/style/i)).toBeNull();
+  });
+
+  it("closes the picker on a click outside", () => {
     render(<SlideRail />);
     fireEvent.click(screen.getByTitle("New slide"));
     fireEvent.pointerDown(document.body);
     expect(screen.queryByRole("dialog")).toBeNull();
-    fireEvent.click(screen.getByTitle(/Pick a style/));
-    expect(screen.getByRole("dialog", { name: "Deck style" })).toBeTruthy();
-    fireEvent.click(screen.getByTitle("New slide"));
-    expect(screen.getByRole("dialog", { name: "New slide" })).toBeTruthy();
-    expect(screen.queryByRole("dialog", { name: "Deck style" })).toBeNull();
   });
 });
 
 describe("style picker", () => {
-  const open = () => fireEvent.click(screen.getByTitle(/Style: |Pick a style/));
-
-  it("names the deck's style on its button", () => {
-    useApp.setState({ deck: { ...DECK, template: "swiss" } });
-    render(<SlideRail />);
-    expect(screen.getByTitle(/^Style: Swiss Design\./)).toBeTruthy();
-  });
   it("shows the deck's style and marks it in the list", () => {
     useApp.setState({ deck: { ...DECK, template: "swiss" } });
-    render(<SlideRail />);
-    open();
-    const dialog = screen.getByRole("dialog", { name: "Deck style" });
-    const swiss = within(dialog).getByRole("button", { name: "Swiss Design style" });
+    render(<StylePicker />);
+    const swiss = screen.getByRole("button", { name: "Swiss Design style" });
     expect(swiss.getAttribute("aria-current")).toBe("true");
-    expect(within(dialog).getByRole("button", { name: "Mine style" }).textContent).toContain("Yours");
-    expect(within(dialog).getByText(/restyle every slide/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Mine style" }).textContent).toContain("Yours");
+    expect(screen.getByText(/restyle every slide/)).toBeTruthy();
   });
 
-  it("puts a restyle prompt in the composer and closes", async () => {
-    render(<SlideRail />);
-    open();
+  it("puts a restyle prompt in the composer", async () => {
+    render(<StylePicker />);
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Bento Grid style" })));
-    expect(screen.queryByRole("dialog")).toBeNull();
     await waitFor(() =>
       expect(useApp.getState().composerFill?.text).toContain('Restyle the whole deck in the "Bento Grid" style'),
     );
@@ -228,8 +217,7 @@ describe("style picker", () => {
     invoke.mockImplementation(async (command: string) =>
       command === "apply_template" ? { ...empty, template: "swiss" } : undefined,
     );
-    render(<SlideRail />);
-    open();
+    render(<StylePicker />);
     expect(screen.getByText(/takes the style's fonts/)).toBeTruthy();
     expect(screen.queryByText(/Save deck as template/)).toBeNull();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Swiss Design style" })));
@@ -239,8 +227,7 @@ describe("style picker", () => {
 
   it("disables restyling while the agent is working", () => {
     useApp.setState({ running: true });
-    render(<SlideRail />);
-    open();
+    render(<StylePicker />);
     expect((screen.getByRole("button", { name: "Swiss Design style" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -256,8 +243,7 @@ describe("style picker", () => {
       if (command === "create_template") return created;
       if (command === "list_templates") return [created, MINE, SWISS];
     });
-    render(<SlideRail />);
-    open();
+    render(<StylePicker />);
     fireEvent.click(screen.getByRole("button", { name: /Save deck as template/ }));
     const name = screen.getByLabelText("Template name") as HTMLInputElement;
     expect(name.value).toBe(DECK.title);
@@ -270,9 +256,8 @@ describe("style picker", () => {
     expect(reveal).toHaveBeenCalledWith("/home/.slopslides/templates/board/deck.html");
   });
 
-  it("cancels naming a template with Escape, keeping the menu open", () => {
-    render(<SlideRail />);
-    open();
+  it("cancels naming a template with Escape, keeping the picker", () => {
+    render(<StylePicker />);
     fireEvent.click(screen.getByRole("button", { name: /Save deck as template/ }));
     fireEvent.keyDown(screen.getByLabelText("Template name"), { key: "Escape" });
     expect(screen.queryByLabelText("Template name")).toBeNull();

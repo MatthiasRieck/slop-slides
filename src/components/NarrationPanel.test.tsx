@@ -67,6 +67,11 @@ afterEach(() => {
 });
 
 describe("NarrationPanel", () => {
+  it("holds the time expected for the slide", () => {
+    render(<NarrationPanel />);
+    expect(screen.getByRole("textbox", { name: "Expected time for this slide" })).toBeTruthy();
+  });
+
   it("shows the current slide's narration with its length", () => {
     render(<NarrationPanel />);
     expect(box().value).toBe("Welcome, everyone.");

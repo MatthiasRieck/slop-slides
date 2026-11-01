@@ -744,6 +744,24 @@ describe("Stage", () => {
       expect(useApp.getState().editing).toBe(false);
     });
 
+    const sketchTools = () => screen.queryByRole("toolbar", { name: "Sketch tools" });
+
+    it("shares its row with the search, after the review tools", () => {
+      render(<Stage />);
+      const search = screen.getByRole("textbox", { name: "Search slides" });
+      expect(sketchTools()?.parentElement).toBe(search.closest("div.relative.z-20"));
+      expect(sketchTools()!.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it("has the search in View mode only", () => {
+      render(<Stage />);
+      act(() => useApp.getState().setMode("narration"));
+      expect(screen.queryByRole("textbox", { name: "Search slides" })).toBeNull();
+      act(() => useApp.getState().setMode("view"));
+      act(() => useApp.getState().setMode("edit"));
+      expect(screen.queryByRole("textbox", { name: "Search slides" })).toBeNull();
+    });
+
     it("shows each mode's tools above the slide, and only there", () => {
       render(<Stage />);
       const sketch = () => screen.queryByRole("toolbar", { name: "Sketch tools" });

@@ -22,7 +22,6 @@ import {
   EyeOff,
   Lock,
   LockOpen,
-  Palette,
   Pencil,
   Plus,
   Redo2,
@@ -47,7 +46,7 @@ import { pixelsOf } from "../lib/slideSize";
 import { cn } from "../lib/utils";
 import { railSelection, useApp } from "../store";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
-import { LayoutPicker, Popover, StylePicker } from "./Templates";
+import { LayoutPicker, Popover } from "./Templates";
 
 /** How a slide in the rail eases into and out of being hidden or locked. */
 const MARK_TRANSITION = "transition duration-200";
@@ -56,11 +55,8 @@ export function SlideRail() {
   const deck = useApp((s) => s.deck);
   const selected = useApp((s) => s.selected);
   const [editingSection, setEditingSection] = useState<number | null>(null);
-  const [picker, setPicker] = useState<"style" | "slide" | null>(null);
-  const styleButton = useRef<HTMLButtonElement>(null);
+  const [addingSlide, setAddingSlide] = useState(false);
   const addButton = useRef<HTMLButtonElement>(null);
-  const templates = useApp((s) => s.templates);
-  const styleTitle = templates?.find((t) => t.id === deck?.template)?.title;
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const matches = useApp((s) => s.search.matches);
   // While a search runs the rail lists what it found. The rest stay mounted, hidden, so ending it
@@ -195,24 +191,10 @@ export function SlideRail() {
             <SquareSplitVertical className="size-4" />
           </button>
           <button
-            ref={styleButton}
-            type="button"
-            onClick={() => setPicker((p) => (p === "style" ? null : "style"))}
-            aria-expanded={picker === "style"}
-            title={
-              styleTitle
-                ? `Style: ${styleTitle}. Pick another, or save the deck as a template`
-                : "Pick a style for the deck, or save it as a template"
-            }
-            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-          >
-            <Palette className="size-4" />
-          </button>
-          <button
             ref={addButton}
             type="button"
-            onClick={() => setPicker((p) => (p === "slide" ? null : "slide"))}
-            aria-expanded={picker === "slide"}
+            onClick={() => setAddingSlide((open) => !open)}
+            aria-expanded={addingSlide}
             title="New slide"
             className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
           >
@@ -220,14 +202,15 @@ export function SlideRail() {
           </button>
         </div>
       </div>
-      {picker === "style" && (
-        <Popover anchor={styleButton} placement="below" width={600} label="Deck style" onClose={() => setPicker(null)}>
-          <StylePicker onDone={() => setPicker(null)} />
-        </Popover>
-      )}
-      {picker === "slide" && (
-        <Popover anchor={addButton} placement="below" width={560} label="New slide" onClose={() => setPicker(null)}>
-          <LayoutPicker mode="add" onBlank={() => void addSlide()} onDone={() => setPicker(null)} />
+      {addingSlide && (
+        <Popover
+          anchor={addButton}
+          placement="below"
+          width={560}
+          label="New slide"
+          onClose={() => setAddingSlide(false)}
+        >
+          <LayoutPicker mode="add" onBlank={() => void addSlide()} onDone={() => setAddingSlide(false)} />
         </Popover>
       )}
       <BulkActions deck={deck} />

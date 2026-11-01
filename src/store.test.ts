@@ -343,6 +343,10 @@ describe("stage view", () => {
     useApp.getState().setMode("narration");
     expect(mode()).toBe("narration");
     expect(localStorage.getItem("slopslide.view")).toBe("slides");
+    useApp.getState().setMode("settings");
+    expect(mode()).toBe("settings");
+    useApp.getState().setMode("edit");
+    expect(useApp.getState()).toMatchObject({ editing: true, slideMode: "view" });
     useApp.getState().setMode("view");
     expect(mode()).toBe("view");
   });

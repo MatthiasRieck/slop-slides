@@ -136,12 +136,14 @@ describe("layout", () => {
       (el) => el.getAttribute("aria-label") ?? el.getAttribute("title") ?? el.textContent,
     );
 
-  it("puts the rail and breadcrumbs first, then the modes, the deck's actions and the file actions", () => {
+  it("puts the rail and breadcrumbs first, then the modes, lint, the deck's actions and the file actions", () => {
+    useApp.setState({ lint: [] });
     render(<TopBar />);
     expect(order()).toEqual([
       "Hide slides",
       "Breadcrumbs",
       "Mode",
+      "deck.html passes lint. Click to check again.",
       "Export",
       "Present",
       "Show in folder",
@@ -152,7 +154,7 @@ describe("layout", () => {
 
   it("leaves the tools of each mode to the row below", () => {
     render(<TopBar />);
-    for (const name of ["Find and replace", "Slide size"]) expect(screen.queryByRole("button", { name })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Find and replace" })).toBeNull();
     expect(document.querySelector("header input")).toBeNull();
   });
 
@@ -161,6 +163,7 @@ describe("layout", () => {
     render(<TopBar />);
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.queryByRole("button", { name: /Export/ })).toBeNull();
+    expect(screen.queryByText(/Lint/)).toBeNull();
   });
 });
 

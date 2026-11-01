@@ -785,6 +785,9 @@ describe("ChatPanel: voice input", () => {
     expect(screen.getByTestId("voice-waveform")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Attach images or files" })).toBeNull();
 
+    // The Escape handler is attached in the same effect flush as the recording listeners,
+    // which can land after the commit that shows the stop button.
+    await waitFor(partial);
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByTestId("voice-waveform")).toBeNull();
     expect(screen.getByRole("button", { name: "Attach images or files" })).toBeTruthy();

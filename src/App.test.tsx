@@ -7,6 +7,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 // The panels have their own tests; here only the layout matters.
 vi.mock("./components/Home", () => ({ Home: () => <div data-testid="stub-home" /> }));
 vi.mock("./components/TopBar", () => ({ TopBar: () => <div data-testid="stub-top-bar" /> }));
+vi.mock("./components/DeckSettings", () => ({ DeckSettings: () => <div data-testid="stub-settings" /> }));
 vi.mock("./components/DeckToolbar", () => ({ DeckToolbar: () => <div data-testid="stub-deck-toolbar" /> }));
 vi.mock("./components/SlideRail", () => ({ SlideRail: () => <div data-testid="stub-rail" /> }));
 vi.mock("./components/Stage", () => ({ Stage: () => <div data-testid="stub-stage" /> }));
@@ -30,6 +31,7 @@ beforeEach(() => {
     openedFile: null,
     deck: null,
     view: "slides",
+    slideMode: "view",
     sidebarOpen: true,
     railOpen: true,
     presenting: false,
@@ -59,6 +61,13 @@ describe("App", () => {
     render(<App />);
     expect(["top-bar", "rail", "stage", "sidebar-tabs"].map(shown)).toEqual([true, true, true, true]);
     expect(["home", "viewer"].map(shown)).toEqual([false, false]);
+  });
+
+  it("shows the settings in the place of the slide in Settings mode", () => {
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML), slideMode: "settings" });
+    render(<App />);
+    expect(screen.getByTestId("stub-settings")).toBeTruthy();
+    expect(screen.queryByTestId("stub-stage")).toBeNull();
   });
 
   it("keeps the HTML view mounted while showing slides, so unsaved edits survive", () => {

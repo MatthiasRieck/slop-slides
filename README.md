@@ -60,13 +60,13 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
 - **Styles and layouts:** decks can follow a template, a deck of example layouts (title,
   section, bullets, split, stats, quote, closing) in one style, with its own entrance animation. 31 come
   with the app (Claymorphism, Swiss Design, Synthwave, Terminal Green, Wabi-Sabi, …); add your own as folders in
-  `~/.slopslides/templates/<name>/deck.html`. Pick a style when creating a deck or with the
-  palette button above the slide rail (it puts a restyle request in the chat; an empty deck
-  takes it at once); the same menu has **Save deck as template**, which copies the deck there
+  `~/.slopslides/templates/<name>/deck.html`. Pick a style when creating a deck or in the
+  Settings mode (it puts a restyle request in the chat; an empty deck
+  takes it at once); the same page has **Save deck as template**, which copies the deck there
   with its text replaced by placeholder words. The rail's `+` shows a blank slide and every
   layout of the deck's style as thumbnails and adds the one you click; **Layout** below the
   slide asks the agent to rebuild the current slide on a layout.
-- **Slide size:** the size button in the top bar sets every slide's canvas: landscape,
+- **Slide size:** the Settings mode sets every slide's canvas: landscape,
   portrait or square, a width and height in px, in or cm (96 px per inch), or a common size
   (16:9, 4:3, 4:5, 9:16, A4, US Letter). It is stored in deck.html as
   `<meta name="slopslide-size" content="1080x1350">`; for a deck with slides it puts a
@@ -115,7 +115,7 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   a short pause, and the slide stays until the narration and a pause after it end; the set
   seconds become the least a slide is shown. Slides timed on the narration timeline keep to
   that instead.
-- **Marks and comments:** the View mode's second row has a pen, a highlighter and an eraser for
+- **Marks and comments:** the View mode's toolbar has a pen, a highlighter and an eraser for
   marking up the slide, and the comment tool: click an element (or the slide) and write what
   should change. Comments show as numbered pins that follow their element; click a pin to change
   or delete it. Marks and comments are saved in the deck file and can be hidden together. The

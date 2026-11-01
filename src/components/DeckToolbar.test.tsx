@@ -56,77 +56,6 @@ beforeEach(() => {
   });
 });
 
-describe("deck title", () => {
-  const titleInput = () => screen.getByRole("textbox", { name: "Deck title" }) as HTMLInputElement;
-
-  it("shows the deck title", () => {
-    render(<DeckToolbar />);
-    expect(titleInput().value).toBe("Talk");
-  });
-
-  it("renames on Enter", async () => {
-    invoke.mockResolvedValue({ ...deckFor(DECK_HTML), title: "Board meeting" });
-    render(<DeckToolbar />);
-    fireEvent.change(titleInput(), { target: { value: "  Board meeting " } });
-    titleInput().focus();
-    await act(async () => fireEvent.keyDown(titleInput(), { key: "Enter" }));
-    expect(invoke).toHaveBeenCalledWith("rename_deck", { id: "/decks/talk/deck.html", title: "Board meeting" });
-    expect(useApp.getState().deck!.title).toBe("Board meeting");
-    expect(titleInput().value).toBe("Board meeting");
-  });
-
-  it("renames when focus leaves the field", async () => {
-    invoke.mockResolvedValue({ ...deckFor(DECK_HTML), title: "New" });
-    render(<DeckToolbar />);
-    fireEvent.change(titleInput(), { target: { value: "New" } });
-    await act(async () => fireEvent.blur(titleInput()));
-    expect(invoke).toHaveBeenCalledWith("rename_deck", { id: "/decks/talk/deck.html", title: "New" });
-  });
-
-  it("Escape restores the saved title without renaming", async () => {
-    render(<DeckToolbar />);
-    fireEvent.change(titleInput(), { target: { value: "Oops" } });
-    titleInput().focus();
-    // Escape blurs the field, and blurring normally commits the edit.
-    await act(async () => fireEvent.keyDown(titleInput(), { key: "Escape" }));
-    expect(titleInput().value).toBe("Talk");
-    expect(document.activeElement).not.toBe(titleInput());
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("still renames normally after an Escape", async () => {
-    invoke.mockResolvedValue({ ...deckFor(DECK_HTML), title: "Second try" });
-    render(<DeckToolbar />);
-    titleInput().focus();
-    await act(async () => fireEvent.keyDown(titleInput(), { key: "Escape" }));
-    fireEvent.change(titleInput(), { target: { value: "Second try" } });
-    await act(async () => fireEvent.blur(titleInput()));
-    expect(invoke).toHaveBeenCalledWith("rename_deck", { id: "/decks/talk/deck.html", title: "Second try" });
-  });
-
-  it.each([[""], ["   "], ["Talk"], [" Talk "]])("does not rename to %j", async (value) => {
-    render(<DeckToolbar />);
-    fireEvent.change(titleInput(), { target: { value } });
-    await act(async () => fireEvent.blur(titleInput()));
-    expect(invoke).not.toHaveBeenCalled();
-    expect(titleInput().value).toBe("Talk");
-  });
-
-  it("reports a failed rename", async () => {
-    invoke.mockRejectedValue("deck not found: talk");
-    render(<DeckToolbar />);
-    fireEvent.change(titleInput(), { target: { value: "New" } });
-    await act(async () => fireEvent.blur(titleInput()));
-    expect(useApp.getState().error).toBe("deck not found: talk");
-  });
-
-  it("picks up title changes made elsewhere (e.g. by the agent)", () => {
-    render(<DeckToolbar />);
-    act(() => useApp.getState().setDeck({ ...deckFor(DECK_HTML), title: "Agent's title" }));
-    expect(titleInput().value).toBe("Agent's title");
-  });
-});
-
 describe("deck actions", () => {
   const exportButton = () => screen.getByRole("button", { name: /Export/ }) as HTMLButtonElement;
   const presentButton = () => screen.getByRole("button", { name: /Present/ }) as HTMLButtonElement;
@@ -680,81 +609,6 @@ describe("video export", () => {
   });
 });
 
-describe("lint status", () => {
-  const issues = [
-    { rule: "unclosed-tag", severity: "error" as const, message: "<div> is never closed.", line: 12, slide: "intro" },
-    { rule: "title", severity: "warning" as const, message: "Needs a title.", line: 1, slide: null },
-  ];
-
-  it("shows a pending state until the first check finishes", () => {
-    useApp.setState({ lint: null });
-    render(<DeckToolbar />);
-    expect(screen.getByTitle(/Checking deck\.html/)).toBeTruthy();
-  });
-
-  it("shows OK and re-checks on click", () => {
-    const refreshLint = vi.fn(async () => {});
-    useApp.setState({ lint: [], refreshLint });
-    render(<DeckToolbar />);
-    fireEvent.click(screen.getByRole("button", { name: /Lint OK/ }));
-    expect(refreshLint).toHaveBeenCalled();
-    expect(useApp.getState().composerFill).toBeNull();
-  });
-
-  it("counts errors and warnings and lists them in the tooltip", () => {
-    useApp.setState({ lint: issues });
-    render(<DeckToolbar />);
-    const button = screen.getByRole("button", { name: /Lint: 1 error, 1 warning/ });
-    expect(button.title).toContain("Line 12: <div> is never closed.");
-    expect(button.className).toContain("text-destructive");
-  });
-
-  it("uses the warning style when there are only warnings", () => {
-    useApp.setState({ lint: [issues[1]!, issues[1]!] });
-    render(<DeckToolbar />);
-    expect(screen.getByRole("button", { name: /Lint: 2 warnings/ }).className).toContain("text-amber-600");
-  });
-
-  it("fills the chat composer with fix instructions when clicked", () => {
-    useApp.setState({ lint: issues, composerFill: null, running: false });
-    render(<DeckToolbar />);
-    fireEvent.click(screen.getByRole("button", { name: /Lint: 1 error/ }));
-    const fill = useApp.getState().composerFill!;
-    expect(fill.text).toContain("[unclosed-tag] (slide `intro`)");
-    expect(fill.text).toContain("lint_deck");
-  });
-
-  it("hands slide id style errors to the agent without editing the deck", () => {
-    const message =
-      "CSS targets slide id `intro`; add a reusable layout class and replace its id-based selectors, preserving its appearance.";
-    const deck = deckFor(DECK_HTML);
-    useApp.setState({
-      deck,
-      lint: [{ rule: "slide-id-style", severity: "error", message, line: 337, slide: "intro" }],
-      composerFill: null,
-      running: false,
-    });
-    render(<DeckToolbar />);
-    const button = screen.getByRole("button", { name: "Lint: 1 error" });
-    expect(button.title).toContain(message);
-    fireEvent.click(button);
-
-    const prompt = useApp.getState().composerFill!.text;
-    expect(prompt).toContain(`- line 337 error [slide-id-style] (slide \`intro\`): ${message}`);
-    expect(prompt).toContain("without changing how the slides look");
-    expect(prompt).toContain("run the lint_deck tool to verify");
-    expect(useApp.getState().deck).toBe(deck);
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("is disabled while the agent works", () => {
-    useApp.setState({ lint: issues, running: true });
-    render(<DeckToolbar />);
-    expect((screen.getByRole("button", { name: /Lint: 1 error/ }) as HTMLButtonElement).disabled).toBe(true);
-    useApp.setState({ running: false });
-  });
-});
-
 describe("deck toolbar", () => {
   it("renders nothing without a deck", () => {
     useApp.setState({ deck: null });
@@ -762,44 +616,13 @@ describe("deck toolbar", () => {
     expect(container.innerHTML).toBe("");
   });
 
-  it("holds the deck's tools, in order", () => {
-    useApp.setState({ lint: [] });
-    render(<DeckToolbar />);
-    const toolbar = screen.getByRole("toolbar", { name: "Deck" });
-    const labels = Array.from(toolbar.querySelectorAll("button")).map(
-      (b) => b.getAttribute("aria-label") ?? b.textContent,
-    );
-    expect(labels).toEqual([
-      "Match case",
-      "Whole words",
-      "Previous match",
-      "Next match",
-      "Replace",
-      "Slide size",
-      "Lint OK",
-    ]);
-    expect(screen.getByRole("textbox", { name: "Search slides" })).toBeTruthy();
-  });
-
   it.each([
-    ["code", { view: "code" as const }],
+    ["view", {}],
     ["edit", { editing: true }],
-    ["narration", { slideMode: "narration" as const }],
-  ])("offers the search in View mode only, not in %s", (_mode, state) => {
-    useApp.setState({ lint: [], ...state });
-    render(<DeckToolbar />);
-    expect(screen.queryByRole("textbox", { name: "Search slides" })).toBeNull();
-    useApp.setState({ view: "slides", editing: false, slideMode: "view" });
-  });
-
-  it("stays for the HTML view", () => {
-    useApp.setState({ view: "code" });
-    render(<DeckToolbar />);
-    expect(screen.getByRole("toolbar", { name: "Deck" })).toBeTruthy();
-  });
-
-  it("leaves the row to the stage in edit mode", () => {
-    useApp.setState({ editing: true });
+    ["settings", { slideMode: "settings" as const }],
+    ["code", { view: "code" as const }],
+  ])("leaves the row out in %s mode", (_mode, state) => {
+    useApp.setState(state);
     const { container } = render(<DeckToolbar />);
     expect(container.innerHTML).toBe("");
   });
@@ -807,7 +630,12 @@ describe("deck toolbar", () => {
   it("becomes the narration in narration mode", () => {
     useApp.setState({ slideMode: "narration", selected: "intro" });
     render(<DeckToolbar />);
-    expect(screen.queryByRole("toolbar", { name: "Deck" })).toBeNull();
     expect(screen.getByRole("textbox", { name: "Narration" })).toBeTruthy();
+  });
+
+  it("becomes the notes in notes mode", () => {
+    useApp.setState({ slideMode: "notes", selected: "intro" });
+    render(<DeckToolbar />);
+    expect(screen.getByRole("region", { name: "Speaker notes" })).toBeTruthy();
   });
 });

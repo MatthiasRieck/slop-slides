@@ -3,6 +3,7 @@ import { type ReactNode, useEffect, useRef } from "react";
 import { Group, Panel, type PanelSize, Separator, usePanelRef } from "react-resizable-panels";
 
 import { CodeView } from "./components/CodeView";
+import { DeckSettings } from "./components/DeckSettings";
 import { DeckToolbar } from "./components/DeckToolbar";
 import { FileViewer } from "./components/FileViewer";
 import { Home } from "./components/Home";
@@ -53,7 +54,7 @@ export function useNewWindowKey() {
 function Workbench() {
   const hasDeck = useApp((s) => s.deck !== null);
   const view = useApp((s) => s.view);
-  const narrating = useApp((s) => deckMode(s) === "narration");
+  const mode = useApp(deckMode);
   const sidebarOpen = useApp((s) => s.sidebarOpen);
   const railOpen = useApp((s) => s.railOpen);
   // Re-lint whenever the deck file changes on disk (agent, HTML view, slide operations).
@@ -90,9 +91,9 @@ function Workbench() {
               <div className="min-h-0 flex-1">
                 {/* The HTML view stays mounted so unsaved edits survive switching to the slides. */}
                 <CodeView active={view === "code"} />
-                {view === "slides" && <Stage />}
+                {view === "slides" && (mode === "settings" ? <DeckSettings /> : <Stage />)}
               </div>
-              {narrating && <NarrationTimeline />}
+              {mode === "narration" && <NarrationTimeline />}
             </div>
           ) : (
             <FileViewer />

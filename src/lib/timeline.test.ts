@@ -95,6 +95,11 @@ describe("spokenSeconds", () => {
     } as const;
     expect(spokenSeconds(slides, audio)).toEqual({ said: 2, stale: 3, new: 60, silent: null });
   });
+
+  it("counts a recording on a slide without any written narration", () => {
+    const audio = { voice: { slide: "voice", state: "ready", seconds: 4, recorded: true } } as const;
+    expect(spokenSeconds([slide("voice")], audio)).toEqual({ voice: 4 });
+  });
 });
 
 describe("moving slides", () => {

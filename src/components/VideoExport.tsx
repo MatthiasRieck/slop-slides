@@ -46,7 +46,7 @@ export function VideoExportPanel(props: {
     void useNarration.getState().loadSpeech();
   }, []);
 
-  const narrated = props.slides.filter((s) => (s.narration ?? "").trim() !== "");
+  const narrated = props.slides.filter((s) => (s.narration ?? "").trim() !== "" || audio[s.id]?.recorded);
   const pending = narrated.filter((s) => audio[s.id]?.state !== "ready");
   const speaks = narration && narrated.length > 0;
   const canSpeak = !!speech?.available && !!speech.modelReady;

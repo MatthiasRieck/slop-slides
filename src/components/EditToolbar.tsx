@@ -70,7 +70,7 @@ import {
 } from "../lib/editTools";
 import { SWATCHES } from "../lib/palette";
 import { cn } from "../lib/utils";
-import { ArrangeControls } from "./ArrangeControls";
+import { ArrangeControls, TiltControls } from "./ArrangeControls";
 import { keepFocus, ToolButton } from "./Button";
 import { DraftInput } from "./Field";
 import { LookTools } from "./LookTools";
@@ -429,6 +429,7 @@ export function EditToolbar(props: {
             <option value="stretch">Stretch</option>
           </select>
           <ArrangeControls geometry={props.geometry ?? null} onArrange={props.onArrange} onDone={returnFocus} />
+          <TiltControls geometry={props.geometry ?? null} onArrange={props.onArrange} />
         </RibbonRow>
         <RibbonRow>
           {ORDER.map((o) => (

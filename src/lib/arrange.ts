@@ -20,11 +20,16 @@ export interface EditGeometry {
 
 export type GeometryField = "x" | "y" | "w" | "h" | "rotation";
 
+/** Degrees one press of a 3D rotate button turns the selection. */
+export const TILT_STEP = 5;
+
 /** What the arrange controls ask the slide editor to do. */
 export type ArrangeMessage =
   | { type: "slop:edit-align"; to: AlignTo }
   | { type: "slop:edit-distribute"; axis: DistributeAxis }
-  | ({ type: "slop:edit-geometry" } & Partial<Record<GeometryField, number>>);
+  | ({ type: "slop:edit-geometry" } & Partial<Record<GeometryField, number>>)
+  | { type: "slop:edit-tilt"; x: number; y: number }
+  | { type: "slop:edit-tilt"; reset: true };
 
 /** A geometry report from the slide editor, or null when it is malformed (or nothing is selected). */
 export function parseGeometry(value: unknown): EditGeometry | null {

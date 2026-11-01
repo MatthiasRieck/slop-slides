@@ -1174,16 +1174,109 @@ describe("slide editor", () => {
       expect(h1.getAttribute("style")).toBe("rotate: 90deg;");
     });
 
-    it("keeps the frame in place under a tilt, turning only with a rotation", () => {
-      const { h1, ui, pull } = withHeading();
+    /** Measures the heading as a browser would: its box when flat, the `tilted` extent once tilted and upright. */
+    function measure(e: ReturnType<typeof editor>, h1: HTMLElement, tilted: DOMRect) {
+      const flat = new e.window.DOMRect(400, 250, 200, 100);
+      h1.getBoundingClientRect = () => {
+        if (!h1.style.transform.startsWith("perspective")) return flat;
+        return !h1.style.rotate || h1.style.rotate === "none" ? tilted : new e.window.DOMRect(0, 0, 1, 1);
+      };
+    }
+
+    it("frames the extent of a tilt's perspective, and the box again once it is flat", () => {
+      const { e, h1, ui, pull } = withHeading();
       const box = () => [ui.style.left, ui.style.top, ui.style.width, ui.style.height, ui.style.transform];
       const flat = box();
-      pull("tilt", [520, 200], [880, 200]);
-      expect(h1.style.transform).toBe("perspective(1000px) rotateX(0deg) rotateY(180deg)");
+      measure(e, h1, new e.window.DOMRect(440, 220, 120, 170));
+      pull("tilt", [520, 200], [580, 200]);
+      expect(box()).toEqual(["440px", "220px", "120px", "170px", "rotate(0deg)"]);
+      pull("tilt", [580, 200], [520, 200]);
       expect(box()).toEqual(flat);
+    });
+
+    it("turns the frame with a rotation, around the tilt's extent", () => {
+      const { e, h1, ui, pull } = withHeading();
+      // Upright, the extent's center is 30px right and 10px down of the box's center.
+      measure(e, h1, new e.window.DOMRect(470, 260, 120, 100));
+      pull("tilt", [520, 200], [580, 200]);
       h1.style.rotate = "90deg";
-      pull("tilt", [880, 200], [880, 240]);
+      pull("tilt", [580, 200], [580, 200.1]);
+      // A quarter turn takes that offset to 10px left and 30px down of the center (500, 300).
+      expect(parseFloat(ui.style.left)).toBeCloseTo(490 - 60);
+      expect(parseFloat(ui.style.top)).toBeCloseTo(330 - 50);
+      expect(ui.style.width).toBe("120px");
+      expect(ui.style.height).toBe("100px");
       expect(ui.style.transform).toBe("rotate(90deg)");
+      // Measuring leaves the rotation as it was.
+      expect(h1.style.rotate).toBe("90deg");
+      expect(h1.style.getPropertyPriority("rotate")).toBe("");
+    });
+
+    it("frames each of several tilted elements by its extent", () => {
+      const { e, h1, pull } = withHeading();
+      measure(e, h1, new e.window.DOMRect(440, 220, 120, 170));
+      pull("tilt", [520, 200], [580, 200]);
+      e.fromParent({ type: "slop:edit-select", path: [0], also: [[1]] });
+      const frame = e.$("[data-slop-multi]").firstElementChild as HTMLElement;
+      expect([frame.style.left, frame.style.top, frame.style.width, frame.style.height]).toEqual([
+        "440px",
+        "220px",
+        "120px",
+        "170px",
+      ]);
+    });
+
+    it("keeps a pulled handle under the pointer when the tilt shows the box narrower", () => {
+      const { e, h1, pull } = withHeading("stretch");
+      // Seen at half its width.
+      measure(e, h1, new e.window.DOMRect(450, 250, 100, 100));
+      pull("tilt", [520, 200], [640, 200]);
+      pull("1 0", [550, 300], [580, 300]);
+      expect(h1.style.scale).toBe("1.3 1");
+      // Its frame gets 30px wider on screen, the left side staying put.
+      expect(h1.style.translate).toBe("15px 0px");
+    });
+
+    it("does not fling an element seen edge-on", () => {
+      const { e, h1, pull } = withHeading("stretch");
+      measure(e, h1, new e.window.DOMRect(500, 250, 0, 100));
+      pull("tilt", [520, 200], [700, 200]);
+      pull("1 0", [500, 300], [510, 300]);
+      expect(h1.style.scale).toBe("1.4 1");
+    });
+
+    it("steps the selection's tilt from the toolbar, saving quick steps together", () => {
+      vi.useFakeTimers();
+      const { e, h1 } = withHeading();
+      e.fromParent({ type: "slop:edit-tilt", x: 5, y: -5 });
+      e.fromParent({ type: "slop:edit-tilt", x: 5, y: 0 });
+      expect(h1.style.transform).toBe("perspective(1000px) rotateX(10deg) rotateY(-5deg)");
+      expect(h1.style.getPropertyPriority("transform")).toBe("important");
+      expect(h1.hasAttribute("data-moved")).toBe(true);
+      expect(e.commits()).toHaveLength(0);
+      vi.advanceTimersByTime(500);
+      expect(e.commits()).toHaveLength(1);
+      expect(e.commits()[0]!.markup).toContain("rotateX(10deg) rotateY(-5deg)");
+      e.fromParent({ type: "slop:edit-tilt", reset: true });
+      vi.advanceTimersByTime(500);
+      expect(h1.hasAttribute("style")).toBe(false);
+      expect(h1.hasAttribute("data-moved")).toBe(false);
+      expect(e.commits()).toHaveLength(2);
+      vi.useRealTimers();
+    });
+
+    it("steps every selected element's tilt, and leaves a flip alone on a reset without a tilt", () => {
+      const { e, h1 } = withHeading();
+      const card = e.$(".card");
+      e.fromParent({ type: "slop:edit-select", path: [0], also: [[1]] });
+      e.fromParent({ type: "slop:edit-tilt", x: 0, y: 5 });
+      expect(h1.style.transform).toBe("perspective(1000px) rotateX(0deg) rotateY(5deg)");
+      expect(card.style.transform).toBe("perspective(1000px) rotateX(0deg) rotateY(5deg)");
+      e.fromParent({ type: "slop:edit-tilt", reset: true });
+      expect(card.hasAttribute("style")).toBe(false);
+      h1.style.setProperty("transform", "scaleX(-1)", "important");
+      e.fromParent({ type: "slop:edit-tilt", reset: true });
+      expect(h1.style.getPropertyPriority("transform")).toBe("important");
     });
 
     it.each([

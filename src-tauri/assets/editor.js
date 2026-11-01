@@ -96,6 +96,9 @@
    - { type: "slop:edit-distribute", axis: "h" | "v" } evens out the gaps between three or more.
    - { type: "slop:edit-geometry", x, y, w, h, rotation } sets any of them, in slide pixels from
      the slide's top left. Several elements only take x and y, which move them together.
+   - { type: "slop:edit-tilt", x, y } tilts the selection that many degrees further around its
+     horizontal (x) and vertical (y) axis, or with { reset: true } flat again. Quick steps save
+     together, like nudges.
    Whenever the selection or its place changes, it reports { type: "slop:edit-geometry", slide,
    geometry: { count, x, y, w, h, rotation } } (null when nothing is selected): the unturned box
    of one element, or the bounds of several, with a null rotation.
@@ -145,6 +148,8 @@
   // Degrees of tilt per screen pixel dragged, and how far away the viewer of a tilt stands.
   var TILT_PER_PX = 0.5;
   var PERSPECTIVE = 1000;
+  // A handle pulled on an element seen nearly edge-on moves it this much faster, at most.
+  var MAX_SPREAD = 8;
   // The tilt the editor puts in front of an element's inline `transform`.
   var TILT = /^perspective\([\d.]+px\) rotateX\((-?[\d.]+)deg\) rotateY\((-?[\d.]+)deg\)\s*/;
   var MIN_SCALE = 0.1;
@@ -253,8 +258,9 @@
 
   // Scale, rotate, and tilt handles, outside the slide so they never end up in its markup. They
   // sit just outside the frame, so even small text stays clickable (and double-clickable) inside
-  // it. The frame turns with a rotation but stays flat under a 3D tilt, so its handles can be
-  // grabbed and pull the way they point however far the element is tilted, even turned over.
+  // it. The frame turns with a rotation but stays flat under a 3D tilt, around the extent of the
+  // perspective, so its handles can be grabbed and pull the way they point however far the
+  // element is tilted, even turned over.
   var ui = document.createElement("div");
   ui.setAttribute("data-slop-ui", "");
   ui.style.display = "none";
@@ -727,7 +733,50 @@
     return isFinite(value) && value > 0 ? value : 1;
   }
 
-  /** Lays the handles over the selection's box, turned with it; they keep their size on screen. */
+  /**
+   * The frame around `el` as it shows, on screen: its center (x, y), size (w, h) and rotation
+   * (angle). That is its box, or under a tilt the extent of its perspective. The frame turns with
+   * the rotation, so a rotated element's extent is measured without it and put back in its place.
+   */
+  function shownFrame(el) {
+    var angle = angleOf(el);
+    if (!TILT.test(el.style.transform || "")) {
+      var center = centerOf(el);
+      var size = sizeOf(el);
+      var scale = scaleOf(el);
+      return { x: center.x, y: center.y, w: size.w * scale.x * zoom(), h: size.h * scale.y * zoom(), angle: angle };
+    }
+    if (!angle) {
+      var rect = el.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, w: rect.width, h: rect.height, angle: 0 };
+    }
+    var turned = centerOf(el);
+    var rotate = el.style.rotate;
+    var priority = el.style.getPropertyPriority("rotate");
+    el.style.setProperty("rotate", "none", "important");
+    var extent = el.getBoundingClientRect();
+    var upright = centerOf(el);
+    el.style.setProperty("rotate", rotate, priority);
+    var off = turn(extent.left + extent.width / 2 - upright.x, extent.top + extent.height / 2 - upright.y, angle);
+    return { x: turned.x + off.x, y: turned.y + off.y, w: extent.width, h: extent.height, angle: angle };
+  }
+
+  /**
+   * How far the sides of `el` must go for those of its frame to go one pixel: more the further it
+   * is tilted away, which would leave the handles behind the pointer.
+   */
+  function spreadOf(el) {
+    if (!TILT.test(el.style.transform || "")) return { x: 1, y: 1 };
+    var frame = shownFrame(el);
+    var size = sizeOf(el);
+    var scale = scaleOf(el);
+    var spread = function (box, shown) {
+      return shown > 0 ? Math.min(MAX_SPREAD, (box * zoom()) / shown) : MAX_SPREAD;
+    };
+    return { x: spread(size.w * scale.x, frame.w), y: spread(size.h * scale.y, frame.h) };
+  }
+
+  /** Lays the handles over the selection's frame, turned with it; they keep their size on screen. */
   function placeHandles() {
     scheduleOverflow();
     scheduleGeometry();
@@ -736,20 +785,16 @@
       ui.style.display = "none";
       return;
     }
-    var center = centerOf(selected);
-    var size = sizeOf(selected);
-    var scale = scaleOf(selected);
-    var w = size.w * scale.x * zoom();
-    var h = size.h * scale.y * zoom();
+    var frame = shownFrame(selected);
     ui.style.display = "";
-    ui.style.left = center.x - w / 2 + "px";
-    ui.style.top = center.y - h / 2 + "px";
-    ui.style.width = w + "px";
-    ui.style.height = h + "px";
-    ui.style.transform = "rotate(" + angleOf(selected) + "deg)";
+    ui.style.left = frame.x - frame.w / 2 + "px";
+    ui.style.top = frame.y - frame.h / 2 + "px";
+    ui.style.width = frame.w + "px";
+    ui.style.height = frame.h + "px";
+    ui.style.transform = "rotate(" + frame.angle + "deg)";
     // Edge handles only where there is room for them between the corners.
-    mark(ui, "data-narrow", w < 40);
-    mark(ui, "data-flat", h < 40);
+    mark(ui, "data-narrow", frame.w < 40);
+    mark(ui, "data-flat", frame.h < 40);
   }
 
   ui.addEventListener("pointerdown", function (event) {
@@ -769,6 +814,7 @@
       scale: scaleOf(selected),
       offset: offsetOf(selected),
       size: sizeOf(selected),
+      spread: spreadOf(selected),
       zoom: zoom(),
       dir: { x: dir[0], y: dir[1] },
       resize: sizeMode === "resize",
@@ -834,8 +880,8 @@
     var s0 = drag.scale;
     var moved = turn(dx / drag.zoom, dy / drag.zoom, -drag.angle);
     // The dragged handle's new spot, relative to the element's center before the drag.
-    var hx = (d.x * w * s0.x) / 2 + moved.x;
-    var hy = (d.y * h * s0.y) / 2 + moved.y;
+    var hx = (d.x * w * s0.x) / 2 + moved.x * drag.spread.x;
+    var hy = (d.y * h * s0.y) / 2 + moved.y * drag.spread.y;
     var reach = fromCenter ? 2 : 1;
     var sx = d.x && w ? (reach * d.x * (hx + (fromCenter ? 0 : (d.x * w * s0.x) / 2))) / w : s0.x;
     var sy = d.y && h ? (reach * d.y * (hy + (fromCenter ? 0 : (d.y * h * s0.y) / 2))) / h : s0.y;
@@ -851,7 +897,7 @@
     // Where the center goes so the opposite side stays put (only along the dragged axes).
     var cx = fromCenter || !d.x ? 0 : (d.x * w * (sx - s0.x)) / 2;
     var cy = fromCenter || !d.y ? 0 : (d.y * h * (sy - s0.y)) / 2;
-    var shift = turn(cx, cy, drag.angle);
+    var shift = turn(cx / drag.spread.x, cy / drag.spread.y, drag.angle);
     if (drag.resize) {
       resizeTo(sx, sy, shift);
       return;
@@ -2899,15 +2945,10 @@
   function placeFrames() {
     frames.textContent = "";
     if (!extras.length || editing) return;
-    var k = zoom();
     allSelected().forEach(function (el) {
-      var center = centerOf(el);
-      var size = sizeOf(el);
-      var scale = scaleOf(el);
-      var w = size.w * scale.x * k;
-      var h = size.h * scale.y * k;
+      var at = shownFrame(el);
       var frame = document.createElement("div");
-      frame.style.cssText = "left:" + (center.x - w / 2) + "px;top:" + (center.y - h / 2) + "px;width:" + w + "px;height:" + h + "px;transform:rotate(" + angleOf(el) + "deg)";
+      frame.style.cssText = "left:" + (at.x - at.w / 2) + "px;top:" + (at.y - at.h / 2) + "px;width:" + at.w + "px;height:" + at.h + "px;transform:rotate(" + at.angle + "deg)";
       frames.appendChild(frame);
     });
   }
@@ -3188,6 +3229,20 @@
     commit();
   }
 
+  /** Tilts the selection a step further, or flat again (see slop:edit-tilt at the top of this file). */
+  function stepTilt(data) {
+    finishEditing();
+    var group = allSelected();
+    if (!group.length) return;
+    group.forEach(function (el) {
+      var now = tiltOf(el);
+      if (!data.reset) tiltTo(el, now.x + (Number(data.x) || 0), now.y + (Number(data.y) || 0));
+      else if (now.x || now.y) tiltTo(el, 0, 0);
+    });
+    clearTimeout(nudgeTimer);
+    nudgeTimer = setTimeout(commit, NUDGE_SAVE_MS);
+  }
+
   /** The lines to snap to on each axis: the slide's and other elements' edges and centers. */
   function snapTargets(moving) {
     var lines = { x: [], y: [] };
@@ -3278,7 +3333,7 @@
     var dx = event.clientX - drag.start.x;
     var dy = event.clientY - drag.start.y;
     if (!drag.box) {
-      drag.box = frameOf(drag.el);
+      drag.box = TILT.test(drag.el.style.transform || "") ? boxOf(drag.el) : frameOf(drag.el);
       drag.targets = snapTargets([drag.el]);
     }
     var box = drag.box;
@@ -3344,6 +3399,7 @@
     else if (data.type === "slop:edit-align") alignSelection(String(data.to));
     else if (data.type === "slop:edit-distribute") distributeSelection(String(data.axis));
     else if (data.type === "slop:edit-geometry") setGeometry(data);
+    else if (data.type === "slop:edit-tilt") stepTilt(data);
     else return false;
     return true;
   }

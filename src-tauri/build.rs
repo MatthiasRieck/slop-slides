@@ -189,7 +189,34 @@ fn narration_engine() {
         println!("cargo:rustc-link-lib=m");
         println!("cargo:rustc-link-lib=pthread");
     }
+    if os == "macos" && arch == "x86_64" {
+        link_compiler_rt(&build);
+    }
     println!("cargo:rustc-cfg=narration_engine");
+}
+
+/// The engine's __builtin_cpu_supports needs compiler-rt's __cpu_model. Clang links compiler-rt
+/// into what it links itself, but rustc links with -nodefaultlibs, so it has to be asked for.
+fn link_compiler_rt(build: &cc::Build) {
+    let output = build
+        .get_compiler()
+        .to_command()
+        .arg("--print-file-name=libclang_rt.osx.a")
+        .output()
+        .expect("run the C compiler");
+    let printed = String::from_utf8(output.stdout).expect("compiler-rt path");
+    let library = Path::new(printed.trim());
+    // A compiler that can't find the file prints the bare name back.
+    assert!(
+        library.is_file(),
+        "compiler-rt missing: {}",
+        library.display()
+    );
+    println!(
+        "cargo:rustc-link-search=native={}",
+        library.parent().expect("compiler-rt directory").display()
+    );
+    println!("cargo:rustc-link-lib=static:-bundle=clang_rt.osx");
 }
 
 fn unavailable(reason: &str) {

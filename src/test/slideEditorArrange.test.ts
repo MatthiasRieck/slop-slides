@@ -7,6 +7,7 @@ import { JSDOM } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import EDITOR from "../../src-tauri/assets/editor.js?raw";
+import OVERFLOW from "../../src-tauri/assets/overflow.js?raw";
 import PASTEBOARD from "../../src-tauri/assets/pasteboard.js?raw";
 import RUNTIME from "../../src-tauri/assets/runtime.js?raw";
 import { placement } from "./placement";
@@ -59,6 +60,7 @@ function editor() {
   doms.push(dom);
   dom.window.eval(RUNTIME);
   dom.window.eval(PASTEBOARD);
+  dom.window.eval(OVERFLOW);
   dom.window.eval(EDITOR);
   const { window } = dom;
   const doc = window.document;

@@ -192,7 +192,8 @@ re-checks with its `lint_deck` tool.
 The composer shows a permissions picker for every agent. Each agent remembers its own mode:
 
 - **Ask for approval** (default): the agent reads and edits files in the workspace, fetches
-  web pages, and uses SlopSlide's own tools (`lint_deck`, `open_file`) without asking.
+  web pages, and uses SlopSlide's own tools (`lint_deck`, `open_file`, `render_slide`) without
+  asking.
   Shell commands, files outside the workspace, and other tools ask first. (Codex runs
   commands inside its workspace sandbox and asks for anything beyond it.)
 - **Approve for me** (Codex only): the same workspace boundary, with Codex's automatic
@@ -274,7 +275,9 @@ src-tauri/src/
   lint.rs               HTML lint for deck.html: well-formed markup plus the deck format
                         rules; shown as the status button in the top bar
   mcp.rs                stdio MCP server (`slopslide --lint-mcp [deck]`) exposing the
-                        linter to the agent as its `lint_deck` tool
+                        linter to the agent as its `lint_deck` tool, and `render_slide`
+  render.rs             renders slides in a hidden window for `render_slide`, answering
+                        the MCP server through the session folder
   agent.rs              manages turns and snapshots; normalizes provider events for the UI
   extensions.rs         the user's MCP servers, skills, plugins and AGENTS.md, passed to
                         every provider (see below)
@@ -365,8 +368,8 @@ turns refuse to start if those limits are exceeded. Legacy per-deck sessions rem
 disk; opening their workspace starts a fresh conversation.
 
 Claude receives file tools (Read/Write/Edit/Glob/Grep plus web search/fetch), skills, the
-app's `lint_deck` and `open_file` tools and the MCP servers from Extensions. Codex uses its
-configured tools and MCP servers, plus `lint_deck`, `open_file` and the extensions, under the
+app's `lint_deck`, `open_file` and `render_slide` tools and the MCP servers from Extensions. Codex uses its
+configured tools and MCP servers, plus `lint_deck`, `open_file`, `render_slide` and the extensions, under the
 selected permission mode. Copilot uses its
 workspace-scoped read/write permission handler. You can also edit `deck.html` by hand in any
 editor; the app picks up the changes.

@@ -248,6 +248,8 @@ impl AgentManager {
                 approvals,
                 extensions,
             };
+            let _renders =
+                crate::render::start(app.clone(), turn.dir.clone(), turn.session_dir.clone());
             for message in &turn.extensions.warnings {
                 turn.emit(&AgentEvent::Error {
                     message: message.clone(),

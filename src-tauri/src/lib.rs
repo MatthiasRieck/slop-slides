@@ -19,6 +19,7 @@ mod permissions;
 mod pptx;
 mod protocol;
 mod providers;
+mod render;
 mod review;
 mod safety;
 mod screens;

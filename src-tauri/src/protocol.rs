@@ -48,7 +48,10 @@ const URI_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b')');
 
 const PASTEBOARD_JS: &str = include_str!("../assets/pasteboard.js");
-const EDITOR_JS: &str = include_str!("../assets/editor.js");
+const EDITOR_JS: &str = concat!(
+    include_str!("../assets/overflow.js"),
+    include_str!("../assets/editor.js"),
+);
 
 pub fn handle(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
     let uri = request.uri();

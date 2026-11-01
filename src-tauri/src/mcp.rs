@@ -1,5 +1,6 @@
-//! Workspace MCP tools: lint_deck validates a workspace-relative deck and open_file
-//! queues a request in the current workspace session for the app to show a file.
+//! Workspace MCP tools: lint_deck validates a workspace-relative deck, open_file queues a
+//! request in the current workspace session for the app to show a file, and render_slide
+//! asks the app, the same way, for images of slides (see render.rs).
 //! Started as `slopslide --lint-mcp [workspace root]`.
 
 use std::io::{BufRead, Write};
@@ -9,12 +10,14 @@ use serde_json::{json, Value};
 
 use crate::deck;
 use crate::lint;
+use crate::render;
 use crate::sessions::Sessions;
 
 pub const FLAG: &str = "--lint-mcp";
 pub const SERVER: &str = "slopslide";
 pub const TOOL: &str = "lint_deck";
 pub const OPEN_TOOL: &str = "open_file";
+pub const RENDER_TOOL: &str = "render_slide";
 const OPEN_REQUESTS: &str = "open-requests";
 /// Claude Code's rule for every tool of this server, for `--allowedTools`; its tools are
 /// named `mcp__slopslide__<tool>`.
@@ -110,6 +113,25 @@ pub fn handle(
             "inputSchema": { "type": "object", "properties": {
                 "path": { "type": "string", "description": "Workspace-relative file path." }
             }, "required": ["path"] }
+        }, {
+            "name": RENDER_TOOL,
+            "description": format!("See slides of a deck as the app renders them: returns an \
+                image of each slide, hidden ones too, with every entrance animation finished, \
+                and lists the elements that run past the slide or are cut off by their own \
+                box. Use it to check the look after building or reworking slides, instead of \
+                a browser or screenshots from the shell. Takes at most {} slides per call.",
+                render::MAX_SLIDES),
+            "inputSchema": { "type": "object", "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The deck file, relative to the workspace root; deck.html when left out.",
+                },
+                "slides": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "The ids of the slides to render.",
+                },
+            }, "required": ["slides"] }
         }]}),
         "tools/call" if request["params"]["name"] == TOOL => {
             let rel = request["params"]["arguments"]["path"]
@@ -156,10 +178,48 @@ pub fn handle(
             };
             json!({ "content": [{ "type": "text", "text": text }], "isError": failed })
         }
+        "tools/call" if request["params"]["name"] == RENDER_TOOL => {
+            let rendered = (|| -> crate::error::Result<Vec<Value>> {
+                let arguments = &request["params"]["arguments"];
+                let rel = arguments["path"]
+                    .as_str()
+                    .filter(|p| !p.is_empty())
+                    .unwrap_or(deck::DECK_FILE);
+                crate::workspace::open_file(dir, rel)?;
+                let slides: Vec<String> = arguments["slides"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|slide| slide.as_str().map(str::to_string))
+                    .collect();
+                render::check_slides(&slides)?;
+                let session =
+                    session(dir).ok_or_else(|| crate::error::Error::msg("no workspace session"))?;
+                let slides = render::ask(&session, rel, slides, render::WAIT)?;
+                Ok(render_content(&slides))
+            })();
+            let (content, failed) = match rendered {
+                Ok(content) => (content, false),
+                Err(e) => (vec![json!({ "type": "text", "text": e.to_string() })], true),
+            };
+            json!({ "content": content, "isError": failed })
+        }
         "tools/call" => return Some(error(id, -32602, "unknown tool")),
         method => return Some(error(id, -32601, &format!("method not found: {method}"))),
     };
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+}
+
+/// A tool result for rendered `slides`: what was found on each, followed by its image.
+fn render_content(slides: &[render::Rendered]) -> Vec<Value> {
+    let mut content = Vec::new();
+    for slide in slides {
+        content.push(json!({ "type": "text", "text": slide.report() }));
+        if let Some(png) = &slide.png {
+            content.push(json!({ "type": "image", "data": png, "mimeType": "image/png" }));
+        }
+    }
+    content
 }
 
 /// Drain the session inbox. Validate again before forwarding a request to the UI.
@@ -252,7 +312,10 @@ mod tests {
     fn lists_the_lint_tool() {
         let res = call(Path::new("/nonexistent"), "tools/list", json!({}));
         let tools = res["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 2);
+        assert_eq!(tools.len(), 3);
+        assert_eq!(tools[2]["name"], RENDER_TOOL);
+        assert_eq!(tools[2]["inputSchema"]["required"], json!(["slides"]));
+        assert!(crate::agent::SYSTEM_PROMPT.contains(RENDER_TOOL));
         assert_eq!(tools[1]["name"], OPEN_TOOL);
         assert_eq!(tools[0]["name"], TOOL);
         assert_eq!(CLAUDE_TOOLS, format!("mcp__{SERVER}"));
@@ -262,6 +325,7 @@ mod tests {
     fn recognizes_its_claude_tool_names() {
         assert!(is_claude_tool("mcp__slopslide__lint_deck"));
         assert!(is_claude_tool("mcp__slopslide__open_file"));
+        assert!(is_claude_tool("mcp__slopslide__render_slide"));
         assert!(!is_claude_tool("mcp__slopslide__"));
         assert!(!is_claude_tool("mcp__slopslides__lint_deck"));
         assert!(!is_claude_tool("mcp__github__push"));
@@ -273,6 +337,8 @@ mod tests {
         assert_eq!(display_name("mcp__slopslide__lint_deck"), TOOL);
         assert_eq!(display_name("slopslide-lint_deck"), TOOL);
         assert_eq!(display_name("slopslide-open_file"), OPEN_TOOL);
+        assert_eq!(display_name("mcp__slopslide__render_slide"), RENDER_TOOL);
+        assert_eq!(display_name("slopslide-render_slide"), RENDER_TOOL);
         assert_eq!(display_name("lint_deck"), TOOL);
         assert_eq!(display_name("mcp__github__push"), "mcp__github__push");
         assert_eq!(display_name("github-push"), "github-push");
@@ -414,6 +480,77 @@ mod tests {
                 );
             }
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn render_tool_returns_what_the_app_rendered_as_images() {
+        let dir = temp_deck("<main class=\"deck\"></main>");
+        std::fs::create_dir_all(dir.join("talks")).unwrap();
+        std::fs::write(dir.join("talks/q3.html"), "<main class=\"deck\"></main>").unwrap();
+        let session = dir.join("session");
+        let app = {
+            let session = session.clone();
+            std::thread::spawn(move || loop {
+                if let Some((name, request)) = render::take_requests(&session).pop() {
+                    assert_eq!(request.path, "talks/q3.html");
+                    assert_eq!(request.slides, ["title", "gone"]);
+                    let title = render::Rendered {
+                        id: "title".into(),
+                        png: Some("cG5n".into()),
+                        overflow: vec!["<h1> \"Big\" runs past the right edge by 40px".into()],
+                    };
+                    let gone = render::Rendered {
+                        id: "gone".into(),
+                        png: None,
+                        overflow: Vec::new(),
+                    };
+                    render::answer(&session, &name, &Ok(vec![title, gone])).unwrap();
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            })
+        };
+        let res = call(
+            &dir,
+            "tools/call",
+            json!({"name": RENDER_TOOL, "arguments": {"path": "talks/q3.html", "slides": ["title", "gone"]}}),
+        );
+        app.join().unwrap();
+        assert_eq!(res["result"]["isError"], false);
+        let content = res["result"]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 3);
+        let text = content[0]["text"].as_str().unwrap();
+        assert!(text.contains("slide `title`"), "{text}");
+        assert!(text.contains("runs past the right edge by 40px"), "{text}");
+        assert_eq!(
+            content[1],
+            json!({"type": "image", "data": "cG5n", "mimeType": "image/png"})
+        );
+        assert!(content[2]["text"].as_str().unwrap().contains("no slide"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn render_tool_refuses_bad_requests_without_asking_the_app() {
+        let dir = temp_deck("<main class=\"deck\"></main>");
+        let too_many: Vec<String> = (0..=render::MAX_SLIDES).map(|n| n.to_string()).collect();
+        for arguments in [
+            json!({"slides": []}),
+            json!({}),
+            json!({"slides": too_many}),
+            json!({"path": "../x.html", "slides": ["a"]}),
+            json!({"path": "missing.html", "slides": ["a"]}),
+            json!({"path": "/etc/passwd", "slides": ["a"]}),
+        ] {
+            let res = call(
+                &dir,
+                "tools/call",
+                json!({"name": RENDER_TOOL, "arguments": arguments}),
+            );
+            assert_eq!(res["result"]["isError"], true, "{arguments}");
+        }
+        assert!(render::take_requests(&dir.join("session")).is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

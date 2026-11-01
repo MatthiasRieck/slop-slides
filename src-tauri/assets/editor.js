@@ -126,14 +126,17 @@
   var slide = document.querySelector(".deck > .slide.active");
   var pasteboard = window.slopPasteboard;
   if (!slide || !pasteboard || window.parent === window) return;
+  var overflow = window.__slopOverflow;
+  var paints = overflow.paints;
+  var paintsBox = overflow.paintsBox;
+  var nameOf = overflow.nameOf;
 
   // Attributes the editor adds while it works; stripped from the markup it saves.
   var EDITOR_ATTRS = ["contenteditable", "spellcheck", "data-slop-selected", "data-slop-hover", "data-slop-editing", "data-slop-typing"];
   var MOVED = "data-moved";
-  var PLACEHOLDER = "data-resize-placeholder";
-  var DELETED = "data-delete-placeholder";
-  // Invisible layout slots the editor leaves behind; never selected or checked for overflow.
-  var SLOTS = "[" + PLACEHOLDER + "], [" + DELETED + "]";
+  var PLACEHOLDER = overflow.PLACEHOLDER;
+  var DELETED = overflow.DELETED;
+  var SLOTS = overflow.SLOTS;
   var DROPPED = "data-dropped";
   var DRAG_THRESHOLD = 3;
   var DOUBLE_CLICK_MS = 400;
@@ -146,9 +149,7 @@
   var TILT = /^perspective\([\d.]+px\) rotateX\((-?[\d.]+)deg\) rotateY\((-?[\d.]+)deg\)\s*/;
   var MIN_SCALE = 0.1;
   var sizeMode = "resize";
-  var OVERFLOW_TOLERANCE = 2;
-  // Marks an element the user added (a text box, shape or drawing); it stays in the markup.
-  var ADDED = "data-added";
+  var ADDED = overflow.ADDED;
   var SVG_NS = "http://www.w3.org/2000/svg";
   var TOOLS = ["select", "text", "rect", "rounded", "ellipse", "triangle", "star", "bubble", "draw", "line", "arrow", "paint"];
   var RADIUS = { rect: "0px", rounded: "24px", ellipse: "50%", triangle: "0px", star: "0px", bubble: "0px" };
@@ -384,25 +385,6 @@
     var el = slide;
     for (var i = 0; path && i < path.length && el; i++) el = el.children[path[i]];
     return el && el !== slide ? el : null;
-  }
-
-  /** Whether `el` shows anything: text, media, a background, a border, or a shadow. */
-  function paints(el) {
-    var style = getComputedStyle(el);
-    if (style.visibility === "hidden" || style.opacity === "0") return false;
-    if (el.hasAttribute(ADDED)) return true;
-    if (el.textContent.trim() || /^(img|svg|video|canvas|picture|iframe|object|embed)$/i.test(el.tagName)) return true;
-    return paintsBox(style);
-  }
-
-  /** Whether a box with this computed style shows a background, a border, or a shadow. */
-  function paintsBox(style) {
-    var bg = style.backgroundColor;
-    var clear = !bg || bg === "transparent" || /rgba\(.*,\s*0\)$/.test(bg);
-    var border = ["Top", "Right", "Bottom", "Left"].some(function (side) {
-      return parseFloat(style["border" + side + "Width"]) > 0 && style["border" + side + "Style"] !== "none";
-    });
-    return !clear || (style.backgroundImage || "none") !== "none" || border || (style.boxShadow || "none") !== "none";
   }
 
   /** The element to select for `el`: not inline text runs, whole SVG drawings. */
@@ -1086,66 +1068,6 @@
     return out;
   }
 
-  /** Which of the slide's edges `rect` runs past, with by how many slide pixels. */
-  function pastEdges(rect, bounds, k) {
-    var past = [];
-    var add = function (side, by) {
-      by /= k;
-      if (by > OVERFLOW_TOLERANCE) past.push({ side: side, by: Math.round(by) });
-    };
-    add("top", bounds.top - rect.top);
-    add("right", rect.right - bounds.right);
-    add("bottom", rect.bottom - bounds.bottom);
-    add("left", bounds.left - rect.left);
-    return past;
-  }
-
-  /** Whether `el` itself holds text or media, as opposed to decoration like a glow that bleeds off the edge. */
-  function hasContent(el) {
-    if (el.closest("[aria-hidden=true]")) return false;
-    if (/^(img|svg|video|canvas|picture|iframe|object|embed)$/i.test(el.tagName)) return true;
-    return Array.prototype.some.call(el.childNodes, function (node) {
-      return node.nodeType === 3 && node.textContent.trim();
-    });
-  }
-
-  /** Elements that run past the slide's edge or are cut off by their own box; the innermost ones. */
-  function findOverflow() {
-    var bounds = slide.getBoundingClientRect();
-    var k = zoom();
-    var hits = [];
-    Array.prototype.forEach.call(slide.querySelectorAll("*"), function (el) {
-      var svg = el.closest("svg");
-      if ((svg && svg !== el) || el.closest(".notes, .narration, " + SLOTS)) return;
-      var rect = el.getBoundingClientRect();
-      if (!rect.width && !rect.height) return;
-      var past = hasContent(el) && paints(el) ? pastEdges(rect, bounds, k) : [];
-      var style = getComputedStyle(el);
-      var clips = style.overflowX !== "visible" || style.overflowY !== "visible";
-      var cut = clips && (el.scrollWidth > el.clientWidth + OVERFLOW_TOLERANCE || el.scrollHeight > el.clientHeight + OVERFLOW_TOLERANCE);
-      if (past.length || cut) hits.push({ el: el, rect: rect, past: past, cut: cut });
-    });
-    return hits.filter(function (hit) {
-      return !hits.some(function (other) {
-        return other !== hit && hit.el.contains(other.el);
-      });
-    });
-  }
-
-  /** `el` in a few words: its tag and the start of its text. */
-  function nameOf(el) {
-    var text = el.textContent.replace(/\s+/g, " ").trim();
-    return "<" + el.tagName.toLowerCase() + ">" + (text ? ' "' + text.slice(0, 40) + (text.length > 40 ? "…" : "") + '"' : "");
-  }
-
-  function describeOverflow(hit) {
-    var what = hit.past.map(function (p) {
-      return "runs past the " + p.side + " edge by " + p.by + "px";
-    });
-    if (hit.cut) what.push("is cut off by its own box");
-    return nameOf(hit.el) + " " + what.join(" and ");
-  }
-
   function drawOverflow(hits) {
     wires.textContent = "";
     hits.forEach(function (hit) {
@@ -1162,9 +1084,9 @@
 
   function refreshOverflow() {
     overflowFrame = 0;
-    var hits = findOverflow();
+    var hits = overflow.find(slide);
     drawOverflow(hits);
-    var items = hits.map(describeOverflow);
+    var items = hits.map(overflow.describe);
     var key = JSON.stringify(items);
     if (key === reportedOverflow) return;
     reportedOverflow = key;

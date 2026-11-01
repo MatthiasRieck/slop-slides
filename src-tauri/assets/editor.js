@@ -207,10 +207,9 @@
     // The selection frame is drawn by the handle overlay, so it keeps its size on screen.
     "[data-slop-selected] { cursor: move !important; }" +
     "[data-slop-editing] { outline: 3px solid #3b82f6 !important; outline-offset: 4px; }" +
-    "[data-slop-ui] { position: fixed; z-index: 2147483647; pointer-events: none; box-sizing: border-box; }" +
+    "[data-slop-ui] { position: fixed; z-index: 2147483647; pointer-events: none; box-sizing: border-box;" +
+    " outline: 2px solid #3b82f6; }" +
     "[data-slop-ui] * { position: absolute; box-sizing: border-box; }" +
-    // The frame and its stretch handles lie in the element's plane, tilted with it.
-    "[data-slop-ui] > [data-plane] { inset: 0; outline: 2px solid #3b82f6; }" +
     "[data-slop-ui] [data-handle] { pointer-events: auto; background: #fff;" +
     " border: 2px solid #3b82f6; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); touch-action: none;" +
     " width: 16px; height: 16px; }" +
@@ -253,13 +252,14 @@
 
   // Scale, rotate, and tilt handles, outside the slide so they never end up in its markup. They
   // sit just outside the frame, so even small text stays clickable (and double-clickable) inside
-  // it. The rotate and tilt handles stay flat, so they can be grabbed however far it is tilted.
+  // it. The frame turns with a rotation but stays flat under a 3D tilt, so its handles can be
+  // grabbed and pull the way they point however far the element is tilted, even turned over.
   var ui = document.createElement("div");
   ui.setAttribute("data-slop-ui", "");
   ui.style.display = "none";
   ui.innerHTML =
     '<div data-stem></div><div data-handle="rotate" title="Rotate (Shift snaps to 15°, double-click resets)"></div>' +
-    '<div data-handle="tilt" title="Tilt in 3D (Shift snaps to 15°, double-click resets)"></div><div data-plane>' +
+    '<div data-handle="tilt" title="Tilt in 3D (Shift snaps to 15°, double-click resets)"></div>' +
     [[-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]]
       .map(function (d) {
         var cursor = d[0] === 0 ? "ns" : d[1] === 0 ? "ew" : d[0] === d[1] ? "nwse" : "nesw";
@@ -276,10 +276,8 @@
           outside(d[0], w) + "px; cursor: " + cursor + '-resize"></div>'
         );
       })
-      .join("") +
-    "</div>";
+      .join("");
   document.body.appendChild(ui);
-  var plane = ui.querySelector("[data-plane]");
 
   var pointUi = document.createElement("div");
   pointUi.setAttribute("data-slop-points", "");
@@ -767,11 +765,6 @@
     ui.style.width = w + "px";
     ui.style.height = h + "px";
     ui.style.transform = "rotate(" + angleOf(selected) + "deg)";
-    // The frame tilts like the element; its perspective scales with it to look the same.
-    var tilt = tiltOf(selected);
-    var k = zoom() * Math.sqrt(scale.x * scale.y);
-    plane.style.transform =
-      tilt.x || tilt.y ? "perspective(" + PERSPECTIVE * k + "px) rotateX(" + tilt.x + "deg) rotateY(" + tilt.y + "deg)" : "";
     // Edge handles only where there is room for them between the corners.
     mark(ui, "data-narrow", w < 40);
     mark(ui, "data-flat", h < 40);

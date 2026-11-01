@@ -18,6 +18,7 @@ import {
   type GeometryField,
   parseGeometryValue,
 } from "../lib/arrange";
+import { DraftInput } from "./Field";
 
 const ALIGN: { to: AlignTo; label: string; icon: ReactNode }[] = [
   { to: "left", label: "left edges", icon: <AlignStartVertical /> },
@@ -158,37 +159,17 @@ function GeometryInput(props: {
   onChange: (value: number) => void;
   onDone: () => void;
 }) {
-  const shown = props.value === null ? "" : String(props.value);
-  const [draft, setDraft] = useState(shown);
-  useEffect(() => setDraft(shown), [shown]);
-  const apply = () => {
-    const value = parseGeometryValue(props.field, draft);
-    if (value === null || value === props.value) setDraft(shown);
-    else props.onChange(value);
-  };
   return (
     <label title={props.title} className="flex items-center gap-1 text-muted-foreground">
       {props.label}
-      <input
-        type="text"
-        inputMode="numeric"
+      <DraftInput
         aria-label={props.title}
         disabled={props.disabled}
-        placeholder="–"
-        value={draft}
-        onChange={(event) => setDraft(event.target.value.replace(/[^\d.-]/g, ""))}
-        onBlur={apply}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            apply();
-            props.onDone();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            setDraft(shown);
-            props.onDone();
-          }
-        }}
+        value={props.value}
+        parse={(text) => parseGeometryValue(props.field, text)}
+        sanitize={(text) => text.replace(/[^\d.-]/g, "")}
+        onChange={props.onChange}
+        onDone={props.onDone}
         className="h-6 w-12 rounded-md border bg-transparent px-1 text-center text-foreground tabular-nums disabled:opacity-30"
       />
     </label>

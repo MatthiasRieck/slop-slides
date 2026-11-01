@@ -72,6 +72,7 @@ import { SWATCHES } from "../lib/palette";
 import { cn } from "../lib/utils";
 import { ArrangeControls } from "./ArrangeControls";
 import { keepFocus, ToolButton, useOutsideClose } from "./EditControls";
+import { DraftInput } from "./Field";
 import { LookTools } from "./LookTools";
 import { RibbonRow, RibbonSection, useRibbonFit } from "./Ribbon";
 
@@ -617,39 +618,16 @@ function FontPicker(props: {
 
 /** The font size as a number to type; it applies on Enter or when the field loses focus. */
 function FontSizeInput(props: { value: number | null; onChange: (size: number) => void; onDone: () => void }) {
-  const [draft, setDraft] = useState(props.value === null ? "" : String(props.value));
-  useEffect(() => setDraft(props.value === null ? "" : String(props.value)), [props.value]);
-  const apply = () => {
-    const size = parseFontSize(draft);
-    if (size === null || size === props.value) {
-      setDraft(props.value === null ? "" : String(props.value));
-      return false;
-    }
-    props.onChange(size);
-    return true;
-  };
   return (
-    <input
-      type="text"
-      inputMode="numeric"
+    <DraftInput
       aria-label="Font size"
       title="Font size (type a size and press Enter)"
       disabled={props.value === null}
-      placeholder="–"
-      value={draft}
-      onChange={(event) => setDraft(event.target.value.replace(/[^\d.]/g, ""))}
-      onBlur={apply}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          apply();
-          props.onDone();
-        } else if (event.key === "Escape") {
-          event.preventDefault();
-          setDraft(props.value === null ? "" : String(props.value));
-          props.onDone();
-        }
-      }}
+      value={props.value}
+      parse={parseFontSize}
+      sanitize={(text) => text.replace(/[^\d.]/g, "")}
+      onChange={props.onChange}
+      onDone={props.onDone}
       className="h-6 w-9 rounded-md border bg-transparent px-1 text-center text-xs tabular-nums disabled:opacity-30"
     />
   );

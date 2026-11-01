@@ -10,6 +10,7 @@ import { useDraftText } from "../lib/useDraftText";
 import { formatBytes } from "../lib/voice";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
+import { Field, wideSelectClass } from "./Field";
 import { ScriptField, ScriptPreviewToggle } from "./ScriptMarkdown";
 import { SlideTime } from "./SlideTime";
 
@@ -19,7 +20,6 @@ export const NARRATION_SAVE_DELAY = 800;
 /** No audio known yet; one object, so selecting it does not re-render. */
 const NO_AUDIO: Record<string, SlideAudio> = {};
 
-const field = "h-7 w-full min-w-0 rounded-md border bg-background px-1.5 text-xs";
 const button =
   "flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium hover:bg-accent disabled:opacity-40 disabled:hover:bg-transparent [&_svg]:size-3.5";
 
@@ -78,13 +78,12 @@ function SpeechSettings({ deck }: { deck: Deck }) {
   return (
     <div className="flex flex-col gap-2 p-3 text-xs">
       <div className="flex gap-2">
-        <label className="flex min-w-0 flex-[3] flex-col gap-1">
-          <span className="text-muted-foreground">Voice</span>
+        <Field label="Voice" className="flex min-w-0 flex-[3] flex-col gap-1">
           <select
             aria-label="Narration voice"
             value={settings.voice}
             onChange={(event) => void useApp.getState().setNarrationVoice(event.target.value)}
-            className={field}
+            className={wideSelectClass}
           >
             {speech.voices.map((voice) => (
               <option key={voice.id} value={voice.id}>
@@ -92,14 +91,13 @@ function SpeechSettings({ deck }: { deck: Deck }) {
               </option>
             ))}
           </select>
-        </label>
-        <label className="flex min-w-0 flex-[2] flex-col gap-1">
-          <span className="text-muted-foreground">Language</span>
+        </Field>
+        <Field label="Language" className="flex min-w-0 flex-[2] flex-col gap-1">
           <select
             aria-label="Narration language"
             value={settings.language}
             onChange={(event) => void useApp.getState().setNarrationLanguage(event.target.value)}
-            className={field}
+            className={wideSelectClass}
           >
             {speech.languages.map((language) => (
               <option key={language.id} value={language.id}>
@@ -107,7 +105,7 @@ function SpeechSettings({ deck }: { deck: Deck }) {
               </option>
             ))}
           </select>
-        </label>
+        </Field>
       </div>
       {!speech.available ? (
         <p className="text-muted-foreground">Speaking narration is not available on this platform yet.</p>

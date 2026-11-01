@@ -13,6 +13,7 @@ mod html;
 mod lint;
 mod mcp;
 mod mp4;
+mod music;
 mod narration;
 mod pdf;
 mod permissions;
@@ -858,6 +859,22 @@ fn set_narration_language(id: String, language: String) -> Result<Deck> {
     deck::set_narration_language(&deck::deck_file(&id)?, &language)
 }
 
+/// Makes the audio file at `path` the deck's background music, copying it to the deck's assets.
+#[tauri::command]
+fn set_music(id: String, path: String) -> Result<Deck> {
+    deck::set_music(&deck::deck_file(&id)?, Path::new(&path))
+}
+
+#[tauri::command]
+fn remove_music(id: String) -> Result<Deck> {
+    deck::remove_music(&deck::deck_file(&id)?)
+}
+
+#[tauri::command]
+fn set_music_volume(id: String, volume: u8) -> Result<Deck> {
+    deck::set_music_volume(&deck::deck_file(&id)?, volume)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // `slopslide --lint-mcp [deck dir]`: the agent's lint tool, started by the agent CLI in
@@ -995,6 +1012,9 @@ pub fn run() {
             render_narration,
             cancel_narration,
             narration_wav,
+            set_music,
+            remove_music,
+            set_music_volume,
             set_narration_voice,
             set_narration_language,
         ])

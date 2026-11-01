@@ -12,6 +12,7 @@ use crate::html::{
     HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR, NARRATION_CLASS, SECTION_CLASS, SECTION_TITLE_ATTR,
     TIME_ATTR,
 };
+use crate::music;
 use crate::narration;
 use crate::review;
 use crate::size::{self, SlideSize};
@@ -117,6 +118,7 @@ pub fn lint(
     check_template(&mut l);
     check_slide_size(&mut l);
     check_narration_settings(&mut l);
+    check_music(&mut l);
     check_entrances(&mut l);
     check_morphs(&mut l);
     check_assets(&mut l, asset_exists);
@@ -813,6 +815,50 @@ fn check_narration_settings(l: &mut Linter) {
                     truncate(content, 40),
                     list(narration::LANGUAGES.iter().map(|l| l.id).collect()),
                     narration::DEFAULT_LANGUAGE
+                )
+            })
+        },
+    );
+}
+
+/// The music meta must name a file of the deck's in a supported type, and its volume be a
+/// whole percentage. Whether the file exists is `missing-asset`'s to say.
+fn check_music(l: &mut Linter) {
+    check_app_meta(
+        l,
+        html::MUSIC_META,
+        ["music-invalid", "music-duplicate", "music-misplaced"],
+        |content| {
+            let attached = content
+                .strip_prefix("./")
+                .unwrap_or(content)
+                .starts_with("assets/");
+            (!attached || !music::supported(content)).then(|| {
+                format!(
+                    "<meta name=\"{}\"> must name an audio file in assets/ next to the deck (\"{}\"), of one of these types: {}.",
+                    html::MUSIC_META,
+                    truncate(content, 40),
+                    music::EXTENSIONS.join(", ")
+                )
+            })
+        },
+    );
+    check_app_meta(
+        l,
+        html::MUSIC_VOLUME_META,
+        [
+            "music-volume-invalid",
+            "music-volume-duplicate",
+            "music-volume-misplaced",
+        ],
+        |content| {
+            let percent = content.parse::<u8>().is_ok_and(|v| v <= 100);
+            (!percent).then(|| {
+                format!(
+                    "<meta name=\"{}\"> must be a whole percentage from 0 to 100 (\"{}\"). Remove it for the default, {}.",
+                    html::MUSIC_VOLUME_META,
+                    truncate(content, 40),
+                    music::DEFAULT_VOLUME
                 )
             })
         },
@@ -2213,6 +2259,55 @@ mod tests {
             r#"<section class="slide" id="a"><meta name="slopslide-narration-language" content="en"></section>"#,
         );
         assert_eq!(rules(&in_body), ["narration-language-misplaced"]);
+    }
+
+    #[test]
+    fn checks_the_music_metas() {
+        let meta = |name: &str, content: &str| {
+            format!("<title>Talk</title><meta name=\"{name}\" content=\"{content}\">")
+        };
+        let base = deck(r#"<section class="slide" id="a"></section>"#);
+        let with = |tag: &str| base.replace("<title>Talk</title>", tag);
+        let exists = |p: &str| p == "assets/song.mp3";
+        let found = |html: &str| -> Vec<&'static str> {
+            lint(html, exists, &[])
+                .into_iter()
+                .map(|i| i.rule)
+                .collect()
+        };
+
+        let good = with(&meta(html::MUSIC_META, "assets/song.mp3"));
+        assert_eq!(found(&good), Vec::<&str>::new());
+        assert_eq!(found(&html::ensure_runtime(&good)), Vec::<&str>::new());
+        assert_eq!(
+            found(&html::set_music_volume(&good, 75)),
+            Vec::<&str>::new()
+        );
+
+        for bad in ["", "song.mp3", "https://x.test/song.mp3", "../song.mp3"] {
+            let html = with(&meta(html::MUSIC_META, bad));
+            assert_eq!(found(&html), ["music-invalid"], "{bad}");
+        }
+        let unsupported = with(&meta(html::MUSIC_META, "assets/song.aiff"));
+        assert_eq!(found(&unsupported), ["missing-asset", "music-invalid"]);
+        let missing = with(&meta(html::MUSIC_META, "assets/gone.mp3"));
+        assert_eq!(found(&missing), ["missing-asset"]);
+
+        for bad in ["", "loud", "101", "-1", "0.5"] {
+            let html = with(&meta(html::MUSIC_VOLUME_META, bad));
+            assert_eq!(found(&html), ["music-volume-invalid"], "{bad}");
+        }
+
+        let twice = good.replace(
+            "<title>Talk</title>",
+            "<title>Talk</title><meta name=\"slopslide-music\" content=\"assets/song.mp3\">",
+        );
+        assert_eq!(found(&twice), ["music-duplicate"]);
+        let in_body = base.replace(
+            r#"<section class="slide" id="a"></section>"#,
+            r#"<section class="slide" id="a"><meta name="slopslide-music" content="assets/song.mp3"></section>"#,
+        );
+        assert_eq!(found(&in_body), ["music-misplaced"]);
     }
 
     #[test]

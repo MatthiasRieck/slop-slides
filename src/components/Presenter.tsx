@@ -145,6 +145,7 @@ export function Presenter() {
           title="Presentation"
           src={`${fileUrl(deck.id, `v=${deck.shellHash}&show`)}${hash}`}
           sandbox="allow-scripts"
+          allow="autoplay"
           onLoad={(event) => event.currentTarget.focus()}
           className="size-full border-0"
         />

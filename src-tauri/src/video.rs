@@ -14,7 +14,8 @@
 //! Frames are encoded on a thread of their own as AV1, a royalty-free codec, with rav1e
 //! (written in Rust, so every platform encodes the same way), and written to the MP4 (see
 //! mp4.rs) as they come. A frame held on screen is stored once, lasting as long as it shows.
-//! The narration is one Opus audio track, royalty-free too, encoded once the frames are.
+//! The narration is one Opus audio track, royalty-free too, encoded once the frames are. The
+//! deck's background music (see music.rs) plays under it, looped to the video's length.
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -38,7 +39,7 @@ use crate::capture::{decode_png, Image, Rect, Size};
 use crate::error::{Error, Result};
 use crate::mp4::{AudioTrack, Mp4Writer};
 use crate::narration::{self, Narration};
-use crate::{deck, html, pdf, protocol, voice};
+use crate::{deck, html, music, pdf, protocol, voice};
 
 /// Where the page's helper answers; the navigation is caught, never made.
 const SIGNAL_PATH: &str = "/.video-signal";
@@ -213,6 +214,7 @@ pub async fn export(
         true => narrate(app, file, &progress).await?,
         false => Vec::new(),
     };
+    let music = load_music(file).await?;
     let canvas = html::slide_size(&deck::read_html(file)?).pixels();
     let dest = pdf::absolute_dest(dest)?;
     let query = if options.animate {
@@ -261,6 +263,7 @@ pub async fn export(
         video_size(canvas.0, canvas.1),
         options,
         &clips,
+        music.as_ref(),
         progress,
     )
     .await;
@@ -313,6 +316,17 @@ async fn narrate(
             })
         })
         .collect())
+}
+
+/// The deck's background music, decoded, and its volume in percent.
+async fn load_music(file: &Path) -> Result<Option<(Vec<f32>, u8)>> {
+    let Some((path, volume)) = deck::music_track(file)? else {
+        return Ok(None);
+    };
+    let samples = tauri::async_runtime::spawn_blocking(move || music::decode(&path))
+        .await
+        .map_err(|e| Error::msg(format!("cannot read the music: {e}")))??;
+    Ok(Some((samples, volume)))
 }
 
 /// Resolves once the export is cancelled.
@@ -388,6 +402,7 @@ async fn record(
     size: (u32, u32),
     options: Options,
     clips: &[Option<Vec<f32>>],
+    background: Option<&(Vec<f32>, u8)>,
     progress: impl Fn(Progress),
 ) -> Result<()> {
     let ready = helper.answer("ready").await?;
@@ -408,10 +423,13 @@ async fn record(
         })
         .collect();
     let frames = lengths.iter().sum();
-    let audio = clips
-        .iter()
-        .any(Option::is_some)
-        .then(|| soundtrack(&lengths, options.fps, clips, options.pause_before));
+    let audio = (background.is_some() || clips.iter().any(Option::is_some)).then(|| {
+        let mut track = soundtrack(&lengths, options.fps, clips, options.pause_before);
+        if let Some((samples, volume)) = background {
+            music::mix(&mut track, samples, *volume);
+        }
+        track
+    });
 
     let (jobs, encoded) = spawn_encoder(dest.to_path_buf(), size, options.fps, audio)?;
     let encoder_gone = || Error::msg("the video encoder stopped");

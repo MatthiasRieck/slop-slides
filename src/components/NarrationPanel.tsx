@@ -9,6 +9,7 @@ import { useDraftText } from "../lib/useDraftText";
 import { formatBytes } from "../lib/voice";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
+import { MusicControls } from "./MusicControls";
 import { ScriptField, ScriptPreviewToggle } from "./ScriptMarkdown";
 
 /** How long typing pauses before the narration is saved to the deck. */
@@ -55,9 +56,10 @@ export function NarrationPanel() {
         preview={preview}
         onPreview={setPreview}
       />
-      <div className="flex w-72 shrink-0 flex-col justify-between overflow-y-auto border-l">
+      <div className="flex w-72 shrink-0 flex-col overflow-y-auto border-l">
         <SpeechSettings deck={deck} />
         <DeckAudio deck={deck} />
+        <MusicControls deck={deck} />
       </div>
     </section>
   );

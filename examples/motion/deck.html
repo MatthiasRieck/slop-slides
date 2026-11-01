@@ -253,7 +253,7 @@ p {font-size:34px;line-height:1.45;max-width:720px;color:#b4bcae}
 footer {position:absolute;bottom:60px;font-size:22px;color:#b4bcae}
 </style></head><body><main class="deck"><section class="slide" id="introduce"><div class="copy"><div class="kicker">Orbit / Motion study</div><h1>Meet Orbit.</h1><p>A familiar object. A new point of view.</p></div><img class="hero" data-morph="orbit" src="assets/orbit.svg" alt="Green spherical object with a tilted ivory orbit" style="translate: -21px -71px;" data-moved=""><footer>01 / 04 · Click right to continue · Click left to go back</footer></section><section class="slide " id="reveal"><div class="copy"><div class="kicker">Orbit / Motion study</div><h1>Meet Orbit.</h1><p>A familiar object. A new point of view.<br><strong style="color:#e7ffb5">One small reveal, one deliberate click.</strong></p></div><img class="hero" data-morph="orbit" src="assets/orbit.svg" alt="Green spherical object with a tilted ivory orbit"><footer>02 / 04 · Click right to continue · Click left to go back</footer></section><section class="slide detail" id="detail"><div class="copy"><div class="kicker">Orbit / Motion study</div><h1>Make room<br>for the story.</h1><p>The same image moves left and grows. The layout changes; the visual thread stays.</p></div><img class="hero" data-morph="orbit" src="assets/orbit.svg" alt="Green spherical object with a tilted ivory orbit"><footer>03 / 04 · Click right to continue · Click left to go back</footer></section><section class="slide wide" id="focus"><div class="copy"><div class="kicker">Orbit / Motion study</div><h1>Let the<br>object lead.</h1><p>A third composition. Go back to see the movement reverse.</p></div><img class="hero" data-morph="orbit" src="assets/orbit.svg" alt="Green spherical object with a tilted ivory orbit" style="translate: 157px 2px; transform: perspective(1000px) rotateX(14deg) rotateY(-44deg) !important;" data-moved=""><footer>04 / 04 · Click right to continue · Click left to go back</footer></section></main>  <!-- slopslide:runtime-js (managed by SlopSlide, do not edit) -->
   <script>
-/* SlopSlide player. Keys: ←/→, space, PageUp/PageDown, Home/End, F for full screen, R for review marks. */
+/* SlopSlide player. Keys: ←/→, space, PageUp/PageDown, Home/End, F for full screen, R for review marks, M to mute the music. */
 (function () {
   var root = document.documentElement;
   // The runtime-css block sets this before the body renders; without it the stylesheet lists
@@ -534,7 +534,10 @@ footer {position:absolute;bottom:60px;font-size:22px;color:#b4bcae}
   window.addEventListener("load", fitAll);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitAll);
 
-  function navigate(key) {
+  // The deck's background music (its slopslide-music meta), once the show has started it.
+  var music = null;
+
+  function navigate(key, plain) {
     if (key === "ArrowRight" || key === "ArrowDown" || key === "PageDown" || key === " ") show(current + 1);
     else if (key === "ArrowLeft" || key === "ArrowUp" || key === "PageUp") show(current - 1);
     else if (key === "Home") show(0);
@@ -542,7 +545,8 @@ footer {position:absolute;bottom:60px;font-size:22px;color:#b4bcae}
     else if ((key === "f" || key === "F") && !framed) {
       if (document.fullscreenElement) document.exitFullscreen();
       else root.requestFullscreen && root.requestFullscreen();
-    } else return false;
+    } else if ((key === "m" || key === "M") && plain && music) music.muted = !music.muted;
+    else return false;
     return true;
   }
 
@@ -555,13 +559,32 @@ footer {position:absolute;bottom:60px;font-size:22px;color:#b4bcae}
     var plain = !event.metaKey && !event.ctrlKey && !event.altKey;
     if ((event.key === "r" || event.key === "R") && plain) {
       if (toggleReview(!root.hasAttribute("data-slop-review"))) event.preventDefault();
-    } else if (navigate(event.key)) event.preventDefault();
+    } else if (navigate(event.key, plain)) event.preventDefault();
   });
 
   if (embed) return;
+  // Music plays under the show on a loop. Print and video windows leave it out: a video mixes
+  // it into its soundtrack itself. A browser may refuse to play before the viewer has done
+  // anything on the page, so the first key press or click tries again.
+  var musicTag = document.querySelector('meta[name="slopslide-music"]');
+  if (musicTag && musicTag.content && !params.has("print")) {
+    var volumeTag = document.querySelector('meta[name="slopslide-music-volume"]');
+    var volume = volumeTag ? parseInt(volumeTag.content, 10) : NaN;
+    music = new Audio(musicTag.content);
+    music.loop = true;
+    music.volume = isNaN(volume) ? 0.3 : Math.min(1, Math.max(0, volume / 100));
+    var startMusic = function () {
+      var playing = music.paused && music.play();
+      if (playing && playing.catch) playing.catch(function () {});
+    };
+    startMusic();
+    window.addEventListener("keydown", startMusic, { once: true });
+    window.addEventListener("pointerdown", startMusic, { once: true });
+  }
+
   // The presenter forwards keys pressed while its drawing tools have focus.
   window.addEventListener("message", function (event) {
-    if (framed && event.data && event.data.type === "slop:go") navigate(String(event.data.key));
+    if (framed && event.data && event.data.type === "slop:go") navigate(String(event.data.key), true);
   });
   window.addEventListener("hashchange", function () {
     show(indexFor(decodeURIComponent(location.hash.slice(1))));

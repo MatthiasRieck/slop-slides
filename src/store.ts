@@ -460,6 +460,11 @@ interface AppState {
   /** Sets the voice (or language) the deck's narration is said in. */
   setNarrationVoice: (voice: string) => Promise<void>;
   setNarrationLanguage: (language: string) => Promise<void>;
+  /** Makes the audio file at `path` the deck's background music. */
+  setMusic: (path: string) => Promise<void>;
+  removeMusic: () => Promise<void>;
+  /** Sets the music's volume, in percent. */
+  setMusicVolume: (volume: number) => Promise<void>;
   undoSlideEdit: () => Promise<void>;
   redoSlideEdit: () => Promise<void>;
   /** Undoes every edit made since entering edit mode, then leaves it. */
@@ -1081,6 +1086,12 @@ export const useApp = create<AppState>((set, get) => ({
   setNarrationVoice: (voice) => editDeck((id) => api.setNarrationVoice(id, voice)),
 
   setNarrationLanguage: (language) => editDeck((id) => api.setNarrationLanguage(id, language)),
+
+  setMusic: (path) => editDeck((id) => api.setMusic(id, path)),
+
+  removeMusic: () => editDeck((id) => api.removeMusic(id)),
+
+  setMusicVolume: (volume) => editDeck((id) => api.setMusicVolume(id, volume)),
 
   undoSlideEdit: () => {
     editQueue = editQueue.then(() => stepSlideHistory("slideUndo", "slideRedo")).then(() => undefined);

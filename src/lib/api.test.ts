@@ -258,6 +258,9 @@ const CASES = [
   ["renderNarration", () => api.renderNarration("talk", null), "render_narration", { id: "talk", slides: null }],
   ["cancelNarration", () => api.cancelNarration(), "cancel_narration", undefined],
   ["narrationWav", () => api.narrationWav("talk", "a"), "narration_wav", { id: "talk", slide: "a" }],
+  ["setMusic", () => api.setMusic("talk", "/music/song.mp3"), "set_music", { id: "talk", path: "/music/song.mp3" }],
+  ["removeMusic", () => api.removeMusic("talk"), "remove_music", { id: "talk" }],
+  ["setMusicVolume", () => api.setMusicVolume("talk", 45), "set_music_volume", { id: "talk", volume: 45 }],
   [
     "setNarrationVoice",
     () => api.setNarrationVoice("talk", "aiden"),

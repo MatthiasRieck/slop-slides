@@ -694,3 +694,124 @@ describe("player: shared heroes", () => {
     expect(still.doc.startViewTransition).not.toHaveBeenCalled();
   });
 });
+
+describe("player: background music", () => {
+  const META = `<meta name="slopslide-music" content="assets/song.mp3">`;
+  const html = (head = META) => DECK.replace("<html>", `<html><head>${head}</head>`);
+
+  /** A browser's audio element; `blocked` refuses to play, as before the viewer interacts. */
+  function audio(options: { blocked?: boolean } = {}) {
+    const made: { src: string; loop: boolean; volume: number; muted: boolean; paused: boolean; play: () => unknown }[] =
+      [];
+    const blocked = { now: !!options.blocked };
+    const setup = (window: DOMWindow) => {
+      Object.assign(window, {
+        Audio: class {
+          loop = false;
+          volume = 1;
+          muted = false;
+          paused = true;
+          play = vi.fn(() => {
+            if (blocked.now) return Promise.reject(new Error("NotAllowedError"));
+            this.paused = false;
+            return Promise.resolve();
+          });
+          constructor(public src: string) {
+            made.push(this);
+          }
+        },
+      });
+    };
+    return { made, blocked, setup };
+  }
+
+  it("loops the music from the start of the show, at the default volume", () => {
+    const { made, setup } = audio();
+    player({ html: html(), setup });
+    expect(made).toHaveLength(1);
+    expect(made[0]!.src).toBe("assets/song.mp3");
+    expect(made[0]!.loop).toBe(true);
+    expect(made[0]!.volume).toBe(0.3);
+    expect(made[0]!.paused).toBe(false);
+  });
+
+  it("keeps playing, one track, across slides", () => {
+    const { made, setup } = audio();
+    const p = player({ html: html(), setup });
+    p.key("ArrowRight");
+    p.key("ArrowLeft");
+    expect(made).toHaveLength(1);
+    expect(made[0]!.play).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["55", 0.55],
+    ["0", 0],
+    ["100", 1],
+    ["400", 1],
+    ["loud", 0.3],
+  ])("takes the volume %j", (content, volume) => {
+    const { made, setup } = audio();
+    const head = `${META}<meta name="slopslide-music-volume" content="${content}">`;
+    player({ html: html(head), setup });
+    expect(made[0]!.volume).toBe(volume);
+  });
+
+  it("starts on the first key press when the browser blocks it", async () => {
+    const { made, blocked, setup } = audio({ blocked: true });
+    const p = player({ html: html(), setup });
+    await Promise.resolve();
+    expect(made[0]!.paused).toBe(true);
+    blocked.now = false;
+    p.key("ArrowRight");
+    expect(made[0]!.paused).toBe(false);
+    expect(p.active()).toBe(1);
+  });
+
+  it("starts on the first click when the browser blocks it", () => {
+    const { made, blocked, setup } = audio({ blocked: true });
+    const p = player({ html: html(), setup });
+    blocked.now = false;
+    p.window.dispatchEvent(new p.window.Event("pointerdown"));
+    expect(made[0]!.paused).toBe(false);
+  });
+
+  it("mutes and unmutes with M, not ⌘M", () => {
+    const { made, setup } = audio();
+    const p = player({ html: html(), setup });
+    expect(p.key("m").defaultPrevented).toBe(true);
+    expect(made[0]!.muted).toBe(true);
+    p.key("M");
+    expect(made[0]!.muted).toBe(false);
+    const event = new p.window.KeyboardEvent("keydown", { key: "m", metaKey: true, cancelable: true });
+    p.window.dispatchEvent(event);
+    expect(made[0]!.muted).toBe(false);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("mutes with M forwarded by the presenter", () => {
+    const { made, setup } = audio();
+    const parent = { postMessage: vi.fn() };
+    const p = player({ html: html(), setup, parent });
+    p.window.dispatchEvent(new p.window.MessageEvent("message", { data: { type: "slop:go", key: "m" } }));
+    expect(made[0]!.muted).toBe(true);
+  });
+
+  it("leaves M alone in a deck without music", () => {
+    const { made, setup } = audio();
+    const p = player({ setup });
+    expect(made).toHaveLength(0);
+    expect(p.key("m").defaultPrevented).toBe(false);
+  });
+
+  it.each([
+    ["editor previews", "?embed&slide=intro"],
+    ["thumbnails", "?embed&static"],
+    ["PDF and video windows", "?print"],
+    ["still video windows", "?static&print"],
+  ])("is silent in %s", (_, at) => {
+    const { made, setup } = audio();
+    player({ html: html(), setup, at });
+    expect(made).toHaveLength(0);
+  });
+});

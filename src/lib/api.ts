@@ -94,7 +94,19 @@ export interface Deck {
   size?: SizeInfo;
   /** The voice and language its narration is said in (its `slopslide-narration-*` metas). */
   narration?: NarrationSettings;
+  /** The background music played under the show (its `slopslide-music*` metas), if any. */
+  music?: DeckMusic | null;
 }
+
+export interface DeckMusic {
+  /** Relative to the deck file: `assets/<file>`. */
+  file: string;
+  /** In percent. */
+  volume: number;
+}
+
+/** The file types background music can be; `EXTENSIONS` in src-tauri/src/music.rs has the same. */
+export const MUSIC_EXTENSIONS = ["mp3", "m4a", "wav", "flac", "ogg"];
 
 export interface NarrationSettings {
   /** One of SpeechStatus.voices' ids. */
@@ -494,6 +506,11 @@ export const api = {
   cancelNarration: () => invoke<void>("cancel_narration"),
   /** A slide's narration audio, as WAV bytes. */
   narrationWav: (id: string, slide: string) => invoke<ArrayBuffer>("narration_wav", { id, slide }),
+  /** Makes the audio file at `path` the deck's background music, copying it to the deck's assets. */
+  setMusic: (id: string, path: string) => invoke<Deck>("set_music", { id, path }),
+  removeMusic: (id: string) => invoke<Deck>("remove_music", { id }),
+  /** Sets the music's volume, in percent. */
+  setMusicVolume: (id: string, volume: number) => invoke<Deck>("set_music_volume", { id, volume }),
   setNarrationVoice: (id: string, voice: string) => invoke<Deck>("set_narration_voice", { id, voice }),
   setNarrationLanguage: (id: string, language: string) => invoke<Deck>("set_narration_language", { id, language }),
 };

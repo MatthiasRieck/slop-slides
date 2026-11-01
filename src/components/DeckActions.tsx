@@ -1,7 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { ChevronDown, FileCode2, FileText, Film, Images, Loader2, Play, Share, X } from "lucide-react";
+import { ChevronDown, FileCode2, FileText, Film, Images, Loader2, Play, Presentation, Share, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { api, type Deck, errorMessage, type Screen, type Slide } from "../lib/api";
@@ -89,6 +89,24 @@ function Actions({ deck }: { deck: Deck }) {
     }
   };
 
+  const exportPptx = async () => {
+    const dest = await save({
+      title: "Export as PowerPoint",
+      defaultPath: `${fileName}.pptx`,
+      filters: [{ name: "PowerPoint presentation", extensions: ["pptx"] }],
+    });
+    if (!dest) return;
+    setExporting(true);
+    try {
+      await api.exportPptx(deck.id, dest);
+      await revealItemInDir(dest);
+    } catch (error) {
+      useApp.getState().setError(`Could not save the PowerPoint file: ${errorMessage(error)}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const exportVideo = async (options: VideoOptions) => {
     const dest = await save({
       title: "Export as video",
@@ -131,6 +149,7 @@ function Actions({ deck }: { deck: Deck }) {
         shownSlides={deck.slides.filter((s) => !s.hidden)}
         onHtml={() => void exportDeck()}
         onPdf={() => void exportPdf()}
+        onPptx={() => void exportPptx()}
         onImages={() => void exportImages()}
         onVideo={(options) => void exportVideo(options)}
       />
@@ -177,8 +196,8 @@ function progressLabel(progress: VideoProgress): string {
 }
 
 /**
- * The Export button and its choices: one shareable HTML file, a PDF, a PNG per slide, or a
- * video (which first asks how to make it).
+ * The Export button and its choices: one shareable HTML file, a PDF, a PowerPoint file, a PNG
+ * per slide, or a video (which first asks how to make it).
  */
 function ExportMenu(props: {
   disabled: boolean;
@@ -188,6 +207,7 @@ function ExportMenu(props: {
   shownSlides: Slide[];
   onHtml: () => void;
   onPdf: () => void;
+  onPptx: () => void;
   onImages: () => void;
   onVideo: (options: VideoOptions) => void;
 }) {
@@ -245,6 +265,12 @@ function ExportMenu(props: {
             label="PDF"
             hint="One page per slide, for printing or sharing"
             onClick={choose(props.onPdf)}
+          />
+          <ExportItem
+            icon={Presentation}
+            label="PowerPoint"
+            hint="Editable slides; some effects are simplified"
+            onClick={choose(props.onPptx)}
           />
           <ExportItem
             icon={Images}

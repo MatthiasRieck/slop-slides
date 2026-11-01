@@ -98,6 +98,10 @@ Rules (NON-NEGOTIABLE):
 - Prefer Edit over Write. Use unique anchors such as `id="pricing-tiers"` to target a
   slide. Rewrite the whole file only when restyling the entire deck.
 
+A deck imported from PowerPoint places each element absolutely, with `ppt-el` classes and inline
+`left`/`top`/`width`/`height`. It is an ordinary deck: edit it like any other, and when asked to
+restyle or tidy it, rebuild its slides on real layouts and move repeated styles into `<style>`.
+
 ## Templates
 
 A template is an ordinary deck whose slides are example layouts in one style, filled with

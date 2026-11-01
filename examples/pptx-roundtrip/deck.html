@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <!-- slopslide:runtime-css (managed by SlopSlide, do not edit) -->
+  <style>
+/* SlopSlide player: fixed stage (--slop-w × --slop-h, 1920×1080 unless the deck names another
+   size) scaled to the window, one slide at a time. The app appends the size-dependent rules.
+   The player sets data-slop-player on <html> from a script in <head>, before the body
+   renders. Viewers without JavaScript (iOS Quick Look, e.g. decks opened from chat apps)
+   never get it and show every slide top to bottom instead. */
+html,
+body {
+  margin: 0;
+  background: #000;
+}
+html[data-slop-thumbnail],
+html[data-slop-thumbnail] body {
+  background: transparent;
+}
+/* Slides are fixed canvases: stop mobile Safari enlarging text it finds too small, which
+   would overflow the slides when the stage is scaled down to a phone. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+html[data-slop-player],
+html[data-slop-player] body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+.deck {
+  width: var(--slop-w, 1920px);
+  margin: 0 auto;
+  overflow: hidden;
+}
+html[data-slop-player] .deck {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: var(--slop-h, 1080px);
+  margin: 0;
+  transform-origin: 0 0;
+}
+/* Stage geometry and slide switching are !important: deck styles often set
+   `.slide { position: relative }` or similar, which would stack the slides. */
+.deck > .slide {
+  position: relative !important;
+  inset: auto !important;
+  width: var(--slop-w, 1920px) !important;
+  height: var(--slop-h, 1080px) !important;
+  margin: 0 0 24px !important;
+  overflow: hidden;
+}
+/* Without the player, deck styles must not hide slides or stop the page scrolling. */
+html:not([data-slop-player]),
+html:not([data-slop-player]) body {
+  height: auto !important;
+  overflow: visible !important;
+}
+html:not([data-slop-player]) .deck > .slide {
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+html:not([data-slop-player]) .deck > .slide[data-hidden] {
+  display: none !important;
+}
+html:not([data-slop-player]) .slide .reveal {
+  opacity: 1 !important;
+  animation: none !important;
+}
+html[data-slop-player] .deck > .slide {
+  position: absolute !important;
+  inset: 0 !important;
+  margin: 0 !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.35s ease, visibility 0s linear 0.35s;
+}
+html[data-slop-player] .deck > .slide.active {
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transition: opacity 0.35s ease;
+  z-index: 1;
+}
+/* Section markers only label the editor's slide rail; the player never shows them. */
+.deck > .deck-section {
+  display: none !important;
+}
+.slide .notes,
+.slide .narration {
+  display: none !important;
+}
+/* Review marks from the editor, drawn by the player over their slide; R shows and hides them. */
+.slide > .slop-review {
+  display: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  pointer-events: none;
+  z-index: 2147483647;
+}
+html[data-slop-review] .slide > .slop-review {
+  display: block;
+}
+.slide img,
+.slide video,
+.slide canvas,
+.slide svg {
+  max-width: 100%;
+  max-height: 100%;
+}
+/* Entrances only say where an element comes from: animating `translate`, `scale`, and
+   `rotate` (not `transform`) and leaving them out of the last frame lands each element on
+   its own styles, rotations and hand edits included. A deck restyles the entrance by
+   setting `animation` on `.slide.active .reveal`; the stagger below outranks that rule, so
+   the shorthand does not reset it. */
+@keyframes slop-reveal {
+  from {
+    opacity: 0;
+    translate: 0 28px;
+  }
+  to {
+    opacity: 1;
+  }
+}
+html[data-slop-player] .slide .reveal {
+  opacity: 0;
+}
+.slide.active .reveal {
+  animation: slop-reveal 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.slide.active .reveal.reveal-delay-1 { animation-delay: 0.12s; }
+.slide.active .reveal.reveal-delay-2 { animation-delay: 0.24s; }
+.slide.active .reveal.reveal-delay-3 { animation-delay: 0.36s; }
+.slide.active .reveal.reveal-delay-4 { animation-delay: 0.48s; }
+/* Editor thumbnails render the final frame of every animation. */
+html[data-slop-static] *,
+html[data-slop-static] *::before,
+html[data-slop-static] *::after {
+  animation-delay: 0s !important;
+  animation-duration: 0s !important;
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-delay: 0s !important;
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+/* Print / save as PDF: one slide per page (the app's size rules set the page size), printed as
+   shown, backgrounds and all, rather than in the browser's ink-saving colors. */
+@media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  html,
+  body,
+  html[data-slop-player],
+  html[data-slop-player] body {
+    height: auto;
+    overflow: visible;
+  }
+  .deck,
+  html[data-slop-player] .deck {
+    position: static;
+    height: auto;
+    margin: 0;
+    transform: none !important;
+  }
+  .deck > .slide,
+  html[data-slop-player] .deck > .slide {
+    position: relative !important;
+    margin: 0 !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    break-after: page;
+  }
+  .deck > .slide[data-hidden] {
+    display: none !important;
+  }
+  .slide .reveal {
+    opacity: 1 !important;
+    animation: none !important;
+  }
+}
+
+/* Matched heroes move between click states; slide fades must not delay the snapshot. */
+html:active-view-transition .deck > .slide {
+  transition: none !important;
+}
+::view-transition-group(*) {
+  animation-duration: 550ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 220ms;
+}
+/* Stage size: 1920x1080 (the deck's slopslide-size meta). */
+:root {
+  --slop-w: 1920px;
+  --slop-h: 1080px;
+}
+@media print {
+  @page {
+    size: 1920px 1080px;
+    margin: 0;
+  }
+}
+@media screen and (max-width: 1919.98px) { html:not([data-slop-player]) .deck { zoom: 0.95; } }
+@media screen and (max-width: 1823.98px) { html:not([data-slop-player]) .deck { zoom: 0.9; } }
+@media screen and (max-width: 1727.98px) { html:not([data-slop-player]) .deck { zoom: 0.85; } }
+@media screen and (max-width: 1631.98px) { html:not([data-slop-player]) .deck { zoom: 0.8; } }
+@media screen and (max-width: 1535.98px) { html:not([data-slop-player]) .deck { zoom: 0.75; } }
+@media screen and (max-width: 1439.98px) { html:not([data-slop-player]) .deck { zoom: 0.7; } }
+@media screen and (max-width: 1343.98px) { html:not([data-slop-player]) .deck { zoom: 0.65; } }
+@media screen and (max-width: 1247.98px) { html:not([data-slop-player]) .deck { zoom: 0.6; } }
+@media screen and (max-width: 1151.98px) { html:not([data-slop-player]) .deck { zoom: 0.55; } }
+@media screen and (max-width: 1055.98px) { html:not([data-slop-player]) .deck { zoom: 0.5; } }
+@media screen and (max-width: 959.98px) { html:not([data-slop-player]) .deck { zoom: 0.45; } }
+@media screen and (max-width: 863.98px) { html:not([data-slop-player]) .deck { zoom: 0.4; } }
+@media screen and (max-width: 767.98px) { html:not([data-slop-player]) .deck { zoom: 0.35; } }
+@media screen and (max-width: 671.98px) { html:not([data-slop-player]) .deck { zoom: 0.3; } }
+@media screen and (max-width: 575.98px) { html:not([data-slop-player]) .deck { zoom: 0.25; } }
+@media screen and (max-width: 479.98px) { html:not([data-slop-player]) .deck { zoom: 0.2; } }
+@media screen and (max-width: 383.98px) { html:not([data-slop-player]) .deck { zoom: 0.15; } }
+@media screen and (max-width: 287.98px) { html:not([data-slop-player]) .deck { zoom: 0.1; } }
+  </style>
+  <script>document.documentElement.setAttribute("data-slop-player", "");</script>
+  <!-- /slopslide:runtime-css -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PowerPoint round trip test</title>
+  <style>
+    :root { --ink: #16202e; --muted: #5b6b80; --accent: #e4572e; --paper: #fbf9f4; --deep: #0f1730; }
+    .slide { background: var(--paper); color: var(--ink); font-family: Helvetica, Arial, sans-serif; font-size: 34px; line-height: 1.4; padding: 96px 120px; box-sizing: border-box; display: flex; flex-direction: column; gap: 32px; overflow: hidden; }
+    .slide h1 { font-size: 120px; line-height: 1.05; margin: 0; }
+    .slide h2 { font-size: 72px; line-height: 1.1; margin: 0; }
+    .slide p { margin: 0; }
+    .muted { color: var(--muted); }
+
+    .layout-title { justify-content: center; }
+    .layout-split { flex-direction: row; align-items: center; gap: 80px; }
+    .layout-split > div { flex: 1; display: flex; flex-direction: column; gap: 28px; }
+    .layout-split img { flex: 1; width: 800px; height: 640px; object-fit: cover; border-radius: 28px; }
+    .layout-bleed { padding: 0; justify-content: flex-end; background: var(--deep); }
+    .layout-bleed > img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    .layout-bleed .caption { position: relative; margin: 72px; padding: 32px 48px; color: #fff; background: rgba(0, 0, 0, 0.55); border-radius: 20px; align-self: flex-start; }
+    table.data { border-collapse: collapse; width: 100%; font-size: 32px; }
+    table.data th { text-align: left; background: var(--deep); color: #fff; padding: 18px 24px; }
+    table.data td { padding: 18px 24px; border-bottom: 2px solid #d5d9e0; }
+    table.data td.num { text-align: right; }
+
+    .layout-glass { background: linear-gradient(135deg, #1b1f5e 0%, #0d3b4f 100%); color: #fff; }
+    .orb { position: absolute; border-radius: 50%; filter: blur(14px); }
+    .orb.a { width: 560px; height: 560px; right: 40px; top: -80px; background: linear-gradient(135deg, #ffb347, #ff3d77); }
+    .orb.b { width: 420px; height: 420px; left: 60px; bottom: -100px; background: radial-gradient(circle, #33f0c8, #2486ff); }
+    .cards { position: relative; display: grid; grid-template-columns: repeat(3, 1fr); gap: 36px; flex: 1; }
+    .card { padding: 40px; border-radius: 36px; background: rgba(255, 255, 255, 0.14); border: 2px solid rgba(255, 255, 255, 0.35); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4); display: flex; flex-direction: column; gap: 16px; }
+    .card strong { font-size: 84px; line-height: 1; }
+
+    .layout-svg { flex-direction: row; gap: 56px; align-items: stretch; }
+    .layout-svg .chart { flex: 2; width: 1000px; height: 760px; }
+    .layout-svg .side { flex: 1; display: flex; flex-direction: column; gap: 32px; }
+    .layout-svg .side img { width: 200px; height: 200px; }
+    .icons { display: flex; gap: 32px; color: var(--accent); }
+    .icons svg { width: 96px; height: 96px; }
+
+    .layout-transform { background: #eef1f6; position: relative; }
+    .tilted { position: absolute; left: 140px; top: 280px; width: 460px; padding: 32px; background: #fff; box-shadow: 0 16px 40px rgba(20, 30, 60, 0.25); transform: rotate(-6deg); }
+    .turned-text { position: absolute; right: -60px; top: 400px; font-size: 44px; font-weight: 700; color: var(--accent); transform: rotate(90deg); }
+    .skewed { position: absolute; left: 700px; top: 300px; width: 380px; height: 180px; background: var(--deep); color: #fff; display: flex; align-items: center; justify-content: center; transform: skewX(-14deg); }
+    .perspective { position: absolute; left: 700px; top: 560px; width: 380px; height: 260px; object-fit: cover; transform: perspective(900px) rotateY(32deg); }
+    .clipped { position: absolute; left: 1180px; top: 260px; width: 420px; height: 420px; object-fit: cover; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+    .scaled { position: absolute; left: 150px; top: 720px; width: 300px; padding: 20px; background: var(--accent); color: #fff; transform-origin: top left; transform: scale(1.5); }
+
+    .layout-type h2 span.grad { background: linear-gradient(90deg, #e4572e, #7c3aed); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .layout-type .spaced { letter-spacing: 0.3em; text-transform: uppercase; font-size: 26px; color: var(--muted); }
+    .layout-type .callout::before { content: "→ "; color: var(--accent); }
+    .layout-type mark { background: #ffe58a; }
+    .columns { display: flex; gap: 72px; }
+    .columns > * { flex: 1; margin: 0; }
+
+    .layout-stack { position: relative; background: #101418; color: #fff; }
+    .layout-stack::before { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.04) 0 20px, transparent 20px 40px); }
+    .sheet { position: absolute; width: 520px; height: 320px; border-radius: 24px; display: flex; align-items: center; justify-content: center; font-size: 44px; font-weight: 700; }
+    .sheet.one { left: 240px; top: 300px; background: #e4572e; z-index: 3; }
+    .sheet.two { left: 480px; top: 420px; background: #2e86ab; z-index: 2; opacity: 0.85; }
+    .sheet.three { left: 720px; top: 540px; background: #f6c445; color: #111; z-index: 1; }
+    .sheet.four { left: 1200px; top: 300px; background: conic-gradient(#e4572e, #f6c445, #2e86ab, #e4572e); color: #fff; }
+    .avatar { position: absolute; right: 150px; bottom: 90px; width: 240px; height: 240px; border-radius: 50%; object-fit: cover; border: 8px solid #fff; }
+    .masked { position: absolute; left: 1240px; top: 640px; }
+
+    .layout-bento { display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(3, 1fr); gap: 24px; padding: 72px; }
+    .tile { border-radius: 28px; padding: 28px; background: #fff; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08); overflow: hidden; position: relative; }
+    .tile.wide { grid-column: span 2; }
+    .tile.tall { grid-row: span 2; padding: 0; }
+    .tile.tall img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .tile.dark { background: var(--deep); color: #fff; }
+    .tile.accent { background: linear-gradient(160deg, #ff9a56, #e4572e); color: #fff; }
+    .tile.outline { background: transparent; box-shadow: none; border: 4px dashed var(--muted); }
+    .tile .big { font-size: 72px; font-weight: 800; line-height: 1; }
+    .tile img.logo { position: absolute; right: 16px; bottom: 16px; width: 120px; }
+    .progress { height: 18px; border-radius: 9px; background: #e3e7ee; margin-top: 16px; }
+    .progress i { display: block; width: 64%; height: 100%; border-radius: 9px; background: var(--accent); }
+  </style>
+</head>
+<body>
+  <main class="deck">
+    <section class="slide layout-title" id="title">
+      <h1>Round trip test</h1>
+      <p class="muted">Trivial slides first, then the hard ones.</p>
+    </section>
+
+    <section class="slide" id="bullets">
+      <h2>Plain bullets</h2>
+      <ul>
+        <li>First point, short and simple</li>
+        <li>Second point with <strong>bold</strong> and <em>italic</em> words</li>
+        <li>Third point that is long enough to wrap onto a second line so that the wrapping behaviour of a list item shows up clearly in the comparison</li>
+      </ul>
+      <aside class="notes">Remember to mention **the wrap** &amp; thank the team.</aside>
+    </section>
+
+    <div class="deck-section" data-title="Pictures"></div>
+
+    <section class="slide layout-split" id="text-and-photo">
+      <div>
+        <h2>Text beside a photo</h2>
+        <p>A JPEG cropped with object-fit and rounded corners.</p>
+        <p class="muted">See <a href="https://example.com/report?a=1&amp;b=2">the report</a> or jump to <a href="#numbers">the numbers</a>.</p>
+      </div>
+      <img src="assets/sunset.jpg" alt="Sunset over layered hills">
+    </section>
+
+    <section class="slide layout-bleed" id="full-bleed">
+      <img src="assets/valley.png" alt="A green valley">
+      <p class="caption">A full-bleed PNG, with a translucent caption on top</p>
+      <aside class="narration">This valley is here to test narration surviving as notes.</aside>
+    </section>
+
+    <section class="slide" id="numbers">
+      <h2>A simple table</h2>
+      <table class="data">
+        <tr><th>Region</th><th>Q2</th><th>Q3</th></tr>
+        <tr><td>North</td><td class="num">1,204</td><td class="num">1,380</td></tr>
+        <tr><td>South &amp; East</td><td class="num">982</td><td class="num">1,105</td></tr>
+        <tr><td>West</td><td class="num">1,510</td><td class="num">1,492</td></tr>
+      </table>
+    </section>
+
+    <section class="slide" id="muted-slide" data-hidden>
+      <h2>Hidden slide</h2>
+      <p>This must not reach PowerPoint.</p>
+    </section>
+
+    <div class="deck-section" data-title="Hard ones"></div>
+
+    <section class="slide layout-glass" id="glass">
+      <div class="orb a"></div>
+      <div class="orb b"></div>
+      <h2 style="position: relative">Glass, blur and elevation</h2>
+      <div class="cards">
+        <div class="card"><strong>48%</strong><span>Backdrop blur on translucent cards</span></div>
+        <div class="card"><strong>2.4×</strong><span>Blurred gradient orbs behind them</span></div>
+        <div class="card"><strong>€9M</strong><span>Borders with alpha and deep shadows</span></div>
+      </div>
+    </section>
+
+    <section class="slide layout-svg" id="svg-chart">
+      <svg class="chart" viewBox="0 0 1000 760" role="img" aria-label="Revenue by quarter">
+        <rect width="1000" height="760" rx="24" fill="#fff"/>
+        <g fill="#2e86ab"><rect x="110" y="420" width="120" height="260"/><rect x="290" y="320" width="120" height="360"/><rect x="470" y="240" width="120" height="440"/><rect x="650" y="150" width="120" height="530"/></g>
+        <polyline points="170,380 350,300 530,190 710,110 880,70" fill="none" stroke="#e4572e" stroke-width="10" stroke-linecap="round"/>
+        <g fill="#e4572e"><circle cx="170" cy="380" r="14"/><circle cx="350" cy="300" r="14"/><circle cx="530" cy="190" r="14"/><circle cx="710" cy="110" r="14"/></g>
+        <g font-family="Helvetica" font-size="34" fill="#5b6b80" text-anchor="middle"><text x="170" y="725">Q1</text><text x="350" y="725">Q2</text><text x="530" y="725">Q3</text><text x="710" y="725">Q4</text></g>
+        <text x="60" y="70" font-family="Helvetica" font-size="44" font-weight="700" fill="#16202e">Inline SVG with its own text</text>
+      </svg>
+      <div class="side">
+        <h2>SVGs</h2>
+        <img src="assets/badge.svg" alt="A verified badge">
+        <img src="assets/orbit.svg" alt="An orbit diagram">
+        <div class="icons">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.500-7.500L2 9h7z"/></svg>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide layout-transform" id="transforms">
+      <h2>Rotate, skew, 3D, clip</h2>
+      <div class="tilted"><h3 style="margin: 0 0 8px">Rotated card</h3><p>Nested block children.</p></div>
+      <div class="turned-text">Rotated text</div>
+      <div class="skewed">Skewed box</div>
+      <img class="perspective" src="assets/sunset.jpg" alt="A tilted photo">
+      <img class="clipped" src="assets/night.webp" alt="A WebP clipped to a diamond">
+      <div class="scaled">Scaled 1.5×</div>
+    </section>
+
+    <section class="slide layout-type" id="typography">
+      <h2>Tricky <span class="grad">gradient text</span> &amp; runs</h2>
+      <p class="spaced">Letter spaced and upper-cased</p>
+      <p class="callout">Pseudo-element arrow, <mark>highlighted words</mark>, H<sub>2</sub>O and E=mc<sup>2</sup>, <s>struck</s>, <u>underlined</u>.</p>
+      <div class="columns">
+        <ol>
+          <li>Numbered one</li>
+          <li>Numbered two
+            <ul><li>Nested bullet</li><li>Another nested</li></ul>
+          </li>
+          <li>Numbered three</li>
+        </ol>
+        <p style="text-align: justify">A justified paragraph that runs over several lines, with Ünïcödé, 日本語 and emoji 🎉 in it, plus characters that break naive escaping such as &lt;tag&gt; &amp; "quotes".</p>
+      </div>
+    </section>
+
+    <section class="slide layout-stack" id="stacking">
+      <h2 style="position: relative">Overlaps and z-index</h2>
+      <div class="sheet one">On top</div>
+      <div class="sheet two">Middle, 85%</div>
+      <div class="sheet three">Bottom</div>
+      <div class="sheet four">Conic</div>
+      <img class="avatar" src="assets/valley.png" alt="A round picture">
+      <img class="masked" src="assets/logo.png" alt="A transparent logo" width="200" height="200">
+    </section>
+
+    <section class="slide layout-bento" id="bento">
+      <div class="tile wide"><div class="big">Bento</div><p class="muted">Grid with mixed tiles</p></div>
+      <div class="tile tall"><img src="assets/valley.png" alt="Portrait crop of a valley"></div>
+      <div class="tile dark"><div class="big">64%</div><div class="progress"><i></i></div></div>
+      <div class="tile accent"><div class="big">+12</div><p>Gradient tile</p></div>
+      <div class="tile outline"><p>Dashed outline</p></div>
+      <div class="tile"><p>Logo in a corner</p><img class="logo" src="assets/logo.png" alt="Logo"></div>
+      <div class="tile wide dark"><p>Last wide tile with white text on dark</p></div>
+      <div class="tile"><img src="assets/badge.svg" alt="Badge" style="width: 100%; height: 100%; object-fit: contain"></div>
+    </section>
+  </main>
+  <!-- slopslide:runtime-js (managed by SlopSlide, do not edit) -->
+  <script>
+/* SlopSlide player. Keys: ←/→, space, PageUp/PageDown, Home/End, F for full screen, R for review marks. */
+(function () {
+  var root = document.documentElement;
+  // The runtime-css block sets this before the body renders; without it the stylesheet lists
+  // the slides for viewers that run no JavaScript.
+  root.setAttribute("data-slop-player", "");
+  var params = new URLSearchParams(location.search);
+  var embed = params.has("embed");
+  var framed = window.parent !== window;
+  if (params.has("static")) root.setAttribute("data-slop-static", "");
+  if (embed && params.has("static")) root.setAttribute("data-slop-thumbnail", "");
+
+  var deck = document.querySelector(".deck");
+  var all = Array.prototype.filter.call(document.querySelectorAll(".slide"), function (el) {
+    return !el.parentElement || !el.parentElement.closest(".slide");
+  });
+  // Hidden slides (data-hidden) are skipped by the show; the editor still embeds them.
+  var slides = embed
+    ? all
+    : all.filter(function (el) {
+        return !el.hasAttribute("data-hidden");
+      });
+  if (!deck || slides.length === 0) return;
+  var current = -1;
+  // The stage's size in slide pixels (the deck's slide size, 1920×1080 unless it names another).
+  var W = deck.offsetWidth || 1920;
+  var H = deck.offsetHeight || 1080;
+
+  function fit() {
+    var scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    var x = (window.innerWidth - W * scale) / 2;
+    var y = (window.innerHeight - H * scale) / 2;
+    deck.style.transform = "translate(" + x + "px," + y + "px) scale(" + scale + ")";
+  }
+
+  function indexFor(ref) {
+    if (!ref) return 0;
+    // A hidden slide's id lands on the next shown slide (or the last one).
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].id !== ref) continue;
+      for (var j = i; j < all.length; j++) {
+        var index = slides.indexOf(all[j]);
+        if (index >= 0) return index;
+      }
+      return slides.length - 1;
+    }
+    // The editor addresses slides without an id by position, as "#2".
+    var n = parseInt(ref.replace(/^#/, ""), 10);
+    return isNaN(n) ? 0 : Math.min(slides.length - 1, Math.max(0, n - 1));
+  }
+
+  var transition = null;
+  function morphNames(slide, enabled) {
+    var seen = Object.create(null);
+    Array.prototype.forEach.call(slide.querySelectorAll("[data-morph]"), function (el) {
+      var key = el.getAttribute("data-morph");
+      // Invalid or duplicate names must not break the whole browser transition.
+      var valid = /^[a-z][a-z0-9-]*$/.test(key) && !seen[key];
+      seen[key] = true;
+      el.style.viewTransitionName = enabled && valid ? "slop-" + key : "";
+    });
+  }
+
+  function show(index) {
+    index = Math.min(slides.length - 1, Math.max(0, index));
+    if (index === current) return;
+    var previous = current;
+    current = index;
+    if (transition) transition.skipTransition();
+    var motion = !window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var canMorph = previous >= 0 && !embed && !params.has("static") && motion &&
+      document.startViewTransition && slides[index].querySelector("[data-morph]") &&
+      slides[previous].querySelector("[data-morph]");
+    function update() {
+      if (current !== index) return;
+      slides.forEach(function (el, i) {
+        morphNames(el, !!canMorph && i === index);
+        el.classList.toggle("active", i === index);
+      });
+    }
+    if (canMorph) {
+      morphNames(slides[previous], true);
+      var next = document.startViewTransition(update);
+      transition = next;
+      // A rejected snapshot (e.g. duplicate author CSS names) still switches the slide.
+      next.ready.catch(function () {});
+      next.finished.catch(function () {}).then(function () {
+        if (transition !== next) return;
+        transition = null;
+        slides.forEach(function (el) { morphNames(el, false); });
+      });
+    } else update();
+    if (embed) return;
+    var id = slides[index].id || String(index + 1);
+    try {
+      history.replaceState(null, "", "#" + id);
+    } catch (e) {
+      // Sandboxed frames and some file:// contexts refuse URL updates; navigation still works.
+    }
+    if (framed) window.parent.postMessage({ type: "slop:slide", id: slides[index].id || null, index: index }, "*");
+  }
+
+  // Review marks drawn in the editor (the slopslide:review block), hidden until R or ?review
+  // shows them. The editor draws them itself, so embedded previews leave them out.
+  var review = null;
+  var reviewData = document.getElementById("slopslide-review");
+  if (reviewData && !embed) {
+    try {
+      review = JSON.parse(reviewData.textContent);
+    } catch (e) {
+      review = null;
+    }
+  }
+  var SVG = "http://www.w3.org/2000/svg";
+  // Widths in screen pixels, as the editor draws them.
+  var INK = { pen: { width: 4, opacity: 1 }, highlighter: { width: 28, opacity: 0.4 } };
+
+  // SVG path data for a smooth curve through a stroke's points (fractions of the slide), as the
+  // app draws it: from the first point to halfway to the next, then from halfway to halfway,
+  // bent by each point between as a quadratic Bézier control point, to the last point.
+  function smoothPath(points) {
+    var xy = points.map(function (p) {
+      return [p[0] * W, p[1] * H];
+    });
+    var at = function (x, y) {
+      return Math.round(x * 10) / 10 + " " + Math.round(y * 10) / 10;
+    };
+    var halfway = function (i) {
+      return at((xy[i][0] + xy[i + 1][0]) / 2, (xy[i][1] + xy[i + 1][1]) / 2);
+    };
+    var last = xy.length - 1;
+    if (last < 2) {
+      return xy
+        .map(function (p, i) {
+          return (i ? "L" : "M") + at(p[0], p[1]);
+        })
+        .join("");
+    }
+    var d = "M" + at(xy[0][0], xy[0][1]) + "L" + halfway(0);
+    for (var i = 1; i < last; i++) {
+      d += "Q" + at(xy[i][0], xy[i][1]) + " " + (i === last - 1 ? at(xy[last][0], xy[last][1]) : halfway(i));
+    }
+    return d;
+  }
+
+  function drawReview(slide, strokes) {
+    var svg = document.createElementNS(SVG, "svg");
+    svg.setAttribute("class", "slop-review");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("aria-hidden", "true");
+    strokes.forEach(function (stroke) {
+      var ink = stroke && INK[stroke.tool];
+      var points = stroke && stroke.points;
+      if (!ink || !Array.isArray(points) || points.length === 0) return;
+      var d = smoothPath(points);
+      // A tap never moves; a tiny step makes the round cap draw it as a dot.
+      if (points.every(function (p) { return p[0] === points[0][0] && p[1] === points[0][1]; })) d += "l0.01 0";
+      var path = document.createElementNS(SVG, "path");
+      path.setAttribute("d", d);
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", String(stroke.color));
+      path.setAttribute("stroke-width", String(ink.width));
+      path.setAttribute("stroke-opacity", String(ink.opacity));
+      path.setAttribute("stroke-linecap", "round");
+      path.setAttribute("stroke-linejoin", "round");
+      path.setAttribute("vector-effect", "non-scaling-stroke");
+      svg.appendChild(path);
+    });
+    slide.appendChild(svg);
+  }
+
+  /** Shows or hides the review marks; false when the deck has none. */
+  function toggleReview(on) {
+    if (!review || typeof review !== "object") return false;
+    if (on) {
+      all.forEach(function (slide) {
+        var strokes = slide.id && review[slide.id];
+        if (Array.isArray(strokes) && !slide.querySelector(":scope > .slop-review")) drawReview(slide, strokes);
+      });
+    }
+    if (on) root.setAttribute("data-slop-review", "");
+    else root.removeAttribute("data-slop-review");
+    return true;
+  }
+  if (params.has("review")) toggleReview(true);
+
+  // Text boxes with data-autofit="shrink" shrink their text until it fits their box. Every
+  // font size in the box scales by the same factor, set inline; `original` gives back what the
+  // inline font size was before, so the slide editor saves the markup without the fit.
+  var FIT_MIN = 0.2;
+  var FIT_STEPS = 10;
+  var fitted = typeof Map === "function" ? new Map() : null;
+  var fitScales = typeof Map === "function" ? new Map() : null;
+
+  function overflows(el) {
+    return el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1;
+  }
+
+  function fitNodes(el) {
+    return [el].concat(
+      Array.prototype.filter.call(el.querySelectorAll("*"), function (node) {
+        return !node.closest("svg") || node.tagName.toLowerCase() === "svg";
+      }),
+    );
+  }
+
+  /** Puts back the font sizes `fitText` changed in `el`. */
+  function unfitText(el) {
+    if (!fitted) return;
+    fitNodes(el).forEach(function (node) {
+      var before = fitted.get(node);
+      if (!before) return;
+      fitted.delete(node);
+      if (before.value) node.style.setProperty("font-size", before.value, before.priority);
+      else node.style.removeProperty("font-size");
+      if (!node.getAttribute("style")) node.removeAttribute("style");
+    });
+    fitScales.delete(el);
+  }
+
+  /** Shrinks the text of a `data-autofit="shrink"` box until it fits; false when it already does. */
+  function fitText(el) {
+    if (!fitted) return false;
+    unfitText(el);
+    if (el.getAttribute("data-autofit") !== "shrink" || (!el.clientHeight && !el.clientWidth) || !overflows(el)) {
+      return false;
+    }
+    var nodes = fitNodes(el);
+    var sizes = nodes.map(function (node) {
+      return parseFloat(getComputedStyle(node).fontSize) || 0;
+    });
+    nodes.forEach(function (node) {
+      fitted.set(node, {
+        value: node.style.getPropertyValue("font-size"),
+        priority: node.style.getPropertyPriority("font-size"),
+      });
+    });
+    var scaleTo = function (k) {
+      nodes.forEach(function (node, i) {
+        if (sizes[i]) node.style.setProperty("font-size", Math.round(sizes[i] * k * 100) / 100 + "px", "important");
+      });
+    };
+    var lo = FIT_MIN;
+    var hi = 1;
+    for (var step = 0; step < FIT_STEPS; step++) {
+      var mid = (lo + hi) / 2;
+      scaleTo(mid);
+      if (overflows(el)) hi = mid;
+      else lo = mid;
+    }
+    scaleTo(lo);
+    fitScales.set(el, lo);
+    return true;
+  }
+
+  function fitAll() {
+    Array.prototype.forEach.call(document.querySelectorAll('.slide [data-autofit="shrink"]'), fitText);
+  }
+
+  window.slopAutofit = {
+    fit: fitText,
+    unfit: unfitText,
+    fitAll: fitAll,
+    /** What `node`'s inline font size was before a fit: { value, priority }, or null when not fitted. */
+    original: function (node) {
+      return (fitted && fitted.get(node)) || null;
+    },
+    /** How far the box `el` is shrunk (1 when it is not). */
+    scale: function (el) {
+      return (fitScales && fitScales.get(el)) || 1;
+    },
+  };
+
+  window.addEventListener("resize", fit);
+  fit();
+  show(indexFor(embed ? params.get("slide") : decodeURIComponent(location.hash.slice(1))));
+  fitAll();
+  window.addEventListener("load", fitAll);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitAll);
+
+  function navigate(key) {
+    if (key === "ArrowRight" || key === "ArrowDown" || key === "PageDown" || key === " ") show(current + 1);
+    else if (key === "ArrowLeft" || key === "ArrowUp" || key === "PageUp") show(current - 1);
+    else if (key === "Home") show(0);
+    else if (key === "End") show(slides.length - 1);
+    else if ((key === "f" || key === "F") && !framed) {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else root.requestFullscreen && root.requestFullscreen();
+    } else return false;
+    return true;
+  }
+
+  window.addEventListener("keydown", function (event) {
+    if (framed) {
+      var mod = event.metaKey || event.ctrlKey;
+      window.parent.postMessage({ type: "slop:key", key: event.key, mod: mod, shift: event.shiftKey }, "*");
+    }
+    if (embed) return;
+    var plain = !event.metaKey && !event.ctrlKey && !event.altKey;
+    if ((event.key === "r" || event.key === "R") && plain) {
+      if (toggleReview(!root.hasAttribute("data-slop-review"))) event.preventDefault();
+    } else if (navigate(event.key)) event.preventDefault();
+  });
+
+  if (embed) return;
+  // The presenter forwards keys pressed while its drawing tools have focus.
+  window.addEventListener("message", function (event) {
+    if (framed && event.data && event.data.type === "slop:go") navigate(String(event.data.key));
+  });
+  window.addEventListener("hashchange", function () {
+    show(indexFor(decodeURIComponent(location.hash.slice(1))));
+  });
+  document.addEventListener("click", function (event) {
+    if (event.target.closest("a, button, input, select, textarea, video, [contenteditable]")) return;
+    show(event.clientX < window.innerWidth / 4 ? current - 1 : current + 1);
+  });
+  var touchX = null;
+  document.addEventListener("touchstart", function (event) {
+    touchX = event.touches[0].clientX;
+  });
+  document.addEventListener("touchend", function (event) {
+    if (touchX === null) return;
+    var dx = event.changedTouches[0].clientX - touchX;
+    if (Math.abs(dx) > 40) show(current + (dx < 0 ? 1 : -1));
+    touchX = null;
+  });
+})();
+  </script>
+  <!-- /slopslide:runtime-js -->
+</body>
+</html>

@@ -386,6 +386,8 @@ interface AppState {
   openDeck: (id: string) => Promise<void>;
   /** Creates a deck at the root of the open workspace and opens it. */
   createDeck: (title: string, template?: string | null) => Promise<void>;
+  /** Makes a deck from the PowerPoint file at `path`, in the workspace, and opens it. */
+  importPptx: (path: string) => Promise<void>;
   /** Closes the open file; false when the user kept unsaved edits instead. */
   closeDeck: () => Promise<boolean>;
   setDeck: (deck: Deck) => void;
@@ -706,6 +708,20 @@ export const useApp = create<AppState>((set, get) => ({
       rememberFile(path);
       set({ openedFile: { path, absolute: deck.id, kind: "deck" } });
       await loadDeckState(deck);
+    } catch (error) {
+      set({ error: errorMessage(error) });
+    }
+  },
+
+  importPptx: async (path) => {
+    if (!(await get().closeDeck())) return;
+    try {
+      const { deck, skipped } = await api.importPptx(path);
+      const relative = relativePath(get().workspace, deck.id) ?? basename(deck.id);
+      rememberFile(relative);
+      set({ openedFile: { path: relative, absolute: deck.id, kind: "deck" } });
+      await loadDeckState(deck);
+      if (skipped.length > 0) set({ error: `Imported, with these changes: ${skipped.join("; ")}.` });
     } catch (error) {
       set({ error: errorMessage(error) });
     }

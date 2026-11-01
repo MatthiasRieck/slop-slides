@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { api, errorMessage, type RecentWorkspace } from "../lib/api";
 import { cn, isMac, relativeTime } from "../lib/utils";
 import { useApp } from "../store";
+import { SectionLabel } from "./SectionLabel";
 import { TemplateSelect } from "./Templates";
 
 /** Asks for a folder and opens it as the workspace. */
@@ -75,7 +76,7 @@ export function Home() {
           />
 
           <section className="flex flex-col gap-2">
-            <h2 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">Open</h2>
+            <SectionLabel as="h2">Open</SectionLabel>
             <div className="flex gap-2">
               <button
                 type="button"
@@ -98,7 +99,7 @@ export function Home() {
 
           {recent && recent.length > 0 && (
             <section className="flex flex-col gap-2">
-              <h2 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">Recent folders</h2>
+              <SectionLabel as="h2">Recent folders</SectionLabel>
               <ul className="flex flex-col divide-y rounded-lg border bg-card">
                 {recent.map((workspace) => (
                   <li key={workspace.path} className="group flex items-center">

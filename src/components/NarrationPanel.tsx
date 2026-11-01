@@ -1,5 +1,5 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { AudioLines, Download, Loader2, Lock, Play, Sparkles, Square, Trash2, X } from "lucide-react";
+import { AudioLines, Download, Loader2, Play, Sparkles, Square, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { type Deck, errorMessage, type Slide, type SlideAudio } from "../lib/api";
@@ -10,7 +10,8 @@ import { useDraftText } from "../lib/useDraftText";
 import { formatBytes } from "../lib/voice";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
-import { ScriptField, ScriptPreviewToggle } from "./ScriptMarkdown";
+import { ScriptField } from "./ScriptMarkdown";
+import { SlideBand, SlideBandHeader } from "./SlideBand";
 import { SlideTime } from "./SlideTime";
 
 /** How long typing pauses before the narration is saved to the deck. */
@@ -38,31 +39,28 @@ export function NarrationPanel() {
   }, [loadSpeech]);
   const index = deck?.slides.findIndex((s) => s.id === selected) ?? -1;
   const slide = deck?.slides[index];
-  if (!deck || !slide) {
-    return (
-      <p className="shrink-0 border-b bg-background p-4 text-sm text-muted-foreground">
-        {deck ? "Add a slide to write its narration." : "Open a deck to write narration for its slides."}
-      </p>
-    );
-  }
   return (
-    <section aria-label="Narration tools" className="flex h-52 shrink-0 justify-center border-b bg-background">
-      {/* One editor per slide: switching slides saves the last one's pending text as it unmounts. */}
-      <NarrationEditor
-        key={slide.id}
-        deck={deck}
-        slide={slide}
-        index={index}
-        total={deck.slides.length}
-        preview={preview}
-        onPreview={setPreview}
-      />
-      <div className="flex w-72 shrink-0 flex-col justify-between overflow-y-auto border-l">
-        <SpeechSettings deck={deck} />
-        <CleanUpAll deck={deck} />
-        <DeckAudio deck={deck} />
-      </div>
-    </section>
+    <SlideBand label="Narration tools" noun="narration" deck={deck} slide={slide}>
+      {(deck, slide) => (
+        <>
+          {/* One editor per slide: switching slides saves the last one's pending text as it unmounts. */}
+          <NarrationEditor
+            key={slide.id}
+            deck={deck}
+            slide={slide}
+            index={index}
+            total={deck.slides.length}
+            preview={preview}
+            onPreview={setPreview}
+          />
+          <div className="flex w-72 shrink-0 flex-col justify-between overflow-y-auto border-l">
+            <SpeechSettings deck={deck} />
+            <CleanUpAll deck={deck} />
+            <DeckAudio deck={deck} />
+          </div>
+        </>
+      )}
+    </SlideBand>
   );
 }
 
@@ -156,23 +154,13 @@ function NarrationEditor(props: {
   const words = wordCount(spoken);
   return (
     <div className="flex min-w-0 max-w-3xl flex-1 flex-col gap-2 p-3">
-      <div className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
-        <span className="min-w-0 truncate">
-          Slide {index + 1} of {total} · <span className="font-mono">{slide.id}</span>
-        </span>
+      <SlideBandHeader slide={slide} index={index} total={total} preview={preview} onPreview={props.onPreview}>
         <span className="ml-auto shrink-0 tabular-nums">
           {words} {words === 1 ? "word" : "words"} ·{" "}
           <span title="Estimated at 150 words per minute">~{speakingTime(spoken)}</span>
         </span>
         <SlideTime deck={deck} />
-        <ScriptPreviewToggle preview={preview} onChange={props.onPreview} />
-        {slide.locked && (
-          <span className="flex shrink-0 items-center gap-1">
-            <Lock className="size-3" />
-            Locked
-          </span>
-        )}
-      </div>
+      </SlideBandHeader>
       <ScriptField
         label="Narration"
         draft={draft}

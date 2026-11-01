@@ -23,7 +23,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::comments::{self, Comments};
@@ -66,6 +66,21 @@ pub struct Slide {
     pub notes: String,
     /// The seconds the presenter expects to spend on it; 0 without any (see [`html::TIME_ATTR`]).
     pub time: u32,
+    /// How long the narration timeline shows it, in seconds; automatic without any (see
+    /// [`html::DURATION_ATTR`]).
+    pub duration: Option<f64>,
+    /// When its narration starts on the timeline, in seconds after the slide does (see
+    /// [`html::NARRATION_START_ATTR`]).
+    pub narration_start: Option<f64>,
+}
+
+/// What a slide's timing on the narration timeline becomes; None removes that part of it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlideTiming {
+    pub slide: String,
+    pub duration: Option<f64>,
+    pub narration_start: Option<f64>,
 }
 
 /// A named group of slides, started by a marker between slides in the deck file.
@@ -177,7 +192,7 @@ fn fallback_title(file: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn unique_dir(root: &Path, stem: &str) -> PathBuf {
+pub fn unique_dir(root: &Path, stem: &str) -> PathBuf {
     let stem = if stem.is_empty() { "untitled" } else { stem };
     std::iter::once(root.join(stem))
         .chain((2..).map(|n| root.join(format!("{stem}-{n}"))))
@@ -275,6 +290,14 @@ pub fn load(file: &Path) -> Result<Deck> {
                 .as_ref()
                 .and_then(|(_, value)| html::parse_time(value))
                 .unwrap_or(0),
+            duration: span
+                .duration
+                .as_ref()
+                .and_then(|(_, value)| html::parse_duration(value)),
+            narration_start: span
+                .narration_start
+                .as_ref()
+                .and_then(|(_, value)| html::parse_narration_start(value)),
         })
         .collect();
     let path = file.to_string_lossy().into_owned();
@@ -583,6 +606,20 @@ pub fn set_slide_time(file: &Path, slide: &str, seconds: u32) -> Result<Deck> {
         Ok((html::set_time(s, slide, seconds)?, ()))
     })?
     .0)
+}
+
+/// Sets the timing of slides on the narration timeline, all in one write: moving a slide changes
+/// its neighbours too. Locked slides keep theirs.
+pub fn set_slide_timing(file: &Path, timing: &[SlideTiming]) -> Result<RailEdit> {
+    rail_edit(file, |s| {
+        let mut out = s.to_string();
+        for t in timing {
+            ensure_unlocked(&out, &t.slide)?;
+            out = html::set_duration(&out, &t.slide, t.duration)?;
+            out = html::set_narration_start(&out, &t.slide, t.narration_start)?;
+        }
+        Ok((out, Vec::new()))
+    })
 }
 
 /// Gives every slide the canvas `size` and refreshes the player runtime to match. The slides'
@@ -1400,6 +1437,59 @@ mod tests {
         let other = "<section class=\"slide\" id=\"b\">mine</section>";
         assert!(update_slide(&deck.file(), &deck.session(), "a", other, &base).is_err());
         assert_eq!(deck.html(), EDITED);
+    }
+
+    fn timing(slide: &str, duration: Option<f64>, narration_start: Option<f64>) -> SlideTiming {
+        SlideTiming {
+            slide: slide.into(),
+            duration,
+            narration_start,
+        }
+    }
+
+    #[test]
+    fn timing_changes_many_slides_in_one_write_and_can_be_removed() {
+        let deck = TempDeck::new(EDITED);
+        let edit = set_slide_timing(
+            &deck.file(),
+            &[
+                timing("a", Some(4.5), Some(0.5)),
+                timing("b", Some(2.0), Some(-1.25)),
+            ],
+        )
+        .unwrap();
+        assert_eq!(edit.previous, EDITED);
+        assert_eq!(edit.deck.slides[0].duration, Some(4.5));
+        assert_eq!(edit.deck.slides[1].narration_start, Some(-1.25));
+
+        let edit = set_slide_timing(&deck.file(), &[timing("a", None, None)]).unwrap();
+        assert_eq!(edit.deck.slides[0].duration, None);
+        assert_eq!(edit.deck.slides[0].narration_start, None);
+        assert_eq!(edit.deck.slides[1].duration, Some(2.0));
+    }
+
+    #[test]
+    fn timing_leaves_the_deck_alone_when_a_slide_cannot_take_it() {
+        let html = EDITED.replacen("id=\"b\"", "id=\"b\" data-locked", 1);
+        let deck = TempDeck::new(&html);
+        let locked = [timing("a", Some(4.0), None), timing("b", Some(4.0), None)];
+        assert!(set_slide_timing(&deck.file(), &locked).is_err());
+        assert!(set_slide_timing(&deck.file(), &[timing("nope", Some(4.0), None)]).is_err());
+        assert!(set_slide_timing(&deck.file(), &[timing("a", Some(0.0), None)]).is_err());
+        assert_eq!(deck.html(), html);
+    }
+
+    #[test]
+    fn invalid_timing_reads_as_none() {
+        let html = EDITED.replacen(
+            "id=\"b\"",
+            "id=\"b\" data-duration=\"soon\" data-narration-start=\"later\"",
+            1,
+        );
+        let deck = TempDeck::new(&html);
+        let loaded = load(&deck.file()).unwrap();
+        assert_eq!(loaded.slides[1].duration, None);
+        assert_eq!(loaded.slides[1].narration_start, None);
     }
 
     #[test]

@@ -15,6 +15,7 @@ import {
   type RailEdit,
   type ReplacedText,
   type Slide,
+  type SlideTiming,
   type TemplateSummary,
   type WorkspaceChanged,
   type WorkspaceInfo,
@@ -386,6 +387,8 @@ interface AppState {
   openDeck: (id: string) => Promise<void>;
   /** Creates a deck at the root of the open workspace and opens it. */
   createDeck: (title: string, template?: string | null) => Promise<void>;
+  /** Makes a deck from the PowerPoint file at `path`, in the workspace, and opens it. */
+  importPptx: (path: string) => Promise<void>;
   /** Closes the open file; false when the user kept unsaved edits instead. */
   closeDeck: () => Promise<boolean>;
   setDeck: (deck: Deck) => void;
@@ -460,6 +463,8 @@ interface AppState {
   setSlideTime: (slide: string, seconds: number) => Promise<void>;
   /** Hands the composer a request to clean up the recorded narration of `slide`, or (null) of every slide. */
   cleanNarration: (slide: string | null) => void;
+  /** Saves slides' timing on the narration timeline, as one change the rail's history can undo. */
+  setSlideTiming: (timing: SlideTiming[]) => Promise<void>;
   /** Sets the voice (or language) the deck's narration is said in. */
   setNarrationVoice: (voice: string) => Promise<void>;
   setNarrationLanguage: (language: string) => Promise<void>;
@@ -706,6 +711,20 @@ export const useApp = create<AppState>((set, get) => ({
       rememberFile(path);
       set({ openedFile: { path, absolute: deck.id, kind: "deck" } });
       await loadDeckState(deck);
+    } catch (error) {
+      set({ error: errorMessage(error) });
+    }
+  },
+
+  importPptx: async (path) => {
+    if (!(await get().closeDeck())) return;
+    try {
+      const { deck, skipped } = await api.importPptx(path);
+      const relative = relativePath(get().workspace, deck.id) ?? basename(deck.id);
+      rememberFile(relative);
+      set({ openedFile: { path: relative, absolute: deck.id, kind: "deck" } });
+      await loadDeckState(deck);
+      if (skipped.length > 0) set({ error: `Imported, with these changes: ${skipped.join("; ")}.` });
     } catch (error) {
       set({ error: errorMessage(error) });
     }
@@ -1082,6 +1101,10 @@ export const useApp = create<AppState>((set, get) => ({
   setSlideTime: (slide, seconds) => editDeck((id) => api.setSlideTime(id, slide, seconds)),
 
   cleanNarration: (slide) => promptAgent(cleanNarrationPrompt(slide)),
+
+  setSlideTiming: async (timing) => {
+    if (timing.length > 0) await editRail((id) => api.setSlideTiming(id, timing));
+  },
 
   setNarrationVoice: (voice) => editDeck((id) => api.setNarrationVoice(id, voice)),
 

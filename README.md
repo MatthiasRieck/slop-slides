@@ -90,6 +90,15 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   mode (for one slide or all of them) puts a request in the chat for the agent to turn it into clean, fluent
   sentences. Text needs the Whisper model, and nothing is kept for locked slides. The
   microphone does one thing at a time: teleprompter, text or audio.
+- **PowerPoint:** **Import PowerPoint…** turns a `.pptx` into a new deck: slides, layouts and
+  themes, text, images, shapes, tables, speaker notes, sections and hidden slides. The deck is
+  HTML from then on; the file itself is left as it is and never written back. Animations are
+  dropped, charts arrive as tables of their data, and EMF/WMF images are left out (the import
+  says what it changed). The **PowerPoint** export writes a new `.pptx` of native, editable
+  shapes and text, with notes and sections. Transparency, linear gradients and shadows stay
+  PowerPoint's own effects; backdrop blur is dropped; whatever PowerPoint cannot draw (SVG,
+  filters, masks, 3D) becomes a transparent picture. Web fonts are not embedded, so install them
+  where the file is opened.
 - **Export:** saves the deck as **one self-contained HTML file** (attached images embedded)
   that plays in any browser: arrows/space/click to navigate, `F` for full screen, `#slide-id`
   links, print to PDF. The same menu saves a **PDF** or **PNG images** (one per slide, in a
@@ -104,7 +113,8 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   animations follow the video's clock, so every frame is exact however long capturing it takes.
   With **Speak narration**, each slide's narration is said over it (an Opus audio track) after
   a short pause, and the slide stays until the narration and a pause after it end; the set
-  seconds become the least a slide is shown.
+  seconds become the least a slide is shown. Slides timed on the narration timeline keep to
+  that instead.
 - **Marks and comments:** the View mode's second row has a pen, a highlighter and an eraser for
   marking up the slide, and the comment tool: click an element (or the slide) and write what
   should change. Comments show as numbered pins that follow their element; click a pin to change
@@ -120,7 +130,11 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   `narration/<slide id>.wav` next to the deck; a slide whose narration, voice or language
   changed is spoken again, the rest never. When presenting, the play button between the
   arrows runs the show by itself, speaking each slide's narration with the video export's
-  timing. Speaking needs macOS or Linux (with OpenBLAS); Windows builds can write narration
+  timing. The timeline under the slide shows the slides above the audio: drag a slide, or the
+  edge between two, across the audio to change when it shows. The audio stays where it is, so
+  narration can run over into the next slide, with the slide changing mid-sentence; video
+  exports and the self-running show follow it, and the slide keeps its timing in the deck
+  (`data-duration`, `data-narration-start`). Speaking needs macOS or Linux (with OpenBLAS); Windows builds can write narration
   but not speak it yet.
 
 Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.

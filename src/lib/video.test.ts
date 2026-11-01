@@ -11,7 +11,6 @@ import {
   secondsProblem,
   slideFrames,
   type VideoOptions,
-  videoLength,
 } from "./video";
 
 const options = (overrides: Partial<VideoOptions> = {}): VideoOptions => ({ ...DEFAULT_VIDEO_OPTIONS, ...overrides });
@@ -57,22 +56,6 @@ describe("slideFrames", () => {
     expect(slideFrames(o, 10.01)).toBe(346);
     // Without narration, its length does not count.
     expect(slideFrames({ ...o, narration: false }, 10)).toBe(150);
-  });
-});
-
-describe("videoLength", () => {
-  it("is the slides' time as minutes and seconds", () => {
-    const silent = (n: number) => Array<null>(n).fill(null);
-    expect(videoLength(silent(8), options({ secondsPerSlide: 5, fps: 30 }))).toBe("0:40");
-    expect(videoLength(silent(13), options({ secondsPerSlide: 5, fps: 30 }))).toBe("1:05");
-    expect(videoLength(silent(1), options({ secondsPerSlide: 600, fps: 60 }))).toBe("10:00");
-    expect(videoLength(silent(3), options({ secondsPerSlide: 0.5, fps: 24 }))).toBe("0:02");
-  });
-
-  it("counts the time narrated slides stay longer", () => {
-    const o = options({ secondsPerSlide: 5, fps: 30, pauseBefore: 0.5, pauseAfter: 1 });
-    expect(videoLength([null, 58.5, 1], o)).toBe("1:10");
-    expect(videoLength([null, 58.5, 1], { ...o, narration: false })).toBe("0:15");
   });
 });
 

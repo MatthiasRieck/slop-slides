@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { Folder, FolderOpen, Library, Plus, X } from "lucide-react";
+import { FileUp, Folder, FolderOpen, Library, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api, errorMessage, type RecentWorkspace } from "../lib/api";
@@ -11,6 +11,17 @@ import { TemplateSelect } from "./Templates";
 export async function chooseWorkspace() {
   const path = await open({ directory: true, title: "Open a folder" });
   if (path && !Array.isArray(path)) await useApp.getState().openWorkspace(path);
+}
+
+/** Asks for a PowerPoint file and imports it as a new deck; `beforeImport` gets a workspace open. */
+export async function choosePptx(beforeImport?: () => Promise<boolean>) {
+  const path = await open({
+    title: "Import PowerPoint",
+    filters: [{ name: "PowerPoint presentation", extensions: ["pptx", "pptm", "potx"] }],
+  });
+  if (!path || Array.isArray(path)) return;
+  if (beforeImport && !(await beforeImport())) return;
+  await useApp.getState().importPptx(path);
 }
 
 /** The start screen: open a folder (or one opened before), or start a deck in the library. */
@@ -159,7 +170,17 @@ export function NewDeckForm(props: { heading: string; hint?: string; beforeCreat
           New deck
         </button>
       </div>
-      {props.hint && <p className="text-xs text-muted-foreground">{props.hint}</p>}
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs text-muted-foreground">{props.hint}</p>
+        <button
+          type="button"
+          onClick={() => void choosePptx(props.beforeCreate)}
+          className="flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-accent"
+        >
+          <FileUp className="size-3.5" />
+          Import PowerPoint…
+        </button>
+      </div>
     </form>
   );
 }

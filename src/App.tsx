@@ -6,6 +6,7 @@ import { CodeView } from "./components/CodeView";
 import { DeckToolbar } from "./components/DeckToolbar";
 import { FileViewer } from "./components/FileViewer";
 import { Home } from "./components/Home";
+import { NarrationTimeline } from "./components/NarrationTimeline";
 import { Presenter } from "./components/Presenter";
 import { Sidebar } from "./components/Sidebar";
 import { SlideImageExport } from "./components/SlideImageExport";
@@ -14,7 +15,7 @@ import { Stage } from "./components/Stage";
 import { TopBar } from "./components/TopBar";
 import { api, errorMessage } from "./lib/api";
 import { isMac } from "./lib/utils";
-import { useApp } from "./store";
+import { deckMode, useApp } from "./store";
 
 export function App() {
   const workspace = useApp((s) => s.workspace);
@@ -52,6 +53,7 @@ export function useNewWindowKey() {
 function Workbench() {
   const hasDeck = useApp((s) => s.deck !== null);
   const view = useApp((s) => s.view);
+  const narrating = useApp((s) => deckMode(s) === "narration");
   const sidebarOpen = useApp((s) => s.sidebarOpen);
   const railOpen = useApp((s) => s.railOpen);
   // Re-lint whenever the deck file changes on disk (agent, HTML view, slide operations).
@@ -90,6 +92,7 @@ function Workbench() {
                 <CodeView active={view === "code"} />
                 {view === "slides" && <Stage />}
               </div>
+              {narrating && <NarrationTimeline />}
             </div>
           ) : (
             <FileViewer />

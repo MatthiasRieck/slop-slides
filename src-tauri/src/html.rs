@@ -41,6 +41,10 @@ pub struct SlideSpan {
     pub locked: Option<Range<usize>>,
     /// Byte range of the whole `data-time` attribute, and its value, when the slide has one.
     pub time: Option<(Range<usize>, String)>,
+    /// The same for the `data-duration` attribute.
+    pub duration: Option<(Range<usize>, String)>,
+    /// The same for the `data-narration-start` attribute.
+    pub narration_start: Option<(Range<usize>, String)>,
 }
 
 /// Marks a slide the player skips. The editor still shows it, muted.
@@ -53,6 +57,19 @@ pub const LOCKED_ATTR: &str = "data-locked";
 /// How long the presenter expects to spend on a slide, in whole seconds. The presenter view
 /// counts it against the time on the slide.
 pub const TIME_ATTR: &str = "data-time";
+
+/// How long the narration timeline shows a slide, in seconds: a video export and the show
+/// playing by itself keep to it instead of working it out from the slide's narration.
+pub const DURATION_ATTR: &str = "data-duration";
+
+/// When the slide's narration starts on the timeline, in seconds after the slide starts; before
+/// it, when negative. Moving a slide across the audio leaves the audio where it was, so it can
+/// run into the slides around its own.
+pub const NARRATION_START_ATTR: &str = "data-narration-start";
+
+/// The shortest and longest `data-duration`, in seconds.
+pub const MIN_DURATION: f64 = 0.5;
+pub const MAX_DURATION: f64 = 3600.0;
 
 /// Marks an element the user moved, rotated or scaled by hand in the editor; it carries inline
 /// `translate` / `rotate` / `scale` styles until the agent tidies the slide's layout.
@@ -171,6 +188,12 @@ pub fn find_slides(html: &str) -> Vec<SlideSpan> {
                         .find(|(n, _, _, _)| n == attr)
                         .map(|(_, _, _, r)| r.clone())
                 };
+                let valued = |attr: &str| {
+                    tag.attrs
+                        .iter()
+                        .find(|(n, _, _, _)| n == attr)
+                        .map(|(_, v, _, r)| (r.clone(), v.clone()))
+                };
                 open = Some((
                     SlideSpan {
                         range: i..i,
@@ -179,11 +202,9 @@ pub fn find_slides(html: &str) -> Vec<SlideSpan> {
                         tag_name_end: tag.name_end,
                         hidden: flag(HIDDEN_ATTR),
                         locked: flag(LOCKED_ATTR),
-                        time: tag
-                            .attrs
-                            .iter()
-                            .find(|(n, _, _, _)| n == TIME_ATTR)
-                            .map(|(_, v, _, r)| (r.clone(), v.clone())),
+                        time: valued(TIME_ATTR),
+                        duration: valued(DURATION_ATTR),
+                        narration_start: valued(NARRATION_START_ATTR),
                     },
                     0,
                 ));
@@ -616,19 +637,70 @@ pub fn parse_time(value: &str) -> Option<u32> {
 
 /// Sets the slide's `data-time` to `seconds`; 0 removes it.
 pub fn set_time(html: &str, id: &str, seconds: u32) -> Result<String, String> {
+    let value = (seconds > 0).then(|| seconds.to_string());
+    set_value(html, id, TIME_ATTR, value, |s| &s.time)
+}
+
+/// The seconds a `data-duration` value stands for: [`MIN_DURATION`] to [`MAX_DURATION`].
+pub fn parse_duration(value: &str) -> Option<f64> {
+    let seconds: f64 = value.trim().parse().ok()?;
+    (MIN_DURATION..=MAX_DURATION)
+        .contains(&seconds)
+        .then_some(seconds)
+}
+
+/// The seconds a `data-narration-start` value stands for: up to [`MAX_DURATION`] either way.
+pub fn parse_narration_start(value: &str) -> Option<f64> {
+    let seconds: f64 = value.trim().parse().ok()?;
+    (-MAX_DURATION..=MAX_DURATION)
+        .contains(&seconds)
+        .then_some(seconds)
+}
+
+/// Sets the slide's `data-duration` to `seconds`; None removes it.
+pub fn set_duration(html: &str, id: &str, seconds: Option<f64>) -> Result<String, String> {
+    let value = seconds.map(|s| s.to_string());
+    if let Some(value) = value.as_deref().filter(|v| parse_duration(v).is_none()) {
+        return Err(format!("A slide cannot be shown for {value} seconds."));
+    }
+    set_value(html, id, DURATION_ATTR, value, |s| &s.duration)
+}
+
+/// Sets the slide's `data-narration-start` to `seconds`; None removes it.
+pub fn set_narration_start(html: &str, id: &str, seconds: Option<f64>) -> Result<String, String> {
+    let value = seconds.map(|s| s.to_string());
+    if let Some(value) = value
+        .as_deref()
+        .filter(|v| parse_narration_start(v).is_none())
+    {
+        return Err(format!("Narration cannot start at {value} seconds."));
+    }
+    set_value(html, id, NARRATION_START_ATTR, value, |s| {
+        &s.narration_start
+    })
+}
+
+/// Sets the slide's attribute `name`, which `current` finds on it, to `value`; None removes it.
+fn set_value(
+    html: &str,
+    id: &str,
+    name: &str,
+    value: Option<String>,
+    current: impl Fn(&SlideSpan) -> &Option<(Range<usize>, String)>,
+) -> Result<String, String> {
     let slides = find_slides(html);
     let span = span_of(&slides, id).ok_or_else(|| format!("Slide not found: {id}"))?;
-    let attr = format!("{TIME_ATTR}=\"{seconds}\"");
-    Ok(match (&span.time, seconds) {
-        (Some((range, _)), 0) => {
+    let attr = value.map(|value| format!("{name}=\"{value}\""));
+    Ok(match (current(span), attr) {
+        (Some((range, _)), None) => {
             let start = html[..range.start].trim_end().len();
             format!("{}{}", &html[..start], &html[range.end..])
         }
-        (Some((range, _)), _) => {
+        (Some((range, _)), Some(attr)) => {
             format!("{}{attr}{}", &html[..range.start], &html[range.end..])
         }
-        (None, 0) => html.to_string(),
-        (None, _) => format!(
+        (None, None) => html.to_string(),
+        (None, Some(attr)) => format!(
             "{} {attr}{}",
             &html[..span.tag_name_end],
             &html[span.tag_name_end..]
@@ -2675,6 +2747,41 @@ mod tests {
             out.len(),
             "same shape again"
         );
+    }
+
+    #[test]
+    fn sets_changes_and_removes_a_slides_timing() {
+        let html = "<section class=\"slide\" id=\"a\"><p>A</p></section>";
+        let timed = set_duration(html, "a", Some(12.5)).unwrap();
+        let timed = set_narration_start(&timed, "a", Some(-0.75)).unwrap();
+        let span = &find_slides(&timed)[0];
+        assert_eq!(span.duration.as_ref().unwrap().1, "12.5");
+        assert_eq!(span.narration_start.as_ref().unwrap().1, "-0.75");
+
+        let changed = set_duration(&timed, "a", Some(3.0)).unwrap();
+        assert_eq!(find_slides(&changed)[0].duration.as_ref().unwrap().1, "3");
+        let cleared = set_duration(&changed, "a", None).unwrap();
+        assert_eq!(set_narration_start(&cleared, "a", None).unwrap(), html);
+        assert_eq!(set_duration(html, "a", None).unwrap(), html);
+
+        assert!(set_duration(html, "a", Some(0.1)).is_err());
+        assert!(set_duration(html, "a", Some(f64::NAN)).is_err());
+        assert!(set_narration_start(html, "a", Some(f64::INFINITY)).is_err());
+        assert!(set_duration(html, "missing", Some(5.0)).is_err());
+    }
+
+    #[test]
+    fn timing_values_must_be_in_range() {
+        assert_eq!(parse_duration(" 2.5 "), Some(2.5));
+        assert_eq!(parse_duration("0.5"), Some(0.5));
+        for bad in ["0.4", "-1", "soon", "", "NaN", "inf", "3601"] {
+            assert_eq!(parse_duration(bad), None, "{bad}");
+        }
+        assert_eq!(parse_narration_start("-1.5"), Some(-1.5));
+        assert_eq!(parse_narration_start("0"), Some(0.0));
+        for bad in ["soon", "", "NaN", "3601", "-3601"] {
+            assert_eq!(parse_narration_start(bad), None, "{bad}");
+        }
     }
 
     #[test]

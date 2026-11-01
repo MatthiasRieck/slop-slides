@@ -16,6 +16,7 @@ mod mp4;
 mod narration;
 mod pdf;
 mod permissions;
+mod pptx;
 mod protocol;
 mod providers;
 mod review;
@@ -214,6 +215,16 @@ fn create_deck(window: Window, title: String, template: Option<String>) -> Resul
     deck::create(&workspace_root(&window)?, &title, template)
 }
 
+/// Converts the PowerPoint file at `path` into a new deck in the open workspace.
+#[tauri::command]
+async fn import_pptx(window: Window, path: String) -> Result<pptx::Imported> {
+    let root = workspace_root(&window)?;
+    // Not on the main thread: a big file takes a moment, and the window must stay alive.
+    tauri::async_runtime::spawn_blocking(move || pptx::import(Path::new(&path), &root))
+        .await
+        .map_err(|e| error::Error::msg(format!("the import failed: {e}")))?
+}
+
 #[tauri::command]
 fn list_templates() -> Result<Vec<templates::TemplateSummary>> {
     Ok(templates::list(&templates::user_root()?))
@@ -331,6 +342,12 @@ fn set_slide_notes(id: String, slide: String, text: String) -> Result<Deck> {
 #[tauri::command]
 fn set_slide_time(id: String, slide: String, seconds: u32) -> Result<Deck> {
     deck::set_slide_time(&deck::deck_file(&id)?, &slide, seconds)
+}
+
+/// Sets the timing of slides on the narration timeline, all in one write.
+#[tauri::command]
+fn set_slide_timing(id: String, timing: Vec<deck::SlideTiming>) -> Result<RailEdit> {
+    deck::set_slide_timing(&deck::deck_file(&id)?, &timing)
 }
 
 /// Gives every slide of the deck the canvas `size`.
@@ -578,9 +595,15 @@ async fn export_pdf(app: AppHandle, id: String, dest: String) -> Result<()> {
     pdf::export(&app, &deck::deck_file(&id)?, Path::new(&dest)).await
 }
 
+/// Writes the deck to `dest` as a PowerPoint file, one slide per shown slide.
+#[tauri::command]
+async fn export_pptx(app: AppHandle, id: String, dest: String) -> Result<()> {
+    pptx::export(&app, &deck::deck_file(&id)?, Path::new(&dest)).await
+}
+
 /// Records the deck to `dest` as an MP4, each shown slide on screen for the same time (or,
-/// speaking its narration, until that ends), with `video-export-progress` events to `window`
-/// as it goes.
+/// speaking its narration, as long as the narration timeline says), with
+/// `video-export-progress` events to `window` as it goes.
 #[tauri::command]
 async fn export_video(
     app: AppHandle,
@@ -895,6 +918,14 @@ fn narration_wav(id: String, slide: String) -> Result<tauri::ipc::Response> {
     Ok(tauri::ipc::Response::new(std::fs::read(file)?))
 }
 
+/// How loud a slide's narration audio is along its length, for drawing its waveform.
+#[tauri::command]
+async fn narration_peaks(id: String, slide: String) -> Result<Vec<f32>> {
+    let file = narration::audio_file(&deck::deck_file(&id)?, &slide);
+    let (samples, rate) = narration::audio::read_wav(&file)?;
+    Ok(narration::audio::peaks(&samples, rate))
+}
+
 #[tauri::command]
 fn set_narration_voice(id: String, voice: String) -> Result<Deck> {
     deck::set_narration_voice(&deck::deck_file(&id)?, &voice)
@@ -989,6 +1020,7 @@ pub fn run() {
             set_slide_narration,
             set_slide_notes,
             set_slide_time,
+            set_slide_timing,
             set_slide_size,
             add_section,
             rename_section,
@@ -1011,6 +1043,8 @@ pub fn run() {
             create_image_export_dir,
             export_slide_image,
             export_pdf,
+            export_pptx,
+            import_pptx,
             export_video,
             cancel_video_export,
             load_chat,
@@ -1046,6 +1080,7 @@ pub fn run() {
             render_narration,
             cancel_narration,
             narration_wav,
+            narration_peaks,
             set_narration_voice,
             set_narration_language,
         ])

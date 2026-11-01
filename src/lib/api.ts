@@ -17,6 +17,12 @@ export interface WorkspaceEntry {
   kind: FileKind;
 }
 
+/** A deck made from a PowerPoint file, and what could not come along. */
+export interface ImportedPptx {
+  deck: Deck;
+  skipped: string[];
+}
+
 /** A workspace file the user opened, with the viewer it needs. */
 export interface OpenedFile {
   /** Workspace-relative, `/`-separated. */
@@ -54,6 +60,17 @@ export interface Slide {
   notes?: string;
   /** The seconds the presenter expects to spend on it (its `data-time`); 0 or missing without any. */
   time?: number;
+  /** How long the narration timeline shows it, in seconds (its `data-duration`); automatic without any. */
+  duration?: number | null;
+  /** When its narration starts, in seconds after the slide does (its `data-narration-start`); earlier when negative. */
+  narrationStart?: number | null;
+}
+
+/** What a slide's timing on the narration timeline becomes; null removes that part of it. */
+export interface SlideTiming {
+  slide: string;
+  duration: number | null;
+  narrationStart: number | null;
 }
 
 /** What a change from the slide rail did; saving `previous` back over `source` undoes it. */
@@ -332,6 +349,8 @@ export const api = {
   listDir: (path: string) => invoke<WorkspaceEntry[]>("list_dir", { path }),
   /** A file of the open workspace, with the viewer it opens in. */
   openFile: (path: string) => invoke<OpenedFile>("open_file", { path }),
+  /** Converts a PowerPoint file into a new deck in the workspace; the file itself stays as it is. */
+  importPptx: (path: string) => invoke<ImportedPptx>("import_pptx", { path }),
   /** Creates `<workspace>/<title>/deck.html`; with a template, it takes its styles (and names it). */
   createDeck: (title: string, template: string | null = null) => invoke<Deck>("create_deck", { title, template }),
   openDeck: (id: string) => invoke<Deck>("open_deck", { id }),
@@ -354,6 +373,8 @@ export const api = {
   /** Sets what is said over the slide; empty `text` removes its narration. */
   /** Sets the seconds expected on a slide; 0 removes them. */
   setSlideTime: (id: string, slide: string, seconds: number) => invoke<Deck>("set_slide_time", { id, slide, seconds }),
+  /** Sets the timing of slides on the narration timeline, all in one write. */
+  setSlideTiming: (id: string, timing: SlideTiming[]) => invoke<RailEdit>("set_slide_timing", { id, timing }),
   setSlideNarration: (id: string, slide: string, text: string) =>
     invoke<Deck>("set_slide_narration", { id, slide, text }),
   /** Sets the slide's speaker notes; empty `text` removes them. */
@@ -396,6 +417,8 @@ export const api = {
   exportDeck: (id: string, dest: string) => invoke<void>("export_deck", { id, dest }),
   /** Prints the deck to `dest` as a PDF: one page per shown slide, with selectable text. */
   exportPdf: (id: string, dest: string) => invoke<void>("export_pdf", { id, dest }),
+  /** Writes the deck to `dest` as a PowerPoint file: one editable slide per shown slide. */
+  exportPptx: (id: string, dest: string) => invoke<void>("export_pptx", { id, dest }),
   /**
    * Records the deck to `dest` as an MP4, each shown slide on screen for the same time (longer
    * to fit its narration, with `options.narration`); `video-export-progress` events follow it.
@@ -512,6 +535,8 @@ export const api = {
   cancelNarration: () => invoke<void>("cancel_narration"),
   /** A slide's narration audio, as WAV bytes. */
   narrationWav: (id: string, slide: string) => invoke<ArrayBuffer>("narration_wav", { id, slide }),
+  /** How loud a slide's narration audio is along its length, 0 to 1, for drawing its waveform. */
+  narrationPeaks: (id: string, slide: string) => invoke<number[]>("narration_peaks", { id, slide }),
   setNarrationVoice: (id: string, voice: string) => invoke<Deck>("set_narration_voice", { id, voice }),
   setNarrationLanguage: (id: string, language: string) => invoke<Deck>("set_narration_language", { id, language }),
 };

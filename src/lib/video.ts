@@ -70,18 +70,6 @@ export function slideFrames(options: VideoOptions, narration: number | null): nu
   return Math.max(least, Math.ceil((options.pauseBefore + narration + options.pauseAfter) * options.fps));
 }
 
-/**
- * The video's length, as "1:05", for slides whose narration lasts `narrations` seconds each
- * (null for a slide without).
- */
-export function videoLength(narrations: (number | null)[], options: VideoOptions): string {
-  const frames = narrations.reduce<number>((sum, seconds) => sum + slideFrames(options, seconds), 0);
-  const total = Math.round(frames / options.fps);
-  const minutes = Math.floor(total / 60);
-  const rest = String(total % 60).padStart(2, "0");
-  return `${minutes}:${rest}`;
-}
-
 /** The options last used, or the defaults. */
 export function loadVideoOptions(): VideoOptions {
   try {

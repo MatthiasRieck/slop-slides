@@ -19,6 +19,8 @@ const PARAGRAPH_PAUSE: f32 = 0.7;
 const SILENCE: f32 = 0.01;
 /// Silence kept at each end of a trimmed piece, in seconds, so words do not start abruptly.
 const KEEP: f32 = 0.05;
+/// How finely the timeline draws a waveform.
+const PEAKS_PER_SECOND: u32 = 25;
 
 /// A piece of a script, said in one go, and whether a new paragraph starts with it.
 #[derive(Debug, Clone, PartialEq)]
@@ -155,6 +157,20 @@ pub fn write_wav(path: &Path, samples: &[f32], rate: u32) -> Result<()> {
     Ok(())
 }
 
+/// How loud `samples` (at `rate`) are along their length: the loudest in each of
+/// [`PEAKS_PER_SECOND`] slices of a second, 0 to 1.
+pub fn peaks(samples: &[f32], rate: u32) -> Vec<f32> {
+    samples
+        .chunks((rate / PEAKS_PER_SECOND).max(1) as usize)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .fold(0.0_f32, |peak, s| peak.max(s.abs()))
+                .min(1.0)
+        })
+        .collect()
+}
+
 /// A mono 16-bit PCM WAV file, as [`write_wav`] writes it: its samples and their rate.
 pub fn read_wav(path: &Path) -> Result<(Vec<f32>, u32)> {
     let mut bytes = Vec::new();
@@ -201,6 +217,18 @@ fn parse_wav(bytes: &[u8]) -> Option<(Vec<f32>, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peaks_are_the_loudest_sample_of_each_slice() {
+        let slice = (RATE / PEAKS_PER_SECOND) as usize;
+        let mut samples = vec![0.0; slice * 2 + 1];
+        samples[3] = -0.5;
+        samples[slice + 1] = 0.25;
+        samples[slice * 2] = 1.5;
+        assert_eq!(peaks(&samples, RATE), [0.5, 0.25, 1.0]);
+        assert!(peaks(&[], RATE).is_empty());
+        assert_eq!(peaks(&[0.5], 1), [0.5]);
+    }
 
     fn texts(script: &str) -> Vec<(String, bool)> {
         pieces(script)

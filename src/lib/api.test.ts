@@ -121,6 +121,13 @@ const CASES = [
   ["copySlide", () => api.copySlide("talk", "a"), "copy_slide", { id: "talk", slide: "a" }],
   ["pasteSlide", () => api.pasteSlide("talk", "a"), "paste_slide", { id: "talk", after: "a" }],
   ["setSlideTime", () => api.setSlideTime("talk", "a", 90), "set_slide_time", { id: "talk", slide: "a", seconds: 90 }],
+  [
+    "setSlideTiming",
+    () => api.setSlideTiming("talk", [{ slide: "a", duration: 4, narrationStart: null }]),
+    "set_slide_timing",
+    { id: "talk", timing: [{ slide: "a", duration: 4, narrationStart: null }] },
+  ],
+  ["narrationPeaks", () => api.narrationPeaks("talk", "a"), "narration_peaks", { id: "talk", slide: "a" }],
   ["newWindow", () => api.newWindow(), "new_window", undefined],
   ["listScreens", () => api.listScreens(), "list_screens", undefined],
   ["screenPreviews", () => api.screenPreviews(() => {}), "screen_previews", { grabbed: expect.anything() }],
@@ -145,6 +152,8 @@ const CASES = [
   ],
   ["exportDeck", () => api.exportDeck("talk", "/out.html"), "export_deck", { id: "talk", dest: "/out.html" }],
   ["exportPdf", () => api.exportPdf("talk", "/out.pdf"), "export_pdf", { id: "talk", dest: "/out.pdf" }],
+  ["exportPptx", () => api.exportPptx("talk", "/out.pptx"), "export_pptx", { id: "talk", dest: "/out.pptx" }],
+  ["importPptx", () => api.importPptx("/in.pptx"), "import_pptx", { path: "/in.pptx" }],
   [
     "exportVideo",
     () => api.exportVideo("talk", "/out.mp4", { ...DEFAULT_VIDEO_OPTIONS }),

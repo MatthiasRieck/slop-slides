@@ -305,6 +305,34 @@ export interface VoiceDownloadProgress {
 }
 
 /** An attached screen (see src-tauri/src/screens.rs). */
+/** How a slide differs from the last commit (see src-tauri/src/git.rs). */
+export type SlideStatus = "added" | "removed" | "modified" | "moved" | "unchanged";
+
+export interface SlideChange {
+  /** Tells the rows of the list apart. */
+  key: string;
+  status: SlideStatus;
+  /** The slide's id in the deck; null for a removed slide. */
+  id: string | null;
+  /** The slide's id at the commit; null for an added slide. */
+  oldId: string | null;
+  /** What changed that the slide's picture may not show, such as its speaker notes. */
+  details: string[];
+}
+
+/** The deck compared with the last commit. */
+export interface DeckChanges {
+  tracking: "noRepository" | "notCommitted" | "committed";
+  /** The commit compared with; `hash` reloads what is shown from it when it changes. */
+  commit: { hash: string; subject: string } | null;
+  /** Something every slide shares changed, so any of them may look different. */
+  stylesChanged: boolean;
+  /** Every slide's canvas at the commit. */
+  oldSize: SizeInfo | null;
+  /** The deck's slides in order, with the removed ones where they used to be. */
+  slides: SlideChange[];
+}
+
 export interface Screen {
   /** Position in the list, which `presentOn` takes. */
   index: number;
@@ -440,6 +468,8 @@ export const api = {
     viewport: { width: number; height: number },
     width: number,
   ) => invoke<string>("export_slide_image", { dir, index, total, rect, viewport, width }),
+  /** How the deck differs from the last commit. */
+  deckChanges: (id: string) => invoke<DeckChanges>("deck_changes", { id }),
   lintDeck: (id: string) => invoke<LintIssue[]>("lint_deck", { id }),
   /**
    * Screenshots `rect` of the window; returns an absolute session image path. Both are in CSS

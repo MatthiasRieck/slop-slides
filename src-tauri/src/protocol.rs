@@ -5,7 +5,10 @@
 //! workspaces the windows have open are refused. Templates (see [`templates`]) are served as
 //! `slop://localhost/.template/<template-id>/<path>`, for the layout and style previews, and
 //! files in a deck's session (sketches the chat shows) by their absolute path, as
-//! `slop://localhost/.session/<absolute path>`.
+//! `slop://localhost/.session/<absolute path>`. A workspace file as of the last commit comes by
+//! its absolute path too, as `slop://localhost/.head/<absolute path>`, so a slide's assets are
+//! the committed ones as well (see [`git`]); one the commit does not have, like an ignored file,
+//! comes from the workspace.
 //!
 //! With `?pan` in the query, a deck is served with the pasteboard (`assets/pasteboard.js`)
 //! added, so the stage can pan and zoom around the slide. With `?edit`, it also gets the slide
@@ -23,6 +26,7 @@ use tauri::http::{header, Request, Response, StatusCode};
 use tauri::{AppHandle, Manager};
 
 use crate::deck;
+use crate::git;
 use crate::html;
 use crate::sessions::Sessions;
 use crate::templates;
@@ -34,6 +38,8 @@ const FILE_PREFIX: &str = ".file";
 const TEMPLATE_PREFIX: &str = ".template";
 /// First path segment of session files, followed by their absolute path.
 const SESSION_PREFIX: &str = ".session";
+/// First path segment of files as of the last commit, followed by their absolute path.
+const HEAD_PREFIX: &str = ".head";
 
 /// What `encodeURIComponent` leaves alone, as the frontend builds the same URLs.
 const URI_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
@@ -94,6 +100,9 @@ fn serve(app: &AppHandle, raw_path: &str) -> Result<(&'static str, Vec<u8>), Sta
     if prefix == SESSION_PREFIX {
         let home = deck::app_home().map_err(|_| StatusCode::NOT_FOUND)?;
         return read_in_session(&Sessions::new(&home), &rel);
+    }
+    if prefix == HEAD_PREFIX {
+        return read_at_head(&app.state::<OpenWorkspace>(), &rel);
     }
     Err(StatusCode::NOT_FOUND)
 }
@@ -201,6 +210,23 @@ fn read_in_session(sessions: &Sessions, path: &str) -> Result<(&'static str, Vec
     }
     let bytes = std::fs::read(&file).map_err(|_| StatusCode::NOT_FOUND)?;
     Ok((deck::mime_for(path), bytes))
+}
+
+/// A file of the open workspace as of the last commit, by its absolute path without the leading
+/// `/`. It may be gone from the disk, so its closest remaining folder must be inside instead.
+fn read_at_head(
+    workspace: &OpenWorkspace,
+    path: &str,
+) -> Result<(&'static str, Vec<u8>), StatusCode> {
+    let file = absolute(path);
+    let inside = git::existing_folder(&file).is_some_and(|dir| workspace.contains(dir));
+    if !git::is_plain_path(&file) || !inside {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    match git::read_at_head(&file) {
+        Some(bytes) => Ok((deck::mime_for(path), bytes)),
+        None => read_in_workspace(workspace, path),
+    }
 }
 
 #[cfg(test)]
@@ -371,6 +397,69 @@ mod tests {
         assert_eq!(
             read(ws.join("talk/../../secret.txt")),
             Err(StatusCode::FORBIDDEN)
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn serves_committed_files_inside_the_open_workspace_only() {
+        let root = std::env::temp_dir().join(format!("slopslide-proto-{}", uuid::Uuid::new_v4()));
+        let ws = root.join("ws");
+        std::fs::create_dir_all(ws.join("assets")).unwrap();
+        std::fs::write(ws.join("deck.html"), "old").unwrap();
+        std::fs::write(ws.join("assets/gone.png"), "image").unwrap();
+        std::fs::write(root.join("secret.txt"), "secret").unwrap();
+        // The repository takes in more than the workspace: its commit has a file next to it.
+        for args in [
+            &["init", "-q"][..],
+            &["add", "-A"],
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@x.y",
+                "commit",
+                "-qm",
+                "1",
+            ],
+        ] {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .output()
+                .unwrap()
+                .status;
+            assert!(status.success());
+        }
+        std::fs::write(ws.join("deck.html"), "new").unwrap();
+        std::fs::write(ws.join("ignored.png"), "here only").unwrap();
+        std::fs::remove_dir_all(ws.join("assets")).unwrap();
+        let open = OpenWorkspace::default();
+        let read = |path: PathBuf| read_at_head(&open, &url_path(&path));
+
+        assert_eq!(read(ws.join("deck.html")), Err(StatusCode::FORBIDDEN));
+        open.set("main", Some(ws.clone()));
+        assert_eq!(
+            read(ws.join("deck.html")),
+            Ok(("text/html; charset=utf-8", b"old".to_vec()))
+        );
+        assert_eq!(
+            read(ws.join("assets/gone.png")),
+            Ok(("image/png", b"image".to_vec())),
+            "a file deleted since the commit still shows"
+        );
+        assert_eq!(
+            read(ws.join("ignored.png")),
+            Ok(("image/png", b"here only".to_vec())),
+            "what the commit does not have comes from the workspace"
+        );
+        assert_eq!(read(ws.join("missing.png")), Err(StatusCode::FORBIDDEN));
+        assert_eq!(read(root.join("secret.txt")), Err(StatusCode::FORBIDDEN));
+        assert_eq!(
+            read(ws.join("../secret.txt")),
+            Err(StatusCode::FORBIDDEN),
+            "the commit has it, but it is outside the workspace"
         );
 
         let _ = std::fs::remove_dir_all(&root);

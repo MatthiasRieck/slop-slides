@@ -9,6 +9,7 @@ mod env;
 mod error;
 mod extensions;
 mod find;
+mod git;
 mod html;
 mod lint;
 mod mcp;
@@ -542,6 +543,12 @@ fn export_deck(id: String, dest: String) -> Result<()> {
     deck::export(&deck::deck_file(&id)?, std::path::Path::new(&dest))
 }
 
+/// What changed in the deck since the last commit. Off the main thread: it runs git.
+#[tauri::command(async)]
+fn deck_changes(id: String) -> Result<git::DeckChanges> {
+    git::changes(&deck::deck_file(&id)?)
+}
+
 #[tauri::command]
 fn lint_deck(window: Window, id: String) -> Result<Vec<lint::Issue>> {
     let file = deck::deck_file(&id)?;
@@ -1039,6 +1046,7 @@ pub fn run() {
             find_in_deck,
             replace_in_deck,
             export_deck,
+            deck_changes,
             lint_deck,
             capture_sketch,
             create_image_export_dir,

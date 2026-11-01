@@ -161,6 +161,7 @@ const CASES = [
     { id: "talk", dest: "/out.mp4", options: DEFAULT_VIDEO_OPTIONS },
   ],
   ["cancelVideoExport", () => api.cancelVideoExport(), "cancel_video_export", undefined],
+  ["deckChanges", () => api.deckChanges("talk"), "deck_changes", { id: "talk" }],
   ["lintDeck", () => api.lintDeck("talk"), "lint_deck", { id: "talk" }],
   [
     "createImageExportDir",

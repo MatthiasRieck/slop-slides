@@ -40,6 +40,15 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   elements keep a
   temporary offset; **Tidy layout** then sends the agent a screenshot so it rebuilds the
   slide's layout around where you put things.
+- **Git:** the Git tab shows what changed in the deck since the last commit, staged or not. The
+  slide list marks each slide added, modified or moved, and removed slides stay in it where
+  they used to be (the filter button leaves out the slides that did not change). Click a
+  modified slide to compare its two versions: drag across the slide to move the divider, drag
+  its round handle to rotate it (Shift for steps of 15°), and set Angle and Feather above the
+  slide. A feather of 0 is a sharp edge, 50 fades from one version to the other over 50 slide
+  pixels. Slides show the images of their own version. What a picture cannot show, like
+  speaker notes, is named under the slide. It only reads the repository; it needs `git` and a
+  commit that has the deck.
 - **Right:** chat with the agent. It knows which slide you're on, and you can attach images
   (paperclip, or drop files anywhere on the window). The microphone button dictates: click to
   start, and what you say shows up at the cursor as you speak; click again to keep it (Esc

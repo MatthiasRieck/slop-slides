@@ -359,11 +359,11 @@ pub fn content_hash(text: &str) -> String {
 }
 
 /// Hash of everything except the slides, section markers, review marks and comments: shared
-/// styles, fonts, runtime. A marker's (or such a block's) leading whitespace goes with it, so
-/// adding or removing one leaves the hash alone.
+/// styles, fonts, runtime. The leading whitespace of each of those goes with it, so adding or
+/// removing one leaves the hash alone.
 pub fn shell_hash(html: &str, slides: &[SlideSpan], sections: &[SectionSpan]) -> String {
-    let mut cut: Vec<Range<usize>> = slides.iter().map(|s| s.range.clone()).collect();
     let with_indent = |range: &Range<usize>| html[..range.start].trim_end().len()..range.end;
+    let mut cut: Vec<Range<usize>> = slides.iter().map(|s| with_indent(&s.range)).collect();
     cut.extend(sections.iter().map(|s| with_indent(&s.range)));
     cut.extend(crate::review::block_range(html).map(|r| with_indent(&r)));
     cut.extend(crate::comments::block_range(html).map(|r| with_indent(&r)));

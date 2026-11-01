@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import { type ReactNode, useEffect, useRef } from "react";
 import { Group, Panel, type PanelSize, Separator, usePanelRef } from "react-resizable-panels";
 
+import { ChangesRail, ChangesView } from "./components/ChangesView";
 import { CodeView } from "./components/CodeView";
 import { DeckSettings } from "./components/DeckSettings";
 import { DeckToolbar } from "./components/DeckToolbar";
@@ -15,7 +16,7 @@ import { SlideRail } from "./components/SlideRail";
 import { Stage } from "./components/Stage";
 import { TopBar } from "./components/TopBar";
 import { api, errorMessage } from "./lib/api";
-import { isMac } from "./lib/utils";
+import { cn, isMac } from "./lib/utils";
 import { deckMode, useApp } from "./store";
 
 export function App() {
@@ -79,7 +80,11 @@ function Workbench() {
               minSize={150}
               maxSize={360}
             >
-              <SlideRail />
+              {/* The slide list stays mounted so its thumbnails do not load all over again. */}
+              <div className={cn("h-full", mode === "git" && "hidden")}>
+                <SlideRail />
+              </div>
+              {mode === "git" && <ChangesRail />}
             </SidePanel>
             <ResizeHandle />
           </>
@@ -91,7 +96,8 @@ function Workbench() {
               <div className="min-h-0 flex-1">
                 {/* The HTML view stays mounted so unsaved edits survive switching to the slides. */}
                 <CodeView active={view === "code"} />
-                {view === "slides" && (mode === "settings" ? <DeckSettings /> : <Stage />)}
+                {view === "slides" &&
+                  (mode === "settings" ? <DeckSettings /> : mode === "git" ? <ChangesView /> : <Stage />)}
               </div>
               {mode === "narration" && <NarrationTimeline />}
             </div>

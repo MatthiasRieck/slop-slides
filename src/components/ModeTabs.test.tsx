@@ -37,6 +37,7 @@ describe("ModeTabs", () => {
       "Narration",
       "Notes",
       "Settings",
+      "Git",
       "HTML",
     ]);
     expect(selected()).toEqual(["View"]);
@@ -72,11 +73,11 @@ describe("ModeTabs", () => {
     expect(tab("Narration").disabled).toBe(false);
   });
 
-  it("has only View, Settings and HTML for a deck without slides", () => {
+  it("has only View, Settings, Git and HTML for a deck without slides", () => {
     useApp.setState({ deck: { ...deckFor(DECK_HTML), slides: [] }, selected: null });
     render(<ModeTabs />);
     const enabled = screen.getAllByRole("tab").filter((t) => !(t as HTMLButtonElement).disabled);
-    expect(enabled.map((t) => t.textContent)).toEqual(["View", "Settings", "HTML"]);
+    expect(enabled.map((t) => t.textContent)).toEqual(["View", "Settings", "Git", "HTML"]);
   });
 
   it("marks a slide that has narration", () => {

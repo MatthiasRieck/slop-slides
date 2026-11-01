@@ -207,7 +207,7 @@ function loadFavorites(): string[] {
 export type StageView = "slides" | "code";
 
 /** What the deck is open for; the top bar's tabs pick it (see components/ModeTabs.tsx). */
-export type DeckMode = "view" | "edit" | "narration" | "notes" | "settings" | "code";
+export type DeckMode = "view" | "edit" | "narration" | "notes" | "settings" | "git" | "code";
 
 /** The mode of the deck: the HTML view and editing have their own state, the rest is `slideMode`. */
 export function deckMode(state: Pick<AppState, "view" | "editing" | "slideMode">): DeckMode {
@@ -357,7 +357,7 @@ interface AppState {
   search: SlideSearch;
   editing: boolean;
   /** The mode shown over the rendered slide when not editing; see `deckMode`. */
-  slideMode: "view" | "narration" | "notes" | "settings";
+  slideMode: "view" | "narration" | "notes" | "settings" | "git";
   /** Bumped when a slide edit could not be saved, so the stage reloads the slide from disk. */
   editReload: number;
   /** The edit toolbar's tool: select, or what a drag on the slide adds. */

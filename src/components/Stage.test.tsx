@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -1674,6 +1674,43 @@ describe("Stage", () => {
         fireEvent.change(rotation, { target: { value: "-30" } });
         fireEvent.blur(rotation);
         expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-geometry", rotation: -30 }, "*");
+      });
+
+      it("rotates the selection in 3D from the toolbar, with the reset in the middle", () => {
+        const button = (name: string) => screen.getByRole("button", { name });
+        const { container } = render(<Stage />);
+        toggleEditing();
+        const { frame, post } = loaded(container);
+        expect(button("3D rotate").hasAttribute("disabled")).toBe(true);
+        const geometry = { count: 1, x: 10, y: 20, w: 300, h: 200, rotation: 0 };
+        fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry });
+        fireEvent.click(button("3D rotate"));
+        const grid = within(screen.getByRole("dialog", { name: "3D rotate" })).getAllByRole("button");
+        expect(grid.map((b) => b.getAttribute("aria-label"))).toEqual([
+          "Rotate top left 5° in 3D",
+          "Rotate top 5° in 3D",
+          "Rotate top right 5° in 3D",
+          "Rotate left 5° in 3D",
+          "Reset the 3D rotation",
+          "Rotate right 5° in 3D",
+          "Rotate bottom left 5° in 3D",
+          "Rotate bottom 5° in 3D",
+          "Rotate bottom right 5° in 3D",
+        ]);
+        const sent = [[5, -5], [5, 0], [5, 5], [0, -5], null, [0, 5], [-5, -5], [-5, 0], [-5, 5]];
+        grid.forEach((b, i) => {
+          fireEvent.click(b);
+          const step = sent[i];
+          expect(post).toHaveBeenLastCalledWith(
+            step ? { type: "slop:edit-tilt", x: step[0], y: step[1] } : { type: "slop:edit-tilt", reset: true },
+            "*",
+          );
+        });
+        // The panel stays through the preview's reload after a save, its buttons waiting for the selection.
+        fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry: null });
+        expect(button("Rotate top 5° in 3D").hasAttribute("disabled")).toBe(true);
+        fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry });
+        expect(button("Rotate top 5° in 3D").hasAttribute("disabled")).toBe(false);
       });
 
       it("asks the editor to copy or cut with ⌘C / ⌘X pressed in the app, unless text is selected there", () => {

@@ -7,7 +7,17 @@ import {
   AlignStartHorizontal,
   AlignStartVertical,
   AlignVerticalDistributeCenter,
+  ArrowDown,
+  ArrowDownLeft,
+  ArrowDownRight,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  ArrowUpLeft,
+  ArrowUpRight,
   Move,
+  Rotate3d,
+  RotateCcw,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
@@ -17,7 +27,9 @@ import {
   type EditGeometry,
   type GeometryField,
   parseGeometryValue,
+  TILT_STEP,
 } from "../lib/arrange";
+import { ToolButton, useOutsideClose } from "./EditControls";
 
 const ALIGN: { to: AlignTo; label: string; icon: ReactNode }[] = [
   { to: "left", label: "left edges", icon: <AlignStartVertical /> },
@@ -34,6 +46,21 @@ const FIELDS: { field: GeometryField; label: string; title: string }[] = [
   { field: "w", label: "W", title: "Width" },
   { field: "h", label: "H", title: "Height" },
   { field: "rotation", label: "°", title: "Rotation in degrees" },
+];
+
+/**
+ * The 3D rotate buttons, laid out the way they turn: the side a button names turns away, as when
+ * pulling the tilt handle that way. `x` and `y` are steps around the horizontal and vertical axis.
+ */
+const TILTS: { side: string; x: number; y: number; icon: ReactNode }[] = [
+  { side: "top left", x: 1, y: -1, icon: <ArrowUpLeft /> },
+  { side: "top", x: 1, y: 0, icon: <ArrowUp /> },
+  { side: "top right", x: 1, y: 1, icon: <ArrowUpRight /> },
+  { side: "left", x: 0, y: -1, icon: <ArrowLeft /> },
+  { side: "right", x: 0, y: 1, icon: <ArrowRight /> },
+  { side: "bottom left", x: -1, y: -1, icon: <ArrowDownLeft /> },
+  { side: "bottom", x: -1, y: 0, icon: <ArrowDown /> },
+  { side: "bottom right", x: -1, y: 1, icon: <ArrowDownRight /> },
 ];
 
 /** Keeps focus (and the text selection) in the slide when a button is pressed. */
@@ -142,6 +169,52 @@ export function ArrangeControls(props: {
             ))}
           </div>
           {many && <p className="text-muted-foreground">{geometry.count} elements selected</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Turns the selection in 3D, a step at a time, with a reset in the middle. The panel stays open
+ * to press again, and through the preview's reload after a save, which clears the selection
+ * until the editor restores it.
+ */
+export function TiltControls(props: { geometry: EditGeometry | null; onArrange?: (message: ArrangeMessage) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useOutsideClose(open, ref, () => setOpen(false));
+  const off = !props.geometry;
+  const tilt = (t: (typeof TILTS)[number]) => (
+    <ToolButton
+      key={t.side}
+      label={`Rotate ${t.side} ${TILT_STEP}° in 3D`}
+      disabled={off}
+      onClick={() => props.onArrange?.({ type: "slop:edit-tilt", x: t.x * TILT_STEP, y: t.y * TILT_STEP })}
+    >
+      {t.icon}
+    </ToolButton>
+  );
+  return (
+    <div ref={ref} className="relative">
+      <ToolButton label="3D rotate" active={open} disabled={off && !open} onClick={() => setOpen(!open)}>
+        <Rotate3d />
+      </ToolButton>
+      {open && (
+        <div
+          role="dialog"
+          aria-label="3D rotate"
+          className="absolute top-full left-1/2 z-30 mt-1 grid w-max -translate-x-1/2 grid-cols-3 gap-0.5 rounded-md border bg-card p-1 shadow-md"
+        >
+          {TILTS.slice(0, 4).map(tilt)}
+          <ToolButton
+            label="Reset the 3D rotation"
+            disabled={off}
+            onClick={() => props.onArrange?.({ type: "slop:edit-tilt", reset: true })}
+          >
+            <RotateCcw />
+          </ToolButton>
+          {TILTS.slice(4).map(tilt)}
         </div>
       )}
     </div>

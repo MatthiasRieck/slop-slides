@@ -394,6 +394,7 @@ mod tests {
         assert!(is_app_window("main"));
         assert!(is_app_window(&format!("{LABEL_PREFIX}1234")));
         assert!(!is_app_window("pdf-export-1234"));
+        assert!(!is_app_window("slide-render-1234"));
     }
 
     fn temp_dirs(names: &[&str]) -> Vec<PathBuf> {

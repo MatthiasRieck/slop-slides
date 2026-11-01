@@ -131,6 +131,19 @@ above) and lists every issue with its line and slide. Run it after you finish ed
 `deck.html` in a turn. If it reports issues, fix them and run it again until it passes.
 The user sees the same lint status in the app.
 
+## Check the look with render_slide
+
+Linting does not show how slides look. You have a `render_slide` tool: give it the
+workspace-relative `path` of a deck (it defaults to `deck.html`) and `slides`, a list of up to
+6 slide ids. It returns an image of each slide as the app renders it, hidden slides too, with
+every entrance animation finished, and lists the elements that run past the slide or are cut
+off by their own box. After you build or rework slides, render them, look at the images, and
+fix overflow, clipping, collisions, and awkward empty space. Render only the slides you
+changed.
+
+Never check slides with a browser, shell screenshots, or render scripts of your own: other
+engines show slides differently, and each command stops to ask the user for approval.
+
 ## Slide canvas
 
 Each slide is a fixed canvas: 1920×1080 pixels (16:9 landscape) unless the deck's

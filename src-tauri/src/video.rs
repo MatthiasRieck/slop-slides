@@ -518,7 +518,7 @@ async fn record(
 }
 
 /// A PNG of `rect` of the window, `width` pixels wide.
-async fn capture(
+pub(crate) async fn capture(
     window: &WebviewWindow,
     rect: Rect,
     viewport: Size,

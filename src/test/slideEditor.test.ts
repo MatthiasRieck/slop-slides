@@ -1137,12 +1137,9 @@ describe("slide editor", () => {
       expect(h1.style.transform).toBe("perspective(1000px) rotateX(10deg) rotateY(30deg)");
       expect(h1.style.getPropertyPriority("transform")).toBe("important");
       expect(h1.hasAttribute("data-moved")).toBe(true);
-      // The frame and stretch handles tilt along; the rotate and tilt handles stay flat.
-      const plane = ui.querySelector<HTMLElement>("[data-plane]")!;
-      expect(plane.style.transform).toBe("perspective(1000px) rotateX(10deg) rotateY(30deg)");
-      expect(plane.querySelectorAll('[data-handle="scale"]')).toHaveLength(8);
-      expect(plane.querySelector('[data-handle="rotate"], [data-handle="tilt"]')).toBeNull();
+      // The frame and its handles stay flat around the element's box.
       expect(ui.style.transform).toBe("rotate(0deg)");
+      expect(ui.querySelector("[style*='perspective']")).toBeNull();
       const [commit] = e.commits();
       expect(commit!.markup).toContain(
         `style="transform: perspective(1000px) rotateX(10deg) rotateY(30deg) !important;" data-moved="">Hello`,
@@ -1173,7 +1170,31 @@ describe("slide editor", () => {
       pull("rotate", [500, 200], [600, 300]);
       handle("tilt").dispatchEvent(new e.window.MouseEvent("dblclick", { bubbles: true }));
       expect(h1.getAttribute("style")).toBe("rotate: 90deg;");
-      expect(e.$("[data-plane]").style.transform).toBe("");
+    });
+
+    it("keeps the frame in place under a tilt, turning only with a rotation", () => {
+      const { h1, ui, pull } = withHeading();
+      const box = () => [ui.style.left, ui.style.top, ui.style.width, ui.style.height, ui.style.transform];
+      const flat = box();
+      pull("tilt", [520, 200], [880, 200]);
+      expect(h1.style.transform).toBe("perspective(1000px) rotateX(0deg) rotateY(180deg)");
+      expect(box()).toEqual(flat);
+      h1.style.rotate = "90deg";
+      pull("tilt", [880, 200], [880, 240]);
+      expect(ui.style.transform).toBe("rotate(90deg)");
+    });
+
+    it.each([
+      ["around the vertical axis", [880, 200]],
+      ["around the horizontal axis", [520, 560]],
+    ] as [string, [number, number]][])("stretches the way a handle is pulled when turned over %s", (_, to) => {
+      const { h1, pull } = withHeading("stretch");
+      pull("tilt", [520, 200], to);
+      expect(h1.style.transform).toContain("180deg");
+      // The right handle stays on the right and drags it wider, the left side staying put.
+      pull("1 0", [600, 300], [650, 300]);
+      expect(h1.style.scale).toBe("1.25 1");
+      expect(h1.style.translate).toBe("25px 0px");
     });
 
     it("keeps a transform the element already had, behind the tilt", () => {

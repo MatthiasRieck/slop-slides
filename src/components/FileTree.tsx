@@ -16,6 +16,7 @@ import { api, errorMessage, type FileKind, type WorkspaceEntry } from "../lib/ap
 import { ancestorsOf, foldersToReload, toggleFolder, visibleRows } from "../lib/fileTree";
 import { cn, isMac } from "../lib/utils";
 import { useApp } from "../store";
+import { ToolButton } from "./Button";
 
 const EXPANDED_KEY = "slopslide.expanded:";
 
@@ -144,23 +145,16 @@ function WorkspaceTree({ root, name }: { root: string; name: string }) {
         <span title={root} className="min-w-0 flex-1 truncate px-1 text-xs font-medium">
           {name}
         </span>
-        <button
-          type="button"
+        <ToolButton
+          variant="panel"
           title={isMac ? "Show in Finder" : "Show in folder"}
           onClick={() => void revealItemInDir(root)}
-          className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
         >
           <FolderOpen className="size-3.5" />
-        </button>
-        <button
-          type="button"
-          title="Refresh"
-          aria-label="Refresh"
-          onClick={() => void refresh()}
-          className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
+        </ToolButton>
+        <ToolButton variant="panel" title="Refresh" aria-label="Refresh" onClick={() => void refresh()}>
           <RefreshCw className={cn("size-3.5", refreshing && "animate-spin")} />
-        </button>
+        </ToolButton>
       </div>
       <div role="tree" aria-label={`Files in ${name}`} className="min-h-0 flex-1 overflow-y-auto py-1">
         {rootError ? (

@@ -1,16 +1,9 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const invoke = vi.fn();
-const revealItemInDir = vi.fn(async (..._args: unknown[]) => {});
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
-vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: (...args: unknown[]) => revealItemInDir(...args) }));
-
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { invoke, revealItemInDir } from "../test/tauri";
 import { SETTLE_MS, SlideImageExport } from "./SlideImageExport";
 
 const DIR = "/Users/me/Desktop/Talk";

@@ -1,5 +1,6 @@
-import { X } from "lucide-react";
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+
+import { Dialog } from "./Dialog";
 
 /** Exported for the test that keeps them in step with the tools' keys. */
 export const SECTIONS: { title: string; keys: [string, string][] }[] = [
@@ -50,11 +51,12 @@ export const SECTIONS: { title: string; keys: [string, string][] }[] = [
   },
 ];
 
+/** The keys that close the help: Escape, and `?` again. */
+const CLOSE_KEYS = ["Escape", "?"];
+
 /** The edit mode's keys, on `?`, unless the user is typing (the editor keeps those keys to itself). */
 export function ShortcutHelp() {
   const [open, setOpen] = useState(false);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const returnFocus = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     const onKey = (event: globalThis.KeyboardEvent) => {
@@ -76,72 +78,35 @@ export function ShortcutHelp() {
     };
   }, []);
 
-  // Takes focus from the preview, so Escape closes this rather than reaching the editor.
-  useEffect(() => {
-    if (!open) return;
-    returnFocus.current = document.activeElement as HTMLElement | null;
-    dialogRef.current?.focus();
-  }, [open]);
-
-  const close = () => {
-    setOpen(false);
-    returnFocus.current?.focus();
-  };
-
   if (!open) return null;
 
-  const onKeyDown = (event: KeyboardEvent) => {
-    event.stopPropagation();
-    if (event.key === "Escape" || event.key === "?") {
-      event.preventDefault();
-      close();
-    }
-  };
-
   return (
-    <div
-      data-testid="shortcut-help-backdrop"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) close();
-      }}
+    <Dialog
+      label="Keyboard shortcuts"
+      onClose={() => setOpen(false)}
+      className="w-[34rem] max-w-[calc(100vw-2rem)] rounded-xl border bg-card p-4 text-xs text-foreground shadow-lg outline-none"
+      heading={<h2 className="text-sm font-medium">Keyboard shortcuts</h2>}
+      takeFocus
+      closeKeys={CLOSE_KEYS}
+      closeOnBackdrop
+      closeButton
+      backdropTestId="shortcut-help-backdrop"
     >
-      {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: a dialog that takes focus handles its own keys. */}
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-label="Keyboard shortcuts"
-        tabIndex={-1}
-        onKeyDown={onKeyDown}
-        className="w-[34rem] max-w-[calc(100vw-2rem)] rounded-xl border bg-card p-4 text-xs text-foreground shadow-lg outline-none"
-      >
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-medium">Keyboard shortcuts</h2>
-          <button
-            type="button"
-            aria-label="Close"
-            onClick={close}
-            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-          >
-            <X className="size-4" />
-          </button>
-        </div>
-        <div className="grid grid-cols-2 gap-x-6 gap-y-4">
-          {SECTIONS.map((section) => (
-            <section key={section.title}>
-              <h3 className="mb-1 font-medium text-muted-foreground">{section.title}</h3>
-              <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5">
-                {section.keys.map(([keys, what]) => (
-                  <div key={keys} className="contents">
-                    <dt className="tabular-nums">{keys}</dt>
-                    <dd className="text-muted-foreground">{what}</dd>
-                  </div>
-                ))}
-              </dl>
-            </section>
-          ))}
-        </div>
+      <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+        {SECTIONS.map((section) => (
+          <section key={section.title}>
+            <h3 className="mb-1 font-medium text-muted-foreground">{section.title}</h3>
+            <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-0.5">
+              {section.keys.map(([keys, what]) => (
+                <div key={keys} className="contents">
+                  <dt className="tabular-nums">{keys}</dt>
+                  <dd className="text-muted-foreground">{what}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        ))}
       </div>
-    </div>
+    </Dialog>
   );
 }

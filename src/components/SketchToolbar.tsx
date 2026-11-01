@@ -1,9 +1,9 @@
 import { Eraser, Eye, EyeOff, Highlighter, MessageSquarePlus, PenLine, Trash2, Undo2 } from "lucide-react";
-import type { ReactNode } from "react";
 
 import { INK_COLORS } from "../lib/ink";
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
+import { ToolButton } from "./Button";
 import type { Annotations } from "./PresenterTools";
 
 /**
@@ -48,31 +48,33 @@ export function SketchToolbar(props: {
     <div role="toolbar" aria-label="Sketch tools" className="flex items-center gap-0.5">
       {hasReview && (
         <>
-          <SketchButton
+          <ToolButton
+            variant="plain"
             label={reviewVisible ? "Hide review marks and comments" : "Show review marks and comments"}
             onClick={toggleReview}
           >
             {reviewVisible ? <Eye /> : <EyeOff />}
-          </SketchButton>
+          </ToolButton>
           <div className="mx-1 h-4 w-px bg-border" />
         </>
       )}
-      <SketchButton label="Draw on the slide" active={tool === "pen"} onClick={() => toggle("pen")}>
+      <ToolButton variant="plain" label="Draw on the slide" active={tool === "pen"} onClick={() => toggle("pen")}>
         <PenLine />
-      </SketchButton>
-      <SketchButton
+      </ToolButton>
+      <ToolButton
+        variant="plain"
         label="Highlight on the slide"
         active={tool === "highlighter"}
         onClick={() => toggle("highlighter")}
       >
         <Highlighter />
-      </SketchButton>
-      <SketchButton label="Erase marks" active={tool === "eraser"} onClick={() => toggle("eraser")}>
+      </ToolButton>
+      <ToolButton variant="plain" label="Erase marks" active={tool === "eraser"} onClick={() => toggle("eraser")}>
         <Eraser />
-      </SketchButton>
-      <SketchButton label="Comment on an element" active={commenting} onClick={toggleCommenting}>
+      </ToolButton>
+      <ToolButton variant="plain" label="Comment on an element" active={commenting} onClick={toggleCommenting}>
         <MessageSquarePlus />
-      </SketchButton>
+      </ToolButton>
       {inking && (
         <div className="mx-1 flex items-center gap-1">
           {INK_COLORS.map((color) => (
@@ -94,39 +96,14 @@ export function SketchToolbar(props: {
       {strokes.length > 0 && (
         <>
           <div className="mx-1 h-4 w-px bg-border" />
-          <SketchButton label="Undo mark" onClick={undo}>
+          <ToolButton variant="plain" label="Undo mark" onClick={undo}>
             <Undo2 />
-          </SketchButton>
-          <SketchButton label="Clear marks on this slide" onClick={clear}>
+          </ToolButton>
+          <ToolButton variant="plain" label="Clear marks on this slide" onClick={clear}>
             <Trash2 />
-          </SketchButton>
+          </ToolButton>
         </>
       )}
     </div>
-  );
-}
-
-function SketchButton(props: {
-  label: string;
-  active?: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={props.label}
-      title={props.label}
-      aria-pressed={props.active}
-      disabled={props.disabled}
-      onClick={props.onClick}
-      className={cn(
-        "rounded-md p-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4",
-        props.active && "bg-accent text-foreground",
-      )}
-    >
-      {props.children}
-    </button>
   );
 }

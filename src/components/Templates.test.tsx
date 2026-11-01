@@ -1,16 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const invoke = vi.fn();
-const reveal = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
-vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: (...args: unknown[]) => reveal(...args) }));
-
+import { beforeEach, describe, expect, it } from "vitest";
 import type { TemplateSummary } from "../lib/api";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { invoke, revealItemInDir as reveal } from "../test/tauri";
 import { SlideRail } from "./SlideRail";
 import { LayoutPicker, StylePicker } from "./Templates";
 

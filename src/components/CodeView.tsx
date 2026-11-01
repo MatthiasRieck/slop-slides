@@ -33,6 +33,7 @@ import { changedRange, normalizeNewlines, onDiskRead } from "../lib/codeSync";
 import { findSlideSpans, type SlideSpan } from "../lib/slideSpans";
 import { basename, cn, fileUrl, isMac } from "../lib/utils";
 import { useApp } from "../store";
+import { Button } from "./Button";
 
 interface SlideMarks {
   /** Slides of the document as currently edited, re-found on every change. */
@@ -403,26 +404,27 @@ export function CodeView({ active }: { active: boolean }) {
         <span className="ml-auto text-2xs">
           {mod}F search · {mod}S save
         </span>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
           disabled={!dirty || saving}
           onClick={() => source !== null && loadText(source)}
           title="Discard unsaved changes"
-          className="flex items-center gap-1 rounded-md px-1.5 py-1 hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
         >
           <RotateCcw className="size-3.5" />
           Revert
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="primary"
+          size="md"
           disabled={!dirty || saving}
           onClick={() => saveRef.current()}
           title={`Save ${fileName} (${mod}S)`}
-          className="flex items-center gap-1 rounded-md bg-primary px-2 py-1 font-medium text-primary-foreground shadow-sm hover:opacity-90 disabled:opacity-40"
+          className="shadow-sm"
         >
           <Save className="size-3.5" />
           {saving ? "Saving…" : "Save"}
-        </button>
+        </Button>
       </div>
       {conflict && (
         <div className="flex shrink-0 items-center gap-2 border-b bg-warning/10 px-3 py-1.5 text-xs">

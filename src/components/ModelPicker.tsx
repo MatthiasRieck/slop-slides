@@ -1,5 +1,5 @@
 import { AlertTriangle, Check, ChevronDown, Gauge, Loader2, RotateCw, Search, Star } from "lucide-react";
-import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   contextWindowLabel,
@@ -13,34 +13,12 @@ import {
 } from "../lib/models";
 import { cn, isMac } from "../lib/utils";
 import { chatProvider, useApp } from "../store";
-import { ComposerPopover } from "./ComposerPopover";
+import { Popover } from "./Popover";
 import { ProviderIcon } from "./ProviderIcon";
 
 type Filter = "favorites" | Provider;
 
 type Row = ProviderModel & { provider: Provider };
-
-/** Closes a popover on outside pointer-down or Escape. */
-export function useDismiss(ref: RefObject<HTMLElement | null>, open: boolean, close: () => void) {
-  useEffect(() => {
-    if (!open) return;
-    const onPointer = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) close();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        close();
-      }
-    };
-    document.addEventListener("pointerdown", onPointer, true);
-    document.addEventListener("keydown", onKey, true);
-    return () => {
-      document.removeEventListener("pointerdown", onPointer, true);
-      document.removeEventListener("keydown", onKey, true);
-    };
-  }, [open, close, ref]);
-}
 
 const triggerClass =
   "flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground aria-expanded:bg-accent aria-expanded:text-foreground";
@@ -66,9 +44,18 @@ export function ModelPicker() {
         <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[17rem]:block" />
       </button>
       {open && (
-        <ComposerPopover anchor={rootRef} onClose={close} width={352} className="flex overflow-hidden">
+        <Popover
+          anchor={rootRef}
+          onClose={close}
+          width={352}
+          variant="menu"
+          portal
+          follow
+          capture
+          className="flex overflow-hidden"
+        >
           <ModelMenu onClose={close} />
-        </ComposerPopover>
+        </Popover>
       )}
     </div>
   );
@@ -368,7 +355,7 @@ export function EffortPicker() {
         <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[17rem]:block" />
       </button>
       {open && (
-        <ComposerPopover anchor={rootRef} onClose={close} width={160} className="p-1.5">
+        <Popover anchor={rootRef} onClose={close} width={160} variant="menu" portal follow capture className="p-1.5">
           {sections.map((section, index) => (
             <div key={section.title} className={cn(index > 0 && "mt-1.5 border-t pt-1.5")}>
               <div className="px-2 pt-1 pb-1.5 text-2xs font-medium text-muted-foreground">{section.title}</div>
@@ -388,7 +375,7 @@ export function EffortPicker() {
               ))}
             </div>
           ))}
-        </ComposerPopover>
+        </Popover>
       )}
     </div>
   );

@@ -1,25 +1,8 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { invoke, listen, open as openDialog, revealItemInDir, save } from "../test/tauri";
 
-const invoke = vi.fn();
-const save = vi.fn();
-const openDialog = vi.fn();
-const revealItemInDir = vi.fn();
-const listen = vi.fn();
 const unlisten = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invoke(...args),
-  Channel: class {
-    constructor(public onmessage: () => void) {}
-  },
-}));
-vi.mock("@tauri-apps/api/event", () => ({ listen: (...args: unknown[]) => listen(...args) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({
-  ask: vi.fn(),
-  save: (...args: unknown[]) => save(...args),
-  open: (...args: unknown[]) => openDialog(...args),
-}));
-vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: (...args: unknown[]) => revealItemInDir(...args) }));
 
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";

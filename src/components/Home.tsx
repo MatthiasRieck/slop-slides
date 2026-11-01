@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 import { api, errorMessage, type RecentWorkspace } from "../lib/api";
 import { cn, isMac, relativeTime } from "../lib/utils";
 import { useApp } from "../store";
+import { Button, ToolButton } from "./Button";
+import { SectionLabel } from "./SectionLabel";
 import { TemplateSelect } from "./Templates";
 
 /** Asks for a folder and opens it as the workspace. */
@@ -75,7 +77,7 @@ export function Home() {
           />
 
           <section className="flex flex-col gap-2">
-            <h2 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">Open</h2>
+            <SectionLabel as="h2">Open</SectionLabel>
             <div className="flex gap-2">
               <button
                 type="button"
@@ -98,7 +100,7 @@ export function Home() {
 
           {recent && recent.length > 0 && (
             <section className="flex flex-col gap-2">
-              <h2 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">Recent folders</h2>
+              <SectionLabel as="h2">Recent folders</SectionLabel>
               <ul className="flex flex-col divide-y rounded-lg border bg-card">
                 {recent.map((workspace) => (
                   <li key={workspace.path} className="group flex items-center">
@@ -116,15 +118,15 @@ export function Home() {
                         {relativeTime(workspace.openedMs)}
                       </span>
                     </button>
-                    <button
-                      type="button"
+                    <ToolButton
+                      variant="panel"
                       title="Remove from recent folders"
                       aria-label={`Remove ${workspace.name} from recent folders`}
                       onClick={() => void forget(workspace)}
-                      className="mr-1.5 rounded-md p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-foreground focus:opacity-100 group-hover:opacity-100"
+                      className="mr-1.5 opacity-0 focus:opacity-100 group-hover:opacity-100"
                     >
                       <X className="size-3.5" />
-                    </button>
+                    </ToolButton>
                   </li>
                 ))}
               </ul>
@@ -172,14 +174,10 @@ export function NewDeckForm(props: { heading: string; hint?: string; beforeCreat
       </div>
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-muted-foreground">{props.hint}</p>
-        <button
-          type="button"
-          onClick={() => void choosePptx(props.beforeCreate)}
-          className="flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-accent"
-        >
+        <Button size="lg" onClick={() => void choosePptx(props.beforeCreate)} className="shrink-0">
           <FileUp className="size-3.5" />
           Import PowerPoint…
-        </button>
+        </Button>
       </div>
     </form>
   );

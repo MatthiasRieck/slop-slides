@@ -1,22 +1,8 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const invoke = vi.fn();
-const save = vi.fn();
-const openDialog = vi.fn();
-const revealItemInDir = vi.fn();
-const ask = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({
-  ask: (...args: unknown[]) => ask(...args),
-  save: (...args: unknown[]) => save(...args),
-  open: (...args: unknown[]) => openDialog(...args),
-}));
-vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: (...args: unknown[]) => revealItemInDir(...args) }));
-
+import { beforeEach, describe, expect, it } from "vitest";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { ask, invoke, open as openDialog, revealItemInDir, save } from "../test/tauri";
 import { TopBar } from "./TopBar";
 
 const WORKSPACE = { path: "/decks", name: "decks" };

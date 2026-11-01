@@ -28,6 +28,7 @@
       "a11y": {
         "preset": "recommended",
         "noAutofocus": "off",
+        "noLabelWithoutControl": { "level": "error", "options": { "inputComponents": ["DraftInput"] } },
         "noNoninteractiveElementInteractions": "error"
       },
       "style": {

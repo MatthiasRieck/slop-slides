@@ -71,8 +71,10 @@ import {
 import { SWATCHES } from "../lib/palette";
 import { cn } from "../lib/utils";
 import { ArrangeControls } from "./ArrangeControls";
-import { keepFocus, ToolButton, useOutsideClose } from "./EditControls";
+import { keepFocus, ToolButton } from "./Button";
+import { DraftInput } from "./Field";
 import { LookTools } from "./LookTools";
+import { DropdownPanel, dropdownPanel, useDismiss } from "./Popover";
 import { RibbonRow, RibbonSection, useRibbonFit } from "./Ribbon";
 
 const TOOLS: { tool: EditTool; label: string; icon: ReactNode }[] = [
@@ -185,6 +187,7 @@ export function EditToolbar(props: {
           <RibbonRow key={row[0]?.tool}>
             {row.map((t) => (
               <ToolButton
+                keepFocus
                 key={t.tool}
                 label={t.label}
                 active={props.tool === t.tool}
@@ -194,7 +197,7 @@ export function EditToolbar(props: {
               </ToolButton>
             ))}
             {index === 1 && (
-              <ToolButton label="Add an image from a file" onClick={() => props.onPickImage?.(false)}>
+              <ToolButton keepFocus label="Add an image from a file" onClick={() => props.onPickImage?.(false)}>
                 <ImagePlus />
               </ToolButton>
             )}
@@ -210,6 +213,7 @@ export function EditToolbar(props: {
             onChange={(fontFamily) => props.onStyle({ fontFamily })}
           />
           <ToolButton
+            keepFocus
             label="Smaller text"
             disabled={textOff}
             onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, -1) })}
@@ -222,6 +226,7 @@ export function EditToolbar(props: {
             onDone={returnFocus}
           />
           <ToolButton
+            keepFocus
             label="Larger text"
             disabled={textOff}
             onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, 1) })}
@@ -231,6 +236,7 @@ export function EditToolbar(props: {
         </RibbonRow>
         <RibbonRow>
           <ToolButton
+            keepFocus
             label="Bold (⌘B)"
             active={!textOff && !!style.bold}
             disabled={textOff}
@@ -239,6 +245,7 @@ export function EditToolbar(props: {
             <Bold />
           </ToolButton>
           <ToolButton
+            keepFocus
             label="Italic (⌘I)"
             active={!textOff && !!style.italic}
             disabled={textOff}
@@ -247,6 +254,7 @@ export function EditToolbar(props: {
             <Italic />
           </ToolButton>
           <ToolButton
+            keepFocus
             label="Underline (⌘U)"
             active={!textOff && !!style.underline}
             disabled={textOff}
@@ -255,6 +263,7 @@ export function EditToolbar(props: {
             <Underline />
           </ToolButton>
           <ToolButton
+            keepFocus
             label="Strikethrough"
             active={!textOff && !!style.strike}
             disabled={textOff}
@@ -264,6 +273,7 @@ export function EditToolbar(props: {
           </ToolButton>
           {SCRIPTS.map((s) => (
             <ToolButton
+              keepFocus
               key={s.value}
               label={s.label}
               active={!textOff && !!selection && selection.script === s.value}
@@ -294,6 +304,7 @@ export function EditToolbar(props: {
         <RibbonRow>
           {ALIGN.map((a) => (
             <ToolButton
+              keepFocus
               key={a.value}
               label={a.label}
               active={!textOff && style.align === a.value}
@@ -305,6 +316,7 @@ export function EditToolbar(props: {
           ))}
           {LISTS.map((l) => (
             <ToolButton
+              keepFocus
               key={l.value}
               label={l.label}
               active={!textOff && !!selection && selection.list === l.value}
@@ -324,6 +336,7 @@ export function EditToolbar(props: {
         <RibbonRow>
           {VALIGN.map((a) => (
             <ToolButton
+              keepFocus
               key={a.value}
               label={a.label}
               active={!textOff && !!state?.valign && style.valign === a.value}
@@ -419,11 +432,17 @@ export function EditToolbar(props: {
         </RibbonRow>
         <RibbonRow>
           {ORDER.map((o) => (
-            <ToolButton key={o.to} label={o.label} disabled={!props.selection} onClick={() => props.onOrder(o.to)}>
+            <ToolButton
+              keepFocus
+              key={o.to}
+              label={o.label}
+              disabled={!props.selection}
+              onClick={() => props.onOrder(o.to)}
+            >
               {o.icon}
             </ToolButton>
           ))}
-          <ToolButton label="Delete (⌫)" disabled={!props.selection} onClick={props.onDelete}>
+          <ToolButton keepFocus label="Delete (⌫)" disabled={!props.selection} onClick={props.onDelete}>
             <Trash2 />
           </ToolButton>
         </RibbonRow>
@@ -448,14 +467,7 @@ function ColorButton(props: {
   const onChange = useRef(props.onChange);
   onChange.current = props.onChange;
 
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: PointerEvent) => {
-      if (!ref.current?.contains(event.target as Node)) setOpen(false);
-    };
-    window.addEventListener("pointerdown", close);
-    return () => window.removeEventListener("pointerdown", close);
-  }, [open]);
+  useDismiss(open, ref, () => setOpen(false));
 
   // The system color picker reports every color the user passes over; only the one they settle on counts.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the input mounts and unmounts with the popover
@@ -493,11 +505,7 @@ function ColorButton(props: {
         />
       </button>
       {open && (
-        <div
-          role="dialog"
-          aria-label={props.label}
-          className="absolute top-full left-1/2 z-30 mt-1 -translate-x-1/2 rounded-md border bg-card p-2 shadow-md"
-        >
+        <DropdownPanel role="dialog" aria-label={props.label}>
           {!!props.deck?.length && (
             <fieldset aria-label="Deck colors" className="mb-2 grid w-max grid-cols-6 gap-1 border-b pb-2">
               {props.deck.map((color) => (
@@ -562,7 +570,7 @@ function ColorButton(props: {
             />
             Custom
           </label>
-        </div>
+        </DropdownPanel>
       )}
     </div>
   );
@@ -617,39 +625,16 @@ function FontPicker(props: {
 
 /** The font size as a number to type; it applies on Enter or when the field loses focus. */
 function FontSizeInput(props: { value: number | null; onChange: (size: number) => void; onDone: () => void }) {
-  const [draft, setDraft] = useState(props.value === null ? "" : String(props.value));
-  useEffect(() => setDraft(props.value === null ? "" : String(props.value)), [props.value]);
-  const apply = () => {
-    const size = parseFontSize(draft);
-    if (size === null || size === props.value) {
-      setDraft(props.value === null ? "" : String(props.value));
-      return false;
-    }
-    props.onChange(size);
-    return true;
-  };
   return (
-    <input
-      type="text"
-      inputMode="numeric"
+    <DraftInput
       aria-label="Font size"
       title="Font size (type a size and press Enter)"
       disabled={props.value === null}
-      placeholder="–"
-      value={draft}
-      onChange={(event) => setDraft(event.target.value.replace(/[^\d.]/g, ""))}
-      onBlur={apply}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          apply();
-          props.onDone();
-        } else if (event.key === "Escape") {
-          event.preventDefault();
-          setDraft(props.value === null ? "" : String(props.value));
-          props.onDone();
-        }
-      }}
+      value={props.value}
+      parse={parseFontSize}
+      sanitize={(text) => text.replace(/[^\d.]/g, "")}
+      onChange={props.onChange}
+      onDone={props.onDone}
       className="h-6 w-9 rounded-md border bg-transparent px-1 text-center text-xs tabular-nums disabled:opacity-30"
     />
   );
@@ -669,7 +654,7 @@ function LinkButton(props: {
   const [address, setAddress] = useState("");
   const [slide, setSlide] = useState("");
   const [invalid, setInvalid] = useState(false);
-  useOutsideClose(open, ref, () => setOpen(false));
+  useDismiss(open, ref, () => setOpen(false));
   if (props.disabled && open) setOpen(false);
 
   const toggle = () => {
@@ -696,22 +681,17 @@ function LinkButton(props: {
 
   return (
     <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-label="Link"
+      <ToolButton
+        keepFocus
+        label="Link"
         title={props.value ? `Link: ${props.value}` : "Add a link"}
-        aria-pressed={!!props.value}
+        active={!!props.value}
         aria-expanded={open}
         disabled={props.disabled}
-        onMouseDown={keepFocus}
         onClick={toggle}
-        className={cn(
-          "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4",
-          props.value && "bg-accent text-foreground",
-        )}
       >
         <Link />
-      </button>
+      </ToolButton>
       {open && (
         <form
           role="dialog"
@@ -720,7 +700,7 @@ function LinkButton(props: {
             event.preventDefault();
             apply();
           }}
-          className="absolute top-full left-1/2 z-30 mt-1 flex w-64 -translate-x-1/2 flex-col gap-2 rounded-md border bg-card p-2 text-xs shadow-md"
+          className={cn(dropdownPanel, "flex w-64 flex-col gap-2 text-xs")}
         >
           <input
             autoFocus
@@ -785,7 +765,7 @@ function SpacingButton(props: {
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  useOutsideClose(open, ref, () => setOpen(false));
+  useDismiss(open, ref, () => setOpen(false));
   if (props.disabled && open) setOpen(false);
   const heights = [...new Set<number>([...LINE_HEIGHTS, ...(props.lineHeight ? [props.lineHeight] : [])])].sort(
     (a, b) => a - b,
@@ -794,23 +774,21 @@ function SpacingButton(props: {
   const select = "h-6 rounded border bg-transparent px-1";
   return (
     <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-label="Spacing"
+      <ToolButton
+        keepFocus
+        label="Spacing"
         title="Line height and letter spacing"
         aria-expanded={open}
         disabled={props.disabled}
-        onMouseDown={keepFocus}
         onClick={() => setOpen(!open)}
-        className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4"
       >
         <Space />
-      </button>
+      </ToolButton>
       {open && (
-        <div
+        <DropdownPanel
           role="dialog"
           aria-label="Spacing"
-          className="absolute top-full left-1/2 z-30 mt-1 grid w-max -translate-x-1/2 grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5 rounded-md border bg-card p-2 text-xs shadow-md"
+          className="grid w-max grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5 text-xs"
         >
           <label htmlFor="edit-line-height" className="text-muted-foreground">
             Line height
@@ -843,7 +821,7 @@ function SpacingButton(props: {
               </option>
             ))}
           </select>
-        </div>
+        </DropdownPanel>
       )}
     </div>
   );

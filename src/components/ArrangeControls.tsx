@@ -9,7 +9,7 @@ import {
   AlignVerticalDistributeCenter,
   Move,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 
 import {
   type AlignTo,
@@ -18,6 +18,9 @@ import {
   type GeometryField,
   parseGeometryValue,
 } from "../lib/arrange";
+import { ToolButton } from "./Button";
+import { DraftInput } from "./Field";
+import { DropdownPanel, useDismiss } from "./Popover";
 
 const ALIGN: { to: AlignTo; label: string; icon: ReactNode }[] = [
   { to: "left", label: "left edges", icon: <AlignStartVertical /> },
@@ -36,11 +39,6 @@ const FIELDS: { field: GeometryField; label: string; title: string }[] = [
   { field: "rotation", label: "°", title: "Rotation in degrees" },
 ];
 
-/** Keeps focus (and the text selection) in the slide when a button is pressed. */
-function keepFocus(event: React.MouseEvent) {
-  event.preventDefault();
-}
-
 /**
  * The selection's place on the slide: align and distribute several elements, align one with the
  * slide, and exact position, size and rotation. Several elements have bounds to move, but no
@@ -56,78 +54,56 @@ export function ArrangeControls(props: {
   const { geometry } = props;
   const many = (geometry?.count ?? 0) > 1;
 
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: PointerEvent) => {
-      if (!ref.current?.contains(event.target as Node)) setOpen(false);
-    };
-    window.addEventListener("pointerdown", onDown);
-    return () => window.removeEventListener("pointerdown", onDown);
-  }, [open]);
+  useDismiss(open, ref, () => setOpen(false));
   if (!geometry && open) setOpen(false);
 
-  const button =
-    "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-4";
   return (
     <div ref={ref} className="relative">
-      <button
-        type="button"
-        aria-label="Arrange"
+      <ToolButton
+        keepFocus
+        label="Arrange"
         title="Align, distribute, position and size"
         aria-expanded={open}
         disabled={!geometry}
-        onMouseDown={keepFocus}
         onClick={() => setOpen(!open)}
-        className={button}
       >
         <Move />
-      </button>
+      </ToolButton>
       {open && geometry && (
-        <div
-          role="dialog"
-          aria-label="Arrange"
-          className="absolute top-full left-1/2 z-30 mt-1 flex w-max -translate-x-1/2 flex-col gap-2 rounded-md border bg-card p-2 text-xs shadow-md"
-        >
+        <DropdownPanel role="dialog" aria-label="Arrange" className="flex w-max flex-col gap-2 text-xs">
           <div className="flex items-center gap-0.5">
             {ALIGN.map((a) => {
               const label = many ? `Align ${a.label}` : `Align with the slide's ${a.label}`;
               return (
-                <button
+                <ToolButton
                   key={a.to}
-                  type="button"
-                  aria-label={label}
-                  title={label}
-                  onMouseDown={keepFocus}
+                  keepFocus
+                  label={label}
                   onClick={() => props.onArrange?.({ type: "slop:edit-align", to: a.to })}
-                  className={button}
                 >
                   {a.icon}
-                </button>
+                </ToolButton>
               );
             })}
             <div className="mx-1 h-4 w-px bg-border" />
-            <button
-              type="button"
-              aria-label="Distribute horizontally"
+            <ToolButton
+              keepFocus
+              label="Distribute horizontally"
               title="Even out the gaps side to side (three or more elements)"
               disabled={geometry.count < 3}
-              onMouseDown={keepFocus}
               onClick={() => props.onArrange?.({ type: "slop:edit-distribute", axis: "h" })}
-              className={button}
             >
               <AlignHorizontalDistributeCenter />
-            </button>
-            <button
-              type="button"
-              aria-label="Distribute vertically"
+            </ToolButton>
+            <ToolButton
+              keepFocus
+              label="Distribute vertically"
               title="Even out the gaps top to bottom (three or more elements)"
               disabled={geometry.count < 3}
-              onMouseDown={keepFocus}
               onClick={() => props.onArrange?.({ type: "slop:edit-distribute", axis: "v" })}
-              className={button}
             >
               <AlignVerticalDistributeCenter />
-            </button>
+            </ToolButton>
           </div>
           <div className="flex items-center gap-1.5">
             {FIELDS.map((f) => (
@@ -142,7 +118,7 @@ export function ArrangeControls(props: {
             ))}
           </div>
           {many && <p className="text-muted-foreground">{geometry.count} elements selected</p>}
-        </div>
+        </DropdownPanel>
       )}
     </div>
   );
@@ -158,37 +134,17 @@ function GeometryInput(props: {
   onChange: (value: number) => void;
   onDone: () => void;
 }) {
-  const shown = props.value === null ? "" : String(props.value);
-  const [draft, setDraft] = useState(shown);
-  useEffect(() => setDraft(shown), [shown]);
-  const apply = () => {
-    const value = parseGeometryValue(props.field, draft);
-    if (value === null || value === props.value) setDraft(shown);
-    else props.onChange(value);
-  };
   return (
     <label title={props.title} className="flex items-center gap-1 text-muted-foreground">
       {props.label}
-      <input
-        type="text"
-        inputMode="numeric"
+      <DraftInput
         aria-label={props.title}
         disabled={props.disabled}
-        placeholder="–"
-        value={draft}
-        onChange={(event) => setDraft(event.target.value.replace(/[^\d.-]/g, ""))}
-        onBlur={apply}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            apply();
-            props.onDone();
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            setDraft(shown);
-            props.onDone();
-          }
-        }}
+        value={props.value}
+        parse={(text) => parseGeometryValue(props.field, text)}
+        sanitize={(text) => text.replace(/[^\d.-]/g, "")}
+        onChange={props.onChange}
+        onDone={props.onDone}
         className="h-6 w-12 rounded-md border bg-transparent px-1 text-center text-foreground tabular-nums disabled:opacity-30"
       />
     </label>

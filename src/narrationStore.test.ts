@@ -1,16 +1,12 @@
 import { act } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { invoke, listen } from "./test/tauri";
 
-const invoke = vi.fn();
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
-vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }));
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async (event: string, handler: (event: { payload: unknown }) => void) => {
-    listeners.set(event, handler);
-    return () => {};
-  }),
-}));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
+listen.mockImplementation(async (event: string, handler: (event: { payload: unknown }) => void) => {
+  listeners.set(event, handler);
+  return () => {};
+});
 
 import { initNarrationEvents, NARRATION_CANCELLED, useNarration } from "./narrationStore";
 import { useApp } from "./store";

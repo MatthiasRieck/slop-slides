@@ -17,6 +17,8 @@ import {
 } from "../lib/slideSize";
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
+import { Button } from "./Button";
+import { Field, NumberField, selectClass } from "./Field";
 
 const ORIENTATIONS: { id: Orientation; label: string; icon: typeof Square }[] = [
   { id: "landscape", label: "Landscape", icon: RectangleHorizontal },
@@ -95,11 +97,10 @@ function SlideSizePanel(props: { current: SlideSize }) {
         ))}
       </div>
       <div className="flex items-end gap-2">
-        <SizeField label="Width" value={width} onChange={setWidth} />
+        <NumberField label="Width" aria-label="Width" min={0} value={width} onChange={setWidth} />
         <span className="pb-1.5 text-muted-foreground">×</span>
-        <SizeField label="Height" value={height} onChange={setHeight} />
-        <label className="flex flex-col gap-1">
-          <span className="text-muted-foreground">Unit</span>
+        <NumberField label="Height" aria-label="Height" min={0} value={height} onChange={setHeight} />
+        <Field label="Unit" className="flex flex-col gap-1">
           <select
             aria-label="Unit"
             value={unit}
@@ -109,7 +110,7 @@ function SlideSizePanel(props: { current: SlideSize }) {
               if (!problem) show(convert(draft, next));
               else setUnit(next);
             }}
-            className="h-7 rounded-md border bg-background px-1.5"
+            className={selectClass}
           >
             {UNITS.map((u) => (
               <option key={u.id} value={u.id}>
@@ -117,7 +118,7 @@ function SlideSizePanel(props: { current: SlideSize }) {
               </option>
             ))}
           </select>
-        </label>
+        </Field>
       </div>
       <p
         role={problem ? "alert" : undefined}
@@ -152,41 +153,19 @@ function SlideSizePanel(props: { current: SlideSize }) {
         </p>
       )}
       <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          disabled={unchanged}
-          onClick={() => show(current)}
-          className="rounded-md border px-2.5 py-1 font-medium hover:bg-accent disabled:opacity-40"
-        >
+        <Button size="lg" disabled={unchanged} onClick={() => show(current)}>
           Reset
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="primary"
+          size="lg"
           type="submit"
           disabled={!!problem || unchanged || running}
           title={running ? "Wait for the agent to finish to change the slide size" : undefined}
-          className="rounded-md bg-primary px-2.5 py-1 font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
         >
           Apply
-        </button>
+        </Button>
       </div>
     </form>
-  );
-}
-
-function SizeField(props: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="flex min-w-0 flex-1 flex-col gap-1">
-      <span className="text-muted-foreground">{props.label}</span>
-      <input
-        aria-label={props.label}
-        type="number"
-        inputMode="decimal"
-        min={0}
-        step="any"
-        value={props.value}
-        onChange={(event) => props.onChange(event.target.value)}
-        className="h-7 w-full min-w-0 rounded-md border bg-background px-1.5 tabular-nums"
-      />
-    </label>
   );
 }

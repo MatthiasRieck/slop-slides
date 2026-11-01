@@ -1,6 +1,7 @@
-//! Voice input for the chat composer and the presenter's teleprompter: records the default
-//! microphone and transcribes it on this machine with whisper.cpp. The speech-to-text model is
-//! downloaded once, on first use, to `~/.slopslides/models/` and shared by every workspace.
+//! Voice input for the chat composer, the presenter's teleprompter and recording a deck's
+//! narration in the presenter view: records the default microphone and transcribes it on this
+//! machine with whisper.cpp. The speech-to-text model is downloaded once, on first use, to
+//! `~/.slopslides/models/` and shared by every workspace.
 
 use std::fs;
 use std::io::Write;
@@ -14,7 +15,7 @@ use std::time::Duration;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SizedSample;
 use futures_util::StreamExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 use whisper_rs::{
@@ -22,6 +23,7 @@ use whisper_rs::{
 };
 
 use crate::error::{Error, Result};
+use crate::{deck, narration};
 
 /// A speech-to-text model file and where it comes from.
 pub struct Model {
@@ -80,6 +82,10 @@ pub const PARTIAL_EVENT: &str = "voice-partial";
 pub const HEARD_EVENT: &str = "voice-heard";
 /// Emitted when following a speaker fails for good: what went wrong.
 pub const FOLLOW_FAILED_EVENT: &str = "voice-follow-failed";
+/// Emitted when recording narration goes wrong: what went wrong.
+pub const NARRATION_FAILED_EVENT: &str = "narration-record-failed";
+/// Emitted when recording kept something of a slide's narration: the deck's id.
+pub const NARRATION_KEPT_EVENT: &str = "narration-recorded";
 
 /// `~/.slopslides/models`, where downloaded speech models live.
 pub fn models_dir(home: &Path) -> PathBuf {
@@ -126,10 +132,92 @@ struct Engine {
     following: Option<WhisperState>,
 }
 
+/// What recording narration keeps of what is said.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecordMode {
+    /// The words, added to the narration of the slide on screen.
+    Text,
+    /// The voice, added to the narration audio of the slide on screen.
+    Audio,
+}
+
+/// The deck a narration recording goes to, and what it keeps.
+pub struct NarrationTarget {
+    pub deck: String,
+    pub file: PathBuf,
+    pub mode: RecordMode,
+}
+
+/// What a session is for.
+enum Purpose {
+    Dictation,
+    /// The teleprompter in this window.
+    Following(String),
+    /// Recording narration in this window, starting at this slide.
+    Narrating(String, NarrationTarget, String),
+}
+
+/// The slide a narration recording is at. Each time the show comes to a slide is a new visit,
+/// though it may be a slide it has been to before.
+struct Cursor {
+    slide: String,
+    visit: u32,
+}
+
+/// A piece of a narration recording, all of it said over one slide.
+#[derive(Debug)]
+struct Take {
+    slide: String,
+    visit: u32,
+    samples: Vec<f32>,
+}
+
+impl Cursor {
+    fn take(&self, samples: Vec<f32>) -> Take {
+        Take {
+            slide: self.slide.clone(),
+            visit: self.visit,
+            samples,
+        }
+    }
+
+    /// Moves on to `slide`: what was recorded so far is the take of the slide being left.
+    fn turn_to(&mut self, slide: &str, samples: &mut Vec<f32>) -> Option<Take> {
+        if self.slide == slide {
+            return None;
+        }
+        let take = self.take(std::mem::take(samples));
+        self.slide = slide.to_string();
+        self.visit += 1;
+        Some(take)
+    }
+
+    /// A take of the start of `samples` (at `rate`), cut at a pause, once they are long enough:
+    /// what is said over a slide lands in the deck as it goes, and no more of it than this can
+    /// be lost.
+    fn cut_long(&self, samples: &mut Vec<f32>, rate: u32) -> Option<Take> {
+        let segment = (SEGMENT_SECONDS * rate as f32) as usize;
+        if samples.len() <= segment {
+            return None;
+        }
+        let end = split_point(&samples[..segment], rate);
+        Some(self.take(samples.drain(..end).collect()))
+    }
+}
+
+/// A narration recording's way of handing what it recorded to the worker keeping it.
+struct Narrating {
+    cursor: Arc<Mutex<Cursor>>,
+    takes: mpsc::Sender<Take>,
+}
+
 /// A recording and its live transcription.
 struct Session {
-    /// Label of the window following a speaker with this session; dictation has none.
+    /// Label of the window using this session, which goes with it; dictation has none.
     follower: Option<String>,
+    /// Set while recording narration.
+    narrating: Option<Narrating>,
     recording: Recording,
     transcript: Arc<Mutex<Transcript>>,
     live: Arc<AtomicBool>,
@@ -178,16 +266,71 @@ impl Voice {
     /// Starts recording the default microphone (asking for access first, where the system
     /// requires it) and transcribing it live, reported as [`PARTIAL_EVENT`].
     pub async fn start(&self, app: AppHandle, home: &Path) -> Result<()> {
-        self.open(app, home, None).await
+        self.open(app, home, Purpose::Dictation).await
     }
 
     /// Starts listening for the teleprompter in `window`: until cancelled, reports the words of
     /// the last few seconds as [`HEARD_EVENT`]. Nothing is kept.
     pub async fn follow(&self, app: AppHandle, home: &Path, window: String) -> Result<()> {
-        self.open(app, home, Some(window)).await
+        self.open(app, home, Purpose::Following(window)).await
     }
 
-    async fn open(&self, app: AppHandle, home: &Path, follower: Option<String>) -> Result<()> {
+    /// Starts recording narration for `window` at `slide`: what is said goes to the slide on
+    /// screen (see [`Voice::narrate_slide`]), piece by piece, as `target` says. Cut off on the
+    /// way out of the slide or at a pause, each piece is kept even if the session then just
+    /// ends: this is the one recording that is not thrown away by cancelling it.
+    pub async fn record_narration(
+        &self,
+        app: AppHandle,
+        home: &Path,
+        window: String,
+        target: NarrationTarget,
+        slide: String,
+    ) -> Result<()> {
+        self.open(app, home, Purpose::Narrating(window, target, slide))
+            .await
+    }
+
+    /// Tells the narration recording which slide is on screen now.
+    pub fn narrate_slide(&self, slide: &str) {
+        let session = self.session.lock().unwrap();
+        let Some(session) = session.as_ref() else {
+            return;
+        };
+        let Some(narrating) = &session.narrating else {
+            return;
+        };
+        let mut samples = session.recording.samples.lock().unwrap();
+        let take = narrating
+            .cursor
+            .lock()
+            .unwrap()
+            .turn_to(slide, &mut samples);
+        if let Some(take) = take {
+            let _ = narrating.takes.send(take);
+        }
+    }
+
+    /// Ends the narration recording, if there is one, once all of it is kept.
+    pub async fn stop_narration(&self) -> Result<()> {
+        let session = {
+            let mut session = self.session.lock().unwrap();
+            match session.as_ref().is_some_and(|s| s.narrating.is_some()) {
+                true => session.take(),
+                false => None,
+            }
+        };
+        let Some(session) = session else {
+            return Ok(());
+        };
+        tauri::async_runtime::spawn_blocking(move || {
+            let _ = wrap_up(session).join();
+        })
+        .await
+        .map_err(|e| Error::msg(e.to_string()))
+    }
+
+    async fn open(&self, app: AppHandle, home: &Path, purpose: Purpose) -> Result<()> {
         tauri::async_runtime::spawn_blocking(microphone_access)
             .await
             .map_err(|e| Error::msg(e.to_string()))??;
@@ -207,16 +350,31 @@ impl Voice {
             transcript: transcript.clone(),
             live: live.clone(),
         };
-        let following = follower.is_some();
+        let (follower, narrating, live_thread) = match purpose {
+            Purpose::Dictation => (None, None, std::thread::spawn(move || worker.run())),
+            Purpose::Following(window) => (
+                Some(window),
+                None,
+                std::thread::spawn(move || worker.follow()),
+            ),
+            Purpose::Narrating(window, target, slide) => {
+                let cursor = Arc::new(Mutex::new(Cursor { slide, visit: 0 }));
+                let (takes, incoming) = mpsc::channel();
+                let narrating = Narrating {
+                    cursor: cursor.clone(),
+                    takes,
+                };
+                let thread = std::thread::spawn(move || worker.narrate(incoming, cursor, target));
+                (Some(window), Some(narrating), thread)
+            }
+        };
         *session = Some(Session {
             follower,
+            narrating,
             recording,
             transcript,
             live,
-            live_thread: std::thread::spawn(move || match following {
-                true => worker.follow(),
-                false => worker.run(),
-            }),
+            live_thread,
         });
         Ok(())
     }
@@ -246,16 +404,16 @@ impl Voice {
         .map_err(|e| Error::msg(e.to_string()))?
     }
 
-    /// Stops recording and throws it away.
+    /// Stops recording and throws it away; a narration recording is kept (see
+    /// [`Voice::record_narration`]).
     pub fn cancel(&self) {
         if let Some(session) = self.session.lock().unwrap().take() {
-            session.live.store(false, Ordering::SeqCst);
-            session.recording.finish();
+            wrap_up(session);
         }
     }
 
-    /// Stops following a speaker for `window`, which closed: a window that is gone cannot ask,
-    /// and the microphone must not stay on.
+    /// Stops listening for `window`, which closed: a window that is gone cannot ask, and the
+    /// microphone must not stay on.
     pub fn window_closed(&self, window: &str) {
         let session = self.session.lock().unwrap();
         if session.as_ref().and_then(|s| s.follower.as_deref()) == Some(window) {
@@ -273,9 +431,7 @@ impl Voice {
             .unwrap_or_else(|e| e.into_inner())
             .take();
         if let Some(session) = session {
-            session.live.store(false, Ordering::SeqCst);
-            session.recording.finish();
-            let _ = session.live_thread.join();
+            let _ = wrap_up(session).join();
         }
         // Waits for a transcription still running.
         self.whisper
@@ -283,6 +439,18 @@ impl Voice {
             .unwrap_or_else(|e| e.into_inner())
             .take();
     }
+}
+
+/// Ends a session: the microphone goes off, and the last of a narration recording goes to the
+/// worker keeping it. Returns the worker's thread, which is done once it has kept all of it.
+fn wrap_up(session: Session) -> JoinHandle<()> {
+    session.live.store(false, Ordering::SeqCst);
+    let (samples, _) = session.recording.finish();
+    if let Some(narrating) = session.narrating {
+        let take = narrating.cursor.lock().unwrap().take(samples);
+        let _ = narrating.takes.send(take);
+    }
+    session.live_thread
 }
 
 /// Transcribes a recording while it runs, reporting the text so far.
@@ -315,6 +483,50 @@ impl LiveWorker {
                 Err(e) => {
                     log::warn!("live transcription: {e}");
                     return;
+                }
+            }
+        }
+    }
+
+    /// Keeps each take of a narration recording in turn, until the recording is over and the
+    /// last take is kept. The takes are cut where they are recorded, so the time this takes
+    /// does not change which slide anything was said over.
+    fn narrate(
+        self,
+        takes: mpsc::Receiver<Take>,
+        cursor: Arc<Mutex<Cursor>>,
+        target: NarrationTarget,
+    ) {
+        let mut visit = None;
+        loop {
+            let take = match takes.recv_timeout(LIVE_INTERVAL) {
+                Ok(take) => take,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let mut samples = self.samples.lock().unwrap();
+                    let long = cursor.lock().unwrap().cut_long(&mut samples, self.rate);
+                    match long {
+                        Some(take) => take,
+                        None => continue,
+                    }
+                }
+            };
+            if silent(&take.samples) {
+                let _ = self.app.emit(NARRATION_FAILED_EVENT, SILENT_MICROPHONE);
+                continue;
+            }
+            let goes_on = visit == Some(take.visit);
+            let kept = keep_take(&target, &take, self.rate, goes_on, |audio| {
+                transcribe(&self.whisper, &self.model, audio)
+            });
+            match kept {
+                Ok(true) => {
+                    visit = Some(take.visit);
+                    let _ = self.app.emit(NARRATION_KEPT_EVENT, &target.deck);
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    let _ = self.app.emit(NARRATION_FAILED_EVENT, e.to_string());
                 }
             }
         }
@@ -356,6 +568,34 @@ impl LiveWorker {
     }
 }
 
+/// Adds `take` (at `rate`) to its slide, the way `target` says; `goes_on` when it continues the
+/// last one kept. Returns whether anything was kept: not silence, and nothing of a locked slide.
+fn keep_take(
+    target: &NarrationTarget,
+    take: &Take,
+    rate: u32,
+    goes_on: bool,
+    transcribe: impl FnOnce(&[f32]) -> Result<String>,
+) -> Result<bool> {
+    let audio = resample(&take.samples, rate, WHISPER_RATE);
+    if !may_hold_speech(&audio) || deck::slide_locked(&target.file, &take.slide)? {
+        return Ok(false);
+    }
+    match target.mode {
+        RecordMode::Text => {
+            let text = transcribe(&audio)?;
+            if text.is_empty() {
+                return Ok(false);
+            }
+            deck::append_slide_narration(&target.file, &take.slide, &text, !goes_on)?;
+        }
+        RecordMode::Audio => {
+            narration::append_recording(&target.file, &take.slide, &take.samples, rate)?
+        }
+    }
+    Ok(true)
+}
+
 /// Waits `interval` for the next pass; false once the session is over.
 fn next_pass(live: &AtomicBool, interval: Duration) -> bool {
     let mut waited = Duration::ZERO;
@@ -391,7 +631,7 @@ fn advance(
     let segment = (SEGMENT_SECONDS * WHISPER_RATE as f32) as usize;
     while audio.len().saturating_sub(transcript.offset) > segment {
         let start = transcript.offset;
-        let end = start + split_point(&audio[start..start + segment]);
+        let end = start + split_point(&audio[start..start + segment], WHISPER_RATE);
         let text = transcribe(whisper, model, &audio[start..end])?;
         transcript.text = join_text(&transcript.text, &text);
         transcript.offset = end;
@@ -403,10 +643,10 @@ fn advance(
     ))
 }
 
-/// Where to cut `audio` (at [`WHISPER_RATE`]) to not cut a word: the middle of its quietest
-/// tenth of a second within its last quarter.
-pub fn split_point(audio: &[f32]) -> usize {
-    let window = WHISPER_RATE as usize / 10;
+/// Where to cut `audio` (at `rate`) to not cut a word: the middle of its quietest tenth of a
+/// second within its last quarter.
+pub fn split_point(audio: &[f32], rate: u32) -> usize {
+    let window = rate as usize / 10;
     if audio.len() < window * 2 {
         return audio.len();
     }
@@ -1039,7 +1279,7 @@ mod tests {
         let rate = WHISPER_RATE as usize;
         let mut audio = vec![0.3; rate * 20];
         audio[rate * 17..rate * 17 + rate / 5].fill(0.0);
-        let cut = split_point(&audio);
+        let cut = split_point(&audio, WHISPER_RATE);
         assert!(
             (rate * 17..rate * 17 + rate / 5).contains(&cut),
             "cut {cut}"
@@ -1047,8 +1287,8 @@ mod tests {
         // A pause early on is ignored: the segment should stay long.
         let mut early = vec![0.3; rate * 20];
         early[rate..rate * 2].fill(0.0);
-        assert!(split_point(&early) >= rate * 15);
-        assert_eq!(split_point(&[0.1; 100]), 100);
+        assert!(split_point(&early, WHISPER_RATE) >= rate * 15);
+        assert_eq!(split_point(&[0.1; 100], WHISPER_RATE), 100);
     }
 
     #[test]
@@ -1079,6 +1319,7 @@ mod tests {
     fn session(follower: Option<&str>) -> Session {
         Session {
             follower: follower.map(String::from),
+            narrating: None,
             recording: Recording {
                 stop: mpsc::channel().0,
                 thread: std::thread::spawn(|| {}),
@@ -1108,6 +1349,202 @@ mod tests {
         voice.window_closed("main");
         assert!(voice.session.lock().unwrap().is_some());
         voice.cancel();
+    }
+
+    /// A narration session at slide `a`, with what the microphone delivered so far.
+    fn narrating_session(samples: Vec<f32>) -> (Session, mpsc::Receiver<Take>) {
+        let (takes, incoming) = mpsc::channel();
+        let mut session = session(Some("presenter-1"));
+        *session.recording.samples.lock().unwrap() = samples;
+        session.narrating = Some(Narrating {
+            cursor: Arc::new(Mutex::new(Cursor {
+                slide: "a".into(),
+                visit: 0,
+            })),
+            takes,
+        });
+        (session, incoming)
+    }
+
+    #[test]
+    fn turning_to_a_slide_cuts_what_was_said_over_the_last_one() {
+        let (session, takes) = narrating_session(vec![0.1, 0.2]);
+        let voice = Voice::default();
+        *voice.session.lock().unwrap() = Some(session);
+
+        voice.narrate_slide("a");
+        assert!(takes.try_recv().is_err(), "still on the same slide");
+
+        voice.narrate_slide("b");
+        let take = takes.try_recv().unwrap();
+        assert_eq!(
+            (take.slide.as_str(), take.visit, take.samples),
+            ("a", 0, vec![0.1, 0.2])
+        );
+
+        // Back to a slide: another visit, so what is said now starts a new paragraph.
+        voice.narrate_slide("a");
+        let take = takes.try_recv().unwrap();
+        assert_eq!((take.slide.as_str(), take.visit), ("b", 1));
+        voice.cancel();
+        let last = takes.try_recv().unwrap();
+        assert_eq!((last.slide.as_str(), last.visit), ("a", 2));
+    }
+
+    #[test]
+    fn other_sessions_have_no_slides_to_turn_to() {
+        let voice = Voice::default();
+        voice.narrate_slide("a");
+        *voice.session.lock().unwrap() = Some(session(None));
+        voice.narrate_slide("a");
+        tauri::async_runtime::block_on(voice.stop_narration()).unwrap();
+        assert!(voice.session.lock().unwrap().is_some(), "dictation goes on");
+        voice.cancel();
+    }
+
+    #[test]
+    fn closing_the_recording_window_keeps_what_was_said() {
+        let (session, takes) = narrating_session(vec![0.1, 0.2]);
+        let voice = Voice::default();
+        *voice.session.lock().unwrap() = Some(session);
+        voice.window_closed("main");
+        assert!(voice.session.lock().unwrap().is_some());
+        voice.window_closed("presenter-1");
+        assert!(voice.session.lock().unwrap().is_none());
+        assert_eq!(takes.try_recv().unwrap().samples, vec![0.1, 0.2]);
+    }
+
+    #[test]
+    fn stopping_keeps_the_last_of_the_recording() {
+        let (session, takes) = narrating_session(vec![0.3]);
+        let voice = Voice::default();
+        *voice.session.lock().unwrap() = Some(session);
+        tauri::async_runtime::block_on(voice.stop_narration()).unwrap();
+        assert!(voice.session.lock().unwrap().is_none());
+        assert_eq!(takes.try_recv().unwrap().samples, vec![0.3]);
+    }
+
+    #[test]
+    fn long_takes_are_cut_at_a_pause_and_the_rest_stays() {
+        let rate = 48_000;
+        let cursor = Cursor {
+            slide: "a".into(),
+            visit: 3,
+        };
+        let mut short = vec![0.3; rate * 10];
+        assert!(cursor.cut_long(&mut short, rate as u32).is_none());
+        assert_eq!(short.len(), rate * 10);
+
+        let mut samples = vec![0.3; rate * 25];
+        samples[rate * 17..rate * 17 + rate / 5].fill(0.0);
+        let take = cursor.cut_long(&mut samples, rate as u32).unwrap();
+        assert_eq!((take.slide.as_str(), take.visit), ("a", 3));
+        assert!(
+            (rate * 17..rate * 17 + rate / 5).contains(&take.samples.len()),
+            "cut at {}",
+            take.samples.len()
+        );
+        assert_eq!(take.samples.len() + samples.len(), rate * 25);
+    }
+
+    fn narrated_deck() -> (PathBuf, PathBuf) {
+        let dir = temp_dir();
+        let file = dir.join("deck.html");
+        fs::write(
+            &file,
+            r#"<!DOCTYPE html><html><head><title>T</title></head><body><main class="deck"><section class="slide" id="a"><aside class="narration">So,</aside></section><section class="slide" id="b" data-locked><h1>B</h1></section></main></body></html>"#,
+        )
+        .unwrap();
+        (dir, file)
+    }
+
+    fn target(file: &Path, mode: RecordMode) -> NarrationTarget {
+        NarrationTarget {
+            deck: file.to_string_lossy().into_owned(),
+            file: file.to_path_buf(),
+            mode,
+        }
+    }
+
+    fn speech(slide: &str) -> Take {
+        Take {
+            slide: slide.into(),
+            visit: 0,
+            samples: vec![0.2; WHISPER_RATE as usize],
+        }
+    }
+
+    fn narration_of(file: &Path, slide: &str) -> String {
+        let deck = deck::load(file).unwrap();
+        let slide = deck.slides.iter().find(|s| s.id == slide).unwrap();
+        slide.narration.clone()
+    }
+
+    #[test]
+    fn text_goes_on_within_a_visit_and_starts_a_paragraph_on_a_new_one() {
+        let (dir, file) = narrated_deck();
+        let target = target(&file, RecordMode::Text);
+        let say = |text: &'static str, goes_on: bool| {
+            keep_take(&target, &speech("a"), WHISPER_RATE, goes_on, |_| {
+                Ok(text.into())
+            })
+        };
+        assert!(say("um this one", true).unwrap());
+        assert_eq!(narration_of(&file, "a"), "So, um this one");
+        assert!(say("and again", false).unwrap());
+        assert_eq!(narration_of(&file, "a"), "So, um this one\n\nand again");
+        // Whisper heard nothing.
+        assert!(!say("", true).unwrap());
+        assert_eq!(narration_of(&file, "a"), "So, um this one\n\nand again");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn silence_and_locked_slides_are_not_kept() {
+        let (dir, file) = narrated_deck();
+        for mode in [RecordMode::Text, RecordMode::Audio] {
+            let target = target(&file, mode);
+            let never = |_: &[f32]| panic!("nothing to transcribe");
+            let locked = keep_take(&target, &speech("b"), WHISPER_RATE, false, never);
+            assert!(!locked.unwrap());
+            let mut quiet = speech("a");
+            quiet.samples.fill(0.0001);
+            assert!(!keep_take(&target, &quiet, WHISPER_RATE, false, never).unwrap());
+        }
+        assert_eq!(narration_of(&file, "a"), "So,");
+        assert!(!narration::audio_dir(&file).exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn audio_goes_to_the_slides_recording_without_transcribing() {
+        let (dir, file) = narrated_deck();
+        let target = target(&file, RecordMode::Audio);
+        let never = |_: &[f32]| panic!("audio needs no transcript");
+        assert!(keep_take(&target, &speech("a"), WHISPER_RATE, false, never).unwrap());
+        let audio = narration::statuses(&file, &deck::load(&file).unwrap());
+        assert!(audio[0].recorded);
+        assert_eq!(audio[0].seconds, Some(1.0));
+        assert_eq!(narration_of(&file, "a"), "So,");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn transcribing_a_take_that_fails_says_so() {
+        let (dir, file) = narrated_deck();
+        let target = target(&file, RecordMode::Text);
+        let result = keep_take(&target, &speech("a"), WHISPER_RATE, false, |_| {
+            Err(Error::msg("no model"))
+        });
+        assert_eq!(result.unwrap_err().to_string(), "no model");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_record_mode_comes_from_the_frontend_in_lower_case() {
+        let mode = |json| serde_json::from_str::<RecordMode>(json).unwrap();
+        assert_eq!(mode("\"text\""), RecordMode::Text);
+        assert_eq!(mode("\"audio\""), RecordMode::Audio);
     }
 
     #[test]

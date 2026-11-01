@@ -111,8 +111,27 @@ function stopFollowing(following: { current: boolean }) {
   void api.cancelRecording();
 }
 
-/** What the teleprompter has to say above the script: its first-use offer, progress or failure. */
-export function TeleprompterNotice({ teleprompter }: { teleprompter: ReturnType<typeof useTeleprompter> }) {
+/** What a listening tool of the presenter view does with the speech model, and what it says about it. */
+export interface Listener {
+  phase: string;
+  modelBytes: number;
+  progress: VoiceDownloadProgress | null;
+  error: string | null;
+  download: () => Promise<void>;
+  decline: () => void;
+}
+
+/**
+ * What the teleprompter (or another tool that listens, naming what it does as `purpose`) has to
+ * say above the script: its first-use offer, progress or failure.
+ */
+export function TeleprompterNotice({
+  teleprompter,
+  purpose = "The teleprompter listens on this computer with Whisper.",
+}: {
+  teleprompter: Listener;
+  purpose?: string;
+}) {
   const { phase, modelBytes, progress, error } = teleprompter;
   if (error)
     return (
@@ -125,8 +144,7 @@ export function TeleprompterNotice({ teleprompter }: { teleprompter: ReturnType<
       <div className="shrink-0 rounded-lg bg-white/5 p-2 text-xs">
         <p className="font-medium">Download the speech model?</p>
         <p className="mt-1 text-white/60">
-          The teleprompter listens on this computer with Whisper. The model ({formatBytes(modelBytes)}) is downloaded
-          once to ~/.slopslides/models.
+          {purpose} The model ({formatBytes(modelBytes)}) is downloaded once to ~/.slopslides/models.
         </p>
         <div className="mt-2 flex justify-end gap-1.5">
           <button

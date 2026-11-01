@@ -33,6 +33,7 @@ import {
   pickEffort,
   requestEffort,
 } from "./lib/models";
+import { cleanNarrationPrompt } from "./lib/narration";
 import {
   type Approval,
   DEFAULT_PERMISSION_MODES,
@@ -457,6 +458,8 @@ interface AppState {
   setNotes: (slide: string, text: string) => Promise<void>;
   /** Sets the seconds expected on the slide; 0 removes them. */
   setSlideTime: (slide: string, seconds: number) => Promise<void>;
+  /** Hands the composer a request to clean up the recorded narration of `slide`, or (null) of every slide. */
+  cleanNarration: (slide: string | null) => void;
   /** Sets the voice (or language) the deck's narration is said in. */
   setNarrationVoice: (voice: string) => Promise<void>;
   setNarrationLanguage: (language: string) => Promise<void>;
@@ -1077,6 +1080,8 @@ export const useApp = create<AppState>((set, get) => ({
   setNotes: (slide, text) => editDeck((id) => api.setSlideNotes(id, slide, text)),
 
   setSlideTime: (slide, seconds) => editDeck((id) => api.setSlideTime(id, slide, seconds)),
+
+  cleanNarration: (slide) => promptAgent(cleanNarrationPrompt(slide)),
 
   setNarrationVoice: (voice) => editDeck((id) => api.setNarrationVoice(id, voice)),
 

@@ -1,8 +1,9 @@
-import { Loader2, RotateCcw, ScrollText, X } from "lucide-react";
+import { Captions, Loader2, Mic, RotateCcw, ScrollText, Square, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Deck, Slide } from "../lib/api";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn } from "../lib/utils";
+import { RecordingStatus, useNarrationRecorder } from "./NarrationRecorder";
 import { ScriptMarkdown } from "./ScriptMarkdown";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { FollowedScript, TeleprompterNotice, useTeleprompter } from "./Teleprompter";
@@ -49,7 +50,10 @@ export function remaining(elapsedMs: number, minutes: number): { text: string; o
  * notes of the slide on screen and the next slide to be shown. Beside the slide it is a narrow
  * column; in a window of its own (`window`, on a second screen) it also shows the slide itself.
  * The teleprompter listens to the presenter and follows them through the slide's narration, or
- * its notes when it has none, fading what was said (see src/lib/teleprompter.ts).
+ * its notes when it has none, fading what was said (see src/lib/teleprompter.ts). The record
+ * buttons take down what the presenter says over each slide, as its narration's text or its
+ * narration audio (see `useNarrationRecorder`), while they go through the slides. All of them
+ * listen on the one microphone, so one at a time.
  */
 export function PresenterPanel(props: {
   deck: Deck;
@@ -80,7 +84,17 @@ export function PresenterPanel(props: {
   };
   const teleprompter = useTeleprompter();
   const following = teleprompter.phase === "following";
-  const script = following ? slide?.narration || slide?.notes : slide?.notes;
+  const recorder = useNarrationRecorder(deck.id, id);
+  const recording = recorder.phase === "recording";
+  const recordingText = recording && recorder.mode === "text";
+  const script =
+    following || (recording && !recordingText)
+      ? slide?.narration || slide?.notes
+      : recordingText
+        ? slide?.narration
+        : slide?.notes;
+  const busyRecording =
+    recorder.phase === "starting" || recorder.phase === "downloading" || recorder.phase === "saving";
   const notesClass = cn(
     "min-h-0 flex-1 overflow-y-auto rounded-lg bg-white/5 p-3 leading-relaxed",
     // Formatted text keeps to the dark panel whatever the app's theme.
@@ -104,12 +118,49 @@ export function PresenterPanel(props: {
         <PanelButton
           label={following ? "Stop the teleprompter" : "Teleprompter: follow what you say through the script"}
           active={following}
+          disabled={recording || busyRecording}
           onClick={() => void teleprompter.toggle()}
         >
           {teleprompter.phase === "starting" || teleprompter.phase === "downloading" ? (
             <Loader2 className="animate-spin" />
           ) : (
             <ScrollText />
+          )}
+        </PanelButton>
+        <PanelButton
+          label={
+            recordingText
+              ? "Stop recording the text"
+              : "Record the narration as text: what you say is added to each slide"
+          }
+          active={recordingText}
+          disabled={teleprompter.phase !== "off" || !slide || (recording && !recordingText)}
+          onClick={() => void recorder.toggle("text")}
+        >
+          {busyRecording && recorder.mode === "text" ? (
+            <Loader2 className="animate-spin" />
+          ) : recordingText ? (
+            <Square className="fill-current" />
+          ) : (
+            <Captions />
+          )}
+        </PanelButton>
+        <PanelButton
+          label={
+            recording && !recordingText
+              ? "Stop recording the audio"
+              : "Record the narration as audio: your voice is added to each slide"
+          }
+          active={recording && !recordingText}
+          disabled={teleprompter.phase !== "off" || !slide || recordingText}
+          onClick={() => void recorder.toggle("audio")}
+        >
+          {busyRecording && recorder.mode === "audio" ? (
+            <Loader2 className="animate-spin" />
+          ) : recording && !recordingText ? (
+            <Square className="fill-current" />
+          ) : (
+            <Mic />
           )}
         </PanelButton>
         <PanelButton label="Restart the timer" onClick={props.onRestart}>
@@ -142,11 +193,22 @@ export function PresenterPanel(props: {
         </div>
       )}
       <TeleprompterNotice teleprompter={teleprompter} />
+      <TeleprompterNotice
+        teleprompter={recorder}
+        purpose="What you say is transcribed on this computer with Whisper."
+      />
+      <RecordingStatus recorder={recorder} locked={!!slide?.locked} />
       {following && script ? (
         <FollowedScript key={`${id}:${script}`} text={script} className={notesClass} />
       ) : (
         <div data-testid="presenter-notes" className={notesClass}>
-          {script ? <ScriptMarkdown text={script} /> : <span className="text-white/40">No notes for this slide.</span>}
+          {script ? (
+            <ScriptMarkdown text={script} />
+          ) : (
+            <span className="text-white/40">
+              {recordingText ? "What you say over this slide shows up here." : "No notes for this slide."}
+            </span>
+          )}
         </div>
       )}
       {!props.window && (
@@ -245,18 +307,25 @@ function ElapsedTime(props: { startedAt: number; slideStartedAt: number; budget:
   );
 }
 
-function PanelButton(props: { label: string; active?: boolean; onClick: () => void; children: React.ReactNode }) {
+function PanelButton(props: {
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <button
       type="button"
       title={props.label}
       aria-label={props.label}
       aria-pressed={props.active}
+      disabled={props.disabled}
       // Keep keyboard focus where it was, so Space still advances the slide.
       onMouseDown={(event) => event.preventDefault()}
       onClick={props.onClick}
       className={cn(
-        "flex size-7 items-center justify-center rounded-lg hover:bg-white/10 [&_svg]:size-4",
+        "flex size-7 items-center justify-center rounded-lg hover:bg-white/10 disabled:pointer-events-none disabled:opacity-35 [&_svg]:size-4",
         props.active ? "bg-red-500/15 text-red-400" : "text-white/70 hover:text-white",
       )}
     >

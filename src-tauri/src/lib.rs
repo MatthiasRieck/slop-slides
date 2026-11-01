@@ -790,6 +790,53 @@ fn cancel_recording(voice: State<voice::Voice>) {
     voice.cancel();
 }
 
+/// Starts recording the deck's narration for the calling window, from `slide` on: what is said
+/// goes to the slide on screen as text or as audio, with `narration-recorded` events as it does.
+#[tauri::command]
+async fn start_narration_recording(
+    app: AppHandle,
+    window: tauri::Window,
+    voice: State<'_, voice::Voice>,
+    id: String,
+    slide: String,
+    mode: voice::RecordMode,
+) -> Result<()> {
+    let target = voice::NarrationTarget {
+        file: deck::deck_file(&id)?,
+        deck: id,
+        mode,
+    };
+    voice
+        .record_narration(
+            app,
+            &deck::app_home()?,
+            window.label().to_string(),
+            target,
+            slide,
+        )
+        .await
+}
+
+/// Tells the narration recording which slide is on screen now.
+#[tauri::command]
+fn narration_recording_slide(voice: State<voice::Voice>, slide: String) {
+    voice.narrate_slide(&slide);
+}
+
+/// Ends the narration recording, once all of it is kept.
+#[tauri::command]
+async fn stop_narration_recording(voice: State<'_, voice::Voice>) -> Result<()> {
+    voice.stop_narration().await
+}
+
+/// Deletes a slide's recorded narration; returns every slide's audio.
+#[tauri::command]
+fn delete_recorded_narration(id: String, slide: String) -> Result<Vec<narration::SlideAudio>> {
+    let file = deck::deck_file(&id)?;
+    narration::delete_recording(&file, &slide)?;
+    Ok(narration::statuses(&file, &deck::load(&file)?))
+}
+
 #[tauri::command]
 fn speech_status(narration: State<narration::Narration>) -> Result<narration::SpeechStatus> {
     Ok(narration.status(&deck::app_home()?))
@@ -989,6 +1036,10 @@ pub fn run() {
             start_recording,
             stop_recording,
             cancel_recording,
+            start_narration_recording,
+            narration_recording_slide,
+            stop_narration_recording,
+            delete_recorded_narration,
             speech_status,
             download_speech_model,
             narration_audio,

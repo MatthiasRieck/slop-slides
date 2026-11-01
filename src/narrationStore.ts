@@ -35,6 +35,8 @@ interface NarrationState {
   /** Says the `slides`' (all for null) narration that has no up-to-date audio; false when it failed or was cancelled. */
   renderAudio: (deck: string, slides: string[] | null) => Promise<boolean>;
   cancelRender: () => Promise<void>;
+  /** Deletes the slide's recording, so the voice model can say its narration again. */
+  deleteRecording: (deck: string, slide: string) => Promise<void>;
 }
 
 function fail(error: unknown) {
@@ -99,6 +101,15 @@ export const useNarration = create<NarrationState>((set, get) => ({
   cancelRender: async () => {
     await api.cancelNarration();
   },
+
+  deleteRecording: async (deck, slide) => {
+    try {
+      const audio = await api.deleteRecordedNarration(deck, slide);
+      set({ audio: byId(audio), audioDeck: deck });
+    } catch (error) {
+      fail(error);
+    }
+  },
 }));
 
 /** Keeps the narration state in step with backend events and the open deck. */
@@ -110,6 +121,10 @@ export async function initNarrationEvents() {
     // Renders started in another window, or by a video export, show here too.
     useNarration.setState({ render: payload.slide === null ? null : payload });
     if (payload.deck === useApp.getState().deck?.id) void useNarration.getState().refreshAudio(payload.deck);
+  });
+  // Recorded in the presenter view, maybe in its own window.
+  await listen<string>("narration-recorded", ({ payload }) => {
+    if (payload === useApp.getState().deck?.id) void useNarration.getState().refreshAudio(payload);
   });
   // A changed deck (a script, the voice or language) changes which audio is up to date.
   let last: Deck | null = null;

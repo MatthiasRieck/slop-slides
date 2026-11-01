@@ -1,4 +1,5 @@
-import { AudioLines, Download, Loader2, Lock, Play, Square, X } from "lucide-react";
+import { ask } from "@tauri-apps/plugin-dialog";
+import { AudioLines, Download, Loader2, Lock, Play, Sparkles, Square, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { type Deck, errorMessage, type Slide, type SlideAudio } from "../lib/api";
@@ -57,6 +58,7 @@ export function NarrationPanel() {
       />
       <div className="flex w-72 shrink-0 flex-col justify-between overflow-y-auto border-l">
         <SpeechSettings deck={deck} />
+        <CleanUpAll deck={deck} />
         <DeckAudio deck={deck} />
       </div>
     </section>
@@ -178,13 +180,25 @@ function NarrationEditor(props: {
         onBlur={() => void flush()}
         placeholder={slide.locked ? "No narration." : "What is said while this slide is shown…"}
       />
-      <SlideAudioControls deck={deck} slide={slide.id} hasText={draft.trim() !== ""} flush={flush} />
+      <SlideAudioControls
+        deck={deck}
+        slide={slide.id}
+        hasText={draft.trim() !== ""}
+        locked={!!slide.locked}
+        flush={flush}
+      />
     </div>
   );
 }
 
 /** What the slide's audio is, and buttons to hear it and to (re)make it. */
-function SlideAudioControls(props: { deck: Deck; slide: string; hasText: boolean; flush: () => Promise<void> }) {
+function SlideAudioControls(props: {
+  deck: Deck;
+  slide: string;
+  hasText: boolean;
+  locked: boolean;
+  flush: () => Promise<void>;
+}) {
   const { deck, slide } = props;
   const audio = useNarration((s) => (s.audioDeck === deck.id ? s.audio[slide] : undefined));
   const speech = useNarration((s) => s.speech);
@@ -208,7 +222,16 @@ function SlideAudioControls(props: { deck: Deck; slide: string; hasText: boolean
       useApp.getState().setError(`Could not play the narration: ${errorMessage(error)}`);
     }
   };
-  if (!props.hasText) return null;
+  const clean = async () => {
+    await props.flush();
+    useApp.getState().cleanNarration(slide);
+  };
+  const remove = async () => {
+    playback?.stop();
+    if (await confirmDelete()) await useNarration.getState().deleteRecording(deck.id, slide);
+  };
+  const recorded = !!audio?.recorded;
+  if (!props.hasText && !recorded) return null;
   const busy = render?.slide === slide || (render !== null && render.slide === null && render.deck === deck.id);
   return (
     <div className="flex items-center justify-between gap-2 text-xs">
@@ -223,6 +246,17 @@ function SlideAudioControls(props: { deck: Deck; slide: string; hasText: boolean
         )}
       </span>
       <div className="flex shrink-0 gap-1">
+        {props.hasText && !props.locked && (
+          <button
+            type="button"
+            className={button}
+            onClick={() => void clean()}
+            title="Ask the agent to turn this slide's recorded words into clean, fluent sentences"
+          >
+            <Sparkles />
+            Clean up
+          </button>
+        )}
         <button
           type="button"
           className={button}
@@ -233,16 +267,29 @@ function SlideAudioControls(props: { deck: Deck; slide: string; hasText: boolean
           {playback ? <Square /> : <Play />}
           {playback ? "Stop" : "Play"}
         </button>
-        <button
-          type="button"
-          className={button}
-          disabled={!canSpeak || render !== null}
-          onClick={() => void generate()}
-          title={canSpeak ? "Speak this slide's narration" : "Download the voice model first"}
-        >
-          <AudioLines />
-          {audio?.state === "ready" ? "Regenerate" : "Generate"}
-        </button>
+        {recorded ? (
+          <button
+            type="button"
+            className={button}
+            disabled={props.locked}
+            onClick={() => void remove()}
+            title="Delete your recording of this slide"
+          >
+            <Trash2 />
+            Delete recording
+          </button>
+        ) : (
+          <button
+            type="button"
+            className={button}
+            disabled={!canSpeak || render !== null}
+            onClick={() => void generate()}
+            title={canSpeak ? "Speak this slide's narration" : "Download the voice model first"}
+          >
+            <AudioLines />
+            {audio?.state === "ready" ? "Regenerate" : "Generate"}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -251,7 +298,36 @@ function SlideAudioControls(props: { deck: Deck; slide: string; hasText: boolean
 function audioLabel(audio: SlideAudio | undefined): string {
   if (!audio || audio.state === "missing" || audio.state === "none") return "No audio yet";
   const length = audio.seconds !== null ? formatDuration(audio.seconds) : "";
+  if (audio.recorded) return `Your recording ${length}`;
   return audio.state === "stale" ? `Audio ${length}, out of date` : `Audio ${length}`;
+}
+
+/** Whether the user really wants their recording gone; it cannot be brought back. */
+async function confirmDelete(): Promise<boolean> {
+  const message = "Delete your recording of this slide? This can't be undone.";
+  try {
+    return await ask(message, { title: "Delete recording", kind: "warning", okLabel: "Delete" });
+  } catch {
+    return window.confirm(message);
+  }
+}
+
+/** Has the agent make clean, fluent scripts of the whole deck's recorded words. */
+function CleanUpAll({ deck }: { deck: Deck }) {
+  if (!deck.slides.some((s) => s.narration && !s.locked)) return null;
+  return (
+    <div className="border-t p-3">
+      <button
+        type="button"
+        className={button}
+        onClick={() => useApp.getState().cleanNarration(null)}
+        title="Ask the agent to turn the recorded words of all slides into clean, fluent sentences"
+      >
+        <Sparkles />
+        Clean up all narration
+      </button>
+    </div>
+  );
 }
 
 /** The deck's narration as a whole: how much needs speaking, and the render running. */

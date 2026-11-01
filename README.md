@@ -40,7 +40,8 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   elements keep a
   temporary offset; **Tidy layout** then sends the agent a screenshot so it rebuilds the
   slide's layout around where you put things.
-- **Git:** the Git tab shows what changed in the deck since the last commit, staged or not. The
+- **Git:** for a deck in a git repository, the Git tab shows what changed since the last commit,
+  staged or not. Without a repository, or without `git` installed, there is no Git tab. The
   slide list marks each slide with an icon in the middle of its thumbnail: a green plus for
   added, an orange pen for modified, a red trash can for removed and a blue arrow for moved
   (with the number it used to have). A slide that was edited and moved shows both, and removed
@@ -55,7 +56,7 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   shared styles are above the slide. Staging one slide leaves the others out of the next commit,
   and brings along the images it shows. Restoring puts that one change back as it was committed;
   ⌘Z takes it back. The box above the list commits what is staged, and its + and − buttons stage
-  and unstage the whole deck (changes to sections only go in that way). It needs `git`. Before a
+  and unstage the whole deck (changes to sections only go in that way). Before a
   deck's first commit, only the whole deck can be staged.
 - **Right:** chat with the agent. It knows which slide you're on, and you can attach images
   (paperclip, or drop files anywhere on the window). The microphone button dictates: click to

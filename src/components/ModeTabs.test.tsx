@@ -1,15 +1,23 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ ask: vi.fn() }));
 
+import { useChanges } from "../changesStore";
 import { deckMode, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ModeTabs } from "./ModeTabs";
 
 const tab = (name: string) => screen.getByRole("tab", { name }) as HTMLButtonElement;
+const tabs = () => screen.getAllByRole("tab").map((t) => t.textContent);
+const repositoryChecks = () => vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "deck_in_repository").length;
+const inRepository = (found: boolean) => {
+  vi.mocked(invoke).mockImplementation(async () => found);
+};
+const settled = () => act(async () => {});
 const selected = () =>
   screen
     .getAllByRole("tab")
@@ -25,21 +33,17 @@ beforeEach(() => {
     editing: false,
     slideMode: "view",
     codeDirty: false,
+    running: false,
   });
+  vi.mocked(invoke).mockReset();
+  inRepository(true);
+  useChanges.setState({ repository: useApp.getState().deck?.id ?? null });
 });
 
 describe("ModeTabs", () => {
   it("lists the modes, with View selected", () => {
     render(<ModeTabs />);
-    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
-      "View",
-      "Edit",
-      "Narration",
-      "Notes",
-      "Settings",
-      "Git",
-      "HTML",
-    ]);
+    expect(tabs()).toEqual(["View", "Edit", "Narration", "Notes", "Settings", "Git", "HTML"]);
     expect(selected()).toEqual(["View"]);
   });
 
@@ -78,6 +82,70 @@ describe("ModeTabs", () => {
     render(<ModeTabs />);
     const enabled = screen.getAllByRole("tab").filter((t) => !(t as HTMLButtonElement).disabled);
     expect(enabled.map((t) => t.textContent)).toEqual(["View", "Settings", "Git", "HTML"]);
+  });
+
+  describe("the Git tab", () => {
+    beforeEach(() => {
+      useChanges.setState({ repository: null });
+    });
+
+    it("is not there for a deck outside a repository, or without git", async () => {
+      inRepository(false);
+      render(<ModeTabs />);
+      await settled();
+      expect(tabs()).toEqual(["View", "Edit", "Narration", "Notes", "Settings", "HTML"]);
+    });
+
+    it("shows up once the deck is found in a repository", async () => {
+      render(<ModeTabs />);
+      expect(tabs()).not.toContain("Git");
+      await settled();
+      expect(tabs()).toContain("Git");
+    });
+
+    it("shows up on coming back to the window after a git init", async () => {
+      inRepository(false);
+      render(<ModeTabs />);
+      await settled();
+      inRepository(true);
+      await act(async () => {
+        fireEvent.focus(window);
+      });
+      expect(tabs()).toContain("Git");
+    });
+
+    it("shows up after a git init by the agent", async () => {
+      useApp.setState({ running: true });
+      inRepository(false);
+      render(<ModeTabs />);
+      await settled();
+      inRepository(true);
+      await act(async () => useApp.setState({ running: false }));
+      expect(tabs()).toContain("Git");
+    });
+
+    it("closes Git mode when the repository goes away", async () => {
+      inRepository(true);
+      render(<ModeTabs />);
+      await settled();
+      fireEvent.click(tab("Git"));
+      expect(deckMode(useApp.getState())).toBe("git");
+      inRepository(false);
+      await act(async () => {
+        fireEvent.focus(window);
+      });
+      expect(deckMode(useApp.getState())).toBe("view");
+      expect(tabs()).not.toContain("Git");
+    });
+
+    it("stops looking when closed", async () => {
+      const { unmount } = render(<ModeTabs />);
+      await settled();
+      unmount();
+      const before = repositoryChecks();
+      fireEvent.focus(window);
+      expect(repositoryChecks()).toBe(before);
+    });
   });
 
   it("marks a slide that has narration", () => {

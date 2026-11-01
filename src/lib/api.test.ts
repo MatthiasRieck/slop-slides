@@ -161,6 +161,7 @@ const CASES = [
     { id: "talk", dest: "/out.mp4", options: DEFAULT_VIDEO_OPTIONS },
   ],
   ["cancelVideoExport", () => api.cancelVideoExport(), "cancel_video_export", undefined],
+  ["deckInRepository", () => api.deckInRepository("talk"), "deck_in_repository", { id: "talk" }],
   ["deckChanges", () => api.deckChanges("talk"), "deck_changes", { id: "talk" }],
   [
     "stageChange",

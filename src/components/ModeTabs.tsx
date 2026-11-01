@@ -1,5 +1,7 @@
 import { AudioLines, Code2, Eye, GitCompare, Pencil, Settings2, StickyNote } from "lucide-react";
+import { useEffect } from "react";
 
+import { useChanges } from "../changesStore";
 import { basename, cn } from "../lib/utils";
 import { type DeckMode, deckMode, useApp } from "../store";
 
@@ -13,6 +15,29 @@ const MODES: { id: DeckMode; label: string; icon: typeof Eye }[] = [
   { id: "code", label: "HTML", icon: Code2 },
 ];
 
+/**
+ * Whether the deck is in a git repository, and so has a Git mode. A `git init` shows up on coming
+ * back to the window or after the agent's turn, and with the repository gone the mode closes.
+ */
+function useInRepository() {
+  const deck = useApp((s) => s.deck?.id ?? null);
+  const running = useApp((s) => s.running);
+  const inGitMode = useApp((s) => deckMode(s) === "git");
+  const inRepository = useChanges((s) => deck !== null && s.repository === deck);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: look again whenever a turn starts or ends
+  useEffect(() => {
+    if (!deck) return;
+    const check = () => void useChanges.getState().checkRepository(deck);
+    check();
+    window.addEventListener("focus", check);
+    return () => window.removeEventListener("focus", check);
+  }, [deck, running]);
+  useEffect(() => {
+    if (inGitMode && !inRepository) useApp.getState().setMode("view");
+  }, [inGitMode, inRepository]);
+  return inRepository;
+}
+
 /** The deck's modes, in the top bar. Each brings its own tools to the row under it. */
 export function ModeTabs() {
   const mode = useApp(deckMode);
@@ -21,6 +46,7 @@ export function ModeTabs() {
   const narrated = useApp((s) => !!s.deck?.slides.find((slide) => slide.id === s.selected)?.narration);
   const codeDirty = useApp((s) => s.codeDirty);
   const file = useApp((s) => basename(s.deck?.id ?? ""));
+  const inRepository = useInRepository();
 
   const titles: Record<DeckMode, string> = {
     view: "Show the slide, mark it up and comment on it; marks and comments go to the agent with your next message",
@@ -34,10 +60,11 @@ export function ModeTabs() {
     code: `Show ${file}, scrolled to the selected slide`,
   };
   const needsSlide = (id: DeckMode) => id === "edit" || id === "narration" || id === "notes";
+  const modes = MODES.filter(({ id }) => id !== "git" || inRepository);
 
   return (
     <div role="tablist" aria-label="Mode" className="flex items-center rounded-md border bg-muted p-0.5">
-      {MODES.map(({ id, label, icon: Icon }) => (
+      {modes.map(({ id, label, icon: Icon }) => (
         <button
           key={id}
           type="button"

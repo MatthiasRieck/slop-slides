@@ -13,10 +13,14 @@ interface ChangesState {
   /** The changes of `deck`; null until they have been read. */
   changes: DeckChanges | null;
   deck: string | null;
+  /** The deck last found in a git repository, which is what offers Git mode. */
+  repository: string | null;
   picked: string | null;
   /** Leaves the slides that did not change out of the list. */
   onlyChanges: boolean;
   divider: Divider;
+  /** Finds out whether `deck` is in a git repository. */
+  checkRepository: (deck: string) => Promise<void>;
   /** Reads the changes of `deck` again. */
   refresh: (deck: string) => Promise<void>;
   /** Picks a row of the list; a slide still in the deck becomes the app's selected slide too. */
@@ -75,9 +79,20 @@ export const useChanges = create<ChangesState>((set, get) => {
   return {
     changes: null,
     deck: null,
+    repository: null,
     picked: null,
     onlyChanges: false,
     divider: DEFAULT_DIVIDER,
+
+    checkRepository: async (deck) => {
+      let found = false;
+      try {
+        found = await api.deckInRepository(deck);
+      } catch {
+        // A deck that cannot be checked just has no Git mode.
+      }
+      if (useApp.getState().deck?.id === deck) set({ repository: found ? deck : null });
+    },
 
     refresh: async (deck) => {
       const ticket = ++lastRefresh;

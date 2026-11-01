@@ -414,15 +414,8 @@ function Changes({ deck }: { deck: Deck }) {
   useRefreshChanges(deck.id);
   useChangesKeyboard();
 
-  if (!changes) return <div className="h-full bg-canvas" />;
-  if (changes.tracking === "noRepository") {
-    return (
-      <Message title="This deck is not in a git repository">
-        Put its folder under version control (<code>git init</code>) and commit it to compare the slides with that
-        version.
-      </Message>
-    );
-  }
+  // Without a repository the mode is about to close; see ModeTabs.tsx.
+  if (!changes || changes.tracking === "noRepository") return <div className="h-full bg-canvas" />;
   return (
     <div className="flex h-full flex-col">
       <ComparisonBar changes={changes} deck={deck.id} enabled={!!row && comparable(row, changes)} />

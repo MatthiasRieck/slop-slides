@@ -10,8 +10,8 @@ const say = playNarration as unknown as Mock;
 
 const timeline: Timeline = {
   slides: [
-    { id: "a", start: 0, end: 2, locked: false, timed: true },
-    { id: "b", start: 2, end: 6, locked: false, timed: false },
+    { id: "a", start: 0, end: 2, locked: false, duration: 2, narrationStart: null },
+    { id: "b", start: 2, end: 6, locked: false, duration: null, narrationStart: null },
   ],
   clips: [
     { slide: "a", start: 1, end: 3 },

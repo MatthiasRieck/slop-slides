@@ -1,16 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Slide } from "./api";
-import {
-  edgeMovable,
-  layoutTimeline,
-  moveEdge,
-  moveSlide,
-  retime,
-  slideAt,
-  slideMovable,
-  spokenSeconds,
-} from "./timeline";
+import { layoutTimeline, moveClip, moveEdge, slideAt, spokenSeconds, withTiming } from "./timeline";
 import { DEFAULT_VIDEO_OPTIONS, type VideoOptions } from "./video";
 
 const slide = (id: string, more: Partial<Slide> = {}): Slide => ({
@@ -47,9 +38,9 @@ describe("layoutTimeline", () => {
   it("shows a timed slide for its time, its narration running over the next", () => {
     const slides = [slide("a", { duration: 2 }), slide("b", { duration: 6, narrationStart: 3.5 })];
     const t = layoutTimeline(slides, { a: 5, b: 1 }, options());
-    expect(t.slides.map((s) => [s.start, s.end, s.timed])).toEqual([
-      [0, 2, true],
-      [2, 8, true],
+    expect(t.slides.map((s) => [s.start, s.end, s.duration, s.narrationStart])).toEqual([
+      [0, 2, 2, null],
+      [2, 8, 6, 3.5],
     ]);
     expect(t.clips).toEqual([
       { slide: "a", start: 0.5, end: 5.5 },
@@ -70,7 +61,7 @@ describe("layoutTimeline", () => {
 
   it("ignores narration and set timing without narration", () => {
     const t = layoutTimeline([slide("a", { duration: 9 })], { a: 5 }, options({ narration: false }));
-    expect(t.slides[0]).toMatchObject({ end: 3, timed: false });
+    expect(t.slides[0]).toMatchObject({ end: 3, duration: null });
     expect(t.clips).toEqual([]);
   });
 
@@ -102,78 +93,120 @@ describe("spokenSeconds", () => {
   });
 });
 
-describe("moving slides", () => {
-  const timeline = () =>
-    layoutTimeline(
-      [slide("a", { duration: 4 }), slide("b", { duration: 4 }), slide("c", { duration: 4 })],
-      { a: 3, b: 3, c: 3 },
-      options(),
-    );
+describe("moving", () => {
+  const spoken = { a: 3, b: 3, c: 3 };
+  const slides = [slide("a", { duration: 4 }), slide("b", { duration: 4 }), slide("c", { duration: 4 })];
+  const timeline = () => layoutTimeline(slides, spoken, options());
+  const saved = (timing: ReturnType<typeof moveEdge>) => layoutTimeline(withTiming(slides, timing), spoken, options());
 
-  it("moves an edge, the next slide giving the time and the rest staying", () => {
-    expect(moveEdge(timeline(), 0, 5)).toEqual([5, 8, 12]);
-    expect(moveEdge(timeline(), 1, 7)).toEqual([4, 7, 12]);
+  it("changes only the length of the slide whose edge moves", () => {
+    expect(moveEdge(timeline(), 0, 5)).toEqual([{ slide: "a", duration: 5, narrationStart: null }]);
+    expect(moveEdge(timeline(), 1, 7)).toEqual([{ slide: "b", duration: 3, narrationStart: null }]);
+    expect(moveEdge(timeline(), 2, 20)).toEqual([{ slide: "c", duration: 12, narrationStart: null }]);
   });
 
-  it("keeps both slides at an edge at least the shortest length", () => {
-    expect(moveEdge(timeline(), 0, 0)).toEqual([0.5, 8, 12]);
-    expect(moveEdge(timeline(), 0, 100)).toEqual([7.5, 8, 12]);
-  });
-
-  it("moves the last edge to change where the timeline ends", () => {
-    expect(moveEdge(timeline(), 2, 20)).toEqual([4, 8, 20]);
-    expect(moveEdge(timeline(), 2, 1)).toEqual([4, 8, 8.5]);
-  });
-
-  it("moves a slide across the audio, keeping its length", () => {
-    expect(moveSlide(timeline(), 1, 1)).toEqual([5, 9, 12]);
-    expect(moveSlide(timeline(), 1, -1)).toEqual([3, 7, 12]);
-  });
-
-  it("stops a moving slide at the shortest length of its neighbours", () => {
-    expect(moveSlide(timeline(), 1, 100)).toEqual([7.5, 11.5, 12]);
-    expect(moveSlide(timeline(), 1, -100)).toEqual([0.5, 4.5, 12]);
-  });
-
-  it("moves the last slide with the end of the timeline, and never the first", () => {
-    expect(moveSlide(timeline(), 2, 3)).toEqual([4, 11, 15]);
-    expect(moveSlide(timeline(), 0, 3)).toEqual([4, 8, 12]);
-  });
-
-  it("does not move locked slides", () => {
-    const t = layoutTimeline([slide("a"), slide("b", { locked: true }), slide("c"), slide("d")], {}, options());
-    expect([0, 1, 2].map((i) => edgeMovable(t, i))).toEqual([false, false, true]);
-    expect([0, 1, 2, 3].map((i) => slideMovable(t, i))).toEqual([false, false, false, true]);
-  });
-
-  it("saves only the slides that changed, with their audio left where it was", () => {
-    const t = timeline();
-    expect(retime(t, moveEdge(t, 0, 5.5))).toEqual([
-      { slide: "a", duration: 5.5, narrationStart: 0.5 },
-      // Its narration was at 4.5, which is before it now.
-      { slide: "b", duration: 2.5, narrationStart: -1 },
+  it("moves the slides after it, changing how long it all lasts", () => {
+    const moved = saved(moveEdge(timeline(), 0, 5));
+    expect(moved.slides.map((s) => [s.start, s.end])).toEqual([
+      [0, 5],
+      [5, 9],
+      [9, 13],
     ]);
-    expect(retime(t, moveEdge(t, 2, 15))).toEqual([{ slide: "c", duration: 7, narrationStart: 0.5 }]);
-    expect(retime(t, moveSlide(t, 1, 0))).toEqual([]);
+    expect(moved.end).toBe(13);
   });
 
-  it("gives the audio the same place on the timeline after saving", () => {
-    const slides = [slide("a"), slide("b")];
-    const spoken = { a: 3, b: 3 };
-    const before = layoutTimeline(slides, spoken, options());
-    const saved = retime(before, moveEdge(before, 0, 2));
-    const after = slides.map((s) => {
-      const change = saved.find((t) => t.slide === s.id);
-      return { ...s, duration: change?.duration, narrationStart: change?.narrationStart };
-    });
-    const timeline = layoutTimeline(after, spoken, options());
-    expect(timeline.clips.map((c) => c.start)).toEqual(before.clips.map((c) => c.start));
-    expect(timeline.slides[0]?.end).toBe(2);
+  it("keeps each narration where it is in its slide", () => {
+    const moved = saved(moveEdge(timeline(), 0, 5));
+    expect(moved.clips).toEqual([
+      { slide: "a", start: 0.5, end: 3.5 },
+      { slide: "b", start: 5.5, end: 8.5 },
+      { slide: "c", start: 9.5, end: 12.5 },
+    ]);
   });
 
-  it("leaves a slide without narration no narration start", () => {
-    const t = layoutTimeline([slide("a"), slide("b")], {}, options());
-    expect(retime(t, moveEdge(t, 0, 4))[0]).toEqual({ slide: "a", duration: 4, narrationStart: null });
+  it("keeps a narration start that was set", () => {
+    const set = [slide("a", { duration: 4, narrationStart: 1 }), slide("b", { duration: 4 })];
+    const t = layoutTimeline(set, spoken, options());
+    expect(moveEdge(t, 0, 6)).toEqual([{ slide: "a", duration: 6, narrationStart: 1 }]);
+  });
+
+  it("delays a narration a shorter slide would talk over, and restores it when longer again", () => {
+    const short = withTiming(slides, moveEdge(timeline(), 0, 2));
+    const moved = layoutTimeline(short, spoken, options());
+    expect(moved.clips[1]).toEqual({ slide: "b", start: 3.5, end: 6.5 });
+    const back = withTiming(short, moveEdge(moved, 0, 4));
+    expect(layoutTimeline(back, spoken, options()).clips[1]?.start).toBe(4.5);
+  });
+
+  it("keeps a slide at its shortest and longest length", () => {
+    expect(moveEdge(timeline(), 0, 0)[0]?.duration).toBe(0.5);
+    expect(moveEdge(timeline(), 1, 1)[0]?.duration).toBe(0.5);
+    expect(moveEdge(timeline(), 0, 100_000)[0]?.duration).toBe(3600);
+  });
+
+  it("saves nothing for an edge that stays", () => {
+    expect(moveEdge(timeline(), 0, 4)).toEqual([]);
+    expect(moveEdge(timeline(), 9, 4)).toEqual([]);
+  });
+
+  it("moves a narration inside the timeline without moving anything else", () => {
+    const timing = moveClip(timeline(), "b", -0.5);
+    expect(timing).toEqual([{ slide: "b", duration: 4, narrationStart: 0 }]);
+    const moved = saved(timing);
+    expect(moved.clips.map((c) => c.start)).toEqual([0.5, 4, 8.5]);
+    expect(moved.slides.map((s) => s.end)).toEqual([4, 8, 12]);
+  });
+
+  it("moves a narration before its slide, and over the next", () => {
+    const t = layoutTimeline(slides, { a: 1, b: 1, c: 1 }, options());
+    expect(moveClip(t, "b", -1)[0]?.narrationStart).toBe(-0.5);
+    const alone = layoutTimeline(slides, { a: 1 }, options());
+    expect(moveClip(alone, "a", 5)[0]?.narrationStart).toBe(5.5);
+  });
+
+  it("stops a narration at the narration on either side", () => {
+    expect(moveClip(timeline(), "b", -100)[0]?.narrationStart).toBe(-0.5);
+    expect(moveClip(timeline(), "b", 100)[0]?.narrationStart).toBe(1.5);
+    for (const by of [-100, 100]) {
+      const [a, b, c] = saved(moveClip(timeline(), "b", by)).clips;
+      expect(b?.start).toBeGreaterThanOrEqual(a?.end ?? 0);
+      expect(c?.start).toBeGreaterThanOrEqual(b?.end ?? 0);
+      expect(c?.start).toBe(8.5);
+    }
+  });
+
+  it("stops the first narration at the start of the timeline", () => {
+    expect(moveClip(timeline(), "a", -100)[0]?.narrationStart).toBe(0);
+  });
+
+  it("lets the last narration run on, the last slide staying for it", () => {
+    const timing = moveClip(timeline(), "c", 10);
+    expect(timing).toEqual([{ slide: "c", duration: 4, narrationStart: 10.5 }]);
+    expect(saved(timing).end).toBe(21.5);
+  });
+
+  it("does not stretch a slide that follows its narration when the narration moves", () => {
+    const free = [slide("a"), slide("b")];
+    const t = layoutTimeline(free, { a: 3, b: 3 }, options());
+    const moved = layoutTimeline(withTiming(free, moveClip(t, "a", 1)), { a: 3, b: 3 }, options());
+    expect(moved.slides.map((s) => s.end)).toEqual(t.slides.map((s) => s.end));
+    expect(moved.clips[0]?.start).toBe(1.5);
+  });
+
+  it("saves nothing for a narration that stays, or without one", () => {
+    expect(moveClip(timeline(), "b", 0)).toEqual([]);
+    expect(moveClip(timeline(), "nope", 1)).toEqual([]);
+    expect(moveClip(layoutTimeline(slides, {}, options()), "a", 1)).toEqual([]);
+  });
+});
+
+describe("withTiming", () => {
+  it("changes only the slides it names", () => {
+    const a = slide("a", { duration: 1 });
+    const b = slide("b", { duration: 2 });
+    const [first, second] = withTiming([a, b], [{ slide: "b", duration: null, narrationStart: 1 }]);
+    expect(first).toBe(a);
+    expect(second).toMatchObject({ duration: null, narrationStart: 1 });
   });
 });
 

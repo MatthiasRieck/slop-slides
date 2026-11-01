@@ -130,9 +130,10 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   `narration/<slide id>.wav` next to the deck; a slide whose narration, voice or language
   changed is spoken again, the rest never. When presenting, the play button between the
   arrows runs the show by itself, speaking each slide's narration with the video export's
-  timing. The timeline under the slide shows the slides above the audio: drag a slide, or the
-  edge between two, across the audio to change when it shows. The audio stays where it is, so
-  narration can run over into the next slide, with the slide changing mid-sentence; video
+  timing. The timeline under the slide shows the slides above the audio: drag the end of a
+  slide to change how long it shows, and the slides after it follow, each narration keeping
+  its place in its slide. Drag a narration to move it, up to the narration on either side, so
+  it can run over into the next slide, with the slide changing mid-sentence; video
   exports and the self-running show follow it, and the slide keeps its timing in the deck
   (`data-duration`, `data-narration-start`). Speaking needs macOS or Linux (with OpenBLAS); Windows builds can write narration
   but not speak it yet.

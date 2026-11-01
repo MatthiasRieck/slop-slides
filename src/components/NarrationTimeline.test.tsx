@@ -57,7 +57,7 @@ describe("NarrationTimeline", () => {
     open();
     await act(async () => {});
     for (const n of [1, 2, 3]) expect(screen.getByRole("button", { name: `Slide ${n}` })).toBeTruthy();
-    const clip = screen.getByRole("img", { name: "Narration of intro" });
+    const clip = screen.getByRole("button", { name: "Narration of intro" });
     expect(clip.style.left).not.toBe("");
     expect(clip.querySelector("path")?.getAttribute("d")).toBe("M0 0.5V1.5M1 0V2");
     expect(invoke).toHaveBeenCalledWith("narration_peaks", { id: deckOf().id, slide: "intro" });
@@ -74,8 +74,8 @@ describe("NarrationTimeline", () => {
       }),
     );
     await act(async () => {});
-    expect(screen.getByRole("img", { name: "Narration of intro, out of date" })).toBeTruthy();
-    expect(screen.getByRole("img", { name: "Narration of outro, not spoken yet" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Narration of intro, out of date" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Narration of outro, not spoken yet" })).toBeTruthy();
   });
 
   it("leaves hidden slides out, as the video does", () => {
@@ -99,66 +99,150 @@ describe("NarrationTimeline", () => {
     expect(screen.getByRole("button", { name: "Slide 2" }).getAttribute("aria-current")).toBe("true");
   });
 
-  it("moves the edge between two slides with the arrow keys, keeping the audio in place", async () => {
+  it("changes only the slide whose edge moves with the arrow keys", async () => {
     open();
     fireEvent.keyDown(screen.getByRole("button", { name: "End of slide 1" }), { key: "ArrowRight", shiftKey: true });
     await act(async () => {});
     expect(timingCalls()).toEqual([
-      {
-        id: deckOf().id,
-        timing: [
-          { slide: "intro", duration: 6, narrationStart: 0.5 },
-          { slide: "#2", duration: 4, narrationStart: null },
-        ],
-      },
+      { id: deckOf().id, timing: [{ slide: "intro", duration: 6, narrationStart: null }] },
     ]);
     expect(useApp.getState().deckUndo).toHaveLength(1);
   });
 
-  it("moves a slide across the audio with the arrow keys", async () => {
-    open();
-    fireEvent.keyDown(screen.getByRole("button", { name: "Slide 2" }), { key: "ArrowLeft" });
-    await act(async () => {});
-    expect(timingCalls()[0].timing).toEqual([
-      { slide: "intro", duration: 4.9, narrationStart: 0.5 },
-      { slide: "#2", duration: 5, narrationStart: null },
-      { slide: "outro", duration: 5.1, narrationStart: null },
-    ]);
-  });
-
-  it("drags an edge across the audio, saving once when it is let go", async () => {
-    open();
+  it("drags an edge, the slides after it following, saving once when it is let go", async () => {
+    open({ intro: { narration: "Hello" }, outro: { narration: "Bye" } });
     const edge = screen.getByRole("button", { name: "End of slide 1" });
+    const outro = screen.getByRole("button", { name: /^Narration of outro/ });
+    const before = outro.style.left;
     fireEvent.pointerDown(edge, { clientX: 100, button: 0 });
-    // Not wide yet in the test, so a pixel is the whole timeline: it stops at the shortest slide.
     fireEvent.pointerMove(edge, { clientX: 101 });
+    expect(screen.getByRole("button", { name: /^Narration of outro/ }).style.left).toBe(before);
+    // Not wide yet in the test, so a pixel is the whole timeline.
     fireEvent.pointerMove(edge, { clientX: 110 });
+    expect(screen.getByRole("button", { name: /^Narration of outro/ }).style.left).not.toBe(before);
     expect(timingCalls()).toEqual([]);
     fireEvent.pointerUp(edge, { clientX: 110 });
     await act(async () => {});
     expect(timingCalls()).toHaveLength(1);
-    expect(timingCalls()[0].timing).toEqual([
-      { slide: "intro", duration: 9.5, narrationStart: 0.5 },
-      { slide: "#2", duration: 0.5, narrationStart: null },
-    ]);
+    expect(timingCalls()[0].timing).toHaveLength(1);
+    expect(timingCalls()[0].timing[0]).toMatchObject({ slide: "intro", narrationStart: null });
   });
 
-  it("drags a slide, but a press that stays put only selects it", async () => {
+  it("keeps a moved edge in place until it is saved", async () => {
+    open();
+    let saved = (_: RailEdit) => {};
+    const edit = {
+      deck: deckOf({ intro: { narration: "Hello", duration: 6 } }),
+      previous: "a",
+      source: "b",
+      created: [],
+    };
+    invoke.mockImplementation((command: string) =>
+      command === "set_slide_timing" ? new Promise<RailEdit>((resolve) => (saved = resolve)) : Promise.resolve([]),
+    );
+    const slide = () => screen.getByRole("button", { name: "Slide 2" }).parentElement?.style.left;
+    const before = slide();
+    fireEvent.keyDown(screen.getByRole("button", { name: "End of slide 1" }), { key: "ArrowRight", shiftKey: true });
+    await act(async () => {});
+    expect(slide()).not.toBe(before);
+    expect(screen.getByText("0:00 / 0:16")).toBeTruthy();
+    const moved = slide();
+    await act(async () => saved(edit));
+    expect(slide()).toBe(moved);
+  });
+
+  it("goes back when saving fails", async () => {
+    open();
+    const before = screen.getByRole("button", { name: "Slide 2" }).parentElement?.style.left;
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "set_slide_timing") throw new Error("nope");
+      return [];
+    });
+    fireEvent.keyDown(screen.getByRole("button", { name: "End of slide 1" }), { key: "ArrowRight", shiftKey: true });
+    await act(async () => {});
+    expect(screen.getByRole("button", { name: "Slide 2" }).parentElement?.style.left).toBe(before);
+    expect(useApp.getState().error).toContain("nope");
+    useApp.setState({ error: null });
+  });
+
+  it("adds up arrow keys pressed faster than they are saved", async () => {
+    open();
+    const edge = screen.getByRole("button", { name: "End of slide 1" });
+    for (let i = 0; i < 5; i++) fireEvent.keyDown(edge, { key: "ArrowRight" });
+    await act(async () => {});
+    expect(timingCalls().at(-1).timing).toEqual([{ slide: "intro", duration: 5.5, narrationStart: null }]);
+  });
+
+  it("keeps what is dragged under the pointer, the track growing with the timeline", async () => {
+    open();
+    const scrolled = vi.fn();
+    const edge = screen.getByRole("button", { name: "End of slide 1" });
+    edge.scrollIntoView = scrolled;
+    const line = screen.getByTestId("ruler").parentElement as HTMLElement;
+    line.getBoundingClientRect = () => ({ width: 1500 }) as DOMRect;
+    fireEvent.pointerDown(edge, { clientX: 100, button: 0 });
+    fireEvent.pointerMove(edge, { clientX: 250 });
+    fireEvent.pointerMove(edge, { clientX: 400 });
+    // 300 of 1500 pixels is a fifth of 15 seconds, and 18 seconds are a fifth wider.
+    expect(line.style.width).toBe("120%");
+    expect(screen.getByText("0:00 / 0:18")).toBeTruthy();
+    expect(scrolled).toHaveBeenCalled();
+    fireEvent.pointerUp(edge, { clientX: 400 });
+    await act(async () => {});
+    expect(line.style.width).toBe("100%");
+    expect(timingCalls()[0].timing[0].duration).toBe(8);
+  });
+
+  it("never shows the playhead past the end of a shorter timeline", async () => {
+    open();
+    const ruler = screen.getByTestId("ruler");
+    ruler.getBoundingClientRect = () => ({ left: 0, width: 300 }) as DOMRect;
+    fireEvent.pointerDown(ruler, { clientX: 300 });
+    const edge = screen.getByRole("button", { name: "End of slide 2" });
+    fireEvent.pointerDown(edge, { clientX: 100, button: 0 });
+    fireEvent.pointerMove(edge, { clientX: 90 });
+    expect(screen.getByText("0:11 / 0:11")).toBeTruthy();
+    fireEvent.pointerUp(edge, { clientX: 90 });
+    await act(async () => {});
+  });
+
+  it("only selects a slide when pressed: its length changes at its edge", async () => {
     open();
     const slide = screen.getByRole("button", { name: "Slide 3" });
     fireEvent.pointerDown(slide, { clientX: 100, button: 0 });
-    fireEvent.pointerUp(slide, { clientX: 101 });
-    fireEvent.click(slide);
-    expect(timingCalls()).toEqual([]);
-    expect(useApp.getState().selected).toBe("outro");
-    fireEvent.pointerDown(slide, { clientX: 100, button: 0 });
     fireEvent.pointerMove(slide, { clientX: 90 });
     fireEvent.pointerUp(slide, { clientX: 90 });
+    fireEvent.keyDown(slide, { key: "ArrowLeft" });
+    fireEvent.click(slide);
     await act(async () => {});
-    expect(timingCalls()[0].timing).toEqual([
-      { slide: "#2", duration: 0.5, narrationStart: null },
-      { slide: "outro", duration: 5, narrationStart: null },
-    ]);
+    expect(timingCalls()).toEqual([]);
+    expect(useApp.getState().selected).toBe("outro");
+  });
+
+  it("moves a narration with the arrow keys, keeping its slide's length", async () => {
+    open();
+    fireEvent.keyDown(screen.getByRole("button", { name: "Narration of intro" }), { key: "ArrowRight" });
+    await act(async () => {});
+    expect(timingCalls()[0].timing).toEqual([{ slide: "intro", duration: 5, narrationStart: 0.6 }]);
+  });
+
+  it("drags a narration, stopping at the next, and a press that stays put saves nothing", async () => {
+    open({ intro: { narration: "Hello" }, outro: { narration: "Bye" } });
+    const clip = screen.getByRole("button", { name: "Narration of intro" });
+    fireEvent.pointerDown(clip, { clientX: 100, button: 0 });
+    fireEvent.pointerUp(clip, { clientX: 101 });
+    expect(timingCalls()).toEqual([]);
+    fireEvent.pointerDown(clip, { clientX: 100, button: 0 });
+    fireEvent.pointerMove(clip, { clientX: 110 });
+    fireEvent.pointerUp(clip, { clientX: 110 });
+    await act(async () => {});
+    // The next narration, of about a second, starts at 10.5.
+    expect(timingCalls()[0].timing).toEqual([{ slide: "intro", duration: 5, narrationStart: 7.5 }]);
+  });
+
+  it("does not move the narration of a locked slide", () => {
+    open({ intro: { narration: "Hello", locked: true } });
+    expect((screen.getByRole("button", { name: "Narration of intro" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("ignores a press with another button", () => {
@@ -180,12 +264,16 @@ describe("NarrationTimeline", () => {
     expect(screen.getByText("0:08 / 0:15")).toBeTruthy();
   });
 
-  it("does not move locked slides or their neighbours", () => {
+  it("does not change locked slides, but lets the one before move them", () => {
     open({ "#2": { locked: true } });
-    const edge = screen.getByRole("button", { name: "End of slide 1" }) as HTMLButtonElement;
-    expect(edge.disabled).toBe(true);
-    fireEvent.keyDown(screen.getByRole("button", { name: "Slide 3" }), { key: "ArrowLeft" });
-    expect(timingCalls()).toEqual([]);
+    const edge = (n: number) => screen.getByRole("button", { name: `End of slide ${n}` }) as HTMLButtonElement;
+    expect(edge(1).disabled).toBe(false);
+    expect(edge(2).disabled).toBe(true);
+  });
+
+  it("keeps the track clear of the resize handles on either side of its panel", () => {
+    open();
+    expect(screen.getByTestId("ruler").parentElement?.parentElement?.className).toContain("mx-1.5");
   });
 
   it("keeps the last edge inside the track, so a track that fits does not scroll", () => {

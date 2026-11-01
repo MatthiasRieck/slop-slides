@@ -13,8 +13,10 @@ export interface TimelineSlide {
   start: number;
   end: number;
   locked: boolean;
-  /** Its length was set on the timeline; otherwise it follows its narration. */
-  timed: boolean;
+  /** The length set on the timeline; null when it follows its narration. */
+  duration: number | null;
+  /** The narration start set on the timeline; null for the pause before. */
+  narrationStart: number | null;
 }
 
 /** A slide's narration on the timeline. It need not lie inside the slide. */
@@ -51,7 +53,8 @@ export function layoutTimeline(
   for (const slide of slides) {
     const narration = options.narration ? (spoken[slide.id] ?? null) : null;
     const duration = options.narration ? (slide.duration ?? null) : null;
-    const offset = (options.narration ? slide.narrationStart : null) ?? options.pauseBefore;
+    const narrationStart = options.narration ? (slide.narrationStart ?? null) : null;
+    const offset = narrationStart ?? options.pauseBefore;
     const frames =
       duration !== null
         ? Math.max(1, Math.round(duration * fps))
@@ -63,7 +66,7 @@ export function layoutTimeline(
       clips.push({ slide: slide.id, start: from, end: voice });
     }
     shown += frames;
-    out.push({ id: slide.id, start, end: shown / fps, locked: slide.locked, timed: duration !== null });
+    out.push({ id: slide.id, start, end: shown / fps, locked: slide.locked, duration, narrationStart });
   }
   const end = Math.max(shown, Math.ceil(voice * fps)) / fps;
   const last = out[out.length - 1];
@@ -86,11 +89,6 @@ export function spokenSeconds(slides: Slide[], audio: Record<string, SlideAudio>
   );
 }
 
-/** Where each slide ends. */
-function ends(timeline: Timeline): number[] {
-  return timeline.slides.map((s) => s.end);
-}
-
 /** Hundredths of a second, which is finer than a frame and short in the deck file. */
 function rounded(seconds: number): number {
   return Math.round(seconds * 100) / 100;
@@ -99,59 +97,44 @@ function rounded(seconds: number): number {
 const clamp = (value: number, low: number, high: number) => Math.min(Math.max(value, low), Math.max(low, high));
 
 /**
- * The `ends` of `timeline` with slide `index`'s end at `to`. The next slide gives or takes the
- * time, so the slides after it stay where they are; the last slide's end is the timeline's.
+ * What to save for slide `index` to end at `to`. Only its length changes: the slides after it
+ * follow, and every narration keeps its place in its slide. The timeline gets longer or shorter.
  */
-export function moveEdge(timeline: Timeline, index: number, to: number): number[] {
-  const next = ends(timeline);
-  const start = timeline.slides[index]?.start ?? 0;
-  const after = next[index + 1];
-  next[index] = clamp(to, start + MIN_DURATION, Math.min(start + MAX_DURATION, (after ?? Infinity) - MIN_DURATION));
-  return next;
-}
-
-/**
- * The `ends` of `timeline` with slide `index` moved by `by` seconds, keeping its length: the
- * slides on either side give or take the time. The first slide always starts the timeline, so
- * it does not move; moving the last changes where the timeline ends.
- */
-export function moveSlide(timeline: Timeline, index: number, by: number): number[] {
-  const next = ends(timeline);
-  const before = timeline.slides[index - 1];
+export function moveEdge(timeline: Timeline, index: number, to: number): SlideTiming[] {
   const slide = timeline.slides[index];
-  if (!before || !slide) return next;
-  const following = timeline.slides[index + 1];
-  const late = following ? following.end - MIN_DURATION - slide.end : Infinity;
-  const moved = clamp(by, before.start + MIN_DURATION - slide.start, late);
-  next[index - 1] = slide.start + moved;
-  next[index] = slide.end + moved;
-  return next;
-}
-
-/** Whether a slide's edge, between it and the next (if any), can move: locked slides cannot change. */
-export function edgeMovable(timeline: Timeline, index: number): boolean {
-  return !timeline.slides[index]?.locked && !timeline.slides[index + 1]?.locked;
-}
-
-/** Whether a slide can move across the audio: it and its neighbours change. */
-export function slideMovable(timeline: Timeline, index: number): boolean {
-  return index > 0 && edgeMovable(timeline, index - 1) && edgeMovable(timeline, index);
+  if (!slide) return [];
+  const duration = clamp(rounded(to - slide.start), MIN_DURATION, MAX_DURATION);
+  if (Math.abs(duration - (slide.end - slide.start)) < 0.005) return [];
+  return [{ slide: slide.id, duration, narrationStart: slide.narrationStart }];
 }
 
 /**
- * What to save for the slides `next` changes, `next` being where each slide ends. The audio
- * stays where it is, so a slide that moves gets a narration start to keep it there.
+ * What to save for `id`'s narration to move by `by` seconds, stopping at the narration on either
+ * side. The slide keeps its length, so nothing else moves.
  */
-export function retime(timeline: Timeline, next: number[]): SlideTiming[] {
-  const changed = (a: number, b: number) => Math.abs(a - b) >= 0.005;
-  return timeline.slides.flatMap((slide, i) => {
-    const start = next[i - 1] ?? 0;
-    const end = next[i] ?? slide.end;
-    if (!changed(start, slide.start) && !changed(end, slide.end)) return [];
-    const clip = timeline.clips.find((c) => c.slide === slide.id);
-    return [
-      { slide: slide.id, duration: rounded(end - start), narrationStart: clip ? rounded(clip.start - start) : null },
-    ];
+export function moveClip(timeline: Timeline, id: string, by: number): SlideTiming[] {
+  const index = timeline.clips.findIndex((c) => c.slide === id);
+  const clip = timeline.clips[index];
+  const slide = timeline.slides.find((s) => s.id === id);
+  if (!clip || !slide) return [];
+  const earliest = Math.max(timeline.clips[index - 1]?.end ?? 0, slide.start - MAX_DURATION);
+  const next = (timeline.clips[index + 1]?.start ?? Infinity) - (clip.end - clip.start);
+  const start = clamp(clip.start + by, earliest, Math.min(next, slide.start + MAX_DURATION));
+  if (Math.abs(start - clip.start) < 0.005) return [];
+  return [
+    {
+      slide: id,
+      duration: slide.duration ?? rounded(slide.end - slide.start),
+      narrationStart: rounded(start - slide.start),
+    },
+  ];
+}
+
+/** `slides` with `timing` saved. */
+export function withTiming(slides: Slide[], timing: SlideTiming[]): Slide[] {
+  return slides.map((slide) => {
+    const change = timing.find((t) => t.slide === slide.id);
+    return change ? { ...slide, duration: change.duration, narrationStart: change.narrationStart } : slide;
   });
 }
 

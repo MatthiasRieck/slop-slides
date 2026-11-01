@@ -608,8 +608,8 @@ pub fn set_slide_time(file: &Path, slide: &str, seconds: u32) -> Result<Deck> {
     .0)
 }
 
-/// Sets the timing of slides on the narration timeline, all in one write: moving a slide changes
-/// its neighbours too. Locked slides keep theirs.
+/// Sets the timing of slides on the narration timeline, all in one write: resetting it changes
+/// every slide. Locked slides keep theirs.
 pub fn set_slide_timing(file: &Path, timing: &[SlideTiming]) -> Result<RailEdit> {
     rail_edit(file, |s| {
         let mut out = s.to_string();

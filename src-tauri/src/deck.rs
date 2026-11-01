@@ -177,7 +177,7 @@ fn fallback_title(file: &Path) -> String {
         .unwrap_or_default()
 }
 
-fn unique_dir(root: &Path, stem: &str) -> PathBuf {
+pub fn unique_dir(root: &Path, stem: &str) -> PathBuf {
     let stem = if stem.is_empty() { "untitled" } else { stem };
     std::iter::once(root.join(stem))
         .chain((2..).map(|n| root.join(format!("{stem}-{n}"))))

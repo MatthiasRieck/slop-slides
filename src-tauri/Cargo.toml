@@ -51,6 +51,9 @@ rav1e = { version = "0.8", default-features = false, features = ["threading"] }
 opus = "0.4"
 # Saying narration, which is Markdown, without its marks (see src/narration/mod.rs).
 pulldown-cmark = { version = "0.13.6", default-features = false }
+# PowerPoint files (see src/pptx/): zip archives of XML parts.
+zip = { version = "9", default-features = false, features = ["deflate"] }
+quick-xml = "0.41.0"
 
 # Slide screenshots for sketches (see src/capture.rs) and PDF printing (src/pdf.rs); the same
 # versions wry already uses.

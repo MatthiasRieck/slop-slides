@@ -16,6 +16,7 @@ mod mp4;
 mod narration;
 mod pdf;
 mod permissions;
+mod pptx;
 mod protocol;
 mod providers;
 mod review;
@@ -212,6 +213,16 @@ fn create_deck(window: Window, title: String, template: Option<String>) -> Resul
         .zip(source.as_deref())
         .map(|(id, html)| deck::TemplateSource { id, html });
     deck::create(&workspace_root(&window)?, &title, template)
+}
+
+/// Converts the PowerPoint file at `path` into a new deck in the open workspace.
+#[tauri::command]
+async fn import_pptx(window: Window, path: String) -> Result<pptx::Imported> {
+    let root = workspace_root(&window)?;
+    // Not on the main thread: a big file takes a moment, and the window must stay alive.
+    tauri::async_runtime::spawn_blocking(move || pptx::import(Path::new(&path), &root))
+        .await
+        .map_err(|e| error::Error::msg(format!("the import failed: {e}")))?
 }
 
 #[tauri::command]
@@ -576,6 +587,12 @@ async fn export_slide_image(
 #[tauri::command]
 async fn export_pdf(app: AppHandle, id: String, dest: String) -> Result<()> {
     pdf::export(&app, &deck::deck_file(&id)?, Path::new(&dest)).await
+}
+
+/// Writes the deck to `dest` as a PowerPoint file, one slide per shown slide.
+#[tauri::command]
+async fn export_pptx(app: AppHandle, id: String, dest: String) -> Result<()> {
+    pptx::export(&app, &deck::deck_file(&id)?, Path::new(&dest)).await
 }
 
 /// Records the deck to `dest` as an MP4, each shown slide on screen for the same time (or,
@@ -964,6 +981,8 @@ pub fn run() {
             create_image_export_dir,
             export_slide_image,
             export_pdf,
+            export_pptx,
+            import_pptx,
             export_video,
             cancel_video_export,
             load_chat,

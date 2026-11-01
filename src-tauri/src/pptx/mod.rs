@@ -1,0 +1,23 @@
+//! PowerPoint files, in and out. Decks stay HTML: a `.pptx` is converted into a new deck once
+//! ([`import`]), never kept or written back, and exporting ([`export`]) writes a new `.pptx`
+//! from the slides as rendered.
+
+mod export;
+mod import;
+mod xml;
+
+pub use export::export;
+pub use import::{import, Imported};
+
+/// English Metric Units per inch, PowerPoint's unit of length.
+const EMU_PER_INCH: f64 = 914_400.0;
+/// The width of a standard widescreen PowerPoint slide (13.333 inches). A 1920 px wide deck maps
+/// onto it, so sizes in points look as they do in any other presentation.
+const WIDESCREEN_EMU: f64 = 12_192_000.0;
+/// One CSS pixel in EMU, at 96 pixels per inch.
+const EMU_PER_CSS_PX: f64 = EMU_PER_INCH / 96.0;
+/// The longest side of an imported slide's canvas, in pixels.
+const CANVAS_LONG_SIDE: f64 = 1920.0;
+
+#[cfg(test)]
+mod tests;

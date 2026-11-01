@@ -17,6 +17,12 @@ export interface WorkspaceEntry {
   kind: FileKind;
 }
 
+/** A deck made from a PowerPoint file, and what could not come along. */
+export interface ImportedPptx {
+  deck: Deck;
+  skipped: string[];
+}
+
 /** A workspace file the user opened, with the viewer it needs. */
 export interface OpenedFile {
   /** Workspace-relative, `/`-separated. */
@@ -327,6 +333,8 @@ export const api = {
   listDir: (path: string) => invoke<WorkspaceEntry[]>("list_dir", { path }),
   /** A file of the open workspace, with the viewer it opens in. */
   openFile: (path: string) => invoke<OpenedFile>("open_file", { path }),
+  /** Converts a PowerPoint file into a new deck in the workspace; the file itself stays as it is. */
+  importPptx: (path: string) => invoke<ImportedPptx>("import_pptx", { path }),
   /** Creates `<workspace>/<title>/deck.html`; with a template, it takes its styles (and names it). */
   createDeck: (title: string, template: string | null = null) => invoke<Deck>("create_deck", { title, template }),
   openDeck: (id: string) => invoke<Deck>("open_deck", { id }),
@@ -391,6 +399,8 @@ export const api = {
   exportDeck: (id: string, dest: string) => invoke<void>("export_deck", { id, dest }),
   /** Prints the deck to `dest` as a PDF: one page per shown slide, with selectable text. */
   exportPdf: (id: string, dest: string) => invoke<void>("export_pdf", { id, dest }),
+  /** Writes the deck to `dest` as a PowerPoint file: one editable slide per shown slide. */
+  exportPptx: (id: string, dest: string) => invoke<void>("export_pptx", { id, dest }),
   /**
    * Records the deck to `dest` as an MP4, each shown slide on screen for the same time (longer
    * to fit its narration, with `options.narration`); `video-export-progress` events follow it.

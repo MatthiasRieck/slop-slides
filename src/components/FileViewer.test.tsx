@@ -47,6 +47,15 @@ describe("FileViewer", () => {
     expect(revealItemInDir).toHaveBeenCalledWith("/ws/notes.md");
   });
 
+  it("offers to import a PowerPoint file as a deck", async () => {
+    const importPptx = vi.fn(async () => {});
+    useApp.setState({ importPptx, openedFile: { path: "talks/q3.pptx", absolute: "/ws/talks/q3.pptx", kind: "file" } });
+    render(<FileViewer />);
+    expect(screen.queryByText("There is no preview for this kind of file yet.")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Import as deck" }));
+    expect(importPptx).toHaveBeenCalledWith("/ws/talks/q3.pptx");
+  });
+
   it("offers to start a deck in the workspace when nothing is open", async () => {
     render(<FileViewer />);
     expect(screen.getByText("Start a deck")).toBeTruthy();

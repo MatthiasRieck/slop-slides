@@ -130,7 +130,7 @@ describe("deck title", () => {
 describe("deck actions", () => {
   const exportButton = () => screen.getByRole("button", { name: /Export/ }) as HTMLButtonElement;
   const presentButton = () => screen.getByRole("button", { name: /Present/ }) as HTMLButtonElement;
-  async function exportAs(item: "HTML file" | "PDF" | "PNG images") {
+  async function exportAs(item: "HTML file" | "PDF" | "PowerPoint" | "PNG images") {
     fireEvent.click(exportButton());
     await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: new RegExp(item) })));
   }
@@ -331,6 +331,7 @@ describe("deck actions", () => {
     expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
       "HTML fileOne self-contained file to share",
       "PDFOne page per slide, for printing or sharing",
+      "PowerPointEditable slides; some effects are simplified",
       "PNG imagesOne image per slide, in a new folder",
       "VideoAn MP4 with each slide shown for a set time",
     ]);
@@ -371,6 +372,34 @@ describe("deck actions", () => {
     expect(revealItemInDir).toHaveBeenCalledWith("/Users/me/Desktop/Talk.pdf");
     expect(useApp.getState().imageExport).toBeNull();
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("writes a PowerPoint file to the chosen place and reveals it", async () => {
+    save.mockResolvedValue("/Users/me/Desktop/Talk.pptx");
+    render(<DeckActions />);
+    await exportAs("PowerPoint");
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaultPath: "Talk.pptx",
+        filters: [{ name: "PowerPoint presentation", extensions: ["pptx"] }],
+      }),
+    );
+    expect(invoke).toHaveBeenCalledWith("export_pptx", {
+      id: useApp.getState().deck?.id,
+      dest: "/Users/me/Desktop/Talk.pptx",
+    });
+    expect(revealItemInDir).toHaveBeenCalledWith("/Users/me/Desktop/Talk.pptx");
+  });
+
+  it("reports a PowerPoint export that fails", async () => {
+    save.mockResolvedValue("/Users/me/Desktop/Talk.pptx");
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "export_pptx") throw new Error("disk full");
+    });
+    render(<DeckActions />);
+    await exportAs("PowerPoint");
+    await vi.waitFor(() => expect(useApp.getState().error).toBe("Could not save the PowerPoint file: disk full"));
+    expect(revealItemInDir).not.toHaveBeenCalled();
   });
 
   it("shows the PDF is being written, and blocks another export meanwhile", async () => {

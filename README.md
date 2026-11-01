@@ -81,6 +81,15 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   along, even when you paraphrase or jump to another part. Words you jump over stay as they
   are. It moves the script only; you still change the slides. Speech stays on your computer,
   transcribed with the same Whisper model as dictation.
+- **PowerPoint:** **Import PowerPoint…** turns a `.pptx` into a new deck: slides, layouts and
+  themes, text, images, shapes, tables, speaker notes, sections and hidden slides. The deck is
+  HTML from then on; the file itself is left as it is and never written back. Animations are
+  dropped, charts arrive as tables of their data, and EMF/WMF images are left out (the import
+  says what it changed). The **PowerPoint** export writes a new `.pptx` of native, editable
+  shapes and text, with notes and sections. Transparency, linear gradients and shadows stay
+  PowerPoint's own effects; backdrop blur is dropped; whatever PowerPoint cannot draw (SVG,
+  filters, masks, 3D) becomes a transparent picture. Web fonts are not embedded, so install them
+  where the file is opened.
 - **Export:** saves the deck as **one self-contained HTML file** (attached images embedded)
   that plays in any browser: arrows/space/click to navigate, `F` for full screen, `#slide-id`
   links, print to PDF. The same menu saves a **PDF** or **PNG images** (one per slide, in a

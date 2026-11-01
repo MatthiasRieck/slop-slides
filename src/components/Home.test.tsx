@@ -15,9 +15,11 @@ import { Home } from "./Home";
 const NOW = Date.now();
 const LIBRARY = "/Users/me/Documents/SlopSlide";
 let recent: RecentWorkspace[];
+let importSkipped: string[];
 
 beforeEach(() => {
   localStorage.clear();
+  importSkipped = [];
   recent = [
     { path: "/Users/me/talks", name: "talks", openedMs: NOW - 5 * 60_000 },
     { path: "/Users/me/work/q3", name: "q3", openedMs: NOW - 3 * 3_600_000 },
@@ -35,6 +37,11 @@ beforeEach(() => {
         return { path: args?.path, name: args?.path?.split("/").pop() };
       case "create_deck":
         return { ...deckFor(DECK_HTML), id: `${LIBRARY}/talk/deck.html`, path: `${LIBRARY}/talk/deck.html` };
+      case "import_pptx":
+        return {
+          deck: { ...deckFor(DECK_HTML), id: `${LIBRARY}/q3/deck.html`, path: `${LIBRARY}/q3/deck.html` },
+          skipped: importSkipped,
+        };
       case "load_chat":
         return null;
       case "list_templates":
@@ -156,5 +163,34 @@ describe("Home", () => {
     fireEvent.change(screen.getByPlaceholderText(/Deck title/), { target: { value: "Board" } });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: /New deck/ })));
     expect(invoke).toHaveBeenCalledWith("create_deck", { title: "Board", template: "swiss" });
+  });
+
+  it("imports a PowerPoint file into the library and opens the new deck", async () => {
+    openDialog.mockResolvedValue("/Users/me/Downloads/q3.pptx");
+    render(<Home />);
+    fireEvent.click(screen.getByRole("button", { name: "Import PowerPoint…" }));
+    await waitFor(() => expect(useApp.getState().deck?.id).toBe(`${LIBRARY}/q3/deck.html`));
+    expect(invoke).toHaveBeenCalledWith("open_workspace", { path: LIBRARY });
+    expect(invoke).toHaveBeenCalledWith("import_pptx", { path: "/Users/me/Downloads/q3.pptx" });
+    expect(useApp.getState().error).toBeNull();
+  });
+
+  it("opens no workspace when the PowerPoint dialog is cancelled", async () => {
+    openDialog.mockResolvedValue(null);
+    render(<Home />);
+    fireEvent.click(screen.getByRole("button", { name: "Import PowerPoint…" }));
+    await waitFor(() => expect(openDialog).toHaveBeenCalled());
+    expect(invoke).not.toHaveBeenCalledWith("import_pptx", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("open_workspace", expect.anything());
+  });
+
+  it("says what an import had to change", async () => {
+    importSkipped = ["charts (their data came along as tables)"];
+    openDialog.mockResolvedValue("/Users/me/Downloads/q3.pptx");
+    render(<Home />);
+    fireEvent.click(screen.getByRole("button", { name: "Import PowerPoint…" }));
+    await waitFor(() =>
+      expect(useApp.getState().error).toBe("Imported, with these changes: charts (their data came along as tables)."),
+    );
   });
 });

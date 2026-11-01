@@ -1,5 +1,5 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { File, FolderOpen, MonitorPlay } from "lucide-react";
+import { File, FileUp, FolderOpen, MonitorPlay } from "lucide-react";
 
 import type { OpenedFile } from "../lib/api";
 import { basename, fileUrl, isMac } from "../lib/utils";
@@ -53,11 +53,26 @@ function PageView({ file }: { file: OpenedFile }) {
 }
 
 function NoViewer({ file }: { file: OpenedFile }) {
+  const powerPoint = /\.(pptx|pptm|potx)$/i.test(file.path);
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
       <File className="size-6 text-muted-foreground" />
       <p className="text-sm font-medium">{basename(file.path)}</p>
-      <p className="text-xs text-muted-foreground">There is no preview for this kind of file yet.</p>
+      <p className="text-xs text-muted-foreground">
+        {powerPoint
+          ? "Import it to make an editable deck. This file stays as it is."
+          : "There is no preview for this kind of file yet."}
+      </p>
+      {powerPoint && (
+        <button
+          type="button"
+          onClick={() => void useApp.getState().importPptx(file.absolute)}
+          className="mt-1 flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
+        >
+          <FileUp className="size-3.5" />
+          Import as deck
+        </button>
+      )}
       <button
         type="button"
         onClick={() => void revealItemInDir(file.absolute)}

@@ -3,7 +3,8 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "re
 
 import { popupShift, sectionsToCollapse } from "../lib/ribbon";
 import { cn } from "../lib/utils";
-import { keepFocus, useOutsideClose } from "./EditControls";
+import { keepFocus } from "./EditControls";
+import { useDismiss } from "./Popover";
 
 /**
  * Fits a ribbon's sections to its width. Returns the ref for the ribbon and the index of the first
@@ -62,7 +63,7 @@ export function RibbonSection(props: {
   const { collapsed } = props;
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLFieldSetElement>(null);
-  useOutsideClose(open, ref, () => setOpen(false));
+  useDismiss(open, ref, () => setOpen(false));
   // biome-ignore lint/correctness/useExhaustiveDependencies: `closeOn` is only what to watch
   useEffect(() => setOpen(false), [props.closeOn]);
   if (open && !collapsed) setOpen(false);

@@ -2,13 +2,13 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { ChevronDown, FileCode2, FileText, Film, Images, Loader2, Play, Presentation, Share, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 import { api, type Deck, errorMessage, type Screen, type Slide } from "../lib/api";
 import { VIDEO_CANCELLED, type VideoOptions, type VideoProgress } from "../lib/video";
 import { useApp } from "../store";
+import { Popover, useDismiss } from "./Popover";
 import { ScreenPicker } from "./ScreenPicker";
-import { Popover } from "./Templates";
 import { VideoExportPanel } from "./VideoExport";
 
 /** Export and present, in the top bar next to the mode tabs. */
@@ -216,21 +216,7 @@ function ExportMenu(props: {
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onPointer = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("pointerdown", onPointer);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointerdown", onPointer);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  useDismiss(open, menuRef, () => setOpen(false), { escape: true });
 
   const choose = (action: () => void) => () => {
     setOpen(false);

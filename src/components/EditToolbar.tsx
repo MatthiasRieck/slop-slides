@@ -71,9 +71,10 @@ import {
 import { SWATCHES } from "../lib/palette";
 import { cn } from "../lib/utils";
 import { ArrangeControls } from "./ArrangeControls";
-import { keepFocus, ToolButton, useOutsideClose } from "./EditControls";
+import { keepFocus, ToolButton } from "./EditControls";
 import { DraftInput } from "./Field";
 import { LookTools } from "./LookTools";
+import { DropdownPanel, dropdownPanel, useDismiss } from "./Popover";
 import { RibbonRow, RibbonSection, useRibbonFit } from "./Ribbon";
 
 const TOOLS: { tool: EditTool; label: string; icon: ReactNode }[] = [
@@ -449,14 +450,7 @@ function ColorButton(props: {
   const onChange = useRef(props.onChange);
   onChange.current = props.onChange;
 
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: PointerEvent) => {
-      if (!ref.current?.contains(event.target as Node)) setOpen(false);
-    };
-    window.addEventListener("pointerdown", close);
-    return () => window.removeEventListener("pointerdown", close);
-  }, [open]);
+  useDismiss(open, ref, () => setOpen(false));
 
   // The system color picker reports every color the user passes over; only the one they settle on counts.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the input mounts and unmounts with the popover
@@ -494,11 +488,7 @@ function ColorButton(props: {
         />
       </button>
       {open && (
-        <div
-          role="dialog"
-          aria-label={props.label}
-          className="absolute top-full left-1/2 z-30 mt-1 -translate-x-1/2 rounded-md border bg-card p-2 shadow-md"
-        >
+        <DropdownPanel role="dialog" aria-label={props.label}>
           {!!props.deck?.length && (
             <fieldset aria-label="Deck colors" className="mb-2 grid w-max grid-cols-6 gap-1 border-b pb-2">
               {props.deck.map((color) => (
@@ -563,7 +553,7 @@ function ColorButton(props: {
             />
             Custom
           </label>
-        </div>
+        </DropdownPanel>
       )}
     </div>
   );
@@ -647,7 +637,7 @@ function LinkButton(props: {
   const [address, setAddress] = useState("");
   const [slide, setSlide] = useState("");
   const [invalid, setInvalid] = useState(false);
-  useOutsideClose(open, ref, () => setOpen(false));
+  useDismiss(open, ref, () => setOpen(false));
   if (props.disabled && open) setOpen(false);
 
   const toggle = () => {
@@ -698,7 +688,7 @@ function LinkButton(props: {
             event.preventDefault();
             apply();
           }}
-          className="absolute top-full left-1/2 z-30 mt-1 flex w-64 -translate-x-1/2 flex-col gap-2 rounded-md border bg-card p-2 text-xs shadow-md"
+          className={cn(dropdownPanel, "flex w-64 flex-col gap-2 text-xs")}
         >
           <input
             autoFocus
@@ -763,7 +753,7 @@ function SpacingButton(props: {
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  useOutsideClose(open, ref, () => setOpen(false));
+  useDismiss(open, ref, () => setOpen(false));
   if (props.disabled && open) setOpen(false);
   const heights = [...new Set<number>([...LINE_HEIGHTS, ...(props.lineHeight ? [props.lineHeight] : [])])].sort(
     (a, b) => a - b,
@@ -785,10 +775,10 @@ function SpacingButton(props: {
         <Space />
       </button>
       {open && (
-        <div
+        <DropdownPanel
           role="dialog"
           aria-label="Spacing"
-          className="absolute top-full left-1/2 z-30 mt-1 grid w-max -translate-x-1/2 grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5 rounded-md border bg-card p-2 text-xs shadow-md"
+          className="grid w-max grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5 text-xs"
         >
           <label htmlFor="edit-line-height" className="text-muted-foreground">
             Line height
@@ -821,7 +811,7 @@ function SpacingButton(props: {
               </option>
             ))}
           </select>
-        </div>
+        </DropdownPanel>
       )}
     </div>
   );

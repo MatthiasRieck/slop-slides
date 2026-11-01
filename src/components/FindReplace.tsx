@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, type ReplacedText } from "../lib/api";
 import { cn } from "../lib/utils";
 import { activeMatch, useApp } from "../store";
-import { Popover } from "./Templates";
+import { Popover } from "./Popover";
 
 /** How long typing settles before it searches. */
 const SEARCH_DELAY_MS = 150;

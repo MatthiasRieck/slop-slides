@@ -9,7 +9,7 @@ import {
   AlignVerticalDistributeCenter,
   Move,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 
 import {
   type AlignTo,
@@ -18,7 +18,9 @@ import {
   type GeometryField,
   parseGeometryValue,
 } from "../lib/arrange";
+import { keepFocus } from "./EditControls";
 import { DraftInput } from "./Field";
+import { DropdownPanel, useDismiss } from "./Popover";
 
 const ALIGN: { to: AlignTo; label: string; icon: ReactNode }[] = [
   { to: "left", label: "left edges", icon: <AlignStartVertical /> },
@@ -37,11 +39,6 @@ const FIELDS: { field: GeometryField; label: string; title: string }[] = [
   { field: "rotation", label: "°", title: "Rotation in degrees" },
 ];
 
-/** Keeps focus (and the text selection) in the slide when a button is pressed. */
-function keepFocus(event: React.MouseEvent) {
-  event.preventDefault();
-}
-
 /**
  * The selection's place on the slide: align and distribute several elements, align one with the
  * slide, and exact position, size and rotation. Several elements have bounds to move, but no
@@ -57,14 +54,7 @@ export function ArrangeControls(props: {
   const { geometry } = props;
   const many = (geometry?.count ?? 0) > 1;
 
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (event: PointerEvent) => {
-      if (!ref.current?.contains(event.target as Node)) setOpen(false);
-    };
-    window.addEventListener("pointerdown", onDown);
-    return () => window.removeEventListener("pointerdown", onDown);
-  }, [open]);
+  useDismiss(open, ref, () => setOpen(false));
   if (!geometry && open) setOpen(false);
 
   const button =
@@ -84,11 +74,7 @@ export function ArrangeControls(props: {
         <Move />
       </button>
       {open && geometry && (
-        <div
-          role="dialog"
-          aria-label="Arrange"
-          className="absolute top-full left-1/2 z-30 mt-1 flex w-max -translate-x-1/2 flex-col gap-2 rounded-md border bg-card p-2 text-xs shadow-md"
-        >
+        <DropdownPanel role="dialog" aria-label="Arrange" className="flex w-max flex-col gap-2 text-xs">
           <div className="flex items-center gap-0.5">
             {ALIGN.map((a) => {
               const label = many ? `Align ${a.label}` : `Align with the slide's ${a.label}`;
@@ -143,7 +129,7 @@ export function ArrangeControls(props: {
             ))}
           </div>
           {many && <p className="text-muted-foreground">{geometry.count} elements selected</p>}
-        </div>
+        </DropdownPanel>
       )}
     </div>
   );

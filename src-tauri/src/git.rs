@@ -238,6 +238,16 @@ fn staged_files(dir: &Path) -> (usize, usize) {
     (paths(git(dir, &all)).len(), paths(git(dir, &here)).len())
 }
 
+/// `text`, from git, with the line endings of `deck`. Checkouts can get other ones than the file
+/// has (`core.autocrlf`, the default of git for Windows), and those are not changes to the deck.
+fn matching_endings(text: &str, deck: &str) -> String {
+    let lf = text.replace("\r\n", "\n");
+    match deck.contains("\r\n") {
+        true => lf.replace('\n', "\r\n"),
+        false => lf,
+    }
+}
+
 /// The deck as the index has it; None when it does not have it.
 fn read_index(file: &Path) -> Option<String> {
     let (dir, name) = split(file).ok()?;
@@ -292,10 +302,12 @@ struct Versions {
 fn versions(file: &Path) -> Result<Versions> {
     let head =
         read_at_head(file).ok_or_else(|| Error::msg("The last commit does not have this deck."))?;
-    let head = String::from_utf8_lossy(&head).into_owned();
+    let work = deck::read_html(file)?;
+    let head = matching_endings(&String::from_utf8_lossy(&head), &work);
     Ok(Versions {
-        index: read_index(file).unwrap_or_else(|| head.clone()),
-        work: deck::read_html(file)?,
+        index: read_index(file)
+            .map_or_else(|| head.clone(), |index| matching_endings(&index, &work)),
+        work,
         head,
     })
 }
@@ -578,13 +590,16 @@ pub fn changes(file: &Path) -> Result<DeckChanges> {
     let (Some(commit), Some(committed)) = (head_commit(dir), read_at_head(file)) else {
         return Ok(uncompared(Tracking::NotCommitted, &slides));
     };
-    let committed = String::from_utf8_lossy(&committed);
+    let committed = matching_endings(&String::from_utf8_lossy(&committed), &source);
     let others = |files: Vec<String>| -> Vec<String> {
         files.into_iter().filter(|path| path != name).collect()
     };
     let assets = others(changed_files(dir));
     let old = snapshots(&committed);
-    let index = read_index(file).unwrap_or_else(|| committed.to_string());
+    let index = read_index(file).map_or_else(
+        || committed.clone(),
+        |index| matching_endings(&index, &source),
+    );
     let staged = snapshots(&index);
     let unstaged = others(unstaged_files(dir));
     let styles_changed = shell(&committed) != shell(&source)
@@ -1072,6 +1087,9 @@ mod tests {
             fs::create_dir_all(root.join("talk/assets")).unwrap();
             let repo = Self(root);
             repo.run(&["init", "-q"]);
+            // `commit` goes by the repository's identity, and CI machines have none of their own.
+            repo.run(&["config", "user.name", "Test"]);
+            repo.run(&["config", "user.email", "test@example.com"]);
             repo
         }
 
@@ -1244,7 +1262,7 @@ mod tests {
     }
 
     fn index_of(repo: &Repo) -> String {
-        read_index(&repo.deck()).unwrap()
+        matching_endings(&read_index(&repo.deck()).unwrap(), &work_of(repo))
     }
 
     fn work_of(repo: &Repo) -> String {
@@ -1530,5 +1548,33 @@ mod tests {
         repo.write("talk/deck.html", &with_marks);
         restore(&repo, &Change::Styles);
         assert_eq!(review::read(&work_of(&repo)).len(), 1);
+    }
+
+    #[test]
+    fn line_endings_are_not_changes() {
+        // What git for Windows does by default: commits have LF, checkouts get CRLF. The app
+        // writes the deck with LF all the same.
+        let repo = Repo::new();
+        repo.run(&["config", "core.autocrlf", "true"]);
+        repo.write("talk/deck.html", &deck(&["a=A", "b=B"]));
+        repo.commit("First");
+
+        let clean = changes(&repo.deck()).unwrap();
+        assert!(!clean.styles_changed);
+        assert!(clean.slides.iter().all(|s| s.status == Unchanged));
+        assert!(!clean.has_unstaged);
+
+        repo.write("talk/deck.html", &deck(&["a=Ay", "b=B"]));
+        stage(&repo.deck(), &slide("a")).unwrap();
+        let found = changes(&repo.deck()).unwrap();
+        assert!(found.slides[0].staged);
+        assert!(!found.has_unstaged);
+        assert!(!found.styles_changed);
+    }
+
+    #[test]
+    fn matches_the_line_endings_of_the_deck() {
+        assert_eq!(matching_endings("a\r\nb\n", "x\ny"), "a\nb\n");
+        assert_eq!(matching_endings("a\r\nb\n", "x\r\ny"), "a\r\nb\r\n");
     }
 }

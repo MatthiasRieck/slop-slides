@@ -553,10 +553,11 @@ describe("moving a section", () => {
       return { top, bottom: top + 20, left: 0, right: 100, width: 100, height: 20, x: 0, y: top } as DOMRect;
     });
   });
-  // A drag swallows the next click until a tick after it ends.
+  // A drag swallows clicks until dnd-kit drops its guard, 50ms after the drag ends. This timer
+  // starts later with the same delay, so it fires after dnd-kit's.
   afterEach(async () => {
     await letGo();
-    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
     vi.restoreAllMocks();
   });
 

@@ -110,8 +110,26 @@ fn serve(app: &AppHandle, raw_path: &str) -> Result<(&'static str, Vec<u8>), Sta
 /// URL of a workspace file, by its absolute path, as the frontend's `fileUrl` makes it.
 pub fn file_url(file: &Path, query: &str) -> String {
     let path = file.to_string_lossy().replace('\\', "/");
+    // canonicalize() adds Windows verbatim prefixes. Sending them as URL segments would
+    // turn a drive path into a relative path when the handler reconstructs it.
+    let path = if let Some(unc) = path.strip_prefix("//?/UNC/") {
+        format!("//{unc}")
+    } else if let Some(drive) = path
+        .strip_prefix("//?/")
+        .filter(|p| p.as_bytes().get(1) == Some(&b':'))
+    {
+        drive.to_string()
+    } else {
+        path
+    };
+    // Unlike a Unix root slash, a network path's two leading slashes are significant.
+    let path = if path.starts_with("//") {
+        path.as_str()
+    } else {
+        path.trim_start_matches('/')
+    };
     let encoded: Vec<String> = std::iter::once(FILE_PREFIX)
-        .chain(path.trim_start_matches('/').split('/'))
+        .chain(path.split('/'))
         .map(|segment| utf8_percent_encode(segment, URI_COMPONENT).to_string())
         .collect();
     // WebView2 (Windows) exposes custom schemes as http://<scheme>.localhost.
@@ -270,6 +288,67 @@ mod tests {
         assert!(
             url.ends_with("/.file/C%3A/Users/me/deck%20(1).html?print"),
             "{url}"
+        );
+    }
+
+    #[test]
+    fn file_urls_take_canonical_windows_paths() {
+        let url = file_url(Path::new(r"\\?\C:\my talks\café\deck.html"), "static&print");
+        assert!(
+            url.ends_with("/.file/C%3A/my%20talks/caf%C3%A9/deck.html?static&print"),
+            "{url}"
+        );
+    }
+
+    #[test]
+    fn file_urls_preserve_windows_network_roots() {
+        for path in [
+            r"\\server\share\my talk\deck.html",
+            r"\\?\UNC\server\share\my talk\deck.html",
+        ] {
+            let url = file_url(Path::new(path), "print");
+            let raw = url
+                .split_once("localhost")
+                .unwrap()
+                .1
+                .split('?')
+                .next()
+                .unwrap();
+            assert_eq!(
+                split(raw),
+                Ok((".file".into(), "//server/share/my talk/deck.html".into())),
+                "{url}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn serves_a_file_url_from_a_canonical_windows_workspace() {
+        let root =
+            std::env::temp_dir().join(format!("slopslide-canonical-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("my talk")).unwrap();
+        let file = root.join("my talk/deck.html");
+        std::fs::write(&file, "<html>canonical deck</html>").unwrap();
+        let open = OpenWorkspace::default();
+        open.set("main", Some(root.canonicalize().unwrap()));
+        let url = file_url(&file.canonicalize().unwrap(), "static&print");
+        let raw = url
+            .split_once("localhost")
+            .unwrap()
+            .1
+            .split('?')
+            .next()
+            .unwrap();
+        let (_, path) = split(raw).unwrap();
+        let served = read_in_workspace(&open, &path);
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            served,
+            Ok((
+                "text/html; charset=utf-8",
+                b"<html>canonical deck</html>".to_vec()
+            ))
         );
     }
 

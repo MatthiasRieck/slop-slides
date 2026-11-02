@@ -1,8 +1,8 @@
 import { isWindows } from "./utils";
 
 /**
- * Files dropped on the window. The chat attaches whatever lands anywhere; parts of the window
- * (like the slide being edited) can claim the files that land on them first.
+ * Files dropped on the window. Parts of the window claim the files that land on them (the chat
+ * attaches them, the slide being edited places images); decks dropped anywhere else open.
  */
 
 /** A point in the window, in CSS pixels. */
@@ -30,6 +30,52 @@ export function catchDrops(catcher: DropCatcher, covers: (point: DropPoint) => b
 /** Whether a catcher would take files dropped at `point`. */
 export function dropCovered(point: DropPoint | null): boolean {
   return !!point && [...catchers.values()].some((covers) => covers(point));
+}
+
+/** Hears where files being dragged over the window are, or null once they leave or drop. */
+export type DragWatcher = (point: DropPoint | null) => void;
+
+const watchers = new Set<DragWatcher>();
+
+/** Tells `watcher` where files being dragged are; returns a function that stops it. */
+export function watchDrag(watcher: DragWatcher): () => void {
+  watchers.add(watcher);
+  return () => {
+    watchers.delete(watcher);
+  };
+}
+
+/** A drag and drop event of the window, as Tauri reports it. */
+export type DragDropPayload =
+  | { type: "enter"; paths: string[]; position?: { x: number; y: number } }
+  | { type: "over"; position?: { x: number; y: number } }
+  | { type: "drop"; paths: string[]; position?: { x: number; y: number } }
+  | { type: "leave" };
+
+/**
+ * Handles a drag and drop event of the window: tells the watchers where the files are, and
+ * hands dropped ones to the catchers, then the ones none of them took to `rest`.
+ */
+export function handleDragDrop(payload: DragDropPayload, rest: (paths: string[]) => void) {
+  const point = payload.type === "leave" || payload.type === "drop" ? null : dropPoint(payload.position);
+  for (const watcher of watchers) watcher(point);
+  if (payload.type !== "drop") return;
+  const left = claimDrop(payload.paths, dropPoint(payload.position));
+  if (left.length > 0) rest(left);
+}
+
+/** Whether `point` lies within `element`'s box on screen. */
+export function within(element: Element | null, point: DropPoint): boolean {
+  if (!element) return false;
+  const box = element.getBoundingClientRect();
+  return (
+    box.width > 0 &&
+    box.height > 0 &&
+    point.x >= box.left &&
+    point.x <= box.right &&
+    point.y >= box.top &&
+    point.y <= box.bottom
+  );
 }
 
 /** Hands dropped files to the catchers in turn; returns the ones none of them took. */

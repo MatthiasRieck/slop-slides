@@ -160,6 +160,85 @@ describe("workspaces", () => {
     expect(useApp.getState().sidebarTab).toBe("files");
   });
 
+  describe("decks dropped on the window", () => {
+    const OTHER = "/elsewhere/pitch/deck.html";
+    function dropBackend(extra: Record<string, Handler> = {}) {
+      workspaceBackend({
+        file_kind: ({ path }) => (/(deck|q3)\.html$/.test(String(path)) ? "deck" : "webpage"),
+        open_deck: ({ id }) => ({ ...TALK, id, path: id }),
+        ...extra,
+      });
+    }
+
+    it("open in this window when it has no deck open, in its folder", async () => {
+      const useApp = await freshStore(false);
+      dropBackend();
+      await useApp.getState().openDroppedDecks([OTHER]);
+      expect(calls("open_workspace")).toEqual([{ path: "/elsewhere/pitch" }]);
+      expect(calls("open_deck")).toEqual([{ id: OTHER }]);
+      expect(useApp.getState().deck?.id).toBe(OTHER);
+      expect(calls("open_deck_window")).toEqual([]);
+    });
+
+    it("open from the open folder without switching it", async () => {
+      const useApp = await freshStore(false);
+      dropBackend();
+      await useApp.getState().openWorkspace("/ws");
+      await useApp.getState().openDroppedDecks(["/ws/talks/q3.html"]);
+      expect(calls("open_workspace")).toHaveLength(1);
+      expect(useApp.getState().deck?.id).toBe("/ws/talks/q3.html");
+    });
+
+    it("open in a window of their own when this one has a deck open", async () => {
+      const useApp = await freshStore(false);
+      dropBackend();
+      await useApp.getState().openWorkspace("/ws");
+      await useApp.getState().openDeck("/ws/talks/q3.html");
+      await useApp.getState().openDroppedDecks(["/ws/talks/q3.html", "/ws/other/deck.html", OTHER]);
+      expect(calls("open_deck_window")).toEqual([{ path: "/ws/other/deck.html" }, { path: OTHER }]);
+      expect(useApp.getState().deck?.id).toBe("/ws/talks/q3.html");
+    });
+
+    it("open the first here and the others in windows of their own", async () => {
+      const useApp = await freshStore(false);
+      dropBackend();
+      await useApp.getState().openDroppedDecks([OTHER, "/elsewhere/b/deck.html"]);
+      expect(useApp.getState().deck?.id).toBe(OTHER);
+      expect(calls("open_deck_window")).toEqual([{ path: "/elsewhere/b/deck.html" }]);
+    });
+
+    it("do not stop the agent working in this window's folder", async () => {
+      const useApp = await freshStore(false);
+      dropBackend();
+      await useApp.getState().openWorkspace("/ws");
+      useApp.setState({ running: true });
+      await useApp.getState().openDroppedDecks([OTHER]);
+      expect(calls("open_deck_window")).toEqual([{ path: OTHER }]);
+      expect(useApp.getState().workspace?.path).toBe("/ws");
+    });
+
+    it("leave other files alone", async () => {
+      const useApp = await freshStore(false);
+      dropBackend();
+      await useApp.getState().openDroppedDecks(["/tmp/a.png", "/tmp/page.html"]);
+      expect(calls("file_kind")).toEqual([{ path: "/tmp/page.html" }]);
+      expect(calls("open_deck")).toEqual([]);
+      expect(calls("open_deck_window")).toEqual([]);
+      expect(useApp.getState().workspace).toBeNull();
+    });
+
+    it("report a deck that cannot be opened", async () => {
+      const useApp = await freshStore(false);
+      dropBackend({
+        file_kind: () => {
+          throw "not a file: /gone/deck.html";
+        },
+      });
+      await useApp.getState().openDroppedDecks(["/gone/deck.html"]);
+      expect(useApp.getState().error).toBe("not a file: /gone/deck.html");
+    });
+  });
+
   it("opens a deck in the editor and other pages as they are", async () => {
     const useApp = await freshStore(false);
     workspaceBackend();
@@ -1430,7 +1509,7 @@ describe("agent events", () => {
 
   it("opens the folder from Finder waiting for this window, at start and when told", async () => {
     const store = await freshModule(false);
-    let pending: string | null = "/decks/a";
+    let pending: { folder: string; file: string | null } | null = { folder: "/decks/a", file: null };
     backend({
       take_pending_folder: () => {
         const path = pending;
@@ -1446,6 +1525,32 @@ describe("agent events", () => {
     // Another window's folder: this one has none waiting.
     listeners.get("folder-pending")?.({ payload: null });
     await vi.waitFor(() => expect(calls("take_pending_folder")).toHaveLength(2));
+    expect(calls("open_workspace")).toHaveLength(1);
+  });
+
+  it("opens a dropped deck waiting for this window, in its folder", async () => {
+    const store = await freshModule(false);
+    const DECK_FILE = "/decks/a/deck.html";
+    let pending: { folder: string; file: string | null } | null = { folder: "/decks/a", file: DECK_FILE };
+    backend({
+      take_pending_folder: () => {
+        const next = pending;
+        pending = null;
+        return next;
+      },
+      open_workspace: ({ path }) => ({ path, name: String(path).split("/").pop() }),
+      open_deck: ({ id }) => ({ ...deckFor(DECK_HTML), id, path: id }),
+      load_chat: () => null,
+      agent_running: () => false,
+    });
+    await store.initEventBridge();
+    await vi.waitFor(() => expect(store.useApp.getState().deck?.id).toBe(DECK_FILE));
+    expect(calls("open_workspace")).toEqual([{ path: "/decks/a" }]);
+
+    // Another deck from the same folder, sent to the window that has it open.
+    pending = { folder: "/decks/a", file: "/decks/a/other.html" };
+    listeners.get("folder-pending")?.({ payload: null });
+    await vi.waitFor(() => expect(store.useApp.getState().deck?.id).toBe("/decks/a/other.html"));
     expect(calls("open_workspace")).toHaveLength(1);
   });
 

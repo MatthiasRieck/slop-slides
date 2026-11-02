@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { catchDrops, claimDrop, dropCovered, dropPoint, imageSize, isImage } from "./drop";
+import {
+  catchDrops,
+  claimDrop,
+  dropCovered,
+  dropPoint,
+  handleDragDrop,
+  imageSize,
+  isImage,
+  watchDrag,
+  within,
+} from "./drop";
 
 const stops: (() => void)[] = [];
 afterEach(() => {
@@ -40,6 +50,58 @@ describe("dropped files", () => {
     stop();
     expect(claimDrop(["/a.png"], { x: 0, y: 0 })).toEqual(["/a.png"]);
     expect(catcher).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleDragDrop", () => {
+  it("tells the watchers where dragged files are, and that they left or dropped", () => {
+    const watcher = vi.fn();
+    stops.push(watchDrag(watcher));
+    const rest = vi.fn();
+    handleDragDrop({ type: "enter", paths: ["/a.png"], position: { x: 1, y: 2 } }, rest);
+    handleDragDrop({ type: "over", position: { x: 3, y: 4 } }, rest);
+    handleDragDrop({ type: "leave" }, rest);
+    handleDragDrop({ type: "drop", paths: ["/a.png"], position: { x: 3, y: 4 } }, rest);
+    expect(watcher.mock.calls).toEqual([[{ x: 1, y: 2 }], [{ x: 3, y: 4 }], [null], [null]]);
+  });
+
+  it("hands dropped files to the catchers, and what they leave to `rest`", () => {
+    stops.push(catchDrops((paths) => paths.filter((p) => !p.endsWith(".png"))));
+    const rest = vi.fn();
+    handleDragDrop({ type: "drop", paths: ["/a.png", "/talk/deck.html"], position: { x: 1, y: 1 } }, rest);
+    expect(rest).toHaveBeenCalledWith(["/talk/deck.html"]);
+    rest.mockClear();
+    handleDragDrop({ type: "drop", paths: ["/b.png"], position: { x: 1, y: 1 } }, rest);
+    expect(rest).not.toHaveBeenCalled();
+  });
+
+  it("stops telling a watcher once it stops", () => {
+    const watcher = vi.fn();
+    watchDrag(watcher)();
+    handleDragDrop({ type: "leave" }, () => {});
+    expect(watcher).not.toHaveBeenCalled();
+  });
+});
+
+describe("within", () => {
+  const box = (left: number, top: number, width: number, height: number) => {
+    const element = document.createElement("div");
+    element.getBoundingClientRect = () =>
+      ({ left, top, width, height, right: left + width, bottom: top + height }) as DOMRect;
+    return element;
+  };
+
+  it("tells whether a point lies in an element's box", () => {
+    const element = box(100, 50, 200, 100);
+    expect(within(element, { x: 100, y: 50 })).toBe(true);
+    expect(within(element, { x: 250, y: 120 })).toBe(true);
+    expect(within(element, { x: 99, y: 60 })).toBe(false);
+    expect(within(element, { x: 150, y: 151 })).toBe(false);
+  });
+
+  it("is false for no element, or one folded away to nothing", () => {
+    expect(within(null, { x: 0, y: 0 })).toBe(false);
+    expect(within(box(0, 0, 0, 800), { x: 0, y: 10 })).toBe(false);
   });
 });
 

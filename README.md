@@ -62,7 +62,8 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   the next commit, restoring one takes it out of the deck, and the styles count as changed once
   they differ from what is staged.
 - **Right:** chat with the agent. It knows which slide you're on, and you can attach images
-  (paperclip, or drop files anywhere on the window). The microphone button dictates: click to
+  (paperclip, or drop files on the chat). Attached files stay where they are; only images
+  pasted into the chat are saved to the deck's `assets/`. The microphone button dictates: click to
   start, and what you say shows up at the cursor as you speak; click again to keep it (Esc
   discards it). On macOS the first use asks for microphone access (when running from a
   terminal or editor, macOS asks for that app instead). Speech is
@@ -74,7 +75,9 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   a click on the Dock icon only brings the app back. A folder
   dropped on the app's icon or opened with it from Finder (Open With) opens in a window: one
   on the start screen, else a new one. A folder already open in one window is brought to the
-  front instead of opening twice. Elements and whole slides copied in one
+  front instead of opening twice. A deck dropped on the window (anywhere but the chat) opens
+  there when no deck is open, else in a window of its own, with the deck's folder as its
+  workspace. Elements and whole slides copied in one
   window paste into another; the images they show are copied into the receiving deck's
   `assets/`. A pasted element keeps its size and text look, but styles that come from the
   other deck's CSS (its classes, its theme) do not come along.

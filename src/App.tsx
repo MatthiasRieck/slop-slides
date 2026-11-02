@@ -1,3 +1,4 @@
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { X } from "lucide-react";
 import { type ReactNode, useEffect, useRef } from "react";
 import { Group, Panel, type PanelSize, Separator, usePanelRef } from "react-resizable-panels";
@@ -16,6 +17,7 @@ import { SlideRail } from "./components/SlideRail";
 import { Stage } from "./components/Stage";
 import { TopBar } from "./components/TopBar";
 import { api, errorMessage } from "./lib/api";
+import { handleDragDrop } from "./lib/drop";
 import { cn, isMac } from "./lib/utils";
 import { deckMode, useApp } from "./store";
 
@@ -23,6 +25,7 @@ export function App() {
   const workspace = useApp((s) => s.workspace);
   const presenting = useApp((s) => s.presenting);
   useNewWindowKey();
+  useWindowDrops();
 
   return (
     <>
@@ -45,6 +48,29 @@ export function useNewWindowKey() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+}
+
+/**
+ * Files dropped on the window go to what lies where they land (see lib/drop); decks among the
+ * rest open, here or in a window of their own.
+ */
+export function useWindowDrops() {
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void getCurrentWebview()
+      .onDragDropEvent((event) =>
+        handleDragDrop(event.payload, (paths) => void useApp.getState().openDroppedDecks(paths)),
+      )
+      .then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 }
 

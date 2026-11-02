@@ -377,14 +377,22 @@ interface AppState {
   /** Undone slide rail changes that can be redone, newest last. */
   deckRedo: DeckUndo[];
 
-  /** Opens a folder in the file tree, reopening the file last open in it. */
-  openWorkspace: (path: string) => Promise<void>;
+  /**
+   * Opens a folder in the file tree, reopening the file last open in it, or the deck `file`
+   * (its absolute path) when given.
+   */
+  openWorkspace: (path: string, file?: string) => Promise<void>;
   /** Back to the start screen; false when the user kept unsaved edits instead. */
   closeWorkspace: () => Promise<boolean>;
   /** Opens a workspace file (by its workspace-relative path) in the viewer for its kind. */
   openPath: (path: string) => Promise<void>;
   /** Opens a deck by its id (the deck file's absolute path). */
   openDeck: (id: string) => Promise<void>;
+  /**
+   * Opens the decks among files dropped on the window (absolute paths): one in this window
+   * while it has no deck open, the others in windows of their own.
+   */
+  openDroppedDecks: (paths: string[]) => Promise<void>;
   /** Creates a deck at the root of the open workspace and opens it. */
   createDeck: (title: string, template?: string | null) => Promise<void>;
   /** Makes a deck from the PowerPoint file at `path`, in the workspace, and opens it. */
@@ -638,8 +646,11 @@ export const useApp = create<AppState>((set, get) => ({
   deckRedo: [],
   templates: undefined,
 
-  openWorkspace: async (path) => {
-    if (get().workspace?.path === path) return;
+  openWorkspace: async (path, file) => {
+    if (get().workspace?.path === path) {
+      if (file) await get().openDeck(file);
+      return;
+    }
     if (!(await get().closeWorkspace())) return;
     try {
       const workspace = await api.openWorkspace(path);
@@ -649,6 +660,7 @@ export const useApp = create<AppState>((set, get) => ({
       set({ error: errorMessage(error) });
       return;
     }
+    if (file) return get().openDeck(file);
     const workspacePath = get().workspace!.path;
     const last = localStorage.getItem(LAST_FILE_KEY + workspacePath);
     if (last === null) return get().setSidebarTab("files");
@@ -702,6 +714,26 @@ export const useApp = create<AppState>((set, get) => ({
       await loadDeckState(deck);
     } catch (error) {
       set({ openedFile: null, error: errorMessage(error) });
+    }
+  },
+
+  openDroppedDecks: async (paths) => {
+    try {
+      const decks: string[] = [];
+      for (const path of paths.filter((p) => /\.html?$/i.test(p))) {
+        if ((await api.fileKind(path)) === "deck") decks.push(path);
+      }
+      for (const path of decks) {
+        const { deck, workspace, running } = get();
+        if (deck?.id === path) continue;
+        const inWorkspace = relativePath(workspace, path) !== null;
+        // Switching folders would stop the agent working in this one.
+        if (deck || (running && !inWorkspace)) await api.openDeckWindow(path);
+        else if (inWorkspace) await get().openDeck(path);
+        else await get().openWorkspace(dirname(path), path);
+      }
+    } catch (error) {
+      set({ error: errorMessage(error) });
     }
   },
 
@@ -2036,11 +2068,11 @@ export async function initEventBridge() {
   await openPendingFolder();
 }
 
-/** Opens the folder from Finder waiting for this window, if there is one. */
+/** Opens the folder from Finder (or a dropped deck) waiting for this window, if there is one. */
 async function openPendingFolder() {
   try {
-    const path = await api.takePendingFolder();
-    if (path) await useApp.getState().openWorkspace(path);
+    const pending = await api.takePendingFolder();
+    if (pending) await useApp.getState().openWorkspace(pending.folder, pending.file ?? undefined);
   } catch (error) {
     useApp.getState().setError(errorMessage(error));
   }

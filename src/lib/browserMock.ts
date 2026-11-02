@@ -117,6 +117,10 @@ export function installBrowserMock() {
         case "paste_slide":
         case "take_pending_folder":
           return null;
+        case "attach_files":
+          return a.paths;
+        case "file_kind":
+          return "file";
         case "paste_from_clipboard":
           return { kind: "nothing" };
         case "read_clipboard_text":

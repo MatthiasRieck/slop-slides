@@ -7,7 +7,7 @@
 //! ([`OpenWorkspace`]). The
 //! folders opened before are remembered in `~/.slopslides/recent-workspaces.json`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -101,6 +101,15 @@ fn kind_of(path: &Path, limit: Option<u64>) -> FileKind {
         Ok(_) => classify(&String::from_utf8_lossy(&bytes)),
         Err(_) => FileKind::File,
     }
+}
+
+/// The kind of a file anywhere on disk, by its absolute path (a file dropped on the window).
+pub fn file_kind(path: &str) -> Result<FileKind> {
+    let path = Path::new(path);
+    if !path.is_absolute() || !path.exists() {
+        return Err(Error::msg(format!("not a file: {}", path.display())));
+    }
+    Ok(kind_of(path, Some(SNIFF_BYTES)))
 }
 
 /// The workspace folder: an existing, absolute directory.
@@ -231,6 +240,44 @@ impl OpenWorkspace {
     }
 }
 
+/// Files from outside the workspaces the user attached to a chat (dropped on it, picked for it).
+/// They stay where they are; `slop://` serves them too, so the chat can show them.
+#[derive(Default)]
+pub struct AttachedFiles(Mutex<HashSet<PathBuf>>);
+
+impl AttachedFiles {
+    /// How the chat refers to each of `paths` (absolute): a file inside `root` by its
+    /// workspace-relative, `/`-separated path, any other by its absolute path, which it
+    /// remembers as attached.
+    pub fn attach(&self, root: &Path, paths: &[String]) -> Result<Vec<String>> {
+        let root = root.canonicalize()?;
+        paths
+            .iter()
+            .map(|path| {
+                let file = Path::new(path)
+                    .canonicalize()
+                    .map_err(|_| Error::msg(format!("file not found: {path}")))?;
+                if !file.is_file() {
+                    return Err(Error::msg(format!("not a file: {path}")));
+                }
+                if let Ok(rel) = file.strip_prefix(&root) {
+                    let parts: Vec<_> = rel.iter().map(|p| p.to_string_lossy()).collect();
+                    return Ok(parts.join("/"));
+                }
+                let absolute = file.to_string_lossy().into_owned();
+                self.0.lock().unwrap().insert(file);
+                Ok(absolute)
+            })
+            .collect()
+    }
+
+    /// Whether `path` is a file attached before.
+    pub fn contains(&self, path: &Path) -> bool {
+        path.canonicalize()
+            .is_ok_and(|file| self.0.lock().unwrap().contains(&file))
+    }
+}
+
 /// Whether `path` exists inside `root` (both resolved, so `..` and links cannot leave it).
 pub fn inside(root: &Path, path: &Path) -> bool {
     match (path.canonicalize(), root.canonicalize()) {
@@ -308,6 +355,65 @@ pub fn display_name(root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attached_files_inside_the_workspace_are_relative_others_absolute_and_served() {
+        let (ws, outside) = (Temp::new(), Temp::new());
+        ws.write("talk/assets/a.png", "png");
+        let photo = outside.write("photo.png", "png");
+        let attached = AttachedFiles::default();
+        let refs = attached
+            .attach(
+                &ws.0,
+                &[
+                    ws.0.join("talk/assets/a.png")
+                        .to_string_lossy()
+                        .into_owned(),
+                    photo.to_string_lossy().into_owned(),
+                ],
+            )
+            .unwrap();
+        let photo = photo.canonicalize().unwrap();
+        assert_eq!(
+            refs,
+            vec![
+                "talk/assets/a.png".to_string(),
+                photo.to_string_lossy().into_owned()
+            ]
+        );
+        assert!(!outside.0.join("talk").exists(), "nothing is copied");
+        assert!(attached.contains(&photo));
+        assert!(
+            !attached.contains(&ws.0.join("talk/assets/a.png")),
+            "workspace files are served as such"
+        );
+        assert!(!attached.contains(&outside.write("other.png", "png")));
+    }
+
+    #[test]
+    fn attaching_refuses_folders_and_missing_files() {
+        let (ws, outside) = (Temp::new(), Temp::new());
+        let attached = AttachedFiles::default();
+        let folder = outside.0.to_string_lossy().into_owned();
+        assert!(attached.attach(&ws.0, &[folder]).is_err());
+        let missing = outside.0.join("gone.png").to_string_lossy().into_owned();
+        assert!(attached.attach(&ws.0, &[missing]).is_err());
+        assert!(!attached.contains(&outside.0));
+    }
+
+    #[test]
+    fn file_kind_tells_decks_from_other_files_anywhere() {
+        let t = Temp::new();
+        let deck = t.write("talk/deck.html", "<main class=\"deck\"></main>");
+        let page = t.write("page.html", "<p>hi</p>");
+        let image = t.write("a.png", "png");
+        let kind = |p: &Path| file_kind(&p.to_string_lossy());
+        assert_eq!(kind(&deck).unwrap(), FileKind::Deck);
+        assert_eq!(kind(&page).unwrap(), FileKind::Webpage);
+        assert_eq!(kind(&image).unwrap(), FileKind::File);
+        assert!(file_kind("talk/deck.html").is_err(), "relative");
+        assert!(kind(&t.0.join("gone.html")).is_err());
+    }
 
     struct Temp(PathBuf);
 

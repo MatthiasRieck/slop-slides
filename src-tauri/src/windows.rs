@@ -2,18 +2,15 @@
 //! folders can be open side by side; File › New Window (⌘N, Ctrl+N elsewhere) opens another.
 //! On macOS so does opening the app again (a double-click in Finder) and the New Window item of
 //! its Dock menu, while a click on its Dock icon only brings it back: see `reopened`. Folders
-//! opened with the app from Finder (dropped on its icon, Open With) open in a window too: see
-//! `open_folder`.
+//! opened with the app from Finder (dropped on its icon, Open With) open in a window too, and
+//! so do decks dropped on a window that has one open already: see `open_folder`.
 
 use std::collections::HashMap;
-#[cfg(any(target_os = "macos", test))]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-#[cfg(target_os = "macos")]
-use tauri::Emitter;
-use tauri::{AppHandle, LogicalPosition, Manager, WebviewWindowBuilder, Window};
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, LogicalPosition, Manager, WebviewWindowBuilder, Window};
 
 use crate::agent::AgentManager;
 use crate::error::{Error, Result};
@@ -27,27 +24,30 @@ pub const LABEL_PREFIX: &str = "window-";
 /// Id of the File › New Window menu item.
 pub const NEW_WINDOW_MENU: &str = "new-window";
 
-#[cfg(target_os = "macos")]
 /// Tells the windows a folder is waiting to be opened in one of them; each asks for its own
 /// with `take_pending_folder`.
 pub const PENDING_EVENT: &str = "folder-pending";
 
-/// Folders waiting to be opened, by the label of the window they open in. The window takes
-/// its folder once its frontend is up, which for a new window is after it is built. Only
-/// macOS opens folders from outside the app; elsewhere none are ever waiting.
-#[derive(Default)]
-pub struct PendingFolders(Mutex<HashMap<String, PathBuf>>);
-
-impl PendingFolders {
-    pub fn take(&self, window: &str) -> Option<PathBuf> {
-        self.0.lock().unwrap().remove(window)
-    }
+/// A folder waiting to be opened in a window, with the deck to open in it, if any.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pending {
+    pub folder: PathBuf,
+    pub file: Option<PathBuf>,
 }
 
-#[cfg(any(target_os = "macos", test))]
+/// Folders waiting to be opened, by the label of the window they open in. The window takes
+/// its folder once its frontend is up, which for a new window is after it is built.
+#[derive(Default)]
+pub struct PendingFolders(Mutex<HashMap<String, Pending>>);
+
 impl PendingFolders {
-    fn insert(&self, window: &str, root: PathBuf) {
-        self.0.lock().unwrap().insert(window.to_string(), root);
+    pub fn take(&self, window: &str) -> Option<Pending> {
+        self.0.lock().unwrap().remove(window)
+    }
+
+    fn insert(&self, window: &str, pending: Pending) {
+        self.0.lock().unwrap().insert(window.to_string(), pending);
     }
 
     fn window_with(&self, root: &Path) -> Option<String> {
@@ -55,7 +55,7 @@ impl PendingFolders {
             .lock()
             .unwrap()
             .iter()
-            .find(|(_, pending)| same_folder(pending, root))
+            .find(|(_, pending)| same_folder(&pending.folder, root))
             .map(|(window, _)| window.clone())
     }
 
@@ -64,14 +64,12 @@ impl PendingFolders {
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
 fn same_folder(a: &Path, b: &Path) -> bool {
     let resolve = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     resolve(a) == resolve(b)
 }
 
 /// Where a folder opened from outside the app goes.
-#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, PartialEq)]
 enum Target {
     /// The window that has it open (or is about to): brought to the front.
@@ -83,7 +81,6 @@ enum Target {
 }
 
 /// Where `root` goes, given the app windows (`windows`, in the order to prefer them).
-#[cfg(any(target_os = "macos", test))]
 fn target(
     open: &OpenWorkspace,
     pending: &PendingFolders,
@@ -107,20 +104,29 @@ fn target(
 }
 
 /// Opens `root`, a folder opened with the app from outside it, in a window: the one that has
-/// it open already, else one on the start screen, else a new one.
-#[cfg(target_os = "macos")]
-pub fn open_folder(app: &AppHandle, root: PathBuf) -> Result<()> {
+/// it open already, else one on the start screen, else a new one. With `file`, a deck in it,
+/// the window opens that deck too.
+pub fn open_folder(app: &AppHandle, root: PathBuf, file: Option<PathBuf>) -> Result<()> {
     let windows = app_windows(app);
     let pending = app.state::<PendingFolders>();
+    let opening = Pending {
+        folder: root.clone(),
+        file,
+    };
     match target(&app.state::<OpenWorkspace>(), &pending, &windows, &root) {
-        Target::Focus(window) => focus(app, &window),
+        Target::Focus(window) => {
+            if opening.file.is_some() {
+                pending.insert(&window, opening);
+            }
+            focus(app, &window);
+        }
         Target::Use(window) => {
-            pending.insert(&window, root);
+            pending.insert(&window, opening);
             focus(app, &window);
         }
         Target::New => {
             let label = new_label();
-            pending.insert(&label, root);
+            pending.insert(&label, opening);
             if let Err(e) = build(app, &label) {
                 pending.take(&label);
                 return Err(e);
@@ -167,7 +173,6 @@ pub fn reopened(app: &AppHandle, has_visible_windows: bool) -> Result<()> {
 }
 
 /// The app windows: the first one first, then the others in the order they were opened.
-#[cfg(target_os = "macos")]
 fn app_windows(app: &AppHandle) -> Vec<String> {
     let mut windows: Vec<String> = app
         .webview_windows()
@@ -178,7 +183,6 @@ fn app_windows(app: &AppHandle) -> Vec<String> {
     windows
 }
 
-#[cfg(target_os = "macos")]
 fn focus(app: &AppHandle, window: &str) {
     if let Some(window) = app.get_webview_window(window) {
         let _ = window.unminimize();
@@ -424,15 +428,50 @@ mod tests {
             Target::Use("window-2".into()),
             "the window on the start screen takes it"
         );
-        pending.insert("window-2", dirs[1].clone());
+        pending.insert(
+            "window-2",
+            Pending {
+                folder: dirs[1].clone(),
+                file: None,
+            },
+        );
         assert_eq!(
             target(&open, &pending, &windows, &dirs[1]),
             Target::Focus("window-2".into()),
             "opened twice before the window took it"
         );
         assert_eq!(target(&open, &pending, &windows, &dirs[2]), Target::New);
-        assert_eq!(pending.take("window-2"), Some(dirs[1].clone()));
+        assert_eq!(
+            pending.take("window-2").map(|p| p.folder),
+            Some(dirs[1].clone())
+        );
         assert_eq!(pending.take("window-2"), None, "taken once");
+    }
+
+    #[test]
+    fn a_dropped_deck_waits_with_its_folder_and_goes_where_the_folder_is_open() {
+        let dirs = temp_dirs(&["talk"]);
+        let deck = dirs[0].join("deck.html");
+        let (open, pending) = (OpenWorkspace::default(), PendingFolders::default());
+        let windows = vec!["main".to_string(), "window-2".to_string()];
+        open.set("main", Some(dirs[0].clone()));
+        open.set("window-2", Some(std::env::temp_dir()));
+        assert_eq!(
+            target(&open, &pending, &windows, &dirs[0]),
+            Target::Focus("main".into())
+        );
+        open.set("main", Some(std::env::temp_dir().join("elsewhere")));
+        assert_eq!(target(&open, &pending, &windows, &dirs[0]), Target::New);
+        let waiting = Pending {
+            folder: dirs[0].clone(),
+            file: Some(deck.clone()),
+        };
+        pending.insert("window-3", waiting.clone());
+        assert_eq!(
+            serde_json::to_value(&waiting).unwrap(),
+            serde_json::json!({ "folder": dirs[0], "file": deck })
+        );
+        assert_eq!(pending.take("window-3"), Some(waiting));
     }
 
     #[test]

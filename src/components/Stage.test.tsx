@@ -1733,6 +1733,42 @@ describe("Stage", () => {
         expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-copy" }), "*");
       });
 
+      it("copies the slide, not an element, with ⌘C after a press on the slide rail", () => {
+        const { container } = render(
+          <>
+            <Stage />
+            <div data-slide-rail>
+              <button type="button" data-testid="rail-slide" />
+            </div>
+          </>,
+        );
+        toggleEditing();
+        const { post } = loaded(container);
+        // Focus in the rail.
+        fireEvent.keyDown(screen.getByTestId("rail-slide"), { key: "c", metaKey: true });
+        expect(invoke).toHaveBeenCalledWith("copy_slide", { id: useApp.getState().deck!.id, slide: "intro" });
+        expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-copy" }), "*");
+        // Focus left on the body by the press (WebKit), until a press elsewhere.
+        vi.mocked(invoke).mockClear();
+        fireEvent.pointerDown(screen.getByTestId("rail-slide"));
+        const copy = new KeyboardEvent("keydown", { key: "c", metaKey: true, cancelable: true, bubbles: true });
+        act(() => void document.body.dispatchEvent(copy));
+        expect(copy.defaultPrevented).toBe(true);
+        expect(invoke).toHaveBeenCalledWith("copy_slide", expect.anything());
+        expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-copy" }), "*");
+        // ⌘X and ⌘V on the rail stay with the editor, whose paste takes slides as well.
+        fireEvent.keyDown(document.body, { key: "x", metaKey: true });
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-copy", cut: true }, "*");
+        fireEvent.keyDown(document.body, { key: "v", metaKey: true });
+        expect(invoke).toHaveBeenCalledWith("paste_from_clipboard", expect.anything());
+        expect(invoke).not.toHaveBeenCalledWith("paste_slide", expect.anything());
+        vi.mocked(invoke).mockClear();
+        fireEvent.pointerDown(container);
+        fireEvent.keyDown(document.body, { key: "c", metaKey: true });
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-copy", cut: false }, "*");
+        expect(invoke).not.toHaveBeenCalledWith("copy_slide", expect.anything());
+      });
+
       it("pastes an element copied in the editor back into it", async () => {
         vi.mocked(invoke).mockResolvedValue({ kind: "element", html: "<!--slopslides:{}--><p>Hi</p>" });
         const { container } = render(<Stage />);

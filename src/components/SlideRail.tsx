@@ -173,7 +173,7 @@ export function SlideRail() {
   };
 
   return (
-    <div className="flex h-full flex-col bg-sidebar">
+    <div data-slide-rail className="flex h-full flex-col bg-sidebar">
       <div className="flex h-10 shrink-0 items-center justify-between px-3">
         <SectionLabel>Slides · {found ? `${found.size} of ${deck.slides.length}` : deck.slides.length}</SectionLabel>
         <div className="flex items-center gap-0.5">

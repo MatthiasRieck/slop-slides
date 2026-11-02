@@ -13,6 +13,9 @@
    does: each matched hero moves from the other's place, size and pose to its own, while the
    slides cross-fade. */
 (function () {
+  // WebView2 finishes canceled signal navigations too; keep the clock and animation state.
+  if (window.__slopVideo) return;
+
   // Tests answer through __slopVideoSignal; jsdom cannot navigate.
   var signal =
     window.__slopVideoSignal ||

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, watch};
 
 use crate::agent::{AgentEvent, Outcome, SYSTEM_PROMPT};
@@ -27,17 +27,14 @@ struct Server {
 impl Server {
     /// `config` holds `-c` overrides.
     fn spawn(bin: &Path, cwd: Option<&Path>, config: &[String]) -> Result<Self> {
-        let mut cmd = Command::new(bin);
+        let mut cmd = crate::process::command(bin)?;
         cmd.arg("app-server").args(config);
         if let Some(dir) = cwd {
             cmd.current_dir(dir);
         }
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        #[cfg(windows)]
-        cmd.creation_flags(0x0800_0000);
+            .stderr(Stdio::null());
         let mut child = cmd
             .spawn()
             .map_err(|e| Error::msg(format!("Could not start Codex app-server: {e}")))?;

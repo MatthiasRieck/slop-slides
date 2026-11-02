@@ -90,6 +90,11 @@ describe("SlideRail", () => {
     });
   });
 
+  it("marks itself for the stage's keys, so ⌘C pressed on it copies the slide", () => {
+    const { container } = render(<SlideRail />);
+    expect(container.querySelector("[data-slide-rail]")).not.toBeNull();
+  });
+
   it("numbers every slide and shows the count", () => {
     render(<SlideRail />);
     expect(screen.getByText("Slides · 3")).toBeTruthy();

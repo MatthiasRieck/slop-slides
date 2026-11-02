@@ -148,20 +148,35 @@ describe("marks", () => {
     expect(screen.getAllByTestId("change-mark").every((m) => m.textContent === "")).toBe(true);
   });
 
-  it("shows both marks on a slide that changed and moved, and where it came from", async () => {
+  it("puts the move of a slide that changed in its own field under the picture", async () => {
     await show(changes({ slides: [row("modified", "intro", [], { moved: true, oldNumber: 3 })] }));
     expect(screen.getAllByTestId("change-mark").map((m) => m.title)).toEqual(["Modified", "Moved"]);
-    expect(screen.getByText("was 3")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Slide 1, modified and moved" })).toBeTruthy();
+    const move = screen.getByTestId("move-row");
+    expect(move.textContent).toContain("Moved from slide 3");
+    expect(within(move).getByRole("group", { name: "Moved" })).toBeTruthy();
+    const picture = screen.getByRole("button", { name: "Slide 1, modified and moved" });
+    expect(picture.contains(move)).toBe(false);
+    expect(within(picture.parentElement as HTMLElement).queryByTestId("move-row")).toBeNull();
   });
 
-  it("marks a slide staged only once all of its changes are", async () => {
+  it("leaves the picture of a slide that only moved unmarked, with the move under it", async () => {
+    await show(changes({ slides: [row("moved", "intro", [], { moved: true, oldNumber: 3 })] }));
+    expect(screen.getAllByTestId("change-mark").map((m) => m.title)).toEqual(["Moved"]);
+    expect(screen.getByTestId("move-row")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Slide 1, moved" })).toBeTruthy();
+  });
+
+  it("marks the edit and the move staged each on their own", async () => {
     const both = { moved: true, oldNumber: 3 };
     await show(changes({ slides: [row("modified", "intro", [], { ...both, staged: true })] }));
-    expect(screen.queryByTestId("staged-mark")).toBeNull();
+    expect(screen.getAllByTestId("staged-mark")).toHaveLength(1);
+    expect(within(screen.getByTestId("move-row")).queryByTestId("staged-mark")).toBeNull();
+    expect(screen.getByRole("button", { name: "Slide 1, modified and moved, staged" })).toBeTruthy();
     cleanup();
-    await show(changes({ slides: [row("modified", "intro", [], { ...both, staged: true, moveStaged: true })] }));
-    expect(screen.getByTestId("staged-mark")).toBeTruthy();
+    await show(changes({ slides: [row("modified", "intro", [], { ...both, moveStaged: true })] }));
+    expect(screen.getAllByTestId("staged-mark")).toHaveLength(1);
+    expect(within(screen.getByTestId("move-row")).getByTestId("staged-mark")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Slide 1, modified and moved" })).toBeTruthy();
   });
 });
 

@@ -5,6 +5,7 @@ import {
   ListFilter,
   type LucideIcon,
   Minus,
+  Paintbrush,
   Pencil,
   Plus,
   RefreshCw,
@@ -39,6 +40,9 @@ const MARKS: Record<Exclude<SlideStatus, "unchanged">, Mark> = {
   },
   moved: { label: "Moved", icon: ArrowUpDown, color: "bg-info text-info-foreground", ring: "ring-info" },
 };
+
+/** What the slides share (styles, fonts, scripts), which is no slide's change. */
+const STYLES: Mark = { label: "Styles", icon: Paintbrush, color: MARKS.modified.color, ring: MARKS.modified.ring };
 
 /** The marks of a row: a slide can have changed and moved. */
 function marksOf(row: SlideChange): Mark[] {
@@ -83,12 +87,22 @@ export function ChangesRail() {
   const count = (status: keyof typeof MARKS) =>
     slides.filter((row) => (status === "moved" ? row.moved : row.status === status)).length;
   const counts = (["modified", "added", "removed", "moved"] as const).filter((status) => count(status) > 0);
+  const stylesChanged = !!changes?.stylesChanged;
+  const canStage = !!changes && changes.tracking !== "noRepository";
 
   return (
     <div className="flex h-full flex-col bg-sidebar">
       <div className="flex h-10 shrink-0 items-center justify-between gap-2 px-3">
         <div className="flex min-w-0 items-center gap-1">
-          {counts.length === 0 && <SectionLabel className="truncate">Changes</SectionLabel>}
+          {counts.length === 0 && !stylesChanged && <SectionLabel className="truncate">Changes</SectionLabel>}
+          {stylesChanged && (
+            <span
+              title="The shared styles changed"
+              className={cn("flex items-center gap-0.5 rounded px-1 text-2xs font-medium", STYLES.color)}
+            >
+              <STYLES.icon className="size-2.5" />
+            </span>
+          )}
           {counts.map((status) => {
             const { icon: Icon, color, label } = MARKS[status];
             return (
@@ -114,6 +128,7 @@ export function ChangesRail() {
       </div>
       {changes && changes.tracking !== "noRepository" && <CommitBox deck={deck.id} changes={changes} />}
       <ol className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 pb-4 pt-1.5">
+        {changes && stylesChanged && <StylesRow deck={deck.id} changes={changes} canStage={canStage} />}
         {rows.map((row) => (
           <ChangeRow
             key={row.key}
@@ -121,11 +136,13 @@ export function ChangesRail() {
             row={row}
             number={numbers.get(row.key)}
             commit={changes?.commit?.hash}
-            canStage={changes?.tracking === "committed"}
+            canStage={canStage}
           />
         ))}
         {changes && rows.length === 0 && slides.length > 0 && (
-          <li className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">No slide changed.</li>
+          <li className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">
+            {stylesChanged ? "No slide changed, only the shared styles." : "No slide changed."}
+          </li>
         )}
       </ol>
     </div>
@@ -277,6 +294,31 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
   );
 }
 
+/** The row above the slides for what they share, once that changed: a styles mark with its buttons. */
+function StylesRow({ deck, changes, canStage }: { deck: string; changes: DeckChanges; canStage: boolean }) {
+  const actions = canStage
+    ? { change: { kind: "styles" } as const, noun: "the shared styles", staged: changes.stylesStaged }
+    : null;
+  return (
+    <li data-testid="styles-row" className="flex gap-2">
+      <span className="w-4 shrink-0" />
+      <div className="relative flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground">
+        <span className="truncate">Shared styles</span>
+        <MarkRow mark={STYLES} deck={deck} actions={actions} locked={false} />
+        {changes.stylesStaged && (
+          <span
+            data-testid="staged-mark"
+            title="Staged"
+            className="pointer-events-none absolute right-1 top-1 rounded-full bg-overlay p-0.5 text-overlay-foreground"
+          >
+            <Check className="size-3" />
+          </span>
+        )}
+      </div>
+    </li>
+  );
+}
+
 /** A status icon, with staging on its left and restoring on its right. */
 function MarkRow(props: { mark: Mark; deck: string; actions: ReturnType<typeof actionsOf>; locked: boolean }) {
   const { mark, deck, actions, locked } = props;
@@ -308,7 +350,7 @@ function MarkRow(props: { mark: Mark; deck: string; actions: ReturnType<typeof a
           title={
             locked
               ? "This slide is locked; unlock it to restore it"
-              : `Put ${actions.noun} back as committed (⌘Z undoes it)`
+              : `Put ${actions.noun} back as committed, or staged (⌘Z undoes it)`
           }
           disabled={locked}
           onClick={() => void restore(deck, actions.change)}
@@ -669,7 +711,8 @@ function caption(row: SlideChange, changes: DeckChanges): string {
   const place = row.moved ? ` It moved from slide ${row.oldNumber}.` : "";
   const styles = changes.stylesChanged ? " The deck's shared styles changed, so it may still look different." : "";
   const also = row.details.length > 0 ? ` Changed: ${row.details.join(", ")}.` : "";
-  if (changes.tracking === "notCommitted") return "Not committed yet, so every slide is new.";
+  if (changes.tracking === "notCommitted")
+    return `Not committed yet, so every slide is new; restoring takes it out.${styles}`;
   switch (row.status) {
     case "added":
       return "New since the last commit.";

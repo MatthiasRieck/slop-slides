@@ -238,6 +238,41 @@ describe("staging", () => {
     expect(sent("stage_change")[0]?.[1]).toMatchObject({ change: { kind: "styles" } });
   });
 
+  it("lists a change to the shared styles above the slides, with its own buttons", async () => {
+    await show(changes({ stylesChanged: true, slides: [row("unchanged", "intro")] }));
+    const styles = within(screen.getByTestId("styles-row"));
+    expect(screen.getByTitle("The shared styles changed")).toBeTruthy();
+    expect(styles.queryByTestId("staged-mark")).toBeNull();
+    await act(async () => {
+      fireEvent.click(styles.getByRole("button", { name: "Stage" }));
+    });
+    expect(sent("stage_change")[0]?.[1]).toMatchObject({ change: { kind: "styles" } });
+    vi.mocked(invoke).mockImplementation(async (cmd) =>
+      cmd === "restore_change" ? { deck: deckFor(DECK_HTML), previous: "old", source: "new", created: [] } : changes(),
+    );
+    await act(async () => {
+      fireEvent.click(styles.getByRole("button", { name: "Restore" }));
+    });
+    expect(sent("restore_change")[0]?.[1]).toMatchObject({ change: { kind: "styles" } });
+  });
+
+  it("marks staged styles, and says when only the styles changed", async () => {
+    await show(changes({ stylesChanged: true, stylesStaged: true, slides: [row("unchanged", "intro")] }));
+    expect(within(screen.getByTestId("styles-row")).getByTestId("staged-mark")).toBeTruthy();
+    expect(within(screen.getByTestId("styles-row")).getByRole("button", { name: "Unstage" })).toBeTruthy();
+    await act(async () => {
+      useChanges.getState().setOnlyChanges(true);
+    });
+    expect(screen.getByText("No slide changed, only the shared styles.")).toBeTruthy();
+    expect(screen.getByTestId("styles-row")).toBeTruthy();
+  });
+
+  it("lists no styles row while nothing of them changed", async () => {
+    await show();
+    expect(screen.queryByTestId("styles-row")).toBeNull();
+    expect(screen.queryByTitle("The shared styles changed")).toBeNull();
+  });
+
   it("does not restore a locked slide", async () => {
     const deck = deckFor(DECK_HTML.replace('id="intro"', 'id="intro" data-locked'));
     useApp.setState({ deck });
@@ -245,10 +280,26 @@ describe("staging", () => {
     expect((group("Modified").getByRole("button", { name: "Restore" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("has nothing to stage slide by slide before a first commit", async () => {
+  it("stages and restores slide by slide before a first commit too", async () => {
     await show(changes({ tracking: "notCommitted", commit: null, slides: [row("added", "intro")] }));
-    expect(group("Added").queryByRole("button", { name: "Stage" })).toBeNull();
     expect(screen.getByRole("textbox", { name: "Commit message" })).toBeTruthy();
+    expect((screen.getByTitle("Stage everything in this deck") as HTMLButtonElement).disabled).toBe(false);
+    await act(async () => {
+      fireEvent.click(group("Added").getByRole("button", { name: "Stage" }));
+    });
+    expect(sent("stage_change")[0]?.[1]).toMatchObject({ change: { kind: "slide", id: "intro", oldId: null } });
+    vi.mocked(invoke).mockImplementation(async (cmd) =>
+      cmd === "restore_change" ? { deck: deckFor(DECK_HTML), previous: "old", source: "new", created: [] } : changes(),
+    );
+    await act(async () => {
+      fireEvent.click(group("Added").getByRole("button", { name: "Restore" }));
+    });
+    expect(sent("restore_change")[0]?.[1]).toMatchObject({ change: { kind: "slide", id: "intro", oldId: null } });
+  });
+
+  it("offers nothing to stage for a deck outside a repository", async () => {
+    await show(changes({ tracking: "noRepository", commit: null, slides: [row("added", "intro")] }));
+    expect(screen.queryByRole("button", { name: "Stage" })).toBeNull();
   });
 });
 
@@ -395,7 +446,7 @@ describe("ChangesView", () => {
   it("shows a deck never committed as all new", async () => {
     await show(changes({ tracking: "notCommitted", commit: null, slides: [row("added", "intro")] }));
     expect(screen.getByText("Not committed yet")).toBeTruthy();
-    expect(screen.getByText("Not committed yet, so every slide is new.")).toBeTruthy();
+    expect(screen.getByText("Not committed yet, so every slide is new; restoring takes it out.")).toBeTruthy();
     expect(isComparing()).toBe(false);
   });
 });

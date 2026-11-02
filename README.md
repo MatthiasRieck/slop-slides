@@ -89,7 +89,11 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   (16:9, 4:3, 4:5, 9:16, A4, US Letter). It is stored in deck.html as
   `<meta name="slopslide-size" content="1080x1350">`; for a deck with slides it puts a
   message in the chat asking the agent to lay them out again for the new size.
-- **Present:** full-screen slideshow (arrows/space/click to advance, `Esc` to exit). With
+- **Present:** full-screen slideshow (arrows/space/click to advance, `Esc` to exit). A deck
+  with `<meta name="slopslide-transition" content="scroll">` (ask the agent for a scrolling or
+  continuous deck) plays as one continuous scroll instead: the slides stack top to bottom, the
+  wheel, trackpad or keys scroll through them, and the scrolling eases to a stop at the nearest
+  slide. With
   several screens attached, a picker shows them as they are arranged, each with a screenshot
   of what is on it (on macOS this needs the Screen Recording permission; without it the picker
   shows the arrangement alone, as it does on Linux), to choose where the slides and the
@@ -323,6 +327,7 @@ deck.html        the whole presentation: <section class="slide" id="…"> per sl
                  optional <div class="deck-section" data-title="…"> markers between them
                  that start a section, shared styles, the embedded player runtime, and
                  optionally <meta name="slopslide-template" content="…"> naming its template
+                 and <meta name="slopslide-transition" content="scroll"> for a continuous scroll
 assets/          attached images and media (inlined on export)
 ```
 

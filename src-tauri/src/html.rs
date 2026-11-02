@@ -1235,6 +1235,15 @@ pub fn set_slide_size(html: &str, size: SlideSize) -> String {
     set_app_meta(html, size::SIZE_META, content.as_deref())
 }
 
+/// The app setting saying how the player moves between slides:
+/// `<meta name="slopslide-transition" content="scroll">`. One of [`TRANSITIONS`]; the default,
+/// `fade`, switches slides one at a time, and `scroll` stacks them in one continuous scroll
+/// (see assets/runtime.js).
+pub const TRANSITION_META: &str = "slopslide-transition";
+
+/// The ways the player can move between slides (see [`TRANSITION_META`]).
+pub const TRANSITIONS: [&str; 2] = ["fade", "scroll"];
+
 /// The app setting naming the voice the deck's narration is said in (see
 /// [`crate::narration::VOICES`]).
 pub const NARRATION_VOICE_META: &str = "slopslide-narration-voice";

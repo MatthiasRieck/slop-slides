@@ -116,6 +116,7 @@ pub fn lint(
     check_comments(&mut l);
     check_template(&mut l);
     check_slide_size(&mut l);
+    check_transition(&mut l);
     check_narration_settings(&mut l);
     check_entrances(&mut l);
     check_morphs(&mut l);
@@ -800,6 +801,33 @@ fn check_slide_size(l: &mut Linter) {
                 size::MIN_PX,
                 size::MAX_PX
             ))
+        },
+    );
+}
+
+/// The transition meta must name a way the player can move between slides.
+fn check_transition(l: &mut Linter) {
+    check_app_meta(
+        l,
+        html::TRANSITION_META,
+        [
+            "transition-invalid",
+            "transition-duplicate",
+            "transition-misplaced",
+        ],
+        |content| {
+            let known = html::TRANSITIONS
+                .iter()
+                .any(|t| content.eq_ignore_ascii_case(t));
+            (!known).then(|| {
+                format!(
+                    "<meta name=\"{}\"> names no transition the player has (\"{}\"): use one of {}. Remove it for the default, {}.",
+                    html::TRANSITION_META,
+                    truncate(content, 40),
+                    html::TRANSITIONS.join(", "),
+                    html::TRANSITIONS[0]
+                )
+            })
         },
     );
 }
@@ -2235,6 +2263,40 @@ mod tests {
         assert_eq!(rules(&commented), Vec::<&str>::new());
         let other = deck("").replace("<title>", "<meta name=\"description\" content=\"\"><title>");
         assert_eq!(rules(&other), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn checks_the_transition_meta() {
+        let scrolled = deck(r#"<section class="slide" id="a"></section>"#).replace(
+            "<title>Talk</title>",
+            "<title>Talk</title>\n  <meta name=\"slopslide-transition\" content=\"scroll\">",
+        );
+        assert_eq!(rules(&scrolled), Vec::<&str>::new());
+        assert_eq!(rules(&html::ensure_runtime(&scrolled)), Vec::<&str>::new());
+        assert_eq!(
+            rules(&scrolled.replace("\"scroll\"", "\"fade\"")),
+            Vec::<&str>::new()
+        );
+        for bad in ["", " ", "slide", "continuous", "morph"] {
+            let html = scrolled.replace("content=\"scroll\"", &format!("content=\"{bad}\""));
+            assert_eq!(rules(&html), ["transition-invalid"], "{bad}");
+        }
+        let no_content = scrolled.replace(" content=\"scroll\"", "");
+        assert_eq!(rules(&no_content), ["transition-invalid"]);
+        let message = &lint(&scrolled.replace("scroll", "slide"), |_| true, &[])[0].message;
+        assert!(message.contains("\"slide\""), "{message}");
+        assert!(message.contains("fade, scroll"), "{message}");
+        let twice = scrolled.replace(
+            "<title>Talk</title>",
+            "<title>Talk</title><meta name=\"slopslide-transition\" content=\"fade\">",
+        );
+        assert_eq!(rules(&twice), ["transition-duplicate"]);
+        let in_body = deck(
+            r#"<section class="slide" id="a"><meta name="slopslide-transition" content="scroll"></section>"#,
+        );
+        assert_eq!(rules(&in_body), ["transition-misplaced"]);
+        let commented = deck(r#"<!-- <meta name="slopslide-transition" content="nope"> -->"#);
+        assert_eq!(rules(&commented), Vec::<&str>::new());
     }
 
     #[test]

@@ -11,7 +11,7 @@ import PASTEBOARD from "../../src-tauri/assets/pasteboard.js?raw";
 import RUNTIME from "../../src-tauri/assets/runtime.js?raw";
 import { placement } from "./placement";
 
-const DECK = (bodyStyle = "") => `<!DOCTYPE html><html><head><style>${bodyStyle}</style></head><body>
+const DECK = (bodyStyle = "", head = "") => `<!DOCTYPE html><html><head>${head}<style>${bodyStyle}</style></head><body>
 <main class="deck">
   <section class="slide" id="intro"><h1>Hello</h1><a href="#x">Link</a></section>
   <section class="slide" id="outro"><p>Bye</p></section>
@@ -35,17 +35,20 @@ interface View {
 function pasteboard({
   framed = true,
   bodyStyle = "",
+  head = "",
   show = false,
   stage,
 }: {
   framed?: boolean;
   bodyStyle?: string;
+  /** Extra markup in <head>, such as a deck setting's meta. */
+  head?: string;
   show?: boolean;
   stage?: [number, number];
 } = {}) {
   const posted: unknown[] = [];
   const parent = { postMessage: (data: unknown) => posted.push(data) };
-  const dom = new JSDOM(DECK(bodyStyle), {
+  const dom = new JSDOM(DECK(bodyStyle, head), {
     url: show
       ? "https://example.test/deck.html?v=1&show#intro"
       : "https://example.test/deck.html?embed&slide=intro&pan",
@@ -541,6 +544,26 @@ describe("pasteboard", () => {
     const p = pasteboard();
     p.drag(p.$("h1"), 50, 0, 2);
     expect(p.transform()).toBe("translate(320px,180px) scale(1)");
+  });
+
+  it("leaves the wheel to a continuously scrolling show until the slide is zoomed", () => {
+    const SCROLL = '<meta name="slopslide-transition" content="scroll">';
+    const p = pasteboard({ show: true, head: SCROLL });
+    expect(p.doc.documentElement.hasAttribute("data-slop-scroll")).toBe(true);
+    // A swipe and a mouse wheel notch scroll the deck: the pasteboard neither pans nor zooms.
+    expect(p.wheel({ deltaY: 100 }).defaultPrevented).toBe(false);
+    const notch = new p.window.WheelEvent("wheel", { deltaY: 4.000244, cancelable: true, bubbles: true });
+    p.doc.body.dispatchEvent(notch);
+    expect(notch.defaultPrevented).toBe(false);
+    expect(p.zooms()).toEqual([]);
+    // Pinching zooms in, and from then on the wheel pans the zoomed slide.
+    expect(p.wheel({ ctrlKey: true, deltaY: -60, clientX: 320, clientY: 180 }).defaultPrevented).toBe(true);
+    expect(p.zooms().at(-1)!.k).toBeGreaterThan(1);
+    expect(p.wheel({ deltaY: 100 }).defaultPrevented).toBe(true);
+    // Editor previews never scroll continuously, so the pasteboard keeps the wheel there.
+    const preview = pasteboard({ head: SCROLL });
+    expect(preview.doc.documentElement.hasAttribute("data-slop-scroll")).toBe(false);
+    expect(preview.wheel({ deltaY: 100 }).defaultPrevented).toBe(true);
   });
 
   it("pans with a trackpad swipe and zooms with a pinch around the pointer", () => {

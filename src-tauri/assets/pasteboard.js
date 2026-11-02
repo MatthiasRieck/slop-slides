@@ -513,6 +513,9 @@
   window.addEventListener(
     "wheel",
     function (event) {
+      // A show of a continuously scrolling deck (runtime.js sets data-slop-scroll) scrolls with
+      // the wheel and trackpad while the slide is not zoomed; pinching still zooms.
+      if (show && cam.k === 1 && !event.ctrlKey && !event.metaKey && root.hasAttribute("data-slop-scroll")) return;
       event.preventDefault();
       var unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
       var dx = event.deltaX * unit;

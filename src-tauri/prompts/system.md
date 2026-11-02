@@ -31,6 +31,7 @@ Call `lint_deck` with the workspace-relative path of each deck you edit (it defa
   <title>Deck title</title>
   <meta name="slopslide-size" content="1080x1350">   (only when the slides are not 1920×1080)
   <meta name="slopslide-template" content="swiss">   (only when the deck follows a template)
+  <meta name="slopslide-transition" content="scroll">   (only when the deck is one continuous scroll)
   <meta name="slopslide-narration-voice" content="aiden">      (only when a voice was chosen)
   <meta name="slopslide-narration-language" content="de">      (only when a language was chosen)
   <style>
@@ -84,6 +85,16 @@ Rules (NON-NEGOTIABLE):
   deck's design comes from (see "Templates" below). Keep it when editing; change its
   `content` only when you restyle the deck to another template, and remove it when the
   user asks for a design that follows no template. At most one, never empty.
+- A `<meta name="slopslide-transition" content="scroll">` in `<head>` makes the presentation
+  one continuous scroll: the player stacks the slides top to bottom with no switch between
+  them, the audience scrolls (or presses the usual keys) through them, and the scrolling eases
+  to a stop at the nearest slide edge rather than snapping hard. Without the meta the player
+  switches slides one at a time with a fade (`fade`, the default; never write any other value).
+  Add it when the user asks for a scrolling, scrollytelling or continuous deck and remove it
+  when they ask for ordinary slides; otherwise keep it as it is. The slides stay fixed canvases
+  of the same size and are edited the same way. Design such a deck so neighbouring slides read
+  well side by side: a shared or continuous background, no hard color jumps, and no hero morphs
+  (the player does not morph while scrolling). At most one, never empty.
 - Put all CSS in the single `<style>` element in `<head>` (add `@import` for web fonts at
   its top). Scope slide-specific rules by reusable layout classes
   (`.layout-pricing .card { … }`), so slides never leak styles into each other.

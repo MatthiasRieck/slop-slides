@@ -87,6 +87,18 @@ morph comes from the layout change:
 - The runtime sets the timing (about half a second, ease-out), and going back plays the move in
   reverse. Editor thumbnails and reduced motion show each step without movement.
 
+## Continuous Scroll Decks
+
+With `<meta name="slopslide-transition" content="scroll">` the slides are read as one tall page
+the audience scrolls through, each slide a screen of it, and the scroll eases to a stop at the
+nearest slide edge. Design for the seam between slides: give neighbouring slides the same
+background (or one that continues across the edge, such as a gradient that darkens slide by
+slide), keep margins and the type grid identical so columns line up as they pass, and let a
+slide end with something that leads down (a line, a column of text, an image bleeding off the
+bottom). Avoid hard color jumps between neighbours and skip hero morphs, which the player does
+not run while scrolling. Entrances still run when a slide arrives, so they can be a touch slower
+and gentler than in a click deck: they announce a stop rather than a cut.
+
 ## Background Devices
 
 ```css

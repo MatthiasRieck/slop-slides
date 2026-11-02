@@ -295,7 +295,8 @@ fn write_index(file: &Path, text: &str) -> Result<()> {
 /// The three versions of a deck.
 struct Versions {
     /// The deck at the last commit; a deck never committed is its shell without any slide, so
-    /// that every slide is an addition, and the shell itself is not a change.
+    /// that every slide is an addition. That shell is the index's, when it has the deck, so
+    /// that what changed in it since is a change to the styles, and the deck's own otherwise.
     head: String,
     index: String,
     work: String,
@@ -305,23 +306,31 @@ struct Versions {
     in_index: bool,
 }
 
-/// `source` without any of its slides: what a deck not committed yet is compared with.
+/// `source` without any of its slides, and without the whitespace before them, so that its
+/// shell hashes like the shell of `source` does: what a deck not committed yet is compared with.
 fn empty_deck(source: &str) -> String {
-    with_slides_of(source, "")
+    match slides_range(source) {
+        Some(range) => format!(
+            "{}{}",
+            source[..range.start].trim_end(),
+            &source[range.end..]
+        ),
+        None => source.to_string(),
+    }
 }
 
 fn versions(file: &Path) -> Result<Versions> {
     let work = deck::read_html(file)?;
     let committed = read_at_head(file);
     let in_head = committed.is_some();
+    let index = read_index(file).map(|index| matching_endings(&index, &work));
     let head = committed.map_or_else(
-        || empty_deck(&work),
+        || empty_deck(index.as_deref().unwrap_or(&work)),
         |head| matching_endings(&String::from_utf8_lossy(&head), &work),
     );
-    let index = read_index(file);
     Ok(Versions {
         in_index: index.is_some(),
-        index: index.map_or_else(|| head.clone(), |index| matching_endings(&index, &work)),
+        index: index.unwrap_or_else(|| head.clone()),
         work,
         head,
         in_head,
@@ -401,12 +410,11 @@ pub fn stage(file: &Path, change: &Change) -> Result<()> {
         Change::Styles => Ok(with_slides_of(&v.work, &v.index)),
     }
     .map_err(Error::Message)?;
-    // Before a first commit the shell is not a change of its own: the index gets it as it is,
-    // and the deck itself once every slide is in.
-    let index = match v.in_head {
-        true => index,
-        false if same_slides(&index, &v.work) => v.work.clone(),
-        false => with_slides_of(&v.work, &index),
+    // Before a first commit, the index becomes the deck itself once everything of it is in.
+    let index = match !v.in_head && same_slides(&index, &v.work) && shell(&index) == shell(&v.work)
+    {
+        true => v.work.clone(),
+        false => index,
     };
     update_index(file, &v, &index)?;
     match change {
@@ -643,29 +651,27 @@ pub fn changes(file: &Path) -> Result<DeckChanges> {
     if !in_work_tree(dir) {
         return Ok(no_repository());
     }
-    // A deck in the repository but not in its last commit is compared with nothing: every slide
-    // is new, and its shell is not a change of its own. Staging works all the same.
+    // A deck in the repository but not in its last commit is compared with its shell alone:
+    // every slide is new, and the shell changed once it differs from the index's. Staging
+    // works all the same.
     let commit = head_commit(dir);
     let committed = commit.as_ref().and_then(|_| read_at_head(file));
     let commit = commit.filter(|_| committed.is_some());
+    let index = read_index(file).map(|index| matching_endings(&index, &source));
     let committed = match committed {
         Some(head) => matching_endings(&String::from_utf8_lossy(&head), &source),
-        None => empty_deck(&source),
+        None => empty_deck(index.as_deref().unwrap_or(&source)),
     };
     let others = |files: Vec<String>| -> Vec<String> {
         files.into_iter().filter(|path| path != name).collect()
     };
     let assets = others(changed_files(dir));
     let old = snapshots(&committed);
-    let index = read_index(file).map_or_else(
-        || committed.clone(),
-        |index| matching_endings(&index, &source),
-    );
+    let index = index.unwrap_or_else(|| committed.clone());
     let staged = snapshots(&index);
     let unstaged = others(unstaged_files(dir));
-    let styles_changed = commit.is_some()
-        && (shell(&committed) != shell(&source)
-            || assets.iter().any(|a| strip_slides(&source).contains(a)));
+    let styles_changed = shell(&committed) != shell(&source)
+        || assets.iter().any(|a| strip_slides(&source).contains(a));
     let mut list = compare(&old, &slides, &assets);
     mark_staged(
         &mut list,
@@ -1637,6 +1643,36 @@ mod tests {
         let found = changes(&repo.deck()).unwrap();
         assert_eq!(found.tracking, Tracking::Committed);
         assert!(found.slides.iter().all(|s| s.status == Unchanged));
+    }
+
+    #[test]
+    fn a_new_decks_styles_change_once_they_differ_from_the_staged_ones() {
+        let repo = Repo::new();
+        repo.write("talk/deck.html", &deck_styled("red", &["a=A", "b=B"]));
+        let a = Change::Slide {
+            id: Some("a".into()),
+            old_id: None,
+        };
+        stage(&repo.deck(), &a).unwrap();
+        assert!(!changes(&repo.deck()).unwrap().styles_changed);
+
+        repo.write("talk/deck.html", &deck_styled("blue", &["a=A", "b=B"]));
+        let found = changes(&repo.deck()).unwrap();
+        assert_eq!(found.tracking, Tracking::NotCommitted);
+        assert!(found.styles_changed, "the index has the red shell");
+        assert!(!found.styles_staged);
+        assert!(found.slides[0].staged, "the slide itself did not change");
+
+        stage(&repo.deck(), &Change::Styles).unwrap();
+        assert!(index_of(&repo).contains("blue"));
+        assert_eq!(ids(&index_of(&repo)), ["a"], "the styles alone");
+        assert!(!changes(&repo.deck()).unwrap().styles_changed);
+
+        repo.write("talk/deck.html", &deck_styled("green", &["a=A", "b=B"]));
+        restore(&repo, &Change::Styles);
+        assert!(work_of(&repo).contains("blue"), "back as staged");
+        assert_eq!(ids(&work_of(&repo)), ["a", "b"]);
+        assert!(!changes(&repo.deck()).unwrap().styles_changed);
     }
 
     #[test]

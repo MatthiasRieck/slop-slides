@@ -25,6 +25,39 @@ static void *submit(void *arg) {
     for (int i = 0; i < 1000; ++i) qwen_parallel(16, count_task, arg);
     return NULL;
 }
+/* The open file: every way out closes what it opened, so that a failure leaves the file
+   deletable and reports its own line rather than the cleanup's. */
+static int check_open_file(int fd) {
+    struct stat st;
+    CHECK(fstat(fd, &st) == 0 && st.st_size > INT32_MAX);
+    char bytes[4];
+    CHECK(pread(fd, bytes, 4, (int64_t)st.st_size - 4) == 4 && !memcmp(bytes, "tail", 4));
+    unsigned char *map = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    CHECK(map != MAP_FAILED);
+    int tail_ok = !memcmp(map + st.st_size - 4, "tail", 4);
+    int unmapped = munmap(map, (size_t)st.st_size) == 0;
+    CHECK(tail_ok);
+    CHECK(unmapped);
+    return 0;
+}
+static int check_file(const char *file) {
+    struct stat st;
+    CHECK(stat(file, &st) == 0 && st.st_size > INT32_MAX);
+    FILE *f = fopen(file, "rb"); CHECK(f); fclose(f);
+    int fd = open(file, O_RDONLY); CHECK(fd >= 0);
+    int failed = check_open_file(fd);
+    close(fd);
+    return failed;
+}
+static int check_dir(const char *dir) {
+    DIR *d = opendir(dir); CHECK(d);
+    int found = 0;
+    struct dirent *entry;
+    while ((entry = readdir(d))) if (!strcmp(entry->d_name, "model \xc3\xa4.bin")) found = 1;
+    closedir(d);
+    CHECK(found);
+    return 0;
+}
 int slop_windows_regression(const char *dir, const char *file) {
     void *p = malloc(17);
     CHECK(p && (uintptr_t)p % 64 == 0);
@@ -36,22 +69,10 @@ int slop_windows_regression(const char *dir, const char *file) {
     free(p);
     p = aligned_alloc(64, 256); CHECK(p); free(p);
     char *copy = strdup("test"); CHECK(copy && !strcmp(copy, "test")); free(copy);
-    struct stat st;
-    CHECK(stat(file, &st) == 0 && st.st_size > INT32_MAX);
-    FILE *f = fopen(file, "rb"); CHECK(f); fclose(f);
-    int fd = open(file, O_RDONLY); CHECK(fd >= 0);
-    CHECK(fstat(fd, &st) == 0 && st.st_size > INT32_MAX);
-    char bytes[4];
-    CHECK(pread(fd, bytes, 4, (int64_t)st.st_size - 4) == 4 && !memcmp(bytes, "tail", 4));
-    unsigned char *map = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    CHECK(map != MAP_FAILED && !memcmp(map + st.st_size - 4, "tail", 4));
-    CHECK(munmap(map, (size_t)st.st_size) == 0);
-    close(fd);
-    DIR *d = opendir(dir); CHECK(d);
-    int found = 0;
-    struct dirent *entry;
-    while ((entry = readdir(d))) if (!strcmp(entry->d_name, "model \xc3\xa4.bin")) found = 1;
-    closedir(d); CHECK(found);
+    int failed = check_file(file);
+    if (failed) return failed;
+    failed = check_dir(dir);
+    if (failed) return failed;
     struct timespec before, after, pause = {0, 1000000};
     CHECK(clock_gettime(CLOCK_MONOTONIC, &before) == 0);
     CHECK(nanosleep(&pause, NULL) == 0);

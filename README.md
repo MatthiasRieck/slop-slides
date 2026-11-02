@@ -52,13 +52,15 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   other over 50 slide pixels. Slides show the images of their own version. What a picture
   cannot show, like speaker notes, is named under the slide.
   Left of each of those icons, a button stages that change (or unstages it), and right of it a
-  button restores it, so a slide's edit and its move go separately; the buttons for the deck's
-  shared styles are above the slide. Staging one slide leaves the others out of the next commit,
+  button restores it, so a slide's edit and its move go separately; a change to the deck's shared
+  styles (CSS, fonts, anything outside the slides) gets a row of its own at the top of the list,
+  and its buttons are above the slide too. Staging one slide leaves the others out of the next commit,
   and brings along the images it shows. Restoring puts that one change back as it was committed;
   ⌘Z takes it back. The box above the list commits what is staged, and its + and − buttons stage
   and unstage the whole deck (changes to sections only go in that way). Before a
   deck's first commit every slide is new; staging one puts the deck with just the staged slides in
-  the next commit, and restoring one takes it out of the deck.
+  the next commit, restoring one takes it out of the deck, and the styles count as changed once
+  they differ from what is staged.
 - **Right:** chat with the agent. It knows which slide you're on, and you can attach images
   (paperclip, or drop files anywhere on the window). The microphone button dictates: click to
   start, and what you say shows up at the cursor as you speak; click again to keep it (Esc

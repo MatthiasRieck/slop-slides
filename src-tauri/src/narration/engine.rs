@@ -384,11 +384,22 @@ mod tests {
         let cdir = std::ffi::CString::new(dir.to_str().unwrap()).unwrap();
         let cpath = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
         let result = unsafe { slop_windows_regression(cdir.as_ptr(), cpath.as_ptr()) };
-        std::fs::remove_dir_all(dir).unwrap();
+        // The result first: a failure of the regression may leave the folder undeletable.
         assert_eq!(
             result, 0,
             "native Windows regression failed at test.c line {result}"
         );
+        // Windows can hold a just-unmapped file a moment longer (the memory manager, an
+        // indexer), and that is no failure of the code under test.
+        let mut removed = std::fs::remove_dir_all(&dir);
+        for _ in 0..50 {
+            if removed.is_ok() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            removed = std::fs::remove_dir_all(&dir);
+        }
+        removed.expect("the test's folder is deletable once the regression closed its files");
     }
 
     #[test]

@@ -2480,6 +2480,53 @@ describe("slide editor", () => {
         expect(lines.hasAttribute("contenteditable")).toBe(false);
         expect([...lines.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["One", "Two", "Three"]);
       });
+
+      it("selects and edits a saved list as one text again, so items can still be added", () => {
+        // After the preview reloads (or edit mode is left and entered again), the list the
+        // editor made is plain markup: clicking an item must not pick the item on its own.
+        const LIST_DECK = `<!DOCTYPE html><html><head></head><body>
+<main class="deck">
+  <section class="slide" id="intro">
+    <div id="lines" data-added="text" style="position: absolute; left: 10px; top: 10px"><ul style="margin: 0px; padding-left: 1.2em; list-style-type: disc;"><li>One</li><li>Two<ul><li>Deep</li></ul></li></ul></div>
+    <ul id="bare"><li>Alpha</li><li>Beta</li></ul>
+    <div class="card"><p>Text</p><ul id="mixed"><li>Gamma</li></ul></div>
+  </section>
+</main></body></html>`;
+        const e = editor({ markup: LIST_DECK });
+        const lines = e.$("#lines");
+        e.down(e.$("#lines li"));
+        expect(e.selected()).toEqual([lines]);
+        e.down(e.$("#lines ul ul li"));
+        expect(e.selected()).toEqual([lines]);
+        // A list on the slide by itself is selected whole; one next to other content too.
+        e.down(e.$("#bare li"));
+        expect(e.selected()).toEqual([e.$("#bare")]);
+        e.down(e.$("#mixed li"));
+        expect(e.selected()).toEqual([e.$("#mixed")]);
+        // Tab goes through the text, the list and the card's paragraph, never an item.
+        e.down(e.$("#intro"));
+        const seen: Element[] = [];
+        for (let i = 0; i < 4; i++) {
+          e.key("Tab");
+          seen.push(...e.selected());
+        }
+        expect(seen.some((el) => el.tagName === "LI")).toBe(false);
+        expect(seen).toContain(lines);
+        expect(seen).toContain(e.$("#bare"));
+        // Editing from an item edits the whole text, so Enter adds an item and the list grows.
+        e.down(e.$("#lines li"));
+        e.key("Enter");
+        expect(lines.getAttribute("contenteditable")).toBe("true");
+        selectText(e, lines, 3);
+        e.key("Enter");
+        expect(lines.getAttribute("contenteditable")).toBe("true");
+        expect([...lines.querySelectorAll(":scope > ul > li")].map((li) => li.firstChild?.textContent)).toEqual([
+          "One",
+          "",
+          "Two",
+        ]);
+        expect(lastReport(e)).toMatchObject({ list: "ul" });
+      });
     });
 
     describe("links", () => {

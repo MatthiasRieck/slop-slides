@@ -18,6 +18,7 @@ mod narration;
 mod pdf;
 mod permissions;
 mod pptx;
+mod process;
 mod protocol;
 mod providers;
 mod render;
@@ -994,6 +995,8 @@ fn set_narration_language(id: String, language: String) -> Result<Deck> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
+    process::worker_if_requested();
     // `slopslide --lint-mcp [deck dir]`: the agent's lint tool, started by the agent CLI in
     // the deck folder.
     let args: Vec<String> = std::env::args().collect();

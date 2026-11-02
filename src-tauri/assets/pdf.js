@@ -6,6 +6,9 @@
    image with its text hidden (`decor`, `show`), then printed as that image with only the
    text on top (`paint`, `text`): the text stays real and selectable. */
 (function () {
+  // WebView2 finishes canceled signal navigations too; keep the current print state.
+  if (window.__slopPdf) return;
+
   var root = document.documentElement;
 
   // Tests answer through __slopPdfSignal; jsdom cannot navigate.

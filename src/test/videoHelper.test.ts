@@ -147,6 +147,25 @@ describe("video helper", () => {
     expect(answers).toEqual(["ready&slides=2&rect=0,0,0,0&view=1024,768"]);
   });
 
+  it("keeps the animation clock when a canceled navigation reinjects the helper", async () => {
+    const { window, doc, api, answers, settle, animate } = helper();
+    await settle();
+    api.frame(1000);
+    const late = animate("title", 700);
+    api.frame(1100);
+    expect(late.currentTime).toBe(0);
+    window.eval(VIDEO_JS);
+    await settle();
+    const current = (window as unknown as { __slopVideo: Helper }).__slopVideo;
+    expect(current).toBe(api);
+    expect(answers.filter((answer) => answer.startsWith("ready"))).toHaveLength(1);
+    expect(doc.querySelectorAll("style[data-slop-video]")).toHaveLength(1);
+    current.frame(1300);
+    expect(late.currentTime).toBe(200);
+    expect(late.finished).toBe(false);
+    expect(answers.at(-1)).toBe("frame&busy=1");
+  });
+
   it("pauses each animation and moves it to the video's clock", async () => {
     const { api, answers, settle, animate } = helper();
     const entrance = animate("title", 700);

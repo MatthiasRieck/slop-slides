@@ -59,6 +59,25 @@ describe("PDF helper", () => {
     expect(answers).toEqual(["ready&slides=2"]);
   });
 
+  it("keeps captured decor when a canceled navigation reinjects the helper", async () => {
+    const { window, doc, api, answers, settle } = helper();
+    await settle();
+    api.decor();
+    api.paint(0, "data:image/png;base64,AAA");
+    window.eval(PDF_JS);
+    await settle();
+    const current = (window as unknown as { __slopPdf: Helper }).__slopPdf;
+    expect(current).toBe(api);
+    expect(answers).toEqual(["ready&slides=2", "decor"]);
+    current.paint(1, "data:image/png;base64,BBB");
+    current.text();
+    await settle();
+    expect(answers.at(-1)).toBe("text");
+    expect(doc.documentElement.getAttribute("data-slop-pdf")).toBe("text");
+    expect((doc.getElementById("intro") as HTMLElement).style.background).toContain("data:image/png;base64,AAA");
+    expect((doc.getElementById("end") as HTMLElement).style.background).toContain("data:image/png;base64,BBB");
+  });
+
   it("prints slides the size of the paper they get", async () => {
     const { doc, api, answers, settle } = helper();
     await settle();

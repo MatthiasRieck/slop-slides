@@ -245,10 +245,26 @@ describe("staging", () => {
     expect((group("Modified").getByRole("button", { name: "Restore" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("has nothing to stage slide by slide before a first commit", async () => {
+  it("stages and restores slide by slide before a first commit too", async () => {
     await show(changes({ tracking: "notCommitted", commit: null, slides: [row("added", "intro")] }));
-    expect(group("Added").queryByRole("button", { name: "Stage" })).toBeNull();
     expect(screen.getByRole("textbox", { name: "Commit message" })).toBeTruthy();
+    expect((screen.getByTitle("Stage everything in this deck") as HTMLButtonElement).disabled).toBe(false);
+    await act(async () => {
+      fireEvent.click(group("Added").getByRole("button", { name: "Stage" }));
+    });
+    expect(sent("stage_change")[0]?.[1]).toMatchObject({ change: { kind: "slide", id: "intro", oldId: null } });
+    vi.mocked(invoke).mockImplementation(async (cmd) =>
+      cmd === "restore_change" ? { deck: deckFor(DECK_HTML), previous: "old", source: "new", created: [] } : changes(),
+    );
+    await act(async () => {
+      fireEvent.click(group("Added").getByRole("button", { name: "Restore" }));
+    });
+    expect(sent("restore_change")[0]?.[1]).toMatchObject({ change: { kind: "slide", id: "intro", oldId: null } });
+  });
+
+  it("offers nothing to stage for a deck outside a repository", async () => {
+    await show(changes({ tracking: "noRepository", commit: null, slides: [row("added", "intro")] }));
+    expect(screen.queryByRole("button", { name: "Stage" })).toBeNull();
   });
 });
 
@@ -395,7 +411,7 @@ describe("ChangesView", () => {
   it("shows a deck never committed as all new", async () => {
     await show(changes({ tracking: "notCommitted", commit: null, slides: [row("added", "intro")] }));
     expect(screen.getByText("Not committed yet")).toBeTruthy();
-    expect(screen.getByText("Not committed yet, so every slide is new.")).toBeTruthy();
+    expect(screen.getByText("Not committed yet, so every slide is new; restoring takes it out.")).toBeTruthy();
     expect(isComparing()).toBe(false);
   });
 });

@@ -294,22 +294,62 @@ fn write_index(file: &Path, text: &str) -> Result<()> {
 
 /// The three versions of a deck.
 struct Versions {
+    /// The deck at the last commit; a deck never committed is its shell without any slide, so
+    /// that every slide is an addition, and the shell itself is not a change.
     head: String,
     index: String,
     work: String,
+    /// The last commit has the deck.
+    in_head: bool,
+    /// The index has the deck.
+    in_index: bool,
+}
+
+/// `source` without any of its slides: what a deck not committed yet is compared with.
+fn empty_deck(source: &str) -> String {
+    with_slides_of(source, "")
 }
 
 fn versions(file: &Path) -> Result<Versions> {
-    let head =
-        read_at_head(file).ok_or_else(|| Error::msg("The last commit does not have this deck."))?;
     let work = deck::read_html(file)?;
-    let head = matching_endings(&String::from_utf8_lossy(&head), &work);
+    let committed = read_at_head(file);
+    let in_head = committed.is_some();
+    let head = committed.map_or_else(
+        || empty_deck(&work),
+        |head| matching_endings(&String::from_utf8_lossy(&head), &work),
+    );
+    let index = read_index(file);
     Ok(Versions {
-        index: read_index(file)
-            .map_or_else(|| head.clone(), |index| matching_endings(&index, &work)),
+        in_index: index.is_some(),
+        index: index.map_or_else(|| head.clone(), |index| matching_endings(&index, &work)),
         work,
         head,
+        in_head,
     })
+}
+
+/// What the index has the deck as from now on. A deck not committed yet leaves the index again
+/// once none of its slides is staged: a commit of its shell alone would be a deck of nothing.
+fn update_index(file: &Path, v: &Versions, text: &str) -> Result<()> {
+    if v.in_head || !html::find_slides(text).is_empty() {
+        return write_index(file, text);
+    }
+    if v.in_index {
+        let (dir, name) = split(file)?;
+        git_write(dir, &["update-index", "--force-remove", "--", name], b"")?;
+    }
+    Ok(())
+}
+
+/// Whether `a` and `b` have the same slides in the same order, whatever is between them.
+fn same_slides(a: &str, b: &str) -> bool {
+    let key = |source: &str| -> Vec<(String, String)> {
+        snapshots(source)
+            .into_iter()
+            .map(|slide| (slide.id, slide.hash))
+            .collect()
+    };
+    key(a) == key(b)
 }
 
 /// Adds the changed or new files around the deck that `text` refers to, so that a commit of it
@@ -361,7 +401,14 @@ pub fn stage(file: &Path, change: &Change) -> Result<()> {
         Change::Styles => Ok(with_slides_of(&v.work, &v.index)),
     }
     .map_err(Error::Message)?;
-    write_index(file, &index)?;
+    // Before a first commit the shell is not a change of its own: the index gets it as it is,
+    // and the deck itself once every slide is in.
+    let index = match v.in_head {
+        true => index,
+        false if same_slides(&index, &v.work) => v.work.clone(),
+        false => with_slides_of(&v.work, &index),
+    };
+    update_index(file, &v, &index)?;
     match change {
         Change::Slide { id: Some(id), .. } => stage_assets(file, slide_of(&v.work, id)),
         Change::Styles => stage_assets(file, &strip_slides(&v.work)),
@@ -372,7 +419,7 @@ pub fn stage(file: &Path, change: &Change) -> Result<()> {
 /// Takes `change` out of the index again; the deck keeps it.
 pub fn unstage(file: &Path, change: &Change) -> Result<()> {
     let v = versions(file)?;
-    write_index(file, &without_change(&v, &v.index, change)?)
+    update_index(file, &v, &without_change(&v, &v.index, change)?)
 }
 
 /// `base` with `change` as it was committed.
@@ -407,7 +454,7 @@ pub fn finish_restore(file: &Path, change: &Change, before: &str) -> Result<()> 
         work: before.to_string(),
         ..versions(file)?
     };
-    write_index(file, &without_change(&v, &v.index, change)?)?;
+    update_index(file, &v, &without_change(&v, &v.index, change)?)?;
     match change {
         Change::Slide {
             old_id: Some(id), ..
@@ -594,12 +641,17 @@ pub fn changes(file: &Path) -> Result<DeckChanges> {
     let (dir, name) = split(file)?;
     let slides = snapshots(&source);
     if !in_work_tree(dir) {
-        return Ok(uncompared(Tracking::NoRepository, &slides));
+        return Ok(no_repository());
     }
-    let (Some(commit), Some(committed)) = (head_commit(dir), read_at_head(file)) else {
-        return Ok(uncompared(Tracking::NotCommitted, &slides));
+    // A deck in the repository but not in its last commit is compared with nothing: every slide
+    // is new, and its shell is not a change of its own. Staging works all the same.
+    let commit = head_commit(dir);
+    let committed = commit.as_ref().and_then(|_| read_at_head(file));
+    let commit = commit.filter(|_| committed.is_some());
+    let committed = match committed {
+        Some(head) => matching_endings(&String::from_utf8_lossy(&head), &source),
+        None => empty_deck(&source),
     };
-    let committed = matching_endings(&String::from_utf8_lossy(&committed), &source);
     let others = |files: Vec<String>| -> Vec<String> {
         files.into_iter().filter(|path| path != name).collect()
     };
@@ -611,8 +663,9 @@ pub fn changes(file: &Path) -> Result<DeckChanges> {
     );
     let staged = snapshots(&index);
     let unstaged = others(unstaged_files(dir));
-    let styles_changed = shell(&committed) != shell(&source)
-        || assets.iter().any(|a| strip_slides(&source).contains(a));
+    let styles_changed = commit.is_some()
+        && (shell(&committed) != shell(&source)
+            || assets.iter().any(|a| strip_slides(&source).contains(a)));
     let mut list = compare(&old, &slides, &assets);
     mark_staged(
         &mut list,
@@ -622,10 +675,13 @@ pub fn changes(file: &Path) -> Result<DeckChanges> {
     );
     let (staged_files, staged_here) = staged_files(dir);
     Ok(DeckChanges {
-        tracking: Tracking::Committed,
-        commit: Some(commit),
+        tracking: match commit {
+            Some(_) => Tracking::Committed,
+            None => Tracking::NotCommitted,
+        },
+        old_size: commit.as_ref().map(|_| html::slide_size(&committed).into()),
+        commit,
         styles_changed,
-        old_size: Some(html::slide_size(&committed).into()),
         slides: list,
         styles_staged: styles_changed
             && shell(&index) == shell(&source)
@@ -663,16 +719,13 @@ fn mark_staged(
     }
 }
 
-fn uncompared(tracking: Tracking, slides: &[Snapshot]) -> DeckChanges {
+fn no_repository() -> DeckChanges {
     DeckChanges {
-        tracking,
+        tracking: Tracking::NoRepository,
         commit: None,
         styles_changed: false,
         old_size: None,
-        slides: match tracking {
-            Tracking::NoRepository => Vec::new(),
-            _ => compare(&[], slides, &[]),
-        },
+        slides: Vec::new(),
         styles_staged: false,
         staged_files: 0,
         staged_elsewhere: 0,
@@ -1509,6 +1562,160 @@ mod tests {
 
         unstage_all(&repo.deck()).unwrap();
         assert_eq!(changes(&repo.deck()).unwrap().staged_files, 0);
+    }
+
+    #[test]
+    fn a_deck_never_committed_can_be_staged_slide_by_slide() {
+        let repo = Repo::new();
+        repo.write(
+            "talk/deck.html",
+            &deck(&["a=<img src='assets/a.png'>", "b=B", "c=C"]),
+        );
+        repo.write("talk/assets/a.png", "image");
+        let found = changes(&repo.deck()).unwrap();
+        assert_eq!(found.tracking, Tracking::NotCommitted);
+        assert!(found.has_unstaged, "a new deck has everything to stage");
+        assert_eq!(found.staged_files, 0);
+        assert!(
+            !found.styles_changed,
+            "a new deck's shell is not a change of its own"
+        );
+
+        stage(
+            &repo.deck(),
+            &Change::Slide {
+                id: Some("b".into()),
+                old_id: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            ids(&index_of(&repo)),
+            ["b"],
+            "the index has the shell with just that slide"
+        );
+        let found = changes(&repo.deck()).unwrap();
+        assert_eq!(found.tracking, Tracking::NotCommitted);
+        let staged: Vec<_> = found.slides.iter().map(|s| (s.status, s.staged)).collect();
+        assert_eq!(staged, [(Added, false), (Added, true), (Added, false)]);
+        assert_eq!(found.staged_files, 1);
+        assert!(found.has_unstaged);
+
+        stage(
+            &repo.deck(),
+            &Change::Slide {
+                id: Some("a".into()),
+                old_id: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(ids(&index_of(&repo)), ["a", "b"], "in the deck's order");
+        assert_eq!(
+            changes(&repo.deck()).unwrap().staged_files,
+            2,
+            "with the image it shows"
+        );
+
+        stage(
+            &repo.deck(),
+            &Change::Slide {
+                id: Some("c".into()),
+                old_id: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            index_of(&repo),
+            work_of(&repo),
+            "all staged: the deck itself"
+        );
+        let found = changes(&repo.deck()).unwrap();
+        assert!(found.slides.iter().all(|s| s.staged));
+        assert!(!found.has_unstaged);
+
+        commit(&repo.deck(), "First").unwrap();
+        let found = changes(&repo.deck()).unwrap();
+        assert_eq!(found.tracking, Tracking::Committed);
+        assert!(found.slides.iter().all(|s| s.status == Unchanged));
+    }
+
+    #[test]
+    fn unstaging_the_last_slide_of_a_new_deck_takes_it_out_of_the_index() {
+        let repo = Repo::new();
+        repo.write("talk/deck.html", &deck(&["a=A", "b=B"]));
+        let a = Change::Slide {
+            id: Some("a".into()),
+            old_id: None,
+        };
+        let b = Change::Slide {
+            id: Some("b".into()),
+            old_id: None,
+        };
+        stage(&repo.deck(), &a).unwrap();
+        stage(&repo.deck(), &b).unwrap();
+        unstage(&repo.deck(), &a).unwrap();
+        assert_eq!(ids(&index_of(&repo)), ["b"]);
+        assert!(!changes(&repo.deck()).unwrap().slides[0].staged);
+        unstage(&repo.deck(), &b).unwrap();
+        assert_eq!(
+            read_index(&repo.deck()),
+            None,
+            "a deck of no slides is not staged"
+        );
+        assert_eq!(changes(&repo.deck()).unwrap().staged_files, 0);
+        unstage(&repo.deck(), &b).unwrap();
+        assert_eq!(read_index(&repo.deck()), None, "unstaging again is fine");
+    }
+
+    #[test]
+    fn restoring_a_slide_of_a_new_deck_takes_it_out() {
+        let repo = Repo::new();
+        repo.write("talk/deck.html", &deck(&["a=A", "b=B"]));
+        let a = Change::Slide {
+            id: Some("a".into()),
+            old_id: None,
+        };
+        stage(&repo.deck(), &a).unwrap();
+        restore(&repo, &a);
+        assert_eq!(ids(&work_of(&repo)), ["b"]);
+        assert_eq!(
+            read_index(&repo.deck()),
+            None,
+            "nothing of it staged any more"
+        );
+        let found = changes(&repo.deck()).unwrap();
+        assert_eq!(found.tracking, Tracking::NotCommitted);
+        assert_eq!(found.slides.len(), 1);
+
+        let b = Change::Slide {
+            id: Some("b".into()),
+            old_id: None,
+        };
+        restore(&repo, &b);
+        assert!(ids(&work_of(&repo)).is_empty(), "the deck keeps its shell");
+        assert!(changes(&repo.deck()).unwrap().slides.is_empty());
+    }
+
+    #[test]
+    fn a_new_deck_in_a_repository_with_commits_stages_like_one_before_the_first() {
+        let repo = Repo::new();
+        repo.write("other.txt", "x");
+        repo.commit("other");
+        repo.write("talk/deck.html", &deck(&["a=A", "b=B"]));
+        stage(
+            &repo.deck(),
+            &Change::Slide {
+                id: Some("a".into()),
+                old_id: None,
+            },
+        )
+        .unwrap();
+        let found = changes(&repo.deck()).unwrap();
+        assert_eq!(found.tracking, Tracking::NotCommitted);
+        assert_eq!(found.commit, None, "the commit is not of this deck");
+        assert_eq!(ids(&index_of(&repo)), ["a"]);
+        assert!(found.slides[0].staged && !found.slides[1].staged);
+        assert!(found.has_unstaged);
     }
 
     #[test]

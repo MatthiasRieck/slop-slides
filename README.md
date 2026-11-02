@@ -57,7 +57,8 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   and brings along the images it shows. Restoring puts that one change back as it was committed;
   ⌘Z takes it back. The box above the list commits what is staged, and its + and − buttons stage
   and unstage the whole deck (changes to sections only go in that way). Before a
-  deck's first commit, only the whole deck can be staged.
+  deck's first commit every slide is new; staging one puts the deck with just the staged slides in
+  the next commit, and restoring one takes it out of the deck.
 - **Right:** chat with the agent. It knows which slide you're on, and you can attach images
   (paperclip, or drop files anywhere on the window). The microphone button dictates: click to
   start, and what you say shows up at the cursor as you speak; click again to keep it (Esc

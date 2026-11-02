@@ -121,7 +121,7 @@ export function ChangesRail() {
             row={row}
             number={numbers.get(row.key)}
             commit={changes?.commit?.hash}
-            canStage={changes?.tracking === "committed"}
+            canStage={!!changes && changes.tracking !== "noRepository"}
           />
         ))}
         {changes && rows.length === 0 && slides.length > 0 && (
@@ -669,7 +669,7 @@ function caption(row: SlideChange, changes: DeckChanges): string {
   const place = row.moved ? ` It moved from slide ${row.oldNumber}.` : "";
   const styles = changes.stylesChanged ? " The deck's shared styles changed, so it may still look different." : "";
   const also = row.details.length > 0 ? ` Changed: ${row.details.join(", ")}.` : "";
-  if (changes.tracking === "notCommitted") return "Not committed yet, so every slide is new.";
+  if (changes.tracking === "notCommitted") return "Not committed yet, so every slide is new; restoring takes it out.";
   switch (row.status) {
     case "added":
       return "New since the last commit.";

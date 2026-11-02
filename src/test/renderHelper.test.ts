@@ -59,7 +59,7 @@ function helper() {
   window.eval(RENDER);
   const render = (window as unknown as { __slopRender: Helper }).__slopRender;
   const slide = (id: string) => window.document.getElementById(id) as HTMLElement;
-  return { render, answers, slide, resizes };
+  return { render, answers, slide, resizes, window };
 }
 
 const answered = (answer: string) => new URLSearchParams(answer);
@@ -71,6 +71,18 @@ describe("the render helper", () => {
       vi.advanceTimersByTime(100);
       expect(answers).toEqual(["ready&slides=3"]);
     });
+  });
+
+  it("does not restart when WebView2 finishes a canceled signal navigation", async () => {
+    const { render, answers, window } = helper();
+    await vi.runAllTimersAsync();
+    expect(answers).toEqual(["ready&slides=3"]);
+    // WebView2 fires NavigationCompleted even though the app canceled /.render-signal.
+    window.eval(RENDER);
+    render.show("intro");
+    await vi.runAllTimersAsync();
+    expect(answers.map((answer) => answer.split("&")[0])).toEqual(["ready", "shown=intro"]);
+    expect((window as unknown as { __slopRender: Helper }).__slopRender).toBe(render);
   });
 
   it("shows only the asked slide and says where it is", () => {

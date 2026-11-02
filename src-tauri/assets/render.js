@@ -2,6 +2,9 @@
    in the hidden window that renders slides for the agent; it never becomes part of a deck. Each
    step answers by navigating to /.render-signal?<answer>, which the app catches and cancels. */
 (function () {
+  // WebView2 also finishes canceled signal navigations; the page-load callback runs us again.
+  if (window.__slopRender) return;
+
   // The most overflow findings a slide reports; an answer travels in a URL.
   var MAX_FINDINGS = 20;
 

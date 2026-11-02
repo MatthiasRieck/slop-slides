@@ -123,6 +123,32 @@ describe("deck URLs (desktop app)", () => {
       "http://slop.localhost/.file/C%3A/talks/assets/a.png",
     );
   });
+
+  it("serves canonical Windows paths without their verbatim drive prefix", async () => {
+    const utils = await loadWith("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+    const deck = String.raw`\\?\C:\my talks\café\deck.html`;
+    const base = "http://slop.localhost/.file/C%3A/my%20talks/caf%C3%A9";
+    expect(utils.fileUrl(deck)).toBe(`${base}/deck.html`);
+    expect(utils.slideUrl(deck, "intro", "1", true)).toBe(`${base}/deck.html?embed&slide=intro&v=1&static`);
+    expect(utils.deckFileUrl(deck, "assets/a.png")).toBe(`${base}/assets/a.png`);
+    expect(utils.headSlideUrl(deck, "intro", "abc")).toBe(
+      `${base.replace("/.file/", "/.head/")}/deck.html?embed&slide=intro&v=abc&static&print`,
+    );
+    expect(utils.workspaceChatFileUrl(String.raw`\\?\C:\my talks`, "assets/a.png")).toBe(
+      "http://slop.localhost/.file/C%3A/my%20talks/assets/a.png",
+    );
+    expect(utils.chatFileUrl(deck, String.raw`\\?\C:\sessions\sketches\1.png`)).toBe(
+      "http://slop.localhost/.session/C%3A/sessions/sketches/1.png",
+    );
+  });
+
+  it.each([String.raw`\\server\share\my talk\deck.html`, String.raw`\\?\UNC\server\share\my talk\deck.html`])(
+    "preserves the network root of %s",
+    async (path) => {
+      const utils = await loadWith("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+      expect(utils.fileUrl(path)).toBe("http://slop.localhost/.file///server/share/my%20talk/deck.html");
+    },
+  );
 });
 
 describe("relativeTime", () => {

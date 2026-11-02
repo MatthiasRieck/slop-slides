@@ -23,8 +23,15 @@ const FILE_PREFIX = ".file";
 const SESSION_PREFIX = ".session";
 const HEAD_PREFIX = ".head";
 
-/** An absolute path as the backend takes it in URLs: `/`-separated, without the leading `/`. */
-const urlPath = (absolute: string) => absolute.replaceAll("\\", "/").replace(/^\//, "");
+/** A filesystem path for transport: strip Windows verbatim prefixes, but retain UNC roots. */
+function urlPath(absolute: string): string {
+  // Rust canonicalize() returns \\?\C:\… or \\?\UNC\server\share\… on Windows.
+  const path = absolute
+    .replaceAll("\\", "/")
+    .replace(/^\/\/\?\/UNC\//, "//")
+    .replace(/^\/\/\?\/(?=[A-Za-z]:\/)/, "");
+  return path.startsWith("//") ? path : path.replace(/^\//, "");
+}
 
 /** URL of a file in the open workspace, by its absolute path. */
 export function fileUrl(absolute: string, query?: string): string {
@@ -52,7 +59,7 @@ export function deckFileUrl(deckId: string, path: string, query?: string): strin
 
 /** Files the app keeps in the deck's session (screenshots) come as absolute paths. */
 export function isSessionFile(path: string): boolean {
-  return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
+  return path.startsWith("/") || path.startsWith("\\\\") || /^[A-Za-z]:[\\/]/.test(path);
 }
 
 /**

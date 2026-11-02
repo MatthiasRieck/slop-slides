@@ -233,7 +233,7 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
       <span className="w-4 shrink-0 pt-0.5 text-right text-2xs tabular-nums text-muted-foreground">
         {number ?? "–"}
       </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
+      <div className="flex min-w-0 flex-1 flex-col gap-3">
         <div className="relative">
           <button
             type="button"
@@ -277,21 +277,25 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
           )}
           {content && row.staged && <StagedMark />}
         </div>
-        {row.moved && <MoveRow row={row} deck={deck.id} actions={canStage ? actionsOf(row, MARKS.moved) : null} />}
+        {row.moved && (
+          <MoveRow row={row} number={number} deck={deck.id} actions={canStage ? actionsOf(row, MARKS.moved) : null} />
+        )}
       </div>
     </li>
   );
 }
 
 /** The field under a slide that moved: its own change, staged and restored apart from the slide. */
-function MoveRow({ row, deck, actions }: { row: SlideChange; deck: string; actions: ReturnType<typeof actionsOf> }) {
-  const from = row.oldNumber === null ? "Moved" : `Was slide ${row.oldNumber}`;
+function MoveRow(props: { row: SlideChange; number?: number; deck: string; actions: ReturnType<typeof actionsOf> }) {
+  const { row, number, deck, actions } = props;
+  const from = row.oldNumber === null || number === undefined ? "Moved" : `${row.oldNumber} → ${number}`;
+  const title = row.oldNumber === null ? "Moved" : `Moved from slide ${row.oldNumber} to slide ${number ?? "?"}`;
   return (
     <div
       data-testid="move-row"
       className="flex items-center justify-between gap-1.5 rounded-md border border-dashed border-info px-1.5 py-1 text-xs text-muted-foreground"
     >
-      <span className="flex min-w-0 items-center gap-1" title={`Moved from slide ${row.oldNumber ?? "?"}`}>
+      <span className="flex min-w-0 items-center gap-1" title={title}>
         {row.moveStaged && (
           <span
             data-testid="staged-mark"
@@ -314,7 +318,7 @@ function StagedMark() {
     <span
       data-testid="staged-mark"
       title="Staged"
-      className="pointer-events-none absolute right-1 top-1 rounded-full bg-overlay p-0.5 text-overlay-foreground"
+      className="pointer-events-none absolute left-1 top-1 rounded-full bg-overlay p-0.5 text-overlay-foreground"
     >
       <Check className="size-3" />
     </span>

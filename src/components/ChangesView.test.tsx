@@ -152,7 +152,8 @@ describe("marks", () => {
     await show(changes({ slides: [row("modified", "intro", [], { moved: true, oldNumber: 3 })] }));
     expect(screen.getAllByTestId("change-mark").map((m) => m.title)).toEqual(["Modified", "Moved"]);
     const move = screen.getByTestId("move-row");
-    expect(move.textContent).toContain("Was slide 3");
+    expect(move.textContent).toContain("3 → 1");
+    expect(move.querySelector("[title]")?.getAttribute("title")).toBe("Moved from slide 3 to slide 1");
     expect(within(move).getByRole("group", { name: "Moved" })).toBeTruthy();
     const picture = screen.getByRole("button", { name: "Slide 1, modified and moved" });
     expect(picture.contains(move)).toBe(false);

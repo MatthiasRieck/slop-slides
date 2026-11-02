@@ -13,6 +13,8 @@
    freely), dragging the small handle on a stretch of the line adds a point there, which curves
    it, and double-clicking a point in between removes it.
    Double-click (or Enter) edits its text, Escape selects the parent (see "Editing text" below).
+   A list is selected and edited whole, from any of its items: the text element it was made
+   from when the list is all that element holds, otherwise the outermost list.
    Dragging and resizing snap to the slide's edges and center and to other elements' edges and
    centers, with guide lines (hold ⌘ / Ctrl to move freely; Shift-resizes, and turned elements'
    resizes, do not snap), and a readout by the pointer shows the position and size.
@@ -393,12 +395,29 @@
     return el && el !== slide ? el : null;
   }
 
-  /** The element to select for `el`: not inline text runs, whole SVG drawings. */
+  /**
+   * The text element a list belongs to: its outermost list, and when that is all its parent
+   * holds (as a list the editor made from the parent's lines is), the parent. Items are lines
+   * of one text, not elements of their own: selecting one would lose the list's editing.
+   */
+  function listHolder(el) {
+    var list = el.closest("li, ul, ol");
+    if (!list || !slide.contains(list) || list === slide) return el;
+    for (var up = list.parentElement; up && up !== slide && slide.contains(up); up = up.parentElement) {
+      if (/^(ul|ol|li)$/i.test(up.tagName)) list = up;
+    }
+    var parent = list.parentElement;
+    var alone = parent !== slide && parent.children.length === 1 && parent.textContent.trim() === list.textContent.trim();
+    return alone ? parent : list;
+  }
+
+  /** The element to select for `el`: not inline text runs, whole SVG drawings, whole lists. */
   function selectable(el) {
     if (!el || el.nodeType !== 1 || !slide.contains(el) || el === slide || el.closest(SLOTS)) return null;
     var svg = el.closest("svg");
     while (svg && svg.parentElement && svg.parentElement.closest("svg")) svg = svg.parentElement.closest("svg");
     if (svg && slide.contains(svg)) el = svg;
+    el = listHolder(el);
     while (el.parentElement !== slide && getComputedStyle(el).display === "inline") {
       // A link around an element without text (display: contents) leaves the element selected.
       if (getComputedStyle(el.parentElement).display === "contents") break;

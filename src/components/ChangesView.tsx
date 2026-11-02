@@ -233,7 +233,7 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
       <span className="w-4 shrink-0 pt-0.5 text-right text-2xs tabular-nums text-muted-foreground">
         {number ?? "–"}
       </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="relative">
           <button
             type="button"
@@ -285,14 +285,25 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
 
 /** The field under a slide that moved: its own change, staged and restored apart from the slide. */
 function MoveRow({ row, deck, actions }: { row: SlideChange; deck: string; actions: ReturnType<typeof actionsOf> }) {
+  const from = row.oldNumber === null ? "Moved" : `Was slide ${row.oldNumber}`;
   return (
     <div
       data-testid="move-row"
-      className="relative flex items-center justify-between gap-2 rounded-md border border-dashed border-info px-2 py-1 text-xs text-muted-foreground"
+      className="flex items-center justify-between gap-1.5 rounded-md border border-dashed border-info px-1.5 py-1 text-xs text-muted-foreground"
     >
-      <span className="truncate">{row.oldNumber === null ? "Moved" : `Moved from slide ${row.oldNumber}`}</span>
+      <span className="flex min-w-0 items-center gap-1" title={`Moved from slide ${row.oldNumber ?? "?"}`}>
+        {row.moveStaged && (
+          <span
+            data-testid="staged-mark"
+            title="Staged"
+            className="shrink-0 rounded-full bg-overlay p-0.5 text-overlay-foreground"
+          >
+            <Check className="size-2.5" />
+          </span>
+        )}
+        <span className="truncate tabular-nums">{from}</span>
+      </span>
       <MarkRow mark={MARKS.moved} deck={deck} actions={actions} locked={false} small />
-      {row.moveStaged && <StagedMark />}
     </div>
   );
 }

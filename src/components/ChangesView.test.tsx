@@ -128,6 +128,23 @@ describe("ChangesRail", () => {
     expect(screen.queryByTitle("1 moved")).toBeNull();
   });
 
+  it("draws every header badge at one height and icon size, with or without a count", async () => {
+    await show(changes({ stylesChanged: true, slides: LIST }));
+    const badges = screen.getAllByTestId("count-badge");
+    expect(badges.map((badge) => badge.title)).toContain("The shared styles changed");
+    expect(badges.length).toBeGreaterThan(1);
+    const classesOf = (badge: HTMLElement) => ({
+      height: badge.className.split(" ").filter((c) => /^h-/.test(c)),
+      icon: badge
+        .querySelector("svg")
+        ?.getAttribute("class")
+        ?.split(" ")
+        .filter((c) => /^size-/.test(c)),
+    });
+    for (const badge of badges) expect(classesOf(badge)).toEqual(classesOf(badges[0]!));
+    expect(classesOf(badges[0]!).height).toHaveLength(1);
+  });
+
   it("can show only the slides that changed", async () => {
     await show();
     fireEvent.click(screen.getByTitle("Show only the slides that changed"));

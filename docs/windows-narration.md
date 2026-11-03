@@ -11,24 +11,75 @@ message. `SLOPSLIDE_NO_NARRATION_ENGINE=1` still disables the engine on every pl
 End users install the packaged application and download the model from its Narration
 tab. They do not need WSL, a compiler, OpenBLAS, Python or a pthread DLL.
 
-Source builds need the normal Tauri Windows prerequisites and Visual Studio's
-**C++ Clang tools for Windows** component (clang-cl). The engine uses C11 atomics,
+Source builds need these tools installed once:
+
+- Git for Windows, Node.js 22+, pnpm, and stable Rust with the
+  `x86_64-pc-windows-msvc` toolchain.
+- Visual Studio Build Tools with **Desktop development with C++**, including the
+  x64/x86 MSVC tools, a Windows SDK, and **C++ CMake tools for Windows**.
+- **C++ Clang tools for Windows** in Visual Studio Installer, or a standalone LLVM
+  installation containing `clang-cl.exe` (the standard `Program Files/LLVM/bin`
+  location is detected automatically).
+- The remaining [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/#windows),
+  including the WebView2 runtime.
+
+The engine uses C11 atomics,
 GNU C extensions and SIMD intrinsics that cl.exe cannot compile. Only the narration
 C sources use clang-cl; other native Rust dependencies retain their own compiler.
 
-CI and releases use `.github/actions/windows-narration` to install a pinned vcpkg
-revision and `openblas[threads]:x64-windows-narration`. To reproduce:
+From a 64-bit PowerShell in the repository root, run:
 
 ```powershell
-# In a vcpkg checkout at bcd3a4fa5419dbe6bfb23f7610062621b3f596f2:
-./bootstrap-vcpkg.bat -disableMetrics
-./vcpkg.exe install 'openblas[threads]:x64-windows-narration' --overlay-triplets=C:/path/to/slop-slides/scripts/vcpkg-triplets --host-triplet=x64-windows-narration
-$env:SLOPSLIDE_OPENBLAS_DIR = "$PWD/installed/x64-windows-narration"
-$env:SLOPSLIDE_REQUIRE_NARRATION_ENGINE = '1'
-# Back in the SlopSlide checkout:
-pnpm install --frozen-lockfile
-pnpm tauri build
+./start.ps1                  # development with hot reload
+./start.ps1 -Mode release    # optimized executable, then launch
+./start.ps1 -Mode build      # Windows installers
 ```
+
+The launcher activates the installed x64 Visual Studio environment, finds Rust,
+Clang and CMake, pins Rust to Microsoft's linker (including when using Git Bash),
+installs JavaScript dependencies, and prepares narration. It does
+not install system software or change permanent environment settings. If a tool
+is missing, it stops with instructions. If local PowerShell policy blocks scripts,
+use a process-only exception according to your machine's policy, for example
+`powershell -NoProfile -ExecutionPolicy Bypass -File ./start.ps1`.
+
+The first narration setup downloads the pinned vcpkg revision
+`bcd3a4fa5419dbe6bfb23f7610062621b3f596f2` and builds
+`openblas[threads]:x64-windows-narration` under the git-ignored
+`.vcpkg-narration/` directory. This needs internet access and can take several
+minutes. Subsequent runs validate and reuse that installation. An existing checkout
+at a different revision or with tracked changes is reported without overwriting it.
+To use an existing compatible static installation, set `SLOPSLIDE_OPENBLAS_DIR`
+before starting; an invalid override is reported rather than silently replaced.
+
+To configure native dependencies without launching, then run your own commands
+**in the same PowerShell window**:
+
+```powershell
+./scripts/setup-windows.ps1
+pnpm install --frozen-lockfile
+pnpm tauri build --no-bundle
+# Or run the repository checks using Git Bash from this configured shell:
+bash ./check.sh
+```
+
+Both scripts require narration by default and clear a stale
+`SLOPSLIDE_NO_NARRATION_ENGINE` in the process. To deliberately build without it,
+use `./start.ps1 -NoNarration` (or `./scripts/setup-windows.ps1 -NoNarration` for
+custom build commands). This skips OpenBLAS and the Clang requirement. Start a new
+shell to discard the process environment changes. Direct Cargo/pnpm builds still
+allow the existing fallback unless `SLOPSLIDE_REQUIRE_NARRATION_ENGINE` is set.
+
+CI and releases call this same setup script through
+`.github/actions/windows-narration`, caching the installed dependency and exporting
+the required paths for later build steps. Run `./scripts/test-windows-build.ps1`
+for offline setup regression tests; Windows CI runs them before dependency setup.
+
+After launching the built app, download the approximately 2.5 GB Qwen3-TTS
+0.6B CustomVoice model from the Narration tab, then generate and play a slide.
+macOS uses the same model and engine with Apple's Accelerate framework, linked
+automatically by `build.rs`; it does not require OpenBLAS. Linux uses its system
+OpenBLAS package.
 
 `SLOPSLIDE_OPENBLAS_DIR` must contain `include/openblas/cblas.h`, `lib/openblas.lib` and
 `share/openblas/copyright`. Use the checked-in narration triplet, not a DLL/import library. It statically

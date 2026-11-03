@@ -15,6 +15,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Test Windows setup scripts offline
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-windows-build.ps1
       - name: Install Windows narration dependencies
         if: runner.os == 'Windows'
         uses: ./.github/actions/windows-narration

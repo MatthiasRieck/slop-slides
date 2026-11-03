@@ -173,11 +173,32 @@ Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.
 
 ## Development
 
+On **Windows x64**, install the [Windows prerequisites](docs/windows-narration.md#building)
+once, then use PowerShell from the checkout:
+
+```powershell
+./start.ps1                 # set up native dependencies, then start dev mode
+./start.ps1 -Mode release   # build and launch an optimized executable
+./start.ps1 -Mode build     # build Windows installers
+```
+
+The launcher detects Visual Studio/LLVM/CMake and Rust, builds the pinned static
+OpenBLAS dependency on first use, and reuses it afterwards. Narration is required
+by default, so a missing dependency produces an error instead of a build without
+speech. `-NoNarration` explicitly skips OpenBLAS and omits the speech engine;
+`-Mode browser` previews the UI without native tools. Setup runs in the current
+process and does not install system tools or change your permanent PATH.
+
+On **macOS/Linux**, or in an already configured build environment:
+
 ```sh
 pnpm install
 pnpm app:dev        # desktop app with hot reload
 pnpm app:build      # installers for the current OS → src-tauri/target/release/bundle
 ```
+
+macOS uses Apple's Accelerate framework automatically, so narration needs no
+separate OpenBLAS installation. Linux needs `libopenblas-dev` as listed above.
 
 `pnpm dev` alone serves the UI at http://localhost:1420 in a plain browser, with mocked IPC
 and read-only access to your deck library (`dev/browserPreview.ts`). This is handy for

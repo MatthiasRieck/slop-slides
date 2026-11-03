@@ -50,6 +50,11 @@ function marksOf(row: SlideChange): Mark[] {
   return row.moved && row.status !== "moved" ? [...marks, MARKS.moved] : marks;
 }
 
+/** The mark on the slide's picture: what changed in it, which a move is not. */
+function contentMarkOf(row: SlideChange): Mark | null {
+  return row.status === "unchanged" || row.status === "moved" ? null : MARKS[row.status];
+}
+
 /** The change a mark of a row stands for, to stage or restore it. */
 function actionsOf(row: SlideChange, mark: Mark): { change: Change; noun: string; staged: boolean } | null {
   const { id, oldId } = row;
@@ -217,10 +222,7 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
   const picked = useChanges((s) => s.picked === row.key);
   const slide = deck.slides.find((s) => s.id === row.id);
   const marks = marksOf(row);
-  const fullyStaged =
-    (row.status === "added" || row.status === "removed" || row.status === "modified" ? row.staged : true) &&
-    (!row.moved || row.moveStaged) &&
-    marks.length > 0;
+  const content = contentMarkOf(row);
   const itemRef = useRef<HTMLLIElement>(null);
   useEffect(() => {
     if (picked) itemRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -231,66 +233,95 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
       <span className="w-4 shrink-0 pt-0.5 text-right text-2xs tabular-nums text-muted-foreground">
         {number ?? "–"}
       </span>
-      <div className="relative min-w-0 flex-1">
-        <button
-          type="button"
-          aria-pressed={picked}
-          aria-label={[number ? `Slide ${number}` : "Slide", describe(row), fullyStaged && "staged"]
-            .filter(Boolean)
-            .join(", ")}
-          onClick={() => useChanges.getState().pick(row.key)}
-          className={cn(
-            "block w-full overflow-hidden rounded-md transition-shadow",
-            picked
-              ? "ring-2 ring-primary ring-offset-2 ring-offset-sidebar"
-              : marks[0]
-                ? `ring-2 ${marks[0].ring}`
-                : "hover:ring-1 hover:ring-input",
-          )}
-        >
-          {slide ? (
-            <LiveThumbnail deck={deck} slide={slide} faded={row.status === "unchanged"} />
-          ) : row.oldId && commit ? (
-            <SlideFrame
-              deckId={deck.id}
-              slideId={row.oldId}
-              version={commit}
-              url={headSlideUrl(deck.id, row.oldId, commit)}
-              size={pixelsOf({ size: deck.size })}
-              thumbnail
-              className="opacity-60 grayscale"
-            />
-          ) : null}
-        </button>
-        {marks.length > 0 && (
-          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1">
-            {marks.map((mark) => (
+      <div className="flex min-w-0 flex-1 flex-col gap-3">
+        <div className="relative">
+          <button
+            type="button"
+            aria-pressed={picked}
+            aria-label={[number ? `Slide ${number}` : "Slide", describe(row), content && row.staged && "staged"]
+              .filter(Boolean)
+              .join(", ")}
+            onClick={() => useChanges.getState().pick(row.key)}
+            className={cn(
+              "block w-full overflow-hidden rounded-md transition-shadow",
+              picked
+                ? "ring-2 ring-primary ring-offset-2 ring-offset-sidebar"
+                : marks[0]
+                  ? `ring-2 ${marks[0].ring}`
+                  : "hover:ring-1 hover:ring-input",
+            )}
+          >
+            {slide ? (
+              <LiveThumbnail deck={deck} slide={slide} faded={row.status === "unchanged"} />
+            ) : row.oldId && commit ? (
+              <SlideFrame
+                deckId={deck.id}
+                slideId={row.oldId}
+                version={commit}
+                url={headSlideUrl(deck.id, row.oldId, commit)}
+                size={pixelsOf({ size: deck.size })}
+                thumbnail
+                className="opacity-60 grayscale"
+              />
+            ) : null}
+          </button>
+          {content && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <MarkRow
-                key={mark.label}
-                mark={mark}
+                mark={content}
                 deck={deck.id}
-                actions={canStage ? actionsOf(row, mark) : null}
+                actions={canStage ? actionsOf(row, content) : null}
                 locked={!!slide?.locked}
               />
-            ))}
-          </div>
-        )}
-        {row.moved && row.oldNumber !== null && (
-          <span className="pointer-events-none absolute bottom-1 left-1 rounded bg-info px-1 py-px text-2xs font-medium text-info-foreground">
-            was {row.oldNumber}
-          </span>
-        )}
-        {fullyStaged && (
-          <span
-            data-testid="staged-mark"
-            title="Staged"
-            className="pointer-events-none absolute right-1 top-1 rounded-full bg-overlay p-0.5 text-overlay-foreground"
-          >
-            <Check className="size-3" />
-          </span>
+            </div>
+          )}
+          {content && row.staged && <StagedMark />}
+        </div>
+        {row.moved && (
+          <MoveRow row={row} number={number} deck={deck.id} actions={canStage ? actionsOf(row, MARKS.moved) : null} />
         )}
       </div>
     </li>
+  );
+}
+
+/** The field under a slide that moved: its own change, staged and restored apart from the slide. */
+function MoveRow(props: { row: SlideChange; number?: number; deck: string; actions: ReturnType<typeof actionsOf> }) {
+  const { row, number, deck, actions } = props;
+  const from = row.oldNumber === null || number === undefined ? "Moved" : `${row.oldNumber} → ${number}`;
+  const title = row.oldNumber === null ? "Moved" : `Moved from slide ${row.oldNumber} to slide ${number ?? "?"}`;
+  return (
+    <div
+      data-testid="move-row"
+      className="flex items-center justify-between gap-1.5 rounded-md border border-dashed border-info px-1.5 py-1 text-xs text-muted-foreground"
+    >
+      <span className="flex min-w-0 items-center gap-1" title={title}>
+        {row.moveStaged && (
+          <span
+            data-testid="staged-mark"
+            title="Staged"
+            className="shrink-0 rounded-full bg-overlay p-0.5 text-overlay-foreground"
+          >
+            <Check className="size-2.5" />
+          </span>
+        )}
+        <span className="truncate tabular-nums">{from}</span>
+      </span>
+      <MarkRow mark={MARKS.moved} deck={deck} actions={actions} locked={false} small />
+    </div>
+  );
+}
+
+/** The check in the corner of what is staged. */
+function StagedMark() {
+  return (
+    <span
+      data-testid="staged-mark"
+      title="Staged"
+      className="pointer-events-none absolute left-1 top-1 rounded-full bg-overlay p-0.5 text-overlay-foreground"
+    >
+      <Check className="size-3" />
+    </span>
   );
 }
 
@@ -305,29 +336,29 @@ function StylesRow({ deck, changes, canStage }: { deck: string; changes: DeckCha
       <div className="relative flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground">
         <span className="truncate">Shared styles</span>
         <MarkRow mark={STYLES} deck={deck} actions={actions} locked={false} />
-        {changes.stylesStaged && (
-          <span
-            data-testid="staged-mark"
-            title="Staged"
-            className="pointer-events-none absolute right-1 top-1 rounded-full bg-overlay p-0.5 text-overlay-foreground"
-          >
-            <Check className="size-3" />
-          </span>
-        )}
+        {changes.stylesStaged && <StagedMark />}
       </div>
     </li>
   );
 }
 
 /** A status icon, with staging on its left and restoring on its right. */
-function MarkRow(props: { mark: Mark; deck: string; actions: ReturnType<typeof actionsOf>; locked: boolean }) {
-  const { mark, deck, actions, locked } = props;
+function MarkRow(props: {
+  mark: Mark;
+  deck: string;
+  actions: ReturnType<typeof actionsOf>;
+  locked: boolean;
+  /** Fits a row of text instead of a slide's picture. */
+  small?: boolean;
+}) {
+  const { mark, deck, actions, locked, small } = props;
   const { label, icon: Icon, color } = mark;
   const { stage, unstage, restore } = useChanges.getState();
   return (
-    <fieldset aria-label={label} className="flex items-center gap-1.5">
+    <fieldset aria-label={label} className={cn("flex shrink-0 items-center", small ? "gap-1" : "gap-1.5")}>
       {actions && (
         <MarkButton
+          small={small}
           label={actions.staged ? "Unstage" : "Stage"}
           title={
             actions.staged ? `Take ${actions.noun} out of the next commit` : `Add ${actions.noun} to the next commit`
@@ -340,12 +371,13 @@ function MarkRow(props: { mark: Mark; deck: string; actions: ReturnType<typeof a
       <span
         data-testid="change-mark"
         title={label}
-        className={cn("flex size-7 items-center justify-center rounded-full shadow-md", color)}
+        className={cn("flex items-center justify-center rounded-full shadow-md", small ? "size-5" : "size-7", color)}
       >
-        <Icon className="size-4" />
+        <Icon className={small ? "size-3" : "size-4"} />
       </span>
       {actions && (
         <MarkButton
+          small={small}
           label="Restore"
           title={
             locked
@@ -366,6 +398,7 @@ function MarkButton(props: {
   label: string;
   title: string;
   disabled?: boolean;
+  small?: boolean;
   onClick: () => void;
   children: ReactNode;
 }) {
@@ -376,7 +409,10 @@ function MarkButton(props: {
       title={props.title}
       disabled={props.disabled}
       onClick={props.onClick}
-      className="pointer-events-auto flex size-6 items-center justify-center rounded-full bg-handle text-handle-foreground shadow-md ring-1 ring-scrim/40 hover:opacity-90 disabled:pointer-events-none disabled:opacity-40"
+      className={cn(
+        "pointer-events-auto flex items-center justify-center rounded-full bg-handle text-handle-foreground shadow-md ring-1 ring-scrim/40 hover:opacity-90 disabled:pointer-events-none disabled:opacity-40",
+        props.small ? "size-5" : "size-6",
+      )}
     >
       {props.children}
     </button>

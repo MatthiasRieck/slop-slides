@@ -3,20 +3,27 @@ import { AlertTriangle, CheckCircle2, Loader2, XCircle } from "lucide-react";
 import { basename, cn } from "../lib/utils";
 import { lintFixPrompt, useApp } from "../store";
 
-/** Lint result for the deck file. When it has issues, clicking puts fix instructions in the chat. */
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/**
+ * Lint result for the deck file, kept small: a checkmark, or the error and warning icons with their
+ * counts. The tooltip lists the issues; clicking puts fix instructions in the chat.
+ */
 export function LintStatus() {
   const lint = useApp((s) => s.lint);
   const running = useApp((s) => s.running);
   const file = useApp((s) => basename(s.deck?.id ?? "") || "deck.html");
+  const base = "flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-medium tabular-nums";
 
   if (lint === null) {
     return (
       <span
+        role="status"
         title={`Checking ${file}…`}
-        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground"
+        aria-label="Lint: checking"
+        className={cn(base, "text-muted-foreground")}
       >
-        <Loader2 className="size-3.5 animate-spin" />
-        Lint
+        <Loader2 className="size-4 animate-spin" />
       </span>
     );
   }
@@ -28,20 +35,16 @@ export function LintStatus() {
       <button
         type="button"
         title={`${file} passes lint. Click to check again.`}
+        aria-label="Lint OK"
         onClick={() => void useApp.getState().refreshLint()}
-        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-success hover:bg-accent"
+        className={cn(base, "text-success hover:bg-accent")}
       >
-        <CheckCircle2 className="size-3.5" />
-        Lint OK
+        <CheckCircle2 className="size-4" />
       </button>
     );
   }
 
-  const Icon = errors > 0 ? XCircle : AlertTriangle;
-  const summary = [
-    errors > 0 && `${errors} ${errors === 1 ? "error" : "errors"}`,
-    warnings > 0 && `${warnings} ${warnings === 1 ? "warning" : "warnings"}`,
-  ]
+  const summary = [errors > 0 && plural(errors, "error"), warnings > 0 && plural(warnings, "warning")]
     .filter(Boolean)
     .join(", ");
   const details = lint
@@ -53,15 +56,23 @@ export function LintStatus() {
     <button
       type="button"
       disabled={running}
-      title={`${details}\n\nClick to ask the agent to fix ${lint.length === 1 ? "it" : "them"}.`}
+      aria-label={`Lint: ${summary}`}
+      title={`${summary}\n${details}\n\nClick to ask the agent to fix ${lint.length === 1 ? "it" : "them"}.`}
       onClick={() => useApp.getState().fillComposer(lintFixPrompt(lint, file))}
-      className={cn(
-        "flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium hover:bg-accent disabled:opacity-50",
-        errors > 0 ? "text-destructive" : "text-warning",
-      )}
+      className={cn(base, "gap-2 hover:bg-accent disabled:opacity-50")}
     >
-      <Icon className="size-3.5" />
-      Lint: {summary}
+      {errors > 0 && (
+        <span data-testid="lint-errors" className="flex items-center gap-1 text-destructive">
+          <XCircle className="size-4" />
+          {errors}
+        </span>
+      )}
+      {warnings > 0 && (
+        <span data-testid="lint-warnings" className="flex items-center gap-1 text-warning">
+          <AlertTriangle className="size-4" />
+          {warnings}
+        </span>
+      )}
     </button>
   );
 }

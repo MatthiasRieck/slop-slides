@@ -60,7 +60,7 @@ export function Home() {
 
   return (
     <div className="flex h-full flex-col">
-      <header data-tauri-drag-region className={cn("flex h-12 shrink-0 items-center", isMac ? "pl-[84px]" : "pl-4")}>
+      <header data-tauri-drag-region className={cn("flex h-14 shrink-0 items-center", isMac ? "pl-[84px]" : "pl-4")}>
         <span data-tauri-drag-region className="text-sm font-semibold tracking-tight">
           SlopSlide
         </span>

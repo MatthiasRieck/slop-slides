@@ -12,7 +12,7 @@ import { Popover, useDismiss } from "./Popover";
 import { ScreenPicker } from "./ScreenPicker";
 import { VideoExportPanel } from "./VideoExport";
 
-/** Export and present, in the top bar next to the mode tabs. */
+/** Export (an icon until an export runs) and present, in the top bar next to the lint status. */
 /** The longest the screen picker waits for the screens to be captured before opening anyway. */
 const PICKER_MAX_WAIT_MS = 150;
 
@@ -219,6 +219,7 @@ function ExportMenu(props: {
   const buttonRef = useRef<HTMLButtonElement>(null);
 
   useDismiss(open, menuRef, () => setOpen(false), { escape: true });
+  const label = props.progress !== null ? progressLabel(props.progress) : props.busy ? "Exporting…" : null;
 
   const choose = (action: () => void) => () => {
     setOpen(false);
@@ -233,10 +234,13 @@ function ExportMenu(props: {
         disabled={props.disabled}
         aria-haspopup="menu"
         aria-expanded={open}
+        // Idle, it is only an icon; while exporting it says how far it has got.
+        aria-label={label ? undefined : "Export"}
+        title={label ? undefined : "Export"}
         onClick={() => setOpen((v) => !v)}
       >
         {props.busy ? <Loader2 className="size-3.5 animate-spin" /> : <Share className="size-3.5" />}
-        {props.progress !== null ? progressLabel(props.progress) : props.busy ? "Exporting…" : "Export"}
+        {label}
         <ChevronDown className="size-3 text-muted-foreground" />
       </Button>
       {open && (

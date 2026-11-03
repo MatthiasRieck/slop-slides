@@ -63,7 +63,7 @@ export function ModeTabs() {
   const modes = MODES.filter(({ id }) => id !== "git" || inRepository);
 
   return (
-    <div role="tablist" aria-label="Mode" className="flex items-center rounded-md border bg-muted p-0.5">
+    <div role="tablist" aria-label="Mode" className="flex items-center gap-0.5 rounded-lg border bg-muted p-1">
       {modes.map(({ id, label, icon: Icon }) => (
         <button
           key={id}
@@ -74,11 +74,11 @@ export function ModeTabs() {
           disabled={(needsSlide(id) && !hasSlide) || (id === "edit" && locked)}
           onClick={() => useApp.getState().setMode(id)}
           className={cn(
-            "flex items-center gap-1.5 rounded px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
+            "flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
             mode === id && "bg-background text-foreground shadow-sm ring-1 ring-border",
           )}
         >
-          <Icon className="size-3.5" />
+          <Icon className="size-4" />
           {label}
           {id === "narration" && narrated && (
             <span data-testid="has-narration" className="size-1.5 rounded-full bg-primary" aria-hidden />

@@ -9,14 +9,15 @@ import { LintStatus } from "./LintStatus";
 import { ModeTabs } from "./ModeTabs";
 
 /**
- * The workspace's bar: the slide rail toggle (for a deck) and breadcrumbs from the workspace
- * folder to the open file; for a deck, its mode tabs in the middle, then lint, export and
- * present; then revealing and closing the file (back to the workspace) and the sidebar toggle.
- * The tools of each mode live above the slide (DeckToolbar, Stage).
+ * The workspace's bar. On the left, the slide rail toggle (for a deck), closing the open file (back
+ * to the workspace), its path from the workspace folder with the deck's title under it, and
+ * revealing it in the file manager; for a deck, its mode tabs in the middle, then lint, export and
+ * present; then the sidebar toggle. The tools of each mode live above the slide (DeckToolbar, Stage).
  */
 export function TopBar() {
   const workspace = useApp((s) => s.workspace);
   const hasDeck = useApp((s) => s.deck !== null);
+  const deckTitle = useApp((s) => s.deck?.title ?? null);
   const openedFile = useApp((s) => s.openedFile);
   if (!workspace) return null;
 
@@ -24,13 +25,32 @@ export function TopBar() {
     <header
       data-tauri-drag-region
       className={cn(
-        "relative z-30 grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] items-center gap-3 border-b bg-background pr-3",
+        "relative z-30 grid h-14 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] items-center gap-3 border-b bg-background pr-3",
         isMac ? "pl-[84px]" : "pl-3",
       )}
     >
       <div data-tauri-drag-region className="flex min-w-0 items-center gap-1 self-stretch">
         {hasDeck && <RailToggle />}
-        <Breadcrumbs workspace={workspace.name} path={openedFile?.path ?? null} />
+        {openedFile && (
+          <ToolButton
+            variant="panel"
+            size="md"
+            onClick={() => void useApp.getState().closeDeck()}
+            title={`Close ${basename(openedFile.path)}`}
+            aria-label={`Close ${basename(openedFile.path)}`}
+          >
+            <X className="size-4" />
+          </ToolButton>
+        )}
+        <div data-tauri-drag-region className="flex min-w-0 flex-col justify-center">
+          <Breadcrumbs workspace={workspace.name} path={openedFile?.path ?? null} small={deckTitle !== null} />
+          {deckTitle !== null && (
+            <h1 data-tauri-drag-region title={deckTitle} className="truncate px-1.5 text-sm font-medium leading-5">
+              {deckTitle || "Untitled"}
+            </h1>
+          )}
+        </div>
+        {openedFile && <RevealButton path={openedFile.absolute} />}
       </div>
       {hasDeck ? <ModeTabs /> : <div />}
       <div data-tauri-drag-region className="flex items-center justify-end gap-1 self-stretch">
@@ -40,31 +60,24 @@ export function TopBar() {
             <DeckActions />
           </div>
         )}
-        {openedFile && (
-          <>
-            <RevealButton path={openedFile.absolute} />
-            <ToolButton
-              variant="panel"
-              size="md"
-              onClick={() => void useApp.getState().closeDeck()}
-              title={`Close ${basename(openedFile.path)}`}
-              aria-label={`Close ${basename(openedFile.path)}`}
-            >
-              <X className="size-4" />
-            </ToolButton>
-          </>
-        )}
         <SidebarToggle />
       </div>
     </header>
   );
 }
 
-/** The workspace folder, then each folder of the open file's path, then the file. */
-function Breadcrumbs({ workspace, path }: { workspace: string; path: string | null }) {
+/**
+ * The workspace folder, then each folder of the open file's path, then the file. Small and muted
+ * above a deck's title; otherwise it is the title.
+ */
+function Breadcrumbs({ workspace, path, small }: { workspace: string; path: string | null; small: boolean }) {
   const crumbs = [workspace, ...(path ? path.split("/").filter(Boolean) : [])];
   return (
-    <nav aria-label="Breadcrumbs" title={path ?? workspace} className="flex min-w-0 items-center gap-1 px-1.5 text-sm">
+    <nav
+      aria-label="Breadcrumbs"
+      title={path ?? workspace}
+      className={cn("flex min-w-0 items-center gap-1 px-1.5", small ? "text-2xs leading-4" : "text-sm")}
+    >
       {crumbs.map((crumb, i) => {
         const last = i === crumbs.length - 1;
         return (
@@ -73,7 +86,11 @@ function Breadcrumbs({ workspace, path }: { workspace: string; path: string | nu
             {i > 0 && <span className="text-muted-foreground/40">/</span>}
             <span
               aria-current={last ? "page" : undefined}
-              className={cn("truncate", last ? "font-medium text-foreground" : "max-w-40 text-muted-foreground")}
+              className={cn(
+                "truncate",
+                !last && "max-w-40 text-muted-foreground",
+                last && (small ? "text-muted-foreground" : "font-medium text-foreground"),
+              )}
             >
               {crumb}
             </span>

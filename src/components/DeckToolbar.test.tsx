@@ -323,8 +323,8 @@ describe("deck actions", () => {
     expect(exportButton().textContent).toContain("Exporting…");
     expect(exportButton().disabled).toBe(true);
     await act(async () => finish());
-    expect(exportButton().textContent).toContain("Export");
-    expect(exportButton().textContent).not.toContain("Exporting");
+    expect(exportButton().getAttribute("aria-label")).toBe("Export");
+    expect(exportButton().textContent).toBe("");
     expect(exportButton().disabled).toBe(false);
   });
 

@@ -122,20 +122,46 @@ describe("layout", () => {
       (el) => el.getAttribute("aria-label") ?? el.getAttribute("title") ?? el.textContent,
     );
 
-  it("puts the rail and breadcrumbs first, then the modes, lint, the deck's actions and the file actions", () => {
+  it("puts the rail and the file (close, path, reveal) first, then the modes, lint, the deck's actions and the sidebar", () => {
     useApp.setState({ lint: [] });
     render(<TopBar />);
     expect(order()).toEqual([
       "Hide slides",
+      "Close deck.html",
       "Breadcrumbs",
+      "Show in folder",
       "Mode",
-      "deck.html passes lint. Click to check again.",
+      "Lint OK",
       "Export",
       "Present",
-      "Show in folder",
-      "Close deck.html",
       "Hide sidebar",
     ]);
+  });
+
+  it("shows the deck's title under its path", () => {
+    render(<TopBar />);
+    const title = screen.getByRole("heading", { level: 1 });
+    expect(title.textContent).toBe(useApp.getState().deck!.title);
+    const nav = screen.getByRole("navigation", { name: "Breadcrumbs" });
+    expect(nav.className).toContain("text-2xs");
+    expect(nav.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("shows only the path, at full size, for a file that is not a deck", () => {
+    useApp.setState({
+      deck: null,
+      openedFile: { path: "site/index.html", absolute: "/decks/site/index.html", kind: "webpage" },
+    });
+    render(<TopBar />);
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+    expect(screen.getByRole("navigation", { name: "Breadcrumbs" }).className).toContain("text-sm");
+  });
+
+  it("shows export as an icon and lint as a checkmark", () => {
+    useApp.setState({ lint: [] });
+    render(<TopBar />);
+    expect(screen.getByRole("button", { name: "Export" }).textContent).toBe("");
+    expect(screen.getByRole("button", { name: "Lint OK" }).textContent).toBe("");
   });
 
   it("leaves the tools of each mode to the row below", () => {

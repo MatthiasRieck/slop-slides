@@ -19,14 +19,17 @@ describe("lint status", () => {
   it("shows a pending state until the first check finishes", () => {
     useApp.setState({ lint: null });
     render(<LintStatus />);
-    expect(screen.getByTitle(/Checking deck\.html/)).toBeTruthy();
+    expect(screen.getByTitle(/Checking deck\.html/).textContent).toBe("");
   });
 
-  it("shows OK and re-checks on click", () => {
+  it("shows only a checkmark when the deck passes, and re-checks on click", () => {
     const refreshLint = vi.fn(async () => {});
     useApp.setState({ lint: [], refreshLint });
     render(<LintStatus />);
-    fireEvent.click(screen.getByRole("button", { name: /Lint OK/ }));
+    const button = screen.getByRole("button", { name: "Lint OK" });
+    expect(button.textContent).toBe("");
+    expect(button.querySelector("svg")).toBeTruthy();
+    fireEvent.click(button);
     expect(refreshLint).toHaveBeenCalled();
     expect(useApp.getState().composerFill).toBeNull();
   });
@@ -36,13 +39,18 @@ describe("lint status", () => {
     render(<LintStatus />);
     const button = screen.getByRole("button", { name: /Lint: 1 error, 1 warning/ });
     expect(button.title).toContain("Line 12: <div> is never closed.");
-    expect(button.className).toContain("text-destructive");
+    expect(screen.getByTestId("lint-errors").textContent).toBe("1");
+    expect(screen.getByTestId("lint-errors").className).toContain("text-destructive");
+    expect(screen.getByTestId("lint-warnings").textContent).toBe("1");
   });
 
   it("uses the warning style when there are only warnings", () => {
     useApp.setState({ lint: [issues[1]!, issues[1]!] });
     render(<LintStatus />);
-    expect(screen.getByRole("button", { name: /Lint: 2 warnings/ }).className).toContain("text-warning");
+    expect(screen.getByRole("button", { name: "Lint: 2 warnings" })).toBeTruthy();
+    expect(screen.getByTestId("lint-warnings").textContent).toBe("2");
+    expect(screen.getByTestId("lint-warnings").className).toContain("text-warning");
+    expect(screen.queryByTestId("lint-errors")).toBeNull();
   });
 
   it("fills the chat composer with fix instructions when clicked", () => {

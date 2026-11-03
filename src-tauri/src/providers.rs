@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::process::{ChildStdin, ChildStdout, Command};
+use tokio::process::{ChildStdin, ChildStdout};
 
 use crate::copilot;
 use crate::env;
@@ -156,14 +156,11 @@ async fn copilot() -> ProviderInfo {
 
 /// Runs a short-lived `codex app-server`: initialize handshake, then every `model/list` page.
 async fn codex_models(bin: &Path) -> Result<Vec<ModelInfo>> {
-    let mut cmd = Command::new(bin);
+    let mut cmd = crate::process::command(bin)?;
     cmd.arg("app-server")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    #[cfg(windows)]
-    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        .stderr(Stdio::null());
     let mut child = cmd
         .spawn()
         .map_err(|e| Error::msg(format!("Could not start Codex: {e}")))?;

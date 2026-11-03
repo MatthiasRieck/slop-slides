@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::watch;
 
 use crate::agent::{AgentEvent, Outcome, SYSTEM_PROMPT};
@@ -25,17 +25,14 @@ const METHOD_NOT_FOUND: i64 = -32601;
 const DETACH_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn spawn(bin: &Path, dir: Option<&Path>) -> Result<(Child, Conn)> {
-    let mut cmd = Command::new(bin);
+    let mut cmd = crate::process::command(bin)?;
     cmd.args(["--server", "--stdio", "--no-auto-update"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
+        .stderr(Stdio::null());
     if let Some(dir) = dir {
         cmd.current_dir(dir);
     }
-    #[cfg(windows)]
-    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     let mut child = cmd
         .spawn()
         .map_err(|e| Error::msg(format!("Could not start GitHub Copilot: {e}")))?;

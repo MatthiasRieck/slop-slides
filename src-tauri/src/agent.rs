@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Command;
 use tokio::sync::watch;
 
 use crate::deck;
@@ -485,15 +484,12 @@ impl Turn {
         args.extend(plugin_args(&plugins));
         let started = Instant::now();
 
-        let mut cmd = Command::new(&self.bin);
+        let mut cmd = crate::process::command(&self.bin)?;
         cmd.args(args)
             .current_dir(&self.dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        #[cfg(windows)]
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+            .stderr(Stdio::piped());
 
         let mut child = cmd.spawn().map_err(|e| {
             Error::msg(format!(

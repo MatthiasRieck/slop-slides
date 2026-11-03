@@ -347,6 +347,18 @@ fn set_slide_time(id: String, slide: String, seconds: u32) -> Result<Deck> {
     deck::set_slide_time(&deck::deck_file(&id)?, &slide, seconds)
 }
 
+/// Sets how the player moves on to a slide; None gives it the deck's transition.
+#[tauri::command]
+fn set_slide_transition(id: String, slide: String, transition: Option<String>) -> Result<RailEdit> {
+    deck::set_slide_transition(&deck::deck_file(&id)?, &slide, transition.as_deref())
+}
+
+/// Sets the transition of every slide without its own.
+#[tauri::command]
+fn set_deck_transition(id: String, transition: String) -> Result<Deck> {
+    deck::set_deck_transition(&deck::deck_file(&id)?, &transition)
+}
+
 /// Sets the timing of slides on the narration timeline, all in one write.
 #[tauri::command]
 fn set_slide_timing(id: String, timing: Vec<deck::SlideTiming>) -> Result<RailEdit> {
@@ -1079,6 +1091,8 @@ pub fn run() {
             set_slide_narration,
             set_slide_notes,
             set_slide_time,
+            set_slide_transition,
+            set_deck_transition,
             set_slide_timing,
             set_slide_size,
             add_section,

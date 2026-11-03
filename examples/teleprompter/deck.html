@@ -78,17 +78,29 @@ html[data-slop-player] .deck > .slide {
   position: absolute !important;
   inset: 0 !important;
   margin: 0 !important;
+  pointer-events: none !important;
+}
+html[data-slop-player] .deck > .slide:not(.active):not(.slop-leaving) {
   visibility: hidden !important;
   opacity: 0 !important;
-  pointer-events: none !important;
-  transition: opacity 0.35s ease, visibility 0s linear 0.35s;
 }
+/* Opacity, translate, scale and clip-path are left to the slide transitions below, so they are
+   not !important here (an !important value would outrank the animations). */
 html[data-slop-player] .deck > .slide.active {
   visibility: visible !important;
-  opacity: 1 !important;
+  opacity: 1;
   pointer-events: auto !important;
-  transition: opacity 0.35s ease;
   z-index: 1;
+}
+/* The slide being left stays on screen under the new one until its transition hides it. */
+html[data-slop-player] .deck > .slide.slop-leaving {
+  visibility: visible;
+  opacity: 1;
+  z-index: 0;
+}
+html[data-slop-player] .deck > .slide.slop-leaving .reveal {
+  opacity: 1;
+  animation: none;
 }
 /* Section markers only label the editor's slide rail; the player never shows them. */
 .deck > .deck-section {
@@ -144,6 +156,88 @@ html[data-slop-player] .slide .reveal {
 .slide.active .reveal.reveal-delay-2 { animation-delay: 0.24s; }
 .slide.active .reveal.reveal-delay-3 { animation-delay: 0.36s; }
 .slide.active .reveal.reveal-delay-4 { animation-delay: 0.48s; }
+/* Slide transitions. The player names the one moving between the two slides in
+   data-slop-transition on <html> (the incoming slide's data-transition, or the deck's
+   slopslide-transition meta, fade without either), and data-slop-back when going back.
+   The slide being left ends hidden, so nothing needs to clean up after it. */
+@keyframes slop-fade-in {
+  from { opacity: 0; }
+}
+@keyframes slop-fade-out {
+  to { opacity: 0; visibility: hidden; }
+}
+@keyframes slop-slide-in {
+  from { translate: 100% 0; }
+}
+@keyframes slop-slide-out {
+  to { translate: -100% 0; visibility: hidden; }
+}
+@keyframes slop-slide-in-back {
+  from { translate: -100% 0; }
+}
+@keyframes slop-slide-out-back {
+  to { translate: 100% 0; visibility: hidden; }
+}
+@keyframes slop-zoom-in {
+  from { opacity: 0; scale: 0.9; }
+}
+@keyframes slop-zoom-out {
+  to { opacity: 0; scale: 1.08; visibility: hidden; }
+}
+@keyframes slop-zoom-in-back {
+  from { opacity: 0; scale: 1.08; }
+}
+@keyframes slop-zoom-out-back {
+  to { opacity: 0; scale: 0.9; visibility: hidden; }
+}
+@keyframes slop-wipe-in {
+  from { clip-path: inset(0 100% 0 0); }
+}
+@keyframes slop-wipe-in-back {
+  from { clip-path: inset(0 0 0 100%); }
+}
+@keyframes slop-hold {
+  to { visibility: hidden; }
+}
+html[data-slop-transition="fade"] .deck > .slide.active {
+  animation: slop-fade-in 0.35s ease both;
+}
+html[data-slop-transition="fade"] .deck > .slide.slop-leaving {
+  animation: slop-fade-out 0.35s ease both;
+}
+html[data-slop-transition="slide"] .deck > .slide.active {
+  animation: slop-slide-in 0.6s cubic-bezier(0.65, 0, 0.35, 1) both;
+}
+html[data-slop-transition="slide"] .deck > .slide.slop-leaving {
+  animation: slop-slide-out 0.6s cubic-bezier(0.65, 0, 0.35, 1) both;
+}
+html[data-slop-transition="slide"][data-slop-back] .deck > .slide.active {
+  animation-name: slop-slide-in-back;
+}
+html[data-slop-transition="slide"][data-slop-back] .deck > .slide.slop-leaving {
+  animation-name: slop-slide-out-back;
+}
+html[data-slop-transition="zoom"] .deck > .slide.active {
+  animation: slop-zoom-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+html[data-slop-transition="zoom"] .deck > .slide.slop-leaving {
+  animation: slop-zoom-out 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+html[data-slop-transition="zoom"][data-slop-back] .deck > .slide.active {
+  animation-name: slop-zoom-in-back;
+}
+html[data-slop-transition="zoom"][data-slop-back] .deck > .slide.slop-leaving {
+  animation-name: slop-zoom-out-back;
+}
+html[data-slop-transition="wipe"] .deck > .slide.active {
+  animation: slop-wipe-in 0.6s cubic-bezier(0.65, 0, 0.35, 1) both;
+}
+html[data-slop-transition="wipe"][data-slop-back] .deck > .slide.active {
+  animation-name: slop-wipe-in-back;
+}
+html[data-slop-transition="wipe"] .deck > .slide.slop-leaving {
+  animation: slop-hold 0.6s step-end both;
+}
 /* Editor thumbnails render the final frame of every animation. */
 html[data-slop-static] *,
 html[data-slop-static] *::before,
@@ -188,6 +282,7 @@ html[data-slop-static] *::after {
     margin: 0 !important;
     visibility: visible !important;
     opacity: 1 !important;
+    animation: none !important;
     break-after: page;
   }
   .deck > .slide[data-hidden] {
@@ -199,9 +294,10 @@ html[data-slop-static] *::after {
   }
 }
 
-/* Matched heroes move between click states; slide fades must not delay the snapshot. */
+/* Matched heroes move between click states; slide transitions must not delay the snapshot. */
 html:active-view-transition .deck > .slide {
   transition: none !important;
+  animation: none !important;
 }
 ::view-transition-group(*) {
   animation-duration: 550ms;
@@ -424,6 +520,20 @@ We should go back to the Moon because it is the nearest place to learn how to li
     return isNaN(n) ? 0 : Math.min(slides.length - 1, Math.max(0, n - 1));
   }
 
+  // Slide transitions (runtime.css): a slide's data-transition says how the player moves on to it
+  // from the slide before, and back; the deck's slopslide-transition meta names the rest.
+  var TRANSITIONS = ["none", "fade", "slide", "zoom", "wipe"];
+  var deckMeta = document.querySelector('meta[name="slopslide-transition"]');
+  var deckTransition = deckMeta && TRANSITIONS.indexOf((deckMeta.getAttribute("content") || "").trim()) >= 0
+    ? deckMeta.getAttribute("content").trim()
+    : "fade";
+
+  /** The transition between the slides at `from` and `to`: the later one's, or the deck's. */
+  function transitionBetween(from, to) {
+    var own = (slides[Math.max(from, to)].getAttribute("data-transition") || "").trim();
+    return TRANSITIONS.indexOf(own) >= 0 ? own : deckTransition;
+  }
+
   var transition = null;
   function morphNames(slide, enabled) {
     var seen = Object.create(null);
@@ -446,11 +556,19 @@ We should go back to the Moon because it is the nearest place to learn how to li
     var canMorph = previous >= 0 && !embed && !params.has("static") && motion &&
       document.startViewTransition && slides[index].querySelector("[data-morph]") &&
       slides[previous].querySelector("[data-morph]");
+    // Embedded previews and thumbnails switch at once; so does a morph, which moves the slides itself.
+    var animated = previous >= 0 && !embed && !params.has("static") && !canMorph;
+    var kind = animated ? transitionBetween(previous, index) : "none";
     function update() {
       if (current !== index) return;
+      if (kind === "none") root.removeAttribute("data-slop-transition");
+      else root.setAttribute("data-slop-transition", kind);
+      if (index < previous) root.setAttribute("data-slop-back", "");
+      else root.removeAttribute("data-slop-back");
       slides.forEach(function (el, i) {
         morphNames(el, !!canMorph && i === index);
         el.classList.toggle("active", i === index);
+        el.classList.toggle("slop-leaving", kind !== "none" && i === previous);
       });
     }
     if (canMorph) {

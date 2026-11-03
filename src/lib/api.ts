@@ -64,7 +64,12 @@ export interface Slide {
   duration?: number | null;
   /** When its narration starts, in seconds after the slide does (its `data-narration-start`); earlier when negative. */
   narrationStart?: number | null;
+  /** How the player moves on to it from the slide before, and back (its `data-transition`); the deck's when missing. */
+  transition?: SlideTransition | null;
 }
+
+/** How the player moves from one slide to the next (see src-tauri/assets/runtime.css). */
+export type SlideTransition = "none" | "fade" | "slide" | "zoom" | "wipe";
 
 /** What a slide's timing on the narration timeline becomes; null removes that part of it. */
 export interface SlideTiming {
@@ -111,6 +116,8 @@ export interface Deck {
   size?: SizeInfo;
   /** The voice and language its narration is said in (its `slopslide-narration-*` metas). */
   narration?: NarrationSettings;
+  /** The transition of every slide without its own (its `slopslide-transition` meta); fade when missing. */
+  transition?: SlideTransition;
 }
 
 export interface NarrationSettings {
@@ -423,6 +430,12 @@ export const api = {
   /** Sets what is said over the slide; empty `text` removes its narration. */
   /** Sets the seconds expected on a slide; 0 removes them. */
   setSlideTime: (id: string, slide: string, seconds: number) => invoke<Deck>("set_slide_time", { id, slide, seconds }),
+  /** Sets how the player moves on to a slide; null gives it the deck's transition. */
+  setSlideTransition: (id: string, slide: string, transition: SlideTransition | null) =>
+    invoke<RailEdit>("set_slide_transition", { id, slide, transition }),
+  /** Sets the transition of every slide without its own. */
+  setDeckTransition: (id: string, transition: SlideTransition) =>
+    invoke<Deck>("set_deck_transition", { id, transition }),
   /** Sets the timing of slides on the narration timeline, all in one write. */
   setSlideTiming: (id: string, timing: SlideTiming[]) => invoke<RailEdit>("set_slide_timing", { id, timing }),
   setSlideNarration: (id: string, slide: string, text: string) =>

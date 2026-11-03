@@ -115,6 +115,18 @@ const CASES = [
   ["pasteSlide", () => api.pasteSlide("talk", "a"), "paste_slide", { id: "talk", after: "a" }],
   ["setSlideTime", () => api.setSlideTime("talk", "a", 90), "set_slide_time", { id: "talk", slide: "a", seconds: 90 }],
   [
+    "setSlideTransition",
+    () => api.setSlideTransition("talk", "a", "zoom"),
+    "set_slide_transition",
+    { id: "talk", slide: "a", transition: "zoom" },
+  ],
+  [
+    "setDeckTransition",
+    () => api.setDeckTransition("talk", "wipe"),
+    "set_deck_transition",
+    { id: "talk", transition: "wipe" },
+  ],
+  [
     "setSlideTiming",
     () => api.setSlideTiming("talk", [{ slide: "a", duration: 4, narrationStart: null }]),
     "set_slide_timing",

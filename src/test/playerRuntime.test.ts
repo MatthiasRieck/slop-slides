@@ -644,6 +644,92 @@ describe("player: without JavaScript", () => {
   });
 });
 
+describe("player: slide transitions", () => {
+  const CSS = readFileSync("src-tauri/assets/runtime.css", "utf8");
+  const root = (p: ReturnType<typeof player>) => p.doc.documentElement;
+  const leaving = (p: ReturnType<typeof player>) =>
+    [...p.doc.querySelectorAll(".deck > .slide")].findIndex((s) => s.classList.contains("slop-leaving"));
+
+  it("fades by default, and only once the show moves on", () => {
+    const p = player();
+    expect(root(p).hasAttribute("data-slop-transition")).toBe(false);
+    expect(leaving(p)).toBe(-1);
+    p.key("ArrowRight");
+    expect(root(p).getAttribute("data-slop-transition")).toBe("fade");
+    expect(root(p).hasAttribute("data-slop-back")).toBe(false);
+    expect(leaving(p)).toBe(0);
+    p.key("ArrowRight");
+    expect(leaving(p)).toBe(1);
+    expect(p.doc.querySelectorAll(".slop-leaving")).toHaveLength(1);
+  });
+
+  it("takes the deck's transition from its meta, ignoring unknown ones", () => {
+    const meta = (name: string) =>
+      DECK.replace("<html>", `<html><head><meta name="slopslide-transition" content="${name}"></head>`);
+    const p = player({ html: meta("slide") });
+    p.key("ArrowRight");
+    expect(root(p).getAttribute("data-slop-transition")).toBe("slide");
+    const unknown = player({ html: meta("spin") });
+    unknown.key("ArrowRight");
+    expect(root(unknown).getAttribute("data-slop-transition")).toBe("fade");
+  });
+
+  it("uses the later slide's own transition both ways, playing it backwards when going back", () => {
+    const html = DECK.replace('<section class="slide"><p>', '<section class="slide" data-transition="zoom"><p>');
+    const p = player({ html });
+    p.key("ArrowRight");
+    expect(root(p).getAttribute("data-slop-transition")).toBe("zoom");
+    p.key("ArrowRight");
+    expect(root(p).getAttribute("data-slop-transition")).toBe("fade");
+    p.key("ArrowLeft");
+    expect(root(p).getAttribute("data-slop-transition")).toBe("fade");
+    p.key("ArrowLeft");
+    expect(root(p).getAttribute("data-slop-transition")).toBe("zoom");
+    expect(root(p).hasAttribute("data-slop-back")).toBe(true);
+    expect(leaving(p)).toBe(1);
+  });
+
+  it("switches at once for `none`, in editor previews and in thumbnails", () => {
+    const html = DECK.replace('<section class="slide"><p>', '<section class="slide" data-transition="none"><p>');
+    const p = player({ html });
+    p.key("ArrowRight");
+    expect(root(p).hasAttribute("data-slop-transition")).toBe(false);
+    expect(leaving(p)).toBe(-1);
+    const still = player({ at: "?static" });
+    still.key("ArrowRight");
+    expect(still.active()).toBe(1);
+    expect(root(still).hasAttribute("data-slop-transition")).toBe(false);
+    expect(leaving(still)).toBe(-1);
+  });
+
+  it("keeps the slide being left on screen, its entrances finished, under the new one", () => {
+    const html = DECK.replace(
+      "<html>",
+      `<html data-slop-player data-slop-transition="slide"><head><style>${CSS}</style></head>`,
+    ).replace("<button>", '<p class="reveal">Hi</p><button>');
+    const dom = new JSDOM(html, { pretendToBeVisual: true });
+    doms.push(dom);
+    const doc = dom.window.document;
+    const style = (el: Element) => dom.window.getComputedStyle(el);
+    const [intro, second, end] = [...doc.querySelectorAll(".deck > .slide")] as [Element, Element, Element];
+    intro.classList.add("slop-leaving");
+    second.classList.add("active");
+    expect(style(intro).visibility).toBe("visible");
+    expect(style(intro).zIndex).toBe("0");
+    expect(style(intro.querySelector(".reveal")!).opacity).toBe("1");
+    expect(style(second).visibility).toBe("visible");
+    expect(style(second).zIndex).toBe("1");
+    expect(style(end).visibility).toBe("hidden");
+  });
+
+  it("has keyframes for every transition the app offers", () => {
+    for (const kind of ["fade", "slide", "zoom", "wipe"]) {
+      expect(CSS).toContain(`html[data-slop-transition="${kind}"] .deck > .slide.active`);
+      expect(CSS).toContain(`html[data-slop-transition="${kind}"] .deck > .slide.slop-leaving`);
+    }
+  });
+});
+
 describe("player: shared heroes", () => {
   const html = DECK.replace("<button>", '<img data-morph="hero"><button>').replace(
     "<p>No id</p>",

@@ -10,7 +10,7 @@ use crate::comments;
 use crate::html::{
     self, find_ci, has_class, parse_tag, ADDED_ATTR, AUTOFIT_ATTR, DROPPED_ATTR, DURATION_ATTR,
     EDITOR_ATTRS, HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR, NARRATION_CLASS, NARRATION_START_ATTR,
-    SECTION_CLASS, SECTION_TITLE_ATTR, TIME_ATTR,
+    SECTION_CLASS, SECTION_TITLE_ATTR, TIME_ATTR, TRANSITIONS, TRANSITION_ATTR, TRANSITION_META,
 };
 use crate::narration;
 use crate::review;
@@ -117,6 +117,7 @@ pub fn lint(
     check_template(&mut l);
     check_slide_size(&mut l);
     check_narration_settings(&mut l);
+    check_transition(&mut l);
     check_entrances(&mut l);
     check_morphs(&mut l);
     check_assets(&mut l, asset_exists);
@@ -616,6 +617,22 @@ fn check_slides(l: &mut Linter) {
                 ),
             );
         }
+        if let Some((_, value)) = slide
+            .transition
+            .as_ref()
+            .filter(|(_, v)| html::parse_transition(v).is_none())
+        {
+            l.report(
+                "transition-value",
+                Severity::Warning,
+                at,
+                format!(
+                    "`{TRANSITION_ATTR}=\"{}\"` is ignored: use one of {}, or remove it for the deck's transition.",
+                    truncate(value, 40),
+                    TRANSITIONS.join(", ")
+                ),
+            );
+        }
     }
 }
 
@@ -843,6 +860,29 @@ fn check_narration_settings(l: &mut Linter) {
                     truncate(content, 40),
                     list(narration::LANGUAGES.iter().map(|l| l.id).collect()),
                     narration::DEFAULT_LANGUAGE
+                )
+            })
+        },
+    );
+}
+
+/// The deck's slide transition meta must name one the player knows.
+fn check_transition(l: &mut Linter) {
+    check_app_meta(
+        l,
+        TRANSITION_META,
+        [
+            "transition-invalid",
+            "transition-duplicate",
+            "transition-misplaced",
+        ],
+        |content| {
+            html::parse_transition(content).is_none().then(|| {
+                format!(
+                    "<meta name=\"{TRANSITION_META}\"> names no slide transition the player knows (\"{}\"): use one of {}. Remove it for the default, {}.",
+                    truncate(content, 40),
+                    TRANSITIONS.join(", "),
+                    html::DEFAULT_TRANSITION
                 )
             })
         },
@@ -2267,6 +2307,45 @@ mod tests {
             r#"<section class="slide" id="a"><meta name="slopslide-narration-language" content="en"></section>"#,
         );
         assert_eq!(rules(&in_body), ["narration-language-misplaced"]);
+    }
+
+    #[test]
+    fn checks_the_slide_transitions() {
+        let set = html::set_deck_transition(
+            &deck(
+                r#"<section class="slide" id="a"></section>
+<section class="slide" id="b" data-transition="zoom"></section>"#,
+            ),
+            "slide",
+        )
+        .unwrap();
+        assert_eq!(rules(&set), Vec::<&str>::new());
+        assert_eq!(rules(&html::ensure_runtime(&set)), Vec::<&str>::new());
+        for bad in ["", "Slide", "spin"] {
+            let html = set.replace("content=\"slide\"", &format!("content=\"{bad}\""));
+            assert_eq!(rules(&html), ["transition-invalid"], "{bad}");
+            let html = set.replace(
+                "data-transition=\"zoom\"",
+                &format!("data-transition=\"{bad}\""),
+            );
+            assert_eq!(rules(&html), ["transition-value"], "{bad}");
+        }
+        let issues = lint(&set.replace("\"zoom\"", "\"spin\""), |_| true, &[]);
+        assert_eq!(issues[0].slide.as_deref(), Some("b"));
+        assert!(
+            issues[0].message.contains("none, fade, slide, zoom, wipe"),
+            "{}",
+            issues[0].message
+        );
+        let twice = set.replace(
+            "<title>Talk</title>",
+            "<title>Talk</title><meta name=\"slopslide-transition\" content=\"wipe\">",
+        );
+        assert_eq!(rules(&twice), ["transition-duplicate"]);
+        let in_body = deck(
+            r#"<section class="slide" id="a"><meta name="slopslide-transition" content="wipe"></section>"#,
+        );
+        assert_eq!(rules(&in_body), ["transition-misplaced"]);
     }
 
     #[test]

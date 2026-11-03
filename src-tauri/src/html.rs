@@ -45,6 +45,8 @@ pub struct SlideSpan {
     pub duration: Option<(Range<usize>, String)>,
     /// The same for the `data-narration-start` attribute.
     pub narration_start: Option<(Range<usize>, String)>,
+    /// The same for the `data-transition` attribute.
+    pub transition: Option<(Range<usize>, String)>,
 }
 
 /// Marks a slide the player skips. The editor still shows it, muted.
@@ -66,6 +68,28 @@ pub const DURATION_ATTR: &str = "data-duration";
 /// it, when negative. Moving a slide across the audio leaves the audio where it was, so it can
 /// run into the slides around its own.
 pub const NARRATION_START_ATTR: &str = "data-narration-start";
+
+/// How the player moves on to a slide from the one before it (and back), overriding the deck's
+/// transition (see [`TRANSITION_META`]): one of [`TRANSITIONS`].
+pub const TRANSITION_ATTR: &str = "data-transition";
+
+/// The app setting naming the deck's slide transition, which every slide without its own
+/// [`TRANSITION_ATTR`] uses; [`DEFAULT_TRANSITION`] without one.
+pub const TRANSITION_META: &str = "slopslide-transition";
+
+/// The slide transitions the player knows (`assets/runtime.css`): `none` switches at once,
+/// `fade` cross-fades, `slide` pushes the old slide out to the side, `zoom` grows the new slide in
+/// as the old one fades out, and `wipe` uncovers the new slide from one side.
+pub const TRANSITIONS: &[&str] = &["none", "fade", "slide", "zoom", "wipe"];
+
+/// The transition of a deck that names none.
+pub const DEFAULT_TRANSITION: &str = "fade";
+
+/// The transition a `data-transition` value or the deck's meta names, if the player knows it.
+pub fn parse_transition(value: &str) -> Option<&'static str> {
+    let value = value.trim();
+    TRANSITIONS.iter().copied().find(|t| *t == value)
+}
 
 /// The shortest and longest `data-duration`, in seconds.
 pub const MIN_DURATION: f64 = 0.5;
@@ -205,6 +229,7 @@ pub fn find_slides(html: &str) -> Vec<SlideSpan> {
                         time: valued(TIME_ATTR),
                         duration: valued(DURATION_ATTR),
                         narration_start: valued(NARRATION_START_ATTR),
+                        transition: valued(TRANSITION_ATTR),
                     },
                     0,
                 ));
@@ -678,6 +703,20 @@ pub fn set_narration_start(html: &str, id: &str, seconds: Option<f64>) -> Result
     set_value(html, id, NARRATION_START_ATTR, value, |s| {
         &s.narration_start
     })
+}
+
+/// Sets the slide's `data-transition` to `transition` (one of [`TRANSITIONS`]); None removes it,
+/// so the slide takes the deck's transition.
+pub fn set_transition(html: &str, id: &str, transition: Option<&str>) -> Result<String, String> {
+    let value = match transition {
+        Some(name) => Some(
+            parse_transition(name)
+                .ok_or_else(|| format!("Unknown slide transition: {name}"))?
+                .to_string(),
+        ),
+        None => None,
+    };
+    set_value(html, id, TRANSITION_ATTR, value, |s| &s.transition)
 }
 
 /// Sets the slide's attribute `name`, which `current` finds on it, to `value`; None removes it.
@@ -1260,6 +1299,26 @@ pub fn narration_language(html: &str) -> Option<String> {
 /// Names the narration's language in the deck's `<meta>` (right after `<title>`).
 pub fn set_narration_language(html: &str, language: &str) -> String {
     set_app_meta(html, NARRATION_LANGUAGE_META, Some(language))
+}
+
+/// The deck's slide transition (see [`TRANSITION_META`]); [`DEFAULT_TRANSITION`] when it names
+/// none the player knows.
+pub fn transition(html: &str) -> &'static str {
+    app_meta_content(html, TRANSITION_META)
+        .and_then(|content| parse_transition(&content))
+        .unwrap_or(DEFAULT_TRANSITION)
+}
+
+/// Names the deck's slide transition in its `<meta>` (right after `<title>`); the default
+/// removes the tag.
+pub fn set_deck_transition(html: &str, transition: &str) -> Result<String, String> {
+    let name = parse_transition(transition)
+        .ok_or_else(|| format!("Unknown slide transition: {transition}"))?;
+    Ok(set_app_meta(
+        html,
+        TRANSITION_META,
+        (name != DEFAULT_TRANSITION).then_some(name),
+    ))
 }
 
 /// `html` without its slides and section markers: the deck's shell (styles, runtime).

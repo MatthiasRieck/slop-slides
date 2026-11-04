@@ -10,6 +10,7 @@ import { FileViewer } from "./components/FileViewer";
 import { Home } from "./components/Home";
 import { NarrationTimeline } from "./components/NarrationTimeline";
 import { Presenter } from "./components/Presenter";
+import { RewindDialog } from "./components/RewindDialog";
 import { Sidebar } from "./components/Sidebar";
 import { SlideImageExport } from "./components/SlideImageExport";
 import { SlideRail } from "./components/SlideRail";
@@ -29,6 +30,7 @@ export function App() {
       {workspace ? <Workbench /> : <Home />}
       {presenting && <Presenter />}
       <SlideImageExport />
+      <RewindDialog />
       <ErrorToast />
     </>
   );

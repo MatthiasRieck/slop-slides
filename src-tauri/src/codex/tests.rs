@@ -17,6 +17,7 @@ fn args(dir: &Path) -> TurnArgs<'_> {
         mode: PermissionMode::Ask,
         approvals: Arc::default(),
         extensions: Box::leak(Box::default()),
+        rewind: Default::default(),
     }
 }
 
@@ -686,6 +687,40 @@ mod process {
                 );
                 assert!(response["result"].get("decision").is_none());
                 assert!(broker.is_empty());
+            }
+        });
+    }
+
+    #[test]
+    fn reverts_the_thread_before_the_turn_and_reports_the_turn() {
+        run(async {
+            for (scenario, prompt) in [
+                (json!({}), "Make slides"),
+                (json!({"revertError": true}), "NOTE\n\nMake slides"),
+            ] {
+                let f = Fixture::new(scenario);
+                let started = Mutex::new(Vec::new());
+                let record = |turn: &str| started.lock().unwrap().push(turn.to_string());
+                let mut a = f.args();
+                a.session = Some("thread-1");
+                a.rewind = rewind::TurnRewind {
+                    cut: Some(("turn-0", "NOTE")),
+                    started: Some(&record),
+                };
+                let (_tx, mut rx) = watch::channel(false);
+                let outcome = run_turn(a, &mut rx, &|_| {}, &|_| Ok(())).await.unwrap();
+                assert!(matches!(outcome, Outcome::Done));
+                let requests = f.requests();
+                let at = |method: &str| requests.iter().position(|r| r["method"] == method);
+                let revert = at("thread/revert").expect("the thread is reverted");
+                assert_eq!(
+                    requests[revert]["params"],
+                    json!({"threadId": "thread-1", "beforeTurnId": "turn-0"})
+                );
+                let start = at("turn/start").unwrap();
+                assert!(revert < start);
+                assert_eq!(requests[start]["params"]["input"][0]["text"], prompt);
+                assert_eq!(*started.lock().unwrap(), ["turn-1"]);
             }
         });
     }

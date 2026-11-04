@@ -14,7 +14,7 @@ use crate::agent::{AgentEvent, Outcome, SYSTEM_PROMPT};
 use crate::error::{Error, Result};
 use crate::extensions::{self, Extensions};
 use crate::permissions::{Answer, Approval, Approvals, Choices, Decision, PermissionMode, Run};
-use crate::{env, mcp};
+use crate::{env, mcp, rewind};
 
 struct Server {
     _child: Child,
@@ -230,6 +230,7 @@ pub struct TurnArgs<'a> {
     pub mode: PermissionMode,
     pub approvals: Arc<Approvals>,
     pub extensions: &'a Extensions,
+    pub rewind: rewind::TurnRewind<'a>,
 }
 
 pub async fn run_turn(
@@ -323,13 +324,25 @@ async fn connected_turn(
     emit(&AgentEvent::Started {
         session_id: Some(thread.clone()),
     });
+    let mut prompt = std::borrow::Cow::Borrowed(args.prompt);
+    if let Some((point, note)) = args.rewind.cut {
+        let reverted = server
+            .request(
+                "thread/revert",
+                json!({"threadId": thread, "beforeTurnId": point}),
+            )
+            .await;
+        if reverted.is_err() {
+            prompt = rewind::with_note(note, args.prompt).into();
+        }
+    }
     let started = Instant::now();
     let response = server
         .request(
             "turn/start",
             json!({
                 "threadId": thread,
-                "input": [{"type": "text", "text": args.prompt}],
+                "input": [{"type": "text", "text": prompt}],
                 "effort": args.effort,
             }),
         )
@@ -338,6 +351,9 @@ async fn connected_turn(
         .as_str()
         .ok_or_else(|| Error::msg("Codex returned no turn ID."))?
         .to_string();
+    if let Some(started) = args.rewind.started {
+        started(&turn);
+    }
     server.active_turn = Some((thread.clone(), turn.clone()));
     let mut mapper = EventMapper::default();
     loop {

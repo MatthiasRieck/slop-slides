@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { HistoryEntry } from "../lib/api";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ask, invoke, open as openDialog, revealItemInDir, save } from "../test/tauri";
@@ -45,30 +46,40 @@ describe("slide rail toggle", () => {
 });
 
 describe("undo and redo", () => {
-  it("are off outside edit mode, and step through the edit history in it", () => {
+  it("step through the deck's history, naming the change, and are off while the agent works", () => {
     const undo = vi.fn().mockResolvedValue(undefined);
     const redo = vi.fn().mockResolvedValue(undefined);
-    const { undoSlideEdit, redoSlideEdit } = useApp.getState();
-    const entry = { slide: "intro", markup: "", after: "" };
-    useApp.setState({ undoSlideEdit: undo, redoSlideEdit: redo, slideUndo: [entry], slideRedo: [entry] });
+    const { undo: realUndo, redo: realRedo } = useApp.getState();
+    const entry = (label: string, source: HistoryEntry["source"]): HistoryEntry => ({
+      id: label,
+      label,
+      source,
+      time: 0,
+    });
+    useApp.setState({ undo, redo, history: { undo: null, redo: null, current: "v1" } });
     try {
       render(<TopBar />);
       const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
       expect(button("Undo").disabled).toBe(true);
       expect(button("Redo").disabled).toBe(true);
-      expect(button("Undo").title).toContain("in edit mode");
+      expect(button("Undo").title).toBe("Nothing to undo");
 
-      act(() => useApp.setState({ editing: true }));
-      expect(button("Undo").disabled).toBe(false);
+      act(() =>
+        useApp.setState({
+          history: { undo: entry("Bigger title", "chat"), redo: entry("Move slides", "rail"), current: "v2" },
+        }),
+      );
+      expect(button("Undo").title).toBe("Undo chat: “Bigger title” (⌘Z)");
+      expect(button("Redo").title).toBe("Redo “Move slides” (⇧⌘Z)");
       fireEvent.click(button("Undo"));
       fireEvent.click(button("Redo"));
       expect([undo, redo].map((f) => f.mock.calls.length)).toEqual([1, 1]);
 
-      act(() => useApp.setState({ slideUndo: [], slideRedo: [] }));
+      act(() => useApp.setState({ running: true }));
       expect(button("Undo").disabled).toBe(true);
-      expect(button("Redo").disabled).toBe(true);
+      expect(button("Undo").title).toContain("once the agent is done");
     } finally {
-      useApp.setState({ undoSlideEdit, redoSlideEdit, slideUndo: [], slideRedo: [] });
+      useApp.setState({ undo: realUndo, redo: realRedo, history: null, running: false });
     }
   });
 });

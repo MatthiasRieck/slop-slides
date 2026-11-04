@@ -407,7 +407,7 @@ describe("picking several slides", () => {
   const picked = () => useApp.getState().railSelected;
   const bulk = () => within(screen.getByRole("toolbar", { name: "Selected slides" }));
 
-  beforeEach(() => useApp.setState({ deck: deck(), selected: "a", railSelected: [], deckUndo: [], deckRedo: [] }));
+  beforeEach(() => useApp.setState({ deck: deck(), selected: "a", railSelected: [] }));
   afterEach(() => useApp.getState().clearSearch());
 
   it("⌘-click adds and removes slides, and the stage follows the last one added", () => {
@@ -460,8 +460,9 @@ describe("picking several slides", () => {
     render(<SlideRail />);
     expect(bulk().getByTitle("Delete slides (not the 1 locked)")).toBeTruthy();
     await act(async () => fireEvent.click(bulk().getByTitle(/^Delete slides/)));
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith("delete_slides", { id: DECK.id, slides: ["a", "c"] });
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === "delete_slides")).toEqual([
+      ["delete_slides", { id: DECK.id, slides: ["a", "c"] }],
+    ]);
     expect(useApp.getState().selected).toBe("d");
     expect(picked()).toEqual([]);
   });
@@ -507,19 +508,6 @@ describe("picking several slides", () => {
     await act(async () => fireEvent.click(bulk().getByTitle("Move up (⌘↑)")));
     expect(invoke).toHaveBeenCalledWith("reorder_slides", { id: DECK.id, slides: ["b", "c", "a", "d"] });
     expect(picked()).toEqual(["b", "c"]);
-  });
-
-  it("can undo and redo from the rail once something changed", async () => {
-    invoke.mockResolvedValue(edited(deck()));
-    render(<SlideRail />);
-    expect(screen.queryByTitle(/^Undo the last/)).toBeNull();
-    await act(async () => fireEvent.click(item(0).getByTitle("Hide slide")));
-    invoke.mockResolvedValue(deck());
-    await act(async () => fireEvent.click(screen.getByTitle(/^Undo the last/)));
-    expect(invoke).toHaveBeenLastCalledWith("save_deck_source", { id: DECK.id, source: "<old>", base: "<new>" });
-    expect((screen.getByTitle(/^Undo the last/) as HTMLButtonElement).disabled).toBe(true);
-    await act(async () => fireEvent.click(screen.getByTitle(/^Redo the slide/)));
-    expect(invoke).toHaveBeenLastCalledWith("save_deck_source", { id: DECK.id, source: "<new>", base: "<old>" });
   });
 });
 

@@ -464,10 +464,10 @@ function useChangesKeyboard() {
     const onKey = (event: KeyboardEvent) => {
       if (useApp.getState().presenting || event.altKey) return;
       if ((event.target as Element | null)?.closest?.("input, textarea, [contenteditable], [role=slider]")) return;
-      // A restore is a slide list change: the same keys take it back as anywhere else.
+      // A restore is a change to the deck: the same keys take it back as anywhere else.
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
-        void (event.shiftKey ? useApp.getState().redoDeckEdit() : useApp.getState().undoDeckEdit());
+        void (event.shiftKey ? useApp.getState().redo() : useApp.getState().undo());
         return;
       }
       if (event.metaKey || event.ctrlKey) return;

@@ -43,7 +43,6 @@ pub const HOME_DIR: &str = ".slopslides";
 pub const DECK_FILE: &str = "deck.html";
 const DECK_TEMPLATE: &str = include_str!("../assets/deck-template.html");
 const BLANK_SLIDE: &str = include_str!("../assets/blank-slide.html");
-const SNAPSHOTS_KEPT: usize = 30;
 const SKETCHES_KEPT: usize = 30;
 /// The locked slides as they were when the agent's turn started (see [`guard_locked`]).
 const LOCKS_FILE: &str = "locked.json";
@@ -174,7 +173,7 @@ fn write_html(file: &Path, html: &str) -> Result<()> {
     atomic_write(file, html.as_bytes())
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4().simple()));
     fs::write(&tmp, bytes)?;
     fs::rename(&tmp, path)?;
@@ -322,30 +321,6 @@ pub fn load(file: &Path) -> Result<Deck> {
             .collect(),
         slides,
     })
-}
-
-/// Saves a copy of the deck file under the session's `snapshots/`, keeping the newest few.
-pub fn snapshot(file: &Path, session: &Path) -> Result<()> {
-    let snapshots = snapshot_dir(file, session)?;
-    fs::create_dir_all(&snapshots)?;
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    fs::copy(
-        file,
-        snapshots.join(format!("{stamp}-{}.html", uuid::Uuid::new_v4().simple())),
-    )?;
-    prune_oldest(&snapshots, SNAPSHOTS_KEPT)
-}
-
-/// Per-file history prevents decks in the same workspace from overwriting each other.
-fn snapshot_dir(file: &Path, session: &Path) -> Result<PathBuf> {
-    let base = session.join("snapshots");
-    match sessions::workspace_of(session) {
-        Some(root) => Ok(base.join(guard_key(file, &root)?)),
-        None => Ok(base), // Legacy sessions remain readable.
-    }
 }
 
 fn guard_key(file: &Path, root: &Path) -> Result<String> {
@@ -745,7 +720,7 @@ pub fn release_guard(file: &Path, session: &Path) -> Result<Vec<String>> {
     let (mut restored, mut ids) = html::restore_locked(&source, &guard);
     if !html::changed_locked(&restored, &guard).is_empty() {
         // A removed or broken slide container cannot host the missing locked slides.
-        // Rebuild their container; the snapshot keeps the complete pre-turn deck.
+        // Rebuild their container; the deck's history keeps the complete pre-turn deck.
         (restored, ids) = html::restore_locked(
             "<html><body><main class=\"deck\"></main></body></html>",
             &guard,
@@ -774,12 +749,11 @@ pub fn delete_section(file: &Path, index: usize) -> Result<Deck> {
 }
 
 /// Deletes `slides` along with their review marks and comments, all in one write; none if any is locked.
-pub fn delete_slides(file: &Path, session: &Path, slides: &[String]) -> Result<RailEdit> {
+pub fn delete_slides(file: &Path, slides: &[String]) -> Result<RailEdit> {
     let source = read_html(file)?;
     for slide in slides {
         ensure_unlocked(&source, slide).map_err(Error::Message)?;
     }
-    snapshot(file, session)?;
     rail_edit(file, |s| {
         let mut out = s.to_string();
         for slide in slides {
@@ -791,16 +765,10 @@ pub fn delete_slides(file: &Path, session: &Path, slides: &[String]) -> Result<R
 
 /// Writes `source` over the deck, as a change that can be undone. Locked `slides` refuse it, and
 /// review marks and comments of slides that went with it are dropped.
-pub fn restore(
-    file: &Path,
-    session: &Path,
-    slide: Option<&str>,
-    source: String,
-) -> Result<RailEdit> {
+pub fn restore(file: &Path, slide: Option<&str>, source: String) -> Result<RailEdit> {
     if let Some(slide) = slide {
         ensure_unlocked(&read_html(file)?, slide).map_err(Error::Message)?;
     }
-    snapshot(file, session)?;
     rail_edit(file, |_| {
         Ok((prune_review(&source).unwrap_or(source), Vec::new()))
     })
@@ -809,13 +777,7 @@ pub fn restore(
 /// Replaces one slide with markup edited on the stage. `base` is the slide's hash the edit
 /// started from; the save is refused when the slide has changed since. Returns the slide's
 /// previous markup, so the edit can be undone by saving it back.
-pub fn update_slide(
-    file: &Path,
-    session: &Path,
-    slide: &str,
-    markup: &str,
-    base: &str,
-) -> Result<(Deck, String)> {
+pub fn update_slide(file: &Path, slide: &str, markup: &str, base: &str) -> Result<(Deck, String)> {
     let source = read_html(file)?;
     let current = html::find_slides(&source)
         .into_iter()
@@ -828,8 +790,32 @@ pub fn update_slide(
             "The slide changed while you were editing it; your last change was not saved.",
         ));
     }
-    snapshot(file, session)?;
     edit(file, |s| html::replace_slide(s, slide, markup))
+}
+
+/// Puts `slides` back as they are in `version`, an earlier version of the deck, all in one
+/// write. Slides it does not have, or the deck no longer has, are left alone; none if any of
+/// them is locked.
+pub fn restore_slides(file: &Path, version: &str, slides: &[String]) -> Result<Deck> {
+    let old = html::find_slides(version);
+    Ok(edit(file, |source| {
+        let mut out = source.to_string();
+        for slide in slides {
+            let Some(span) = old.iter().find(|s| s.id.as_deref() == Some(slide.as_str())) else {
+                continue;
+            };
+            if !html::find_slides(&out)
+                .iter()
+                .any(|s| s.id.as_deref() == Some(slide.as_str()))
+            {
+                continue;
+            }
+            ensure_unlocked(&out, slide)?;
+            out = html::replace_slide(&out, slide, &version[span.range.clone()])?.0;
+        }
+        Ok((out, ()))
+    })?
+    .0)
 }
 
 /// What [`replace_text`] did, with the deck's source before and after, so it can be undone by
@@ -852,7 +838,6 @@ pub fn find_text(file: &Path, query: &str, options: find::Options) -> Result<Vec
 /// slides are left alone. The file is only written when something changed.
 pub fn replace_text(
     file: &Path,
-    session: &Path,
     query: &str,
     replacement: &str,
     options: find::Options,
@@ -861,7 +846,6 @@ pub fn replace_text(
     let previous = read_html(file)?;
     let replaced = find::replace(&previous, query, replacement, options, only);
     if replaced.count > 0 {
-        snapshot(file, session)?;
         write_html(file, &replaced.html)?;
     }
     Ok(ReplacedText {
@@ -879,7 +863,6 @@ pub fn replace_text(
 /// refused so neither side's work is silently lost.
 pub fn save_source(
     file: &Path,
-    session: &Path,
     source: &str,
     base: Option<&str>,
     normalize_after: bool,
@@ -902,7 +885,6 @@ pub fn save_source(
             changed.join(", ")
         )));
     }
-    snapshot(file, session)?;
     write_html(file, source)?;
     if normalize_after {
         normalize(file)?;
@@ -1280,15 +1262,6 @@ mod tests {
         fn session(&self) -> PathBuf {
             PathBuf::from(format!("{}-session", self.0.display()))
         }
-        fn snapshots(&self) -> Vec<String> {
-            let dir = self.session().join("snapshots");
-            let Ok(entries) = fs::read_dir(dir) else {
-                return Vec::new();
-            };
-            entries
-                .map(|e| fs::read_to_string(e.unwrap().path()).unwrap())
-                .collect()
-        }
     }
 
     impl Drop for TempDeck {
@@ -1304,8 +1277,7 @@ mod tests {
     #[test]
     fn saves_source_when_base_matches() {
         let deck = TempDeck::new(ORIGINAL);
-        let saved =
-            save_source(&deck.file(), &deck.session(), EDITED, Some(ORIGINAL), false).unwrap();
+        let saved = save_source(&deck.file(), EDITED, Some(ORIGINAL), false).unwrap();
         assert_eq!(deck.html(), EDITED);
         let ids: Vec<_> = saved.slides.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, ["a", "b"]);
@@ -1313,40 +1285,31 @@ mod tests {
     }
 
     #[test]
-    fn save_snapshots_the_previous_version() {
-        let deck = TempDeck::new(ORIGINAL);
-        save_source(&deck.file(), &deck.session(), EDITED, Some(ORIGINAL), false).unwrap();
-        assert_eq!(deck.snapshots(), [ORIGINAL]);
-    }
-
-    #[test]
     fn save_refuses_when_file_changed_since_base() {
         let deck = TempDeck::new(ORIGINAL);
         let agent_version = ORIGINAL.replace(">A<", ">Agent<");
         fs::write(deck.0.join(DECK_FILE), &agent_version).unwrap();
-        let err =
-            save_source(&deck.file(), &deck.session(), EDITED, Some(ORIGINAL), false).unwrap_err();
+        let err = save_source(&deck.file(), EDITED, Some(ORIGINAL), false).unwrap_err();
         assert!(err.to_string().contains("changed on disk"), "{err}");
         assert_eq!(
             deck.html(),
             agent_version,
             "the agent's version must survive"
         );
-        assert!(deck.snapshots().is_empty());
     }
 
     #[test]
     fn save_without_base_overwrites() {
         let deck = TempDeck::new(ORIGINAL);
         fs::write(deck.0.join(DECK_FILE), "<html>agent</html>").unwrap();
-        save_source(&deck.file(), &deck.session(), EDITED, None, false).unwrap();
+        save_source(&deck.file(), EDITED, None, false).unwrap();
         assert_eq!(deck.html(), EDITED);
     }
 
     #[test]
     fn save_accepts_base_with_different_line_endings() {
         let deck = TempDeck::new(&ORIGINAL.replace('\n', "\r\n"));
-        save_source(&deck.file(), &deck.session(), EDITED, Some(ORIGINAL), false).unwrap();
+        save_source(&deck.file(), EDITED, Some(ORIGINAL), false).unwrap();
         assert_eq!(deck.html(), EDITED);
     }
 
@@ -1354,8 +1317,7 @@ mod tests {
     fn save_normalizes_when_asked() {
         let deck = TempDeck::new(ORIGINAL);
         let no_id = EDITED.replace(" id=\"b\"", "");
-        let saved =
-            save_source(&deck.file(), &deck.session(), &no_id, Some(ORIGINAL), true).unwrap();
+        let saved = save_source(&deck.file(), &no_id, Some(ORIGINAL), true).unwrap();
         let html = deck.html();
         assert!(html.contains("slopslide:runtime-js"), "runtime installed");
         assert!(
@@ -1369,7 +1331,7 @@ mod tests {
     fn save_leaves_markup_alone_without_normalizing() {
         let deck = TempDeck::new(ORIGINAL);
         let no_id = EDITED.replace(" id=\"b\"", "");
-        let saved = save_source(&deck.file(), &deck.session(), &no_id, None, false).unwrap();
+        let saved = save_source(&deck.file(), &no_id, None, false).unwrap();
         assert_eq!(deck.html(), no_id);
         assert_eq!(
             saved.slides[1].id, "#2",
@@ -1385,8 +1347,7 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].slide, "a");
 
-        let done =
-            replace_text(&deck.file(), &deck.session(), "A!", "Alpha", options, None).unwrap();
+        let done = replace_text(&deck.file(), "A!", "Alpha", options, None).unwrap();
         assert_eq!(
             (done.count, done.slides.clone()),
             (1, vec!["a".to_string()])
@@ -1394,22 +1355,13 @@ mod tests {
         assert_eq!(done.previous, EDITED);
         assert_eq!(deck.html(), done.source);
         assert!(deck.html().contains(">Alpha</section>"));
-        assert_eq!(deck.snapshots(), [EDITED]);
 
         // Nothing found: the file is left alone.
-        let none = replace_text(&deck.file(), &deck.session(), "zzz", "x", options, None).unwrap();
+        let none = replace_text(&deck.file(), "zzz", "x", options, None).unwrap();
         assert_eq!(none.count, 0);
-        assert_eq!(deck.snapshots().len(), 1);
 
         // Undo: the previous source saved back over this one.
-        save_source(
-            &deck.file(),
-            &deck.session(),
-            &done.previous,
-            Some(&done.source),
-            false,
-        )
-        .unwrap();
+        save_source(&deck.file(), &done.previous, Some(&done.source), false).unwrap();
         assert_eq!(deck.html(), EDITED);
     }
 
@@ -1418,24 +1370,16 @@ mod tests {
         let deck = TempDeck::new(EDITED);
         let base = load(&deck.file()).unwrap().slides[0].hash.clone();
         let markup = "<section class=\"slide\" id=\"a\"><p data-moved=\"\" style=\"translate: 10px 0px\">A!</p></section>";
-        let (saved, previous) =
-            update_slide(&deck.file(), &deck.session(), "a", markup, &base).unwrap();
+        let (saved, previous) = update_slide(&deck.file(), "a", markup, &base).unwrap();
         assert_eq!(previous, "<section class=\"slide\" id=\"a\">A!</section>");
         assert_eq!(deck.html(), EDITED.replace(&previous, markup));
-        assert_eq!(deck.snapshots(), [EDITED]);
         let moved: Vec<_> = saved.slides.iter().map(|s| s.moved).collect();
         assert_eq!(moved, [true, false]);
         assert_ne!(saved.slides[0].hash, base);
 
         // Undo: save the previous markup back on top of the new version.
-        let (restored, _) = update_slide(
-            &deck.file(),
-            &deck.session(),
-            "a",
-            &previous,
-            &saved.slides[0].hash,
-        )
-        .unwrap();
+        let (restored, _) =
+            update_slide(&deck.file(), "a", &previous, &saved.slides[0].hash).unwrap();
         assert_eq!(deck.html(), EDITED);
         assert_eq!(restored.slides[0].hash, base);
     }
@@ -1444,15 +1388,14 @@ mod tests {
     fn update_slide_refuses_when_the_slide_changed_since_base() {
         let deck = TempDeck::new(EDITED);
         let markup = "<section class=\"slide\" id=\"a\">mine</section>";
-        let err = update_slide(&deck.file(), &deck.session(), "a", markup, "stale").unwrap_err();
+        let err = update_slide(&deck.file(), "a", markup, "stale").unwrap_err();
         assert!(err.to_string().contains("changed"), "{err}");
         assert_eq!(deck.html(), EDITED);
-        assert!(deck.snapshots().is_empty());
 
         let base = load(&deck.file()).unwrap().slides[0].hash.clone();
-        assert!(update_slide(&deck.file(), &deck.session(), "zz", markup, &base).is_err());
+        assert!(update_slide(&deck.file(), "zz", markup, &base).is_err());
         let other = "<section class=\"slide\" id=\"b\">mine</section>";
-        assert!(update_slide(&deck.file(), &deck.session(), "a", other, &base).is_err());
+        assert!(update_slide(&deck.file(), "a", other, &base).is_err());
         assert_eq!(deck.html(), EDITED);
     }
 
@@ -1646,58 +1589,49 @@ mod tests {
         let deck = TempDeck::new(LOCKED);
         let base = load(&deck.file()).unwrap().slides[0].hash.clone();
         let markup = "<section class=\"slide\" id=\"a\" data-locked>mine</section>";
-        let err = update_slide(&deck.file(), &deck.session(), "a", markup, &base).unwrap_err();
+        let err = update_slide(&deck.file(), "a", markup, &base).unwrap_err();
         assert!(err.to_string().contains("locked"), "{err}");
-        let err = delete_slides(&deck.file(), &deck.session(), &ids(&["a"])).unwrap_err();
+        let err = delete_slides(&deck.file(), &ids(&["a"])).unwrap_err();
         assert!(err.to_string().contains("locked"), "{err}");
         assert_eq!(deck.html(), LOCKED);
-        assert!(deck.snapshots().is_empty());
 
         // Other slides, hiding, and moving it stay open.
         let base = load(&deck.file()).unwrap().slides[1].hash.clone();
         let other = "<section class=\"slide\" id=\"b\">B!</section>";
-        update_slide(&deck.file(), &deck.session(), "b", other, &base).unwrap();
+        update_slide(&deck.file(), "b", other, &base).unwrap();
         set_slides_hidden(&deck.file(), Some(&deck.session()), &ids(&["a"]), true).unwrap();
         let moved = reorder(&deck.file(), vec!["b".into(), "a".into()]).unwrap();
         assert_eq!(slide_ids(&moved.deck), ["b", "a"]);
-        delete_slides(&deck.file(), &deck.session(), &ids(&["b"])).unwrap();
+        delete_slides(&deck.file(), &ids(&["b"])).unwrap();
     }
 
     #[test]
     fn source_edits_cannot_change_a_locked_slide() {
         let deck = TempDeck::new(LOCKED);
         let changed = LOCKED.replace(">A<", ">mine<");
-        let err =
-            save_source(&deck.file(), &deck.session(), &changed, Some(LOCKED), false).unwrap_err();
+        let err = save_source(&deck.file(), &changed, Some(LOCKED), false).unwrap_err();
         assert!(
             err.to_string()
                 .contains("Locked slides cannot be changed: a"),
             "{err}"
         );
         let unlocked = LOCKED.replace(" data-locked", "");
-        assert!(save_source(
-            &deck.file(),
-            &deck.session(),
-            &unlocked,
-            Some(LOCKED),
-            false
-        )
-        .is_err());
+        assert!(save_source(&deck.file(), &unlocked, Some(LOCKED), false).is_err());
         assert_eq!(deck.html(), LOCKED);
 
         // Changing the rest of the deck, or locking another slide, is fine.
         let other = LOCKED
             .replace(">B<", ">B!<")
             .replace("id=\"b\"", "id=\"b\" data-locked");
-        save_source(&deck.file(), &deck.session(), &other, Some(LOCKED), false).unwrap();
+        save_source(&deck.file(), &other, Some(LOCKED), false).unwrap();
         assert_eq!(deck.html(), other);
         let crlf = other.replace('\n', "\r\n").replace(">B!<", ">B<");
         assert!(
-            save_source(&deck.file(), &deck.session(), &crlf, Some(&other), false).is_err(),
+            save_source(&deck.file(), &crlf, Some(&other), false).is_err(),
             "line endings alone are not a change, the text is"
         );
         let crlf = other.replace('\n', "\r\n");
-        save_source(&deck.file(), &deck.session(), &crlf, Some(&other), false).unwrap();
+        save_source(&deck.file(), &crlf, Some(&other), false).unwrap();
     }
 
     #[test]
@@ -1776,7 +1710,7 @@ mod tests {
     fn save_reports_missing_deck() {
         let deck = TempDeck::new(ORIGINAL);
         fs::remove_file(deck.0.join(DECK_FILE)).unwrap();
-        assert!(save_source(&deck.file(), &deck.session(), EDITED, Some(ORIGINAL), false).is_err());
+        assert!(save_source(&deck.file(), EDITED, Some(ORIGINAL), false).is_err());
         assert!(!deck.0.join(DECK_FILE).exists());
     }
 
@@ -2004,34 +1938,6 @@ mod tests {
     }
 
     #[test]
-    fn snapshots_keep_only_the_newest() {
-        let deck = TempDeck::new(ORIGINAL);
-        let snapshots = deck.session().join("snapshots");
-        fs::create_dir_all(&snapshots).unwrap();
-        // Older snapshots, named by timestamp like real ones.
-        for n in 0..SNAPSHOTS_KEPT + 5 {
-            fs::write(
-                snapshots.join(format!("{}.html", 1_000_000_000_000u64 + n as u64)),
-                "old",
-            )
-            .unwrap();
-        }
-        snapshot(&deck.file(), &deck.session()).unwrap();
-        let mut names: Vec<_> = fs::read_dir(&snapshots)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        assert_eq!(names.len(), SNAPSHOTS_KEPT);
-        assert!(
-            !names.contains(&"1000000000000.html".to_string()),
-            "oldest pruned"
-        );
-        let newest = snapshots.join(names.last().unwrap());
-        assert_eq!(fs::read_to_string(newest).unwrap(), ORIGINAL);
-    }
-
-    #[test]
     fn save_sketch_writes_a_png_and_prunes_old_ones() {
         let deck = TempDeck::new(ORIGINAL);
         let sketches = deck.session().join("sketches");
@@ -2184,7 +2090,7 @@ mod tests {
     fn deleting_a_slide_drops_its_comments() {
         let deck = TempDeck::new(THREE);
         save_comments(&deck.file(), &notes(&["a", "b"])).unwrap();
-        let deleted = delete_slides(&deck.file(), &deck.session(), &ids(&["b"])).unwrap();
+        let deleted = delete_slides(&deck.file(), &ids(&["b"])).unwrap();
         assert_eq!(deleted.deck.comments, notes(&["a"]));
         assert_eq!(load(&deck.file()).unwrap().comments, notes(&["a"]));
     }
@@ -2249,13 +2155,6 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_fails_without_a_deck_file() {
-        let deck = TempDeck::new(ORIGINAL);
-        fs::remove_file(deck.0.join(DECK_FILE)).unwrap();
-        assert!(snapshot(&deck.file(), &deck.session()).is_err());
-    }
-
-    #[test]
     fn rename_trims_and_escapes() {
         let deck = TempDeck::new(THREE);
         let renamed = rename(&deck.file(), "  R&D <2025>  ").unwrap();
@@ -2295,6 +2194,29 @@ mod tests {
     }
 
     #[test]
+    fn restores_slides_from_an_earlier_version() {
+        let deck = TempDeck::new(THREE);
+        let version = deck.html();
+        let edited = THREE
+            .replace(">A<", ">A edited<")
+            .replace(">B<", ">B edited<");
+        fs::write(deck.file(), &edited).unwrap();
+        let restored = restore_slides(&deck.file(), &version, &ids(&["a", "gone"])).unwrap();
+        assert!(deck.html().contains(">A</section>"));
+        assert!(
+            deck.html().contains(">B edited<"),
+            "other slides keep their edits"
+        );
+        assert_eq!(slide_ids(&restored), ["a", "b", "c"]);
+        fs::write(
+            deck.file(),
+            edited.replace("id=\"b\"", "id=\"b\" data-locked"),
+        )
+        .unwrap();
+        assert!(restore_slides(&deck.file(), &version, &ids(&["b"])).is_err());
+    }
+
+    #[test]
     fn duplicate_and_delete_slides_on_disk() {
         let deck = TempDeck::new(THREE);
         let copied = duplicate_slides(&deck.file(), &ids(&["b"])).unwrap();
@@ -2302,17 +2224,11 @@ mod tests {
         assert_eq!(slide_ids(&copied.deck), ["a", "b", "b-copy", "c"]);
         assert!(deck.html().contains("id=\"b-copy\">B</section>"));
 
-        let before_delete = deck.html();
-        let deleted = delete_slides(&deck.file(), &deck.session(), &ids(&["b"])).unwrap();
+        let deleted = delete_slides(&deck.file(), &ids(&["b"])).unwrap();
         assert_eq!(slide_ids(&deleted.deck), ["a", "b-copy", "c"]);
-        assert_eq!(
-            deck.snapshots(),
-            [before_delete],
-            "deleting keeps a snapshot to recover from"
-        );
 
         assert!(duplicate_slides(&deck.file(), &ids(&["nope"])).is_err());
-        assert!(delete_slides(&deck.file(), &deck.session(), &ids(&["nope"])).is_err());
+        assert!(delete_slides(&deck.file(), &ids(&["nope"])).is_err());
     }
 
     fn ids(slides: &[&str]) -> Vec<String> {
@@ -2335,9 +2251,8 @@ mod tests {
         let copied = duplicate_slides(&deck.file(), &ids(&["a", "c"])).unwrap();
         assert_eq!(copied.created, ["a-copy", "c-copy"]);
         assert_eq!(slide_ids(&copied.deck), ["a", "a-copy", "b", "c", "c-copy"]);
-        let deleted = delete_slides(&deck.file(), &deck.session(), &ids(&["a", "b"])).unwrap();
+        let deleted = delete_slides(&deck.file(), &ids(&["a", "b"])).unwrap();
         assert_eq!(slide_ids(&deleted.deck), ["a-copy", "c", "c-copy"]);
-        assert_eq!(deck.snapshots().len(), 1, "one delete, one snapshot");
     }
 
     #[test]
@@ -2345,13 +2260,12 @@ mod tests {
         let deck = TempDeck::new(THREE);
         save_review(&deck.file(), &marks(&["a", "b"])).unwrap();
         let before = deck.html();
-        let deleted = delete_slides(&deck.file(), &deck.session(), &ids(&["b"])).unwrap();
+        let deleted = delete_slides(&deck.file(), &ids(&["b"])).unwrap();
         assert_eq!(deleted.previous, before);
         assert_eq!(deleted.source, deck.html());
 
         let restored = save_source(
             &deck.file(),
-            &deck.session(),
             &deleted.previous,
             Some(&deleted.source),
             false,
@@ -2364,14 +2278,7 @@ mod tests {
         let moved = reorder(&deck.file(), ids(&["c", "b", "a"])).unwrap();
         set_slide_notes(&deck.file(), "a", "Changed since").unwrap();
         assert!(
-            save_source(
-                &deck.file(),
-                &deck.session(),
-                &moved.previous,
-                Some(&moved.source),
-                false
-            )
-            .is_err(),
+            save_source(&deck.file(), &moved.previous, Some(&moved.source), false).is_err(),
             "an undo refuses to overwrite what came after the edit"
         );
     }
@@ -2381,9 +2288,9 @@ mod tests {
         let deck = TempDeck::new(THREE);
         set_slide_locked(&deck.file(), None, "b", true).unwrap();
         let before = deck.html();
-        let err = delete_slides(&deck.file(), &deck.session(), &ids(&["a", "b"])).unwrap_err();
+        let err = delete_slides(&deck.file(), &ids(&["a", "b"])).unwrap_err();
         assert!(err.to_string().contains("locked"), "{err}");
-        assert!(delete_slides(&deck.file(), &deck.session(), &ids(&["a", "nope"])).is_err());
+        assert!(delete_slides(&deck.file(), &ids(&["a", "nope"])).is_err());
         assert!(set_slides_hidden(&deck.file(), None, &ids(&["a", "nope"]), true).is_err());
         assert!(duplicate_slides(&deck.file(), &ids(&["a", "nope"])).is_err());
         assert_eq!(deck.html(), before);
@@ -2431,11 +2338,11 @@ mod tests {
     fn deleting_a_slide_drops_its_review_marks() {
         let deck = TempDeck::new(THREE);
         save_review(&deck.file(), &marks(&["a", "b"])).unwrap();
-        let deleted = delete_slides(&deck.file(), &deck.session(), &ids(&["b"])).unwrap();
+        let deleted = delete_slides(&deck.file(), &ids(&["b"])).unwrap();
         assert_eq!(deleted.deck.review, marks(&["a"]));
         assert_eq!(load(&deck.file()).unwrap().review, marks(&["a"]));
 
-        delete_slides(&deck.file(), &deck.session(), &ids(&["a"])).unwrap();
+        delete_slides(&deck.file(), &ids(&["a"])).unwrap();
         assert!(
             !deck.html().contains(review::START),
             "deleting the last marked slide removes the block"
@@ -2665,34 +2572,13 @@ mod tests {
     }
 
     #[test]
-    fn workspace_assets_without_a_deck_and_per_file_snapshot_retention() {
+    fn workspace_assets_without_a_deck() {
         let deck = TempDeck::new(ORIGINAL);
         assert_eq!(
             save_asset(&deck.0, "photo.png", "aGk=").unwrap(),
             "assets/photo.png"
         );
         assert_eq!(fs::read(deck.0.join("assets/photo.png")).unwrap(), b"hi");
-        let session = crate::sessions::Sessions::new(&deck.session())
-            .start(&deck.0)
-            .unwrap();
-        let other = deck.0.join("q3.html");
-        fs::write(&other, ORIGINAL).unwrap();
-        snapshot(&other, &session).unwrap();
-        for _ in 0..SNAPSHOTS_KEPT + 2 {
-            snapshot(&deck.file(), &session).unwrap();
-        }
-        assert_eq!(
-            fs::read_dir(session.join("snapshots/deck.html"))
-                .unwrap()
-                .count(),
-            SNAPSHOTS_KEPT
-        );
-        assert_eq!(
-            fs::read_dir(session.join("snapshots/q3.html"))
-                .unwrap()
-                .count(),
-            1
-        );
     }
 
     #[test]

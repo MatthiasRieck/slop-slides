@@ -108,6 +108,14 @@ impl FakeServer {
                         reply(&message, json!({"thread":{"id":"thread-1"}}));
                     }
                 }
+                "thread/revert" => {
+                    if self.flag("revertError") {
+                        send(&json!({"id":message["id"],
+                            "error":{"code":-32000,"message":"cannot revert"}}));
+                    } else {
+                        reply(&message, json!({}));
+                    }
+                }
                 "turn/start" => self.turn(&message),
                 _ => {}
             }

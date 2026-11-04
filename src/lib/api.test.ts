@@ -86,6 +86,16 @@ const CASES = [
     "update_slide",
     { id: "talk", slide: "a", markup: "<section>", base: "h1" },
   ],
+  ["deckHistory", () => api.deckHistory("talk"), "deck_history", { id: "talk" }],
+  ["undoDeck", () => api.undoDeck("talk"), "undo_deck", { id: "talk" }],
+  ["redoDeck", () => api.redoDeck("talk"), "redo_deck", { id: "talk" }],
+  [
+    "restoreSlides",
+    () => api.restoreSlides("talk", "v1", ["a"]),
+    "restore_slides",
+    { id: "talk", since: "v1", slides: ["a"] },
+  ],
+  ["rewindChat", () => api.rewindChat("/ws", "m1", "Note"), "rewind_chat", { id: "/ws", message: "m1", note: "Note" }],
   [
     "saveDeckSource",
     () => api.saveDeckSource("talk", "<html>", "<old>"),
@@ -349,6 +359,23 @@ describe("api", () => {
         contextWindow: null,
         compact: true,
       },
+    });
+  });
+
+  it("sendMessage names the chat message its turn answers", async () => {
+    invoke.mockResolvedValue(undefined);
+    await api.sendMessage(
+      "talk",
+      "[context]…",
+      { provider: "claude", model: "m", effort: "", contextWindow: null },
+      false,
+      {
+        message: "m1",
+        label: "Bigger title",
+      },
+    );
+    expect(invoke).toHaveBeenLastCalledWith("send_message", {
+      args: expect.objectContaining({ prompt: "[context]…", message: "m1", label: "Bigger title" }),
     });
   });
 

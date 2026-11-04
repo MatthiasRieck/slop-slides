@@ -17,9 +17,9 @@ use tokio::sync::watch;
 use crate::agent::{AgentEvent, Outcome, SYSTEM_PROMPT};
 use crate::error::{Error, Result};
 use crate::extensions::{self, Extensions};
-use crate::mcp;
 use crate::permissions::{Approval, Approvals, Choices, Decision, PermissionMode};
 use crate::providers::ModelInfo;
+use crate::{mcp, rewind};
 
 const METHOD_NOT_FOUND: i64 = -32601;
 const DETACH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -241,6 +241,7 @@ pub struct TurnArgs<'a> {
     pub mode: PermissionMode,
     pub approvals: Arc<Approvals>,
     pub extensions: &'a Extensions,
+    pub rewind: rewind::TurnRewind<'a>,
 }
 
 /// The `session.create`/`session.resume` parameters. Copilot discovers no configuration of
@@ -360,13 +361,26 @@ pub async fn run_turn(
         return Ok(Outcome::Done);
     }
 
+    let mut prompt = std::borrow::Cow::Borrowed(args.prompt);
+    if let Some((point, note)) = args.rewind.cut {
+        let truncated = conn
+            .request(
+                "session.history.truncate",
+                json!({ "sessionId": session_id, "eventId": point }),
+            )
+            .await;
+        if truncated.is_err() {
+            prompt = rewind::with_note(note, args.prompt).into();
+        }
+    }
     let (run, mut answers) = args.approvals.start(args.workspace);
     emit(&AgentEvent::Thinking);
     conn.request(
         "session.send",
-        json!({ "sessionId": session_id, "prompt": args.prompt }),
+        json!({ "sessionId": session_id, "prompt": prompt }),
     )
     .await?;
+    let mut anchored = false;
 
     loop {
         let message = tokio::select! {
@@ -401,6 +415,13 @@ pub async fn run_turn(
             continue;
         }
         let event = &message["params"]["event"];
+        // The event of this turn's message, where taking the conversation back truncates it.
+        if !anchored && event["type"] == "user.message" && event["data"]["content"] == *prompt {
+            if let (Some(started), Some(id)) = (args.rewind.started, event["id"].as_str()) {
+                started(id);
+            }
+            anchored = true;
+        }
         if event["type"] == "permission.requested" {
             match permission(&event["data"], args.dir, args.mode) {
                 Some((request_id, Permission::Answer(result))) => {
@@ -758,6 +779,7 @@ mod tests {
             mode: PermissionMode::Ask,
             approvals: Arc::default(),
             extensions: &ext,
+            rewind: Default::default(),
         };
         let config = session_config(&args);
         let servers = &config["mcpServers"];
@@ -1030,6 +1052,112 @@ read()
         assert_eq!(models[0].label, "Model One");
     }
 
+    /// A stand-in server that resumes a session, truncates its history (or refuses to, with
+    /// a `refuse` file), and logs each request.
+    #[cfg(unix)]
+    #[test]
+    fn truncates_the_history_before_the_turn_and_reports_its_message() {
+        use std::sync::Mutex;
+
+        let script = r#"#!/usr/bin/env python3
+import json, os, sys
+log = open("requests.log", "a")
+def read():
+    length = None
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line: sys.exit(0)
+        line = line.strip()
+        if not line: break
+        name, _, value = line.partition(b":")
+        if name.lower() == b"content-length": length = int(value)
+    return json.loads(sys.stdin.buffer.read(length))
+def send(message):
+    body = json.dumps(message).encode()
+    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+    sys.stdout.buffer.flush()
+def event(kind, data, id=None):
+    send({"jsonrpc": "2.0", "method": "session.event", "params": {"event": {"id": id, "type": kind, "data": data}}})
+while True:
+    request = read()
+    method = request["method"]
+    log.write(json.dumps(request) + "\n"); log.flush()
+    if method == "session.history.truncate" and os.path.exists("refuse"):
+        send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32000, "message": "no"}})
+    elif method == "session.send":
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {}})
+        event("user.message", {"content": "older"}, "e0")
+        event("user.message", {"content": request["params"]["prompt"]}, "e1")
+        event("session.idle", {})
+    else:
+        send({"jsonrpc": "2.0", "id": request["id"], "result": {}})
+"#;
+        for (refuse, prompt) in [(false, "Go"), (true, "NOTE\n\nGo")] {
+            let dir =
+                std::env::temp_dir().join(format!("slopslide-truncate-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            if refuse {
+                std::fs::write(dir.join("refuse"), "").unwrap();
+            }
+            let bin = dir.join("copilot");
+            crate::test_support::write_script(&bin, script);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let started = Mutex::new(Vec::new());
+            let record = |id: &str| started.lock().unwrap().push(id.to_string());
+            let (_tx, mut rx) = watch::channel(false);
+            let args = TurnArgs {
+                bin: &bin,
+                dir: &dir,
+                lint_server: Path::new("/app/slopslide"),
+                prompt: "Go",
+                model: None,
+                effort: None,
+                session: Some("s1"),
+                compact: false,
+                workspace: "deck-1",
+                mode: PermissionMode::Ask,
+                approvals: Arc::default(),
+                extensions: &Extensions::default(),
+                rewind: rewind::TurnRewind {
+                    cut: Some(("e-old", "NOTE")),
+                    started: Some(&record),
+                },
+            };
+            let outcome = runtime.block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(20),
+                    run_turn(args, &mut rx, &|_| {}, &|_| Ok(())),
+                )
+                .await
+                .expect("turn timed out")
+            });
+            let log = std::fs::read_to_string(dir.join("requests.log")).unwrap();
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(matches!(outcome, Ok(Outcome::Done)));
+            let requests: Vec<Value> = log
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect();
+            let at = |method: &str| requests.iter().position(|r| r["method"] == method).unwrap();
+            let truncate = at("session.history.truncate");
+            assert_eq!(
+                requests[truncate]["params"],
+                json!({"sessionId": "s1", "eventId": "e-old"})
+            );
+            let send = at("session.send");
+            assert!(truncate < send);
+            assert_eq!(requests[send]["params"]["prompt"], prompt);
+            assert_eq!(
+                *started.lock().unwrap(),
+                ["e1"],
+                "this turn's message, not an older one"
+            );
+        }
+    }
+
     /// A stand-in server whose turn asks to run a shell command and then a workspace read,
     /// logging the decisions it receives.
     #[cfg(unix)]
@@ -1104,6 +1232,7 @@ while True:
             mode: PermissionMode::Ask,
             approvals: approvals.clone(),
             extensions: &Extensions::default(),
+            rewind: Default::default(),
         };
         let outcome = runtime.block_on(async {
             tokio::time::timeout(
@@ -1190,6 +1319,7 @@ while True:
             mode: PermissionMode::Ask,
             approvals: approvals.clone(),
             extensions: &Extensions::default(),
+            rewind: Default::default(),
         };
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1304,6 +1434,7 @@ while True:
             mode: PermissionMode::Ask,
             approvals: Arc::default(),
             extensions: &Extensions::default(),
+            rewind: Default::default(),
         };
         let outcome = runtime.block_on(run_turn(
             args,

@@ -20,6 +20,7 @@ import {
   Search,
   Square,
   SquareTerminal,
+  Undo2,
   X,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -364,8 +365,13 @@ function UserBubble({ message }: { message: UserMessage }) {
         )}
       </div>
       <CopyMessage text={message.text} />
-      {(slideNumber > 0 || message.attachments.length > 0 || message.screenshot || message.element) && (
+      {(slideNumber > 0 ||
+        message.attachments.length > 0 ||
+        message.screenshot ||
+        message.element ||
+        message.reverted) && (
         <div className="flex flex-wrap justify-end gap-1 text-2xs text-muted-foreground">
+          {message.reverted && <span title="You undid what this turn changed in the deck">changes undone ·</span>}
           {slideNumber > 0 && <span>on slide {slideNumber}</span>}
           {message.sketch && <span>· with sketch</span>}
           {!!message.comments?.length && (
@@ -616,6 +622,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     textareaRef.current?.focus();
   }, [draft === ""]);
 
+  const revertNotes = useApp((s) => s.revertNotes);
   const composerFill = useApp((s) => s.composerFill);
   useEffect(() => {
     if (composerFill) {
@@ -789,7 +796,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
         >
           <span className="h-1 w-8 rounded-full bg-border group-hover:bg-muted-foreground group-focus-visible:bg-primary" />
         </div>
-        {(files.length > 0 || slideNumber > 0 || element) && (
+        {(files.length > 0 || slideNumber > 0 || element || revertNotes.length > 0) && (
           <div className="@container flex flex-wrap gap-1 px-3.5 pt-3">
             {slideNumber > 0 && (
               <button
@@ -843,6 +850,24 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
               </span>
             )}
             <ComposerComments />
+            {revertNotes.map((note) => (
+              <span
+                key={note.message}
+                title={`The agent is told that you undid what its turn for ${note.label} changed in the deck`}
+                className="flex h-5 min-w-0 items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 text-xs text-primary"
+              >
+                <Undo2 className="size-3 shrink-0" />
+                <span className="truncate">Undone: {note.label}</span>
+                <button
+                  type="button"
+                  aria-label="Don't tell the agent"
+                  onClick={() => useApp.getState().dropRevertNote(note.message)}
+                  className="hover:text-foreground"
+                >
+                  <X className="size-3" />
+                </button>
+              </span>
+            ))}
             {files.map((a) => (
               <span
                 key={a}

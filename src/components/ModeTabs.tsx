@@ -63,7 +63,7 @@ export function ModeTabs() {
   const modes = MODES.filter(({ id }) => id !== "git" || inRepository);
 
   return (
-    <div role="tablist" aria-label="Mode" className="flex items-center gap-0.5 rounded-lg border bg-muted p-1">
+    <div role="tablist" aria-label="Mode" className="flex items-center gap-1 self-stretch">
       {modes.map(({ id, label, icon: Icon }) => (
         <button
           key={id}
@@ -74,16 +74,24 @@ export function ModeTabs() {
           disabled={(needsSlide(id) && !hasSlide) || (id === "edit" && locked)}
           onClick={() => useApp.getState().setMode(id)}
           className={cn(
-            "flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
-            mode === id && "bg-background text-foreground shadow-sm ring-1 ring-border",
+            "flex min-w-14 flex-col items-center justify-center gap-0.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
+            mode === id && "text-primary hover:text-primary",
           )}
         >
-          <Icon className="size-4" />
+          <span className="relative">
+            <Icon className="size-5" strokeWidth={1.75} />
+            {id === "narration" && narrated && (
+              <span
+                data-testid="has-narration"
+                className="absolute -top-0.5 -right-1 size-1.5 rounded-full bg-primary"
+                aria-hidden
+              />
+            )}
+            {id === "code" && codeDirty && (
+              <span title="Unsaved changes" className="absolute -top-0.5 -right-1 size-1.5 rounded-full bg-primary" />
+            )}
+          </span>
           {label}
-          {id === "narration" && narrated && (
-            <span data-testid="has-narration" className="size-1.5 rounded-full bg-primary" aria-hidden />
-          )}
-          {id === "code" && codeDirty && <span title="Unsaved changes" className="size-1.5 rounded-full bg-primary" />}
         </button>
       ))}
     </div>

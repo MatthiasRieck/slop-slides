@@ -138,8 +138,9 @@ fn take_pending_folder(window: Window, pending: State<windows::PendingFolders>) 
         .map(|root| root.to_string_lossy().into_owned())
 }
 
-/// Opens another app window on the start screen.
-#[tauri::command]
+/// Opens another app window on the start screen. Off the main thread: building a window from
+/// a command on it deadlocks on Windows, leaving a blank window that cannot be closed.
+#[tauri::command(async)]
 fn new_window(app: AppHandle) -> Result<()> {
     windows::open_new(&app)
 }
@@ -1220,5 +1221,34 @@ mod window_config_tests {
         assert_eq!(position["y"].as_f64(), Some((56.0 - 14.0) / 2.0 + 9.0));
         // Leaves room before the `pl-[84px]` content padding.
         assert!(position["x"].as_f64().unwrap() + 54.0 < 84.0);
+    }
+}
+
+#[cfg(test)]
+mod command_thread_tests {
+    /// The attribute on the command `name` in this file.
+    fn command_attribute(name: &str) -> &'static str {
+        let source = include_str!("lib.rs");
+        let at = source
+            .find(&format!("\nfn {name}("))
+            .unwrap_or_else(|| panic!("no command {name}"));
+        source[..at]
+            .lines()
+            .rev()
+            .find(|line| line.starts_with("#[tauri::command"))
+            .unwrap()
+    }
+
+    #[test]
+    fn commands_that_open_windows_run_off_the_main_thread() {
+        // A synchronous command runs on the main thread, where building a window deadlocks on
+        // Windows: Ctrl+N left a blank window that could not be closed.
+        for name in ["new_window", "present_on"] {
+            assert_eq!(
+                command_attribute(name),
+                "#[tauri::command(async)]",
+                "{name}"
+            );
+        }
     }
 }

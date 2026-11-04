@@ -58,6 +58,16 @@ describe("ModeTabs", () => {
     expect(selected()).toEqual(["View"]);
   });
 
+  it("shows each mode as an icon over its label, highlighting the selected one", () => {
+    render(<ModeTabs />);
+    fireEvent.click(tab("Settings"));
+    for (const t of screen.getAllByRole("tab")) {
+      expect(t.querySelector("svg")).not.toBeNull();
+      expect(t.className).toContain("flex-col");
+      expect(t.classList.contains("text-primary")).toBe(t.textContent === "Settings");
+    }
+  });
+
   it("leaves edit mode when switching to another mode", () => {
     render(<ModeTabs />);
     fireEvent.click(tab("Edit"));

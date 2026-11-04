@@ -44,6 +44,24 @@ const MARKS: Record<Exclude<SlideStatus, "unchanged">, Mark> = {
 /** What the slides share (styles, fonts, scripts), which is no slide's change. */
 const STYLES: Mark = { label: "Styles", icon: Paintbrush, color: MARKS.modified.color, ring: MARKS.modified.ring };
 
+/** A kind of change in the header, with how many slides have it. Every badge has the same height and icon box. */
+function CountBadge(props: { mark: Mark; title: string; count?: number }) {
+  const { icon: Icon, color } = props.mark;
+  return (
+    <span
+      data-testid="count-badge"
+      title={props.title}
+      className={cn(
+        "flex h-4 shrink-0 items-center gap-0.5 rounded px-1 text-2xs font-medium leading-none tabular-nums",
+        color,
+      )}
+    >
+      <Icon className="size-3 shrink-0" />
+      {props.count}
+    </span>
+  );
+}
+
 /** The marks of a row: a slide can have changed and moved. */
 function marksOf(row: SlideChange): Mark[] {
   const marks = row.status === "unchanged" ? [] : [MARKS[row.status]];
@@ -100,25 +118,16 @@ export function ChangesRail() {
       <div className="flex h-10 shrink-0 items-center justify-between gap-2 px-3">
         <div className="flex min-w-0 items-center gap-1">
           {counts.length === 0 && !stylesChanged && <SectionLabel className="truncate">Changes</SectionLabel>}
-          {stylesChanged && (
-            <span
-              title="The shared styles changed"
-              className={cn("flex items-center gap-0.5 rounded px-1 text-2xs font-medium", STYLES.color)}
-            >
-              <STYLES.icon className="size-2.5" />
-            </span>
-          )}
+          {stylesChanged && <CountBadge mark={STYLES} title="The shared styles changed" />}
           {counts.map((status) => {
-            const { icon: Icon, color, label } = MARKS[status];
+            const mark = MARKS[status];
             return (
-              <span
+              <CountBadge
                 key={status}
-                title={`${count(status)} ${label.toLowerCase()}`}
-                className={cn("flex items-center gap-0.5 rounded px-1 text-2xs font-medium tabular-nums", color)}
-              >
-                <Icon className="size-2.5" />
-                {count(status)}
-              </span>
+                mark={mark}
+                title={`${count(status)} ${mark.label.toLowerCase()}`}
+                count={count(status)}
+              />
             );
           })}
         </div>

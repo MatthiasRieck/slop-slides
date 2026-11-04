@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ask, invoke, open as openDialog, revealItemInDir, save } from "../test/tauri";
@@ -41,6 +41,35 @@ describe("slide rail toggle", () => {
     expect(show.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(show);
     expect(useApp.getState().railOpen).toBe(true);
+  });
+});
+
+describe("undo and redo", () => {
+  it("are off outside edit mode, and step through the edit history in it", () => {
+    const undo = vi.fn().mockResolvedValue(undefined);
+    const redo = vi.fn().mockResolvedValue(undefined);
+    const { undoSlideEdit, redoSlideEdit } = useApp.getState();
+    const entry = { slide: "intro", markup: "", after: "" };
+    useApp.setState({ undoSlideEdit: undo, redoSlideEdit: redo, slideUndo: [entry], slideRedo: [entry] });
+    try {
+      render(<TopBar />);
+      const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
+      expect(button("Undo").disabled).toBe(true);
+      expect(button("Redo").disabled).toBe(true);
+      expect(button("Undo").title).toContain("in edit mode");
+
+      act(() => useApp.setState({ editing: true }));
+      expect(button("Undo").disabled).toBe(false);
+      fireEvent.click(button("Undo"));
+      fireEvent.click(button("Redo"));
+      expect([undo, redo].map((f) => f.mock.calls.length)).toEqual([1, 1]);
+
+      act(() => useApp.setState({ slideUndo: [], slideRedo: [] }));
+      expect(button("Undo").disabled).toBe(true);
+      expect(button("Redo").disabled).toBe(true);
+    } finally {
+      useApp.setState({ undoSlideEdit, redoSlideEdit, slideUndo: [], slideRedo: [] });
+    }
   });
 });
 
@@ -122,7 +151,7 @@ describe("layout", () => {
       (el) => el.getAttribute("aria-label") ?? el.getAttribute("title") ?? el.textContent,
     );
 
-  it("puts the rail and the file (close, path, reveal) first, then the modes, lint, the deck's actions and the sidebar", () => {
+  it("puts the rail and the file (close, path, reveal) first, then the modes, undo / redo, lint, the deck's actions and the sidebar", () => {
     useApp.setState({ lint: [] });
     render(<TopBar />);
     expect(order()).toEqual([
@@ -131,6 +160,8 @@ describe("layout", () => {
       "Breadcrumbs",
       "Show in folder",
       "Mode",
+      "Undo",
+      "Redo",
       "Lint OK",
       "Export",
       "Present",

@@ -2125,7 +2125,7 @@ describe("editing slides on the stage", () => {
     expect(useApp.getState().error).toContain("cannot be redone");
   });
 
-  it("discard undoes every edit of the session and leaves edit mode", async () => {
+  it("discard undoes every edit of the session and stays in edit mode", async () => {
     const useApp = await freshStore();
     const disk = slideBackend();
     useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
@@ -2134,7 +2134,35 @@ describe("editing slides on the stage", () => {
     await useApp.getState().saveSlideEdit("intro", MOVED.replace("Hello", "Hi"));
     await useApp.getState().discardSlideEdits();
     expect(disk.markup()).toBe(ORIGINAL);
-    expect(useApp.getState()).toMatchObject({ editing: false, slideUndo: [], slideRedo: [], error: null });
+    expect(useApp.getState()).toMatchObject({ editing: true, slideUndo: [], slideRedo: [], error: null });
+  });
+
+  it("discarding one slide puts only it back, keeps the others' edits and stays in edit mode", async () => {
+    const useApp = await freshStore();
+    const disk = slideBackend();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    useApp.getState().setEditing(true);
+    await useApp.getState().saveSlideEdit("intro", MOVED);
+    await useApp.getState().saveSlideEdit("intro", MOVED.replace("Hello", "Hi"));
+    const other = { slide: "outro", markup: "<section></section>", after: "outro-x" };
+    useApp.setState((s) => ({ slideUndo: [other, ...s.slideUndo], slideRedo: [other] }));
+    await useApp.getState().discardSlideEdits("intro");
+    expect(disk.markup()).toBe(ORIGINAL);
+    expect(calls("update_slide").at(-1)).toMatchObject({ slide: "intro", markup: ORIGINAL });
+    expect(useApp.getState()).toMatchObject({ editing: true, slideUndo: [other], slideRedo: [other], error: null });
+  });
+
+  it("discarding one slide refuses once it changed outside the editor", async () => {
+    const useApp = await freshStore();
+    slideBackend();
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    useApp.getState().setEditing(true);
+    await useApp.getState().saveSlideEdit("intro", MOVED);
+    useApp.getState().setDeck(deckFor(DECK_HTML, "agent"));
+    await useApp.getState().discardSlideEdits("intro");
+    expect(calls("update_slide")).toHaveLength(1);
+    expect(useApp.getState().error).toContain("cannot be discarded");
+    expect(useApp.getState().editing).toBe(true);
   });
 
   it("discard stops at an edit it cannot undo", async () => {
@@ -2147,7 +2175,7 @@ describe("editing slides on the stage", () => {
     await useApp.getState().discardSlideEdits();
     expect(calls("update_slide")).toHaveLength(1);
     expect(useApp.getState().error).toContain("cannot be undone");
-    expect(useApp.getState().editing).toBe(false);
+    expect(useApp.getState()).toMatchObject({ editing: true, slideUndo: [] });
   });
 
   it("accepting (leaving edit mode) keeps the edits, and each session starts with fresh history", async () => {

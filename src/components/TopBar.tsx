@@ -1,5 +1,14 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { FolderOpen, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, X } from "lucide-react";
+import {
+  FolderOpen,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  Redo2,
+  Undo2,
+  X,
+} from "lucide-react";
 
 import { basename, cn, isMac } from "../lib/utils";
 import { useApp } from "../store";
@@ -11,8 +20,8 @@ import { ModeTabs } from "./ModeTabs";
 /**
  * The workspace's bar. On the left, the slide rail toggle (for a deck), closing the open file (back
  * to the workspace), its path from the workspace folder with the deck's title under it, and
- * revealing it in the file manager; for a deck, its mode tabs in the middle, then lint, export and
- * present; then the sidebar toggle. The tools of each mode live above the slide (DeckToolbar, Stage).
+ * revealing it in the file manager; for a deck, its mode tabs in the middle, then undo / redo, lint,
+ * export and present; then the sidebar toggle. The tools of each mode live above the slide (DeckToolbar, Stage).
  */
 export function TopBar() {
   const workspace = useApp((s) => s.workspace);
@@ -56,6 +65,7 @@ export function TopBar() {
       <div data-tauri-drag-region className="flex items-center justify-end gap-1 self-stretch">
         {hasDeck && (
           <div className="mr-2 flex items-center gap-1">
+            <EditHistory />
             <LintStatus />
             <DeckActions />
           </div>
@@ -111,6 +121,39 @@ function RevealButton({ path }: { path: string }) {
     >
       <FolderOpen className="size-4" />
     </ToolButton>
+  );
+}
+
+/** Undo and redo; for now they step through edit mode's history, and are off outside it. */
+function EditHistory() {
+  const editing = useApp((s) => s.editing);
+  const canUndo = useApp((s) => s.editing && s.slideUndo.length > 0);
+  const canRedo = useApp((s) => s.editing && s.slideRedo.length > 0);
+  const app = useApp.getState;
+  const off = editing ? "" : " (in edit mode)";
+  return (
+    <div className="flex items-center">
+      <ToolButton
+        variant="panel"
+        size="md"
+        label="Undo"
+        title={`Undo (⌘Z)${off}`}
+        disabled={!canUndo}
+        onClick={() => void app().undoSlideEdit()}
+      >
+        <Undo2 className="size-4" />
+      </ToolButton>
+      <ToolButton
+        variant="panel"
+        size="md"
+        label="Redo"
+        title={`Redo (⇧⌘Z)${off}`}
+        disabled={!canRedo}
+        onClick={() => void app().redoSlideEdit()}
+      >
+        <Redo2 className="size-4" />
+      </ToolButton>
+    </div>
   );
 }
 

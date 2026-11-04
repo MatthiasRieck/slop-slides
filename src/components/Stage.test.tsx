@@ -768,8 +768,9 @@ describe("Stage", () => {
       act(() => useApp.getState().setMode("edit"));
       expect(sketch()).toBeNull();
       expect(edit()).not.toBeNull();
-      for (const name of ["Undo", "Redo"]) expect(screen.getByRole("button", { name })).toBeTruthy();
-      fireEvent.click(screen.getByRole("button", { name: /Accept/ }));
+      // Undo and redo live in the top bar, leaving the ribbon the row's whole width.
+      for (const name of ["Undo", "Redo"]) expect(screen.queryByRole("button", { name })).toBeNull();
+      act(() => useApp.getState().setMode("view"));
       expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "view" });
       expect(sketch()).not.toBeNull();
       expect(edit()).toBeNull();
@@ -1422,24 +1423,57 @@ describe("Stage", () => {
       });
     });
 
-    it("undo, redo, discard and accept buttons drive the edit history", () => {
-      const undo = vi.fn().mockResolvedValue(undefined);
-      const redo = vi.fn().mockResolvedValue(undefined);
+    it("floats a discard button over the slide while there are edits, which discards them all", () => {
       const discard = vi.fn().mockResolvedValue(undefined);
-      useApp.setState({ undoSlideEdit: undo, redoSlideEdit: redo, discardSlideEdits: discard });
+      useApp.setState({ discardSlideEdits: discard });
       render(<Stage />);
       toggleEditing();
-      const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
-      expect(button("Undo").disabled).toBe(true);
-      expect(button("Redo").disabled).toBe(true);
+      const discardButton = () => screen.queryByRole("button", { name: /Discard changes/ });
+      expect(discardButton()).toBeNull();
       const entry = { slide: "intro", markup: "", after: "" };
-      act(() => useApp.setState({ slideUndo: [entry], slideRedo: [entry] }));
-      fireEvent.click(button("Undo"));
-      fireEvent.click(button("Redo"));
-      fireEvent.click(screen.getByRole("button", { name: /Discard/ }));
-      expect([undo, redo, discard].map((f) => f.mock.calls.length)).toEqual([1, 1, 1]);
-      fireEvent.click(screen.getByRole("button", { name: /Accept/ }));
-      expect(useApp.getState()).toMatchObject({ editing: false, slideUndo: [], slideRedo: [] });
+      act(() => useApp.setState({ slideUndo: [entry, entry] }));
+      expect(discardButton()!.closest("[data-testid=stage-area]")).not.toBeNull();
+      fireEvent.click(discardButton()!);
+      expect(discard).toHaveBeenCalledWith();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("asks whether to discard only this slide when other slides were edited too", () => {
+      const discard = vi.fn().mockResolvedValue(undefined);
+      useApp.setState({ discardSlideEdits: discard, selected: "intro" });
+      render(<Stage />);
+      toggleEditing();
+      const intro = { slide: "intro", markup: "", after: "" };
+      const outro = { slide: "outro", markup: "", after: "" };
+      act(() => useApp.setState({ slideUndo: [outro, intro] }));
+      const open = () => fireEvent.click(screen.getByRole("button", { name: /Discard changes/ }));
+      const dialog = () => screen.queryByRole("dialog", { name: "Discard changes" });
+
+      open();
+      expect(dialog()!.textContent).toContain("1 other slide");
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(dialog()).toBeNull();
+      expect(discard).not.toHaveBeenCalled();
+
+      open();
+      fireEvent.click(screen.getByRole("button", { name: "Only this slide" }));
+      expect(discard).toHaveBeenLastCalledWith("intro");
+      expect(dialog()).toBeNull();
+
+      open();
+      fireEvent.click(screen.getByRole("button", { name: "All slides" }));
+      expect(discard).toHaveBeenLastCalledWith();
+    });
+
+    it("discards without asking when only other slides were edited", () => {
+      const discard = vi.fn().mockResolvedValue(undefined);
+      useApp.setState({ discardSlideEdits: discard, selected: "intro" });
+      render(<Stage />);
+      toggleEditing();
+      act(() => useApp.setState({ slideUndo: [{ slide: "outro", markup: "", after: "" }] }));
+      fireEvent.click(screen.getByRole("button", { name: /Discard changes/ }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(discard).toHaveBeenCalledWith();
     });
 
     it("saves the markup the editor posts for the current slide", () => {

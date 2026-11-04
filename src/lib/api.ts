@@ -9,6 +9,12 @@ import type { VideoOptions } from "./video";
 /** What a workspace file is, which decides what it opens in (see src-tauri/src/workspace.rs). */
 export type FileKind = "directory" | "deck" | "slideshow" | "webpage" | "file";
 
+/** A folder waiting to open in this window, with the deck to open in it (absolute), if any. */
+export interface PendingFolder {
+  folder: string;
+  file: string | null;
+}
+
 /** A file or folder in the open workspace. */
 export interface WorkspaceEntry {
   name: string;
@@ -385,8 +391,15 @@ export const api = {
   closePresenterView: () => invoke<void>("close_presenter_view"),
   /** Opens another app window, on the start screen; each window has a folder of its own. */
   newWindow: () => invoke<void>("new_window"),
-  /** The folder opened from Finder that is waiting to open in this window, once; null without one. */
-  takePendingFolder: () => invoke<string | null>("take_pending_folder"),
+  /**
+   * The folder opened from Finder (or a dropped deck's folder) waiting to open in this window,
+   * with the deck to open in it, once; null without one.
+   */
+  takePendingFolder: () => invoke<PendingFolder | null>("take_pending_folder"),
+  /** Opens a deck in another window, with its folder as the workspace. */
+  openDeckWindow: (path: string) => invoke<void>("open_deck_window", { path }),
+  /** What the file at an absolute path (one dropped on the window) is. */
+  fileKind: (path: string) => invoke<FileKind>("file_kind", { path }),
   /** Opens a folder: the file tree shows it and the app serves and watches its files. */
   openWorkspace: (path: string) => invoke<WorkspaceInfo>("open_workspace", { path }),
   closeWorkspace: () => invoke<void>("close_workspace"),
@@ -447,6 +460,11 @@ export const api = {
   /** Replaces `query` in the text of the deck's slides, or only of `slides`; locked slides are left alone. */
   replaceInDeck: (id: string, query: string, replacement: string, options: FindOptions, slides: string[] | null) =>
     invoke<ReplacedText>("replace_in_deck", { id, query, replacement, options, slides }),
+  /**
+   * Attaches files to the chat where they are, without copying them: returns their refs,
+   * workspace-relative inside the workspace and absolute outside it.
+   */
+  attachFiles: (paths: string[]) => invoke<string[]>("attach_files", { paths }),
   importAssets: (id: string, paths: string[]) => invoke<string[]>("import_assets", { id, paths }),
   /** Saves pasted file contents (base64) into the deck's assets; returns its `assets/…` ref. */
   saveAsset: (id: string, name: string, data: string) => invoke<string>("save_asset", { id, name, data }),

@@ -93,6 +93,9 @@ const CASES = [
     { id: "talk", source: "<html>", base: "<old>" },
   ],
   ["importAssets", () => api.importAssets("talk", ["/a.png"]), "import_assets", { id: "talk", paths: ["/a.png"] }],
+  ["attachFiles", () => api.attachFiles(["/a.png"]), "attach_files", { paths: ["/a.png"] }],
+  ["fileKind", () => api.fileKind("/talk/deck.html"), "file_kind", { path: "/talk/deck.html" }],
+  ["openDeckWindow", () => api.openDeckWindow("/talk/deck.html"), "open_deck_window", { path: "/talk/deck.html" }],
   [
     "saveAsset",
     () => api.saveAsset("talk", "shot.png", "aGk="),

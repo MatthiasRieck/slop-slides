@@ -11,12 +11,25 @@ vi.mock("./components/Stage", () => ({ Stage: () => <div data-testid="stub-stage
 vi.mock("./components/Sidebar", () => ({ Sidebar: () => <div data-testid="stub-sidebar-tabs" /> }));
 vi.mock("./components/FileViewer", () => ({ FileViewer: () => <div data-testid="stub-viewer" /> }));
 vi.mock("./components/Presenter", () => ({ Presenter: () => <div data-testid="stub-presenter" /> }));
+
+type DragDrop = { payload: DragDropPayload };
+let dragDrop: ((event: DragDrop) => void) | null = null;
+const unlistenDragDrop = vi.fn();
+vi.mock("@tauri-apps/api/webview", () => ({
+  getCurrentWebview: () => ({
+    onDragDropEvent: async (handler: (event: DragDrop) => void) => {
+      dragDrop = handler;
+      return unlistenDragDrop;
+    },
+  }),
+}));
 vi.mock("./components/CodeView", () => ({
   CodeView: ({ active }: { active: boolean }) => <div data-testid="stub-code" data-active={String(active)} />,
 }));
 
 import { invoke } from "@tauri-apps/api/core";
 import { App } from "./App";
+import { catchDrops, type DragDropPayload } from "./lib/drop";
 import { useApp } from "./store";
 import { DECK_HTML, deckFor } from "./test/fixtures";
 
@@ -156,5 +169,39 @@ describe("lint status", () => {
     act(() => void window.dispatchEvent(event));
     expect(event.defaultPrevented).toBe(true);
     expect(invoke).toHaveBeenCalledWith("new_window");
+  });
+});
+
+describe("files dropped on the window", () => {
+  const openDroppedDecks = vi.fn(async () => {});
+  beforeEach(() => {
+    dragDrop = null;
+    unlistenDragDrop.mockReset();
+    openDroppedDecks.mockClear();
+    useApp.setState({ openDroppedDecks });
+  });
+
+  it("open the decks among the files nothing where they landed took", async () => {
+    const stop = catchDrops((paths) => paths.filter((p) => !p.endsWith(".png")));
+    try {
+      render(<App />);
+      await vi.waitFor(() => expect(dragDrop).not.toBeNull());
+      const paths = ["/tmp/a.png", "/talks/q3/deck.html"];
+      act(() => dragDrop!({ payload: { type: "drop", paths, position: { x: 10, y: 10 } } }));
+      expect(openDroppedDecks).toHaveBeenCalledWith(["/talks/q3/deck.html"]);
+      openDroppedDecks.mockClear();
+      act(() => dragDrop!({ payload: { type: "drop", paths: ["/tmp/b.png"], position: { x: 10, y: 10 } } }));
+      expect(openDroppedDecks).not.toHaveBeenCalled();
+    } finally {
+      stop();
+    }
+  });
+
+  it("are listened for on the start screen too, until the app goes", async () => {
+    const { unmount } = render(<App />);
+    expect(shown("home")).toBe(true);
+    await vi.waitFor(() => expect(dragDrop).not.toBeNull());
+    unmount();
+    expect(unlistenDragDrop).toHaveBeenCalled();
   });
 });

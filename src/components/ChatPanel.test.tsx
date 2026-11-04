@@ -1,26 +1,11 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { invoke, open as openDialog } from "../test/tauri";
-
-type DragDrop = {
-  payload: { type: "enter" | "over" | "leave" | "drop"; paths?: string[]; position?: { x: number; y: number } };
-};
-let dragDrop: ((event: DragDrop) => void) | null = null;
-const unlistenDragDrop = vi.fn();
-vi.mock("@tauri-apps/api/webview", () => ({
-  getCurrentWebview: () => ({
-    onDragDropEvent: async (handler: (event: DragDrop) => void) => {
-      dragDrop = handler;
-      return unlistenDragDrop;
-    },
-  }),
-}));
-
-import { catchDrops } from "../lib/drop";
+import { catchDrops, type DragDropPayload, handleDragDrop } from "../lib/drop";
 import type { ProviderInfo } from "../lib/models";
 import { type AssistantMessage, type ChatMessage, type ChatPart, flushReviewSave, TIDY_PROMPT, useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { invoke, open as openDialog } from "../test/tauri";
 import { ChatPanel } from "./ChatPanel";
 
 const PROVIDERS: ProviderInfo[] = [
@@ -81,8 +66,6 @@ afterEach(() => flushReviewSave());
 beforeEach(() => {
   invoke.mockReset().mockResolvedValue([]);
   openDialog.mockReset();
-  unlistenDragDrop.mockReset();
-  dragDrop = null;
   send.mockClear();
   resetChat.mockClear();
   interrupt.mockClear();
@@ -818,15 +801,13 @@ describe("ChatPanel: voice input", () => {
 });
 
 describe("ChatPanel: attachments", () => {
-  it("attaches picked files and sends them with the message", async () => {
+  it("attaches picked files where they are and sends them with the message", async () => {
     openDialog.mockResolvedValue(["/Users/me/Photo.PNG", "/Users/me/data.csv"]);
     invoke.mockResolvedValue(["assets/photo.png", "assets/data.csv"]);
     render(<ChatPanel />);
     await act(async () => fireEvent.click(screen.getByTitle("Attach images or files")));
-    expect(invoke).toHaveBeenCalledWith("import_assets", {
-      id: "/decks/talk/deck.html",
-      paths: ["/Users/me/Photo.PNG", "/Users/me/data.csv"],
-    });
+    expect(invoke).toHaveBeenCalledWith("attach_files", { paths: ["/Users/me/Photo.PNG", "/Users/me/data.csv"] });
+    expect(invoke).not.toHaveBeenCalledWith("import_assets", expect.anything());
     // Images go in the fan; other files stay chips.
     expect(screen.getByAltText("photo.png")).toBeTruthy();
     expect(screen.getByText("data.csv")).toBeTruthy();
@@ -852,7 +833,7 @@ describe("ChatPanel: attachments", () => {
     invoke.mockResolvedValue(["assets/a.png"]);
     render(<ChatPanel />);
     await act(async () => fireEvent.click(screen.getByTitle("Attach images or files")));
-    expect(invoke).toHaveBeenCalledWith("import_assets", { id: "/decks/talk/deck.html", paths: ["/a.png"] });
+    expect(invoke).toHaveBeenCalledWith("attach_files", { paths: ["/a.png"] });
   });
 
   it("removes an attachment and does not list one twice", async () => {
@@ -869,72 +850,94 @@ describe("ChatPanel: attachments", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("imports files dropped on the window", async () => {
-    invoke.mockResolvedValue(["assets/drop.png"]);
-    const { container } = render(<ChatPanel />);
-    await waitFor(() => expect(dragDrop).not.toBeNull());
-    const composer = () => container.querySelector(".shadow-composer")!;
-    act(() => dragDrop!({ payload: { type: "enter" } }));
+  /** The chat panel, laid out at x 600–1000 of the window. */
+  function renderInPlace() {
+    const view = render(<ChatPanel />);
+    const panel = view.container.firstElementChild as HTMLElement;
+    panel.getBoundingClientRect = () =>
+      ({ left: 600, right: 1000, top: 0, bottom: 800, width: 400, height: 800 }) as DOMRect;
+    return { ...view, composer: () => view.container.querySelector(".shadow-composer")! };
+  }
+  const left = vi.fn();
+  const drag = (payload: DragDropPayload) => act(async () => handleDragDrop(payload, left));
+  const at = (x: number) => ({ x, y: 100 });
+
+  it("attaches files dropped on the chat where they are", async () => {
+    left.mockClear();
+    invoke.mockResolvedValue(["/Users/me/Desktop/drop.png"]);
+    const { composer } = renderInPlace();
+    await drag({ type: "enter", paths: ["/Users/me/Desktop/drop.png"], position: at(700) });
     expect(composer().className).toContain("border-primary");
-    act(() => dragDrop!({ payload: { type: "leave" } }));
+    await drag({ type: "leave" });
     expect(composer().className).not.toContain("border-primary");
-    act(() => dragDrop!({ payload: { type: "over" } }));
-    await act(async () => dragDrop!({ payload: { type: "drop", paths: ["/tmp/drop.png"] } }));
+    await drag({ type: "over", position: at(700) });
+    await drag({ type: "drop", paths: ["/Users/me/Desktop/drop.png"], position: at(700) });
     expect(composer().className).not.toContain("border-primary");
-    expect(invoke).toHaveBeenCalledWith("import_assets", { id: "/decks/talk/deck.html", paths: ["/tmp/drop.png"] });
-    expect(screen.getByAltText("drop.png")).toBeTruthy();
+    expect(invoke).toHaveBeenCalledWith("attach_files", { paths: ["/Users/me/Desktop/drop.png"] });
+    expect(invoke).not.toHaveBeenCalledWith("import_assets", expect.anything());
+    expect(left).not.toHaveBeenCalled();
+    // From outside the workspace: shown by name, served from where it is.
+    const image = screen.getByAltText("drop.png");
+    expect(image.getAttribute("src")).toContain("/.session/Users/me/Desktop/drop.png");
+    type("Use this");
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(send).toHaveBeenCalledWith("Use this", {
+      includeSlide: true,
+      attachments: ["/Users/me/Desktop/drop.png"],
+    });
   });
 
-  it("leaves dropped files to what lies where they landed, attaching the rest", async () => {
-    invoke.mockResolvedValue(["assets/notes.md"]);
+  it("attaches decks dropped on the chat rather than opening them", async () => {
+    left.mockClear();
+    invoke.mockResolvedValue(["other/deck.html"]);
+    renderInPlace();
+    await drag({ type: "drop", paths: ["/decks/talk/other/deck.html"], position: at(800) });
+    expect(invoke).toHaveBeenCalledWith("attach_files", { paths: ["/decks/talk/other/deck.html"] });
+    expect(left).not.toHaveBeenCalled();
+    expect(screen.getByText("other/deck.html")).toBeTruthy();
+  });
+
+  it("leaves files dropped elsewhere on the window, and does not light up for them", async () => {
+    left.mockClear();
+    const { composer } = renderInPlace();
+    await drag({ type: "enter", paths: ["/tmp/a.png"], position: at(100) });
+    expect(composer().className).not.toContain("border-primary");
+    await drag({ type: "drop", paths: ["/tmp/a.png", "/tmp/deck.html"], position: at(100) });
+    expect(invoke).not.toHaveBeenCalledWith("attach_files", expect.anything());
+    expect(left).toHaveBeenCalledWith(["/tmp/a.png", "/tmp/deck.html"]);
+  });
+
+  it("does not take drops on a chat that is folded away", async () => {
+    left.mockClear();
+    const { container } = render(<ChatPanel />);
+    (container.firstElementChild as HTMLElement).getBoundingClientRect = () =>
+      ({ left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0 }) as DOMRect;
+    await drag({ type: "drop", paths: ["/tmp/a.png"], position: { x: 0, y: 0 } });
+    expect(left).toHaveBeenCalledWith(["/tmp/a.png"]);
+  });
+
+  it("leaves what the slide being edited takes to it", async () => {
+    left.mockClear();
+    invoke.mockResolvedValue(["/tmp/notes.md"]);
     const catcher = vi.fn((paths: string[]) => paths.filter((p) => !p.endsWith(".png")));
-    const stop = catchDrops(catcher);
+    const stop = catchDrops(catcher, () => true);
     try {
-      render(<ChatPanel />);
-      await waitFor(() => expect(dragDrop).not.toBeNull());
-      await act(async () =>
-        dragDrop!({
-          payload: { type: "drop", paths: ["/tmp/photo.png", "/tmp/notes.md"], position: { x: 200, y: 100 } },
-        }),
-      );
-      expect(catcher).toHaveBeenCalledWith(["/tmp/photo.png", "/tmp/notes.md"], { x: 200, y: 100 });
-      expect(invoke).toHaveBeenCalledWith("import_assets", { id: "/decks/talk/deck.html", paths: ["/tmp/notes.md"] });
-      // Nothing left over, nothing to import.
-      invoke.mockClear();
-      await act(async () =>
-        dragDrop!({ payload: { type: "drop", paths: ["/tmp/photo.png"], position: { x: 1, y: 1 } } }),
-      );
-      expect(invoke).not.toHaveBeenCalledWith("import_assets", expect.anything());
+      renderInPlace();
+      await drag({ type: "drop", paths: ["/tmp/photo.png", "/tmp/notes.md"], position: at(700) });
+      expect(catcher).toHaveBeenCalledWith(["/tmp/photo.png", "/tmp/notes.md"], at(700));
+      expect(invoke).toHaveBeenCalledWith("attach_files", { paths: ["/tmp/notes.md"] });
     } finally {
       stop();
     }
   });
 
-  it("does not invite drops over what would take them instead", async () => {
-    const stop = catchDrops(
-      (paths) => paths,
-      (point) => point.x > 500,
-    );
-    try {
-      const { container } = render(<ChatPanel />);
-      await waitFor(() => expect(dragDrop).not.toBeNull());
-      const composer = () => container.querySelector(".shadow-composer")!;
-      act(() => dragDrop!({ payload: { type: "enter", paths: ["/tmp/a.png"], position: { x: 600, y: 10 } } }));
-      expect(composer().className).not.toContain("border-primary");
-      act(() => dragDrop!({ payload: { type: "over", position: { x: 100, y: 10 } } }));
-      expect(composer().className).toContain("border-primary");
-      act(() => dragDrop!({ payload: { type: "over", position: { x: 700, y: 10 } } }));
-      expect(composer().className).not.toContain("border-primary");
-    } finally {
-      stop();
-    }
-  });
-
-  it("stops listening for drops when unmounted", async () => {
-    const { unmount } = render(<ChatPanel />);
-    await waitFor(() => expect(dragDrop).not.toBeNull());
+  it("stops taking drops when unmounted", async () => {
+    left.mockClear();
+    const { unmount } = renderInPlace();
     unmount();
-    expect(unlistenDragDrop).toHaveBeenCalled();
+    await drag({ type: "drop", paths: ["/tmp/a.png"], position: at(700) });
+    expect(invoke).not.toHaveBeenCalledWith("attach_files", expect.anything());
+    expect(left).toHaveBeenCalledWith(["/tmp/a.png"]);
   });
 
   const paste = (files: File[], text = "") =>
@@ -1428,17 +1431,17 @@ describe("workspace attachments", () => {
   it.each([
     [true, "talk/assets/photo.png", "/decks/talk/deck.html"],
     [false, "assets/photo.png", "/decks"],
-  ])("attaches images with workspace-relative context when a deck is open: %s", async (hasDeck, reference, target) => {
+  ])("attaches images with workspace-relative context when a deck is open: %s", async (hasDeck, reference) => {
     useApp.setState({
       workspace: { path: "/decks", name: "decks" },
       deck: hasDeck ? deckFor(DECK_HTML) : null,
       selected: hasDeck ? "intro" : null,
     });
     openDialog.mockResolvedValue(["/Users/me/photo.png"]);
-    invoke.mockResolvedValue(["assets/photo.png"]);
+    invoke.mockResolvedValue([reference]);
     render(<ChatPanel />);
     await act(async () => fireEvent.click(screen.getByTitle("Attach images or files")));
-    expect(invoke).toHaveBeenCalledWith("import_assets", { id: target, paths: ["/Users/me/photo.png"] });
+    expect(invoke).toHaveBeenCalledWith("attach_files", { paths: ["/Users/me/photo.png"] });
     expect(screen.getByAltText("photo.png").getAttribute("src")).toContain(`/decks/${reference}`);
     type("Use this");
     fireEvent.keyDown(textarea(), { key: "Enter" });

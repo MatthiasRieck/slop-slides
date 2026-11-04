@@ -5,7 +5,8 @@
 //! workspaces the windows have open are refused. Templates (see [`templates`]) are served as
 //! `slop://localhost/.template/<template-id>/<path>`, for the layout and style previews, and
 //! files in a deck's session (sketches the chat shows) by their absolute path, as
-//! `slop://localhost/.session/<absolute path>`. A workspace file as of the last commit comes by
+//! `slop://localhost/.session/<absolute path>`, which serves the files attached to the chat from
+//! outside the workspace too (see [`AttachedFiles`]). A workspace file as of the last commit comes by
 //! its absolute path too, as `slop://localhost/.head/<absolute path>`, so a slide's assets are
 //! the committed ones as well (see [`git`]); one the commit does not have, like an ignored file,
 //! comes from the workspace.
@@ -30,7 +31,7 @@ use crate::git;
 use crate::html;
 use crate::sessions::Sessions;
 use crate::templates;
-use crate::workspace::OpenWorkspace;
+use crate::workspace::{AttachedFiles, OpenWorkspace};
 
 /// First path segment of workspace files, followed by their absolute path.
 const FILE_PREFIX: &str = ".file";
@@ -99,7 +100,9 @@ fn serve(app: &AppHandle, raw_path: &str) -> Result<(&'static str, Vec<u8>), Sta
     }
     if prefix == SESSION_PREFIX {
         let home = deck::app_home().map_err(|_| StatusCode::NOT_FOUND)?;
-        return read_in_session(&Sessions::new(&home), &rel);
+        return read_in_session(&Sessions::new(&home), &rel).or_else(|status| {
+            read_attached(&app.state::<AttachedFiles>(), &rel).map_err(|_| status)
+        });
     }
     if prefix == HEAD_PREFIX {
         return read_at_head(&app.state::<OpenWorkspace>(), &rel);
@@ -224,6 +227,20 @@ fn read_in_workspace(
 fn read_in_session(sessions: &Sessions, path: &str) -> Result<(&'static str, Vec<u8>), StatusCode> {
     let file = absolute(path);
     if !sessions.contains(&file) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let bytes = std::fs::read(&file).map_err(|_| StatusCode::NOT_FOUND)?;
+    Ok((deck::mime_for(path), bytes))
+}
+
+/// A file attached to the chat from outside the workspace, by its absolute path without the
+/// leading `/` (`C:/…` on Windows).
+fn read_attached(
+    attached: &AttachedFiles,
+    path: &str,
+) -> Result<(&'static str, Vec<u8>), StatusCode> {
+    let file = absolute(path);
+    if !attached.contains(&file) {
         return Err(StatusCode::FORBIDDEN);
     }
     let bytes = std::fs::read(&file).map_err(|_| StatusCode::NOT_FOUND)?;
@@ -542,6 +559,34 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn serves_attached_files_only() {
+        let root = std::env::temp_dir().join(format!("slopslide-proto-{}", uuid::Uuid::new_v4()));
+        let (ws, outside) = (root.join("ws"), root.join("outside"));
+        std::fs::create_dir_all(&ws).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("photo.png"), "png").unwrap();
+        std::fs::write(outside.join("other.png"), "png").unwrap();
+        let attached = AttachedFiles::default();
+        attached
+            .attach(
+                &ws,
+                &[outside.join("photo.png").to_string_lossy().into_owned()],
+            )
+            .unwrap();
+
+        assert_eq!(
+            read_attached(&attached, &url_path(&outside.join("photo.png"))),
+            Ok(("image/png", b"png".to_vec()))
+        );
+        assert_eq!(
+            read_attached(&attached, &url_path(&outside.join("other.png"))),
+            Err(StatusCode::FORBIDDEN),
+            "only attached files"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

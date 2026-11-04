@@ -130,12 +130,44 @@ fn close_workspace(window: Window, open: State<OpenWorkspace>, watcher: State<Wo
     open.set(window.label(), None);
 }
 
-/// The folder waiting to be opened in this window (see [`windows::open_folder`]), once.
+/// The folder (and deck) waiting to be opened in this window (see [`windows::open_folder`]),
+/// once.
 #[tauri::command]
-fn take_pending_folder(window: Window, pending: State<windows::PendingFolders>) -> Option<String> {
-    pending
-        .take(window.label())
-        .map(|root| root.to_string_lossy().into_owned())
+fn take_pending_folder(
+    window: Window,
+    pending: State<windows::PendingFolders>,
+) -> Option<windows::Pending> {
+    pending.take(window.label())
+}
+
+/// Opens the deck at `path` (dropped on a window that has a deck open) in another window, with
+/// the deck's folder as its workspace. Off the main thread, which building a window from a
+/// command needs on Windows.
+#[tauri::command(async)]
+fn open_deck_window(app: AppHandle, path: String) -> Result<()> {
+    let file = deck::deck_file(&path)?.canonicalize()?;
+    let root = file
+        .parent()
+        .ok_or_else(|| error::Error::msg(format!("no folder for {path}")))?
+        .to_path_buf();
+    windows::open_folder(&app, root, Some(file))
+}
+
+/// What the file at `path` (absolute, dropped on the window) is.
+#[tauri::command]
+fn file_kind(path: String) -> Result<workspace::FileKind> {
+    workspace::file_kind(&path)
+}
+
+/// Attaches files (absolute paths) to the chat where they are, without copying them: returns
+/// how the chat refers to each (see [`workspace::AttachedFiles::attach`]).
+#[tauri::command]
+fn attach_files(
+    window: Window,
+    attached: State<workspace::AttachedFiles>,
+    paths: Vec<String>,
+) -> Result<Vec<String>> {
+    attached.attach(&workspace_root(&window)?, &paths)
 }
 
 /// Opens another app window on the start screen.
@@ -1033,6 +1065,7 @@ pub fn run() {
         .manage(WorkspaceWatcher::default())
         .manage(OpenWorkspace::default())
         .manage(windows::PendingFolders::default())
+        .manage(workspace::AttachedFiles::default())
         .manage(voice::Voice::default())
         .manage(narration::Narration::default())
         .on_menu_event(|app, event| {
@@ -1058,6 +1091,9 @@ pub fn run() {
             present_on,
             close_presenter_view,
             take_pending_folder,
+            open_deck_window,
+            file_kind,
+            attach_files,
             open_workspace,
             close_workspace,
             recent_workspaces,
@@ -1173,7 +1209,7 @@ pub fn run() {
                     .filter_map(|url| url.to_file_path().ok())
                     .filter(|path| path.is_dir());
                 for folder in folders {
-                    if let Err(e) = windows::open_folder(app, folder) {
+                    if let Err(e) = windows::open_folder(app, folder, None) {
                         eprintln!("{e}");
                     }
                 }

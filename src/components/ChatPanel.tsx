@@ -1,4 +1,3 @@
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   AlertTriangle,
@@ -28,7 +27,7 @@ import remarkGfm from "remark-gfm";
 
 import { api, errorMessage } from "../lib/api";
 import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowTokens } from "../lib/context";
-import { claimDrop, dropCovered, dropPoint, isImage } from "../lib/drop";
+import { catchDrops, type DropPoint, isImage, watchDrag, within } from "../lib/drop";
 import type { EditElement } from "../lib/editTools";
 import { PROVIDERS, type Provider } from "../lib/models";
 import { basename, cn, dirname, isSessionFile, workspaceChatFileUrl } from "../lib/utils";
@@ -66,6 +65,7 @@ export function ChatPanel() {
   const revision = useApp((s) => s.chatRevision);
   const workspacePath = useApp((s) => s.workspace?.path);
   const [switching, setSwitching] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: each conversation starts with its own empty draft
   useEffect(() => {
     setDraft("");
@@ -77,14 +77,14 @@ export function ChatPanel() {
   }, [composerFill]);
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div ref={panelRef} className="flex h-full flex-col bg-background">
       <ThreadNavigation switching={switching} setSwitching={setSwitching} />
       <div className="flex min-h-0 flex-1 flex-col" inert={switching}>
         {cliMissing && <MissingCli provider={provider} />}
         <MessageList key={`${workspacePath}-${revision}`} messages={messages} running={running}>
           {messages.length === 0 && <EmptyChat deckEmpty={deckEmpty} onPick={(text) => setDraft(text)} />}
         </MessageList>
-        <Composer key={`composer-${workspacePath}-${revision}`} draft={draft} setDraft={setDraft} />
+        <Composer key={`composer-${workspacePath}-${revision}`} draft={draft} setDraft={setDraft} dropZone={panelRef} />
       </div>
     </div>
   );
@@ -376,7 +376,7 @@ function UserBubble({ message }: { message: UserMessage }) {
           {message.element && <span>· about {message.element.name}</span>}
           {message.screenshot && <span>· with screenshot</span>}
           {message.attachments.map((a) => (
-            <span key={a}>· {a.replace(/^assets\//, "")}</span>
+            <span key={a}>· {attachmentLabel(a)}</span>
           ))}
         </div>
       )}
@@ -514,8 +514,13 @@ function describeTool(part: Extract<ChatPart, { kind: "tool" }>, deckId: string)
   }
 }
 
-function Composer(props: { draft: string; setDraft: (text: string) => void }) {
-  const { draft, setDraft } = props;
+function Composer(props: {
+  draft: string;
+  setDraft: (text: string) => void;
+  /** Files dropped on it are attached. */
+  dropZone: React.RefObject<HTMLElement | null>;
+}) {
+  const { draft, setDraft, dropZone } = props;
   const deck = useApp((s) => s.deck);
   const workspace = useApp((s) => s.workspace);
   const assetTarget = deck?.id ?? workspace?.path;
@@ -625,11 +630,12 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     textareaRef.current?.focus();
   }, [composerFill]);
 
-  const importPaths = async (paths: string[]) => {
-    if (!assetTarget || paths.length === 0) return;
+  // Dropped and picked files are attached where they are, not copied into the deck's assets.
+  const attachPaths = async (paths: string[]) => {
+    if (paths.length === 0) return;
     try {
-      const imported = (await api.importAssets(assetTarget, paths)).map(attachmentRef);
-      setAttachments((prev) => [...prev, ...imported.filter((a) => !prev.includes(a))]);
+      const attached = await api.attachFiles(paths);
+      setAttachments((prev) => [...prev, ...attached.filter((a) => !prev.includes(a))]);
     } catch (error) {
       useApp.getState().setError(errorMessage(error));
     }
@@ -657,31 +663,21 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     void pasteImages(images);
   };
 
-  // Files dropped anywhere on the window become attachments, unless something there (like the
-  // slide being edited) takes them.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: re-register so drops import into the current asset target
+  // Files dropped on the chat become attachments; the composer lights up while they are over it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: attachPaths only sets state
   useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void getCurrentWebview()
-      .onDragDropEvent((event) => {
-        if (event.payload.type === "over" || event.payload.type === "enter")
-          setDragging(!dropCovered(dropPoint(event.payload.position)));
-        else if (event.payload.type === "leave") setDragging(false);
-        else if (event.payload.type === "drop") {
-          setDragging(false);
-          void importPaths(claimDrop(event.payload.paths, dropPoint(event.payload.position)));
-        }
-      })
-      .then((fn) => {
-        if (disposed) fn();
-        else unlisten = fn;
-      });
+    const covers = (point: DropPoint) => within(dropZone.current, point);
+    const stopCatching = catchDrops((paths, point) => {
+      if (!covers(point)) return paths;
+      void attachPaths(paths);
+      return [];
+    }, covers);
+    const stopWatching = watchDrag((point) => setDragging(!!point && covers(point)));
     return () => {
-      disposed = true;
-      unlisten?.();
+      stopCatching();
+      stopWatching();
     };
-  }, [assetTarget]);
+  }, [dropZone]);
 
   const pickFiles = async () => {
     const picked = await open({
@@ -693,7 +689,7 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
         },
       ],
     });
-    if (picked) await importPaths(Array.isArray(picked) ? picked : [picked]);
+    if (picked) await attachPaths(Array.isArray(picked) ? picked : [picked]);
   };
 
   const send = (message: string) => {
@@ -849,10 +845,10 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
                 className="flex h-5 items-center gap-1 rounded-md border px-1.5 text-xs text-muted-foreground"
               >
                 <FileText className="size-3" />
-                {a.replace(/^assets\//, "")}
+                {attachmentLabel(a)}
                 <button
                   type="button"
-                  aria-label={`Remove ${a.replace(/^assets\//, "")}`}
+                  aria-label={`Remove ${attachmentLabel(a)}`}
                   onClick={() => removeAttachment(a)}
                   className="hover:text-foreground"
                 >
@@ -928,7 +924,11 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
   );
 }
 
-const assetName = (path: string) => (isSessionFile(path) ? "Slide screenshot" : basename(path));
+/** Screenshots are kept in the workspace's session, in the app's home folder. */
+const isScreenshot = (path: string) => isSessionFile(path) && /[\\/]\.slopslides[\\/]sessions[\\/]/.test(path);
+const assetName = (path: string) => (isScreenshot(path) ? "Slide screenshot" : basename(path));
+/** An attached file by its path in the workspace, or by its name when it is from elsewhere. */
+const attachmentLabel = (path: string) => (isSessionFile(path) ? basename(path) : path.replace(/^assets\//, ""));
 
 /** How many previews the fan shows; the rest are counted on a badge. */
 const FAN_SIZE = 4;

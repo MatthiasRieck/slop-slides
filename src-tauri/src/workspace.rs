@@ -104,12 +104,14 @@ fn kind_of(path: &Path, limit: Option<u64>) -> FileKind {
 }
 
 /// The kind of a file anywhere on disk, by its absolute path (a file dropped on the window).
+/// Like [`open_file`], it reads the whole file: a deck with a large `<head>` (inline fonts or
+/// images) has its markers past what the file tree sniffs.
 pub fn file_kind(path: &str) -> Result<FileKind> {
     let path = Path::new(path);
     if !path.is_absolute() || !path.exists() {
         return Err(Error::msg(format!("not a file: {}", path.display())));
     }
-    Ok(kind_of(path, Some(SNIFF_BYTES)))
+    Ok(kind_of(path, None))
 }
 
 /// The workspace folder: an existing, absolute directory.
@@ -412,6 +414,16 @@ mod tests {
         assert_eq!(kind(&page).unwrap(), FileKind::Webpage);
         assert_eq!(kind(&image).unwrap(), FileKind::File);
         assert!(file_kind("talk/deck.html").is_err(), "relative");
+        let padding = "x".repeat(SNIFF_BYTES as usize * 2);
+        let big = t.write(
+            "big/deck.html",
+            &format!("<head><style>/* {padding} */</style></head><main class=\"deck\"></main>"),
+        );
+        assert_eq!(
+            kind(&big).unwrap(),
+            FileKind::Deck,
+            "markers past the sniffed part"
+        );
         assert!(kind(&t.0.join("gone.html")).is_err());
     }
 

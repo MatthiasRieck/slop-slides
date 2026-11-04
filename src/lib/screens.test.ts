@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Screen } from "./api";
-import { arrange, choose, defaultChoice } from "./screens";
+import { arrange, choose, defaultChoice, rememberChoice } from "./screens";
 
 const screen = (index: number, x: number, y: number, width = 1920, height = 1080): Screen => ({
   index,
@@ -57,5 +57,39 @@ describe("choose", () => {
   it("moves one to a free screen", () => {
     expect(choose({ audience: 2, presenter: 0 }, "presenter", 1)).toEqual({ audience: 2, presenter: 1 });
     expect(choose({ audience: 2, presenter: null }, "audience", 1)).toEqual({ audience: 1, presenter: null });
+  });
+});
+
+describe("rememberChoice", () => {
+  const two = [screen(0, 0, 0), screen(1, 1920, 0)];
+
+  it("starts the next picker with the choice last made", () => {
+    rememberChoice(two, { audience: 0, presenter: 1 });
+    expect(defaultChoice(two)).toEqual({ audience: 0, presenter: 1 });
+    rememberChoice(two, { audience: 1, presenter: null });
+    expect(defaultChoice(two)).toEqual({ audience: 1, presenter: null });
+  });
+
+  it("follows the screens when their order changes", () => {
+    rememberChoice(two, { audience: 1, presenter: 0 });
+    // Another screen plugged in to the left: the same two screens are now 1 and 2.
+    const three = [
+      screen(0, -1920, 0),
+      { ...screen(1, 0, 0), name: "Screen 0" },
+      { ...screen(2, 1920, 0), name: "Screen 1" },
+    ];
+    expect(defaultChoice(three)).toEqual({ audience: 2, presenter: 1 });
+  });
+
+  it("starts as usual when the slides' screen is gone", () => {
+    rememberChoice(two, { audience: 1, presenter: 0 });
+    const others = [screen(0, 0, 0), { ...screen(1, 3000, 0), name: "Projector" }];
+    expect(defaultChoice(others)).toEqual({ audience: 1, presenter: 0 });
+  });
+
+  it("puts the presenter view on another screen when its own is gone", () => {
+    const three = [screen(0, 0, 0), screen(1, 1920, 0), screen(2, 3840, 0)];
+    rememberChoice(three, { audience: 1, presenter: 2 });
+    expect(defaultChoice(two)).toEqual({ audience: 1, presenter: 0 });
   });
 });

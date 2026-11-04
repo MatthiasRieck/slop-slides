@@ -1,5 +1,6 @@
 import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
+import { forgetChoice } from "../lib/screens";
 import * as tauri from "./tauri";
 
 // Every test runs against the shared Tauri stand-ins in ./tauri.
@@ -11,6 +12,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({ revealItemInDir: tauri.revealItemI
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  forgetChoice();
   for (const mock of tauri.tauriMocks) mock.mockClear();
 });
 

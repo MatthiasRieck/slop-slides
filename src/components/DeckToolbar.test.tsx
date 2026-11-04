@@ -100,6 +100,25 @@ describe("deck actions", () => {
     expect(useApp.getState().screens).toEqual({ audience: 1, presenter: 0 });
   });
 
+  it("opens the picker with the screens chosen last time", async () => {
+    const attached = [
+      { index: 0, name: "A", x: 0, y: 0, width: 100, height: 100, pixelWidth: 100, pixelHeight: 100, primary: true },
+      { index: 1, name: "B", x: 100, y: 0, width: 100, height: 100, pixelWidth: 100, pixelHeight: 100, primary: false },
+    ];
+    invoke.mockResolvedValue(attached);
+    render(<DeckActions />);
+    await act(async () => fireEvent.click(presentButton()));
+    fireEvent.click(screen.getByLabelText("Slides on A"));
+    fireEvent.click(screen.getByLabelText("Presenter view on B"));
+    fireEvent.click(screen.getByText("Start presenting"));
+    act(() => useApp.setState({ presenting: false, screens: null }));
+    await act(async () => fireEvent.click(presentButton()));
+    expect(screen.getByTestId("screen-0").dataset.role).toBe("audience");
+    expect(screen.getByTestId("screen-1").dataset.role).toBe("presenter");
+    fireEvent.click(screen.getByText("Start presenting"));
+    expect(useApp.getState().screens).toEqual({ audience: 0, presenter: 1 });
+  });
+
   describe("screenshots in the picker", () => {
     const attached = [
       { index: 0, name: "A", x: 0, y: 0, width: 100, height: 100, pixelWidth: 100, pixelHeight: 100, primary: true },

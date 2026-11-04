@@ -381,8 +381,11 @@ export const api = {
     invoke<(string | null)[]>("screen_previews", { grabbed: new Channel<null>(onGrabbed) }),
   /** Moves this window to the `audience` screen and opens the presenter view on `presenter`. */
   presentOn: (audience: number, presenter: number | null) => invoke<void>("present_on", { audience, presenter }),
-  /** Closes the presenter view window, if open. */
-  closePresenterView: () => invoke<void>("close_presenter_view"),
+  /**
+   * Ends a show on several screens: closes the presenter view window, if open, and puts this
+   * window back where it was before `presentOn` moved it, once it is out of full screen.
+   */
+  endPresenting: () => invoke<void>("end_presenting"),
   /** Opens another app window, on the start screen; each window has a folder of its own. */
   newWindow: () => invoke<void>("new_window"),
   /** The folder opened from Finder that is waiting to open in this window, once; null without one. */

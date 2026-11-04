@@ -472,8 +472,11 @@ interface AppState {
   setNarrationLanguage: (language: string) => Promise<void>;
   undoSlideEdit: () => Promise<void>;
   redoSlideEdit: () => Promise<void>;
-  /** Undoes every edit made since entering edit mode, then leaves it. */
-  discardSlideEdits: () => Promise<void>;
+  /**
+   * Undoes every edit made since entering edit mode, staying in it. With `slide`, only puts that
+   * slide back as it was on entering edit mode.
+   */
+  discardSlideEdits: (slide?: string) => Promise<void>;
   /**
    * Replaces `query` in the text of the deck's slides (or only of `slides`), after any slide
    * edits still being saved. Null when it failed (the error is shown).
@@ -1124,12 +1127,16 @@ export const useApp = create<AppState>((set, get) => ({
     return editQueue;
   },
 
-  discardSlideEdits: () => {
+  discardSlideEdits: (slide) => {
     const discard = async () => {
+      if (slide !== undefined) {
+        await discardEditsOf(slide);
+        return;
+      }
       while (get().slideUndo.length > 0) {
         if (!(await stepSlideHistory("slideUndo", "slideRedo"))) break;
       }
-      set({ editing: false, slideUndo: [], slideRedo: [] });
+      set({ slideUndo: [], slideRedo: [] });
     };
     editQueue = editQueue.then(discard);
     return editQueue;
@@ -1477,6 +1484,34 @@ async function stepSlideHistory(from: "slideUndo" | "slideRedo", to: "slideUndo"
   } catch (error) {
     useApp.setState({ error: errorMessage(error) });
     return false;
+  }
+}
+
+/**
+ * Puts `slide` back as it was before the first edit of it still in the history, and drops its
+ * entries from both histories; the other slides' edits stay undoable.
+ */
+async function discardEditsOf(slide: string) {
+  const { deck, slideUndo } = useApp.getState();
+  const entries = slideUndo.filter((entry) => entry.slide === slide);
+  const first = entries[0];
+  const last = entries.at(-1);
+  if (!deck || !first || !last) return;
+  const current = deck.slides.find((s) => s.id === slide)?.hash;
+  if (current !== last.after) {
+    useApp.setState({ error: "The slide changed since it was edited, so its edits cannot be discarded." });
+    return;
+  }
+  try {
+    const { deck: next } = await api.updateSlide(deck.id, slide, first.markup, current);
+    if (useApp.getState().deck?.id !== deck.id) return;
+    useApp.getState().setDeck(next);
+    useApp.setState((s) => ({
+      slideUndo: s.slideUndo.filter((entry) => entry.slide !== slide),
+      slideRedo: s.slideRedo.filter((entry) => entry.slide !== slide),
+    }));
+  } catch (error) {
+    useApp.setState({ error: errorMessage(error) });
   }
 }
 

@@ -82,6 +82,37 @@ describe("Presenter", () => {
     expect(useApp.getState().presenting).toBe(false);
   });
 
+  it("has an exit button at the top that ends the show without stealing focus", () => {
+    render(<Presenter />);
+    const exit = screen.getByRole("button", { name: /^Exit presentation/ });
+    expect(screen.getByTestId("exit-zone").contains(exit)).toBe(true);
+    const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    exit.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(true);
+    fireEvent.click(exit);
+    expect(useApp.getState().presenting).toBe(false);
+  });
+
+  it("the exit button shows at the start, on hover and briefly after shortcuts", () => {
+    vi.useFakeTimers();
+    try {
+      render(<Presenter />);
+      const exit = screen.getByRole("button", { name: /^Exit presentation/ });
+      const zone = screen.getByTestId("exit-zone");
+      expect(exit.dataset.visible).toBe("true");
+      act(() => void vi.advanceTimersByTime(2000));
+      expect(exit.dataset.visible).toBe("false");
+      fireEvent.mouseEnter(zone);
+      expect(exit.dataset.visible).toBe("true");
+      fireEvent.mouseLeave(zone);
+      expect(exit.dataset.visible).toBe("false");
+      fireEvent.keyDown(document.body, { key: "p" });
+      expect(exit.dataset.visible).toBe("true");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("hands other keys to the player", () => {
     render(<Presenter />);
     const focus = vi.spyOn(frame(), "focus");

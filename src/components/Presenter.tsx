@@ -1,6 +1,6 @@
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronLeft, ChevronRight, type LucideIcon, Maximize, PanelRight, Pause, Play } from "lucide-react";
+import { ChevronLeft, ChevronRight, type LucideIcon, Maximize, PanelRight, Pause, Play, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { api, type Deck, errorMessage } from "../lib/api";
@@ -50,6 +50,7 @@ export function Presenter() {
   // How the slide is zoomed and panned; the ink goes along with it.
   const [zoom, setZoom] = useState({ x: 0, y: 0, k: 1 });
   const nav = useReveal(annotations.peek);
+  const top = useReveal(annotations.peek);
   const moved = !(zoom.x === 0 && zoom.y === 0 && zoom.k === 1);
   const [panelOpen, setPanelOpen] = useState(() => localStorage.getItem(PANEL_KEY) === "true");
   const [startedAt, setStartedAt] = useState(() => Date.now());
@@ -208,6 +209,23 @@ export function Presenter() {
               <Icon />
             </button>
           ))}
+        </div>
+        <div data-testid="exit-zone" className="absolute top-0 left-1/2 z-10 -translate-x-1/2 p-4" {...top.zoneProps}>
+          <button
+            type="button"
+            title="Exit presentation (Esc)"
+            // Keep keyboard focus where it was, so Space still advances the slide.
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => useApp.getState().setPresenting(false)}
+            data-visible={top.visible}
+            className={cn(
+              "dark flex items-center gap-1.5 rounded-xl border border-foreground/10 bg-overlay px-3 py-1.5 text-xs text-foreground/80 shadow-lg backdrop-blur transition-opacity duration-200 hover:text-foreground [&_svg]:size-3.5",
+              top.visible ? "opacity-100" : "opacity-0",
+            )}
+          >
+            <X />
+            Exit presentation
+          </button>
         </div>
         <PresenterToolbar annotations={annotations} onExit={() => useApp.getState().setPresenting(false)} />
       </div>

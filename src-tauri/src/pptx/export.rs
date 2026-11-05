@@ -267,14 +267,12 @@ pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
     let (window_width, window_height) = pdf::window_size(canvas, pdf::screen_area(app));
     let (signal_tx, signals) = mpsc::unbounded_channel::<Url>();
     let label = format!("pptx-export-{}", uuid::Uuid::new_v4().simple());
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::CustomProtocol(url))
+    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::CustomProtocol(url))
         .title("PowerPoint export")
         .inner_size(window_width, window_height)
-        .visible(false)
         // No title bar: WebKit would inset the page under it, and captures would be off.
-        .decorations(false)
-        .focused(false)
-        .skip_taskbar(true)
+        .decorations(false);
+    let window = pdf::out_of_sight(builder)
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Finished {
                 let _ = webview.eval(PPTX_JS);
@@ -289,10 +287,6 @@ pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
         })
         .build()
         .map_err(|e| Error::msg(format!("cannot open the deck for export: {e}")))?;
-    if let Err(e) = pdf::lay_out_hidden(&window, window_width, window_height).await {
-        let _ = window.destroy();
-        return Err(e);
-    }
 
     let mut helper = pdf::Helper {
         window: &window,

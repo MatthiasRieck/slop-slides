@@ -1,7 +1,8 @@
 //! Conversations belong to a workspace folder. The newest session records the active thread.
-//! `meta.json` stores {"workspace": "<canonical folder>"}; chat, provider ids,
-//! sketches and templates live here, with snapshots/<relative deck path>/<stamp>.html
-//! and locked.json keyed by relative deck path.
+//! `meta.json` stores {"workspace": "<canonical folder>"}; chat, provider ids, sketches,
+//! templates, where each turn's conversation started (`rewind.json`, see [`crate::rewind`]),
+//! and locked.json keyed by relative deck path live here. The decks' undo histories do not:
+//! they outlive chats (see [`crate::history`]).
 //!
 //! Migration: legacy {"deck": ...} sessions (including folder-keyed ones) remain
 //! readable on disk. Opening a workspace starts a fresh conversation rather than

@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 
+import type { HistoryEntry } from "../lib/api";
 import { basename, cn, isMac } from "../lib/utils";
 import { useApp } from "../store";
 import { ToolButton } from "./Button";
@@ -124,22 +125,25 @@ function RevealButton({ path }: { path: string }) {
   );
 }
 
-/** Undo and redo; for now they step through edit mode's history, and are off outside it. */
+/**
+ * Undo and redo of the open deck's changes, whatever made them: edits, the slide rail, review
+ * marks, narration, the code view, the agent, or another app. Off while the agent is working.
+ */
 function EditHistory() {
-  const editing = useApp((s) => s.editing);
-  const canUndo = useApp((s) => s.editing && s.slideUndo.length > 0);
-  const canRedo = useApp((s) => s.editing && s.slideRedo.length > 0);
+  const undo = useApp((s) => s.history?.undo ?? null);
+  const redo = useApp((s) => s.history?.redo ?? null);
+  const running = useApp((s) => s.running);
   const app = useApp.getState;
-  const off = editing ? "" : " (in edit mode)";
+  const busy = running ? " (once the agent is done)" : "";
   return (
     <div className="flex items-center">
       <ToolButton
         variant="panel"
         size="md"
         label="Undo"
-        title={`Undo (⌘Z)${off}`}
-        disabled={!canUndo}
-        onClick={() => void app().undoSlideEdit()}
+        title={undo ? `Undo ${historyLabel(undo)} (⌘Z)${busy}` : "Nothing to undo"}
+        disabled={!undo || running}
+        onClick={() => void app().undo()}
       >
         <Undo2 className="size-4" />
       </ToolButton>
@@ -147,14 +151,19 @@ function EditHistory() {
         variant="panel"
         size="md"
         label="Redo"
-        title={`Redo (⇧⌘Z)${off}`}
-        disabled={!canRedo}
-        onClick={() => void app().redoSlideEdit()}
+        title={redo ? `Redo ${historyLabel(redo)} (⇧⌘Z)${busy}` : "Nothing to redo"}
+        disabled={!redo || running}
+        onClick={() => void app().redo()}
       >
         <Redo2 className="size-4" />
       </ToolButton>
     </div>
   );
+}
+
+/** How an undo or redo names the change, e.g. `“Move slides”` or `chat: “Bigger title”`. */
+export function historyLabel(entry: HistoryEntry): string {
+  return entry.source === "chat" ? `chat: “${entry.label}”` : `“${entry.label}”`;
 }
 
 /** Shows or hides the slide rail on the left. */

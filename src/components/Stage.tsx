@@ -36,7 +36,7 @@ import {
 import { type Stroke, zoomBox } from "../lib/ink";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn, deckFileUrl } from "../lib/utils";
-import { deckMode, SKETCH_TARGET_ATTR, searchHighlight, useApp } from "../store";
+import { deckMode, editedSlidesOf, SKETCH_TARGET_ATTR, searchHighlight, useApp } from "../store";
 import { Button, ToolButton } from "./Button";
 import { CommentEditor, CommentPins, useSlideComments } from "./Comments";
 import { Dialog } from "./Dialog";
@@ -366,13 +366,13 @@ function ChangeLayoutButton(props: { disabled: boolean }) {
 }
 
 /**
- * Floats under the edit tools while there are edits to discard, and undoes them, staying in edit
- * mode. When the current slide and others were edited, it asks whether to put back just this
+ * Floats under the edit tools while there are edits to discard, and puts the slides back as they
+ * were on entering edit mode, staying in it. When the current slide and others were edited, it asks whether to put back just this
  * slide or every slide.
  */
 function DiscardButton() {
   const selected = useApp((s) => s.selected);
-  const edited = useApp(useShallow((s) => [...new Set(s.slideUndo.map((entry) => entry.slide))]));
+  const edited = useApp(useShallow(editedSlidesOf));
   const [asking, setAsking] = useState(false);
   if (edited.length === 0) return null;
   const app = useApp.getState;
@@ -900,8 +900,8 @@ const NO_INK: Record<string, Stroke[]> = {};
 /** ⌘Z undoes, ⇧⌘Z / ⌘Y redo; true when the key was one of them. */
 function runHistoryKey(key: string, shift: boolean) {
   const lower = key.toLowerCase();
-  if (lower === "z" && !shift) void useApp.getState().undoSlideEdit();
-  else if ((lower === "z" && shift) || lower === "y") void useApp.getState().redoSlideEdit();
+  if (lower === "z" && !shift) void useApp.getState().undo();
+  else if ((lower === "z" && shift) || lower === "y") void useApp.getState().redo();
   else return false;
   return true;
 }
@@ -983,14 +983,14 @@ function useSlideKeyboard() {
       else return false;
       return true;
     };
-    // Out of edit mode, whose keys these are on the slide: the slide rail's history and moves
+    // Out of edit mode, whose keys these are on the slide: the deck's history, the rail's moves
     // (⌘↑ / ⌘↓, also out of a section), and Delete and Escape for the slides picked in it.
     const rail = (key: string, mod: boolean, shift: boolean) => {
       const app = useApp.getState();
       if (app.editing || app.presenting) return false;
       const lower = key.toLowerCase();
-      if (mod && lower === "z" && !shift) void app.undoDeckEdit();
-      else if (mod && ((lower === "z" && shift) || lower === "y")) void app.redoDeckEdit();
+      if (mod && lower === "z" && !shift) void app.undo();
+      else if (mod && ((lower === "z" && shift) || lower === "y")) void app.redo();
       else if (mod && key === "ArrowUp") void app.moveSlides(-1);
       else if (mod && key === "ArrowDown") void app.moveSlides(1);
       else if (!mod && app.railSelected.length > 0 && (key === "Delete" || key === "Backspace"))

@@ -85,8 +85,6 @@ beforeEach(() => {
     editing: false,
     slideMode: "view",
     error: null,
-    deckUndo: [],
-    deckRedo: [],
   });
   useChanges.setState({ changes: null, deck: null, picked: null, onlyChanges: false, divider: DEFAULT_DIVIDER });
 });
@@ -243,7 +241,7 @@ describe("staging", () => {
       fireEvent.click(group("Modified").getByRole("button", { name: "Restore" }));
     });
     expect(sent("restore_change")).toHaveLength(1);
-    expect(useApp.getState().deckUndo.at(-1)).toEqual({ previous: "old", source: "new" });
+    expect(sent("deck_history").length).toBeGreaterThan(0);
   });
 
   it("offers to unstage what is staged", async () => {

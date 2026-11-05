@@ -175,7 +175,9 @@ describe("replace", () => {
     invoke.mockImplementation(async (cmd: string) => {
       if (cmd === "find_in_deck") return MATCHES;
       if (cmd === "replace_in_deck") return replaced;
-      if (cmd === "save_deck_source") return DECK;
+      if (cmd === "deck_history")
+        return { undo: { id: "r", source: "edit", label: "Replace text", time: 0 }, redo: null, current: "r" };
+      if (cmd === "undo_deck") return { deck: DECK, entry: null, status: { undo: null, redo: null, current: "o" } };
       return null;
     });
     await open();
@@ -198,9 +200,7 @@ describe("replace", () => {
     await waitFor(() => expect(screen.getByText(/Replaced 2 matches on 2 slides/)).toBeTruthy());
     expect(screen.getByText(/1 locked slide was left as it was/)).toBeTruthy();
     fireEvent.click(button("Undo"));
-    await waitFor(() =>
-      expect(invoke).toHaveBeenCalledWith("save_deck_source", { id: DECK.id, source: "<old>", base: "<new>" }),
-    );
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("undo_deck", { id: DECK.id }));
     await waitFor(() => expect(screen.queryByText(/Replaced/)).toBeNull());
   });
 

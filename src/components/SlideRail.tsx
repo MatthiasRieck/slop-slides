@@ -24,10 +24,8 @@ import {
   LockOpen,
   Pencil,
   Plus,
-  Redo2,
   SquareSplitVertical,
   Trash2,
-  Undo2,
   X,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -177,7 +175,6 @@ export function SlideRail() {
       <div className="flex h-10 shrink-0 items-center justify-between px-3">
         <SectionLabel>Slides · {found ? `${found.size} of ${deck.slides.length}` : deck.slides.length}</SectionLabel>
         <div className="flex items-center gap-0.5">
-          <RailHistory />
           <ToolButton
             variant="panel"
             onClick={addSection}
@@ -281,33 +278,6 @@ export function SlideRail() {
         )}
       </div>
     </div>
-  );
-}
-
-/** Undo and redo of what was done in the rail, once there is something to step through. */
-function RailHistory() {
-  const canUndo = useApp((s) => s.deckUndo.length > 0);
-  const canRedo = useApp((s) => s.deckRedo.length > 0);
-  if (!canUndo && !canRedo) return null;
-  return (
-    <>
-      <ToolButton
-        variant="panel"
-        title="Undo the last slide list change (⌘Z)"
-        disabled={!canUndo}
-        onClick={() => void useApp.getState().undoDeckEdit()}
-      >
-        <Undo2 className="size-4" />
-      </ToolButton>
-      <ToolButton
-        variant="panel"
-        title="Redo the slide list change (⇧⌘Z)"
-        disabled={!canRedo}
-        onClick={() => void useApp.getState().redoDeckEdit()}
-      >
-        <Redo2 className="size-4" />
-      </ToolButton>
-    </>
   );
 }
 

@@ -18,7 +18,7 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   use the arrow keys) to move it, double-click (or press Enter) to edit its text (Enter
   starts a new line, Escape or ⌘Enter finishes), Escape to select the parent, Delete (or the trash button in the edit bar) to remove
   it, ⌘C / ⌘X / ⌘V to copy, cut and paste elements (also between slides), and ⌘Z / Ctrl+Z
-  to undo. ⌘V also pastes images and text copied in other apps, like a browser. Pastes go
+  to undo (the deck's one history; see How it works). ⌘V also pastes images and text copied in other apps, like a browser. Pastes go
   on top of the slide, under the pointer (or in the middle of the view), without moving the
   layout. Right-click an element for these actions and its stacking order, to ask the agent
   about it, or to have the agent tidy just an element you added. `?` lists the shortcuts.
@@ -305,7 +305,10 @@ the microphone for dictation.
 ```
 src/                    React UI (Zustand store, Tailwind)
 src-tauri/src/
-  deck.rs               deck folders: load/normalize, slide operations, export, snapshots
+  deck.rs               deck folders: load/normalize, slide operations, export
+  history.rs            each deck's undo history: whole-file versions of every change
+                        (edits, rail, review, narration, code view, agent, other apps)
+  rewind.rs             takes an agent's conversation back to before a message
   sessions.rs           chat sessions in `~/.slopslides/sessions`, each tied to one workspace
   html.rs               finds the slide <section>s in deck.html and rewrites them;
                         installs the player runtime (assets/runtime.{css,js})
@@ -320,7 +323,7 @@ src-tauri/src/
                         linter to the agent as its `lint_deck` tool, and `render_slide`
   render.rs             renders slides in a hidden window for `render_slide`, answering
                         the MCP server through the session folder
-  agent.rs              manages turns and snapshots; normalizes provider events for the UI
+  agent.rs              manages turns; normalizes provider events for the UI
   extensions.rs         the user's MCP servers, skills, plugins and AGENTS.md, passed to
                         every provider (see below)
   codex.rs              Codex app-server transport, permissions, and approval responses
@@ -355,9 +358,11 @@ everything else in `~/.slopslides/`:
 
 ```
 templates/<name>/          user templates
+history/<key>/             one deck's undo history: journal.json and each version
+                           of its HTML (assets are not kept), the newest 100
 sessions/<session id>/     one chat about a workspace: meta.json (its workspace
                            folder), chat.json, each provider's session id,
-                           snapshots/<relative deck path>/, sketches/, templates staged for the agent,
+                           rewind.json, sketches/, templates staged for the agent,
                            and Claude Code's generated mcp.json and claude-plugins/
 system-prompt.md           the system prompt file Claude Code reads
 mcp.json                   your MCP servers, for every agent (see Extensions)
@@ -403,8 +408,20 @@ and plugins, and Codex its MCP servers.
 
 `deck.html` already plays standalone in a browser. The editor renders individual slides of
 it in sandboxed iframes (`deck.html?embed&slide=<id>`), so the thumbnails, stage, and
-exported file all use the same player. Before every agent turn and slide deletion, a copy is
-saved for every deck to the session's `snapshots/<relative deck path>/` (last 30 kept per file).
+exported file all use the same player.
+
+Every change to a deck goes into its undo history, whatever made it: one entry per edit
+gesture, rail change, find and replace, code view save, setting, and agent turn (each deck
+the turn changed gets one entry, labeled with the message); typing notes or narration and
+drawing review marks close together make one entry. A change made in another app is noticed
+the next time the app looks (opening the deck, a reload, before an undo) and becomes an
+"Outside change" entry. ⌘Z / ⇧⌘Z and the top bar's buttons step through it, in any mode,
+except while the agent works; a new change drops what could be redone. Undoing an agent
+turn asks whether the chat goes back too: the message returns to the composer, and the
+provider's conversation is cut back when the next turn starts (Claude Code resumes with
+`--resume-session-at`, Codex reverts the thread, Copilot truncates its history), or, where
+it cannot be, the next prompt says what was undone. Keeping the chat marks the message and
+tells the agent with the next one.
 The safety scan skips dot folders and is bounded to 10,000 entries and 64 MiB of HTML;
 turns refuse to start if those limits are exceeded. Legacy per-deck sessions remain on
 disk; opening their workspace starts a fresh conversation.

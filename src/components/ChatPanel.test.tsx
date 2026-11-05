@@ -1446,3 +1446,29 @@ describe("workspace attachments", () => {
     if (!hasDeck) expect(screen.queryByRole("button", { name: /^Slide \d/ })).toBeNull();
   });
 });
+
+describe("undone agent turns", () => {
+  afterEach(() => useApp.setState({ revertNotes: [] }));
+
+  it("marks a message whose deck changes were undone", () => {
+    showMessages({
+      id: "u1",
+      role: "user",
+      text: "Bigger title",
+      slide: null,
+      attachments: [],
+      reverted: true,
+      createdAt: 0,
+    });
+    expect(screen.getByText("changes undone ·")).toBeTruthy();
+  });
+
+  it("shows what the next message tells the agent, and can leave it out", () => {
+    useApp.setState({ revertNotes: [{ message: "u1", label: '"Bigger title"' }] });
+    render(<ChatPanel />);
+    expect(screen.getByText('Undone: "Bigger title"')).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Don't tell the agent" }));
+    expect(useApp.getState().revertNotes).toEqual([]);
+    expect(screen.queryByText(/Undone:/)).toBeNull();
+  });
+});

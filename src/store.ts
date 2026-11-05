@@ -7,9 +7,11 @@ import {
   type AgentEventEnvelope,
   api,
   type Deck,
+  type DeckHistory,
   errorMessage,
   type FindMatch,
   type FindOptions,
+  type HistoryEntry,
   type LintIssue,
   type OpenedFile,
   type RailEdit,
@@ -75,6 +77,8 @@ export interface UserMessage {
   element?: EditElement | null;
   /** Set when the message ran a command instead of prompting the agent. */
   command?: "compact";
+  /** The deck changes of its turn were undone, and the chat kept it. */
+  reverted?: boolean;
   createdAt: number;
 }
 
@@ -364,18 +368,23 @@ interface AppState {
   editTool: EditTool;
   /** What new text boxes, shapes and drawings look like; restyling one updates its family's. */
   editStyles: Record<ToolFamily, EditStyle>;
-  /** Slide edits that can be undone, newest last. */
-  slideUndo: SlideUndo[];
   /** Templates for layouts and styles; `undefined` until loaded. */
   templates: TemplateSummary[] | undefined;
-  /** Undone slide edits that can be redone, newest last. */
-  slideRedo: SlideUndo[];
   /** The slides picked in the rail when there are several; empty when it is just `selected`. */
   railSelected: string[];
-  /** Slide rail changes that can be undone, newest last. They outlive edit mode, unlike `slideUndo`. */
-  deckUndo: DeckUndo[];
-  /** Undone slide rail changes that can be redone, newest last. */
-  deckRedo: DeckUndo[];
+  /**
+   * What undo and redo would do in the open deck: its one history of every change, whatever
+   * made it (see src-tauri/src/history.rs). Null until known.
+   */
+  history: DeckHistory | null;
+  /** Where the deck's history was when edit mode started, and its slides' hashes then. */
+  editBase: { version: string; hashes: Record<string, string> } | null;
+  /** The slides edited on the stage since edit mode started. */
+  editedSlides: string[];
+  /** An undone agent turn whose message is still in the chat, while asking whether to rewind the chat too. */
+  rewindAsk: HistoryEntry | null;
+  /** Agent turns whose deck changes the user undid; the next message tells the agent. */
+  revertNotes: { message: string; label: string }[];
 
   /** Opens a folder in the file tree, reopening the file last open in it. */
   openWorkspace: (path: string) => Promise<void>;
@@ -414,9 +423,20 @@ interface AppState {
   reorderRail: (order: string[]) => Promise<void>;
   /** Moves the picked slides one rail row up (-1) or down (1), section markers included. */
   moveSlides: (delta: -1 | 1) => Promise<void>;
-  /** Puts the deck back as it was before the last rail change, unless it changed again since. */
-  undoDeckEdit: () => Promise<void>;
-  redoDeckEdit: () => Promise<void>;
+  /** Takes back the deck's newest change, whatever made it: an edit, the rail, the agent, … */
+  undo: () => Promise<void>;
+  /** Makes the change undone last again. */
+  redo: () => Promise<void>;
+  /** Asks the deck's history what undo and redo would do now. */
+  refreshHistory: () => Promise<void>;
+  /**
+   * Answers `rewindAsk`: also take the chat back to before the turn's message, keep the chat and
+   * tell the agent with the next message, or (null) leave the chat alone. `remember` keeps the
+   * answer for next time.
+   */
+  answerRewind: (choice: RewindChoice | null, remember?: boolean) => Promise<void>;
+  /** Stops telling the agent that the changes of the turn of `message` were undone. */
+  dropRevertNote: (message: string) => void;
   /** Goes to the next (1) or previous (-1) match, around the deck. */
   stepSearch: (delta: 1 | -1) => void;
   clearSearch: () => void;
@@ -470,11 +490,9 @@ interface AppState {
   /** Sets the voice (or language) the deck's narration is said in. */
   setNarrationVoice: (voice: string) => Promise<void>;
   setNarrationLanguage: (language: string) => Promise<void>;
-  undoSlideEdit: () => Promise<void>;
-  redoSlideEdit: () => Promise<void>;
   /**
-   * Undoes every edit made since entering edit mode, staying in it. With `slide`, only puts that
-   * slide back as it was on entering edit mode.
+   * Puts the slides edited since entering edit mode back as they were then, staying in it. With
+   * `slide`, only that slide.
    */
   discardSlideEdits: (slide?: string) => Promise<void>;
   /**
@@ -487,7 +505,7 @@ interface AppState {
     options: FindOptions,
     slides: string[] | null,
   ) => Promise<ReplacedText | null>;
-  /** Undoes a replace: saves the deck's `previous` source back, unless it changed since (`source`). */
+  /** Undoes a replace, as long as it still is the deck's newest change. */
   undoReplace: (replaced: ReplacedText) => Promise<boolean>;
   refreshTemplates: () => Promise<void>;
   /**
@@ -539,25 +557,14 @@ interface AppState {
   chatRevision: number;
 }
 
-interface SlideUndo {
-  slide: string;
-  /** Markup to restore. */
-  markup: string;
-  /** The slide's hash right after the edit; undo is refused once the slide changed again. */
-  after: string;
-}
-
-/** A rail change: `previous` is the deck file to save back, as long as it still is `source`. */
-interface DeckUndo {
-  previous: string;
-  source: string;
-}
-
-const UNDO_KEPT = 50;
+/** How the chat follows when the deck changes of an agent turn are undone (see `answerRewind`). */
+export type RewindChoice = "rewind" | "deck";
+/** The answer to keep giving, once the user asked not to be asked again. */
+export const REWIND_KEY = "slopslide.rewindChoice";
+/** How the deck's history labels a find and replace (see src-tauri/src/lib.rs). */
+const REPLACE_LABEL = "Replace text";
 /** How much of an element's markup goes in the prompt; the agent can read the rest in the deck. */
 const ELEMENT_MARKUP_KEPT = 4000;
-/** Rail history keeps whole deck files, so it stays shorter. */
-const DECK_UNDO_KEPT = 20;
 
 export const TIDY_PROMPT =
   "Tidy up the layout of this slide. I edited it by hand: keep my text, the styles I picked and what I added, and keep things where I moved them, at the size and angle I gave them, but rebuild the layout cleanly and fix any overflow or clipping.";
@@ -634,11 +641,12 @@ export const useApp = create<AppState>((set, get) => ({
   editReload: 0,
   editTool: "select",
   editStyles: DEFAULT_EDIT_STYLES,
-  slideUndo: [],
-  slideRedo: [],
   railSelected: [],
-  deckUndo: [],
-  deckRedo: [],
+  history: null,
+  editBase: null,
+  editedSlides: [],
+  rewindAsk: null,
+  revertNotes: [],
   templates: undefined,
 
   openWorkspace: async (path) => {
@@ -758,8 +766,7 @@ export const useApp = create<AppState>((set, get) => ({
       editing: false,
       slideMode: "view",
       editTool: "select",
-      slideUndo: [],
-      slideRedo: [],
+      ...NO_EDIT_STATE,
       ...NO_RAIL_STATE,
     });
     return true;
@@ -773,6 +780,7 @@ export const useApp = create<AppState>((set, get) => ({
       selected: stillThere ? selected : (deck.slides[0]?.id ?? null),
       railSelected: railSelected.filter((id) => deck.slides.some((s) => s.id === id)),
     });
+    void refreshHistory();
   },
 
   select: (slide) => set((s) => ({ selected: slide, railSelected: [], revealRev: s.revealRev + 1 })),
@@ -864,15 +872,21 @@ export const useApp = create<AppState>((set, get) => ({
     if (order.some((key, i) => key !== keys[i])) await get().reorderRail(order);
   },
 
-  undoDeckEdit: () => {
-    editQueue = editQueue.then(() => stepDeckHistory("deckUndo", "deckRedo"));
-    return editQueue;
+  undo: () => stepHistory(true),
+
+  redo: () => stepHistory(false),
+
+  refreshHistory: () => refreshHistory(),
+
+  answerRewind: async (choice, remember = false) => {
+    const entry = get().rewindAsk;
+    set({ rewindAsk: null });
+    if (!entry || !choice) return;
+    if (remember) localStorage.setItem(REWIND_KEY, choice);
+    await applyRewind(entry, choice);
   },
 
-  redoDeckEdit: () => {
-    editQueue = editQueue.then(() => stepDeckHistory("deckRedo", "deckUndo"));
-    return editQueue;
-  },
+  dropRevertNote: (message) => set((s) => ({ revertNotes: s.revertNotes.filter((n) => n.message !== message) })),
 
   setSearch: (changes) =>
     set((s) => {
@@ -1050,8 +1064,18 @@ export const useApp = create<AppState>((set, get) => ({
   setEditing: (editing) => {
     if (editing === get().editing) return;
     if (editing && selectedSlide()?.locked) return;
-    // Each edit session starts with fresh history and the select tool; leaving keeps the edits.
-    set({ editing, editTool: "select", slideUndo: [], slideRedo: [] });
+    // Each edit session starts with the select tool; leaving keeps the edits.
+    set({ editing, editTool: "select", ...NO_EDIT_STATE });
+    if (!editing) return;
+    // Where discarding the session's edits goes back to, after any change still being saved.
+    editQueue = editQueue.then(async () => {
+      await refreshHistory();
+      const { deck, history, editing } = get();
+      if (!deck || !editing || !history?.current) return;
+      set({
+        editBase: { version: history.current, hashes: Object.fromEntries(deck.slides.map((s) => [s.id, s.hash])) },
+      });
+    });
   },
 
   setMode: (mode) => {
@@ -1072,14 +1096,10 @@ export const useApp = create<AppState>((set, get) => ({
       const base = deck?.slides.find((s) => s.id === slide)?.hash;
       if (!deck || !base) return;
       try {
-        const { deck: next, previous } = await api.updateSlide(deck.id, slide, markup, base);
+        const next = await api.updateSlide(deck.id, slide, markup, base);
         if (get().deck?.id !== deck.id) return;
-        const after = next.slides.find((s) => s.id === slide)?.hash ?? "";
         get().setDeck(next);
-        set((s) => ({
-          slideUndo: [...s.slideUndo, { slide, markup: previous, after }].slice(-UNDO_KEPT),
-          slideRedo: [],
-        }));
+        set((s) => ({ editedSlides: s.editedSlides.includes(slide) ? s.editedSlides : [...s.editedSlides, slide] }));
       } catch (error) {
         set((s) => ({ error: errorMessage(error), editReload: s.editReload + 1 }));
       }
@@ -1117,26 +1137,22 @@ export const useApp = create<AppState>((set, get) => ({
 
   setNarrationLanguage: (language) => editDeck((id) => api.setNarrationLanguage(id, language)),
 
-  undoSlideEdit: () => {
-    editQueue = editQueue.then(() => stepSlideHistory("slideUndo", "slideRedo")).then(() => undefined);
-    return editQueue;
-  },
-
-  redoSlideEdit: () => {
-    editQueue = editQueue.then(() => stepSlideHistory("slideRedo", "slideUndo")).then(() => undefined);
-    return editQueue;
-  },
-
   discardSlideEdits: (slide) => {
     const discard = async () => {
-      if (slide !== undefined) {
-        await discardEditsOf(slide);
-        return;
+      const { deck, editBase } = get();
+      const slides = slide === undefined ? editedSlidesOf(get()) : [slide];
+      if (!deck || !editBase || slides.length === 0) return;
+      try {
+        const next = await api.restoreSlides(deck.id, editBase.version, slides);
+        if (get().deck?.id !== deck.id) return;
+        get().setDeck(next);
+        set((s) => ({
+          editedSlides: s.editedSlides.filter((id) => !slides.includes(id)),
+          editReload: s.editReload + 1,
+        }));
+      } catch (error) {
+        set({ error: errorMessage(error) });
       }
-      while (get().slideUndo.length > 0) {
-        if (!(await stepSlideHistory("slideUndo", "slideRedo"))) break;
-      }
-      set({ slideUndo: [], slideRedo: [] });
     };
     editQueue = editQueue.then(discard);
     return editQueue;
@@ -1160,21 +1176,17 @@ export const useApp = create<AppState>((set, get) => ({
     return done;
   },
 
-  undoReplace: (replaced) => {
-    const run = async () => {
-      const { deck } = get();
-      if (!deck || deck.id !== replaced.deck.id) return false;
-      try {
-        get().setDeck(await api.saveDeckSource(deck.id, replaced.previous, replaced.source));
-        return true;
-      } catch (error) {
-        set({ error: `The replace cannot be undone: ${errorMessage(error)}` });
-        return false;
-      }
-    };
-    const done = editQueue.then(run);
-    editQueue = done.then(() => undefined);
-    return done;
+  undoReplace: async (replaced) => {
+    await editQueue;
+    await refreshHistory();
+    const { deck, history } = get();
+    if (!deck || deck.id !== replaced.deck.id) return false;
+    if (history?.undo?.source !== "edit" || history.undo.label !== REPLACE_LABEL) {
+      set({ error: "The replace cannot be undone: the deck changed since." });
+      return false;
+    }
+    await get().undo();
+    return true;
   },
 
   refreshTemplates: async () => {
@@ -1346,7 +1358,10 @@ export const useApp = create<AppState>((set, get) => ({
     }
     const template = deck ? await stageDeckTemplate(deck) : null;
     if (get().workspace?.path !== workspace.path) return;
-    await startTurn(workspace.path, assistant.id, buildPrompt(deck, openedFile, user, template), false);
+    const notes = get().revertNotes;
+    set({ revertNotes: [] });
+    const prompt = withRevertNotes(notes, buildPrompt(deck, openedFile, user, template));
+    await startTurn(workspace.path, assistant.id, prompt, false, user);
   },
 
   compact: async () => {
@@ -1381,7 +1396,7 @@ export const useApp = create<AppState>((set, get) => ({
     const { chat, provider } = await api.selectChatThread(workspace.path, thread);
     if (get().workspace?.path !== workspace.path) return;
     restoreWorkspaceChat(workspace.path, chat, false, provider);
-    set((s) => ({ chatRevision: s.chatRevision + 1, composerFill: null }));
+    set((s) => ({ chatRevision: s.chatRevision + 1, composerFill: null, rewindAsk: null, revertNotes: [] }));
   },
 
   resetChat: async () => {
@@ -1394,12 +1409,25 @@ export const useApp = create<AppState>((set, get) => ({
       running: false,
       sessionProvider: null,
       composerFill: null,
+      rewindAsk: null,
+      revertNotes: [],
       chatRevision: s.chatRevision + 1,
     }));
   },
 }));
 
-const NO_RAIL_STATE = { railSelected: [], deckUndo: [], deckRedo: [] };
+const NO_RAIL_STATE = { railSelected: [] };
+const NO_EDIT_STATE = { editBase: null, editedSlides: [] };
+
+/** The slides edited since edit mode started that are not as they were then any more. */
+export function editedSlidesOf(state: Pick<AppState, "deck" | "editBase" | "editedSlides">): string[] {
+  const { deck, editBase, editedSlides } = state;
+  if (!deck || !editBase) return [];
+  return editedSlides.filter((id) => {
+    const hash = deck.slides.find((s) => s.id === id)?.hash;
+    return hash !== undefined && hash !== editBase.hashes[id];
+  });
+}
 
 /** The slides the rail's actions apply to, in deck order. */
 export function railSelection(state: Pick<AppState, "deck" | "selected" | "railSelected">): string[] {
@@ -1432,8 +1460,11 @@ function newReply(provider: Provider): AssistantMessage {
   };
 }
 
-/** Hands `prompt` to the selected agent; a failure to start lands on reply `replyId`. */
-async function startTurn(deckId: string, replyId: string, prompt: string, compact: boolean) {
+/**
+ * Hands `prompt` to the selected agent; a failure to start lands on reply `replyId`. `message`
+ * is the user's message the turn answers.
+ */
+async function startTurn(deckId: string, replyId: string, prompt: string, compact: boolean, message?: UserMessage) {
   const { selection, providers, permissionModes } = useApp.getState();
   try {
     const { provider, model, contextWindow } = selection;
@@ -1444,6 +1475,7 @@ async function startTurn(deckId: string, replyId: string, prompt: string, compac
       prompt,
       { provider, model, effort, contextWindow, permissionMode: permissionModes[provider] },
       compact,
+      message ? { message: message.id, label: message.text } : null,
     );
   } catch (error) {
     updateAssistant(replyId, (m) => ({
@@ -1457,86 +1489,7 @@ async function startTurn(deckId: string, replyId: string, prompt: string, compac
   }
 }
 
-/**
- * Restores the newest entry of one slide edit history (undo or redo) and records how to
- * reverse that in the other. False when there was nothing to restore or it was refused.
- */
-async function stepSlideHistory(from: "slideUndo" | "slideRedo", to: "slideUndo" | "slideRedo"): Promise<boolean> {
-  const { deck, [from]: history } = useApp.getState();
-  const last = history.at(-1);
-  if (!deck || !last) return false;
-  useApp.setState({ [from]: history.slice(0, -1) });
-  const current = deck.slides.find((s) => s.id === last.slide)?.hash;
-  if (current !== last.after) {
-    useApp.setState({
-      error: `The slide changed since that edit, so it cannot be ${from === "slideUndo" ? "undone" : "redone"}.`,
-    });
-    return false;
-  }
-  try {
-    const { deck: next, previous } = await api.updateSlide(deck.id, last.slide, last.markup, current);
-    if (useApp.getState().deck?.id !== deck.id) return false;
-    const after = next.slides.find((s) => s.id === last.slide)?.hash ?? "";
-    useApp.getState().setDeck(next);
-    useApp.getState().select(last.slide);
-    useApp.setState((s) => ({ [to]: [...s[to], { slide: last.slide, markup: previous, after }].slice(-UNDO_KEPT) }));
-    return true;
-  } catch (error) {
-    useApp.setState({ error: errorMessage(error) });
-    return false;
-  }
-}
-
-/**
- * Puts `slide` back as it was before the first edit of it still in the history, and drops its
- * entries from both histories; the other slides' edits stay undoable.
- */
-async function discardEditsOf(slide: string) {
-  const { deck, slideUndo } = useApp.getState();
-  const entries = slideUndo.filter((entry) => entry.slide === slide);
-  const first = entries[0];
-  const last = entries.at(-1);
-  if (!deck || !first || !last) return;
-  const current = deck.slides.find((s) => s.id === slide)?.hash;
-  if (current !== last.after) {
-    useApp.setState({ error: "The slide changed since it was edited, so its edits cannot be discarded." });
-    return;
-  }
-  try {
-    const { deck: next } = await api.updateSlide(deck.id, slide, first.markup, current);
-    if (useApp.getState().deck?.id !== deck.id) return;
-    useApp.getState().setDeck(next);
-    useApp.setState((s) => ({
-      slideUndo: s.slideUndo.filter((entry) => entry.slide !== slide),
-      slideRedo: s.slideRedo.filter((entry) => entry.slide !== slide),
-    }));
-  } catch (error) {
-    useApp.setState({ error: errorMessage(error) });
-  }
-}
-
-/**
- * Saves the newest entry of one rail history (undo or redo) back over the deck and records how
- * to reverse that in the other. Refused, by the save, once the deck file changed again.
- */
-async function stepDeckHistory(from: "deckUndo" | "deckRedo", to: "deckUndo" | "deckRedo") {
-  const { deck, [from]: history } = useApp.getState();
-  const last = history.at(-1);
-  if (!deck || !last) return;
-  useApp.setState({ [from]: history.slice(0, -1) });
-  try {
-    const next = await api.saveDeckSource(deck.id, last.previous, last.source);
-    if (useApp.getState().deck?.id !== deck.id) return;
-    useApp.getState().setDeck(next);
-    adoptReview(next);
-    useApp.setState((s) => ({ [to]: [...s[to], { previous: last.source, source: last.previous }] }));
-  } catch (error) {
-    const verb = from === "deckUndo" ? "undone" : "redone";
-    useApp.setState({ error: `That slide list change cannot be ${verb}: ${errorMessage(error)}` });
-  }
-}
-
-/** Queues a rail change after the edits before it, shows its deck and adds it to the rail history. */
+/** Queues a rail change after the edits before it and shows its deck. */
 function editRail(change: (id: string) => Promise<RailEdit>): Promise<RailEdit | null> {
   const save = async () => {
     const { deck } = useApp.getState();
@@ -1545,8 +1498,6 @@ function editRail(change: (id: string) => Promise<RailEdit>): Promise<RailEdit |
       const edit = await change(deck.id);
       if (useApp.getState().deck?.id !== deck.id) return edit;
       useApp.getState().setDeck(edit.deck);
-      const entry = { previous: edit.previous, source: edit.source };
-      useApp.setState((s) => ({ deckUndo: [...s.deckUndo, entry].slice(-DECK_UNDO_KEPT), deckRedo: [] }));
       return edit;
     } catch (error) {
       useApp.setState({ error: errorMessage(error) });
@@ -1667,10 +1618,10 @@ async function loadDeckState(deck: Deck) {
     editing: false,
     slideMode: "view",
     editTool: "select",
-    slideUndo: [],
-    slideRedo: [],
+    ...NO_EDIT_STATE,
     ...NO_RAIL_STATE,
   });
+  void refreshHistory();
 }
 
 const REVIEW_SAVE_DELAY = 400;
@@ -1993,6 +1944,8 @@ function applyAgentEvent(event: AgentEvent) {
       }));
       useApp.setState({ running: false });
       persistChat();
+      // The turn's changes are in the decks' histories once it finished.
+      void refreshHistory();
       return;
   }
 }
@@ -2079,4 +2032,125 @@ async function openPendingFolder() {
   } catch (error) {
     useApp.getState().setError(errorMessage(error));
   }
+}
+
+let historyRun = 0;
+
+/** Asks the open deck's history what undo and redo would do now. */
+async function refreshHistory() {
+  const { deck } = useApp.getState();
+  const run = ++historyRun;
+  if (!deck) {
+    useApp.setState({ history: null });
+    return;
+  }
+  try {
+    const history = await api.deckHistory(deck.id);
+    if (run === historyRun && useApp.getState().deck?.id === deck.id) useApp.setState({ history });
+  } catch {
+    if (run === historyRun) useApp.setState({ history: null });
+  }
+}
+
+/**
+ * Undoes (`back`) or redoes the open deck's newest change, after the edits before it, and shows
+ * the first slide it changed. An undone agent turn may take the chat back too (see `turnUndone`).
+ */
+function stepHistory(back: boolean): Promise<void> {
+  const step = async () => {
+    await flushReviewSave();
+    const { deck } = useApp.getState();
+    if (!deck) return;
+    try {
+      const done = await (back ? api.undoDeck(deck.id) : api.redoDeck(deck.id));
+      if (useApp.getState().deck?.id !== deck.id) return;
+      const before = (id: string | null) => deck.slides.find((s) => s.id === id)?.hash;
+      const changed = done.deck.slides.filter((slide) => before(slide.id) !== slide.hash).map((s) => s.id);
+      useApp.getState().setDeck(done.deck);
+      adoptReview(done.deck);
+      historyRun++;
+      useApp.setState((s) => ({ history: done.status, editReload: s.editReload + 1 }));
+      const { selected } = useApp.getState();
+      if (changed[0] && !(selected && changed.includes(selected))) useApp.getState().select(changed[0]);
+      const entry = done.entry;
+      if (entry?.source === "chat" && entry.message) {
+        if (back) turnUndone(entry);
+        else turnRedone(entry);
+      }
+    } catch (error) {
+      useApp.setState({ error: errorMessage(error) });
+    }
+  };
+  editQueue = editQueue.then(step);
+  return editQueue;
+}
+
+/** The deck changes of an agent turn were undone: asks whether the chat follows, unless told before. */
+function turnUndone(entry: HistoryEntry) {
+  const message = useApp.getState().messages.find((m) => m.id === entry.message);
+  if (message?.role !== "user" || message.reverted) return;
+  const remembered = localStorage.getItem(REWIND_KEY);
+  if (remembered === "rewind" || remembered === "deck") void applyRewind(entry, remembered);
+  else useApp.setState({ rewindAsk: entry });
+}
+
+/** Redoing an agent turn kept in the chat takes back what undoing it told the agent. */
+function turnRedone(entry: HistoryEntry) {
+  useApp.setState((s) => ({
+    messages: s.messages.map((m) => (m.id === entry.message && m.role === "user" ? { ...m, reverted: false } : m)),
+    revertNotes: s.revertNotes.filter((n) => n.message !== entry.message),
+    rewindAsk: s.rewindAsk?.id === entry.id ? null : s.rewindAsk,
+  }));
+  persistChat();
+}
+
+/**
+ * Follows an undone agent turn in the chat: takes the chat back to before its message (which
+ * goes back into the composer), or keeps it, marked, and tells the agent with the next message.
+ */
+async function applyRewind(entry: HistoryEntry, choice: RewindChoice) {
+  const { workspace, messages } = useApp.getState();
+  const index = messages.findIndex((m) => m.id === entry.message);
+  const message = messages[index];
+  if (!workspace || message?.role !== "user") return;
+  const label = quoteLabel(message.text);
+  if (choice === "deck") {
+    useApp.setState((s) => ({
+      messages: s.messages.map((m) => (m.id === message.id ? { ...message, reverted: true } : m)),
+      revertNotes: [...s.revertNotes.filter((n) => n.message !== message.id), { message: message.id, label }],
+    }));
+    persistChat();
+    return;
+  }
+  const kept = new Set(messages.slice(0, index).map((m) => m.id));
+  useApp.setState((s) => ({
+    messages: s.messages.slice(0, index),
+    revertNotes: s.revertNotes.filter((n) => kept.has(n.message)),
+    chatRevision: s.chatRevision + 1,
+  }));
+  useApp.getState().fillComposer(message.text);
+  persistChat();
+  try {
+    await api.rewindChat(
+      workspace.path,
+      message.id,
+      `[note]The user took the conversation back to before their message ${label}: your replies from there on are gone, and the changes you made to the files in those turns were undone. Disregard them, and read the files again before changing them.[/note]`,
+    );
+  } catch (error) {
+    useApp.setState({ error: errorMessage(error) });
+  }
+}
+
+/** A chat message, shortened and quoted, for telling the agent about it. */
+function quoteLabel(text: string): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  return `"${line.length > 80 ? `${line.slice(0, 80).trimEnd()}…` : line}"`;
+}
+
+/** `prompt`, telling the agent first about the turns whose deck changes the user undid. */
+export function withRevertNotes(notes: { label: string }[], prompt: string): string {
+  if (notes.length === 0) return prompt;
+  const which = notes.map((n) => n.label).join(", ");
+  const turns = notes.length === 1 ? "your turn for the message" : "your turns for the messages";
+  return `[note]The user undid the changes ${turns} ${which} made to the deck; the files are back to how they were before. Read them again before changing them.[/note]\n\n${prompt}`;
 }

@@ -1,11 +1,13 @@
-//! Turn-wide protection. Capture and snapshot all decks before granting the agent a turn;
-//! eager snapshots avoid watcher races (atomic replacements, deletes, and rapid rewrites).
+//! Turn-wide protection. Capture all decks, and checkpoint their histories, before granting the
+//! agent a turn; capturing eagerly avoids watcher races (atomic replacements, deletes, and rapid
+//! rewrites). Each deck the turn changed gets one history entry when it ends.
 //! Limits fail closed: a partially scanned workspace is never handed to the agent.
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
+use crate::history::{self, Change};
 use crate::{deck, workspace};
 
 const MAX_ENTRIES: usize = 10_000;
@@ -14,6 +16,8 @@ const MAX_BYTES: u64 = 64 * 1024 * 1024;
 pub struct Guard {
     root: PathBuf,
     session: PathBuf,
+    /// The app's folder, which keeps the decks' histories.
+    home: PathBuf,
     before: BTreeMap<PathBuf, Vec<u8>>,
 }
 
@@ -76,23 +80,26 @@ fn scan(root: &Path, max_entries: usize, max_bytes: u64) -> Result<BTreeMap<Path
 }
 
 impl Guard {
-    pub fn start(root: &Path, session: &Path) -> Result<Self> {
+    pub fn start(root: &Path, session: &Path, home: &Path) -> Result<Self> {
         let before = decks(root)?;
         // Discard a stale guard from an interrupted app instance, once the full scan succeeds.
         fs::create_dir_all(session)?;
         fs::write(session.join("locked.json"), "{}")?;
         for file in before.keys() {
-            deck::snapshot(file, session)?;
+            history::checkpoint(home, file)?;
             deck::guard_locked(file, session)?;
         }
         Ok(Self {
             root: root.into(),
             session: session.into(),
+            home: home.into(),
             before,
         })
     }
 
-    pub fn finish(self) -> Result<Vec<(String, Vec<String>)>> {
+    /// Ends the turn: puts back locked slides, normalizes the decks it touched, and adds what it
+    /// did to each deck's history as `change`.
+    pub fn finish(self, change: &Change) -> Result<Vec<(String, Vec<String>)>> {
         let mut restored = Vec::new();
         let mut errors = Vec::new();
         // Restore every pre-existing deck, even if one cannot be restored or has been deleted.
@@ -120,13 +127,19 @@ impl Guard {
                 if let Err(e) = deck::normalize(file) {
                     errors.push(format!("{}: {e}", file.display()));
                 }
+                if let Err(e) = history::record(&self.home, file, change) {
+                    errors.push(format!("{}: {e}", file.display()));
+                }
             }
         }
         // New decks have no lock guard but still need ids and the runtime.
         match decks(&self.root) {
             Ok(now) => {
                 for file in now.keys().filter(|f| !self.before.contains_key(*f)) {
-                    if let Err(e) = deck::normalize(file) {
+                    // A new deck's history starts with the version the agent wrote.
+                    let normalized = deck::normalize(file)
+                        .and_then(|()| history::record(&self.home, file, change));
+                    if let Err(e) = normalized {
                         errors.push(format!("{}: {e}", file.display()));
                     }
                 }
@@ -148,6 +161,10 @@ mod tests {
     use super::*;
     use crate::sessions::Sessions;
 
+    fn turn() -> Change {
+        Change::chat("Tidy the slides", Some("m1".into()))
+    }
+
     #[test]
     fn protects_other_decks_snapshots_per_file_and_normalizes_new_decks() {
         let temp = std::env::temp_dir().join(format!("slopslide-guard-{}", uuid::Uuid::new_v4()));
@@ -159,7 +176,7 @@ mod tests {
         fs::write(&a, source).unwrap();
         fs::write(&b, source).unwrap();
         let session = Sessions::new(&temp.join("home")).start(&root).unwrap();
-        let guard = Guard::start(&root, &session).unwrap();
+        let guard = Guard::start(&root, &session, &temp.join("home")).unwrap();
         fs::write(
             &b,
             source.replace(">A<", ">changed<").replace(" id=\"b\"", ""),
@@ -176,26 +193,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            guard.finish().unwrap(),
+            guard.finish(&turn()).unwrap(),
             [("talks/quarterly/q3.html".into(), vec!["a".into()])]
         );
         let out = fs::read_to_string(&b).unwrap();
         assert!(out.contains(">A</section>"));
         assert!(out.contains("slopslide:runtime-js"));
         assert!(!deck::load(&b).unwrap().slides[1].id.is_empty());
-        assert!(fs::read_to_string(new)
+        assert!(fs::read_to_string(&new)
             .unwrap()
             .contains("slopslide:runtime-js"));
-        for path in ["deck.html", "talks/quarterly/q3.html"] {
-            let files: Vec<_> = fs::read_dir(session.join("snapshots").join(path))
-                .unwrap()
-                .collect();
-            assert_eq!(files.len(), 1);
-            assert_eq!(
-                fs::read_to_string(files[0].as_ref().unwrap().path()).unwrap(),
-                source
-            );
-        }
+        // One entry for the turn in the history of each deck it changed; none for the other.
+        let home = temp.join("home");
+        let undo = history::status(&home, &b, false).unwrap().undo.unwrap();
+        assert_eq!(
+            (undo.source, undo.label.as_str()),
+            (history::Source::Chat, "Tidy the slides")
+        );
+        assert_eq!(undo.message.as_deref(), Some("m1"));
+        assert!(history::status(&home, &a, false).unwrap().undo.is_none());
+        history::undo(&home, &b).unwrap();
+        assert_eq!(fs::read_to_string(&b).unwrap(), source);
+        // A new deck's history starts with the agent's version.
+        let created = history::status(&home, &new, false).unwrap();
+        assert!(created.undo.is_none() && created.current.is_some());
         assert!(!session.join("locked.json").exists());
         fs::remove_dir_all(temp).unwrap();
     }
@@ -211,20 +232,20 @@ mod tests {
         fs::write(&a, source).unwrap();
         fs::write(&b, source).unwrap();
         let session = Sessions::new(&temp.join("home")).start(&root).unwrap();
-        let guard = Guard::start(&root, &session).unwrap();
+        let guard = Guard::start(&root, &session, &temp.join("home")).unwrap();
         deck::set_slide_locked(&a, Some(&session), "a", false).unwrap();
         assert!(deck::read_guard(&a, Some(&session)).is_empty());
         assert_eq!(deck::read_guard(&b, Some(&session)).len(), 1);
         fs::remove_dir_all(root.join("talks")).unwrap();
         assert_eq!(
-            guard.finish().unwrap(),
+            guard.finish(&turn()).unwrap(),
             [("talks/q3.html".into(), vec!["a".into()])]
         );
         assert!(fs::read_to_string(&b).unwrap().contains(">A</section>"));
-        let guard = Guard::start(&root, &session).unwrap();
+        let guard = Guard::start(&root, &session, &temp.join("home")).unwrap();
         fs::write(&b, "broken document without a slide container").unwrap();
         assert_eq!(
-            guard.finish().unwrap(),
+            guard.finish(&turn()).unwrap(),
             [("talks/q3.html".into(), vec!["a".into()])]
         );
         let restored = fs::read_to_string(&b).unwrap();

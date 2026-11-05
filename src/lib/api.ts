@@ -73,7 +73,7 @@ export interface SlideTiming {
   narrationStart: number | null;
 }
 
-/** What a change from the slide rail did; saving `previous` back over `source` undoes it. */
+/** What a change from the slide rail did, with the deck's source before and after. */
 export interface RailEdit {
   deck: Deck;
   previous: string;
@@ -148,10 +148,45 @@ export interface CreatedSlide {
   slide: string;
 }
 
-export interface UpdatedSlide {
+/** What made a change in a deck's history (see src-tauri/src/history.rs). */
+export type HistorySource =
+  | "open"
+  | "external"
+  | "edit"
+  | "rail"
+  | "review"
+  | "narration"
+  | "notes"
+  | "deck"
+  | "code"
+  | "chat";
+
+/** One version in a deck's undo history, with the change that made it. */
+export interface HistoryEntry {
+  id: string;
+  source: HistorySource;
+  label: string;
+  /** Milliseconds since the Unix epoch. */
+  time: number;
+  /** The chat message whose agent turn made the change. */
+  message?: string;
+}
+
+/** What undo and redo would do in a deck now. */
+export interface DeckHistory {
+  /** The change undo takes back. */
+  undo: HistoryEntry | null;
+  /** The change redo makes again. */
+  redo: HistoryEntry | null;
+  /** The version the deck is at. */
+  current: string | null;
+}
+
+/** What an undo or redo did: the deck it left, the change it took back or made again. */
+export interface HistoryStep {
   deck: Deck;
-  /** The slide's markup before the update; saving it back undoes the update. */
-  previous: string;
+  entry: HistoryEntry | null;
+  status: DeckHistory;
 }
 
 /** How find and replace matches (see src-tauri/src/find.rs). */
@@ -182,7 +217,7 @@ export interface ReplacedText {
   slides: string[];
   /** Locked slides with matches, left as they were. */
   skipped: string[];
-  /** The deck's source before and after; saving `previous` over `source` undoes the replace. */
+  /** The deck's source before and after. */
   previous: string;
   source: string;
 }
@@ -438,9 +473,17 @@ export const api = {
   deleteSlides: (id: string, slides: string[]) => invoke<RailEdit>("delete_slides", { id, slides }),
   /** Replaces one slide's markup; refused when the slide's hash is no longer `base`. */
   updateSlide: (id: string, slide: string, markup: string, base: string) =>
-    invoke<UpdatedSlide>("update_slide", { id, slide, markup, base }),
+    invoke<Deck>("update_slide", { id, slide, markup, base }),
   saveDeckSource: (id: string, source: string, base: string | null) =>
     invoke<Deck>("save_deck_source", { id, source, base }),
+  /** What undo and redo would do in the deck; notices changes made outside the app first. */
+  deckHistory: (id: string) => invoke<DeckHistory>("deck_history", { id }),
+  /** Takes back the deck's newest change, whatever made it. */
+  undoDeck: (id: string) => invoke<HistoryStep>("undo_deck", { id }),
+  /** Makes the change undone last again. */
+  redoDeck: (id: string) => invoke<HistoryStep>("redo_deck", { id }),
+  /** Puts `slides` back as they were at version `since` of the deck's history. */
+  restoreSlides: (id: string, since: string, slides: string[]) => invoke<Deck>("restore_slides", { id, since, slides }),
   /** Where `query` is found in the text on the deck's slides (and their notes). */
   findInDeck: (id: string, query: string, options: FindOptions) =>
     invoke<FindMatch[]>("find_in_deck", { id, query, options }),
@@ -543,7 +586,14 @@ export const api = {
     },
     /** Summarize the conversation so far instead of sending `prompt`. */
     compact = false,
-  ) => invoke<void>("send_message", { args: { workspace, prompt, ...selection, compact } }),
+    /** The chat message the turn answers, and what the user wrote, for the decks' histories. */
+    turn: { message: string; label: string } | null = null,
+  ) => invoke<void>("send_message", { args: { workspace, prompt, ...selection, compact, ...turn } }),
+  /**
+   * Takes the workspace's conversation back to before chat message `message` when its next turn
+   * starts; that turn's prompt starts with `note` when the provider cannot do it.
+   */
+  rewindChat: (id: string, message: string, note: string) => invoke<void>("rewind_chat", { id, message, note }),
   /** The modes `provider` offers in workspace `id` (Codex: per its configuration). */
   permissionModes: (provider: Provider, id: string) => invoke<PermissionMode[]>("permission_modes", { provider, id }),
   respondApproval: (workspace: string, id: string, decision: ApprovalDecision) =>

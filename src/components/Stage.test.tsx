@@ -229,8 +229,8 @@ describe("Stage", () => {
 
   describe("slide rail keys", () => {
     const actions = {
-      undoDeckEdit: vi.fn(async () => {}),
-      redoDeckEdit: vi.fn(async () => {}),
+      undo: vi.fn(async () => {}),
+      redo: vi.fn(async () => {}),
       moveSlides: vi.fn(async () => {}),
       deleteSlides: vi.fn(async () => {}),
     };
@@ -240,20 +240,20 @@ describe("Stage", () => {
       useApp.setState({ ...actions, railSelected: [] });
     });
     afterEach(() => {
-      const { undoDeckEdit, redoDeckEdit, moveSlides, deleteSlides } = real;
-      useApp.setState({ undoDeckEdit, redoDeckEdit, moveSlides, deleteSlides, railSelected: [] });
+      const { undo, redo, moveSlides, deleteSlides } = real;
+      useApp.setState({ undo, redo, moveSlides, deleteSlides, railSelected: [] });
     });
 
-    it("undoes and redoes rail changes outside edit mode", () => {
+    it("undoes and redoes the deck's changes outside edit mode", () => {
       render(<Stage />);
       fireEvent.keyDown(document.body, { key: "z", metaKey: true });
-      expect(actions.undoDeckEdit).toHaveBeenCalledOnce();
+      expect(actions.undo).toHaveBeenCalledOnce();
       fireEvent.keyDown(document.body, { key: "Z", metaKey: true, shiftKey: true });
       fireEvent.keyDown(document.body, { key: "y", ctrlKey: true });
-      expect(actions.redoDeckEdit).toHaveBeenCalledTimes(2);
+      expect(actions.redo).toHaveBeenCalledTimes(2);
     });
 
-    it("leaves ⌘Z to the slide's own history in edit mode, and to text fields", () => {
+    it("leaves ⌘Z to text fields, and undoes once in edit mode", () => {
       render(
         <>
           <Stage />
@@ -261,9 +261,10 @@ describe("Stage", () => {
         </>,
       );
       fireEvent.keyDown(screen.getByTestId("composer"), { key: "z", metaKey: true });
+      expect(actions.undo).not.toHaveBeenCalled();
       act(() => useApp.getState().setEditing(true));
       fireEvent.keyDown(document.body, { key: "z", metaKey: true });
-      expect(actions.undoDeckEdit).not.toHaveBeenCalled();
+      expect(actions.undo).toHaveBeenCalledOnce();
       act(() => useApp.getState().setEditing(false));
     });
 
@@ -288,7 +289,7 @@ describe("Stage", () => {
       forward({ key: "ArrowDown", mod: true });
       expect(actions.moveSlides).toHaveBeenLastCalledWith(1);
       forward({ key: "z", mod: true });
-      expect(actions.undoDeckEdit).toHaveBeenCalledOnce();
+      expect(actions.undo).toHaveBeenCalledOnce();
       frame.remove();
     });
 
@@ -685,7 +686,7 @@ describe("Stage", () => {
 
   describe("editing the slide", () => {
     const NoLayout = globalThis.ResizeObserver;
-    const { saveSlideEdit, undoSlideEdit, redoSlideEdit, discardSlideEdits, tidyLayout } = useApp.getState();
+    const { saveSlideEdit, undo, redo, discardSlideEdits, tidyLayout } = useApp.getState();
     const toggleEditing = () => act(() => useApp.getState().setMode(useApp.getState().editing ? "view" : "edit"));
     const stageFrame = (container: HTMLElement) => container.querySelector("iframe")!;
     const MARKUP = `<section class="slide" id="intro"><h1 data-moved="" style="translate: 9px 0px;">Hello</h1></section>`;
@@ -707,11 +708,11 @@ describe("Stage", () => {
         unobserve() {}
         disconnect() {}
       } as unknown as typeof ResizeObserver;
-      useApp.setState({ editing: false, editReload: 0, slideUndo: [], slideRedo: [], running: false });
+      useApp.setState({ editing: false, editReload: 0, editBase: null, editedSlides: [], running: false });
     });
     afterEach(() => {
       globalThis.ResizeObserver = NoLayout;
-      useApp.setState({ saveSlideEdit, undoSlideEdit, redoSlideEdit, discardSlideEdits, tidyLayout });
+      useApp.setState({ saveSlideEdit, undo, redo, discardSlideEdits, tidyLayout });
       vi.restoreAllMocks();
     });
 
@@ -1172,7 +1173,7 @@ describe("Stage", () => {
           const { post } = enter();
           vi.mocked(open).mockResolvedValue(null as never);
           await act(async () => void fireEvent.click(button("Add an image from a file")));
-          expect(invoke).not.toHaveBeenCalled();
+          expect(invoke).not.toHaveBeenCalledWith("import_assets", expect.anything());
           expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-paste-images" }), "*");
         });
 
@@ -1423,6 +1424,13 @@ describe("Stage", () => {
       });
     });
 
+    /** Marks `slides` edited since edit mode started: changed from the hashes they had then. */
+    const edited = (...slides: string[]) => {
+      const { deck } = useApp.getState();
+      const hashes = Object.fromEntries(deck!.slides.map((s) => [s.id, slides.includes(s.id) ? "before" : s.hash]));
+      useApp.setState({ editBase: { version: "v1", hashes }, editedSlides: slides });
+    };
+
     it("floats a discard button over the slide while there are edits, which discards them all", () => {
       const discard = vi.fn().mockResolvedValue(undefined);
       useApp.setState({ discardSlideEdits: discard });
@@ -1430,8 +1438,7 @@ describe("Stage", () => {
       toggleEditing();
       const discardButton = () => screen.queryByRole("button", { name: /Discard changes/ });
       expect(discardButton()).toBeNull();
-      const entry = { slide: "intro", markup: "", after: "" };
-      act(() => useApp.setState({ slideUndo: [entry, entry] }));
+      act(() => edited("intro"));
       expect(discardButton()!.closest("[data-testid=stage-area]")).not.toBeNull();
       fireEvent.click(discardButton()!);
       expect(discard).toHaveBeenCalledWith();
@@ -1443,9 +1450,7 @@ describe("Stage", () => {
       useApp.setState({ discardSlideEdits: discard, selected: "intro" });
       render(<Stage />);
       toggleEditing();
-      const intro = { slide: "intro", markup: "", after: "" };
-      const outro = { slide: "outro", markup: "", after: "" };
-      act(() => useApp.setState({ slideUndo: [outro, intro] }));
+      act(() => edited("outro", "intro"));
       const open = () => fireEvent.click(screen.getByRole("button", { name: /Discard changes/ }));
       const dialog = () => screen.queryByRole("dialog", { name: "Discard changes" });
 
@@ -1470,7 +1475,7 @@ describe("Stage", () => {
       useApp.setState({ discardSlideEdits: discard, selected: "intro" });
       render(<Stage />);
       toggleEditing();
-      act(() => useApp.setState({ slideUndo: [{ slide: "outro", markup: "", after: "" }] }));
+      act(() => edited("outro"));
       fireEvent.click(screen.getByRole("button", { name: /Discard changes/ }));
       expect(screen.queryByRole("dialog")).toBeNull();
       expect(discard).toHaveBeenCalledWith();
@@ -1897,10 +1902,8 @@ describe("Stage", () => {
 
     it("undoes with ⌘Z / Ctrl+Z from the slide or the window, and Escape leaves edit mode", () => {
       const undo = vi.fn().mockResolvedValue(undefined);
-      useApp.setState({ undoSlideEdit: undo });
+      useApp.setState({ undo });
       const { container } = render(<Stage />);
-      fireEvent.keyDown(document.body, { key: "z", metaKey: true });
-      expect(undo).not.toHaveBeenCalled();
       toggleEditing();
       fireEvent.keyDown(document.body, { key: "z", ctrlKey: true });
       fromFrame(stageFrame(container), { type: "slop:key", key: "z", mod: true });
@@ -1912,7 +1915,7 @@ describe("Stage", () => {
     it("redoes with ⇧⌘Z or Ctrl+Y from the slide or the window", () => {
       const undo = vi.fn().mockResolvedValue(undefined);
       const redo = vi.fn().mockResolvedValue(undefined);
-      useApp.setState({ undoSlideEdit: undo, redoSlideEdit: redo });
+      useApp.setState({ undo, redo });
       const { container } = render(<Stage />);
       toggleEditing();
       fireEvent.keyDown(document.body, { key: "Z", metaKey: true, shiftKey: true });

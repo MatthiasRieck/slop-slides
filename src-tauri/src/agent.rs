@@ -21,6 +21,7 @@ use crate::error::{Error, Result};
 use crate::extensions::Extensions;
 use crate::mcp;
 use crate::permissions::{Approval, Approvals, Choices, Decision, PermissionMode};
+use crate::rewind;
 use crate::sessions::Sessions;
 use crate::{codex, copilot};
 
@@ -185,6 +186,12 @@ pub struct SendArgs {
     pub compact: bool,
     #[serde(default)]
     pub permission_mode: PermissionMode,
+    /// The id of the chat message this turn answers, to take the conversation back to it.
+    #[serde(default)]
+    pub message: Option<String>,
+    /// What the user wrote, to label the turn's changes in the decks' histories.
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 impl AgentManager {
@@ -242,6 +249,7 @@ impl AgentManager {
                     }),
                 effort: args.effort.filter(|e| !e.is_empty()),
                 compact: args.compact,
+                message: args.message.clone(),
                 workspace: args.workspace.clone(),
                 permission_mode: args.permission_mode,
                 approvals,
@@ -254,10 +262,15 @@ impl AgentManager {
                     message: message.clone(),
                 });
             }
-            let interrupted = match crate::safety::Guard::start(&turn.dir, &turn.session_dir) {
+            let guard = crate::safety::Guard::start(&turn.dir, &turn.session_dir, &turn.app_home);
+            let change = crate::history::Change::chat(
+                args.label.as_deref().unwrap_or(""),
+                args.message.clone(),
+            );
+            let interrupted = match guard {
                 Ok(guard) => {
                     let interrupted = turn.run_with_open_requests(&args.prompt, cancel_rx).await;
-                    match guard.finish() {
+                    match guard.finish(&change) {
                         Ok(restored) => {
                             for (file, ids) in restored {
                                 turn.emit(&AgentEvent::Error {
@@ -314,13 +327,15 @@ struct Turn {
     dir: PathBuf,
     /// Where the files every deck's agent shares are written (see [`deck::app_home`]).
     app_home: PathBuf,
-    /// The workspace's session this turn belongs to: chat state, snapshots, provider session ids.
+    /// The workspace's session this turn belongs to: chat state, provider session ids.
     session_dir: PathBuf,
     provider: Provider,
     bin: PathBuf,
     model: Option<String>,
     effort: Option<String>,
     compact: bool,
+    /// The chat message the turn answers (see [`SendArgs::message`]).
+    message: Option<String>,
     workspace: String,
     permission_mode: PermissionMode,
     approvals: Arc<Approvals>,
@@ -373,7 +388,34 @@ impl Turn {
                 return false;
             }
         }
-        let mut outcome = self.run_once(prompt, session.as_deref(), &mut cancel).await;
+        // A rewind the user asked for since the last turn (see `rewind`).
+        let plan = if self.compact {
+            None
+        } else {
+            rewind::take(&self.session_dir, self.provider).unwrap_or_default()
+        };
+        let mut session = session;
+        let mut prompt = prompt.to_string();
+        let mut cut = None;
+        match plan {
+            Some(rewind::Plan::Fresh) => {
+                let _ = deck::write_session(&self.session_dir, session_file, None);
+                session = None;
+            }
+            Some(rewind::Plan::At { point, note }) if session.is_some() => {
+                cut = Some((point, note))
+            }
+            Some(rewind::Plan::At { note, .. } | rewind::Plan::Note(note)) => {
+                prompt = rewind::with_note(&note, &prompt);
+            }
+            None => {}
+        }
+        let cut = cut
+            .as_ref()
+            .map(|(point, note)| (point.as_str(), note.as_str()));
+        let mut outcome = self
+            .run_once(&prompt, session.as_deref(), cut, &mut cancel)
+            .await;
         if self.compact && matches!(outcome, Ok(Outcome::ResumeFailed)) {
             // Starting fresh would leave nothing to compact.
             let _ = deck::write_session(&self.session_dir, session_file, None);
@@ -386,7 +428,7 @@ impl Turn {
         if matches!(outcome, Ok(Outcome::ResumeFailed)) {
             // The stored session is gone (other machine, cleared history): start fresh.
             let _ = deck::write_session(&self.session_dir, session_file, None);
-            outcome = self.run_once(prompt, None, &mut cancel).await;
+            outcome = self.run_once(&prompt, None, None, &mut cancel).await;
         }
         match outcome {
             Ok(Outcome::Interrupted) => true,
@@ -400,14 +442,29 @@ impl Turn {
         }
     }
 
+    /// Records the provider's `point` where the turn of the user's message started.
+    fn started_at(&self, point: Option<&str>) {
+        if let Some(message) = &self.message {
+            let _ = rewind::anchor(&self.session_dir, message, self.provider, point);
+        }
+    }
+
+    /// One turn in `session` (or a new conversation), cut back at `cut` first (see
+    /// [`rewind::TurnRewind::cut`]).
     async fn run_once(
         &self,
         prompt: &str,
         session: Option<&str>,
+        cut: Option<(&str, &str)>,
         cancel: &mut watch::Receiver<bool>,
     ) -> Result<Outcome> {
         let model = self.model.as_deref();
         let effort = self.effort.as_deref();
+        let started = |point: &str| self.started_at(Some(point));
+        let rewind = rewind::TurnRewind {
+            cut,
+            started: Some(&started),
+        };
         if self.provider == Provider::Copilot {
             let args = copilot::TurnArgs {
                 bin: &self.bin,
@@ -422,6 +479,7 @@ impl Turn {
                 mode: self.permission_mode,
                 approvals: self.approvals.clone(),
                 extensions: &self.extensions,
+                rewind,
             };
             let on_session = |id: &str| {
                 deck::write_session(&self.session_dir, self.provider.session_file(), Some(id))
@@ -442,6 +500,7 @@ impl Turn {
                     mode: self.permission_mode,
                     approvals: self.approvals.clone(),
                     extensions: &self.extensions,
+                    rewind,
                 },
                 cancel,
                 &|event| self.emit(event),
@@ -481,7 +540,19 @@ impl Turn {
             session,
             self.permission_mode,
         );
+        if let (Some(_), Some((point, _))) = (session, cut) {
+            // Drops the conversation after this message (see `rewind`).
+            args.extend(["--resume-session-at".into(), point.into()]);
+        }
         args.extend(plugin_args(&plugins));
+        // The conversation's newest message before this turn, where taking it back resumes.
+        let tail = match (session, cut) {
+            (None, _) => None,
+            (Some(_), Some((point, _))) => Some(point.to_string()),
+            (Some(_), None) => rewind::claude_tail(&self.session_dir),
+        };
+        self.started_at(tail.as_deref());
+        let mut newest = tail;
         let started = Instant::now();
 
         let mut cmd = crate::process::command(&self.bin)?;
@@ -556,6 +627,11 @@ impl Turn {
                             continue;
                         }
                         Some("result") => stdin = None,
+                        Some("assistant") if value["parent_tool_use_id"].is_null() => {
+                            if let Some(uuid) = value["uuid"].as_str() {
+                                newest = Some(uuid.to_string());
+                            }
+                        }
                         _ => {}
                     }
                     if let Some(id) = session_id_of_init(&value) {
@@ -577,10 +653,12 @@ impl Turn {
                 }
                 _ = cancel.changed() => {
                     let _ = child.kill().await;
+                    let _ = rewind::set_claude_tail(&self.session_dir, newest.as_deref());
                     return Ok(Outcome::Interrupted);
                 }
             }
         }
+        let _ = rewind::set_claude_tail(&self.session_dir, newest.as_deref());
 
         let status = child.wait().await?;
         let stderr = stderr_task.await.unwrap_or_default();
@@ -1740,6 +1818,7 @@ mod tests {
                     model: model.map(str::to_string),
                     effort: None,
                     compact: false,
+                    message: None,
                     workspace: "test".into(),
                     permission_mode: self.mode,
                     approvals,
@@ -1959,6 +2038,61 @@ echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id
             assert!(mcp["mcpServers"]["slopslide"].is_object());
             let prompt = fs::read_to_string(home.join("system-prompt.md")).unwrap();
             assert!(prompt.starts_with(SYSTEM_PROMPT) && prompt.ends_with("Be brief."));
+        }
+
+        #[tokio::test]
+        async fn takes_the_conversation_back_to_before_a_message() {
+            let fx = Fixture::new(&format!(
+                r#"echo '{{"type":"system","subtype":"init","session_id":"s1"}}'
+echo '{{"type":"assistant","uuid":"nested","parent_tool_use_id":"t1","message":{{"content":[]}}}}'
+echo "{{\"type\":\"assistant\",\"uuid\":\"u-$$\",\"parent_tool_use_id\":null,\"message\":{{\"content\":[]}}}}"
+{OK}"#
+            ));
+            let run = |message: &str| {
+                let (tx, rx) = watch::channel(false);
+                let mut turn = fx.turn();
+                turn.message = Some(message.into());
+                async move {
+                    // Dropping the sender would interrupt the turn.
+                    let _tx = tx;
+                    tokio::time::timeout(Duration::from_secs(20), turn.run("Go", rx))
+                        .await
+                        .expect("turn timed out")
+                }
+            };
+            let pids = |fx: &Fixture| {
+                fs::read_to_string(fx.dir.join(LOG_DIR).join("runs"))
+                    .unwrap()
+                    .lines()
+                    .map(String::from)
+                    .collect::<Vec<_>>()
+            };
+            run("m1").await;
+            run("m2").await;
+            let first = format!("u-{}", pids(&fx)[0]);
+
+            rewind::request(&fx.session_dir(), "m2", "NOTE").unwrap();
+            run("m3").await;
+            let runs = fx.invocations();
+            assert!(has_flag(&runs[2], "--resume", "s1"));
+            assert!(
+                has_flag(&runs[2], "--resume-session-at", &first),
+                "resumes after the last reply before m2, not a nested agent's"
+            );
+            assert_eq!(fx.prompt(), "Go");
+
+            rewind::request(&fx.session_dir(), "m1", "NOTE").unwrap();
+            run("m4").await;
+            let runs = fx.invocations();
+            assert!(
+                !runs[3].contains(&"--resume".to_string()),
+                "m1 started the conversation: start a new one"
+            );
+
+            rewind::request(&fx.session_dir(), "unknown", "NOTE").unwrap();
+            run("m5").await;
+            assert!(!fx.invocations()[4].contains(&"--resume-session-at".to_string()));
+            assert_eq!(fx.prompt(), "NOTE\n\nGo");
         }
 
         #[tokio::test]

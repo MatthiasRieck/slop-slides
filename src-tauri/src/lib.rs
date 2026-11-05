@@ -11,6 +11,7 @@ mod export_smoke;
 mod extensions;
 mod find;
 mod git;
+mod history;
 mod html;
 mod lint;
 mod mcp;
@@ -24,6 +25,7 @@ mod protocol;
 mod providers;
 mod render;
 mod review;
+mod rewind;
 mod safety;
 mod screens;
 mod sessions;
@@ -45,12 +47,19 @@ use tauri::{AppHandle, Manager, State, Window};
 use agent::{AgentManager, SendArgs};
 use deck::{Deck, RailEdit};
 use error::Result;
+use history::{Change, Source};
 use sessions::Sessions;
 use watcher::WorkspaceWatcher;
 use workspace::OpenWorkspace;
 
 fn sessions() -> Result<Sessions> {
     Ok(Sessions::new(&deck::app_home()?))
+}
+
+/// Runs `f`, a change to deck `id`'s file, and adds it to the deck's history (see [`history`]).
+fn changing<T>(id: &str, change: Change, f: impl FnOnce(&Path) -> Result<T>) -> Result<T> {
+    let file = deck::deck_file(id)?;
+    history::change(&deck::app_home()?, &file, change, || f(&file))
 }
 
 /// The current session of the window's workspace, starting one if it has none.
@@ -76,14 +85,6 @@ fn workspace_root(window: &Window) -> Result<PathBuf> {
 struct CreatedSlide {
     deck: Deck,
     slide: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct UpdatedSlide {
-    deck: Deck,
-    /// The slide's markup before the update, to undo it.
-    previous: String,
 }
 
 #[derive(Serialize)]
@@ -251,7 +252,9 @@ fn apply_template(id: String, template: String) -> Result<Deck> {
         id: &template,
         html: &html,
     };
-    deck::apply_template(&deck::deck_file(&id)?, source)
+    changing(&id, Change::new(Source::Deck, "Apply template"), |file| {
+        deck::apply_template(file, source)
+    })
 }
 
 /// Adds a copy of one of the template's slides after `after`.
@@ -263,7 +266,9 @@ fn add_template_slide(
     after: Option<String>,
 ) -> Result<CreatedSlide> {
     let html = templates::source(&templates::user_root()?, &template)?;
-    let (deck, slide) = deck::add_template_slide(&deck::deck_file(&id)?, after, &html, &slide)?;
+    let (deck, slide) = changing(&id, Change::new(Source::Rail, "Add slide"), |file| {
+        deck::add_template_slide(file, after, &html, &slide)
+    })?;
     Ok(CreatedSlide { deck, slide })
 }
 
@@ -277,11 +282,12 @@ fn create_template(id: String, name: String) -> Result<templates::TemplateSummar
 fn open_deck(window: Window, agent: State<AgentManager>, id: String) -> Result<Deck> {
     let file = deck::deck_file(&id)?;
     let session = current_session(&window)?;
-    deck::open(
-        &file,
-        session.as_deref(),
-        !agent.is_running(&workspace_root(&window)?.to_string_lossy()),
-    )
+    let idle = !agent.is_running(&workspace_root(&window)?.to_string_lossy());
+    let deck = deck::open(&file, session.as_deref(), idle)?;
+    if idle {
+        history::checkpoint(&deck::app_home()?, &file)?;
+    }
+    Ok(deck)
 }
 
 #[tauri::command]
@@ -291,33 +297,43 @@ fn load_deck(id: String) -> Result<Deck> {
 
 #[tauri::command]
 fn save_review(id: String, review: review::Review) -> Result<()> {
-    deck::save_review(&deck::deck_file(&id)?, &review)
+    let change = Change::new(Source::Review, "Review marks").grouped("review");
+    changing(&id, change, |file| deck::save_review(file, &review))
 }
 
 #[tauri::command]
 fn save_comments(id: String, comments: comments::Comments) -> Result<()> {
-    deck::save_comments(&deck::deck_file(&id)?, &comments)
+    let change = Change::new(Source::Review, "Comments").grouped("comments");
+    changing(&id, change, |file| deck::save_comments(file, &comments))
 }
 
 #[tauri::command]
 fn rename_deck(id: String, title: String) -> Result<Deck> {
-    deck::rename(&deck::deck_file(&id)?, &title)
+    changing(&id, Change::new(Source::Deck, "Rename deck"), |file| {
+        deck::rename(file, &title)
+    })
 }
 
 #[tauri::command]
 fn reorder_slides(id: String, slides: Vec<String>) -> Result<RailEdit> {
-    deck::reorder(&deck::deck_file(&id)?, slides)
+    changing(&id, Change::new(Source::Rail, "Move slides"), |file| {
+        deck::reorder(file, slides)
+    })
 }
 
 #[tauri::command]
 fn add_slide(id: String, after: Option<String>) -> Result<CreatedSlide> {
-    let (deck, slide) = deck::add_blank(&deck::deck_file(&id)?, after)?;
+    let (deck, slide) = changing(&id, Change::new(Source::Rail, "Add slide"), |file| {
+        deck::add_blank(file, after)
+    })?;
     Ok(CreatedSlide { deck, slide })
 }
 
 #[tauri::command]
 fn duplicate_slides(id: String, slides: Vec<String>) -> Result<RailEdit> {
-    deck::duplicate_slides(&deck::deck_file(&id)?, &slides)
+    changing(&id, Change::new(Source::Rail, "Duplicate slides"), |file| {
+        deck::duplicate_slides(file, &slides)
+    })
 }
 
 #[tauri::command]
@@ -327,80 +343,162 @@ fn set_slides_hidden(
     slides: Vec<String>,
     hidden: bool,
 ) -> Result<RailEdit> {
-    let file = deck::deck_file(&id)?;
-    deck::set_slides_hidden(&file, current_session(&window)?.as_deref(), &slides, hidden)
+    let session = current_session(&window)?;
+    let label = if hidden { "Hide slides" } else { "Show slides" };
+    changing(&id, Change::new(Source::Rail, label), |file| {
+        deck::set_slides_hidden(file, session.as_deref(), &slides, hidden)
+    })
 }
 
 /// Sets what is said over a slide; empty `text` removes its narration.
 #[tauri::command]
 fn set_slide_narration(id: String, slide: String, text: String) -> Result<Deck> {
-    deck::set_slide_narration(&deck::deck_file(&id)?, &slide, &text)
+    let change =
+        Change::new(Source::Narration, "Edit narration").grouped(format!("narration:{slide}"));
+    changing(&id, change, |file| {
+        deck::set_slide_narration(file, &slide, &text)
+    })
 }
 
 /// Sets a slide's speaker notes; empty `text` removes them.
 #[tauri::command]
 fn set_slide_notes(id: String, slide: String, text: String) -> Result<Deck> {
-    deck::set_slide_notes(&deck::deck_file(&id)?, &slide, &text)
+    let change = Change::new(Source::Notes, "Edit notes").grouped(format!("notes:{slide}"));
+    changing(&id, change, |file| {
+        deck::set_slide_notes(file, &slide, &text)
+    })
 }
 
 /// Sets the seconds the presenter expects to spend on a slide; 0 removes them.
 #[tauri::command]
 fn set_slide_time(id: String, slide: String, seconds: u32) -> Result<Deck> {
-    deck::set_slide_time(&deck::deck_file(&id)?, &slide, seconds)
+    let change = Change::new(Source::Notes, "Set slide time").grouped(format!("time:{slide}"));
+    changing(&id, change, |file| {
+        deck::set_slide_time(file, &slide, seconds)
+    })
 }
 
 /// Sets the timing of slides on the narration timeline, all in one write.
 #[tauri::command]
 fn set_slide_timing(id: String, timing: Vec<deck::SlideTiming>) -> Result<RailEdit> {
-    deck::set_slide_timing(&deck::deck_file(&id)?, &timing)
+    let change = Change::new(Source::Narration, "Change timing").grouped("timing");
+    changing(&id, change, |file| deck::set_slide_timing(file, &timing))
 }
 
 /// Gives every slide of the deck the canvas `size`.
 #[tauri::command]
 fn set_slide_size(id: String, size: size::SlideSize) -> Result<Deck> {
-    deck::set_slide_size(&deck::deck_file(&id)?, size)
+    changing(
+        &id,
+        Change::new(Source::Deck, "Change slide size"),
+        |file| deck::set_slide_size(file, size),
+    )
 }
 
 #[tauri::command]
 fn set_slide_locked(window: Window, id: String, slide: String, locked: bool) -> Result<Deck> {
-    let file = deck::deck_file(&id)?;
-    deck::set_slide_locked(&file, current_session(&window)?.as_deref(), &slide, locked)
+    let session = current_session(&window)?;
+    let label = if locked { "Lock slide" } else { "Unlock slide" };
+    changing(&id, Change::new(Source::Rail, label), |file| {
+        deck::set_slide_locked(file, session.as_deref(), &slide, locked)
+    })
 }
 
 #[tauri::command]
 fn add_section(id: String, before: Option<String>, title: String) -> Result<Deck> {
-    deck::add_section(&deck::deck_file(&id)?, before, &title)
+    changing(&id, Change::new(Source::Rail, "Add section"), |file| {
+        deck::add_section(file, before, &title)
+    })
 }
 
 #[tauri::command]
 fn rename_section(id: String, index: usize, title: String) -> Result<Deck> {
-    deck::rename_section(&deck::deck_file(&id)?, index, &title)
+    changing(&id, Change::new(Source::Rail, "Rename section"), |file| {
+        deck::rename_section(file, index, &title)
+    })
 }
 
 #[tauri::command]
 fn delete_section(id: String, index: usize) -> Result<Deck> {
-    deck::delete_section(&deck::deck_file(&id)?, index)
+    changing(&id, Change::new(Source::Rail, "Delete section"), |file| {
+        deck::delete_section(file, index)
+    })
 }
 
 #[tauri::command]
-fn delete_slides(window: Window, id: String, slides: Vec<String>) -> Result<RailEdit> {
-    let file = deck::deck_file(&id)?;
-    deck::delete_slides(&file, &session(&window)?, &slides)
+fn delete_slides(id: String, slides: Vec<String>) -> Result<RailEdit> {
+    changing(&id, Change::new(Source::Rail, "Delete slides"), |file| {
+        deck::delete_slides(file, &slides)
+    })
 }
 
 /// Saves a slide edited on the stage (text edits, moved elements). `base` is its hash when
 /// the edit started.
 #[tauri::command]
-fn update_slide(
-    window: Window,
-    id: String,
-    slide: String,
-    markup: String,
-    base: String,
-) -> Result<UpdatedSlide> {
-    let file = deck::deck_file(&id)?;
-    let (deck, previous) = deck::update_slide(&file, &session(&window)?, &slide, &markup, &base)?;
-    Ok(UpdatedSlide { deck, previous })
+fn update_slide(id: String, slide: String, markup: String, base: String) -> Result<Deck> {
+    let (deck, _) = changing(&id, Change::new(Source::Edit, "Edit slide"), |file| {
+        deck::update_slide(file, &slide, &markup, &base)
+    })?;
+    Ok(deck)
+}
+
+/// What undo and redo would do in deck `id`. A change made outside the app since is noticed
+/// first, unless the agent is working: its unfinished edits would become an entry.
+#[tauri::command]
+fn deck_history(window: Window, agent: State<AgentManager>, id: String) -> Result<history::Status> {
+    let idle = !agent.is_running(&workspace_root(&window)?.to_string_lossy());
+    history::status(&deck::app_home()?, &deck::deck_file(&id)?, idle)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryStep {
+    deck: Deck,
+    #[serde(flatten)]
+    step: history::Step,
+}
+
+/// Undoes (`back`) or redoes the newest change of deck `id`, whatever made it.
+fn step_history(
+    window: &Window,
+    agent: &AgentManager,
+    id: &str,
+    back: bool,
+) -> Result<HistoryStep> {
+    if agent.is_running(&workspace_root(window)?.to_string_lossy()) {
+        return Err(error::Error::msg(
+            "The agent is still working on the deck; stop it or wait for it to finish first.",
+        ));
+    }
+    let (home, file) = (deck::app_home()?, deck::deck_file(id)?);
+    let step = if back {
+        history::undo(&home, &file)?
+    } else {
+        history::redo(&home, &file)?
+    };
+    Ok(HistoryStep {
+        deck: deck::load(&file)?,
+        step,
+    })
+}
+
+#[tauri::command]
+fn undo_deck(window: Window, agent: State<AgentManager>, id: String) -> Result<HistoryStep> {
+    step_history(&window, &agent, &id, true)
+}
+
+#[tauri::command]
+fn redo_deck(window: Window, agent: State<AgentManager>, id: String) -> Result<HistoryStep> {
+    step_history(&window, &agent, &id, false)
+}
+
+/// Puts `slides` back as they were at version `since` of deck `id`'s history, as one change.
+#[tauri::command]
+fn restore_slides(id: String, since: String, slides: Vec<String>) -> Result<Deck> {
+    let version = history::version(&deck::app_home()?, &deck::deck_file(&id)?, &since)?;
+    changing(&id, Change::new(Source::Edit, "Discard edits"), |file| {
+        deck::restore_slides(file, &version, &slides)
+    })
 }
 
 #[tauri::command]
@@ -413,14 +511,9 @@ fn save_deck_source(
 ) -> Result<Deck> {
     // Normalizing mid-turn could rewrite ids the agent is about to reference.
     let normalize = !agent.is_running(&workspace_root(&window)?.to_string_lossy());
-    let file = deck::deck_file(&id)?;
-    deck::save_source(
-        &file,
-        &session(&window)?,
-        &source,
-        base.as_deref(),
-        normalize,
-    )
+    changing(&id, Change::new(Source::Code, "Edit source"), |file| {
+        deck::save_source(file, &source, base.as_deref(), normalize)
+    })
 }
 
 fn asset_target(root: &Path, id: &str) -> Result<PathBuf> {
@@ -472,8 +565,9 @@ fn paste_slide(id: String, after: Option<String>) -> Result<Option<CreatedSlide>
     let Some(copied) = clipboard::read_slide()? else {
         return Ok(None);
     };
-    let file = deck::deck_file(&id)?;
-    let (deck, slide) = deck::paste_slide(&file, after, copied.deck.as_deref(), &copied.markup)?;
+    let (deck, slide) = changing(&id, Change::new(Source::Rail, "Paste slide"), |file| {
+        deck::paste_slide(file, after, copied.deck.as_deref(), &copied.markup)
+    })?;
     Ok(Some(CreatedSlide { deck, slide }))
 }
 
@@ -507,22 +601,15 @@ fn find_in_deck(id: String, query: String, options: find::Options) -> Result<Vec
 /// Replaces `query` with `replacement` in the text of deck `id`'s slides (or of `slides`).
 #[tauri::command]
 fn replace_in_deck(
-    window: Window,
     id: String,
     query: String,
     replacement: String,
     options: find::Options,
     slides: Option<Vec<String>>,
 ) -> Result<ReplacedText> {
-    let file = deck::deck_file(&id)?;
-    let done = deck::replace_text(
-        &file,
-        &session(&window)?,
-        &query,
-        &replacement,
-        options,
-        slides.as_deref(),
-    )?;
+    let done = changing(&id, Change::new(Source::Edit, "Replace text"), |file| {
+        deck::replace_text(file, &query, &replacement, options, slides.as_deref())
+    })?;
     Ok(ReplacedText {
         deck: done.deck,
         count: done.count,
@@ -571,7 +658,7 @@ fn unstage_change(id: String, change: git::Change) -> Result<()> {
 /// Puts a change back as it was committed, in the deck and the index; the slide list's undo
 /// takes the deck's part back.
 #[tauri::command(async)]
-fn restore_change(window: Window, id: String, change: git::Change) -> Result<RailEdit> {
+fn restore_change(id: String, change: git::Change) -> Result<RailEdit> {
     let file = deck::deck_file(&id)?;
     let before = deck::read_html(&file)?;
     let source = git::restored(&file, &change)?;
@@ -580,7 +667,9 @@ fn restore_change(window: Window, id: String, change: git::Change) -> Result<Rai
         git::Change::Move { id, .. } => Some(id.as_str()),
         git::Change::Styles => None,
     };
-    let edit = deck::restore(&file, &session(&window)?, slide, source)?;
+    let edit = changing(&id, Change::new(Source::Deck, "Restore from git"), |file| {
+        deck::restore(file, slide, source)
+    })?;
     git::finish_restore(&file, &change, &before)?;
     Ok(edit)
 }
@@ -711,6 +800,16 @@ fn save_chat(id: String, chat: serde_json::Value) -> Result<()> {
         &sessions()?.current_or_start(&workspace::root(&id)?)?,
         &chat,
     )
+}
+
+/// Takes workspace `id`'s conversation back to before chat message `message` when its next turn
+/// starts; that turn's prompt starts with `note` instead when it cannot be (see [`rewind`]).
+#[tauri::command]
+fn rewind_chat(id: String, message: String, note: String) -> Result<()> {
+    let session = sessions()?
+        .current(&workspace::root(&id)?)
+        .ok_or_else(|| error::Error::msg("This folder has no conversation."))?;
+    rewind::request(&session, &message, &note)
 }
 
 #[tauri::command]
@@ -987,12 +1086,20 @@ async fn narration_peaks(id: String, slide: String) -> Result<Vec<f32>> {
 
 #[tauri::command]
 fn set_narration_voice(id: String, voice: String) -> Result<Deck> {
-    deck::set_narration_voice(&deck::deck_file(&id)?, &voice)
+    changing(
+        &id,
+        Change::new(Source::Narration, "Change voice"),
+        |file| deck::set_narration_voice(file, &voice),
+    )
 }
 
 #[tauri::command]
 fn set_narration_language(id: String, language: String) -> Result<Deck> {
-    deck::set_narration_language(&deck::deck_file(&id)?, &language)
+    changing(
+        &id,
+        Change::new(Source::Narration, "Change language"),
+        |file| deck::set_narration_language(file, &language),
+    )
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1095,6 +1202,11 @@ pub fn run() {
             delete_slides,
             update_slide,
             save_deck_source,
+            deck_history,
+            undo_deck,
+            redo_deck,
+            restore_slides,
+            rewind_chat,
             import_assets,
             save_asset,
             copy_to_clipboard,

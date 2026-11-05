@@ -22,7 +22,7 @@ function deckOf(changes: Record<string, Partial<Slide>> = {}): Deck {
 /** Three five-second slides by default; the first has narration of three seconds. */
 function open(changes: Record<string, Partial<Slide>> = { intro: { narration: "Hello" } }) {
   const deck = deckOf(changes);
-  useApp.setState({ deck, selected: "intro", deckUndo: [], deckRedo: [] });
+  useApp.setState({ deck, selected: "intro" });
   useNarration.setState({
     audioDeck: deck.id,
     audio: { intro: { slide: "intro", state: "ready", seconds: 3 } },
@@ -103,7 +103,6 @@ describe("NarrationTimeline", () => {
     expect(timingCalls()).toEqual([
       { id: deckOf().id, timing: [{ slide: "intro", duration: 6, narrationStart: null }] },
     ]);
-    expect(useApp.getState().deckUndo).toHaveLength(1);
   });
 
   it("drags an edge, the slides after it following, saving once when it is let go", async () => {

@@ -102,10 +102,16 @@ function Waveform(props: { level: number; live: boolean }) {
 }
 
 /**
- * The composer's microphone button: click to dictate (the text shows up as you speak), click
+ * A microphone button for a text field: click to dictate (the text shows up as you speak), click
  * again to keep it. The first use offers to download the speech model, which then runs locally.
+ *
+ * - `label`: what the button does while idle, "Dictate a message" by default.
+ * - `portal`: puts the download offer in the body (the default). Off, it stays inside the
+ *   button's parent, for a popover that would take a press on it as a press outside.
  */
-export function VoiceInput(props: DictationHandlers & { ref?: Ref<VoiceInputHandle> }) {
+export function VoiceInput(
+  props: DictationHandlers & { ref?: Ref<VoiceInputHandle>; label?: string; portal?: boolean },
+) {
   const handlers = useRef(props);
   handlers.current = props;
   const sendWhenDone = useRef(false);
@@ -222,9 +228,10 @@ export function VoiceInput(props: DictationHandlers & { ref?: Ref<VoiceInputHand
 
   const closeOffer = useCallback(() => setPhase((p) => (p === "offer" ? "idle" : p)), []);
   const percent = progress && progress.total > 0 ? Math.round((progress.received / progress.total) * 100) : 0;
+  const label = props.label ?? "Dictate a message";
   const title = {
-    idle: "Dictate a message",
-    offer: "Dictate a message",
+    idle: label,
+    offer: label,
     downloading: "Downloading the speech model…",
     starting: "Starting the microphone…",
     recording: "Stop dictating (Esc discards it)",
@@ -271,7 +278,7 @@ export function VoiceInput(props: DictationHandlers & { ref?: Ref<VoiceInputHand
           onClose={closeOffer}
           width={280}
           variant="menu"
-          portal
+          portal={props.portal ?? true}
           follow
           capture
           className="p-3 text-xs"

@@ -2059,6 +2059,7 @@ mod tests {
                     x: 0.5,
                     y: 0.5,
                     target: None,
+                    area: None,
                 };
                 (id.to_string(), vec![comment])
             })

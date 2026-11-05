@@ -1333,10 +1333,20 @@ mod tests {
             x: 0.5,
             y: 0.5,
             target: None,
+            area: None,
+        };
+        let on_area = comments::Comment {
+            id: "second".into(),
+            text: "Too crowded".into(),
+            area: Some(comments::Area {
+                shape: comments::Shape::Lasso,
+                points: vec![[0.1, 0.1], [0.5, 0.1], [0.3, 0.4]],
+            }),
+            ..comment.clone()
         };
         comments::write(
             &deck(r#"<section class="slide" id="intro"><p>Hi</p></section>"#),
-            &[("intro".to_string(), vec![comment])].into(),
+            &[("intro".to_string(), vec![comment, on_area])].into(),
         )
     }
 
@@ -1356,6 +1366,10 @@ mod tests {
         );
         assert_eq!(
             rules(&html.replace(comments::END, "")),
+            ["comments-invalid"]
+        );
+        assert_eq!(
+            rules(&html.replace("\"lasso\"", "\"blob\"")),
             ["comments-invalid"]
         );
         let block = &html[comments::block_range(&html).unwrap()];

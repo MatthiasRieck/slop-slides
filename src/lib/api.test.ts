@@ -221,6 +221,26 @@ const CASES = [
     "capture_sketch",
     { id: "talk", rect: { x: 1, y: 2, width: 300, height: 168.75 }, viewport: { width: 1480, height: 920 } },
   ],
+  [
+    "captureArea",
+    () =>
+      api.captureArea("talk", { x: 1, y: 2, width: 30, height: 20 }, { width: 1480, height: 920 }, [
+        [0, 0],
+        [1, 0],
+        [0, 1],
+      ]),
+    "capture_area",
+    {
+      id: "talk",
+      rect: { x: 1, y: 2, width: 30, height: 20 },
+      viewport: { width: 1480, height: 920 },
+      outline: [
+        [0, 0],
+        [1, 0],
+        [0, 1],
+      ],
+    },
+  ],
   ["sessionProvider", () => api.sessionProvider("talk"), "session_provider", { id: "talk" }],
   ["loadChat", () => api.loadChat("talk"), "load_chat", { id: "talk" }],
   ["saveChat", () => api.saveChat("talk", [1]), "save_chat", { id: "talk", chat: [1] }],

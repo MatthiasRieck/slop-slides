@@ -250,6 +250,19 @@ describe("VoiceInput", () => {
     expect(commands()).toEqual(["voice_status"]);
   });
 
+  it("names itself after its field, and can keep the offer next to the button", async () => {
+    backend({ ready: false });
+    const { container } = render(
+      <div data-testid="field">
+        <VoiceInput label="Dictate the comment" portal={false} {...handlers()} />
+      </div>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Dictate the comment" }));
+    const offer = await screen.findByText("Download the speech model?");
+    expect(screen.getByTestId("field").contains(offer)).toBe(true);
+    expect(container.contains(offer)).toBe(true);
+  });
+
   it("reports a microphone that cannot be opened", async () => {
     backend({ ready: true, startError: "No microphone found." });
     render(<VoiceInput {...handlers()} />);

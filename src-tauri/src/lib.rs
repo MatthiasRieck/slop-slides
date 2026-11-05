@@ -710,6 +710,29 @@ async fn capture_sketch(
     deck::save_sketch(&session(&window)?, &png)
 }
 
+/// Screenshots `rect` of the window (an area of the slide a comment is on) into the deck's
+/// session, with what lies outside `outline` (in fractions of `rect`) made transparent.
+#[tauri::command]
+async fn capture_area(
+    window: Window,
+    webview: tauri::Webview,
+    id: String,
+    rect: capture::Rect,
+    viewport: capture::Size,
+    outline: Vec<[f64; 2]>,
+) -> Result<String> {
+    deck::deck_file(&id)?;
+    let png = capture::snapshot_within(
+        &webview,
+        rect,
+        viewport,
+        capture::SKETCH_WIDTH,
+        Some(outline),
+    )
+    .await?;
+    deck::save_sketch(&session(&window)?, &png)
+}
+
 /// Creates `<parent>/<deck title>` (or `<deck title> 2`, …) for exported slide images.
 #[tauri::command]
 fn create_image_export_dir(id: String, parent: String) -> Result<String> {
@@ -1233,6 +1256,7 @@ pub fn run() {
             commit_changes,
             lint_deck,
             capture_sketch,
+            capture_area,
             create_image_export_dir,
             export_slide_image,
             export_pdf,

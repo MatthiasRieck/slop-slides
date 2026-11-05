@@ -38,7 +38,7 @@ import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn, deckFileUrl } from "../lib/utils";
 import { deckMode, editedSlidesOf, SKETCH_TARGET_ATTR, searchHighlight, useApp } from "../store";
 import { Button, ToolButton } from "./Button";
-import { CommentEditor, CommentPins, useSlideComments } from "./Comments";
+import { AreaDrawer, CommentEditor, CommentPins, useSlideComments } from "./Comments";
 import { Dialog } from "./Dialog";
 import { EditContextMenu, type EditMenuAction } from "./EditContextMenu";
 import { EditToolbar } from "./EditToolbar";
@@ -74,9 +74,12 @@ export function Stage() {
   const postToEditor = editFrames.post;
   const overflow = editFrames.overflow;
   const reviewShown = mode === "view" && reviewVisible;
-  const commentPins = useSlideComments(areaRef, postToEditor, reviewShown);
+  const inkRef = useRef<HTMLDivElement>(null);
+  const commentPins = useSlideComments(areaRef, postToEditor, reviewShown, inkRef);
   const pinAnchor = useRef<HTMLButtonElement>(null);
   const setCommenting = commentPins.setCommenting;
+  const setDrawingArea = commentPins.setDrawingArea;
+  const drawingArea = commentPins.drawingArea;
   const view = pasteboard.view;
   const canvas = pixelsOf(deck);
   // The preview fills the whole area around the slide: an endless pasteboard to pan and zoom on.
@@ -102,9 +105,10 @@ export function Stage() {
   }, []);
 
   useSlideKeyboard();
-  useSketchKeyboard(annotations.tool !== "pointer" || commentPins.commenting, () => {
+  useSketchKeyboard(annotations.tool !== "pointer" || commentPins.commenting || drawingArea, () => {
     annotations.setTool("pointer");
     setCommenting(false);
+    setDrawingArea(false);
   });
 
   // Picking a pen shows the review marks, so the new ones are not drawn blind.
@@ -117,7 +121,8 @@ export function Stage() {
     if (mode === "view") return;
     putToolAway("pointer");
     setCommenting(false);
-  }, [mode, putToolAway, setCommenting]);
+    setDrawingArea(false);
+  }, [mode, putToolAway, setCommenting, setDrawingArea]);
   // The editor in the preview adds what the toolbar's tool says, styled like its defaults.
   useEffect(() => {
     if (editing) postToEditor(toolMessage(editTool, editStyles));
@@ -179,8 +184,18 @@ export function Stage() {
             annotations={annotations}
             commenting={commentPins.commenting}
             onCommenting={commentPins.setCommenting}
+            drawingArea={drawingArea}
+            onDrawingArea={setDrawingArea}
+            areaShape={commentPins.areaShape}
+            onAreaShape={commentPins.setAreaShape}
           />
           {commentPins.commenting && <span>Click an element to comment on it. Esc finishes.</span>}
+          {drawingArea && (
+            <span>
+              {commentPins.areaShape === "lasso" ? "Draw around" : "Drag over"} the part of the slide to comment on. Esc
+              finishes.
+            </span>
+          )}
           <div className="flex-1" />
           <SlideSearch />
         </ModeBar>
@@ -217,12 +232,20 @@ export function Stage() {
             />
             {/* Ink sits on the slide, wherever the pasteboard has moved it. */}
             <div
+              ref={inkRef}
               data-testid="annotation-view"
               className="pointer-events-none absolute"
               style={inkBox(pasteboard.current, width / canvas.width)}
             >
               <AnnotationLayer annotations={annotations} zoom={pasteboard.current?.k} />
-              <CommentPins pins={commentPins} inking={annotations.tool !== "pointer"} anchor={pinAnchor} />
+              <CommentPins
+                pins={commentPins}
+                inking={annotations.tool !== "pointer" || drawingArea}
+                anchor={pinAnchor}
+              />
+              {drawingArea && (
+                <AreaDrawer shape={commentPins.areaShape} onArea={(area) => void commentPins.commentOnArea(area)} />
+              )}
             </div>
           </div>
         ) : (

@@ -1,5 +1,6 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
+  ChevronDown,
   FolderOpen,
   PanelLeftClose,
   PanelLeftOpen,
@@ -9,20 +10,22 @@ import {
   Undo2,
   X,
 } from "lucide-react";
+import { useRef, useState } from "react";
 
-import type { HistoryEntry } from "../lib/api";
-import { basename, cn, isMac } from "../lib/utils";
+import type { HistoryEntry, OpenedFile } from "../lib/api";
+import { basename, cn, isMac, revealLabel } from "../lib/utils";
 import { useApp } from "../store";
 import { ToolButton } from "./Button";
-import { DeckActions } from "./DeckActions";
+import { DeckActions, MenuItem } from "./DeckActions";
 import { LintStatus } from "./LintStatus";
 import { ModeTabs } from "./ModeTabs";
+import { useDismiss } from "./Popover";
 
 /**
- * The workspace's bar. On the left, the slide rail toggle (for a deck), closing the open file (back
- * to the workspace), its path from the workspace folder with the deck's title under it, and
- * revealing it in the file manager; for a deck, its mode tabs in the middle, then undo / redo, lint,
- * export and present; then the sidebar toggle. The tools of each mode live above the slide (DeckToolbar, Stage).
+ * The workspace's bar. On the left, the slide rail toggle (for a deck) and the open file's path from
+ * the workspace folder with the deck's title under it, which opens a menu to close the file (back
+ * to the workspace) or reveal it in the file manager; for a deck, its mode tabs in the middle, then
+ * undo / redo, lint, export and present; then the sidebar toggle. The tools of each mode live above the slide (DeckToolbar, Stage).
  */
 export function TopBar() {
   const workspace = useApp((s) => s.workspace);
@@ -41,26 +44,11 @@ export function TopBar() {
     >
       <div data-tauri-drag-region className="flex min-w-0 items-center gap-1 self-stretch">
         {hasDeck && <RailToggle />}
-        {openedFile && (
-          <ToolButton
-            variant="panel"
-            size="md"
-            onClick={() => void useApp.getState().closeDeck()}
-            title={`Close ${basename(openedFile.path)}`}
-            aria-label={`Close ${basename(openedFile.path)}`}
-          >
-            <X className="size-4" />
-          </ToolButton>
+        {openedFile ? (
+          <FileMenu workspace={workspace.name} file={openedFile} deckTitle={deckTitle} />
+        ) : (
+          <Breadcrumbs workspace={workspace.name} path={null} small={false} />
         )}
-        <div data-tauri-drag-region className="flex min-w-0 flex-col justify-center">
-          <Breadcrumbs workspace={workspace.name} path={openedFile?.path ?? null} small={deckTitle !== null} />
-          {deckTitle !== null && (
-            <h1 data-tauri-drag-region title={deckTitle} className="truncate px-1.5 text-sm font-medium leading-5">
-              {deckTitle || "Untitled"}
-            </h1>
-          )}
-        </div>
-        {openedFile && <RevealButton path={openedFile.absolute} />}
       </div>
       {hasDeck ? <ModeTabs /> : <div />}
       <div data-tauri-drag-region className="flex items-center justify-end gap-1 self-stretch">
@@ -84,8 +72,8 @@ export function TopBar() {
 function Breadcrumbs({ workspace, path, small }: { workspace: string; path: string | null; small: boolean }) {
   const crumbs = [workspace, ...(path ? path.split("/").filter(Boolean) : [])];
   return (
-    <nav
-      aria-label="Breadcrumbs"
+    <span
+      data-breadcrumbs
       title={path ?? workspace}
       className={cn("flex min-w-0 items-center gap-1 px-1.5", small ? "text-2xs leading-4" : "text-sm")}
     >
@@ -108,20 +96,55 @@ function Breadcrumbs({ workspace, path, small }: { workspace: string; path: stri
           </span>
         );
       })}
-    </nav>
+    </span>
   );
 }
 
-function RevealButton({ path }: { path: string }) {
+/**
+ * The open file's path (and a deck's title under it) as one button, opening a menu like Export's:
+ * close the file, or show it in the file manager.
+ */
+function FileMenu({ workspace, file, deckTitle }: { workspace: string; file: OpenedFile; deckTitle: string | null }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useDismiss(open, menuRef, () => setOpen(false), { escape: true });
+  const name = basename(file.path);
+
+  const choose = (action: () => void) => () => {
+    setOpen(false);
+    action();
+  };
+
   return (
-    <ToolButton
-      variant="panel"
-      size="md"
-      onClick={() => void revealItemInDir(path)}
-      title={isMac ? "Show in Finder" : "Show in folder"}
-    >
-      <FolderOpen className="size-4" />
-    </ToolButton>
+    <div ref={menuRef} className="relative min-w-0">
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title={file.path}
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          "flex min-w-0 max-w-full items-center gap-1 rounded-md py-1 pr-1.5 text-left hover:bg-accent",
+          open && "bg-accent",
+        )}
+      >
+        <span className="flex min-w-0 flex-col justify-center">
+          <Breadcrumbs workspace={workspace} path={file.path} small={deckTitle !== null} />
+          {deckTitle !== null && (
+            <span data-deck-title title={deckTitle} className="truncate px-1.5 text-sm font-medium leading-5">
+              {deckTitle || "Untitled"}
+            </span>
+          )}
+        </span>
+        <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
+      </button>
+      {open && (
+        <div role="menu" className="absolute left-0 top-full z-20 mt-1 w-56 rounded-lg border bg-card p-1 shadow-lg">
+          <MenuItem icon={X} label={`Close ${name}`} onClick={choose(() => void useApp.getState().closeDeck())} />
+          <MenuItem icon={FolderOpen} label={revealLabel} onClick={choose(() => void revealItemInDir(file.absolute))} />
+        </div>
+      )}
+    </div>
   );
 }
 

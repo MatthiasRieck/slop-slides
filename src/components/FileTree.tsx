@@ -14,7 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, errorMessage, type FileKind, type WorkspaceEntry } from "../lib/api";
 import { ancestorsOf, foldersToReload, toggleFolder, visibleRows } from "../lib/fileTree";
-import { cn, isMac } from "../lib/utils";
+import { cn, revealLabel } from "../lib/utils";
 import { useApp } from "../store";
 import { ToolButton } from "./Button";
 
@@ -145,11 +145,7 @@ function WorkspaceTree({ root, name }: { root: string; name: string }) {
         <span title={root} className="min-w-0 flex-1 truncate px-1 text-xs font-medium">
           {name}
         </span>
-        <ToolButton
-          variant="panel"
-          title={isMac ? "Show in Finder" : "Show in folder"}
-          onClick={() => void revealItemInDir(root)}
-        >
+        <ToolButton variant="panel" title={revealLabel} onClick={() => void revealItemInDir(root)}>
           <FolderOpen className="size-3.5" />
         </ToolButton>
         <ToolButton variant="panel" title="Refresh" aria-label="Refresh" onClick={() => void refresh()}>

@@ -7,6 +7,14 @@ export function cn(...inputs: ClassValue[]) {
 
 export const isMac = navigator.userAgent.includes("Mac");
 export const isWindows = navigator.userAgent.includes("Windows");
+/** What revealing a file in the system's file manager is called here. */
+export const revealLabel = revealLabelFor(navigator.userAgent);
+
+export function revealLabelFor(userAgent: string): string {
+  if (userAgent.includes("Mac")) return "Show in Finder";
+  if (userAgent.includes("Windows")) return "Show in File Explorer";
+  return "Show in folder";
+}
 /** Dev-only: the UI is running in a plain browser via dev/browserPreview.ts. */
 const inBrowserPreview = import.meta.env.DEV && !("__TAURI_INTERNALS__" in window);
 

@@ -2,7 +2,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { File, FileUp, FolderOpen, MonitorPlay } from "lucide-react";
 
 import type { OpenedFile } from "../lib/api";
-import { basename, fileUrl, isMac } from "../lib/utils";
+import { basename, fileUrl, revealLabel } from "../lib/utils";
 import { useApp } from "../store";
 import { Button } from "./Button";
 import { NewDeckForm } from "./Home";
@@ -77,7 +77,7 @@ function NoViewer({ file }: { file: OpenedFile }) {
       )}
       <Button size="lg" onClick={() => void revealItemInDir(file.absolute)} className="mt-1">
         <FolderOpen className="size-3.5" />
-        {isMac ? "Show in Finder" : "Show in folder"}
+        {revealLabel}
       </Button>
     </div>
   );

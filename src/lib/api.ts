@@ -557,6 +557,16 @@ export const api = {
     rect: { x: number; y: number; width: number; height: number },
     viewport: { width: number; height: number },
   ) => invoke<string>("capture_sketch", { id, rect, viewport }),
+  /**
+   * Screenshots `rect` of the window like {@link captureSketch}, with what lies outside `outline`
+   * (a polygon in fractions of `rect`) made transparent.
+   */
+  captureArea: (
+    id: string,
+    rect: { x: number; y: number; width: number; height: number },
+    viewport: { width: number; height: number },
+    outline: [number, number][],
+  ) => invoke<string>("capture_area", { id, rect, viewport, outline }),
   sessionProvider: (id: string) => invoke<Provider | null>("session_provider", { id }),
   loadChat: (id: string) => invoke<unknown>("load_chat", { id }),
   saveChat: (id: string, chat: unknown) => invoke<void>("save_chat", { id, chat }),

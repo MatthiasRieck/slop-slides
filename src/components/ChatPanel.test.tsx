@@ -1369,6 +1369,22 @@ describe("composer fill", () => {
     expect(send).toHaveBeenLastCalledWith("Next", { includeSlide: true, attachments: [] });
   });
 
+  it("attaches images handed over while it was shown or before, keeping the draft", () => {
+    const area = "/home/.slopslides/sessions/1-ab/sketches/2-cd.png";
+    useApp.setState({ composerFill: null, composerImages: [area] });
+    render(<ChatPanel />);
+    expect(useApp.getState().composerImages).toEqual([]);
+    type("Look here");
+    act(() => useApp.getState().attachToComposer("/home/.slopslides/sessions/1-ab/sketches/3-ef.png"));
+    expect(screen.getByRole("button", { name: "Show 2 attached images" })).toBeTruthy();
+    expect(textarea().value).toBe("Look here");
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(send).toHaveBeenCalledWith("Look here", {
+      includeSlide: true,
+      attachments: [area, "/home/.slopslides/sessions/1-ab/sketches/3-ef.png"],
+    });
+  });
+
   describe("a handed-over element", () => {
     const ELEMENT = { path: "#intro > h1:nth-child(1)", markup: "<h1>Hi</h1>", name: '<h1> "Hi"', added: false };
 

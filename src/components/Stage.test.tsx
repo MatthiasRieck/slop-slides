@@ -567,6 +567,42 @@ describe("Stage", () => {
         expect(screen.getAllByTestId("comment-pin").map((p) => p.textContent)).toEqual(["1"]);
       });
 
+      it("focuses the comment's text once it shows", async () => {
+        const { container } = render(<Stage />);
+        fireEvent.click(tool("Comment on an element"));
+        pick(container);
+        expect(document.activeElement).toBe(input());
+        // The preview that took the press may take focus too; the field gets it back.
+        frameOf(container).focus();
+        await waitFor(() => expect(document.activeElement).toBe(input()));
+      });
+
+      it("dictates into the comment at the caret, and Enter keeps what is still being said", async () => {
+        const { listen } = await import("@tauri-apps/api/event");
+        vi.mocked(invoke).mockImplementation(async (cmd: string) => {
+          if (cmd === "voice_status") return { modelReady: true, modelBytes: 1, downloading: false, recording: false };
+          if (cmd === "stop_recording") return "much bigger";
+          return undefined;
+        });
+        const { container } = render(<Stage />);
+        fireEvent.click(tool("Comment on an element"));
+        pick(container);
+        fireEvent.change(input(), { target: { value: "Make it" } });
+        fireEvent.click(screen.getByRole("button", { name: "Dictate the comment" }));
+        await screen.findByRole("button", { name: /Stop dictating/ });
+        const partial = await waitFor(() => {
+          const call = vi.mocked(listen).mock.calls.findLast(([name]) => name === "voice-partial");
+          return call![1] as (event: { payload: string }) => void;
+        });
+        act(() => partial({ payload: "much" }));
+        expect((input() as HTMLTextAreaElement).value).toBe("Make it much");
+        fireEvent.keyDown(input(), { key: "Enter" });
+        await waitFor(() =>
+          expect(useApp.getState().comments.intro?.map((c) => c.text)).toEqual(["Make it much bigger"]),
+        );
+        expect(screen.queryByRole("dialog")).toBeNull();
+      });
+
       it("keeps a comment being written when another element is picked", () => {
         const { container } = render(<Stage />);
         fireEvent.click(tool("Comment on an element"));
@@ -641,6 +677,125 @@ describe("Stage", () => {
         expect(screen.getByTestId("comment-pin")).toBeTruthy();
         fireEvent.click(tool("Hide review marks and comments"));
         expect(screen.queryByTestId("comment-pin")).toBeNull();
+      });
+
+      describe("on an area", () => {
+        const SHOT = "/home/.slopslides/sessions/1-ab/sketches/1-ab.png";
+        const drawer = () => screen.getByTestId("area-drawer");
+        const drag = (points: [number, number][]) => {
+          const [first, ...rest] = points;
+          fireEvent.pointerDown(drawer(), { button: 0, clientX: first![0], clientY: first![1], pointerId: 1 });
+          for (const [x, y] of rest) fireEvent.pointerMove(drawer(), { clientX: x, clientY: y, pointerId: 1 });
+          const last = points.at(-1)!;
+          fireEvent.pointerUp(drawer(), { clientX: last[0], clientY: last[1], pointerId: 1 });
+        };
+
+        beforeEach(() => {
+          useApp.setState({ composerImages: [] });
+          vi.mocked(invoke).mockImplementation(async (cmd: string) => (cmd === "capture_area" ? SHOT : undefined));
+        });
+
+        it("screenshots the area dragged out, and hands the screenshot to the chat with the comment", async () => {
+          render(<Stage />);
+          fireEvent.click(tool("Comment on an area (rectangle)"));
+          expect(pressed("Comment on an area (rectangle)")).toBe(true);
+          // The slide is 1000×500 on screen.
+          drag([
+            [100, 50],
+            [250, 150],
+            [400, 250],
+          ]);
+          const dialog = await screen.findByRole("dialog", { name: "New comment" });
+          expect(dialog.textContent).toContain("rectangle");
+          expect(invoke).toHaveBeenCalledWith("capture_area", {
+            id: useApp.getState().deck!.id,
+            rect: { x: 100, y: 50, width: 300, height: 200 },
+            viewport: { width: window.innerWidth, height: window.innerHeight },
+            outline: [
+              [0, 0],
+              [1, 0],
+              [1, 1],
+              [0, 1],
+            ],
+          });
+          expect(screen.getAllByTestId("comment-area")).toHaveLength(1);
+          expect(document.activeElement).toBe(input());
+          fireEvent.change(input(), { target: { value: "Too crowded" } });
+          fireEvent.keyDown(input(), { key: "Enter" });
+          const area = {
+            shape: "rect",
+            points: [
+              [0.1, 0.1],
+              [0.4, 0.5],
+            ],
+          };
+          expect(useApp.getState().comments.intro).toEqual([
+            { id: expect.any(String), text: "Too crowded", x: 0.1, y: 0.1, area },
+          ]);
+          expect(useApp.getState().composerImages).toEqual([SHOT]);
+          expect(screen.getAllByTestId("comment-area")).toHaveLength(1);
+          expect(screen.getAllByTestId("comment-pin").map((p) => p.textContent)).toEqual(["1"]);
+        });
+
+        it("hands nothing to the chat when the comment is dropped", async () => {
+          render(<Stage />);
+          fireEvent.click(tool("Comment on an area (rectangle)"));
+          drag([
+            [100, 50],
+            [400, 250],
+          ]);
+          await screen.findByRole("dialog", { name: "New comment" });
+          fireEvent.keyDown(input(), { key: "Escape" });
+          expect(useApp.getState().comments.intro ?? []).toEqual([]);
+          expect(useApp.getState().composerImages).toEqual([]);
+          expect(screen.queryByTestId("comment-area")).toBeNull();
+        });
+
+        it("makes nothing of a click", async () => {
+          render(<Stage />);
+          fireEvent.click(tool("Comment on an area (rectangle)"));
+          drag([[100, 50]]);
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          expect(screen.queryByRole("dialog")).toBeNull();
+          expect(invoke).not.toHaveBeenCalledWith("capture_area", expect.anything());
+        });
+
+        it("draws with the shape picked from its menu, which it remembers", async () => {
+          render(<Stage />);
+          fireEvent.click(tool("Area shape"));
+          fireEvent.click(screen.getByRole("menuitemradio", { name: "Lasso" }));
+          expect(screen.queryByRole("menu")).toBeNull();
+          expect(pressed("Comment on an area (lasso)")).toBe(true);
+          drag([
+            [100, 100],
+            [500, 100],
+            [300, 400],
+          ]);
+          await screen.findByRole("dialog", { name: "New comment" });
+          const call = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === "capture_area");
+          expect((call![1] as { outline: unknown[] }).outline).toHaveLength(3);
+          fireEvent.change(input(), { target: { value: "This bit" } });
+          fireEvent.click(screen.getByRole("button", { name: "Save" }));
+          expect(useApp.getState().comments.intro?.[0]?.area?.shape).toBe("lasso");
+          expect(localStorage.getItem("slopslides.areaShape")).toBe("lasso");
+        });
+
+        it("takes turns with picking elements and the pens, and Escape puts it away", () => {
+          render(<Stage />);
+          const area = "Comment on an area (rectangle)";
+          fireEvent.click(tool(area));
+          fireEvent.click(tool("Comment on an element"));
+          expect([pressed(area), pressed("Comment on an element")]).toEqual([false, true]);
+          fireEvent.click(tool(area));
+          expect([pressed(area), pressed("Comment on an element")]).toEqual([true, false]);
+          fireEvent.click(tool("Draw on the slide"));
+          expect([pressed(area), pressed("Draw on the slide")]).toEqual([false, true]);
+          fireEvent.click(tool(area));
+          expect(pressed("Draw on the slide")).toBe(false);
+          fireEvent.keyDown(document.body, { key: "Escape" });
+          expect(pressed(area)).toBe(false);
+          expect(screen.queryByTestId("area-drawer")).toBeNull();
+        });
       });
 
       it("lets ink pass under the pins", () => {

@@ -15,6 +15,16 @@ export interface CommentTarget {
   at: [number, number];
 }
 
+/** How an area of the slide is outlined. */
+export type AreaShape = "rect" | "ellipse" | "lasso";
+
+/** An area of the slide a comment is about, in fractions of the slide. */
+export interface CommentArea {
+  shape: AreaShape;
+  /** Two opposite corners for a rectangle or the box an ellipse fills; a lasso's corners. */
+  points: [number, number][];
+}
+
 /** A comment pinned at a point given in fractions of the slide. */
 export interface SlideComment {
   id: string;
@@ -23,6 +33,8 @@ export interface SlideComment {
   y: number;
   /** Absent for a comment on the slide itself. */
   target?: CommentTarget | null;
+  /** The area outlined, for a comment on an area rather than an element. */
+  area?: CommentArea | null;
 }
 
 /** Which comments go out with a message: the selected slide's, or the whole deck's. */
@@ -55,14 +67,99 @@ export function commentSelector(slide: string, target: CommentTarget): string {
   return [`#${slide}`, ...target.path.map((index) => `:nth-child(${index + 1})`)].join(" > ");
 }
 
+const SHAPE_NAMES: Record<AreaShape, string> = {
+  rect: "a rectangle",
+  ellipse: "an ellipse",
+  lasso: "a freehand outline",
+};
+
 /** A comment as the agent reads it; the text is quoted, so it stays on one line. */
 export function commentLine(comment: PlacedComment, size: { width: number; height: number }, slides: number): string {
-  const { target } = comment;
+  const { target, area } = comment;
   const where = `slide \`${comment.slide}\` (${comment.slideNumber} of ${slides})`;
-  const element = target
-    ? `on <${target.tag}> at \`${commentSelector(comment.slide, target)}\`${target.label ? ` showing ${JSON.stringify(target.label)}` : ""}`
-    : `on the slide as a whole, at x ${Math.round(comment.x * size.width)}, y ${Math.round(comment.y * size.height)}`;
-  return `- ${where}, ${element}: ${JSON.stringify(comment.text)}`;
+  const px = ([x, y]: [number, number]) => [Math.round(x * size.width), Math.round(y * size.height)] as const;
+  let on: string;
+  if (area) {
+    const box = areaBounds(area);
+    const [left, top] = px([box.left, box.top]);
+    const [right, bottom] = px([box.right, box.bottom]);
+    on = `on the area inside ${SHAPE_NAMES[area.shape]} at x ${left}–${right}, y ${top}–${bottom}`;
+  } else if (target) {
+    on = `on <${target.tag}> at \`${commentSelector(comment.slide, target)}\`${target.label ? ` showing ${JSON.stringify(target.label)}` : ""}`;
+  } else {
+    const [x, y] = px([comment.x, comment.y]);
+    on = `on the slide as a whole, at x ${x}, y ${y}`;
+  }
+  return `- ${where}, ${on}: ${JSON.stringify(comment.text)}`;
+}
+
+/** The box around `area`, in fractions of the slide. */
+export function areaBounds(area: CommentArea): { left: number; top: number; right: number; bottom: number } {
+  const xs = area.points.map(([x]) => x);
+  const ys = area.points.map(([, y]) => y);
+  return { left: Math.min(...xs), top: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
+}
+
+/** How many corners stand in for an ellipse's curve. */
+const ELLIPSE_STEPS = 48;
+
+/** The corners of the polygon `area` encloses, in fractions of the slide. */
+export function areaOutline(area: CommentArea): [number, number][] {
+  if (area.shape === "lasso") return area.points;
+  const { left, top, right, bottom } = areaBounds(area);
+  if (area.shape === "rect") {
+    return [
+      [left, top],
+      [right, top],
+      [right, bottom],
+      [left, bottom],
+    ];
+  }
+  const [cx, cy, rx, ry] = [(left + right) / 2, (top + bottom) / 2, (right - left) / 2, (bottom - top) / 2];
+  return Array.from({ length: ELLIPSE_STEPS }, (_, i) => {
+    const angle = (i / ELLIPSE_STEPS) * 2 * Math.PI;
+    return [cx + rx * Math.cos(angle), cy + ry * Math.sin(angle)];
+  });
+}
+
+/** Smallest area worth a comment, as a fraction of the slide's width or height. */
+const MIN_AREA_SIDE = 0.01;
+/** Lasso points closer together than this (in fractions of the slide) are dropped. */
+const LASSO_STEP = 0.004;
+
+const round = (n: number) => Math.round(n * 10_000) / 10_000;
+const clampFraction = (n: number) => round(Math.min(1, Math.max(0, n)));
+
+/**
+ * The area dragged out with `shape` through `points` (fractions of the slide, kept on it), or
+ * null when it is too small to mean anything: a click, or a lasso drawn along a line.
+ */
+export function areaFromDrag(shape: AreaShape, points: [number, number][]): CommentArea | null {
+  const kept = points.map(([x, y]) => [clampFraction(x), clampFraction(y)] as [number, number]);
+  const first = kept[0];
+  const last = kept.at(-1);
+  if (!first || !last) return null;
+  let area: CommentArea;
+  if (shape === "lasso") {
+    const thinned: [number, number][] = [];
+    for (const p of kept) {
+      const before = thinned.at(-1);
+      if (!before || Math.hypot(p[0] - before[0], p[1] - before[1]) >= LASSO_STEP) thinned.push(p);
+    }
+    if (thinned.length < 3) return null;
+    area = { shape, points: thinned };
+  } else {
+    area = { shape, points: [first, last] };
+  }
+  const box = areaBounds(area);
+  return box.right - box.left >= MIN_AREA_SIDE && box.bottom - box.top >= MIN_AREA_SIDE ? area : null;
+}
+
+/** An SVG path of `area`'s outline, in a 1×1 view box. */
+export function areaPath(area: CommentArea): string {
+  const [first, ...rest] = areaOutline(area);
+  if (!first) return "";
+  return `M${first.join(" ")}${rest.map((p) => `L${p.join(" ")}`).join("")}Z`;
 }
 
 const isFraction = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -77,6 +174,18 @@ export function parseTarget(value: unknown): CommentTarget | null {
   return { path, tag, label: typeof label === "string" ? label : "", at };
 }
 
+const SHAPES: readonly string[] = ["rect", "ellipse", "lasso"] satisfies AreaShape[];
+
+/** An area as saved, if it has the right shape. */
+export function parseArea(value: unknown): CommentArea | null {
+  const area = value as Partial<CommentArea> | null | undefined;
+  const { shape, points } = area ?? {};
+  if (typeof shape !== "string" || !SHAPES.includes(shape) || !Array.isArray(points)) return null;
+  const valid = points.every((p) => Array.isArray(p) && p.length === 2 && p.every(isFraction));
+  const enough = shape === "lasso" ? points.length >= 3 : points.length === 2;
+  return valid && enough ? { shape: shape as AreaShape, points } : null;
+}
+
 /** The spots the preview reported, by comment id, without any that make no sense. */
 export function parseSpots(value: unknown): Record<string, CommentSpot> {
   if (!Array.isArray(value)) return {};
@@ -86,4 +195,38 @@ export function parseSpots(value: unknown): Record<string, CommentSpot> {
       : [],
   );
   return Object.fromEntries(entries);
+}
+
+interface Box {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * What to screenshot for `area` on a slide shown at `slide` (screen pixels) of which `visible`
+ * shows: the part of the window around the area, and its outline in fractions of that part.
+ * Null when none of the area is in view.
+ */
+export function areaCapture(
+  area: CommentArea,
+  slide: Box,
+  visible: Box,
+): { rect: { x: number; y: number; width: number; height: number }; outline: [number, number][] } | null {
+  const box = areaBounds(area);
+  const x0 = Math.max(slide.left + box.left * slide.width, visible.left);
+  const y0 = Math.max(slide.top + box.top * slide.height, visible.top);
+  const x1 = Math.min(slide.left + box.right * slide.width, visible.left + visible.width);
+  const y1 = Math.min(slide.top + box.bottom * slide.height, visible.top + visible.height);
+  if (x1 - x0 < 1 || y1 - y0 < 1) return null;
+  const [width, height] = [x1 - x0, y1 - y0];
+  const outline = areaOutline(area).map(
+    ([x, y]) =>
+      [round((slide.left + x * slide.width - x0) / width), round((slide.top + y * slide.height - y0) / height)] as [
+        number,
+        number,
+      ],
+  );
+  return { rect: { x: x0, y: y0, width, height }, outline };
 }

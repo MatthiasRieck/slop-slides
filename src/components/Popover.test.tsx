@@ -1,4 +1,4 @@
-import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { type RefObject, useRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -168,6 +168,28 @@ function Moving(props: { follow: boolean }) {
 
 const panel = () => screen.getByText("Panel content").parentElement as HTMLElement;
 
+/** A popover that focuses its field. */
+function Focusing() {
+  const anchor = useRef<HTMLButtonElement>(null);
+  const field = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <button
+        type="button"
+        ref={(el) => {
+          anchor.current = el;
+          if (el) el.getBoundingClientRect = () => new DOMRect(0, 0, 10, 10);
+        }}
+      >
+        Anchor
+      </button>
+      <Popover anchor={anchor} width={100} initialFocus={field} onClose={vi.fn()}>
+        <input ref={field} aria-label="Field" />
+      </Popover>
+    </>
+  );
+}
+
 describe("Popover", () => {
   // jsdom's window is 1024 by 768.
   it("renders its children below the anchor, kept on screen", () => {
@@ -228,6 +250,14 @@ describe("Popover", () => {
     render(<Harness rect={new DOMRect(0, 0, 10, 10)} width={100} portal onClose={vi.fn()} />);
     expect(screen.getByTestId("host").contains(panel())).toBe(false);
     expect(panel().parentElement).toBe(document.body);
+  });
+
+  it("focuses what it is given once it is placed, and again if something takes the focus away", async () => {
+    render(<Focusing />);
+    const field = screen.getByRole("textbox", { name: "Field" });
+    expect(document.activeElement).toBe(field);
+    screen.getByText("Anchor").focus();
+    await waitFor(() => expect(document.activeElement).toBe(field));
   });
 
   it("follows the anchor on resize only when asked", () => {

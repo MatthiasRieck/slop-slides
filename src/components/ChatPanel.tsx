@@ -632,6 +632,14 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     textareaRef.current?.focus();
   }, [composerFill]);
 
+  // Screenshots of areas commented on, handed over while the composer was or wasn't shown.
+  const composerImages = useApp((s) => s.composerImages);
+  useEffect(() => {
+    if (composerImages.length === 0) return;
+    const taken = useApp.getState().takeComposerImages();
+    setAttachments((prev) => [...prev, ...taken.filter((a) => !prev.includes(a))]);
+  }, [composerImages]);
+
   const importPaths = async (paths: string[]) => {
     if (!assetTarget || paths.length === 0) return;
     try {

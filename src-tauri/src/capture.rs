@@ -57,6 +57,18 @@ pub async fn snapshot(
     viewport: Size,
     max_width: u32,
 ) -> Result<Vec<u8>> {
+    snapshot_within(webview, rect, viewport, max_width, None).await
+}
+
+/// Like [`snapshot`], with what lies outside `outline` (a polygon in fractions of `rect`,
+/// such as the area a comment is on) made transparent.
+pub async fn snapshot_within(
+    webview: &Webview,
+    rect: Rect,
+    viewport: Size,
+    max_width: u32,
+    outline: Option<Vec<[f64; 2]>>,
+) -> Result<Vec<u8>> {
     check(rect, viewport)?;
     let (tx, rx) = tokio::sync::oneshot::channel::<Result<Image>>();
     webview
@@ -67,7 +79,11 @@ pub async fn snapshot(
         .map_err(|_| Error::msg("the screenshot was cancelled"))??;
     tauri::async_runtime::spawn_blocking(move || {
         let region = crop(&full, rect, viewport)?;
-        encode_png(&downscale(&region, max_width))
+        let mut image = downscale(&region, max_width);
+        if let Some(outline) = outline {
+            mask_outside(&mut image, &outline);
+        }
+        encode_png(&image)
     })
     .await
     .map_err(|e| Error::msg(format!("screenshot failed: {e}")))?
@@ -204,6 +220,36 @@ pub fn downscale(image: &Image, max_width: u32) -> Image {
         width,
         height,
         rgba,
+    }
+}
+
+/// Makes the pixels of `image` whose centers lie outside `outline` (a polygon in fractions of
+/// the image's size) transparent. An outline of fewer than three points leaves it as it is.
+pub fn mask_outside(image: &mut Image, outline: &[[f64; 2]]) {
+    if outline.len() < 3 {
+        return;
+    }
+    let (w, h) = (f64::from(image.width), f64::from(image.height));
+    let corners: Vec<[f64; 2]> = outline.iter().map(|[x, y]| [x * w, y * h]).collect();
+    for y in 0..image.height {
+        let cy = f64::from(y) + 0.5;
+        // Where the outline's edges cross this row, left to right: inside lies between pairs.
+        let mut crossings: Vec<f64> = corners
+            .iter()
+            .zip(corners.iter().cycle().skip(1))
+            .filter(|([_, y0], [_, y1])| (*y0 <= cy) != (*y1 <= cy))
+            .map(|([x0, y0], [x1, y1])| x0 + (cy - y0) / (y1 - y0) * (x1 - x0))
+            .collect();
+        crossings.sort_by(f64::total_cmp);
+        let row = y as usize * image.width as usize * 4;
+        for x in 0..image.width {
+            let cx = f64::from(x) + 0.5;
+            let inside = crossings.iter().filter(|&&c| c < cx).count() % 2 == 1;
+            if !inside {
+                let i = row + x as usize * 4;
+                image.rgba[i..i + 4].fill(0);
+            }
+        }
     }
 }
 
@@ -533,6 +579,61 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn alpha(image: &Image, x: u32, y: u32) -> u8 {
+        image.pixel(x, y)[3]
+    }
+
+    #[test]
+    fn masks_what_lies_outside_a_triangle() {
+        let mut image = solid(10, 10, [9, 9, 9, 255]);
+        // The lower left half, below the diagonal from the top left to the bottom right.
+        mask_outside(&mut image, &[[0.0, 0.0], [1.0, 1.0], [0.0, 1.0]]);
+        assert_eq!(alpha(&image, 1, 8), 255);
+        assert_eq!(image.pixel(1, 8), [9, 9, 9, 255]);
+        assert_eq!(alpha(&image, 8, 1), 0);
+        assert_eq!(image.pixel(8, 1), [0, 0, 0, 0]);
+        let kept = image.rgba.chunks(4).filter(|p| p[3] == 255).count();
+        // The diagonal itself counts as inside.
+        assert_eq!(kept, 55);
+    }
+
+    #[test]
+    fn masks_around_a_rectangle_and_keeps_a_concave_outline_hollow() {
+        let mut image = solid(10, 10, [1, 2, 3, 255]);
+        mask_outside(
+            &mut image,
+            &[[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]],
+        );
+        assert_eq!(image.rgba.chunks(4).filter(|p| p[3] == 255).count(), 36);
+        assert_eq!(alpha(&image, 0, 0), 0);
+        assert_eq!(alpha(&image, 5, 5), 255);
+
+        // A U: the notch in its top middle is outside.
+        let mut image = solid(10, 10, [1, 2, 3, 255]);
+        let u = [
+            [0.0, 0.0],
+            [0.3, 0.0],
+            [0.3, 0.6],
+            [0.7, 0.6],
+            [0.7, 0.0],
+            [1.0, 0.0],
+            [1.0, 1.0],
+            [0.0, 1.0],
+        ];
+        mask_outside(&mut image, &u);
+        assert_eq!(alpha(&image, 5, 2), 0);
+        assert_eq!(alpha(&image, 1, 2), 255);
+        assert_eq!(alpha(&image, 8, 2), 255);
+        assert_eq!(alpha(&image, 5, 8), 255);
+    }
+
+    #[test]
+    fn an_outline_too_short_to_enclose_anything_masks_nothing() {
+        let mut image = solid(4, 4, [1, 2, 3, 255]);
+        mask_outside(&mut image, &[[0.0, 0.0], [1.0, 1.0]]);
+        assert_eq!(image, solid(4, 4, [1, 2, 3, 255]));
+    }
 
     fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
         Rect {

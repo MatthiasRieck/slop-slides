@@ -337,6 +337,8 @@ interface AppState {
    * `element` an element of the slide the message is about. Without text, the draft stays.
    */
   composerFill: { text: string; rev: number; screenshot?: string; element?: EditElement } | null;
+  /** Images waiting to be attached in the chat composer (screenshots of areas commented on). */
+  composerImages: string[];
   /**
    * Ink drawn on slides in the editor, by slide id. Saved in the deck file as review marks, and
    * sent along with the next message about the slide while it has changed since last sent.
@@ -455,6 +457,10 @@ interface AppState {
   setError: (error: string | null) => void;
   refreshLint: () => Promise<void>;
   fillComposer: (text: string, options?: { screenshot?: string | null; element?: EditElement }) => void;
+  /** Attaches `path` in the chat composer, now or once it is shown, keeping its draft. */
+  attachToComposer: (path: string) => void;
+  /** The images waiting for the composer, which it then holds. */
+  takeComposerImages: () => string[];
   setSketches: (update: (all: Record<string, Stroke[]>) => Record<string, Stroke[]>) => void;
   clearSketch: (slide: string) => void;
   /** Keeps the slide's current marks out of the next message. */
@@ -628,6 +634,7 @@ export const useApp = create<AppState>((set, get) => ({
   error: null,
   lint: null,
   composerFill: null,
+  composerImages: [],
   sketches: {},
   sketchesSent: {},
   reviewVisible: localStorage.getItem(REVIEW_VISIBLE_KEY) !== "false",
@@ -758,6 +765,7 @@ export const useApp = create<AppState>((set, get) => ({
       presenting: false,
       lint: null,
       composerFill: null,
+      composerImages: [],
       sketches: {},
       sketchesSent: {},
       comments: {},
@@ -1003,6 +1011,15 @@ export const useApp = create<AppState>((set, get) => ({
         ...(element && { element }),
       },
     })),
+
+  attachToComposer: (path) =>
+    set((s) => (s.composerImages.includes(path) ? s : { composerImages: [...s.composerImages, path] })),
+
+  takeComposerImages: () => {
+    const images = get().composerImages;
+    if (images.length > 0) set({ composerImages: [] });
+    return images;
+  },
 
   setSketches: (update) => {
     set((s) => ({ sketches: update(s.sketches) }));

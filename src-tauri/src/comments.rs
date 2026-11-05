@@ -42,6 +42,37 @@ pub struct Target {
     pub at: [f64; 2],
 }
 
+/// How the user outlined an area of the slide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Shape {
+    /// `points` are two opposite corners.
+    Rect,
+    /// `points` are two opposite corners of the box the ellipse fills.
+    Ellipse,
+    /// `points` are the corners of a freehand outline.
+    Lasso,
+}
+
+/// An area of the slide a comment is about, in fractions of the slide.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Area {
+    pub shape: Shape,
+    pub points: Vec<[f64; 2]>,
+}
+
+impl Area {
+    fn valid(&self) -> bool {
+        let count = self.points.len();
+        let enough = match self.shape {
+            Shape::Rect | Shape::Ellipse => count == 2,
+            Shape::Lasso => count >= 3,
+        };
+        enough && self.points.iter().flatten().all(|v| v.is_finite())
+    }
+}
+
 /// A comment on a slide, pinned at a point given in fractions of the slide.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -53,6 +84,9 @@ pub struct Comment {
     /// None for a comment on the slide itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<Target>,
+    /// The area outlined on the slide, for a comment on an area rather than an element.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<Area>,
 }
 
 /// Comments by slide id.
@@ -75,7 +109,7 @@ pub fn parse(html: &str) -> Result<Comments, String> {
         .find(|(_, comments)| !comments.iter().all(valid))
     {
         return Err(format!(
-            "The comments for slide `{slide}` have a missing id or text, or a bad position."
+            "The comments for slide `{slide}` have a missing id or text, a bad position, or a bad area."
         ));
     }
     Ok(comments)
@@ -94,6 +128,7 @@ fn valid(comment: &Comment) -> bool {
             .into_iter()
             .chain(at)
             .all(f64::is_finite)
+        && comment.area.as_ref().map_or(true, Area::valid)
 }
 
 /// `html` with its comments block holding `comments`: slides without any are left out, and the
@@ -146,6 +181,18 @@ mod tests {
                 label: "Our vision".into(),
                 at: [0.1, 0.9],
             }),
+            area: None,
+        }
+    }
+
+    fn area(shape: Shape, points: &[[f64; 2]]) -> Comment {
+        Comment {
+            target: None,
+            area: Some(Area {
+                shape,
+                points: points.to_vec(),
+            }),
+            ..comment("area", "Too crowded")
         }
     }
 
@@ -183,6 +230,41 @@ mod tests {
         let html = write(DOC, &all);
         assert!(!html.contains("target"));
         assert_eq!(parse(&html), Ok(all));
+    }
+
+    #[test]
+    fn a_comment_on_an_area_keeps_its_outline() {
+        let all = comments(&[(
+            "intro",
+            vec![
+                area(Shape::Rect, &[[0.1, 0.2], [0.4, 0.5]]),
+                area(Shape::Ellipse, &[[0.1, 0.2], [0.4, 0.5]]),
+                area(Shape::Lasso, &[[0.1, 0.2], [0.4, 0.2], [0.3, 0.6]]),
+            ],
+        )]);
+        let html = write(DOC, &all);
+        assert!(html.contains(r#""area":{"shape":"rect","points":[[0.1,0.2],[0.4,0.5]]}"#));
+        assert!(!html.contains("target"));
+        assert_eq!(parse(&html), Ok(all));
+    }
+
+    #[test]
+    fn drops_areas_without_enough_points() {
+        let all = comments(&[(
+            "a",
+            vec![
+                area(Shape::Rect, &[[0.1, 0.2]]),
+                area(Shape::Lasso, &[[0.1, 0.2], [0.4, 0.5]]),
+                area(Shape::Ellipse, &[[0.1, f64::NAN], [0.4, 0.5]]),
+            ],
+        )]);
+        assert_eq!(write(DOC, &all), DOC);
+        let html = write(
+            DOC,
+            &comments(&[("a", vec![area(Shape::Rect, &[[0.1, 0.2], [0.4, 0.5]])])]),
+        );
+        assert!(parse(&html.replace("[[0.1,0.2],[0.4,0.5]]", "[[0.1,0.2]]")).is_err());
+        assert!(parse(&html.replace("\"rect\"", "\"star\"")).is_err());
     }
 
     #[test]

@@ -72,6 +72,8 @@ const LOOKS = {
  * - `portal`: renders into the body, outside container-query and scroll compositing layers.
  * - `follow`: moves with the anchor as the window, scrolling or the layout around it changes.
  * - `capture`: see `useDismiss`; Escape then stops at the popover.
+ * - `initialFocus`: what to focus once the panel shows. It is hidden until placed, and a hidden
+ *   field can't take focus, so focusing it on mount does nothing.
  */
 export function Popover(props: {
   anchor: RefObject<HTMLElement | null>;
@@ -84,6 +86,7 @@ export function Popover(props: {
   portal?: boolean;
   follow?: boolean;
   capture?: boolean;
+  initialFocus?: RefObject<HTMLElement | null>;
   children: ReactNode;
 }) {
   const { anchor, width, placement = "auto", follow = false } = props;
@@ -122,6 +125,19 @@ export function Popover(props: {
   }, [anchor, placement, width, gap, follow]);
 
   useDismiss(true, [anchor, panel], props.onClose, { escape: true, capture: props.capture });
+
+  const placed = position.visibility !== "hidden";
+  const initialFocus = props.initialFocus;
+  useEffect(() => {
+    if (!placed || !initialFocus) return;
+    initialFocus.current?.focus();
+    // A press in the slide preview that opened the panel can hand focus to the preview after
+    // this; take it back once that has settled.
+    const frame = requestAnimationFrame(() => {
+      if (document.activeElement !== initialFocus.current) initialFocus.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [placed, initialFocus]);
 
   const content = (
     <div

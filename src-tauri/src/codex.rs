@@ -143,7 +143,7 @@ fn skill_roots(ext: &Extensions) -> Vec<PathBuf> {
 fn allowed(requirements: &Value, key: &str, value: &str) -> bool {
     requirements[key]
         .as_array()
-        .map_or(true, |a| a.iter().any(|v| v == value))
+        .is_none_or(|a| a.iter().any(|v| v == value))
 }
 fn supported_modes(config: &Value, requirements: &Value) -> Vec<PermissionMode> {
     let reviewer = config.get("approvals_reviewer").is_some();
@@ -508,7 +508,7 @@ fn approval_request(method: &str, p: &Value) -> Option<(Approval, Choices)> {
         } else {
             p["availableDecisions"]
                 .as_array()
-                .map_or(true, |a| a.iter().any(|v| v == d.key()))
+                .is_none_or(|a| a.iter().any(|v| v == d.key()))
         };
         if !offered {
             continue;

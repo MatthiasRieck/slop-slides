@@ -295,7 +295,7 @@ async fn capture_slides(
     width: u32,
 ) -> Result<Vec<Rendered>> {
     let ready = helper.answer("ready").await?;
-    if ready.get("slides").map_or(true, |n| n == "0") {
+    if ready.get("slides").is_none_or(|n| n == "0") {
         return Err(Error::msg("this file has no slides to render"));
     }
     let mut rendered = Vec::new();

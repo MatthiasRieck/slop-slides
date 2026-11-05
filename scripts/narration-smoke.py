@@ -1,6 +1,7 @@
-"""Real-model smoke test for a Windows SlopSlide executable (Python standard library only).
+"""Real-model smoke test for a SlopSlide executable's narration worker (Python standard
+library only), on any platform.
 
-python scripts/windows-narration-smoke.py --exe path/to/slopslide.exe --download
+python scripts/narration-smoke.py --exe path/to/slopslide --download
 The model, WAVs, stderr, and measurements stay in --work for inspection/listening.
 """
 import argparse
@@ -23,8 +24,10 @@ def model_files():
     source = (Path(__file__).resolve().parents[1] / "src-tauri/src/narration/mod.rs").read_text()
     repo = re.search(r'const MODEL_REPO: &str = "([^"]+)"', source)[1]
     revision = re.search(r'const MODEL_REVISION: &str = "([^"]+)"', source)[1]
-    files = re.findall(r'ModelFile \{ path: "([^"]+)", bytes: ([\d_]+), sha256: "([a-f0-9]+)"', source)
-    assert len(files) == 11, "model manifest changed; update smoke-test parser"
+    files = re.findall(r'ModelFile \{ path: "?([^",]+)"?, bytes: ([\d_]+), sha256: "([a-f0-9]+)"', source)
+    names = dict(re.findall(r'pub const (MODEL_FILE|VOICES_FILE): &str = "([^"]+)"', source))
+    files = [(names.get(p, p), n, h) for p, n, h in files]
+    assert len(files) == 2, "model manifest changed; update smoke-test parser"
     return repo, revision, [(p, int(n.replace("_", "")), h) for p, n, h in files]
 
 
@@ -57,7 +60,9 @@ def prepare_model(directory, download):
 
 
 def peak_memory(process):
-    # Query the OS high-water mark, not a sampling estimate that can miss peaks.
+    # Query the OS high-water mark, not a sampling estimate that can miss peaks (Windows only).
+    if os.name != "nt":
+        return None
     class Counters(ctypes.Structure):
         _fields_ = [("cb", ctypes.c_ulong), ("faults", ctypes.c_ulong)] + [
             (name, ctypes.c_size_t) for name in (
@@ -83,8 +88,6 @@ def peak_memory(process):
 
 
 def run(args):
-    if os.name != "nt":
-        raise RuntimeError("Run this smoke test on Windows to measure the Windows engine")
     work = args.work.resolve()
     work.mkdir(parents=True, exist_ok=True)
     model = work / "voice model 模型"
@@ -95,7 +98,8 @@ def run(args):
         start = time.perf_counter()
         proc = subprocess.Popen([str(args.exe.resolve()), "--narration-worker", str(model)],
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log,
-                                text=True, encoding="utf-8", creationflags=subprocess.CREATE_NO_WINDOW)
+                                text=True, encoding="utf-8",
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         answers = queue.Queue()
         def read_answers():
             for line in proc.stdout:
@@ -113,13 +117,16 @@ def run(args):
         try:
             assert answer() == {"ready": True}, "engine did not load"
             report["load_seconds"] = time.perf_counter() - start
-            for index, (speaker, language, text) in enumerate([
-                ("ryan", "English", "Welcome to SlopSlide. This narration is generated locally on Windows."),
-                ("aiden", "German", "Diese Präsentation wird direkt auf diesem Computer vorgelesen."),
+            long = " ".join(["Every slide of this deck is read out on this computer, word for word,"] * 12)
+            for index, (speaker, text) in enumerate([
+                ("expr-voice-2-m", "Welcome to SlopSlide. This narration is generated locally, in 2026, for $5."),
+                ("expr-voice-3-f", "Our quarterly revenue grew by twelve percent.\n\nThanks, everyone!"),
+                # More than the model reads at once: the worker says it in parts.
+                ("expr-voice-5-m", long + " and that is all."),
             ]):
                 output = work / f"slide {index} ä.wav"
                 start = time.perf_counter()
-                send(dict(text=text, speaker=speaker, language=language, output=str(output)))
+                send(dict(text=text, speaker=speaker, output=str(output)))
                 result = answer()
                 elapsed = time.perf_counter() - start
                 assert result.get("samples", 0) > 0, result
@@ -129,11 +136,11 @@ def run(args):
                     samples = wav.readframes(wav.getnframes())
                     assert any(samples), "silent output"
                     seconds = wav.getnframes() / wav.getframerate()
-                report["renders"].append(dict(speaker=speaker, language=language, text=text,
+                report["renders"].append(dict(speaker=speaker, text=text,
                     wall_seconds=elapsed, audio_seconds=seconds, real_time_factor=elapsed / seconds))
             bad = work / "invalid.wav"
             bad.unlink(missing_ok=True)
-            send(dict(text="Hello", speaker="nonexistent", language="English", output=str(bad)))
+            send(dict(text="Hello", speaker="nonexistent", output=str(bad)))
             assert "error" in answer() and not bad.exists()
             report["peak_working_set_bytes"] = peak_memory(proc)
             proc.stdin.close()
@@ -153,5 +160,5 @@ if __name__ == "__main__":
     parser.add_argument("--exe", type=Path, required=True)
     parser.add_argument("--work", type=Path, default=Path("narration smoke 空間"))
     parser.add_argument("--download", action="store_true")
-    parser.add_argument("--timeout", type=int, default=900)
+    parser.add_argument("--timeout", type=int, default=300)
     run(parser.parse_args())

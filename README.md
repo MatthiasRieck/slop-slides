@@ -145,9 +145,9 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
 - **Notes and narration in Markdown:** both are written in Markdown, with a preview in their
   panels; the presenter view shows them formatted and narration is spoken without the marks.
 - **Narration:** the Narration mode holds what is said over each slide. It is spoken
-  on your computer by [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) 0.6B CustomVoice, in
-  one of its nine voices and ten languages, chosen per deck. Its model (2.5 GB, all voices
-  included) is downloaded on request to `~/.slopslides/models`. Each slide's audio is
+  on your computer by [Kitten TTS](https://github.com/KittenML/KittenTTS) Mini 0.8, in
+  one of its eight English voices, chosen per deck. Its model (80 MB, all voices included)
+  is downloaded on request to `~/.slopslides/models`. Each slide's audio is
   `narration/<slide id>.wav` next to the deck; a slide whose narration, voice or language
   changed is spoken again, the rest never. When presenting, the play button between the
   arrows runs the show by itself, speaking each slide's narration with the video export's
@@ -156,10 +156,9 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   its place in its slide. Drag a narration to move it, up to the narration on either side, so
   it can run over into the next slide, with the slide changing mid-sentence; video
   exports and the self-running show follow it, and the slide keeps its timing in the deck
-  (`data-duration`, `data-narration-start`). Speaking needs macOS or Linux (with OpenBLAS); Windows builds can write narration
-  but not speak it yet.
+  (`data-duration`, `data-narration-start`).
 
-Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.
+Built with Tauri 2 (Rust) and React. It runs on macOS (Apple Silicon), Windows, and Linux.
 
 ## Requirements
 
@@ -169,25 +168,23 @@ Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.
   `SLOPSLIDE_CLAUDE_PATH`, `SLOPSLIDE_CODEX_PATH`, or `SLOPSLIDE_COPILOT_PATH`.
 - For development: Node 22+, pnpm, Rust (stable), CMake (to build whisper.cpp and libopus),
   and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS; on
-  Linux also `libasound2-dev` for the microphone and `libopenblas-dev` for narration.
+  Linux also `libasound2-dev` for the microphone. The build downloads a prebuilt ONNX Runtime
+  for narration.
 
 ## Development
 
-On **Windows x64**, install the [Windows prerequisites](docs/windows-narration.md#building)
+On **Windows x64**, install the [Windows prerequisites](docs/windows-build.md)
 once, then use PowerShell from the checkout:
 
 ```powershell
-./start.ps1                 # set up native dependencies, then start dev mode
+./start.ps1                 # set up the build tools, then start dev mode
 ./start.ps1 -Mode release   # build and launch an optimized executable
 ./start.ps1 -Mode build     # build Windows installers
 ```
 
-The launcher detects Visual Studio/LLVM/CMake and Rust, builds the pinned static
-OpenBLAS dependency on first use, and reuses it afterwards. Narration is required
-by default, so a missing dependency produces an error instead of a build without
-speech. `-NoNarration` explicitly skips OpenBLAS and omits the speech engine;
-`-Mode browser` previews the UI without native tools. Setup runs in the current
-process and does not install system tools or change your permanent PATH.
+The launcher detects Visual Studio, CMake and Rust in the current process; it does not
+install system tools or change your permanent PATH. `-Mode browser` previews the UI
+without native tools.
 
 On **macOS/Linux**, or in an already configured build environment:
 
@@ -196,9 +193,6 @@ pnpm install
 pnpm app:dev        # desktop app with hot reload
 pnpm app:build      # installers for the current OS → src-tauri/target/release/bundle
 ```
-
-macOS uses Apple's Accelerate framework automatically, so narration needs no
-separate OpenBLAS installation. Linux needs `libopenblas-dev` as listed above.
 
 `pnpm dev` alone serves the UI at http://localhost:1420 in a plain browser, with mocked IPC
 and read-only access to your deck library (`dev/browserPreview.ts`). This is handy for
@@ -290,13 +284,12 @@ cargo test --manifest-path src-tauri/Cargo.toml real_codex_lint_approval_test --
 ## Releases
 
 Push a tag such as `v0.1.0`. `.github/workflows/release.yml` then builds macOS (Apple
-Silicon and Intel), Windows (MSI/NSIS), and Linux (AppImage/deb/rpm) installers into a
+Silicon only), Windows (MSI/NSIS), and Linux (AppImage/deb/rpm) installers into a
 draft GitHub release. Code signing and notarization secrets are listed in the workflow.
 
 To build a signed and notarized macOS app and DMG locally, copy
 `scripts/signing.env.example` to `.signing.env` (git-ignored), fill in your certificate and
-notarization credentials, then run `scripts/build-signed.sh` (`--universal` for Apple Silicon
-and Intel in one app, `--no-notarize` to only sign, `--check` to validate the settings without
+notarization credentials, then run `scripts/build-signed.sh` (`--no-notarize` to only sign, `--check` to validate the settings without
 building). Signing uses the hardened runtime with `src-tauri/Entitlements.plist`, which grants
 the microphone for dictation.
 
@@ -335,7 +328,7 @@ src-tauri/src/
                         once, and an Opus track for narration
   narration/            spoken narration: the voice model's download, each deck's audio
                         (`narration/` next to it) and when it is out of date; engine.rs
-                        runs Qwen3-TTS (vendor/qwen3-tts, built by build.rs) in a worker
+                        runs Kitten TTS (kitten.rs, with ONNX Runtime) in a worker
                         process (`slopslide --narration-worker`)
   watcher.rs            file watcher → `deck-changed` events, so edits stream into the UI
 src-tauri/prompts/      the agent's system prompt and design references, compiled into the

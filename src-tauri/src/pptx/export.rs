@@ -446,7 +446,13 @@ pub(super) fn matte(white: &Image, black: &Image) -> Result<Image> {
         return Err(Error::msg("the two captures differ in size"));
     }
     let mut rgba = Vec::with_capacity(white.rgba.len());
-    for (w, b) in white.rgba.chunks_exact(4).zip(black.rgba.chunks_exact(4)) {
+    for (w, b) in white
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(black.rgba.as_chunks::<4>().0)
+    {
         let through: i32 = (0..3)
             .map(|i| i32::from(w[i]) - i32::from(b[i]))
             .sum::<i32>()

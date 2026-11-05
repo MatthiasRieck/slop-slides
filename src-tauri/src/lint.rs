@@ -2256,25 +2256,30 @@ mod tests {
         let set = html::set_narration_language(
             &html::set_narration_voice(
                 &deck(r#"<section class="slide" id="a"></section>"#),
-                "aiden",
+                "luna",
             ),
-            "de",
+            "en",
         );
         assert_eq!(rules(&set), Vec::<&str>::new());
         assert_eq!(rules(&html::ensure_runtime(&set)), Vec::<&str>::new());
-        for bad in ["", "Aiden", "bob"] {
-            let html = set.replace("content=\"aiden\"", &format!("content=\"{bad}\""));
+        // "ryan" was a voice of the earlier model; older decks may still name it.
+        for bad in ["", "Luna", "bob", "ryan", "expr-voice-3-f"] {
+            let html = set.replace("content=\"luna\"", &format!("content=\"{bad}\""));
             assert_eq!(rules(&html), ["narration-voice-invalid"], "{bad}");
         }
-        for bad in ["", "german", "xx"] {
-            let html = set.replace("content=\"de\"", &format!("content=\"{bad}\""));
+        // Kitten TTS speaks only English, so other languages are gone.
+        for bad in ["", "english", "xx", "de"] {
+            let html = set.replace("content=\"en\"", &format!("content=\"{bad}\""));
             assert_eq!(rules(&html), ["narration-language-invalid"], "{bad}");
         }
-        let message = &lint(&set.replace("aiden", "bob"), |_| true, &[])[0].message;
-        assert!(message.contains("ryan, aiden"), "{message}");
+        let message = &lint(&set.replace("luna", "bob"), |_| true, &[])[0].message;
+        assert!(message.contains("jasper, bella, luna"), "{message}");
+        assert!(message.contains("the default, jasper"), "{message}");
+        let message = &lint(&set.replace("\"en\"", "\"de\""), |_| true, &[])[0].message;
+        assert!(message.contains("use one of en."), "{message}");
         let twice = set.replace(
             "<title>Talk</title>",
-            "<title>Talk</title><meta name=\"slopslide-narration-voice\" content=\"ryan\">",
+            "<title>Talk</title><meta name=\"slopslide-narration-voice\" content=\"leo\">",
         );
         assert_eq!(rules(&twice), ["narration-voice-duplicate"]);
         let in_body = deck(

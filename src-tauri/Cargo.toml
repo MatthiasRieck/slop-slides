@@ -5,7 +5,7 @@ description = "Chat-driven slide editor"
 authors = ["Matthias Rieck"]
 license = "MIT"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.92"
 
 [lib]
 name = "slopslide_lib"
@@ -13,9 +13,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-# The narration speech engine (vendor/qwen3-tts, see build.rs), and OpenBLAS on Linux/Windows.
-cc = "1"
-pkg-config = "0.3"
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -51,6 +48,11 @@ rav1e = { version = "0.8", default-features = false, features = ["threading"] }
 opus = "0.4"
 # Saying narration, which is Markdown, without its marks (see src/narration/mod.rs).
 pulldown-cmark = { version = "0.13.6", default-features = false }
+# The narration speech engine (see src/narration/kitten.rs): Kitten TTS, an ONNX model run by
+# ONNX Runtime (prebuilt, linked statically), and Misaki's English lexicon for its phonemes
+# (without its espeak-ng fallback, which is GPL).
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "tls-native"] }
+misaki-rs = { version = "0.8.0", default-features = false }
 # PowerPoint files (see src/pptx/): zip archives of XML parts.
 zip = { version = "9", default-features = false, features = ["deflate"] }
 quick-xml = "0.41.0"

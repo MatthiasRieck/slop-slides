@@ -1,13 +1,24 @@
-name: Windows narration real-model smoke
+name: Narration real-model smoke
 on:
   workflow_dispatch:
 jobs:
   smoke:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/windows-narration
+      - name: Set up Windows build tools
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/windows-build
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev patchelf
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -23,11 +34,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm tauri build --no-bundle
       - name: Load, render, measure, and stop real worker
-        run: python scripts/windows-narration-smoke.py --exe src-tauri/target/release/slopslide.exe --work '${{ runner.temp }}/narration smoke 空間' --download
+        shell: bash
+        run: python scripts/narration-smoke.py --exe src-tauri/target/release/slopslide${{ runner.os == 'Windows' && '.exe' || '' }} --work '${{ runner.temp }}/narration smoke 空間' --download
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: windows-narration-measurements-and-audio
+          name: narration-measurements-and-audio-${{ runner.os }}
           path: |
             ${{ runner.temp }}/narration smoke 空間/measurements.json
             ${{ runner.temp }}/narration smoke 空間/*.wav

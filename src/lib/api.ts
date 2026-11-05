@@ -284,7 +284,7 @@ export interface NarrationVoice {
   id: string;
   name: string;
   description: string;
-  /** The language it speaks natively; others it speaks with an accent. */
+  /** The language it speaks natively. */
   native: string;
 }
 

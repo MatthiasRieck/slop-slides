@@ -2627,7 +2627,7 @@ pub(super) fn convert(bytes: Vec<u8>, fallback: &str) -> Result<Converted> {
         let mut shapes = String::new();
         let show_master = slide.root.flag("showMasterSp") != Some(false);
         if show_master {
-            if layout.map_or(true, |l| l.root.flag("showMasterSp") != Some(false)) {
+            if layout.is_none_or(|l| l.root.flag("showMasterSp") != Some(false)) {
                 if let Some(tree) = master.and_then(|m| m.root.at(&["cSld", "spTree"])) {
                     let part = master.expect("the tree came from it");
                     converter.tree_html(&chain, part, tree, Frame::IDENTITY, &mut shapes, false, 0);

@@ -1537,24 +1537,25 @@ mod tests {
         let settings = |d: &Deck| (d.narration.voice.clone(), d.narration.language.clone());
         assert_eq!(
             settings(&load(&deck.file()).unwrap()),
-            ("ryan".into(), "en".into())
+            ("jasper".into(), "en".into())
         );
-        let voiced = set_narration_voice(&deck.file(), "sohee").unwrap();
-        assert_eq!(settings(&voiced), ("sohee".into(), "en".into()));
-        let spoken = set_narration_language(&deck.file(), "ko").unwrap();
-        assert_eq!(settings(&spoken), ("sohee".into(), "ko".into()));
+        let voiced = set_narration_voice(&deck.file(), "kiki").unwrap();
+        assert_eq!(settings(&voiced), ("kiki".into(), "en".into()));
+        let spoken = set_narration_language(&deck.file(), "en").unwrap();
+        assert_eq!(settings(&spoken), ("kiki".into(), "en".into()));
         assert!(deck
             .html()
-            .contains("<meta name=\"slopslide-narration-voice\" content=\"sohee\">"));
+            .contains("<meta name=\"slopslide-narration-voice\" content=\"kiki\">"));
         assert!(deck
             .html()
-            .contains("<meta name=\"slopslide-narration-language\" content=\"ko\">"));
+            .contains("<meta name=\"slopslide-narration-language\" content=\"en\">"));
         // Setting it again replaces the tag.
-        set_narration_voice(&deck.file(), "ryan").unwrap();
+        set_narration_voice(&deck.file(), "leo").unwrap();
         assert_eq!(deck.html().matches("slopslide-narration-voice").count(), 1);
         let html = deck.html();
         assert!(set_narration_voice(&deck.file(), "nobody").is_err());
         assert!(set_narration_language(&deck.file(), "xx").is_err());
+        assert!(set_narration_language(&deck.file(), "de").is_err());
         assert_eq!(deck.html(), html);
     }
 

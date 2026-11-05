@@ -26,7 +26,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libopenblas-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libopenblas-dev patchelf xvfb
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -45,6 +45,24 @@ jobs:
       - name: Run all checks, including Codex protocol and subprocess regressions
         shell: bash
         run: ./check.sh
+      # Exports drive platform code no unit test reaches (hidden windows, printing, captures).
+      - name: Export a sample deck to PDF and PowerPoint
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          cargo build --manifest-path src-tauri/Cargo.toml --bin slopslide
+          display=()
+          if [[ "$RUNNER_OS" == Linux ]]; then display=(xvfb-run -a); fi
+          "${display[@]}" src-tauri/target/debug/slopslide --export-smoke \
+            fixtures/export-smoke/deck.html "$RUNNER_TEMP/export-smoke" \
+            "Export smoke test" "Shapes and pictures" "Gradient card"
+      - name: Upload the exported sample deck
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: export-smoke-${{ runner.os }}
+          path: ${{ runner.temp }}/export-smoke
+          if-no-files-found: ignore
       # Runners are Apple Silicon, so only the release would otherwise link the Intel app.
       - name: Verify Intel Mac build links
         if: runner.os == 'macOS'

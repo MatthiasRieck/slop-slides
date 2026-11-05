@@ -7,6 +7,7 @@ mod copilot;
 mod deck;
 mod env;
 mod error;
+mod export_smoke;
 mod extensions;
 mod find;
 mod git;
@@ -1020,6 +1021,12 @@ pub fn run() {
             .unwrap_or_default();
         std::process::exit(narration::engine::worker_main(&dir));
     }
+    let context = tauri::generate_context!();
+    // `slopslide --export-smoke <deck.html> <out dir> [text…]`: exports a deck with the
+    // platform's webview and exits, for CI (see export_smoke.rs).
+    if args.get(1).map(String::as_str) == Some(export_smoke::FLAG) {
+        std::process::exit(export_smoke::run(context, &args[2..]));
+    }
     env::adopt_login_shell_env();
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
@@ -1152,7 +1159,7 @@ pub fn run() {
             set_narration_voice,
             set_narration_language,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while running SlopSlide")
         .run(|app, event| match event {
             tauri::RunEvent::Exit => app.state::<voice::Voice>().shutdown(),

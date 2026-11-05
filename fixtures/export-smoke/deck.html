@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Export smoke test</title>
+  <style>
+    /* No web fonts: CI exports without network. */
+    .slide {
+      background: #f4f1ea;
+      color: #1c1b19;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 32px;
+      line-height: 1.4;
+    }
+    .slide h1 { font-size: 120px; margin: 0; }
+    .slide h2 { font-size: 80px; margin: 0; }
+    .layout-blank {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 32px;
+      padding: 120px;
+    }
+    .card {
+      width: 640px;
+      padding: 32px;
+      border-radius: 24px;
+      background: linear-gradient(90deg, #d6461f, #f2a541);
+      color: #fff;
+    }
+  </style>
+</head>
+<body>
+  <main class="deck">
+    <section class="slide layout-blank" id="title">
+      <h1>Export smoke test</h1>
+      <p>Exported on every platform CI runs on.</p>
+    </section>
+    <section class="slide layout-blank" id="shapes">
+      <h2>Shapes and pictures</h2>
+      <ul>
+        <li>A gradient card</li>
+        <li>An inline SVG picture</li>
+      </ul>
+      <div class="card">Gradient card</div>
+      <svg width="240" height="240" viewBox="0 0 24 24" aria-label="Badge">
+        <circle cx="12" cy="12" r="10" fill="#2a6f97" opacity="0.8"/>
+        <path d="M7 12l3 3 7-7" stroke="#fff" stroke-width="2" fill="none"/>
+      </svg>
+    </section>
+    <section class="slide layout-blank" id="hidden" data-hidden>
+      <h2>Hidden slide</h2>
+    </section>
+  </main>
+</body>
+</html>

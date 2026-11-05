@@ -293,14 +293,12 @@ pub async fn export(
     let (window_width, window_height) = pdf::window_size(canvas, pdf::screen_area(app));
     let (signal_tx, signals) = mpsc::unbounded_channel::<Url>();
     let label = format!("video-export-{}", uuid::Uuid::new_v4().simple());
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::CustomProtocol(url))
+    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::CustomProtocol(url))
         .title("Video export")
         .inner_size(window_width, window_height)
-        .visible(false)
         // No title bar: WebKit would inset the page under it, and captures would be off.
-        .decorations(false)
-        .focused(false)
-        .skip_taskbar(true)
+        .decorations(false);
+    let window = pdf::out_of_sight(builder)
         .on_page_load(|webview, payload| {
             if payload.event() == PageLoadEvent::Finished {
                 let _ = webview.eval(VIDEO_JS);
@@ -440,6 +438,7 @@ async fn record(
     progress: impl Fn(Progress),
 ) -> Result<()> {
     let ready = helper.answer("ready").await?;
+    pdf::check_view(&ready)?;
     let slides: u32 = ready
         .get("slides")
         .and_then(|n| n.parse().ok())

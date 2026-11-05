@@ -7,6 +7,7 @@
 //! that image, whatever its scale factor, and crops, downsizes and encodes it.
 
 use std::io::Cursor;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use tauri::Webview;
@@ -70,6 +71,29 @@ pub async fn snapshot(
     })
     .await
     .map_err(|e| Error::msg(format!("screenshot failed: {e}")))?
+}
+
+/// Saves `rect` of `webview` (one slide, shown whole) as the `index`th of `total` exported
+/// slide images in `dir`, at most `width` pixels wide (the slides' canvas width; by default
+/// [`SLIDE_WIDTH`]). Returns the image's path.
+pub async fn save_slide_image(
+    webview: &Webview,
+    dir: &Path,
+    index: usize,
+    total: usize,
+    rect: Rect,
+    viewport: Size,
+    width: Option<u32>,
+) -> Result<PathBuf> {
+    let png = snapshot(webview, rect, viewport, slide_image_width(width)).await?;
+    let path = dir.join(crate::deck::slide_image_name(index, total));
+    std::fs::write(&path, png)?;
+    Ok(path)
+}
+
+/// The widest a slide image may be: `width`, or [`SLIDE_WIDTH`], within the size limit.
+fn slide_image_width(width: Option<u32>) -> u32 {
+    width.unwrap_or(SLIDE_WIDTH).clamp(1, crate::size::MAX_PX)
 }
 
 /// PNG of `rect` of `webview`, rendered afresh `pixels_wide` pixels wide: sharper than the
@@ -701,6 +725,14 @@ mod tests {
             image.rgba,
             [10, 20, 30, 255, 128, 64, 0, 128, 0, 0, 0, 0, 255, 255, 255, 255]
         );
+    }
+
+    #[test]
+    fn slide_images_are_the_canvas_width_within_the_size_limit() {
+        assert_eq!(slide_image_width(None), SLIDE_WIDTH);
+        assert_eq!(slide_image_width(Some(1080)), 1080);
+        assert_eq!(slide_image_width(Some(0)), 1);
+        assert_eq!(slide_image_width(Some(u32::MAX)), crate::size::MAX_PX);
     }
 
     #[test]

@@ -22,6 +22,7 @@
       gap: 32px;
       padding: 120px;
     }
+    .pictures { display: flex; gap: 48px; align-items: center; }
     .card {
       width: 640px;
       padding: 32px;
@@ -39,15 +40,18 @@
     </section>
     <section class="slide layout-blank" id="shapes">
       <h2>Shapes and pictures</h2>
-      <ul>
+      <ul class="reveal">
         <li>A gradient card</li>
-        <li>An inline SVG picture</li>
+        <li>An inline SVG picture and a PNG one</li>
       </ul>
       <div class="card">Gradient card</div>
-      <svg width="240" height="240" viewBox="0 0 24 24" aria-label="Badge">
-        <circle cx="12" cy="12" r="10" fill="#2a6f97" opacity="0.8"/>
-        <path d="M7 12l3 3 7-7" stroke="#fff" stroke-width="2" fill="none"/>
-      </svg>
+      <div class="pictures">
+        <svg width="240" height="240" viewBox="0 0 24 24" aria-label="Badge">
+          <circle cx="12" cy="12" r="10" fill="#2a6f97" opacity="0.8"/>
+          <path d="M7 12l3 3 7-7" stroke="#fff" stroke-width="2" fill="none"/>
+        </svg>
+        <img src="assets/checks.png" width="240" height="240" alt="Checks">
+      </div>
     </section>
     <section class="slide layout-blank" id="hidden" data-hidden>
       <h2>Hidden slide</h2>

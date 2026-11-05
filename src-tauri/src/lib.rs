@@ -641,10 +641,16 @@ async fn export_slide_image(
     viewport: capture::Size,
     width: Option<u32>,
 ) -> Result<String> {
-    let width = width.unwrap_or(capture::SLIDE_WIDTH).clamp(1, size::MAX_PX);
-    let png = capture::snapshot(&webview, rect, viewport, width).await?;
-    let path = std::path::Path::new(&dir).join(deck::slide_image_name(index, total));
-    std::fs::write(&path, png)?;
+    let path = capture::save_slide_image(
+        &webview,
+        Path::new(&dir),
+        index,
+        total,
+        rect,
+        viewport,
+        width,
+    )
+    .await?;
     Ok(path.to_string_lossy().into_owned())
 }
 

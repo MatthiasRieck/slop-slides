@@ -5,6 +5,7 @@
 //! (`?static&print`, see protocol.rs), and has the page's helper (`assets/render.js`) show each
 //! slide and report what overflows on it before capturing it, as video.rs captures frames.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -37,7 +38,7 @@ const RENDER_JS: &str = concat!(
     include_str!("../assets/render.js"),
 );
 /// What the hidden window is for, as its errors name it.
-const TASK: &str = "rendering";
+pub(crate) const TASK: &str = "rendering";
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Request {
@@ -218,39 +219,13 @@ async fn serve(app: &AppHandle, dir: &Path, request: &Request) -> Result<Vec<Ren
 }
 
 /// Images of `slides` of the deck `file`.
-async fn render(app: &AppHandle, file: &Path, slides: &[String]) -> Result<Vec<Rendered>> {
+pub(crate) async fn render(
+    app: &AppHandle,
+    file: &Path,
+    slides: &[String],
+) -> Result<Vec<Rendered>> {
     let canvas = html::slide_size(&deck::read_html(file)?).pixels();
-    let url = protocol::file_url(file, "static&print")
-        .parse()
-        .map_err(|e| Error::msg(format!("cannot open the deck for rendering: {e}")))?;
-
-    let (window_width, window_height) = pdf::window_size(canvas, pdf::screen_area(app));
-    let (signal_tx, signals) = mpsc::unbounded_channel::<Url>();
-    let label = format!("slide-render-{}", uuid::Uuid::new_v4().simple());
-    let window: WebviewWindow =
-        WebviewWindowBuilder::new(app, &label, WebviewUrl::CustomProtocol(url))
-            .title("Slide render")
-            .inner_size(window_width, window_height)
-            .visible(false)
-            // No title bar: WebKit would inset the page under it, and captures would be off.
-            .decorations(false)
-            .focused(false)
-            .skip_taskbar(true)
-            .on_page_load(|webview, payload| {
-                if payload.event() == PageLoadEvent::Finished {
-                    let _ = webview.eval(RENDER_JS);
-                }
-            })
-            .on_navigation(move |url| {
-                if url.path() != SIGNAL_PATH {
-                    return true;
-                }
-                let _ = signal_tx.send(url.clone());
-                false
-            })
-            .build()
-            .map_err(|e| Error::msg(format!("cannot open the deck for rendering: {e}")))?;
-
+    let (window, signals) = open(app, file)?;
     let mut helper = pdf::Helper {
         window: &window,
         signals,
@@ -259,6 +234,59 @@ async fn render(app: &AppHandle, file: &Path, slides: &[String]) -> Result<Vec<R
     let rendered = capture_slides(&mut helper, slides, image_width(canvas)).await;
     let _ = window.destroy();
     rendered
+}
+
+/// A window out of sight showing the deck `file` (in the open workspace), with its helper
+/// (`assets/render.js`) answering on the returned channel: first `ready`, with how many
+/// slides there are, then where each slide it is asked to [`show`] is.
+pub(crate) fn open(
+    app: &AppHandle,
+    file: &Path,
+) -> Result<(WebviewWindow, mpsc::UnboundedReceiver<Url>)> {
+    let canvas = html::slide_size(&deck::read_html(file)?).pixels();
+    let url = protocol::file_url(file, "static&print")
+        .parse()
+        .map_err(|e| Error::msg(format!("cannot open the deck for rendering: {e}")))?;
+
+    let (window_width, window_height) = pdf::window_size(canvas, pdf::screen_area(app));
+    let (signal_tx, signals) = mpsc::unbounded_channel::<Url>();
+    let label = format!("slide-render-{}", uuid::Uuid::new_v4().simple());
+    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::CustomProtocol(url))
+        .title("Slide render")
+        .inner_size(window_width, window_height)
+        // No title bar: WebKit would inset the page under it, and captures would be off.
+        .decorations(false);
+    let window = pdf::out_of_sight(builder)
+        .on_page_load(|webview, payload| {
+            if payload.event() == PageLoadEvent::Finished {
+                let _ = webview.eval(RENDER_JS);
+            }
+        })
+        .on_navigation(move |url| {
+            if url.path() != SIGNAL_PATH {
+                return true;
+            }
+            let _ = signal_tx.send(url.clone());
+            false
+        })
+        .build()
+        .map_err(|e| Error::msg(format!("cannot open the deck for rendering: {e}")))?;
+    Ok((window, signals))
+}
+
+/// Shows the slide `id` in a window from [`open`]: its answer (`rect`, `view`, `overflow`),
+/// or None if the deck has no such slide.
+pub(crate) async fn show(
+    helper: &mut pdf::Helper<'_>,
+    id: &str,
+) -> Result<Option<HashMap<String, String>>> {
+    let script = format!("window.__slopRender.show({})", pdf::js_string(id));
+    let shown = helper.run(&script, "shown").await?;
+    if shown.contains_key("missing") {
+        return Ok(None);
+    }
+    pdf::check_view(&shown)?;
+    Ok(Some(shown))
 }
 
 async fn capture_slides(
@@ -272,16 +300,14 @@ async fn capture_slides(
     }
     let mut rendered = Vec::new();
     for id in slides {
-        let script = format!("window.__slopRender.show({})", pdf::js_string(id));
-        let shown = helper.run(&script, "shown").await?;
-        if shown.contains_key("missing") {
+        let Some(shown) = show(helper, id).await? else {
             rendered.push(Rendered {
                 id: id.clone(),
                 png: None,
                 overflow: Vec::new(),
             });
             continue;
-        }
+        };
         let (rect, viewport) = pdf::geometry(&shown)?;
         let png = video::capture(helper.window, rect, viewport, width).await?;
         rendered.push(Rendered {

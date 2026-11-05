@@ -9,6 +9,11 @@ import { TopBar } from "./TopBar";
 const WORKSPACE = { path: "/decks", name: "decks" };
 const OPENED = { path: "talk/deck.html", absolute: "/decks/talk/deck.html", kind: "deck" as const };
 
+/** The open file's path and title, the button that opens its menu. */
+const fileButton = () => document.querySelector<HTMLButtonElement>("header button[aria-haspopup=menu][title]")!;
+const crumbsEl = () => document.querySelector<HTMLElement>("[data-breadcrumbs]")!;
+const openFileMenu = () => fireEvent.click(fileButton());
+
 beforeEach(() => {
   invoke.mockReset();
   save.mockReset();
@@ -99,15 +104,29 @@ describe("sidebar toggle", () => {
 });
 
 describe("workspace bar", () => {
-  it("reveals the deck file in the file manager", () => {
+  it("opens a menu from the file's path to close it or show it in the file manager", () => {
     render(<TopBar />);
-    fireEvent.click(screen.getByTitle("Show in folder"));
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(fileButton().getAttribute("aria-expanded")).toBe("false");
+    openFileMenu();
+    expect(fileButton().getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Close deck.html", "Show in folder"]);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("reveals the deck file in the file manager and closes the menu", () => {
+    render(<TopBar />);
+    openFileMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Show in folder" }));
     expect(revealItemInDir).toHaveBeenCalledWith("/decks/talk/deck.html");
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   it("closes the open deck, back to the workspace with nothing open", async () => {
     render(<TopBar />);
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Close deck.html" })));
+    openFileMenu();
+    await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: "Close deck.html" })));
     expect(useApp.getState().deck).toBeNull();
     expect(useApp.getState().openedFile).toBeNull();
     expect(useApp.getState().workspace).toEqual(WORKSPACE);
@@ -120,7 +139,8 @@ describe("workspace bar", () => {
       openedFile: { path: "site/index.html", absolute: "/decks/site/index.html", kind: "webpage" },
     });
     render(<TopBar />);
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Close index.html" })));
+    openFileMenu();
+    await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: "Close index.html" })));
     expect(useApp.getState().openedFile).toBeNull();
     expect(useApp.getState().workspace).toEqual(WORKSPACE);
   });
@@ -129,7 +149,8 @@ describe("workspace bar", () => {
     useApp.setState({ codeDirty: true });
     ask.mockResolvedValue(false);
     render(<TopBar />);
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Close deck.html" })));
+    openFileMenu();
+    await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: "Close deck.html" })));
     expect(ask).toHaveBeenCalled();
     expect(useApp.getState().deck).not.toBeNull();
     expect(useApp.getState().openedFile).toEqual(OPENED);
@@ -147,10 +168,11 @@ describe("workspace bar", () => {
       openedFile: { path: "site/index.html", absolute: "/decks/site/index.html", kind: "webpage" },
     });
     render(<TopBar />);
-    expect(screen.getByRole("navigation", { name: "Breadcrumbs" }).textContent).toBe("decks/site/index.html");
+    expect(crumbsEl().textContent).toBe("decks/site/index.html");
     expect(screen.queryByRole("button", { name: /Present/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Hide slides" })).toBeNull();
-    fireEvent.click(screen.getByTitle("Show in folder"));
+    openFileMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Show in folder" }));
     expect(revealItemInDir).toHaveBeenCalledWith("/decks/site/index.html");
     expect(screen.getByRole("button", { name: "Hide sidebar" })).toBeTruthy();
   });
@@ -158,18 +180,16 @@ describe("workspace bar", () => {
 
 describe("layout", () => {
   const order = () =>
-    Array.from(document.querySelectorAll("header nav, header [role=tablist], header button:not([role=tab])")).map(
+    Array.from(document.querySelectorAll("header [role=tablist], header button:not([role=tab])")).map(
       (el) => el.getAttribute("aria-label") ?? el.getAttribute("title") ?? el.textContent,
     );
 
-  it("puts the rail and the file (close, path, reveal) first, then the modes, undo / redo, lint, the deck's actions and the sidebar", () => {
+  it("puts the rail and the file's menu first, then the modes, undo / redo, lint, the deck's actions and the sidebar", () => {
     useApp.setState({ lint: [] });
     render(<TopBar />);
     expect(order()).toEqual([
       "Hide slides",
-      "Close deck.html",
-      "Breadcrumbs",
-      "Show in folder",
+      "talk/deck.html",
       "Mode",
       "Undo",
       "Redo",
@@ -180,13 +200,13 @@ describe("layout", () => {
     ]);
   });
 
-  it("shows the deck's title under its path", () => {
+  it("shows the deck's title under its path, both in the file's menu button", () => {
     render(<TopBar />);
-    const title = screen.getByRole("heading", { level: 1 });
+    const title = document.querySelector<HTMLElement>("[data-deck-title]")!;
     expect(title.textContent).toBe(useApp.getState().deck!.title);
-    const nav = screen.getByRole("navigation", { name: "Breadcrumbs" });
-    expect(nav.className).toContain("text-2xs");
-    expect(nav.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(crumbsEl().className).toContain("text-2xs");
+    expect(crumbsEl().compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(fileButton().contains(title) && fileButton().contains(crumbsEl())).toBe(true);
   });
 
   it("shows only the path, at full size, for a file that is not a deck", () => {
@@ -195,8 +215,8 @@ describe("layout", () => {
       openedFile: { path: "site/index.html", absolute: "/decks/site/index.html", kind: "webpage" },
     });
     render(<TopBar />);
-    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
-    expect(screen.getByRole("navigation", { name: "Breadcrumbs" }).className).toContain("text-sm");
+    expect(document.querySelector("[data-deck-title]")).toBeNull();
+    expect(crumbsEl().className).toContain("text-sm");
   });
 
   it("shows export as an icon and lint as a checkmark", () => {
@@ -223,9 +243,7 @@ describe("layout", () => {
 
 describe("breadcrumbs", () => {
   const crumbs = () =>
-    Array.from(screen.getByRole("navigation", { name: "Breadcrumbs" }).querySelectorAll("span > span:last-child")).map(
-      (el) => el.textContent,
-    );
+    Array.from(crumbsEl().querySelectorAll(":scope > span > span:last-child")).map((el) => el.textContent);
 
   it("goes from the workspace folder to the open file", () => {
     render(<TopBar />);
@@ -245,7 +263,6 @@ describe("breadcrumbs", () => {
     render(<TopBar />);
     expect(crumbs()).toEqual(["decks"]);
     expect(screen.getByText("decks").getAttribute("aria-current")).toBe("page");
-    expect(screen.queryByTitle("Show in folder")).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Close/ })).toBeNull();
+    expect(document.querySelector("header button[aria-haspopup=menu]")).toBeNull();
   });
 });

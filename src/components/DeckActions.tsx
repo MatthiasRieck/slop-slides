@@ -245,31 +245,31 @@ function ExportMenu(props: {
       </Button>
       {open && (
         <div role="menu" className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card p-1 shadow-lg">
-          <ExportItem
+          <MenuItem
             icon={FileCode2}
             label="HTML file"
             hint="One self-contained file to share"
             onClick={choose(props.onHtml)}
           />
-          <ExportItem
+          <MenuItem
             icon={FileText}
             label="PDF"
             hint="One page per slide, for printing or sharing"
             onClick={choose(props.onPdf)}
           />
-          <ExportItem
+          <MenuItem
             icon={Presentation}
             label="PowerPoint"
             hint="Editable slides; some effects are simplified"
             onClick={choose(props.onPptx)}
           />
-          <ExportItem
+          <MenuItem
             icon={Images}
             label="PNG images"
             hint="One image per slide, in a new folder"
             onClick={choose(props.onImages)}
           />
-          <ExportItem
+          <MenuItem
             icon={Film}
             label="Video"
             hint="An MP4 with each slide shown for a set time"
@@ -299,7 +299,8 @@ function ExportMenu(props: {
   );
 }
 
-function ExportItem(props: { icon: typeof Share; label: string; hint: string; onClick: () => void }) {
+/** One choice of a top bar menu: an icon, a label and, optionally, a hint under it. */
+export function MenuItem(props: { icon: typeof Share; label: string; hint?: string; onClick: () => void }) {
   const Icon = props.icon;
   return (
     <button
@@ -311,7 +312,7 @@ function ExportItem(props: { icon: typeof Share; label: string; hint: string; on
       <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
       <span className="flex flex-col">
         <span className="text-xs font-medium">{props.label}</span>
-        <span className="text-2xs text-muted-foreground">{props.hint}</span>
+        {props.hint && <span className="text-2xs text-muted-foreground">{props.hint}</span>}
       </span>
     </button>
   );

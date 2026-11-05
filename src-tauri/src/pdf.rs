@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::error::{Error, Result};
@@ -228,6 +228,23 @@ pub(crate) fn window_size(slide: (u32, u32), screen: Option<(f64, f64)>) -> (f64
         .filter(|(sw, sh)| *sw >= 1.0 && *sh >= 1.0)
         .map_or(1.0, |(sw, sh)| (0.8 * sw / w).min(0.8 * sh / h).min(1.0));
     ((w * scale).floor().max(1.0), (h * scale).floor().max(1.0))
+}
+
+/// Where a Linux export window goes: far off every screen.
+const OFFSCREEN: f64 = -32_000.0;
+
+/// `builder`'s window kept out of sight. WebKitGTK lays out a webview only once its window is
+/// shown, and a hidden one stays 0×0 with nothing to read or capture; on Linux the window is
+/// shown instead, far off screen. The other engines lay out hidden windows.
+pub(crate) fn out_of_sight<'a, R: Runtime, M: Manager<R>>(
+    builder: WebviewWindowBuilder<'a, R, M>,
+) -> WebviewWindowBuilder<'a, R, M> {
+    let builder = builder.focused(false).skip_taskbar(true);
+    if cfg!(target_os = "linux") {
+        builder.visible(true).position(OFFSCREEN, OFFSCREEN)
+    } else {
+        builder.visible(false)
+    }
 }
 
 /// The hidden window's page helper (`assets/pdf.js`, or `assets/video.js` for video.rs) and

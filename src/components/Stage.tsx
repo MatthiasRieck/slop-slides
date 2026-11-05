@@ -189,13 +189,6 @@ export function Stage() {
             areaShape={commentPins.areaShape}
             onAreaShape={commentPins.setAreaShape}
           />
-          {commentPins.commenting && <span>Click an element to comment on it. Esc finishes.</span>}
-          {drawingArea && (
-            <span>
-              {commentPins.areaShape === "lasso" ? "Draw around" : "Drag over"} the part of the slide to comment on. Esc
-              finishes.
-            </span>
-          )}
           <div className="flex-1" />
           <SlideSearch />
         </ModeBar>

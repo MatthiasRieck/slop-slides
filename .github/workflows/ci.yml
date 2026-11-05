@@ -46,7 +46,7 @@ jobs:
         shell: bash
         run: ./check.sh
       # Exports drive platform code no unit test reaches (hidden windows, printing, captures).
-      - name: Export a sample deck to PDF and PowerPoint
+      - name: Export a sample deck every way the app can
         timeout-minutes: 15
         shell: bash
         run: |

@@ -7,9 +7,8 @@ use std::io::{Cursor, Read, Write};
 use zip::write::SimpleFileOptions;
 
 use super::export::{
-    check_view, matte, package, Background, Border, BoxItem, Bullet, Crop, Fill, Gradient,
-    ImageItem, Item, Meta, Paragraph, Run, Scene, SceneSlide, Shadow, ShotInfo, ShotItem, Stop,
-    TextItem,
+    matte, package, Background, Border, BoxItem, Bullet, Crop, Fill, Gradient, ImageItem, Item,
+    Meta, Paragraph, Run, Scene, SceneSlide, Shadow, ShotInfo, ShotItem, Stop, TextItem,
 };
 use super::import::{self, convert};
 use super::xml;
@@ -1080,22 +1079,4 @@ fn cropped_pictures_may_be_taller_than_their_frame() {
         .unwrap()
         .html
         .contains(".ppt-crop img { position: absolute; max-width: none; max-height: none; }"));
-}
-
-fn answer(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-    pairs
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect()
-}
-
-#[test]
-fn a_window_with_no_viewport_is_an_error() {
-    let err = check_view(&answer(&[("slides", "2"), ("view", "0,0")]))
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("not laid out"), "{err}");
-    assert!(check_view(&answer(&[("view", "1536,864")])).is_ok());
-    // An older helper that does not report the view.
-    assert!(check_view(&answer(&[("slides", "2")])).is_ok());
 }

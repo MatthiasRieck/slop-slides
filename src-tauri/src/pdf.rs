@@ -336,6 +336,22 @@ pub(crate) fn parse_answer(url: &Url) -> HashMap<String, String> {
         .collect()
 }
 
+/// Whether the page has a viewport to lay the slides out in; with none, every element has no
+/// size and the slides would come out empty: WebKitGTK does that
+/// to a hidden window (see [`out_of_sight`]).
+pub(crate) fn check_view(ready: &HashMap<String, String>) -> Result<()> {
+    let view: Vec<f64> = ready
+        .get("view")
+        .map(|v| v.split(',').filter_map(|n| n.trim().parse().ok()).collect())
+        .unwrap_or_default();
+    match view[..] {
+        [width, height] if width < 1.0 || height < 1.0 => Err(Error::msg(format!(
+            "the export window was not laid out ({width}×{height} pixels)"
+        ))),
+        _ => Ok(()),
+    }
+}
+
 /// Where a shown slide is: `rect=x,y,w,h` and `view=w,h`, in CSS pixels.
 pub(crate) fn geometry(
     answer: &HashMap<String, String>,
@@ -716,6 +732,24 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn answer(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_window_with_no_viewport_is_an_error() {
+        let err = check_view(&answer(&[("slides", "2"), ("view", "0,0")]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not laid out"), "{err}");
+        assert!(check_view(&answer(&[("view", "1536,864")])).is_ok());
+        // An older helper that does not report the view.
+        assert!(check_view(&answer(&[("slides", "2")])).is_ok());
+    }
 
     #[test]
     fn pages_are_the_slide_size_in_points() {

@@ -289,6 +289,10 @@ pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
         })
         .build()
         .map_err(|e| Error::msg(format!("cannot open the deck for export: {e}")))?;
+    if let Err(e) = pdf::lay_out_hidden(&window, window_width, window_height).await {
+        let _ = window.destroy();
+        return Err(e);
+    }
 
     let mut helper = pdf::Helper {
         window: &window,
@@ -369,6 +373,7 @@ async fn read_scene(helper: &mut pdf::Helper<'_>) -> Result<(Scene, HashMap<usiz
     if count == 0 {
         return Err(Error::msg("the deck has no shown slides to export"));
     }
+    check_view(&ready)?;
     let scanned = helper.run("window.__slopPptx.scan()", "scanned").await?;
     let chunks: usize = scanned
         .get("chunks")
@@ -402,6 +407,21 @@ async fn read_scene(helper: &mut pdf::Helper<'_>) -> Result<(Scene, HashMap<usiz
         shots.insert(index, png);
     }
     Ok((scene, shots))
+}
+
+/// Whether the page has a viewport to lay the slides out in; with none, every element has no
+/// size and the slides would come out empty.
+pub(super) fn check_view(ready: &HashMap<String, String>) -> Result<()> {
+    let view: Vec<f64> = ready
+        .get("view")
+        .map(|v| v.split(',').filter_map(|n| n.trim().parse().ok()).collect())
+        .unwrap_or_default();
+    match view[..] {
+        [width, height] if width < 1.0 || height < 1.0 => Err(Error::msg(format!(
+            "the export window was not laid out ({width}×{height} pixels)"
+        ))),
+        _ => Ok(()),
+    }
 }
 
 async fn capture_shot(

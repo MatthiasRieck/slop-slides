@@ -121,7 +121,21 @@ describe("PowerPoint helper", () => {
   it("reports when the deck is ready, counting shown slides only", async () => {
     const { answers, settle } = helper(`${SLIDE("")}<section class="slide" data-hidden></section>`);
     await settle();
-    expect(answers).toEqual(["ready&slides=1"]);
+    expect(answers).toEqual(["ready&slides=1&view=1024,768"]);
+  });
+
+  it("keeps the export under way when a canceled navigation reinjects the helper", async () => {
+    const { window, api, answers, settle } = helper(SLIDE("<h1>Title</h1>"));
+    await settle();
+    api.scan();
+    await settle();
+    window.eval(PPTX_JS);
+    await settle();
+    const current = (window as unknown as { __slopPptx: Helper }).__slopPptx;
+    expect(current).toBe(api);
+    expect(answers.filter((a) => a.startsWith("ready"))).toHaveLength(1);
+    current.chunk(0);
+    expect(answers.at(-1)).toMatch(/^chunk=0&data=./);
   });
 
   it("skips hidden slides in the scene", async () => {

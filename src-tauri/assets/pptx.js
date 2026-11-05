@@ -7,6 +7,10 @@
    counterpart and is dropped; whatever else PowerPoint cannot draw (SVG, canvas, filters, masks,
    3D, pseudo-element art) becomes a "shot", a picture the app captures with `isolate`. */
 (function () {
+  // WebView2 finishes canceled signal navigations too, which runs this again: keep the scene
+  // and shots of the export under way, and do not report ready twice.
+  if (window.__slopPptx) return;
+
   var root = document.documentElement;
   var CHUNK = 24000;
 
@@ -959,7 +963,10 @@
   }
 
   window.__slopPptx = {
-    /** Waits for fonts and images (a few seconds at most), then reports the slide count. */
+    /**
+     * Waits for fonts and images (a few seconds at most), then reports the slide count and the
+     * window's size: a window the engine never laid out has none, and nothing to read.
+     */
     ready: function () {
       var images = Array.prototype.map.call(document.images, function (img) {
         return img.decode ? img.decode().catch(function () {}) : null;
@@ -971,7 +978,7 @@
       });
       Promise.race([Promise.all(images.concat([fonts])), cap]).then(function () {
         setTimeout(function () {
-          signal("ready&slides=" + slides().length);
+          signal("ready&slides=" + slides().length + "&view=" + [window.innerWidth, window.innerHeight].join(","));
         }, 100);
       });
     },

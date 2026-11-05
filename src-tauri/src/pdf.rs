@@ -230,6 +230,39 @@ pub(crate) fn window_size(slide: (u32, u32), screen: Option<(f64, f64)>) -> (f64
     ((w * scale).floor().max(1.0), (h * scale).floor().max(1.0))
 }
 
+/// Makes sure the hidden `window` is laid out at `width` × `height` logical pixels, as the
+/// page needs a viewport to be read and captured. WebKitGTK sizes a webview only when its
+/// window is shown, so a hidden one stays 0×0 there; the window is given its size without
+/// being shown. The other engines lay out hidden windows anyway.
+pub(crate) async fn lay_out_hidden(window: &WebviewWindow, width: f64, height: f64) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use gtk::prelude::*;
+        let (tx, rx) = oneshot::channel::<Result<()>>();
+        let target = window.clone();
+        window
+            .run_on_main_thread(move || {
+                let laid_out = target
+                    .gtk_window()
+                    .map(|gtk_window| {
+                        let (w, h) = (width.round() as i32, height.round() as i32);
+                        gtk_window.set_default_size(w, h);
+                        gtk_window.resize(w, h);
+                        gtk_window.realize();
+                        gtk_window.size_allocate(&gtk::Rectangle::new(0, 0, w, h));
+                    })
+                    .map_err(|e| Error::msg(format!("cannot reach the export window: {e}")));
+                let _ = tx.send(laid_out);
+            })
+            .map_err(|e| Error::msg(format!("cannot reach the export window: {e}")))?;
+        rx.await
+            .map_err(|_| Error::msg("the export window was closed"))??;
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (window, width, height);
+    Ok(())
+}
+
 /// The hidden window's page helper (`assets/pdf.js`, or `assets/video.js` for video.rs) and
 /// its answers.
 pub(crate) struct Helper<'a> {

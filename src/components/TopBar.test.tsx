@@ -90,16 +90,14 @@ describe("undo and redo", () => {
 });
 
 describe("sidebar toggle", () => {
-  it("hides and shows the sidebar", () => {
+  it("shows the closed sidebar from the bar, and leaves hiding the open one to the sidebar", () => {
+    useApp.setState({ sidebarOpen: false });
     render(<TopBar />);
-    const hide = screen.getByRole("button", { name: "Hide sidebar" });
-    expect(hide.getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(hide);
-    expect(useApp.getState().sidebarOpen).toBe(false);
     const show = screen.getByRole("button", { name: "Show sidebar" });
     expect(show.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(show);
     expect(useApp.getState().sidebarOpen).toBe(true);
+    expect(screen.queryByRole("button", { name: /sidebar/ })).toBeNull();
   });
 });
 
@@ -214,6 +212,7 @@ describe("workspace bar", () => {
     useApp.setState({
       deck: null,
       openedFile: { path: "site/index.html", absolute: "/decks/site/index.html", kind: "webpage" },
+      sidebarOpen: false,
     });
     render(<TopBar />);
     expect(crumbsEl().textContent).toBe("decks/site/index.html");
@@ -222,7 +221,7 @@ describe("workspace bar", () => {
     openFileMenu();
     fireEvent.click(screen.getByRole("menuitem", { name: "Show in folder" }));
     expect(revealItemInDir).toHaveBeenCalledWith("/decks/site/index.html");
-    expect(screen.getByRole("button", { name: "Hide sidebar" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Show sidebar" })).toBeTruthy();
   });
 });
 
@@ -233,7 +232,7 @@ describe("layout", () => {
     );
 
   it("puts the rail, the file's menu and undo / redo first, then the modes and chat, the deck's actions and the sidebar", () => {
-    useApp.setState({ lint: [], sidebarTab: "files" });
+    useApp.setState({ lint: [], sidebarTab: "files", sidebarOpen: false });
     render(<TopBar />);
     expect(order()).toEqual([
       "Hide slides",
@@ -244,7 +243,7 @@ describe("layout", () => {
       "Show chat",
       "Export",
       "Present",
-      "Hide sidebar",
+      "Show sidebar",
     ]);
   });
 

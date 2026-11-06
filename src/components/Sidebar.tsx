@@ -10,6 +10,7 @@ import { FileTree } from "./FileTree";
 import { useDismiss } from "./Popover";
 import { SettingsPanel } from "./SettingsPanel";
 import { SvgEditor } from "./SvgEditor";
+import { SidebarToggle } from "./TopBar";
 
 interface TabKind {
   label: string;
@@ -37,7 +38,7 @@ const TABS: Record<SidebarTab, TabKind> = {
 /**
  * The right sidebar, from the top of the window to the bottom: a tab for each surface open in it
  * (the chat, the workspace's files, the settings, …), each closable, and a `+` to open another;
- * the settings button sits at its bottom left. Maximized, it covers the whole window.
+ * the maximize and hide buttons at its top right, the settings button at its bottom left. Maximized, it covers the whole window.
  */
 export function Sidebar() {
   const tabs = useApp((s) => s.sidebarTabs);
@@ -69,6 +70,7 @@ export function Sidebar() {
         >
           {maximized ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
         </ToolButton>
+        <SidebarToggle />
       </div>
       <div role="tabpanel" className="min-h-0 flex-1">
         {active ? TABS[active].render() : <NoTabs />}

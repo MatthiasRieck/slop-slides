@@ -2987,6 +2987,242 @@ describe("slide editor: shapes, styling and media", () => {
     });
   });
 
+  describe("sticky line ends", () => {
+    const BOXES = DECK.replace(
+      '<div class="shape"',
+      '<div id="a" style="position: absolute; left: 500px; top: 300px; width: 200px; height: 100px; background: #ff0000"></div>' +
+        '<div class="b" style="position: absolute; left: 1000px; top: 600px; width: 100px; height: 100px; background: #00ff00"></div>' +
+        '<div class="shape"',
+    );
+    /** Lays out every element where its inline left, top, size and translate put it. */
+    const layOut = (e: ReturnType<typeof editor>) => {
+      const px = (v: string) => Number.parseFloat(v) || 0;
+      function rect(this: HTMLElement) {
+        const [tx = 0, ty = 0] = (this.style?.translate || "").split(" ").map(px);
+        return new e.window.DOMRect(
+          px(this.style?.left ?? "") + tx,
+          px(this.style?.top ?? "") + ty,
+          px(this.style?.width ?? ""),
+          px(this.style?.height ?? ""),
+        );
+      }
+      e.window.HTMLElement.prototype.getBoundingClientRect = rect;
+      e.window.SVGElement.prototype.getBoundingClientRect = rect;
+    };
+    const setup = (from = [100, 100], to = [300, 200]) => {
+      const e = editor({ markup: BOXES });
+      layOut(e);
+      e.fromParent({ type: "slop:edit-tool", tool: "line", style: LINE_STYLE });
+      dragOut(e, from, to);
+      const line = added(e)[0]!;
+      return { e, line, a: e.$("#a"), b: e.$(".b") };
+    };
+    const handles = (e: ReturnType<typeof editor>) => [
+      ...e.doc.querySelectorAll<HTMLElement>("[data-slop-points] [data-point=point]"),
+    ];
+    const spot = (el: HTMLElement) => [Number.parseFloat(el.style.left), Number.parseFloat(el.style.top)];
+    const pull = (e: ReturnType<typeof editor>, handle: HTMLElement, to: number[], init: PointerEventInit = {}) => {
+      const [x, y] = spot(handle);
+      handle.dispatchEvent(
+        new e.window.PointerEvent("pointerdown", {
+          clientX: x,
+          clientY: y,
+          button: 0,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      at(e, "pointermove", to[0]!, to[1]!, init);
+      at(e, "pointerup", to[0]!, to[1]!, init);
+    };
+    /** The line's two ends, in slide pixels. */
+    const ends = (line: HTMLElement) => {
+      const [x1, y1, x2, y2] = /^M(\S+) (\S+) L(\S+) (\S+)/
+        .exec(line.querySelector("path")!.getAttribute("d")!)!
+        .slice(1)
+        .map(Number) as [number, number, number, number];
+      const [tx = 0, ty = 0] = (line.style.translate || "").split(" ").map((v) => Number.parseFloat(v) || 0);
+      const left = Number.parseFloat(line.style.left) + tx;
+      const top = Number.parseFloat(line.style.top) + ty;
+      return [
+        [left + x1, top + y1],
+        [left + x2, top + y2],
+      ];
+    };
+    const click = (e: ReturnType<typeof editor>, el: Element, init: PointerEventInit = {}) => {
+      el.dispatchEvent(
+        new e.window.PointerEvent("pointerdown", { button: 0, bubbles: true, cancelable: true, ...init }),
+      );
+      el.dispatchEvent(new e.window.PointerEvent("pointerup", { button: 0, bubbles: true, cancelable: true, ...init }));
+    };
+
+    it("sticks an end dropped on an element to it, and moves that end with the element", () => {
+      const { e, line, a } = setup();
+      pull(e, handles(e)[1]!, [600, 400]);
+      expect(line.getAttribute("data-to")).toBe("a");
+      expect(line.getAttribute("data-to-at")).toBe("50% 100%");
+      expect(line.hasAttribute("data-from")).toBe(false);
+      expect(handles(e).map((h) => h.hasAttribute("data-bound"))).toEqual([false, true]);
+      e.drag(a, 40, -12);
+      expect(ends(line)).toEqual([
+        [100, 100],
+        [640, 388],
+      ]);
+      const markup = e.commits().at(-1)!.markup;
+      expect(markup).toContain('data-to="a" data-to-at="50% 100%"');
+      expect(markup).not.toContain("data-slop-hover");
+    });
+
+    it("finds what it is stuck to on its own slide when an earlier slide repeats the id", () => {
+      const markup = BOXES.replace(
+        '<section class="slide" id="intro">',
+        '<section class="slide" id="zero"><div id="a" style="position: absolute; left: 0px; top: 0px; width: 10px; height: 10px"></div></section><section class="slide" id="intro">',
+      );
+      const e = editor({ markup });
+      layOut(e);
+      e.fromParent({ type: "slop:edit-tool", tool: "line", style: LINE_STYLE });
+      dragOut(e, [100, 100], [600, 400]);
+      const line = added(e)[0]!;
+      expect(line.getAttribute("data-to")).toBe("a");
+      e.drag(e.$("#intro #a"), 40, -12);
+      expect(ends(line)[1]).toEqual([640, 388]);
+    });
+
+    it("outlines the element an end would stick to while it is dragged", () => {
+      const { e, a } = setup();
+      const [x, y] = spot(handles(e)[1]!);
+      handles(e)[1]!.dispatchEvent(
+        new e.window.PointerEvent("pointerdown", {
+          clientX: x,
+          clientY: y,
+          button: 0,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      at(e, "pointermove", 600, 350);
+      expect(a.hasAttribute("data-slop-hover")).toBe(true);
+      at(e, "pointerup", 600, 350);
+      expect(a.hasAttribute("data-slop-hover")).toBe(false);
+    });
+
+    it("gives the element an id when it has none, and follows its resizes and turns", () => {
+      const { e, line, b } = setup();
+      pull(e, handles(e)[1]!, [1050, 700]);
+      expect(b.id).toBe("el-1");
+      expect(line.getAttribute("data-to")).toBe("el-1");
+      click(e, b);
+      e.fromParent({ type: "slop:edit-geometry", w: 300 });
+      expect(ends(line)[1]).toEqual([1150, 700]);
+      e.fromParent({ type: "slop:edit-geometry", rotation: 90 });
+      // The bottom middle, turned a quarter around the center (1150, 650), is on the left.
+      expect(ends(line)[1]).toEqual([1100, 650]);
+    });
+
+    it("sticks both ends of a line dragged out from one element to another", () => {
+      const { e, line, a } = setup([600, 350], [1050, 650]);
+      expect(line.getAttribute("data-from")).toBe("a");
+      expect(line.getAttribute("data-from-at")).toBe("50% 50%");
+      expect(line.getAttribute("data-to")).toBe("el-1");
+      e.drag(a, 0, 100);
+      expect(ends(line)).toEqual([
+        [600, 450],
+        [1050, 650],
+      ]);
+    });
+
+    it("sticks to the smallest element the end is on", () => {
+      const { e, line } = setup();
+      const big = e.doc.createElement("div");
+      big.id = "big";
+      big.setAttribute(
+        "style",
+        "position: absolute; left: 0px; top: 0px; width: 1920px; height: 1080px; background: #0000ff",
+      );
+      e.$("#intro").insertBefore(big, e.$("#a"));
+      pull(e, handles(e)[1]!, [600, 350]);
+      expect(line.getAttribute("data-to")).toBe("a");
+      pull(e, handles(e)[1]!, [300, 800]);
+      expect(line.getAttribute("data-to")).toBe("big");
+    });
+
+    it("lets go when the end is dragged off, or dropped with ⌘", () => {
+      const { e, line } = setup();
+      pull(e, handles(e)[1]!, [600, 400]);
+      pull(e, handles(e)[1]!, [300, 800]);
+      expect(line.hasAttribute("data-to")).toBe(false);
+      expect(line.hasAttribute("data-to-at")).toBe(false);
+      pull(e, handles(e)[1]!, [600, 350], { metaKey: true });
+      expect(line.hasAttribute("data-to")).toBe(false);
+    });
+
+    it("lets go when the line is dragged on its own, but not along with what it is stuck to", () => {
+      const { e, line, a } = setup();
+      pull(e, handles(e)[1]!, [600, 400]);
+      click(e, a, { shiftKey: true });
+      expect(e.selected()).toHaveLength(2);
+      e.drag(a, 20, 20);
+      expect(line.getAttribute("data-to")).toBe("a");
+      expect(ends(line)).toEqual([
+        [120, 120],
+        [620, 420],
+      ]);
+      e.fromParent({ type: "slop:edit-select", path: [[...e.$("#intro").children].indexOf(line)] });
+      e.drag(line, 0, 50);
+      expect(line.hasAttribute("data-to")).toBe(false);
+      const left = ends(line);
+      e.drag(a, 100, 0);
+      expect(ends(line)).toEqual(left);
+    });
+
+    it("follows nudges before they are saved", () => {
+      const { e, line, a } = setup();
+      pull(e, handles(e)[1]!, [600, 400]);
+      click(e, a);
+      e.key("ArrowRight", { shiftKey: true });
+      expect(ends(line)[1]).toEqual([610, 400]);
+    });
+
+    it("lets go of an element that is deleted, leaving the line where it is", () => {
+      const { e, line, a } = setup();
+      pull(e, handles(e)[1]!, [600, 400]);
+      click(e, a);
+      e.key("Delete");
+      expect(e.doc.getElementById("a")).toBeNull();
+      expect(line.hasAttribute("data-to")).toBe(false);
+      expect(ends(line)[1]).toEqual([600, 400]);
+    });
+
+    it("keeps duplicated lines stuck to the copies of what they were stuck to", () => {
+      const { e, line, a } = setup();
+      pull(e, handles(e)[1]!, [600, 400]);
+      click(e, a, { shiftKey: true });
+      e.fromParent({ type: "slop:edit-duplicate" });
+      const [aCopy, lineCopy] = e.selected() as HTMLElement[];
+      expect(lineCopy).not.toBe(line);
+      expect(aCopy!.id).toBe("el-1");
+      expect(lineCopy!.getAttribute("data-to")).toBe("el-1");
+      expect(line.getAttribute("data-to")).toBe("a");
+      // A line copied on its own lets go.
+      e.fromParent({ type: "slop:edit-select", path: [[...e.$("#intro").children].indexOf(line)] });
+      e.fromParent({ type: "slop:edit-duplicate" });
+      expect(e.selected()[0]!.hasAttribute("data-to")).toBe(false);
+    });
+
+    it("keeps pasted lines stuck to the pasted copies, with ids of their own", () => {
+      const { e, line, a } = setup();
+      pull(e, handles(e)[1]!, [600, 400]);
+      click(e, a, { shiftKey: true });
+      e.fromParent({ type: "slop:edit-copy" });
+      const copied = e.posted().find((m) => (m as { type: string }).type === "slop:edit-copied") as { html: string };
+      e.fromParent({ type: "slop:edit-paste", html: copied.html });
+      const [aCopy, lineCopy] = e.selected() as HTMLElement[];
+      expect(aCopy!.id).toBe("el-1");
+      expect(lineCopy!.getAttribute("data-to")).toBe("el-1");
+      expect(line.getAttribute("data-to")).toBe("a");
+    });
+  });
+
   describe("cut-out shapes", () => {
     it.each(["triangle", "star", "bubble"])("drags out a %s that holds text, with no border", (tool) => {
       const e = editor();

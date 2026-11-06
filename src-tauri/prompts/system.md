@@ -370,7 +370,13 @@ triangle, star or speech bubble, which may hold text, `drawing` for an `<svg>` w
 line, a straight or curved line or an arrow) and is absolutely positioned on the slide with inline `left`,
 `top`, `width`, and `height`. A line or arrow keeps its one `<path>` as the editor drew it
 (`M … L …` when straight, `M … C … C …` when curved, an arrow's head a last `M … L … L …`), which
-is what lets the user drag its points. A triangle, star or speech bubble is a box cut out with an inline
+is what lets the user drag its points. A line's end the user stuck to an element carries
+`data-from` / `data-to` (that element's id; the editor may have given it one, such as `el-1`)
+and `data-from-at` / `data-to-at` (the spot on its box, `"50% 100%"`); the editor moves that end
+whenever the user moves the element. Keep these attributes and the ids they name, also when
+tidying, and when you move, resize or remove such an element, move the line's end with it (or
+remove the attributes with the element). The `stuck-line-target` and `stuck-line-anchor` lint
+warnings list ends that name no element on their slide or no spot. A triangle, star or speech bubble is a box cut out with an inline
 `clip-path: polygon(…)`; keep it. When tidying, keep each one where it
 appears and as it looks (its text, colors, border, and stacking), give it a class and move its
 styles into the slide's rules (or fit it into the layout where that is cleaner), then remove

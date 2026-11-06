@@ -12,6 +12,11 @@
    point (snapping like a resize; Shift snaps to 45° from the point before it, ⌘ / Ctrl moves
    freely), dragging the small handle on a stretch of the line adds a point there, which curves
    it, and double-clicking a point in between removes it.
+   An end dropped on an element (or dragged out from one) sticks to it, like a connector: the
+   line keeps `data-from` / `data-to` with the element's id (one is given to it if it has none)
+   and `data-from-at` / `data-to-at`, the spot on its box as percentages ("50% 100%", in its own
+   turned frame). Whenever that element moves, resizes or turns, the end goes with it. Dragging
+   the end off it, or the line on its own, lets go; so does deleting the element.
    Double-click (or Enter) edits its text, Escape selects the parent (see "Editing text" below).
    A list is selected and edited whole, from any of its items: the text element it was made
    from when the list is all that element holds, otherwise the outermost list.
@@ -143,6 +148,12 @@
   var DELETED = overflow.DELETED;
   var SLOTS = overflow.SLOTS;
   var DROPPED = "data-dropped";
+  // What a line's ends are stuck to (see "Sticky ends").
+  var ENDS = [
+    { attr: "data-from", at: "data-from-at", first: true },
+    { attr: "data-to", at: "data-to-at", first: false },
+  ];
+  var STUCK_ATTRS = ["data-from", "data-from-at", "data-to", "data-to-at"];
   var DRAG_THRESHOLD = 3;
   var DOUBLE_CLICK_MS = 400;
   var NUDGE_SAVE_MS = 500;
@@ -235,6 +246,7 @@
     "[data-slop-points] > * { position: absolute; box-sizing: border-box; pointer-events: auto; touch-action: none; cursor: move;" +
     " width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: var(--slop-handle); border: 2px solid var(--slop-accent);" +
     " box-shadow: 0 1px 3px var(--slop-scrim); }" +
+    "[data-slop-points] > [data-bound] { background: var(--slop-accent); border-color: var(--slop-handle); }" +
     "[data-slop-points] > [data-point=add] { width: 10px; height: 10px; margin: -5px 0 0 -5px; background: var(--slop-accent);" +
     " border-color: var(--slop-handle); cursor: crosshair; }" +
     "[data-slop-overflow] { position: fixed; inset: 0; z-index: 2147483646; pointer-events: none; }" +
@@ -368,6 +380,7 @@
 
   function commit() {
     if (batching) return;
+    followLines([]);
     clearTimeout(nudgeTimer);
     nudgeTimer = null;
     var markup = serialize();
@@ -947,7 +960,7 @@
     placeholder.setAttribute("aria-hidden", "true");
     placeholder.setAttribute("inert", "");
     [placeholder].concat(Array.prototype.slice.call(placeholder.querySelectorAll("*"))).forEach(function (node) {
-      ["id", MOVED, ADDED, DROPPED].concat(EDITOR_ATTRS).forEach(function (name) { node.removeAttribute(name); });
+      ["id", MOVED, ADDED, DROPPED].concat(EDITOR_ATTRS, STUCK_ATTRS).forEach(function (name) { node.removeAttribute(name); });
       node.style.setProperty("visibility", "hidden", "important");
       node.style.setProperty("pointer-events", "none", "important");
       node.style.setProperty("animation", "none", "important");
@@ -2111,7 +2124,9 @@
     create.moved = true;
     var at = slidePoint(event.clientX, event.clientY);
     if (create.line) {
-      drawLine(create, event.shiftKey ? snapLine(create.at, at) : at);
+      var to = event.shiftKey ? snapLine(create.at, at) : at;
+      drawLine(create, to);
+      hover(event.metaKey || event.ctrlKey ? null : stickTarget(to, create.el));
       return;
     }
     if (create.drawing) {
@@ -2138,6 +2153,13 @@
     if (done.drawing) {
       if (done.line) {
         if (!done.moved) drawLine(done, { x: done.at.x + SHAPE_SIZE.w, y: done.at.y });
+        hover(null);
+        var ends = done.drawing.strokes[0];
+        ENDS.forEach(function (end, i) {
+          var at = { x: ends[i][0], y: ends[i][1] };
+          var target = stickTarget(at, done.el);
+          if (target) stick(done.el, end, target, at);
+        });
         useTool("select", true);
         select(done.el);
       }
@@ -2461,6 +2483,7 @@
     if (drag.mode !== "move") {
       drag.moved = true;
       transformTo(event);
+      followLines([drag.el]);
       showReadout(event);
       return;
     }
@@ -2482,6 +2505,12 @@
     // A click on one of several selected elements leaves just that one selected.
     var click = !moved && drag.mode === "move" && extras.length > 0;
     var point = drag.mode === "point";
+    var end = point && moved && !drag.insert ? endAt(drag.index, drag.points.length) : null;
+    if (end) {
+      if (drag.stick) stick(el, end, drag.stick, drag.at);
+      else unstick(el, end);
+      hover(null);
+    }
     drag = null;
     clearDragMarks();
     // The handles to add points are away during a drag.
@@ -2680,9 +2709,7 @@
     }
     var el = document.importNode(clip.el, true);
     // Ids stay unique; a copy takes one only when the original is gone.
-    withDescendants(el).forEach(function (node) {
-      if (node.id && document.getElementById(node.id)) node.removeAttribute("id");
-    });
+    restickCopies([el], idTaken);
     var box = clip.header.box && typeof clip.header.box === "object" ? clip.header.box : {};
     var w = box.w > 0 ? box.w : 0;
     var h = box.h > 0 ? box.h : 0;
@@ -3060,16 +3087,17 @@
   function duplicateSelected(offset) {
     finishEditing();
     if (nudgeTimer) commit();
-    selectMany(inDocumentOrder(allSelected()).map(function (el) {
+    var copies = inDocumentOrder(allSelected()).map(function (el) {
       var header = clipHeader(el);
       var copy = cleanCopy(el);
-      withDescendants(copy).forEach(function (node) {
-        node.removeAttribute("id");
-      });
       slide.appendChild(copy);
       placeFree(copy, header, { x: header.box.x + offset, y: header.box.y + offset });
       return copy;
-    }));
+    });
+    restickCopies(copies, function () {
+      return true;
+    });
+    selectMany(copies);
   }
 
   /** ⌘D: duplicates the selection, offset so the copy shows. */
@@ -3093,17 +3121,16 @@
     var bottom = Math.max.apply(null, boxes.map(function (b) { return num(b.y) + num(b.h); }));
     var at = pastePoint();
     var center = slidePoint(at.x, at.y);
-    var els = clip.els.map(function (source, i) {
-      var el = document.importNode(source, true);
-      withDescendants(el).forEach(function (node) {
-        if (node.id && document.getElementById(node.id)) node.removeAttribute("id");
-      });
+    var els = clip.els.map(function (source) {
+      return document.importNode(source, true);
+    });
+    restickCopies(els, idTaken);
+    els.forEach(function (el, i) {
       slide.appendChild(el);
       placeFree(el, clip.header.group[i], {
         x: center.x - (right - left) / 2 + num(boxes[i].x) - left,
         y: center.y - (bottom - top) / 2 + num(boxes[i].y) - top,
       });
-      return el;
     });
     // The group shifts as one when a copy already sits at one of its spots.
     var shift = 0;
@@ -3388,7 +3415,27 @@
       return { el: el, from: offsetOf(el) };
     });
     drag.box = boundsOf(group);
-    drag.targets = snapTargets(group);
+    // Lines stuck to the group move with it, so they are nothing to snap to.
+    var stuck = Array.prototype.filter.call(slide.querySelectorAll("[data-from], [data-to]"), function (line) {
+      return ENDS.some(function (end) {
+        var target = stuckTo(line, end);
+        return target && group.some(function (el) {
+          return el.contains(target);
+        });
+      });
+    });
+    drag.targets = snapTargets(group.concat(stuck));
+    // A line dragged on its own lets go of what it is not dragged along with.
+    drag.lines = group.filter(function (el) {
+      ENDS.forEach(function (end) {
+        var target = stuckTo(el, end);
+        var along = target && group.some(function (other) {
+          return other.contains(target);
+        });
+        if (!along) unstick(el, end);
+      });
+      return !!lineOf(el);
+    });
   }
 
   function moveDrag(event, dx, dy) {
@@ -3397,6 +3444,7 @@
     drag.group.forEach(function (item) {
       moveTo(item.el, item.from.x + by.x, item.from.y + by.y);
     });
+    followLines(drag.lines);
     showReadout(event);
   }
 
@@ -3510,6 +3558,7 @@
         allSelected().forEach(function (el) {
           moveBy(el, nudge[0], nudge[1]);
         });
+        followLines(allSelected());
         clearTimeout(nudgeTimer);
         nudgeTimer = setTimeout(commit, NUDGE_SAVE_MS);
       } else if (event.key === "Escape") {
@@ -3746,6 +3795,183 @@
     if (scale.x !== 1 || scale.y !== 1) scaleTo(el, 1, 1);
   }
 
+  // ---- Sticky ends: a line's end dropped on an element goes wherever that element goes.
+
+  /** The end of a line at point `index` of `count`, or null for a point in between. */
+  function endAt(index, count) {
+    return index === 0 ? ENDS[0] : index === count - 1 ? ENDS[1] : null;
+  }
+
+  /** What `line`'s `end` is stuck to on this slide (a copied slide may repeat ids), or null. */
+  function stuckTo(line, end) {
+    var id = line.getAttribute(end.attr);
+    var target = id ? Array.prototype.find.call(slide.querySelectorAll("[id]"), function (el) {
+      return el.id === id;
+    }) : null;
+    return target && !target.contains(line) ? target : null;
+  }
+
+  function unstick(line, end) {
+    line.removeAttribute(end.attr);
+    line.removeAttribute(end.at);
+  }
+
+  /** `el`'s box before it is turned, as its center, size and turn, in slide pixels. */
+  function anchorFrame(el) {
+    var frame = frameOf(el);
+    return {
+      x: (frame.left + frame.right) / 2,
+      y: (frame.top + frame.bottom) / 2,
+      w: frame.right - frame.left,
+      h: frame.bottom - frame.top,
+      angle: angleOf(el),
+    };
+  }
+
+  /** The spot `at` ([x, y] as fractions of its box, in its turned frame) on `el`, in slide pixels. */
+  function anchorPoint(el, at) {
+    var f = anchorFrame(el);
+    var off = turn((at[0] - 0.5) * f.w, (at[1] - 0.5) * f.h, f.angle);
+    return [roundTenth(f.x + off.x), roundTenth(f.y + off.y)];
+  }
+
+  /** Where slide point `p` lies on `el`'s box, as fractions of it, kept on the box. */
+  function anchorOf(el, p) {
+    var f = anchorFrame(el);
+    var local = turn(p.x - f.x, p.y - f.y, -f.angle);
+    var keep = function (n) {
+      return Math.min(1, Math.max(0, n));
+    };
+    return [keep(local.x / f.w + 0.5), keep(local.y / f.h + 0.5)];
+  }
+
+  /** "25% 100%" as fractions; the box's center when it says nothing usable. */
+  function parseAnchor(value) {
+    var parts = String(value || "").trim().split(/\s+/).map(function (part) {
+      return /^-?[\d.]+%$/.test(part) ? parseFloat(part) / 100 : NaN;
+    });
+    return parts.length === 2 && parts.every(isFinite) ? parts : [0.5, 0.5];
+  }
+
+  function formatAnchor(at) {
+    return at.map(function (n) {
+      return Math.round(n * 10000) / 100 + "%";
+    }).join(" ");
+  }
+
+  /**
+   * The element an end at slide point `p` sticks to: the smallest one it is on, or close to the
+   * edge of. Never `line` itself, what holds it, or another line.
+   */
+  function stickTarget(p, line) {
+    var tolerance = SNAP_PX / zoom();
+    var best = null;
+    var area = Infinity;
+    walkContent(slide, function (el) {
+      if (el === line || el.contains(line) || !arrangeable(el) || lineOf(el)) return false;
+      var f = anchorFrame(el);
+      if (!(f.w > 0 && f.h > 0)) return false;
+      var local = turn(p.x - f.x, p.y - f.y, -f.angle);
+      if (Math.abs(local.x) > f.w / 2 + tolerance || Math.abs(local.y) > f.h / 2 + tolerance) return false;
+      if (f.w * f.h < area) {
+        best = el;
+        area = f.w * f.h;
+      }
+      return false;
+    });
+    return best;
+  }
+
+  /** An id no element has, nor any of `taken`. */
+  function freshId(taken) {
+    for (var n = 1; ; n++) {
+      var id = "el-" + n;
+      if (!document.getElementById(id) && !(taken && taken[id])) return id;
+    }
+  }
+
+  /** Sticks `line`'s `end` to `target` at slide point `p`, giving `target` an id if it has none. */
+  function stick(line, end, target, p) {
+    if (!target.id) target.id = freshId();
+    line.setAttribute(end.attr, target.id);
+    line.setAttribute(end.at, formatAnchor(anchorOf(target, p)));
+  }
+
+  var following = false;
+  /** Moves the stuck ends of every line, but those in `skip`, to where their elements are now. */
+  function followLines(skip) {
+    if (following) return;
+    following = true;
+    Array.prototype.forEach.call(slide.querySelectorAll("[data-from], [data-to]"), function (el) {
+      if (skip.indexOf(el) >= 0) return;
+      var line = lineOf(el);
+      var tilt = line ? tiltOf(el) : null;
+      if (!line || tilt.x || tilt.y) return;
+      var points = slidePoints(el, line);
+      var changed = false;
+      ENDS.forEach(function (end) {
+        if (!el.hasAttribute(end.attr)) return;
+        var target = stuckTo(el, end);
+        if (!target) {
+          unstick(el, end);
+          return;
+        }
+        var f = anchorFrame(target);
+        // A hidden element keeps its lines where they are.
+        if (!(f.w > 0 && f.h > 0)) return;
+        var to = anchorPoint(target, parseAnchor(el.getAttribute(end.at)));
+        var i = end.first ? 0 : points.length - 1;
+        if (Math.abs(points[i][0] - to[0]) > 0.5 || Math.abs(points[i][1] - to[1]) > 0.5) {
+          points[i] = to;
+          changed = true;
+        }
+      });
+      // Both ends on one spot would leave no line.
+      if (changed && (points.length > 2 || distance(points[0], points[1]) > 0)) writeLine(el, points, line.arrow);
+    });
+    following = false;
+  }
+
+  /**
+   * Keeps the ends of copied lines stuck only within the copies `els`: to the copy of what the
+   * original was stuck to (which gets an id of its own), or else to nothing. Ids for which
+   * `drop` says so are removed, so ids stay unique.
+   */
+  function restickCopies(els, drop) {
+    var nodes = [];
+    els.forEach(function (el) {
+      nodes = nodes.concat(withDescendants(el));
+    });
+    var copied = {};
+    nodes.forEach(function (node) {
+      if (node.id) copied[node.id] = node;
+    });
+    nodes.forEach(function (node) {
+      if (node.id && drop(node)) node.removeAttribute("id");
+    });
+    var given = {};
+    nodes.forEach(function (node) {
+      ENDS.forEach(function (end) {
+        var id = node.getAttribute(end.attr);
+        if (id === null) return;
+        var target = copied[id];
+        if (!target || target === node) {
+          unstick(node, end);
+          return;
+        }
+        if (!target.id) {
+          target.id = freshId(given);
+          given[target.id] = true;
+        }
+        node.setAttribute(end.attr, target.id);
+      });
+    });
+  }
+
+  function idTaken(node) {
+    return !!document.getElementById(node.id);
+  }
+
   /** Puts the handles on the selected line's points; false when no line is selected to show them. */
   function placePoints() {
     pointUi.textContent = "";
@@ -3775,8 +4001,9 @@
       });
     }
     points.forEach(function (p, i) {
-      var end = i === 0 || i === points.length - 1;
-      handle("point", i, p, "Drag to move (Shift snaps to 45°, ⌘ moves freely)" + (end ? "" : ", double-click to remove"));
+      var end = endAt(i, points.length);
+      handle("point", i, p, "Drag to move (Shift snaps to 45°, ⌘ moves freely)" + (end ? ", drop on an element to stick to it" : ", double-click to remove"));
+      if (end && el.hasAttribute(end.attr)) pointUi.lastChild.setAttribute("data-bound", "");
     });
     return true;
   }
@@ -3852,6 +4079,10 @@
     if (points.length === 2 && at.x === other[0] && at.y === other[1]) return;
     points[drag.index] = [at.x, at.y];
     drag.at = at;
+    if (!drag.insert && endAt(drag.index, points.length)) {
+      drag.stick = event.metaKey || event.ctrlKey ? null : stickTarget(at, drag.el);
+      hover(drag.stick);
+    }
     writeLine(drag.el, points, drag.arrow);
     placeHandles();
     showReadout(event);

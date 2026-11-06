@@ -84,6 +84,14 @@ describe("Stage", () => {
     expect((button as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("shows the deck's lint status beside Tidy layout, in the row under the slide", () => {
+    useApp.setState({ lint: [] });
+    render(<Stage />);
+    const lint = screen.getByRole("button", { name: "Lint OK" });
+    const tidy = screen.getByRole("button", { name: /Tidy layout/ });
+    expect(tidy.nextElementSibling).toBe(lint);
+  });
+
   it("renders nothing without a deck", () => {
     useApp.setState({ deck: null });
     const { container } = render(<Stage />);

@@ -43,6 +43,7 @@ import { Dialog } from "./Dialog";
 import { EditContextMenu, type EditMenuAction } from "./EditContextMenu";
 import { EditToolbar } from "./EditToolbar";
 import { SlideSearch } from "./FindReplace";
+import { LintStatus } from "./LintStatus";
 import { Popover } from "./Popover";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { ShortcutHelp } from "./ShortcutHelp";
@@ -337,6 +338,7 @@ export function Stage() {
                 Tidy layout
               </Button>
             )}
+            <LintStatus />
           </div>
         </div>
       )}

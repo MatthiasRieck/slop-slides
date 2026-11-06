@@ -60,6 +60,39 @@ describe("NarrationTimeline", () => {
     expect(invoke).toHaveBeenCalledWith("narration_peaks", { id: deckOf().id, slide: "intro" });
   });
 
+  it("shows when each word of timed audio is said", async () => {
+    open();
+    await act(async () => {});
+    const clip = () => screen.getByRole("button", { name: "Narration of intro" });
+    expect(clip().querySelector("[data-word]")).toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith("narration_words", expect.anything());
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "narration_peaks") return [0.5, 1];
+      if (command === "narration_words")
+        return [
+          { text: "Hello,", start: 0.3, end: 0.9 },
+          { text: "world.", start: 1.5, end: 2.4 },
+        ];
+      return null;
+    });
+    act(() => useNarration.setState({ audio: { intro: { slide: "intro", state: "ready", seconds: 3, timed: true } } }));
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledWith("narration_words", { id: deckOf().id, slide: "intro" });
+    const words = [...clip().querySelectorAll<HTMLElement>("[data-word]")];
+    expect(words.map((w) => w.textContent)).toEqual(["Hello,", "world."]);
+    // Each word starts where it is said and reaches to the next.
+    expect(words.map((w) => [w.style.left, w.style.width])).toEqual([
+      ["10%", "40%"],
+      ["50%", "50%"],
+    ]);
+
+    // Out-of-date audio's words are not shown.
+    act(() => useNarration.setState({ audio: { intro: { slide: "intro", state: "stale", seconds: 3, timed: true } } }));
+    await act(async () => {});
+    const stale = screen.getByRole("button", { name: "Narration of intro, out of date" });
+    expect(stale.querySelector("[data-word]")).toBeNull();
+  });
+
   it("marks narration not spoken yet and out-of-date audio", async () => {
     open({ intro: { narration: "Hello" }, outro: { narration: "Bye" } });
     act(() =>

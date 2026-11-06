@@ -427,6 +427,7 @@ async fn say_all(
                     fingerprint: job.fingerprint.clone(),
                     seconds: samples as f64 / f64::from(audio::RATE),
                     recorded: false,
+                    words: None,
                 },
             );
         })?;
@@ -551,6 +552,10 @@ struct Entry {
     /// The presenter's own voice rather than the model's.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     recorded: bool,
+    /// Every word said in the audio and when, once it was heard again by the speech-to-text
+    /// model (see [`time_words`]). Made audio is a new entry, without them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    words: Option<Vec<voice::Word>>,
 }
 
 /// Held while changing a manifest: a recording and a render may finish slides at the same time.
@@ -604,6 +609,8 @@ pub struct SlideAudio {
     pub seconds: Option<f64>,
     /// It is the presenter's own recording.
     pub recorded: bool,
+    /// When each word of the audio is said is known (see [`time_words`]).
+    pub timed: bool,
 }
 
 /// A slide's narration to say.
@@ -694,6 +701,7 @@ pub fn statuses(file: &Path, deck: &Deck) -> Vec<SlideAudio> {
             let seconds = entry.map(|e| e.seconds);
             let text = spoken(&slide.narration);
             let recorded = entry.is_some_and(|e| e.recorded);
+            let timed = entry.is_some_and(|e| e.words.is_some());
             let state = match entry {
                 _ if recorded => AudioState::Ready,
                 _ if text.is_empty() => AudioState::None,
@@ -708,6 +716,7 @@ pub fn statuses(file: &Path, deck: &Deck) -> Vec<SlideAudio> {
                 state,
                 seconds,
                 recorded,
+                timed,
             }
         })
         .collect()
@@ -738,6 +747,7 @@ pub fn append_recording(file: &Path, slide: &str, samples: &[f32], rate: u32) ->
                 fingerprint: String::new(),
                 seconds: all.len() as f64 / f64::from(audio::RATE),
                 recorded: true,
+                words: None,
             },
         );
     })
@@ -759,6 +769,89 @@ pub fn delete_recording(file: &Path, slide: &str) -> Result<()> {
     }
     Manifest::update(&dir, |manifest| {
         manifest.slides.remove(slide);
+    })
+}
+
+/// Payload of [`TIMING_EVENT`]: how far timing a deck's words has got.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimingProgress {
+    pub deck: String,
+    /// The slide being heard now; None once all are done.
+    pub slide: Option<String>,
+    pub done: usize,
+    pub total: usize,
+}
+
+/// Emitted as [`time_words`] goes.
+pub const TIMING_EVENT: &str = "narration-timing";
+
+/// When each word of a slide's audio is said: seconds from the start of its audio, which
+/// plays `data-narration-start` seconds after the slide shows.
+pub fn words(file: &Path, slide: &str) -> Option<Vec<voice::Word>> {
+    if !audio_file(file, slide).is_file() {
+        return None;
+    }
+    Manifest::read(&audio_dir(file)).slides.remove(slide)?.words
+}
+
+/// Has `voice` hear the up-to-date audio of the deck `file`'s `slides` (all for None) again,
+/// unless it was, to keep when each word is said (see [`words`]): the made audio in the deck's
+/// narration language, a recording in whatever language it is in. Calls `progress` as it goes
+/// and returns every slide's audio.
+pub async fn time_words(
+    voice: &voice::Voice,
+    home: &Path,
+    file: &Path,
+    slides: Option<&[String]>,
+    progress: impl Fn(TimingProgress),
+) -> Result<Vec<SlideAudio>> {
+    let deck = deck::load(file)?;
+    let (_, language) = settings(file);
+    let todo: Vec<SlideAudio> = statuses(file, &deck)
+        .into_iter()
+        .filter(|a| a.state == AudioState::Ready && !a.timed)
+        .filter(|a| slides.map_or(true, |s| s.contains(&a.slide)))
+        .collect();
+    let dir = audio_dir(file);
+    for (done, audio) in todo.iter().enumerate() {
+        progress(TimingProgress {
+            deck: deck.id.clone(),
+            slide: Some(audio.slide.clone()),
+            done,
+            total: todo.len(),
+        });
+        let Some(heard) = Manifest::read(&dir).slides.remove(&audio.slide) else {
+            continue;
+        };
+        let (samples, rate) = audio::read_wav(&audio_file(file, &audio.slide))?;
+        let spoken_in = (!heard.recorded).then(|| language.id.to_string());
+        let words = voice
+            .time_words(home, samples, rate, spoken_in)
+            .await
+            .map_err(|e| Error::msg(format!("Slide {}: {e}", audio.slide)))?;
+        keep_words(&dir, &audio.slide, &heard, words)?;
+    }
+    progress(TimingProgress {
+        deck: deck.id.clone(),
+        slide: None,
+        done: todo.len(),
+        total: todo.len(),
+    });
+    Ok(statuses(file, &deck::load(file)?))
+}
+
+/// Keeps `words` as the slide's, unless its audio changed since `heard` was its entry.
+fn keep_words(dir: &Path, slide: &str, heard: &Entry, words: Vec<voice::Word>) -> Result<()> {
+    Manifest::update(dir, |manifest| {
+        if let Some(entry) = manifest.slides.get_mut(slide) {
+            let same = entry.fingerprint == heard.fingerprint
+                && entry.seconds == heard.seconds
+                && entry.recorded == heard.recorded;
+            if same {
+                entry.words = Some(words);
+            }
+        }
     })
 }
 
@@ -915,6 +1008,7 @@ mod tests {
                     fingerprint: fingerprint("Say this.", &voice, &language),
                     seconds: 1.0,
                     recorded: false,
+                    words: None,
                 },
             )]),
         }
@@ -993,6 +1087,7 @@ mod tests {
                 fingerprint: fingerprint("Say A.", "ryan", "en"),
                 seconds: 0.5,
                 recorded: false,
+                words: None,
             },
         );
         manifest.slides.insert(
@@ -1001,6 +1096,7 @@ mod tests {
                 fingerprint: fingerprint("Old B.", "ryan", "en"),
                 seconds: 1.0,
                 recorded: false,
+                words: None,
             },
         );
         manifest.write(&audio).unwrap();
@@ -1061,6 +1157,7 @@ mod tests {
                     fingerprint: fingerprint("Say A.", "ryan", "en"),
                     seconds: 2.0,
                     recorded: false,
+                    words: None,
                 },
             );
         })
@@ -1109,6 +1206,88 @@ mod tests {
         assert_eq!(found[0].state, AudioState::Missing);
         assert_eq!(found[1].state, AudioState::None);
         assert!(!found[0].recorded);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn heard_audio_keeps_its_words_until_the_audio_changes() {
+        let dir = temp_dir();
+        let slides = r#"<section class="slide" id="a"><aside class="narration">Say A.</aside></section><section class="slide" id="b"><aside class="narration">Say B.</aside></section><section class="slide" id="c"></section>"#;
+        let file = deck_with(&dir, "deck.html", "", slides);
+        let deck = deck::load(&file).unwrap();
+        let audio = audio_dir(&file);
+        fs::create_dir_all(&audio).unwrap();
+        // a has up-to-date audio, b out-of-date audio, c none.
+        audio::write_wav(&audio_file(&file, "a"), &[0.0; 24_000], audio::RATE).unwrap();
+        audio::write_wav(&audio_file(&file, "b"), &[0.0; 24_000], audio::RATE).unwrap();
+        let entry = |text: &str| Entry {
+            fingerprint: fingerprint(text, "ryan", "en"),
+            seconds: 1.0,
+            recorded: false,
+            words: None,
+        };
+        Manifest::update(&audio, |m| {
+            m.slides.insert("a".into(), entry("Say A."));
+            m.slides.insert("b".into(), entry("Old B."));
+        })
+        .unwrap();
+        assert!(statuses(&file, &deck).iter().all(|a| !a.timed));
+        assert_eq!(words(&file, "a"), None);
+
+        // Silence is heard as no words, without the speech model; only a is heard at all.
+        let voice = voice::Voice::default();
+        let seen = Mutex::new(Vec::new());
+        let found = tauri::async_runtime::block_on(time_words(
+            &voice,
+            Path::new("/nonexistent"),
+            &file,
+            None,
+            |p| seen.lock().unwrap().push((p.slide, p.done, p.total)),
+        ))
+        .unwrap();
+        assert_eq!(
+            found.iter().map(|a| a.timed).collect::<Vec<_>>(),
+            [true, false, false]
+        );
+        assert_eq!(words(&file, "a"), Some(vec![]));
+        assert_eq!(words(&file, "c"), None);
+        assert_eq!(
+            seen.into_inner().unwrap(),
+            [(Some("a".to_string()), 0, 1), (None, 1, 1)]
+        );
+
+        // Heard audio is not heard again.
+        let found = tauri::async_runtime::block_on(time_words(
+            &voice,
+            Path::new("/nonexistent"),
+            &file,
+            Some(&["a".to_string()]),
+            |p| assert_eq!(p.total, 0),
+        ))
+        .unwrap();
+        assert!(found[0].timed);
+
+        // Words of audio that changed while it was heard are not kept.
+        let heard = Manifest::read(&audio).slides.remove("a").unwrap();
+        let said = vec![voice::Word {
+            text: "Say".into(),
+            start: 0.1,
+            end: 0.4,
+        }];
+        keep_words(&audio, "a", &heard, said.clone()).unwrap();
+        assert_eq!(words(&file, "a"), Some(said.clone()));
+        append_recording(&file, "a", &[0.1; 24_000], audio::RATE).unwrap();
+        assert!(!statuses(&file, &deck)[0].timed, "a recording is new audio");
+        keep_words(&audio, "a", &heard, said.clone()).unwrap();
+        assert_eq!(words(&file, "a"), None);
+
+        // Words are kept in the manifest only once there are some, and go with the audio file.
+        let heard = Manifest::read(&audio).slides.remove("a").unwrap();
+        keep_words(&audio, "a", &heard, said.clone()).unwrap();
+        let json = fs::read_to_string(audio.join(MANIFEST)).unwrap();
+        assert_eq!(json.matches("\"words\"").count(), 1);
+        fs::remove_file(audio_file(&file, "a")).unwrap();
+        assert_eq!(words(&file, "a"), None);
         fs::remove_dir_all(dir).unwrap();
     }
 

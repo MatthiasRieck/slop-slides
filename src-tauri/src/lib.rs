@@ -1105,6 +1105,38 @@ fn cancel_narration(narration: State<narration::Narration>) {
     narration.cancel();
 }
 
+/// Has the speech-to-text model hear the up-to-date audio of the deck's `slides` (all for None)
+/// again, to keep when each word is said, with `narration-timing` progress events to every
+/// window; returns every slide's audio.
+#[tauri::command]
+async fn time_narration(
+    app: AppHandle,
+    voice: State<'_, voice::Voice>,
+    id: String,
+    slides: Option<Vec<String>>,
+) -> Result<Vec<narration::SlideAudio>> {
+    use tauri::Emitter;
+    let file = deck::deck_file(&id)?;
+    let progress = |p: narration::TimingProgress| {
+        let _ = app.emit(narration::TIMING_EVENT, p);
+    };
+    narration::time_words(
+        &voice,
+        &deck::app_home()?,
+        &file,
+        slides.as_deref(),
+        progress,
+    )
+    .await
+}
+
+/// When each word of a slide's narration audio is said, in seconds from the audio's start;
+/// null until `time_narration` heard it.
+#[tauri::command]
+fn narration_words(id: String, slide: String) -> Result<Option<Vec<voice::Word>>> {
+    Ok(narration::words(&deck::deck_file(&id)?, &slide))
+}
+
 /// A slide's narration audio, as WAV bytes.
 #[tauri::command]
 fn narration_wav(id: String, slide: String) -> Result<tauri::ipc::Response> {
@@ -1306,6 +1338,8 @@ pub fn run() {
             cancel_narration,
             narration_wav,
             narration_peaks,
+            time_narration,
+            narration_words,
             set_narration_voice,
             set_narration_language,
         ])

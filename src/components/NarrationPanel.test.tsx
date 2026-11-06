@@ -52,7 +52,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   setNarration.mockClear();
   invoke.mockReset();
-  useNarration.setState({ speech: null, audio: {}, audioDeck: null, render: null, download: null });
+  useNarration.setState({ speech: null, audio: {}, audioDeck: null, render: null, download: null, timing: null });
   useApp.setState({ deck: deckWith({ intro: "Welcome, everyone." }), selected: "intro", setNarration });
 });
 
@@ -250,6 +250,50 @@ describe("NarrationPanel speech", () => {
     expect(screen.getByText(/Speaking slide 2 of 2/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Cancel/ }));
     expect(invoke).toHaveBeenCalledWith("cancel_narration");
+  });
+
+  it("times the words of audio that is not timed yet, showing how far it has got", async () => {
+    backend(SPEECH);
+    useApp.setState({ deck: deckWith({ intro: "One.", outro: "Three." }) });
+    await show();
+    // Out-of-date audio is not worth timing.
+    act(() =>
+      audioOf([
+        { slide: "intro", state: "ready", seconds: 1 },
+        { slide: "outro", state: "stale", seconds: 2 },
+      ]),
+    );
+    expect(screen.getByText("Audio 0:01")).toBeTruthy();
+    expect(screen.getByText("1 slide's words not timed")).toBeTruthy();
+    let finish!: (audio: SlideAudio[]) => void;
+    invoke.mockImplementation((command: string) =>
+      command === "time_narration"
+        ? new Promise((resolve) => (finish = resolve))
+        : Promise.resolve(command === "voice_status" ? { modelReady: true } : SPEECH),
+    );
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Time words/ })));
+    expect(invoke).toHaveBeenCalledWith("time_narration", { id: deckFor(DECK_HTML).id, slides: null });
+    act(() => useNarration.setState({ timing: { deck: deckFor(DECK_HTML).id, slide: "intro", done: 0, total: 1 } }));
+    expect(screen.getByText("Timing words of slide 1 of 1…")).toBeTruthy();
+    await act(async () =>
+      finish([
+        { slide: "intro", state: "ready", seconds: 1, timed: true },
+        { slide: "outro", state: "stale", seconds: 2 },
+      ]),
+    );
+    expect(screen.getByText("Audio 0:01, words timed")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Time words/ })).toBeNull();
+  });
+
+  it("says when it downloads the speech model to time words", async () => {
+    backend(SPEECH);
+    await show();
+    act(() =>
+      useNarration.setState({
+        timing: { deck: deckFor(DECK_HTML).id, slide: null, done: 0, total: 0, downloading: true },
+      }),
+    );
+    expect(screen.getByText("Downloading the speech model…")).toBeTruthy();
   });
 
   describe("recordings and cleaning up", () => {

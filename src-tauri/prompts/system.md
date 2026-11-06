@@ -372,8 +372,10 @@ line, a straight or curved line or an arrow) and is absolutely positioned on the
 (`M … L …` when straight, `M … C … C …` when curved, an arrow's head a last `M … L … L …`), which
 is what lets the user drag its points. A line's end the user stuck to an element carries
 `data-from` / `data-to` (that element's id; the editor may have given it one, such as `el-1`)
-and `data-from-at` / `data-to-at` (the spot on its box, `"50% 100%"`); the editor moves that end
-whenever the user moves the element. Keep these attributes and the ids they name, also when
+and `data-from-at` / `data-to-at` (the spot on its box, `"50% 100%"`, followed by `edge` when
+the end is stuck to the element's outline there, `"0% 0% edge"`); the editor moves that end
+whenever the user moves the element. An `edge` end sits where the line toward that spot first
+meets the element's outline, so it slides along the outline as the element turns. Keep these attributes and the ids they name, also when
 tidying, and when you move, resize or remove such an element, move the line's end with it (or
 remove the attributes with the element). The `stuck-line-target` and `stuck-line-anchor` lint
 warnings list ends that name no element on their slide or no spot. A triangle, star or speech bubble is a box cut out with an inline

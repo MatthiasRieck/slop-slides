@@ -15,8 +15,13 @@
    An end dropped on an element (or dragged out from one) sticks to it, like a connector: the
    line keeps `data-from` / `data-to` with the element's id (one is given to it if it has none)
    and `data-from-at` / `data-to-at`, the spot on its box as percentages ("50% 100%", in its own
-   turned frame). Whenever that element moves, resizes or turns, the end goes with it. Dragging
-   the end off it, or the line on its own, lets go; so does deleting the element.
+   turned frame). Whenever that element moves, resizes or turns, the end goes with it. Dropped
+   close to the element's outline (its box, rounded corners, ellipse, `clip-path` shape or, for
+   a drawing, its own strokes), which shows highlighted, the end sticks to its edge instead:
+   the spot on the outline is kept with " edge" ("0% 0% edge"), and the end goes where the line
+   toward that spot first meets the outline, so as the element turns the end slides along its
+   edge while the line still points at the spot. Dragging the end off it, or the line on its
+   own, lets go; so does deleting the element.
    Double-click (or Enter) edits its text, Escape selects the parent (see "Editing text" below).
    A list is selected and edited whole, from any of its items: the text element it was made
    from when the list is all that element holds, otherwise the outermost list.
@@ -266,6 +271,10 @@
     "[data-slop-svg-open]:hover { filter: brightness(1.1); }" +
     "[data-slop-svg-open][hidden] { display: none; }" +
     "[data-slop-overflow] { position: fixed; inset: 0; z-index: 2147483646; pointer-events: none; }" +
+    // The outline of the element a line's end would stick to the edge of, and the spot on it.
+    "[data-slop-edge] { position: fixed; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; z-index: 2147483646; pointer-events: none; }" +
+    "[data-slop-edge] path { fill: none; stroke: var(--slop-accent); stroke-width: 3px; stroke-linejoin: round; }" +
+    "[data-slop-edge] circle { fill: var(--slop-accent); stroke: var(--slop-handle); stroke-width: 2px; }" +
     "[data-slop-overflow][data-quiet] { display: none; }" +
     "[data-slop-overflow] > * { position: absolute; box-sizing: border-box; }" +
     "[data-slop-overflow] > [data-wire] { outline: 3px dashed var(--slop-danger); outline-offset: -1px; background: color-mix(in srgb, var(--slop-danger) 8%, transparent); }" +
@@ -319,6 +328,10 @@
   var pointUi = document.createElement("div");
   pointUi.setAttribute("data-slop-points", "");
   document.body.appendChild(pointUi);
+
+  var edgeUi = document.createElementNS(SVG_NS, "svg");
+  edgeUi.setAttribute("data-slop-edge", "");
+  document.body.appendChild(edgeUi);
 
   var svgButton = document.createElement("button");
   svgButton.type = "button";
@@ -2201,8 +2214,11 @@
     var at = slidePoint(event.clientX, event.clientY);
     if (create.line) {
       var to = event.shiftKey ? snapLine(create.at, at) : at;
+      var hit = event.metaKey || event.ctrlKey ? null : stickTarget(to, create.el);
+      // Close to an element's outline, the end goes onto it, where the line toward the spot meets it.
+      if (hit && hit.edge && !event.shiftKey) to = toPoint(edgePoint(hit.el, [create.at.x, create.at.y], [hit.at.x, hit.at.y]));
       drawLine(create, to);
-      hover(event.metaKey || event.ctrlKey ? null : stickTarget(to, create.el));
+      previewStick(hit);
       return;
     }
     if (create.drawing) {
@@ -2229,12 +2245,11 @@
     if (done.drawing) {
       if (done.line) {
         if (!done.moved) drawLine(done, { x: done.at.x + SHAPE_SIZE.w, y: done.at.y });
-        hover(null);
+        previewStick(null);
         var ends = done.drawing.strokes[0];
         ENDS.forEach(function (end, i) {
-          var at = { x: ends[i][0], y: ends[i][1] };
-          var target = stickTarget(at, done.el);
-          if (target) stick(done.el, end, target, at);
+          var hit = stickTarget({ x: ends[i][0], y: ends[i][1] }, done.el);
+          if (hit) stick(done.el, end, hit);
         });
         useTool("select", true);
         select(done.el);
@@ -2583,9 +2598,9 @@
     var point = drag.mode === "point";
     var end = point && moved && !drag.insert ? endAt(drag.index, drag.points.length) : null;
     if (end) {
-      if (drag.stick) stick(el, end, drag.stick, drag.at);
+      if (drag.stick) stick(el, end, drag.stick);
       else unstick(el, end);
-      hover(null);
+      previewStick(null);
     }
     drag = null;
     clearDragMarks();
@@ -3923,26 +3938,400 @@
     return [keep(local.x / f.w + 0.5), keep(local.y / f.h + 0.5)];
   }
 
-  /** "25% 100%" as fractions; the box's center when it says nothing usable. */
+  /** "25% 100%" (or "25% 100% edge") as fractions and whether it is on the edge; the box's center when it says nothing usable. */
   function parseAnchor(value) {
-    var parts = String(value || "").trim().split(/\s+/).map(function (part) {
+    var words = String(value || "").trim().split(/\s+/);
+    var edge = words.length === 3 && words[2] === "edge";
+    var parts = words.slice(0, edge ? 2 : 3).map(function (part) {
       return /^-?[\d.]+%$/.test(part) ? parseFloat(part) / 100 : NaN;
     });
-    return parts.length === 2 && parts.every(isFinite) ? parts : [0.5, 0.5];
+    return parts.length === 2 && parts.every(isFinite) ? { at: parts, edge: edge } : { at: [0.5, 0.5], edge: false };
   }
 
-  function formatAnchor(at) {
+  function formatAnchor(at, edge) {
     return at.map(function (n) {
       return Math.round(n * 10000) / 100 + "%";
-    }).join(" ");
+    }).join(" ") + (edge ? " edge" : "");
+  }
+
+  // Spots along each quarter of a rounded corner or ellipse, and the most along an SVG shape.
+  var ARC_SAMPLES = 12;
+  var VECTOR_SAMPLES = 240;
+  // Screen pixels from an element's outline within which an end sticks to its edge.
+  var EDGE_PX = 10;
+
+  /**
+   * `el`'s outline as rings of [x, y] fractions of its box before it is turned: each closed
+   * (an area) or open (a stroke of a drawing). Its `clip-path`, else its SVG shapes, else its
+   * box with its rounded corners.
+   */
+  function outlineOf(el) {
+    var size = sizeOf(el);
+    var w = size.w || 1;
+    var h = size.h || 1;
+    return clipOutline(el, w, h) || vectorOutline(el) || cornerOutline(el, w, h);
+  }
+
+  /** A CSS length ("12px", "25%" of `base`), or NaN. */
+  function cssLength(value, base) {
+    var m = String(value || "").trim().match(/^(-?[\d.]+)(px|%)?$/);
+    if (!m) return NaN;
+    var n = parseFloat(m[1]);
+    return m[2] === "%" ? (n / 100) * base : m[2] === "px" || n === 0 ? n : NaN;
+  }
+
+  /** Spots around the ellipse at (cx, cy) with radii (rx, ry), in fractions of a w × h box. */
+  function ellipseRing(cx, cy, rx, ry, w, h) {
+    var ring = [];
+    for (var i = 0; i < ARC_SAMPLES * 4; i++) {
+      var a = (i / (ARC_SAMPLES * 4)) * 2 * Math.PI;
+      ring.push([(cx + rx * Math.cos(a)) / w, (cy + ry * Math.sin(a)) / h]);
+    }
+    return ring;
+  }
+
+  /** The outline a `clip-path` polygon(), circle(), ellipse() or inset() cuts; null for none or what it cannot read. */
+  function clipOutline(el, w, h) {
+    var clip = (el.style.getPropertyValue("clip-path") || getComputedStyle(el).getPropertyValue("clip-path") || "").trim();
+    var m = clip.match(/^(polygon|circle|ellipse|inset)\((.*)\)/);
+    if (!m) return null;
+    var args = m[2].trim();
+    var ring = null;
+    if (m[1] === "polygon") {
+      ring = args.replace(/^(nonzero|evenodd)\s*,/, "").split(",").map(function (pair) {
+        var xy = pair.trim().split(/\s+/);
+        return [cssLength(xy[0], w) / w, cssLength(xy[1], h) / h];
+      });
+      if (ring.length < 3) return null;
+    } else if (m[1] === "inset") {
+      var sides = args.split(/\s+round\s+/)[0].trim().split(/\s+/);
+      // One to four values, as for margins: top, right, bottom, left.
+      var side = function (i) {
+        return sides[i] || sides[i === 3 ? 1 : 0] || sides[0];
+      };
+      var t = cssLength(side(0), h);
+      var r = cssLength(side(1), w);
+      var b = cssLength(side(2), h);
+      var l = cssLength(side(3), w);
+      ring = [[l / w, t / h], [1 - r / w, t / h], [1 - r / w, 1 - b / h], [l / w, 1 - b / h]];
+    } else {
+      var parts = args.split(/\s+at\s+/);
+      var center = (parts[1] || "50% 50%").trim().split(/\s+/);
+      var cx = cssLength(center[0], w);
+      var cy = cssLength(center[1] || "50%", h);
+      var radii = parts[0].trim() ? parts[0].trim().split(/\s+/) : [];
+      var radius = function (value, base, near, far) {
+        return !value || value === "closest-side" ? near : value === "farthest-side" ? far : cssLength(value, base);
+      };
+      var rx;
+      var ry;
+      if (m[1] === "circle") {
+        var near = Math.min(cx, cy, w - cx, h - cy);
+        var far = Math.max(cx, cy, w - cx, h - cy);
+        rx = ry = radius(radii[0], Math.sqrt((w * w + h * h) / 2), near, far);
+      } else {
+        rx = radius(radii[0], w, Math.min(cx, w - cx), Math.max(cx, w - cx));
+        ry = radius(radii[1], h, Math.min(cy, h - cy), Math.max(cy, h - cy));
+      }
+      if (!(rx > 0 && ry > 0)) return null;
+      ring = ellipseRing(cx, cy, rx, ry, w, h);
+    }
+    var ok = ring.every(function (p) {
+      return isFinite(p[0]) && isFinite(p[1]);
+    });
+    return ok ? [{ points: ring, closed: true }] : null;
   }
 
   /**
-   * The element an end at slide point `p` sticks to: the smallest one it is on, or close to the
-   * edge of. Never `line` itself, what holds it, or another line.
+   * The corners of an SVG path made only of straight stretches (M, L, H, V, Z), as rings of
+   * [x, y] closed or not; null when it curves.
+   */
+  function straightPath(d) {
+    var parts = String(d || "").match(/[a-z]|-?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi) || [];
+    var rings = [];
+    var ring = null;
+    var x = 0;
+    var y = 0;
+    var command = null;
+    for (var i = 0; i < parts.length; ) {
+      if (/^[a-z]$/i.test(parts[i])) command = parts[i++];
+      if (!command || !/^[mlhvz]$/i.test(command)) return null;
+      var relative = command === command.toLowerCase();
+      var c = command.toUpperCase();
+      if (c === "Z") {
+        if (ring) {
+          ring.closed = true;
+          x = ring.points[0][0];
+          y = ring.points[0][1];
+        }
+        ring = null;
+        continue;
+      }
+      var a = parseFloat(parts[i++]);
+      var b = c === "H" || c === "V" ? 0 : parseFloat(parts[i++]);
+      if (!isFinite(a) || !isFinite(b)) return null;
+      if (c === "H") x = relative ? x + a : a;
+      else if (c === "V") y = relative ? y + a : a;
+      else {
+        x = relative ? x + a : a;
+        y = relative ? y + b : b;
+      }
+      if (c === "M" || !ring) {
+        ring = { points: [], closed: false };
+        rings.push(ring);
+        // After an M, more pairs are lines.
+        if (c === "M") command = relative ? "l" : "L";
+      }
+      ring.points.push([x, y]);
+    }
+    return rings;
+  }
+
+  /** The rings an SVG shape outlines, in its own user space; null when it cannot tell. */
+  function shapeRings(shape) {
+    var tag = shape.tagName.toLowerCase();
+    var n = function (name) {
+      return parseFloat(shape.getAttribute(name)) || 0;
+    };
+    if (tag === "rect") {
+      var x = n("x");
+      var y = n("y");
+      return n("width") > 0 && n("height") > 0
+        ? [{ points: [[x, y], [x + n("width"), y], [x + n("width"), y + n("height")], [x, y + n("height")]], closed: true }]
+        : null;
+    }
+    if (tag === "circle" || tag === "ellipse") {
+      var rx = tag === "circle" ? n("r") : n("rx");
+      var ry = tag === "circle" ? n("r") : n("ry");
+      return rx > 0 && ry > 0 ? [{ points: ellipseRing(n("cx"), n("cy"), rx, ry, 1, 1), closed: true }] : null;
+    }
+    if (tag === "line") return [{ points: [[n("x1"), n("y1")], [n("x2"), n("y2")]], closed: false }];
+    if (tag === "polygon" || tag === "polyline") {
+      var numbers = (shape.getAttribute("points") || "").match(NUMBER) || [];
+      var points = [];
+      for (var i = 0; i + 1 < numbers.length; i += 2) points.push([parseFloat(numbers[i]), parseFloat(numbers[i + 1])]);
+      return points.length > 1 ? [{ points: points, closed: tag === "polygon" }] : null;
+    }
+    var straight = straightPath(shape.getAttribute("d"));
+    if (straight) return straight;
+    // A curve: followed along its length.
+    if (typeof shape.getTotalLength !== "function" || typeof shape.getPointAtLength !== "function") return null;
+    var length;
+    try {
+      length = shape.getTotalLength();
+    } catch (e) {
+      return null;
+    }
+    if (!(length > 0)) return null;
+    var count = Math.min(VECTOR_SAMPLES, Math.max(ARC_SAMPLES, Math.ceil(length / 4)));
+    var ring = [];
+    for (var k = 0; k <= count; k++) {
+      var p = shape.getPointAtLength((k / count) * length);
+      ring.push([p.x, p.y]);
+    }
+    return [{ points: ring, closed: /z\s*$/i.test(shape.getAttribute("d") || "") }];
+  }
+
+  /** The outline of an SVG's shapes, as fractions of its viewBox; null when it has none to follow. */
+  function vectorOutline(el) {
+    if (el.namespaceURI !== SVG_NS) return null;
+    var box = viewBoxOf(el);
+    if (!box) {
+      var size = sizeOf(el);
+      box = [0, 0, size.w || 1, size.h || 1];
+    }
+    var rings = [];
+    Array.prototype.forEach.call(el.querySelectorAll("path, line, polyline, polygon, rect, circle, ellipse"), function (shape) {
+      var own = shapeRings(shape);
+      if (!own) return;
+      // Its own transforms and those of the groups it is in, up to the SVG.
+      var matrices = [];
+      for (var node = shape; node && node !== el; node = node.parentNode) {
+        var list = node.transform && node.transform.baseVal;
+        var matrix = list && list.numberOfItems ? list.consolidate().matrix : null;
+        if (matrix) matrices.push(matrix);
+      }
+      // A filled shape is an area, even when its outline is left open.
+      var fill = shape.getAttribute("fill") || getComputedStyle(shape).getPropertyValue("fill");
+      var filled = !!fill && fill !== "none" && shape.tagName.toLowerCase() !== "line";
+      own.forEach(function (ring) {
+        rings.push({
+          closed: ring.closed || (filled && ring.points.length > 2),
+          points: ring.points.map(function (p) {
+            var x = p[0];
+            var y = p[1];
+            matrices.forEach(function (m) {
+              var nx = m.a * x + m.c * y + m.e;
+              y = m.b * x + m.d * y + m.f;
+              x = nx;
+            });
+            return [(x - box[0]) / box[2], (y - box[1]) / box[3]];
+          }),
+        });
+      });
+    });
+    return rings.length ? rings : null;
+  }
+
+  /** `el`'s box with its rounded corners, as CSS rounds them (scaled down when they would overlap). */
+  function cornerOutline(el, w, h) {
+    var style = getComputedStyle(el);
+    var names = ["border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"];
+    var values = names.map(function (name) {
+      return (style.getPropertyValue(name) || el.style.getPropertyValue(name) || "").trim();
+    });
+    // No rounding there may only mean the shorthand was not taken apart.
+    if (values.every(function (v) {
+      return !parseFloat(v);
+    })) {
+      // Only the shorthand: "a b c d / e f g h".
+      var short = (style.getPropertyValue("border-radius") || el.style.getPropertyValue("border-radius") || "").split("/");
+      var expand = function (text) {
+        var v = String(text || "").trim().split(/\s+/).filter(Boolean);
+        if (!v.length) return null;
+        return [v[0], v[1] || v[0], v[2] || v[0], v[3] || v[1] || v[0]];
+      };
+      var horizontal = expand(short[0]) || ["0", "0", "0", "0"];
+      var vertical = expand(short[1]) || horizontal;
+      values = horizontal.map(function (x, i) {
+        return x + " " + vertical[i];
+      });
+    }
+    var radii = values.map(function (value) {
+      var parts = value.split(/\s+/);
+      var rx = cssLength(parts[0] || "0", w);
+      var ry = cssLength(parts[1] || parts[0] || "0", h);
+      return [rx > 0 ? rx : 0, ry > 0 ? ry : 0];
+    });
+    var scale = Math.min(
+      1,
+      w / (radii[0][0] + radii[1][0] || 1),
+      w / (radii[3][0] + radii[2][0] || 1),
+      h / (radii[0][1] + radii[3][1] || 1),
+      h / (radii[1][1] + radii[2][1] || 1),
+    );
+    // Each corner: the corner of the box, and which way its rounding's center lies from it.
+    var corners = [[0, 0, 1, 1], [w, 0, -1, 1], [w, h, -1, -1], [0, h, 1, -1]];
+    var ring = [];
+    corners.forEach(function (c, i) {
+      var rx = radii[i][0] * scale;
+      var ry = radii[i][1] * scale;
+      if (!(rx > 0 && ry > 0)) {
+        ring.push([c[0] / w, c[1] / h]);
+        return;
+      }
+      var cx = c[0] + c[2] * rx;
+      var cy = c[1] + c[3] * ry;
+      // A quarter around, clockwise from the side before the corner to the one after it.
+      var start = Math.PI + (i * Math.PI) / 2;
+      for (var k = 0; k <= ARC_SAMPLES; k++) {
+        var a = start + (k / ARC_SAMPLES) * (Math.PI / 2);
+        ring.push([(cx + rx * Math.cos(a)) / w, (cy + ry * Math.sin(a)) / h]);
+      }
+    });
+    return [{ points: ring, closed: true }];
+  }
+
+  /** `el`'s outline in slide pixels, as rings of [x, y] that are closed or not. */
+  function slideOutline(el) {
+    var f = anchorFrame(el);
+    return outlineOf(el).map(function (ring) {
+      return {
+        closed: ring.closed,
+        points: ring.points.map(function (p) {
+          var off = turn((p[0] - 0.5) * f.w, (p[1] - 0.5) * f.h, f.angle);
+          return [f.x + off.x, f.y + off.y];
+        }),
+      };
+    });
+  }
+
+  /** Each stretch of the rings, as [from, to]. */
+  function stretchesOf(rings) {
+    var all = [];
+    rings.forEach(function (ring) {
+      var pts = ring.points;
+      for (var i = 0; i + 1 < pts.length; i++) all.push([pts[i], pts[i + 1]]);
+      if (ring.closed && pts.length > 2) all.push([pts[pts.length - 1], pts[0]]);
+    });
+    return all;
+  }
+
+  /** The spot on the rings nearest slide point `p`, and how far it is. */
+  function nearestOnOutline(rings, p) {
+    var best = { point: null, distance: Infinity };
+    stretchesOf(rings).forEach(function (s) {
+      var dx = s[1][0] - s[0][0];
+      var dy = s[1][1] - s[0][1];
+      var length = dx * dx + dy * dy;
+      var t = length ? Math.min(1, Math.max(0, ((p.x - s[0][0]) * dx + (p.y - s[0][1]) * dy) / length)) : 0;
+      var q = [s[0][0] + t * dx, s[0][1] + t * dy];
+      var d = Math.sqrt(Math.pow(p.x - q[0], 2) + Math.pow(p.y - q[1], 2));
+      if (d < best.distance) best = { point: q, distance: d };
+    });
+    return best;
+  }
+
+  /** Whether slide point `p` is inside the closed rings (even-odd, as holes would be). */
+  function insideOutline(rings, p) {
+    var inside = false;
+    rings.forEach(function (ring) {
+      if (!ring.closed) return;
+      var pts = ring.points;
+      for (var i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        var a = pts[i];
+        var b = pts[j];
+        if (a[1] > p.y !== b[1] > p.y && p.x < ((b[0] - a[0]) * (p.y - a[1])) / (b[1] - a[1]) + a[0]) inside = !inside;
+      }
+    });
+    return inside;
+  }
+
+  /** Where the way from slide point `from` to `to` first meets the rings, as [x, y]; null if it does not. */
+  function firstCrossing(rings, from, to) {
+    var rx = to[0] - from[0];
+    var ry = to[1] - from[1];
+    var best = null;
+    var first = Infinity;
+    stretchesOf(rings).forEach(function (s) {
+      var sx = s[1][0] - s[0][0];
+      var sy = s[1][1] - s[0][1];
+      var cross = rx * sy - ry * sx;
+      if (!cross) return;
+      var qx = s[0][0] - from[0];
+      var qy = s[0][1] - from[1];
+      var t = (qx * sy - qy * sx) / cross;
+      var u = (qx * ry - qy * rx) / cross;
+      if (t >= 0 && t <= 1 + 1e-6 && u >= -1e-6 && u <= 1 + 1e-6 && t < first) {
+        first = t;
+        best = [from[0] + t * rx, from[1] + t * ry];
+      }
+    });
+    return best;
+  }
+
+  /**
+   * Where an end stuck to the edge of `el` at slide point `spot` goes, its line coming from
+   * slide point `from`: where the way toward the spot first meets the outline, so the line still
+   * points at the spot. From inside the element, or when the way misses it, the outline's spot
+   * nearest the spot.
+   */
+  function edgePoint(el, from, spot) {
+    var rings = slideOutline(el);
+    var p = { x: spot[0], y: spot[1] };
+    var hit = null;
+    if (from && distance(from, spot) > 0 && !insideOutline(rings, { x: from[0], y: from[1] })) hit = firstCrossing(rings, from, spot);
+    if (!hit) hit = nearestOnOutline(rings, p).point || spot;
+    return [roundTenth(hit[0]), roundTenth(hit[1])];
+  }
+
+  /**
+   * What an end at slide point `p` sticks to: the smallest element it is on, or close to the
+   * outline of. Never `line` itself, what holds it, or another line. `edge` says it is close to
+   * the outline, then `at` is the spot on it; otherwise `at` is `p`.
    */
   function stickTarget(p, line) {
-    var tolerance = SNAP_PX / zoom();
+    var tolerance = EDGE_PX / zoom();
     var best = null;
     var area = Infinity;
     walkContent(slide, function (el) {
@@ -3951,13 +4340,50 @@
       if (!(f.w > 0 && f.h > 0)) return false;
       var local = turn(p.x - f.x, p.y - f.y, -f.angle);
       if (Math.abs(local.x) > f.w / 2 + tolerance || Math.abs(local.y) > f.h / 2 + tolerance) return false;
+      var rings = slideOutline(el);
+      var near = nearestOnOutline(rings, p);
+      var edge = near.distance <= tolerance;
+      var closed = rings.some(function (ring) {
+        return ring.closed;
+      });
+      var on = closed ? insideOutline(rings, p) : Math.abs(local.x) <= f.w / 2 && Math.abs(local.y) <= f.h / 2;
+      if (!edge && !on) return false;
       if (f.w * f.h < area) {
-        best = el;
+        best = { el: el, edge: edge, at: edge ? { x: roundTenth(near.point[0]), y: roundTenth(near.point[1]) } : p };
         area = f.w * f.h;
       }
       return false;
     });
     return best;
+  }
+
+  function toPoint(xy) {
+    return { x: xy[0], y: xy[1] };
+  }
+
+  /** Shows what an end would stick to: the element's box, or its outline and the spot on it for its edge. */
+  function previewStick(hit) {
+    hover(hit && !hit.edge ? hit.el : null);
+    edgeUi.textContent = "";
+    if (!hit || !hit.edge) return;
+    var origin = slide.getBoundingClientRect();
+    var k = zoom();
+    var screen = function (p) {
+      return roundTenth(origin.left + p[0] * k) + " " + roundTenth(origin.top + p[1] * k);
+    };
+    var path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", slideOutline(hit.el).map(function (ring) {
+      return ring.points.map(function (p, i) {
+        return (i ? "L" : "M") + screen(p);
+      }).join(" ") + (ring.closed ? " Z" : "");
+    }).join(" "));
+    edgeUi.appendChild(path);
+    var dot = document.createElementNS(SVG_NS, "circle");
+    var at = screen([hit.at.x, hit.at.y]).split(" ");
+    dot.setAttribute("cx", at[0]);
+    dot.setAttribute("cy", at[1]);
+    dot.setAttribute("r", "5");
+    edgeUi.appendChild(dot);
   }
 
   /** An id no element has, nor any of `taken`. */
@@ -3968,11 +4394,12 @@
     }
   }
 
-  /** Sticks `line`'s `end` to `target` at slide point `p`, giving `target` an id if it has none. */
-  function stick(line, end, target, p) {
+  /** Sticks `line`'s `end` to what `hit` (from `stickTarget`) found, giving the element an id if it has none. */
+  function stick(line, end, hit) {
+    var target = hit.el;
     if (!target.id) target.id = freshId();
     line.setAttribute(end.attr, target.id);
-    line.setAttribute(end.at, formatAnchor(anchorOf(target, p)));
+    line.setAttribute(end.at, formatAnchor(anchorOf(target, hit.at), hit.edge));
   }
 
   var following = false;
@@ -3987,18 +4414,31 @@
       if (!line || tilt.x || tilt.y) return;
       var points = slidePoints(el, line);
       var changed = false;
-      ENDS.forEach(function (end) {
-        if (!el.hasAttribute(end.attr)) return;
+      var spots = ENDS.map(function (end) {
+        if (!el.hasAttribute(end.attr)) return null;
         var target = stuckTo(el, end);
         if (!target) {
           unstick(el, end);
-          return;
+          return null;
         }
         var f = anchorFrame(target);
         // A hidden element keeps its lines where they are.
-        if (!(f.w > 0 && f.h > 0)) return;
-        var to = anchorPoint(target, parseAnchor(el.getAttribute(end.at)));
+        if (!(f.w > 0 && f.h > 0)) return null;
+        var anchor = parseAnchor(el.getAttribute(end.at));
+        return { target: target, edge: anchor.edge, at: anchorPoint(target, anchor.at) };
+      });
+      ENDS.forEach(function (end, n) {
+        var spot = spots[n];
+        if (!spot) return;
         var i = end.first ? 0 : points.length - 1;
+        var to = spot.at;
+        if (spot.edge) {
+          // The line comes toward the spot from the point before the end: on a straight line,
+          // the other end, or the spot that end is stuck to.
+          var other = spots[1 - n];
+          var from = points.length === 2 && other ? other.at : points[end.first ? 1 : points.length - 2];
+          to = edgePoint(spot.target, from, spot.at);
+        }
         if (Math.abs(points[i][0] - to[0]) > 0.5 || Math.abs(points[i][1] - to[1]) > 0.5) {
           points[i] = to;
           changed = true;
@@ -4153,13 +4593,19 @@
       at = { x: at.x + sx.by, y: at.y + sy.by };
       drawGuides(sx.hits, sy.hits, { left: at.x, top: at.y, right: at.x, bottom: at.y });
     }
+    var hit = null;
+    if (!drag.insert && endAt(drag.index, points.length)) {
+      hit = event.metaKey || event.ctrlKey ? null : stickTarget(at, drag.el);
+      // Close to an element's outline, the end goes onto it, where the line toward the spot meets it.
+      if (hit && hit.edge && !event.shiftKey) at = toPoint(edgePoint(hit.el, other, [hit.at.x, hit.at.y]));
+    }
     // Both ends on one spot would leave no line.
     if (points.length === 2 && at.x === other[0] && at.y === other[1]) return;
     points[drag.index] = [at.x, at.y];
     drag.at = at;
     if (!drag.insert && endAt(drag.index, points.length)) {
-      drag.stick = event.metaKey || event.ctrlKey ? null : stickTarget(at, drag.el);
-      hover(drag.stick);
+      drag.stick = hit;
+      previewStick(hit);
     }
     writeLine(drag.el, points, drag.arrow);
     placeHandles();

@@ -3,8 +3,8 @@
    /.video-signal?<answer>, which the app catches and cancels.
 
    The video has its own clock. Every animation the page runs (CSS animations and transitions,
-   the player's slide fades, hero morphs) is paused when it first appears and moved to where
-   the video's clock says it is, so each frame shows its exact moment however long capturing
+   the player's slide fades, hero morphs) is paused when it first appears (on a slide, when that
+   slide first shows) and moved to where the video's clock says it is, so each frame shows its exact moment however long capturing
    it takes. `busy=0` tells the app that nothing shown will move any more, so the rest of the
    slide's time can repeat the last frame.
 
@@ -196,15 +196,29 @@
     return !slide || getComputedStyle(slide).visibility !== "hidden";
   }
 
-  /** Moves every animation to the clock; answers whether any shown one is still moving. */
+  /** Whether `animation` is on a slide the show has not got to yet. */
+  function waiting(animation) {
+    var target = animation.effect && animation.effect.target;
+    var slide = target && target.closest ? target.closest(".deck > .slide") : null;
+    return !!slide && !slide.classList.contains("active");
+  }
+
+  /** Moves every animation to the clock; answers whether any shown one is still moving. An
+      animation on a slide counts from when the slide shows, however long the page has had it,
+      as the player and the app's preview count it (runtime.js): until then it waits at its
+      start. */
   function sync() {
     var busy = false;
     var animations = document.getAnimations ? document.getAnimations() : [];
     animations.forEach(function (animation) {
       if (done.has(animation)) return;
       if (!births.has(animation)) {
-        births.set(animation, clock);
         animation.pause();
+        if (waiting(animation)) {
+          animation.currentTime = 0;
+          return;
+        }
+        births.set(animation, clock);
       }
       var local = clock - births.get(animation);
       var end = endOf(animation);

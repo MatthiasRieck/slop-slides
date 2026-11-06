@@ -29,13 +29,19 @@ pub struct Beats {
     /// Each beat: when it falls, in seconds into the audio, and how strong the onset there
     /// is, 0 to 1 (1 the strongest of them).
     pub beats: Vec<(f64, f64)>,
+    /// Where each beat falls in its bar of [`BAR`] beats, 0 for the bar's first beat (the
+    /// downbeat); bars may shift where the music does.
+    pub in_bar: Vec<usize>,
 }
+
+/// Beats in a bar: four, as nearly all popular music has.
+pub const BAR: usize = 4;
 
 /// The beat of `samples` (mono, at `rate`); None when there is none to find, as in silence or
 /// audio shorter than a few beats.
 pub fn find(samples: &[f32], rate: u32) -> Option<Beats> {
     let audio = voice::resample(samples, rate, RATE);
-    let onsets = onset_strength(&audio);
+    let (onsets, bass) = onset_strength(&audio);
     let fps = f64::from(RATE) / HOP as f64;
     let period = tempo_period(&onsets, fps)?;
     let frames = track(&onsets, period);
@@ -60,15 +66,70 @@ pub fn find(samples: &[f32], rate: u32) -> Option<Beats> {
                 )
             })
             .collect(),
+        in_bar: bars(
+            &frames
+                .iter()
+                .map(|&f| onsets[f] + bass[f])
+                .collect::<Vec<_>>(),
+        ),
     })
 }
 
-/// How sharply sound sets in at each hop of `audio`: the growth of its log spectrum since the
-/// hop before, summed over frequencies, with the slow swell of loudness taken out.
-fn onset_strength(audio: &[f32]) -> Vec<f64> {
-    if audio.len() < WINDOW {
+/// Where each beat falls in its bar, given how accented each is (the bass and the whole): the
+/// bar's first beat is mostly its most accented. Bars run on four beats at a time, but may
+/// shift by a beat or two where the accents keep pointing elsewhere (a bar of two, a break),
+/// each shift costing as much as a few accents.
+fn bars(accents: &[f64]) -> Vec<usize> {
+    let n = accents.len();
+    if n == 0 {
         return Vec::new();
     }
+    let mut sorted = accents.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let shift = 4.0 * sorted[n / 2].max(f64::EPSILON);
+    // score[s]: the best total for the beats so far, the last being beat s of its bar.
+    let mut score: Vec<f64> = (0..BAR)
+        .map(|s| if s == 0 { accents[0] } else { 0.0 })
+        .collect();
+    let mut back = vec![[0usize; BAR]; n];
+    for i in 1..n {
+        let mut next = [f64::NEG_INFINITY; BAR];
+        for s in 0..BAR {
+            for (before, &total) in score.iter().enumerate() {
+                let cost = if (before + 1) % BAR == s { 0.0 } else { shift };
+                if total - cost > next[s] {
+                    next[s] = total - cost;
+                    back[i][s] = before;
+                }
+            }
+            if s == 0 {
+                next[s] += accents[i];
+            }
+        }
+        score = next.to_vec();
+    }
+    let mut at = (0..BAR)
+        .max_by(|&a, &b| score[a].total_cmp(&score[b]))
+        .unwrap_or(0);
+    let mut in_bar = vec![0; n];
+    for i in (0..n).rev() {
+        in_bar[i] = at;
+        at = back[i][at];
+    }
+    in_bar
+}
+
+/// The highest frequency of the bass, in Hz: kick drums and bass lines, which mark bars.
+const BASS: f64 = 200.0;
+
+/// How sharply sound sets in at each hop of `audio`: the growth of its log spectrum since the
+/// hop before, summed over frequencies, with the slow swell of loudness taken out; and the same
+/// for the bass alone.
+fn onset_strength(audio: &[f32]) -> (Vec<f64>, Vec<f64>) {
+    if audio.len() < WINDOW {
+        return (Vec::new(), Vec::new());
+    }
+    let bass_bins = (BASS * WINDOW as f64 / f64::from(RATE)).ceil() as usize;
     let fft = Fft::new(WINDOW);
     let window: Vec<f32> = (0..WINDOW)
         .map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / WINDOW as f32).cos())
@@ -85,6 +146,7 @@ fn onset_strength(audio: &[f32]) -> Vec<f64> {
     let hops = audio.len() / HOP + 1;
     let mut previous: Option<Vec<f64>> = None;
     let mut flux = Vec::with_capacity(hops);
+    let mut bass_flux = Vec::with_capacity(hops);
     let mut frame = vec![Complex::default(); WINDOW];
     for hop in 0..hops {
         let at = (hop * HOP) as isize - half as isize;
@@ -96,16 +158,25 @@ fn onset_strength(audio: &[f32]) -> Vec<f64> {
             .iter()
             .map(|c| (1.0 + 100.0 * f64::from((c.re * c.re + c.im * c.im).sqrt())).ln())
             .collect();
-        flux.push(previous.as_ref().map_or(0.0, |before: &Vec<f64>| {
-            spectrum
-                .iter()
-                .zip(before)
-                .map(|(now, then)| (now - then).max(0.0))
-                .sum::<f64>()
-        }));
+        let growth = |bins: std::ops::Range<usize>| {
+            previous.as_ref().map_or(0.0, |before: &Vec<f64>| {
+                spectrum[bins.clone()]
+                    .iter()
+                    .zip(&before[bins])
+                    .map(|(now, then)| (now - then).max(0.0))
+                    .sum::<f64>()
+            })
+        };
+        flux.push(growth(0..half));
+        bass_flux.push(growth(1..bass_bins.clamp(2, half)));
         previous = Some(spectrum);
     }
-    // Take out the local average (about half a second either way), so only onsets stand out.
+    (stand_out(&flux), stand_out(&bass_flux))
+}
+
+/// `flux` with its local average (about half a second either way) taken out, so only onsets
+/// stand out, scaled to a spread of 1.
+fn stand_out(flux: &[f64]) -> Vec<f64> {
     let reach = 30;
     let mut sums = vec![0.0; flux.len() + 1];
     for (i, f) in flux.iter().enumerate() {
@@ -273,6 +344,78 @@ mod tests {
         }
     }
 
+    /// Beats at `bpm` with a kick on each bar's first beat and a hat on the others, the bars
+    /// starting at beat `first`; after `shift_at` beats, one bar of two beats.
+    fn bars_of(bpm: f64, first: usize, shift_at: Option<usize>, seconds: f64) -> Vec<f32> {
+        let rate = 16_000;
+        let beat = 60.0 / bpm;
+        let mut downbeats = Vec::new();
+        let mut i = first;
+        while (i as f64) * beat < seconds {
+            downbeats.push(i);
+            i += if shift_at == Some(i) { 2 } else { BAR };
+        }
+        (0..(seconds * f64::from(rate)) as usize)
+            .map(|n| {
+                let t = n as f64 / f64::from(rate);
+                let k = (t / beat) as usize;
+                let since = t - k as f64 * beat;
+                let tau = std::f64::consts::TAU;
+                if downbeats.contains(&k) {
+                    ((-since * 20.0).exp()
+                        * (tau * (45.0 + 100.0 * (-since * 30.0).exp()) * t).sin())
+                        as f32
+                } else {
+                    // A hat: noise-like, high and short.
+                    ((-since * 60.0).exp()
+                        * 0.4
+                        * (tau * 5000.0 * t).sin()
+                        * (tau * 7300.0 * t).sin()) as f32
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn finds_where_bars_start() {
+        for first in [0, 1, 3] {
+            let found = find(&bars_of(120.0, first, None, 20.0), 16_000).unwrap();
+            let downbeats: Vec<f64> = found
+                .beats
+                .iter()
+                .zip(&found.in_bar)
+                .filter(|(_, &b)| b == 0)
+                .map(|((at, _), _)| *at)
+                .collect();
+            assert!(downbeats.len() >= 8, "{first}: {downbeats:?}");
+            for at in &downbeats {
+                let k = (at / 0.5).round() as usize;
+                assert_eq!(k % BAR, first % BAR, "{first}: a downbeat at {at}");
+            }
+            assert!(found.in_bar.iter().all(|&b| b < BAR));
+        }
+    }
+
+    #[test]
+    fn bars_follow_the_music_when_it_shifts_by_a_beat_or_two() {
+        // Bars from beat 0, then a bar of two at beat 16: from there they start on odd-even
+        // beats two later.
+        let found = find(&bars_of(120.0, 0, Some(16), 30.0), 16_000).unwrap();
+        let downbeat = |at: f64| {
+            found
+                .beats
+                .iter()
+                .zip(&found.in_bar)
+                .find(|((t, _), _)| (t - at).abs() < 0.05)
+                .map(|(_, &b)| b == 0)
+        };
+        assert_eq!(downbeat(4.0), Some(true));
+        assert_eq!(downbeat(5.0), Some(false));
+        assert_eq!(downbeat(13.0), Some(true), "after the short bar");
+        assert_eq!(downbeat(14.0), Some(false));
+        assert!(bars(&[]).is_empty());
+    }
+
     /// Prints the beat of the audio file `SLOP_BEAT_PROBE`:
     /// `SLOP_BEAT_PROBE=song.m4a cargo test probe_beats -- --ignored --nocapture`.
     #[test]
@@ -288,8 +431,8 @@ mod tests {
             found.beats.len(),
             started.elapsed()
         );
-        for (at, strength) in found.beats.iter().take(40) {
-            println!("{at:7.3} {strength:.2}");
+        for ((at, strength), bar) in found.beats.iter().zip(&found.in_bar).take(40) {
+            println!("{at:7.3} {strength:.2} {bar}");
         }
     }
 

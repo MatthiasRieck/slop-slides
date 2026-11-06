@@ -72,9 +72,11 @@
       right: -20%;
       bottom: -10%;
       height: 48%;
-      background: repeating-conic-gradient(#1f2440 0 25%, #f2e4d0 0 50%) 0 0 / 160px 160px;
-      transform: perspective(700px) rotateX(62deg);
-      transform-origin: 50% 100%;
+      /* A floor running off to the horizon, drawn in 2D: exports draw 3D perspective flattened. */
+      background: repeating-conic-gradient(#1f2440 0 25%, #f2e4d0 0 50%) 50% 100% / 160px 72px;
+      clip-path: polygon(34% 0, 66% 0, 100% 100%, 0 100%);
+      -webkit-mask-image: linear-gradient(to bottom, transparent, #000 70%);
+      mask-image: linear-gradient(to bottom, transparent, #000 70%);
       opacity: 0.18;
       pointer-events: none;
     }

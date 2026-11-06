@@ -1,6 +1,7 @@
 //! `slopslide --export-smoke <deck.html> <out dir> [text…]`: runs every export the app offers
 //! with the real webview of the platform and checks each result: PDF, PowerPoint (and its
-//! import back), MP4 video (animated and still), slide images, the agent's slide renders, and
+//! import back), MP4 video (animated and still), slide images, the agent's slide renders (with
+//! every animation finished, and a moment after each slide shows), and
 //! the standalone HTML deck, which is then opened again. CI runs it on every platform (see
 //! .github/workflows/ci.yml), as the exports drive platform code no unit test reaches: hidden
 //! windows, printing, captures.
@@ -203,7 +204,7 @@ async fn export_all(app: &AppHandle, args: &Args) -> Result<()> {
     step("Slide render", async {
         let dir = out.join("rendered");
         std::fs::create_dir_all(&dir)?;
-        for rendered in render::render(app, &file, &shown).await? {
+        for rendered in render::render(app, &file, &shown, None).await? {
             use base64::Engine as _;
             let png = rendered
                 .png
@@ -221,6 +222,26 @@ async fn export_all(app: &AppHandle, args: &Args) -> Result<()> {
                     rendered.overflow.join("; ")
                 );
             }
+        }
+        Ok(dir)
+    })
+    .await?;
+
+    // The same, a moment after each slide shows, with its animations held there.
+    step("Slide render at a moment", async {
+        let dir = out.join("rendered-at");
+        std::fs::create_dir_all(&dir)?;
+        for rendered in render::render(app, &file, &shown, Some(0.25)).await? {
+            use base64::Engine as _;
+            let png = rendered
+                .png
+                .ok_or_else(|| Error::msg(format!("slide {} was not found", rendered.id)))?;
+            let png = base64::engine::general_purpose::STANDARD
+                .decode(png)
+                .map_err(|e| Error::msg(format!("slide {}: {e}", rendered.id)))?;
+            check_png(&png, canvas)
+                .map_err(|e| Error::msg(format!("slide {}: {e}", rendered.id)))?;
+            std::fs::write(dir.join(format!("{}.png", rendered.id)), png)?;
         }
         Ok(dir)
     })
@@ -272,7 +293,7 @@ async fn slide_images(
     dir: &Path,
     canvas: (u32, u32),
 ) -> Result<Vec<PathBuf>> {
-    let (window, signals) = render::open(app, file)?;
+    let (window, signals) = render::open(app, file, false)?;
     let mut helper = pdf::Helper {
         window: &window,
         signals,
@@ -282,7 +303,7 @@ async fn slide_images(
         helper.answer("ready").await?;
         let mut saved = Vec::new();
         for (index, id) in shown.iter().enumerate() {
-            let answer = render::show(&mut helper, id)
+            let answer = render::show(&mut helper, id, None)
                 .await?
                 .ok_or_else(|| Error::msg(format!("slide {id} was not found")))?;
             let (rect, viewport) = pdf::geometry(&answer)?;

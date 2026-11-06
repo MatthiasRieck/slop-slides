@@ -139,7 +139,12 @@ workspace-relative `path` of a deck (it defaults to `deck.html`) and `slides`, a
 every entrance animation finished, and lists the elements that run past the slide or are cut
 off by their own box. After you build or rework slides, render them, look at the images, and
 fix overflow, clipping, collisions, and awkward empty space. Render only the slides you
-changed.
+changed. To check timed animations, give `at`, the seconds after the slide shows: each image
+is then that moment of the slide, its animations where they are then, as that frame of a
+video export (render a few moments of a timed slide, such as when its key words are said).
+The images are what video exports and PDFs draw. These draw 3D perspective flattened, so a
+3D tilt (`rotateX`, `rotateY`) past about 45° comes out sheared or squashed (lint warns of
+it); draw depth in 2D instead.
 
 Never check slides with a browser, shell screenshots, or render scripts of your own: other
 engines show slides differently, and each command stops to ask the user for approval.
@@ -205,13 +210,17 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   (it may be short) and the slides it plays over get no narration of their own.
 - To time anything to narration (an animation to a word, karaoke text, motion to the beat),
   call `narration_timeline` first: it gives when each slide shows and when each word is said,
-  as seconds into the show and into the slide showing then, counting the pause before each
-  narration and audio that plays on across slides. For music, `narration_beats` gives the
-  tempo and every beat the same way; use it instead of analysing the audio yourself. An
-  animation on a slide starts as the slide shows, so its delay is the time into that slide.
-  Pin `data-duration` and `data-narration-start` on the slides you time, as the timeline
-  shows them, so exports with other settings keep to it, and run `narration_timeline` again
-  after changing them.
+  with its start and end, as seconds into the show and into the slide showing then, counting
+  the pause before each narration and audio that plays on across slides. For music,
+  `narration_beats` gives the tempo and every beat the same way, with its bar and beat in the
+  bar (beat 1 the downbeat); use it instead of analysing the audio yourself. Both also save
+  their data as JSON in the session and give its path: have scripts read that file, never
+  copy the numbers out. Every animation on a slide counts from when the slide shows, in the
+  editor's preview, the show and video exports alike, whether or not its rule needs
+  `.active`: its delay is the time into that slide. Pin `data-duration` and
+  `data-narration-start` on the slides you time, and run `narration_timeline` again after
+  changing them. For karaoke, light each word a little early (about 0.1 s) and fill it across
+  its span (start to end), so long sung words visibly start on time.
 - The user can edit text and move, rotate, tilt (in 3D), and scale elements on the slide by
   hand. Such an element gets a `data-moved` attribute and inline `translate: Xpx Ypx`,
   `rotate: Ndeg`, `scale: N` (or stretched, `scale: X Y`), and/or

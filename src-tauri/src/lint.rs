@@ -118,6 +118,7 @@ pub fn lint(
     check_slide_size(&mut l);
     check_narration_settings(&mut l);
     check_entrances(&mut l);
+    check_tilts(&mut l);
     check_morphs(&mut l);
     check_stuck_lines(&mut l);
     check_assets(&mut l, asset_exists);
@@ -1268,6 +1269,103 @@ fn check_entrances(l: &mut Linter) {
     }
 }
 
+/// The steepest a 3D tilt (rotateX/rotateY) draws about right in exports, PDFs and renders.
+const STEEPEST_TILT: f64 = 45.0;
+
+/// 3D tilts steeper than [`STEEPEST_TILT`] in the deck's styles: WebKit draws a page off screen
+/// (video and image exports, PDFs, `render_slide`) with perspective flattened, so a steep tilt
+/// comes out sheared and squashed, or as a thin line, though the editor shows it right. The
+/// user's own tilts (on `data-moved` elements) are theirs.
+fn check_tilts(l: &mut Linter) {
+    let html = l.html;
+    let mut found = Vec::new();
+    let mut from = 0;
+    while let Some(open) = find_ci(html, from, "<style") {
+        let Some(start) = html[open..].find('>').map(|i| open + i + 1) else {
+            break;
+        };
+        let end = find_ci(html, start, "</style").unwrap_or(html.len());
+        from = end;
+        if in_markup(l, open) {
+            found.extend(
+                steep_tilts(&html[start..end])
+                    .into_iter()
+                    .map(|(at, deg)| (start + at, deg)),
+            );
+        }
+    }
+    for (at, _) in html.match_indices("style=\"") {
+        let tag = html[..at].rfind('<').map_or("", |o| &html[o..at]);
+        let value_end = html[at + 7..].find('"').map_or(html.len(), |e| at + 7 + e);
+        if tag.contains("data-moved") || !in_markup(l, at) {
+            continue;
+        }
+        found.extend(
+            steep_tilts(&html[at + 7..value_end])
+                .into_iter()
+                .map(|(i, deg)| (at + 7 + i, deg)),
+        );
+    }
+    for (at, degrees) in found {
+        l.report(
+            "steep-3d-tilt",
+            Severity::Warning,
+            at,
+            format!(
+                "A 3D tilt of {degrees:.0}° shows right in the editor, but video and image exports, PDFs and render_slide draw perspective flattened: past about {STEEPEST_TILT:.0}° it comes out sheared and squashed, or as a thin line. Draw depth in 2D instead (a trapezoid with clip-path, rows that widen toward the viewer, scale), or keep the tilt within {STEEPEST_TILT:.0}°."
+            ),
+        );
+    }
+}
+
+/// Where `css` tilts something in 3D by more than [`STEEPEST_TILT`], and by how much, in degrees.
+fn steep_tilts(css: &str) -> Vec<(usize, f64)> {
+    let lower = css.to_ascii_lowercase();
+    let mut found = Vec::new();
+    for function in ["rotatex(", "rotatey(", "rotate3d("] {
+        for (at, _) in lower.match_indices(function) {
+            let args = &lower[at + function.len()..];
+            let Some(close) = args.find(')') else {
+                continue;
+            };
+            // rotate3d(x, y, z, angle) tilts in 3D unless it turns about z alone.
+            let args = &args[..close];
+            let angle = if function == "rotate3d(" {
+                let parts: Vec<&str> = args.split(',').map(str::trim).collect();
+                let flat =
+                    parts.len() == 4 && parts[..2].iter().all(|p| p.parse::<f64>() == Ok(0.0));
+                if parts.len() != 4 || flat {
+                    continue;
+                }
+                parts[3]
+            } else {
+                args.trim()
+            };
+            if let Some(degrees) = degrees(angle).filter(|d| {
+                d.abs() % 180.0 > STEEPEST_TILT && d.abs() % 180.0 < 180.0 - STEEPEST_TILT
+            }) {
+                found.push((at, degrees.abs()));
+            }
+        }
+    }
+    found.sort_by_key(|(at, _)| *at);
+    found
+}
+
+/// A CSS angle in degrees: `deg`, `rad`, `grad` or `turn`; None for anything else (a `var()`).
+fn degrees(angle: &str) -> Option<f64> {
+    let angle = angle.trim();
+    let split = angle.find(|c: char| c.is_ascii_alphabetic())?;
+    let value: f64 = angle[..split].trim().parse().ok()?;
+    Some(match &angle[split..] {
+        "deg" => value,
+        "rad" => value.to_degrees(),
+        "grad" => value * 0.9,
+        "turn" => value * 360.0,
+        _ => return None,
+    })
+}
+
 /// `@keyframes` blocks in `css` that set `transform`: where each starts, and its name.
 fn transform_keyframes(css: &str) -> Vec<(usize, &str)> {
     let mut found = Vec::new();
@@ -1953,6 +2051,54 @@ mod tests {
             issue.message
         );
         assert!(narration_overlaps(&source, &[]).is_empty());
+    }
+
+    #[test]
+    fn flags_3d_tilts_exports_draw_flattened() {
+        let with = |css: &str, slide: &str| {
+            let html =
+                deck(slide).replace("<style>.slide {}</style>", &format!("<style>{css}</style>"));
+            rules(&html)
+        };
+        let plain = "<section class=\"slide\" id=\"a\"></section>";
+        assert_eq!(
+            with(
+                ".floor { transform: perspective(900px) rotateX(58deg); }",
+                plain
+            ),
+            ["steep-3d-tilt"]
+        );
+        for steep in [
+            "rotateY(-50deg)",
+            "rotateX(1rad)",
+            "rotate3d(1, 0, 0, 0.2turn)",
+            "ROTATEX(60DEG)",
+        ] {
+            assert_eq!(
+                with(&format!(".a {{ transform: {steep}; }}"), plain),
+                ["steep-3d-tilt"],
+                "{steep}"
+            );
+        }
+        for fine in [
+            "rotateX(20deg)",
+            "rotateY(-44deg)",
+            "rotateX(45deg)",
+            "rotateX(180deg)",
+            "rotate(90deg)",
+            "rotate3d(0, 0, 1, 90deg)",
+            "rotateX(var(--tilt))",
+        ] {
+            assert!(
+                with(&format!(".a {{ transform: {fine}; }}"), plain).is_empty(),
+                "{fine}"
+            );
+        }
+        // In an inline style too, but not on what the user tilted by hand.
+        let inline = "<section class=\"slide\" id=\"a\"><div style=\"transform: rotateX(60deg)\">x</div></section>";
+        assert_eq!(with(".slide {}", inline), ["steep-3d-tilt"]);
+        let moved = inline.replace("<div style", "<div data-moved style");
+        assert!(!with(".slide {}", &moved).contains(&"steep-3d-tilt"));
     }
 
     #[test]

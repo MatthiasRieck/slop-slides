@@ -398,6 +398,18 @@ html:active-view-transition .deck > .slide {
     return isNaN(n) ? 0 : Math.min(slides.length - 1, Math.max(0, n - 1));
   }
 
+  // An animation on a slide counts from when the slide shows, as video exports (video.js) and
+  // the app's preview count it: one that runs whether or not its slide is active starts over.
+  function startOver(slide) {
+    if (!document.getAnimations) return;
+    document.getAnimations().forEach(function (animation) {
+      var target = animation.effect && animation.effect.target;
+      if (typeof animation.animationName === "string" && target && slide.contains(target)) {
+        animation.currentTime = 0;
+      }
+    });
+  }
+
   var transition = null;
   function morphNames(slide, enabled) {
     var seen = Object.create(null);
@@ -426,6 +438,7 @@ html:active-view-transition .deck > .slide {
         morphNames(el, !!canMorph && i === index);
         el.classList.toggle("active", i === index);
       });
+      startOver(slides[index]);
     }
     if (canMorph) {
       morphNames(slides[previous], true);

@@ -45,6 +45,24 @@ pub struct Request {
     /// The deck file, relative to the workspace root.
     pub path: String,
     pub slides: Vec<String>,
+    /// Seconds after each slide shows to render it at, with its animations where they are
+    /// then, as a video export frames it; None for every animation finished.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<f64>,
+}
+
+/// The latest moment a render may be asked for, in seconds after the slide shows: a slide shows
+/// at most this long.
+pub const LATEST: f64 = html::MAX_DURATION;
+
+/// Checks a render's `at`, when given.
+pub fn check_at(at: Option<f64>) -> Result<()> {
+    match at {
+        Some(at) if !(0.0..=LATEST).contains(&at) => Err(Error::msg(format!(
+            "at is seconds after the slide shows, 0 to {LATEST}"
+        ))),
+        _ => Ok(()),
+    }
 }
 
 /// One requested slide.
@@ -107,12 +125,14 @@ pub fn ask(
     session: &Path,
     path: &str,
     slides: Vec<String>,
+    at: Option<f64>,
     wait: Duration,
 ) -> Result<Vec<Rendered>> {
     let name = uuid::Uuid::new_v4().to_string();
     let request = Request {
         path: path.into(),
         slides,
+        at,
     };
     put(&session.join(REQUESTS), &name, &request)?;
     let result = session.join(RESULTS).join(format!("{name}.json"));
@@ -214,24 +234,27 @@ pub fn start(app: AppHandle, dir: PathBuf, session: PathBuf) -> Serving {
 /// The tool checked the request, but anything may write to the inbox: check it again.
 async fn serve(app: &AppHandle, dir: &Path, request: &Request) -> Result<Vec<Rendered>> {
     check_slides(&request.slides)?;
+    check_at(request.at)?;
     let file = crate::workspace::resolve(dir, &request.path)?;
-    render(app, &file, &request.slides).await
+    render(app, &file, &request.slides, request.at).await
 }
 
-/// Images of `slides` of the deck `file`.
+/// Images of `slides` of the deck `file`: `at` seconds after each shows, or with every
+/// animation finished for None.
 pub(crate) async fn render(
     app: &AppHandle,
     file: &Path,
     slides: &[String],
+    at: Option<f64>,
 ) -> Result<Vec<Rendered>> {
     let canvas = html::slide_size(&deck::read_html(file)?).pixels();
-    let (window, signals) = open(app, file)?;
+    let (window, signals) = open(app, file, at.is_some())?;
     let mut helper = pdf::Helper {
         window: &window,
         signals,
         task: TASK,
     };
-    let rendered = capture_slides(&mut helper, slides, image_width(canvas)).await;
+    let rendered = capture_slides(&mut helper, slides, at, image_width(canvas)).await;
     let _ = window.destroy();
     rendered
 }
@@ -242,9 +265,12 @@ pub(crate) async fn render(
 pub(crate) fn open(
     app: &AppHandle,
     file: &Path,
+    moving: bool,
 ) -> Result<(WebviewWindow, mpsc::UnboundedReceiver<Url>)> {
     let canvas = html::slide_size(&deck::read_html(file)?).pixels();
-    let url = protocol::file_url(file, "static&print")
+    // Still, every animation shows its last frame; moving, the helper holds them where asked.
+    let query = if moving { "print" } else { "static&print" };
+    let url = protocol::file_url(file, query)
         .parse()
         .map_err(|e| Error::msg(format!("cannot open the deck for rendering: {e}")))?;
 
@@ -279,8 +305,10 @@ pub(crate) fn open(
 pub(crate) async fn show(
     helper: &mut pdf::Helper<'_>,
     id: &str,
+    at: Option<f64>,
 ) -> Result<Option<HashMap<String, String>>> {
-    let script = format!("window.__slopRender.show({})", pdf::js_string(id));
+    let at = at.map_or_else(|| "null".to_string(), |at| at.to_string());
+    let script = format!("window.__slopRender.show({}, {at})", pdf::js_string(id));
     let shown = helper.run(&script, "shown").await?;
     if shown.contains_key("missing") {
         return Ok(None);
@@ -292,6 +320,7 @@ pub(crate) async fn show(
 async fn capture_slides(
     helper: &mut pdf::Helper<'_>,
     slides: &[String],
+    at: Option<f64>,
     width: u32,
 ) -> Result<Vec<Rendered>> {
     let ready = helper.answer("ready").await?;
@@ -300,7 +329,7 @@ async fn capture_slides(
     }
     let mut rendered = Vec::new();
     for id in slides {
-        let Some(shown) = show(helper, id).await? else {
+        let Some(shown) = show(helper, id, at).await? else {
             rendered.push(Rendered {
                 id: id.clone(),
                 png: None,
@@ -349,6 +378,7 @@ mod tests {
                         Request {
                             path: "talk/deck.html".into(),
                             slides: vec!["a".into()],
+                            at: Some(2.5),
                         }
                     );
                     answer(&dir, &name, &Ok(vec![slide("a", &[])])).unwrap();
@@ -357,7 +387,7 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(5));
             })
         };
-        let rendered = ask(&dir, "talk/deck.html", vec!["a".into()], WAIT).unwrap();
+        let rendered = ask(&dir, "talk/deck.html", vec!["a".into()], Some(2.5), WAIT).unwrap();
         app.join().unwrap();
         assert_eq!(rendered, [slide("a", &[])]);
         assert_eq!(
@@ -381,7 +411,7 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(5));
             })
         };
-        let error = ask(&dir, "deck.html", vec!["a".into()], WAIT).unwrap_err();
+        let error = ask(&dir, "deck.html", vec!["a".into()], None, WAIT).unwrap_err();
         app.join().unwrap();
         assert_eq!(error.to_string(), "no slides to render");
         std::fs::remove_dir_all(dir).unwrap();
@@ -394,6 +424,7 @@ mod tests {
             &dir,
             "deck.html",
             vec!["a".into()],
+            None,
             Duration::from_millis(20),
         )
         .unwrap_err();
@@ -409,6 +440,7 @@ mod tests {
         let request = |path: &str| Request {
             path: path.into(),
             slides: vec!["a".into()],
+            at: None,
         };
         put(&inbox, "first", &request("a.html")).unwrap();
         std::thread::sleep(Duration::from_millis(20));
@@ -423,11 +455,25 @@ mod tests {
     }
 
     #[test]
+    fn a_render_moment_is_seconds_a_slide_can_show() {
+        assert!(check_at(None).is_ok());
+        assert!(check_at(Some(0.0)).is_ok());
+        assert!(check_at(Some(LATEST)).is_ok());
+        assert!(check_at(Some(-0.1)).is_err());
+        assert!(check_at(Some(LATEST + 1.0)).is_err());
+        assert!(check_at(Some(f64::NAN)).is_err());
+        // Requests from before the moment read as every animation finished.
+        let old: Request = serde_json::from_str(r#"{"path":"a.html","slides":["a"]}"#).unwrap();
+        assert_eq!(old.at, None);
+    }
+
+    #[test]
     fn clearing_forgets_what_a_turn_left_behind() {
         let dir = session();
         let request = Request {
             path: "a.html".into(),
             slides: Vec::new(),
+            at: None,
         };
         put(&dir.join(REQUESTS), "old", &request).unwrap();
         answer(&dir, "old", &Err("stale".into())).unwrap();

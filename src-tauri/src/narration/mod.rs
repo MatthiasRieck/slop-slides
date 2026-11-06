@@ -570,9 +570,10 @@ struct Entry {
     timing: u32,
 }
 
-/// The way [`time_words`] times words now: 2 places them by dynamic time warping (see
-/// [`voice::Voice::time_words`]); 0 (or none) was Whisper's own timestamps.
-const WORD_TIMING: u32 = 2;
+/// The way [`time_words`] times words now: 3 places them by dynamic time warping and gives
+/// each a span (see [`voice::Voice::time_words`]); 2 left some a mere moment, and 0 (or none)
+/// was Whisper's own timestamps.
+const WORD_TIMING: u32 = 3;
 
 fn is_zero(n: &u32) -> bool {
     *n == 0
@@ -1453,7 +1454,10 @@ mod tests {
         assert!(found[0].timed);
         assert_eq!(words(&file, "a"), Some(vec![]));
         let json = fs::read_to_string(audio.join(MANIFEST)).unwrap();
-        assert!(json.contains("\"timing\": 2"), "{json}");
+        assert!(
+            json.contains(&format!("\"timing\": {WORD_TIMING}")),
+            "{json}"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 

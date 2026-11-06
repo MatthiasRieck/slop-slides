@@ -149,16 +149,25 @@ impl Options {
         let mut starts = Vec::with_capacity(slides.len());
         let mut shown = 0;
         let mut voice = 0.0_f64;
+        // Where the slides so far end, unrounded: a pinned length ends its slide on the frame
+        // nearest that, so rounding to frames never adds up over slides at any frame rate.
+        let mut exact = 0.0_f64;
         for slide in slides {
             let offset = slide.narration_start.unwrap_or(self.pause_before);
             let length = match slide.duration {
-                Some(seconds) => ((seconds * fps).round() as u32).max(1),
+                Some(seconds) => {
+                    exact += seconds;
+                    ((exact * fps).round() as u32).saturating_sub(shown).max(1)
+                }
                 None => Options {
                     pause_before: offset.max(0.0),
                     ..*self
                 }
                 .slide_frames(slide.narration),
             };
+            if slide.duration.is_none() {
+                exact = f64::from(shown + length) / fps;
+            }
             let start = slide.narration.map(|seconds| {
                 let start = (f64::from(shown) / fps + offset).max(voice);
                 voice = start + seconds;
@@ -1063,6 +1072,40 @@ mod tests {
         assert_eq!(o.timeline(&[late]).frames, [120]);
         // Before the slide starts means the video's start, for the first slide.
         assert_eq!(o.timeline(&[early]).starts, [Some(0.0)]);
+    }
+
+    #[test]
+    fn pinned_lengths_do_not_drift_by_rounding_to_frames() {
+        // Twenty slides of 3.33 s: each rounded alone, 80 frames at 24 fps (3.333 s) would put
+        // the last start 0.07 s late; they end on the frames nearest where they should.
+        let pinned = Timing {
+            duration: Some(3.33),
+            ..Timing::default()
+        };
+        for fps in [24, 30, 60] {
+            let o = options(1.0, fps);
+            let frames = o.timeline(&[pinned; 20]).frames;
+            let mut shown = 0;
+            for (i, length) in frames.iter().enumerate() {
+                shown += length;
+                let should = 3.33 * (i + 1) as f64;
+                let off = (f64::from(shown) / f64::from(fps) - should).abs();
+                assert!(
+                    off <= 0.5 / f64::from(fps) + 1e-9,
+                    "{fps} fps, slide {i}: {off} s off"
+                );
+            }
+        }
+        // After a slide that follows its narration, pinned slides count from where it ended.
+        let o = Options {
+            pause_before: 0.5,
+            pause_after: 1.0,
+            narration: true,
+            ..options(1.0, 24)
+        };
+        let frames = o.timeline(&[spoken(1.01), pinned, pinned]).frames;
+        assert_eq!(frames[0], 61);
+        assert_eq!(frames[0] + frames[1] + frames[2], 61 + 160);
     }
 
     #[test]

@@ -994,7 +994,10 @@ fn transcribe_words(
         .chunks(WHISPER_RATE as usize / 100)
         .map(|frame| (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt())
         .collect();
-    Ok(words_of(&settled(warped(&heard), &loudness), seconds))
+    Ok(spanned(
+        words_of(&settled(warped(&heard), &loudness), seconds),
+        seconds,
+    ))
 }
 
 /// One of Whisper's one-word segments: its text, its start and end, and where dynamic time
@@ -1077,6 +1080,31 @@ pub fn settled(spans: Vec<Span>, loudness: &[f32]) -> Vec<(String, i64, i64)> {
             )
         })
         .collect()
+}
+
+/// The shortest a word is taken to last, in seconds.
+const SHORTEST_WORD: f64 = 0.08;
+
+/// `words` of audio `seconds` long, each lasting a while: one heard as a mere moment (sung
+/// words often are) lasts until the next starts, at most as long as the usual word, so it can
+/// be highlighted while it is said.
+pub fn spanned(mut words: Vec<Word>, seconds: f64) -> Vec<Word> {
+    let mut lengths: Vec<f64> = words
+        .iter()
+        .map(|w| w.end - w.start)
+        .filter(|&l| l >= SHORTEST_WORD)
+        .collect();
+    lengths.sort_by(f64::total_cmp);
+    let usual = lengths.get(lengths.len() / 2).copied().unwrap_or(0.3);
+    for i in 0..words.len() {
+        if words[i].end - words[i].start >= SHORTEST_WORD {
+            continue;
+        }
+        let next = words.get(i + 1).map_or(seconds, |w| w.start);
+        let word = &mut words[i];
+        word.end = (word.start + usual).min(next).min(seconds).max(word.end);
+    }
+    words
 }
 
 /// The words of Whisper's one-word `segments` (text, start and end in hundredths of a second)
@@ -1874,6 +1902,36 @@ mod tests {
             ]
         );
         assert!(settled(Vec::new(), &[]).is_empty());
+    }
+
+    #[test]
+    fn words_heard_as_a_moment_last_until_the_next() {
+        let words = spanned(
+            vec![
+                word("Hold", 0.0, 0.4),
+                word("on", 0.5, 0.8),
+                word("Leadership", 1.0, 1.0),
+                word("super", 3.0, 3.0),
+                word("excited", 3.1, 3.6),
+                word("now", 4.0, 4.0),
+            ],
+            4.1,
+        );
+        assert_eq!(
+            words,
+            vec![
+                word("Hold", 0.0, 0.4),
+                word("on", 0.5, 0.8),
+                // As long as the usual word (0.4 s), well before the next.
+                word("Leadership", 1.0, 1.4),
+                // Up to the next word.
+                word("super", 3.0, 3.1),
+                word("excited", 3.1, 3.6),
+                // Up to the end of the audio.
+                word("now", 4.0, 4.1),
+            ]
+        );
+        assert!(spanned(Vec::new(), 1.0).is_empty());
     }
 
     #[test]

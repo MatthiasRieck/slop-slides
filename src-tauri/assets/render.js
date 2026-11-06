@@ -15,6 +15,27 @@
       location.assign(location.origin + "/.render-signal?" + answer);
     };
 
+  /** Holds what moves on `slide` `at` seconds after it shows, as that frame of a video export:
+      its CSS animations there (each counts from when the slide shows), and everything else,
+      as the slide's fade, done. */
+  function hold(slide, at) {
+    if (!document.getAnimations) return;
+    document.getAnimations().forEach(function (animation) {
+      var effect = animation.effect;
+      var target = effect && effect.target;
+      animation.pause();
+      if (typeof animation.animationName === "string" && target && slide.contains(target)) {
+        animation.currentTime = Math.min(at * 1000, effect.getComputedTiming().endTime);
+        return;
+      }
+      try {
+        animation.finish();
+      } catch (e) {
+        // One that repeats forever has no end; paused, it stays where it is.
+      }
+    });
+  }
+
   /** Every slide, those the show skips too: the agent works on them as well. */
   function slides() {
     return Array.prototype.slice.call(document.querySelectorAll(".deck > .slide"));
@@ -38,8 +59,9 @@
       });
     },
 
-    /** Shows the slide `id`; answers where it is and what overflows on it. */
-    show: function (id) {
+    /** Shows the slide `id`, `at` seconds after it shows (null: every animation finished, as
+        the page is loaded still for that); answers where it is and what overflows on it. */
+    show: function (id, at) {
       var all = slides();
       var slide = all.filter(function (el) {
         return el.id === id;
@@ -52,6 +74,7 @@
       all.forEach(function (el) {
         el.classList.toggle("active", el === slide);
       });
+      if (typeof at === "number" && at >= 0) hold(slide, at);
       // The window may be smaller than asked (macOS keeps windows within the screen); have
       // the player fit the slide to it, so all of it is on screen to capture.
       window.dispatchEvent(new Event("resize"));

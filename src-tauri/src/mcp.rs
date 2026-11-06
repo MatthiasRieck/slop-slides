@@ -123,10 +123,14 @@ pub fn handle(
         }, {
             "name": RENDER_TOOL,
             "description": format!("See slides of a deck as the app renders them: returns an \
-                image of each slide, hidden ones too, with every entrance animation finished, \
-                and lists the elements that run past the slide or are cut off by their own \
-                box. Use it to check the look after building or reworking slides, instead of \
-                a browser or screenshots from the shell. Takes at most {} slides per call.",
+                image of each slide, hidden ones too, with every animation finished, and lists \
+                the elements that run past the slide or are cut off by their own box. With \
+                `at`, each slide is shown that many seconds after it shows instead, its \
+                animations where they are then, as that frame of a video export: use it to \
+                check timed animations (what is on screen when a word is sung, say). The images \
+                are what video exports and PDFs draw. Use it to check the look after building \
+                or reworking slides, instead of a browser or screenshots from the shell. Takes \
+                at most {} slides per call.",
                 render::MAX_SLIDES),
             "inputSchema": { "type": "object", "properties": {
                 "path": {
@@ -137,6 +141,10 @@ pub fn handle(
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "The ids of the slides to render.",
+                },
+                "at": {
+                    "type": "number",
+                    "description": "Seconds after each slide shows to render it at (the time into the slide, as narration_timeline gives it); every animation finished when left out.",
                 },
             }, "required": ["slides"] }
         }, {
@@ -254,9 +262,16 @@ pub fn handle(
                     .filter_map(|slide| slide.as_str().map(str::to_string))
                     .collect();
                 render::check_slides(&slides)?;
+                let at = match &arguments["at"] {
+                    Value::Null => None,
+                    at => Some(at.as_f64().ok_or_else(|| {
+                        crate::error::Error::msg("at is seconds after the slide shows, a number")
+                    })?),
+                };
+                render::check_at(at)?;
                 let session =
                     session(dir).ok_or_else(|| crate::error::Error::msg("no workspace session"))?;
-                let slides = render::ask(&session, rel, slides, render::WAIT)?;
+                let slides = render::ask(&session, rel, slides, at, render::WAIT)?;
                 Ok(render_content(&slides))
             })();
             let (content, failed) = match rendered {
@@ -273,10 +288,19 @@ pub fn handle(
         }
         "tools/call" if request["params"]["name"] == TIMELINE_TOOL => {
             let arguments = &request["params"]["arguments"];
-            text_result(deck::app_home().and_then(|home| narration_timeline(dir, arguments, &home)))
+            let session = session(dir);
+            text_result(
+                deck::app_home()
+                    .and_then(|home| narration_timeline(dir, arguments, &home, session.as_deref())),
+            )
         }
         "tools/call" if request["params"]["name"] == BEATS_TOOL => {
-            text_result(narration_beats(dir, &request["params"]["arguments"]))
+            let session = session(dir);
+            text_result(narration_beats(
+                dir,
+                &request["params"]["arguments"],
+                session.as_deref(),
+            ))
         }
         "tools/call" => return Some(error(id, -32602, "unknown tool")),
         method => return Some(error(id, -32601, &format!("method not found: {method}"))),
@@ -376,9 +400,41 @@ fn secs(seconds: f64) -> String {
     format!("{seconds:.2}")
 }
 
+/// Seconds as the timing tools save them: to the millisecond.
+fn ms(seconds: f64) -> f64 {
+    (seconds * 1000.0).round() / 1000.0
+}
+
+/// Writes `data` to `name` in the `timing/` folder of the workspace's `session`, for the agent's
+/// scripts to read; a line telling where, or nothing without a session.
+fn saved(session: Option<&Path>, rel: &str, what: &str, data: &Value) -> String {
+    let Some(session) = session else {
+        return String::new();
+    };
+    let folder = session.join("timing");
+    let name = format!("{}.{what}.json", rel.replace(['/', '\\'], "_"));
+    let written = std::fs::create_dir_all(&folder).and_then(|_| {
+        let text = serde_json::to_string_pretty(data).unwrap_or_default();
+        std::fs::write(folder.join(&name), text)
+    });
+    match written {
+        Ok(()) => format!(
+            "\n\nThe same as JSON, for your scripts to read rather than copy: {}",
+            folder.join(name).display()
+        ),
+        Err(e) => format!("\n\n(Its JSON could not be saved: {e}.)"),
+    }
+}
+
 /// How the deck at `path` (`arguments`) plays out with its narration, with when each word is
-/// said (timing them first with the model in `home` where needed) unless `words` is false.
-fn narration_timeline(dir: &Path, arguments: &Value, home: &Path) -> Result<String> {
+/// said (timing them first with the model in `home` where needed) unless `words` is false; also
+/// saved as JSON in the workspace's `session`.
+fn narration_timeline(
+    dir: &Path,
+    arguments: &Value,
+    home: &Path,
+    session: Option<&Path>,
+) -> Result<String> {
     use narration::timeline;
     let (rel, file) = deck_argument(dir, arguments)?;
     let with_words = arguments["words"].as_bool().unwrap_or(true);
@@ -405,8 +461,28 @@ fn narration_timeline(dir: &Path, arguments: &Value, home: &Path) -> Result<Stri
         crate::html::DURATION_ATTR,
         crate::html::NARRATION_START_ATTR,
     );
+    let mut data_slides = Vec::new();
+    let mut data_words = Vec::new();
     for (i, slide) in slides.iter().enumerate() {
         let pinned = |set: Option<f64>| if set.is_some() { "pinned" } else { "default" };
+        data_slides.push(json!({
+            "id": slide.id,
+            "start": ms(slide.start),
+            "end": ms(slide.end),
+            "duration": slide.duration,
+            "narrationStart": slide.narration_start,
+            "narration": slide.narration.as_ref().map(|clip| json!({
+                "start": ms(clip.start),
+                "end": ms(clip.end),
+                "source": match (clip.imported, clip.recorded) {
+                    (true, _) => "imported",
+                    (_, true) => "recording",
+                    _ => "voice",
+                },
+                "waits": ms(clip.start - clip.planned.max(0.0)).max(0.0),
+            })),
+            "unspoken": slide.unspoken,
+        }));
         out.push_str(&format!(
             "\n{}. `{}` shows {}–{} ({} s, {})",
             i + 1,
@@ -475,17 +551,37 @@ fn narration_timeline(dir: &Path, arguments: &Value, home: &Path) -> Result<Stri
                             secs(at.into_slide),
                             word.text
                         ));
+                        data_words.push(json!({
+                            "audio": slide.id,
+                            "text": word.text,
+                            "start": ms(at.at),
+                            "end": ms(at.at + word.end - word.start),
+                            "slide": at.slide,
+                            "intoSlide": ms(at.into_slide),
+                        }));
                     }
                 }
             }
         }
     }
+    let data = json!({
+        "deck": rel,
+        "assumed": {
+            "secondsPerSlide": d.seconds_per_slide,
+            "pauseBefore": d.pause_before,
+            "pauseAfter": d.pause_after,
+        },
+        "end": slides.last().map_or(0.0, |s| ms(s.end)),
+        "slides": data_slides,
+        "words": data_words,
+    });
+    out.push_str(&saved(session, &rel, "timeline", &data));
     Ok(out)
 }
 
 /// The beat of the narration audio of `slide` of the deck at `path` (`arguments`), placed on
-/// the deck's timeline.
-fn narration_beats(dir: &Path, arguments: &Value) -> Result<String> {
+/// the deck's timeline; also saved as JSON in the workspace's `session`.
+fn narration_beats(dir: &Path, arguments: &Value, session: Option<&Path>) -> Result<String> {
     use narration::timeline;
     let (rel, file) = deck_argument(dir, arguments)?;
     let slide = arguments["slide"]
@@ -512,23 +608,45 @@ fn narration_beats(dir: &Path, arguments: &Value) -> Result<String> {
     let mut out = format!(
         "Slide `{slide}`'s narration has a beat of {:.1} BPM (one every {} s), {} beats. Each: \
          when it falls in the show (as {TIMELINE_TOOL} counts), the slide showing then and the \
-         seconds into it, and how strong its onset is (0 to 1, 1 the strongest). Bars of four \
-         beats usually start on strong ones.",
+         seconds into it, how strong its onset is (0 to 1, 1 the strongest), and bar.beat: \
+         bars of four, beat 1 their downbeat, found from the accents and shifting where the \
+         music does (bar 0 is before the first downbeat).",
         found.tempo,
         secs(60.0 / found.tempo),
         found.beats.len(),
     );
-    for (at, strength) in &found.beats {
+    let mut bar = 0;
+    let mut data_beats = Vec::new();
+    for ((at, strength), &in_bar) in found.beats.iter().zip(&found.in_bar) {
+        if in_bar == 0 {
+            bar += 1;
+        }
         let Some(placed) = timeline::place(&slides, slide, *at) else {
             continue;
         };
         out.push_str(&format!(
-            "\n{} {} +{} {strength:.2}",
+            "\n{} {} +{} {strength:.2} {bar}.{}",
             secs(placed.at),
             placed.slide,
-            secs(placed.into_slide)
+            secs(placed.into_slide),
+            in_bar + 1
         ));
+        data_beats.push(json!({
+            "at": ms(placed.at),
+            "slide": placed.slide,
+            "intoSlide": ms(placed.into_slide),
+            "strength": (strength * 100.0).round() / 100.0,
+            "bar": bar,
+            "beat": in_bar + 1,
+        }));
     }
+    let data = json!({
+        "deck": rel,
+        "audio": slide,
+        "tempo": (found.tempo * 10.0).round() / 10.0,
+        "beats": data_beats,
+    });
+    out.push_str(&saved(session, &rel, &format!("beats-{slide}"), &data));
     Ok(out)
 }
 
@@ -1003,7 +1121,7 @@ mod tests {
         let manifest = dir.join("narration/manifest.json");
         let json = std::fs::read_to_string(&manifest).unwrap().replace(
             "\"recorded\": true",
-            r#""recorded": true, "timing": 2, "words": [{"text": "One,", "start": 1.0, "end": 1.4}, {"text": "two.", "start": 3.25, "end": 3.5}]"#,
+            r#""recorded": true, "timing": 3, "words": [{"text": "One,", "start": 1.0, "end": 1.4}, {"text": "two.", "start": 3.25, "end": 3.5}]"#,
         );
         std::fs::write(&manifest, json).unwrap();
         let res = call(
@@ -1026,6 +1144,19 @@ mod tests {
             assert!(text.contains(line), "{line}\n{text}");
         }
         assert!(!text.contains("Words of `outro`"), "{text}");
+        // The same as JSON in the session, for scripts.
+        let saved = dir.join("session/timing/deck.html.timeline.json");
+        assert!(text.ends_with(&saved.display().to_string()), "{text}");
+        let data: Value = serde_json::from_str(&std::fs::read_to_string(&saved).unwrap()).unwrap();
+        assert_eq!(data["slides"][0]["id"], "song");
+        assert_eq!(data["slides"][0]["narration"]["source"], "imported");
+        assert_eq!(data["slides"][1]["start"], 2.0);
+        assert_eq!(data["slides"][2]["unspoken"], true);
+        assert_eq!(
+            data["words"][1],
+            json!({"audio": "song", "text": "two.", "start": 3.25, "end": 3.5, "slide": "verse", "intoSlide": 1.25})
+        );
+        assert_eq!(data["end"], 17.0);
         // Without words, just the slides.
         let res = call(
             &dir,
@@ -1045,7 +1176,7 @@ mod tests {
     #[test]
     fn timeline_tool_says_why_words_are_not_timed() {
         let dir = song_deck();
-        let text = narration_timeline(&dir, &json!({}), Path::new("/nonexistent")).unwrap();
+        let text = narration_timeline(&dir, &json!({}), Path::new("/nonexistent"), None).unwrap();
         assert!(
             text.contains("Words of `song`'s narration: not timed (Slide song: The speech model is not downloaded; the user can time them in the Narration panel)."),
             "{text}"
@@ -1074,6 +1205,26 @@ mod tests {
             .find(|l| l.starts_with("2.50 "))
             .unwrap_or_default();
         assert!(line.starts_with("2.50 verse +0.50 "), "{text}");
+        // Each ends in its bar and beat.
+        assert!(
+            line.rsplit(' ').next().is_some_and(|b| b.contains('.')),
+            "{line}"
+        );
+        let saved = dir.join("session/timing/deck.html.beats-song.json");
+        let data: Value = serde_json::from_str(&std::fs::read_to_string(saved).unwrap()).unwrap();
+        assert!(
+            (data["tempo"].as_f64().unwrap() - 120.0).abs() < 2.0,
+            "{data}"
+        );
+        let beat = data["beats"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| (b["at"].as_f64().unwrap() - 2.5).abs() < 0.01)
+            .unwrap();
+        assert_eq!(beat["slide"], "verse");
+        assert!((beat["intoSlide"].as_f64().unwrap() - 0.5).abs() < 0.01);
+        assert!((1..=4).contains(&beat["beat"].as_u64().unwrap()));
         for (arguments, why) in [
             (json!({}), "slide is required"),
             (

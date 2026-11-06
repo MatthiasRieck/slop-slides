@@ -366,6 +366,30 @@ describe("player: in the presenter", () => {
     expect([word.currentTime, word.state]).toEqual([2000, "running"]);
   });
 
+  it("starts a slide's animations over when it shows, as a video export counts them", () => {
+    const running = (target: Element, name: string | null = "spin") => ({
+      animationName: name,
+      effect: { target },
+      currentTime: 4000 as number | null,
+    });
+    let animations: ReturnType<typeof running>[] = [];
+    const p = player({
+      setup: (window) => {
+        window.document.getAnimations = () => animations as unknown as Animation[];
+      },
+    });
+    const end = p.doc.getElementById("end")!;
+    const onEnd = running(end.querySelector("a")!);
+    const onIntro = running(p.doc.getElementById("intro")!);
+    const fade = running(end, null);
+    animations = [onEnd, onIntro, fade];
+    p.key("End");
+    expect(p.active()).toBe(2);
+    expect(onEnd.currentTime).toBe(0);
+    expect(onIntro.currentTime).toBe(4000);
+    expect(fade.currentTime).toBe(4000);
+  });
+
   it("ignores forwarded keys when not in the presenter", () => {
     const go = (p: ReturnType<typeof player>) =>
       p.window.dispatchEvent(new p.window.MessageEvent("message", { data: { type: "slop:go", key: "End" } }));

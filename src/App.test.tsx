@@ -60,6 +60,18 @@ describe("App", () => {
     expect(["home", "viewer"].map(shown)).toEqual([false, false]);
   });
 
+  it("runs the sidebar the full height of the window, with the top bar only over the main area", () => {
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) });
+    render(<App />);
+    const main = screen.getByTestId("main");
+    const sidebar = screen.getByTestId("sidebar");
+    expect(main.contains(screen.getByTestId("stub-top-bar"))).toBe(true);
+    expect(main.contains(screen.getByTestId("rail"))).toBe(true);
+    expect(main.contains(sidebar)).toBe(false);
+    expect(sidebar.contains(screen.getByTestId("stub-sidebar-tabs"))).toBe(true);
+    expect(main.parentElement).toBe(sidebar.parentElement);
+  });
+
   it("shows the settings in the place of the slide in Settings mode", () => {
     useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML), slideMode: "settings" });
     render(<App />);

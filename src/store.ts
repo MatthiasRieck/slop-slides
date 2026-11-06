@@ -270,13 +270,16 @@ export function searchHighlight(state: Pick<AppState, "search" | "selected">) {
   };
 }
 
-/** The right sidebar's tabs, in order (see components/Sidebar.tsx). */
-export const SIDEBAR_TABS = ["chat", "files"] as const;
+/** What the right sidebar can show, each in a tab of its own, in menu order (see components/Sidebar.tsx). */
+export const SIDEBAR_TABS = ["chat", "files", "settings"] as const;
 export type SidebarTab = (typeof SIDEBAR_TABS)[number];
 const isSidebarTab = (value: unknown): value is SidebarTab => SIDEBAR_TABS.includes(value as SidebarTab);
+/** The tabs a first start opens. */
+const DEFAULT_SIDEBAR_TABS: SidebarTab[] = ["chat", "files"];
 
 const SIDEBAR_OPEN_KEY = "slopslide.sidebarOpen";
 const SIDEBAR_TAB_KEY = "slopslide.sidebarTab";
+const SIDEBAR_TABS_KEY = "slopslide.sidebarTabs";
 /** The file last open in each workspace, reopened with it: `slopslide.lastFile:<root>`. */
 const LAST_FILE_KEY = "slopslide.lastFile:";
 
@@ -307,8 +310,10 @@ interface AppState {
   codeDirty: boolean;
   /** The right sidebar is shown; the user can collapse it to give the stage more room. */
   sidebarOpen: boolean;
-  /** The sidebar tab shown. */
-  sidebarTab: SidebarTab;
+  /** The sidebar's open tabs, in the order they show; each kind at most once. */
+  sidebarTabs: SidebarTab[];
+  /** The sidebar tab shown; null once every tab is closed. */
+  sidebarTab: SidebarTab | null;
   /** The slide rail is shown; the user can collapse it to give the stage more room. */
   railOpen: boolean;
   /** Bumped when attached assets change, reloading every slide preview. */
@@ -445,8 +450,10 @@ interface AppState {
   setView: (view: StageView) => void;
   setCodeDirty: (dirty: boolean) => void;
   setSidebarOpen: (open: boolean) => void;
-  /** Shows the sidebar on `tab`. */
+  /** Shows the sidebar on `tab`, opening that tab (after the others) if it is closed. */
   setSidebarTab: (tab: SidebarTab) => void;
+  /** Closes the sidebar tab `tab`; when it was showing, the tab beside it shows instead. */
+  closeSidebarTab: (tab: SidebarTab) => void;
   setRailOpen: (open: boolean) => void;
   setModel: (provider: Provider, model: string) => void;
   setEffort: (effort: string) => void;
@@ -612,7 +619,7 @@ export const useApp = create<AppState>((set, get) => ({
   view: localStorage.getItem("slopslide.view") === "code" ? "code" : "slides",
   codeDirty: false,
   sidebarOpen: localStorage.getItem(SIDEBAR_OPEN_KEY) !== "false",
-  sidebarTab: loadSidebarTab(),
+  ...loadSidebarTabs(),
   railOpen: localStorage.getItem("slopslide.railOpen") !== "false",
   assetsRev: 0,
   chatRevision: 0,
@@ -942,9 +949,21 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setSidebarTab: (sidebarTab) => {
-    localStorage.setItem(SIDEBAR_TAB_KEY, sidebarTab);
+    const open = get().sidebarTabs;
+    const sidebarTabs = open.includes(sidebarTab) ? open : [...open, sidebarTab];
+    saveSidebarTabs(sidebarTabs, sidebarTab);
     if (!get().sidebarOpen) get().setSidebarOpen(true);
-    set({ sidebarTab });
+    set({ sidebarTabs, sidebarTab });
+  },
+
+  closeSidebarTab: (tab) => {
+    const { sidebarTabs: open, sidebarTab: active } = get();
+    const at = open.indexOf(tab);
+    if (at < 0) return;
+    const sidebarTabs = open.filter((t) => t !== tab);
+    const sidebarTab = active === tab ? (sidebarTabs[Math.min(at, sidebarTabs.length - 1)] ?? null) : active;
+    saveSidebarTabs(sidebarTabs, sidebarTab);
+    set({ sidebarTabs, sidebarTab });
   },
 
   setRailOpen: (railOpen) => {
@@ -1558,9 +1577,24 @@ async function promptAboutElement(text: string, element: EditElement, { leaveEdi
   promptAgent(text, { screenshot, element });
 }
 
-function loadSidebarTab(): SidebarTab {
-  const saved = localStorage.getItem(SIDEBAR_TAB_KEY);
-  return isSidebarTab(saved) ? saved : "chat";
+/** The sidebar's tabs as last left; tabs that are no more (narration was one) are dropped. */
+function loadSidebarTabs(): { sidebarTabs: SidebarTab[]; sidebarTab: SidebarTab | null } {
+  let sidebarTabs = DEFAULT_SIDEBAR_TABS;
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(SIDEBAR_TABS_KEY) ?? "null");
+    if (Array.isArray(saved)) sidebarTabs = [...new Set(saved.filter(isSidebarTab))];
+  } catch {
+    // Not JSON: start over with the default tabs.
+  }
+  const active = localStorage.getItem(SIDEBAR_TAB_KEY);
+  const sidebarTab = isSidebarTab(active) && sidebarTabs.includes(active) ? active : (sidebarTabs[0] ?? null);
+  return { sidebarTabs, sidebarTab };
+}
+
+function saveSidebarTabs(tabs: SidebarTab[], active: SidebarTab | null) {
+  localStorage.setItem(SIDEBAR_TABS_KEY, JSON.stringify(tabs));
+  if (active) localStorage.setItem(SIDEBAR_TAB_KEY, active);
+  else localStorage.removeItem(SIDEBAR_TAB_KEY);
 }
 
 /** `absolute` relative to the workspace folder, `/`-separated; null when outside it. */

@@ -13,6 +13,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { claimDrop, dropCovered } from "../lib/drop";
 import { DEFAULT_EDIT_STYLES } from "../lib/editTools";
 import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
+import { useSvgEditor } from "../svgStore";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Stage } from "./Stage";
 
@@ -2310,6 +2311,49 @@ describe("Stage", () => {
         fireEvent.click(item(name));
         expect(post).toHaveBeenCalledWith(message, "*");
         expect(screen.queryByRole("menu")).toBeNull();
+      });
+
+      it("opens a drawing in the SVG editor, offered only for drawings", () => {
+        const { frame, post } = open();
+        expect(screen.queryByRole("menuitem", { name: "Edit in the SVG editor" })).toBeNull();
+        fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+        fromFrame(frame, {
+          type: "slop:edit-menu",
+          slide: "intro",
+          x: 1,
+          y: 1,
+          element: { ...ELEMENT, markup: '<svg viewBox="0 0 1 1"></svg>', name: "<svg>" },
+        });
+        fireEvent.click(item("Edit in the SVG editor"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-open-svg" }, "*");
+        expect(screen.queryByRole("menu")).toBeNull();
+      });
+
+      it("hands a drawing the slide editor opens to the SVG editor, for the slide shown only", async () => {
+        const { frame } = open();
+        const drawing = {
+          type: "slop:edit-open-svg",
+          path: [2],
+          markup: "<svg><rect></rect></svg>",
+          width: 300,
+          height: 150,
+          color: "red",
+          vars: { "--brand": "#f00" },
+        };
+        fromFrame(frame, { ...drawing, slide: "outro" });
+        expect(useSvgEditor.getState().edit).toBeNull();
+        fromFrame(frame, { ...drawing, slide: "intro" });
+        await waitFor(() =>
+          expect(useSvgEditor.getState().edit).toMatchObject({
+            slide: "intro",
+            path: [2],
+            original: "<svg><rect></rect></svg>",
+            size: { w: 300, h: 150 },
+            vars: { "--brand": "#f00" },
+          }),
+        );
+        expect(useApp.getState().sidebarTab).toBe("svg");
+        useSvgEditor.setState({ edit: null });
       });
 
       it("pastes from the clipboard", async () => {

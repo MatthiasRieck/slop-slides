@@ -135,6 +135,23 @@ describe("sidebar", () => {
     expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "settings"], sidebarTab: "chat" });
   });
 
+  it("maximizes the sidebar over the window, opening it, and never leaves a closed one maximized", async () => {
+    localStorage.clear();
+    const useApp = await freshStore();
+    expect(useApp.getState().sidebarMaximized).toBe(false);
+    useApp.getState().setSidebarOpen(false);
+    useApp.getState().setSidebarMaximized(true);
+    expect(useApp.getState()).toMatchObject({ sidebarMaximized: true, sidebarOpen: true });
+    useApp.getState().setSidebarOpen(false);
+    expect(useApp.getState()).toMatchObject({ sidebarMaximized: false, sidebarOpen: false });
+    useApp.getState().setSidebarMaximized(true);
+    useApp.getState().setSidebarMaximized(false);
+    expect(useApp.getState()).toMatchObject({ sidebarMaximized: false, sidebarOpen: true });
+    // It is for now: a fresh start has it beside the slides.
+    useApp.getState().setSidebarMaximized(true);
+    expect((await freshStore()).getState().sidebarMaximized).toBe(false);
+  });
+
   it("shows the tab beside a closed one, and none once all are closed", async () => {
     localStorage.clear();
     let useApp = await freshStore();
@@ -2049,6 +2066,52 @@ describe("editing slides on the stage", () => {
     expect(calls("update_slide").map((c) => c.base)).toEqual(["intro-1", "intro-2"]);
     expect(disk.markup()).toContain("Hi");
     expect(useApp.getState().error).toBeNull();
+  });
+
+  it("changes a slide's markup as it is in the file, saving it against the hash it was read at", async () => {
+    const useApp = await freshStore();
+    backend({
+      slide_source: () => ({ markup: ORIGINAL, hash: "h-disk" }),
+      update_slide: () => deckFor(DECK_HTML, "2"),
+    });
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", editedSlides: [] });
+    const saved = await useApp.getState().changeSlideMarkup("intro", (markup) => markup.replace("Hello", "Hi"));
+    expect(saved).toBe(true);
+    expect(calls("slide_source")).toEqual([{ id: "/decks/talk/deck.html", slide: "intro" }]);
+    expect(calls("update_slide")).toEqual([
+      { id: "/decks/talk/deck.html", slide: "intro", markup: ORIGINAL.replace("Hello", "Hi"), base: "h-disk" },
+    ]);
+    expect(useApp.getState().deck!.slides[0]!.hash).toBe("intro-2");
+    expect(useApp.getState().editedSlides).toEqual(["intro"]);
+  });
+
+  it("reads the slide for a markup change only once the edits before it are saved", async () => {
+    const useApp = await freshStore();
+    let current = ORIGINAL;
+    backend({
+      update_slide: ({ markup }) => {
+        current = String(markup);
+        return deckFor(DECK_HTML, "2");
+      },
+      slide_source: () => ({ markup: current, hash: "h" }),
+    });
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    const edit = useApp.getState().saveSlideEdit("intro", MOVED);
+    const change = useApp.getState().changeSlideMarkup("intro", (markup) => `${markup}<!-- x -->`);
+    await Promise.all([edit, change]);
+    expect(calls("update_slide").at(-1)!.markup).toBe(`${MOVED}<!-- x -->`);
+  });
+
+  it("shows why a markup change could not be made, and saves nothing", async () => {
+    const useApp = await freshStore();
+    backend({ slide_source: () => ({ markup: ORIGINAL, hash: "h" }) });
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
+    const saved = await useApp.getState().changeSlideMarkup("intro", () => {
+      throw new Error("The drawing has changed.");
+    });
+    expect(saved).toBe(false);
+    expect(calls("update_slide")).toEqual([]);
+    expect(useApp.getState().error).toBe("The drawing has changed.");
   });
 
   it("reports a refused save and reloads the slide from disk", async () => {

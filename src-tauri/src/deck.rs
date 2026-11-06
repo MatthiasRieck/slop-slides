@@ -774,6 +774,24 @@ pub fn restore(file: &Path, slide: Option<&str>, source: String) -> Result<RailE
     })
 }
 
+/// One slide's markup as it is in the deck file, with the hash a save of it must name as its base.
+#[derive(Debug, Serialize)]
+pub struct SlideSource {
+    pub markup: String,
+    pub hash: String,
+}
+
+/// Slide `slide`'s markup and hash, read from the file: what an edit made outside the stage's
+/// preview (such as the SVG editor's) starts from.
+pub fn slide_source(file: &Path, slide: &str) -> Result<SlideSource> {
+    let source = read_html(file)?;
+    let markup = html::slide_markup(&source, slide).map_err(Error::Message)?;
+    Ok(SlideSource {
+        markup: markup.to_string(),
+        hash: html::content_hash(markup),
+    })
+}
+
 /// Replaces one slide with markup edited on the stage. `base` is the slide's hash the edit
 /// started from; the save is refused when the slide has changed since. Returns the slide's
 /// previous markup, so the edit can be undone by saving it back.
@@ -1363,6 +1381,21 @@ mod tests {
         // Undo: the previous source saved back over this one.
         save_source(&deck.file(), &done.previous, Some(&done.source), false).unwrap();
         assert_eq!(deck.html(), EDITED);
+    }
+
+    #[test]
+    fn slide_source_gives_the_markup_and_the_hash_a_save_needs() {
+        let deck = TempDeck::new(EDITED);
+        let source = slide_source(&deck.file(), "b").unwrap();
+        assert_eq!(
+            source.markup,
+            "<section class=\"slide\" id=\"b\">B</section>"
+        );
+        assert_eq!(source.hash, load(&deck.file()).unwrap().slides[1].hash);
+        let markup = "<section class=\"slide\" id=\"b\">B!</section>";
+        update_slide(&deck.file(), "b", markup, &source.hash).unwrap();
+        assert_eq!(slide_source(&deck.file(), "b").unwrap().markup, markup);
+        assert!(slide_source(&deck.file(), "zz").is_err());
     }
 
     #[test]

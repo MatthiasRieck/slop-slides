@@ -1,38 +1,74 @@
-import { Files, MessageSquare, Plus, Settings, X } from "lucide-react";
+import { Files, Maximize2, MessageSquare, Minimize2, Plus, Settings, Shapes, X } from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
 
-import { cn } from "../lib/utils";
+import { cn, isMac } from "../lib/utils";
 import { SIDEBAR_TABS, type SidebarTab, useApp } from "../store";
+import { useSvgEditor } from "../svgStore";
 import { ToolButton } from "./Button";
 import { ChatPanel } from "./ChatPanel";
 import { FileTree } from "./FileTree";
 import { useDismiss } from "./Popover";
 import { SettingsPanel } from "./SettingsPanel";
+import { SvgEditor } from "./SvgEditor";
+
+interface TabKind {
+  label: string;
+  hint: string;
+  icon: typeof Files;
+  render: () => ReactNode;
+  /** Closes the tab, when that takes more than closing it (such as asking about unsaved changes). */
+  close?: () => void;
+}
 
 /** What each sidebar tab shows. Add a tab here and to `SIDEBAR_TABS` in the store. */
-const TABS: Record<SidebarTab, { label: string; hint: string; icon: typeof Files; render: () => ReactNode }> = {
+const TABS: Record<SidebarTab, TabKind> = {
   chat: { label: "Chat", hint: "Talk to the agent about the deck", icon: MessageSquare, render: () => <ChatPanel /> },
   files: { label: "Files", hint: "The workspace's folders and files", icon: Files, render: () => <FileTree /> },
+  svg: {
+    label: "SVG",
+    hint: "Edit a drawing from a slide",
+    icon: Shapes,
+    render: () => <SvgEditor />,
+    close: () => void useSvgEditor.getState().close(),
+  },
   settings: { label: "Settings", hint: "How the app behaves", icon: Settings, render: () => <SettingsPanel /> },
 };
 
 /**
  * The right sidebar, from the top of the window to the bottom: a tab for each surface open in it
  * (the chat, the workspace's files, the settings, …), each closable, and a `+` to open another;
- * the settings button sits at its bottom left.
+ * the settings button sits at its bottom left. Maximized, it covers the whole window.
  */
 export function Sidebar() {
   const tabs = useApp((s) => s.sidebarTabs);
   const active = useApp((s) => s.sidebarTab);
+  const maximized = useApp((s) => s.sidebarMaximized);
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <div data-tauri-drag-region className="relative z-30 flex h-14 shrink-0 items-center gap-1 border-b px-2">
+      <div
+        data-tauri-drag-region
+        className={cn(
+          "relative z-30 flex h-14 shrink-0 items-center gap-1 border-b px-2",
+          // Over the whole window, it starts where the top bar does, clear of the window's buttons.
+          maximized && isMac && "pl-[84px]",
+        )}
+      >
         <div role="tablist" aria-label="Sidebar" className="flex min-w-0 items-center gap-1 overflow-x-auto">
           {tabs.map((id) => (
             <Tab key={id} id={id} active={id === active} />
           ))}
         </div>
         <OpenTabMenu open={tabs} />
+        <div data-tauri-drag-region className="flex-1" />
+        <ToolButton
+          variant="panel"
+          size="md"
+          label={maximized ? "Restore the sidebar" : "Maximize the sidebar over the slides"}
+          active={maximized}
+          onClick={() => useApp.getState().setSidebarMaximized(!maximized)}
+        >
+          {maximized ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+        </ToolButton>
       </div>
       <div role="tabpanel" className="min-h-0 flex-1">
         {active ? TABS[active].render() : <NoTabs />}
@@ -54,7 +90,7 @@ export function Sidebar() {
 
 /** One open tab. Hovering (or focusing) it puts its close button where its icon is. */
 function Tab({ id, active }: { id: SidebarTab; active: boolean }) {
-  const { label, icon: Icon } = TABS[id];
+  const { label, icon: Icon, close } = TABS[id];
   return (
     <div
       className={cn(
@@ -76,7 +112,7 @@ function Tab({ id, active }: { id: SidebarTab; active: boolean }) {
         type="button"
         aria-label={`Close ${label}`}
         title={`Close ${label}`}
-        onClick={() => useApp.getState().closeSidebarTab(id)}
+        onClick={() => (close ? close() : useApp.getState().closeSidebarTab(id))}
         className="invisible absolute left-1.5 flex size-4.5 items-center justify-center rounded-sm hover:bg-foreground/10 group-focus-within:visible group-hover:visible"
       >
         <X className="size-3.5" />

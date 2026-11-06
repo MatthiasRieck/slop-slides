@@ -39,6 +39,13 @@
    the selection's primary element and of the others, which the app selects again after the
    reload with { type: "slop:edit-select", path, also }.
 
+   A selected SVG drawing (an <svg> on the slide) shows an "Edit SVG" button at its top right,
+   which hands it to the app's SVG editor: { type: "slop:edit-open-svg", slide, path, markup,
+   width, height, color, vars } with its markup (without the editor's marks), its size in slide
+   pixels, its text color and the CSS variables it can see, so it looks the same outside the
+   slide. The app's context menu asks for the same with { type: "slop:edit-open-svg" }. The SVG
+   editor saves its changes into the deck itself.
+
    A right-click selects what is under it and asks the app for its menu: { type: "slop:edit-menu",
    slide, x, y, element: { path, markup, name, added } | null }, with (x, y) in the preview's pixels.
 
@@ -214,6 +221,8 @@
   var SHADOW_LENGTHS = /-?[\d.]+px\s+-?[\d.]+px\s+([\d.]+)px/;
   var SHADOW_FILTER = /drop-shadow\((?:[^()]|\([^()]*\))*\)/;
   var MAX_DECK_COLORS = 12;
+  // At most this many CSS variables go along with a drawing to the SVG editor.
+  var MAX_SVG_VARS = 200;
   // What the format painter takes from text.
   var PAINTED_TEXT = ["color", "fontSize", "bold", "italic", "underline", "strike", "letterSpacing", "lineHeight", "align"];
 
@@ -249,6 +258,13 @@
     "[data-slop-points] > [data-bound] { background: var(--slop-accent); border-color: var(--slop-handle); }" +
     "[data-slop-points] > [data-point=add] { width: 10px; height: 10px; margin: -5px 0 0 -5px; background: var(--slop-accent);" +
     " border-color: var(--slop-handle); cursor: crosshair; }" +
+    // The button that opens the selected drawing in the app's SVG editor.
+    "[data-slop-svg-open] { position: fixed; z-index: 2147483647; display: flex; align-items: center; gap: 4px;" +
+    " margin: 0; padding: 4px 8px 4px 10px; border: 0; border-radius: 999px; background: var(--slop-accent);" +
+    " color: var(--slop-handle); font: 600 12px/16px system-ui, sans-serif; white-space: nowrap; cursor: pointer;" +
+    " box-shadow: 0 1px 4px var(--slop-scrim); }" +
+    "[data-slop-svg-open]:hover { filter: brightness(1.1); }" +
+    "[data-slop-svg-open][hidden] { display: none; }" +
     "[data-slop-overflow] { position: fixed; inset: 0; z-index: 2147483646; pointer-events: none; }" +
     "[data-slop-overflow][data-quiet] { display: none; }" +
     "[data-slop-overflow] > * { position: absolute; box-sizing: border-box; }" +
@@ -303,6 +319,16 @@
   var pointUi = document.createElement("div");
   pointUi.setAttribute("data-slop-points", "");
   document.body.appendChild(pointUi);
+
+  var svgButton = document.createElement("button");
+  svgButton.type = "button";
+  svgButton.setAttribute("data-slop-svg-open", "");
+  svgButton.title = "Open the drawing in the SVG editor, in the sidebar";
+  svgButton.innerHTML =
+    'Edit SVG<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"' +
+    ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
+  svgButton.hidden = true;
+  document.body.appendChild(svgButton);
 
   var wires = document.createElement("div");
   wires.setAttribute("data-slop-overflow", "");
@@ -813,6 +839,7 @@
     scheduleOverflow();
     scheduleGeometry();
     placeFrames();
+    placeSvgButton();
     if (placePoints() || !selected || editing || extras.length || !slide.contains(selected)) {
       ui.style.display = "none";
       return;
@@ -828,6 +855,54 @@
     mark(ui, "data-narrow", frame.w < 40);
     mark(ui, "data-flat", frame.h < 40);
   }
+
+  // ---- The SVG editor's button: a selected drawing opens in the app's SVG editor.
+
+  function isDrawing(el) {
+    return !!el && el.namespaceURI === SVG_NS && el.localName === "svg";
+  }
+
+  /** Puts the "Edit SVG" button at the selected drawing's top right, outside its handles. */
+  function placeSvgButton() {
+    var show = isDrawing(selected) && !editing && !extras.length && tool === "select" && !(drag && drag.moved) &&
+      slide.contains(selected);
+    svgButton.hidden = !show;
+    if (!show) return;
+    var rect = selected.getBoundingClientRect();
+    svgButton.style.left = Math.round(rect.right + 12) + "px";
+    svgButton.style.top = Math.round(rect.top - 4) + "px";
+  }
+
+  /** Hands the drawing `el` to the app's SVG editor. */
+  function openSvg(el) {
+    if (!isDrawing(el)) return;
+    if (nudgeTimer) commit();
+    var size = sizeOf(el);
+    var computed = getComputedStyle(el);
+    window.parent.postMessage(
+      {
+        type: "slop:edit-open-svg",
+        slide: slide.id,
+        path: pathOf(el),
+        markup: cleanCopy(el).outerHTML,
+        width: size.w || el.getBoundingClientRect().width / zoom(),
+        height: size.h || el.getBoundingClientRect().height / zoom(),
+        color: computed.color || null,
+        vars: cssVariables(el),
+      },
+      "*",
+    );
+  }
+
+  svgButton.addEventListener("pointerdown", function (event) {
+    // Not a press on the slide: the selection stays, and nothing drags.
+    event.stopPropagation();
+    event.preventDefault();
+  });
+  svgButton.addEventListener("click", function (event) {
+    event.stopPropagation();
+    openSvg(selected);
+  });
 
   ui.addEventListener("pointerdown", function (event) {
     var kind = event.target.getAttribute && event.target.getAttribute("data-handle");
@@ -1997,6 +2072,7 @@
       document.documentElement.setAttribute("data-slop-tool", tool);
       hover(null);
     }
+    placeSvgButton();
     if (tell) window.parent.postMessage({ type: "slop:edit-tool", slide: slide.id, tool: tool }, "*");
   }
 
@@ -3586,6 +3662,8 @@
       if (Array.isArray(data.also)) selectMany([selected].concat(data.also.map(atPath)));
       // Clearing the selection for a screenshot hides the wires too, until the next interaction.
       if (data.quiet) mark(wires, "data-quiet", true);
+    } else if (data.type === "slop:edit-open-svg") {
+      openSvg(selected);
     } else if (data.type === "slop:edit-size-mode") {
       if (data.mode !== "resize" && data.mode !== "stretch") return;
       sizeMode = data.mode;
@@ -4285,7 +4363,8 @@
   }
 
   /** The colors in the deck's CSS variables, for the color popover's deck swatches. */
-  function deckColors() {
+  /** The CSS variables the deck's stylesheets define (not the app's own), with the value each first has. */
+  function cssVariableNames() {
     var names = [];
     var scoped = {};
     var visit = function (rules) {
@@ -4308,6 +4387,25 @@
         // A stylesheet from another origin (a web font service) cannot be read.
       }
     });
+    return { names: names, scoped: scoped };
+  }
+
+  /** The values of the deck's CSS variables as `el` sees them, for showing it outside the slide. */
+  function cssVariables(el) {
+    var found = cssVariableNames();
+    var computed = getComputedStyle(el);
+    var vars = {};
+    found.names.slice(0, MAX_SVG_VARS).forEach(function (name) {
+      var value = String(computed.getPropertyValue(name) || found.scoped[name] || "").trim();
+      if (value) vars[name] = value;
+    });
+    return vars;
+  }
+
+  function deckColors() {
+    var found = cssVariableNames();
+    var names = found.names;
+    var scoped = found.scoped;
     var probe = document.createElement("span");
     probe.setAttribute("data-slop-ui", "");
     document.body.appendChild(probe);

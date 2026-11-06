@@ -271,7 +271,7 @@ export function searchHighlight(state: Pick<AppState, "search" | "selected">) {
 }
 
 /** What the right sidebar can show, each in a tab of its own, in menu order (see components/Sidebar.tsx). */
-export const SIDEBAR_TABS = ["chat", "files", "settings"] as const;
+export const SIDEBAR_TABS = ["chat", "files", "svg", "settings"] as const;
 export type SidebarTab = (typeof SIDEBAR_TABS)[number];
 const isSidebarTab = (value: unknown): value is SidebarTab => SIDEBAR_TABS.includes(value as SidebarTab);
 /** The tabs a first start opens. */
@@ -314,6 +314,8 @@ interface AppState {
   sidebarTabs: SidebarTab[];
   /** The sidebar tab shown; null once every tab is closed. */
   sidebarTab: SidebarTab | null;
+  /** The sidebar covers the whole window, over the slides, for room to work in (such as the SVG editor's). */
+  sidebarMaximized: boolean;
   /** The slide rail is shown; the user can collapse it to give the stage more room. */
   railOpen: boolean;
   /** Bumped when attached assets change, reloading every slide preview. */
@@ -454,6 +456,7 @@ interface AppState {
   setSidebarTab: (tab: SidebarTab) => void;
   /** Closes the sidebar tab `tab`; when it was showing, the tab beside it shows instead. */
   closeSidebarTab: (tab: SidebarTab) => void;
+  setSidebarMaximized: (maximized: boolean) => void;
   setRailOpen: (open: boolean) => void;
   setModel: (provider: Provider, model: string) => void;
   setEffort: (effort: string) => void;
@@ -490,6 +493,11 @@ interface AppState {
   setEditStyle: (family: ToolFamily, changes: EditStyle) => void;
   /** Saves `markup` as the new version of `slide`, after any edits still being saved. */
   saveSlideEdit: (slide: string, markup: string) => Promise<void>;
+  /**
+   * Saves `slide` of the open deck as `change` makes its markup in the file, after any edits still
+   * being saved; false (with the error shown) when `change` throws or the save fails.
+   */
+  changeSlideMarkup: (slide: string, change: (markup: string) => string) => Promise<boolean>;
   /** Saves what is said over `slide` (empty removes it), after any slide edits still being saved. */
   setNarration: (slide: string, text: string) => Promise<void>;
   /** Saves the speaker notes of `slide` (empty removes them), after any slide edits still being saved. */
@@ -620,6 +628,7 @@ export const useApp = create<AppState>((set, get) => ({
   codeDirty: false,
   sidebarOpen: localStorage.getItem(SIDEBAR_OPEN_KEY) !== "false",
   ...loadSidebarTabs(),
+  sidebarMaximized: false,
   railOpen: localStorage.getItem("slopslide.railOpen") !== "false",
   assetsRev: 0,
   chatRevision: 0,
@@ -945,7 +954,8 @@ export const useApp = create<AppState>((set, get) => ({
 
   setSidebarOpen: (sidebarOpen) => {
     localStorage.setItem(SIDEBAR_OPEN_KEY, String(sidebarOpen));
-    set({ sidebarOpen });
+    // A closed sidebar does not cover the window either.
+    set(sidebarOpen ? { sidebarOpen } : { sidebarOpen, sidebarMaximized: false });
   },
 
   setSidebarTab: (sidebarTab) => {
@@ -1125,6 +1135,31 @@ export const useApp = create<AppState>((set, get) => ({
 
   setEditStyle: (family, changes) =>
     set((s) => ({ editStyles: { ...s.editStyles, [family]: { ...s.editStyles[family], ...changes } } })),
+
+  setSidebarMaximized: (sidebarMaximized) => {
+    if (sidebarMaximized && !get().sidebarOpen) get().setSidebarOpen(true);
+    set({ sidebarMaximized });
+  },
+
+  changeSlideMarkup: (slide, change) => {
+    let saved = false;
+    const save = async () => {
+      const { deck } = get();
+      if (!deck) return;
+      try {
+        const source = await api.slideSource(deck.id, slide);
+        const next = await api.updateSlide(deck.id, slide, change(source.markup), source.hash);
+        saved = true;
+        if (get().deck?.id !== deck.id) return;
+        get().setDeck(next);
+        set((s) => ({ editedSlides: s.editedSlides.includes(slide) ? s.editedSlides : [...s.editedSlides, slide] }));
+      } catch (error) {
+        set({ error: errorMessage(error) });
+      }
+    };
+    editQueue = editQueue.then(save);
+    return editQueue.then(() => saved);
+  },
 
   saveSlideEdit: (slide, markup) => {
     const save = async () => {

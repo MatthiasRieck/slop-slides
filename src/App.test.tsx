@@ -114,6 +114,18 @@ describe("App", () => {
     expect(hidden("sidebar")).toBe(false);
   });
 
+  it("lays the maximized sidebar over the whole window, keeping it in its place in the layout", () => {
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML), sidebarMaximized: false });
+    render(<App />);
+    const body = screen.getByTestId("sidebar-body");
+    expect(body.className).not.toContain("fixed");
+    act(() => useApp.getState().setSidebarMaximized(true));
+    expect(screen.getByTestId("sidebar-body")).toBe(body);
+    expect(body.className).toContain("fixed inset-0");
+    expect(screen.getByTestId("sidebar").contains(body)).toBe(true);
+    expect(shown("stage")).toBe(true);
+  });
+
   it("starts with a closed panel collapsed", () => {
     useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML), railOpen: false });
     render(<App />);

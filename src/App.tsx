@@ -54,12 +54,14 @@ export function useNewWindowKey() {
  * An open workspace: the top bar over the open file (a deck in the slide editor, with its slide
  * rail, or another page as it is), and on the right the sidebar with the chat, the files and the
  * settings, from the top of the window to the bottom, so the top bar ends where it starts.
+ * Maximized, the sidebar covers the whole window, the rest staying as it is underneath.
  */
 function Workbench() {
   const hasDeck = useApp((s) => s.deck !== null);
   const view = useApp((s) => s.view);
   const mode = useApp(deckMode);
   const sidebarOpen = useApp((s) => s.sidebarOpen);
+  const sidebarMaximized = useApp((s) => s.sidebarMaximized);
   const railOpen = useApp((s) => s.railOpen);
   // Re-lint whenever the deck file changes on disk (agent, HTML view, slide operations).
   const deckVersion = useApp((s) =>
@@ -122,7 +124,10 @@ function Workbench() {
         minSize={260}
         maxSize={640}
       >
-        <Sidebar />
+        {/* Fixed, it leaves the panel (and the layout) where it was, so restoring it is instant. */}
+        <div data-testid="sidebar-body" className={sidebarMaximized ? "fixed inset-0 z-40 bg-background" : "h-full"}>
+          <Sidebar />
+        </div>
       </SidePanel>
     </Group>
   );

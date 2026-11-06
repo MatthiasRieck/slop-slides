@@ -3058,18 +3058,18 @@ describe("slide editor: shapes, styling and media", () => {
 
     it("sticks an end dropped on an element to it, and moves that end with the element", () => {
       const { e, line, a } = setup();
-      pull(e, handles(e)[1]!, [600, 400]);
+      pull(e, handles(e)[1]!, [600, 380]);
       expect(line.getAttribute("data-to")).toBe("a");
-      expect(line.getAttribute("data-to-at")).toBe("50% 100%");
+      expect(line.getAttribute("data-to-at")).toBe("50% 80%");
       expect(line.hasAttribute("data-from")).toBe(false);
       expect(handles(e).map((h) => h.hasAttribute("data-bound"))).toEqual([false, true]);
       e.drag(a, 40, -12);
       expect(ends(line)).toEqual([
         [100, 100],
-        [640, 388],
+        [640, 368],
       ]);
       const markup = e.commits().at(-1)!.markup;
-      expect(markup).toContain('data-to="a" data-to-at="50% 100%"');
+      expect(markup).toContain('data-to="a" data-to-at="50% 80%"');
       expect(markup).not.toContain("data-slop-hover");
     });
 
@@ -3081,11 +3081,11 @@ describe("slide editor: shapes, styling and media", () => {
       const e = editor({ markup });
       layOut(e);
       e.fromParent({ type: "slop:edit-tool", tool: "line", style: LINE_STYLE });
-      dragOut(e, [100, 100], [600, 400]);
+      dragOut(e, [100, 100], [600, 380]);
       const line = added(e)[0]!;
       expect(line.getAttribute("data-to")).toBe("a");
       e.drag(e.$("#intro #a"), 40, -12);
-      expect(ends(line)[1]).toEqual([640, 388]);
+      expect(ends(line)[1]).toEqual([640, 368]);
     });
 
     it("outlines the element an end would stick to while it is dragged", () => {
@@ -3108,15 +3108,15 @@ describe("slide editor: shapes, styling and media", () => {
 
     it("gives the element an id when it has none, and follows its resizes and turns", () => {
       const { e, line, b } = setup();
-      pull(e, handles(e)[1]!, [1050, 700]);
+      pull(e, handles(e)[1]!, [1050, 680]);
       expect(b.id).toBe("el-1");
       expect(line.getAttribute("data-to")).toBe("el-1");
       click(e, b);
       e.fromParent({ type: "slop:edit-geometry", w: 300 });
-      expect(ends(line)[1]).toEqual([1150, 700]);
+      expect(ends(line)[1]).toEqual([1150, 680]);
       e.fromParent({ type: "slop:edit-geometry", rotation: 90 });
-      // The bottom middle, turned a quarter around the center (1150, 650), is on the left.
-      expect(ends(line)[1]).toEqual([1100, 650]);
+      // 30 below the middle, turned a quarter around the center (1150, 650), is 30 left of it.
+      expect(ends(line)[1]).toEqual([1120, 650]);
     });
 
     it("sticks both ends of a line dragged out from one element to another", () => {
@@ -3158,14 +3158,14 @@ describe("slide editor: shapes, styling and media", () => {
 
     it("lets go when the line is dragged on its own, but not along with what it is stuck to", () => {
       const { e, line, a } = setup();
-      pull(e, handles(e)[1]!, [600, 400]);
+      pull(e, handles(e)[1]!, [600, 380]);
       click(e, a, { shiftKey: true });
       expect(e.selected()).toHaveLength(2);
       e.drag(a, 20, 20);
       expect(line.getAttribute("data-to")).toBe("a");
       expect(ends(line)).toEqual([
         [120, 120],
-        [620, 420],
+        [620, 400],
       ]);
       e.fromParent({ type: "slop:edit-select", path: [[...e.$("#intro").children].indexOf(line)] });
       e.drag(line, 0, 50);
@@ -3177,20 +3177,20 @@ describe("slide editor: shapes, styling and media", () => {
 
     it("follows nudges before they are saved", () => {
       const { e, line, a } = setup();
-      pull(e, handles(e)[1]!, [600, 400]);
+      pull(e, handles(e)[1]!, [600, 380]);
       click(e, a);
       e.key("ArrowRight", { shiftKey: true });
-      expect(ends(line)[1]).toEqual([610, 400]);
+      expect(ends(line)[1]).toEqual([610, 380]);
     });
 
     it("lets go of an element that is deleted, leaving the line where it is", () => {
       const { e, line, a } = setup();
-      pull(e, handles(e)[1]!, [600, 400]);
+      pull(e, handles(e)[1]!, [600, 380]);
       click(e, a);
       e.key("Delete");
       expect(e.doc.getElementById("a")).toBeNull();
       expect(line.hasAttribute("data-to")).toBe(false);
-      expect(ends(line)[1]).toEqual([600, 400]);
+      expect(ends(line)[1]).toEqual([600, 380]);
     });
 
     it("keeps duplicated lines stuck to the copies of what they were stuck to", () => {
@@ -3207,6 +3207,189 @@ describe("slide editor: shapes, styling and media", () => {
       e.fromParent({ type: "slop:edit-select", path: [[...e.$("#intro").children].indexOf(line)] });
       e.fromParent({ type: "slop:edit-duplicate" });
       expect(e.selected()[0]!.hasAttribute("data-to")).toBe(false);
+    });
+
+    describe("to an element's edge", () => {
+      /** Adds an element to the slide, laid out where its inline styles put it. */
+      const place = (e: ReturnType<typeof editor>, id: string, css: string) => {
+        const el = e.doc.createElement("div");
+        el.id = id;
+        el.setAttribute("style", `position: absolute; background: #0000ff; ${css}`);
+        e.$("#intro").appendChild(el);
+        return el;
+      };
+      /** Whether `p` lies on the way from `from` toward `to`. */
+      const onTheWay = (from: number[], p: number[], to: number[]) => {
+        const cross = (p[0]! - from[0]!) * (to[1]! - from[1]!) - (p[1]! - from[1]!) * (to[0]! - from[0]!);
+        return Math.abs(cross) / Math.hypot(to[0]! - from[0]!, to[1]! - from[1]!) < 0.5;
+      };
+      const near = (got: number[], want: number[]) => {
+        expect(got[0]).toBeCloseTo(want[0]!, 0);
+        expect(got[1]).toBeCloseTo(want[1]!, 0);
+      };
+
+      it("sticks an end dropped close to the border to the spot on it", () => {
+        const { e, line } = setup();
+        pull(e, handles(e)[1]!, [620, 397]);
+        expect(line.getAttribute("data-to")).toBe("a");
+        expect(line.getAttribute("data-to-at")).toBe("60% 100% edge");
+        expect(e.commits().at(-1)!.markup).toContain('data-to-at="60% 100% edge"');
+      });
+
+      it("sticks inside the element, away from its border, as before", () => {
+        const { e, line } = setup();
+        pull(e, handles(e)[1]!, [600, 350]);
+        expect(line.getAttribute("data-to-at")).toBe("50% 50%");
+      });
+
+      it("ends where the line toward the spot first meets the border", () => {
+        // From the left, toward the bottom middle: the line goes in through the left side.
+        const { e, line } = setup([100, 350]);
+        pull(e, handles(e)[1]!, [600, 400]);
+        expect(line.getAttribute("data-to-at")).toBe("50% 100% edge");
+        const [from, to] = ends(line);
+        expect(to![0]).toBeCloseTo(500, 0);
+        expect(onTheWay(from!, to!, [600, 400])).toBe(true);
+      });
+
+      it("slides along the border as the element turns, still pointing at the spot", () => {
+        const { e, line, a } = setup([100, 350]);
+        pull(e, handles(e)[1]!, [503, 303]);
+        expect(line.getAttribute("data-to-at")).toBe("0% 0% edge");
+        near(ends(line)[1]!, [500, 300]);
+        click(e, a);
+        e.fromParent({ type: "slop:edit-geometry", rotation: 180 });
+        // The top left corner is now at the bottom right (700, 400), behind the left side.
+        const [from, to] = ends(line);
+        near(to!, [500, 383.3]);
+        expect(onTheWay(from!, to!, [700, 400])).toBe(true);
+        expect(line.getAttribute("data-to-at")).toBe("0% 0% edge");
+        e.fromParent({ type: "slop:edit-geometry", rotation: 0 });
+        near(ends(line)[1]!, [500, 300]);
+      });
+
+      it("keeps a spot inside the element where it is as the element turns", () => {
+        const { e, line, a } = setup([100, 350]);
+        pull(e, handles(e)[1]!, [520, 320]);
+        expect(line.getAttribute("data-to-at")).toBe("10% 20%");
+        click(e, a);
+        e.fromParent({ type: "slop:edit-geometry", rotation: 180 });
+        near(ends(line)[1]!, [680, 380]);
+      });
+
+      it("aims both ends of a line stuck to two edges at each other's spot", () => {
+        const { e, line, a } = setup([697, 350], [1003, 650]);
+        expect(line.getAttribute("data-from-at")).toBe("100% 50% edge");
+        expect(line.getAttribute("data-to-at")).toBe("0% 50% edge");
+        e.drag(a, 0, 300);
+        const [from, to] = ends(line);
+        near(from!, [700, 650]);
+        near(to!, [1000, 650]);
+      });
+
+      it("highlights the outline while an end is close to it, instead of the box", () => {
+        const { e, a } = setup();
+        const [x, y] = spot(handles(e)[1]!);
+        handles(e)[1]!.dispatchEvent(
+          new e.window.PointerEvent("pointerdown", {
+            clientX: x,
+            clientY: y,
+            button: 0,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        at(e, "pointermove", 600, 396);
+        const outline = e.doc.querySelector("[data-slop-edge] path");
+        expect(outline?.getAttribute("d")).toMatch(/^M500 300 L700 300 L700 400 L500 400 Z$/);
+        expect(e.doc.querySelector("[data-slop-edge] circle")?.getAttribute("cy")).toBe("400");
+        expect(a.hasAttribute("data-slop-hover")).toBe(false);
+        at(e, "pointermove", 600, 350);
+        expect(e.doc.querySelector("[data-slop-edge] path")).toBeNull();
+        expect(a.hasAttribute("data-slop-hover")).toBe(true);
+        at(e, "pointermove", 600, 396);
+        at(e, "pointerup", 600, 396);
+        expect(e.doc.querySelector("[data-slop-edge]")!.childNodes).toHaveLength(0);
+        expect(e.commits().at(-1)!.markup).not.toContain("data-slop-edge");
+      });
+
+      it("follows a cut-out shape's outline, not its box", () => {
+        const { e, line } = setup();
+        place(
+          e,
+          "star",
+          "left: 1300px; top: 100px; width: 200px; height: 200px; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)",
+        );
+        // The box's corner is off the star.
+        pull(e, handles(e)[1]!, [1302, 102]);
+        expect(line.hasAttribute("data-to")).toBe(false);
+        pull(e, handles(e)[1]!, [1400, 104]);
+        expect(line.getAttribute("data-to")).toBe("star");
+        expect(line.getAttribute("data-to-at")).toBe("50% 0% edge");
+        pull(e, handles(e)[1]!, [1400, 200]);
+        expect(line.getAttribute("data-to-at")).toBe("50% 50%");
+      });
+
+      it("follows rounded corners and ellipses", () => {
+        const { e, line } = setup();
+        place(e, "oval", "left: 1300px; top: 100px; width: 200px; height: 100px; border-radius: 50%");
+        pull(e, handles(e)[1]!, [1303, 103]);
+        expect(line.hasAttribute("data-to")).toBe(false);
+        pull(e, handles(e)[1]!, [1400, 104]);
+        expect(line.getAttribute("data-to-at")).toBe("50% 0% edge");
+        // Off the ellipse, but on the rounded box's corner.
+        place(e, "round", "left: 1300px; top: 500px; width: 200px; height: 100px; border-radius: 20px");
+        pull(e, handles(e)[1]!, [1306, 506]);
+        expect(line.getAttribute("data-to")).toBe("round");
+        const [x, y] = line.getAttribute("data-to-at")!.split(" ").map(Number.parseFloat);
+        // On the rounding: 20px around its center (20, 20) from the corner.
+        expect(Math.hypot((x! / 100) * 200 - 20, (y! / 100) * 100 - 20)).toBeCloseTo(20, 0);
+      });
+
+      /** Adds a drawing of one path, 200 × 200 on the slide, its viewBox 100 × 100. */
+      const drawing = (e: ReturnType<typeof editor>, id: string, d: string) => {
+        const NS = "http://www.w3.org/2000/svg";
+        const svg = e.doc.createElementNS(NS, "svg");
+        svg.id = id;
+        svg.setAttribute("data-added", "drawing");
+        svg.setAttribute("viewBox", "0 0 100 100");
+        svg.setAttribute("style", "position: absolute; left: 1300px; top: 100px; width: 200px; height: 200px");
+        const path = e.doc.createElementNS(NS, "path");
+        path.setAttribute("d", d);
+        path.setAttribute("fill", "#00ff00");
+        svg.appendChild(path);
+        e.$("#intro").appendChild(svg);
+        return path;
+      };
+
+      it("follows the straight strokes of a drawing", () => {
+        const { e, line } = setup();
+        drawing(e, "diamond", "M50 0 L100 50 L50 100 l-50 -50 Z");
+        // The box's corner is off the diamond.
+        pull(e, handles(e)[1]!, [1304, 104]);
+        expect(line.hasAttribute("data-to")).toBe(false);
+        pull(e, handles(e)[1]!, [1496, 200]);
+        expect(line.getAttribute("data-to")).toBe("diamond");
+        expect(line.getAttribute("data-to-at")).toBe("100% 50% edge");
+      });
+
+      it("follows a drawing's curves along their length", () => {
+        const { e, line } = setup();
+        const path = drawing(e, "blob", "M100 50 C100 100 0 100 0 50 C0 0 100 0 100 50 Z");
+        // jsdom has no SVG geometry: the curve is the circle around (50, 50).
+        Object.assign(path, {
+          getTotalLength: () => 100 * Math.PI,
+          getPointAtLength: (length: number) => ({
+            x: 50 + 50 * Math.cos(length / 50),
+            y: 50 + 50 * Math.sin(length / 50),
+          }),
+        });
+        pull(e, handles(e)[1]!, [1306, 106]);
+        expect(line.hasAttribute("data-to")).toBe(false);
+        pull(e, handles(e)[1]!, [1495, 200]);
+        expect(line.getAttribute("data-to")).toBe("blob");
+        expect(line.getAttribute("data-to-at")).toBe("100% 50% edge");
+      });
     });
 
     it("keeps pasted lines stuck to the pasted copies, with ids of their own", () => {

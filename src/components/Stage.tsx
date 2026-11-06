@@ -37,6 +37,7 @@ import { type Stroke, zoomBox } from "../lib/ink";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn, deckFileUrl } from "../lib/utils";
 import { deckMode, editedSlidesOf, SKETCH_TARGET_ATTR, searchHighlight, useApp } from "../store";
+import { parseSvgOpen, useSvgEditor } from "../svgStore";
 import { Button, ToolButton } from "./Button";
 import { AreaDrawer, CommentEditor, CommentPins, useSlideComments } from "./Comments";
 import { Dialog } from "./Dialog";
@@ -687,6 +688,9 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
             }
           })
           .catch((error) => useApp.getState().setError(errorMessage(error)));
+      } else if (data?.type === "slop:edit-open-svg" && data.slide === selected) {
+        const drawing = parseSvgOpen(data, useApp.getState().deck?.id);
+        if (drawing) void useSvgEditor.getState().open(drawing);
       } else if (data?.type === "slop:edit-copied" && data.slide === selected && typeof data.html === "string") {
         api
           .copyToClipboard(data.html, String(data.text ?? ""), useApp.getState().deck?.id ?? null)
@@ -784,6 +788,7 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
     else if (action === "paste") void paste();
     else if (action === "duplicate") post({ type: "slop:edit-duplicate" });
     else if (action === "delete") post({ type: "slop:edit-delete" });
+    else if (action === "svg") post({ type: "slop:edit-open-svg" });
     else if (action === "ask" || action === "tidy") {
       if (!element) return;
       // The screenshot shows the whole slide, with the element selected and the menu gone.

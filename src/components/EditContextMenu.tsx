@@ -2,7 +2,7 @@ import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from
 
 import type { EditElement, StackOrder } from "../lib/editTools";
 
-export type EditMenuAction = "cut" | "copy" | "paste" | "duplicate" | "delete" | "ask" | "tidy" | StackOrder;
+export type EditMenuAction = "cut" | "copy" | "paste" | "duplicate" | "delete" | "ask" | "tidy" | "svg" | StackOrder;
 
 const WIDTH = 224;
 
@@ -27,6 +27,10 @@ const ORDER_ITEMS: Item[] = [
 ];
 const ASK: Item = { action: "ask", label: "Ask the agent about this…" };
 const TIDY: Item = { action: "tidy", label: "Tidy this element" };
+const SVG: Item = { action: "svg", label: "Edit in the SVG editor" };
+
+/** Whether `element` is a drawing, which the SVG editor opens. */
+const isDrawing = (element: EditElement | null) => !!element && /^<svg[\s>]/i.test(element.markup.trimStart());
 
 /**
  * The menu for a right-click in the slide editor. It lives in the app, not in the preview, so it
@@ -120,6 +124,12 @@ export function EditContextMenu(props: {
           TIDY,
           !element?.added || running,
           element?.added ? undefined : "Only for elements you added or dropped on the slide",
+        )}
+        {isDrawing(element) && (
+          <>
+            {divider}
+            {button(SVG, false)}
+          </>
         )}
       </div>
     </div>

@@ -432,6 +432,13 @@ fn delete_slides(id: String, slides: Vec<String>) -> Result<RailEdit> {
     })
 }
 
+/// Slide `slide` of deck `id` as it is in the file, with its hash: what the SVG editor
+/// changes an element of and saves back with `update_slide`.
+#[tauri::command]
+fn slide_source(id: String, slide: String) -> Result<deck::SlideSource> {
+    deck::slide_source(&deck::deck_file(&id)?, &slide)
+}
+
 /// Saves a slide edited on the stage (text edits, moved elements). `base` is its hash when
 /// the edit started.
 #[tauri::command]
@@ -1230,6 +1237,7 @@ pub fn run() {
             delete_section,
             delete_slides,
             update_slide,
+            slide_source,
             save_deck_source,
             deck_history,
             undo_deck,

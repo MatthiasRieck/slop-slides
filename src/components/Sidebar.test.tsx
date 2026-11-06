@@ -1,13 +1,16 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The tabs' contents have their own tests.
 vi.mock("./ChatPanel", () => ({ ChatPanel: () => <div data-testid="chat" /> }));
 vi.mock("./FileTree", () => ({ FileTree: () => <div data-testid="files" /> }));
 vi.mock("./SettingsPanel", () => ({ SettingsPanel: () => <div data-testid="settings" /> }));
+vi.mock("./SvgEditor", () => ({ SvgEditor: () => <div data-testid="svg" /> }));
 
 import { useApp } from "../store";
+import { useSvgEditor } from "../svgStore";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { ask } from "../test/tauri";
 import { Sidebar } from "./Sidebar";
 
 beforeEach(() => {
@@ -68,15 +71,56 @@ describe("Sidebar", () => {
     useApp.setState({ sidebarTabs: ["files"], sidebarTab: "files" });
     render(<Sidebar />);
     fireEvent.click(screen.getByRole("button", { name: "Open a tab" }));
-    expect(screen.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Chat", "Settings"]);
+    expect(screen.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Chat", "SVG", "Settings"]);
     fireEvent.click(screen.getByRole("menuitem", { name: "Chat" }));
     expect(screen.queryByRole("menu")).toBeNull();
     expect(tabNames()).toEqual(["Files", "Chat"]);
     expect(shown("chat")).toBe(true);
   });
 
+  it("maximizes over the window and back", () => {
+    useApp.setState({ sidebarMaximized: false });
+    render(<Sidebar />);
+    fireEvent.click(screen.getByRole("button", { name: "Maximize the sidebar over the slides" }));
+    expect(useApp.getState().sidebarMaximized).toBe(true);
+    const restore = screen.getByRole("button", { name: "Restore the sidebar" });
+    expect(restore.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(restore);
+    expect(useApp.getState().sidebarMaximized).toBe(false);
+  });
+
+  it("closes the SVG editor's tab through the editor, which asks about changes not accepted", async () => {
+    const markup = "<svg></svg>";
+    useApp.setState({ sidebarTabs: ["chat", "svg"], sidebarTab: "svg" });
+    useSvgEditor.setState({
+      edit: {
+        deckId: "/d/deck.html",
+        slide: "intro",
+        path: [0],
+        original: markup,
+        draft: "<svg><g></g></svg>",
+        past: [markup],
+        future: [],
+        size: { w: 10, h: 10 },
+        color: null,
+        vars: {},
+        saving: false,
+      },
+    });
+    ask.mockResolvedValueOnce(false);
+    render(<Sidebar />);
+    expect(shown("svg")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Close SVG" }));
+    await waitFor(() => expect(ask).toHaveBeenCalled());
+    expect(tabNames()).toEqual(["Chat", "SVG"]);
+    ask.mockResolvedValueOnce(true);
+    fireEvent.click(screen.getByRole("button", { name: "Close SVG" }));
+    await waitFor(() => expect(tabNames()).toEqual(["Chat"]));
+    expect(useSvgEditor.getState().edit).toBeNull();
+  });
+
   it("turns off + once every surface is open", () => {
-    useApp.setState({ sidebarTabs: ["chat", "files", "settings"] });
+    useApp.setState({ sidebarTabs: ["chat", "files", "svg", "settings"] });
     render(<Sidebar />);
     expect((screen.getByRole("button", { name: "Open a tab" }) as HTMLButtonElement).disabled).toBe(true);
   });

@@ -119,6 +119,7 @@ pub fn lint(
     check_narration_settings(&mut l);
     check_entrances(&mut l);
     check_morphs(&mut l);
+    check_stuck_lines(&mut l);
     check_assets(&mut l, asset_exists);
     check_links(&mut l);
     check_locked(&mut l, locked);
@@ -521,6 +522,77 @@ fn check_morphs(l: &mut Linter) {
             }
         }
     }
+}
+
+/// The ends of a line the user stuck to elements in the editor: `data-from` / `data-to` name
+/// an element on the same slide by id, and `data-from-at` / `data-to-at` the spot on its box
+/// as two percentages (`"50% 100%"`).
+fn check_stuck_lines(l: &mut Linter) {
+    const ENDS: [(&str, &str); 2] = [("data-from", "data-from-at"), ("data-to", "data-to-at")];
+    for slide in l.slides.clone() {
+        let mut ids = HashSet::new();
+        let mut stuck = Vec::new();
+        let mut at = slide.range.start;
+        while at < slide.range.end {
+            let Some(tag) = parse_tag(l.html, at) else {
+                at += 1;
+                continue;
+            };
+            if !tag.closing {
+                let attr = |name: &str| {
+                    tag.attrs
+                        .iter()
+                        .find(|(n, ..)| n == name)
+                        .map(|(_, v, ..)| v.trim().to_string())
+                };
+                if let Some(id) = attr("id") {
+                    ids.insert(id);
+                }
+                for (end, spot) in ENDS {
+                    match (attr(end), attr(spot)) {
+                        (Some(id), spot) => stuck.push((at, end, id, spot)),
+                        (None, Some(_)) => l.report(
+                            "stuck-line-anchor",
+                            Severity::Warning,
+                            at,
+                            format!("`{spot}` means nothing without `{end}`; remove it."),
+                        ),
+                        (None, None) => {}
+                    }
+                }
+            }
+            at = tag.end;
+        }
+        for (at, end, id, spot) in stuck {
+            if !ids.contains(&id) {
+                l.report(
+                    "stuck-line-target",
+                    Severity::Warning,
+                    at,
+                    format!("This line's `{end}` names `{id}`, but no element on this slide has that id. Give the element it ends on that id, or remove `{end}` and its `-at`."),
+                );
+            }
+            if !spot.as_deref().is_some_and(is_anchor) {
+                l.report(
+                    "stuck-line-anchor",
+                    Severity::Warning,
+                    at,
+                    format!("`{end}-at` needs the spot on the element's box the line ends at, as two percentages from 0% to 100% (e.g. \"50% 100%\")."),
+                );
+            }
+        }
+    }
+}
+
+/// Two percentages from 0% to 100%, such as `50% 100%`.
+fn is_anchor(value: &str) -> bool {
+    let parts: Vec<_> = value.split_whitespace().collect();
+    parts.len() == 2
+        && parts.iter().all(|p| {
+            p.strip_suffix('%')
+                .and_then(|n| n.parse::<f64>().ok())
+                .is_some_and(|n| (0.0..=100.0).contains(&n))
+        })
 }
 
 /// Slide ids: present, unique, kebab-case.
@@ -1265,6 +1337,41 @@ mod tests {
             .into_iter()
             .map(|i| i.rule)
             .collect()
+    }
+
+    #[test]
+    fn stuck_lines_name_an_element_on_their_slide_and_a_spot_on_it() {
+        let line = |attrs: &str| {
+            format!(r#"<svg {attrs} viewBox="0 0 10 10"><path d="M0 0 L10 10"/></svg>"#)
+        };
+        let clean = deck(&format!(
+            r#"<section class="slide" id="a"><div id="box"></div><div id="other"></div>{}</section>"#,
+            line(
+                r#"data-from="box" data-from-at="50% 100%" data-to="other" data-to-at="0% 25.5%""#
+            )
+        ));
+        let issues = lint(&clean, |_| true, &[]);
+        assert!(
+            !issues.iter().any(|i| i.rule.starts_with("stuck-line")),
+            "{issues:?}"
+        );
+
+        let broken = deck(&format!(
+            r#"<section class="slide" id="a">{}{}{}</section><section class="slide" id="b"><div id="box"></div></section>"#,
+            line(r#"data-to="box" data-to-at="50% 100%""#),
+            line(r#"data-from-at="50% 50%""#),
+            line(r#"data-to="here" data-to-at="center""#),
+        ));
+        let issues = lint(&broken, |_| true, &[]);
+        let count = |rule| issues.iter().filter(|i| i.rule == rule).count();
+        // `box` is on another slide, and `here` on none.
+        assert_eq!(count("stuck-line-target"), 2);
+        // `data-from-at` alone, and `center` is no spot.
+        assert_eq!(count("stuck-line-anchor"), 2);
+        assert!(issues
+            .iter()
+            .filter(|i| i.rule.starts_with("stuck-line"))
+            .all(|i| i.slide.as_deref() == Some("a")));
     }
 
     #[test]

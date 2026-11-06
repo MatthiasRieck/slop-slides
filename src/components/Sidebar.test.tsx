@@ -68,11 +68,8 @@ describe("Sidebar", () => {
     useApp.setState({ sidebarTabs: ["files"], sidebarTab: "files" });
     render(<Sidebar />);
     fireEvent.click(screen.getByRole("button", { name: "Open a tab" }));
-    expect(screen.getAllByRole("menuitem").map((m) => m.textContent?.split(/(?=[A-Z])/)[0])).toEqual([
-      "Chat",
-      "Settings",
-    ]);
-    fireEvent.click(screen.getByRole("menuitem", { name: /Chat/ }));
+    expect(screen.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Chat", "Settings"]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Chat" }));
     expect(screen.queryByRole("menu")).toBeNull();
     expect(tabNames()).toEqual(["Files", "Chat"]);
     expect(shown("chat")).toBe(true);

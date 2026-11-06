@@ -5,7 +5,6 @@ import { cn } from "../lib/utils";
 import { SIDEBAR_TABS, type SidebarTab, useApp } from "../store";
 import { ToolButton } from "./Button";
 import { ChatPanel } from "./ChatPanel";
-import { MenuItem } from "./DeckActions";
 import { FileTree } from "./FileTree";
 import { useDismiss } from "./Popover";
 import { SettingsPanel } from "./SettingsPanel";
@@ -27,7 +26,7 @@ export function Sidebar() {
   const active = useApp((s) => s.sidebarTab);
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <div data-tauri-drag-region className="flex h-14 shrink-0 items-center gap-1 border-b px-2">
+      <div data-tauri-drag-region className="relative z-30 flex h-14 shrink-0 items-center gap-1 border-b px-2">
         <div role="tablist" aria-label="Sidebar" className="flex min-w-0 items-center gap-1 overflow-x-auto">
           {tabs.map((id) => (
             <Tab key={id} id={id} active={id === active} />
@@ -107,19 +106,26 @@ function OpenTabMenu({ open: openTabs }: { open: SidebarTab[] }) {
         <Plus className="size-4" />
       </ToolButton>
       {open && closed.length > 0 && (
-        <div role="menu" className="absolute left-0 top-full z-20 mt-1 w-56 rounded-lg border bg-card p-1 shadow-lg">
-          {closed.map((id) => (
-            <MenuItem
-              key={id}
-              icon={TABS[id].icon}
-              label={TABS[id].label}
-              hint={TABS[id].hint}
-              onClick={() => {
-                setOpen(false);
-                useApp.getState().setSidebarTab(id);
-              }}
-            />
-          ))}
+        <div role="menu" className="absolute left-0 top-full z-20 mt-1 w-40 rounded-lg border bg-card p-1 shadow-lg">
+          {closed.map((id) => {
+            const { label, hint, icon: Icon } = TABS[id];
+            return (
+              <button
+                key={id}
+                type="button"
+                role="menuitem"
+                title={hint}
+                onClick={() => {
+                  setOpen(false);
+                  useApp.getState().setSidebarTab(id);
+                }}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent"
+              >
+                <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                {label}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

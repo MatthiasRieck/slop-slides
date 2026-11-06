@@ -51,8 +51,9 @@ export function useNewWindowKey() {
 }
 
 /**
- * An open workspace: the open file in the middle (a deck in the slide editor, with its slide
- * rail, or another page as it is) and the sidebar with the chat and the files on the right.
+ * An open workspace: the top bar over the open file (a deck in the slide editor, with its slide
+ * rail, or another page as it is), and on the right the sidebar with the chat, the files and the
+ * settings, from the top of the window to the bottom, so the top bar ends where it starts.
  */
 function Workbench() {
   const hasDeck = useApp((s) => s.deck !== null);
@@ -69,57 +70,61 @@ function Workbench() {
     void useApp.getState().refreshLint();
   }, [deckVersion]);
   return (
-    <div className="flex h-full flex-col">
-      <TopBar />
-      <Group orientation="horizontal" className="min-h-0 flex-1">
-        {hasDeck && (
-          <>
-            <SidePanel
-              id="rail"
-              open={railOpen}
-              onOpenChange={useApp.getState().setRailOpen}
-              defaultSize={220}
-              minSize={150}
-              maxSize={360}
-            >
-              {/* The slide list stays mounted so its thumbnails do not load all over again. */}
-              <div className={cn("h-full", mode === "git" && "hidden")}>
-                <SlideRail />
-              </div>
-              {mode === "git" && <ChangesRail />}
-            </SidePanel>
-            <ResizeHandle />
-          </>
-        )}
-        <Panel id="stage" minSize={360}>
-          {hasDeck ? (
-            <div className="flex h-full flex-col">
-              <DeckToolbar />
-              <div className="min-h-0 flex-1">
-                {/* The HTML view stays mounted so unsaved edits survive switching to the slides. */}
-                <CodeView active={view === "code"} />
-                {view === "slides" &&
-                  (mode === "settings" ? <DeckSettings /> : mode === "git" ? <ChangesView /> : <Stage />)}
-              </div>
-              {mode === "narration" && <NarrationTimeline />}
-            </div>
-          ) : (
-            <FileViewer />
-          )}
-        </Panel>
-        <ResizeHandle />
-        <SidePanel
-          id="sidebar"
-          open={sidebarOpen}
-          onOpenChange={useApp.getState().setSidebarOpen}
-          defaultSize={380}
-          minSize={260}
-          maxSize={640}
-        >
-          <Sidebar />
-        </SidePanel>
-      </Group>
-    </div>
+    <Group orientation="horizontal" className="h-full">
+      <Panel id="main" minSize={480}>
+        <div className="flex h-full flex-col">
+          <TopBar />
+          <Group orientation="horizontal" className="min-h-0 flex-1">
+            {hasDeck && (
+              <>
+                <SidePanel
+                  id="rail"
+                  open={railOpen}
+                  onOpenChange={useApp.getState().setRailOpen}
+                  defaultSize={220}
+                  minSize={150}
+                  maxSize={360}
+                >
+                  {/* The slide list stays mounted so its thumbnails do not load all over again. */}
+                  <div className={cn("h-full", mode === "git" && "hidden")}>
+                    <SlideRail />
+                  </div>
+                  {mode === "git" && <ChangesRail />}
+                </SidePanel>
+                <ResizeHandle />
+              </>
+            )}
+            <Panel id="stage" minSize={360}>
+              {hasDeck ? (
+                <div className="flex h-full flex-col">
+                  <DeckToolbar />
+                  <div className="min-h-0 flex-1">
+                    {/* The HTML view stays mounted so unsaved edits survive switching to the slides. */}
+                    <CodeView active={view === "code"} />
+                    {view === "slides" &&
+                      (mode === "settings" ? <DeckSettings /> : mode === "git" ? <ChangesView /> : <Stage />)}
+                  </div>
+                  {mode === "narration" && <NarrationTimeline />}
+                </div>
+              ) : (
+                <FileViewer />
+              )}
+            </Panel>
+          </Group>
+        </div>
+      </Panel>
+      <ResizeHandle />
+      <SidePanel
+        id="sidebar"
+        open={sidebarOpen}
+        onOpenChange={useApp.getState().setSidebarOpen}
+        defaultSize={380}
+        minSize={260}
+        maxSize={640}
+      >
+        <Sidebar />
+      </SidePanel>
+    </Group>
   );
 }
 

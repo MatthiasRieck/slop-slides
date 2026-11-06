@@ -121,6 +121,47 @@ describe("sidebar", () => {
     useApp = await freshStore();
     expect(useApp.getState().sidebarTab).toBe("chat");
   });
+
+  it("opens the chat and files tabs first, and remembers which tabs are open", async () => {
+    localStorage.clear();
+    let useApp = await freshStore();
+    expect(useApp.getState().sidebarTabs).toEqual(["chat", "files"]);
+    useApp.getState().setSidebarTab("settings");
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "files", "settings"], sidebarTab: "settings" });
+    useApp.getState().setSidebarTab("chat");
+    expect(useApp.getState().sidebarTabs).toEqual(["chat", "files", "settings"]);
+    useApp.getState().closeSidebarTab("files");
+    useApp = await freshStore();
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "settings"], sidebarTab: "chat" });
+  });
+
+  it("shows the tab beside a closed one, and none once all are closed", async () => {
+    localStorage.clear();
+    let useApp = await freshStore();
+    useApp.getState().setSidebarTab("settings");
+    useApp.getState().setSidebarTab("files");
+    useApp.getState().closeSidebarTab("files");
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "settings"], sidebarTab: "settings" });
+    useApp.getState().closeSidebarTab("chat");
+    expect(useApp.getState().sidebarTab).toBe("settings");
+    useApp.getState().closeSidebarTab("settings");
+    useApp.getState().closeSidebarTab("settings");
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: [], sidebarTab: null });
+    useApp = await freshStore();
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: [], sidebarTab: null });
+    useApp.getState().setSidebarOpen(false);
+    useApp.getState().setSidebarTab("files");
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["files"], sidebarTab: "files", sidebarOpen: true });
+  });
+
+  it("drops saved tabs that are no more, and a showing tab that is not open", async () => {
+    localStorage.clear();
+    localStorage.setItem("slopslide.sidebarTabs", JSON.stringify(["narration", "files", "files", 3]));
+    localStorage.setItem("slopslide.sidebarTab", "chat");
+    expect((await freshStore()).getState()).toMatchObject({ sidebarTabs: ["files"], sidebarTab: "files" });
+    localStorage.setItem("slopslide.sidebarTabs", "not json");
+    expect((await freshStore()).getState().sidebarTabs).toEqual(["chat", "files"]);
+  });
 });
 
 describe("workspaces", () => {

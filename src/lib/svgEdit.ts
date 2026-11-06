@@ -675,3 +675,89 @@ export function replaceSvgInSlide(slide: string, path: number[] | null, original
   found.replaceWith(node);
   return section.outerHTML;
 }
+
+// ---- The backdrop behind the drawing
+
+/** The checkerboard behind the drawing: light, or dark for drawings in light colors. */
+export type Backdrop = "light" | "dark";
+
+/** Named colors light enough to vanish on a light backdrop. */
+const LIGHT_NAMES = new Set([
+  "white",
+  "snow",
+  "ivory",
+  "whitesmoke",
+  "ghostwhite",
+  "floralwhite",
+  "seashell",
+  "linen",
+  "oldlace",
+  "mintcream",
+  "azure",
+  "aliceblue",
+  "honeydew",
+  "lavenderblush",
+  "beige",
+  "cornsilk",
+  "lightyellow",
+  "lightcyan",
+  "gainsboro",
+  "lightgray",
+  "lightgrey",
+  "silver",
+  "yellow",
+]);
+/** The properties whose colors the drawing is seen by. */
+const PAINTS = ["fill", "stroke", "stop-color", "color", "flood-color"];
+const PAINT_RULE = /(?:^|[;{\s])(fill|stroke|stop-color|color|flood-color)\s*:\s*([^;}!]+)/gi;
+
+/** Relative luminance (0 black, 1 white) of a plain color; null for anything else. */
+export function luminanceOf(value: string): number | null {
+  const v = value.trim().toLowerCase();
+  if (LIGHT_NAMES.has(v)) return 1;
+  if (v === "black") return 0;
+  const hex = hexOf(v);
+  if (!hex) return null;
+  const channel = (i: number) => {
+    const c = Number.parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+}
+
+/**
+ * The backdrop the drawing is best seen on: dark when most of the colors it paints with are
+ * light (white icons, say), light otherwise. `currentColor` is `color` and `var(--x)` is looked
+ * up in `vars`, as on the slide; colors that cannot be read (gradients, unknown names) do not count.
+ */
+export function backdropFor(svg: Element, color: string | null, vars: Record<string, string>): Backdrop {
+  const values: string[] = [];
+  for (const el of elementsOf(svg)) {
+    if (el.localName === "style") {
+      for (const m of (el.textContent ?? "").matchAll(PAINT_RULE)) values.push(m[2] ?? "");
+      continue;
+    }
+    for (const name of PAINTS) {
+      const attr = el.getAttribute(name);
+      if (attr) values.push(attr);
+    }
+    for (const m of (el.getAttribute("style") ?? "").matchAll(PAINT_RULE)) values.push(m[2] ?? "");
+  }
+  const resolve = (value: string, depth = 0): string => {
+    const v = value.trim();
+    if (/^currentcolor$/i.test(v)) return color ?? "";
+    const m = /^var\(\s*(--[\w-]+)\s*(?:,\s*(.+))?\)$/i.exec(v);
+    if (!m?.[1] || depth > 8) return v;
+    const found = vars[m[1]];
+    return found !== undefined ? resolve(found, depth + 1) : m[2] ? resolve(m[2], depth + 1) : "";
+  };
+  let light = 0;
+  let dark = 0;
+  for (const value of values) {
+    const l = luminanceOf(resolve(value));
+    if (l === null) continue;
+    if (l > 0.6) light++;
+    else dark++;
+  }
+  return light > dark ? "dark" : "light";
+}

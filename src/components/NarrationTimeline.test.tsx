@@ -6,6 +6,7 @@ vi.mock("../lib/timelinePlayback", () => ({ playTimeline: vi.fn() }));
 
 import type { Deck, RailEdit, Slide } from "../lib/api";
 import { formatDuration } from "../lib/narrationAudio";
+import { getSlideClock } from "../lib/slideClock";
 import { playTimeline } from "../lib/timelinePlayback";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
@@ -346,6 +347,29 @@ describe("NarrationTimeline", () => {
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     expect(stop).toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Play" })).toBeTruthy();
+  });
+
+  it("keeps the showing slide's animations with the playhead", () => {
+    play.mockReturnValue(vi.fn());
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    const [, timeline, , events] = play.mock.calls[0] as [
+      string,
+      { slides: { id: string; start: number }[] },
+      number,
+      { tick: (t: number) => void },
+    ];
+    const outro = timeline.slides.find((s) => s.id === "outro")!;
+    act(() => events.tick(outro.start + 1.5));
+    expect(getSlideClock()).toEqual({ slide: "outro", at: 1.5, playing: true });
+    expect(screen.getByText(`${formatDuration(outro.start + 1.5)} / ${formatDuration(15)}`)).toBeTruthy();
+    // Paused, it holds there.
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    expect(getSlideClock()).toEqual({ slide: "outro", at: 1.5, playing: false });
+    // Played to the end, the slides run on their own again.
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    act(() => (play.mock.calls[1]![3] as { ended: () => void }).ended());
+    expect(getSlideClock()).toBeNull();
   });
 
   it("goes back to the start when it ends", () => {

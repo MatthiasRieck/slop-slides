@@ -652,6 +652,33 @@ html:active-view-transition .deck > .slide {
     } else if (navigate(event.key)) event.preventDefault();
   });
 
+  // Narration playing in the app keeps the slide's animations with it (src/lib/slideClock.ts):
+  // { type: "slop:clock", slide, at, playing } puts every CSS animation on that slide, while it
+  // shows, `at` seconds after it showed, as a video export does, running on from there or held.
+  // Only one that drifted is moved while it runs, so it does not stutter.
+  function keepTime(id, at, playing) {
+    var slide = slides[current];
+    if (!slide || (id && slide.id !== id) || !document.getAnimations || !(at >= 0)) return;
+    var ms = at * 1000;
+    document.getAnimations().forEach(function (animation) {
+      var effect = animation.effect;
+      var target = effect && effect.target;
+      // CSS transitions (the slide's fade) are not the slide's timeline.
+      if (typeof animation.animationName !== "string" || !target || !slide.contains(target)) return;
+      var end = effect.getComputedTiming().endTime;
+      var time = Math.min(ms, end);
+      if (!playing || time >= end || Math.abs((animation.currentTime || 0) - time) > 40) {
+        animation.currentTime = time;
+      }
+      if (playing && time < end) animation.play();
+      else animation.pause();
+    });
+  }
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (framed && data && data.type === "slop:clock") keepTime(data.slide, Number(data.at), !!data.playing);
+  });
+
   if (embed) return;
   // The presenter forwards keys pressed while its drawing tools have focus.
   window.addEventListener("message", function (event) {

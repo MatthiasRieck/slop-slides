@@ -3,6 +3,7 @@ import { type KeyboardEvent, type PointerEvent, useEffect, useLayoutEffect, useR
 
 import { api, type Deck, type NarrationWord, type Slide, type SlideAudio, type SlideTiming } from "../lib/api";
 import { formatDuration } from "../lib/narrationAudio";
+import { setSlideClock } from "../lib/slideClock";
 import { pixelsOf } from "../lib/slideSize";
 import {
   layoutTimeline,
@@ -96,29 +97,39 @@ function Tracks(props: {
   useEffect(() => stop ?? undefined, [stop]);
   // A changed deck has another timeline than the one playing.
   // biome-ignore lint/correctness/useExhaustiveDependencies: Runs on every change of the deck.
-  useEffect(() => setStop(null), [deck]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: The clock starts where playing did.
   useEffect(() => {
-    if (!stop) return;
-    const started = Date.now() - time * 1000;
-    const clock = setInterval(() => setTime((Date.now() - started) / 1000), 100);
-    return () => clearInterval(clock);
-  }, [stop]);
+    setStop(null);
+    setSlideClock(null);
+  }, [deck]);
+  useEffect(() => () => setSlideClock(null), []);
 
+  /** Puts the slide showing at `at` (and its animations) where the timeline is then. */
+  const clockAt = (at: number, playing: boolean) => {
+    const slide = timeline.slides[slideAt(timeline, at)];
+    setSlideClock(slide ? { slide: slide.id, at: at - slide.start, playing } : null);
+  };
   const select = (index: number) => {
     const slide = timeline.slides[index];
     if (slide) useApp.getState().select(slide.id);
   };
   const play = () => {
-    if (stop) return setStop(null);
+    if (stop) {
+      clockAt(time, false);
+      return setStop(null);
+    }
     const from = time >= timeline.end ? 0 : time;
     setTime(from);
     select(slideAt(timeline, from));
     const stopping = playTimeline(deck.id, timeline, from, {
       slide: select,
+      tick: (at) => {
+        setTime(at);
+        clockAt(at, true);
+      },
       ended: () => {
         setStop(null);
         setTime(0);
+        setSlideClock(null);
       },
     });
     setStop(() => stopping);
@@ -176,6 +187,7 @@ function Tracks(props: {
     setStop(null);
     setTime(at);
     select(slideAt(timeline, at));
+    clockAt(at, false);
   };
 
   const reset = slides

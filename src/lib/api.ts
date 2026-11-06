@@ -323,8 +323,10 @@ export interface SlideAudio {
   state: AudioState;
   /** How long the audio there plays (stale audio too); null without any. */
   seconds: number | null;
-  /** It is the presenter's own recording: up to date whatever the script says. */
+  /** It is the presenter's own recording, or audio made elsewhere: up to date whatever the script says. */
   recorded?: boolean;
+  /** It is audio made elsewhere, brought in by the agent (`set_narration_audio`). */
+  imported?: boolean;
   /** When each of its words is said is known (see `timeNarration`). */
   timed?: boolean;
 }

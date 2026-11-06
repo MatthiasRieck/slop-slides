@@ -8,6 +8,10 @@ vi.mock("./narrationAudio", () => ({ playNarration: vi.fn() }));
 
 const say = playNarration as unknown as Mock;
 
+/** The slide each narration was said for and how far in it started, asked when it loaded. */
+const said = () =>
+  say.mock.calls.map(([deck, slide, from]) => [deck, slide, typeof from === "function" ? from() : from]);
+
 const timeline: Timeline = {
   slides: [
     { id: "a", start: 0, end: 2, locked: false, duration: 2, narrationStart: null },
@@ -38,11 +42,11 @@ describe("playTimeline", () => {
     await vi.advanceTimersByTimeAsync(999);
     expect(say).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-    expect(say).toHaveBeenCalledWith("deck", "a", 0);
+    expect(said()).toEqual([["deck", "a", 0]]);
     await vi.advanceTimersByTimeAsync(1000);
     expect(on.slide.mock.calls).toEqual([[1]]);
     await vi.advanceTimersByTimeAsync(2000);
-    expect(say).toHaveBeenCalledWith("deck", "b", 0);
+    expect(say.mock.calls[1]?.slice(0, 2)).toEqual(["deck", "b"]);
     expect(on.ended).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2000);
     expect(on.ended).toHaveBeenCalledOnce();
@@ -52,8 +56,42 @@ describe("playTimeline", () => {
     const on = events();
     playTimeline("deck", timeline, 2.5, on);
     await vi.advanceTimersByTimeAsync(0);
-    expect(say).toHaveBeenCalledWith("deck", "a", 1.5);
+    expect(said()).toEqual([["deck", "a", 1.5]]);
     expect(on.slide).not.toHaveBeenCalled();
+  });
+
+  it("starts audio that loads late where the clock is by then", async () => {
+    let load!: () => void;
+    let from = -1;
+    say.mockImplementation(
+      (_deck: string, _slide: string, at: () => number) =>
+        new Promise((resolve) => {
+          load = () => {
+            from = at();
+            resolve(voice());
+          };
+        }),
+    );
+    playTimeline("deck", timeline, 0, events());
+    await vi.advanceTimersByTimeAsync(1000);
+    // The audio takes 400 ms to load: it starts 0.4 s in, with the slides.
+    await vi.advanceTimersByTimeAsync(400);
+    load();
+    expect(from).toBeCloseTo(0.4, 5);
+  });
+
+  it("tells where it is as it plays, up to the end", async () => {
+    const on = { ...events(), tick: vi.fn() };
+    const stop = playTimeline("deck", timeline, 5, on);
+    expect(on.tick).toHaveBeenLastCalledWith(5);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(on.tick.mock.lastCall?.[0]).toBeCloseTo(5.5, 5);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(on.tick.mock.lastCall?.[0]).toBe(6);
+    stop();
+    const calls = on.tick.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(on.tick.mock.calls.length).toBe(calls);
   });
 
   it("skips clips that are over", async () => {

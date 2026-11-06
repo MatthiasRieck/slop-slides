@@ -215,7 +215,7 @@ function SlideAudioControls(props: {
   };
   const remove = async () => {
     playback?.stop();
-    if (await confirmDelete()) await useNarration.getState().deleteRecording(deck.id, slide);
+    if (await confirmDelete(!!audio?.imported)) await useNarration.getState().deleteRecording(deck.id, slide);
   };
   const recorded = !!audio?.recorded;
   if (!props.hasText && !recorded) return null;
@@ -257,10 +257,12 @@ function SlideAudioControls(props: {
             size="md"
             disabled={props.locked}
             onClick={() => void remove()}
-            title="Delete your recording of this slide"
+            title={
+              audio?.imported ? "Remove the audio brought in for this slide" : "Delete your recording of this slide"
+            }
           >
             <Trash2 />
-            Delete recording
+            {audio?.imported ? "Remove audio" : "Delete recording"}
           </Button>
         ) : (
           <Button
@@ -281,16 +283,20 @@ function SlideAudioControls(props: {
 function audioLabel(audio: SlideAudio | undefined): string {
   if (!audio || audio.state === "missing" || audio.state === "none") return "No audio yet";
   const length = audio.seconds !== null ? formatDuration(audio.seconds) : "";
+  if (audio.imported) return `Imported audio ${length}${audio.timed ? ", words timed" : ""}`;
   if (audio.recorded) return `Your recording ${length}${audio.timed ? ", words timed" : ""}`;
   if (audio.state === "stale") return `Audio ${length}, out of date`;
   return `Audio ${length}${audio.timed ? ", words timed" : ""}`;
 }
 
-/** Whether the user really wants their recording gone; it cannot be brought back. */
-async function confirmDelete(): Promise<boolean> {
-  const message = "Delete your recording of this slide? This can't be undone.";
+/** Whether the user really wants their recording (or the `imported` audio) gone; it cannot be brought back. */
+async function confirmDelete(imported: boolean): Promise<boolean> {
+  const message = imported
+    ? "Remove the audio brought in for this slide? Its copy in the deck's narration folder is deleted; the file it came from stays."
+    : "Delete your recording of this slide? This can't be undone.";
   try {
-    return await ask(message, { title: "Delete recording", kind: "warning", okLabel: "Delete" });
+    const title = imported ? "Remove audio" : "Delete recording";
+    return await ask(message, { title, kind: "warning", okLabel: imported ? "Remove" : "Delete" });
   } catch {
     return window.confirm(message);
   }

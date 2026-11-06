@@ -9,9 +9,9 @@ vi.mock("../lib/drop", async (importOriginal) => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-
 import { claimDrop, dropCovered } from "../lib/drop";
 import { DEFAULT_EDIT_STYLES } from "../lib/editTools";
+import { setSlideClock } from "../lib/slideClock";
 import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
 import { useSvgEditor } from "../svgStore";
 import { DECK_HTML, deckFor } from "../test/fixtures";
@@ -904,6 +904,28 @@ describe("Stage", () => {
       expect(sources.some((src) => src?.includes("&static&pan&edit=0"))).toBe(true);
       toggleEditing();
       expect(useApp.getState().editing).toBe(false);
+    });
+
+    it("shows the slide as it plays while narration plays over it, even in edit mode", () => {
+      const { container } = render(<Stage />);
+      toggleEditing();
+      const sources = () => [...container.querySelectorAll("iframe")].map((f) => f.getAttribute("src") ?? "");
+      expect(sources().some((src) => src.includes("edit="))).toBe(true);
+      const selected = useApp.getState().selected!;
+      act(() => setSlideClock({ slide: selected, at: 1, playing: true }));
+      expect(sources().some((src) => !src.includes("edit=") && !src.includes("static"))).toBe(true);
+      // Every frame of the slide gets the clock as it moves.
+      const frames = [...container.querySelectorAll("iframe")];
+      for (const frame of frames) fireEvent.load(frame);
+      const posts = frames.map((frame) => vi.spyOn(frame.contentWindow!, "postMessage"));
+      act(() => setSlideClock({ slide: selected, at: 1.1, playing: true }));
+      const clocks = posts.flatMap((post) => post.mock.calls.map(([data]) => data));
+      expect(clocks).toContainEqual({ type: "slop:clock", slide: selected, at: 1.1, playing: true });
+      // Paused, or on another slide, it is the editor's again.
+      act(() => setSlideClock({ slide: selected, at: 1.1, playing: false }));
+      expect(sources().some((src) => src.includes("edit="))).toBe(true);
+      act(() => setSlideClock(null));
+      toggleEditing();
     });
 
     const sketchTools = () => screen.queryByRole("toolbar", { name: "Sketch tools" });

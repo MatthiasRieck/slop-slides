@@ -692,7 +692,59 @@ fn check_slides(l: &mut Linter) {
                 ),
             );
         }
+        let pinned = |attr: &Option<(std::ops::Range<usize>, String)>,
+                      parse: fn(&str) -> Option<f64>| {
+            attr.as_ref().and_then(|(_, v)| parse(v))
+        };
+        if let (Some(start), Some(duration)) = (
+            pinned(&slide.narration_start, html::parse_narration_start),
+            pinned(&slide.duration, html::parse_duration),
+        ) {
+            if start >= duration {
+                l.report(
+                    "narration-start-after-end",
+                    Severity::Error,
+                    at,
+                    format!(
+                        "The slide's narration starts {start} s in (`{NARRATION_START_ATTR}`), but the slide only shows for {duration} s (`{DURATION_ATTR}`): start it before the slide ends. Audio that is to play on over the next slides starts on a short first slide."
+                    ),
+                );
+            }
+        }
     }
+}
+
+/// The slides whose narration has to wait for an earlier slide's, still playing over them (see
+/// [`crate::narration::timeline::overlaps`]), as issues of `source`.
+pub fn narration_overlaps(
+    source: &str,
+    overlaps: &[crate::narration::timeline::Overlap],
+) -> Vec<Issue> {
+    let mut l = Linter::new(source);
+    let slides = l.slides.clone();
+    for overlap in overlaps {
+        let Some(span) = slides
+            .iter()
+            .find(|s| s.id.as_deref() == Some(&overlap.slide))
+        else {
+            continue;
+        };
+        let (slide, under, waits) = (&overlap.slide, &overlap.under, overlap.waits);
+        let late = if overlap.after_end {
+            ", after the slide stopped showing"
+        } else {
+            ""
+        };
+        l.report(
+            "narration-overlap",
+            Severity::Warning,
+            span.range.start,
+            format!(
+                "The narration audio of slide `{under}` still plays when slide `{slide}`'s own narration is to start, so that waits {waits:.1} s{late}. Audio that plays on over later slides leaves them without narration of their own: remove theirs (script and audio), or end `{under}`'s audio sooner."
+            ),
+        );
+    }
+    l.issues
 }
 
 /// Narration: one `<aside class="narration">` of Markdown text per slide, no HTML in it.
@@ -1839,6 +1891,68 @@ mod tests {
             )),
             ["narration-start-value"]
         );
+    }
+
+    #[test]
+    fn flags_narration_that_starts_after_its_slide_ends() {
+        let slide = |attrs: &str| {
+            rules(&deck(&format!(
+                "<section class=\"slide\" id=\"a\" {attrs}></section>"
+            )))
+        };
+        assert_eq!(
+            slide("data-duration=\"4\" data-narration-start=\"5\""),
+            ["narration-start-after-end"]
+        );
+        assert_eq!(
+            slide("data-duration=\"4\" data-narration-start=\"4\""),
+            ["narration-start-after-end"]
+        );
+        for fine in [
+            "data-duration=\"4\" data-narration-start=\"3.9\"",
+            "data-duration=\"4\" data-narration-start=\"-2\"",
+            // Without a pinned length the slide lasts its narration out.
+            "data-narration-start=\"30\"",
+            "data-duration=\"4\"",
+        ] {
+            assert!(slide(fine).is_empty(), "{fine}");
+        }
+        // A value the app cannot read is reported as that alone.
+        assert_eq!(
+            slide("data-duration=\"soon\" data-narration-start=\"5\""),
+            ["duration-value"]
+        );
+    }
+
+    #[test]
+    fn reports_narration_that_waits_for_audio_still_playing() {
+        use crate::narration::timeline::Overlap;
+        let source = deck(
+            "<section class=\"slide\" id=\"song\"></section>\n<section class=\"slide\" id=\"talk\"></section>",
+        );
+        let overlap = |slide: &str, after_end| Overlap {
+            slide: slide.into(),
+            under: "song".into(),
+            waits: 2.54,
+            after_end,
+        };
+        let issues = narration_overlaps(&source, &[overlap("talk", true), overlap("gone", false)]);
+        assert_eq!(issues.len(), 1, "slides no longer there are skipped");
+        let issue = &issues[0];
+        assert_eq!(
+            (issue.rule, issue.severity),
+            ("narration-overlap", Severity::Warning)
+        );
+        assert_eq!(issue.slide.as_deref(), Some("talk"));
+        assert!(
+            issue.message.contains("slide `song` still plays")
+                && issue
+                    .message
+                    .contains("waits 2.5 s, after the slide stopped showing"),
+            "{}",
+            issue.message
+        );
+        assert!(narration_overlaps(&source, &[]).is_empty());
     }
 
     #[test]

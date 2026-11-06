@@ -183,12 +183,36 @@ describe("Presenter", () => {
       await act(async () => vi.advanceTimersByTime(400));
       expect(playNarration).not.toHaveBeenCalled();
       await act(async () => vi.advanceTimersByTime(100));
-      expect(playNarration).toHaveBeenCalledWith(deckFor(DECK_HTML).id, "intro", 0);
+      expect(playNarration).toHaveBeenCalledWith(deckFor(DECK_HTML).id, "intro", expect.any(Function));
+      // Loaded at once, it starts at its start.
+      expect(playNarration.mock.lastCall?.[2]()).toBeCloseTo(0, 5);
       // Longer than the set time: the slide waits for the narration and the pause after it.
       await act(async () => vi.advanceTimersByTime(10_900));
       expect(nexts(post)).toBe(0);
       await act(async () => vi.advanceTimersByTime(100));
       expect(nexts(post)).toBe(1);
+    });
+
+    it("keeps the slide's animations with the narration, from the slide's start", async () => {
+      playNarration.mockImplementation(async () => ({ ended: new Promise<void>(() => {}), stop: vi.fn() }));
+      useNarration.setState({
+        audioDeck: deckFor(DECK_HTML).id,
+        audio: { intro: { slide: "intro", state: "ready", seconds: 10 } },
+      });
+      render(<Presenter />);
+      const post = vi.spyOn(frame().contentWindow!, "postMessage");
+      fromFrame({ type: "slop:slide", id: "intro", index: 0 });
+      const clocks = () =>
+        post.mock.calls.map(([data]) => data as { type: string }).filter((data) => data.type === "slop:clock");
+      fireEvent.click(screen.getByLabelText("Play"));
+      expect(clocks()[0]).toEqual({ type: "slop:clock", slide: "intro", at: 0, playing: true });
+      await act(async () => vi.advanceTimersByTime(1500));
+      const last = clocks().at(-1) as unknown as { at: number; playing: boolean };
+      expect(last.at).toBeCloseTo(1.5, 1);
+      expect(last.playing).toBe(true);
+      // Paused, the slide holds where it was.
+      fireEvent.click(screen.getByLabelText("Pause"));
+      expect(clocks().at(-1)).toMatchObject({ slide: "intro", playing: false });
     });
 
     it("keeps to the timeline's timing, the narration carrying on over the next slide", async () => {

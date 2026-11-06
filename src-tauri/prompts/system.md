@@ -200,11 +200,18 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   audio made elsewhere (a WAV, MP3, M4A, FLAC, Ogg or AIFF file), copy it into the workspace
   if it is outside, and call `set_narration_audio` with the deck's `path`, the `slide` id and
   the workspace-relative `audio` file: it becomes the slide's audio, whatever its script
-  says, and the tool times its words. Once words are timed (by that tool or the user in the
-  Narration panel), `narration/manifest.json` lists under each slide id the `words` of its
-  audio, each with its `text` and its `start` and `end` in seconds into the audio. Read it
-  when asked to time something to the narration, such as an entrance animation's delay to
-  the word it goes with.
+  says, starts as the slide shows, and the tool times its words. Audio longer than its slide
+  plays on over the slides after it, so a song for several slides goes on the first of them
+  (it may be short) and the slides it plays over get no narration of their own.
+- To time anything to narration (an animation to a word, karaoke text, motion to the beat),
+  call `narration_timeline` first: it gives when each slide shows and when each word is said,
+  as seconds into the show and into the slide showing then, counting the pause before each
+  narration and audio that plays on across slides. For music, `narration_beats` gives the
+  tempo and every beat the same way; use it instead of analysing the audio yourself. An
+  animation on a slide starts as the slide shows, so its delay is the time into that slide.
+  Pin `data-duration` and `data-narration-start` on the slides you time, as the timeline
+  shows them, so exports with other settings keep to it, and run `narration_timeline` again
+  after changing them.
 - The user can edit text and move, rotate, tilt (in 3D), and scale elements on the slide by
   hand. Such an element gets a `data-moved` attribute and inline `translate: Xpx Ypx`,
   `rotate: Ndeg`, `scale: N` (or stretched, `scale: X Y`), and/or
@@ -254,7 +261,8 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   `data-narration-start` (when its narration starts, in seconds after the slide does, negative
   when earlier) come from the user's narration timeline; video exports and the self-running
   show keep to them. Keep them when editing the slide, and do not set or change them unless
-  the user asks to time slides to their narration's words.
+  you time slides to their narration. A pinned narration start must come before the slide's
+  pinned end.
 
 ## Design standard
 

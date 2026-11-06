@@ -1,7 +1,6 @@
-//! The speech engine, Qwen3-TTS in C (vendor/qwen3-tts, compiled by build.rs), runs in a
-//! worker process: the app started again with [`WORKER_FLAG`]. The engine may exit its
-//! process on a damaged model, takes about 3 GB of memory while loaded, and is stopped by
-//! killing it, so none of that touches the app.
+//! The speech engine, Kitten TTS (see [`super::kitten`]), runs in a worker process: the app
+//! started again with [`WORKER_FLAG`]. A crash in ONNX Runtime or a damaged model does not
+//! touch the app, and the worker is stopped by killing it.
 //!
 //! The app writes one JSON request per line to the worker's stdin and reads one JSON answer
 //! per line from its stdout: first `{"ready":true}` once the model is loaded, then for each
@@ -15,56 +14,18 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
-use super::audio;
+use super::{audio, kitten};
 use crate::error::{Error, Result};
 
 /// `slopslide --narration-worker <model dir>` runs the worker.
 pub const WORKER_FLAG: &str = "--narration-worker";
 
-/// The most frames (12 a second) the engine may make for one piece before it is given up on:
-/// it did not find the end of what it was saying.
-#[cfg(narration_engine)]
-const MAX_FRAMES: i32 = 562;
-/// The same seed for every piece, so the same script in the same voice sounds the same.
-#[cfg(narration_engine)]
-const SEED: u32 = 42;
-
-/// Whether this build has the speech engine (see build.rs).
-pub const AVAILABLE: bool = cfg!(narration_engine);
-
-/// Report unsupported hardware before entering C code compiled with AVX2/FMA.
-pub fn unavailable_reason() -> Option<&'static str> {
-    if !AVAILABLE {
-        return Some("This build has no narration engine. Install an official supported SlopSlide build; source builds need the BLAS dependencies described in docs/windows-narration.md.");
-    }
-    #[cfg(target_arch = "x86_64")]
-    if !std::is_x86_feature_detected!("avx2") || !std::is_x86_feature_detected!("fma") {
-        return Some("Local narration requires a CPU with AVX2 and FMA support.");
-    }
-    None
-}
-
-/// Also exposed by --narration-license so the linked dependency's notice is shipped
-/// in the executable and can be read without opening the GUI.
-pub fn license() -> &'static str {
-    #[cfg(all(windows, narration_engine))]
-    {
-        include_str!(concat!(env!("OUT_DIR"), "/openblas-license.txt"))
-    }
-    #[cfg(not(all(windows, narration_engine)))]
-    {
-        "This build does not statically bundle OpenBLAS."
-    }
-}
-
 /// Something for the worker to say.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Request {
     pub text: String,
-    /// The engine's speaker name, e.g. `ryan`.
+    /// The model's name for the voice, e.g. `expr-voice-2-m`.
     pub speaker: String,
-    /// The engine's language name, e.g. `English`.
-    pub language: String,
     /// The WAV file to write.
     pub output: PathBuf,
 }
@@ -89,9 +50,6 @@ pub struct Worker {
 impl Worker {
     /// Starts a worker on the model in `model_dir` and waits until it has loaded it.
     pub async fn start(model_dir: &Path) -> Result<Self> {
-        if let Some(reason) = unavailable_reason() {
-            return Err(Error::msg(reason));
-        }
         let exe = std::env::current_exe()?;
         let mut command = Command::new(exe);
         #[cfg(windows)]
@@ -181,19 +139,17 @@ pub fn worker_main(model_dir: &Path) -> i32 {
         let _ = out.write_all(b"\n");
         let _ = out.flush();
     };
-    if let Some(reason) = unavailable_reason() {
-        send(Answer {
-            error: Some(reason.into()),
-            ..Answer::default()
-        });
-        return 1;
-    }
-    let Some(engine) = Engine::load(model_dir) else {
-        send(Answer {
-            error: Some("cannot load the narration voice model; download it again".into()),
-            ..Answer::default()
-        });
-        return 1;
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
+    let onnx = model_dir.join(super::MODEL_FILE);
+    let mut model = match kitten::Model::load(&onnx, &model_dir.join(super::VOICES_FILE), threads) {
+        Ok(model) => model,
+        Err(e) => {
+            send(Answer {
+                error: Some(format!("{e}; download the narration voice model again")),
+                ..Answer::default()
+            });
+            return 1;
+        }
     };
     send(Answer {
         ready: true,
@@ -202,7 +158,7 @@ pub fn worker_main(model_dir: &Path) -> i32 {
     for line in std::io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         let answer = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => match say(&engine, &request) {
+            Ok(request) => match say(&mut model, &request) {
                 Ok(samples) => Answer {
                     samples: Some(samples),
                     ..Answer::default()
@@ -223,10 +179,21 @@ pub fn worker_main(model_dir: &Path) -> i32 {
 }
 
 /// Says `request`'s script piece by piece and writes it, joined, to its WAV file.
-fn say(engine: &Engine, request: &Request) -> Result<usize> {
+fn say(model: &mut kitten::Model, request: &Request) -> Result<usize> {
+    if !model.has_voice(&request.speaker) {
+        return Err(Error::msg(format!(
+            "the voice model has no voice {:?}",
+            request.speaker
+        )));
+    }
     let mut said = Vec::new();
     for piece in audio::pieces(&request.text) {
-        let samples = engine.speak(&piece.text, &request.speaker, &request.language)?;
+        let samples = speak(model, &piece.text, &request.speaker)?;
+        if samples.is_empty() || samples.iter().any(|s| !s.is_finite()) {
+            return Err(Error::msg(
+                "the speech engine could not say this; try shorter sentences",
+            ));
+        }
         said.push((piece, samples));
     }
     let joined = audio::join(&said);
@@ -234,97 +201,31 @@ fn say(engine: &Engine, request: &Request) -> Result<usize> {
     Ok(joined.len())
 }
 
-#[cfg(narration_engine)]
-mod ffi {
-    use std::ffi::{c_char, c_int, c_uint, c_void};
-
-    extern "C" {
-        pub fn slop_tts_load(model_dir: *const c_char, threads: c_int) -> *mut c_void;
-        #[allow(clippy::too_many_arguments)]
-        pub fn slop_tts_speak(
-            ctx: *mut c_void,
-            text: *const c_char,
-            speaker: *const c_char,
-            language: *const c_char,
-            max_frames: c_int,
-            seed: c_uint,
-            cancel: Option<extern "C" fn(*mut c_void) -> c_int>,
-            user: *mut c_void,
-            audio: *mut *mut f32,
-            samples: *mut c_int,
-        ) -> c_int;
-        pub fn slop_tts_free_audio(audio: *mut f32);
-        pub fn slop_tts_unload(ctx: *mut c_void);
+/// `text` said in `voice`: at once if the model reads that many phonemes at once, otherwise
+/// in halves split between words.
+fn speak(model: &mut kitten::Model, text: &str, voice: &str) -> Result<Vec<f32>> {
+    let ids = model.tokens(text);
+    if ids.len() <= kitten::MAX_TOKENS {
+        return model.speak(text, ids, voice);
     }
+    let Some((first, second)) = halves(text) else {
+        return Err(Error::msg(
+            "the speech engine could not say this; try shorter sentences",
+        ));
+    };
+    let mut samples = speak(model, first, voice)?;
+    samples.extend(speak(model, second, voice)?);
+    Ok(samples)
 }
 
-/// The loaded model.
-struct Engine {
-    #[cfg(narration_engine)]
-    ctx: *mut std::ffi::c_void,
-}
-
-#[cfg(narration_engine)]
-impl Engine {
-    fn load(model_dir: &Path) -> Option<Self> {
-        let dir = std::ffi::CString::new(model_dir.to_string_lossy().as_bytes()).ok()?;
-        let threads = std::thread::available_parallelism().map_or(4, |n| n.get().min(8));
-        let ctx = unsafe { ffi::slop_tts_load(dir.as_ptr(), threads as i32) };
-        (!ctx.is_null()).then_some(Engine { ctx })
-    }
-
-    /// `text` said by `speaker` in `language`, at [`audio::RATE`].
-    fn speak(&self, text: &str, speaker: &str, language: &str) -> Result<Vec<f32>> {
-        let c = |s: &str| std::ffi::CString::new(s).map_err(|_| Error::msg("invalid text"));
-        let (text, speaker, language) = (c(text)?, c(speaker)?, c(language)?);
-        let mut audio = std::ptr::null_mut();
-        let mut samples = 0;
-        let rc = unsafe {
-            ffi::slop_tts_speak(
-                self.ctx,
-                text.as_ptr(),
-                speaker.as_ptr(),
-                language.as_ptr(),
-                MAX_FRAMES,
-                SEED,
-                None,
-                std::ptr::null_mut(),
-                &mut audio,
-                &mut samples,
-            )
-        };
-        match rc {
-            0 => {
-                let out = unsafe { std::slice::from_raw_parts(audio, samples as usize) }.to_vec();
-                unsafe { ffi::slop_tts_free_audio(audio) };
-                Ok(out)
-            }
-            -1 => Err(Error::msg(format!(
-                "the voice model has no voice {speaker:?} or language {language:?}"
-            ))),
-            _ => Err(Error::msg(
-                "the speech engine could not say this; try shorter sentences",
-            )),
-        }
-    }
-}
-
-#[cfg(narration_engine)]
-impl Drop for Engine {
-    fn drop(&mut self) {
-        unsafe { ffi::slop_tts_unload(self.ctx) };
-    }
-}
-
-#[cfg(not(narration_engine))]
-impl Engine {
-    fn load(_model_dir: &Path) -> Option<Self> {
-        None
-    }
-
-    fn speak(&self, _text: &str, _speaker: &str, _language: &str) -> Result<Vec<f32>> {
-        Err(Error::msg("this build has no speech engine"))
-    }
+/// `text` split at the space nearest its middle; None for one word.
+fn halves(text: &str) -> Option<(&str, &str)> {
+    let middle = text.len() / 2;
+    let at = text
+        .match_indices(' ')
+        .map(|(at, _)| at)
+        .min_by_key(|at| at.abs_diff(middle))?;
+    Some((text[..at].trim(), text[at..].trim()))
 }
 
 #[cfg(test)]
@@ -352,54 +253,13 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::assertions_on_constants)] // Deliberately validate the build-script cfg.
-    fn required_engine_is_compiled_in() {
-        if std::env::var_os("SLOPSLIDE_REQUIRE_NARRATION_ENGINE").is_some()
-            && std::env::var_os("SLOPSLIDE_NO_NARRATION_ENGINE").is_none()
-        {
-            assert!(AVAILABLE, "CI must test the enabled engine");
-        }
-    }
-
-    #[cfg(all(windows, narration_engine))]
-    #[test]
-    fn windows_native_paths_mapping_allocation_and_concurrent_pool() {
-        use std::io::{Seek, SeekFrom};
-        use std::os::windows::io::AsRawHandle;
-        extern "C" {
-            fn slop_windows_mark_sparse(handle: *mut std::ffi::c_void) -> i32;
-            fn slop_windows_regression(
-                dir: *const std::ffi::c_char,
-                file: *const std::ffi::c_char,
-            ) -> i32;
-        }
-        let dir = std::env::temp_dir().join(format!("narration 空間 {}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("model ä.bin");
-        let mut file = std::fs::File::create(&path).unwrap();
-        assert_eq!(unsafe { slop_windows_mark_sparse(file.as_raw_handle()) }, 0);
-        file.seek(SeekFrom::Start((1u64 << 32) + 16)).unwrap();
-        file.write_all(b"tail").unwrap();
-        drop(file);
-        let cdir = std::ffi::CString::new(dir.to_str().unwrap()).unwrap();
-        let cpath = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
-        let result = unsafe { slop_windows_regression(cdir.as_ptr(), cpath.as_ptr()) };
-        // The result first: a failure of the regression may leave the folder undeletable.
+    fn long_text_is_halved_between_words() {
         assert_eq!(
-            result, 0,
-            "native Windows regression failed at test.c line {result}"
+            halves("one two three four"),
+            Some(("one two", "three four"))
         );
-        // Windows can hold a just-unmapped file a moment longer (the memory manager, an
-        // indexer), and that is no failure of the code under test.
-        let mut removed = std::fs::remove_dir_all(&dir);
-        for _ in 0..50 {
-            if removed.is_ok() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            removed = std::fs::remove_dir_all(&dir);
-        }
-        removed.expect("the test's folder is deletable once the regression closed its files");
+        assert_eq!(halves("one two"), Some(("one", "two")));
+        assert_eq!(halves("one"), None);
     }
 
     #[test]

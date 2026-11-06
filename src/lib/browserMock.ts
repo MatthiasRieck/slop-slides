@@ -138,10 +138,10 @@ export function installBrowserMock() {
           return {
             available: false,
             modelReady: false,
-            modelBytes: 2_498_383_610,
+            modelBytes: 81_546_918,
             downloading: false,
             rendering: null,
-            voices: [{ id: "ryan", name: "Ryan", description: "Dynamic male voice", native: "en" }],
+            voices: [{ id: "jasper", name: "Jasper", description: "Male voice", native: "en" }],
             languages: [{ id: "en", name: "English" }],
           };
         case "narration_audio":

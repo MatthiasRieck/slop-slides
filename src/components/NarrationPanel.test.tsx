@@ -23,17 +23,14 @@ const box = () => screen.getByRole("textbox", { name: "Narration" }) as HTMLText
 const SPEECH: SpeechStatus = {
   available: true,
   modelReady: true,
-  modelBytes: 2_498_383_610,
+  modelBytes: 81_546_918,
   downloading: false,
   rendering: null,
   voices: [
-    { id: "ryan", name: "Ryan", description: "Dynamic male voice", native: "en" },
-    { id: "sohee", name: "Sohee", description: "Warm female voice", native: "ko" },
+    { id: "jasper", name: "Jasper", description: "Male voice", native: "en" },
+    { id: "luna", name: "Luna", description: "Female voice", native: "en" },
   ],
-  languages: [
-    { id: "en", name: "English" },
-    { id: "ko", name: "Korean" },
-  ],
+  languages: [{ id: "en", name: "English" }],
 };
 
 /** The backend answering speech_status with `speech`, and other commands with `answers`. */
@@ -147,24 +144,47 @@ describe("NarrationPanel speech", () => {
     return view;
   }
 
-  it("picks the deck's voice and language", async () => {
+  it("picks the deck's voice", async () => {
     backend(SPEECH);
     const setNarrationVoice = vi.fn(async () => {});
-    const setNarrationLanguage = vi.fn(async () => {});
     useApp.setState({
-      deck: { ...deckWith({ intro: "Hi." }), narration: { voice: "sohee", language: "ko" } },
+      deck: { ...deckWith({ intro: "Hi." }), narration: { voice: "luna", language: "en" } },
       setNarrationVoice,
-      setNarrationLanguage,
     });
     await show();
     const voice = screen.getByRole("combobox", { name: "Narration voice" }) as HTMLSelectElement;
+    expect(voice.value).toBe("luna");
+    expect(screen.getByRole("option", { name: "Luna — Female voice" })).toBeTruthy();
+    // The model speaks one language: there is nothing to choose.
+    expect(screen.queryByRole("combobox", { name: "Narration language" })).toBeNull();
+    fireEvent.change(voice, { target: { value: "jasper" } });
+    expect(setNarrationVoice).toHaveBeenCalledWith("jasper");
+  });
+
+  it("picks the first voice for a deck that names none", async () => {
+    backend(SPEECH);
+    useApp.setState({ deck: { ...deckWith({ intro: "Hi." }), narration: undefined } });
+    await show();
+    const voice = screen.getByRole("combobox", { name: "Narration voice" }) as HTMLSelectElement;
+    expect(voice.value).toBe("jasper");
+  });
+
+  it("picks the language when the model speaks several", async () => {
+    backend({
+      ...SPEECH,
+      voices: [...SPEECH.voices, { id: "sohee", name: "Sohee", description: "Warm female voice", native: "ko" }],
+      languages: [...SPEECH.languages, { id: "ko", name: "Korean" }],
+    });
+    const setNarrationLanguage = vi.fn(async () => {});
+    useApp.setState({
+      deck: { ...deckWith({ intro: "Hi." }), narration: { voice: "sohee", language: "ko" } },
+      setNarrationLanguage,
+    });
+    await show();
     const language = screen.getByRole("combobox", { name: "Narration language" }) as HTMLSelectElement;
-    expect(voice.value).toBe("sohee");
     expect(language.value).toBe("ko");
     expect(screen.getByRole("option", { name: "Sohee — Warm female voice (Korean)" })).toBeTruthy();
-    fireEvent.change(voice, { target: { value: "ryan" } });
     fireEvent.change(language, { target: { value: "en" } });
-    expect(setNarrationVoice).toHaveBeenCalledWith("ryan");
     expect(setNarrationLanguage).toHaveBeenCalledWith("en");
   });
 
@@ -179,12 +199,12 @@ describe("NarrationPanel speech", () => {
           : Promise.resolve(),
     );
     await show();
-    expect(screen.getByText(/2.5 GB/)).toBeTruthy();
+    expect(screen.getByText(/82 MB/)).toBeTruthy();
     const generate = screen.getByRole("button", { name: /Generate/ }) as HTMLButtonElement;
     expect(generate.disabled).toBe(true);
     await act(async () => fireEvent.click(screen.getByRole("button", { name: /Download voice model/ })));
     expect(invoke).toHaveBeenCalledWith("download_speech_model");
-    act(() => useNarration.setState({ download: { received: 1_249_191_805, total: 2_498_383_610 } }));
+    act(() => useNarration.setState({ download: { received: 40_773_459, total: 81_546_918 } }));
     expect(screen.getByRole("status").textContent).toContain("50%");
     invoke.mockImplementation(async (command: string) => (command === "speech_status" ? SPEECH : undefined));
     await act(async () => finish());

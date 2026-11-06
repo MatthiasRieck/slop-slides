@@ -68,7 +68,10 @@ function SpeechSettings({ deck }: { deck: Deck }) {
   const download = useNarration((s) => s.download);
   const downloadModel = useNarration((s) => s.downloadModel);
   if (!speech) return null;
-  const settings = deck.narration ?? { voice: "ryan", language: "en" };
+  // The backend lists the defaults first.
+  const settings = deck.narration ?? { voice: speech.voices[0]?.id ?? "", language: speech.languages[0]?.id ?? "" };
+  // A model that speaks one language needs no choice of it.
+  const multilingual = speech.languages.length > 1;
   const languageName = (id: string) => speech.languages.find((l) => l.id === id)?.name ?? id;
   const percent = download && download.total > 0 ? Math.round((download.received / download.total) * 100) : 0;
   return (
@@ -83,25 +86,28 @@ function SpeechSettings({ deck }: { deck: Deck }) {
           >
             {speech.voices.map((voice) => (
               <option key={voice.id} value={voice.id}>
-                {voice.name} — {voice.description} ({languageName(voice.native)})
+                {voice.name} — {voice.description}
+                {multilingual && ` (${languageName(voice.native)})`}
               </option>
             ))}
           </select>
         </Field>
-        <Field label="Language" className="flex min-w-0 flex-[2] flex-col gap-1">
-          <select
-            aria-label="Narration language"
-            value={settings.language}
-            onChange={(event) => void useApp.getState().setNarrationLanguage(event.target.value)}
-            className={wideSelectClass}
-          >
-            {speech.languages.map((language) => (
-              <option key={language.id} value={language.id}>
-                {language.name}
-              </option>
-            ))}
-          </select>
-        </Field>
+        {multilingual && (
+          <Field label="Language" className="flex min-w-0 flex-[2] flex-col gap-1">
+            <select
+              aria-label="Narration language"
+              value={settings.language}
+              onChange={(event) => void useApp.getState().setNarrationLanguage(event.target.value)}
+              className={wideSelectClass}
+            >
+              {speech.languages.map((language) => (
+                <option key={language.id} value={language.id}>
+                  {language.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
       </div>
       {!speech.available ? (
         <p className="text-muted-foreground">Speaking narration is not available on this platform yet.</p>

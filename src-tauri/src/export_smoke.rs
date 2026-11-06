@@ -447,7 +447,7 @@ pub fn check_mp4(bytes: &[u8], expect: &VideoExpect) -> Result<()> {
     let mut at = 0u64;
     for (n, (size, duration)) in track.sizes.iter().zip(&track.durations).enumerate() {
         let slide = ((at * fps / slide_length) as usize).min(expect.slides.saturating_sub(1));
-        if at * fps % slide_length == 0 && track.keys.contains(&(n as u32 + 1)) {
+        if (at * fps).is_multiple_of(slide_length) && track.keys.contains(&(n as u32 + 1)) {
             starts_key[slide] = true;
         }
         bytes_per_slide[slide] += u64::from(*size);
@@ -625,7 +625,9 @@ pub fn check_png(bytes: &[u8], canvas: (u32, u32)) -> Result<()> {
 pub fn is_blank(image: &Image) -> bool {
     let pixels: Vec<[u8; 4]> = image
         .rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|p| [p[0], p[1], p[2], p[3]])
         .collect();
     if pixels.iter().all(|p| p[3] == 0) {
@@ -936,7 +938,7 @@ mod tests {
         assert!(is_blank(&slide_image(100, 100, 5)));
         assert!(!is_blank(&slide_image(100, 100, 50)));
         let mut dark = slide_image(100, 100, 50);
-        for px in dark.rgba.chunks_exact_mut(4).take(10) {
+        for px in dark.rgba.as_chunks_mut::<4>().0.iter_mut().take(10) {
             px.copy_from_slice(&[0, 0, 0, 255]);
         }
         assert!(!is_blank(&dark), "whatever colour the first pixels are");

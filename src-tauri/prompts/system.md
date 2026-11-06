@@ -190,12 +190,13 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   words count: use it to stress a word or two. The runtime hides it and the user edits it in the editor's Narration panel.
   Keep every slide's narration when editing, restyling, or moving it; write or rewrite it only
   when the user asks for narration, a script, or a voice-over. Write it as spoken sentences
-  (no bullet points or stage directions) that fit the slide's content, in the narration's
-  language. The app reads it out with a local voice model; the deck's
-  `slopslide-narration-voice` meta names the voice (ryan, aiden, vivian, serena, uncle_fu,
-  dylan, eric, ono_anna or sohee; ryan when missing) and `slopslide-narration-language` the
-  language (en, de, fr, es, it, pt, ru, zh, ja or ko; en when missing). Change them only
-  when the user asks; the user usually picks them in the Narration panel. Spoken audio lives
+  (no bullet points or stage directions) that fit the slide's content, in English: the app
+  reads it out with a local voice model that speaks only English. The deck's
+  `slopslide-narration-voice` meta names the voice (jasper, bella, luna, bruno, rosie, hugo,
+  kiki or leo; jasper when missing) and `slopslide-narration-language` the language (en, the
+  only one; en when missing). Change them only when the user asks; the user usually picks
+  the voice in the Narration panel. Write numbers, dates and abbreviations the way they are
+  said when they could be misread. Spoken audio lives
   in the deck's `narration/` folder: never edit or delete it.
 - The user can edit text and move, rotate, tilt (in 3D), and scale elements on the slide by
   hand. Such an element gets a `data-moved` attribute and inline `translate: Xpx Ypx`,

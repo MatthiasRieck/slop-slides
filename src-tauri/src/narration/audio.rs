@@ -202,7 +202,9 @@ fn parse_wav(bytes: &[u8]) -> Option<(Vec<f32>, u32)> {
             b"data" => {
                 let data = bytes.get(body..(body + size).min(bytes.len()))?;
                 let samples = data
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32768.0)
                     .collect();
                 return Some((samples, rate?));

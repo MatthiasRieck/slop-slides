@@ -128,7 +128,7 @@ fn valid(comment: &Comment) -> bool {
             .into_iter()
             .chain(at)
             .all(f64::is_finite)
-        && comment.area.as_ref().map_or(true, Area::valid)
+        && comment.area.as_ref().is_none_or(Area::valid)
 }
 
 /// `html` with its comments block holding `comments`: slides without any are left out, and the

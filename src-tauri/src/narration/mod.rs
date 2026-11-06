@@ -1,9 +1,9 @@
 //! Spoken narration: each slide's `<aside class="narration">` read out by a local
-//! text-to-speech model, Qwen3-TTS 0.6B CustomVoice, in one of its built-in voices.
+//! text-to-speech model, Kitten TTS Mini 0.8, in one of its built-in voices.
 //!
-//! The model (about 2.5 GB) is downloaded once, on request, to
-//! `~/.slopslides/models/qwen3-tts-0.6b-customvoice/` and shared by every workspace; all its
-//! voices come with it. The deck names its voice and language in `<meta>` tags (see
+//! The model (about 80 MB) is downloaded once, on request, to
+//! `~/.slopslides/models/kitten-tts-mini-0.8/` and shared by every workspace; all its voices
+//! come with it. The deck names its voice and language in `<meta>` tags (see
 //! [`crate::html::narration_voice`]). Each slide's audio is a WAV file next to the deck,
 //! `narration/<slide id>.wav`, and `narration/manifest.json` keeps the fingerprint of the
 //! script, voice and language it was made from, so a changed slide is said again and an
@@ -15,6 +15,7 @@
 
 pub mod audio;
 pub mod engine;
+pub mod kitten;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -37,70 +38,75 @@ use crate::voice;
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Voice {
-    /// The id the deck names it by, and the engine's speaker name.
+    /// The id the deck names it by.
     pub id: &'static str,
     pub name: &'static str,
+    /// The model's name for it.
+    #[serde(skip)]
+    pub engine: &'static str,
     /// What it sounds like.
     pub description: &'static str,
-    /// The language it speaks natively (see [`LANGUAGES`]); others it speaks with an accent.
+    /// The language it speaks natively (see [`LANGUAGES`]).
     pub native: &'static str,
 }
 
 /// The model's voices, the default first.
 pub const VOICES: &[Voice] = &[
     Voice {
-        id: "ryan",
-        name: "Ryan",
-        description: "Dynamic male voice",
+        id: "jasper",
+        name: "Jasper",
+        engine: "expr-voice-2-m",
+        description: "Male voice",
         native: "en",
     },
     Voice {
-        id: "aiden",
-        name: "Aiden",
-        description: "Sunny American male voice",
+        id: "bella",
+        name: "Bella",
+        engine: "expr-voice-2-f",
+        description: "Female voice",
         native: "en",
     },
     Voice {
-        id: "vivian",
-        name: "Vivian",
-        description: "Bright young female voice",
-        native: "zh",
+        id: "luna",
+        name: "Luna",
+        engine: "expr-voice-3-f",
+        description: "Female voice",
+        native: "en",
     },
     Voice {
-        id: "serena",
-        name: "Serena",
-        description: "Warm, gentle female voice",
-        native: "zh",
+        id: "bruno",
+        name: "Bruno",
+        engine: "expr-voice-3-m",
+        description: "Male voice",
+        native: "en",
     },
     Voice {
-        id: "uncle_fu",
-        name: "Uncle Fu",
-        description: "Low, mellow male voice",
-        native: "zh",
+        id: "rosie",
+        name: "Rosie",
+        engine: "expr-voice-4-f",
+        description: "Female voice",
+        native: "en",
     },
     Voice {
-        id: "dylan",
-        name: "Dylan",
-        description: "Youthful Beijing male voice",
-        native: "zh",
+        id: "hugo",
+        name: "Hugo",
+        engine: "expr-voice-4-m",
+        description: "Male voice",
+        native: "en",
     },
     Voice {
-        id: "eric",
-        name: "Eric",
-        description: "Lively Chengdu male voice",
-        native: "zh",
+        id: "kiki",
+        name: "Kiki",
+        engine: "expr-voice-5-f",
+        description: "Female voice",
+        native: "en",
     },
     Voice {
-        id: "ono_anna",
-        name: "Ono Anna",
-        description: "Playful female voice",
-        native: "ja",
-    },
-    Voice {
-        id: "sohee",
-        name: "Sohee",
-        description: "Warm female voice",
-        native: "ko",
+        id: "leo",
+        name: "Leo",
+        engine: "expr-voice-5-m",
+        description: "Male voice",
+        native: "en",
     },
 ];
 
@@ -111,66 +117,15 @@ pub struct Language {
     /// The ISO 639-1 code the deck names it by.
     pub id: &'static str,
     pub name: &'static str,
-    /// The engine's name for it.
-    #[serde(skip)]
-    pub engine: &'static str,
 }
 
-/// The model's languages, the default first.
-pub const LANGUAGES: &[Language] = &[
-    Language {
-        id: "en",
-        name: "English",
-        engine: "English",
-    },
-    Language {
-        id: "de",
-        name: "German",
-        engine: "German",
-    },
-    Language {
-        id: "fr",
-        name: "French",
-        engine: "French",
-    },
-    Language {
-        id: "es",
-        name: "Spanish",
-        engine: "Spanish",
-    },
-    Language {
-        id: "it",
-        name: "Italian",
-        engine: "Italian",
-    },
-    Language {
-        id: "pt",
-        name: "Portuguese",
-        engine: "Portuguese",
-    },
-    Language {
-        id: "ru",
-        name: "Russian",
-        engine: "Russian",
-    },
-    Language {
-        id: "zh",
-        name: "Chinese",
-        engine: "Chinese",
-    },
-    Language {
-        id: "ja",
-        name: "Japanese",
-        engine: "Japanese",
-    },
-    Language {
-        id: "ko",
-        name: "Korean",
-        engine: "Korean",
-    },
-];
+/// The model's languages, the default first. Kitten TTS 0.8 speaks only English.
+pub const LANGUAGES: &[Language] = &[Language {
+    id: "en",
+    name: "English",
+}];
 
-pub const DEFAULT_VOICE: &str = "ryan";
+pub const DEFAULT_VOICE: &str = "jasper";
 pub const DEFAULT_LANGUAGE: &str = "en";
 
 pub fn voice(id: &str) -> Option<&'static Voice> {
@@ -188,27 +143,22 @@ pub struct ModelFile {
     pub sha256: &'static str,
 }
 
-const MODEL_REPO: &str = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice";
+const MODEL_REPO: &str = "KittenML/kitten-tts-mini-0.8";
 /// Pinned, so the checksums stay valid; part of every audio fingerprint.
-const MODEL_REVISION: &str = "85e237c12c027371202489a0ec509ded67b5e4b5";
+const MODEL_REVISION: &str = "c02725660cea441db4c383af69f1f26f5cd00947";
 /// The folder under `~/.slopslides/models` the model downloads to.
-const MODEL_DIR: &str = "qwen3-tts-0.6b-customvoice";
-/// The engine's version (vendor/qwen3-tts/UPSTREAM.md); part of every audio fingerprint.
-const ENGINE_REVISION: &str = "ef339be58a778b062e1c14382347964552eae007";
+const MODEL_DIR: &str = "kitten-tts-mini-0.8";
+/// The model's weights and its voices, in the model folder.
+pub const MODEL_FILE: &str = "kitten_tts_mini_v0_8.onnx";
+pub const VOICES_FILE: &str = "voices.npz";
+/// The version of how text is made into the model's input (see [`kitten`]): bump it when
+/// that changes so every deck's narration is said again. Part of every audio fingerprint.
+const ENGINE_REVISION: &str = "kitten-0.8/misaki-rs-0.8.0/espeak-1";
 
 #[rustfmt::skip]
 pub const MODEL_FILES: &[ModelFile] = &[
-    ModelFile { path: "config.json", bytes: 4_908, sha256: "81aca2b6fac304944d8acf345272d8a9a727d5fc2e2e66b222ab4729340c7455" },
-    ModelFile { path: "generation_config.json", bytes: 245, sha256: "f1b90b4513f3b34c62851049e2492d7b4c5940daf1276f89c82b8ef04127f3aa" },
-    ModelFile { path: "merges.txt", bytes: 1_671_839, sha256: "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3" },
-    ModelFile { path: "preprocessor_config.json", bytes: 127, sha256: "efdde1022ea9d76928bf7a9cd53139138f5ba2e466e837f08f6105ab1af1c119" },
-    ModelFile { path: "tokenizer_config.json", bytes: 7_344, sha256: "dc3c31c3bdaedd5016382bb3cbe07323026775ad51f5a4fb564505992ae4a670" },
-    ModelFile { path: "vocab.json", bytes: 2_776_833, sha256: "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910" },
-    ModelFile { path: "speech_tokenizer/config.json", bytes: 2_336, sha256: "ee65bb901c876664ab8707c487157aa1a6ee57c65969b28fb5ec9dc211e68167" },
-    ModelFile { path: "speech_tokenizer/configuration.json", bytes: 76, sha256: "6bc26d64eb5024b4d1dab5a52371958b429256d6c9d59787f1f5294a54e0cebd" },
-    ModelFile { path: "speech_tokenizer/preprocessor_config.json", bytes: 234, sha256: "fcb3805e597e786d4067706e602f6688524640f8d3396790e2e09b5942fcbdfb" },
-    ModelFile { path: "speech_tokenizer/model.safetensors", bytes: 682_293_092, sha256: "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258" },
-    ModelFile { path: "model.safetensors", bytes: 1_811_626_576, sha256: "bc3c7e785eb961179c25450d1acff03f839e0002f2f3a5aeb67b5735c0fa2adb" },
+    ModelFile { path: VOICES_FILE, bytes: 3_278_902, sha256: "40ad2638952b77b7b2f30127e2608e169fc69dd256b53bd8aaa3409a33193c42" },
+    ModelFile { path: MODEL_FILE, bytes: 78_268_016, sha256: "0f5bbae4fc4800c98dbc544a87ecfa79510de2fb8222db30d12e5bfe9177df91" },
 ];
 
 /// Emitted while the model downloads: `{ received, total }` bytes.
@@ -247,7 +197,7 @@ fn model_url(file: &ModelFile) -> String {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpeechStatus {
-    /// This build has the speech engine (not every platform does).
+    /// The app can speak narration (always, for the app; not in the browser preview).
     pub available: bool,
     pub model_ready: bool,
     /// The model's download size, to tell the user before downloading it.
@@ -291,7 +241,7 @@ pub struct Narration {
 impl Narration {
     pub fn status(&self, home: &Path) -> SpeechStatus {
         SpeechStatus {
-            available: engine::unavailable_reason().is_none(),
+            available: true,
             model_ready: model_ready(home),
             model_bytes: model_bytes(),
             downloading: self.downloading.load(Ordering::SeqCst),
@@ -346,13 +296,10 @@ impl Narration {
         let deck = deck::load(file)?;
         let todo: Vec<Job> = jobs(file, &deck)
             .into_iter()
-            .filter(|j| slides.map_or(true, |s| s.contains(&j.slide)))
+            .filter(|j| slides.is_none_or(|s| s.contains(&j.slide)))
             .collect();
         if todo.is_empty() {
             return Ok(statuses(file, &deck));
-        }
-        if let Some(reason) = engine::unavailable_reason() {
-            return Err(Error::msg(reason));
         }
         if !model_ready(home) {
             return Err(Error::msg(
@@ -409,7 +356,6 @@ async fn say_all(
         let request = engine::Request {
             text: job.text.clone(),
             speaker: job.voice.to_string(),
-            language: job.language.to_string(),
             output: part.clone(),
         };
         let samples = match worker.say(&request).await {
@@ -611,8 +557,8 @@ pub struct SlideAudio {
 struct Job {
     slide: String,
     text: String,
+    /// The model's name for the voice.
     voice: &'static str,
-    language: &'static str,
     fingerprint: String,
 }
 
@@ -675,8 +621,7 @@ fn jobs(file: &Path, deck: &Deck) -> Vec<Job> {
         .map(|(slide, _)| Job {
             slide: slide.id.clone(),
             text: spoken(&slide.narration),
-            voice: voice.id,
-            language: language.engine,
+            voice: voice.engine,
             fingerprint: fingerprint(&spoken(&slide.narration), voice.id, language.id),
         })
         .collect()
@@ -799,12 +744,14 @@ mod tests {
     fn the_model_lives_in_the_app_home_models_folder() {
         assert_eq!(
             model_dir(Path::new("/home/me/.slopslides")),
-            Path::new("/home/me/.slopslides/models/qwen3-tts-0.6b-customvoice")
+            Path::new("/home/me/.slopslides/models/kitten-tts-mini-0.8")
         );
-        assert!(model_bytes() > 2_400_000_000 && model_bytes() < 2_600_000_000);
+        assert!(model_bytes() > 80_000_000 && model_bytes() < 85_000_000);
         let url = model_url(&MODEL_FILES[0]);
-        assert!(url.contains(MODEL_REVISION), "{url}");
-        assert!(url.ends_with("/config.json"), "{url}");
+        assert_eq!(url, format!("https://huggingface.co/KittenML/kitten-tts-mini-0.8/resolve/{MODEL_REVISION}/voices.npz"));
+        // The worker loads the files the download fetched.
+        let paths: Vec<_> = MODEL_FILES.iter().map(|f| f.path).collect();
+        assert!(paths.contains(&MODEL_FILE) && paths.contains(&VOICES_FILE));
     }
 
     #[test]
@@ -818,7 +765,7 @@ mod tests {
             fs::File::create(&path).unwrap().set_len(f.bytes).unwrap();
         }
         assert!(model_ready(&home));
-        fs::File::create(dir.join("vocab.json"))
+        fs::File::create(dir.join(MODEL_FILE))
             .unwrap()
             .set_len(1)
             .unwrap();
@@ -831,9 +778,16 @@ mod tests {
         assert_eq!(VOICES[0].id, DEFAULT_VOICE);
         assert_eq!(LANGUAGES[0].id, DEFAULT_LANGUAGE);
         assert!(VOICES.iter().all(|v| language(v.native).is_some()));
-        assert_eq!(voice("aiden").unwrap().name, "Aiden");
-        assert!(voice("Aiden").is_none());
-        assert_eq!(language("de").unwrap().engine, "German");
+        assert_eq!(voice("luna").unwrap().name, "Luna");
+        assert_eq!(voice("luna").unwrap().engine, "expr-voice-3-f");
+        assert!(voice("Luna").is_none());
+        assert!(language("de").is_none());
+        // Every voice is one of the model's eight, each once.
+        let mut engines: Vec<_> = VOICES.iter().map(|v| v.engine).collect();
+        engines.sort();
+        engines.dedup();
+        assert_eq!(engines.len(), 8);
+        assert!(engines.iter().all(|e| e.starts_with("expr-voice-")));
     }
 
     #[test]
@@ -861,22 +815,29 @@ mod tests {
         assert_eq!(
             Settings::of(&html("")),
             Settings {
-                voice: "ryan".into(),
+                voice: "jasper".into(),
                 language: "en".into()
             }
         );
         let set = html(
-            "<meta name=\"slopslide-narration-voice\" content=\"sohee\"><meta name=\"slopslide-narration-language\" content=\"ko\">",
+            "<meta name=\"slopslide-narration-voice\" content=\"kiki\"><meta name=\"slopslide-narration-language\" content=\"en\">",
         );
         assert_eq!(
             Settings::of(&set),
             Settings {
-                voice: "sohee".into(),
-                language: "ko".into()
+                voice: "kiki".into(),
+                language: "en".into()
             }
         );
-        let unknown = html("<meta name=\"slopslide-narration-voice\" content=\"bob\">");
-        assert_eq!(Settings::of(&unknown).voice, "ryan");
+        // A voice or language of the earlier model, as an older deck names it.
+        let unknown = html("<meta name=\"slopslide-narration-voice\" content=\"ryan\"><meta name=\"slopslide-narration-language\" content=\"de\">");
+        assert_eq!(
+            Settings::of(&unknown),
+            Settings {
+                voice: "jasper".into(),
+                language: "en".into()
+            }
+        );
     }
 
     #[test]
@@ -954,11 +915,11 @@ mod tests {
 
     #[test]
     fn fingerprints_change_with_script_voice_and_language() {
-        let base = fingerprint("Hello.", "ryan", "en");
-        assert_eq!(base, fingerprint("Hello.", "ryan", "en"));
-        assert_ne!(base, fingerprint("Hello!", "ryan", "en"));
-        assert_ne!(base, fingerprint("Hello.", "aiden", "en"));
-        assert_ne!(base, fingerprint("Hello.", "ryan", "de"));
+        let base = fingerprint("Hello.", "jasper", "en");
+        assert_eq!(base, fingerprint("Hello.", "jasper", "en"));
+        assert_ne!(base, fingerprint("Hello!", "jasper", "en"));
+        assert_ne!(base, fingerprint("Hello.", "luna", "en"));
+        assert_ne!(base, fingerprint("Hello.", "jasper", "de"));
         // Parts cannot run into each other.
         assert_ne!(fingerprint("b", "a", "en"), fingerprint("", "ab", "en"));
     }
@@ -990,7 +951,7 @@ mod tests {
         manifest.slides.insert(
             "a".into(),
             Entry {
-                fingerprint: fingerprint("Say A.", "ryan", "en"),
+                fingerprint: fingerprint("Say A.", "jasper", "en"),
                 seconds: 0.5,
                 recorded: false,
             },
@@ -998,7 +959,7 @@ mod tests {
         manifest.slides.insert(
             "b".into(),
             Entry {
-                fingerprint: fingerprint("Old B.", "ryan", "en"),
+                fingerprint: fingerprint("Old B.", "jasper", "en"),
                 seconds: 1.0,
                 recorded: false,
             },
@@ -1014,13 +975,8 @@ mod tests {
         let todo = jobs(&file, &deck);
         assert_eq!(todo.len(), 1);
         assert_eq!(
-            (
-                todo[0].slide.as_str(),
-                todo[0].text.as_str(),
-                todo[0].voice,
-                todo[0].language
-            ),
-            ("b", "Say B.", "ryan", "English")
+            (todo[0].slide.as_str(), todo[0].text.as_str(), todo[0].voice),
+            ("b", "Say B.", "expr-voice-2-m")
         );
         assert_eq!(ready_audio(&file, &deck).keys().collect::<Vec<_>>(), ["a"]);
 
@@ -1028,7 +984,7 @@ mod tests {
         let file = deck_with(
             &dir,
             "deck.html",
-            "<meta name=\"slopslide-narration-voice\" content=\"aiden\">",
+            "<meta name=\"slopslide-narration-voice\" content=\"leo\">",
             slides,
         );
         let deck = deck::load(&file).unwrap();
@@ -1036,7 +992,7 @@ mod tests {
             states(&deck),
             [AudioState::Stale, AudioState::Stale, AudioState::None]
         );
-        assert_eq!(jobs(&file, &deck)[0].voice, "aiden");
+        assert_eq!(jobs(&file, &deck)[0].voice, "expr-voice-5-m");
 
         // A missing audio file is missing, whatever the manifest says.
         fs::remove_file(audio.join("a.wav")).unwrap();
@@ -1058,7 +1014,7 @@ mod tests {
             m.slides.insert(
                 "a".into(),
                 Entry {
-                    fingerprint: fingerprint("Say A.", "ryan", "en"),
+                    fingerprint: fingerprint("Say A.", "jasper", "en"),
                     seconds: 2.0,
                     recorded: false,
                 },
@@ -1084,7 +1040,7 @@ mod tests {
         let edited = deck_with(
             &dir,
             "deck.html",
-            "<meta name=\"slopslide-narration-voice\" content=\"aiden\">",
+            "<meta name=\"slopslide-narration-voice\" content=\"leo\">",
             &slides.replace("Say A.", "Say something else."),
         );
         let deck = deck::load(&edited).unwrap();

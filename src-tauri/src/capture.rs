@@ -281,11 +281,15 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image> {
     let rgba = match info.color_type {
         png::ColorType::Rgba => buf[..pixels * 4].to_vec(),
         png::ColorType::Rgb => buf[..pixels * 3]
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[1], p[2], 255])
             .collect(),
         png::ColorType::GrayscaleAlpha => buf[..pixels * 2]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .flat_map(|p| [p[0], p[0], p[0], p[1]])
             .collect(),
         png::ColorType::Grayscale => buf[..pixels].iter().flat_map(|&g| [g, g, g, 255]).collect(),
@@ -303,7 +307,7 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image> {
 pub fn from_cairo_argb32(data: &[u8], width: u32, height: u32, stride: usize) -> Image {
     let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
     for row in data.chunks(stride).take(height as usize) {
-        for px in row[..width as usize * 4].chunks_exact(4) {
+        for px in row[..width as usize * 4].as_chunks::<4>().0 {
             let argb = u32::from_ne_bytes([px[0], px[1], px[2], px[3]]);
             let a = (argb >> 24) as u8;
             let channel = |shift: u32| {

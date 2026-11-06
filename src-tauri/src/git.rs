@@ -850,7 +850,7 @@ fn in_order(matches: &[Option<usize>]) -> Vec<bool> {
             .filter(|&j| matches[j].is_some() && matches[j] < *old)
             .max_by_key(|&j| best[j].0);
         best.push((1 + before.map_or(0, |j| best[j].0), before));
-        if old.is_some() && last.map_or(true, |l: usize| best[l].0 < best[i].0) {
+        if old.is_some() && last.is_none_or(|l: usize| best[l].0 < best[i].0) {
             last = Some(i);
         }
     }

@@ -1,6 +1,7 @@
 name: Release
 
-# Push a tag like v0.1.0 to build installers for macOS (Apple Silicon + Intel),
+# Push a tag like v0.1.0 to build installers for macOS (Apple Silicon; narration's ONNX
+# Runtime has no prebuilt library for Intel Macs),
 # Windows, and Linux and attach them to a draft GitHub release.
 on:
   push:
@@ -17,8 +18,6 @@ jobs:
         include:
           - platform: macos-latest
             args: --target aarch64-apple-darwin
-          - platform: macos-latest
-            args: --target x86_64-apple-darwin
           - platform: ubuntu-22.04
             args: ""
           - platform: windows-latest
@@ -26,14 +25,14 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Windows narration dependencies
+      - name: Set up Windows build tools
         if: runner.os == 'Windows'
-        uses: ./.github/actions/windows-narration
+        uses: ./.github/actions/windows-build
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libopenblas-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev patchelf
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -41,7 +40,7 @@ jobs:
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin' || '' }}
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target

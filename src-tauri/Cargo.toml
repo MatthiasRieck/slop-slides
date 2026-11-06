@@ -51,6 +51,8 @@ rav1e = { version = "0.8", default-features = false, features = ["threading"] }
 opus = "0.4"
 # Saying narration, which is Markdown, without its marks (see src/narration/mod.rs).
 pulldown-cmark = { version = "0.13.6", default-features = false }
+# Narration audio made elsewhere (see src/narration/audio.rs): WAV, MP3, AAC/M4A, FLAC, Ogg Vorbis.
+symphonia = { version = "0.5.5", default-features = false, features = ["aac", "alac", "flac", "isomp4", "mp3", "ogg", "pcm", "vorbis", "wav", "aiff"] }
 # PowerPoint files (see src/pptx/): zip archives of XML parts.
 zip = { version = "9", default-features = false, features = ["deflate"] }
 quick-xml = "0.41.0"

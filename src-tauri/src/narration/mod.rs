@@ -12,6 +12,7 @@
 //! A slide's audio can also be the presenter's own voice, recorded in the presenter view (see
 //! [`crate::voice::Voice::record_narration`]) and marked so in the manifest. It is the slide's
 //! audio whatever its script says, and is never said again; deleting it brings the model back.
+//! Audio made elsewhere (see [`import_audio`]) is kept the same way.
 
 pub mod audio;
 pub mod engine;
@@ -772,6 +773,34 @@ pub fn delete_recording(file: &Path, slide: &str) -> Result<()> {
     })
 }
 
+/// Makes the audio file `source` (any format [`audio::decode`] reads) the slide's narration in
+/// place of whatever it had. Like a recording, it is the slide's audio whatever its script
+/// says, until deleted; its words are not timed yet (see [`time_words`]). Returns how long it
+/// plays, in seconds.
+pub fn import_audio(file: &Path, slide: &str, source: &Path) -> Result<f64> {
+    let (samples, rate) = audio::decode(source)?;
+    let samples = voice::resample(&samples, rate, audio::RATE);
+    let seconds = samples.len() as f64 / f64::from(audio::RATE);
+    let dir = audio_dir(file);
+    fs::create_dir_all(&dir)?;
+    let dest = audio_file(file, slide);
+    let part = dest.with_extension("wav.part");
+    audio::write_wav(&part, &samples, audio::RATE)?;
+    fs::rename(&part, &dest)?;
+    Manifest::update(&dir, |manifest| {
+        manifest.slides.insert(
+            slide.to_string(),
+            Entry {
+                fingerprint: String::new(),
+                seconds,
+                recorded: true,
+                words: None,
+            },
+        );
+    })?;
+    Ok(seconds)
+}
+
 /// Payload of [`TIMING_EVENT`]: how far timing a deck's words has got.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1288,6 +1317,49 @@ mod tests {
         assert_eq!(json.matches("\"words\"").count(), 1);
         fs::remove_file(audio_file(&file, "a")).unwrap();
         assert_eq!(words(&file, "a"), None);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn audio_made_elsewhere_becomes_the_slides_narration() {
+        let dir = temp_dir();
+        let slides = r#"<section class="slide" id="a"><aside class="narration">Say A.</aside></section><section class="slide" id="b"></section>"#;
+        let file = deck_with(&dir, "deck.html", "", slides);
+        let deck = deck::load(&file).unwrap();
+        // Made audio of a, timed, is replaced by the imported audio.
+        let audio = audio_dir(&file);
+        fs::create_dir_all(&audio).unwrap();
+        audio::write_wav(&audio_file(&file, "a"), &[0.0; 24_000], audio::RATE).unwrap();
+        Manifest::update(&audio, |m| {
+            m.slides.insert(
+                "a".into(),
+                Entry {
+                    fingerprint: fingerprint("Say A.", "ryan", "en"),
+                    seconds: 1.0,
+                    recorded: false,
+                    words: Some(vec![]),
+                },
+            );
+        })
+        .unwrap();
+        let source = dir.join("take.wav");
+        audio::write_wav(&source, &[0.25; 8_000], 16_000).unwrap();
+        assert_eq!(import_audio(&file, "a", &source).unwrap(), 0.5);
+        // b has no script, yet its imported audio is ready too.
+        assert_eq!(import_audio(&file, "b", &source).unwrap(), 0.5);
+        let found = statuses(&file, &deck);
+        for slide in &found {
+            assert_eq!(slide.state, AudioState::Ready, "{}", slide.slide);
+            assert_eq!(slide.seconds, Some(0.5));
+            assert!(slide.recorded && !slide.timed);
+        }
+        let (samples, rate) = audio::read_wav(&audio_file(&file, "a")).unwrap();
+        assert_eq!((samples.len(), rate), (12_000, audio::RATE));
+        assert!(source.is_file(), "the source stays where it was");
+        // A file that is no audio changes nothing.
+        fs::write(dir.join("notes.txt"), "hello").unwrap();
+        assert!(import_audio(&file, "a", &dir.join("notes.txt")).is_err());
+        assert_eq!(statuses(&file, &deck)[0].seconds, Some(0.5));
         fs::remove_dir_all(dir).unwrap();
     }
 

@@ -196,11 +196,15 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   dylan, eric, ono_anna or sohee; ryan when missing) and `slopslide-narration-language` the
   language (en, de, fr, es, it, pt, ru, zh, ja or ko; en when missing). Change them only
   when the user asks; the user usually picks them in the Narration panel. Spoken audio lives
-  in the deck's `narration/` folder: never edit or delete it. Once the user has timed its
-  words (Narration panel), `narration/manifest.json` lists under each slide id the `words` of
-  its audio, each with its `text` and its `start` and `end` in seconds into the audio. Read
-  it when asked to time something to the narration, such as an entrance animation's delay
-  to the word it goes with.
+  in the deck's `narration/` folder: never edit or delete it. When the user has narration
+  audio made elsewhere (a WAV, MP3, M4A, FLAC, Ogg or AIFF file), copy it into the workspace
+  if it is outside, and call `set_narration_audio` with the deck's `path`, the `slide` id and
+  the workspace-relative `audio` file: it becomes the slide's audio, whatever its script
+  says, and the tool times its words. Once words are timed (by that tool or the user in the
+  Narration panel), `narration/manifest.json` lists under each slide id the `words` of its
+  audio, each with its `text` and its `start` and `end` in seconds into the audio. Read it
+  when asked to time something to the narration, such as an entrance animation's delay to
+  the word it goes with.
 - The user can edit text and move, rotate, tilt (in 3D), and scale elements on the slide by
   hand. Such an element gets a `data-moved` attribute and inline `translate: Xpx Ypx`,
   `rotate: Ndeg`, `scale: N` (or stretched, `scale: X Y`), and/or

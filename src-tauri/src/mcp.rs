@@ -1,6 +1,7 @@
 //! Workspace MCP tools: lint_deck validates a workspace-relative deck, open_file queues a
 //! request in the current workspace session for the app to show a file, and render_slide
-//! asks the app, the same way, for images of slides (see render.rs).
+//! asks the app, the same way, for images of slides (see render.rs). set_narration_audio
+//! makes an audio file the narration of a slide and times its words.
 //! Started as `slopslide --lint-mcp [workspace root]`.
 
 use std::io::{BufRead, Write};
@@ -9,15 +10,19 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::deck;
+use crate::error::{Error, Result};
 use crate::lint;
+use crate::narration;
 use crate::render;
 use crate::sessions::Sessions;
+use crate::voice;
 
 pub const FLAG: &str = "--lint-mcp";
 pub const SERVER: &str = "slopslide";
 pub const TOOL: &str = "lint_deck";
 pub const OPEN_TOOL: &str = "open_file";
 pub const RENDER_TOOL: &str = "render_slide";
+pub const NARRATION_TOOL: &str = "set_narration_audio";
 const OPEN_REQUESTS: &str = "open-requests";
 /// Claude Code's rule for every tool of this server, for `--allowedTools`; its tools are
 /// named `mcp__slopslide__<tool>`.
@@ -132,6 +137,26 @@ pub fn handle(
                     "description": "The ids of the slides to render.",
                 },
             }, "required": ["slides"] }
+        }, {
+            "name": NARRATION_TOOL,
+            "description": "Make an existing audio file (WAV, MP3, M4A/AAC, FLAC, Ogg Vorbis or \
+                AIFF) the narration audio of a slide, in place of any it has, then time its \
+                words with the speech-to-text model. Returns when each word is said, in seconds \
+                into the audio (also kept under the slide in narration/manifest.json). Like a \
+                recording, the audio is kept as the slide's whatever its narration script says; \
+                the script is not changed. Use it when the user has narration audio made \
+                elsewhere. The audio file must be in the workspace: copy it in first if needed.",
+            "inputSchema": { "type": "object", "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The deck file, relative to the workspace root; deck.html when left out.",
+                },
+                "slide": { "type": "string", "description": "The id of the slide it narrates." },
+                "audio": {
+                    "type": "string",
+                    "description": "The audio file, relative to the workspace root.",
+                },
+            }, "required": ["slide", "audio"] }
         }]}),
         "tools/call" if request["params"]["name"] == TOOL => {
             let rel = request["params"]["arguments"]["path"]
@@ -204,10 +229,76 @@ pub fn handle(
             };
             json!({ "content": content, "isError": failed })
         }
+        "tools/call" if request["params"]["name"] == NARRATION_TOOL => {
+            let set = deck::app_home()
+                .and_then(|home| set_narration_audio(dir, &request["params"]["arguments"], &home));
+            let (text, failed) = match set {
+                Ok(text) => (text, false),
+                Err(e) => (e.to_string(), true),
+            };
+            json!({ "content": [{ "type": "text", "text": text }], "isError": failed })
+        }
         "tools/call" => return Some(error(id, -32602, "unknown tool")),
         method => return Some(error(id, -32601, &format!("method not found: {method}"))),
     };
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+}
+
+/// The speech-to-text model, kept loaded between calls.
+static VOICE: std::sync::OnceLock<voice::Voice> = std::sync::OnceLock::new();
+
+/// Makes the workspace file `audio` the narration of `slide` of the deck at `path`
+/// (`arguments`), then times its words with the speech-to-text model in `home`; what it did,
+/// for the agent.
+fn set_narration_audio(dir: &Path, arguments: &Value, home: &Path) -> Result<String> {
+    let text = |key: &str| arguments[key].as_str().filter(|v| !v.is_empty());
+    let rel = text("path").unwrap_or(deck::DECK_FILE);
+    let slide = text("slide").ok_or_else(|| Error::msg("slide is required"))?;
+    let audio = text("audio").ok_or_else(|| Error::msg("audio is required"))?;
+    let file = crate::workspace::open_file(dir, rel)?;
+    let file = PathBuf::from(file.absolute);
+    let source = crate::workspace::open_file(dir, audio)?;
+    if source.kind == crate::workspace::FileKind::Directory {
+        return Err(Error::msg(format!(
+            "{audio} is a folder, not an audio file"
+        )));
+    }
+    let deck = deck::load(&file)?;
+    if !deck.slides.iter().any(|s| s.id == slide) {
+        return Err(Error::msg(format!("{rel} has no slide `{slide}`")));
+    }
+    let seconds = narration::import_audio(&file, slide, Path::new(&source.absolute))?;
+    let kept = narration::audio_file(&file, slide);
+    let kept = kept.strip_prefix(dir).unwrap_or(&kept).display();
+    let mut out =
+        format!("Slide `{slide}` is narrated by {audio} now ({seconds:.1} s, kept as {kept}).");
+    let voice = VOICE.get_or_init(voice::Voice::default);
+    let slides = [slide.to_string()];
+    let timed = tauri::async_runtime::block_on(narration::time_words(
+        voice,
+        home,
+        &file,
+        Some(&slides),
+        |_| {},
+    ));
+    match (timed, narration::words(&file, slide)) {
+        (Ok(_), Some(words)) if words.is_empty() => out.push_str(" No words are heard in it."),
+        (Ok(_), Some(words)) => {
+            out.push_str(" When each word is said, in seconds into the audio:");
+            for word in words {
+                out.push_str(&format!(
+                    "\n{:.2}-{:.2} {}",
+                    word.start, word.end, word.text
+                ));
+            }
+        }
+        (Ok(_), None) => out.push_str(" Its words are not timed."),
+        (Err(e), _) => out.push_str(&format!(
+            " Its words are not timed: {}. The user can time them in the Narration panel.",
+            e.to_string().trim_end_matches('.')
+        )),
+    }
+    Ok(out)
 }
 
 /// A tool result for rendered `slides`: what was found on each, followed by its image.
@@ -312,7 +403,13 @@ mod tests {
     fn lists_the_lint_tool() {
         let res = call(Path::new("/nonexistent"), "tools/list", json!({}));
         let tools = res["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 3);
+        assert_eq!(tools.len(), 4);
+        assert_eq!(tools[3]["name"], NARRATION_TOOL);
+        assert_eq!(
+            tools[3]["inputSchema"]["required"],
+            json!(["slide", "audio"])
+        );
+        assert!(crate::agent::SYSTEM_PROMPT.contains(NARRATION_TOOL));
         assert_eq!(tools[2]["name"], RENDER_TOOL);
         assert_eq!(tools[2]["inputSchema"]["required"], json!(["slides"]));
         assert!(crate::agent::SYSTEM_PROMPT.contains(RENDER_TOOL));
@@ -326,6 +423,7 @@ mod tests {
         assert!(is_claude_tool("mcp__slopslide__lint_deck"));
         assert!(is_claude_tool("mcp__slopslide__open_file"));
         assert!(is_claude_tool("mcp__slopslide__render_slide"));
+        assert!(is_claude_tool("mcp__slopslide__set_narration_audio"));
         assert!(!is_claude_tool("mcp__slopslide__"));
         assert!(!is_claude_tool("mcp__slopslides__lint_deck"));
         assert!(!is_claude_tool("mcp__github__push"));
@@ -339,6 +437,10 @@ mod tests {
         assert_eq!(display_name("slopslide-open_file"), OPEN_TOOL);
         assert_eq!(display_name("mcp__slopslide__render_slide"), RENDER_TOOL);
         assert_eq!(display_name("slopslide-render_slide"), RENDER_TOOL);
+        assert_eq!(
+            display_name("slopslide-set_narration_audio"),
+            NARRATION_TOOL
+        );
         assert_eq!(display_name("lint_deck"), TOOL);
         assert_eq!(display_name("mcp__github__push"), "mcp__github__push");
         assert_eq!(display_name("github-push"), "github-push");
@@ -551,6 +653,110 @@ mod tests {
             assert_eq!(res["result"]["isError"], true, "{arguments}");
         }
         assert!(render::take_requests(&dir.join("session")).is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn narrated_deck() -> PathBuf {
+        let dir = temp_deck(
+            r#"<main class="deck"><section class="slide" id="intro"><aside class="narration">Hi.</aside></section></main>"#,
+        );
+        std::fs::create_dir_all(dir.join("talks/sound")).unwrap();
+        std::fs::write(
+            dir.join("talks/q3.html"),
+            r#"<main class="deck"><section class="slide" id="intro"></section></main>"#,
+        )
+        .unwrap();
+        narration::audio::write_wav(&dir.join("talks/sound/quiet.wav"), &[0.0; 16_000], 16_000)
+            .unwrap();
+        let tone: Vec<f32> = (0..16_000).map(|i| (i as f32 / 20.0).sin() * 0.3).collect();
+        narration::audio::write_wav(&dir.join("talks/sound/talk.wav"), &tone, 16_000).unwrap();
+        std::fs::write(dir.join("talks/sound/notes.txt"), "not audio").unwrap();
+        dir
+    }
+
+    #[test]
+    fn narration_tool_makes_audio_the_slides_narration_and_times_its_words() {
+        let dir = narrated_deck();
+        // Silence is timed as no words, with no speech model needed.
+        let res = call(
+            &dir,
+            "tools/call",
+            json!({"name": NARRATION_TOOL, "arguments": {"slide": "intro", "audio": "talks/sound/quiet.wav"}}),
+        );
+        assert_eq!(res["result"]["isError"], false, "{res}");
+        let text = res["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Slide `intro` is narrated by talks/sound/quiet.wav now (1.0 s, kept as narration/intro.wav)."), "{text}");
+        assert!(text.ends_with("No words are heard in it."), "{text}");
+        let file = dir.join(deck::DECK_FILE);
+        assert_eq!(narration::words(&file, "intro"), Some(vec![]));
+        let manifest = std::fs::read_to_string(dir.join("narration/manifest.json")).unwrap();
+        assert!(manifest.contains("\"recorded\": true"), "{manifest}");
+
+        // Speech without the model is kept, untimed; another deck keeps its audio apart.
+        let args =
+            json!({"path": "talks/q3.html", "slide": "intro", "audio": "talks/sound/talk.wav"});
+        let text = set_narration_audio(&dir, &args, Path::new("/nonexistent")).unwrap();
+        assert!(
+            text.contains("kept as talks/narration/q3/intro.wav"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("Its words are not timed: Slide intro: The speech model is not downloaded. The user can time them in the Narration panel."),
+            "{text}"
+        );
+        assert_eq!(narration::words(&dir.join("talks/q3.html"), "intro"), None);
+        assert_eq!(narration::words(&file, "intro"), Some(vec![]));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn narration_tool_refuses_what_it_cannot_use() {
+        let dir = narrated_deck();
+        for (arguments, why) in [
+            (
+                json!({"audio": "talks/sound/quiet.wav"}),
+                "slide is required",
+            ),
+            (json!({"slide": "intro"}), "audio is required"),
+            (
+                json!({"slide": "outro", "audio": "talks/sound/quiet.wav"}),
+                "deck.html has no slide `outro`",
+            ),
+            (
+                json!({"slide": "intro", "audio": "talks/sound/missing.wav"}),
+                "missing: talks/sound/missing.wav",
+            ),
+            (
+                json!({"slide": "intro", "audio": "../outside.wav"}),
+                "invalid path",
+            ),
+            (
+                json!({"slide": "intro", "audio": "/etc/hosts"}),
+                "invalid path",
+            ),
+            (
+                json!({"slide": "intro", "audio": "talks/sound"}),
+                "is a folder",
+            ),
+            (
+                json!({"slide": "intro", "audio": "talks/sound/notes.txt"}),
+                "is no usable audio",
+            ),
+            (
+                json!({"path": "missing.html", "slide": "intro", "audio": "talks/sound/quiet.wav"}),
+                "missing.html",
+            ),
+        ] {
+            let res = call(
+                &dir,
+                "tools/call",
+                json!({"name": NARRATION_TOOL, "arguments": arguments}),
+            );
+            assert_eq!(res["result"]["isError"], true, "{arguments}");
+            let text = res["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains(why), "{arguments}: {text}");
+        }
+        assert!(!dir.join("narration").exists(), "nothing was kept");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -46,9 +46,11 @@
 
    A selected SVG drawing (an <svg> on the slide) shows an "Edit SVG" button at its top right,
    which hands it to the app's SVG editor: { type: "slop:edit-open-svg", slide, path, markup,
-   width, height, color, vars } with its markup (without the editor's marks), its size in slide
-   pixels, its text color and the CSS variables it can see, so it looks the same outside the
-   slide. The app's context menu asks for the same with { type: "slop:edit-open-svg" }. The SVG
+   width, height, color, vars, css, fonts, ancestors } with its markup (without the editor's
+   marks), its size in slide pixels, its text color, the CSS variables it can see, the deck's
+   style rules (`fonts` its @font-face rules and imports of the stylesheets it cannot read,
+   `css` the rest, relative urls made absolute) and the elements it sits in ({ tag, attrs }, outermost first), so it looks the same
+   outside the slide. The app's context menu asks for the same with { type: "slop:edit-open-svg" }. The SVG
    editor saves its changes into the deck itself.
 
    A right-click selects what is under it and asks the app for its menu: { type: "slop:edit-menu",
@@ -228,6 +230,8 @@
   var MAX_DECK_COLORS = 12;
   // At most this many CSS variables go along with a drawing to the SVG editor.
   var MAX_SVG_VARS = 200;
+  // ... and at most this many of the elements it sits in.
+  var MAX_SVG_ANCESTORS = 64;
   // What the format painter takes from text.
   var PAINTED_TEXT = ["color", "fontSize", "bold", "italic", "underline", "strike", "letterSpacing", "lineHeight", "align"];
 
@@ -892,6 +896,7 @@
     if (nudgeTimer) commit();
     var size = sizeOf(el);
     var computed = getComputedStyle(el);
+    var styles = deckStyles();
     window.parent.postMessage(
       {
         type: "slop:edit-open-svg",
@@ -902,6 +907,9 @@
         height: size.h || el.getBoundingClientRect().height / zoom(),
         color: computed.color || null,
         vars: cssVariables(el),
+        css: styles.css,
+        fonts: styles.fonts,
+        ancestors: ancestorsOf(el),
       },
       "*",
     );
@@ -4846,6 +4854,63 @@
       if (value) vars[name] = value;
     });
     return vars;
+  }
+
+  /**
+   * The deck's style rules, for showing a drawing outside the slide: `fonts` its @font-face rules
+   * and the stylesheets that cannot be read (a web font service's), imported, which work only in
+   * the app's document; `css` the rest. Relative urls are made absolute.
+   */
+  function deckStyles() {
+    var fonts = [];
+    var css = [];
+    var absolute = function (text, base) {
+      return text.replace(/url\(\s*(['"]?)([^'")]*)\1\s*\)/g, function (all, quote, url) {
+        url = url.trim();
+        if (!url || /^([a-z][a-z\d+.-]*:|#|\/\/)/i.test(url)) return all;
+        try {
+          return 'url("' + new URL(url, base).href + '")';
+        } catch (e) {
+          return all;
+        }
+      });
+    };
+    var visit = function (sheet, depth) {
+      var base = sheet.href || document.baseURI;
+      var rules;
+      try {
+        rules = sheet.cssRules;
+      } catch (e) {
+        if (sheet.href) fonts.push('@import url("' + sheet.href + '");');
+        return;
+      }
+      Array.prototype.forEach.call(rules || [], function (rule) {
+        if (/^@import\b/i.test(rule.cssText)) {
+          if (rule.styleSheet && depth < 4) visit(rule.styleSheet, depth + 1);
+          return;
+        }
+        var text = absolute(rule.cssText, base);
+        (/^@font-face\b/i.test(text) ? fonts : css).push(text);
+      });
+    };
+    Array.prototype.forEach.call(document.styleSheets, function (sheet) {
+      if (sheet.ownerNode !== style && !sheet.disabled) visit(sheet, 0);
+    });
+    return { css: css.join("\n"), fonts: fonts.join("\n") };
+  }
+
+  /** The elements `el` sits in, outermost first, with their attributes (not the editor's marks). */
+  function ancestorsOf(el) {
+    var chain = [];
+    for (var n = el.parentElement; n && chain.length < MAX_SVG_ANCESTORS; n = n.parentElement) {
+      var attrs = {};
+      Array.prototype.forEach.call(n.attributes, function (a) {
+        if (/^on/i.test(a.name) || EDITOR_ATTRS.indexOf(a.name) >= 0) return;
+        attrs[a.name] = a.value;
+      });
+      chain.unshift({ tag: n.localName, attrs: attrs });
+    }
+    return chain;
   }
 
   function deckColors() {

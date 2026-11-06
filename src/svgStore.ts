@@ -17,11 +17,41 @@ export interface SvgOpen {
   color: string | null;
   /** The deck's CSS variables as the drawing sees them. */
   vars: Record<string, string>;
+  /** The deck's style rules, but its web fonts. */
+  css: string;
+  /** The deck's @font-face rules and imports of web font stylesheets, which work only in the app's document. */
+  fonts: string;
+  /** The elements it sits in on the slide, outermost first, so the deck's rules match it. */
+  ancestors: SvgAncestor[];
+}
+
+/** An element a drawing sits in on its slide. */
+export interface SvgAncestor {
+  tag: string;
+  attrs: Record<string, string>;
+}
+
+/** At most this much of the deck's CSS, and this many elements around it, go with a drawing. */
+const MAX_CSS = 2 * 1024 * 1024;
+const MAX_ANCESTORS = 64;
+
+/** The elements around a drawing from an "slop:edit-open-svg" message, without anything malformed or active. */
+function parseAncestors(value: unknown): SvgAncestor[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(-MAX_ANCESTORS).flatMap((item) => {
+    const { tag, attrs } = (item ?? {}) as { tag?: unknown; attrs?: unknown };
+    if (typeof tag !== "string" || !/^[a-z][a-z\d-]*$/i.test(tag)) return [];
+    const kept = Object.entries(attrs && typeof attrs === "object" ? attrs : {}).filter(
+      (entry): entry is [string, string] =>
+        typeof entry[1] === "string" && /^[a-z_:][\w:.-]*$/i.test(entry[0]) && !/^on|(^|:)href$|^src$/i.test(entry[0]),
+    );
+    return [{ tag: tag.toLowerCase(), attrs: Object.fromEntries(kept) }];
+  });
 }
 
 /** The drawing a "slop:edit-open-svg" message from the slide editor hands over in deck `deckId`; null when malformed. */
 export function parseSvgOpen(data: Record<string, unknown>, deckId: string | undefined): SvgOpen | null {
-  const { slide, path, markup, width, height, color, vars } = data;
+  const { slide, path, markup, width, height, color, vars, css, fonts, ancestors } = data;
   if (!deckId || typeof slide !== "string" || typeof markup !== "string") return null;
   const size = (n: unknown) => (typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 100);
   const strings = Object.entries(vars && typeof vars === "object" ? vars : {}).filter(
@@ -35,6 +65,9 @@ export function parseSvgOpen(data: Record<string, unknown>, deckId: string | und
     size: { w: size(width), h: size(height) },
     color: typeof color === "string" && color ? color : null,
     vars: Object.fromEntries(strings),
+    css: typeof css === "string" && css.length <= MAX_CSS ? css : "",
+    fonts: typeof fonts === "string" && fonts.length <= MAX_CSS ? fonts : "",
+    ancestors: parseAncestors(ancestors),
   };
 }
 

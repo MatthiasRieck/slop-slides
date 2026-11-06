@@ -48,7 +48,7 @@ import {
 } from "../lib/svgEdit";
 import { cn, deckFileUrl, isMac } from "../lib/utils";
 import { useApp } from "../store";
-import { isDirty, type SvgEdit, useSvgEditor } from "../svgStore";
+import { isDirty, type SvgAncestor, type SvgEdit, useSvgEditor } from "../svgStore";
 import { Button, ToolButton } from "./Button";
 import { Field, inputClass, wideSelectClass } from "./Field";
 import { SectionLabel } from "./SectionLabel";
@@ -358,6 +358,36 @@ interface Drag {
   moved: boolean;
 }
 
+/** Elements that would load or run something; around a drawing they are mirrored as a <div>. */
+const ACTIVE_TAGS = /^(script|style|link|iframe|frame|object|embed|template|base|meta|img|video|audio|source)$/;
+
+/**
+ * `copy` inside elements mirroring the ones it sits in on the slide (outermost first), so the
+ * deck's rules that pick it out by them match; they draw no box of their own.
+ */
+export function withAncestors(copy: Element, ancestors: SvgAncestor[]): Element {
+  let outer = copy;
+  for (const { tag, attrs } of [...ancestors].reverse()) {
+    let el: HTMLElement;
+    try {
+      el = document.createElement(ACTIVE_TAGS.test(tag) ? "div" : tag);
+    } catch {
+      continue;
+    }
+    for (const [name, value] of Object.entries(attrs)) {
+      try {
+        el.setAttribute(name, value);
+      } catch {
+        // Not a name an attribute can have.
+      }
+    }
+    el.style.setProperty("display", "contents", "important");
+    el.append(outer);
+    outer = el;
+  }
+  return outer;
+}
+
 /**
  * The drawing, shown at `zoom` (null: fit) in a shadow root, so its styles stay inside it and the
  * app's do not reach it; with the selection's outline and points drawn over it.
@@ -400,6 +430,16 @@ function Canvas(props: {
     if (zoom === null && room) onZoom(k);
   }, [zoom, room, k, onZoom]);
 
+  // The deck's web fonts, which only load from the app's document.
+  useEffect(() => {
+    if (!edit.fonts) return;
+    const fonts = document.createElement("style");
+    fonts.setAttribute("data-slop-svg-fonts", "");
+    fonts.textContent = edit.fonts;
+    document.head.append(fonts);
+    return () => fonts.remove();
+  }, [edit.fonts]);
+
   // Draws the drawing as edited.
   useLayoutEffect(() => {
     const host = hostRef.current;
@@ -410,38 +450,39 @@ function Canvas(props: {
     copy.setAttribute("width", String(size.w * k));
     copy.setAttribute("height", String(size.h * k));
     const look = (copy as SVGElement).style;
-    // Where the slide put it does not matter here.
-    for (const name of [
-      "position",
-      "left",
-      "top",
-      "right",
-      "bottom",
-      "translate",
-      "rotate",
-      "scale",
-      "transform",
-      "margin",
-      "inset",
-    ]) {
-      look.removeProperty(name);
+    // Where the slide put it does not matter here, whatever the deck's rules say.
+    for (const [name, value] of [
+      ["position", "static"],
+      ["inset", "auto"],
+      ["translate", "none"],
+      ["rotate", "none"],
+      ["scale", "none"],
+      ["transform", "none"],
+      ["margin", "0"],
+      ["width", `${size.w * k}px`],
+      ["height", `${size.h * k}px`],
+      ["min-width", "0"],
+      ["min-height", "0"],
+      ["max-width", "none"],
+      ["max-height", "none"],
+      ["display", "block"],
+      ["overflow", "visible"],
+    ] as const) {
+      look.setProperty(name, value, "important");
     }
-    look.setProperty("width", `${size.w * k}px`);
-    look.setProperty("height", `${size.h * k}px`);
-    look.setProperty("max-width", "none");
-    look.setProperty("max-height", "none");
-    look.setProperty("display", "block");
-    look.setProperty("overflow", "visible");
     const frame = document.createElement("div");
     frame.className = "frame";
     for (const [name, value] of Object.entries(edit.vars)) frame.style.setProperty(name, value);
     if (edit.color) frame.style.color = edit.color;
-    frame.append(copy);
-    const style = document.createElement("style");
-    style.textContent = ":host { display: block; } .frame { line-height: normal; } a { pointer-events: none; }";
-    root.replaceChildren(style, frame);
+    frame.append(withAncestors(copy, edit.ancestors));
+    const base = document.createElement("style");
+    base.textContent = ":host { display: block; } .frame { line-height: normal; } a { pointer-events: none; }";
+    // The deck's own rules, so a drawing styled by them looks as it does on the slide.
+    const deck = document.createElement("style");
+    deck.textContent = edit.css;
+    root.replaceChildren(base, deck, frame);
     shown.current = copy;
-  }, [svg, size, k, edit.deckId, edit.vars, edit.color]);
+  }, [svg, size, k, edit.deckId, edit.vars, edit.color, edit.css, edit.ancestors]);
 
   // Measures the selection on the drawing as drawn, again whenever it is drawn at another size.
   // biome-ignore lint/correctness/useExhaustiveDependencies: a zoom or a resize moves the drawing on screen

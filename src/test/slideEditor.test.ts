@@ -263,6 +263,9 @@ describe("slide editor", () => {
         height: number;
         color: string | null;
         vars: Record<string, string>;
+        css: string;
+        fonts: string;
+        ancestors: { tag: string; attrs: Record<string, string> }[];
       }[];
     const button = (e: ReturnType<typeof editor>) => e.$("[data-slop-svg-open]") as HTMLButtonElement;
 
@@ -298,6 +301,33 @@ describe("slide editor", () => {
       expect(open!.markup).toBe(`<svg viewBox="0 0 10 10"><circle r="1"></circle></svg>`);
       expect(Number.isFinite(open!.width) && Number.isFinite(open!.height)).toBe(true);
       expect(e.commits()).toEqual([]);
+    });
+
+    it("hands over the deck's rules and the elements the drawing sits in, so it looks the same", () => {
+      const STYLED = DECK.replace(
+        "<head></head>",
+        `<head><style>
+          @font-face { font-family: Brand; }
+          .slide svg circle { fill: navy; background: url("assets/dot.png"); }
+          .mark { background: url(data:image/png;base64,AA==); }
+        </style></head>`,
+      );
+      const e = editor({ markup: STYLED });
+      e.down(e.$("svg"));
+      e.up(e.$("svg"));
+      button(e).click();
+      const [open] = opened(e);
+      expect(open!.css).toContain("fill: navy");
+      expect(open!.css).toContain('url("https://example.test/assets/dot.png")');
+      expect(open!.css).toContain("data:image/png;base64,AA==");
+      expect(open!.css).not.toContain("@font-face");
+      // Not the editor's own marks.
+      expect(open!.css).not.toContain("data-slop-hover");
+      expect(open!.fonts).toContain("@font-face");
+      expect(open!.fonts).toContain("font-family: Brand");
+      expect(open!.ancestors.map((a) => a.tag)).toEqual(["html", "body", "main", "section"]);
+      expect(open!.ancestors[3]!.attrs).toMatchObject({ class: expect.stringContaining("slide"), id: "intro" });
+      expect(open!.ancestors[2]!.attrs.class).toContain("deck");
     });
 
     it("opens the selected drawing when the app asks, and nothing else", () => {

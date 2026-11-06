@@ -33,6 +33,7 @@ Call `lint_deck` with the workspace-relative path of each deck you edit (it defa
   <meta name="slopslide-template" content="swiss">   (only when the deck follows a template)
   <meta name="slopslide-narration-voice" content="aiden">      (only when a voice was chosen)
   <meta name="slopslide-narration-language" content="de">      (only when a language was chosen)
+  <meta name="slopslide-transition" content="slide">      (only when the slides do not fade)
   <style>
     /* the deck's design system and per-slide layout */
   </style>
@@ -80,6 +81,8 @@ Rules (NON-NEGOTIABLE):
 - A `<meta name="slopslide-size" content="…">` in `<head>` sets the slide size (see "Slide
   canvas"). The user picks it in the editor; keep it as it is. Change it only when the user
   asks you for another slide size or orientation, and then re-lay out every slide for it.
+- A `<meta name="slopslide-transition" content="…">` in `<head>` sets how the player moves
+  between slides (see "Slide transitions" below). At most one; fade when missing.
 - A `<meta name="slopslide-template" content="…">` in `<head>` names the template the
   deck's design comes from (see "Templates" below). Keep it when editing; change its
   `content` only when you restyle the deck to another template, and remove it when the
@@ -177,8 +180,8 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   marker is needed. Avoid nesting matched elements or adding `reveal` to them. When the user
   asks for a hero animation, an element that moves between slides, or a build, use this (see
   "Hero Morphs" in the design reference).
-  The presenter and standalone player morph in supporting browsers, falling back to slide
-  fades elsewhere; reduced motion and editor thumbnails skip morphing.
+  The presenter and standalone player morph in supporting browsers, falling back to the slide
+  transition elsewhere; reduced motion and editor thumbnails skip morphing.
 - Speaker notes, if requested, go in `<aside class="notes">…</aside>` inside the slide
   (hidden by the runtime). They are Markdown text, formatted in the presenter view: no HTML,
   entities for `&` and `<`, and start the aside's text right after its tag or indent all of it
@@ -246,6 +249,13 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   `data-narration-start` (when its narration starts, in seconds after the slide does, negative
   when earlier) come from the user's narration timeline; video exports and the self-running
   show keep to them. Keep them when editing the slide, and do not set or change them.
+- Slide transitions: the player moves from one slide to the next with the deck's
+  `slopslide-transition` meta, or with the incoming slide's own `data-transition`, which
+  overrides it (going back plays the same transition in reverse). Both take `none`, `fade`,
+  `slide`, `zoom` or `wipe`; without either the slides fade. The user usually picks them in the
+  editor (Settings, and between two thumbnails in the slide list). Keep them when editing,
+  set or change them only when asked, and remove a slide's `data-transition` to give it the
+  deck's again. Never build slide transitions of your own in CSS or JavaScript.
 
 ## Design standard
 

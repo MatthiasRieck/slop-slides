@@ -511,6 +511,81 @@ describe("picking several slides", () => {
   });
 });
 
+describe("slide transitions", () => {
+  const deck = (): Deck => ({
+    ...withSlides("a", "b", "c"),
+    transition: "fade",
+  });
+  const picker = (index: number) => item(index).queryByRole("button", { name: /^Transition to slide/ });
+
+  it("offers the transition between each slide and the one before it", () => {
+    useApp.setState({ deck: deck(), selected: "a" });
+    render(<SlideRail />);
+    expect(picker(0)).toBeNull();
+    expect(picker(1)?.getAttribute("aria-label")).toBe("Transition to slide 2: Fade (deck)");
+    expect(picker(2)?.getAttribute("aria-label")).toBe("Transition to slide 3: Fade (deck)");
+    // Only on hover, unless the slide has its own.
+    expect(picker(1)?.className).toMatch(/\bopacity-0\b/);
+  });
+
+  it("shows a slide's own transition all the time", () => {
+    const own = deck();
+    own.slides[2] = { ...own.slides[2]!, transition: "slide" };
+    useApp.setState({ deck: own, selected: "a" });
+    render(<SlideRail />);
+    expect(picker(2)?.getAttribute("aria-label")).toBe("Transition to slide 3: Slide");
+    expect(picker(2)?.className).not.toMatch(/\bopacity-0\b/);
+  });
+
+  it("picks a transition for a slide, as a change the rail can undo", async () => {
+    useApp.setState({ deck: deck(), selected: "a", deckUndo: [], deckRedo: [] });
+    const next = deck();
+    next.slides[1] = { ...next.slides[1]!, transition: "zoom" };
+    invoke.mockResolvedValue(edited(next));
+    render(<SlideRail />);
+    fireEvent.click(picker(1)!);
+    const dialog = screen.getByRole("dialog", { name: "Slide transition" });
+    expect(within(dialog).getByRole("button", { name: "Deck (Fade)" }).getAttribute("aria-pressed")).toBe("true");
+    await act(async () => fireEvent.click(within(dialog).getByRole("button", { name: "Zoom" })));
+    expect(invoke).toHaveBeenCalledWith("set_slide_transition", { id: DECK.id, slide: "b", transition: "zoom" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(picker(1)?.getAttribute("aria-label")).toBe("Transition to slide 2: Zoom");
+    expect(useApp.getState().deckUndo).toHaveLength(1);
+  });
+
+  it("goes back to the deck's transition", async () => {
+    const own = deck();
+    own.slides[1] = { ...own.slides[1]!, transition: "wipe" };
+    useApp.setState({ deck: own, selected: "a" });
+    invoke.mockResolvedValue(edited(deck()));
+    render(<SlideRail />);
+    fireEvent.click(picker(1)!);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Deck (Fade)" })));
+    expect(invoke).toHaveBeenCalledWith("set_slide_transition", { id: DECK.id, slide: "b", transition: null });
+  });
+
+  it("cannot change a locked slide's transition", () => {
+    const locked = deck();
+    locked.slides[1] = { ...locked.slides[1]!, locked: true };
+    useApp.setState({ deck: locked, selected: "a" });
+    render(<SlideRail />);
+    fireEvent.click(picker(1)!);
+    expect((screen.getByRole("button", { name: "Zoom" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/unlock it to change its transition/)).toBeTruthy();
+  });
+
+  it("hides the transitions while searching, as the slides shown need not follow each other", () => {
+    useApp.setState({ deck: deck(), selected: "a" });
+    render(<SlideRail />);
+    act(() => {
+      useApp.getState().setSearch({ query: "x" });
+      useApp.getState().setSearchMatches([]);
+    });
+    expect(picker(1)).toBeNull();
+    act(() => useApp.getState().clearSearch());
+  });
+});
+
 describe("moving a section", () => {
   const section = (index: number, title: string, before: number) => ({ index, title, before }) as Section;
   const deck: Deck = {

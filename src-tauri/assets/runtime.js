@@ -49,6 +49,20 @@
     return isNaN(n) ? 0 : Math.min(slides.length - 1, Math.max(0, n - 1));
   }
 
+  // Slide transitions (runtime.css): a slide's data-transition says how the player moves on to it
+  // from the slide before, and back; the deck's slopslide-transition meta names the rest.
+  var TRANSITIONS = ["none", "fade", "slide", "zoom", "wipe"];
+  var deckMeta = document.querySelector('meta[name="slopslide-transition"]');
+  var deckTransition = deckMeta && TRANSITIONS.indexOf((deckMeta.getAttribute("content") || "").trim()) >= 0
+    ? deckMeta.getAttribute("content").trim()
+    : "fade";
+
+  /** The transition between the slides at `from` and `to`: the later one's, or the deck's. */
+  function transitionBetween(from, to) {
+    var own = (slides[Math.max(from, to)].getAttribute("data-transition") || "").trim();
+    return TRANSITIONS.indexOf(own) >= 0 ? own : deckTransition;
+  }
+
   var transition = null;
   function morphNames(slide, enabled) {
     var seen = Object.create(null);
@@ -71,11 +85,19 @@
     var canMorph = previous >= 0 && !embed && !params.has("static") && motion &&
       document.startViewTransition && slides[index].querySelector("[data-morph]") &&
       slides[previous].querySelector("[data-morph]");
+    // Embedded previews and thumbnails switch at once; so does a morph, which moves the slides itself.
+    var animated = previous >= 0 && !embed && !params.has("static") && !canMorph;
+    var kind = animated ? transitionBetween(previous, index) : "none";
     function update() {
       if (current !== index) return;
+      if (kind === "none") root.removeAttribute("data-slop-transition");
+      else root.setAttribute("data-slop-transition", kind);
+      if (index < previous) root.setAttribute("data-slop-back", "");
+      else root.removeAttribute("data-slop-back");
       slides.forEach(function (el, i) {
         morphNames(el, !!canMorph && i === index);
         el.classList.toggle("active", i === index);
+        el.classList.toggle("slop-leaving", kind !== "none" && i === previous);
       });
     }
     if (canMorph) {

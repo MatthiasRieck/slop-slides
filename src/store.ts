@@ -18,6 +18,7 @@ import {
   type ReplacedText,
   type Slide,
   type SlideTiming,
+  type SlideTransition,
   type TemplateSummary,
   type WorkspaceChanged,
   type WorkspaceInfo,
@@ -500,6 +501,10 @@ interface AppState {
   cleanNarration: (slide: string | null) => void;
   /** Saves slides' timing on the narration timeline, as one change the rail's history can undo. */
   setSlideTiming: (timing: SlideTiming[]) => Promise<void>;
+  /** Sets how the player moves on to `slide` (null: the deck's transition), as a change the rail's history can undo. */
+  setSlideTransition: (slide: string, transition: SlideTransition | null) => Promise<void>;
+  /** Sets the transition of every slide without its own. */
+  setDeckTransition: (transition: SlideTransition) => Promise<void>;
   /** Sets the voice (or language) the deck's narration is said in. */
   setNarrationVoice: (voice: string) => Promise<void>;
   setNarrationLanguage: (language: string) => Promise<void>;
@@ -1168,6 +1173,12 @@ export const useApp = create<AppState>((set, get) => ({
   setSlideTiming: async (timing) => {
     if (timing.length > 0) await editRail((id) => api.setSlideTiming(id, timing));
   },
+
+  setSlideTransition: async (slide, transition) => {
+    await editRail((id) => api.setSlideTransition(id, slide, transition));
+  },
+
+  setDeckTransition: (transition) => editDeck((id) => api.setDeckTransition(id, transition)),
 
   setNarrationVoice: (voice) => editDeck((id) => api.setNarrationVoice(id, voice)),
 

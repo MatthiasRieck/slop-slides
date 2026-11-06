@@ -48,6 +48,7 @@ import { Popover } from "./Popover";
 import { SectionLabel } from "./SectionLabel";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { LayoutPicker } from "./Templates";
+import { DEFAULT_TRANSITION, TransitionPicker } from "./Transitions";
 
 /** How a slide in the rail eases into and out of being hidden or locked. */
 const MARK_TRANSITION = "transition duration-200";
@@ -242,6 +243,8 @@ export function SlideRail() {
                       filteredOut={!!found && !found.has(item.slide.id)}
                       folded={!!moving}
                       still={!!moving || settling}
+                      // Between two slides in a row; a search lists slides that need not be.
+                      transition={item.index > 0 && !found && !moving}
                     />
                   ) : (
                     <SectionHeader
@@ -549,8 +552,11 @@ function Thumbnail(props: {
   filteredOut: boolean;
   folded: boolean;
   still: boolean;
+  /** Offers the transition from the slide before, above the thumbnail. */
+  transition: boolean;
 }) {
   const { deckId, slide, index, filteredOut, folded } = props;
+  const deckTransition = useApp((s) => s.deck?.transition) ?? DEFAULT_TRANSITION;
   const selected = useApp((s) => s.selected === slide.id);
   const picked = useApp((s) => s.railSelected.includes(slide.id));
   const version = useSlideVersion(slide);
@@ -637,6 +643,9 @@ function Thumbnail(props: {
             className={cn(MARK_TRANSITION, slide.hidden && "opacity-35 grayscale")}
           />
         </button>
+        {props.transition && !isDragging && (
+          <TransitionPicker slide={slide} number={index + 1} deckTransition={deckTransition} />
+        )}
         <RailMark shown={slide.hidden} className="inset-0 flex items-center justify-center text-foreground/80">
           <HiddenMark />
         </RailMark>

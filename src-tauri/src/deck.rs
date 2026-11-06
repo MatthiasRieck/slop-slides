@@ -71,6 +71,9 @@ pub struct Slide {
     /// When its narration starts on the timeline, in seconds after the slide does (see
     /// [`html::NARRATION_START_ATTR`]).
     pub narration_start: Option<f64>,
+    /// How the player moves on to it from the slide before (and back), when it overrides the
+    /// deck's transition (see [`html::TRANSITION_ATTR`]).
+    pub transition: Option<String>,
 }
 
 /// What a slide's timing on the narration timeline becomes; None removes that part of it.
@@ -115,6 +118,8 @@ pub struct Deck {
     pub size: SizeInfo,
     /// The voice and language its narration is said in (see [`crate::narration`]).
     pub narration: narration::Settings,
+    /// The slide transition of every slide without its own (see [`html::TRANSITION_META`]).
+    pub transition: String,
 }
 
 /// `~/Documents/SlopSlide`, where decks lived before workspaces; the default workspace.
@@ -297,6 +302,11 @@ pub fn load(file: &Path) -> Result<Deck> {
                 .narration_start
                 .as_ref()
                 .and_then(|(_, value)| html::parse_narration_start(value)),
+            transition: span
+                .transition
+                .as_ref()
+                .and_then(|(_, value)| html::parse_transition(value))
+                .map(str::to_string),
         })
         .collect();
     let path = file.to_string_lossy().into_owned();
@@ -310,6 +320,7 @@ pub fn load(file: &Path) -> Result<Deck> {
         template: html::template(&source),
         size: html::slide_size(&source).into(),
         narration: narration::Settings::of(&source),
+        transition: html::transition(&source).to_string(),
         sections: section_spans
             .iter()
             .enumerate()
@@ -579,6 +590,28 @@ pub fn set_slide_time(file: &Path, slide: &str, seconds: u32) -> Result<Deck> {
     Ok(edit(file, |s| {
         ensure_unlocked(s, slide)?;
         Ok((html::set_time(s, slide, seconds)?, ()))
+    })?
+    .0)
+}
+
+/// Sets how the player moves on to a slide (see [`html::set_transition`]); None gives it the
+/// deck's transition, as a change the rail's history can undo. A locked slide keeps its
+/// transition too.
+pub fn set_slide_transition(
+    file: &Path,
+    slide: &str,
+    transition: Option<&str>,
+) -> Result<RailEdit> {
+    rail_edit(file, |s| {
+        ensure_unlocked(s, slide)?;
+        Ok((html::set_transition(s, slide, transition)?, Vec::new()))
+    })
+}
+
+/// Sets the transition of every slide without its own (one of [`html::TRANSITIONS`]).
+pub fn set_deck_transition(file: &Path, transition: &str) -> Result<Deck> {
+    Ok(edit(file, |s| {
+        Ok((html::set_deck_transition(s, transition)?, ()))
     })?
     .0)
 }
@@ -1507,6 +1540,62 @@ mod tests {
         assert!(set_slide_time(&deck.file(), "a", 30).is_err());
         assert_eq!(deck.html(), locked);
         assert!(set_slide_time(&deck.file(), "nope", 30).is_err());
+    }
+
+    #[test]
+    fn a_slide_keeps_its_own_transition() {
+        let deck = TempDeck::new(EDITED);
+        let transitions = |d: &Deck| {
+            d.slides
+                .iter()
+                .map(|s| s.transition.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(transitions(&load(&deck.file()).unwrap()), [None, None]);
+        let saved = set_slide_transition(&deck.file(), "b", Some("slide")).unwrap();
+        assert_eq!(transitions(&saved.deck), [None, Some("slide".into())]);
+        assert_eq!(saved.previous, EDITED, "undo puts back the file as it was");
+        assert!(deck.html().contains("data-transition=\"slide\""));
+        let changed = set_slide_transition(&deck.file(), "b", Some("zoom")).unwrap();
+        assert_eq!(transitions(&changed.deck), [None, Some("zoom".into())]);
+        assert_eq!(deck.html().matches("data-transition").count(), 1);
+        let cleared = set_slide_transition(&deck.file(), "b", None).unwrap();
+        assert_eq!(transitions(&cleared.deck), [None, None]);
+        assert_eq!(deck.html(), EDITED);
+
+        assert!(set_slide_transition(&deck.file(), "b", Some("spin")).is_err());
+        assert_eq!(deck.html(), EDITED);
+        set_slide_locked(&deck.file(), None, "a", true).unwrap();
+        let locked = deck.html();
+        assert!(set_slide_transition(&deck.file(), "a", Some("wipe")).is_err());
+        assert_eq!(deck.html(), locked);
+        assert!(set_slide_transition(&deck.file(), "nope", Some("wipe")).is_err());
+    }
+
+    #[test]
+    fn an_unknown_slide_transition_counts_as_none() {
+        let deck =
+            TempDeck::new(&EDITED.replacen("id=\"b\"", "id=\"b\" data-transition=\"spin\"", 1));
+        assert_eq!(load(&deck.file()).unwrap().slides[1].transition, None);
+    }
+
+    #[test]
+    fn the_deck_transition_is_kept_in_its_meta() {
+        let deck = TempDeck::new(EDITED);
+        assert_eq!(load(&deck.file()).unwrap().transition, "fade");
+        let pushed = set_deck_transition(&deck.file(), "slide").unwrap();
+        assert_eq!(pushed.transition, "slide");
+        assert!(deck
+            .html()
+            .contains("<meta name=\"slopslide-transition\" content=\"slide\">"));
+        set_deck_transition(&deck.file(), "none").unwrap();
+        assert_eq!(deck.html().matches("slopslide-transition").count(), 1);
+        // The default needs no tag.
+        let faded = set_deck_transition(&deck.file(), "fade").unwrap();
+        assert_eq!(faded.transition, "fade");
+        assert_eq!(deck.html(), EDITED);
+        assert!(set_deck_transition(&deck.file(), "spin").is_err());
+        assert_eq!(deck.html(), EDITED);
     }
 
     #[test]

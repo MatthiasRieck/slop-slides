@@ -104,6 +104,9 @@ describe("Sidebar", () => {
         size: { w: 10, h: 10 },
         color: null,
         vars: {},
+        css: "",
+        fonts: "",
+        ancestors: [],
         saving: false,
       },
     });

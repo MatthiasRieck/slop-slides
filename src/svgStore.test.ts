@@ -18,6 +18,9 @@ const drawing = (changes: Partial<SvgOpen> = {}): SvgOpen => ({
   size: { w: 200, h: 200 },
   color: "rgb(0, 0, 0)",
   vars: {},
+  css: "",
+  fonts: "",
+  ancestors: [],
   ...changes,
 });
 
@@ -51,6 +54,9 @@ describe("parseSvgOpen", () => {
           height: 20,
           color: "red",
           vars: { "--a": "1", b: "2", "--c": 3 },
+          css: ".hub circle { fill: navy; }",
+          fonts: "@font-face { font-family: Brand; }",
+          ancestors: [{ tag: "section", attrs: { class: "slide hub", id: "intro" } }],
         },
         DECK,
       ),
@@ -62,6 +68,43 @@ describe("parseSvgOpen", () => {
       size: { w: 40, h: 20 },
       color: "red",
       vars: { "--a": "1" },
+      css: ".hub circle { fill: navy; }",
+      fonts: "@font-face { font-family: Brand; }",
+      ancestors: [{ tag: "section", attrs: { class: "slide hub", id: "intro" } }],
+    });
+  });
+
+  it("keeps only well-formed, inert elements around the drawing, and no styles that are not text", () => {
+    const open = parseSvgOpen(
+      {
+        slide: "intro",
+        markup: ORIGINAL,
+        css: 3,
+        fonts: null,
+        ancestors: [
+          { tag: "BODY", attrs: { class: "dark", onclick: "x()", "data-n": 2 } },
+          { tag: "a", attrs: { href: "javascript:x()", "xlink:href": "#y", class: "link" } },
+          { tag: "bad tag", attrs: {} },
+          "nope",
+          null,
+          { tag: "div", attrs: { "bad name": "1", "data-ok": "1" } },
+        ],
+      },
+      DECK,
+    );
+    expect(open).toMatchObject({
+      css: "",
+      fonts: "",
+      ancestors: [
+        { tag: "body", attrs: { class: "dark" } },
+        { tag: "a", attrs: { class: "link" } },
+        { tag: "div", attrs: { "data-ok": "1" } },
+      ],
+    });
+    expect(parseSvgOpen({ slide: "intro", markup: ORIGINAL }, DECK)).toMatchObject({
+      css: "",
+      fonts: "",
+      ancestors: [],
     });
   });
 

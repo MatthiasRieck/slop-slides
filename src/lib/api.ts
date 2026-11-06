@@ -66,6 +66,12 @@ export interface Slide {
   narrationStart?: number | null;
 }
 
+/** A slide's markup in the deck file, and its hash (see `Slide.hash`). */
+export interface SlideSource {
+  markup: string;
+  hash: string;
+}
+
 /** What a slide's timing on the narration timeline becomes; null removes that part of it. */
 export interface SlideTiming {
   slide: string;
@@ -474,6 +480,8 @@ export const api = {
   /** Replaces one slide's markup; refused when the slide's hash is no longer `base`. */
   updateSlide: (id: string, slide: string, markup: string, base: string) =>
     invoke<Deck>("update_slide", { id, slide, markup, base }),
+  /** One slide's markup as it is in the file, with the hash `updateSlide` takes as its base. */
+  slideSource: (id: string, slide: string) => invoke<SlideSource>("slide_source", { id, slide }),
   saveDeckSource: (id: string, source: string, base: string | null) =>
     invoke<Deck>("save_deck_source", { id, source, base }),
   /** What undo and redo would do in the deck; notices changes made outside the app first. */

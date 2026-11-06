@@ -252,6 +252,76 @@ describe("slide editor", () => {
     expect(last.markup).not.toContain("contenteditable");
   });
 
+  describe("the SVG editor's button", () => {
+    const VARS = DECK.replace("<head></head>", "<head><style>:root { --brand: #ff0000; --gap: 8px; }</style></head>");
+    const opened = (e: ReturnType<typeof editor>) =>
+      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-open-svg") as {
+        slide: string;
+        path: number[];
+        markup: string;
+        width: number;
+        height: number;
+        color: string | null;
+        vars: Record<string, string>;
+      }[];
+    const button = (e: ReturnType<typeof editor>) => e.$("[data-slop-svg-open]") as HTMLButtonElement;
+
+    it("shows only while a drawing is selected on its own with the select tool", () => {
+      const e = editor();
+      expect(button(e).hidden).toBe(true);
+      e.down(e.$("circle"));
+      e.up(e.$("circle"));
+      expect(button(e).hidden).toBe(false);
+      expect(button(e).textContent).toContain("Edit SVG");
+      e.down(e.$("h1"));
+      e.up(e.$("h1"));
+      expect(button(e).hidden).toBe(true);
+      e.down(e.$("svg"));
+      e.up(e.$("svg"));
+      e.fromParent({ type: "slop:edit-tool", tool: "rect" });
+      expect(button(e).hidden).toBe(true);
+      e.fromParent({ type: "slop:edit-tool", tool: "select" });
+      expect(button(e).hidden).toBe(false);
+    });
+
+    it("hands the drawing to the app, with where it is and the deck's variables", () => {
+      const e = editor({ markup: VARS });
+      e.down(e.$("svg"));
+      e.up(e.$("svg"));
+      const selection = e.selected();
+      button(e).dispatchEvent(new e.window.PointerEvent("pointerdown", { bubbles: true, cancelable: true }));
+      button(e).click();
+      // The press is not one on the slide: the drawing stays selected.
+      expect(e.selected()).toEqual(selection);
+      const [open] = opened(e);
+      expect(open).toMatchObject({ slide: "intro", path: [2], vars: { "--brand": "#ff0000", "--gap": "8px" } });
+      expect(open!.markup).toBe(`<svg viewBox="0 0 10 10"><circle r="1"></circle></svg>`);
+      expect(Number.isFinite(open!.width) && Number.isFinite(open!.height)).toBe(true);
+      expect(e.commits()).toEqual([]);
+    });
+
+    it("opens the selected drawing when the app asks, and nothing else", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-open-svg" });
+      e.down(e.$("h1"));
+      e.up(e.$("h1"));
+      e.fromParent({ type: "slop:edit-open-svg" });
+      expect(opened(e)).toEqual([]);
+      e.down(e.$("svg"));
+      e.up(e.$("svg"));
+      e.fromParent({ type: "slop:edit-open-svg" });
+      expect(opened(e)).toHaveLength(1);
+    });
+
+    it("never ends up in the slide's markup", () => {
+      const e = editor();
+      e.down(e.$("svg"));
+      e.up(e.$("svg"));
+      e.drag(e.$("h1"), 10, 0);
+      expect(e.commits().at(-1)!.markup).not.toContain("data-slop-svg-open");
+    });
+  });
+
   describe("spell-check", () => {
     it("is on only for the text being edited", () => {
       const e = editor();

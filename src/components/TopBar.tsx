@@ -2,11 +2,13 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   ChevronDown,
   FolderOpen,
+  MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
   Redo2,
+  Settings2,
   Undo2,
   X,
 } from "lucide-react";
@@ -17,15 +19,16 @@ import { basename, cn, isMac, revealLabel } from "../lib/utils";
 import { useApp } from "../store";
 import { ToolButton } from "./Button";
 import { DeckActions, MenuItem } from "./DeckActions";
-import { LintStatus } from "./LintStatus";
 import { ModeTabs } from "./ModeTabs";
 import { useDismiss } from "./Popover";
 
 /**
- * The workspace's bar. On the left, the slide rail toggle (for a deck) and the open file's path from
- * the workspace folder with the deck's title under it, which opens a menu to close the file (back
- * to the workspace) or reveal it in the file manager; for a deck, its mode tabs in the middle, then
- * undo / redo, lint, export and present; then the sidebar toggle. The tools of each mode live above the slide (DeckToolbar, Stage).
+ * The workspace's bar. On the left, the slide rail toggle (for a deck), the open file's path from
+ * the workspace folder with the deck's title under it, which opens a menu to open the deck's
+ * settings, close the file (back to the workspace) or reveal it in the file manager, then undo /
+ * redo; for a deck, its mode tabs in the middle with the chat button after a separator, then export
+ * and present; then the sidebar toggle. The tools of each mode live above the slide (DeckToolbar,
+ * Stage), and the lint status beside Tidy layout under it.
  */
 export function TopBar() {
   const workspace = useApp((s) => s.workspace);
@@ -49,13 +52,20 @@ export function TopBar() {
         ) : (
           <Breadcrumbs workspace={workspace.name} path={null} small={false} />
         )}
+        {hasDeck && <EditHistory />}
       </div>
-      {hasDeck ? <ModeTabs /> : <div />}
+      {hasDeck ? (
+        <div className="flex items-center gap-1 self-stretch">
+          <ModeTabs />
+          <hr aria-orientation="vertical" className="mx-1 h-8 w-px border-0 bg-border" />
+          <ChatButton />
+        </div>
+      ) : (
+        <div />
+      )}
       <div data-tauri-drag-region className="flex items-center justify-end gap-1 self-stretch">
         {hasDeck && (
           <div className="mr-2 flex items-center gap-1">
-            <EditHistory />
-            <LintStatus />
             <DeckActions />
           </div>
         )}
@@ -102,7 +112,7 @@ function Breadcrumbs({ workspace, path, small }: { workspace: string; path: stri
 
 /**
  * The open file's path (and a deck's title under it) as one button, opening a menu like Export's:
- * close the file, or show it in the file manager.
+ * the deck's settings (for a deck), close the file, or show it in the file manager.
  */
 function FileMenu({ workspace, file, deckTitle }: { workspace: string; file: OpenedFile; deckTitle: string | null }) {
   const [open, setOpen] = useState(false);
@@ -140,6 +150,14 @@ function FileMenu({ workspace, file, deckTitle }: { workspace: string; file: Ope
       </button>
       {open && (
         <div role="menu" className="absolute left-0 top-full z-20 mt-1 w-56 rounded-lg border bg-card p-1 shadow-lg">
+          {deckTitle !== null && (
+            <MenuItem
+              icon={Settings2}
+              label="Settings"
+              hint="The slide size and the deck's style"
+              onClick={choose(() => useApp.getState().setMode("settings"))}
+            />
+          )}
           <MenuItem icon={X} label={`Close ${name}`} onClick={choose(() => void useApp.getState().closeDeck())} />
           <MenuItem icon={FolderOpen} label={revealLabel} onClick={choose(() => void revealItemInDir(file.absolute))} />
         </div>
@@ -187,6 +205,28 @@ function EditHistory() {
 /** How an undo or redo names the change, e.g. `“Move slides”` or `chat: “Bigger title”`. */
 export function historyLabel(entry: HistoryEntry): string {
   return entry.source === "chat" ? `chat: “${entry.label}”` : `“${entry.label}”`;
+}
+
+/** Opens the chat in the sidebar, or hides the sidebar when the chat is already showing. */
+function ChatButton() {
+  const showing = useApp((s) => s.sidebarOpen && s.sidebarTab === "chat");
+  const label = showing ? "Hide chat" : "Show chat";
+  return (
+    <ToolButton
+      variant="panel"
+      size="md"
+      title={label}
+      aria-label={label}
+      aria-pressed={showing}
+      onClick={() => {
+        const app = useApp.getState();
+        if (showing) app.setSidebarOpen(false);
+        else app.setSidebarTab("chat");
+      }}
+    >
+      <MessageSquare className="size-5" strokeWidth={1.75} />
+    </ToolButton>
+  );
 }
 
 /** Shows or hides the slide rail on the left. */

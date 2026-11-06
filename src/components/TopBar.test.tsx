@@ -103,16 +103,64 @@ describe("sidebar toggle", () => {
   });
 });
 
+describe("chat button", () => {
+  it("opens the chat in the sidebar, and hides the sidebar when the chat is showing", () => {
+    useApp.setState({ sidebarOpen: false, sidebarTab: "files" });
+    render(<TopBar />);
+    const show = screen.getByRole("button", { name: "Show chat" });
+    expect(show.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(show);
+    expect(useApp.getState()).toMatchObject({ sidebarOpen: true, sidebarTab: "chat" });
+    const hide = screen.getByRole("button", { name: "Hide chat" });
+    expect(hide.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(hide);
+    expect(useApp.getState().sidebarOpen).toBe(false);
+  });
+
+  it("switches an open sidebar from the files to the chat", () => {
+    useApp.setState({ sidebarOpen: true, sidebarTab: "files" });
+    render(<TopBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Show chat" }));
+    expect(useApp.getState()).toMatchObject({ sidebarOpen: true, sidebarTab: "chat" });
+  });
+
+  it("is not there without a deck", () => {
+    useApp.setState({ deck: null });
+    render(<TopBar />);
+    expect(screen.queryByRole("button", { name: /chat/ })).toBeNull();
+  });
+});
+
 describe("workspace bar", () => {
-  it("opens a menu from the file's path to close it or show it in the file manager", () => {
+  it("opens a menu from the file's path to open the settings, close it or show it in the file manager", () => {
     render(<TopBar />);
     expect(screen.queryByRole("menu")).toBeNull();
     expect(fileButton().getAttribute("aria-expanded")).toBe("false");
     openFileMenu();
     expect(fileButton().getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual(["Close deck.html", "Show in folder"]);
+    expect(
+      screen.getAllByRole("menuitem").map((el) => el.firstElementChild?.nextElementSibling?.firstChild?.textContent),
+    ).toEqual(["Settings", "Close deck.html", "Show in folder"]);
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("switches the deck to Settings mode from the file's menu and closes the menu", () => {
+    render(<TopBar />);
+    openFileMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Settings/ }));
+    expect(useApp.getState().slideMode).toBe("settings");
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("has no settings in the menu of a file that is not a deck", () => {
+    useApp.setState({
+      deck: null,
+      openedFile: { path: "site/index.html", absolute: "/decks/site/index.html", kind: "webpage" },
+    });
+    render(<TopBar />);
+    openFileMenu();
+    expect(screen.queryByRole("menuitem", { name: /^Settings/ })).toBeNull();
   });
 
   it("reveals the deck file in the file manager and closes the menu", () => {
@@ -184,16 +232,16 @@ describe("layout", () => {
       (el) => el.getAttribute("aria-label") ?? el.getAttribute("title") ?? el.textContent,
     );
 
-  it("puts the rail and the file's menu first, then the modes, undo / redo, lint, the deck's actions and the sidebar", () => {
-    useApp.setState({ lint: [] });
+  it("puts the rail, the file's menu and undo / redo first, then the modes and chat, the deck's actions and the sidebar", () => {
+    useApp.setState({ lint: [], sidebarTab: "files" });
     render(<TopBar />);
     expect(order()).toEqual([
       "Hide slides",
       "talk/deck.html",
-      "Mode",
       "Undo",
       "Redo",
-      "Lint OK",
+      "Mode",
+      "Show chat",
       "Export",
       "Present",
       "Hide sidebar",
@@ -219,11 +267,19 @@ describe("layout", () => {
     expect(crumbsEl().className).toContain("text-sm");
   });
 
-  it("shows export as an icon and lint as a checkmark", () => {
+  it("shows export as an icon and leaves lint to the row under the slide", () => {
     useApp.setState({ lint: [] });
     render(<TopBar />);
     expect(screen.getByRole("button", { name: "Export" }).textContent).toBe("");
-    expect(screen.getByRole("button", { name: "Lint OK" }).textContent).toBe("");
+    expect(screen.queryByRole("button", { name: "Lint OK" })).toBeNull();
+  });
+
+  it("sets the chat button off from the mode tabs with a vertical separator", () => {
+    render(<TopBar />);
+    const separator = screen.getByRole("separator");
+    expect(separator.getAttribute("aria-orientation")).toBe("vertical");
+    expect(separator.previousElementSibling?.getAttribute("role")).toBe("tablist");
+    expect(separator.nextElementSibling?.getAttribute("aria-label")).toMatch(/chat/);
   });
 
   it("leaves the tools of each mode to the row below", () => {

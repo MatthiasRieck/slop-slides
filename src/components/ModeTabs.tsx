@@ -1,16 +1,18 @@
-import { AudioLines, Code2, Eye, GitCompare, Pencil, Settings2, StickyNote } from "lucide-react";
+import { AudioLines, Code2, Eye, GitCompare, Pencil, StickyNote } from "lucide-react";
 import { useEffect } from "react";
 
 import { useChanges } from "../changesStore";
 import { basename, cn } from "../lib/utils";
 import { type DeckMode, deckMode, useApp } from "../store";
 
-const MODES: { id: DeckMode; label: string; icon: typeof Eye }[] = [
+/** The modes with a tab. Settings opens from the file menu instead (TopBar). */
+type TabMode = Exclude<DeckMode, "settings">;
+
+const MODES: { id: TabMode; label: string; icon: typeof Eye }[] = [
   { id: "view", label: "View", icon: Eye },
   { id: "edit", label: "Edit", icon: Pencil },
   { id: "narration", label: "Narration", icon: AudioLines },
   { id: "notes", label: "Notes", icon: StickyNote },
-  { id: "settings", label: "Settings", icon: Settings2 },
   { id: "git", label: "Git", icon: GitCompare },
   { id: "code", label: "HTML", icon: Code2 },
 ];
@@ -48,18 +50,17 @@ export function ModeTabs() {
   const file = useApp((s) => basename(s.deck?.id ?? ""));
   const inRepository = useInRepository();
 
-  const titles: Record<DeckMode, string> = {
+  const titles: Record<TabMode, string> = {
     view: "Show the slide, mark it up and comment on it; marks and comments go to the agent with your next message",
     edit: locked
       ? "This slide is locked; unlock it in the slide list to edit it"
       : "Edit the slide: click to select, drag to move, drag the handles to resize or rotate, double-click to edit text, drop images onto it to add them",
     narration: narrated ? "Show this slide's narration" : "Write narration for this slide",
     notes: "Write speaker notes for this slide; only the presenter sees them",
-    settings: "Change the slide size and the deck's style",
     git: "See what changed since the last commit, and compare each slide before and after",
     code: `Show ${file}, scrolled to the selected slide`,
   };
-  const needsSlide = (id: DeckMode) => id === "edit" || id === "narration" || id === "notes";
+  const needsSlide = (id: TabMode) => id === "edit" || id === "narration" || id === "notes";
   const modes = MODES.filter(({ id }) => id !== "git" || inRepository);
 
   return (

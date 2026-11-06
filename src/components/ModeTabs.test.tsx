@@ -39,14 +39,13 @@ beforeEach(() => {
 describe("ModeTabs", () => {
   it("lists the modes, with View selected", () => {
     render(<ModeTabs />);
-    expect(tabs()).toEqual(["View", "Edit", "Narration", "Notes", "Settings", "Git", "HTML"]);
+    expect(tabs()).toEqual(["View", "Edit", "Narration", "Notes", "Git", "HTML"]);
     expect(selected()).toEqual(["View"]);
   });
 
   it.each([
     ["Edit", "edit"],
     ["Narration", "narration"],
-    ["Settings", "settings"],
     ["HTML", "code"],
   ])("switches to %s and back to View", (name, mode) => {
     render(<ModeTabs />);
@@ -60,11 +59,11 @@ describe("ModeTabs", () => {
 
   it("shows each mode as an icon over its label, highlighting the selected one", () => {
     render(<ModeTabs />);
-    fireEvent.click(tab("Settings"));
+    fireEvent.click(tab("Notes"));
     for (const t of screen.getAllByRole("tab")) {
       expect(t.querySelector("svg")).not.toBeNull();
       expect(t.className).toContain("flex-col");
-      expect(t.classList.contains("text-primary")).toBe(t.textContent === "Settings");
+      expect(t.classList.contains("text-primary")).toBe(t.textContent === "Notes");
     }
   });
 
@@ -83,11 +82,18 @@ describe("ModeTabs", () => {
     expect(tab("Narration").disabled).toBe(false);
   });
 
-  it("has only View, Settings, Git and HTML for a deck without slides", () => {
+  it("has no Settings tab, and selects no tab in Settings mode", () => {
+    useApp.setState({ slideMode: "settings" });
+    render(<ModeTabs />);
+    expect(screen.queryByRole("tab", { name: "Settings" })).toBeNull();
+    expect(selected()).toEqual([]);
+  });
+
+  it("has only View, Git and HTML for a deck without slides", () => {
     useApp.setState({ deck: { ...deckFor(DECK_HTML), slides: [] }, selected: null });
     render(<ModeTabs />);
     const enabled = screen.getAllByRole("tab").filter((t) => !(t as HTMLButtonElement).disabled);
-    expect(enabled.map((t) => t.textContent)).toEqual(["View", "Settings", "Git", "HTML"]);
+    expect(enabled.map((t) => t.textContent)).toEqual(["View", "Git", "HTML"]);
   });
 
   describe("the Git tab", () => {
@@ -99,7 +105,7 @@ describe("ModeTabs", () => {
       inRepository(false);
       render(<ModeTabs />);
       await settled();
-      expect(tabs()).toEqual(["View", "Edit", "Narration", "Notes", "Settings", "HTML"]);
+      expect(tabs()).toEqual(["View", "Edit", "Narration", "Notes", "HTML"]);
     });
 
     it("shows up once the deck is found in a repository", async () => {

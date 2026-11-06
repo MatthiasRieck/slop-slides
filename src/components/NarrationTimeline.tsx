@@ -1,7 +1,7 @@
 import { Minus, Pause, Play, Plus, RotateCcw } from "lucide-react";
 import { type KeyboardEvent, type PointerEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { api, type Deck, type Slide, type SlideAudio, type SlideTiming } from "../lib/api";
+import { api, type Deck, type NarrationWord, type Slide, type SlideAudio, type SlideTiming } from "../lib/api";
 import { formatDuration } from "../lib/narrationAudio";
 import { pixelsOf } from "../lib/slideSize";
 import {
@@ -388,6 +388,7 @@ function Clip(props: {
       current = false;
     };
   }, [deck, clip.slide, seconds, audio?.state]);
+  const words = useWords(deck, clip.slide, audio);
   const label =
     seconds === null
       ? `Narration of ${clip.slide}, not spoken yet`
@@ -411,7 +412,49 @@ function Clip(props: {
       style={{ left: `${(clip.start / end) * 100}%`, width: `${((clip.end - clip.start) / end) * 100}%` }}
     >
       {peaks.length > 0 && <Waveform peaks={peaks} />}
+      {words.length > 0 && seconds !== null && <Words words={words} seconds={seconds} />}
     </button>
+  );
+}
+
+/** When each word of the slide's up-to-date audio is said, once that is known. */
+function useWords(deck: string, slide: string, audio: SlideAudio | undefined): NarrationWord[] {
+  const [words, setWords] = useState<NarrationWord[]>([]);
+  const timed = audio?.state === "ready" && !!audio.timed;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: New audio has other words.
+  useEffect(() => {
+    if (!timed) return setWords([]);
+    let current = true;
+    api.narrationWords(deck, slide).then(
+      (found) => current && setWords(found ?? []),
+      () => current && setWords([]),
+    );
+    return () => {
+      current = false;
+    };
+  }, [deck, slide, timed, audio?.seconds]);
+  return words;
+}
+
+/** `words` along audio `seconds` long, each at its start, cut off where the next begins. */
+function Words({ words, seconds }: { words: NarrationWord[]; seconds: number }) {
+  const at = (time: number) => (Math.min(time, seconds) / seconds) * 100;
+  return (
+    <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-3.5">
+      {words.map((word, i) => {
+        const next = words[i + 1]?.start ?? seconds;
+        return (
+          <span
+            key={`${word.start}-${word.end}-${word.text}`}
+            data-word={word.text}
+            className="absolute bottom-0 overflow-hidden whitespace-nowrap border-l border-current/40 pl-px text-left text-[9px] leading-3.5 text-foreground/80"
+            style={{ left: `${at(word.start)}%`, width: `${Math.max(0, at(next) - at(word.start))}%` }}
+          >
+            {word.text}
+          </span>
+        );
+      })}
+    </span>
   );
 }
 

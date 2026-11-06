@@ -907,6 +907,99 @@ fn transcribe_latest(
     run(state, params, audio)
 }
 
+/// A word said in a recording, and when: seconds from the recording's start.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Word {
+    pub text: String,
+    pub start: f64,
+    pub end: f64,
+}
+
+/// Every word said in `audio` (at [`WHISPER_RATE`]) and when, in `language` (an ISO 639-1 code)
+/// or whatever language it is in for None.
+fn transcribe_words(
+    whisper: &Mutex<Option<Engine>>,
+    model: &Path,
+    audio: &[f32],
+    language: Option<&str>,
+) -> Result<Vec<Word>> {
+    if !may_hold_speech(audio) {
+        return Ok(Vec::new());
+    }
+    let mut loaded = whisper.lock().unwrap();
+    let mut state = load(&mut loaded, model)?
+        .context
+        .create_state()
+        .map_err(whisper_error)?;
+    let mut params = params();
+    params.set_language(Some(language.unwrap_or("auto")));
+    // One segment per word, each with its own start and end.
+    params.set_no_timestamps(false);
+    params.set_token_timestamps(true);
+    params.set_max_len(1);
+    params.set_split_on_word(true);
+    let mut padded = audio.to_vec();
+    let min = (PAD_SECONDS * WHISPER_RATE as f32) as usize;
+    if padded.len() < min {
+        padded.resize(min, 0.0);
+    }
+    state.full(params, &padded).map_err(whisper_error)?;
+    let segments: Vec<(String, i64, i64)> = state
+        .as_iter()
+        .filter_map(|segment| {
+            let text = segment.to_str_lossy().ok()?.into_owned();
+            Some((text, segment.start_timestamp(), segment.end_timestamp()))
+        })
+        .collect();
+    let seconds = audio.len() as f64 / f64::from(WHISPER_RATE);
+    Ok(words_of(&segments, seconds))
+}
+
+/// The words of Whisper's one-word `segments` (text, start and end in hundredths of a second)
+/// of audio `seconds` long: without non-speech annotations, punctuation kept with the word
+/// before it, and times within the audio and in order.
+pub fn words_of(segments: &[(String, i64, i64)], seconds: f64) -> Vec<Word> {
+    let mut words: Vec<Word> = Vec::new();
+    for (text, t0, t1) in segments {
+        let text = clean_transcript(text);
+        if text.is_empty() {
+            continue;
+        }
+        let start = (*t0 as f64 / 100.0).clamp(0.0, seconds);
+        let end = (*t1 as f64 / 100.0).clamp(start, seconds);
+        let start = words.last().map_or(start, |w| start.max(w.end).min(end));
+        match words.last_mut() {
+            Some(last) if !text.chars().any(char::is_alphanumeric) => {
+                last.text.push_str(&text);
+                last.end = last.end.max(end);
+            }
+            _ => words.push(Word { text, start, end }),
+        }
+    }
+    words
+}
+
+impl Voice {
+    /// Every word said in `samples` (mono, at `rate`) and when, in `language` (an ISO 639-1
+    /// code) or whatever language it is in for None: what timing a slide to its narration
+    /// goes by.
+    pub async fn time_words(
+        &self,
+        home: &Path,
+        samples: Vec<f32>,
+        rate: u32,
+        language: Option<String>,
+    ) -> Result<Vec<Word>> {
+        let (whisper, model) = (self.whisper.clone(), model_path(home));
+        tauri::async_runtime::spawn_blocking(move || {
+            let audio = resample(&samples, rate, WHISPER_RATE);
+            transcribe_words(&whisper, &model, &audio, language.as_deref())
+        })
+        .await
+        .map_err(|e| Error::msg(e.to_string()))?
+    }
+}
+
 fn may_hold_speech(audio: &[f32]) -> bool {
     audio.len() as f32 >= MIN_SECONDS * WHISPER_RATE as f32 && rms(audio) >= SILENCE_RMS
 }
@@ -1545,6 +1638,91 @@ mod tests {
         let mode = |json| serde_json::from_str::<RecordMode>(json).unwrap();
         assert_eq!(mode("\"text\""), RecordMode::Text);
         assert_eq!(mode("\"audio\""), RecordMode::Audio);
+    }
+
+    fn word(text: &str, start: f64, end: f64) -> Word {
+        Word {
+            text: text.into(),
+            start,
+            end,
+        }
+    }
+
+    #[test]
+    fn words_come_with_their_times_in_seconds() {
+        let segments = vec![
+            (" Hello".to_string(), 0, 42),
+            (" world".to_string(), 42, 90),
+        ];
+        assert_eq!(
+            words_of(&segments, 2.0),
+            vec![word("Hello", 0.0, 0.42), word("world", 0.42, 0.9)]
+        );
+    }
+
+    #[test]
+    fn punctuation_stays_with_its_word_and_annotations_are_no_words() {
+        let segments = vec![
+            (" [BLANK_AUDIO]".to_string(), 0, 100),
+            (" First".to_string(), 100, 150),
+            (",".to_string(), 150, 152),
+            (" (music)".to_string(), 152, 200),
+            (" second".to_string(), 200, 260),
+            (".".to_string(), 260, 270),
+        ];
+        assert_eq!(
+            words_of(&segments, 3.0),
+            vec![word("First,", 1.0, 1.52), word("second.", 2.0, 2.7)]
+        );
+        // Punctuation with no word before it is kept as one.
+        assert_eq!(
+            words_of(&[("¿".to_string(), 0, 10)], 1.0),
+            vec![word("¿", 0.0, 0.1)]
+        );
+    }
+
+    #[test]
+    fn word_times_stay_within_the_audio_and_in_order() {
+        let segments = vec![
+            (" late".to_string(), 50, 40),
+            (" overlap".to_string(), 30, 80),
+            (" padding".to_string(), 90, 140),
+        ];
+        assert_eq!(
+            words_of(&segments, 1.2),
+            vec![
+                word("late", 0.5, 0.5),
+                word("overlap", 0.5, 0.8),
+                word("padding", 0.9, 1.2)
+            ]
+        );
+        assert!(words_of(&[], 1.0).is_empty());
+    }
+
+    #[test]
+    fn timing_silence_finds_no_words_without_the_model() {
+        let voice = Voice::default();
+        let quiet = vec![0.0; WHISPER_RATE as usize * 2];
+        let words = tauri::async_runtime::block_on(voice.time_words(
+            Path::new("/nonexistent"),
+            quiet,
+            WHISPER_RATE,
+            Some("en".into()),
+        ));
+        assert!(words.unwrap().is_empty());
+        let speech: Vec<f32> = (0..WHISPER_RATE * 2)
+            .map(|i| (i as f32 / 20.0).sin() * 0.3)
+            .collect();
+        let missing = tauri::async_runtime::block_on(voice.time_words(
+            Path::new("/nonexistent"),
+            speech,
+            WHISPER_RATE,
+            None,
+        ));
+        assert_eq!(
+            missing.unwrap_err().to_string(),
+            "The speech model is not downloaded."
+        );
     }
 
     #[test]

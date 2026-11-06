@@ -1,0 +1,523 @@
+{
+  "slides": {
+    "end": {
+      "fingerprint": "b867c5aad853ec8090fdcf1cef398c04f73e51bf2b8b8b0504859fa9fadd40e3",
+      "seconds": 3.702625,
+      "words": [
+        {
+          "text": "That",
+          "start": 0.05,
+          "end": 0.69
+        },
+        {
+          "text": "is",
+          "start": 0.69,
+          "end": 1.11
+        },
+        {
+          "text": "all",
+          "start": 1.11,
+          "end": 1.56
+        },
+        {
+          "text": "it",
+          "start": 1.56,
+          "end": 1.92
+        },
+        {
+          "text": "takes.",
+          "start": 1.92,
+          "end": 2.82
+        },
+        {
+          "text": "Thanks",
+          "start": 2.82,
+          "end": 3.07
+        },
+        {
+          "text": "for",
+          "start": 3.07,
+          "end": 3.19
+        },
+        {
+          "text": "watching.",
+          "start": 3.19,
+          "end": 3.66
+        }
+      ]
+    },
+    "how": {
+      "fingerprint": "fa553d0397b61fd927cf15f7328a6070307e47077409e3f8fd72fed02fd67c47",
+      "seconds": 15.141958333333331,
+      "words": [
+        {
+          "text": "It",
+          "start": 0.08,
+          "end": 0.18
+        },
+        {
+          "text": "takes",
+          "start": 0.18,
+          "end": 0.66
+        },
+        {
+          "text": "three",
+          "start": 0.66,
+          "end": 1.13
+        },
+        {
+          "text": "steps.",
+          "start": 1.13,
+          "end": 2.06
+        },
+        {
+          "text": "First,",
+          "start": 2.06,
+          "end": 2.67
+        },
+        {
+          "text": "the",
+          "start": 2.67,
+          "end": 2.85
+        },
+        {
+          "text": "voice",
+          "start": 2.85,
+          "end": 3.19
+        },
+        {
+          "text": "model",
+          "start": 3.19,
+          "end": 3.53
+        },
+        {
+          "text": "reads",
+          "start": 3.53,
+          "end": 3.89
+        },
+        {
+          "text": "the",
+          "start": 3.89,
+          "end": 4.0
+        },
+        {
+          "text": "script",
+          "start": 4.0,
+          "end": 4.61
+        },
+        {
+          "text": "aloud.",
+          "start": 4.61,
+          "end": 5.67
+        },
+        {
+          "text": "Second,",
+          "start": 5.67,
+          "end": 6.41
+        },
+        {
+          "text": "the",
+          "start": 6.41,
+          "end": 6.56
+        },
+        {
+          "text": "speech",
+          "start": 6.56,
+          "end": 6.88
+        },
+        {
+          "text": "model",
+          "start": 6.88,
+          "end": 7.34
+        },
+        {
+          "text": "listens",
+          "start": 7.34,
+          "end": 8.01
+        },
+        {
+          "text": "again",
+          "start": 8.01,
+          "end": 8.43
+        },
+        {
+          "text": "and",
+          "start": 8.43,
+          "end": 8.94
+        },
+        {
+          "text": "notes",
+          "start": 8.94,
+          "end": 9.19
+        },
+        {
+          "text": "when",
+          "start": 9.19,
+          "end": 9.57
+        },
+        {
+          "text": "each",
+          "start": 9.57,
+          "end": 9.94
+        },
+        {
+          "text": "word",
+          "start": 9.94,
+          "end": 10.3
+        },
+        {
+          "text": "begins.",
+          "start": 10.3,
+          "end": 11.2
+        },
+        {
+          "text": "Third,",
+          "start": 11.2,
+          "end": 11.74
+        },
+        {
+          "text": "the",
+          "start": 11.74,
+          "end": 11.97
+        },
+        {
+          "text": "slide",
+          "start": 11.97,
+          "end": 12.55
+        },
+        {
+          "text": "uses",
+          "start": 12.55,
+          "end": 12.69
+        },
+        {
+          "text": "those",
+          "start": 12.69,
+          "end": 13.12
+        },
+        {
+          "text": "times",
+          "start": 13.12,
+          "end": 13.64
+        },
+        {
+          "text": "to",
+          "start": 13.64,
+          "end": 13.84
+        },
+        {
+          "text": "reveal",
+          "start": 13.84,
+          "end": 14.31
+        },
+        {
+          "text": "its",
+          "start": 14.31,
+          "end": 14.55
+        },
+        {
+          "text": "text.",
+          "start": 14.55,
+          "end": 15.12
+        }
+      ]
+    },
+    "welcome": {
+      "fingerprint": "a780422ab4d8d21ae5992339b93507d6546251bcf4726ef70c70ebbeac90ff40",
+      "seconds": 9.966916666666666,
+      "words": [
+        {
+          "text": "Welcome!",
+          "start": 0.1,
+          "end": 1.05
+        },
+        {
+          "text": "This",
+          "start": 1.05,
+          "end": 1.44
+        },
+        {
+          "text": "deck",
+          "start": 1.44,
+          "end": 1.88
+        },
+        {
+          "text": "is",
+          "start": 1.88,
+          "end": 2.1
+        },
+        {
+          "text": "narrated",
+          "start": 2.1,
+          "end": 2.98
+        },
+        {
+          "text": "by",
+          "start": 2.98,
+          "end": 3.27
+        },
+        {
+          "text": "a",
+          "start": 3.27,
+          "end": 3.31
+        },
+        {
+          "text": "voice",
+          "start": 3.31,
+          "end": 3.85
+        },
+        {
+          "text": "model,",
+          "start": 3.85,
+          "end": 4.59
+        },
+        {
+          "text": "and",
+          "start": 4.59,
+          "end": 4.85
+        },
+        {
+          "text": "every",
+          "start": 4.85,
+          "end": 5.33
+        },
+        {
+          "text": "word",
+          "start": 5.33,
+          "end": 5.82
+        },
+        {
+          "text": "it",
+          "start": 5.82,
+          "end": 5.98
+        },
+        {
+          "text": "says",
+          "start": 5.98,
+          "end": 6.44
+        },
+        {
+          "text": "appears",
+          "start": 6.44,
+          "end": 7.0
+        },
+        {
+          "text": "on",
+          "start": 7.0,
+          "end": 7.24
+        },
+        {
+          "text": "screen",
+          "start": 7.24,
+          "end": 7.88
+        },
+        {
+          "text": "the",
+          "start": 7.88,
+          "end": 8.08
+        },
+        {
+          "text": "moment",
+          "start": 8.08,
+          "end": 8.92
+        },
+        {
+          "text": "it",
+          "start": 8.92,
+          "end": 9.07
+        },
+        {
+          "text": "is",
+          "start": 9.07,
+          "end": 9.3
+        },
+        {
+          "text": "spoken.",
+          "start": 9.3,
+          "end": 9.966875
+        }
+      ]
+    },
+    "why": {
+      "fingerprint": "1b8bcc5958f8fa0673469dd44410ef5d3fd929f9c4d61eaa8e38b04ff111bea3",
+      "seconds": 15.329625,
+      "words": [
+        {
+          "text": "Timing",
+          "start": 0.06,
+          "end": 0.7
+        },
+        {
+          "text": "buys",
+          "start": 0.7,
+          "end": 1.32
+        },
+        {
+          "text": "you",
+          "start": 1.32,
+          "end": 1.52
+        },
+        {
+          "text": "three",
+          "start": 1.52,
+          "end": 2.1
+        },
+        {
+          "text": "things.",
+          "start": 2.1,
+          "end": 2.92
+        },
+        {
+          "text": "Pace,",
+          "start": 2.92,
+          "end": 3.42
+        },
+        {
+          "text": "because",
+          "start": 3.42,
+          "end": 4.01
+        },
+        {
+          "text": "the",
+          "start": 4.01,
+          "end": 4.26
+        },
+        {
+          "text": "slide",
+          "start": 4.26,
+          "end": 4.83
+        },
+        {
+          "text": "never",
+          "start": 4.83,
+          "end": 5.09
+        },
+        {
+          "text": "runs",
+          "start": 5.09,
+          "end": 5.48
+        },
+        {
+          "text": "ahead",
+          "start": 5.48,
+          "end": 5.88
+        },
+        {
+          "text": "of",
+          "start": 5.88,
+          "end": 5.9
+        },
+        {
+          "text": "the",
+          "start": 5.9,
+          "end": 6.11
+        },
+        {
+          "text": "voice.",
+          "start": 6.11,
+          "end": 6.68
+        },
+        {
+          "text": "Focus,",
+          "start": 6.68,
+          "end": 7.68
+        },
+        {
+          "text": "because",
+          "start": 7.68,
+          "end": 8.15
+        },
+        {
+          "text": "the",
+          "start": 8.15,
+          "end": 8.35
+        },
+        {
+          "text": "audience",
+          "start": 8.35,
+          "end": 8.89
+        },
+        {
+          "text": "reads",
+          "start": 8.89,
+          "end": 9.24
+        },
+        {
+          "text": "what",
+          "start": 9.24,
+          "end": 9.64
+        },
+        {
+          "text": "they",
+          "start": 9.64,
+          "end": 9.97
+        },
+        {
+          "text": "hear.",
+          "start": 9.97,
+          "end": 10.36
+        },
+        {
+          "text": "And",
+          "start": 10.36,
+          "end": 10.7
+        },
+        {
+          "text": "polish,",
+          "start": 10.7,
+          "end": 11.68
+        },
+        {
+          "text": "because",
+          "start": 11.68,
+          "end": 12.09
+        },
+        {
+          "text": "nothing",
+          "start": 12.09,
+          "end": 12.53
+        },
+        {
+          "text": "appears",
+          "start": 12.53,
+          "end": 13.0
+        },
+        {
+          "text": "a",
+          "start": 13.0,
+          "end": 13.32
+        },
+        {
+          "text": "moment",
+          "start": 13.32,
+          "end": 13.56
+        },
+        {
+          "text": "too",
+          "start": 13.56,
+          "end": 14.05
+        },
+        {
+          "text": "early",
+          "start": 14.05,
+          "end": 14.44
+        },
+        {
+          "text": "or",
+          "start": 14.44,
+          "end": 14.66
+        },
+        {
+          "text": "too",
+          "start": 14.66,
+          "end": 15.0
+        },
+        {
+          "text": "late.",
+          "start": 15.0,
+          "end": 15.329625
+        }
+      ]
+    }
+  }
+}

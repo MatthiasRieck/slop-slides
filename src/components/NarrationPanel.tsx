@@ -1,5 +1,5 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { AudioLines, Download, Loader2, Play, Sparkles, Square, Trash2, X } from "lucide-react";
+import { AudioLines, Download, Loader2, Play, Sparkles, Square, Timer, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { type Deck, errorMessage, type Slide, type SlideAudio } from "../lib/api";
@@ -55,6 +55,7 @@ export function NarrationPanel() {
             <SpeechSettings deck={deck} />
             <CleanUpAll deck={deck} />
             <DeckAudio deck={deck} />
+            <WordTiming deck={deck} />
           </div>
         </>
       )}
@@ -280,8 +281,9 @@ function SlideAudioControls(props: {
 function audioLabel(audio: SlideAudio | undefined): string {
   if (!audio || audio.state === "missing" || audio.state === "none") return "No audio yet";
   const length = audio.seconds !== null ? formatDuration(audio.seconds) : "";
-  if (audio.recorded) return `Your recording ${length}`;
-  return audio.state === "stale" ? `Audio ${length}, out of date` : `Audio ${length}`;
+  if (audio.recorded) return `Your recording ${length}${audio.timed ? ", words timed" : ""}`;
+  if (audio.state === "stale") return `Audio ${length}, out of date`;
+  return `Audio ${length}${audio.timed ? ", words timed" : ""}`;
 }
 
 /** Whether the user really wants their recording gone; it cannot be brought back. */
@@ -350,6 +352,47 @@ function DeckAudio({ deck }: { deck: Deck }) {
       >
         <AudioLines />
         Generate all
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Hearing the deck's narration audio again with the speech-to-text model, to know when each
+ * word is said: what timing animations and slide changes to the narration goes by.
+ */
+function WordTiming({ deck }: { deck: Deck }) {
+  const audio = useNarration((s) => (s.audioDeck === deck.id ? s.audio : NO_AUDIO));
+  const timing = useNarration((s) => s.timing);
+  const render = useNarration((s) => s.render);
+  if (timing?.deck === deck.id) {
+    const label = timing.downloading
+      ? "Downloading the speech model…"
+      : timing.total > 0
+        ? `Timing words of slide ${timing.done + 1} of ${timing.total}…`
+        : "Timing words…";
+    return (
+      <div className="flex min-w-0 items-center gap-1 border-t p-3 text-xs" role="status">
+        <Loader2 className="size-3.5 shrink-0 animate-spin" />
+        <span className="truncate">{label}</span>
+      </div>
+    );
+  }
+  const untimed = deck.slides.filter((s) => audio[s.id]?.state === "ready" && !audio[s.id]?.timed).length;
+  if (untimed === 0) return null;
+  return (
+    <div className="flex items-center justify-between gap-2 border-t p-3 text-xs">
+      <span className="text-muted-foreground">
+        {untimed} {untimed === 1 ? "slide's words" : "slides' words"} not timed
+      </span>
+      <Button
+        size="md"
+        disabled={timing !== null || render !== null}
+        onClick={() => void useNarration.getState().timeWords(deck.id, null)}
+        title="Listen to the narration audio with the speech-to-text model to find when each word is said"
+      >
+        <Timer />
+        Time words
       </Button>
     </div>
   );

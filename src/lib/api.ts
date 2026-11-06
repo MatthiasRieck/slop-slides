@@ -325,6 +325,24 @@ export interface SlideAudio {
   seconds: number | null;
   /** It is the presenter's own recording: up to date whatever the script says. */
   recorded?: boolean;
+  /** When each of its words is said is known (see `timeNarration`). */
+  timed?: boolean;
+}
+
+/** A word said in a slide's narration audio, and when: seconds from the audio's start. */
+export interface NarrationWord {
+  text: string;
+  start: number;
+  end: number;
+}
+
+/** Payload of `narration-timing` events. */
+export interface NarrationTimingProgress {
+  deck: string;
+  /** The slide being heard now; null once all are done. */
+  slide: string | null;
+  done: number;
+  total: number;
 }
 
 /** What recording narration in the presenter view keeps: the words, or the voice. */
@@ -665,6 +683,13 @@ export const api = {
    */
   renderNarration: (id: string, slides: string[] | null) => invoke<SlideAudio[]>("render_narration", { id, slides }),
   cancelNarration: () => invoke<void>("cancel_narration"),
+  /**
+   * Has the speech-to-text model hear the up-to-date audio of `slides` (all for null) again, to
+   * know when each word is said, reporting `narration-timing` events; resolves to every slide's audio.
+   */
+  timeNarration: (id: string, slides: string[] | null) => invoke<SlideAudio[]>("time_narration", { id, slides }),
+  /** When each word of a slide's narration audio is said; null until `timeNarration` heard it. */
+  narrationWords: (id: string, slide: string) => invoke<NarrationWord[] | null>("narration_words", { id, slide }),
   /** A slide's narration audio, as WAV bytes. */
   narrationWav: (id: string, slide: string) => invoke<ArrayBuffer>("narration_wav", { id, slide }),
   /** How loud a slide's narration audio is along its length, 0 to 1, for drawing its waveform. */

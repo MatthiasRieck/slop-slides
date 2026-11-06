@@ -200,6 +200,16 @@ describe("Popover", () => {
     expect(style.maxHeight).toBe(`${768 - 120 - 16}px`);
   });
 
+  it("lines its right edge up with the anchor's when aligned to the end, kept on screen", () => {
+    const { unmount } = render(
+      <Harness rect={new DOMRect(500, 100, 40, 20)} placement="below" align="end" width={300} onClose={vi.fn()} />,
+    );
+    expect(panel().style.left).toBe(`${540 - 300}px`);
+    unmount();
+    render(<Harness rect={new DOMRect(20, 100, 40, 20)} placement="below" align="end" width={300} onClose={vi.fn()} />);
+    expect(panel().style.left).toBe("8px");
+  });
+
   it("opens above the anchor when asked", () => {
     render(<Harness rect={new DOMRect(40, 700, 20, 20)} placement="above" width={200} onClose={vi.fn()} />);
     const style = panel().style;

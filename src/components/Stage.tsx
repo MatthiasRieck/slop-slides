@@ -466,7 +466,7 @@ function CurrentSlide(props: {
   // narration, rather than as the editor's still of their last frame.
   const played = useSyncExternalStore(onSlideClock, () => {
     const clock = getSlideClock();
-    return clock?.playing === true && clock.slide === id;
+    return clock?.slide === id;
   });
   const frame = useRef<HTMLIFrameElement | null>(null);
   useEffect(() => onSlideClock(() => postSlideClock(frame.current, id)), [id]);

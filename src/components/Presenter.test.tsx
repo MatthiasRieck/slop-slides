@@ -205,14 +205,15 @@ describe("Presenter", () => {
       const clocks = () =>
         post.mock.calls.map(([data]) => data as { type: string }).filter((data) => data.type === "slop:clock");
       fireEvent.click(screen.getByLabelText("Play"));
-      expect(clocks()[0]).toEqual({ type: "slop:clock", slide: "intro", at: 0, playing: true });
+      expect(clocks()[0]).toEqual({ type: "slop:clock", slide: "intro", at: 0 });
       await act(async () => vi.advanceTimersByTime(1500));
-      const last = clocks().at(-1) as unknown as { at: number; playing: boolean };
+      const last = clocks().at(-1) as unknown as { at: number };
       expect(last.at).toBeCloseTo(1.5, 1);
-      expect(last.playing).toBe(true);
-      // Paused, the slide holds where it was.
+      // Paused, nothing more is sent: the slide's animations run on, none left frozen.
+      const sent = clocks().length;
       fireEvent.click(screen.getByLabelText("Pause"));
-      expect(clocks().at(-1)).toMatchObject({ slide: "intro", playing: false });
+      await act(async () => vi.advanceTimersByTime(1000));
+      expect(clocks().length).toBe(sent);
     });
 
     it("keeps to the timeline's timing, the narration carrying on over the next slide", async () => {

@@ -361,11 +361,11 @@ describe("NarrationTimeline", () => {
     ];
     const outro = timeline.slides.find((s) => s.id === "outro")!;
     act(() => events.tick(outro.start + 1.5));
-    expect(getSlideClock()).toEqual({ slide: "outro", at: 1.5, playing: true });
+    expect(getSlideClock()).toEqual({ slide: "outro", at: 1.5 });
     expect(screen.getByText(`${formatDuration(outro.start + 1.5)} / ${formatDuration(15)}`)).toBeTruthy();
-    // Paused, it holds there.
+    // Paused, the slides run on their own: nothing is left frozen.
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
-    expect(getSlideClock()).toEqual({ slide: "outro", at: 1.5, playing: false });
+    expect(getSlideClock()).toBeNull();
     // Played to the end, the slides run on their own again.
     fireEvent.click(screen.getByRole("button", { name: "Play" }));
     act(() => (play.mock.calls[1]![3] as { ended: () => void }).ended());

@@ -103,10 +103,10 @@ function Tracks(props: {
   }, [deck]);
   useEffect(() => () => setSlideClock(null), []);
 
-  /** Puts the slide showing at `at` (and its animations) where the timeline is then. */
-  const clockAt = (at: number, playing: boolean) => {
+  /** Puts the slide showing at `at` (and its timed animations) where the timeline is then. */
+  const clockAt = (at: number) => {
     const slide = timeline.slides[slideAt(timeline, at)];
-    setSlideClock(slide ? { slide: slide.id, at: at - slide.start, playing } : null);
+    setSlideClock(slide ? { slide: slide.id, at: at - slide.start } : null);
   };
   const select = (index: number) => {
     const slide = timeline.slides[index];
@@ -114,7 +114,7 @@ function Tracks(props: {
   };
   const play = () => {
     if (stop) {
-      clockAt(time, false);
+      setSlideClock(null);
       return setStop(null);
     }
     const from = time >= timeline.end ? 0 : time;
@@ -124,7 +124,7 @@ function Tracks(props: {
       slide: select,
       tick: (at) => {
         setTime(at);
-        clockAt(at, true);
+        clockAt(at);
       },
       ended: () => {
         setStop(null);
@@ -187,7 +187,7 @@ function Tracks(props: {
     setStop(null);
     setTime(at);
     select(slideAt(timeline, at));
-    clockAt(at, false);
+    setSlideClock(null);
   };
 
   const reset = slides

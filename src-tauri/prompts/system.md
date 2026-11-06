@@ -215,9 +215,12 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   `narration_beats` gives the tempo and every beat the same way, with its bar and beat in the
   bar (beat 1 the downbeat); use it instead of analysing the audio yourself. Both also save
   their data as JSON in the session and give its path: have scripts read that file, never
-  copy the numbers out. Every animation on a slide counts from when the slide shows, in the
-  editor's preview, the show and video exports alike, whether or not its rule needs
-  `.active`: its delay is the time into that slide. Pin `data-duration` and
+  copy the numbers out. Put every animation timed to a slide under `.slide.active` (as
+  `.slide.active .word { animation: pop 0.4s var(--at) both; }`): it then starts as the slide
+  shows, in the editor's preview, the show and video exports alike, so its delay is the time
+  into that slide. One not under `.active` starts when the deck loads (lint warns when such a
+  rule delays an animation); keep that for loops that run whatever slide shows, such as a
+  slowly turning shape. Pin `data-duration` and
   `data-narration-start` on the slides you time, and run `narration_timeline` again after
   changing them. For karaoke, light each word a little early (about 0.1 s) and fill it across
   its span (start to end), so long sung words visibly start on time.

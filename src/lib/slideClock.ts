@@ -2,20 +2,19 @@ import { useSyncExternalStore } from "react";
 
 /**
  * Where narration playing in this window is on the slide showing: `at` seconds since the slide
- * showed, and whether time runs. The slide's page (src-tauri/assets/runtime.js) moves its
- * animations there on a `slop:clock` message, so they keep with the narration as a video
- * export keeps them.
+ * showed. The slide's page (src-tauri/assets/runtime.js) moves the animations that began with
+ * the slide (those under `.slide.active`) there on a `slop:clock` message, so they keep with the
+ * narration as a video export keeps them, even when the slide was on screen before it played.
  */
 export interface SlideClock {
   slide: string;
   at: number;
-  playing: boolean;
 }
 
 let current: SlideClock | null = null;
 const listeners = new Set<() => void>();
 
-/** Sets the clock; null when no narration plays and the slide's animations run on their own. */
+/** Sets the clock; null when no narration plays (paused too) and the slide's animations run on their own. */
 export function setSlideClock(clock: SlideClock | null) {
   if (clock === current) return;
   current = clock;
@@ -41,8 +40,5 @@ export function useSlideClock(): SlideClock | null {
 export function postSlideClock(frame: HTMLIFrameElement | null | undefined, slide: string | null) {
   const clock = current;
   if (!clock || (slide !== null && clock.slide !== slide)) return;
-  frame?.contentWindow?.postMessage(
-    { type: "slop:clock", slide: clock.slide, at: clock.at, playing: clock.playing },
-    "*",
-  );
+  frame?.contentWindow?.postMessage({ type: "slop:clock", slide: clock.slide, at: clock.at }, "*");
 }

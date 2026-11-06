@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { api, type Deck, errorMessage } from "../lib/api";
 import { zoomBox } from "../lib/ink";
-import { getSlideClock, onSlideClock, postSlideClock, setSlideClock } from "../lib/slideClock";
+import { onSlideClock, postSlideClock, setSlideClock } from "../lib/slideClock";
 import { layoutTimeline, slideAt } from "../lib/timeline";
 import { playTimeline } from "../lib/timelinePlayback";
 import { cn, fileUrl } from "../lib/utils";
@@ -283,10 +283,9 @@ function usePresenterFeed(deck: Deck | null, slide: string | null, go: (key: str
  * Runs the show by itself while playing, on the video export's timeline (see `layoutTimeline`):
  * each slide shows for its time, then `next` moves on, and narration (up-to-date audio only,
  * from the Narration tab) plays at its time, carrying on across slides when it runs over.
- * Pausing stops the narration and holds the slide's animations; playing again starts over from
- * the start of the slide, its animations too, so they keep with its narration (see
- * `setSlideClock`). Moving to another slide meanwhile goes on from there. The show stops playing
- * after the last slide.
+ * Pausing stops the narration; playing again starts over from the start of the slide, its timed
+ * animations too, so they keep with its narration (see `setSlideClock`). Moving to another slide
+ * meanwhile goes on from there. The show stops playing after the last slide.
  */
 export function useAutoplay(deck: Deck | null, current: string | null, next: () => void) {
   const [playing, setPlaying] = useState(false);
@@ -326,14 +325,13 @@ export function useAutoplay(deck: Deck | null, current: string | null, next: () 
       // From the start of the slide on screen: its animations start over with its narration.
       tick: (time) => {
         const shown = timeline.slides[slideAt(timeline, time)];
-        if (shown) setSlideClock({ slide: shown.id, at: time - shown.start, playing: true });
+        if (shown) setSlideClock({ slide: shown.id, at: time - shown.start });
       },
     });
     return () => {
       stop();
-      // Paused, the slide holds where it was.
-      const clock = getSlideClock();
-      if (clock) setSlideClock({ ...clock, playing: false });
+      // Paused, the slide's animations run on their own.
+      setSlideClock(null);
     };
   }, [playing, deck, from]);
   // Leaving the show lets the slides run on their own again.

@@ -304,18 +304,8 @@ footer {position:absolute;bottom:60px;font-size:22px;color:#b4bcae}
     return isNaN(n) ? 0 : Math.min(slides.length - 1, Math.max(0, n - 1));
   }
 
-  // An animation on a slide counts from when the slide shows, as video exports (video.js) and
-  // the app's preview count it: one that runs whether or not its slide is active starts over.
-  function startOver(slide) {
-    if (!document.getAnimations) return;
-    document.getAnimations().forEach(function (animation) {
-      var target = animation.effect && animation.effect.target;
-      if (typeof animation.animationName === "string" && target && slide.contains(target)) {
-        animation.currentTime = 0;
-      }
-    });
-  }
-
+  // When the slide on screen showed, on the document's animation clock (see keepTime).
+  var shownAt = null;
   var transition = null;
   function morphNames(slide, enabled) {
     var seen = Object.create(null);
@@ -344,7 +334,7 @@ footer {position:absolute;bottom:60px;font-size:22px;color:#b4bcae}
         morphNames(el, !!canMorph && i === index);
         el.classList.toggle("active", i === index);
       });
-      startOver(slides[index]);
+      shownAt = document.timeline ? document.timeline.currentTime : null;
     }
     if (canMorph) {
       morphNames(slides[previous], true);
@@ -571,31 +561,45 @@ footer {position:absolute;bottom:60px;font-size:22px;color:#b4bcae}
     } else if (navigate(event.key)) event.preventDefault();
   });
 
-  // Narration playing in the app keeps the slide's animations with it (src/lib/slideClock.ts):
-  // { type: "slop:clock", slide, at, playing } puts every CSS animation on that slide, while it
-  // shows, `at` seconds after it showed, as a video export does, running on from there or held.
-  // Only one that drifted is moved while it runs, so it does not stutter.
-  function keepTime(id, at, playing) {
+  // Narration playing in the app keeps the slide's timed animations with it (src/lib/slideClock.ts):
+  // { type: "slop:clock", slide, at } puts each CSS animation that began as that slide showed
+  // (the ones under `.slide.active`) `at` seconds in, as a video export has them, though the
+  // slide may have shown long before the narration started. One that was running before (a
+  // loop carrying on across slides) or is paused on purpose is left alone, and one is only
+  // moved once it drifted, so nothing stutters.
+  var driven = typeof WeakSet === "function" ? new WeakSet() : null;
+  var ended = driven && new WeakSet();
+  function keepTime(id, at) {
     var slide = slides[current];
-    if (!slide || (id && slide.id !== id) || !document.getAnimations || !(at >= 0)) return;
+    if (!slide || (id && slide.id !== id) || !driven || !document.getAnimations || !(at >= 0)) return;
     var ms = at * 1000;
     document.getAnimations().forEach(function (animation) {
       var effect = animation.effect;
       var target = effect && effect.target;
       // CSS transitions (the slide's fade) are not the slide's timeline.
       if (typeof animation.animationName !== "string" || !target || !slide.contains(target)) return;
-      var end = effect.getComputedTiming().endTime;
-      var time = Math.min(ms, end);
-      if (!playing || time >= end || Math.abs((animation.currentTime || 0) - time) > 40) {
-        animation.currentTime = time;
+      if (animation.playState === "paused" && !ended.has(animation)) return;
+      if (!driven.has(animation)) {
+        var began = animation.startTime;
+        if (shownAt !== null && began !== null && began < shownAt - 50) return;
+        driven.add(animation);
       }
-      if (playing && time < end) animation.play();
-      else animation.pause();
+      var end = effect.getComputedTiming().endTime;
+      if (ms >= end) {
+        // Past its end it rests on its last frame instead of starting over.
+        animation.currentTime = end;
+        animation.pause();
+        ended.add(animation);
+        return;
+      }
+      ended.delete(animation);
+      if (Math.abs((animation.currentTime || 0) - ms) > 40) animation.currentTime = ms;
+      if (animation.playState === "paused") animation.play();
     });
   }
   window.addEventListener("message", function (event) {
     var data = event.data;
-    if (framed && data && data.type === "slop:clock") keepTime(data.slide, Number(data.at), !!data.playing);
+    if (framed && data && data.type === "slop:clock") keepTime(data.slide, Number(data.at));
   });
 
   if (embed) return;

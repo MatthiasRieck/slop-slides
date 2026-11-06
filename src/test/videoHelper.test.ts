@@ -210,33 +210,13 @@ describe("video helper", () => {
     expect(answers.at(-1)).toBe("frame&busy=1");
   });
 
-  it("holds animations on slides not shown yet at their start, counting from when they show", async () => {
+  it("ignores animations on slides that are not shown", async () => {
     const { api, answers, settle, animate, doc } = helper();
-    // Running since the page loaded, as animations not tied to `.active` do.
     const behind = animate("body", Number.POSITIVE_INFINITY);
     await settle();
-    api.frame(4000);
-    expect(behind.paused).toBe(true);
-    expect(behind.currentTime).toBe(0);
-    expect(answers.at(-1)).toBe("frame&busy=0");
-    api.next(5000);
-    api.frame(5250);
-    expect(behind.currentTime).toBe(250);
-    expect(answers.at(-1)).toBe("frame&busy=1");
-    // Leaving its slide, it runs on through the fade.
-    doc.getElementById("end")!.classList.remove("active");
-    api.frame(5500);
-    expect(behind.currentTime).toBe(500);
-  });
-
-  it("ignores animations on slides that are hidden behind", async () => {
-    const { api, answers, settle, animate, doc } = helper();
-    await settle();
-    const behind = animate("title", Number.POSITIVE_INFINITY);
+    // A stylesheet hides inactive slides; jsdom has none, so say so directly.
+    (doc.getElementById("end") as HTMLElement).style.visibility = "hidden";
     api.frame(100);
-    // A stylesheet hides the slides behind; jsdom has none, so say so directly.
-    (doc.getElementById("intro") as HTMLElement).style.visibility = "hidden";
-    api.frame(200);
     expect(behind.currentTime).toBe(100);
     expect(answers.at(-1)).toBe("frame&busy=0");
   });

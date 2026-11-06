@@ -13,7 +13,7 @@ describe("slide clock", () => {
   it("tells its listeners of each change, until they stop listening", () => {
     const heard = vi.fn();
     const stop = onSlideClock(heard);
-    const clock = { slide: "intro", at: 1, playing: true };
+    const clock = { slide: "intro", at: 1 };
     setSlideClock(clock);
     expect(getSlideClock()).toBe(clock);
     setSlideClock(clock);
@@ -28,15 +28,15 @@ describe("slide clock", () => {
     const { frame: page, postMessage } = frame();
     postSlideClock(page, "intro");
     expect(postMessage).not.toHaveBeenCalled();
-    setSlideClock({ slide: "intro", at: 2.5, playing: false });
+    setSlideClock({ slide: "intro", at: 2.5 });
     postSlideClock(page, "outro");
     expect(postMessage).not.toHaveBeenCalled();
     postSlideClock(page, "intro");
     // A whole deck's page (the presenter's) takes the clock for whichever slide it is on.
     postSlideClock(page, null);
     expect(postMessage.mock.calls).toEqual([
-      [{ type: "slop:clock", slide: "intro", at: 2.5, playing: false }, "*"],
-      [{ type: "slop:clock", slide: "intro", at: 2.5, playing: false }, "*"],
+      [{ type: "slop:clock", slide: "intro", at: 2.5 }, "*"],
+      [{ type: "slop:clock", slide: "intro", at: 2.5 }, "*"],
     ]);
     postSlideClock(null, "intro");
   });

@@ -119,6 +119,7 @@ pub fn lint(
     check_narration_settings(&mut l);
     check_entrances(&mut l);
     check_tilts(&mut l);
+    check_untimed_delays(&mut l);
     check_morphs(&mut l);
     check_stuck_lines(&mut l);
     check_assets(&mut l, asset_exists);
@@ -1272,6 +1273,171 @@ fn check_entrances(l: &mut Linter) {
 /// The steepest a 3D tilt (rotateX/rotateY) draws about right in exports, PDFs and renders.
 const STEEPEST_TILT: f64 = 45.0;
 
+/// The shortest animation delay taken to time something to its slide, in seconds.
+const TIMED_DELAY: f64 = 1.0;
+
+/// Animations delayed to time them (by [`TIMED_DELAY`] or more, or by a `var()` or `calc()`) in
+/// rules not under `.active`: such an animation starts when the page loads, so in the show and
+/// in video exports its delay counts from then rather than from when its slide shows, and what
+/// it is timed to has long passed. A loop that runs whatever slide shows has no such delay.
+fn check_untimed_delays(l: &mut Linter) {
+    let html = l.html;
+    let mut from = 0;
+    while let Some(open) = find_ci(html, from, "<style") {
+        let Some(start) = html[open..].find('>').map(|i| open + i + 1) else {
+            break;
+        };
+        let end = find_ci(html, start, "</style").unwrap_or(html.len());
+        from = end;
+        if !in_markup(l, open) {
+            continue;
+        }
+        for (at, selector) in untimed_delays(&html[start..end]) {
+            l.report(
+                "untimed-animation-delay",
+                Severity::Warning,
+                start + at,
+                format!(
+                    "`{}` delays an animation to time it, but the rule is not under `.active`: the animation starts when the deck loads, so in the show and video exports its delay counts from then, not from when its slide shows. Put it under `.slide.active` (as `.slide.active .word {{ animation: … var(--at) both; }}`), so it starts as the slide shows.",
+                    truncate(selector.trim(), 80)
+                ),
+            );
+        }
+    }
+}
+
+/// The rules of `css` (outside `@keyframes`) that delay an animation to time it without being
+/// under `.active`: where each starts, and its selector.
+fn untimed_delays(css: &str) -> Vec<(usize, &str)> {
+    let mut found = Vec::new();
+    let bytes = css.as_bytes();
+    // Where the text since the last rule (a selector or an at-rule's prelude) starts.
+    let mut head = 0;
+    // Depths of the blocks open: whether each is a rule's declarations.
+    let mut open: Vec<bool> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i = css[i + 2..]
+                    .find("*/")
+                    .map_or(bytes.len(), |e| i + 2 + e + 2);
+                if open.last() != Some(&true) {
+                    head = i;
+                }
+                continue;
+            }
+            b'{' => {
+                let prelude = css[head..i].trim();
+                if prelude.starts_with("@keyframes") || prelude.starts_with("@-webkit-keyframes") {
+                    // Skip the whole block: its "rules" are keyframes.
+                    let mut depth = 0;
+                    while i < bytes.len() {
+                        match bytes[i] {
+                            b'{' => depth += 1,
+                            b'}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                    head = i + 1;
+                } else if prelude.starts_with('@') {
+                    open.push(false);
+                    head = i + 1;
+                } else {
+                    let body_end = css[i..].find('}').map_or(css.len(), |e| i + e);
+                    let body = &css[i + 1..body_end];
+                    let selector = &css[head..i];
+                    let ungated = selector.split(',').any(|part| !part.contains(".active"));
+                    if ungated && delays_to_time(body) {
+                        let lead = selector.len() - selector.trim_start().len();
+                        found.push((head + lead, selector));
+                    }
+                    i = body_end;
+                    head = i + 1;
+                }
+            }
+            b'}' => {
+                open.pop();
+                head = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    found
+}
+
+/// Whether `declarations` delay an animation by [`TIMED_DELAY`] or more, or by a `var()` or
+/// `calc()` (as times set per element are): in `animation-delay`, or as the second time of the
+/// `animation` shorthand.
+fn delays_to_time(declarations: &str) -> bool {
+    let timed = |value: &str| {
+        let value = value.trim();
+        value.starts_with("var(")
+            || value.starts_with("calc(")
+            || seconds(value).is_some_and(|s| s >= TIMED_DELAY)
+    };
+    declarations.split(';').any(|declaration| {
+        let Some((name, value)) = declaration.split_once(':') else {
+            return false;
+        };
+        let value = value.trim().trim_end_matches("!important").trim();
+        match name.trim().to_ascii_lowercase().as_str() {
+            "animation-delay" => value.split(',').any(timed),
+            "animation" => value.split(',').any(|one| {
+                // The first time is the duration, the second the delay.
+                let times: Vec<&str> = css_words(one)
+                    .into_iter()
+                    .filter(|w| {
+                        seconds(w).is_some() || w.starts_with("var(") || w.starts_with("calc(")
+                    })
+                    .collect();
+                times.get(1).is_some_and(|delay| timed(delay))
+            }),
+            _ => false,
+        }
+    })
+}
+
+/// The words of a CSS value, a function call with its arguments being one.
+fn css_words(value: &str) -> Vec<&str> {
+    let mut words = Vec::new();
+    let (mut depth, mut start) = (0, None);
+    for (i, c) in value.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            c if c.is_whitespace() && depth == 0 => {
+                if let Some(s) = start.take() {
+                    words.push(&value[s..i]);
+                }
+                continue;
+            }
+            _ => {}
+        }
+        start.get_or_insert(i);
+    }
+    if let Some(s) = start {
+        words.push(&value[s..]);
+    }
+    words
+}
+
+/// A CSS time in seconds: `s` or `ms`; None for anything else.
+fn seconds(time: &str) -> Option<f64> {
+    let time = time.trim().to_ascii_lowercase();
+    if let Some(ms) = time.strip_suffix("ms") {
+        return ms.parse::<f64>().ok().map(|ms| ms / 1000.0);
+    }
+    time.strip_suffix('s')?.parse().ok()
+}
+
 /// 3D tilts steeper than [`STEEPEST_TILT`] in the deck's styles: WebKit draws a page off screen
 /// (video and image exports, PDFs, `render_slide`) with perspective flattened, so a steep tilt
 /// comes out sheared and squashed, or as a thin line, though the editor shows it right. The
@@ -2099,6 +2265,37 @@ mod tests {
         assert_eq!(with(".slide {}", inline), ["steep-3d-tilt"]);
         let moved = inline.replace("<div style", "<div data-moved style");
         assert!(!with(".slide {}", &moved).contains(&"steep-3d-tilt"));
+    }
+
+    #[test]
+    fn flags_animations_timed_to_a_slide_that_start_with_the_deck() {
+        let with = |css: &str| {
+            rules(
+                &deck("<section class=\"slide\" id=\"a\"></section>")
+                    .replace("<style>.slide {}</style>", &format!("<style>{css}</style>")),
+            )
+        };
+        for untimed in [
+            ".word { animation: pop 0.4s ease-out 3.2s both; }",
+            ".word { animation: pop .4s var(--at) both; }",
+            ".scene .tile { animation-delay: calc(var(--b0) + 0.5s); }",
+            ".a, .slide.active .b { animation: pop 1s 2s; }",
+            "@media (min-width: 1px) { .word { animation-delay: 1500ms; } }",
+            ".a { opacity: 0; } .word { animation: spin 2s linear infinite, pop 1s 4s both; }",
+        ] {
+            assert_eq!(with(untimed), ["untimed-animation-delay"], "{untimed}");
+        }
+        for fine in [
+            ".slide.active .word { animation: pop 0.4s ease-out var(--at, 0s) both; }",
+            ".logo { animation: spin 8s linear infinite; }",
+            ".dot { animation: pulse 1s ease 0.2s infinite; }",
+            ".slide.active .a, .slide.active .b { animation-delay: 2s; }",
+            "@keyframes pop { 0% { opacity: 0; } 100% { opacity: 1; } } .x { color: red; }",
+            "/* .word { animation-delay: 3s; } */ .x { color: red; }",
+            ".x { transition: opacity 0.3s 2s; }",
+        ] {
+            assert!(with(fine).is_empty(), "{fine}: {:?}", with(fine));
+        }
     }
 
     #[test]

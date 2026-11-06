@@ -912,19 +912,20 @@ describe("Stage", () => {
       const sources = () => [...container.querySelectorAll("iframe")].map((f) => f.getAttribute("src") ?? "");
       expect(sources().some((src) => src.includes("edit="))).toBe(true);
       const selected = useApp.getState().selected!;
-      act(() => setSlideClock({ slide: selected, at: 1, playing: true }));
+      act(() => setSlideClock({ slide: selected, at: 1 }));
       expect(sources().some((src) => !src.includes("edit=") && !src.includes("static"))).toBe(true);
       // Every frame of the slide gets the clock as it moves.
       const frames = [...container.querySelectorAll("iframe")];
       for (const frame of frames) fireEvent.load(frame);
       const posts = frames.map((frame) => vi.spyOn(frame.contentWindow!, "postMessage"));
-      act(() => setSlideClock({ slide: selected, at: 1.1, playing: true }));
+      act(() => setSlideClock({ slide: selected, at: 1.1 }));
       const clocks = posts.flatMap((post) => post.mock.calls.map(([data]) => data));
-      expect(clocks).toContainEqual({ type: "slop:clock", slide: selected, at: 1.1, playing: true });
+      expect(clocks).toContainEqual({ type: "slop:clock", slide: selected, at: 1.1 });
       // Paused, or on another slide, it is the editor's again.
-      act(() => setSlideClock({ slide: selected, at: 1.1, playing: false }));
+      act(() => setSlideClock({ slide: "elsewhere", at: 1.1 }));
       expect(sources().some((src) => src.includes("edit="))).toBe(true);
       act(() => setSlideClock(null));
+      expect(sources().some((src) => src.includes("edit="))).toBe(true);
       toggleEditing();
     });
 

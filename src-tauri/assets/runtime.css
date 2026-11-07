@@ -85,6 +85,30 @@ html[data-slop-player] .deck > .slide.active {
   transition: opacity 0.35s ease;
   z-index: 1;
 }
+/* Continuous scrolling (<meta name="slopslide-transition" content="scroll">; the player sets
+   data-slop-scroll): the stage becomes a scroller the slides stack in, gap-free, that eases to a
+   stop at the nearest slide edge instead of switching slides. The scrollbar stays out of sight. */
+html[data-slop-scroll] .deck {
+  overflow-x: hidden;
+  overflow-y: auto;
+  scroll-snap-type: y proximity;
+  scrollbar-width: none;
+}
+html[data-slop-scroll] .deck::-webkit-scrollbar {
+  display: none;
+}
+html[data-slop-scroll] .deck > .slide {
+  position: relative !important;
+  inset: auto !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  transition: none;
+  scroll-snap-align: start;
+}
+html[data-slop-scroll] .deck > .slide[data-hidden] {
+  display: none !important;
+}
 /* Section markers only label the editor's slide rail; the player never shows them. */
 .deck > .deck-section {
   display: none !important;
@@ -175,6 +199,7 @@ html[data-slop-static] *::after {
     position: static;
     height: auto;
     margin: 0;
+    overflow: visible;
     transform: none !important;
   }
   .deck > .slide,

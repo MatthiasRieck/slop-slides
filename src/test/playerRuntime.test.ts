@@ -644,6 +644,185 @@ describe("player: without JavaScript", () => {
   });
 });
 
+describe("player: continuous scrolling", () => {
+  const SCROLL = '<head><meta name="slopslide-transition" content="scroll"></head>';
+  const html = DECK.replace("<html>", `<html>${SCROLL}`);
+  const H = 1080;
+  const posted: unknown[] = [];
+  /** Lays the slides out one under the other, as the runtime CSS does, and records scrolls. */
+  function setup(window: DOMWindow) {
+    const deck = window.document.querySelector<HTMLElement>(".deck")!;
+    const slides = [...window.document.querySelectorAll<HTMLElement>(".deck > .slide")];
+    slides.forEach((slide, i) => {
+      Object.defineProperty(slide, "offsetTop", { value: i * H, configurable: true });
+    });
+    let top = 0;
+    Object.defineProperty(deck, "scrollTop", {
+      get: () => top,
+      set: (value: number) => {
+        top = value;
+      },
+      configurable: true,
+    });
+    const scrolls: ScrollToOptions[] = [];
+    deck.scrollTo = vi.fn((options?: ScrollToOptions | number) => {
+      if (typeof options !== "object") return;
+      scrolls.push(options);
+      top = options.top ?? top;
+    }) as typeof deck.scrollTo;
+    Object.assign(window, { __scrolls: scrolls });
+  }
+  const scroller = (at = "") => {
+    posted.length = 0;
+    const p = player({ html, at, setup, parent: { postMessage: (data) => posted.push(data) } });
+    const deck = p.doc.querySelector<HTMLElement>(".deck")!;
+    const scrolls = (p.window as unknown as { __scrolls: ScrollToOptions[] }).__scrolls;
+    const scrollTo = (top: number) => {
+      deck.scrollTop = top;
+      deck.dispatchEvent(new p.window.Event("scroll"));
+    };
+    return { ...p, deck, scrolls, scrollTo };
+  };
+
+  it("is flagged for a deck that asks for it, and only when presenting", () => {
+    expect(scroller().doc.documentElement.hasAttribute("data-slop-scroll")).toBe(true);
+    expect(player().doc.documentElement.hasAttribute("data-slop-scroll")).toBe(false);
+    expect(player({ html, at: "?embed&slide=intro" }).doc.documentElement.hasAttribute("data-slop-scroll")).toBe(false);
+    expect(player({ html, at: "?static" }).doc.documentElement.hasAttribute("data-slop-scroll")).toBe(false);
+    const fade = html.replace('content="scroll"', 'content="fade"');
+    expect(player({ html: fade }).doc.documentElement.hasAttribute("data-slop-scroll")).toBe(false);
+    const spaced = html.replace('content="scroll"', 'content=" Scroll "');
+    expect(player({ html: spaced }).doc.documentElement.hasAttribute("data-slop-scroll")).toBe(true);
+  });
+
+  it("opens on the slide in the hash without animating there", () => {
+    const p = scroller("#end");
+    expect(p.active()).toBe(2);
+    expect(p.scrolls).toEqual([{ top: 2 * H, behavior: "auto" }]);
+  });
+
+  it("keys, clicks and links scroll smoothly to the slide and make it current at once", () => {
+    const p = scroller();
+    expect(p.scrolls).toEqual([{ top: 0, behavior: "auto" }]);
+    p.key("ArrowRight");
+    expect(p.scrolls.at(-1)).toEqual({ top: H, behavior: "smooth" });
+    expect(p.active()).toBe(1);
+    expect(hashOf(p.window)).toBe("#2");
+    expect(posted.at(-1)).toEqual({ type: "slop:slide", id: null, index: 1 });
+    p.click(p.doc.body, 1500);
+    expect(p.scrolls.at(-1)).toEqual({ top: 2 * H, behavior: "smooth" });
+    expect(p.active()).toBe(2);
+    p.window.location.hash = "#intro";
+    p.window.dispatchEvent(new p.window.Event("hashchange"));
+    expect(p.scrolls.at(-1)).toEqual({ top: 0, behavior: "smooth" });
+    expect(p.active()).toBe(0);
+  });
+
+  it("makes the slide scrolled into view by hand the current one", () => {
+    const p = scroller();
+    p.scrollTo(H * 0.4);
+    expect(p.active()).toBe(0);
+    p.scrollTo(H * 0.6);
+    expect(p.active()).toBe(1);
+    expect(hashOf(p.window)).toBe("#2");
+    expect(posted.at(-1)).toEqual({ type: "slop:slide", id: null, index: 1 });
+    p.scrollTo(2 * H);
+    expect(p.active()).toBe(2);
+    expect(hashOf(p.window)).toBe("#end");
+    expect(p.activeCount()).toBe(1);
+    // Scrolling by hand never asks the scroller to move.
+    expect(p.scrolls).toHaveLength(1);
+  });
+
+  it("ignores the slides a smooth scroll passes until it arrives", () => {
+    vi.useFakeTimers();
+    try {
+      const p = scroller();
+      p.key("End");
+      expect(p.active()).toBe(2);
+      // The browser scrolls in steps: the middle slide goes by.
+      p.scrollTo(H);
+      expect(p.active()).toBe(2);
+      p.scrollTo(2 * H);
+      expect(p.active()).toBe(2);
+      // Arrived: scrolling by hand counts again.
+      p.scrollTo(H);
+      expect(p.active()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up on a smooth scroll the user cuts short", () => {
+    vi.useFakeTimers();
+    try {
+      const p = scroller();
+      p.key("End");
+      p.scrollTo(H);
+      expect(p.active()).toBe(2);
+      vi.advanceTimersByTime(1100);
+      p.scrollTo(H);
+      expect(p.active()).toBe(1);
+      // scrollend settles it right away, without the wait.
+      p.key("Home");
+      p.deck.scrollTop = 2 * H;
+      p.deck.dispatchEvent(new p.window.Event("scrollend"));
+      expect(p.active()).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("scrolls without animation under reduced motion", () => {
+    const p = scroller();
+    Object.assign(p.window, { matchMedia: () => ({ matches: true }) });
+    p.key("ArrowRight");
+    expect(p.scrolls.at(-1)).toEqual({ top: H, behavior: "auto" });
+  });
+
+  it("does not morph heroes: the slides stay in view together", () => {
+    const heroes = html
+      .replace("<button>", '<img data-morph="hero"><button>')
+      .replace("<p>No id</p>", '<img data-morph="hero"><p>No id</p>');
+    const start = vi.fn((update: () => void) => {
+      update();
+      return { ready: Promise.resolve(), finished: Promise.resolve(), skipTransition: vi.fn() };
+    });
+    const p = player({
+      html: heroes,
+      setup: (w) => {
+        setup(w);
+        Object.assign(w.document, { startViewTransition: start });
+      },
+    });
+    p.key("ArrowRight");
+    expect(p.active()).toBe(1);
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it("stacks the slides in a scroller that snaps to them, hidden ones left out", () => {
+    const CSS = readFileSync("src-tauri/assets/runtime.css", "utf8");
+    const page = DECK.replace(
+      "<html>",
+      `<html data-slop-player data-slop-scroll><head><style>${CSS}</style></head>`,
+    ).replace('<section class="slide"><p>No id</p>', '<section class="slide" data-hidden><p>No id</p>');
+    const dom = new JSDOM(page, { pretendToBeVisual: true });
+    doms.push(dom);
+    const style = (selector: string) => dom.window.getComputedStyle(dom.window.document.querySelector(selector)!);
+    expect(style(".deck").overflowY).toBe("auto");
+    expect(style(".deck").overflowX).toBe("hidden");
+    expect(style("#intro").position).toBe("relative");
+    expect(style("#intro").visibility).toBe("visible");
+    expect(style("#intro").opacity).toBe("1");
+    expect(style("#end").visibility).toBe("visible");
+    expect(style("[data-hidden]").display).toBe("none");
+    expect(CSS).toMatch(/html\[data-slop-scroll\] \.deck \{[^}]*scroll-snap-type: y proximity/);
+    expect(CSS).toMatch(/html\[data-slop-scroll\] \.deck > \.slide \{[^}]*scroll-snap-align: start/);
+    // Printing lists every slide, so the scroller must not clip them.
+    expect(CSS).toMatch(/@media print \{[\s\S]*html\[data-slop-player\] \.deck \{[^}]*overflow: visible/);
+  });
+});
+
 describe("player: shared heroes", () => {
   const html = DECK.replace("<button>", '<img data-morph="hero"><button>').replace(
     "<p>No id</p>",

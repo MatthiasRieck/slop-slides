@@ -1,4 +1,7 @@
-/* SlopSlide player. Keys: ←/→, space, PageUp/PageDown, Home/End, F for full screen, R for review marks. */
+/* SlopSlide player. Keys: ←/→, space, PageUp/PageDown, Home/End, F for full screen, R for review marks.
+   A deck with <meta name="slopslide-transition" content="scroll"> is one continuous scroll: the
+   slides stack in a scroller that eases to a stop at each one, instead of switching one at a time
+   (see runtime.css). Editor previews, stills and exports keep to one slide at a time. */
 (function () {
   var root = document.documentElement;
   // The runtime-css block sets this before the body renders; without it the stylesheet lists
@@ -7,8 +10,22 @@
   var params = new URLSearchParams(location.search);
   var embed = params.has("embed");
   var framed = window.parent !== window;
-  if (params.has("static")) root.setAttribute("data-slop-static", "");
-  if (embed && params.has("static")) root.setAttribute("data-slop-thumbnail", "");
+  var still = params.has("static");
+  if (still) root.setAttribute("data-slop-static", "");
+  if (embed && still) root.setAttribute("data-slop-thumbnail", "");
+
+  /** The deck's `slopslide-<name>` setting, as its meta's trimmed `content`, or "" without one. */
+  function setting(name) {
+    var metas = document.querySelectorAll("meta[name]");
+    for (var i = 0; i < metas.length; i++) {
+      if (metas[i].getAttribute("name").trim().toLowerCase() === "slopslide-" + name) {
+        return (metas[i].getAttribute("content") || "").trim().toLowerCase();
+      }
+    }
+    return "";
+  }
+  var scrolling = !embed && !still && setting("transition") === "scroll";
+  if (scrolling) root.setAttribute("data-slop-scroll", "");
 
   var deck = document.querySelector(".deck");
   var all = Array.prototype.filter.call(document.querySelectorAll(".slide"), function (el) {
@@ -61,14 +78,66 @@
     });
   }
 
+  function reducedMotion() {
+    return !!window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  // Continuous scrolling: the slide the scroller is heading for after a key, click or link, and
+  // the timer that gives up on it. Until it arrives, the slides passing by are not made current.
+  var scrollTarget = -1;
+  var scrollTimer = 0;
+  var SCROLL_PATIENCE_MS = 1000;
+
+  /** The slide nearest the scroller's top edge. */
+  function nearest() {
+    var top = deck.scrollTop;
+    var best = 0;
+    var distance = Infinity;
+    for (var i = 0; i < slides.length; i++) {
+      var d = Math.abs(slides[i].offsetTop - top);
+      if (d < distance) {
+        distance = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  function arrived() {
+    scrollTarget = -1;
+    clearTimeout(scrollTimer);
+  }
+
+  /** Scrolls the deck so slide `index` fills the stage, smoothly when `animate`. */
+  function scrollToSlide(index, animate) {
+    arrived();
+    if (animate) {
+      scrollTarget = index;
+      // A wheel turn or swipe cuts a smooth scroll short, and the slide never arrives: after a
+      // moment, the slides in view count again.
+      scrollTimer = setTimeout(arrived, SCROLL_PATIENCE_MS);
+    }
+    var top = slides[index].offsetTop;
+    if (typeof deck.scrollTo === "function") deck.scrollTo({ top: top, behavior: animate ? "smooth" : "auto" });
+    else deck.scrollTop = top;
+  }
+
+  /** Goes to slide `index`: scrolls there when the deck scrolls, and makes it the current one. */
   function show(index) {
     index = Math.min(slides.length - 1, Math.max(0, index));
+    if (index === current) return;
+    if (scrolling) scrollToSlide(index, current >= 0 && !reducedMotion());
+    setCurrent(index);
+  }
+
+  /** Makes slide `index` the one shown (and told about): its entrance runs, the URL names it. */
+  function setCurrent(index) {
     if (index === current) return;
     var previous = current;
     current = index;
     if (transition) transition.skipTransition();
-    var motion = !window.matchMedia || !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    var canMorph = previous >= 0 && !embed && !params.has("static") && motion &&
+    var motion = !reducedMotion();
+    var canMorph = previous >= 0 && !embed && !still && !scrolling && motion &&
       document.startViewTransition && slides[index].querySelector("[data-morph]") &&
       slides[previous].querySelector("[data-morph]");
     function update() {
@@ -275,6 +344,21 @@
   window.addEventListener("resize", fit);
   fit();
   show(indexFor(embed ? params.get("slide") : decodeURIComponent(location.hash.slice(1))));
+  if (scrolling) {
+    // Scrolling by hand (wheel, trackpad, touch, scrollbar) makes the slide in view the current
+    // one; a scroll the player started only when it gets there.
+    deck.addEventListener("scroll", function () {
+      if (scrollTarget >= 0) {
+        if (Math.abs(deck.scrollTop - slides[scrollTarget].offsetTop) > 1) return;
+        arrived();
+      }
+      setCurrent(nearest());
+    });
+    deck.addEventListener("scrollend", function () {
+      arrived();
+      setCurrent(nearest());
+    });
+  }
   fitAll();
   window.addEventListener("load", fitAll);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitAll);

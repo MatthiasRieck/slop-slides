@@ -360,7 +360,14 @@ fn set_narration_audio(dir: &Path, arguments: &Value, home: &Path) -> Result<Str
     let duration = found.duration;
     let seconds = narration::import_audio(&file, slide, Path::new(&source.absolute))?;
     let kept = narration::audio_file(&file, slide);
-    let kept = kept.strip_prefix(dir).unwrap_or(&kept).display();
+    // Workspace-relative, with `/` as the agent writes paths on every platform.
+    let kept: Vec<String> = kept
+        .strip_prefix(dir)
+        .unwrap_or(&kept)
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let kept = kept.join("/");
     let mut out =
         format!("Slide `{slide}` is narrated by {audio} now ({seconds:.2} s, kept as {kept}).");
     // Audio made elsewhere plays from the moment the slide shows, whatever the app's pause.
@@ -1145,7 +1152,10 @@ mod tests {
         }
         assert!(!text.contains("Words of `outro`"), "{text}");
         // The same as JSON in the session, for scripts.
-        let saved = dir.join("session/timing/deck.html.timeline.json");
+        let saved = dir
+            .join("session")
+            .join("timing")
+            .join("deck.html.timeline.json");
         assert!(text.ends_with(&saved.display().to_string()), "{text}");
         let data: Value = serde_json::from_str(&std::fs::read_to_string(&saved).unwrap()).unwrap();
         assert_eq!(data["slides"][0]["id"], "song");

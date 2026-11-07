@@ -5,6 +5,7 @@ import { ChevronDown, FileCode2, FileText, Film, Images, Loader2, Play, Presenta
 import { useRef, useState } from "react";
 
 import { api, type Deck, errorMessage, type Screen, type Slide } from "../lib/api";
+import { rememberChoice } from "../lib/screens";
 import { VIDEO_CANCELLED, type VideoOptions, type VideoProgress } from "../lib/video";
 import { useApp } from "../store";
 import { Button, ToolButton } from "./Button";
@@ -181,6 +182,7 @@ function Actions({ deck }: { deck: Deck }) {
           previews={previews}
           onCancel={() => setScreens(null)}
           onStart={(choice) => {
+            rememberChoice(screens, choice);
             setScreens(null);
             useApp.getState().setPresenting(true, choice);
           }}

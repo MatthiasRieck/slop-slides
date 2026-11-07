@@ -172,10 +172,11 @@ fn present_on(
     screens::present(&app, &window, audience, presenter)
 }
 
-/// Closes the presenter view window when the show ends.
+/// Ends a show on several screens: closes the presenter view and puts the show's window back
+/// where it was before the show moved it.
 #[tauri::command]
-fn close_presenter_view(app: AppHandle) {
-    screens::close_presenter_view(&app);
+async fn end_presenting(app: AppHandle, window: Window) {
+    screens::end(&app, &window).await;
 }
 
 #[tauri::command]
@@ -1239,7 +1240,7 @@ pub fn run() {
             list_screens,
             screen_previews,
             present_on,
-            close_presenter_view,
+            end_presenting,
             take_pending_folder,
             open_workspace,
             close_workspace,

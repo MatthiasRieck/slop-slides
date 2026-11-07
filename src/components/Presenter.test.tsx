@@ -1193,7 +1193,7 @@ describe("presenter view", () => {
 describe("Presenter on several screens", () => {
   const choice = { audience: 1, presenter: 0 };
 
-  it("moves the show to its screen before going full screen, and closes the presenter view after", async () => {
+  it("moves the show to its screen before going full screen, and ends the show there after (closing the presenter view, moving back)", async () => {
     useApp.setState({ screens: choice });
     const { unmount } = render(<Presenter />);
     expect(setFullscreen).not.toHaveBeenCalled();
@@ -1202,7 +1202,7 @@ describe("Presenter on several screens", () => {
     expect(setFullscreen).toHaveBeenCalledWith(true);
     unmount();
     await act(async () => {});
-    expect(invoke).toHaveBeenCalledWith("close_presenter_view");
+    expect(invoke).toHaveBeenCalledWith("end_presenting");
   });
 
   it("opens the presenter view once under StrictMode's double-mounted effects", async () => {
@@ -1227,7 +1227,7 @@ describe("Presenter on several screens", () => {
     await act(async () => {});
     expect(invoke.mock.calls.map(([name]) => name)).toEqual(["present_on"]);
     await act(async () => finishPlacing());
-    expect(invoke.mock.calls.map(([name]) => name)).toEqual(["present_on", "close_presenter_view", "present_on"]);
+    expect(invoke.mock.calls.map(([name]) => name)).toEqual(["present_on", "end_presenting", "present_on"]);
   });
 
   it("stays out of full screen when the show ends while it is being placed", async () => {

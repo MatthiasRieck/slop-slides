@@ -16,8 +16,9 @@ import { AnnotationLayer, PresenterToolbar, useAnnotations, useReveal } from "./
 
 const PANEL_KEY = "slopslide.presenterPanel";
 
-// Placing the show on its screens and closing the presenter view run one after the other, in
-// the order asked: they take a moment off the main thread, and a show can end as it starts.
+// Placing the show on its screens and ending it (closing the presenter view, moving the window
+// back) run one after the other, in the order asked: they take a moment off the main thread, and
+// a show can end as it starts.
 let placing: Promise<unknown> = Promise.resolve();
 function inOrder<T>(command: () => Promise<T>): Promise<T> {
   const run = placing.then(command);
@@ -126,7 +127,8 @@ export function Presenter() {
       window.removeEventListener("message", onMessage);
       ended = true;
       void window_.setFullscreen(false);
-      if (placed) void inOrder(() => api.closePresenterView()).catch(() => {});
+      // Back to where the window was: the show moved it to the audience's screen.
+      if (placed) void inOrder(() => api.endPresenting()).catch(() => {});
     };
   }, []);
 

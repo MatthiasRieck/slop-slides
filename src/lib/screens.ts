@@ -34,10 +34,46 @@ export function arrange(screens: Screen[]): { aspect: number; boxes: ScreenBox[]
   };
 }
 
-/** The choice a picker starts with: the show on the last screen, the presenter view on the first. */
+/** The choice a picker starts with: the last one made, or else the show on the last screen and
+ * the presenter view on the first. */
 export function defaultChoice(screens: Screen[]): ScreenChoice {
-  const audience = screens.length - 1;
-  return { audience, presenter: screens.length > 1 ? 0 : null };
+  return recalled(screens) ?? { audience: screens.length - 1, presenter: screens.length > 1 ? 0 : null };
+}
+
+/** Tells a screen apart from the others across pickers, where its index may change as screens
+ * come and go. */
+function identify(screen: Screen): string {
+  return `${screen.name}@${screen.x},${screen.y}`;
+}
+
+/** The last choice made in a picker, by screen, while the app runs. It isn't saved anywhere:
+ * which screens are attached is a matter of the moment, not of the deck. */
+let last: { audience: string; presenter: string | null } | null = null;
+
+/** Remembers `choice` for the next picker, which starts with it if its screens are still there. */
+export function rememberChoice(screens: Screen[], choice: ScreenChoice): void {
+  const at = (index: number) => screens.find((s) => s.index === index);
+  const audience = at(choice.audience);
+  if (!audience) return;
+  const presenter = choice.presenter === null ? undefined : at(choice.presenter);
+  last = { audience: identify(audience), presenter: presenter ? identify(presenter) : null };
+}
+
+/** Forgets the remembered choice (for tests). */
+export function forgetChoice(): void {
+  last = null;
+}
+
+/** The remembered choice on `screens`; null without one, or when its slides' screen is gone. A
+ * presenter view whose screen is gone goes to another free one. */
+function recalled(screens: Screen[]): ScreenChoice | null {
+  if (!last) return null;
+  const find = (id: string) => screens.find((s) => identify(s) === id)?.index;
+  const audience = find(last.audience);
+  if (audience === undefined) return null;
+  if (last.presenter === null) return { audience, presenter: null };
+  const presenter = find(last.presenter) ?? screens.find((s) => s.index !== audience)?.index ?? null;
+  return { audience, presenter: presenter === audience ? null : presenter };
 }
 
 /**

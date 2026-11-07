@@ -4,16 +4,21 @@
 //! with `?presenter`: it renders from what the show window sends it and never opens a
 //! workspace itself (slides are served to any window while a workspace has them open).
 //!
+//! A show that moves its window to another screen puts it back where it was when it ends (see
+//! [`end`]): leaving full screen alone would leave it on the audience's screen.
+//!
 //! The picker shows a screenshot of each screen, to tell them apart by what is on them. They
 //! are only ever held in the picker: nothing is written to disk. On Linux it goes without (see
 //! [`shots`]).
 
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{
-    ipc::Channel, AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, Position,
-    WebviewUrl, WebviewWindowBuilder, Window,
+    ipc::Channel, AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize,
+    Position, Size, WebviewUrl, WebviewWindowBuilder, Window,
 };
 
 use crate::error::{Error, Result};
@@ -26,6 +31,11 @@ const PREVIEW_TIMEOUT: Duration = Duration::from_secs(3);
 /// windows get. Each gets a label of its own: destroying a window only queues that, so a label
 /// stays taken for a moment after, and the next show may be starting already.
 pub const LABEL_PREFIX: &str = "presenter-";
+
+/// How long the end of a show waits for its window to come out of full screen (macOS animates
+/// that) before putting it back where it was, and how often it looks.
+const SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
+const SETTLE_POLL: Duration = Duration::from_millis(50);
 
 /// Whether the system lays out screens in points, each screen with its own scale, rather than
 /// in the physical pixels of one desktop.
@@ -287,6 +297,151 @@ fn validate(count: usize, audience: usize, presenter: Option<usize>) -> Result<(
     Ok(())
 }
 
+/// Where a window was and how big, in the desktop's units (see [`origin`]), and whether it was
+/// maximized.
+#[derive(Debug, Clone, PartialEq)]
+struct Placement {
+    position: Position,
+    size: Size,
+    maximized: bool,
+}
+
+/// Where each window a show moved was before, by label, until the show ends.
+static BEFORE: Mutex<Option<HashMap<String, Placement>>> = Mutex::new(None);
+
+/// A window's place from what tauri reports: physical pixels, which where the system lays out
+/// screens in points are those points times the scale of the screen the window is on.
+fn placement(
+    position: PhysicalPosition<i32>,
+    size: PhysicalSize<u32>,
+    scale: f64,
+    maximized: bool,
+    points: bool,
+) -> Placement {
+    if points {
+        Placement {
+            position: Position::Logical(position.to_logical(scale)),
+            size: Size::Logical(size.to_logical(scale)),
+            maximized,
+        }
+    } else {
+        Placement {
+            position: position.into(),
+            size: size.into(),
+            maximized,
+        }
+    }
+}
+
+/// Where `window` is now.
+fn placement_of(window: &Window) -> Option<Placement> {
+    Some(placement(
+        window.outer_position().ok()?,
+        window.inner_size().ok()?,
+        window.scale_factor().ok()?,
+        window.is_maximized().unwrap_or(false),
+        LAID_OUT_IN_POINTS,
+    ))
+}
+
+/// Remembers where `window` is, before a show moves it. A window already in full screen is not
+/// somewhere to go back to.
+fn remember(window: &Window) {
+    if window.is_fullscreen().unwrap_or(false) {
+        return;
+    }
+    let Some(placement) = placement_of(window) else {
+        return;
+    };
+    let mut before = BEFORE.lock().unwrap_or_else(|e| e.into_inner());
+    before
+        .get_or_insert_with(HashMap::new)
+        .insert(window.label().to_string(), placement);
+}
+
+/// Takes where `window` was before its show, if a show moved it.
+fn recall(label: &str) -> Option<Placement> {
+    let mut before = BEFORE.lock().unwrap_or_else(|e| e.into_inner());
+    before.as_mut()?.remove(label)
+}
+
+/// Whether a window at `position` of `size` fills the monitor at `at` of `extent`: it is still
+/// full screen, or has yet to start leaving it.
+fn fills(
+    position: PhysicalPosition<i32>,
+    size: PhysicalSize<u32>,
+    at: PhysicalPosition<i32>,
+    extent: PhysicalSize<u32>,
+) -> bool {
+    position.x <= at.x
+        && position.y <= at.y
+        && size.width >= extent.width
+        && size.height >= extent.height
+}
+
+/// Waits for `window` to be out of full screen and stay put: macOS animates it back to where it
+/// was before, and moving it during that is undone at the end. Gives up after [`SETTLE_TIMEOUT`].
+async fn settle(window: &Window) {
+    let deadline = tokio::time::Instant::now() + SETTLE_TIMEOUT;
+    let mut last = None;
+    while tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(SETTLE_POLL).await;
+        if window.is_fullscreen().unwrap_or(false) {
+            continue;
+        }
+        let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+            return;
+        };
+        let full = window
+            .current_monitor()
+            .ok()
+            .flatten()
+            .is_some_and(|m| fills(position, size, *m.position(), *m.size()));
+        let now = Some((position, size));
+        if !full && now == last {
+            return;
+        }
+        last = now;
+    }
+}
+
+/// Puts `window` at `placement`.
+fn place(window: &Window, placement: &Placement) {
+    let _ = window.unmaximize();
+    let _ = window.set_position(placement.position);
+    let _ = window.set_size(placement.size);
+    if placement.maximized {
+        let _ = window.maximize();
+    }
+}
+
+/// Whether `window` is at `placement`, give or take a pixel of rounding.
+fn is_at(window: &Window, placement: &Placement) -> bool {
+    let Some(now) = placement_of(window) else {
+        return true;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let a = now.position.to_physical::<f64>(scale);
+    let b = placement.position.to_physical::<f64>(scale);
+    (a.x - b.x).abs() <= scale && (a.y - b.y).abs() <= scale
+}
+
+/// Ends a show: closes the presenter view and, once the show's window is out of full screen,
+/// puts it back where it was before the show moved it to the audience's screen.
+pub async fn end(app: &AppHandle, window: &Window) {
+    close_presenter_view(app);
+    let Some(before) = recall(window.label()) else {
+        return;
+    };
+    settle(window).await;
+    place(window, &before);
+    // A move the system was still finishing may undo this: look again in a moment.
+    tokio::time::sleep(SETTLE_POLL * 4).await;
+    if !is_at(window, &before) {
+        place(window, &before);
+    }
+}
+
 /// Moves the show window to `audience` (the frontend makes it full screen once it is there)
 /// and opens the presenter view full screen on `presenter`, if given.
 pub fn present(
@@ -297,6 +452,7 @@ pub fn present(
 ) -> Result<()> {
     let screens = list(app)?;
     validate(screens.len(), audience, presenter)?;
+    remember(window);
     window
         .set_position(origin(&screens[audience], LAID_OUT_IN_POINTS))
         .map_err(|e| Error::msg(format!("cannot move the show: {e}")))?;
@@ -335,6 +491,7 @@ pub fn close_presenter_view(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tauri::LogicalSize;
 
     #[test]
     fn the_show_and_the_presenter_view_go_on_different_screens_that_exist() {
@@ -385,6 +542,84 @@ mod tests {
     fn physical_pixels_are_the_desktop_already() {
         let screen = on_desktop((3840, -100), (1920, 1080), 2.0, false);
         assert_eq!(screen, (3840.0, -100.0, 1920.0, 1080.0));
+    }
+
+    #[test]
+    fn a_windows_place_is_kept_in_the_desktops_units() {
+        // On a Retina screen, in points: halved.
+        let at = placement(
+            PhysicalPosition::new(200, 100),
+            PhysicalSize::new(2000, 1200),
+            2.0,
+            false,
+            true,
+        );
+        assert_eq!(
+            at,
+            Placement {
+                position: Position::Logical(LogicalPosition::new(100.0, 50.0)),
+                size: Size::Logical(LogicalSize::new(1000.0, 600.0)),
+                maximized: false,
+            }
+        );
+        // In physical pixels: as they are, whatever the scale.
+        let at = placement(
+            PhysicalPosition::new(-1920, 0),
+            PhysicalSize::new(1280, 720),
+            1.5,
+            true,
+            false,
+        );
+        assert_eq!(
+            at,
+            Placement {
+                position: Position::Physical(PhysicalPosition::new(-1920, 0)),
+                size: Size::Physical(PhysicalSize::new(1280, 720)),
+                maximized: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_window_goes_back_once_to_where_it_was() {
+        let at = placement(
+            PhysicalPosition::new(10, 20),
+            PhysicalSize::new(800, 600),
+            1.0,
+            false,
+            false,
+        );
+        BEFORE
+            .lock()
+            .unwrap()
+            .get_or_insert_with(HashMap::new)
+            .insert("test-window".into(), at.clone());
+        assert_eq!(recall("test-window"), Some(at));
+        assert_eq!(recall("test-window"), None, "taken at the end of the show");
+        assert_eq!(recall("never-moved"), None);
+    }
+
+    #[test]
+    fn a_window_filling_its_monitor_is_still_full_screen() {
+        let monitor = (
+            PhysicalPosition::new(1920, 0),
+            PhysicalSize::new(3840, 2160),
+        );
+        let fills_monitor = |x, y, w, h| {
+            fills(
+                PhysicalPosition::new(x, y),
+                PhysicalSize::new(w, h),
+                monitor.0,
+                monitor.1,
+            )
+        };
+        assert!(fills_monitor(1920, 0, 3840, 2160));
+        assert!(
+            fills_monitor(1912, -8, 3856, 2176),
+            "with its borders off screen"
+        );
+        assert!(!fills_monitor(1920, 50, 3840, 2000), "below the menu bar");
+        assert!(!fills_monitor(2000, 100, 1600, 1000));
     }
 
     #[test]

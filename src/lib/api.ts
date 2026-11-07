@@ -120,7 +120,9 @@ export interface Deck {
 }
 
 export interface NarrationSettings {
-  /** One of SpeechStatus.voices' ids. */
+  /** Who says it: one of SpeechStatus.providers' ids (its `slopslide-narration-provider` meta); "local" when missing. */
+  provider?: string;
+  /** One of its provider's voices' ids. */
   voice: string;
   /** One of SpeechStatus.languages' ids. */
   language: string;
@@ -287,13 +289,28 @@ export interface VoiceStatus {
   recording: boolean;
 }
 
-/** A built-in voice of the narration model (see src-tauri/src/narration/mod.rs). */
+/** A voice narration can be said in (see src-tauri/src/narration/). */
 export interface NarrationVoice {
   id: string;
   name: string;
   description: string;
-  /** The language it speaks natively; others it speaks with an accent. */
-  native: string;
+  /** The language a local model's voice speaks natively; others it speaks with an accent. */
+  native?: string;
+}
+
+/** Where a hosted provider's API key comes from: saved in the app, or its environment variable. */
+export type SpeechKeySource = "saved" | "environment";
+
+/** Who can say narration: the local voice model, or a hosted service (see src-tauri/src/narration/cloud.rs). */
+export interface NarrationProvider {
+  id: string;
+  name: string;
+  /** It is a hosted service, called with the user's API key. */
+  needsKey: boolean;
+  /** Where its key comes from; null while it has none. */
+  key: SpeechKeySource | null;
+  /** Its voices, the default first. */
+  voices: NarrationVoice[];
 }
 
 export interface NarrationLanguage {
@@ -313,7 +330,8 @@ export interface SpeechStatus {
   downloading: boolean;
   /** The deck whose narration is being said, if any. */
   rendering: string | null;
-  voices: NarrationVoice[];
+  /** The local voice model first, then the hosted services. */
+  providers: NarrationProvider[];
   languages: NarrationLanguage[];
 }
 
@@ -705,6 +723,12 @@ export const api = {
   /** How loud a slide's narration audio is along its length, 0 to 1, for drawing its waveform. */
   narrationPeaks: (id: string, slide: string) => invoke<number[]>("narration_peaks", { id, slide }),
   setNarrationVoice: (id: string, voice: string) => invoke<Deck>("set_narration_voice", { id, voice }),
+  /** Sets who says the deck's narration; a voice the provider does not have becomes its default. */
+  setNarrationProvider: (id: string, provider: string) => invoke<Deck>("set_narration_provider", { id, provider }),
+  /** Saves a hosted provider's API key in `~/.slopslides`, or forgets it for null. */
+  setSpeechKey: (provider: string, key: string | null) => invoke<SpeechStatus>("set_speech_key", { provider, key }),
+  /** Every voice the provider's account can use (ElevenLabs: the account's own too). */
+  speechVoices: (provider: string) => invoke<NarrationVoice[]>("speech_voices", { provider }),
   setNarrationLanguage: (id: string, language: string) => invoke<Deck>("set_narration_language", { id, language }),
 };
 

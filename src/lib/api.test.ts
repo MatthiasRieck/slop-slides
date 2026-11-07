@@ -344,6 +344,15 @@ const CASES = [
     { id: "talk", voice: "aiden" },
   ],
   [
+    "setNarrationProvider",
+    () => api.setNarrationProvider("talk", "openai"),
+    "set_narration_provider",
+    { id: "talk", provider: "openai" },
+  ],
+  ["setSpeechKey", () => api.setSpeechKey("openai", "sk-x"), "set_speech_key", { provider: "openai", key: "sk-x" }],
+  ["setSpeechKey", () => api.setSpeechKey("openai", null), "set_speech_key", { provider: "openai", key: null }],
+  ["speechVoices", () => api.speechVoices("elevenlabs"), "speech_voices", { provider: "elevenlabs" }],
+  [
     "setNarrationLanguage",
     () => api.setNarrationLanguage("talk", "de"),
     "set_narration_language",

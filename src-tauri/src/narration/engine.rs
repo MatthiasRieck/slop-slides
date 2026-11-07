@@ -28,6 +28,10 @@ const MAX_FRAMES: i32 = 562;
 /// The same seed for every piece, so the same script in the same voice sounds the same.
 #[cfg(narration_engine)]
 const SEED: u32 = 42;
+/// How much faster than the model's own pace narration is said, keeping its pitch: the
+/// model speaks slowly for slides.
+#[cfg(narration_engine)]
+const SPEED: f32 = 1.12;
 
 /// Whether this build has the speech engine (see build.rs).
 pub const AVAILABLE: bool = cfg!(narration_engine);
@@ -254,6 +258,14 @@ mod ffi {
             samples: *mut c_int,
         ) -> c_int;
         pub fn slop_tts_free_audio(audio: *mut f32);
+        pub fn qwen_audio_time_stretch(
+            input: *const f32,
+            n_in: c_int,
+            rate: f32,
+            sample_rate: c_int,
+            out: *mut *mut f32,
+            out_n: *mut c_int,
+        ) -> c_int;
         pub fn slop_tts_unload(ctx: *mut c_void);
     }
 }
@@ -297,7 +309,7 @@ impl Engine {
             0 => {
                 let out = unsafe { std::slice::from_raw_parts(audio, samples as usize) }.to_vec();
                 unsafe { ffi::slop_tts_free_audio(audio) };
-                Ok(out)
+                Ok(stretch(&out, SPEED))
             }
             -1 => Err(Error::msg(format!(
                 "the voice model has no voice {speaker:?} or language {language:?}"
@@ -307,6 +319,29 @@ impl Engine {
             )),
         }
     }
+}
+
+/// `samples` (at [`audio::RATE`]) said `rate` times as fast, at the same pitch. Unchanged
+/// if the engine's stretcher fails.
+#[cfg(narration_engine)]
+fn stretch(samples: &[f32], rate: f32) -> Vec<f32> {
+    let (mut out, mut n) = (std::ptr::null_mut(), 0);
+    let rc = unsafe {
+        ffi::qwen_audio_time_stretch(
+            samples.as_ptr(),
+            samples.len() as i32,
+            rate,
+            audio::RATE as i32,
+            &mut out,
+            &mut n,
+        )
+    };
+    if rc != 0 || out.is_null() {
+        return samples.to_vec();
+    }
+    let stretched = unsafe { std::slice::from_raw_parts(out, n as usize) }.to_vec();
+    unsafe { ffi::slop_tts_free_audio(out) };
+    stretched
 }
 
 #[cfg(narration_engine)]
@@ -400,6 +435,34 @@ mod tests {
             removed = std::fs::remove_dir_all(&dir);
         }
         removed.expect("the test's folder is deletable once the regression closed its files");
+    }
+
+    #[cfg(narration_engine)]
+    #[test]
+    fn narration_is_said_twelve_percent_faster_at_the_same_pitch() {
+        assert_eq!(SPEED, 1.12);
+        let rate = audio::RATE as usize;
+        // Two seconds of a 200 Hz tone.
+        let tone: Vec<f32> = (0..2 * rate)
+            .map(|i| (i as f32 * 200.0 * std::f32::consts::TAU / rate as f32).sin() * 0.5)
+            .collect();
+        let fast = stretch(&tone, SPEED);
+        let expected = tone.len() as f32 / SPEED;
+        assert!(
+            (fast.len() as f32 - expected).abs() < 0.05 * expected,
+            "{} samples, expected about {expected}",
+            fast.len()
+        );
+        // Same pitch: as many zero crossings per second, away from the ends.
+        let middle = &fast[rate / 4..fast.len() - rate / 4];
+        let crossings = middle
+            .windows(2)
+            .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
+            .count() as f32;
+        let hz = crossings / 2.0 / (middle.len() as f32 / rate as f32);
+        assert!((hz - 200.0).abs() < 10.0, "pitch moved to {hz} Hz");
+        // A failed or trivial stretch keeps the audio.
+        assert_eq!(stretch(&[], SPEED), Vec::<f32>::new());
     }
 
     #[test]

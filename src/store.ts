@@ -112,6 +112,34 @@ export interface AssistantMessage {
 
 export type ChatMessage = UserMessage | AssistantMessage;
 
+/** What goes along with a chat message. */
+export interface SendOptions {
+  includeSlide: boolean;
+  attachments: string[];
+  screenshot?: string;
+  element?: EditElement;
+  /** The slide it is about, when not the one selected now (a queued message keeps its own). */
+  slide?: string | null;
+}
+
+/** A message waiting for the agent's turn to end (see `AppState.queue`). */
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  options: SendOptions;
+  /**
+   * A message already made ready for the agent (its sketch shot, its comments taken), which a
+   * steer could not get into the turn; it goes out as it is.
+   */
+  ready?: ReadyMessage;
+}
+
+/** A user's message and the prompt that tells the agent about it. */
+interface ReadyMessage {
+  user: UserMessage;
+  prompt: string;
+}
+
 export interface ModelSelection {
   provider: Provider;
   model: string;
@@ -566,10 +594,22 @@ interface AppState {
    * composer asking the agent to lay the slides out again for it.
    */
   resizeSlides: (size: SlideSize) => Promise<void>;
-  send: (
-    text: string,
-    options: { includeSlide: boolean; attachments: string[]; screenshot?: string; element?: EditElement },
-  ) => Promise<void>;
+  /** Sends a message to the agent; while it works, the message waits in `queue`. */
+  send: (text: string, options: SendOptions) => Promise<void>;
+  /**
+   * Messages sent while the agent works, in order. The first goes out when a turn finishes
+   * cleanly; after a stop or an error they wait until steered or sent by hand.
+   */
+  queue: QueuedMessage[];
+  /**
+   * Sends a message into the agent's running turn, to change what it does now rather than
+   * after; without a turn, just sends it. If the turn ends first, it runs as the next turn.
+   */
+  steer: (text: string, options: SendOptions) => Promise<void>;
+  /** Steers with a queued message (or, while the agent is idle, sends it). */
+  steerQueued: (id: string) => Promise<void>;
+  /** Takes a message out of the queue, returning it (to edit it in the composer). */
+  takeQueued: (id: string) => QueuedMessage | null;
   /** Has the agent summarize the conversation so far, freeing up its context. */
   compact: () => Promise<void>;
   interrupt: () => void;
@@ -633,6 +673,7 @@ export const useApp = create<AppState>((set, get) => ({
   assetsRev: 0,
   chatRevision: 0,
   messages: [],
+  queue: [],
   sessionProvider: null,
   running: false,
   selection: loadSelection(),
@@ -709,6 +750,7 @@ export const useApp = create<AppState>((set, get) => ({
       openedFile: null,
       workspaceChange: null,
       messages: [],
+      queue: [],
       running: false,
       sessionProvider: null,
     });
@@ -1389,50 +1431,57 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
-  send: async (text, { includeSlide, attachments, screenshot, element }) => {
-    const { workspace, openedFile, deck, selected, running, selection } = get();
-    if (!workspace || running) return;
+  send: async (text, options) => {
+    const { workspace, running, selection } = get();
+    if (!workspace) return;
+    if (running) return enqueue(text, options);
     // Typed as a message, the command still compacts rather than reaching the agent as text.
     if (text.trim() === COMPACT_COMMAND) return get().compact();
-    const slide = deck && includeSlide ? selected : null;
-    const strokes = slide ? (get().sketches[slide] ?? []) : [];
-    // Marks go out once, while they are on show; they stay on the slide as a review.
-    const unsent = !!slide && get().reviewVisible && strokes !== get().sketchesSent[slide];
-    const bounds = unsent && deck ? inkBounds(strokes, pixelsOf(deck)) : null;
-    const comments = commentsInScope(get()).filter((c) => !heldComment(get(), c));
-    let user: UserMessage = {
-      id: newId(),
-      role: "user",
-      text,
-      slide,
-      attachments,
-      sketch: bounds ? { image: null, bounds } : null,
-      ...(comments.length > 0 && { comments }),
-      ...(screenshot && { screenshot }),
-      ...(element && { element }),
-      createdAt: Date.now(),
-    };
+    const draft = draftMessage(text, options);
     const assistant = newReply(selection.provider);
-    set((s) => ({ messages: [...s.messages, user, assistant], running: true }));
-    // They go out once; a comment changed later goes out again.
-    get().holdComments(comments);
-    // Let any edit still being saved land first, so the agent sees the final version.
-    await editQueue;
-    await flushReviewSave();
-    if (deck && slide && user.sketch) {
-      // Screenshot the slide with the ink on it.
-      const image = await captureSlide(deck.id);
-      const captured: UserMessage = { ...user, sketch: { ...user.sketch, image } };
-      user = captured;
-      set((s) => ({ messages: s.messages.map((m) => (m.id === captured.id ? captured : m)) }));
-      set((s) => ({ sketchesSent: { ...s.sketchesSent, [slide]: strokes } }));
-    }
-    const template = deck ? await stageDeckTemplate(deck) : null;
+    set((s) => ({ messages: [...s.messages, draft.user, assistant], running: true }));
+    const ready = await readyMessage(draft);
     if (get().workspace?.path !== workspace.path) return;
-    const notes = get().revertNotes;
-    set({ revertNotes: [] });
-    const prompt = withRevertNotes(notes, buildPrompt(deck, openedFile, user, template));
-    await startTurn(workspace.path, assistant.id, prompt, false, user);
+    set((s) => ({ messages: s.messages.map((m) => (m.id === ready.user.id ? ready.user : m)) }));
+    await startTurn(workspace.path, assistant.id, ready.prompt, false, ready.user);
+  },
+
+  steer: async (text, options) => {
+    const { workspace, running } = get();
+    if (!workspace) return;
+    if (!running) return get().send(text, options);
+    // A compaction is a turn of its own.
+    if (text.trim() === COMPACT_COMMAND) return enqueue(text, options);
+    const ready = await readyMessage(draftMessage(text, options));
+    if (get().workspace?.path !== workspace.path) return;
+    pendingSteers.set(ready.user.id, ready.user);
+    // The chat shows the message when the agent reports taking it (the `steered` event).
+    const delivered = await api.steerAgent(workspace.path, ready.prompt, ready.user.id).catch(() => false);
+    if (delivered) return;
+    pendingSteers.delete(ready.user.id);
+    if (get().workspace?.path !== workspace.path) return;
+    // The turn ended first: the message starts the next one.
+    if (get().running) set((s) => ({ queue: [{ id: ready.user.id, text, options, ready }, ...s.queue] }));
+    else await sendReady(workspace.path, ready);
+  },
+
+  steerQueued: async (id) => {
+    const item = get().takeQueued(id);
+    if (!item) return;
+    const { workspace } = get();
+    if (item.ready && workspace && !get().running) return sendReady(workspace.path, item.ready);
+    if (item.ready) {
+      // Made ready already: it can only wait for the turn to end.
+      set((s) => ({ queue: [item, ...s.queue] }));
+      return;
+    }
+    await get().steer(item.text, item.options);
+  },
+
+  takeQueued: (id) => {
+    const item = get().queue.find((q) => q.id === id) ?? null;
+    if (item) set((s) => ({ queue: s.queue.filter((q) => q.id !== id) }));
+    return item;
   },
 
   compact: async () => {
@@ -1477,6 +1526,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (get().workspace?.path !== workspace.path) return;
     set((s) => ({
       messages: [],
+      queue: [],
       running: false,
       sessionProvider: null,
       composerFill: null,
@@ -1558,6 +1608,90 @@ async function startTurn(deckId: string, replyId: string, prompt: string, compac
     useApp.setState({ running: false });
     persistChat();
   }
+}
+
+/** Steered messages sent to the agent, until it reports taking them (see `steered`). */
+const pendingSteers = new Map<string, UserMessage>();
+
+/** Puts a message at the end of the queue, keeping the slide it is about. */
+function enqueue(text: string, options: SendOptions) {
+  const { selected, deck } = useApp.getState();
+  const slide = options.slide !== undefined ? options.slide : deck && options.includeSlide ? selected : null;
+  useApp.setState((s) => ({ queue: [...s.queue, { id: newId(), text, options: { ...options, slide } }] }));
+}
+
+/** Sends the first queued message, once a turn finished cleanly. */
+function advanceQueue() {
+  const { queue, workspace, running } = useApp.getState();
+  const next = queue[0];
+  if (!next || !workspace || running) return;
+  useApp.setState({ queue: queue.slice(1) });
+  if (next.ready) void sendReady(workspace.path, next.ready);
+  else void useApp.getState().send(next.text, next.options);
+}
+
+/** Starts a turn for a message made ready before (a steer that came too late). */
+async function sendReady(workspace: string, ready: ReadyMessage) {
+  const assistant = newReply(useApp.getState().selection.provider);
+  useApp.setState((s) => ({ messages: [...s.messages, ready.user, assistant], running: true }));
+  await startTurn(workspace, assistant.id, ready.prompt, false, ready.user);
+}
+
+/** A user's message as sent now, before what takes waiting (see `readyMessage`). */
+interface DraftMessage {
+  user: UserMessage;
+  /** The marks on its slide, when they go along. */
+  strokes: Stroke[];
+  comments: SlideComment[];
+}
+
+function draftMessage(text: string, options: SendOptions): DraftMessage {
+  const state = useApp.getState();
+  const { deck, selected } = state;
+  const { includeSlide, attachments, screenshot, element } = options;
+  // A queued message's slide may be gone by the time it goes out.
+  const kept = options.slide && deck?.slides.some((s) => s.id === options.slide) ? options.slide : null;
+  const slide = !deck || !includeSlide ? null : options.slide !== undefined ? kept : selected;
+  const strokes = slide ? (state.sketches[slide] ?? []) : [];
+  // Marks go out once, while they are on show; they stay on the slide as a review.
+  const unsent = !!slide && state.reviewVisible && strokes !== state.sketchesSent[slide];
+  const bounds = unsent && deck ? inkBounds(strokes, pixelsOf(deck)) : null;
+  const comments = commentsInScope(state).filter((c) => !heldComment(state, c));
+  const user: UserMessage = {
+    id: newId(),
+    role: "user",
+    text,
+    slide,
+    attachments,
+    sketch: bounds ? { image: null, bounds } : null,
+    ...(comments.length > 0 && { comments }),
+    ...(screenshot && { screenshot }),
+    ...(element && { element }),
+    createdAt: Date.now(),
+  };
+  return { user, strokes: bounds ? strokes : [], comments };
+}
+
+/** Takes what goes along with `draft` (its sketch, its comments) and builds its prompt. */
+async function readyMessage({ user, strokes, comments }: DraftMessage): Promise<ReadyMessage> {
+  const { holdComments } = useApp.getState();
+  // They go out once; a comment changed later goes out again.
+  holdComments(comments);
+  // Let any edit still being saved land first, so the agent sees the final version.
+  await editQueue;
+  await flushReviewSave();
+  const { deck } = useApp.getState();
+  const slide = user.slide;
+  if (deck && slide && user.sketch) {
+    // Screenshot the slide with the ink on it.
+    const image = await captureSlide(deck.id);
+    user = { ...user, sketch: { ...user.sketch, image } };
+    useApp.setState((s) => ({ sketchesSent: { ...s.sketchesSent, [slide]: strokes } }));
+  }
+  const template = deck ? await stageDeckTemplate(deck) : null;
+  const { openedFile, revertNotes } = useApp.getState();
+  useApp.setState({ revertNotes: [] });
+  return { user, prompt: withRevertNotes(revertNotes, buildPrompt(deck, openedFile, user, template)) };
 }
 
 /** Queues a rail change after the edits before it and shows its deck. */
@@ -1669,6 +1803,8 @@ function restoreWorkspaceChat(path: string, chat: unknown, running: boolean, pro
   const messages = Array.isArray(chat) ? (chat as ChatMessage[]) : [];
   useApp.setState({
     messages: running ? messages : messages.map(settleInterrupted),
+    // A queue belongs to the chat it was typed in.
+    queue: [],
     running,
     sessionProvider: provider === "claude" || provider === "codex" || provider === "copilot" ? provider : null,
   });
@@ -2018,22 +2154,43 @@ function applyAgentEvent(event: AgentEvent) {
         // The new size is only known once the agent reports usage again.
         return { ...m, compacting: false, compacted: true, context: { provider, tokens: null, window } };
       });
-    case "finished":
-      updateLastAssistant((m) => ({
-        ...m,
-        thinking: false,
-        compacting: false,
-        status: event.interrupted ? "interrupted" : m.error ? "error" : "done",
-        parts: expireApprovals(m.parts).map((p) =>
-          p.kind === "tool" && p.status === "running" ? { ...p, status: "done" } : p,
-        ),
-      }));
+    case "steered": {
+      const user = event.message ? pendingSteers.get(event.message) : undefined;
+      if (!user) return;
+      pendingSteers.delete(user.id);
+      const last = useApp.getState().messages.findLast((m) => m.role === "assistant");
+      // The reply so far ends here; the steered message gets one of its own.
+      updateLastAssistant((m) => ({ ...m, ...settleReply(m), status: m.error ? "error" : "done" }));
+      const reply = newReply(last?.role === "assistant" ? replyProvider(last) : useApp.getState().selection.provider);
+      useApp.setState((s) => ({ messages: [...s.messages, user, reply] }));
+      persistChat();
+      return;
+    }
+    case "finished": {
+      let failed = false;
+      updateLastAssistant((m) => {
+        failed = !!m.error;
+        return { ...m, ...settleReply(m), status: event.interrupted ? "interrupted" : m.error ? "error" : "done" };
+      });
       useApp.setState({ running: false });
       persistChat();
       // The turn's changes are in the decks' histories once it finished.
       void refreshHistory();
+      if (!event.interrupted && !failed) advanceQueue();
       return;
+    }
   }
+}
+
+/** A reply's state once its part of the turn is over: nothing in it is still going on. */
+function settleReply(m: AssistantMessage): Partial<AssistantMessage> {
+  return {
+    thinking: false,
+    compacting: false,
+    parts: expireApprovals(m.parts).map((p) =>
+      p.kind === "tool" && p.status === "running" ? { ...p, status: "done" } : p,
+    ),
+  };
 }
 
 let reloadTimer: ReturnType<typeof setTimeout> | undefined;

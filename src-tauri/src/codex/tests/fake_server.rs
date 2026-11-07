@@ -185,6 +185,22 @@ impl FakeServer {
         if self.flag("hold") {
             self.drain();
         }
+        if self.flag("steer") {
+            // Waits for the client to steer the turn; `"reject"` refuses it as if it had ended.
+            let steer = loop {
+                let message = self.read();
+                if message["method"] == "turn/steer" {
+                    break message;
+                }
+            };
+            if self.scenario["steer"] == "reject" {
+                send(&json!({"id":steer["id"],
+                    "error":{"code":-32000,"message":"no active turn"}}));
+            } else {
+                reply(&steer, json!({"turnId":"turn-1"}));
+                event("item/agentMessage/delta", delta("Steered"));
+            }
+        }
         let status = self
             .scenario
             .get("status")

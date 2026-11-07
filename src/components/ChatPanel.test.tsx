@@ -19,7 +19,15 @@ vi.mock("@tauri-apps/api/webview", () => ({
 
 import { catchDrops } from "../lib/drop";
 import type { ProviderInfo } from "../lib/models";
-import { type AssistantMessage, type ChatMessage, type ChatPart, flushReviewSave, TIDY_PROMPT, useApp } from "../store";
+import {
+  type AssistantMessage,
+  type ChatMessage,
+  type ChatPart,
+  flushReviewSave,
+  type QueuedMessage,
+  TIDY_PROMPT,
+  useApp,
+} from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ChatPanel } from "./ChatPanel";
 
@@ -74,6 +82,9 @@ const send = vi.fn(async () => {});
 const resetChat = vi.fn(async () => {});
 const interrupt = vi.fn();
 const compact = vi.fn(async () => {});
+const steer = vi.fn(async () => {});
+const steerQueued = vi.fn(async () => {});
+const takeQueued = vi.fn((_id: string): QueuedMessage | null => null);
 
 // Drawing schedules a save of the review marks; finish it here, not in the next test.
 afterEach(() => flushReviewSave());
@@ -87,6 +98,9 @@ beforeEach(() => {
   resetChat.mockClear();
   interrupt.mockClear();
   compact.mockClear();
+  steer.mockClear();
+  steerQueued.mockClear();
+  takeQueued.mockReset().mockReturnValue(null);
   useApp.setState({
     workspace: { path: "/decks/talk", name: "talk" },
     deck: deckFor(DECK_HTML),
@@ -111,6 +125,10 @@ beforeEach(() => {
     resetChat,
     interrupt,
     compact,
+    steer,
+    steerQueued,
+    takeQueued,
+    queue: [],
   });
 });
 
@@ -526,14 +544,50 @@ describe("ChatPanel: composing", () => {
   it("shows a stop button while the agent works", () => {
     useApp.setState({ running: true });
     render(<ChatPanel />);
-    expect(textarea().placeholder).toBe("The agent is working…");
+    expect(textarea().placeholder).toMatch(/^Queue a message, or (⌘↵|Ctrl\+↵) to steer the agent now…$/);
     expect(screen.queryByTitle("Send")).toBeNull();
-    type("Queued?");
-    fireEvent.keyDown(textarea(), { key: "Enter" });
-    expect(send).not.toHaveBeenCalled();
-    expect(textarea().value).toBe("Queued?");
     fireEvent.click(screen.getByTitle("Stop"));
     expect(interrupt).toHaveBeenCalledOnce();
+  });
+
+  it("queues on Enter while the agent works, and steers with the modifier", () => {
+    useApp.setState({ running: true });
+    render(<ChatPanel />);
+    expect(screen.queryByRole("button", { name: "Steer" })).toBeNull();
+    type("Later");
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(send).toHaveBeenCalledWith("Later", { includeSlide: true, attachments: [] });
+    expect(steer).not.toHaveBeenCalled();
+    expect(textarea().value).toBe("");
+    type("Now");
+    fireEvent.keyDown(textarea(), { key: "Enter", metaKey: true });
+    type("Now too");
+    fireEvent.keyDown(textarea(), { key: "Enter", ctrlKey: true });
+    expect(steer.mock.calls).toEqual([
+      ["Now", { includeSlide: true, attachments: [] }],
+      ["Now too", { includeSlide: true, attachments: [] }],
+    ]);
+    expect(send).toHaveBeenCalledOnce();
+  });
+
+  it("offers to steer or queue the draft while the agent works", () => {
+    useApp.setState({ running: true });
+    render(<ChatPanel />);
+    type("Bluer");
+    fireEvent.click(screen.getByRole("button", { name: "Steer" }));
+    expect(steer).toHaveBeenCalledWith("Bluer", { includeSlide: true, attachments: [] });
+    type("Greener");
+    fireEvent.click(screen.getByRole("button", { name: "Queue" }));
+    expect(send).toHaveBeenCalledWith("Greener", { includeSlide: true, attachments: [] });
+    expect(screen.getByTitle("Stop")).toBeTruthy();
+  });
+
+  it("sends with the modifier while the agent is idle", () => {
+    render(<ChatPanel />);
+    type("Hi");
+    fireEvent.keyDown(textarea(), { key: "Enter", metaKey: true });
+    expect(send).toHaveBeenCalledOnce();
+    expect(steer).not.toHaveBeenCalled();
   });
 
   it("switches models in the picker", () => {
@@ -1486,5 +1540,71 @@ describe("undone agent turns", () => {
     fireEvent.click(screen.getByRole("button", { name: "Don't tell the agent" }));
     expect(useApp.getState().revertNotes).toEqual([]);
     expect(screen.queryByText(/Undone:/)).toBeNull();
+  });
+});
+
+describe("ChatPanel: queued messages", () => {
+  const queued = (id: string, text: string, patch: Partial<QueuedMessage> = {}): QueuedMessage => ({
+    id,
+    text,
+    options: { includeSlide: true, attachments: [] },
+    ...patch,
+  });
+  const list = () => within(screen.getByRole("region", { name: "Queued messages" }));
+
+  it("shows nothing without a queue", () => {
+    render(<ChatPanel />);
+    expect(screen.queryByRole("region", { name: "Queued messages" })).toBeNull();
+  });
+
+  it("lists them while the agent works, to steer with or drop", () => {
+    useApp.setState({ running: true, queue: [queued("q1", "Make it blue"), queued("q2", "Shorter")] });
+    render(<ChatPanel />);
+    expect(list().getByText("Sent when the agent finishes")).toBeTruthy();
+    expect(
+      list()
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual(["Make it blue", "Shorter"]);
+    fireEvent.click(list().getAllByRole("button", { name: "Steer: send into the agent's turn now" })[1]!);
+    expect(steerQueued).toHaveBeenCalledWith("q2");
+    fireEvent.click(list().getAllByRole("button", { name: "Remove" })[0]!);
+    expect(takeQueued).toHaveBeenCalledWith("q1");
+  });
+
+  it("sends them by hand once the agent stopped", () => {
+    useApp.setState({ queue: [queued("q1", "Make it blue")] });
+    render(<ChatPanel />);
+    expect(list().getByText("Waiting: the last turn did not finish")).toBeTruthy();
+    fireEvent.click(list().getByRole("button", { name: "Send now" }));
+    expect(steerQueued).toHaveBeenCalledWith("q1");
+  });
+
+  it("takes one back into the composer to edit, after the draft", () => {
+    const item = queued("q1", "Make it blue", {
+      options: { includeSlide: false, attachments: ["assets/a.csv"], slide: null },
+    });
+    takeQueued.mockReturnValue(item);
+    useApp.setState({ running: true, queue: [item] });
+    render(<ChatPanel />);
+    type("Also");
+    fireEvent.click(list().getByRole("button", { name: "Edit" }));
+    expect(takeQueued).toHaveBeenCalledWith("q1");
+    expect(textarea().value).toBe("Also\n\nMake it blue");
+    expect(screen.getByText("a.csv")).toBeTruthy();
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    expect(send).toHaveBeenCalledWith("Also\n\nMake it blue", { includeSlide: false, attachments: ["assets/a.csv"] });
+  });
+
+  it("only lets a steer that came too late wait for the turn", () => {
+    const ready = {
+      user: { id: "q1", role: "user" as const, text: "Bluer", slide: null, attachments: [], createdAt: 0 },
+      prompt: "Bluer",
+    };
+    useApp.setState({ running: true, queue: [queued("q1", "Bluer", { ready })] });
+    render(<ChatPanel />);
+    expect(list().queryByRole("button", { name: "Steer: send into the agent's turn now" })).toBeNull();
+    expect(list().queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(list().getByRole("button", { name: "Remove" })).toBeTruthy();
   });
 });

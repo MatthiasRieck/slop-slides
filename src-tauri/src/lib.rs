@@ -17,6 +17,7 @@ mod lint;
 mod mcp;
 mod mp4;
 mod narration;
+mod palette;
 mod pdf;
 mod permissions;
 mod pptx;
@@ -402,6 +403,24 @@ fn set_slide_size(id: String, size: size::SlideSize) -> Result<Deck> {
     )
 }
 
+/// Sets colors of the deck's palette, adding new ones. Changes in a row (turning the color
+/// wheel) undo as one.
+#[tauri::command]
+fn set_palette_colors(id: String, colors: Vec<deck::PaletteEntry>) -> Result<Deck> {
+    let change = Change::new(Source::Deck, "Change colors").grouped("palette");
+    changing(&id, change, |file| deck::set_palette_colors(file, &colors))
+}
+
+/// Moves every color the deck writes out into its palette.
+#[tauri::command]
+fn adopt_palette(id: String) -> Result<Deck> {
+    changing(
+        &id,
+        Change::new(Source::Deck, "Move colors into the palette"),
+        deck::adopt_palette,
+    )
+}
+
 #[tauri::command]
 fn set_slide_locked(window: Window, id: String, slide: String, locked: bool) -> Result<Deck> {
     let session = current_session(&window)?;
@@ -449,9 +468,15 @@ fn slide_source(id: String, slide: String) -> Result<deck::SlideSource> {
 /// Saves a slide edited on the stage (text edits, moved elements). `base` is its hash when
 /// the edit started.
 #[tauri::command]
-fn update_slide(id: String, slide: String, markup: String, base: String) -> Result<Deck> {
+fn update_slide(
+    id: String,
+    slide: String,
+    markup: String,
+    base: String,
+    palette: Option<Vec<deck::PaletteEntry>>,
+) -> Result<Deck> {
     let (deck, _) = changing(&id, Change::new(Source::Edit, "Edit slide"), |file| {
-        deck::update_slide(file, &slide, &markup, &base)
+        deck::update_slide(file, &slide, &markup, &base, &palette.unwrap_or_default())
     })?;
     Ok(deck)
 }
@@ -1329,6 +1354,8 @@ pub fn run() {
             set_slide_time,
             set_slide_timing,
             set_slide_size,
+            set_palette_colors,
+            adopt_palette,
             add_section,
             rename_section,
             delete_section,

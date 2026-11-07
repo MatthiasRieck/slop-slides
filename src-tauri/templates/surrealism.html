@@ -53,6 +53,19 @@
 
     /* Surrealism */
     :root {
+      --sky: #7f9cc4;
+      --sky-2: #c8b6c9;
+      --sky-3: #f0c9a0;
+      --floor: #d9b08a;
+      --tile: #f2e4d0;
+      --sun-core: #fff6e0;
+      --sun: #f2b45c;
+      --sun-edge: #c97a3a;
+      --sun-glow: #ffd28c;
+      --pearl: #ffffff;
+      --pearl-2: #b9c4dd;
+      --pearl-3: #5b6890;
+      --pearl-4: #6d9bc3;
       --bg: #e9c9a8;
       --ink: #1f2440;
       --muted: #4a4466;
@@ -62,7 +75,7 @@
       --font-body: "Cormorant Garamond", Georgia, serif;
     }
     .slide {
-      background: linear-gradient(180deg, #7f9cc4 0%, #c8b6c9 38%, #f0c9a0 62%, #e9c9a8 62.1%, #d9b08a 100%);
+      background: linear-gradient(180deg, var(--sky) 0%, var(--sky-2) 38%, var(--sky-3) 62%, var(--bg) 62.1%, var(--floor) 100%);
       font-size: 36px;
     }
     .slide::after {
@@ -73,7 +86,7 @@
       bottom: -10%;
       height: 48%;
       /* A floor running off to the horizon, drawn in 2D: exports draw 3D perspective flattened. */
-      background: repeating-conic-gradient(#1f2440 0 25%, #f2e4d0 0 50%) 50% 100% / 160px 72px;
+      background: repeating-conic-gradient(var(--ink) 0 25%, var(--tile) 0 50%) 50% 100% / 160px 72px;
       clip-path: polygon(34% 0, 66% 0, 100% 100%, 0 100%);
       -webkit-mask-image: linear-gradient(to bottom, transparent, #000 70%);
       mask-image: linear-gradient(to bottom, transparent, #000 70%);
@@ -82,17 +95,17 @@
     }
     .slide h1, .slide h2 { font-weight: 400; }
     .slide h1 { font-size: 136px; font-style: italic; }
-    .slide .deco span:nth-child(1) { right: 220px; top: 120px; width: 300px; height: 300px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #fff6e0, #f2b45c 60%, #c97a3a); box-shadow: 0 0 120px rgba(255, 210, 140, 0.8); }
-    .slide .deco span:nth-child(2) { right: 120px; top: 520px; width: 180px; height: 180px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #ffffff, #b9c4dd 55%, #5b6890); box-shadow: 40px 90px 40px -20px rgba(31, 36, 64, 0.35); }
-    .slide .deco span:nth-child(3) { right: 420px; top: 600px; width: 90px; height: 140px; border-radius: 50% 50% 46% 46% / 60% 60% 40% 40%; background: radial-gradient(circle at 50% 45%, #1f2440 0 18%, #6d9bc3 19% 32%, #fff 33%); box-shadow: 0 30px 30px -10px rgba(31, 36, 64, 0.4); }
+    .slide .deco span:nth-child(1) { right: 220px; top: 120px; width: 300px; height: 300px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, var(--sun-core), var(--sun) 60%, var(--sun-edge)); box-shadow: 0 0 120px color-mix(in srgb, var(--sun-glow) 80%, transparent); }
+    .slide .deco span:nth-child(2) { right: 120px; top: 520px; width: 180px; height: 180px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, var(--pearl), var(--pearl-2) 55%, var(--pearl-3)); box-shadow: 40px 90px 40px -20px color-mix(in srgb, var(--ink) 35%, transparent); }
+    .slide .deco span:nth-child(3) { right: 420px; top: 600px; width: 90px; height: 140px; border-radius: 50% 50% 46% 46% / 60% 60% 40% 40%; background: radial-gradient(circle at 50% 45%, var(--ink) 0 18%, var(--pearl-4) 19% 32%, var(--pearl) 33%); box-shadow: 0 30px 30px -10px color-mix(in srgb, var(--ink) 40%, transparent); }
     .layout-bullets .deco span:nth-child(3), .layout-stats .deco span, .layout-split .deco span:nth-child(1), .layout-split .deco span:nth-child(3) { display: none; }
     .slide .eyebrow { font-family: var(--font-body); font-style: italic; font-size: 34px; letter-spacing: 0.04em; text-transform: none; }
     .slide .lede { font-style: italic; color: var(--ink); }
     .slide .number { font-style: italic; font-size: 200px; }
     .slide .points li { font-size: 42px; color: var(--ink); }
-    .slide .points li::before { width: 24px; height: 24px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #fff, var(--accent)); }
-    .slide .visual .placeholder { border-radius: 50% 50% 0 0; background: linear-gradient(#7f9cc4, #f0c9a0); color: var(--ink); box-shadow: 30px 50px 60px rgba(31, 36, 64, 0.3); }
-    .slide .stat { position: relative; padding: 48px; border-radius: 240px 240px 24px 24px; background: rgba(245, 227, 204, 0.7); }
+    .slide .points li::before { width: 24px; height: 24px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, var(--pearl), var(--accent)); }
+    .slide .visual .placeholder { border-radius: 50% 50% 0 0; background: linear-gradient(var(--sky), var(--sky-3)); color: var(--ink); box-shadow: 30px 50px 60px color-mix(in srgb, var(--ink) 30%, transparent); }
+    .slide .stat { position: relative; padding: 48px; border-radius: 240px 240px 24px 24px; background: color-mix(in srgb, var(--panel) 70%, transparent); }
     .slide .value { font-style: italic; font-weight: 400; }
     .layout-quote blockquote { font-style: italic; font-size: 88px; }
     .slide .cite { font-style: italic; color: var(--ink); }

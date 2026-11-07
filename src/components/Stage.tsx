@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { api, errorMessage, type Slide } from "../lib/api";
+import { api, errorMessage, type PaletteEntry, type Slide } from "../lib/api";
 import { type EditGeometry, type EditLayer, parseGeometry, parseLayers } from "../lib/arrange";
 import { catchDrops, type DropPoint, imageSize, isImage } from "../lib/drop";
 import {
@@ -34,6 +34,13 @@ import {
   parseSelection,
 } from "../lib/editTools";
 import { type Stroke, zoomBox } from "../lib/ink";
+import {
+  PaletteWriter,
+  paletteStyle,
+  paletteSwatches,
+  paletteToolStyle,
+  parsePaletteAdditions,
+} from "../lib/paletteColors";
 import { getSlideClock, onSlideClock, postSlideClock } from "../lib/slideClock";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn, deckFileUrl } from "../lib/utils";
@@ -126,21 +133,36 @@ export function Stage() {
     setCommenting(false);
     setDrawingArea(false);
   }, [mode, putToolAway, setCommenting, setDrawingArea]);
-  // The editor in the preview adds what the toolbar's tool says, styled like its defaults.
+  const palette = deck?.palette ?? NO_PALETTE;
+  const deckId = deck?.id;
+  // Colors handed out for another deck mean nothing for this one.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: clears on every change of deck
+  useEffect(() => () => pendingPalette.clear(), [deckId]);
+  // The editor in the preview adds what the toolbar's tool says, styled like its defaults, in
+  // the deck's palette colors.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new palette changes what the defaults name
   useEffect(() => {
-    if (editing) postToEditor(toolMessage(editTool, editStyles));
-  }, [editing, editTool, editStyles, postToEditor]);
+    if (editing) postToEditor(toolMessage(editTool, editStyles, paletteWriter()));
+  }, [editing, editTool, editStyles, postToEditor, palette]);
   // The preview marks what the toolbar's search finds on this slide.
   const highlight = useApp(useShallow(searchHighlight));
   useEffect(() => {
     postToEditor({ type: "slop:search", ...highlight });
   }, [highlight, postToEditor]);
-  const restyle = (changes: EditStyle) => {
+  const restyle = (picked: EditStyle) => {
     const selection = editFrames.selection;
+    // Every color comes from the deck's palette; one it does not have is added to it.
+    const writer = paletteWriter();
+    const changes = paletteStyle(picked, writer);
     // Restyling also sets how the next one of its kind looks; styling a few words does not.
     const family = selection ? familyOfKind(selection.kind) : familyOf(editTool);
     if (family && !selection?.editing) useApp.getState().setEditStyle(family, defaultsFrom(changes));
-    if (selection) postToEditor({ type: "slop:edit-style", style: changes });
+    if (selection) postToEditor({ type: "slop:edit-style", style: changes, palette: writer.additions() });
+  };
+  const setBackground = (color: string | null) => {
+    const writer = paletteWriter();
+    const value = color ? writer.reference(color) : null;
+    postToEditor({ type: "slop:edit-background", color: value, palette: writer.additions() });
   };
 
   const index = deck?.slides.findIndex((s) => s.id === selected) ?? -1;
@@ -166,14 +188,14 @@ export function Stage() {
             keepRatio={editFrames.keepRatio}
             onKeepRatio={editFrames.setKeepRatio}
             fonts={editFrames.fonts}
-            colors={editFrames.colors}
+            colors={paletteSwatches(palette, editFrames.colors)}
             background={editFrames.background}
             slides={deck?.slides.map((s, i) => ({ id: s.id, label: `${i + 1}. ${s.id}` })) ?? []}
             onTool={(tool) => useApp.getState().setEditTool(tool)}
             onStyle={restyle}
             onList={(list) => postToEditor({ type: "slop:edit-list", list })}
             onLink={(href) => postToEditor({ type: "slop:edit-link", href })}
-            onBackground={(color) => postToEditor({ type: "slop:edit-background", color })}
+            onBackground={setBackground}
             onPickImage={editFrames.pickImage}
             onReturnFocus={editFrames.focus}
             onOrder={(to) => postToEditor({ type: "slop:edit-order", to })}
@@ -671,7 +693,7 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
         restore.current = Array.isArray(data.select)
           ? { slide: data.slide, path: data.select, also: Array.isArray(data.also) ? data.also : [] }
           : null;
-        void useApp.getState().saveSlideEdit(data.slide, data.markup);
+        void useApp.getState().saveSlideEdit(data.slide, data.markup, parsePaletteAdditions(data.palette));
       } else if (data?.type === "slop:edit-overflow" && data.slide === selected && Array.isArray(data.items)) {
         setOverflow({ slide: data.slide, items: data.items.map(String) });
       } else if (data?.type === "slop:edit-press") {
@@ -896,7 +918,7 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
       if (editing) {
         post({ type: "slop:edit-size-mode", mode: sizeMode });
         post({ type: "slop:edit-keep-ratio", on: keepRatio });
-        post(toolMessage(editTool, editStyles));
+        post(toolMessage(editTool, editStyles, paletteWriter()));
       }
       const again = restore.current;
       if (editing && again && again.slide === selected) {
@@ -917,6 +939,18 @@ const NO_OVERFLOW: string[] = [];
 const NO_LAYERS: EditLayer[] = [];
 const NO_FONTS: FontChoice[] = [];
 const NO_COLORS: DeckColor[] = [];
+const NO_PALETTE: PaletteEntry[] = [];
+
+// Palette colors handed to the editor that the deck's palette does not have yet: their save is
+// on its way with the slide, or no element took them (yet).
+const pendingPalette = new Map<string, string>();
+
+/** Hands out palette colors for the toolbar's picks, against the open deck's palette. */
+function paletteWriter(): PaletteWriter {
+  const palette = useApp.getState().deck?.palette ?? NO_PALETTE;
+  for (const entry of palette) pendingPalette.delete(entry.name);
+  return new PaletteWriter(palette, pendingPalette);
+}
 const TOOL_NAMES: Record<EditTool, true> = {
   select: true,
   text: true,
@@ -950,9 +984,10 @@ const TOOL_NAMES: Record<EditTool, true> = {
 };
 
 /** Picks the editor's tool, with the style of what it adds. */
-function toolMessage(tool: EditTool, styles: Record<string, EditStyle>) {
+function toolMessage(tool: EditTool, styles: Record<string, EditStyle>, writer: PaletteWriter) {
   const family = familyOf(tool);
-  return { type: "slop:edit-tool", tool, style: family ? styles[family] : undefined };
+  const style = paletteToolStyle(family ? styles[family] : undefined, family, writer);
+  return { type: "slop:edit-tool", tool, style, palette: writer.additions() };
 }
 
 /**

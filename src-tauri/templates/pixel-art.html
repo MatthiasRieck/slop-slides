@@ -53,6 +53,12 @@
 
     /* Pixel Art */
     :root {
+      --shadow: #0b0a1f;
+      --grass: #3b7a3b;
+      --dirt: #6b3d2e;
+      --star: #fff;
+      --coin-rim: #ffa300;
+      --grass-2: #00a32a;
       --bg: #1d1b3a;
       --ink: #fff1e8;
       --muted: #c2c3c7;
@@ -63,19 +69,19 @@
       --panel: #2a2850;
       --font-display: "Press Start 2P", "Courier New", monospace;
       --font-body: "VT323", "Courier New", monospace;
-      --pixel-border: 0 -8px 0 0 #fff1e8, 0 8px 0 0 #fff1e8, -8px 0 0 0 #fff1e8, 8px 0 0 0 #fff1e8, 0 16px 0 0 #0b0a1f;
+      --pixel-border: 0 -8px 0 0 var(--ink), 0 8px 0 0 var(--ink), -8px 0 0 0 var(--ink), 8px 0 0 0 var(--ink), 0 16px 0 0 var(--shadow);
     }
-    .slide { background: linear-gradient(transparent 0 85%, #3b7a3b 85% 88%, #6b3d2e 88%), var(--bg); font-size: 44px; line-height: 1.15; image-rendering: pixelated; }
-    .slide h1, .slide h2 { font-weight: 400; line-height: 1.3; text-shadow: 8px 8px 0 #0b0a1f; }
+    .slide { background: linear-gradient(transparent 0 85%, var(--grass) 85% 88%, var(--dirt) 88%), var(--bg); font-size: 44px; line-height: 1.15; image-rendering: pixelated; }
+    .slide h1, .slide h2 { font-weight: 400; line-height: 1.3; text-shadow: 8px 8px 0 var(--shadow); }
     .slide h1 { font-size: 80px; color: var(--accent); }
     .slide h2 { font-size: 52px; }
-    .slide .deco span:nth-child(1) { left: 200px; top: 120px; width: 8px; height: 8px; background: #fff; box-shadow: 300px 40px #fff, 700px -40px #fff, 1100px 60px #fff, 1450px 10px #fff, 1580px 200px #fff, 500px 300px #fff, 900px 220px #fff, 1300px 340px #fff; }
-    .slide .deco span:nth-child(2) { right: 220px; top: 140px; width: 160px; height: 160px; background: var(--accent); box-shadow: 0 0 0 8px #ffa300; clip-path: polygon(16px 0, calc(100% - 16px) 0, calc(100% - 16px) 16px, 100% 16px, 100% calc(100% - 16px), calc(100% - 16px) calc(100% - 16px), calc(100% - 16px) 100%, 16px 100%, 16px calc(100% - 16px), 0 calc(100% - 16px), 0 16px, 16px 16px); }
-    .slide .deco span:nth-child(3) { left: 0; right: 0; bottom: 162px; height: 16px; background: repeating-linear-gradient(90deg, var(--green) 0 32px, #00a32a 32px 64px); }
+    .slide .deco span:nth-child(1) { left: 200px; top: 120px; width: 8px; height: 8px; background: var(--star); box-shadow: 300px 40px var(--star), 700px -40px var(--star), 1100px 60px var(--star), 1450px 10px var(--star), 1580px 200px var(--star), 500px 300px var(--star), 900px 220px var(--star), 1300px 340px var(--star); }
+    .slide .deco span:nth-child(2) { right: 220px; top: 140px; width: 160px; height: 160px; background: var(--accent); box-shadow: 0 0 0 8px var(--coin-rim); clip-path: polygon(16px 0, calc(100% - 16px) 0, calc(100% - 16px) 16px, 100% 16px, 100% calc(100% - 16px), calc(100% - 16px) calc(100% - 16px), calc(100% - 16px) 100%, 16px 100%, 16px calc(100% - 16px), 0 calc(100% - 16px), 0 16px, 16px 16px); }
+    .slide .deco span:nth-child(3) { left: 0; right: 0; bottom: 162px; height: 16px; background: repeating-linear-gradient(90deg, var(--green) 0 32px, var(--grass-2) 32px 64px); }
     .slide .eyebrow { font-family: var(--font-display); font-size: 22px; color: var(--blue); letter-spacing: 0.06em; }
     .slide .lede, .slide .body { font-size: 48px; color: var(--muted); }
     .slide .byline { font-size: 36px; }
-    .slide .number { font-size: 96px; color: var(--red); text-shadow: 8px 8px 0 #0b0a1f; }
+    .slide .number { font-size: 96px; color: var(--red); text-shadow: 8px 8px 0 var(--shadow); }
     .layout-title .frame, .layout-section .frame, .layout-closing .frame { padding-bottom: 120px; }
     .slide .points { gap: 28px; }
     .slide .points li { font-size: 48px; padding-left: 64px; }

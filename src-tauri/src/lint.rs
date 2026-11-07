@@ -14,6 +14,7 @@ use crate::html::{
 };
 use crate::html::{ADJUST_ATTR, HEAD_ATTR, HEAD_KINDS, ROUTES, ROUTE_ATTR};
 use crate::narration;
+use crate::palette::{self, Place};
 use crate::review;
 use crate::size::{self, SlideSize};
 
@@ -125,6 +126,7 @@ pub fn lint(
     check_stuck_lines(&mut l);
     check_assets(&mut l, asset_exists);
     check_links(&mut l);
+    check_palette(&mut l);
     check_locked(&mut l, locked);
     l.issues.sort_by_key(|i| (i.line, i.severity));
     l.issues
@@ -1273,6 +1275,70 @@ fn check_slide_id_styles(l: &mut Linter) {
     }
 }
 
+/// Every color comes from the palette (`:root` custom properties), so changing the palette
+/// recolors the whole deck. One issue per line, listing the colors written out on it.
+fn check_palette(l: &mut Linter) {
+    let colors = palette::palette(l.html);
+    for color in &colors {
+        if palette::is_placeholder_name(&color.name) {
+            let name = &color.name;
+            l.report(
+                "palette-name",
+                Severity::Warning,
+                color.range.start,
+                format!("Palette color `--{name}` was added in the editor for a color picked by hand. Rename it for what it is used for (such as `--highlight` or `--chart-2`, or reuse a palette color that fits) and update every `var(--{name})`."),
+            );
+        }
+    }
+    let mut groups: Vec<(usize, Place, Vec<String>)> = Vec::new();
+    for literal in palette::literals(l.html) {
+        let text = l.html[literal.range.clone()].to_string();
+        let line = l.line(literal.range.start);
+        match groups.last_mut() {
+            Some((at, place, texts)) if l.line(*at) == line && *place == literal.place => {
+                if !texts.contains(&text) {
+                    texts.push(text)
+                }
+            }
+            _ => groups.push((literal.range.start, literal.place, vec![text])),
+        }
+    }
+    for (at, place, texts) in groups {
+        let listed = texts
+            .iter()
+            .map(|t| format!("`{}`", truncate(t, 40)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let matches: Vec<String> = texts
+            .iter()
+            .filter_map(|t| {
+                let n = palette::normalize(t);
+                colors
+                    .iter()
+                    .find(|c| palette::normalize(&c.value) == n)
+                    .map(|c| format!("`{t}` is `var(--{})`", c.name))
+            })
+            .collect();
+        let hint = if matches.is_empty() {
+            String::new()
+        } else {
+            format!(" In the palette: {}.", matches.join(", "))
+        };
+        let how = match place {
+            Place::Attribute(attr) => format!(" Presentation attributes do not take `var()`: set it as `style=\"{attr}: var(--name)\"` instead, or use `currentColor`."),
+            _ => String::new(),
+        };
+        l.report(
+            "palette-color",
+            Severity::Warning,
+            at,
+            format!("{} {listed} {} written out instead of coming from the deck's palette, so changing the palette will not reach it.{hint}{how} Refer to a palette color with `var(--name)`, add a new one to `:root` under a name that says what it is for, and mix see-through or lighter shades from the palette: `color-mix(in srgb, var(--accent) 30%, transparent)`.",
+                if texts.len() == 1 { "Color" } else { "Colors" },
+                if texts.len() == 1 { "is" } else { "are" }),
+        );
+    }
+}
+
 /// Tokenize rather than search text: comments, strings, URL fragments and declaration
 /// colors must not count as selectors. Pending references become selectors only when
 /// followed by a rule block; recurse into grouping rules and CSS nesting as well.
@@ -2125,9 +2191,9 @@ mod tests {
             "#title-copy",
         ] {
             for css in [
-                format!("{selector} {{ color: red; }}"),
-                format!("@media print {{ {selector} {{ color: red; }} }}"),
-                format!(".deck {{ color: black; & {selector} {{ color: red; }} }}"),
+                format!("{selector} {{ color: var(--red); }}"),
+                format!("@media print {{ {selector} {{ color: var(--red); }} }}"),
+                format!(".deck {{ color: var(--black); & {selector} {{ color: var(--red); }} }}"),
             ] {
                 let issues = lint(&styled(&css), |_| true, &[]);
                 assert_eq!(issues.len(), 1, "{css}: {issues:?}");
@@ -2145,7 +2211,8 @@ mod tests {
                 assert!(format_report(&issues).contains("reusable layout class"));
             }
         }
-        let fixed = styled(".layout-title { color: red; } .layout-title .card { padding: 20px; }");
+        let fixed =
+            styled(".layout-title { color: var(--red); } .layout-title .card { padding: 20px; }");
         assert!(lint(&fixed, |_| true, &[]).is_empty());
     }
 
@@ -2156,23 +2223,30 @@ mod tests {
                 .replace(
                     "<style>.slide {}</style>",
                     r##"<style>
-/* #abc { color: red; } */
-#icon { fill: red; }
-#abc-longer { color: red; }
+/* #abc { color: var(--red); } */
+#icon { fill: var(--red); }
+#abc-longer { color: var(--red); }
 .layout { color: #abc; --color: #abc; content: "#abc { }"; background: url(#abc); }
-[data-label="#abc"] { color: blue; }
+[data-label="#abc"] { color: var(--blue); }
 @supports (color: #abc) { .layout { color: #abc; } }
 </style>"##,
                 );
-        assert!(lint(&source, |_| true, &[]).is_empty());
+        // `#abc` is a color here, which the palette rule flags; it is no slide id.
+        let id_styles = |html: &str| {
+            lint(html, |_| true, &[])
+                .into_iter()
+                .filter(|i| i.rule != "palette-color")
+                .collect::<Vec<_>>()
+        };
+        assert!(id_styles(&source).is_empty());
         let fake = format!("{}<!-- <style>#abc {{}}</style> --><script>const s = '<style>#abc {{}}</style>';</script>", source);
-        assert!(lint(&fake, |_| true, &[]).is_empty());
+        assert!(id_styles(&fake).is_empty());
     }
 
     #[test]
     fn slide_id_styles_report_each_selector_at_its_line_in_any_style_block() {
         let source = deck(r#"<section class="slide" id="title"></section>"#)
-            .replace("<style>.slide {}</style>", "<style>\n#title { color: red; }\n@media print {\n#title h1 { color: black; }\n}\n</style>\n<style>#title { padding: 1px; }</style>");
+            .replace("<style>.slide {}</style>", "<style>\n#title { color: var(--red); }\n@media print {\n#title h1 { color: var(--black); }\n}\n</style>\n<style>#title { padding: 1px; }</style>");
         let issues = lint(&source, |_| true, &[]);
         assert_eq!(
             issues
@@ -2243,10 +2317,10 @@ mod tests {
         );
         for css in [
             "@layer layouts { @supports (display: grid) { #title .card { display: grid; } } }",
-            "@container (width > 100px) { #title { color: red; } }",
-            "@scope (#title) { .card { color: red; } }",
-            ":is(#title, #title-copy) .card { color: red; }",
-            "#title, #title-copy { color: red; }",
+            "@container (width > 100px) { #title { color: var(--red); } }",
+            "@scope (#title) { .card { color: var(--red); } }",
+            ":is(#title, #title-copy) .card { color: var(--red); }",
+            "#title, #title-copy { color: var(--red); }",
         ] {
             let styled = source.replace(".slide {}", css);
             let issues = lint(&styled, |_| true, &[]);
@@ -2454,8 +2528,8 @@ mod tests {
             ".logo { animation: spin 8s linear infinite; }",
             ".dot { animation: pulse 1s ease 0.2s infinite; }",
             ".slide.active .a, .slide.active .b { animation-delay: 2s; }",
-            "@keyframes pop { 0% { opacity: 0; } 100% { opacity: 1; } } .x { color: red; }",
-            "/* .word { animation-delay: 3s; } */ .x { color: red; }",
+            "@keyframes pop { 0% { opacity: 0; } 100% { opacity: 1; } } .x { color: var(--red); }",
+            "/* .word { animation-delay: 3s; } */ .x { color: var(--red); }",
             ".x { transition: opacity 0.3s 2s; }",
             // A var() holding an easing is no delay, set in the styles or inline.
             ":root { --spring: cubic-bezier(.3, 1.4, .5, 1); } .badge { animation: pop .4s var(--spring) both; }",
@@ -2598,12 +2672,69 @@ mod tests {
     }
 
     #[test]
+    fn colors_come_from_the_palette() {
+        let source = deck("<section class=\"slide\" id=\"a\"><p style=\"color: #E30613\">x</p><svg><path fill=\"#fff\" stroke=\"#000\"/></svg></section>")
+            .replace(
+                "<style>.slide {}</style>",
+                "<style>\n:root { --accent: #e30613; --line: 2px solid var(--accent); }\n.slide { color: var(--accent); background: color-mix(in srgb, var(--accent) 20%, transparent); }\n.card { box-shadow: 0 0 8px rgba(0, 0, 0, 0.3); border: 1px solid #ccc; }\n</style>",
+            );
+        let issues: Vec<_> = lint(&source, |_| true, &[])
+            .into_iter()
+            .filter(|i| i.rule == "palette-color")
+            .collect();
+        // One issue per line and place: both of `.card`'s colors, the inline color, each SVG attribute's.
+        assert_eq!(issues.len(), 4, "{issues:?}");
+        assert!(
+            issues[0].message.contains("`rgba(0, 0, 0, 0.3)`, `#ccc`"),
+            "{}",
+            issues[0].message
+        );
+        assert_eq!(issues[0].slide, None);
+        assert!(
+            issues[1].message.contains("`#E30613` is `var(--accent)`"),
+            "{}",
+            issues[1].message
+        );
+        assert_eq!(issues[1].slide.as_deref(), Some("a"));
+        assert!(issues[0].message.starts_with("Colors "));
+        assert!(issues[1].message.starts_with("Color `#E30613` is written"));
+        assert!(issues[2].message.contains("style=\"fill: var(--name)\""));
+        assert!(issues[3].message.contains("style=\"stroke: var(--name)\""));
+        assert!(issues.iter().all(|i| i.severity == Severity::Warning));
+    }
+
+    #[test]
+    fn a_deck_whose_colors_all_come_from_the_palette_passes() {
+        let source = deck("<section class=\"slide\" id=\"a\"><p style=\"color: var(--accent)\">x</p><svg><path style=\"fill: var(--accent)\" stroke=\"currentColor\"/></svg></section>")
+            .replace(
+                "<style>.slide {}</style>",
+                "<style>:root { --accent: oklch(0.6 0.2 25); --ink: black; } .slide { color: var(--ink); border-color: transparent; }</style>",
+            );
+        assert_eq!(rules(&source), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn colors_picked_by_hand_get_a_real_name() {
+        let source = deck(
+            "<section class=\"slide\" id=\"a\"><p style=\"color: var(--custom-1)\">x</p></section>",
+        )
+        .replace(
+            "<style>.slide {}</style>",
+            "<style>:root { --custom-1: #123456; --custom-blue: #0000ff; }</style>",
+        );
+        let issues = lint(&source, |_| true, &[]);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!(issues[0].rule, "palette-name");
+        assert!(issues[0].message.contains("`--custom-1`"));
+    }
+
+    #[test]
     fn hand_styling_needs_no_rules_of_its_own() {
         // Cut-out shapes and arrows are added elements like any other, and the look the toolbar
         // sets (opacity, shadow, radius, image fit and flips, a slide's background) is inline style.
         let found = lint(
             &deck(
-                "<section class=\"slide\" id=\"a\" style=\"background-color: #ff0000; background-image: none\">\n<div data-added=\"shape\" style=\"position: absolute; clip-path: polygon(50% 0%, 100% 100%, 0% 100%)\">Hi</div>\n<svg data-added=\"drawing\" viewBox=\"0 0 30 30\" style=\"position: absolute; filter: drop-shadow(0px 4px 12px rgba(0, 0, 0, 0.35))\"><path d=\"M3 15 L27 15 M15 3 L27 15 L15 27\" stroke=\"#111111\"/></svg>\n<img src=\"https://example.test/a.png\" alt=\"A cat\" style=\"opacity: 0.5; box-shadow: 0px 8px 24px black; border-radius: 16px; object-fit: cover; object-position: 50% 0%; transform: scaleX(-1) !important\">\n</section>",
+                "<section class=\"slide\" id=\"a\" style=\"background-color: var(--accent); background-image: none\">\n<div data-added=\"shape\" style=\"position: absolute; clip-path: polygon(50% 0%, 100% 100%, 0% 100%)\">Hi</div>\n<svg data-added=\"drawing\" viewBox=\"0 0 30 30\" style=\"position: absolute; filter: drop-shadow(0px 4px 12px var(--shadow))\"><path d=\"M3 15 L27 15 M15 3 L27 15 L15 27\" style=\"stroke: var(--ink)\"/></svg>\n<img src=\"https://example.test/a.png\" alt=\"A cat\" style=\"opacity: 0.5; box-shadow: 0px 8px 24px var(--shadow); border-radius: 16px; object-fit: cover; object-position: 50% 0%; transform: scaleX(-1) !important\">\n</section>",
             ),
             |_| true,
             &[],
@@ -2618,7 +2749,7 @@ mod tests {
         // brackets and braces are drawings with one stroke.
         let found = lint(
             &deck(
-                "<section class=\"slide\" id=\"a\">\n<div data-added=\"shape\" data-shape=\"block-arrow\" style=\"position: absolute; left: 0px; top: 0px; width: 320px; height: 200px; padding: 54px 96px 54px 13px; background-image: url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'%3E%3Cg transform='matrix(-1 0 0 1 100 0)'%3E%3Cpath d='M0 25 L65 25 L65 0 L100 50 L65 100 L65 75 L0 75 Z' fill='%233b82f6'/%3E%3C/g%3E%3C/svg%3E&quot;); background-size: 100% 100%; background-repeat: no-repeat; filter: drop-shadow(0px 8px 24px rgba(0, 0, 0, 0.35))\">Next</div>\n<svg data-added=\"drawing\" data-outline=\"brace\" viewBox=\"0 0 60 200\" style=\"position: absolute; left: 400px; top: 0px; width: 60px; height: 200px\"><path d=\"M57 3 Q30 3 30 57 L30 46 Q30 100 3 100\" stroke=\"#111111\" stroke-width=\"6\" fill=\"none\"/></svg>\n</section>",
+                "<section class=\"slide\" id=\"a\">\n<div data-added=\"shape\" data-shape=\"block-arrow\" style=\"position: absolute; left: 0px; top: 0px; width: 320px; height: 200px; padding: 54px 96px 54px 13px; background-image: url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'%3E%3Cg transform='matrix(-1 0 0 1 100 0)'%3E%3Cpath d='M0 25 L65 25 L65 0 L100 50 L65 100 L65 75 L0 75 Z' fill='%233b82f6'/%3E%3C/g%3E%3C/svg%3E&quot;); background-size: 100% 100%; background-repeat: no-repeat; filter: drop-shadow(0px 8px 24px var(--shadow))\">Next</div>\n<svg data-added=\"drawing\" data-outline=\"brace\" viewBox=\"0 0 60 200\" style=\"position: absolute; left: 400px; top: 0px; width: 60px; height: 200px\"><path d=\"M57 3 Q30 3 30 57 L30 46 Q30 100 3 100\" style=\"stroke: var(--ink)\" stroke-width=\"6\" fill=\"none\"/></svg>\n</section>",
             ),
             |_| true,
             &[],
@@ -2632,7 +2763,7 @@ mod tests {
         // A connector's heads are paths of their own; a group holds what it groups; a lock is a flag.
         let found = lint(
             &deck(
-                "<section class=\"slide\" id=\"a\">\n<div id=\"box\" data-lock=\"\" style=\"position: absolute\">A</div>\n<div data-group=\"\" style=\"position: absolute; left: 0px; top: 0px; width: 500px; height: 300px\"><div data-shape=\"star\" data-adjust=\"7\" style=\"position: absolute\">Hi</div><div data-shape=\"cylinder\" data-adjust=\"12.5\">Db</div></div>\n<svg data-route=\"elbow\" data-from=\"box\" data-from-at=\"50% 100%\" viewBox=\"0 0 10 10\"><path d=\"M3 3 L3 103 L453 103\" stroke=\"#111111\" stroke-dasharray=\"12 18\" fill=\"none\"/><path data-head=\"start dot\" d=\"M0 3 A3 3 0 1 0 6 3 A3 3 0 1 0 0 3 Z\"/><path data-head=\"end triangle\" d=\"M0 0 L5 5 L0 10 Z\"/></svg>\n</section>",
+                "<section class=\"slide\" id=\"a\">\n<div id=\"box\" data-lock=\"\" style=\"position: absolute\">A</div>\n<div data-group=\"\" style=\"position: absolute; left: 0px; top: 0px; width: 500px; height: 300px\"><div data-shape=\"star\" data-adjust=\"7\" style=\"position: absolute\">Hi</div><div data-shape=\"cylinder\" data-adjust=\"12.5\">Db</div></div>\n<svg data-route=\"elbow\" data-from=\"box\" data-from-at=\"50% 100%\" viewBox=\"0 0 10 10\"><path d=\"M3 3 L3 103 L453 103\" style=\"stroke: var(--ink)\" stroke-dasharray=\"12 18\" fill=\"none\"/><path data-head=\"start dot\" d=\"M0 3 A3 3 0 1 0 6 3 A3 3 0 1 0 0 3 Z\"/><path data-head=\"end triangle\" d=\"M0 0 L5 5 L0 10 Z\"/></svg>\n</section>",
             ),
             |_| true,
             &[],
@@ -2680,7 +2811,7 @@ mod tests {
         // A line the user bent is a drawing like a straight one: one path, the arrow's head in it.
         let found = lint(
             &deck(
-                "<section class=\"slide\" id=\"a\">\n<svg data-added=\"drawing\" viewBox=\"0 0 206 106\" style=\"position: absolute; left: 97px; top: 97px; width: 206px; height: 106px; overflow: visible\"><path d=\"M3 3 C36.3 3 69.7 103 103 103 C136.3 103 169.7 3 203 3 M182 15 L203 3 L182 -9\" stroke=\"#111111\" stroke-width=\"6\" fill=\"none\"/></svg>\n</section>",
+                "<section class=\"slide\" id=\"a\">\n<svg data-added=\"drawing\" viewBox=\"0 0 206 106\" style=\"position: absolute; left: 97px; top: 97px; width: 206px; height: 106px; overflow: visible\"><path d=\"M3 3 C36.3 3 69.7 103 103 103 C136.3 103 169.7 3 203 3 M182 15 L203 3 L182 -9\" style=\"stroke: var(--ink)\" stroke-width=\"6\" fill=\"none\"/></svg>\n</section>",
             ),
             |_| true,
             &[],
@@ -2693,7 +2824,7 @@ mod tests {
     fn flags_elements_added_by_hand() {
         let found = lint(
             &deck(
-                "<section class=\"slide\" id=\"a\">\n<div data-added=\"text\" style=\"position: absolute; left: 10px; top: 20px\">Hi</div>\n<div data-added=\"shape\" style=\"position: absolute; left: 0px; top: 0px; width: 320px; height: 200px\"></div>\n<svg data-added=\"drawing\" viewBox=\"0 0 10 10\" style=\"position: absolute\"><path d=\"M0 0 L10 10\" stroke=\"#111111\"/></svg>\n</section>",
+                "<section class=\"slide\" id=\"a\">\n<div data-added=\"text\" style=\"position: absolute; left: 10px; top: 20px\">Hi</div>\n<div data-added=\"shape\" style=\"position: absolute; left: 0px; top: 0px; width: 320px; height: 200px\"></div>\n<svg data-added=\"drawing\" viewBox=\"0 0 10 10\" style=\"position: absolute\"><path d=\"M0 0 L10 10\" style=\"stroke: var(--ink)\"/></svg>\n</section>",
             ),
             |_| true,
             &[],

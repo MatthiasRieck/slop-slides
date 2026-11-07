@@ -53,6 +53,7 @@
 
     /* Victorian */
     :root {
+      --vignette: #121a15;
       --bg: #1d2a22;
       --ink: #f1e6cc;
       --muted: #c9b99a;
@@ -67,11 +68,11 @@
       text-align: center;
       padding: 150px 220px;
       background:
-        radial-gradient(circle at 50% 50%, rgba(196, 154, 76, 0.07) 0 30%, transparent 31%) 0 0 / 120px 120px,
-        radial-gradient(ellipse at center, #26372c, #121a15 85%);
+        radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--accent) 7%, transparent) 0 30%, transparent 31%) 0 0 / 120px 120px,
+        radial-gradient(ellipse at center, var(--panel), var(--vignette) 85%);
       font-size: 36px;
     }
-    .slide::before { content: ""; position: absolute; inset: 44px; border: 3px double var(--accent); outline: 1px solid rgba(196, 154, 76, 0.5); outline-offset: 14px; pointer-events: none; }
+    .slide::before { content: ""; position: absolute; inset: 44px; border: 3px double var(--accent); outline: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); outline-offset: 14px; pointer-events: none; }
     .slide h1, .slide h2 { font-weight: 700; letter-spacing: 0.04em; line-height: 1.08; }
     .slide h1 { font-size: 112px; }
     .slide h2 { font-size: 80px; }
@@ -95,7 +96,7 @@
     .slide .points strong { font-variant: small-caps; letter-spacing: 0.04em; }
     .layout-split { text-align: left; }
     .slide .visual .placeholder { border: 3px double var(--accent); border-radius: 50% / 40%; background: var(--wine); color: var(--accent); outline: 1px solid var(--accent); outline-offset: 12px; font-family: var(--font-body); font-style: italic; text-transform: none; letter-spacing: 0.04em; font-size: 30px; }
-    .slide .stat { align-items: center; padding: 40px; border: 1px solid var(--accent); background: rgba(110, 30, 43, 0.35); }
+    .slide .stat { align-items: center; padding: 40px; border: 1px solid var(--accent); background: color-mix(in srgb, var(--wine) 35%, transparent); }
     .slide .value { font-family: var(--font-display); font-weight: 700; font-size: 110px; color: var(--ink); }
     .slide .label { font-style: italic; }
     .layout-quote { align-items: center; }

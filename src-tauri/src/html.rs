@@ -17,7 +17,7 @@ const RUNTIME_CSS: &str = include_str!("../assets/runtime.css");
 const RUNTIME_JS: &str = include_str!("../assets/runtime.js");
 pub(crate) const CSS_START: &str =
     "<!-- slopslide:runtime-css (managed by SlopSlide, do not edit) -->";
-const CSS_END: &str = "<!-- /slopslide:runtime-css -->";
+pub(crate) const CSS_END: &str = "<!-- /slopslide:runtime-css -->";
 pub(crate) const JS_START: &str =
     "<!-- slopslide:runtime-js (managed by SlopSlide, do not edit) -->";
 const JS_END: &str = "<!-- /slopslide:runtime-js -->";
@@ -169,7 +169,7 @@ pub(crate) struct Tag {
 
 /// Every tag outside comments and raw-text elements (`<script>`, `<style>`, …), with the
 /// byte offset it starts at.
-fn tags(html: &str) -> impl Iterator<Item = (usize, Tag)> + '_ {
+pub(crate) fn tags(html: &str) -> impl Iterator<Item = (usize, Tag)> + '_ {
     let mut i = 0;
     std::iter::from_fn(move || loop {
         let Some(found) = html.get(i..).and_then(|rest| rest.find('<')) else {

@@ -53,6 +53,10 @@
 
     /* Terminal Green */
     :root {
+      --scanline: #ffffff;
+      --line: #30363d;
+      --light-red: #f85149;
+      --light-amber: #d29922;
       --bg: #0d1117;
       --ink: #e6edf3;
       --muted: #8b949e;
@@ -61,14 +65,14 @@
       --font-display: "JetBrains Mono", "Menlo", monospace;
       --font-body: "JetBrains Mono", "Menlo", monospace;
     }
-    .slide { font-size: 28px; background: repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.025) 0 2px, transparent 2px 4px), var(--bg); }
+    .slide { font-size: 28px; background: repeating-linear-gradient(0deg, color-mix(in srgb, var(--scanline) 2.5%, transparent) 0 2px, transparent 2px 4px), var(--bg); }
     .slide h1, .slide h2 { font-weight: 800; letter-spacing: -0.04em; }
     .slide h1 { font-size: 104px; }
     .slide h2 { font-size: 72px; }
     .slide h1::after { content: "_"; color: var(--accent); animation: terminal-green-blink 1s steps(1) infinite; }
     @keyframes terminal-green-blink { 50% { opacity: 0; } }
-    .slide .deco span:nth-child(1) { left: 0; right: 0; top: 0; height: 56px; background: var(--panel); border-bottom: 1px solid #30363d; }
-    .slide .deco span:nth-child(2) { left: 32px; top: 20px; width: 16px; height: 16px; border-radius: 50%; background: #f85149; box-shadow: 28px 0 0 #d29922, 56px 0 0 var(--accent); }
+    .slide .deco span:nth-child(1) { left: 0; right: 0; top: 0; height: 56px; background: var(--panel); border-bottom: 1px solid var(--line); }
+    .slide .deco span:nth-child(2) { left: 32px; top: 20px; width: 16px; height: 16px; border-radius: 50%; background: var(--light-red); box-shadow: 28px 0 0 var(--light-amber), 56px 0 0 var(--accent); }
     .slide .deco span:nth-child(3) { display: none; }
     .slide .eyebrow { font-size: 24px; letter-spacing: 0.04em; text-transform: none; }
     .slide .eyebrow::before { content: "$ "; color: var(--muted); }
@@ -77,8 +81,8 @@
     .slide .number::before { content: "#"; color: var(--muted); }
     .slide .points li { font-size: 32px; padding-left: 56px; }
     .slide .points li::before { content: ">"; top: 0; width: auto; height: auto; background: none; color: var(--accent); }
-    .slide .visual .placeholder { border: 1px solid #30363d; }
-    .slide .stat { padding: 32px; border: 1px solid #30363d; background: var(--panel); }
+    .slide .visual .placeholder { border: 1px solid var(--line); }
+    .slide .stat { padding: 32px; border: 1px solid var(--line); background: var(--panel); }
     .slide .value { font-size: 120px; font-weight: 800; }
     .layout-quote blockquote { font-size: 64px; }
     .layout-quote blockquote::before { content: "// "; color: var(--muted); }

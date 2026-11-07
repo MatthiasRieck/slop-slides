@@ -53,6 +53,15 @@
 
     /* Synthwave */
     :root {
+      --night: #0d0221;
+      --dusk: #261447;
+      --horizon: #6b1d5c;
+      --neon-white: #fff;
+      --chrome: #ffb3d1;
+      --sun: #ffd319;
+      --sun-2: #ff901f;
+      --sun-3: #ff2975;
+      --sun-4: #f222ff;
       --bg: #12002b;
       --ink: #fdf4ff;
       --muted: #d7b8f3;
@@ -62,7 +71,7 @@
       --font-display: "Audiowide", "Eurostile", sans-serif;
       --font-body: "Exo 2", "Trebuchet MS", sans-serif;
     }
-    .slide { background: linear-gradient(180deg, #0d0221 0%, #261447 40%, #6b1d5c 62%, #0d0221 62.2%); }
+    .slide { background: linear-gradient(180deg, var(--night) 0%, var(--dusk) 40%, var(--horizon) 62%, var(--night) 62.2%); }
     .slide::after {
       content: "";
       position: absolute;
@@ -73,18 +82,18 @@
       /* A grid running off to the horizon, drawn in 2D: exports draw 3D perspective flattened.
          Its lines fan out from the middle (conic) and draw closer toward the horizon. */
       background:
-        repeating-conic-gradient(from 180deg at 50% -60%, rgba(5, 217, 232, 0.8) 0 0.35deg, transparent 0.35deg 4deg),
-        repeating-linear-gradient(180deg, transparent 0 calc(var(--row, 56px) - 2px), rgba(255, 42, 109, 0.8) 0 var(--row, 56px));
+        repeating-conic-gradient(from 180deg at 50% -60%, color-mix(in srgb, var(--cyan) 80%, transparent) 0 0.35deg, transparent 0.35deg 4deg),
+        repeating-linear-gradient(180deg, transparent 0 calc(var(--row, 56px) - 2px), color-mix(in srgb, var(--accent) 80%, transparent) 0 var(--row, 56px));
       -webkit-mask-image: linear-gradient(to bottom, transparent, #000 45%);
       mask-image: linear-gradient(to bottom, transparent, #000 45%);
       opacity: 0.55;
       pointer-events: none;
     }
-    .slide h1, .slide h2 { font-weight: 400; text-transform: uppercase; color: #fff; text-shadow: 0 0 12px var(--accent), 0 0 40px var(--accent); }
-    .slide h1 { font-size: 120px; font-style: italic; background: linear-gradient(180deg, #fff 30%, #ffb3d1 55%, var(--accent) 56%, #ffd319 100%); -webkit-background-clip: text; background-clip: text; color: transparent; text-shadow: none; filter: drop-shadow(0 0 18px rgba(255, 42, 109, 0.7)); }
+    .slide h1, .slide h2 { font-weight: 400; text-transform: uppercase; color: var(--neon-white); text-shadow: 0 0 12px var(--accent), 0 0 40px var(--accent); }
+    .slide h1 { font-size: 120px; font-style: italic; background: linear-gradient(180deg, var(--neon-white) 30%, var(--chrome) 55%, var(--accent) 56%, var(--sun) 100%); -webkit-background-clip: text; background-clip: text; color: transparent; text-shadow: none; filter: drop-shadow(0 0 18px color-mix(in srgb, var(--accent) 70%, transparent)); }
     .slide h2 { font-size: 80px; }
-    .slide .deco span:nth-child(1) { right: 160px; top: 110px; width: 480px; height: 480px; border-radius: 50%; background: linear-gradient(180deg, #ffd319 0%, #ff901f 45%, #ff2975 75%, #f222ff 100%); -webkit-mask: repeating-linear-gradient(180deg, #000 0 26px, transparent 26px 36px) 0 240px / 100% 100% no-repeat, linear-gradient(#000, #000) 0 0 / 100% 240px no-repeat; mask: repeating-linear-gradient(180deg, #000 0 26px, transparent 26px 36px) 0 240px / 100% 100% no-repeat, linear-gradient(#000, #000) 0 0 / 100% 240px no-repeat; box-shadow: 0 0 120px rgba(255, 42, 109, 0.5); }
-    .slide .deco span:nth-child(2) { left: 0; right: 0; top: 0; height: 100%; background: radial-gradient(1.5px 1.5px at 10% 20%, #fff, transparent), radial-gradient(1.5px 1.5px at 30% 8%, #fff, transparent), radial-gradient(2px 2px at 55% 25%, #fff, transparent), radial-gradient(1.5px 1.5px at 75% 12%, #fff, transparent), radial-gradient(2px 2px at 90% 30%, #fff, transparent), radial-gradient(1.5px 1.5px at 45% 5%, #fff, transparent); }
+    .slide .deco span:nth-child(1) { right: 160px; top: 110px; width: 480px; height: 480px; border-radius: 50%; background: linear-gradient(180deg, var(--sun) 0%, var(--sun-2) 45%, var(--sun-3) 75%, var(--sun-4) 100%); -webkit-mask: repeating-linear-gradient(180deg, #000 0 26px, transparent 26px 36px) 0 240px / 100% 100% no-repeat, linear-gradient(#000, #000) 0 0 / 100% 240px no-repeat; mask: repeating-linear-gradient(180deg, #000 0 26px, transparent 26px 36px) 0 240px / 100% 100% no-repeat, linear-gradient(#000, #000) 0 0 / 100% 240px no-repeat; box-shadow: 0 0 120px color-mix(in srgb, var(--accent) 50%, transparent); }
+    .slide .deco span:nth-child(2) { left: 0; right: 0; top: 0; height: 100%; background: radial-gradient(1.5px 1.5px at 10% 20%, var(--neon-white), transparent), radial-gradient(1.5px 1.5px at 30% 8%, var(--neon-white), transparent), radial-gradient(2px 2px at 55% 25%, var(--neon-white), transparent), radial-gradient(1.5px 1.5px at 75% 12%, var(--neon-white), transparent), radial-gradient(2px 2px at 90% 30%, var(--neon-white), transparent), radial-gradient(1.5px 1.5px at 45% 5%, var(--neon-white), transparent); }
     .layout-bullets .deco span:nth-child(1), .layout-stats .deco span:nth-child(1), .layout-split .deco span:nth-child(1), .layout-quote .deco span:nth-child(1) { opacity: 0.25; }
     .slide .eyebrow { color: var(--cyan); text-shadow: 0 0 12px var(--cyan); letter-spacing: 0.3em; }
     .slide .lede { color: var(--muted); }
@@ -92,11 +101,11 @@
     .layout-bullets, .layout-stats { justify-content: flex-start; }
     .slide .points li { color: var(--muted); }
     .slide .points li::before { width: 18px; height: 18px; transform: rotate(45deg); background: var(--cyan); box-shadow: 0 0 14px var(--cyan); }
-    .slide .points strong { color: #fff; }
-    .slide .visual .placeholder { border: 3px solid var(--accent); background: linear-gradient(180deg, rgba(5, 217, 232, 0.15), rgba(255, 42, 109, 0.25)); color: #fff; box-shadow: 0 0 40px rgba(255, 42, 109, 0.6), inset 0 0 40px rgba(255, 42, 109, 0.4); }
-    .slide .stat { padding: 40px; border: 2px solid var(--cyan); background: rgba(13, 2, 33, 0.7); box-shadow: 0 0 30px rgba(5, 217, 232, 0.4); }
-    .slide .value { font-weight: 400; font-size: 120px; color: #fff; text-shadow: 0 0 20px var(--accent), 0 0 50px var(--accent); }
-    .layout-quote blockquote { font-family: var(--font-body); font-weight: 600; font-style: italic; font-size: 72px; color: #fff; text-shadow: 0 0 24px rgba(255, 42, 109, 0.8); }
+    .slide .points strong { color: var(--neon-white); }
+    .slide .visual .placeholder { border: 3px solid var(--accent); background: linear-gradient(180deg, color-mix(in srgb, var(--cyan) 15%, transparent), color-mix(in srgb, var(--accent) 25%, transparent)); color: var(--neon-white); box-shadow: 0 0 40px color-mix(in srgb, var(--accent) 60%, transparent), inset 0 0 40px color-mix(in srgb, var(--accent) 40%, transparent); }
+    .slide .stat { padding: 40px; border: 2px solid var(--cyan); background: color-mix(in srgb, var(--night) 70%, transparent); box-shadow: 0 0 30px color-mix(in srgb, var(--cyan) 40%, transparent); }
+    .slide .value { font-weight: 400; font-size: 120px; color: var(--neon-white); text-shadow: 0 0 20px var(--accent), 0 0 50px var(--accent); }
+    .layout-quote blockquote { font-family: var(--font-body); font-weight: 600; font-style: italic; font-size: 72px; color: var(--neon-white); text-shadow: 0 0 24px color-mix(in srgb, var(--accent) 80%, transparent); }
     .slide .cite { color: var(--cyan); }
     /* Entrance: a rise with a neon flicker. */
     @keyframes synthwave-reveal {

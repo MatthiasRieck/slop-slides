@@ -32,6 +32,7 @@ use crate::find;
 use crate::html;
 use crate::lint;
 use crate::narration;
+use crate::palette;
 use crate::review::{self, Review};
 use crate::sessions;
 use crate::size::{SizeInfo, SlideSize, SIZE_META};
@@ -115,6 +116,18 @@ pub struct Deck {
     pub size: SizeInfo,
     /// The voice and language its narration is said in (see [`crate::narration`]).
     pub narration: narration::Settings,
+    /// The deck's color palette (see [`crate::palette`]), in the order it is written.
+    pub palette: Vec<PaletteEntry>,
+}
+
+/// One color of a deck's palette.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PaletteEntry {
+    /// Without the leading `--`.
+    pub name: String,
+    /// The CSS color, as written.
+    pub value: String,
 }
 
 /// `~/Documents/SlopSlide`, where decks lived before workspaces; the default workspace.
@@ -310,6 +323,13 @@ pub fn load(file: &Path) -> Result<Deck> {
         template: html::template(&source),
         size: html::slide_size(&source).into(),
         narration: narration::Settings::of(&source),
+        palette: palette::palette(&source)
+            .into_iter()
+            .map(|c| PaletteEntry {
+                name: c.name,
+                value: c.value,
+            })
+            .collect(),
         sections: section_spans
             .iter()
             .enumerate()
@@ -607,6 +627,21 @@ pub fn set_slide_size(file: &Path, size: SlideSize) -> Result<Deck> {
     .0)
 }
 
+/// Sets palette colors to new values, adding the ones the palette lacks (see
+/// [`palette::set_colors`]).
+pub fn set_palette_colors(file: &Path, colors: &[PaletteEntry]) -> Result<Deck> {
+    let colors: Vec<(String, String)> = colors
+        .iter()
+        .map(|c| (c.name.clone(), c.value.trim().to_string()))
+        .collect();
+    Ok(edit(file, |s| Ok((palette::set_colors(s, &colors)?, ())))?.0)
+}
+
+/// Moves every color the deck writes out into its palette (see [`palette::adopt`]).
+pub fn adopt_palette(file: &Path) -> Result<Deck> {
+    Ok(edit(file, |s| Ok((palette::adopt(s), ())))?.0)
+}
+
 /// Sets the voice the deck's narration is said in: one its provider has (see
 /// [`narration::Provider::accepts_voice`]).
 pub fn set_narration_voice(file: &Path, voice: &str) -> Result<Deck> {
@@ -819,7 +854,17 @@ pub fn slide_source(file: &Path, slide: &str) -> Result<SlideSource> {
 /// Replaces one slide with markup edited on the stage. `base` is the slide's hash the edit
 /// started from; the save is refused when the slide has changed since. Returns the slide's
 /// previous markup, so the edit can be undone by saving it back.
-pub fn update_slide(file: &Path, slide: &str, markup: &str, base: &str) -> Result<(Deck, String)> {
+///
+/// `colors` are palette colors the new markup uses that the deck may not have yet (the
+/// editor's picks): those it lacks are added in the same write; the ones it has keep their
+/// values.
+pub fn update_slide(
+    file: &Path,
+    slide: &str,
+    markup: &str,
+    base: &str,
+    colors: &[PaletteEntry],
+) -> Result<(Deck, String)> {
     let source = read_html(file)?;
     let current = html::find_slides(&source)
         .into_iter()
@@ -832,7 +877,19 @@ pub fn update_slide(file: &Path, slide: &str, markup: &str, base: &str) -> Resul
             "The slide changed while you were editing it; your last change was not saved.",
         ));
     }
-    edit(file, |s| html::replace_slide(s, slide, markup))
+    edit(file, |s| {
+        let (out, previous) = html::replace_slide(s, slide, markup)?;
+        let have = palette::palette(&out);
+        let missing: Vec<(String, String)> = colors
+            .iter()
+            .filter(|c| !have.iter().any(|h| h.name == c.name))
+            .map(|c| (c.name.clone(), c.value.trim().to_string()))
+            .collect();
+        if missing.is_empty() {
+            return Ok((out, previous));
+        }
+        Ok((palette::set_colors(&out, &missing)?, previous))
+    })
 }
 
 /// Puts `slides` back as they are in `version`, an earlier version of the deck, all in one
@@ -1422,7 +1479,7 @@ mod tests {
         );
         assert_eq!(source.hash, load(&deck.file()).unwrap().slides[1].hash);
         let markup = "<section class=\"slide\" id=\"b\">B!</section>";
-        update_slide(&deck.file(), "b", markup, &source.hash).unwrap();
+        update_slide(&deck.file(), "b", markup, &source.hash, &[]).unwrap();
         assert_eq!(slide_source(&deck.file(), "b").unwrap().markup, markup);
         assert!(slide_source(&deck.file(), "zz").is_err());
     }
@@ -1432,7 +1489,7 @@ mod tests {
         let deck = TempDeck::new(EDITED);
         let base = load(&deck.file()).unwrap().slides[0].hash.clone();
         let markup = "<section class=\"slide\" id=\"a\"><p data-moved=\"\" style=\"translate: 10px 0px\">A!</p></section>";
-        let (saved, previous) = update_slide(&deck.file(), "a", markup, &base).unwrap();
+        let (saved, previous) = update_slide(&deck.file(), "a", markup, &base, &[]).unwrap();
         assert_eq!(previous, "<section class=\"slide\" id=\"a\">A!</section>");
         assert_eq!(deck.html(), EDITED.replace(&previous, markup));
         let moved: Vec<_> = saved.slides.iter().map(|s| s.moved).collect();
@@ -1441,7 +1498,7 @@ mod tests {
 
         // Undo: save the previous markup back on top of the new version.
         let (restored, _) =
-            update_slide(&deck.file(), "a", &previous, &saved.slides[0].hash).unwrap();
+            update_slide(&deck.file(), "a", &previous, &saved.slides[0].hash, &[]).unwrap();
         assert_eq!(deck.html(), EDITED);
         assert_eq!(restored.slides[0].hash, base);
     }
@@ -1450,14 +1507,14 @@ mod tests {
     fn update_slide_refuses_when_the_slide_changed_since_base() {
         let deck = TempDeck::new(EDITED);
         let markup = "<section class=\"slide\" id=\"a\">mine</section>";
-        let err = update_slide(&deck.file(), "a", markup, "stale").unwrap_err();
+        let err = update_slide(&deck.file(), "a", markup, "stale", &[]).unwrap_err();
         assert!(err.to_string().contains("changed"), "{err}");
         assert_eq!(deck.html(), EDITED);
 
         let base = load(&deck.file()).unwrap().slides[0].hash.clone();
-        assert!(update_slide(&deck.file(), "zz", markup, &base).is_err());
+        assert!(update_slide(&deck.file(), "zz", markup, &base, &[]).is_err());
         let other = "<section class=\"slide\" id=\"b\">mine</section>";
-        assert!(update_slide(&deck.file(), "a", other, &base).is_err());
+        assert!(update_slide(&deck.file(), "a", other, &base, &[]).is_err());
         assert_eq!(deck.html(), EDITED);
     }
 
@@ -1693,7 +1750,7 @@ mod tests {
         let deck = TempDeck::new(LOCKED);
         let base = load(&deck.file()).unwrap().slides[0].hash.clone();
         let markup = "<section class=\"slide\" id=\"a\" data-locked>mine</section>";
-        let err = update_slide(&deck.file(), "a", markup, &base).unwrap_err();
+        let err = update_slide(&deck.file(), "a", markup, &base, &[]).unwrap_err();
         assert!(err.to_string().contains("locked"), "{err}");
         let err = delete_slides(&deck.file(), &ids(&["a"])).unwrap_err();
         assert!(err.to_string().contains("locked"), "{err}");
@@ -1702,7 +1759,7 @@ mod tests {
         // Other slides, hiding, and moving it stay open.
         let base = load(&deck.file()).unwrap().slides[1].hash.clone();
         let other = "<section class=\"slide\" id=\"b\">B!</section>";
-        update_slide(&deck.file(), "b", other, &base).unwrap();
+        update_slide(&deck.file(), "b", other, &base, &[]).unwrap();
         set_slides_hidden(&deck.file(), Some(&deck.session()), &ids(&["a"]), true).unwrap();
         let moved = reorder(&deck.file(), vec!["b".into(), "a".into()]).unwrap();
         assert_eq!(slide_ids(&moved.deck), ["b", "a"]);
@@ -2829,6 +2886,77 @@ mod tests {
         let before = read_html(&dir).unwrap();
         assert!(apply_template(&dir, template()).is_err());
         assert_eq!(read_html(&dir).unwrap(), before);
+    }
+
+    #[test]
+    fn a_slide_edit_adds_the_palette_colors_it_picked() {
+        let deck = TempDeck::new("<html><head><title>Talk</title><style>:root { --ink: #111111; }</style></head><body><main class=\"deck\">\n<section class=\"slide\" id=\"a\">A</section>\n</main></body></html>");
+        let base = load(&deck.file()).unwrap().slides[0].hash.clone();
+        let entry = |name: &str, value: &str| PaletteEntry {
+            name: name.into(),
+            value: value.into(),
+        };
+        let (saved, _) = update_slide(
+            &deck.file(),
+            "a",
+            "<section class=\"slide\" id=\"a\"><p style=\"color: var(--custom-1)\">A</p></section>",
+            &base,
+            &[entry("custom-1", "#ff0000"), entry("ink", "#000000")],
+        )
+        .unwrap();
+        // A color the palette has keeps its value.
+        assert_eq!(
+            saved.palette,
+            [entry("custom-1", "#ff0000"), entry("ink", "#111111")]
+        );
+        assert!(deck.html().contains("var(--custom-1)"));
+        let bad = update_slide(
+            &deck.file(),
+            "a",
+            "<section class=\"slide\" id=\"a\">B</section>",
+            &saved.slides[0].hash,
+            &[entry("x", "not a color")],
+        );
+        assert!(bad.is_err());
+        assert!(
+            deck.html().contains("var(--custom-1)"),
+            "nothing is written"
+        );
+    }
+
+    #[test]
+    fn reads_sets_and_adopts_palette_colors() {
+        let deck = TempDeck::new("<html><head><title>Talk</title><style>:root { --bg: #ffffff; --ink: #111111; }\n.slide { border: 1px solid #e30613; }</style></head><body><main class=\"deck\">\n<section class=\"slide\" id=\"a\" style=\"color: red\">A</section>\n</main></body></html>");
+        let entry = |name: &str, value: &str| PaletteEntry {
+            name: name.into(),
+            value: value.into(),
+        };
+        let read = load(&deck.file()).unwrap();
+        assert_eq!(
+            read.palette,
+            [entry("bg", "#ffffff"), entry("ink", "#111111")]
+        );
+
+        let set = set_palette_colors(
+            &deck.file(),
+            &[entry("ink", " #222222 "), entry("accent", "#0000ff")],
+        )
+        .unwrap();
+        assert_eq!(
+            set.palette,
+            [
+                entry("accent", "#0000ff"),
+                entry("bg", "#ffffff"),
+                entry("ink", "#222222")
+            ]
+        );
+        assert!(set_palette_colors(&deck.file(), &[entry("ink", "url(x)")]).is_err());
+        assert!(deck.html().contains("--ink: #222222;"));
+
+        let adopted = adopt_palette(&deck.file()).unwrap();
+        assert_eq!(adopted.palette.len(), 5);
+        assert!(crate::palette::literals(&deck.html()).is_empty());
+        assert!(deck.html().contains("style=\"color: var(--text)\""));
     }
 
     #[test]

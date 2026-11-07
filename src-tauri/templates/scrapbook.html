@@ -53,6 +53,15 @@
 
     /* Scrapbook */
     :root {
+      --light: #ffffff;
+      --paper-tint: #785028;
+      --grain: #503214;
+      --shadow: #3c2814;
+      --leaf: #b8c9a8;
+      --leaf-2: #8ea67c;
+      --tape: #ffdc78;
+      --photo: #c9bda5;
+      --note: #fff4b8;
       --bg: #e6d7b9;
       --ink: #2a2118;
       --muted: #54473a;
@@ -64,29 +73,29 @@
     }
     .slide {
       background:
-        radial-gradient(circle at 20% 30%, rgba(255, 255, 255, 0.35), transparent 40%),
-        radial-gradient(circle at 80% 70%, rgba(120, 80, 40, 0.15), transparent 45%),
-        repeating-radial-gradient(circle at 50% 50%, rgba(80, 50, 20, 0.04) 0 2px, transparent 2px 5px),
+        radial-gradient(circle at 20% 30%, color-mix(in srgb, var(--light) 35%, transparent), transparent 40%),
+        radial-gradient(circle at 80% 70%, color-mix(in srgb, var(--paper-tint) 15%, transparent), transparent 45%),
+        repeating-radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--grain) 4%, transparent) 0 2px, transparent 2px 5px),
         var(--bg);
     }
     .slide h1, .slide h2 { font-weight: 400; line-height: 1.1; }
-    .slide .deco span:nth-child(1) { right: 160px; top: 90px; width: 360px; height: 420px; padding: 24px; background: var(--panel); box-shadow: 8px 12px 24px rgba(60, 40, 20, 0.3); transform: rotate(6deg); background-image: linear-gradient(#b8c9a8, #8ea67c); background-clip: content-box; border: 24px solid var(--panel); border-bottom-width: 90px; }
-    .slide .deco span:nth-child(2) { right: 280px; top: 60px; width: 160px; height: 44px; background: rgba(255, 220, 120, 0.7); transform: rotate(-8deg); }
+    .slide .deco span:nth-child(1) { right: 160px; top: 90px; width: 360px; height: 420px; padding: 24px; background: var(--panel); box-shadow: 8px 12px 24px color-mix(in srgb, var(--shadow) 30%, transparent); transform: rotate(6deg); background-image: linear-gradient(var(--leaf), var(--leaf-2)); background-clip: content-box; border: 24px solid var(--panel); border-bottom-width: 90px; }
+    .slide .deco span:nth-child(2) { right: 280px; top: 60px; width: 160px; height: 44px; background: color-mix(in srgb, var(--tape) 70%, transparent); transform: rotate(-8deg); }
     .slide .deco span:nth-child(3) { left: 90px; bottom: 70px; width: 140px; height: 140px; border-radius: 50%; background: radial-gradient(circle, var(--accent) 0 45%, transparent 46%), repeating-conic-gradient(var(--accent) 0 10deg, transparent 10deg 20deg); opacity: 0.85; transform: rotate(12deg); }
     .layout-bullets .deco span:nth-child(1), .layout-stats .deco span:nth-child(1), .layout-split .deco span:nth-child(1), .layout-quote .deco span:nth-child(1), .layout-split .deco span:nth-child(2) { display: none; }
-    .layout-title .frame, .layout-section .frame, .layout-closing .frame { padding: 64px 80px; background: var(--panel); box-shadow: 10px 14px 28px rgba(60, 40, 20, 0.28); transform: rotate(-1.5deg); max-width: 1100px; }
+    .layout-title .frame, .layout-section .frame, .layout-closing .frame { padding: 64px 80px; background: var(--panel); box-shadow: 10px 14px 28px color-mix(in srgb, var(--shadow) 28%, transparent); transform: rotate(-1.5deg); max-width: 1100px; }
     .slide .eyebrow { font-family: var(--font-hand); font-size: 44px; letter-spacing: 0; text-transform: none; }
     .slide .lede { font-size: 34px; }
     .slide .number { font-size: 120px; transform: rotate(-4deg); }
-    .slide .frame-head h2 { display: inline-block; padding: 0 16px; background: linear-gradient(transparent 55%, rgba(255, 220, 120, 0.85) 55%); }
+    .slide .frame-head h2 { display: inline-block; padding: 0 16px; background: linear-gradient(transparent 55%, color-mix(in srgb, var(--tape) 85%, transparent) 55%); }
     .slide .points li { font-size: 34px; }
     .slide .points li::before { content: "✗"; width: auto; height: auto; top: -0.2em; background: none; color: var(--accent); font-family: var(--font-display); font-size: 44px; }
-    .slide .visual { padding: 28px 28px 100px; background: var(--panel); box-shadow: 10px 14px 28px rgba(60, 40, 20, 0.3); transform: rotate(3deg); }
-    .slide .visual::before { content: ""; position: absolute; left: 50%; top: -24px; width: 200px; height: 52px; margin-left: -100px; background: rgba(255, 220, 120, 0.75); transform: rotate(-4deg); }
-    .slide .visual .placeholder { background: #c9bda5; color: var(--muted); }
-    .slide .stat { padding: 40px; background: var(--panel); box-shadow: 8px 12px 22px rgba(60, 40, 20, 0.25); }
+    .slide .visual { padding: 28px 28px 100px; background: var(--panel); box-shadow: 10px 14px 28px color-mix(in srgb, var(--shadow) 30%, transparent); transform: rotate(3deg); }
+    .slide .visual::before { content: ""; position: absolute; left: 50%; top: -24px; width: 200px; height: 52px; margin-left: -100px; background: color-mix(in srgb, var(--tape) 75%, transparent); transform: rotate(-4deg); }
+    .slide .visual .placeholder { background: var(--photo); color: var(--muted); }
+    .slide .stat { padding: 40px; background: var(--panel); box-shadow: 8px 12px 22px color-mix(in srgb, var(--shadow) 25%, transparent); }
     .slide .stat:nth-child(1) { transform: rotate(-2deg); }
-    .slide .stat:nth-child(2) { transform: rotate(1.5deg); background: #fff4b8; }
+    .slide .stat:nth-child(2) { transform: rotate(1.5deg); background: var(--note); }
     .slide .stat:nth-child(3) { transform: rotate(-1deg); }
     .slide .value { font-family: var(--font-display); font-weight: 400; font-size: 120px; }
     .layout-quote blockquote { font-family: var(--font-hand); font-size: 84px; font-weight: 600; }

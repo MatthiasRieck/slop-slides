@@ -53,6 +53,7 @@
 
     /* Wabi-Sabi */
     :root {
+      --light: #ffffff;
       --bg: #ebe4d6;
       --ink: #2e2a25;
       --muted: #6f665a;
@@ -64,9 +65,9 @@
     .slide {
       padding: 140px 180px;
       background:
-        radial-gradient(ellipse at 30% 20%, rgba(255, 255, 255, 0.4), transparent 50%),
-        radial-gradient(ellipse at 80% 90%, rgba(155, 90, 60, 0.1), transparent 45%),
-        repeating-radial-gradient(circle at 30% 60%, rgba(46, 42, 37, 0.025) 0 1px, transparent 1px 3px),
+        radial-gradient(ellipse at 30% 20%, color-mix(in srgb, var(--light) 40%, transparent), transparent 50%),
+        radial-gradient(ellipse at 80% 90%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 45%),
+        repeating-radial-gradient(circle at 30% 60%, color-mix(in srgb, var(--ink) 2.5%, transparent) 0 1px, transparent 1px 3px),
         var(--bg);
     }
     .slide h1, .slide h2 { font-weight: 500; letter-spacing: 0.02em; line-height: 1.2; }
@@ -89,7 +90,7 @@
     .slide .points strong { font-family: var(--font-display); font-weight: 500; }
     .layout-split { gap: 140px; }
     .slide .visual { flex-basis: 640px; height: 780px; }
-    .slide .visual .placeholder { border-radius: 4px 12px 6px 16px; background: var(--panel); color: var(--muted); box-shadow: 0 30px 60px -30px rgba(46, 42, 37, 0.35); letter-spacing: 0.3em; }
+    .slide .visual .placeholder { border-radius: 4px 12px 6px 16px; background: var(--panel); color: var(--muted); box-shadow: 0 30px 60px -30px color-mix(in srgb, var(--ink) 35%, transparent); letter-spacing: 0.3em; }
     .slide .stats { gap: 80px; }
     .slide .stat { padding-top: 40px; border-top: 2px solid var(--ink); }
     .slide .value { font-weight: 500; font-size: 128px; color: var(--ink); }

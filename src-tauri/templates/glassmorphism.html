@@ -53,6 +53,15 @@
 
     /* Glassmorphism */
     :root {
+      --shadow: #050a28;
+      --deep: #10224f;
+      --deep-2: #0b3a4a;
+      --orb: #ff9a5a;
+      --orb-edge: #ff3d77;
+      --orb-2: #36f1cd;
+      --orb-2-edge: #1b8cff;
+      --orb-3: #ffe28a;
+      --orb-3-edge: #ffb02e;
       --bg: #0f1b3d;
       --ink: #ffffff;
       --muted: rgba(255, 255, 255, 0.78);
@@ -60,15 +69,15 @@
       --panel: rgba(255, 255, 255, 0.14);
       --font-display: "Sora", "Avenir Next", sans-serif;
       --font-body: "Manrope", "Avenir Next", sans-serif;
-      --glass-border: 1.5px solid rgba(255, 255, 255, 0.45);
-      --glass-shadow: 0 30px 80px rgba(5, 10, 40, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+      --glass-border: 1.5px solid color-mix(in srgb, var(--ink) 45%, transparent);
+      --glass-shadow: 0 30px 80px color-mix(in srgb, var(--shadow) 35%, transparent), inset 0 1px 0 color-mix(in srgb, var(--ink) 50%, transparent);
     }
-    .slide { background: linear-gradient(135deg, #10224f, #0b3a4a); }
+    .slide { background: linear-gradient(135deg, var(--deep), var(--deep-2)); }
     .slide h1, .slide h2 { font-weight: 700; letter-spacing: -0.03em; }
     .slide .deco span { border-radius: 50%; filter: blur(8px); }
-    .slide .deco span:nth-child(1) { right: 120px; top: -60px; width: 640px; height: 640px; background: radial-gradient(circle at 30% 30%, #ff9a5a, #ff3d77 70%); }
-    .slide .deco span:nth-child(2) { left: 80px; bottom: -160px; width: 560px; height: 560px; background: radial-gradient(circle at 40% 40%, #36f1cd, #1b8cff 75%); }
-    .slide .deco span:nth-child(3) { right: 640px; top: 520px; width: 260px; height: 260px; background: radial-gradient(circle at 35% 35%, #ffe28a, #ffb02e 80%); }
+    .slide .deco span:nth-child(1) { right: 120px; top: -60px; width: 640px; height: 640px; background: radial-gradient(circle at 30% 30%, var(--orb), var(--orb-edge) 70%); }
+    .slide .deco span:nth-child(2) { left: 80px; bottom: -160px; width: 560px; height: 560px; background: radial-gradient(circle at 40% 40%, var(--orb-2), var(--orb-2-edge) 75%); }
+    .slide .deco span:nth-child(3) { right: 640px; top: 520px; width: 260px; height: 260px; background: radial-gradient(circle at 35% 35%, var(--orb-3), var(--orb-3-edge) 80%); }
     .layout-title .frame, .layout-section .frame, .layout-closing .frame, .slide .frame-head, .layout-split .text, .layout-quote blockquote {
       padding: 64px 80px;
       border: var(--glass-border);
@@ -80,13 +89,13 @@
     }
     .slide .frame-head { padding: 40px 64px; }
     .slide .eyebrow { color: var(--accent); }
-    .slide .number { font-size: 140px; color: #fff; }
+    .slide .number { font-size: 140px; color: var(--ink); }
     .slide .points { gap: 24px; }
-    .slide .points li { padding: 28px 40px 28px 96px; border: var(--glass-border); border-radius: 32px; background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); }
+    .slide .points li { padding: 28px 40px 28px 96px; border: var(--glass-border); border-radius: 32px; background: color-mix(in srgb, var(--ink) 10%, transparent); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); }
     .slide .points li::before { left: 40px; top: 50%; width: 22px; height: 22px; margin-top: -11px; border-radius: 50%; box-shadow: 0 0 18px var(--accent); }
-    .slide .visual .placeholder { border: var(--glass-border); border-radius: 48px; background: rgba(255, 255, 255, 0.12); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); color: #fff; box-shadow: var(--glass-shadow); }
+    .slide .visual .placeholder { border: var(--glass-border); border-radius: 48px; background: color-mix(in srgb, var(--ink) 12%, transparent); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); color: var(--ink); box-shadow: var(--glass-shadow); }
     .slide .stat { padding: 48px; border: var(--glass-border); border-radius: 40px; background: var(--panel); backdrop-filter: blur(40px); -webkit-backdrop-filter: blur(40px); box-shadow: var(--glass-shadow); }
-    .slide .value { color: #fff; font-size: 130px; }
+    .slide .value { color: var(--ink); font-size: 130px; }
     .layout-quote blockquote { font-size: 68px; font-weight: 600; }
     /* Entrance: frosted glass coming into focus. */
     @keyframes glassmorphism-reveal {

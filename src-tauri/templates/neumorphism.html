@@ -53,6 +53,9 @@
 
     /* Neumorphism */
     :root {
+      --light: #ffffff;
+      --shade: #b9c2cf;
+      --accent-shade: #a03c1e;
       --bg: #e3e8ef;
       --ink: #2f3a4b;
       --muted: #6b7789;
@@ -60,22 +63,22 @@
       --panel: #e3e8ef;
       --font-display: "Lexend", "Avenir Next", sans-serif;
       --font-body: "Lexend", "Avenir Next", sans-serif;
-      --raised: -18px -18px 36px #ffffff, 18px 18px 36px #b9c2cf;
-      --pressed: inset -12px -12px 24px #ffffff, inset 12px 12px 24px #b9c2cf;
+      --raised: -18px -18px 36px var(--light), 18px 18px 36px var(--shade);
+      --pressed: inset -12px -12px 24px var(--light), inset 12px 12px 24px var(--shade);
     }
     .slide { font-weight: 300; }
     .slide h1, .slide h2 { font-weight: 700; letter-spacing: -0.02em; }
     .slide .deco span:nth-child(1) { right: 180px; top: 160px; width: 360px; height: 360px; border-radius: 50%; box-shadow: var(--raised); }
     .slide .deco span:nth-child(2) { right: 260px; top: 240px; width: 200px; height: 200px; border-radius: 50%; box-shadow: var(--pressed); }
-    .slide .deco span:nth-child(3) { right: 340px; top: 320px; width: 40px; height: 40px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 24px rgba(255, 122, 89, 0.6); }
+    .slide .deco span:nth-child(3) { right: 340px; top: 320px; width: 40px; height: 40px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 24px color-mix(in srgb, var(--accent) 60%, transparent); }
     .layout-bullets .deco span, .layout-stats .deco span, .layout-split .deco span, .layout-quote .deco span:nth-child(3) { display: none; }
     .layout-title .frame, .layout-section .frame, .layout-closing .frame { padding: 72px 88px; border-radius: 56px; box-shadow: var(--raised); max-width: 1180px; }
     .slide .eyebrow { padding: 12px 28px; border-radius: 999px; box-shadow: var(--pressed); color: var(--accent); }
     .slide .number { display: grid; place-items: center; width: 200px; height: 200px; border-radius: 50%; box-shadow: var(--raised); font-size: 90px; }
     .slide .points { gap: 32px; }
     .slide .points li { padding: 30px 40px 30px 104px; border-radius: 32px; box-shadow: var(--raised); }
-    .slide .points li::before { left: 36px; top: 50%; width: 36px; height: 36px; margin-top: -18px; border-radius: 50%; background: var(--panel); box-shadow: inset -5px -5px 10px #fff, inset 5px 5px 10px #b9c2cf; }
-    .slide .points li:first-child::before { background: var(--accent); box-shadow: inset -4px -4px 8px rgba(255, 255, 255, 0.4), inset 4px 4px 8px rgba(160, 60, 30, 0.4); }
+    .slide .points li::before { left: 36px; top: 50%; width: 36px; height: 36px; margin-top: -18px; border-radius: 50%; background: var(--panel); box-shadow: inset -5px -5px 10px var(--light), inset 5px 5px 10px var(--shade); }
+    .slide .points li:first-child::before { background: var(--accent); box-shadow: inset -4px -4px 8px color-mix(in srgb, var(--light) 40%, transparent), inset 4px 4px 8px color-mix(in srgb, var(--accent-shade) 40%, transparent); }
     .slide .points strong { font-weight: 500; }
     .slide .visual .placeholder { border-radius: 64px; box-shadow: var(--pressed); }
     .slide .stat { padding: 48px; border-radius: 48px; box-shadow: var(--raised); }

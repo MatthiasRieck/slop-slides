@@ -2842,6 +2842,50 @@ describe("templates", () => {
   });
 });
 
+describe("changing the deck's palette", () => {
+  it("sets colors, and nothing for none", async () => {
+    const { useApp } = await freshModule();
+    const palette = [{ name: "accent", value: "#0000ff" }];
+    backend({ set_palette_colors: () => ({ ...DECK, palette }) });
+    useApp.setState({ deck: DECK });
+    await useApp.getState().setPaletteColors(palette);
+    expect(calls("set_palette_colors")).toEqual([{ id: "/decks/talk/deck.html", colors: palette }]);
+    expect(useApp.getState().deck?.palette).toEqual(palette);
+    await useApp.getState().setPaletteColors([]);
+    expect(calls("set_palette_colors")).toHaveLength(1);
+  });
+
+  it("moves written-out colors into the palette, reporting a failure", async () => {
+    const { useApp } = await freshModule();
+    backend({
+      adopt_palette: () => {
+        throw "The deck has no style element.";
+      },
+    });
+    useApp.setState({ deck: DECK });
+    await useApp.getState().adoptPalette();
+    expect(calls("adopt_palette")).toEqual([{ id: "/decks/talk/deck.html" }]);
+    expect(useApp.getState().error).toBe("The deck has no style element.");
+  });
+
+  it("saves a slide edit with the palette colors it picked", async () => {
+    const { useApp } = await freshModule();
+    backend({ update_slide: () => DECK });
+    useApp.setState({ deck: DECK });
+    const slide = DECK.slides[0]!;
+    await useApp.getState().saveSlideEdit(slide.id, "<section></section>", [{ name: "custom-1", value: "#f00" }]);
+    expect(calls("update_slide")).toEqual([
+      {
+        id: "/decks/talk/deck.html",
+        slide: slide.id,
+        markup: "<section></section>",
+        base: slide.hash,
+        palette: [{ name: "custom-1", value: "#f00" }],
+      },
+    ]);
+  });
+});
+
 describe("changing the slide size", () => {
   const PORTRAIT = { width: 1080, height: 1350, unit: "px" as const };
   const resized = (size = PORTRAIT) => ({

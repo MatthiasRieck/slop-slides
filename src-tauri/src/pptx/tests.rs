@@ -188,6 +188,9 @@ fn lint_issues(converted: &import::Converted) -> Vec<lint::Issue> {
 fn imported_decks_pass_the_linter() {
     let converted = convert(sample(), "fallback").unwrap();
     assert_eq!(lint_issues(&converted), []);
+    // Every colour comes from the palette.
+    assert!(crate::palette::literals(&converted.html).is_empty());
+    assert!(crate::palette::palette(&converted.html).len() > 2);
 }
 
 #[test]
@@ -208,7 +211,7 @@ fn takes_the_title_and_slide_ids_from_the_presentation() {
 
 #[test]
 fn placeholders_inherit_from_layout_master_and_theme() {
-    let html = convert(sample(), "x").unwrap().html;
+    let html = crate::palette::resolve(&convert(sample(), "x").unwrap().html);
     // The position comes from the layout, the anchor from the master.
     assert!(html.contains("left: 96px; top: 48px; width: 1728px; height: 180px"));
     assert!(html.contains("justify-content: center"));
@@ -221,7 +224,7 @@ fn placeholders_inherit_from_layout_master_and_theme() {
 
 #[test]
 fn bullets_become_lists_by_level_and_stop_where_a_paragraph_opts_out() {
-    let html = convert(sample(), "x").unwrap().html;
+    let html = crate::palette::resolve(&convert(sample(), "x").unwrap().html);
     assert!(html.contains(r#"<ul style="list-style-type: &quot;• &quot;"#));
     assert!(html.contains(r#"<ul style="list-style-type: &quot;– &quot;"#));
     assert!(html.contains("margin-left: 108px"), "level 2 indent");
@@ -231,13 +234,14 @@ fn bullets_become_lists_by_level_and_stop_where_a_paragraph_opts_out() {
 
 #[test]
 fn master_art_shows_but_its_prompts_and_empty_placeholders_do_not() {
-    let html = convert(sample(), "x").unwrap().html;
+    let html = crate::palette::resolve(&convert(sample(), "x").unwrap().html);
     assert!(
         html.contains("background-color: #ff0000"),
         "the master's bar"
     );
     assert!(!html.contains("Click to edit"));
-    let first = &html[..html.find("q3-beyond-2").unwrap()];
+    // The slides, not the palette that names the colour.
+    let first = &html[html.find("<main").unwrap()..html.find("q3-beyond-2").unwrap()];
     assert_eq!(first.matches("#ff0000").count(), 1);
     let second = &html[html.find("q3-beyond-2").unwrap()..];
     assert!(!second.contains("#ff0000"), "showMasterSp=0 leaves it out");
@@ -245,7 +249,7 @@ fn master_art_shows_but_its_prompts_and_empty_placeholders_do_not() {
 
 #[test]
 fn shapes_keep_their_fill_line_geometry_and_rotation() {
-    let html = convert(sample(), "x").unwrap().html;
+    let html = crate::palette::resolve(&convert(sample(), "x").unwrap().html);
     assert!(html.contains("transform: rotate(90deg)"));
     assert!(html.contains("background-color: rgba(0, 255, 0, 0.5)"));
     assert!(html.contains("border: 2px dashed #111111"));
@@ -256,7 +260,7 @@ fn shapes_keep_their_fill_line_geometry_and_rotation() {
 
 #[test]
 fn links_stay_safe_and_slide_jumps_find_their_slide() {
-    let html = convert(sample(), "x").unwrap().html;
+    let html = crate::palette::resolve(&convert(sample(), "x").unwrap().html);
     assert!(html.contains(r#"href="https://example.com/?a=1&amp;b=2" target="_blank""#));
     assert!(html.contains(r##"href="#q3-beyond-2""##));
     assert!(!html.contains("javascript:"));
@@ -268,7 +272,7 @@ fn links_stay_safe_and_slide_jumps_find_their_slide() {
 
 #[test]
 fn slide_number_fields_show_the_real_number() {
-    let html = convert(sample(), "x").unwrap().html;
+    let html = crate::palette::resolve(&convert(sample(), "x").unwrap().html);
     assert!(html.contains(">1</span>"));
     assert!(!html.contains(">99<"));
 }
@@ -289,7 +293,7 @@ fn images_come_along_cropped_once_each_and_unsupported_ones_are_reported() {
 
 #[test]
 fn groups_scale_their_children_and_presets_are_drawn() {
-    let html = convert(sample(), "x").unwrap().html;
+    let html = crate::palette::resolve(&convert(sample(), "x").unwrap().html);
     assert!(html.contains("left: 1020px; top: 20px; width: 20px; height: 20px"));
     assert!(html.contains("<linearGradient"));
     assert!(html.contains("<path d=\"M0 "));
@@ -299,7 +303,7 @@ fn groups_scale_their_children_and_presets_are_drawn() {
 fn tables_are_tables_and_charts_keep_their_numbers() {
     let converted = convert(sample(), "x").unwrap();
     assert!(converted.html.contains(r#"colspan="2""#));
-    assert!(converted.html.contains("background-color: #abcdef"));
+    assert!(crate::palette::resolve(&converted.html).contains("background-color: #abcdef"));
     assert_eq!(
         converted.html.matches("<td colspan").count(),
         1,
@@ -354,9 +358,11 @@ fn theme_references_outrank_presentation_defaults_but_not_the_shape() {
     )
     .unwrap()
     .html;
+    let html = crate::palette::resolve(&html);
     assert!(html.contains("color: #fafafa"), "the shape's reference");
     assert!(html.contains("color: #123456"), "the run's own colour");
-    assert!(!html.contains("color: #111111"), "the deck-wide default");
+    let slides = &html[html.find("<main").unwrap()..];
+    assert!(!slides.contains("color: #111111"), "the deck-wide default");
 }
 
 #[test]
@@ -379,7 +385,7 @@ fn styled_tables_come_along_plain_with_their_grid_and_header() {
 
 #[test]
 fn notes_sections_and_hidden_slides_come_along() {
-    let html = convert(sample(), "x").unwrap().html;
+    let html = crate::palette::resolve(&convert(sample(), "x").unwrap().html);
     let slides = html::find_slides(&html);
     assert_eq!(
         html::notes(&html[slides[0].range.clone()]),
@@ -919,7 +925,9 @@ fn through_export(item: Item) -> import::Converted {
         (src == "assets/photo.jpg").then(|| b"jpeg".to_vec())
     })
     .unwrap();
-    convert(bytes, "x").unwrap()
+    let mut converted = convert(bytes, "x").unwrap();
+    converted.html = crate::palette::resolve(&converted.html);
+    converted
 }
 
 fn text_item(paragraph: Paragraph) -> Item {

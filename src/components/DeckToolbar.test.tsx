@@ -480,7 +480,14 @@ describe("video export", () => {
     });
     invoke.mockImplementation(async (command: string) =>
       command === "speech_status"
-        ? { ...speech, modelBytes: 1, downloading: false, rendering: null, voices: [], languages: [] }
+        ? {
+            ...speech,
+            modelBytes: 1,
+            downloading: false,
+            rendering: null,
+            providers: [{ id: "local", name: "Local voice model", needsKey: false, key: null, voices: [] }],
+            languages: [],
+          }
         : undefined,
     );
     useNarration.setState({
@@ -522,7 +529,7 @@ describe("video export", () => {
             modelBytes: 1,
             downloading: false,
             rendering: null,
-            voices: [],
+            providers: [{ id: "local", name: "Local voice model", needsKey: false, key: null, voices: [] }],
             languages: [],
           }
         : undefined,

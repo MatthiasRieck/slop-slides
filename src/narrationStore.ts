@@ -5,8 +5,10 @@ import {
   api,
   type Deck,
   errorMessage,
+  type NarrationProvider,
   type NarrationRenderProgress,
   type NarrationTimingProgress,
+  type NarrationVoice,
   type SlideAudio,
   type SpeechStatus,
   type VoiceDownloadProgress,
@@ -23,6 +25,8 @@ export const NARRATION_CANCELLED = "the narration was cancelled";
  */
 interface NarrationState {
   speech: SpeechStatus | null;
+  /** Voices a hosted provider's account has beyond its built-in ones (ElevenLabs: the user's own), by provider id. */
+  accountVoices: Record<string, NarrationVoice[]>;
   /** The audio of `audioDeck`'s slides, by slide id. */
   audio: Record<string, SlideAudio>;
   audioDeck: string | null;
@@ -33,6 +37,10 @@ interface NarrationState {
   /** While narration audio is heard again to time its words, how far it has got; `downloading` while the speech-to-text model downloads first. */
   timing: (NarrationTimingProgress & { downloading?: boolean }) | null;
   loadSpeech: () => Promise<void>;
+  /** Asks a hosted provider for every voice its account can use; the built-in ones stay on failure. */
+  loadVoices: (provider: string) => Promise<void>;
+  /** Saves a hosted provider's API key (or forgets it for null); false when it failed. */
+  setKey: (provider: string, key: string | null) => Promise<boolean>;
   /** Reads the deck's audio state again (after its narration, voice or language changed). */
   refreshAudio: (deck: string) => Promise<void>;
   downloadModel: () => Promise<void>;
@@ -59,6 +67,7 @@ function byId(audio: SlideAudio[]): Record<string, SlideAudio> {
 
 export const useNarration = create<NarrationState>((set, get) => ({
   speech: null,
+  accountVoices: {},
   audio: {},
   audioDeck: null,
   download: null,
@@ -71,6 +80,29 @@ export const useNarration = create<NarrationState>((set, get) => ({
     } catch (error) {
       fail(error);
     }
+  },
+
+  loadVoices: async (provider) => {
+    try {
+      const voices = await api.speechVoices(provider);
+      if (voices.length > 0) set((s) => ({ accountVoices: { ...s.accountVoices, [provider]: voices } }));
+    } catch {
+      // Offline or a key it does not accept: the built-in voices do, and saying narration tells why.
+    }
+  },
+
+  setKey: async (provider, key) => {
+    try {
+      set({ speech: await api.setSpeechKey(provider, key) });
+    } catch (error) {
+      fail(error);
+      return false;
+    }
+    set((s) => {
+      const { [provider]: _, ...rest } = s.accountVoices;
+      return { accountVoices: rest };
+    });
+    return true;
   },
 
   refreshAudio: async (deck) => {
@@ -141,6 +173,18 @@ export const useNarration = create<NarrationState>((set, get) => ({
     }
   },
 }));
+
+/** Who says the deck's narration: its provider, or the local model when the deck names none (or one unknown). */
+export function deckProvider(deck: Deck, speech: SpeechStatus): NarrationProvider | undefined {
+  const id = deck.narration?.provider ?? "local";
+  return speech.providers.find((p) => p.id === id) ?? speech.providers.find((p) => p.id === "local");
+}
+
+/** Whether `provider` can say narration now: the local model downloaded here, a hosted service with its key. */
+export function canSpeakWith(speech: SpeechStatus | null, provider: NarrationProvider | undefined): boolean {
+  if (!speech || !provider) return false;
+  return provider.needsKey ? provider.key !== null : speech.available && speech.modelReady;
+}
 
 /**
  * Whether workspace-relative `paths` touch the narration audio of the deck at `deckPath`, as

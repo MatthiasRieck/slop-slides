@@ -947,9 +947,31 @@ fn check_slide_size(l: &mut Linter) {
     );
 }
 
-/// The narration's voice and language metas must name ones the speech model has.
+/// The narration's provider, voice and language metas must name ones the app has; the voice
+/// one the provider has.
 fn check_narration_settings(l: &mut Linter) {
     let list = |ids: Vec<&str>| ids.join(", ");
+    check_app_meta(
+        l,
+        html::NARRATION_PROVIDER_META,
+        [
+            "narration-provider-invalid",
+            "narration-provider-duplicate",
+            "narration-provider-misplaced",
+        ],
+        |content| {
+            narration::Provider::parse(content).is_none().then(|| {
+                format!(
+                    "<meta name=\"{}\"> names no known narration provider (\"{}\"): use one of {}. Remove it for the local voice model.",
+                    html::NARRATION_PROVIDER_META,
+                    truncate(content, 40),
+                    list(narration::cloud::PROVIDERS.iter().map(|p| p.id()).collect()),
+                )
+            })
+        },
+    );
+    // The voice is checked against the provider the deck names (the local model otherwise).
+    let provider = narration::provider_of(l.html);
     check_app_meta(
         l,
         html::NARRATION_VOICE_META,
@@ -959,15 +981,30 @@ fn check_narration_settings(l: &mut Linter) {
             "narration-voice-misplaced",
         ],
         |content| {
-            narration::voice(content).is_none().then(|| {
-                format!(
-                    "<meta name=\"{}\"> names no known voice (\"{}\"): use one of {}. Remove it for the default, {}.",
-                    html::NARRATION_VOICE_META,
-                    truncate(content, 40),
-                    list(narration::VOICES.iter().map(|v| v.id).collect()),
-                    narration::DEFAULT_VOICE
-                )
-            })
+            if provider.accepts_voice(content) {
+                return None;
+            }
+            let choices = match provider {
+                narration::Provider::Local => {
+                    list(narration::VOICES.iter().map(|v| v.id).collect())
+                }
+                narration::Provider::ElevenLabs => format!(
+                    "an ElevenLabs voice id (letters and digits, e.g. {})",
+                    provider.default_voice()
+                ),
+                narration::Provider::OpenAi => {
+                    list(provider.voices().iter().map(|v| v.id).collect())
+                }
+            };
+            Some(format!(
+                "<meta name=\"{}\"> names no voice {} has (\"{}\"): use {}{}. Remove it for the default, {}.",
+                html::NARRATION_VOICE_META,
+                provider.name(),
+                truncate(content, 40),
+                if provider == narration::Provider::ElevenLabs { "" } else { "one of " },
+                choices,
+                provider.default_voice()
+            ))
         },
     );
     check_app_meta(
@@ -2971,6 +3008,55 @@ mod tests {
             r#"<section class="slide" id="a"><meta name="slopslide-narration-language" content="en"></section>"#,
         );
         assert_eq!(rules(&in_body), ["narration-language-misplaced"]);
+    }
+
+    #[test]
+    fn checks_the_narration_provider_and_its_voices() {
+        let base = deck(r#"<section class="slide" id="a"></section>"#);
+        let with = |provider: &str, voice: &str| {
+            html::set_narration_voice(&html::set_narration_provider(&base, Some(provider)), voice)
+        };
+        for (provider, voice) in [
+            ("local", "ryan"),
+            ("openai", "coral"),
+            ("elevenlabs", "JBFqnCBsd6RMkjVDRZzb"),
+            ("elevenlabs", "abcdefghij1234567890"),
+        ] {
+            let html = with(provider, voice);
+            assert_eq!(rules(&html), Vec::<&str>::new(), "{provider} {voice}");
+            assert_eq!(rules(&html::ensure_runtime(&html)), Vec::<&str>::new());
+        }
+        // A voice of another provider.
+        assert_eq!(rules(&with("openai", "ryan")), ["narration-voice-invalid"]);
+        assert_eq!(
+            rules(&with("elevenlabs", "coral")),
+            ["narration-voice-invalid"]
+        );
+        assert_eq!(rules(&with("local", "marin")), ["narration-voice-invalid"]);
+        let message = &lint(&with("openai", "ryan"), |_| true, &[])[0].message;
+        assert!(
+            message.contains("OpenAI") && message.contains("marin, cedar"),
+            "{message}"
+        );
+        let message = &lint(&with("elevenlabs", "x"), |_| true, &[])[0].message;
+        assert!(message.contains("ElevenLabs voice id"), "{message}");
+        // An unknown provider: the voice is checked as the local model's.
+        for bad in ["", "ElevenLabs", "google"] {
+            let html =
+                with("openai", "ryan").replace("content=\"openai\"", &format!("content=\"{bad}\""));
+            assert_eq!(rules(&html), ["narration-provider-invalid"], "{bad}");
+        }
+        let message = &lint(&with("acme", "ryan"), |_| true, &[])[0].message;
+        assert!(message.contains("local, elevenlabs, openai"), "{message}");
+        let twice = with("openai", "coral").replace(
+            "<title>Talk</title>",
+            "<title>Talk</title><meta name=\"slopslide-narration-provider\" content=\"openai\">",
+        );
+        assert_eq!(rules(&twice), ["narration-provider-duplicate"]);
+        let in_body = deck(
+            r#"<section class="slide" id="a"><meta name="slopslide-narration-provider" content="openai"></section>"#,
+        );
+        assert_eq!(rules(&in_body), ["narration-provider-misplaced"]);
     }
 
     #[test]

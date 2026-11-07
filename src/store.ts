@@ -538,6 +538,7 @@ interface AppState {
   setSlideTiming: (timing: SlideTiming[]) => Promise<void>;
   /** Sets the voice (or language) the deck's narration is said in. */
   setNarrationVoice: (voice: string) => Promise<void>;
+  setNarrationProvider: (provider: string) => Promise<void>;
   setNarrationLanguage: (language: string) => Promise<void>;
   /**
    * Puts the slides edited since entering edit mode back as they were then, staying in it. With
@@ -1247,6 +1248,8 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   setNarrationVoice: (voice) => editDeck((id) => api.setNarrationVoice(id, voice)),
+
+  setNarrationProvider: (provider) => editDeck((id) => api.setNarrationProvider(id, provider)),
 
   setNarrationLanguage: (language) => editDeck((id) => api.setNarrationLanguage(id, language)),
 

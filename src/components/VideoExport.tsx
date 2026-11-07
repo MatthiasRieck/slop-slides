@@ -15,7 +15,7 @@ import {
   secondsProblem,
   type VideoOptions,
 } from "../lib/video";
-import { useNarration } from "../narrationStore";
+import { canSpeakWith, deckProvider, useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { Button } from "./Button";
 import { CheckboxRow, Field, NumberField, selectClass } from "./Field";
@@ -40,7 +40,8 @@ export function VideoExportPanel(props: {
   const [narration, setNarration] = useState(initial.narration);
   const [before, setBefore] = useState(String(initial.pauseBefore));
   const [after, setAfter] = useState(String(initial.pauseAfter));
-  const deck = useApp((s) => s.deck?.id);
+  const openDeck = useApp((s) => s.deck);
+  const deck = openDeck?.id;
   const audio = useNarration((s) => (s.audioDeck === deck ? s.audio : NO_AUDIO));
   const speech = useNarration((s) => s.speech);
   useEffect(() => {
@@ -50,16 +51,19 @@ export function VideoExportPanel(props: {
   const narrated = props.slides.filter((s) => (s.narration ?? "").trim() !== "" || audio[s.id]?.recorded);
   const pending = narrated.filter((s) => audio[s.id]?.state !== "ready");
   const speaks = narration && narrated.length > 0;
-  const canSpeak = !!speech?.available && !!speech.modelReady;
+  const provider = speech && openDeck ? deckProvider(openDeck, speech) : undefined;
+  const canSpeak = canSpeakWith(speech, provider);
   const problem =
     props.slides.length === 0
       ? "Every slide is hidden; show one to export a video."
       : (secondsProblem(seconds) ??
         (speaks ? (pauseProblem(before) ?? pauseProblem(after)) : null) ??
         (speaks && pending.length > 0 && speech && !canSpeak
-          ? speech.available
-            ? "Download the voice model in the Narration tab, or leave the narration out."
-            : "Narration cannot be spoken on this platform; leave it out."
+          ? provider?.needsKey
+            ? `Add your ${provider.name} API key in the Narration tab, or leave the narration out.`
+            : speech.available
+              ? "Download the voice model in the Narration tab, or leave the narration out."
+              : "Narration cannot be spoken on this platform; leave it out."
           : null));
 
   const options = (): VideoOptions => ({

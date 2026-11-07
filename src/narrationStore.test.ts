@@ -8,7 +8,15 @@ listen.mockImplementation(async (event: string, handler: (event: { payload: unkn
   return () => {};
 });
 
-import { initNarrationEvents, NARRATION_CANCELLED, touchesNarration, useNarration } from "./narrationStore";
+import type { SpeechStatus } from "./lib/api";
+import {
+  canSpeakWith,
+  deckProvider,
+  initNarrationEvents,
+  NARRATION_CANCELLED,
+  touchesNarration,
+  useNarration,
+} from "./narrationStore";
 import { useApp } from "./store";
 import { DECK_HTML, deckFor } from "./test/fixtures";
 
@@ -16,7 +24,15 @@ const deck = deckFor(DECK_HTML);
 
 beforeEach(() => {
   invoke.mockReset();
-  useNarration.setState({ speech: null, audio: {}, audioDeck: null, render: null, download: null, timing: null });
+  useNarration.setState({
+    speech: null,
+    accountVoices: {},
+    audio: {},
+    audioDeck: null,
+    render: null,
+    download: null,
+    timing: null,
+  });
   useApp.setState({ deck: null, error: null });
 });
 
@@ -133,5 +149,62 @@ describe("narration store", () => {
     expect(invoke).not.toHaveBeenCalledWith("download_voice_model");
     expect(useApp.getState().error).toBe("Slide intro: Transcription failed");
     expect(useNarration.getState().timing).toBeNull();
+  });
+});
+
+const SPEECH: SpeechStatus = {
+  available: true,
+  modelReady: false,
+  modelBytes: 1,
+  downloading: false,
+  rendering: null,
+  providers: [
+    { id: "local", name: "Local voice model", needsKey: false, key: null, voices: [] },
+    { id: "openai", name: "OpenAI", needsKey: true, key: null, voices: [] },
+    { id: "elevenlabs", name: "ElevenLabs", needsKey: true, key: "environment", voices: [] },
+  ],
+  languages: [],
+};
+
+describe("narration providers", () => {
+  it("finds the deck's provider, the local model without one or for an unknown one", () => {
+    const named = (provider?: string) => ({ ...deck, narration: { provider, voice: "x", language: "en" } });
+    expect(deckProvider(deck, SPEECH)?.id).toBe("local");
+    expect(deckProvider(named("openai"), SPEECH)?.id).toBe("openai");
+    expect(deckProvider(named("acme"), SPEECH)?.id).toBe("local");
+  });
+
+  it("can speak with the local model once downloaded, and with a hosted one once it has a key", () => {
+    const [local, openai, eleven] = SPEECH.providers;
+    expect(canSpeakWith(SPEECH, local)).toBe(false);
+    expect(canSpeakWith({ ...SPEECH, modelReady: true }, local)).toBe(true);
+    expect(canSpeakWith({ ...SPEECH, available: false, modelReady: true }, local)).toBe(false);
+    expect(canSpeakWith(SPEECH, openai)).toBe(false);
+    expect(canSpeakWith(SPEECH, { ...openai!, key: "saved" })).toBe(true);
+    expect(canSpeakWith(SPEECH, eleven)).toBe(true);
+    expect(canSpeakWith(null, eleven)).toBe(false);
+  });
+
+  it("saves a key, forgetting the voices listed with the old one", async () => {
+    useNarration.setState({ accountVoices: { openai: [{ id: "a", name: "A", description: "" }] } });
+    invoke.mockResolvedValue(SPEECH);
+    expect(await useNarration.getState().setKey("openai", "sk")).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("set_speech_key", { provider: "openai", key: "sk" });
+    expect(useNarration.getState().speech).toEqual(SPEECH);
+    expect(useNarration.getState().accountVoices).toEqual({});
+    invoke.mockRejectedValue("An API key has no spaces in it.");
+    expect(await useNarration.getState().setKey("openai", "a b")).toBe(false);
+    expect(useApp.getState().error).toContain("no spaces");
+  });
+
+  it("keeps the built-in voices when the account's cannot be listed", async () => {
+    const voices = [{ id: "abcdefghij1234567890", name: "Me", description: "Your voice" }];
+    invoke.mockResolvedValue(voices);
+    await useNarration.getState().loadVoices("elevenlabs");
+    expect(useNarration.getState().accountVoices.elevenlabs).toEqual(voices);
+    invoke.mockRejectedValue("offline");
+    await useNarration.getState().loadVoices("openai");
+    expect(useNarration.getState().accountVoices.openai).toBeUndefined();
+    expect(useApp.getState().error).toBeNull();
   });
 });

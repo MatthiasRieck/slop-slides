@@ -27,7 +27,7 @@ import { useDismiss } from "./Popover";
  * the workspace folder with the deck's title under it, which opens a menu to open the deck's
  * settings, close the file (back to the workspace) or reveal it in the file manager, then undo /
  * redo; for a deck, its mode tabs in the middle with the chat button after a separator, then export
- * and present; then the sidebar toggle. The tools of each mode live above the slide (DeckToolbar,
+ * and present; then the sidebar toggle while the sidebar is closed (open, it sits in the sidebar). The tools of each mode live above the slide (DeckToolbar,
  * Stage), and the lint status beside Tidy layout under it.
  */
 export function TopBar() {
@@ -35,6 +35,7 @@ export function TopBar() {
   const hasDeck = useApp((s) => s.deck !== null);
   const deckTitle = useApp((s) => s.deck?.title ?? null);
   const openedFile = useApp((s) => s.openedFile);
+  const sidebarOpen = useApp((s) => s.sidebarOpen);
   if (!workspace) return null;
 
   return (
@@ -69,7 +70,8 @@ export function TopBar() {
             <DeckActions />
           </div>
         )}
-        <SidebarToggle />
+        {/* Open, the sidebar carries its own toggle, beside its maximize button. */}
+        {!sidebarOpen && <SidebarToggle />}
       </div>
     </header>
   );
@@ -249,7 +251,7 @@ function RailToggle() {
 }
 
 /** Shows or hides the sidebar (chat, files) on the right. */
-function SidebarToggle() {
+export function SidebarToggle() {
   const sidebarOpen = useApp((s) => s.sidebarOpen);
   const Icon = sidebarOpen ? PanelRightClose : PanelRightOpen;
   const label = sidebarOpen ? "Hide sidebar" : "Show sidebar";

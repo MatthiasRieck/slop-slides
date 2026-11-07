@@ -20,7 +20,7 @@ use crate::env;
 use crate::error::{Error, Result};
 use crate::extensions::Extensions;
 use crate::mcp;
-use crate::permissions::{Approval, Approvals, Choices, Decision, PermissionMode};
+use crate::permissions::{Approval, Approvals, Choices, Decision, LiveMode, PermissionMode};
 use crate::rewind;
 use crate::sessions::Sessions;
 use crate::{codex, copilot};
@@ -96,8 +96,15 @@ impl Provider {
 
 #[derive(Default)]
 pub struct AgentManager {
-    running: Mutex<HashMap<String, watch::Sender<bool>>>,
+    running: Mutex<HashMap<String, Running>>,
     pub approvals: Arc<Approvals>,
+}
+
+/// The handles on a workspace's running turn.
+struct Running {
+    cancel: watch::Sender<bool>,
+    /// The turn's permission mode, which the user may change while it runs.
+    mode: watch::Sender<PermissionMode>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -214,13 +221,20 @@ impl AgentManager {
         let bin = args.provider.resolve()?;
         let extensions = Extensions::load(&app_home, &dir);
         let (cancel_tx, cancel_rx) = watch::channel(false);
+        let (mode_tx, mode_rx) = watch::channel(args.permission_mode);
         {
             let mut running = self.running.lock().unwrap();
             if running.contains_key(&args.workspace) {
                 return Err(Error::msg("The agent is still working in this workspace."));
             }
             crate::sessions::claim_provider(&session_dir, args.provider)?;
-            running.insert(args.workspace.clone(), cancel_tx);
+            running.insert(
+                args.workspace.clone(),
+                Running {
+                    cancel: cancel_tx,
+                    mode: mode_tx,
+                },
+            );
         }
         let approvals = self.approvals.clone();
         tauri::async_runtime::spawn(async move {
@@ -251,7 +265,7 @@ impl AgentManager {
                 compact: args.compact,
                 message: args.message.clone(),
                 workspace: args.workspace.clone(),
-                permission_mode: args.permission_mode,
+                permission_mode: mode_rx,
                 approvals,
                 extensions,
             };
@@ -305,8 +319,17 @@ impl AgentManager {
 
     pub fn interrupt(&self, workspace: &str) {
         self.approvals.cancel_workspace(workspace);
-        if let Some(tx) = self.running.lock().unwrap().get(workspace) {
-            let _ = tx.send(true);
+        if let Some(running) = self.running.lock().unwrap().get(workspace) {
+            let _ = running.cancel.send(true);
+        }
+    }
+
+    /// Changes the permission mode of the turn running in `workspace`, if any. Claude Code
+    /// and GitHub Copilot apply it to the requests that follow (Full access also allows
+    /// those waiting); Codex fixes its policy when the turn starts, so it applies next turn.
+    pub fn set_permission_mode(&self, workspace: &str, mode: PermissionMode) {
+        if let Some(running) = self.running.lock().unwrap().get(workspace) {
+            running.mode.send_replace(mode);
         }
     }
 }
@@ -337,7 +360,7 @@ struct Turn {
     /// The chat message the turn answers (see [`SendArgs::message`]).
     message: Option<String>,
     workspace: String,
-    permission_mode: PermissionMode,
+    permission_mode: LiveMode,
     approvals: Arc<Approvals>,
     /// The user's MCP servers, skills, plugins and instructions.
     extensions: Extensions,
@@ -476,7 +499,7 @@ impl Turn {
                 session,
                 compact: self.compact,
                 workspace: &self.workspace,
-                mode: self.permission_mode,
+                mode: self.permission_mode.clone(),
                 approvals: self.approvals.clone(),
                 extensions: &self.extensions,
                 rewind,
@@ -487,6 +510,7 @@ impl Turn {
             return copilot::run_turn(args, cancel, &|event| self.emit(event), &on_session).await;
         }
         if self.provider == Provider::Codex {
+            let mode = *self.permission_mode.borrow();
             return codex::run_turn(
                 codex::TurnArgs {
                     bin: &self.bin,
@@ -497,7 +521,7 @@ impl Turn {
                     model,
                     effort,
                     session,
-                    mode: self.permission_mode,
+                    mode,
                     approvals: self.approvals.clone(),
                     extensions: &self.extensions,
                     rewind,
@@ -531,6 +555,9 @@ impl Turn {
             self.extensions
                 .claude_skills_plugin(&self.session_dir.join(CLAUDE_PLUGINS))?,
         );
+        // Changes from here on reach Claude Code as control requests.
+        let mut mode = self.permission_mode.clone();
+        let launched = *mode.borrow_and_update();
         let mut args = build_claude_args(
             &system_prompt,
             &mcp_config,
@@ -538,7 +565,7 @@ impl Turn {
             model,
             effort,
             session,
-            self.permission_mode,
+            launched,
         );
         if let (Some(_), Some((point, _))) = (session, cut) {
             // Drops the conversation after this message (see `rewind`).
@@ -579,6 +606,7 @@ impl Turn {
         let prompt = if self.compact { CLAUDE_COMPACT } else { prompt };
         write_line(stdin.as_mut(), &claude_user_message(prompt)).await?;
         let (run, mut answers) = self.approvals.start(&self.workspace);
+        let mut mode_requests = 0;
 
         let mut stderr = child.stderr.take().expect("piped stderr");
         let stderr_task = tokio::spawn(async move {
@@ -603,13 +631,23 @@ impl Turn {
                     write_line(stdin.as_mut(), &response).await?;
                     self.emit(&AgentEvent::ApprovalResolved { id: answer.id });
                 }
+                Ok(()) = mode.changed() => {
+                    let mode = *mode.borrow_and_update();
+                    mode_requests += 1;
+                    let request = claude_set_mode(&format!("mode-{mode_requests}"), mode);
+                    write_line(stdin.as_mut(), &request).await?;
+                    if mode == PermissionMode::FullAccess {
+                        run.accept_all();
+                    }
+                }
                 line = lines.next_line() => {
                     let Some(line) = line? else { break };
                     let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
                     match value["type"].as_str() {
                         Some("control_request") => {
                             let id = &value["request_id"];
-                            match claude_permission(&value["request"], self.permission_mode, &self.session_dir) {
+                            let current = *mode.borrow();
+                            match claude_permission(&value["request"], current, &self.session_dir) {
                                 ClaudePermission::Answer(reply) => {
                                     write_line(stdin.as_mut(), &claude_control_response(id, reply)).await?;
                                 }
@@ -755,10 +793,6 @@ fn build_claude_args(
     session: Option<&str>,
     mode: PermissionMode,
 ) -> Vec<String> {
-    let permission_mode = match mode {
-        PermissionMode::FullAccess => "bypassPermissions",
-        _ => "acceptEdits",
-    };
     let mut args: Vec<String> = [
         "-p",
         "--input-format",
@@ -768,7 +802,9 @@ fn build_claude_args(
         "--verbose",
         "--include-partial-messages",
         "--permission-mode",
-        permission_mode,
+        claude_mode(mode),
+        // Lets the user grant Full access while a turn runs (see [`claude_set_mode`]).
+        "--allow-dangerously-skip-permissions",
         // Requests that would prompt arrive on stdout as `can_use_tool` control requests.
         "--permission-prompt-tool",
         "stdio",
@@ -800,6 +836,24 @@ fn build_claude_args(
         args.extend(["--resume".into(), session.into()]);
     }
     args
+}
+
+/// Claude Code's permission mode for `mode`. Outside Full access the app's handler decides
+/// what asks (see [`claude_permission`]).
+fn claude_mode(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::FullAccess => "bypassPermissions",
+        _ => "acceptEdits",
+    }
+}
+
+/// Switches a running Claude Code to `mode`.
+fn claude_set_mode(id: &str, mode: PermissionMode) -> Value {
+    json!({
+        "type": "control_request",
+        "request_id": id,
+        "request": {"subtype": "set_permission_mode", "mode": claude_mode(mode)},
+    })
 }
 
 /// Writes one stream-json line; nothing once stdin is closed.
@@ -1361,6 +1415,10 @@ mod tests {
             after(&base, "--permission-mode").as_deref(),
             Some("acceptEdits")
         );
+        assert!(
+            base.contains(&"--allow-dangerously-skip-permissions".to_string()),
+            "Full access can be granted while a turn runs"
+        );
         assert_eq!(after(&base, "--tools").as_deref(), Some(TOOLS));
         assert_eq!(
             after(&base, "--allowedTools").as_deref(),
@@ -1739,6 +1797,26 @@ mod tests {
     }
 
     #[test]
+    fn changes_the_mode_of_the_running_turn_only() {
+        let manager = AgentManager::default();
+        let (cancel, _) = watch::channel(false);
+        let (mode, live) = watch::channel(PermissionMode::Ask);
+        manager
+            .running
+            .lock()
+            .unwrap()
+            .insert("talk".into(), Running { cancel, mode });
+        manager.set_permission_mode("talk", PermissionMode::FullAccess);
+        assert_eq!(*live.borrow(), PermissionMode::FullAccess);
+        manager.set_permission_mode("other", PermissionMode::Ask);
+        assert_eq!(
+            *live.borrow(),
+            PermissionMode::FullAccess,
+            "idle workspaces have no turn"
+        );
+    }
+
+    #[test]
     fn manager_tracks_nothing_by_default() {
         let manager = AgentManager::default();
         assert!(!manager.is_running("talk"));
@@ -1820,7 +1898,7 @@ mod tests {
                     compact: false,
                     message: None,
                     workspace: "test".into(),
-                    permission_mode: self.mode,
+                    permission_mode: crate::permissions::fixed_mode(self.mode),
                     approvals,
                     extensions: Extensions::default(),
                 }
@@ -2232,6 +2310,66 @@ IFS= read -r answer; printf '%s' "$answer" > "$LOG/answer.log"
                 "--permission-mode",
                 "bypassPermissions"
             ));
+        }
+
+        #[tokio::test]
+        async fn granting_full_access_mid_turn_switches_claude_and_allows_the_waiting_request() {
+            let fx = Fixture::new(&format!(
+                r#"{INIT}
+echo '{{"type":"control_request","request_id":"req-1","request":{{"subtype":"can_use_tool","tool_name":"Bash","input":{{"command":"ls /"}}}}}}'
+IFS= read -r mode; printf '%s' "$mode" > "$LOG/mode.log"
+IFS= read -r answer; printf '%s' "$answer" > "$LOG/answer.log"
+{OK}"#
+            ));
+            let (mode, live) = watch::channel(PermissionMode::Ask);
+            let mut turn = fx.turn();
+            turn.permission_mode = live;
+            let (_cancel, rx) = watch::channel(false);
+            let run = tokio::spawn(async move { turn.run("List the root", rx).await });
+            for _ in 0..200 {
+                if fx
+                    .events()
+                    .iter()
+                    .any(|e| matches!(e, AgentEvent::ApprovalRequested { .. }))
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            mode.send_replace(PermissionMode::FullAccess);
+            let interrupted = tokio::time::timeout(Duration::from_secs(10), run)
+                .await
+                .expect("turn timed out")
+                .unwrap();
+            assert!(!interrupted);
+            assert!(has_flag(
+                &fx.invocations()[0],
+                "--permission-mode",
+                "acceptEdits"
+            ));
+            let log = |name: &str| -> Value {
+                serde_json::from_str(&fs::read_to_string(fx.dir.join(LOG_DIR).join(name)).unwrap())
+                    .unwrap()
+            };
+            let switch = log("mode.log");
+            assert_eq!(switch["type"], "control_request");
+            assert_eq!(
+                switch["request"],
+                json!({"subtype": "set_permission_mode", "mode": "bypassPermissions"})
+            );
+            let answer = log("answer.log");
+            assert_eq!(answer["response"]["request_id"], "req-1");
+            assert_eq!(answer["response"]["response"]["behavior"], "allow");
+            let events = fx.events();
+            let approval = events
+                .iter()
+                .find_map(|e| match e {
+                    AgentEvent::ApprovalRequested { approval } => Some(approval.clone()),
+                    _ => None,
+                })
+                .expect("asked before Full access");
+            assert!(events.contains(&AgentEvent::ApprovalResolved { id: approval.id }));
+            assert!(fx.errors().is_empty(), "{:?}", fx.errors());
         }
 
         #[tokio::test]

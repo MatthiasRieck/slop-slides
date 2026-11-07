@@ -17,7 +17,7 @@ use tokio::sync::watch;
 use crate::agent::{AgentEvent, Outcome, SYSTEM_PROMPT};
 use crate::error::{Error, Result};
 use crate::extensions::{self, Extensions};
-use crate::permissions::{Approval, Approvals, Choices, Decision, PermissionMode};
+use crate::permissions::{Approval, Approvals, Choices, Decision, LiveMode, PermissionMode};
 use crate::providers::ModelInfo;
 use crate::{mcp, rewind};
 
@@ -238,7 +238,8 @@ pub struct TurnArgs<'a> {
     /// Summarize the session's history instead of sending `prompt`.
     pub compact: bool,
     pub workspace: &'a str,
-    pub mode: PermissionMode,
+    /// Read at each request, so a change applies to the requests that follow.
+    pub mode: LiveMode,
     pub approvals: Arc<Approvals>,
     pub extensions: &'a Extensions,
     pub rewind: rewind::TurnRewind<'a>,
@@ -374,6 +375,8 @@ pub async fn run_turn(
         }
     }
     let (run, mut answers) = args.approvals.start(args.workspace);
+    let mut mode = args.mode.clone();
+    mode.mark_unchanged();
     emit(&AgentEvent::Thinking);
     conn.request(
         "session.send",
@@ -392,6 +395,12 @@ pub async fn run_turn(
                 )
                 .await?;
                 emit(&AgentEvent::ApprovalResolved { id: answer.id });
+                continue;
+            }
+            Ok(()) = mode.changed() => {
+                if *mode.borrow_and_update() == PermissionMode::FullAccess {
+                    run.accept_all();
+                }
                 continue;
             }
             message = conn.next() => message?,
@@ -423,7 +432,8 @@ pub async fn run_turn(
             anchored = true;
         }
         if event["type"] == "permission.requested" {
-            match permission(&event["data"], args.dir, args.mode) {
+            let current = *mode.borrow();
+            match permission(&event["data"], args.dir, current) {
                 Some((request_id, Permission::Answer(result))) => {
                     conn.notify_request(
                         "session.permissions.handlePendingPermissionRequest",
@@ -776,7 +786,7 @@ mod tests {
             session: None,
             compact: false,
             workspace: "talk",
-            mode: PermissionMode::Ask,
+            mode: crate::permissions::fixed_mode(PermissionMode::Ask),
             approvals: Arc::default(),
             extensions: &ext,
             rewind: Default::default(),
@@ -1118,7 +1128,7 @@ while True:
                 session: Some("s1"),
                 compact: false,
                 workspace: "deck-1",
-                mode: PermissionMode::Ask,
+                mode: crate::permissions::fixed_mode(PermissionMode::Ask),
                 approvals: Arc::default(),
                 extensions: &Extensions::default(),
                 rewind: rewind::TurnRewind {
@@ -1158,16 +1168,12 @@ while True:
         }
     }
 
-    /// A stand-in server whose turn asks to run a shell command and then a workspace read,
-    /// logging the decisions it receives.
+    /// A stand-in Copilot server over framed stdio whose turn runs `turn` (Python, indented
+    /// eight spaces) after answering `session.send`, logging the decisions it receives.
     #[cfg(unix)]
-    #[test]
-    fn asks_the_user_over_framed_stdio() {
-        use std::sync::Mutex;
-
-        let dir = std::env::temp_dir().join(format!("slopslide-ask-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let script = r#"#!/usr/bin/env python3
+    fn fake_copilot(turn: &str) -> String {
+        format!(
+            r#"#!/usr/bin/env python3
 import json, sys
 log = open("decisions.log", "w")
 def read():
@@ -1185,31 +1191,47 @@ def send(message):
     sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
     sys.stdout.buffer.flush()
 def event(kind, data):
-    send({"jsonrpc": "2.0", "method": "session.event", "params": {"event": {"type": kind, "data": data}}})
+    send({{"jsonrpc": "2.0", "method": "session.event", "params": {{"event": {{"type": kind, "data": data}}}}}})
 def decision():
     while True:
         request = read()
         if request["method"] == "session.permissions.handlePendingPermissionRequest":
             log.write(json.dumps(request["params"]) + "\n"); log.flush()
-            send({"jsonrpc": "2.0", "id": request["id"], "result": {"success": True}})
+            send({{"jsonrpc": "2.0", "id": request["id"], "result": {{"success": True}}}})
             return request["params"]
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {}})
+        send({{"jsonrpc": "2.0", "id": request["id"], "result": {{}}}})
 while True:
     request = read()
     method = request["method"]
     if method == "session.create":
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {"sessionId": "s1"}})
+        send({{"jsonrpc": "2.0", "id": request["id"], "result": {{"sessionId": "s1"}}}})
     elif method == "session.send":
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {}})
+        send({{"jsonrpc": "2.0", "id": request["id"], "result": {{}}}})
+{turn}        event("session.idle", {{}})
+    else:
+        send({{"jsonrpc": "2.0", "id": request["id"], "result": {{}}}})
+"#
+        )
+    }
+
+    /// A stand-in server whose turn asks to run a shell command and then a workspace read,
+    /// logging the decisions it receives.
+    #[cfg(unix)]
+    #[test]
+    fn asks_the_user_over_framed_stdio() {
+        use std::sync::Mutex;
+
+        let dir = std::env::temp_dir().join(format!("slopslide-ask-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = &fake_copilot(
+            r#"
         event("permission.requested", {"requestId": "p1", "permissionRequest": {"kind": "shell", "fullCommandText": "curl -sI https://example.com", "intention": "Check the site", "canOfferSessionApproval": True, "commands": [{"identifier": "curl", "readOnly": False}]}})
         decision()
         event("permission.completed", {"requestId": "p1", "result": {"kind": "approved"}})
         event("permission.requested", {"requestId": "p2", "permissionRequest": {"kind": "read", "path": "deck.html", "intention": "Read the deck"}})
         decision()
-        event("session.idle", {})
-    else:
-        send({"jsonrpc": "2.0", "id": request["id"], "result": {}})
-"#;
+"#,
+        );
         let bin = dir.join("copilot");
         crate::test_support::write_script(&bin, script);
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1229,7 +1251,7 @@ while True:
             session: None,
             compact: false,
             workspace: "deck-1",
-            mode: PermissionMode::Ask,
+            mode: crate::permissions::fixed_mode(PermissionMode::Ask),
             approvals: approvals.clone(),
             extensions: &Extensions::default(),
             rewind: Default::default(),
@@ -1288,6 +1310,91 @@ while True:
         assert!(approvals.is_empty());
     }
 
+    /// Granting Full access while a shell command waits allows it, and the next command
+    /// runs without asking.
+    #[cfg(unix)]
+    #[test]
+    fn full_access_granted_mid_turn_applies_at_once() {
+        use std::sync::Mutex;
+
+        let dir = std::env::temp_dir().join(format!("slopslide-live-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = &fake_copilot(
+            r#"
+        event("permission.requested", {"requestId": "p1", "permissionRequest": {"kind": "shell", "fullCommandText": "ls /", "canOfferSessionApproval": False, "commands": [{"identifier": "ls", "readOnly": True}]}})
+        decision()
+        event("permission.requested", {"requestId": "p2", "permissionRequest": {"kind": "shell", "fullCommandText": "rm -rf build", "canOfferSessionApproval": False, "commands": [{"identifier": "rm", "readOnly": False}]}})
+        decision()
+"#,
+        );
+        let bin = dir.join("copilot");
+        crate::test_support::write_script(&bin, script);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let events = Mutex::new(Vec::new());
+        let (_tx, mut rx) = watch::channel(false);
+        let (mode, live) = watch::channel(PermissionMode::Ask);
+        let args = TurnArgs {
+            bin: &bin,
+            dir: &dir,
+            lint_server: Path::new("/app/slopslide"),
+            prompt: "Tidy up",
+            model: None,
+            effort: None,
+            session: None,
+            compact: false,
+            workspace: "deck-1",
+            mode: live,
+            approvals: Arc::default(),
+            extensions: &Extensions::default(),
+            rewind: Default::default(),
+        };
+        let outcome = runtime.block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(20),
+                run_turn(
+                    args,
+                    &mut rx,
+                    &|e| {
+                        events.lock().unwrap().push(e.clone());
+                        if matches!(e, AgentEvent::ApprovalRequested { .. }) {
+                            mode.send_replace(PermissionMode::FullAccess);
+                        }
+                    },
+                    &|_| Ok(()),
+                ),
+            )
+            .await
+            .expect("turn timed out")
+        });
+        let decisions = std::fs::read_to_string(dir.join("decisions.log")).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(matches!(outcome, Ok(Outcome::Done)));
+        let decisions: Vec<Value> = decisions
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(decisions.len(), 2, "{decisions:?}");
+        for (decision, id) in decisions.iter().zip(["p1", "p2"]) {
+            assert_eq!(decision["requestId"], id);
+            assert_eq!(decision["result"], json!({"kind": "approve-once"}));
+        }
+        let events = events.into_inner().unwrap();
+        let asked: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::ApprovalRequested { approval } => Some(approval),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(asked.len(), 1, "only before Full access: {events:?}");
+        assert!(events.contains(&AgentEvent::ApprovalResolved {
+            id: asked[0].id.clone()
+        }));
+    }
+
     /// Explicit opt-in: on a real Copilot, the app's tools and workspace reads run without
     /// asking while a shell command asks (and is declined here).
     #[test]
@@ -1316,7 +1423,7 @@ while True:
             session: None,
             compact: false,
             workspace: "deck-1",
-            mode: PermissionMode::Ask,
+            mode: crate::permissions::fixed_mode(PermissionMode::Ask),
             approvals: approvals.clone(),
             extensions: &Extensions::default(),
             rewind: Default::default(),
@@ -1431,7 +1538,7 @@ while True:
             session: Some("s1"),
             compact: true,
             workspace: "deck-1",
-            mode: PermissionMode::Ask,
+            mode: crate::permissions::fixed_mode(PermissionMode::Ask),
             approvals: Arc::default(),
             extensions: &Extensions::default(),
             rewind: Default::default(),

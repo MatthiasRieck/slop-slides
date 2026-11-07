@@ -35,9 +35,6 @@ export function PermissionPicker() {
       active = false;
     };
   }, [open, provider, deckId]);
-  useEffect(() => {
-    if (running) setOpen(false);
-  }, [running]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: close the menu when the provider changes
   useEffect(() => setOpen(false), [provider]);
   const name = PROVIDERS[provider].cli;
@@ -56,7 +53,7 @@ export function PermissionPicker() {
       setError(errorMessage(e));
       return;
     }
-    // The turn may have started while the confirmation was open; the store checks again.
+    // Also changes the running turn's mode, if one runs.
     useApp.getState().setPermissionMode(next);
     setOpen(false);
   };
@@ -64,7 +61,6 @@ export function PermissionPicker() {
     <div ref={root} className="min-w-0 shrink-0">
       <button
         type="button"
-        disabled={running}
         aria-label="Permissions"
         title={`${name} permissions: ${PERMISSION_MODES[mode].label}`}
         aria-expanded={open}
@@ -97,6 +93,9 @@ export function PermissionPicker() {
                   <span className="mt-0.5 block text-muted-foreground">{PERMISSION_MODES[m].description}</span>
                 </button>
               ))
+            )}
+            {running && provider === "codex" && modes.length > 0 && (
+              <p className="p-2 text-xs text-muted-foreground">Codex applies a change from your next message.</p>
             )}
             {modes.length > 0 && !modes.includes(mode) && (
               <p role="alert" className="p-2 text-xs text-destructive">

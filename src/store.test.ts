@@ -2554,12 +2554,31 @@ describe("permissions", () => {
     expect((await freshStore()).getState().permissionModes).toEqual({ claude: "ask", codex: "custom", copilot: "ask" });
   });
 
-  it("cannot change the mode during a turn", async () => {
+  it("changes the running turn's mode too", async () => {
     const store = await freshStore();
-    store.setState({ running: true });
+    store.setState({ running: true, selection: claude });
     store.getState().setPermissionMode("fullAccess");
-    expect(store.getState().permissionModes.claude).toBe("ask");
-    expect(localStorage.getItem("slopslide.permissions")).toBeNull();
+    expect(store.getState().permissionModes.claude).toBe("fullAccess");
+    expect(JSON.parse(localStorage.getItem("slopslide.permissions")!).claude).toBe("fullAccess");
+    expect(calls("set_permission_mode")).toEqual([{ id: "/decks/talk", mode: "fullAccess" }]);
+  });
+
+  it("only tells the backend about a mode change while a turn runs", async () => {
+    const store = await freshStore();
+    store.setState({ running: false, selection: claude });
+    store.getState().setPermissionMode("fullAccess");
+    expect(store.getState().permissionModes.claude).toBe("fullAccess");
+    expect(calls("set_permission_mode")).toHaveLength(0);
+  });
+
+  it("reports a failed live mode change", async () => {
+    const store = await freshStore();
+    store.setState({ running: true, selection: claude });
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "set_permission_mode") throw "turn gone";
+    });
+    store.getState().setPermissionMode("fullAccess");
+    await vi.waitFor(() => expect(store.getState().error).toBe("turn gone"));
   });
 
   it("sends each provider its own mode", async () => {

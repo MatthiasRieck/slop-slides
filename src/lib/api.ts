@@ -634,6 +634,7 @@ export const api = {
   rewindChat: (id: string, message: string, note: string) => invoke<void>("rewind_chat", { id, message, note }),
   /** The modes `provider` offers in workspace `id` (Codex: per its configuration). */
   permissionModes: (provider: Provider, id: string) => invoke<PermissionMode[]>("permission_modes", { provider, id }),
+  setPermissionMode: (id: string, mode: PermissionMode) => invoke<void>("set_permission_mode", { id, mode }),
   respondApproval: (workspace: string, id: string, decision: ApprovalDecision) =>
     invoke<void>("respond_approval", { workspace, id, decision }),
   interruptAgent: (id: string) => invoke<void>("interrupt_agent", { id }),

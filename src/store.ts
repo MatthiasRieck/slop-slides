@@ -326,7 +326,7 @@ interface AppState {
   selection: ModelSelection;
   /** Each provider's permission mode; the selected provider's applies to the next turn. */
   permissionModes: PermissionModes;
-  /** Sets the selected provider's mode. */
+  /** Sets the selected provider's mode, also for the turn running in the workspace. */
   setPermissionMode: (mode: PermissionMode) => void;
   /** `provider:model` keys starred in the model picker. */
   favoriteModels: string[];
@@ -638,10 +638,15 @@ export const useApp = create<AppState>((set, get) => ({
   selection: loadSelection(),
   permissionModes: loadPermissions(),
   setPermissionMode: (mode) => {
-    if (get().running || !isPermissionMode(mode)) return;
+    if (!isPermissionMode(mode)) return;
     const permissionModes = { ...get().permissionModes, [get().selection.provider]: mode };
     localStorage.setItem(PERMISSIONS_KEY, JSON.stringify(permissionModes));
     set({ permissionModes });
+    // The provider cannot change during a turn, so the running turn is the selected provider's.
+    const { running, workspace } = get();
+    if (running && workspace) {
+      api.setPermissionMode(workspace.path, mode).catch((error) => set({ error: errorMessage(error) }));
+    }
   },
   favoriteModels: loadFavorites(),
   presenting: false,

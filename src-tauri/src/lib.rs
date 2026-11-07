@@ -941,6 +941,12 @@ async fn permission_modes(
     }
 }
 
+/// Changes the permission mode of the turn running in workspace `id`, if any.
+#[tauri::command]
+fn set_permission_mode(agent: State<AgentManager>, id: String, mode: permissions::PermissionMode) {
+    agent.set_permission_mode(&id, mode);
+}
+
 #[tauri::command]
 fn respond_approval(
     agent: State<AgentManager>,
@@ -1314,6 +1320,7 @@ pub fn run() {
             interrupt_agent,
             permission_modes,
             respond_approval,
+            set_permission_mode,
             agent_running,
             list_providers,
             list_templates,

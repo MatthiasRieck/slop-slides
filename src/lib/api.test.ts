@@ -286,6 +286,12 @@ const CASES = [
     { provider: "copilot", id: "talk" },
   ],
   [
+    "setPermissionMode",
+    () => api.setPermissionMode("talk", "fullAccess"),
+    "set_permission_mode",
+    { id: "talk", mode: "fullAccess" },
+  ],
+  [
     "respondApproval",
     () => api.respondApproval("talk", "request-1", "decline"),
     "respond_approval",

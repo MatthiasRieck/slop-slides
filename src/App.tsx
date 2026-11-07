@@ -50,6 +50,9 @@ export function useNewWindowKey() {
   }, []);
 }
 
+/** The widest the right sidebar goes: two thirds of the window. */
+export const SIDEBAR_MAX_SIZE = "67%";
+
 /**
  * An open workspace: the top bar over the open file (a deck in the slide editor, with its slide
  * rail, or another page as it is), and on the right the sidebar with the chat, the files and the
@@ -122,7 +125,8 @@ function Workbench() {
         onOpenChange={useApp.getState().setSidebarOpen}
         defaultSize={380}
         minSize={260}
-        maxSize={640}
+        // Up to two thirds of the window, however wide it is, the slides keeping the rest.
+        maxSize={SIDEBAR_MAX_SIZE}
       >
         {/* Fixed, it leaves the panel (and the layout) where it was, so restoring it is instant. */}
         <div data-testid="sidebar-body" className={sidebarMaximized ? "fixed inset-0 z-40 bg-background" : "h-full"}>
@@ -144,7 +148,8 @@ function SidePanel(props: {
   onOpenChange: (open: boolean) => void;
   defaultSize: number;
   minSize: number;
-  maxSize: number;
+  /** Pixels, or a string the panels library reads (such as "67%" of the window). */
+  maxSize: number | string;
   children: ReactNode;
 }) {
   const { id, open, onOpenChange, defaultSize, minSize, maxSize, children } = props;

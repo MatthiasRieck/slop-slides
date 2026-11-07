@@ -165,10 +165,30 @@ describe("sidebar", () => {
     useApp.getState().closeSidebarTab("settings");
     expect(useApp.getState()).toMatchObject({ sidebarTabs: [], sidebarTab: null });
     useApp = await freshStore();
-    expect(useApp.getState()).toMatchObject({ sidebarTabs: [], sidebarTab: null });
-    useApp.getState().setSidebarOpen(false);
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: [], sidebarTab: null, sidebarOpen: false });
     useApp.getState().setSidebarTab("files");
     expect(useApp.getState()).toMatchObject({ sidebarTabs: ["files"], sidebarTab: "files", sidebarOpen: true });
+  });
+
+  it("collapses once the last tab is closed, and stays open while any is left", async () => {
+    localStorage.clear();
+    const useApp = await freshStore();
+    useApp.getState().setSidebarMaximized(true);
+    useApp.getState().closeSidebarTab("files");
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat"], sidebarOpen: true, sidebarMaximized: true });
+    useApp.getState().closeSidebarTab("chat");
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: [], sidebarOpen: false, sidebarMaximized: false });
+    expect(localStorage.getItem("slopslide.sidebarOpen")).toBe("false");
+  });
+
+  it("brings back the chat when opened with every tab closed", async () => {
+    localStorage.clear();
+    const useApp = await freshStore();
+    useApp.getState().closeSidebarTab("chat");
+    useApp.getState().closeSidebarTab("files");
+    expect(useApp.getState().sidebarOpen).toBe(false);
+    useApp.getState().setSidebarOpen(true);
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat"], sidebarTab: "chat", sidebarOpen: true });
   });
 
   it("drops saved tabs that are no more, and a showing tab that is not open", async () => {

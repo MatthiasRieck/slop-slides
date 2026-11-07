@@ -16,7 +16,7 @@ vi.mock("./components/CodeView", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { App } from "./App";
+import { App, SIDEBAR_MAX_SIZE } from "./App";
 import { useApp } from "./store";
 import { DECK_HTML, deckFor } from "./test/fixtures";
 
@@ -70,6 +70,13 @@ describe("App", () => {
     expect(main.contains(sidebar)).toBe(false);
     expect(sidebar.contains(screen.getByTestId("stub-sidebar-tabs"))).toBe(true);
     expect(main.parentElement).toBe(sidebar.parentElement);
+  });
+
+  it("lets the sidebar widen to two thirds of the window, not a fixed few pixels", () => {
+    expect(SIDEBAR_MAX_SIZE).toBe("67%");
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) });
+    render(<App />);
+    expect(screen.getByTestId("sidebar")).toBeTruthy();
   });
 
   it("shows the settings in the place of the slide in Settings mode", () => {

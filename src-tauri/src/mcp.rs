@@ -1,7 +1,8 @@
 //! Workspace MCP tools: lint_deck validates a workspace-relative deck, open_file queues a
 //! request in the current workspace session for the app to show a file, and render_slide
 //! asks the app, the same way, for images of slides (see render.rs). set_narration_audio
-//! makes an audio file the narration of a slide and times its words.
+//! makes an audio file the narration of a slide and times its words, and
+//! generate_narration_audio has the app's voice model say slides' narration scripts.
 //! Started as `slopslide --lint-mcp [workspace root]`.
 
 use std::io::{BufRead, Write};
@@ -25,6 +26,7 @@ pub const RENDER_TOOL: &str = "render_slide";
 pub const NARRATION_TOOL: &str = "set_narration_audio";
 pub const TIMELINE_TOOL: &str = "narration_timeline";
 pub const BEATS_TOOL: &str = "narration_beats";
+pub const GENERATE_TOOL: &str = "generate_narration_audio";
 const OPEN_REQUESTS: &str = "open-requests";
 /// Claude Code's rule for every tool of this server, for `--allowedTools`; its tools are
 /// named `mcp__slopslide__<tool>`.
@@ -209,6 +211,28 @@ pub fn handle(
                 },
                 "slide": { "type": "string", "description": "The id of the slide whose narration audio it is." },
             }, "required": ["slide"] }
+        }, {
+            "name": GENERATE_TOOL,
+            "description": format!("Generate narration audio: the app's local voice model reads \
+                out the narration script (<aside class=\"narration\">) of one slide, of the \
+                slides listed, or of every slide when `slides` is left out, in the deck's voice \
+                and language. Only slides whose audio is missing or out of date (script, voice \
+                or language changed) are said again; the user's own recordings, audio set with \
+                {NARRATION_TOOL}, locked slides and slides without a script are left alone. It \
+                takes a while (seconds per sentence), so ask for the slides you changed rather \
+                than all of them. The voice model must be downloaded (Narration panel). Then call \
+                {TIMELINE_TOOL} for when its words fall on the slides."),
+            "inputSchema": { "type": "object", "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The deck file, relative to the workspace root; deck.html when left out.",
+                },
+                "slides": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "The ids of the slides to say; every slide when left out.",
+                },
+            } }
         }]}),
         "tools/call" if request["params"]["name"] == TOOL => {
             let rel = request["params"]["arguments"]["path"]
@@ -312,6 +336,13 @@ pub fn handle(
                 &request["params"]["arguments"],
                 session.as_deref(),
             ))
+        }
+        "tools/call" if request["params"]["name"] == GENERATE_TOOL => {
+            let arguments = &request["params"]["arguments"];
+            let session = session(dir);
+            text_result(deck::app_home().and_then(|home| {
+                generate_narration_audio(dir, arguments, &home, session.as_deref())
+            }))
         }
         "tools/call" => return Some(error(id, -32602, "unknown tool")),
         method => return Some(error(id, -32601, &format!("method not found: {method}"))),
@@ -434,6 +465,113 @@ fn set_narration_audio(
         " Call {TIMELINE_TOOL} for when its words fall on the slides, {BEATS_TOOL} for its beat."
     ));
     Ok(out)
+}
+
+/// The text-to-speech engine's state, so one generation runs at a time in this process.
+static NARRATION: std::sync::OnceLock<narration::Narration> = std::sync::OnceLock::new();
+
+/// The slide ids `slides` of `arguments` lists; None when left out, for every slide.
+fn slides_argument(arguments: &Value) -> Result<Option<Vec<String>>> {
+    let ids = match &arguments["slides"] {
+        Value::Null => return Ok(None),
+        Value::Array(ids) if ids.is_empty() => {
+            return Err(Error::msg(
+                "slides is empty: list slide ids, or leave it out for every slide",
+            ))
+        }
+        Value::Array(ids) => ids,
+        _ => return Err(Error::msg("slides is a list of slide ids")),
+    };
+    ids.iter()
+        .map(|id| {
+            id.as_str()
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| Error::msg("slides is a list of slide ids"))
+        })
+        .collect::<Result<_>>()
+        .map(Some)
+}
+
+/// Has the voice model in `home` say the narration of the deck at `path` (`arguments`): of its
+/// `slides`, or all of them, whose audio is missing or out of date. Slides locked in the deck,
+/// or in the turn's guard in the workspace's `session`, are left alone. What it did, for the
+/// agent, slide by slide.
+fn generate_narration_audio(
+    dir: &Path,
+    arguments: &Value,
+    home: &Path,
+    session: Option<&Path>,
+) -> Result<String> {
+    let (rel, file) = deck_argument(dir, arguments)?;
+    let asked = slides_argument(arguments)?;
+    let deck = deck::load(&file)?;
+    if let Some(missing) = asked
+        .iter()
+        .flatten()
+        .find(|id| !deck.slides.iter().any(|s| &s.id == *id))
+    {
+        return Err(Error::msg(format!("{rel} has no slide `{missing}`")));
+    }
+    let guard = deck::read_guard(&file, session);
+    let locked = |slide: &deck::Slide| slide.locked || guard.iter().any(|l| l.id == slide.id);
+    let wanted: Vec<&deck::Slide> = deck
+        .slides
+        .iter()
+        .filter(|s| asked.as_ref().map_or(true, |ids| ids.contains(&s.id)))
+        .collect();
+    let to_say: Vec<String> = wanted
+        .iter()
+        .filter(|s| !locked(s))
+        .map(|s| s.id.clone())
+        .collect();
+    let before = narration::statuses(&file, &deck);
+    let after = if to_say.is_empty() {
+        before.clone()
+    } else {
+        let speech = NARRATION.get_or_init(narration::Narration::default);
+        tauri::async_runtime::block_on(speech.render(home, &file, Some(&to_say), |_| {}))
+            .map_err(|e| Error::msg(format!("Generating the narration audio failed: {e}")))?
+    };
+    let state_of =
+        |all: &[narration::SlideAudio], id: &str| all.iter().find(|a| a.slide == id).cloned();
+    let mut lines = Vec::new();
+    let mut said = 0;
+    for slide in &wanted {
+        let id = &slide.id;
+        let was = state_of(&before, id);
+        let now = state_of(&after, id);
+        let seconds = now
+            .as_ref()
+            .and_then(|a| a.seconds)
+            .map(|s| format!(" ({s:.2} s)"))
+            .unwrap_or_default();
+        let line = match now {
+            _ if locked(slide) => "locked, its audio is left as it was".to_string(),
+            Some(a) if a.recorded && a.imported => {
+                format!("keeps the audio set for it{seconds}")
+            }
+            Some(a) if a.recorded => format!("keeps the user's own recording{seconds}"),
+            Some(a) if a.state == narration::AudioState::None => {
+                "has no narration script; nothing to say".to_string()
+            }
+            Some(a) if a.state == narration::AudioState::Ready => {
+                if was.is_some_and(|w| w.state == narration::AudioState::Ready) {
+                    format!("already up to date{seconds}")
+                } else {
+                    said += 1;
+                    format!("said{seconds}")
+                }
+            }
+            _ => "has no audio".to_string(),
+        };
+        lines.push(format!("- `{id}`: {line}"));
+    }
+    Ok(format!(
+        "Narration audio of {rel}: {said} slide{} said.\n{}\n\nCall {TIMELINE_TOOL} for when its words fall on the slides.",
+        if said == 1 { "" } else { "s" },
+        lines.join("\n")
+    ))
 }
 
 /// Seconds as the timing tools show them.
@@ -798,11 +936,13 @@ mod tests {
     fn lists_the_lint_tool() {
         let res = call(Path::new("/nonexistent"), "tools/list", json!({}));
         let tools = res["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 7);
         assert_eq!(tools[4]["name"], TIMELINE_TOOL);
         assert_eq!(tools[5]["name"], BEATS_TOOL);
         assert_eq!(tools[5]["inputSchema"]["required"], json!(["slide"]));
-        for tool in [TIMELINE_TOOL, BEATS_TOOL] {
+        assert_eq!(tools[6]["name"], GENERATE_TOOL);
+        assert_eq!(tools[6]["inputSchema"]["required"], Value::Null);
+        for tool in [TIMELINE_TOOL, BEATS_TOOL, GENERATE_TOOL] {
             assert!(crate::agent::SYSTEM_PROMPT.contains(tool), "{tool}");
         }
         assert_eq!(tools[3]["name"], NARRATION_TOOL);
@@ -1430,6 +1570,124 @@ mod tests {
             assert!(text.contains(why), "{arguments}: {text}");
         }
         assert!(!dir.join("narration").exists(), "nothing was kept");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn speaking_deck() -> PathBuf {
+        temp_deck(
+            r#"<main class="deck">
+<section class="slide" id="intro" data-locked><aside class="narration">Hi.</aside></section>
+<section class="slide" id="plain"><h1>No script</h1></section>
+<section class="slide" id="own"><aside class="narration">Mine.</aside></section>
+<section class="slide" id="talk"><aside class="narration">Say this.</aside></section>
+</main>"#,
+        )
+    }
+
+    #[test]
+    fn generate_tool_reports_slides_it_leaves_alone_without_the_voice_model() {
+        let dir = speaking_deck();
+        let file = dir.join(deck::DECK_FILE);
+        let take: Vec<f32> = (0..8_000).map(|i| (i as f32 / 30.0).sin() * 0.2).collect();
+        narration::append_recording(&file, "own", &take, 16_000).unwrap();
+        let args = json!({"slides": ["intro", "plain", "own"]});
+        let text = generate_narration_audio(&dir, &args, Path::new("/nonexistent"), None).unwrap();
+        assert!(
+            text.starts_with("Narration audio of deck.html: 0 slides said."),
+            "{text}"
+        );
+        assert!(
+            text.contains("- `intro`: locked, its audio is left as it was"),
+            "{text}"
+        );
+        assert!(
+            text.contains("- `plain`: has no narration script; nothing to say"),
+            "{text}"
+        );
+        assert!(
+            text.contains("- `own`: keeps the user's own recording (0.50 s)"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("`talk`"),
+            "only the slides asked for: {text}"
+        );
+        assert!(text.contains("Call narration_timeline"), "{text}");
+        assert!(
+            !narration::audio_file(&file, "intro").exists(),
+            "a locked slide gets no audio"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn generate_tool_needs_the_voice_model_to_say_a_script() {
+        let dir = speaking_deck();
+        let file = dir.join(deck::DECK_FILE);
+        // Every slide, as when `slides` is left out: `talk` has a script to say.
+        let err = generate_narration_audio(&dir, &json!({}), Path::new("/nonexistent"), None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.starts_with("Generating the narration audio failed: "),
+            "{err}"
+        );
+        let why = narration::engine::unavailable_reason()
+            .unwrap_or("Download the narration voice model first");
+        assert!(err.contains(why), "{err}");
+        assert!(!narration::audio_file(&file, "talk").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn generate_tool_leaves_slides_locked_in_the_turn_alone() {
+        let dir = speaking_deck();
+        let file = dir.join(deck::DECK_FILE);
+        let session = dir.join("session");
+        std::fs::create_dir_all(&session).unwrap();
+        let html = std::fs::read_to_string(&file).unwrap();
+        let html = html.replace(r#"id="talk">"#, r#"id="talk" data-locked>"#);
+        std::fs::write(&file, &html).unwrap();
+        deck::guard_locked(&file, &session).unwrap();
+        std::fs::write(
+            &file,
+            html.replace(r#"id="talk" data-locked>"#, r#"id="talk">"#),
+        )
+        .unwrap();
+        let args = json!({"slides": ["talk"]});
+        let text = generate_narration_audio(&dir, &args, Path::new("/nonexistent"), Some(&session))
+            .unwrap();
+        assert!(
+            text.contains("- `talk`: locked, its audio is left as it was"),
+            "{text}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn generate_tool_refuses_what_it_cannot_use() {
+        let dir = speaking_deck();
+        for (arguments, why) in [
+            (json!({"slides": ["gone"]}), "deck.html has no slide `gone`"),
+            (json!({"slides": []}), "slides is empty"),
+            (json!({"slides": "talk"}), "slides is a list of slide ids"),
+            (json!({"slides": [3]}), "slides is a list of slide ids"),
+            (json!({"path": "../x.html"}), "invalid path"),
+            (json!({"path": "missing.html"}), "missing.html"),
+        ] {
+            let res = call(
+                &dir,
+                "tools/call",
+                json!({"name": GENERATE_TOOL, "arguments": arguments}),
+            );
+            assert_eq!(res["result"]["isError"], true, "{arguments}");
+            assert!(
+                text_of(&res).contains(why),
+                "{arguments}: {}",
+                text_of(&res)
+            );
+        }
+        assert!(!dir.join("narration").exists(), "nothing was said");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -33,6 +33,8 @@ fn configures_the_builtin_mcp_server_as_preapproved() {
             "mcp_servers.slopslide.args=[\"--lint-mcp\",\"/decks/talk\"]",
             "-c",
             "mcp_servers.slopslide.default_tools_approval_mode=\"approve\"",
+            "-c",
+            "mcp_servers.slopslide.tool_timeout_sec=3600",
         ]
     );
 }

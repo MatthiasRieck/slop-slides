@@ -17,7 +17,13 @@ import {
   BringToFront,
   ChevronRight,
   Circle,
+  CornerDownRight,
+  Cross,
+  Cylinder,
   Diamond,
+  FileText,
+  Heart,
+  Hexagon,
   ImagePlus,
   Italic,
   Link,
@@ -28,13 +34,16 @@ import {
   MousePointer2,
   Move,
   MoveUpRight,
+  Octagon,
   PaintBucket,
   PenLine,
+  Pentagon,
   Plus,
   SendToBack,
   Shapes,
   Slash,
   Space,
+  Spline,
   Square,
   SquareDashed,
   SquareRoundCorner,
@@ -49,7 +58,7 @@ import {
   Wallpaper,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
-import type { ArrangeMessage, EditGeometry } from "../lib/arrange";
+import type { ArrangeMessage, EditGeometry, EditLayer } from "../lib/arrange";
 import {
   type Autofit,
   BORDER_WIDTHS,
@@ -76,9 +85,10 @@ import {
 } from "../lib/editTools";
 import { SWATCHES } from "../lib/palette";
 import { cn } from "../lib/utils";
-import { ArrangeControls, TiltControls } from "./ArrangeControls";
+import { ArrangeControls, GroupControls, LayersPanel, TiltControls } from "./ArrangeControls";
 import { keepFocus, ToolButton } from "./Button";
 import { DraftInput } from "./Field";
+import { DashSelect, LineButton, Parallelogram, Trapezoid } from "./LineTools";
 import { LookTools } from "./LookTools";
 import { DropdownPanel, dropdownPanel, useDismiss } from "./Popover";
 import { RibbonRow, RibbonSection, useRibbonFit } from "./Ribbon";
@@ -103,8 +113,23 @@ const MORE_SHAPES: { tool: EditTool; label: string; icon: ReactNode }[] = [
   { tool: "chevron", label: "Add a chevron (a step in a process)", icon: <ChevronRight /> },
   { tool: "block-arrow", label: "Add a block arrow", icon: <ArrowBigRight /> },
   { tool: "double-arrow", label: "Add a double-headed arrow", icon: <ArrowLeftRight /> },
+  { tool: "hexagon", label: "Add a hexagon (a preparation step)", icon: <Hexagon /> },
+  { tool: "octagon", label: "Add an octagon", icon: <Octagon /> },
+  { tool: "pentagon", label: "Add a pentagon", icon: <Pentagon /> },
+  { tool: "parallelogram", label: "Add a parallelogram (input or output)", icon: <Parallelogram /> },
+  { tool: "trapezoid", label: "Add a trapezoid", icon: <Trapezoid /> },
+  { tool: "plus", label: "Add a plus", icon: <Cross /> },
+  { tool: "cylinder", label: "Add a cylinder (a database)", icon: <Cylinder /> },
+  { tool: "document", label: "Add a document", icon: <FileText /> },
+  { tool: "heart", label: "Add a heart", icon: <Heart /> },
   { tool: "bracket", label: "Add a bracket", icon: <Brackets /> },
   { tool: "brace", label: "Add a brace", icon: <Braces /> },
+  {
+    tool: "elbow",
+    label: "Add an elbow connector (turns at right angles between the elements its ends stick to)",
+    icon: <CornerDownRight />,
+  },
+  { tool: "curve", label: "Add a curved connector (curves between the elements its ends stick to)", icon: <Spline /> },
 ];
 
 const ALIGN: { value: TextAlign; label: string; icon: ReactNode }[] = [
@@ -156,6 +181,9 @@ export interface LinkTarget {
 export function EditToolbar(props: {
   sizeMode: "resize" | "stretch";
   onSizeMode: (mode: "resize" | "stretch") => void;
+  /** Resizes keep the aspect ratio. */
+  keepRatio?: boolean;
+  onKeepRatio?: (on: boolean) => void;
   tool: EditTool;
   selection: EditSelection | null;
   styles: Record<ToolFamily, EditStyle>;
@@ -179,6 +207,8 @@ export function EditToolbar(props: {
   onDelete: () => void;
   /** Where the selection is, for the arrange controls. */
   geometry?: EditGeometry | null;
+  /** What is on the slide, the top-most first, for the Layers panel. */
+  layers?: EditLayer[];
   onArrange?: (message: ArrangeMessage) => void;
 }) {
   const state = toolbarState(props.selection, props.tool, props.styles);
@@ -413,6 +443,12 @@ export function EditToolbar(props: {
                 </option>
               ))}
           </select>
+          <DashSelect
+            value={style.dash ?? "solid"}
+            vector={!!state?.vector}
+            disabled={!state || !!selection?.clipped}
+            onChange={props.onStyle}
+          />
         </RibbonRow>
         <RibbonRow>
           <LookTools
@@ -423,6 +459,7 @@ export function EditToolbar(props: {
             onPickImage={props.onPickImage}
             onReturnFocus={returnFocus}
           />
+          <LineButton selection={selection} onChange={props.onStyle} onDone={returnFocus} />
           <ColorButton
             label="Slide background"
             icon={<Wallpaper />}
@@ -451,8 +488,11 @@ export function EditToolbar(props: {
             onArrange={props.onArrange}
             onStyle={props.onStyle}
             onDone={returnFocus}
+            keepRatio={props.keepRatio}
+            onKeepRatio={props.onKeepRatio}
           />
           <TiltControls geometry={props.geometry ?? null} onArrange={props.onArrange} />
+          <LayersPanel layers={props.layers ?? []} onArrange={props.onArrange} />
         </RibbonRow>
         <RibbonRow>
           {ORDER.map((o) => (
@@ -466,6 +506,7 @@ export function EditToolbar(props: {
               {o.icon}
             </ToolButton>
           ))}
+          <GroupControls geometry={props.geometry ?? null} selection={selection} onArrange={props.onArrange} />
           <ToolButton keepFocus label="Delete (⌫)" disabled={!props.selection} onClick={props.onDelete}>
             <Trash2 />
           </ToolButton>
@@ -494,7 +535,7 @@ function MoreShapes(props: { tool: EditTool; onTool: (tool: EditTool) => void })
         {current?.icon ?? <Plus />}
       </ToolButton>
       {open && (
-        <DropdownPanel role="dialog" aria-label="More shapes" className="grid w-max grid-cols-3 gap-0.5 p-1">
+        <DropdownPanel role="dialog" aria-label="More shapes" className="grid w-max grid-cols-4 gap-0.5 p-1">
           {MORE_SHAPES.map((s) => (
             <ToolButton
               keepFocus

@@ -12,6 +12,7 @@ use crate::html::{
     EDITOR_ATTRS, HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR, NARRATION_CLASS, NARRATION_START_ATTR,
     SECTION_CLASS, SECTION_TITLE_ATTR, SHAPE_ATTR, SHAPE_KINDS, TIME_ATTR,
 };
+use crate::html::{ADJUST_ATTR, HEAD_ATTR, HEAD_KINDS, ROUTES, ROUTE_ATTR};
 use crate::narration;
 use crate::review;
 use crate::size::{self, SlideSize};
@@ -320,7 +321,7 @@ fn check_markup(l: &mut Linter) {
                         "resize-placeholder",
                         Severity::Warning,
                         i,
-                        "This invisible, inert placeholder reserves the original layout space of the resized element immediately before it. Keep the visible element's text, dimensions and position when tidying, fit it into the slide's layout, then remove this entire placeholder and its hidden contents.".into(),
+                        "This invisible, inert placeholder reserves the original layout space of an element the user resized (the one immediately before it) or moved into a group they made (a `data-group` box). Keep the visible element's text, dimensions and position when tidying, fit it into the slide's layout, then remove this entire placeholder and its hidden contents.".into(),
                     );
                 }
                 if tag
@@ -356,6 +357,46 @@ fn check_markup(l: &mut Linter) {
                             format!(
                                 "`{SHAPE_ATTR}=\"{value}\"` is not a shape the editor draws ({}), so it cannot restyle, flip or fit this one. Use one of those kinds, or remove the attribute and draw the shape some other way.",
                                 SHAPE_KINDS.join(", ")
+                            ),
+                        );
+                    }
+                }
+                if let Some((_, value, ..)) = tag.attrs.iter().find(|(n, ..)| n == ADJUST_ATTR) {
+                    if value.trim().parse::<f64>().map_or(true, |n| !n.is_finite()) {
+                        l.report(
+                            "shape-adjust",
+                            Severity::Warning,
+                            i,
+                            format!(
+                                "`{ADJUST_ATTR}=\"{value}\"` is not a number, so the figure is drawn with its usual proportions. Keep the number the editor wrote, or remove the attribute."
+                            ),
+                        );
+                    }
+                }
+                if let Some((_, value, ..)) = tag.attrs.iter().find(|(n, ..)| n == HEAD_ATTR) {
+                    let words: Vec<_> = value.split_whitespace().collect();
+                    let head = matches!(words.as_slice(), [end, kind] if (*end == "start" || *end == "end") && HEAD_KINDS.contains(kind));
+                    if !head {
+                        l.report(
+                            "line-head",
+                            Severity::Warning,
+                            i,
+                            format!(
+                                "`{HEAD_ATTR}=\"{value}\"` says nothing the editor can use: it takes the end (`start` or `end`) and the kind of head ({}), like \"end arrow\".",
+                                HEAD_KINDS.join(", ")
+                            ),
+                        );
+                    }
+                }
+                if let Some((_, value, ..)) = tag.attrs.iter().find(|(n, ..)| n == ROUTE_ATTR) {
+                    if !ROUTES.contains(&value.as_str()) {
+                        l.report(
+                            "line-route",
+                            Severity::Warning,
+                            i,
+                            format!(
+                                "`{ROUTE_ATTR}=\"{value}\"` is not a route the editor draws ({}); remove it for a line that is straight or curved through its points.",
+                                ROUTES.join(", ")
                             ),
                         );
                     }
@@ -2587,10 +2628,45 @@ mod tests {
     }
 
     #[test]
+    fn connectors_groups_and_locks_need_no_rules_of_their_own() {
+        // A connector's heads are paths of their own; a group holds what it groups; a lock is a flag.
+        let found = lint(
+            &deck(
+                "<section class=\"slide\" id=\"a\">\n<div id=\"box\" data-lock=\"\" style=\"position: absolute\">A</div>\n<div data-group=\"\" style=\"position: absolute; left: 0px; top: 0px; width: 500px; height: 300px\"><div data-shape=\"star\" data-adjust=\"7\" style=\"position: absolute\">Hi</div><div data-shape=\"cylinder\" data-adjust=\"12.5\">Db</div></div>\n<svg data-route=\"elbow\" data-from=\"box\" data-from-at=\"50% 100%\" viewBox=\"0 0 10 10\"><path d=\"M3 3 L3 103 L453 103\" stroke=\"#111111\" stroke-dasharray=\"12 18\" fill=\"none\"/><path data-head=\"start dot\" d=\"M0 3 A3 3 0 1 0 6 3 A3 3 0 1 0 0 3 Z\"/><path data-head=\"end triangle\" d=\"M0 0 L5 5 L0 10 Z\"/></svg>\n</section>",
+            ),
+            |_| true,
+            &[],
+        );
+        assert_eq!(found, vec![]);
+    }
+
+    #[test]
+    fn flags_figure_proportions_heads_and_routes_the_editor_cannot_read() {
+        let found = lint(
+            &deck(
+                "<section class=\"slide\" id=\"a\">\n<div data-shape=\"star\" data-adjust=\"lots\">Hi</div>\n<svg data-route=\"zigzag\" viewBox=\"0 0 10 10\">\n<path data-head=\"middle arrow\" d=\"M0 0 L1 1\"/>\n<path data-head=\"end star\" d=\"M0 0 L1 1\"/>\n<path data-head=\"end\" d=\"M0 0 L1 1\"/>\n</svg>\n</section>",
+            ),
+            |_| true,
+            &[],
+        );
+        let found: Vec<_> = found.iter().map(|i| (i.rule, i.line)).collect();
+        assert_eq!(
+            found,
+            [
+                ("shape-adjust", 11),
+                ("line-route", 12),
+                ("line-head", 13),
+                ("line-head", 14),
+                ("line-head", 15),
+            ]
+        );
+    }
+
+    #[test]
     fn flags_shapes_the_editor_cannot_draw() {
         let found = lint(
             &deck(
-                "<section class=\"slide\" id=\"a\">\n<div data-shape=\"hexagon\">Hi</div>\n<div data-shape=\"diamond\">Ok</div>\n</section>",
+                "<section class=\"slide\" id=\"a\">\n<div data-shape=\"cloud\">Hi</div>\n<div data-shape=\"hexagon\">Ok</div>\n</section>",
             ),
             |_| true,
             &[],

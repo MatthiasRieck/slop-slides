@@ -101,7 +101,26 @@ pub const SHAPE_KINDS: &[&str] = &[
     "chevron",
     "block-arrow",
     "double-arrow",
+    "hexagon",
+    "octagon",
+    "pentagon",
+    "parallelogram",
+    "trapezoid",
+    "plus",
+    "cylinder",
+    "document",
+    "heart",
 ];
+/// A figure's proportions (a chevron's point, an arrow's head, a star's points), a number.
+pub const ADJUST_ATTR: &str = "data-adjust";
+/// A line's head, on a `<path>` of its own in it: which end, and what kind (`end arrow`).
+pub const HEAD_ATTR: &str = "data-head";
+/// The heads a line can end in.
+pub const HEAD_KINDS: &[&str] = &["arrow", "triangle", "bar", "dot"];
+/// How a connector goes between its ends, instead of straight or curved through its points.
+pub const ROUTE_ATTR: &str = "data-route";
+/// The routes the editor draws.
+pub const ROUTES: &[&str] = &["elbow", "curved"];
 
 /// Attributes the in-editor slide editor puts on elements while it works. They never belong
 /// in deck.html; the editor strips them before saving.

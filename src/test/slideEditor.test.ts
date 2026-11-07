@@ -1149,6 +1149,31 @@ describe("slide editor", () => {
       expect(h1.style.scale).toBe("");
     });
 
+    it("keeps the aspect ratio without Shift while the ratio is locked, and frees it with Shift", () => {
+      const { e, h1, pull } = withHeading();
+      e.fromParent({ type: "slop:edit-keep-ratio", on: true });
+      pull("1 1", [600, 350], [700, 360]);
+      expect(h1.style.scale).toBe("1.5");
+      pull("1 1", [700, 400], [700, 450], { shiftKey: true });
+      expect(h1.style.scale).toBe("1.5 2");
+      e.fromParent({ type: "slop:edit-keep-ratio", on: false });
+      // Unlocked, it follows the pointer on each axis: wider, as tall as before.
+      pull("1 1", [700, 450], [800, 450]);
+      expect(h1.style.scale).toBe("2");
+    });
+
+    it("brings the height along with a typed width while the ratio is locked", () => {
+      const { e, h1 } = withHeading("resize");
+      e.fromParent({ type: "slop:edit-keep-ratio", on: true });
+      e.fromParent({ type: "slop:edit-geometry", w: 400 });
+      expect(h1.style).toMatchObject({ width: "400px", height: "200px" });
+      e.fromParent({ type: "slop:edit-geometry", h: 100 });
+      expect(h1.style).toMatchObject({ width: "200px", height: "100px" });
+      // Both typed, both taken.
+      e.fromParent({ type: "slop:edit-geometry", w: 300, h: 300 });
+      expect(h1.style).toMatchObject({ width: "300px", height: "300px" });
+    });
+
     it("scales from the center with Alt", () => {
       const { h1, pull } = withHeading();
       pull("1 1", [600, 350], [650, 360], { altKey: true });
@@ -2094,6 +2119,9 @@ describe("slide editor", () => {
           fill: "#3b82f6",
           stroke: "#ff0000",
           strokeWidth: 8,
+          dash: "solid",
+          line: null,
+          adjust: null,
           opacity: 1,
           shadow: 0,
           radius: 0,
@@ -2105,6 +2133,8 @@ describe("slide editor", () => {
           flippable: false,
           flipX: false,
           flipY: false,
+          group: false,
+          locked: false,
         },
       });
       e.down(e.$("svg"));
@@ -2827,10 +2857,106 @@ describe("slide editor: shapes, styling and media", () => {
       e.fromParent({ type: "slop:edit-tool", tool: "arrow", style: LINE_STYLE });
       dragOut(e, [100, 100], [400, 100]);
       const svg = added(e)[0]!;
-      // The shaft, then the head: two strokes in one path, so restyling and resizing treat them as one.
-      expect(svg.querySelector("path")!.getAttribute("d")).toBe("M3 15 L303 15 M282 3 L303 15 L282 27");
-      expect(svg.querySelectorAll("path")).toHaveLength(1);
+      // The shaft, then the head in a path of its own, so the shaft can be dashed and the head not.
+      const [shaft, head] = svg.querySelectorAll("path");
+      expect(shaft!.getAttribute("d")).toBe("M3 15 L303 15");
+      expect(head!.getAttribute("data-head")).toBe("end arrow");
+      expect(head!.getAttribute("d")).toBe("M282 3 L303 15 L282 27");
+      expect(head!.getAttribute("stroke")).toBe("#ef4444");
+      expect(head!.getAttribute("fill")).toBe("none");
       expect(svg.getAttribute("viewBox")).toBe("0 0 306 30");
+      expect(lastSelection(e)).toMatchObject({ line: { start: null, end: "arrow", route: "straight" }, dash: "solid" });
+    });
+
+    it("puts a head of any kind at either end, and takes them off again", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "line", style: LINE_STYLE });
+      dragOut(e, [100, 100], [400, 100]);
+      const svg = added(e)[0]!;
+      style(e, { headStart: "triangle", headEnd: "arrow" });
+      const head = (end: string) => svg.querySelector(`[data-head^="${end} "]`);
+      expect(head("start")!.getAttribute("data-head")).toBe("start triangle");
+      // A triangle is closed and filled with the line's color, pointing back along it.
+      expect(head("start")!.getAttribute("d")).toBe("M24 27 L3 15 L24 3 Z");
+      expect(head("start")!.getAttribute("fill")).toBe("#ef4444");
+      expect(head("end")!.getAttribute("data-head")).toBe("end arrow");
+      expect(lastSelection(e)).toMatchObject({ line: { start: "triangle", end: "arrow" } });
+      style(e, { headStart: "dot", headEnd: "bar" });
+      expect(head("start")!.getAttribute("d")).toMatch(/^M\S+ 15 A8 8 0 1 0 \S+ 15 A8 8 0 1 0 \S+ 15 Z$/);
+      // A bar across the end (the box grew on the left for the dot).
+      expect(head("end")!.getAttribute("d")).toMatch(/^M(\S+) 27 L\1 3$/);
+      style(e, { stroke: "#00ff00" });
+      expect(head("start")!.getAttribute("fill")).toBe("#00ff00");
+      expect(head("end")!.getAttribute("stroke")).toBe("#00ff00");
+      style(e, { headStart: null, headEnd: null });
+      expect(svg.querySelectorAll("path")).toHaveLength(1);
+      expect(e.commits().at(-1)!.markup).not.toContain("data-head");
+    });
+
+    it("reads an arrow of earlier versions, its head in its stroke, and redraws it with the head on its own", () => {
+      const markup = DECK.replace(
+        '<div class="shape"',
+        '<svg id="old" data-added="drawing" viewBox="0 0 306 30" style="position: absolute; left: 97px; top: 85px; width: 306px; height: 30px; overflow: visible;"><path d="M3 15 L303 15 M282 3 L303 15 L282 27" stroke="#111111" stroke-width="6" fill="none"></path></svg><div class="shape"',
+      );
+      const e = editor({ markup });
+      e.down(e.$("#old"));
+      e.up(e.$("#old"));
+      expect(lastSelection(e)).toMatchObject({ line: { start: null, end: "arrow", route: "straight" } });
+      style(e, { headStart: "arrow" });
+      const paths = [...e.$("#old").querySelectorAll("path")].map((p) => [
+        p.getAttribute("data-head"),
+        p.getAttribute("d"),
+      ]);
+      expect(paths).toEqual([
+        [null, "M3 15 L303 15"],
+        ["start arrow", "M24 27 L3 15 L24 3"],
+        ["end arrow", "M282 3 L303 15 L282 27"],
+      ]);
+    });
+
+    it("dashes and dots a line's stroke, but never its heads, and keeps the dashes with its width", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "arrow", style: LINE_STYLE });
+      dragOut(e, [100, 100], [400, 100]);
+      const [shaft, head] = added(e)[0]!.querySelectorAll("path");
+      style(e, { dash: "dashed" });
+      expect(shaft!.getAttribute("stroke-dasharray")).toBe("12 18");
+      expect(head!.hasAttribute("stroke-dasharray")).toBe(false);
+      expect(lastSelection(e)).toMatchObject({ dash: "dashed" });
+      style(e, { strokeWidth: 2 });
+      expect(shaft!.getAttribute("stroke-dasharray")).toBe("4 6");
+      style(e, { dash: "dotted" });
+      expect(shaft!.getAttribute("stroke-dasharray")).toBe("0 4");
+      expect(lastSelection(e)).toMatchObject({ dash: "dotted" });
+      style(e, { dash: "solid" });
+      expect(shaft!.hasAttribute("stroke-dasharray")).toBe(false);
+    });
+
+    it("draws new lines with the dashes of the tool's style", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "line", style: { ...LINE_STYLE, dash: "dotted" } });
+      dragOut(e, [100, 100], [300, 100]);
+      expect(added(e)[0]!.querySelector("path")!.getAttribute("stroke-dasharray")).toBe("0 12");
+    });
+
+    it("mirrors a line through its points, keeping its heads at their ends", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "arrow", style: LINE_STYLE });
+      dragOut(e, [100, 100], [300, 200]);
+      const svg = added(e)[0]!;
+      const box = { left: svg.style.left, width: svg.style.width };
+      expect(lastSelection(e)).toMatchObject({ flippable: true, flipX: false });
+      style(e, { flipX: true });
+      const [shaft] = svg.querySelectorAll("path");
+      // Still in the same box, now from top right to bottom left, with the head at the bottom left.
+      expect(svg.style.left).toBe(box.left);
+      expect(svg.style.width).toBe(box.width);
+      expect(shaft!.getAttribute("d")).toMatch(/^M(\S+) (\S+) L(\S+) (\S+)$/);
+      const [x1, y1, x2, y2] = /^M(\S+) (\S+) L(\S+) (\S+)$/.exec(shaft!.getAttribute("d")!)!.slice(1).map(Number);
+      expect(x1).toBeGreaterThan(x2!);
+      expect(y1).toBeLessThan(y2!);
+      expect(svg.style.transform).toBe("");
+      expect(svg.querySelector('[data-head="end arrow"]')).not.toBeNull();
     });
 
     it("snaps to 45° with Shift", () => {
@@ -2939,9 +3065,10 @@ describe("slide editor: shapes, styling and media", () => {
     });
 
     it("turns an arrow's head with the end it is on", () => {
-      const { e, path } = drawn("arrow", [100, 100], [400, 100]);
+      const { e, svg, path } = drawn("arrow", [100, 100], [400, 100]);
       pull(e, handles(e, "point")[1]!, [100, 400], { metaKey: true });
-      expect(path.getAttribute("d")).toMatch(/^M\S+ 3 L\S+ 303 M\S+ 282 L\S+ 303 L\S+ 282$/);
+      expect(path.getAttribute("d")).toMatch(/^M\S+ 3 L\S+ 303$/);
+      expect(svg.querySelector("[data-head]")!.getAttribute("d")).toMatch(/^M\S+ 282 L\S+ 303 L\S+ 282$/);
     });
 
     it("leaves a click on a handle alone", () => {
@@ -2980,7 +3107,11 @@ describe("slide editor: shapes, styling and media", () => {
       const { e, path } = drawn("arrow", [100, 100], [300, 100]);
       pull(e, handles(e, "add")[0]!, [300, 300], { metaKey: true });
       // The line comes up to its end, so the barbs trail below the tip, either side of it.
-      const head = /M(\S+) (\S+) L(\S+) (\S+) L(\S+) (\S+)$/.exec(path.getAttribute("d")!)!.slice(1).map(Number);
+      expect(path.getAttribute("d")).toMatch(/ C/);
+      const head = /M(\S+) (\S+) L(\S+) (\S+) L(\S+) (\S+)$/
+        .exec(path.parentElement!.querySelector("[data-head]")!.getAttribute("d")!)!
+        .slice(1)
+        .map(Number);
       const [x1, y1, tipX, tipY, x2, y2] = head as [number, number, number, number, number, number];
       expect(y1).toBeGreaterThan(tipY);
       expect(y2).toBeGreaterThan(tipY);
@@ -3036,25 +3167,30 @@ describe("slide editor: shapes, styling and media", () => {
       pull(e, handles(e, "point")[1]!, [403, 3], { metaKey: true });
       expect(svg.style.rotate).toBe("");
       expect(svg.style).toMatchObject({ left: "200px", top: "-12px", width: "206px" });
-      expect(svg.querySelector("path")!.getAttribute("d")).toMatch(/^M3 15 L203 15 M/);
+      expect(svg.querySelector("path")!.getAttribute("d")).toBe("M3 15 L203 15");
+      expect(svg.querySelector("[data-head]")!.getAttribute("data-head")).toBe("end arrow");
     });
 
     it("spreads a curve through its points when given a size, keeping the arrow's head", () => {
       const { e, svg, path } = drawn("arrow", [100, 100], [300, 100]);
       pull(e, handles(e, "add")[0]!, [200, 300], { metaKey: true });
-      const head = path.getAttribute("d")!.split(" M")[1]!;
+      const tip = () => svg.querySelector("[data-head]")!.getAttribute("d")!;
+      const head = tip();
       const [, w] = /0 0 (\d+)/.exec(svg.getAttribute("viewBox")!)!;
       e.fromParent({ type: "slop:edit-geometry", w: Number(w) });
-      expect(path.getAttribute("d")!.split(" M")[1]).toBe(head);
+      expect(tip()).toBe(head);
       e.fromParent({ type: "slop:edit-geometry", w: Number(w) + 200 });
       expect(handles(e, "point")).toHaveLength(3);
-      expect(path.getAttribute("d")).toMatch(/ C.* C.* M\S+ \S+ L\S+ \S+ L\S+ \S+$/);
+      expect(path.getAttribute("d")).toMatch(/ C.* C/);
+      expect(tip()).toMatch(/^M\S+ \S+ L\S+ \S+ L\S+ \S+$/);
     });
 
     it("sizes an arrow's head and its box with the line's width", () => {
       const { e, svg, path } = drawn("arrow", [100, 100], [400, 100]);
       style(e, { strokeWidth: 16 });
-      expect(path.getAttribute("d")).toBe("M8 40 L308 40 M253 8 L308 40 L253 72");
+      expect(path.getAttribute("d")).toBe("M8 40 L308 40");
+      expect(svg.querySelector("[data-head]")!.getAttribute("d")).toBe("M253 8 L308 40 L253 72");
+      expect(svg.querySelector("[data-head]")!.getAttribute("stroke-width")).toBe("16");
       expect(svg.style.top).toBe("60px");
     });
 
@@ -3156,6 +3292,126 @@ describe("slide editor: shapes, styling and media", () => {
       );
       el.dispatchEvent(new e.window.PointerEvent("pointerup", { button: 0, bubbles: true, cancelable: true, ...init }));
     };
+
+    it("pulls an end onto the middle of a side, showing where lines connect", () => {
+      const { e, line } = setup();
+      const [x, y] = spot(handles(e)[1]!);
+      handles(e)[1]!.dispatchEvent(
+        new e.window.PointerEvent("pointerdown", {
+          clientX: x,
+          clientY: y,
+          button: 0,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      at(e, "pointermove", 608, 390);
+      const sites = [...e.doc.querySelectorAll("[data-slop-edge] circle[data-site]")];
+      expect(sites.map((c) => [c.getAttribute("cx"), c.getAttribute("cy")])).toEqual([
+        ["600", "300"],
+        ["700", "350"],
+        ["600", "400"],
+        ["500", "350"],
+      ]);
+      expect(sites.map((c) => c.getAttribute("data-site"))).toEqual(["", "", "on", ""]);
+      at(e, "pointerup", 608, 390);
+      // Right on it, however the line comes in, and there it stays as the element turns.
+      expect(line.getAttribute("data-to-at")).toBe("50% 100%");
+      expect(ends(line)[1]).toEqual([600, 400]);
+    });
+
+    describe("connectors", () => {
+      const connect = (tool: string, from: number[], to: number[]) => {
+        const e = editor({ markup: BOXES });
+        layOut(e);
+        e.fromParent({ type: "slop:edit-tool", tool, style: LINE_STYLE });
+        dragOut(e, from, to);
+        return { e, line: added(e)[0]!, b: e.$(".b") };
+      };
+      /** The stroke's points in slide pixels. */
+      const route = (line: HTMLElement) => {
+        const numbers = line
+          .querySelector("path:not([data-head])")!
+          .getAttribute("d")!
+          .match(/-?[\d.]+/g)!
+          .map(Number);
+        const [tx = 0, ty = 0] = (line.style.translate || "").split(" ").map((v) => Number.parseFloat(v) || 0);
+        const left = Number.parseFloat(line.style.left) + tx;
+        const top = Number.parseFloat(line.style.top) + ty;
+        const points: number[][] = [];
+        for (let i = 0; i < numbers.length; i += 2) points.push([left + numbers[i]!, top + numbers[i + 1]!]);
+        return points;
+      };
+
+      it("routes an elbow connector out of the sides it is stuck to, turning at right angles", () => {
+        const { e, line, b } = connect("elbow", [600, 400], [1050, 600]);
+        expect(line.getAttribute("data-route")).toBe("elbow");
+        expect(line.getAttribute("data-from")).toBe("a");
+        expect(line.getAttribute("data-from-at")).toBe("50% 100%");
+        expect(line.getAttribute("data-to-at")).toBe("50% 0%");
+        // Down out of the bottom of the one, across half way, and down into the top of the other.
+        expect(route(line)).toEqual([
+          [600, 400],
+          [600, 500],
+          [1050, 500],
+          [1050, 600],
+        ]);
+        expect(line.querySelector("[data-head]")!.getAttribute("data-head")).toBe("end arrow");
+        expect(lastSelection(e)).toMatchObject({ line: { route: "elbow", end: "arrow" } });
+        // Only its ends have handles: it routes itself in between.
+        expect(e.doc.querySelectorAll("[data-slop-points] [data-point=add]")).toHaveLength(0);
+        e.drag(b, 0, 100);
+        expect(route(line)).toEqual([
+          [600, 400],
+          [600, 550],
+          [1050, 550],
+          [1050, 700],
+        ]);
+      });
+
+      it("goes around when the side it leaves faces away from the other end", () => {
+        // Out of the right of the one and into the top of the other, which is below and to the right.
+        const { line } = connect("elbow", [700, 350], [1050, 600]);
+        expect(route(line)).toEqual([
+          [700, 350],
+          [1050, 350],
+          [1050, 600],
+        ]);
+      });
+
+      it("curves a curved connector out of its sides", () => {
+        const { line } = connect("curve", [700, 350], [1000, 650]);
+        expect(line.getAttribute("data-route")).toBe("curved");
+        const d = line.querySelector("path:not([data-head])")!.getAttribute("d")!;
+        expect(d).toMatch(/^M\S+ \S+ C\S+ \S+ \S+ \S+ \S+ \S+$/);
+        const [s, c1, c2, end] = route(line) as [number[], number[], number[], number[]];
+        expect(s).toEqual([700, 350]);
+        expect(end).toEqual([1000, 650]);
+        // Out of the right side and into the left: the controls lie level with the ends.
+        expect(c1[1]).toBe(350);
+        expect(c1[0]).toBeGreaterThan(700);
+        expect(c2[1]).toBe(650);
+        expect(c2[0]).toBeLessThan(1000);
+      });
+
+      it("turns a line into a connector and back, dropping the points in between", () => {
+        const { e, line } = connect("line", [100, 100], [300, 300]);
+        style(e, { route: "elbow" });
+        // Free ends head off toward each other: across, then down, then across.
+        expect(route(line)).toEqual([
+          [100, 100],
+          [200, 100],
+          [200, 300],
+          [300, 300],
+        ]);
+        style(e, { route: "straight" });
+        expect(line.hasAttribute("data-route")).toBe(false);
+        expect(route(line)).toEqual([
+          [100, 100],
+          [300, 300],
+        ]);
+      });
+    });
 
     it("sticks an end dropped on an element to it, and moves that end with the element", () => {
       const { e, line, a } = setup();
@@ -3344,13 +3600,13 @@ describe("slide editor: shapes, styling and media", () => {
       });
 
       it("ends where the line toward the spot first meets the border", () => {
-        // From the left, toward the bottom middle: the line goes in through the left side.
+        // From the left, toward the bottom: the line goes in through the left side.
         const { e, line } = setup([100, 350]);
-        pull(e, handles(e)[1]!, [600, 400]);
-        expect(line.getAttribute("data-to-at")).toBe("50% 100% edge");
+        pull(e, handles(e)[1]!, [640, 400]);
+        expect(line.getAttribute("data-to-at")).toBe("70% 100% edge");
         const [from, to] = ends(line);
         expect(to![0]).toBeCloseTo(500, 0);
-        expect(onTheWay(from!, to!, [600, 400])).toBe(true);
+        expect(onTheWay(from!, to!, [640, 400])).toBe(true);
       });
 
       it("slides along the border as the element turns, still pointing at the spot", () => {
@@ -3379,13 +3635,13 @@ describe("slide editor: shapes, styling and media", () => {
       });
 
       it("aims both ends of a line stuck to two edges at each other's spot", () => {
-        const { e, line, a } = setup([697, 350], [1003, 650]);
-        expect(line.getAttribute("data-from-at")).toBe("100% 50% edge");
-        expect(line.getAttribute("data-to-at")).toBe("0% 50% edge");
+        const { e, line, a } = setup([697, 330], [1003, 630]);
+        expect(line.getAttribute("data-from-at")).toBe("100% 30% edge");
+        expect(line.getAttribute("data-to-at")).toBe("0% 30% edge");
         e.drag(a, 0, 300);
         const [from, to] = ends(line);
-        near(from!, [700, 650]);
-        near(to!, [1000, 650]);
+        near(from!, [700, 630]);
+        near(to!, [1000, 630]);
       });
 
       it("highlights the outline while an end is close to it, instead of the box", () => {
@@ -3400,16 +3656,16 @@ describe("slide editor: shapes, styling and media", () => {
             cancelable: true,
           }),
         );
-        at(e, "pointermove", 600, 396);
+        at(e, "pointermove", 560, 396);
         const outline = e.doc.querySelector("[data-slop-edge] path");
         expect(outline?.getAttribute("d")).toMatch(/^M500 300 L700 300 L700 400 L500 400 Z$/);
-        expect(e.doc.querySelector("[data-slop-edge] circle")?.getAttribute("cy")).toBe("400");
+        expect(e.doc.querySelector("[data-slop-edge] circle:not([data-site])")?.getAttribute("cy")).toBe("400");
         expect(a.hasAttribute("data-slop-hover")).toBe(false);
-        at(e, "pointermove", 600, 350);
+        at(e, "pointermove", 560, 350);
         expect(e.doc.querySelector("[data-slop-edge] path")).toBeNull();
         expect(a.hasAttribute("data-slop-hover")).toBe(true);
-        at(e, "pointermove", 600, 396);
-        at(e, "pointerup", 600, 396);
+        at(e, "pointermove", 560, 396);
+        at(e, "pointerup", 560, 396);
         expect(e.doc.querySelector("[data-slop-edge]")!.childNodes).toHaveLength(0);
         expect(e.commits().at(-1)!.markup).not.toContain("data-slop-edge");
       });
@@ -3424,9 +3680,10 @@ describe("slide editor: shapes, styling and media", () => {
         // The box's corner is off the star.
         pull(e, handles(e)[1]!, [1302, 102]);
         expect(line.hasAttribute("data-to")).toBe(false);
-        pull(e, handles(e)[1]!, [1400, 104]);
+        // Half way down the side of its top point.
+        pull(e, handles(e)[1]!, [1411, 137]);
         expect(line.getAttribute("data-to")).toBe("star");
-        expect(line.getAttribute("data-to-at")).toBe("50% 0% edge");
+        expect(line.getAttribute("data-to-at")).toMatch(/^5[56](\.\d+)?% 1[78](\.\d+)?% edge$/);
         pull(e, handles(e)[1]!, [1400, 200]);
         expect(line.getAttribute("data-to-at")).toBe("50% 50%");
       });
@@ -3436,8 +3693,9 @@ describe("slide editor: shapes, styling and media", () => {
         place(e, "oval", "left: 1300px; top: 100px; width: 200px; height: 100px; border-radius: 50%");
         pull(e, handles(e)[1]!, [1303, 103]);
         expect(line.hasAttribute("data-to")).toBe(false);
-        pull(e, handles(e)[1]!, [1400, 104]);
-        expect(line.getAttribute("data-to-at")).toBe("50% 0% edge");
+        pull(e, handles(e)[1]!, [1470, 117]);
+        expect(line.getAttribute("data-to")).toBe("oval");
+        expect(line.getAttribute("data-to-at")).toMatch(/^8\d(\.\d+)?% 1\d(\.\d+)?% edge$/);
         // Off the ellipse, but on the rounded box's corner.
         place(e, "round", "left: 1300px; top: 500px; width: 200px; height: 100px; border-radius: 20px");
         pull(e, handles(e)[1]!, [1306, 506]);
@@ -3469,9 +3727,9 @@ describe("slide editor: shapes, styling and media", () => {
         // The box's corner is off the diamond.
         pull(e, handles(e)[1]!, [1304, 104]);
         expect(line.hasAttribute("data-to")).toBe(false);
-        pull(e, handles(e)[1]!, [1496, 200]);
+        pull(e, handles(e)[1]!, [1452, 148]);
         expect(line.getAttribute("data-to")).toBe("diamond");
-        expect(line.getAttribute("data-to-at")).toBe("100% 50% edge");
+        expect(line.getAttribute("data-to-at")).toBe("75% 25% edge");
       });
 
       it("follows a drawing's curves along their length", () => {
@@ -3487,9 +3745,9 @@ describe("slide editor: shapes, styling and media", () => {
         });
         pull(e, handles(e)[1]!, [1306, 106]);
         expect(line.hasAttribute("data-to")).toBe(false);
-        pull(e, handles(e)[1]!, [1495, 200]);
+        pull(e, handles(e)[1]!, [1469, 128]);
         expect(line.getAttribute("data-to")).toBe("blob");
-        expect(line.getAttribute("data-to-at")).toBe("100% 50% edge");
+        expect(line.getAttribute("data-to-at")).toMatch(/^8\d(\.\d+)?% 1\d(\.\d+)?% edge$/);
       });
     });
 
@@ -3522,41 +3780,55 @@ describe("slide editor: shapes, styling and media", () => {
         Number.parseFloat(n),
       );
 
-    it.each(["triangle", "star", "bubble", "diamond", "chevron", "block-arrow", "double-arrow"])(
-      "drags out a %s that holds text and takes a border",
-      (tool) => {
-        const e = editor();
-        e.fromParent({
-          type: "slop:edit-tool",
-          tool,
-          style: { ...SHAPE_STYLE, stroke: "#000000", strokeWidth: 4 },
-        });
-        dragOut(e, [100, 100], [400, 300]);
-        const [shape] = added(e);
-        expect(shape!.getAttribute("data-added")).toBe("shape");
-        expect(shape!.getAttribute("data-shape")).toBe(tool);
-        expect(shape!.tagName.toLowerCase()).toBe("div");
-        expect(shape!.style.getPropertyValue("clip-path")).toBe("");
-        expect(shape!.style.backgroundColor).toBe("");
-        expect(shape!.style.border).toBe("");
-        expect(drawn(shape!)).toContain("fill='#3b82f6'");
-        // The border is an inner stroke: twice as wide, cut to the shape.
-        expect(drawn(shape!)).toContain("stroke='#000000' stroke-width='8'");
-        expect(pads(shape!).every((n) => n >= 8)).toBe(true);
-        expect(e.selected()).toEqual([shape]);
-        expect(lastSelection(e)).toMatchObject({
-          kind: "shape",
-          text: true,
-          clipped: false,
-          radius: null,
-          fill: "#3b82f6",
-          stroke: "#000000",
-          strokeWidth: 4,
-          flippable: true,
-        });
-        expect(e.commits()[0]!.markup).toContain('data-shape="' + tool + '"');
-      },
-    );
+    it.each([
+      "triangle",
+      "star",
+      "bubble",
+      "diamond",
+      "chevron",
+      "block-arrow",
+      "double-arrow",
+      "hexagon",
+      "octagon",
+      "pentagon",
+      "parallelogram",
+      "trapezoid",
+      "plus",
+      "cylinder",
+      "document",
+      "heart",
+    ])("drags out a %s that holds text and takes a border", (tool) => {
+      const e = editor();
+      e.fromParent({
+        type: "slop:edit-tool",
+        tool,
+        style: { ...SHAPE_STYLE, stroke: "#000000", strokeWidth: 4 },
+      });
+      dragOut(e, [100, 100], [400, 300]);
+      const [shape] = added(e);
+      expect(shape!.getAttribute("data-added")).toBe("shape");
+      expect(shape!.getAttribute("data-shape")).toBe(tool);
+      expect(shape!.tagName.toLowerCase()).toBe("div");
+      expect(shape!.style.getPropertyValue("clip-path")).toBe("");
+      expect(shape!.style.backgroundColor).toBe("");
+      expect(shape!.style.border).toBe("");
+      expect(drawn(shape!)).toContain("fill='#3b82f6'");
+      // The border is an inner stroke: twice as wide, cut to the shape.
+      expect(drawn(shape!)).toContain("stroke='#000000' stroke-width='8'");
+      expect(pads(shape!).every((n) => n >= 8)).toBe(true);
+      expect(e.selected()).toEqual([shape]);
+      expect(lastSelection(e)).toMatchObject({
+        kind: "shape",
+        text: true,
+        clipped: false,
+        radius: null,
+        fill: "#3b82f6",
+        stroke: "#000000",
+        strokeWidth: 4,
+        flippable: true,
+      });
+      expect(e.commits()[0]!.markup).toContain('data-shape="' + tool + '"');
+    });
 
     it("keeps the size it is given, however wide: its padding comes from its height, not its width", () => {
       const e = editor();
@@ -3593,13 +3865,130 @@ describe("slide editor: shapes, styling and media", () => {
       // Picking a border color shows a border.
       expect(lastSelection(e)).toMatchObject({ stroke: "#ff0000", strokeWidth: 4 });
       style(e, { shadow: 24, radius: 10 });
-      expect(shape.style.getPropertyValue("filter")).toContain("drop-shadow(0px 8px 24px");
+      // Drawn past its box by a second SVG, around the shape but not under it, so its text casts none.
+      const shadow = decodeURIComponent(shape.style.getPropertyValue("border-image-source"));
+      expect(shadow).toContain("stdDeviation='12'");
+      expect(shadow).toContain("<mask id='out'");
+      expect(shadow).toContain("translate(0 8)");
+      expect(shape.style.getPropertyValue("border-image-outset")).toBe("46px");
+      expect(shape.style.getPropertyValue("border-image-slice")).toBe("0 fill");
+      expect(shape.style.getPropertyValue("filter")).toBe("");
       expect(shape.style.getPropertyValue("box-shadow")).toBe("");
       expect(shape.style.getPropertyValue("border-radius")).toBe("");
       expect(lastSelection(e)).toMatchObject({ shadow: 24, radius: null });
       style(e, { strokeWidth: 0, fill: "#00ff00" });
       expect(drawn(shape)).not.toContain("stroke=");
-      expect(lastSelection(e)).toMatchObject({ fill: "#00ff00", stroke: null, strokeWidth: 0 });
+      expect(lastSelection(e)).toMatchObject({ fill: "#00ff00", stroke: null, strokeWidth: 0, shadow: 24 });
+      // The shadow is redrawn with the shape as it changes size, and goes again.
+      e.fromParent({ type: "slop:edit-geometry", w: 500 });
+      expect(decodeURIComponent(shape.style.getPropertyValue("border-image-source"))).toContain("viewBox='-46 -46 592");
+      style(e, { shadow: 0 });
+      expect(shape.style.getPropertyValue("border-image-source")).toBe("");
+      expect(lastSelection(e)).toMatchObject({ shadow: 0 });
+    });
+
+    it("moves an earlier version's shadow, a filter over its text too, behind the shape", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "star", style: SHAPE_STYLE });
+      dragOut(e, [100, 100], [400, 300]);
+      const shape = added(e)[0]!;
+      shape.style.setProperty("filter", "drop-shadow(0px 4px 12px rgba(0, 0, 0, 0.35)) blur(1px)");
+      e.fromParent({ type: "slop:edit-select", path: null });
+      e.fromParent({ type: "slop:edit-select", path: [5] });
+      expect(lastSelection(e)).toMatchObject({ shadow: 12 });
+      style(e, { fill: "#ff0000" });
+      expect(shape.style.getPropertyValue("filter")).toBe("blur(1px)");
+      expect(decodeURIComponent(shape.style.getPropertyValue("border-image-source"))).toContain("stdDeviation='6'");
+    });
+
+    it("dashes and dots a figure's border", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "hexagon", style: SHAPE_STYLE });
+      dragOut(e, [100, 100], [400, 300]);
+      const shape = added(e)[0]!;
+      style(e, { dash: "dashed" });
+      // Picking dashes shows a border.
+      expect(drawn(shape)).toContain("stroke='#111111' stroke-width='8' stroke-dasharray='12 8'");
+      expect(lastSelection(e)).toMatchObject({ dash: "dashed", strokeWidth: 4 });
+      style(e, { dash: "dotted" });
+      expect(drawn(shape)).toContain("stroke-dasharray='4 4'");
+      expect(lastSelection(e)).toMatchObject({ dash: "dotted" });
+    });
+
+    it("keeps a block arrow's head as it grows longer, instead of stretching it", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "block-arrow", style: SHAPE_STYLE });
+      dragOut(e, [100, 100], [400, 300]);
+      const shape = added(e)[0]!;
+      e.fromParent({ type: "slop:edit-geometry", w: 300, h: 100 });
+      expect(drawn(shape)).toContain("viewBox='0 0 300 100'");
+      expect(drawn(shape)).toContain("M0 25 L244 25 L244 0 L300 50");
+      e.fromParent({ type: "slop:edit-geometry", w: 900 });
+      // The head is as long as before: 56% of its height.
+      expect(drawn(shape)).toContain("M0 25 L844 25 L844 0 L900 50");
+      expect(lastSelection(e)).toMatchObject({ adjust: { value: 56, min: 0, max: 400, step: 1, label: "Head" } });
+    });
+
+    it("changes a figure's proportions with its handle, and resets them on a double-click", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "chevron", style: SHAPE_STYLE });
+      dragOut(e, [100, 100], [400, 300]);
+      const shape = added(e)[0]!;
+      shape.getBoundingClientRect = () => new e.window.DOMRect(100, 100, 300, 200);
+      e.window.dispatchEvent(new e.window.Event("resize"));
+      const handle = e.$("[data-slop-ui] [data-handle=adjust]");
+      expect(handle.hidden).toBe(false);
+      // Where the point starts: 40% of the height (80px) in from the right.
+      expect([handle.style.left, handle.style.top]).toEqual(["73.3%", "0%"]);
+      handle.dispatchEvent(
+        new e.window.PointerEvent("pointerdown", { clientX: 320, clientY: 100, button: 0, bubbles: true }),
+      );
+      at(e, "pointermove", 300, 100);
+      at(e, "pointerup", 300, 100);
+      // 100px deep now: half its height.
+      expect(shape.getAttribute("data-adjust")).toBe("50");
+      expect(drawn(shape)).toContain("M0 0 L200 0 L300 100 L200 200 L0 200 L100 100 Z");
+      expect(e.commits().at(-1)!.markup).toContain('data-adjust="50"');
+      handle.dispatchEvent(new e.window.MouseEvent("dblclick", { bubbles: true }));
+      expect(shape.hasAttribute("data-adjust")).toBe(false);
+      expect(drawn(shape)).toContain("M0 0 L220 0 L300 100");
+    });
+
+    it("moves a speech bubble's tail along its bottom", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "bubble", style: SHAPE_STYLE });
+      dragOut(e, [100, 100], [400, 300]);
+      const shape = added(e)[0]!;
+      style(e, { adjust: 80 });
+      expect(shape.getAttribute("data-adjust")).toBe("80");
+      // The tail points down at 80% across, leaving the body just before it.
+      expect(drawn(shape)).toContain("L240 200 L210 160");
+      expect(lastSelection(e)).toMatchObject({ adjust: { value: 80, label: "Tail" } });
+      expect(e.$("[data-slop-ui] [data-handle=adjust]").style.left).toBe("80%");
+    });
+
+    it("gives a star as many points as asked, with no handle for them", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "star", style: SHAPE_STYLE });
+      dragOut(e, [100, 100], [300, 300]);
+      const shape = added(e)[0]!;
+      const points = () => /<path d='([^']*)' fill/.exec(drawn(shape))![1]!.split(" L").length;
+      expect(points()).toBe(10);
+      style(e, { adjust: 8 });
+      expect(points()).toBe(16);
+      // Out of range, it goes to the nearest it takes.
+      style(e, { adjust: 40 });
+      expect(shape.getAttribute("data-adjust")).toBe("12");
+      expect(e.$("[data-slop-ui] [data-handle=adjust]").hidden).toBe(true);
+    });
+
+    it("shows no proportions for shapes without any", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "diamond", style: SHAPE_STYLE });
+      dragOut(e, [100, 100], [300, 300]);
+      expect(lastSelection(e)).toMatchObject({ adjust: null });
+      style(e, { adjust: 30 });
+      expect(added(e)[0]!.hasAttribute("data-adjust")).toBe(false);
     });
 
     it("mirrors its shape, not its text, and moves its padding with the shape", () => {
@@ -3610,12 +3999,12 @@ describe("slide editor: shapes, styling and media", () => {
       e.fromParent({ type: "slop:edit-geometry", w: 600, h: 400 });
       style(e, { flipY: true });
       expect(shape.style.transform).toBe("");
-      expect(drawn(shape)).toContain("matrix(1 0 0 -1 0 100)");
+      expect(drawn(shape)).toContain("matrix(1 0 0 -1 0 400)");
       // The tail is on top now, so the text keeps clear of the top.
       expect(pads(shape)).toEqual([104, 30, 24, 30]);
       expect(lastSelection(e)).toMatchObject({ flipX: false, flipY: true });
       style(e, { flipX: true });
-      expect(drawn(shape)).toContain("matrix(-1 0 0 -1 100 100)");
+      expect(drawn(shape)).toContain("matrix(-1 0 0 -1 600 400)");
       expect(lastSelection(e)).toMatchObject({ flipX: true, flipY: true });
       expect(e.commits().at(-1)!.markup).toContain("data-shape=");
     });
@@ -3674,14 +4063,8 @@ describe("slide editor: shapes, styling and media", () => {
       expect(svg!.style.transform).toBe("scaleX(-1)");
     });
 
-    it("does not flip a line, whose ends may be stuck to elements, or a text box", () => {
+    it("does not flip a text box", () => {
       const e = editor();
-      e.fromParent({ type: "slop:edit-tool", tool: "arrow", style: LINE_STYLE });
-      dragOut(e, [100, 100], [300, 200]);
-      const [line] = added(e);
-      expect(lastSelection(e)).toMatchObject({ flippable: false });
-      style(e, { flipX: true });
-      expect(line!.style.transform).toBe("");
       e.down(e.$(".card"));
       expect(lastSelection(e)).toMatchObject({ flippable: false });
       style(e, { flipX: true });

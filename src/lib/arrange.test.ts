@@ -1,6 +1,27 @@
 import { describe, expect, it } from "vitest";
 
-import { parseGeometry, parseGeometryValue, quarterTurn } from "./arrange";
+import { parseGeometry, parseGeometryValue, parseLayers, quarterTurn } from "./arrange";
+
+describe("parseLayers", () => {
+  it("keeps the rows it can use, dropping malformed ones", () => {
+    expect(
+      parseLayers([
+        { path: [3], name: "Group of 2", group: true, locked: false, held: false, selected: true, depth: 0 },
+        { path: [3, 0], name: "Text: Hi", locked: true, depth: 1 },
+        { path: [-1], name: "Bad" },
+        { path: "3", name: "Bad" },
+        { path: [1], name: 5 },
+        null,
+        { path: [2], name: "Deep", depth: 1.5 },
+      ]),
+    ).toEqual([
+      { path: [3], name: "Group of 2", group: true, locked: false, held: false, selected: true, depth: 0 },
+      { path: [3, 0], name: "Text: Hi", group: false, locked: true, held: false, selected: false, depth: 1 },
+      { path: [2], name: "Deep", group: false, locked: false, held: false, selected: false, depth: 0 },
+    ]);
+    expect(parseLayers("nope")).toEqual([]);
+  });
+});
 
 describe("parseGeometry", () => {
   it("takes the editor's report, a null rotation meaning several elements", () => {

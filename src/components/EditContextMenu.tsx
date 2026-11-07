@@ -13,6 +13,10 @@ export type EditMenuAction =
   | "svg"
   | "flip-x"
   | "flip-y"
+  | "group"
+  | "ungroup"
+  | "lock"
+  | "unlock"
   | StackOrder;
 
 const WIDTH = 224;
@@ -40,6 +44,10 @@ const FLIP_ITEMS: Item[] = [
   { action: "flip-x", label: "Flip horizontally" },
   { action: "flip-y", label: "Flip vertically" },
 ];
+const GROUP: Item = { action: "group", label: "Group", keys: "⌘G" };
+const UNGROUP: Item = { action: "ungroup", label: "Ungroup", keys: "⇧⌘G" };
+const LOCK: Item = { action: "lock", label: "Lock" };
+const UNLOCK: Item = { action: "unlock", label: "Unlock" };
 const ASK: Item = { action: "ask", label: "Ask the agent about this…" };
 const TIDY: Item = { action: "tidy", label: "Tidy this element" };
 const SVG: Item = { action: "svg", label: "Edit in the SVG editor" };
@@ -60,6 +68,12 @@ export function EditContextMenu(props: {
   running: boolean;
   /** Whether the selection can be flipped (see `flippable` in EditSelection); flips show only then. */
   flippable?: boolean;
+  /** Several elements are selected, which can be grouped. */
+  several?: boolean;
+  /** The selection is a group, which can be taken apart. */
+  group?: boolean;
+  /** The selection is locked. */
+  locked?: boolean;
   onAction: (action: EditMenuAction) => void;
   onClose: () => void;
 }) {
@@ -135,6 +149,10 @@ export function EditContextMenu(props: {
         {EDIT_ITEMS.map((item) => button(item, item.action !== "paste" && !element))}
         {divider}
         {ORDER_ITEMS.map((item) => button(item, !element))}
+        {divider}
+        {button(GROUP, !element || !props.several)}
+        {button(UNGROUP, !element || !props.group)}
+        {button(props.locked ? UNLOCK : LOCK, !element)}
         {divider}
         {element && props.flippable && (
           <>

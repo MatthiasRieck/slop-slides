@@ -1269,28 +1269,132 @@ describe("Stage", () => {
         expect(useApp.getState().editTool).toBe("select");
       });
 
-      it("offers diagram shapes in a picker, and shows the one picked", () => {
+      // One case per shape: looping them all in one test outruns the timeout
+      // on slower CI runners.
+      it.each([
+        ["Add a diamond (a decision in a flowchart)", "diamond", "shape"],
+        ["Add a chevron (a step in a process)", "chevron", "shape"],
+        ["Add a block arrow", "block-arrow", "shape"],
+        ["Add a double-headed arrow", "double-arrow", "shape"],
+        ["Add a hexagon (a preparation step)", "hexagon", "shape"],
+        ["Add an octagon", "octagon", "shape"],
+        ["Add a pentagon", "pentagon", "shape"],
+        ["Add a parallelogram (input or output)", "parallelogram", "shape"],
+        ["Add a trapezoid", "trapezoid", "shape"],
+        ["Add a plus", "plus", "shape"],
+        ["Add a cylinder (a database)", "cylinder", "shape"],
+        ["Add a document", "document", "shape"],
+        ["Add a heart", "heart", "shape"],
+        ["Add a bracket", "bracket", "draw"],
+        ["Add a brace", "brace", "draw"],
+        ["Add an elbow connector (turns at right angles between the elements its ends stick to)", "elbow", "draw"],
+        ["Add a curved connector (curves between the elements its ends stick to)", "curve", "draw"],
+      ] as const)("offers %s in the shapes picker, and shows it picked", (name, tool, family) => {
         const { frame, post } = enter();
-        for (const [name, tool, family] of [
-          ["Add a diamond (a decision in a flowchart)", "diamond", "shape"],
-          ["Add a chevron (a step in a process)", "chevron", "shape"],
-          ["Add a block arrow", "block-arrow", "shape"],
-          ["Add a double-headed arrow", "double-arrow", "shape"],
-          ["Add a bracket", "bracket", "draw"],
-          ["Add a brace", "brace", "draw"],
-        ] as const) {
-          fireEvent.click(button("More shapes"));
-          fireEvent.click(button(name));
-          expect(post).toHaveBeenLastCalledWith(
-            { type: "slop:edit-tool", tool, style: DEFAULT_EDIT_STYLES[family] },
-            "*",
-          );
-          // The picker closes; its button stands for the shape picked.
-          expect(screen.queryByRole("dialog", { name: "More shapes" })).toBeNull();
-          expect(button("More shapes").getAttribute("aria-pressed")).toBe("true");
-        }
+        const more = button("More shapes");
+        fireEvent.click(more);
+        const picker = screen.getByRole("dialog", { name: "More shapes" });
+        fireEvent.click(within(picker).getByRole("button", { name }));
+        expect(post).toHaveBeenLastCalledWith(
+          { type: "slop:edit-tool", tool, style: DEFAULT_EDIT_STYLES[family] },
+          "*",
+        );
+        // The picker closes; its button stands for the shape picked.
+        expect(screen.queryByRole("dialog", { name: "More shapes" })).toBeNull();
+        expect(more.getAttribute("aria-pressed")).toBe("true");
         fromFrame(frame, { type: "slop:edit-tool", slide: "intro", tool: "select" });
-        expect(button("More shapes").getAttribute("aria-pressed")).toBe("false");
+        expect(more.getAttribute("aria-pressed")).toBe("false");
+      });
+
+      it("dashes the selection's line or border", () => {
+        const { frame, post } = enter();
+        select(frame, { ...SELECTION, stroke: "#000000", strokeWidth: 4, dash: "dotted" });
+        const dash = screen.getByLabelText("Border style") as HTMLSelectElement;
+        expect(dash.value).toBe("dotted");
+        fireEvent.change(dash, { target: { value: "dashed" } });
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { dash: "dashed" } }, "*");
+        select(frame, { ...SELECTION, kind: "drawing", vector: true, text: false, dash: "solid" });
+        expect((screen.getByLabelText("Line style") as HTMLSelectElement).value).toBe("solid");
+      });
+
+      it("sets a line's heads and route, for lines only", () => {
+        const { frame, post } = enter();
+        select(frame);
+        expect(button("Line ends and route").disabled).toBe(true);
+        select(frame, {
+          ...SELECTION,
+          kind: "drawing",
+          vector: true,
+          text: false,
+          line: { start: null, end: "arrow", route: "straight" },
+        });
+        fireEvent.click(button("Line ends and route"));
+        const panel = screen.getByRole("dialog", { name: "Line ends and route" });
+        const start = within(panel).getByLabelText("Start") as HTMLSelectElement;
+        expect(start.value).toBe("");
+        expect((within(panel).getByLabelText("End") as HTMLSelectElement).value).toBe("arrow");
+        fireEvent.change(start, { target: { value: "dot" } });
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { headStart: "dot" } }, "*");
+        expect(within(panel).getByRole("button", { name: "Straight" }).getAttribute("aria-pressed")).toBe("true");
+        fireEvent.click(within(panel).getByRole("button", { name: "Elbow" }));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { route: "elbow" } }, "*");
+        // A line's heads and route are not the next line's.
+        expect(useApp.getState().editStyles.draw).toEqual(DEFAULT_EDIT_STYLES.draw);
+      });
+
+      it("groups, ungroups and locks from the toolbar", () => {
+        const { frame, post } = enter();
+        expect(button("Group (⌘G)").disabled).toBe(true);
+        expect(button("Lock").disabled).toBe(true);
+        select(frame, { ...SELECTION, kind: "group", group: true });
+        fromFrame(frame, {
+          type: "slop:edit-geometry",
+          slide: "intro",
+          geometry: { count: 3, x: 0, y: 0, w: 1, h: 1 },
+        });
+        fireEvent.click(button("Group (⌘G)"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-group" }, "*");
+        fireEvent.click(button("Ungroup (⇧⌘G)"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-ungroup" }, "*");
+        fireEvent.click(button("Lock"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-lock", locked: true }, "*");
+        select(frame, { ...SELECTION, locked: true });
+        expect(button("Unlock").getAttribute("aria-pressed")).toBe("true");
+      });
+
+      it("lists the slide's layers, to pick, lock and restack them", () => {
+        const { frame, post } = enter();
+        expect(button("Layers").disabled).toBe(true);
+        fromFrame(frame, {
+          type: "slop:edit-layers",
+          slide: "intro",
+          layers: [
+            { path: [4], name: "Group of 2", group: true, selected: true, depth: 0 },
+            { path: [4, 1], name: "Text: B", depth: 1 },
+            { path: [4, 0], name: "Text: A", depth: 1 },
+            { path: [0], name: "Heading: Hi", locked: true, depth: 0 },
+          ],
+        });
+        fireEvent.click(button("Layers"));
+        const panel = within(screen.getByRole("dialog", { name: "Layers" }));
+        expect(panel.getAllByRole("listitem").map((row) => row.textContent)).toEqual([
+          "Group of 2",
+          "Text: B",
+          "Text: A",
+          "Heading: Hi",
+        ]);
+        expect(panel.getByRole("button", { name: "Group of 2" }).getAttribute("aria-current")).toBe("true");
+        fireEvent.click(panel.getByRole("button", { name: "Heading: Hi" }));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-select", path: [0] }, "*");
+        fireEvent.click(panel.getByRole("button", { name: "Unlock Heading: Hi" }));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-lock", locked: false, path: [0] }, "*");
+        // Up and down go among the layers of the same group, or of the slide.
+        expect((panel.getByRole("button", { name: "Move Group of 2 up" }) as HTMLButtonElement).disabled).toBe(true);
+        expect((panel.getByRole("button", { name: "Move Text: A down" }) as HTMLButtonElement).disabled).toBe(true);
+        fireEvent.click(panel.getByRole("button", { name: "Move Text: A up" }));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-order", to: "forward", path: [4, 0], any: true }, "*");
+        fireEvent.click(panel.getByRole("button", { name: "Move Group of 2 down" }));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-order", to: "backward", path: [4], any: true }, "*");
       });
 
       it("arms the format painter on the selection, and disarms it", () => {
@@ -1321,6 +1425,26 @@ describe("Stage", () => {
         act(() => void radius.dispatchEvent(new Event("change")));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { radius: 20 } }, "*");
         // Restyling leaves the next shape's defaults alone.
+        expect(useApp.getState().editStyles.shape).toEqual(DEFAULT_EDIT_STYLES.shape);
+      });
+
+      it("changes a shape's proportions from the appearance panel, for shapes that have them", () => {
+        const { frame, post } = enter();
+        select(frame, { ...SELECTION, opacity: 1, shadow: 0, radius: null });
+        fireEvent.click(button("Appearance"));
+        expect(screen.queryByLabelText("Points")).toBeNull();
+        select(frame, {
+          ...SELECTION,
+          opacity: 1,
+          shadow: 0,
+          radius: null,
+          adjust: { value: 5, min: 3, max: 12, step: 1, label: "Points" },
+        });
+        const points = screen.getByLabelText("Points") as HTMLInputElement;
+        expect([points.min, points.max, points.value]).toEqual(["3", "12", "5"]);
+        fireEvent.input(points, { target: { value: "7" } });
+        act(() => void points.dispatchEvent(new Event("change")));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { adjust: 7 } }, "*");
         expect(useApp.getState().editStyles.shape).toEqual(DEFAULT_EDIT_STYLES.shape);
       });
 
@@ -1962,6 +2086,71 @@ describe("Stage", () => {
         expect((screen.getByLabelText("Distance from the slide's left edge") as HTMLInputElement).value).toBe("0");
       });
 
+      it("keeps the field being typed in through the reload that tabbing out of another one causes", () => {
+        const { container } = render(<Stage />);
+        toggleEditing();
+        const { frame, post } = loaded(container);
+        const geometry = { count: 1, x: 10, y: 20, w: 300, h: 200, rotation: 0 };
+        fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry });
+        fireEvent.click(screen.getByRole("button", { name: "Arrange" }));
+        const x = screen.getByLabelText("Distance from the slide's left edge") as HTMLInputElement;
+        const y = screen.getByLabelText("Distance from the slide's top edge") as HTMLInputElement;
+        x.focus();
+        fireEvent.change(x, { target: { value: "42" } });
+        // Tab: X applies as it loses focus, and Y takes it.
+        y.focus();
+        fireEvent.blur(x);
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-geometry", x: 42 }, "*");
+        // The save reloads the preview, which has nothing selected for a moment.
+        fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry: null });
+        expect(y.disabled).toBe(false);
+        expect(document.activeElement).toBe(y);
+        fireEvent.change(y, { target: { value: "64" } });
+        fireEvent.keyDown(y, { key: "Enter" });
+        // Typed before the selection came back, it waits for it.
+        expect(post).not.toHaveBeenCalledWith({ type: "slop:edit-geometry", y: 64 }, "*");
+        fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry: { ...geometry, x: 42 } });
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-geometry", y: 64 }, "*");
+      });
+
+      it("drops a number typed for a selection that does not come back", () => {
+        const now = vi.spyOn(Date, "now").mockReturnValue(1000);
+        const { container } = render(<Stage />);
+        toggleEditing();
+        const { frame, post } = loaded(container);
+        const geometry = { count: 1, x: 10, y: 20, w: 300, h: 200, rotation: 0 };
+        fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry });
+        fireEvent.click(screen.getByRole("button", { name: "Arrange" }));
+        fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry: null });
+        const y = screen.getByLabelText("Distance from the slide's top edge") as HTMLInputElement;
+        fireEvent.change(y, { target: { value: "64" } });
+        fireEvent.keyDown(y, { key: "Enter" });
+        now.mockReturnValue(9000);
+        fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry: { ...geometry, w: 50 } });
+        expect(post).not.toHaveBeenCalledWith({ type: "slop:edit-geometry", y: 64 }, "*");
+        now.mockRestore();
+      });
+
+      it("locks the aspect ratio for resizes, and keeps it locked through reloads", () => {
+        const { container } = render(<Stage />);
+        toggleEditing();
+        const { frame, post } = loaded(container);
+        fromFrame(frame, {
+          type: "slop:edit-geometry",
+          slide: "intro",
+          geometry: { count: 1, x: 10, y: 20, w: 300, h: 200, rotation: 0 },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Arrange" }));
+        const lock = screen.getByRole("button", { name: "Lock aspect ratio" });
+        expect(lock.getAttribute("aria-pressed")).toBe("false");
+        fireEvent.click(lock);
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-keep-ratio", on: true }, "*");
+        expect(lock.getAttribute("aria-pressed")).toBe("true");
+        post.mockClear();
+        fireEvent.load(frame);
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-keep-ratio", on: true }, "*");
+      });
+
       it("flips a shape from the arrange panel, keeping it open", () => {
         const button = (name: string) => screen.getByRole("button", { name });
         const { container } = render(<Stage />);
@@ -2430,6 +2619,34 @@ describe("Stage", () => {
         fireEvent.click(item(name));
         expect(post).toHaveBeenCalledWith(message, "*");
         expect(screen.queryByRole("menu")).toBeNull();
+      });
+
+      it("groups several, takes a group apart, and locks or unlocks, when each applies", () => {
+        const { frame, post } = open();
+        expect(item("Group").disabled).toBe(true);
+        expect(item("Ungroup").disabled).toBe(true);
+        fireEvent.click(item("Lock"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-lock", locked: true }, "*");
+        fromFrame(frame, {
+          type: "slop:edit-geometry",
+          slide: "intro",
+          geometry: { count: 2, x: 0, y: 0, w: 1, h: 1 },
+        });
+        fromFrame(frame, {
+          type: "slop:edit-selection",
+          slide: "intro",
+          selected: true,
+          selection: { kind: "group", group: true, locked: true },
+        });
+        fromFrame(frame, { type: "slop:edit-menu", slide: "intro", x: 1, y: 1, element: ELEMENT });
+        fireEvent.click(item("Group"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-group" }, "*");
+        fromFrame(frame, { type: "slop:edit-menu", slide: "intro", x: 1, y: 1, element: ELEMENT });
+        fireEvent.click(item("Ungroup"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-ungroup" }, "*");
+        fromFrame(frame, { type: "slop:edit-menu", slide: "intro", x: 1, y: 1, element: ELEMENT });
+        fireEvent.click(item("Unlock"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-lock", locked: false }, "*");
       });
 
       it("flips what can be flipped, offered only then", () => {

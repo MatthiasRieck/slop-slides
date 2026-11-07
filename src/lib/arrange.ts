@@ -5,6 +5,10 @@
 
 export type AlignTo = "left" | "center" | "right" | "top" | "middle" | "bottom";
 export type DistributeAxis = "h" | "v";
+/** What aligning lines the selection up with: the slide (each element on its own), or the selection's bounds. */
+export type AlignTarget = "slide" | "selection";
+/** The size matching gives the other selected elements from the primary one. */
+export type MatchAxis = "w" | "h";
 
 /** Where the selection is, in slide pixels (see `geometry` in editor.js). */
 export interface EditGeometry {
@@ -25,11 +29,18 @@ export const TILT_STEP = 5;
 
 /** What the arrange controls ask the slide editor to do. */
 export type ArrangeMessage =
-  | { type: "slop:edit-align"; to: AlignTo }
+  | { type: "slop:edit-align"; to: AlignTo; target: AlignTarget }
+  | { type: "slop:edit-match"; axis: MatchAxis }
   | { type: "slop:edit-distribute"; axis: DistributeAxis }
   | ({ type: "slop:edit-geometry" } & Partial<Record<GeometryField, number>>)
   | { type: "slop:edit-tilt"; x: number; y: number }
   | { type: "slop:edit-tilt"; reset: true };
+
+/** The rotation a quarter turn clockwise (`step` 1) or counterclockwise (-1) from `rotation` gives, within ±180°. */
+export function quarterTurn(rotation: number, step: 1 | -1): number {
+  const turned = (((Math.round(rotation) + step * 90) % 360) + 360) % 360;
+  return turned > 180 ? turned - 360 : turned;
+}
 
 /** A geometry report from the slide editor, or null when it is malformed (or nothing is selected). */
 export function parseGeometry(value: unknown): EditGeometry | null {

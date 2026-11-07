@@ -14,6 +14,12 @@ export type EditTool =
   | "triangle"
   | "star"
   | "bubble"
+  | "diamond"
+  | "chevron"
+  | "block-arrow"
+  | "double-arrow"
+  | "bracket"
+  | "brace"
   | "draw"
   | "line"
   | "arrow"
@@ -105,13 +111,15 @@ export interface EditSelection {
   opacity: number;
   shadow: number;
   radius: number | null;
-  /** A box cut out to a shape (triangle, star, speech bubble): no border, shadow or corner radius. */
+  /** A box cut out with a `clip-path` the editor cannot redraw: no border, shadow or corner radius. */
   clipped: boolean;
   /** An <img>, so the image controls apply. */
   image: boolean;
   fit: ImageFit | null;
   fitPosition: string | null;
   alt: string | null;
+  /** Flipping mirrors what it shows without mirroring text (images, shapes like a triangle, drawings but not lines). */
+  flippable: boolean;
   flipX: boolean;
   flipY: boolean;
 }
@@ -179,7 +187,7 @@ export function stepFontSize(size: number, step: 1 | -1): number {
 
 export function familyOf(tool: EditTool): ToolFamily | null {
   if (tool === "text" || tool === "draw") return tool;
-  if (tool === "line" || tool === "arrow") return "draw";
+  if (tool === "line" || tool === "arrow" || tool === "bracket" || tool === "brace") return "draw";
   return tool === "select" || tool === "paint" ? null : "shape";
 }
 
@@ -264,6 +272,7 @@ export function parseSelection(value: unknown): EditSelection | null {
     fit: v.fit === "contain" || v.fit === "cover" || v.fit === "fill" ? v.fit : null,
     fitPosition: typeof v.fitPosition === "string" ? v.fitPosition : null,
     alt: typeof v.alt === "string" ? v.alt : null,
+    flippable: v.flippable === true,
     flipX: v.flipX === true,
     flipY: v.flipY === true,
   };

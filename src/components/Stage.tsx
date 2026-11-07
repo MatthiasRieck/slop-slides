@@ -262,6 +262,7 @@ export function Stage() {
         <EditContextMenu
           {...editFrames.menu}
           running={running}
+          flippable={!!editFrames.selection?.flippable}
           onAction={editFrames.runMenuAction}
           onClose={editFrames.closeMenu}
         />
@@ -801,7 +802,11 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
     else if (action === "duplicate") post({ type: "slop:edit-duplicate" });
     else if (action === "delete") post({ type: "slop:edit-delete" });
     else if (action === "svg") post({ type: "slop:edit-open-svg" });
-    else if (action === "ask" || action === "tidy") {
+    else if (action === "flip-x" || action === "flip-y") {
+      const look = selection?.slide === current ? selection.selection : null;
+      if (!look?.flippable) return;
+      post({ type: "slop:edit-style", style: action === "flip-x" ? { flipX: !look.flipX } : { flipY: !look.flipY } });
+    } else if (action === "ask" || action === "tidy") {
       if (!element) return;
       // The screenshot shows the whole slide, with the element selected and the menu gone.
       resetView();
@@ -899,6 +904,12 @@ const TOOL_NAMES: Record<EditTool, true> = {
   triangle: true,
   star: true,
   bubble: true,
+  diamond: true,
+  chevron: true,
+  "block-arrow": true,
+  "double-arrow": true,
+  bracket: true,
+  brace: true,
   draw: true,
   line: true,
   arrow: true,

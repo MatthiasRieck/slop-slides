@@ -534,6 +534,45 @@ describe("align and distribute", () => {
     expect(e.$("#a").style.translate).toBe("1620px 390px");
   });
 
+  it("lines several elements up with the slide, each on its own, or with their bounds when asked", () => {
+    const e = editor();
+    e.pick("#a", "#b");
+    e.fromParent({ type: "slop:edit-align", to: "right", target: "slide" });
+    expect(e.$("#a").style.translate).toBe("1620px 0px");
+    expect(e.$("#b").style.translate).toBe("1320px 0px");
+    e.fromParent({ type: "slop:edit-align", to: "top", target: "selection" });
+    // a's top is 100, b's 300.
+    expect(e.$("#b").style.translate).toBe("1320px -200px");
+    // One element has no bounds of its own to align with, so it goes by the slide.
+    e.click(e.$("#c"));
+    e.fromParent({ type: "slop:edit-align", to: "left", target: "selection" });
+    expect(e.$("#c").style.translate).toBe("-800px 0px");
+  });
+
+  it("matches the others' width or height to the primary element's", () => {
+    const e = editor();
+    e.$("#b").style.width = "300px";
+    e.$("#b").style.height = "50px";
+    e.pick("#b", "#a", "#c");
+    e.fromParent({ type: "slop:edit-match", axis: "w" });
+    expect(e.$("#a").style.width).toBe("300px");
+    expect(e.$("#c").style.width).toBe("300px");
+    expect(e.$("#b").style.width).toBe("300px");
+    e.fromParent({ type: "slop:edit-match", axis: "h" });
+    expect(e.$("#a").style.height).toBe("50px");
+    expect(e.$("#c").style.height).toBe("50px");
+    expect(e.commits()).toHaveLength(2);
+    e.fromParent({ type: "slop:edit-match", axis: "depth" });
+    expect(e.commits()).toHaveLength(2);
+  });
+
+  it("matches nothing with one element selected", () => {
+    const e = editor();
+    e.click(e.$("#a"));
+    e.fromParent({ type: "slop:edit-match", axis: "w" });
+    expect(e.commits()).toEqual([]);
+  });
+
   it("evens out the gaps between three or more, the outer two staying put", () => {
     const e = editor();
     e.pick("#c", "#a", "#b");

@@ -2,7 +2,18 @@ import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from
 
 import type { EditElement, StackOrder } from "../lib/editTools";
 
-export type EditMenuAction = "cut" | "copy" | "paste" | "duplicate" | "delete" | "ask" | "tidy" | "svg" | StackOrder;
+export type EditMenuAction =
+  | "cut"
+  | "copy"
+  | "paste"
+  | "duplicate"
+  | "delete"
+  | "ask"
+  | "tidy"
+  | "svg"
+  | "flip-x"
+  | "flip-y"
+  | StackOrder;
 
 const WIDTH = 224;
 
@@ -25,6 +36,10 @@ const ORDER_ITEMS: Item[] = [
   { action: "backward", label: "Send backward" },
   { action: "back", label: "Send to back" },
 ];
+const FLIP_ITEMS: Item[] = [
+  { action: "flip-x", label: "Flip horizontally" },
+  { action: "flip-y", label: "Flip vertically" },
+];
 const ASK: Item = { action: "ask", label: "Ask the agent about this…" };
 const TIDY: Item = { action: "tidy", label: "Tidy this element" };
 const SVG: Item = { action: "svg", label: "Edit in the SVG editor" };
@@ -43,6 +58,8 @@ export function EditContextMenu(props: {
   element: EditElement | null;
   /** The agent is busy, so it cannot take on more. */
   running: boolean;
+  /** Whether the selection can be flipped (see `flippable` in EditSelection); flips show only then. */
+  flippable?: boolean;
   onAction: (action: EditMenuAction) => void;
   onClose: () => void;
 }) {
@@ -119,6 +136,12 @@ export function EditContextMenu(props: {
         {divider}
         {ORDER_ITEMS.map((item) => button(item, !element))}
         {divider}
+        {element && props.flippable && (
+          <>
+            {FLIP_ITEMS.map((item) => button(item, false))}
+            {divider}
+          </>
+        )}
         {button(ASK, !element || running)}
         {button(
           TIDY,

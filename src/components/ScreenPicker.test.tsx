@@ -32,7 +32,7 @@ const screens: Screen[] = [
 describe("ScreenPicker", () => {
   it("shows every screen and starts with the show on the last one", () => {
     const onStart = vi.fn();
-    render(<ScreenPicker screens={screens} onStart={onStart} onCancel={() => {}} />);
+    render(<ScreenPicker screens={screens} onStart={onStart} onCancel={() => {}} onWindows={() => {}} />);
     expect(screen.getByTestId("screen-0").dataset.role).toBe("presenter");
     expect(screen.getByTestId("screen-1").dataset.role).toBe("audience");
     fireEvent.click(screen.getByText("Start presenting"));
@@ -40,14 +40,14 @@ describe("ScreenPicker", () => {
   });
 
   it("only says what a screen is called and how big it is", () => {
-    render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} />);
+    render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} onWindows={() => {}} />);
     expect(screen.getByTestId("screen-0").textContent).toBe("Built-in3024×1964");
     expect(screen.getByTestId("screen-1").textContent).toBe("Projector1920×1080");
   });
 
   it("has each role on one screen", () => {
     const threeScreens = [...screens, { ...screens[1], index: 2, name: "Side", x: 3432 } as Screen];
-    render(<ScreenPicker screens={threeScreens} onStart={() => {}} onCancel={() => {}} />);
+    render(<ScreenPicker screens={threeScreens} onStart={() => {}} onCancel={() => {}} onWindows={() => {}} />);
     fireEvent.click(screen.getByLabelText("Slides on Projector"));
     fireEvent.click(screen.getByLabelText("Presenter view on Side"));
     const pressed = screen.getAllByRole("button", { pressed: true }).map((b) => b.getAttribute("aria-label"));
@@ -56,7 +56,7 @@ describe("ScreenPicker", () => {
 
   it("takes the notes off a screen the slides are put on, for them to go on another", () => {
     const onStart = vi.fn();
-    render(<ScreenPicker screens={screens} onStart={onStart} onCancel={() => {}} />);
+    render(<ScreenPicker screens={screens} onStart={onStart} onCancel={() => {}} onWindows={() => {}} />);
     fireEvent.click(screen.getByLabelText("Slides on Built-in"));
     expect(screen.getByTestId("screen-0").dataset.role).toBe("audience");
     expect(screen.getByTestId("screen-1").dataset.role).toBe("");
@@ -67,7 +67,7 @@ describe("ScreenPicker", () => {
   });
 
   it("can't put the notes on the slides' screen", () => {
-    render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} />);
+    render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} onWindows={() => {}} />);
     const button = screen.getByLabelText("Presenter view on Projector") as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     fireEvent.click(button);
@@ -77,46 +77,73 @@ describe("ScreenPicker", () => {
 
   it("can go without a presenter view", () => {
     const onStart = vi.fn();
-    render(<ScreenPicker screens={screens} onStart={onStart} onCancel={() => {}} />);
+    render(<ScreenPicker screens={screens} onStart={onStart} onCancel={() => {}} onWindows={() => {}} />);
     fireEvent.click(screen.getByLabelText("No presenter view"));
     fireEvent.click(screen.getByText("Start presenting"));
     expect(onStart).toHaveBeenCalledWith({ audience: 1, presenter: null });
   });
 
+  it("can present in windows instead, for sharing the slides' window in a call", () => {
+    const onStart = vi.fn();
+    const onWindows = vi.fn();
+    render(<ScreenPicker screens={screens} onStart={onStart} onCancel={() => {}} onWindows={onWindows} />);
+    fireEvent.click(screen.getByRole("button", { name: /Present in windows/ }));
+    expect(onWindows).toHaveBeenCalled();
+    expect(onStart).not.toHaveBeenCalled();
+  });
+
   it("shows a screenshot of the screens that have one", () => {
     const shot = "data:image/png;base64,AAAA";
-    render(<ScreenPicker screens={screens} previews={[null, shot]} onStart={() => {}} onCancel={() => {}} />);
+    render(
+      <ScreenPicker
+        screens={screens}
+        previews={[null, shot]}
+        onStart={() => {}}
+        onCancel={() => {}}
+        onWindows={() => {}}
+      />,
+    );
     expect(screen.getByAltText("Projector now").getAttribute("src")).toBe(shot);
     expect(screen.queryByAltText("Built-in now")).toBeNull();
   });
 
   it("works without screenshots", () => {
-    render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} />);
+    render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={() => {}} onWindows={() => {}} />);
     expect(screen.queryByRole("img")).toBeNull();
     expect(screen.getByText("Built-in")).toBeTruthy();
   });
 
   it("shows a placeholder on every screen while the screenshots are taken", () => {
     const { rerender } = render(
-      <ScreenPicker screens={screens} previews={null} onStart={() => {}} onCancel={() => {}} />,
+      <ScreenPicker screens={screens} previews={null} onStart={() => {}} onCancel={() => {}} onWindows={() => {}} />,
     );
     expect(screen.getByLabelText("Taking a screenshot of Built-in")).toBeTruthy();
     expect(screen.getByLabelText("Taking a screenshot of Projector")).toBeTruthy();
-    rerender(<ScreenPicker screens={screens} previews={[null, "data:,"]} onStart={() => {}} onCancel={() => {}} />);
+    rerender(
+      <ScreenPicker
+        screens={screens}
+        previews={[null, "data:,"]}
+        onStart={() => {}}
+        onCancel={() => {}}
+        onWindows={() => {}}
+      />,
+    );
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.getByAltText("Projector now")).toBeTruthy();
   });
 
   it("can be used before the screenshots are there", () => {
     const onStart = vi.fn();
-    render(<ScreenPicker screens={screens} previews={null} onStart={onStart} onCancel={() => {}} />);
+    render(
+      <ScreenPicker screens={screens} previews={null} onStart={onStart} onCancel={() => {}} onWindows={() => {}} />,
+    );
     fireEvent.click(screen.getByText("Start presenting"));
     expect(onStart).toHaveBeenCalledWith({ audience: 1, presenter: 0 });
   });
 
   it("cancels with Escape", () => {
     const onCancel = vi.fn();
-    render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={onCancel} />);
+    render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={onCancel} onWindows={() => {}} />);
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onCancel).toHaveBeenCalled();
   });

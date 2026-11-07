@@ -1306,6 +1306,53 @@ describe("Presenter on several screens", () => {
   });
 });
 
+describe("Presenter in windows", () => {
+  beforeEach(() => useApp.setState({ screens: "windows", error: null }));
+
+  it("opens the presenter view in a window and leaves the show's window as it is", async () => {
+    localStorage.setItem("slopslide.presenterPanel", "true");
+    const { unmount } = render(<Presenter />);
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledWith("present_in_windows");
+    expect(invoke).not.toHaveBeenCalledWith("present_on", expect.anything());
+    expect(setFullscreen).not.toHaveBeenCalled();
+    // The notes are in their own window, not beside the slides being shared.
+    expect(screen.queryByRole("complementary")).toBeNull();
+    expect(emit).toHaveBeenCalledWith("presenter:state", expect.objectContaining({ slide: "outro" }));
+    unmount();
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledWith("close_presenter_view");
+    expect(setFullscreen).not.toHaveBeenCalled();
+  });
+
+  it("is driven and ended from the presenter view", async () => {
+    render(<Presenter />);
+    await act(async () => {});
+    const post = vi.spyOn(frame().contentWindow as Window, "postMessage");
+    listeners.get("presenter:key")?.({ payload: "ArrowRight" });
+    expect(post).toHaveBeenCalledWith({ type: "slop:go", key: "ArrowRight" }, "*");
+    act(() => listeners.get("presenter:exit")?.({ payload: null }));
+    expect(useApp.getState().presenting).toBe(false);
+  });
+
+  it("opens the presenter view once under StrictMode's double-mounted effects", async () => {
+    render(
+      <StrictMode>
+        <Presenter />
+      </StrictMode>,
+    );
+    await act(async () => {});
+    expect(invoke.mock.calls.map(([name]) => name)).toEqual(["present_in_windows"]);
+  });
+
+  it("says so when the presenter view can't be opened", async () => {
+    invoke.mockRejectedValueOnce("cannot open the presenter view: no");
+    render(<Presenter />);
+    await act(async () => {});
+    expect(useApp.getState().error).toContain("cannot open the presenter view");
+  });
+});
+
 describe("PresenterWindow", () => {
   it("asks for the show and displays the slide, notes and next slide it is sent", async () => {
     render(<PresenterWindow />);

@@ -6,6 +6,18 @@ export interface ScreenChoice {
   presenter: number | null;
 }
 
+/**
+ * Where the show goes: on screens picked for it, or in windows (the slides in the app window as
+ * it is, the presenter view in a window of its own) for sharing the slides' window in a call.
+ */
+export type Placement = ScreenChoice | "windows";
+
+/** Whether the presenter view has a window of its own, rather than a panel beside the slides. */
+export function hasPresenterWindow(placement: Placement | null): boolean {
+  if (placement === "windows") return true;
+  return placement?.presenter != null;
+}
+
 /** A screen drawn to scale in a box: percentages of the arrangement's bounding box. */
 export interface ScreenBox {
   screen: Screen;

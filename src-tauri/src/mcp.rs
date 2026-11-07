@@ -2,7 +2,7 @@
 //! request in the current workspace session for the app to show a file, and render_slide
 //! asks the app, the same way, for images of slides (see render.rs). set_narration_audio
 //! makes an audio file the narration of a slide and times its words, and
-//! generate_narration_audio has the app's voice model say slides' narration scripts.
+//! generate_narration_audio has the deck's voice say slides' narration scripts.
 //! Started as `slopslide --lint-mcp [workspace root]`.
 
 use std::io::{BufRead, Write};
@@ -213,14 +213,16 @@ pub fn handle(
             }, "required": ["slide"] }
         }, {
             "name": GENERATE_TOOL,
-            "description": format!("Generate narration audio: the app's local voice model reads \
+            "description": format!("Generate narration audio: the deck's voice (the app's local \
+                voice model, or the hosted service its narration provider meta names) reads \
                 out the narration script (<aside class=\"narration\">) of one slide, of the \
                 slides listed, or of every slide when `slides` is left out, in the deck's voice \
                 and language. Only slides whose audio is missing or out of date (script, voice \
                 or language changed) are said again; the user's own recordings, audio set with \
                 {NARRATION_TOOL}, locked slides and slides without a script are left alone. It \
                 takes a while (seconds per sentence), so ask for the slides you changed rather \
-                than all of them. The voice model must be downloaded (Narration panel). Then call \
+                than all of them. The local voice model must be downloaded, or the service's API key \
+                entered, in the Narration panel. Then call \
                 {TIMELINE_TOOL} for when its words fall on the slides."),
             "inputSchema": { "type": "object", "properties": {
                 "path": {

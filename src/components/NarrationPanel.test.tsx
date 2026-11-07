@@ -26,9 +26,34 @@ const SPEECH: SpeechStatus = {
   modelBytes: 2_498_383_610,
   downloading: false,
   rendering: null,
-  voices: [
-    { id: "ryan", name: "Ryan", description: "Dynamic male voice", native: "en" },
-    { id: "sohee", name: "Sohee", description: "Warm female voice", native: "ko" },
+  providers: [
+    {
+      id: "local",
+      name: "Local voice model",
+      needsKey: false,
+      key: null,
+      voices: [
+        { id: "ryan", name: "Ryan", description: "Dynamic male voice", native: "en" },
+        { id: "sohee", name: "Sohee", description: "Warm female voice", native: "ko" },
+      ],
+    },
+    {
+      id: "elevenlabs",
+      name: "ElevenLabs",
+      needsKey: true,
+      key: null,
+      voices: [{ id: "JBFqnCBsd6RMkjVDRZzb", name: "George", description: "Warm British male narrator" }],
+    },
+    {
+      id: "openai",
+      name: "OpenAI",
+      needsKey: true,
+      key: null,
+      voices: [
+        { id: "marin", name: "Marin", description: "Natural, clear voice" },
+        { id: "coral", name: "Coral", description: "Warm, friendly voice" },
+      ],
+    },
   ],
   languages: [
     { id: "en", name: "English" },
@@ -52,7 +77,15 @@ beforeEach(() => {
   vi.useFakeTimers();
   setNarration.mockClear();
   invoke.mockReset();
-  useNarration.setState({ speech: null, audio: {}, audioDeck: null, render: null, download: null, timing: null });
+  useNarration.setState({
+    speech: null,
+    accountVoices: {},
+    audio: {},
+    audioDeck: null,
+    render: null,
+    download: null,
+    timing: null,
+  });
   useApp.setState({ deck: deckWith({ intro: "Welcome, everyone." }), selected: "intro", setNarration });
 });
 
@@ -166,6 +199,85 @@ describe("NarrationPanel speech", () => {
     fireEvent.change(language, { target: { value: "en" } });
     expect(setNarrationVoice).toHaveBeenCalledWith("ryan");
     expect(setNarrationLanguage).toHaveBeenCalledWith("en");
+  });
+
+  /** SPEECH with the hosted provider `id`'s key coming from `key`. */
+  function withKey(id: string, key: "saved" | "environment" | null): SpeechStatus {
+    return { ...SPEECH, providers: SPEECH.providers.map((p) => (p.id === id ? { ...p, key } : p)) };
+  }
+
+  it("picks who says the narration", async () => {
+    backend(SPEECH);
+    const setNarrationProvider = vi.fn(async () => {});
+    useApp.setState({ setNarrationProvider });
+    await show();
+    const provider = screen.getByRole("combobox", { name: "Narration provider" }) as HTMLSelectElement;
+    expect(provider.value).toBe("local");
+    expect([...provider.options].map((o) => o.text)).toEqual(["Local voice model", "ElevenLabs", "OpenAI"]);
+    fireEvent.change(provider, { target: { value: "openai" } });
+    expect(setNarrationProvider).toHaveBeenCalledWith("openai");
+  });
+
+  it("offers a hosted provider's voices and asks for its API key before speaking", async () => {
+    backend(SPEECH, { set_speech_key: withKey("openai", "saved") });
+    useApp.setState({
+      deck: { ...deckWith({ intro: "Hi." }), narration: { provider: "openai", voice: "coral", language: "en" } },
+    });
+    await show();
+    const voice = screen.getByRole("combobox", { name: "Narration voice" }) as HTMLSelectElement;
+    expect(voice.value).toBe("coral");
+    expect([...voice.options].map((o) => o.value)).toEqual(["marin", "coral"]);
+    // No local model download for a hosted provider.
+    expect(screen.queryByRole("button", { name: /Download voice model/ })).toBeNull();
+    const generate = screen.getByRole("button", { name: /Generate/ }) as HTMLButtonElement;
+    expect(generate.disabled).toBe(true);
+    expect(generate.title).toBe("Add your OpenAI API key first");
+    const key = screen.getByLabelText("OpenAI API key") as HTMLInputElement;
+    expect(key.type).toBe("password");
+    const save = screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    fireEvent.change(key, { target: { value: "sk-test" } });
+    await act(async () => fireEvent.click(save));
+    expect(invoke).toHaveBeenCalledWith("set_speech_key", { provider: "openai", key: "sk-test" });
+    expect(screen.getByText("OpenAI API key saved")).toBeTruthy();
+    expect((screen.getByRole("button", { name: /Generate/ }) as HTMLButtonElement).disabled).toBe(false);
+    backend(SPEECH, { set_speech_key: SPEECH });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Remove/ })));
+    expect(invoke).toHaveBeenCalledWith("set_speech_key", { provider: "openai", key: null });
+    expect(screen.getByLabelText("OpenAI API key")).toBeTruthy();
+  });
+
+  it("uses a key from the environment", async () => {
+    backend(withKey("openai", "environment"));
+    useApp.setState({
+      deck: { ...deckWith({ intro: "Hi." }), narration: { provider: "openai", voice: "marin", language: "en" } },
+    });
+    await show();
+    expect(screen.getByText(/OPENAI_API_KEY from your environment/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: /Generate/ }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("lists the voices of the ElevenLabs account, keeping the deck's own voice pickable", async () => {
+    const account = [
+      { id: "JBFqnCBsd6RMkjVDRZzb", name: "George", description: "male, british" },
+      { id: "abcdefghij1234567890", name: "Me", description: "Your voice" },
+    ];
+    backend(withKey("elevenlabs", "saved"), { speech_voices: account });
+    useApp.setState({
+      deck: {
+        ...deckWith({ intro: "Hi." }),
+        narration: { provider: "elevenlabs", voice: "zzzzzzzzzzzzzzzzzzzz", language: "en" },
+      },
+    });
+    await show();
+    expect(invoke).toHaveBeenCalledWith("speech_voices", { provider: "elevenlabs" });
+    const voice = screen.getByRole("combobox", { name: "Narration voice" }) as HTMLSelectElement;
+    expect(voice.value).toBe("zzzzzzzzzzzzzzzzzzzz");
+    expect([...voice.options].map((o) => o.text)).toEqual([
+      "zzzzzzzzzzzzzzzzzzzz",
+      "George — male, british",
+      "Me — Your voice",
+    ]);
   });
 
   it("offers to download the voice model, showing its progress", async () => {

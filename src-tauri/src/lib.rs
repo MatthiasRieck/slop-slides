@@ -172,6 +172,13 @@ fn present_on(
     screens::present(&app, &window, audience, presenter)
 }
 
+/// Opens the presenter view in a window of its own beside the show, which stays where it is.
+/// Off the main thread, which building a window from a command needs on Windows.
+#[tauri::command(async)]
+fn present_in_windows(app: AppHandle) -> Result<()> {
+    screens::present_in_windows(&app)
+}
+
 /// Closes the presenter view window when the show ends.
 #[tauri::command]
 fn close_presenter_view(app: AppHandle) {
@@ -941,6 +948,12 @@ async fn permission_modes(
     }
 }
 
+/// Changes the permission mode of the turn running in workspace `id`, if any.
+#[tauri::command]
+fn set_permission_mode(agent: State<AgentManager>, id: String, mode: permissions::PermissionMode) {
+    agent.set_permission_mode(&id, mode);
+}
+
 #[tauri::command]
 fn respond_approval(
     agent: State<AgentManager>,
@@ -954,6 +967,18 @@ fn respond_approval(
 #[tauri::command]
 fn interrupt_agent(agent: State<AgentManager>, id: String) {
     agent.interrupt(&id);
+}
+
+/// Sends `prompt` into the workspace's running turn; false when it did not get in (no turn
+/// is running, or it is ending), and the frontend runs it as the next turn instead.
+#[tauri::command]
+async fn steer_agent(
+    agent: State<'_, AgentManager>,
+    workspace: String,
+    prompt: String,
+    message: Option<String>,
+) -> Result<bool> {
+    Ok(agent.steer(&workspace, &prompt, message.as_deref()).await)
 }
 
 #[tauri::command]
@@ -1162,6 +1187,45 @@ fn set_narration_voice(id: String, voice: String) -> Result<Deck> {
 }
 
 #[tauri::command]
+fn set_narration_provider(id: String, provider: String) -> Result<Deck> {
+    changing(
+        &id,
+        Change::new(Source::Narration, "Change narration provider"),
+        |file| deck::set_narration_provider(file, &provider),
+    )
+}
+
+/// Saves the API key of a hosted narration provider in `~/.slopslides`, or forgets it for
+/// None; returns what narration can do now.
+#[tauri::command]
+fn set_speech_key(
+    narration: State<narration::Narration>,
+    provider: String,
+    key: Option<String>,
+) -> Result<narration::SpeechStatus> {
+    let provider = narration::Provider::parse(&provider)
+        .ok_or_else(|| error::Error::msg(format!("unknown narration provider: {provider}")))?;
+    let home = deck::app_home()?;
+    narration::cloud::set_key(&home, provider, key.as_deref())?;
+    Ok(narration.status(&home))
+}
+
+/// Every voice the provider's account can use: for ElevenLabs, its premade voices and the
+/// account's own; for the others, their built-in ones.
+#[tauri::command]
+async fn speech_voices(provider: String) -> Result<Vec<narration::cloud::VoiceOption>> {
+    let provider = narration::Provider::parse(&provider)
+        .ok_or_else(|| error::Error::msg(format!("unknown narration provider: {provider}")))?;
+    let home = deck::app_home()?;
+    match (provider, narration::cloud::key(&home, provider)) {
+        (narration::Provider::ElevenLabs, Some((key, _))) => {
+            narration::cloud::elevenlabs_voices(&key).await
+        }
+        _ => Ok(provider.voices().iter().map(Into::into).collect()),
+    }
+}
+
+#[tauri::command]
 fn set_narration_language(id: String, language: String) -> Result<Deck> {
     changing(
         &id,
@@ -1240,6 +1304,7 @@ pub fn run() {
             screen_previews,
             present_on,
             close_presenter_view,
+            present_in_windows,
             take_pending_folder,
             open_workspace,
             close_workspace,
@@ -1312,8 +1377,10 @@ pub fn run() {
             select_chat_thread,
             send_message,
             interrupt_agent,
+            steer_agent,
             permission_modes,
             respond_approval,
+            set_permission_mode,
             agent_running,
             list_providers,
             list_templates,
@@ -1341,6 +1408,9 @@ pub fn run() {
             time_narration,
             narration_words,
             set_narration_voice,
+            set_narration_provider,
+            set_speech_key,
+            speech_voices,
             set_narration_language,
         ])
         .build(context)

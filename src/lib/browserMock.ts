@@ -109,6 +109,7 @@ export function installBrowserMock() {
         case "copy_slide":
         case "new_window":
         case "present_on":
+        case "present_in_windows":
         case "close_presenter_view":
           return null;
         case "list_screens":
@@ -141,7 +142,17 @@ export function installBrowserMock() {
             modelBytes: 2_498_383_610,
             downloading: false,
             rendering: null,
-            voices: [{ id: "ryan", name: "Ryan", description: "Dynamic male voice", native: "en" }],
+            providers: [
+              {
+                id: "local",
+                name: "Local voice model",
+                needsKey: false,
+                key: null,
+                voices: [{ id: "ryan", name: "Ryan", description: "Dynamic male voice", native: "en" }],
+              },
+              { id: "elevenlabs", name: "ElevenLabs", needsKey: true, key: null, voices: [] },
+              { id: "openai", name: "OpenAI", needsKey: true, key: null, voices: [] },
+            ],
             languages: [{ id: "en", name: "English" }],
           };
         case "narration_audio":

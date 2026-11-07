@@ -10,7 +10,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, watch};
 
-use crate::agent::{AgentEvent, Outcome, SYSTEM_PROMPT};
+use crate::agent::{AgentEvent, Outcome, Steers, SYSTEM_PROMPT};
 use crate::error::{Error, Result};
 use crate::extensions::{self, Extensions};
 use crate::permissions::{Answer, Approval, Approvals, Choices, Decision, PermissionMode, Run};
@@ -241,6 +241,7 @@ pub struct TurnArgs<'a> {
 pub async fn run_turn(
     args: TurnArgs<'_>,
     cancel: &mut watch::Receiver<bool>,
+    steers: &mut Steers,
     emit: &(dyn Fn(&AgentEvent) + Sync),
     on_session: &(dyn Fn(&str) -> Result<()> + Sync),
 ) -> Result<Outcome> {
@@ -276,7 +277,7 @@ pub async fn run_turn(
             }
             Ok(Outcome::Interrupted)
         },
-        result = connected_turn(&mut server, &args, &run, &mut answers, emit, on_session) => result,
+        result = connected_turn(&mut server, &args, &run, &mut answers, steers, emit, on_session) => result,
     }
     // Server's kill_on_drop closes the transport, including any pending approvals.
 }
@@ -286,6 +287,7 @@ async fn connected_turn(
     args: &TurnArgs<'_>,
     run: &Run,
     answers: &mut mpsc::UnboundedReceiver<Answer>,
+    steers: &mut Steers,
     emit: &(dyn Fn(&AgentEvent) + Sync),
     on_session: &(dyn Fn(&str) -> Result<()> + Sync),
 ) -> Result<Outcome> {
@@ -369,6 +371,17 @@ async fn connected_turn(
                 emit(&AgentEvent::ApprovalResolved { id: answer.id });
                 continue;
             }
+            Some(steer) = steers.recv() => {
+                // Fails once the turn is over: the message then starts the next turn.
+                let steered = server
+                    .request("turn/steer", steer_params(&thread, &turn, &steer.prompt))
+                    .await;
+                match steered {
+                    Ok(_) => steer.delivered(emit),
+                    Err(_) => steer.refused(),
+                }
+                continue;
+            }
             message = server.next() => message?,
         };
         let method = message["method"].as_str().unwrap_or_default();
@@ -434,6 +447,15 @@ async fn connected_turn(
             return Ok(Outcome::Done);
         }
     }
+}
+
+/// Adds `prompt` to turn `turn` while it runs; Codex refuses it once that turn is over.
+fn steer_params(thread: &str, turn: &str, prompt: &str) -> Value {
+    json!({
+        "threadId": thread,
+        "expectedTurnId": turn,
+        "input": [{"type": "text", "text": prompt}],
+    })
 }
 
 fn missing_thread(message: &str) -> bool {

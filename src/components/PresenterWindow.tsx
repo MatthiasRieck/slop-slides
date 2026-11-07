@@ -9,7 +9,7 @@ import { PresenterPanel } from "./PresenterPanel";
  * The window the presenter view opens in, on the presenter's own screen (see
  * src-tauri/src/screens.rs). It holds no workspace: the show window sends it the deck and the
  * slide on screen, and it sends back the keys pressed here, so the show can be driven from it.
- * Escape ends the show.
+ * Escape ends the show, as closing the window does (the backend tells the show).
  */
 export function PresenterWindow() {
   const [state, setState] = useState<PresenterState | null>(null);

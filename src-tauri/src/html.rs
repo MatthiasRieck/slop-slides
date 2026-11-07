@@ -1255,6 +1255,21 @@ pub const NARRATION_VOICE_META: &str = "slopslide-narration-voice";
 /// [`crate::narration::LANGUAGES`]).
 pub const NARRATION_LANGUAGE_META: &str = "slopslide-narration-language";
 
+/// The app setting naming who says the deck's narration (see
+/// [`crate::narration::cloud::PROVIDERS`]); the local model without one.
+pub const NARRATION_PROVIDER_META: &str = "slopslide-narration-provider";
+
+/// The provider the deck's `<meta>` names for its narration, if any.
+pub fn narration_provider(html: &str) -> Option<String> {
+    app_meta_content(html, NARRATION_PROVIDER_META)
+}
+
+/// Names the narration's provider in the deck's `<meta>` (right after `<title>`), or removes
+/// it for None.
+pub fn set_narration_provider(html: &str, provider: Option<&str>) -> String {
+    set_app_meta(html, NARRATION_PROVIDER_META, provider)
+}
+
 /// The voice the deck's `<meta>` names for its narration, if any.
 pub fn narration_voice(html: &str) -> Option<String> {
     app_meta_content(html, NARRATION_VOICE_META)

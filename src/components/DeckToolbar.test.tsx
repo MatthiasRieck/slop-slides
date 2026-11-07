@@ -100,6 +100,30 @@ describe("deck actions", () => {
     expect(useApp.getState().screens).toEqual({ audience: 1, presenter: 0 });
   });
 
+  it("presents in windows from the menu beside Present, even on one screen", async () => {
+    render(<DeckActions />);
+    fireEvent.click(screen.getByRole("button", { name: "More ways to present" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Present in windows/ }));
+    expect(useApp.getState().presenting).toBe(true);
+    expect(useApp.getState().screens).toBe("windows");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith("list_screens");
+  });
+
+  it("presents in windows from the screen picker", async () => {
+    const attached = [
+      { index: 0, name: "A", x: 0, y: 0, width: 100, height: 100, pixelWidth: 100, pixelHeight: 100, primary: true },
+      { index: 1, name: "B", x: 100, y: 0, width: 100, height: 100, pixelWidth: 100, pixelHeight: 100, primary: false },
+    ];
+    invoke.mockImplementation(async (name: string) => (name === "list_screens" ? attached : []));
+    render(<DeckActions />);
+    await act(async () => fireEvent.click(presentButton()));
+    fireEvent.click(screen.getByRole("button", { name: /Present in windows/ }));
+    expect(useApp.getState().presenting).toBe(true);
+    expect(useApp.getState().screens).toBe("windows");
+    expect(screen.queryByText("Start presenting")).toBeNull();
+  });
+
   describe("screenshots in the picker", () => {
     const attached = [
       { index: 0, name: "A", x: 0, y: 0, width: 100, height: 100, pixelWidth: 100, pixelHeight: 100, primary: true },
@@ -480,7 +504,14 @@ describe("video export", () => {
     });
     invoke.mockImplementation(async (command: string) =>
       command === "speech_status"
-        ? { ...speech, modelBytes: 1, downloading: false, rendering: null, voices: [], languages: [] }
+        ? {
+            ...speech,
+            modelBytes: 1,
+            downloading: false,
+            rendering: null,
+            providers: [{ id: "local", name: "Local voice model", needsKey: false, key: null, voices: [] }],
+            languages: [],
+          }
         : undefined,
     );
     useNarration.setState({
@@ -522,7 +553,7 @@ describe("video export", () => {
             modelBytes: 1,
             downloading: false,
             rendering: null,
-            voices: [],
+            providers: [{ id: "local", name: "Local voice model", needsKey: false, key: null, voices: [] }],
             languages: [],
           }
         : undefined,

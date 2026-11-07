@@ -115,6 +115,10 @@ impl Server {
     }
 }
 
+/// How long Codex lets a tool of the app's MCP server run; generating narration audio for a
+/// whole deck takes minutes, far past Codex's 60-second default.
+const MCP_TOOL_TIMEOUT_SECS: u32 = 3600;
+
 /// `-c` overrides that add the app's MCP server, its tools approved up front.
 fn mcp_config_args(exe: &Path, dir: &Path) -> Vec<String> {
     let server = mcp::SERVER;
@@ -124,6 +128,7 @@ fn mcp_config_args(exe: &Path, dir: &Path) -> Vec<String> {
         format!("mcp_servers.{server}.command={command}"),
         format!("mcp_servers.{server}.args={args}"),
         format!("mcp_servers.{server}.default_tools_approval_mode=\"approve\""),
+        format!("mcp_servers.{server}.tool_timeout_sec={MCP_TOOL_TIMEOUT_SECS}"),
     ]
     .into_iter()
     .flat_map(|value| ["-c".to_string(), value])

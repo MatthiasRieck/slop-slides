@@ -8,7 +8,7 @@ listen.mockImplementation(async (event: string, handler: (event: { payload: unkn
   return () => {};
 });
 
-import { initNarrationEvents, NARRATION_CANCELLED, useNarration } from "./narrationStore";
+import { initNarrationEvents, NARRATION_CANCELLED, touchesNarration, useNarration } from "./narrationStore";
 import { useApp } from "./store";
 import { DECK_HTML, deckFor } from "./test/fixtures";
 
@@ -28,6 +28,28 @@ describe("narration store", () => {
     expect(invoke).toHaveBeenCalledWith("narration_audio", { id: deck.id });
     expect(useNarration.getState().audioDeck).toBe(deck.id);
     expect(useNarration.getState().audio.intro?.seconds).toBe(3);
+  });
+
+  it("reads the audio again when its files change outside the app", async () => {
+    await initNarrationEvents();
+    invoke.mockResolvedValue([]);
+    await act(async () =>
+      useApp.setState({ deck, openedFile: { path: "talks/deck.html", absolute: deck.id, kind: "deck" } }),
+    );
+    invoke.mockClear();
+    invoke.mockResolvedValue([{ slide: "intro", state: "ready", seconds: 4, recorded: true, timed: true }]);
+    await act(async () => useApp.setState({ workspaceChange: { paths: ["talks/notes.md"], rev: 1 } }));
+    expect(invoke).not.toHaveBeenCalled();
+    await act(async () => useApp.setState({ workspaceChange: { paths: ["talks/narration/manifest.json"], rev: 2 } }));
+    expect(invoke).toHaveBeenCalledWith("narration_audio", { id: deck.id });
+    expect(useNarration.getState().audio.intro?.timed).toBe(true);
+  });
+
+  it("knows which changed files are a deck's narration audio", () => {
+    expect(touchesNarration(["narration/intro.wav"], "deck.html")).toBe(true);
+    expect(touchesNarration(["talks/narration/q3/intro.wav"], "talks/q3.html")).toBe(true);
+    expect(touchesNarration(["other/narration/intro.wav"], "talks/deck.html")).toBe(false);
+    expect(touchesNarration(["narration.md", "deck.html"], "deck.html")).toBe(false);
   });
 
   it("follows renders as they go, from any window", async () => {

@@ -319,6 +319,22 @@ describe("NarrationPanel speech", () => {
       expect(screen.getByRole("button", { name: "Generate" })).toBeTruthy();
     });
 
+    it("shows audio brought in from elsewhere as such, to remove", async () => {
+      vi.mocked(ask).mockResolvedValue(true);
+      const imported = { ...recording, imported: true, timed: true, seconds: 185 };
+      useApp.setState({ deck: deckWith({}), selected: "intro" });
+      useNarration.setState({ audioDeck: deckFor(DECK_HTML).id, audio: { intro: imported } });
+      invoke.mockImplementation(async (name: string) =>
+        name === "delete_recorded_narration" ? [{ slide: "intro", state: "none", seconds: null }] : SPEECH,
+      );
+      await act(async () => void render(<NarrationPanel />));
+      expect(screen.getByText("Imported audio 3:05, words timed")).toBeTruthy();
+      expect(screen.queryByText(/Your recording/)).toBeNull();
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Remove audio" })));
+      expect(vi.mocked(ask).mock.lastCall?.[1]).toMatchObject({ title: "Remove audio", okLabel: "Remove" });
+      expect(invoke).toHaveBeenCalledWith("delete_recorded_narration", { id: deckFor(DECK_HTML).id, slide: "intro" });
+    });
+
     it("keeps the recording unless the deletion is confirmed", async () => {
       vi.mocked(ask).mockResolvedValue(false);
       useNarration.setState({ audioDeck: deckFor(DECK_HTML).id, audio: { intro: recording } });

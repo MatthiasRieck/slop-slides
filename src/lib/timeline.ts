@@ -50,15 +50,22 @@ export function layoutTimeline(
   const clips: TimelineClip[] = [];
   let shown = 0;
   let voice = 0;
+  // Where the slides so far end, unrounded: a pinned length ends its slide on the frame nearest
+  // that, so rounding to frames never adds up over slides at any frame rate.
+  let exact = 0;
   for (const slide of slides) {
     const narration = options.narration ? (spoken[slide.id] ?? null) : null;
     const duration = options.narration ? (slide.duration ?? null) : null;
     const narrationStart = options.narration ? (slide.narrationStart ?? null) : null;
     const offset = narrationStart ?? options.pauseBefore;
-    const frames =
-      duration !== null
-        ? Math.max(1, Math.round(duration * fps))
-        : slideFrames({ ...options, pauseBefore: Math.max(0, offset) }, narration);
+    let frames: number;
+    if (duration !== null) {
+      exact += duration;
+      frames = Math.max(1, Math.round(exact * fps) - shown);
+    } else {
+      frames = slideFrames({ ...options, pauseBefore: Math.max(0, offset) }, narration);
+      exact = (shown + frames) / fps;
+    }
     const start = shown / fps;
     if (narration !== null) {
       const from = Math.max(start + offset, voice);

@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { api, type Deck, errorMessage } from "../lib/api";
 import { zoomBox } from "../lib/ink";
-import { layoutTimeline } from "../lib/timeline";
+import { onSlideClock, postSlideClock, setSlideClock } from "../lib/slideClock";
+import { layoutTimeline, slideAt } from "../lib/timeline";
 import { playTimeline } from "../lib/timelinePlayback";
 import { cn, fileUrl } from "../lib/utils";
 import { loadVideoOptions } from "../lib/video";
@@ -135,6 +136,8 @@ export function Presenter() {
   const separate = useApp((s) => s.screens?.presenter != null);
   usePresenterFeed(separate ? deck : null, current ?? startRef.current, go);
   const autoplay = useAutoplay(deck, current, () => go("ArrowRight"));
+  // While it plays, the slide's animations keep with the narration.
+  useEffect(() => onSlideClock(() => postSlideClock(frameRef.current, null)), []);
 
   if (!deck) return null;
   const hash = startRef.current ? `#${encodeURIComponent(startRef.current)}` : "";
@@ -280,8 +283,9 @@ function usePresenterFeed(deck: Deck | null, slide: string | null, go: (key: str
  * Runs the show by itself while playing, on the video export's timeline (see `layoutTimeline`):
  * each slide shows for its time, then `next` moves on, and narration (up-to-date audio only,
  * from the Narration tab) plays at its time, carrying on across slides when it runs over.
- * Pausing stops the narration; playing again starts over from the start of the slide. Moving to
- * another slide meanwhile goes on from there. The show stops playing after the last slide.
+ * Pausing stops the narration; playing again starts over from the start of the slide, its timed
+ * animations too, so they keep with its narration (see `setSlideClock`). Moving to another slide
+ * meanwhile goes on from there. The show stops playing after the last slide.
  */
 export function useAutoplay(deck: Deck | null, current: string | null, next: () => void) {
   const [playing, setPlaying] = useState(false);
@@ -312,14 +316,26 @@ export function useAutoplay(deck: Deck | null, current: string | null, next: () 
     const start = timeline.slides.find((s) => s.id === slide)?.start;
     // A hidden slide has no place on the timeline.
     if (start === undefined) return void nextRef.current();
-    return playTimeline(deck.id, timeline, start, {
+    const stop = playTimeline(deck.id, timeline, start, {
       slide: (index) => {
         onTimeline.current = timeline.slides[index]?.id ?? null;
         nextRef.current();
       },
       ended: () => setPlaying(false),
+      // From the start of the slide on screen: its animations start over with its narration.
+      tick: (time) => {
+        const shown = timeline.slides[slideAt(timeline, time)];
+        if (shown) setSlideClock({ slide: shown.id, at: time - shown.start });
+      },
     });
+    return () => {
+      stop();
+      // Paused, the slide's animations run on their own.
+      setSlideClock(null);
+    };
   }, [playing, deck, from]);
+  // Leaving the show lets the slides run on their own again.
+  useEffect(() => () => setSlideClock(null), []);
   return { playing, toggle: () => setPlaying((p) => !p) };
 }
 

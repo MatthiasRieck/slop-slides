@@ -11,6 +11,7 @@ import {
   type SpeechStatus,
   type VoiceDownloadProgress,
 } from "./lib/api";
+import { dirname } from "./lib/utils";
 import { useApp } from "./store";
 
 /** The backend's error for a render the user cancelled. */
@@ -141,6 +142,16 @@ export const useNarration = create<NarrationState>((set, get) => ({
   },
 }));
 
+/**
+ * Whether workspace-relative `paths` touch the narration audio of the deck at `deckPath`, as
+ * the agent's `set_narration_audio` tool does from outside the app.
+ */
+export function touchesNarration(paths: string[], deckPath: string): boolean {
+  const folder = dirname(deckPath);
+  const audio = folder ? `${folder}/narration/` : "narration/";
+  return paths.some((path) => path.startsWith(audio));
+}
+
 /** Keeps the narration state in step with backend events and the open deck. */
 export async function initNarrationEvents() {
   await listen<VoiceDownloadProgress>("speech-download", ({ payload }) => {
@@ -164,9 +175,17 @@ export async function initNarrationEvents() {
   });
   // A changed deck (a script, the voice or language) changes which audio is up to date.
   let last: Deck | null = null;
+  // Audio written outside the app, such as by the agent, changes it too.
+  let change = useApp.getState().workspaceChange;
   useApp.subscribe((state) => {
-    if (state.deck === last) return;
-    last = state.deck;
-    if (state.deck) void useNarration.getState().refreshAudio(state.deck.id);
+    const changed = state.workspaceChange !== change;
+    change = state.workspaceChange;
+    if (state.deck !== last) {
+      last = state.deck;
+      if (state.deck) void useNarration.getState().refreshAudio(state.deck.id);
+    } else if (changed && state.deck && state.openedFile && change) {
+      if (touchesNarration(change.paths, state.openedFile.path))
+        void useNarration.getState().refreshAudio(state.deck.id);
+    }
   });
 }

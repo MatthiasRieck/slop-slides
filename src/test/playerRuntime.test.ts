@@ -306,6 +306,121 @@ describe("player: in the presenter", () => {
     expect(p.active()).toBe(1);
   });
 
+  it("keeps the animations that began with the slide to the app's narration clock", () => {
+    // jsdom runs no animations: fake them, and the document's clock, as a browser has them.
+    const timeline = { currentTime: 1000 };
+    const fake = (target: Element, endTime: number, startTime: number | null, name: string | null = "rise") => ({
+      animationName: name,
+      effect: { target, getComputedTiming: () => ({ endTime }) },
+      currentTime: 0 as number | null,
+      startTime,
+      playState: "running",
+      play() {
+        this.playState = "running";
+      },
+      pause() {
+        this.playState = "paused";
+      },
+    });
+    let animations: ReturnType<typeof fake>[] = [];
+    const p = player({
+      at: "?embed&slide=intro",
+      parent: { postMessage: vi.fn() },
+      setup: (window) => {
+        Object.assign(window.document, { timeline, getAnimations: () => animations });
+      },
+    });
+    // The slide showed at 1000 ms on the document's clock.
+    const [intro, other] = [p.doc.getElementById("intro")!, p.doc.getElementById("end")!];
+    const word = fake(intro.querySelector("button")!, 5000, 1000);
+    const beat = fake(intro, Number.POSITIVE_INFINITY, 1010);
+    // A loop running since before the slide showed, carrying on across slides.
+    const loop = fake(intro, Number.POSITIVE_INFINITY, 0);
+    const still = fake(intro, 5000, null);
+    still.playState = "paused";
+    const elsewhere = fake(other, 5000, 1000);
+    const fade = fake(intro, 350, 1000, null);
+    animations = [word, beat, loop, still, elsewhere, fade];
+    const clock = (at: unknown, slide = "intro") =>
+      p.window.dispatchEvent(new p.window.MessageEvent("message", { data: { type: "slop:clock", slide, at } }));
+
+    clock(2.5);
+    expect([word.currentTime, word.playState]).toEqual([2500, "running"]);
+    expect(beat.currentTime).toBe(2500);
+    for (const left of [loop, elsewhere, fade]) expect(left.currentTime).toBe(0);
+    expect(still.playState).toBe("paused");
+    // Running, a small drift is left alone; a larger one is caught up, even once seeking moved
+    // its start.
+    word.currentTime = 2530;
+    word.startTime = 0;
+    clock(2.5);
+    expect(word.currentTime).toBe(2530);
+    clock(3.5);
+    expect(word.currentTime).toBe(3500);
+    // Past its end it rests on its last frame, and plays again from earlier on.
+    clock(9);
+    expect([word.currentTime, word.playState]).toEqual([5000, "paused"]);
+    expect(beat.playState).toBe("running");
+    clock(1);
+    expect([word.currentTime, word.playState]).toEqual([1000, "running"]);
+    // Nothing for another slide, or a time that is none.
+    clock(2, "end");
+    clock("later");
+    clock(-1);
+    expect(word.currentTime).toBe(1000);
+  });
+
+  it("counts animations that began within a frame of the slide showing as the slide's", () => {
+    const fake = (target: Element, startTime: number | null, endTime = 5000) => ({
+      animationName: "rise",
+      effect: { target, getComputedTiming: () => ({ endTime }) },
+      currentTime: 0 as number | null,
+      startTime,
+      playState: "running",
+      play() {
+        this.playState = "running";
+      },
+      pause() {
+        this.playState = "paused";
+      },
+    });
+    let animations: ReturnType<typeof fake>[] = [];
+    const clockOf = (timeline: object | undefined) => {
+      const p = player({
+        at: "?embed&slide=intro",
+        parent: { postMessage: vi.fn() },
+        setup: (window) => {
+          Object.assign(window.document, { timeline, getAnimations: () => animations });
+        },
+      });
+      return { p, intro: p.doc.getElementById("intro")! };
+    };
+
+    // The slide showed at 1000 ms: an animation 50 ms earlier is still its own, 51 ms is not.
+    let { p, intro } = clockOf({ currentTime: 1000 });
+    const edge = fake(intro, 950);
+    const before = fake(intro, 949);
+    // One with no length (reduced motion) rests at its end.
+    const none = fake(intro, 1000, 0);
+    animations = [edge, before, none];
+    p.window.dispatchEvent(
+      new p.window.MessageEvent("message", { data: { type: "slop:clock", slide: "intro", at: 2 } }),
+    );
+    expect(edge.currentTime).toBe(2000);
+    expect(before.currentTime).toBe(0);
+    expect([none.currentTime, none.playState]).toEqual([0, "paused"]);
+
+    // Without a document clock (WebKit before its first frame) every animation on the slide is
+    // its own.
+    ({ p, intro } = clockOf(undefined));
+    const early = fake(intro, 0);
+    animations = [early];
+    p.window.dispatchEvent(
+      new p.window.MessageEvent("message", { data: { type: "slop:clock", slide: "intro", at: 1.5 } }),
+    );
+    expect(early.currentTime).toBe(1500);
+  });
+
   it("ignores forwarded keys when not in the presenter", () => {
     const go = (p: ReturnType<typeof player>) =>
       p.window.dispatchEvent(new p.window.MessageEvent("message", { data: { type: "slop:go", key: "End" } }));

@@ -246,7 +246,10 @@ The composer shows a permissions picker for every agent. Each agent remembers it
   policy, and reviewer.
 
 SlopSlide's own MCP tools never ask in any mode. The selection is remembered locally and
-cannot change during a turn. It is reapplied when resuming a conversation and never modifies
+can change while the agent works: Claude Code and GitHub Copilot apply it to the requests that
+follow, and switching to Full access also allows the requests waiting in chat. Codex fixes its
+sandbox and approval policy when a turn starts, so it applies a change from the next message.
+It is reapplied when resuming a conversation and never modifies
 the agent's own configuration (`~/.codex/config.toml`, Claude Code settings). Codex modes
 unavailable in the installed CLI or disallowed by managed requirements are omitted; Codex
 remains responsible for enforcing the effective policy.

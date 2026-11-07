@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::agent::Provider;
 use crate::error::{Error, Result};
@@ -25,6 +25,15 @@ pub enum PermissionMode {
     FullAccess,
     /// Codex only: the user's own Codex configuration.
     Custom,
+}
+
+/// A running turn's permission mode, which the user may change while it runs.
+pub type LiveMode = watch::Receiver<PermissionMode>;
+
+/// A mode that never changes, for turns nobody steers.
+#[cfg(test)]
+pub fn fixed_mode(mode: PermissionMode) -> LiveMode {
+    watch::channel(mode).1
 }
 
 /// The modes Claude Code and GitHub Copilot offer. Codex asks its configuration (see
@@ -190,6 +199,25 @@ impl Run {
         );
     }
 
+    /// Allows every request of this turn still waiting for the user, as granting Full access
+    /// mid-turn does. The answers arrive on the turn's receiver like the user's own.
+    pub fn accept_all(&self) {
+        let mut pending = self.approvals.0.lock().unwrap();
+        let ids: Vec<String> = pending
+            .iter()
+            .filter(|(_, p)| p.run_id == self.id && p.choices.contains_key("accept"))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ids {
+            let request = pending.remove(&id).expect("listed pending request");
+            let _ = request.sender.send(Answer {
+                payload: request.choices["accept"].clone(),
+                id,
+                wire_id: request.wire_id,
+            });
+        }
+    }
+
     /// The agent settled request `wire_id` itself; returns the approval it closed, if pending.
     pub fn resolved(&self, wire_id: &Value) -> Option<String> {
         let mut pending = self.approvals.0.lock().unwrap();
@@ -269,6 +297,49 @@ mod tests {
         assert_eq!(run.resolved(&json!("r1")), None);
         drop(run);
         assert!(approvals.is_empty());
+    }
+
+    #[test]
+    fn full_access_allows_the_turns_waiting_requests() {
+        let approvals = Arc::new(Approvals::default());
+        let (run, mut answers) = approvals.start("deck-1");
+        let (other, mut other_answers) = approvals.start("deck-2");
+        let (a, b, c) = (approval(), approval(), approval());
+        run.ask(
+            json!(1),
+            &a,
+            Choices::from([("accept", json!("yes")), ("decline", json!("no"))]),
+        );
+        // Nothing to accept with: left for the user.
+        run.ask(json!(2), &b, Choices::from([("decline", json!("no"))]));
+        other.ask(json!(3), &c, Choices::from([("accept", json!("yes"))]));
+        run.accept_all();
+        let answer = answers.try_recv().unwrap();
+        assert_eq!(
+            (answer.id, answer.wire_id, answer.payload),
+            (a.id.clone(), json!(1), json!("yes"))
+        );
+        assert!(answers.try_recv().is_err());
+        assert!(approvals
+            .respond("deck-1", &a.id, Decision::Accept)
+            .is_err());
+        approvals
+            .respond("deck-1", &b.id, Decision::Decline)
+            .unwrap();
+        assert!(
+            other_answers.try_recv().is_err(),
+            "another turn's requests wait"
+        );
+        approvals
+            .respond("deck-2", &c.id, Decision::Accept)
+            .unwrap();
+    }
+
+    #[test]
+    fn a_fixed_mode_keeps_its_value() {
+        let mode = fixed_mode(PermissionMode::FullAccess);
+        assert_eq!(*mode.borrow(), PermissionMode::FullAccess);
+        assert!(mode.has_changed().is_err(), "nobody can change it");
     }
 
     #[test]

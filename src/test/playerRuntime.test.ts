@@ -370,6 +370,57 @@ describe("player: in the presenter", () => {
     expect(word.currentTime).toBe(1000);
   });
 
+  it("counts animations that began within a frame of the slide showing as the slide's", () => {
+    const fake = (target: Element, startTime: number | null, endTime = 5000) => ({
+      animationName: "rise",
+      effect: { target, getComputedTiming: () => ({ endTime }) },
+      currentTime: 0 as number | null,
+      startTime,
+      playState: "running",
+      play() {
+        this.playState = "running";
+      },
+      pause() {
+        this.playState = "paused";
+      },
+    });
+    let animations: ReturnType<typeof fake>[] = [];
+    const clockOf = (timeline: object | undefined) => {
+      const p = player({
+        at: "?embed&slide=intro",
+        parent: { postMessage: vi.fn() },
+        setup: (window) => {
+          Object.assign(window.document, { timeline, getAnimations: () => animations });
+        },
+      });
+      return { p, intro: p.doc.getElementById("intro")! };
+    };
+
+    // The slide showed at 1000 ms: an animation 50 ms earlier is still its own, 51 ms is not.
+    let { p, intro } = clockOf({ currentTime: 1000 });
+    const edge = fake(intro, 950);
+    const before = fake(intro, 949);
+    // One with no length (reduced motion) rests at its end.
+    const none = fake(intro, 1000, 0);
+    animations = [edge, before, none];
+    p.window.dispatchEvent(
+      new p.window.MessageEvent("message", { data: { type: "slop:clock", slide: "intro", at: 2 } }),
+    );
+    expect(edge.currentTime).toBe(2000);
+    expect(before.currentTime).toBe(0);
+    expect([none.currentTime, none.playState]).toEqual([0, "paused"]);
+
+    // Without a document clock (WebKit before its first frame) every animation on the slide is
+    // its own.
+    ({ p, intro } = clockOf(undefined));
+    const early = fake(intro, 0);
+    animations = [early];
+    p.window.dispatchEvent(
+      new p.window.MessageEvent("message", { data: { type: "slop:clock", slide: "intro", at: 1.5 } }),
+    );
+    expect(early.currentTime).toBe(1500);
+  });
+
   it("ignores forwarded keys when not in the presenter", () => {
     const go = (p: ReturnType<typeof player>) =>
       p.window.dispatchEvent(new p.window.MessageEvent("message", { data: { type: "slop:go", key: "End" } }));

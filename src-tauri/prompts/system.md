@@ -207,7 +207,8 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   the workspace-relative `audio` file: it becomes the slide's audio, whatever its script
   says, starts as the slide shows, and the tool times its words. Audio longer than its slide
   plays on over the slides after it, so a song for several slides goes on the first of them
-  (it may be short) and the slides it plays over get no narration of their own.
+  (it may be short) and the slides it plays over get no narration of their own. It keeps a
+  slide the user recorded themselves; pass `replace: true` only once the user agreed.
 - To time anything to narration (an animation to a word, karaoke text, motion to the beat),
   call `narration_timeline` first: it gives when each slide shows and when each word is said,
   with its start and end, as seconds into the show and into the slide showing then, counting

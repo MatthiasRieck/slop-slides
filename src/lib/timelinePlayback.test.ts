@@ -94,6 +94,22 @@ describe("playTimeline", () => {
     expect(on.tick.mock.calls.length).toBe(calls);
   });
 
+  it("tells nothing more once it ended, though a tick was due as it ended", async () => {
+    // 1 s to play: the end and the tenth tick fall on the same moment.
+    const order: string[] = [];
+    const on = {
+      slide: vi.fn(),
+      ended: vi.fn(() => order.push("ended")),
+      tick: vi.fn((time: number) => order.push(`tick ${time.toFixed(1)}`)),
+    };
+    // Not stopped as it ends: the caller stops it only once it rendered again.
+    playTimeline("deck", timeline, 5, on);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(on.ended).toHaveBeenCalledOnce();
+    expect(order.at(-2)).toBe("tick 6.0");
+    expect(order.at(-1)).toBe("ended");
+  });
+
   it("skips clips that are over", async () => {
     playTimeline("deck", timeline, 3.5, events());
     await vi.advanceTimersByTimeAsync(0);

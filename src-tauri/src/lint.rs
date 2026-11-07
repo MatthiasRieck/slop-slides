@@ -1282,6 +1282,7 @@ const TIMED_DELAY: f64 = 1.0;
 /// it is timed to has long passed. A loop that runs whatever slide shows has no such delay.
 fn check_untimed_delays(l: &mut Linter) {
     let html = l.html;
+    let easings = easing_vars(html);
     let mut from = 0;
     while let Some(open) = find_ci(html, from, "<style") {
         let Some(start) = html[open..].find('>').map(|i| open + i + 1) else {
@@ -1292,7 +1293,7 @@ fn check_untimed_delays(l: &mut Linter) {
         if !in_markup(l, open) {
             continue;
         }
-        for (at, selector) in untimed_delays(&html[start..end]) {
+        for (at, selector) in untimed_delays(&html[start..end], &easings) {
             l.report(
                 "untimed-animation-delay",
                 Severity::Warning,
@@ -1307,14 +1308,14 @@ fn check_untimed_delays(l: &mut Linter) {
 }
 
 /// The rules of `css` (outside `@keyframes`) that delay an animation to time it without being
-/// under `.active`: where each starts, and its selector.
-fn untimed_delays(css: &str) -> Vec<(usize, &str)> {
+/// under `.active`: where each starts, and its selector. `easings` are custom properties that
+/// hold an easing, not a time.
+fn untimed_delays<'a>(css: &'a str, easings: &HashSet<&str>) -> Vec<(usize, &'a str)> {
     let mut found = Vec::new();
     let bytes = css.as_bytes();
     // Where the text since the last rule (a selector or an at-rule's prelude) starts.
     let mut head = 0;
-    // Depths of the blocks open: whether each is a rule's declarations.
-    let mut open: Vec<bool> = Vec::new();
+    // A rule's declarations are skipped whole, so the scan only ever is between rules here.
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
@@ -1322,11 +1323,11 @@ fn untimed_delays(css: &str) -> Vec<(usize, &str)> {
                 i = css[i + 2..]
                     .find("*/")
                     .map_or(bytes.len(), |e| i + 2 + e + 2);
-                if open.last() != Some(&true) {
-                    head = i;
-                }
+                head = i;
                 continue;
             }
+            // A statement at-rule (`@import url(…);`) ends before the next rule.
+            b';' => head = i + 1,
             b'{' => {
                 let prelude = css[head..i].trim();
                 if prelude.starts_with("@keyframes") || prelude.starts_with("@-webkit-keyframes") {
@@ -1347,14 +1348,13 @@ fn untimed_delays(css: &str) -> Vec<(usize, &str)> {
                     }
                     head = i + 1;
                 } else if prelude.starts_with('@') {
-                    open.push(false);
                     head = i + 1;
                 } else {
                     let body_end = css[i..].find('}').map_or(css.len(), |e| i + e);
                     let body = &css[i + 1..body_end];
                     let selector = &css[head..i];
                     let ungated = selector.split(',').any(|part| !part.contains(".active"));
-                    if ungated && delays_to_time(body) {
+                    if ungated && delays_to_time(body, easings) {
                         let lead = selector.len() - selector.trim_start().len();
                         found.push((head + lead, selector));
                     }
@@ -1362,10 +1362,7 @@ fn untimed_delays(css: &str) -> Vec<(usize, &str)> {
                     head = i + 1;
                 }
             }
-            b'}' => {
-                open.pop();
-                head = i + 1;
-            }
+            b'}' => head = i + 1,
             _ => {}
         }
         i += 1;
@@ -1375,8 +1372,13 @@ fn untimed_delays(css: &str) -> Vec<(usize, &str)> {
 
 /// Whether `declarations` delay an animation by [`TIMED_DELAY`] or more, or by a `var()` or
 /// `calc()` (as times set per element are): in `animation-delay`, or as the second time of the
-/// `animation` shorthand.
-fn delays_to_time(declarations: &str) -> bool {
+/// `animation` shorthand, where a `var()` of one of the `easings` is the easing, not a time.
+fn delays_to_time(declarations: &str, easings: &HashSet<&str>) -> bool {
+    let easing = |word: &str| {
+        word.strip_prefix("var(")
+            .and_then(|rest| rest.split([',', ')']).next())
+            .is_some_and(|name| easings.contains(name.trim()))
+    };
     let timed = |value: &str| {
         let value = value.trim();
         value.starts_with("var(")
@@ -1395,7 +1397,9 @@ fn delays_to_time(declarations: &str) -> bool {
                 let times: Vec<&str> = css_words(one)
                     .into_iter()
                     .filter(|w| {
-                        seconds(w).is_some() || w.starts_with("var(") || w.starts_with("calc(")
+                        seconds(w).is_some()
+                            || (w.starts_with("var(") && !easing(w))
+                            || w.starts_with("calc(")
                     })
                     .collect();
                 times.get(1).is_some_and(|delay| timed(delay))
@@ -1403,6 +1407,36 @@ fn delays_to_time(declarations: &str) -> bool {
             _ => false,
         }
     })
+}
+
+/// Custom properties `html` sets to an easing (`--spring: cubic-bezier(…)`), in its styles or
+/// inline: in the `animation` shorthand such a `var()` sits where a delay may, but is none.
+fn easing_vars(html: &str) -> HashSet<&str> {
+    let mut found = HashSet::new();
+    for (at, _) in html.match_indices("--") {
+        let rest = &html[at..];
+        let name_end = rest[2..]
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+            .map_or(rest.len(), |e| e + 2);
+        let Some(value) = rest[name_end..].trim_start().strip_prefix(':') else {
+            continue;
+        };
+        let value = value.trim_start().to_ascii_lowercase();
+        let easing = [
+            "cubic-bezier(",
+            "steps(",
+            "linear(",
+            "ease",
+            "step-start",
+            "step-end",
+        ]
+        .iter()
+        .any(|start| value.starts_with(start));
+        if easing && name_end > 2 {
+            found.insert(&rest[..name_end]);
+        }
+    }
+    found
 }
 
 /// The words of a CSS value, a function call with its arguments being one.
@@ -1461,16 +1495,24 @@ fn check_tilts(l: &mut Linter) {
         }
     }
     for (at, _) in html.match_indices("style=\"") {
-        let tag = html[..at].rfind('<').map_or("", |o| &html[o..at]);
         let value_end = html[at + 7..].find('"').map_or(html.len(), |e| at + 7 + e);
-        if tag.contains("data-moved") || !in_markup(l, at) {
+        // Nearly no style tilts, so the costlier checks below run only for one that does.
+        let tilts = steep_tilts(&html[at + 7..value_end]);
+        if tilts.is_empty() {
             continue;
         }
-        found.extend(
-            steep_tilts(&html[at + 7..value_end])
-                .into_iter()
-                .map(|(i, deg)| (at + 7 + i, deg)),
-        );
+        // The whole tag: the editor writes `data-moved` after the style it sets.
+        let tag_start = html[..at].rfind('<').unwrap_or(at);
+        let tag_end = html[value_end..]
+            .find('>')
+            .map_or(html.len(), |e| value_end + e);
+        let moved = html[tag_start..tag_end]
+            .split(|c: char| c.is_whitespace() || c == '=' || c == '"')
+            .any(|word| word == MOVED_ATTR);
+        if moved || !in_markup(l, at) {
+            continue;
+        }
+        found.extend(tilts.into_iter().map(|(i, deg)| (at + 7 + i, deg)));
     }
     for (at, degrees) in found {
         l.report(
@@ -2265,6 +2307,35 @@ mod tests {
         assert_eq!(with(".slide {}", inline), ["steep-3d-tilt"]);
         let moved = inline.replace("<div style", "<div data-moved style");
         assert!(!with(".slide {}", &moved).contains(&"steep-3d-tilt"));
+        // The editor writes the style first and marks the element after it.
+        let moved = inline.replace("60deg)\"", "60deg)\" data-moved=\"\"");
+        assert!(
+            !with(".slide {}", &moved).contains(&"steep-3d-tilt"),
+            "{moved}"
+        );
+        // Only the attribute itself counts, not a word in another one.
+        let named = inline.replace("<div style", "<div class=\"not-data-moved\" style");
+        assert_eq!(with(".slide {}", &named), ["steep-3d-tilt"]);
+    }
+
+    #[test]
+    fn tilt_lint_stays_fast_on_decks_with_many_inline_styles() {
+        // A big deck: thousands of inline styles, none tilted (lint runs on every change).
+        let body: String = (0..4000)
+            .map(|i| format!("<p style=\"translate: {i}px 0; color: #123\">Word {i}</p>\n"))
+            .collect();
+        let html = deck(&format!(
+            "<section class=\"slide\" id=\"a\">{body}</section>"
+        ));
+        let started = std::time::Instant::now();
+        let found = rules(&html);
+        assert!(!found.contains(&"steep-3d-tilt"), "{found:?}");
+        // Quadratic in the deck's size this took seconds in debug builds.
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
@@ -2282,6 +2353,8 @@ mod tests {
             ".a, .slide.active .b { animation: pop 1s 2s; }",
             "@media (min-width: 1px) { .word { animation-delay: 1500ms; } }",
             ".a { opacity: 0; } .word { animation: spin 2s linear infinite, pop 1s 4s both; }",
+            // A font import before the rule does not hide it.
+            "@import url(https://fonts.googleapis.com/css2?family=Inter); .word { animation-delay: 2s; }",
         ] {
             assert_eq!(with(untimed), ["untimed-animation-delay"], "{untimed}");
         }
@@ -2293,9 +2366,15 @@ mod tests {
             "@keyframes pop { 0% { opacity: 0; } 100% { opacity: 1; } } .x { color: red; }",
             "/* .word { animation-delay: 3s; } */ .x { color: red; }",
             ".x { transition: opacity 0.3s 2s; }",
+            // A var() holding an easing is no delay, set in the styles or inline.
+            ":root { --spring: cubic-bezier(.3, 1.4, .5, 1); } .badge { animation: pop .4s var(--spring) both; }",
+            ":root { --ease: ease-in-out; } .logo { animation: float 3s var(--ease) infinite; }",
         ] {
             assert!(with(fine).is_empty(), "{fine}: {:?}", with(fine));
         }
+        // A var() holding a time still delays, beside an easing one.
+        let both = ":root { --spring: cubic-bezier(.3, 1.4, .5, 1); --at: 2s; } .w { animation: pop .4s var(--spring) var(--at) both; }";
+        assert_eq!(with(both), ["untimed-animation-delay"], "{both}");
     }
 
     #[test]

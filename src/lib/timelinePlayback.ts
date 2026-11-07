@@ -45,8 +45,21 @@ export function playTimeline(deck: string, timeline: Timeline, from: number, on:
   timeline.slides.forEach((slide, index) => {
     if (slide.start > from) at(slide.start, () => on.slide(index));
   });
-  at(timeline.end, on.ended);
-  const ticking = on.tick && setInterval(() => on.tick?.(Math.min(now(), timeline.end)), TICK);
+  // The last tick is at the end, before it ends; none follows, though one may be due at the
+  // same moment: the caller clears what ticks set (the slide clock) as it ends, and stops this
+  // only after it rendered again.
+  let ended = false;
+  at(timeline.end, () => {
+    ended = true;
+    if (ticking) clearInterval(ticking);
+    on.tick?.(timeline.end);
+    on.ended();
+  });
+  const ticking =
+    on.tick &&
+    setInterval(() => {
+      if (!stopped && !ended) on.tick?.(Math.min(now(), timeline.end));
+    }, TICK);
   on.tick?.(from);
   return () => {
     stopped = true;

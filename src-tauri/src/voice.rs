@@ -439,11 +439,13 @@ impl Voice {
         if let Some(session) = session {
             let _ = wrap_up(session).join();
         }
-        // Waits for a transcription still running.
+        // Waits for a transcription still running. Both models hold Metal buffers, which ggml
+        // aborts the process over when the device is torn down while they are still loaded.
         self.whisper
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take();
+        self.timer.lock().unwrap_or_else(|e| e.into_inner()).take();
     }
 }
 
@@ -1329,6 +1331,20 @@ mod tests {
         load(&mut voice.whisper.lock().unwrap(), &model).unwrap();
         voice.shutdown();
         assert!(voice.whisper.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn shutdown_frees_the_word_timing_model_too() {
+        let home = crate::deck::app_home().unwrap();
+        let model = model_path(&home);
+        if !model.is_file() {
+            return; // the model is not downloaded on this machine
+        }
+        let voice = Voice::default();
+        *voice.timer.lock().unwrap() = Some(timing_context(&model).unwrap());
+        assert!(voice.timer.lock().unwrap().is_some());
+        voice.shutdown();
+        assert!(voice.timer.lock().unwrap().is_none());
     }
 
     #[test]

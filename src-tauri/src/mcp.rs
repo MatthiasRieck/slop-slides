@@ -81,6 +81,10 @@ pub fn serve(dir: &Path) {
             }
         }
     }
+    // A speech model still loaded aborts the process as it exits on macOS (see Voice::shutdown).
+    if let Some(voice) = VOICE.get() {
+        voice.shutdown();
+    }
 }
 
 /// Answers one JSON-RPC message; notifications get no response. `session` finds the workspace's current session.
@@ -168,6 +172,10 @@ pub fn handle(
                 "audio": {
                     "type": "string",
                     "description": "The audio file, relative to the workspace root.",
+                },
+                "replace": {
+                    "type": "boolean",
+                    "description": "Replace the user's own recording of the slide; only when the user agreed. Without it a recorded slide keeps its audio.",
                 },
             }, "required": ["slide", "audio"] }
         }, {
@@ -282,8 +290,11 @@ pub fn handle(
         }
         "tools/call" if request["params"]["name"] == NARRATION_TOOL => {
             let arguments = &request["params"]["arguments"];
+            let session = session(dir);
             text_result(
-                deck::app_home().and_then(|home| set_narration_audio(dir, arguments, &home)),
+                deck::app_home().and_then(|home| {
+                    set_narration_audio(dir, arguments, &home, session.as_deref())
+                }),
             )
         }
         "tools/call" if request["params"]["name"] == TIMELINE_TOOL => {
@@ -341,8 +352,14 @@ fn time_words(file: &Path, slides: Option<&[String]>, home: &Path) -> Result<()>
 
 /// Makes the workspace file `audio` the narration of `slide` of the deck at `path`
 /// (`arguments`), starting with the slide, then times its words with the speech-to-text model
-/// in `home`; what it did, for the agent.
-fn set_narration_audio(dir: &Path, arguments: &Value, home: &Path) -> Result<String> {
+/// in `home`; what it did, for the agent. A slide locked in the deck, or in the turn's guard in
+/// the workspace's `session`, keeps its audio.
+fn set_narration_audio(
+    dir: &Path,
+    arguments: &Value,
+    home: &Path,
+    session: Option<&Path>,
+) -> Result<String> {
     let text = |key: &str| arguments[key].as_str().filter(|v| !v.is_empty());
     let (rel, file) = deck_argument(dir, arguments)?;
     let slide = text("slide").ok_or_else(|| Error::msg("slide is required"))?;
@@ -358,6 +375,23 @@ fn set_narration_audio(dir: &Path, arguments: &Value, home: &Path) -> Result<Str
         return Err(Error::msg(format!("{rel} has no slide `{slide}`")));
     };
     let duration = found.duration;
+    // Checked before the audio is replaced: audio is not in the deck's history to undo.
+    let markup = std::fs::read_to_string(&file)?;
+    if crate::html::is_locked(&markup, slide)
+        || deck::read_guard(&file, session)
+            .iter()
+            .any(|locked| locked.id == slide)
+    {
+        return Err(Error::msg(format!(
+            "The slide `{slide}` is locked; unlock it to change its narration."
+        )));
+    }
+    // The presenter's own recording cannot be made again: replaced only when asked to.
+    if arguments["replace"].as_bool() != Some(true) && narration::has_own_recording(&file, slide) {
+        return Err(Error::msg(format!(
+            "The slide `{slide}` is narrated by the user's own recording, which would be lost. Ask the user first; call again with replace: true to replace it."
+        )));
+    }
     let seconds = narration::import_audio(&file, slide, Path::new(&source.absolute))?;
     let kept = narration::audio_file(&file, slide);
     // Workspace-relative, with `/` as the agent writes paths on every platform.
@@ -419,7 +453,12 @@ fn saved(session: Option<&Path>, rel: &str, what: &str, data: &Value) -> String 
         return String::new();
     };
     let folder = session.join("timing");
-    let name = format!("{}.{what}.json", rel.replace(['/', '\\'], "_"));
+    // `what` may hold a slide id, which the agent writes: keep it one plain file name.
+    let name = format!(
+        "{}.{}.json",
+        rel.replace(['/', '\\'], "_"),
+        narration::file_stem(what)
+    );
     let written = std::fs::create_dir_all(&folder).and_then(|_| {
         let text = serde_json::to_string_pretty(data).unwrap_or_default();
         std::fs::write(folder.join(&name), text)
@@ -1072,7 +1111,7 @@ mod tests {
         // Speech without the model is kept, untimed; another deck keeps its audio apart.
         let args =
             json!({"path": "talks/q3.html", "slide": "intro", "audio": "talks/sound/talk.wav"});
-        let text = set_narration_audio(&dir, &args, Path::new("/nonexistent")).unwrap();
+        let text = set_narration_audio(&dir, &args, Path::new("/nonexistent"), None).unwrap();
         assert!(
             text.contains("kept as talks/narration/q3/intro.wav"),
             "{text}"
@@ -1084,6 +1123,88 @@ mod tests {
         assert_eq!(narration::words(&dir.join("talks/q3.html"), "intro"), None);
         assert_eq!(narration::words(&file, "intro"), Some(vec![]));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn narration_tool_leaves_a_locked_slides_audio_alone() {
+        let dir = temp_deck(
+            r#"<main class="deck"><section class="slide" id="intro" data-locked><aside class="narration">Hi.</aside></section></main>"#,
+        );
+        narration::audio::write_wav(&dir.join("quiet.wav"), &[0.0; 16_000], 16_000).unwrap();
+        let res = call(
+            &dir,
+            "tools/call",
+            json!({"name": NARRATION_TOOL, "arguments": {"slide": "intro", "audio": "quiet.wav"}}),
+        );
+        assert_eq!(res["result"]["isError"], true, "{res}");
+        assert!(
+            text_of(&res).contains("The slide `intro` is locked"),
+            "{res}"
+        );
+        // Nothing was replaced: no audio, no manifest, no pinned start.
+        assert!(!dir.join("narration").exists());
+        let deck = deck::load(&dir.join(deck::DECK_FILE)).unwrap();
+        assert_eq!(deck.slides[0].narration_start, None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn narration_tool_replaces_the_users_own_recording_only_when_asked() {
+        let dir = narrated_deck();
+        let file = dir.join(deck::DECK_FILE);
+        let take: Vec<f32> = (0..8_000).map(|i| (i as f32 / 30.0).sin() * 0.2).collect();
+        narration::append_recording(&file, "intro", &take, 16_000).unwrap();
+        let recording = std::fs::read(narration::audio_file(&file, "intro")).unwrap();
+        let args = json!({"name": NARRATION_TOOL, "arguments": {"slide": "intro", "audio": "talks/sound/quiet.wav"}});
+        let res = call(&dir, "tools/call", args.clone());
+        assert_eq!(res["result"]["isError"], true, "{res}");
+        assert!(
+            text_of(&res).contains("the user's own recording, which would be lost"),
+            "{res}"
+        );
+        assert_eq!(
+            std::fs::read(narration::audio_file(&file, "intro")).unwrap(),
+            recording,
+            "the take is kept"
+        );
+        // Asked to, it replaces it; audio brought in before is replaced without asking.
+        let mut replace = args.clone();
+        replace["arguments"]["replace"] = json!(true);
+        let res = call(&dir, "tools/call", replace);
+        assert_eq!(res["result"]["isError"], false, "{res}");
+        assert!(!narration::has_own_recording(&file, "intro"));
+        let res = call(&dir, "tools/call", args);
+        assert_eq!(res["result"]["isError"], false, "{res}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn timing_data_saved_for_a_slide_stays_in_the_sessions_timing_folder() {
+        let session =
+            std::env::temp_dir().join(format!("slopslide-saved-{}", uuid::Uuid::new_v4()));
+        let data = json!({"beats": []});
+        // Slide ids are written by the agent; none may lead out of the folder or name a stream
+        // (`:` on Windows) or a folder (`/`, `\`).
+        for id in ["../../escape", "a/b", "a\\b", "c:x", "intro"] {
+            let text = saved(
+                Some(&session),
+                "talks/deck.html",
+                &format!("beats-{id}"),
+                &data,
+            );
+            assert!(!text.contains("could not be saved"), "{id}: {text}");
+        }
+        let names: Vec<String> = std::fs::read_dir(session.join("timing"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 5, "{names:?}");
+        assert!(names.contains(&"talks_deck.html.beats-intro.json".to_string()));
+        assert!(names
+            .iter()
+            .all(|n| n.starts_with("talks_deck.html.") && n.ends_with(".json")));
+        assert!(!session.parent().unwrap().join("escape.json").exists());
+        std::fs::remove_dir_all(session).unwrap();
     }
 
     /// `seconds` of a kick drum at 120 BPM, at `rate`.
@@ -1117,7 +1238,7 @@ mod tests {
         ));
         narration::audio::write_wav(&dir.join("song.wav"), &drums(8.0, 22_050), 22_050).unwrap();
         let args = json!({"slide": "song", "audio": "song.wav"});
-        set_narration_audio(&dir, &args, Path::new("/nonexistent")).unwrap();
+        set_narration_audio(&dir, &args, Path::new("/nonexistent"), None).unwrap();
         dir
     }
 

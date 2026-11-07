@@ -511,18 +511,23 @@ pub fn audio_dir(deck_file: &Path) -> PathBuf {
 /// A slide's narration audio: `<slide id>.wav`, or a name made from the id when it is not
 /// safe as a file name.
 pub fn audio_file(deck_file: &Path, slide: &str) -> PathBuf {
+    audio_dir(deck_file).join(format!("{}.wav", file_stem(slide)))
+}
+
+/// A name for a file kept for `slide`, safe on every platform: the id itself when it is plain
+/// (letters, digits, `-`, `_`, `.`), otherwise one made from its hash.
+pub fn file_stem(slide: &str) -> String {
     let safe = !slide.is_empty()
         && !slide.starts_with('.')
         && slide.len() <= 100
         && slide
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
-    let name = if safe {
+    if safe {
         slide.to_string()
     } else {
         format!("slide-{}", &hex(&Sha256::digest(slide.as_bytes()))[..12])
-    };
-    audio_dir(deck_file).join(format!("{name}.wav"))
+    }
 }
 
 /// What a slide's audio is made from: its script, voice and language, and the model and
@@ -789,6 +794,16 @@ pub fn append_recording(file: &Path, slide: &str, samples: &[f32], rate: u32) ->
             },
         );
     })
+}
+
+/// Whether the slide's audio is the presenter's own recording (not audio brought in), which
+/// nothing could make again once it is replaced.
+pub fn has_own_recording(file: &Path, slide: &str) -> bool {
+    Manifest::read(&audio_dir(file))
+        .slides
+        .get(slide)
+        .is_some_and(|e| e.recorded && !e.imported)
+        && audio_file(file, slide).is_file()
 }
 
 /// Deletes the slide's recording, if it has one; audio the model made stays.

@@ -1,4 +1,4 @@
-import { Loader2, MonitorPlay, StickyNote } from "lucide-react";
+import { AppWindow, Loader2, MonitorPlay, StickyNote } from "lucide-react";
 import { useState } from "react";
 
 import type { Screen } from "../lib/api";
@@ -16,13 +16,16 @@ const LABEL = "relative max-w-full truncate rounded bg-background/85 px-1.5 py-p
  * Shown when presenting with several screens attached: the screens drawn the way they sit on
  * the desk, with a button on each for the audience's slides and one for the presenter view
  * (notes, next slide, timers). Each is on one screen at a time. A screenshot of a screen, where
- * there is one, makes it easy to recognize.
+ * there is one, makes it easy to recognize. Or the show goes in windows instead, for sharing
+ * the slides' window in a call.
  */
 export function ScreenPicker(props: {
   screens: Screen[];
   /** A screenshot for each screen, by its index; null while they are being taken. */
   previews?: (string | null)[] | null;
   onStart: (choice: ScreenChoice) => void;
+  /** Presents in windows instead of on the screens. */
+  onWindows: () => void;
   onCancel: () => void;
 }) {
   const { screens } = props;
@@ -118,6 +121,15 @@ export function ScreenPicker(props: {
         No presenter view
       </label>
       <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          title="The slides in this window and the presenter view in another, to share the slides' window in a call"
+          onClick={props.onWindows}
+          className="mr-auto flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground [&_svg]:size-3.5"
+        >
+          <AppWindow />
+          Present in windows
+        </button>
         <button
           type="button"
           onClick={props.onCancel}

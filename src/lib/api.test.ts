@@ -140,6 +140,7 @@ const CASES = [
   ["screenPreviews", () => api.screenPreviews(() => {}), "screen_previews", { grabbed: expect.anything() }],
   ["presentOn", () => api.presentOn(1, 0), "present_on", { audience: 1, presenter: 0 }],
   ["presentOn", () => api.presentOn(1, null), "present_on", { audience: 1, presenter: null }],
+  ["presentInWindows", () => api.presentInWindows(), "present_in_windows", undefined],
   ["closePresenterView", () => api.closePresenterView(), "close_presenter_view", undefined],
   ["takePendingFolder", () => api.takePendingFolder(), "take_pending_folder", undefined],
   ["pasteSlide", () => api.pasteSlide("talk", null), "paste_slide", { id: "talk", after: null }],

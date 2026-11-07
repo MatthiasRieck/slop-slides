@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { api, type Deck, errorMessage } from "../lib/api";
 import { zoomBox } from "../lib/ink";
+import { hasPresenterWindow } from "../lib/screens";
 import { onSlideClock, postSlideClock, setSlideClock } from "../lib/slideClock";
 import { layoutTimeline, slideAt } from "../lib/timeline";
 import { playTimeline } from "../lib/timelinePlayback";
@@ -34,7 +35,8 @@ function inOrder<T>(command: () => Promise<T>): Promise<T> {
  * wheel or a pinch and panned with a swipe or the middle button; 0 fits it again. Play runs
  * the show by itself, speaking each slide's narration (see `useAutoplay`). N opens the presenter
  * view beside the slide (see `PresenterPanel`), in this same window: it is for a screen the
- * audience doesn't see.
+ * audience doesn't see. Presenting in windows, the show stays in this window as it is, for a
+ * call to share, and the presenter view opens in a window of its own.
  */
 export function Presenter() {
   const deck = useApp((s) => s.deck);
@@ -60,10 +62,18 @@ export function Presenter() {
   useEffect(() => {
     const window_ = getCurrentWindow();
     // With several screens, the show first moves to the one picked (and the presenter view opens).
+    // In windows, it stays as it is and the presenter view opens beside it.
     const screens = useApp.getState().screens;
+    const windowed = screens === "windows";
     let ended = false;
     let placed = false;
-    if (screens) {
+    if (windowed) {
+      queueMicrotask(() => {
+        if (ended) return;
+        placed = true;
+        inOrder(() => api.presentInWindows()).catch((error) => useApp.getState().setError(errorMessage(error)));
+      });
+    } else if (screens) {
       // A moment later: StrictMode runs this twice in dev, and closing a presenter view that
       // macOS is still taking full screen makes the system beep.
       queueMicrotask(() => {
@@ -126,14 +136,14 @@ export function Presenter() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("message", onMessage);
       ended = true;
-      void window_.setFullscreen(false);
+      if (!windowed) void window_.setFullscreen(false);
       if (placed) void inOrder(() => api.closePresenterView()).catch(() => {});
     };
   }, []);
 
   const go = (key: string) => frameRef.current?.contentWindow?.postMessage({ type: "slop:go", key }, "*");
   // The presenter view in a window of its own (on another screen) is fed from here.
-  const separate = useApp((s) => s.screens?.presenter != null);
+  const separate = useApp((s) => hasPresenterWindow(s.screens));
   usePresenterFeed(separate ? deck : null, current ?? startRef.current, go);
   const autoplay = useAutoplay(deck, current, () => go("ArrowRight"));
   // While it plays, the slide's animations keep with the narration.

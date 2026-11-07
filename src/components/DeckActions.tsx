@@ -1,7 +1,19 @@
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { ChevronDown, FileCode2, FileText, Film, Images, Loader2, Play, Presentation, Share, X } from "lucide-react";
+import {
+  AppWindow,
+  ChevronDown,
+  FileCode2,
+  FileText,
+  Film,
+  Images,
+  Loader2,
+  Play,
+  Presentation,
+  Share,
+  X,
+} from "lucide-react";
 import { useRef, useState } from "react";
 
 import { api, type Deck, errorMessage, type Screen, type Slide } from "../lib/api";
@@ -165,26 +177,76 @@ function Actions({ deck }: { deck: Deck }) {
           <X className="size-3.5" />
         </ToolButton>
       )}
-      <Button
-        variant="primary"
-        size="xl"
+      <PresentButton
         disabled={deck.slides.length === 0}
-        onClick={() => void present()}
-        className="shadow-sm"
-      >
-        <Play className="size-3.5 fill-current" />
-        Present
-      </Button>
+        onPresent={() => void present()}
+        onWindows={() => useApp.getState().setPresenting(true, "windows")}
+      />
       {screens && (
         <ScreenPicker
           screens={screens}
           previews={previews}
           onCancel={() => setScreens(null)}
+          onWindows={() => {
+            setScreens(null);
+            useApp.getState().setPresenting(true, "windows");
+          }}
           onStart={(choice) => {
             setScreens(null);
             useApp.getState().setPresenting(true, choice);
           }}
         />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Present, with a menu beside it for presenting in windows: the slides in this window, to share
+ * it in a call, and the presenter view in a window of its own. That works on a single screen.
+ */
+function PresentButton(props: { disabled: boolean; onPresent: () => void; onWindows: () => void }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useDismiss(open, menuRef, () => setOpen(false), { escape: true });
+
+  return (
+    <div ref={menuRef} className="relative flex">
+      <Button
+        variant="primary"
+        size="xl"
+        disabled={props.disabled}
+        onClick={props.onPresent}
+        className="rounded-r-none shadow-sm"
+      >
+        <Play className="size-3.5 fill-current" />
+        Present
+      </Button>
+      <Button
+        variant="primary"
+        size="xl"
+        disabled={props.disabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="More ways to present"
+        title="More ways to present"
+        onClick={() => setOpen((v) => !v)}
+        className="rounded-l-none border-l border-primary-foreground/20 px-1.5 shadow-sm"
+      >
+        <ChevronDown className="size-3" />
+      </Button>
+      {open && (
+        <div role="menu" className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card p-1 shadow-lg">
+          <MenuItem
+            icon={AppWindow}
+            label="Present in windows"
+            hint="Slides in this window to share in a call; your notes in another"
+            onClick={() => {
+              setOpen(false);
+              props.onWindows();
+            }}
+          />
+        </div>
       )}
     </div>
   );

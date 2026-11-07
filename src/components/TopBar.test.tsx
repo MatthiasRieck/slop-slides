@@ -243,6 +243,7 @@ describe("layout", () => {
       "Show chat",
       "Export",
       "Present",
+      "More ways to present",
       "Show sidebar",
     ]);
   });

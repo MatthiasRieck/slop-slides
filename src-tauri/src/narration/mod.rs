@@ -13,9 +13,14 @@
 //! [`crate::voice::Voice::record_narration`]) and marked so in the manifest. It is the slide's
 //! audio whatever its script says, and is never said again; deleting it brings the model back.
 //! Audio made elsewhere (see [`import_audio`]) is kept the same way.
+//!
+//! A deck may have a hosted service say its narration instead, ElevenLabs or OpenAI (see
+//! [`cloud`]): its `slopslide-narration-provider` meta names which. Their audio is kept the
+//! same way, its fingerprint naming the service and model rather than the local model.
 
 pub mod audio;
 pub mod beats;
+pub mod cloud;
 pub mod engine;
 pub mod timeline;
 
@@ -35,6 +40,7 @@ use tokio::sync::Notify;
 use crate::deck::{self, Deck};
 use crate::error::{Error, Result};
 use crate::voice;
+pub use cloud::Provider;
 
 /// A built-in voice of the model.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -258,8 +264,47 @@ pub struct SpeechStatus {
     pub downloading: bool,
     /// The deck whose narration is being said, if any.
     pub rendering: Option<String>,
-    pub voices: &'static [Voice],
+    /// Who can say narration: the local model first, then the hosted services.
+    pub providers: Vec<ProviderStatus>,
     pub languages: &'static [Language],
+}
+
+/// A provider of narration, as the Narration panel shows it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderStatus {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// It is a hosted service, called with the user's API key.
+    pub needs_key: bool,
+    /// Where its key comes from; None while it has none.
+    pub key: Option<cloud::KeySource>,
+    /// Its voices, the default first.
+    pub voices: Vec<cloud::VoiceOption>,
+}
+
+impl ProviderStatus {
+    fn of(home: &Path, provider: Provider) -> Self {
+        let voices = match provider {
+            Provider::Local => VOICES
+                .iter()
+                .map(|v| cloud::VoiceOption {
+                    id: v.id.into(),
+                    name: v.name.into(),
+                    description: v.description.into(),
+                    native: Some(v.native.into()),
+                })
+                .collect(),
+            _ => provider.voices().iter().map(Into::into).collect(),
+        };
+        ProviderStatus {
+            id: provider.id(),
+            name: provider.name(),
+            needs_key: provider != Provider::Local,
+            key: cloud::key(home, provider).map(|(_, source)| source),
+            voices,
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -304,7 +349,10 @@ impl Narration {
                 .unwrap()
                 .as_ref()
                 .map(|(d, _)| d.clone()),
-            voices: VOICES,
+            providers: cloud::PROVIDERS
+                .into_iter()
+                .map(|p| ProviderStatus::of(home, p))
+                .collect(),
             languages: LANGUAGES,
         }
     }
@@ -354,20 +402,35 @@ impl Narration {
         if todo.is_empty() {
             return Ok(statuses(file, &deck));
         }
-        if let Some(reason) = engine::unavailable_reason() {
-            return Err(Error::msg(reason));
-        }
-        if !model_ready(home) {
-            return Err(Error::msg(
-                "Download the narration voice model first (Narration tab).",
-            ));
-        }
+        let provider = todo[0].provider;
+        let key = match provider {
+            Provider::Local => {
+                if let Some(reason) = engine::unavailable_reason() {
+                    return Err(Error::msg(reason));
+                }
+                if !model_ready(home) {
+                    return Err(Error::msg(
+                        "Download the narration voice model first (Narration tab).",
+                    ));
+                }
+                None
+            }
+            cloud => match cloud::key(home, cloud) {
+                Some((key, _)) => Some(key),
+                None => {
+                    return Err(Error::msg(format!(
+                        "Add your {} API key in the Narration tab first.",
+                        cloud.name()
+                    )))
+                }
+            },
+        };
         let stop = Arc::new(Notify::new());
         *self.running.lock().unwrap() = Some((deck.id.clone(), stop.clone()));
         // Cleared however this ends, also when the caller drops it (a cancelled video export).
         let _clear = Clear(&self.running);
         tokio::select! {
-            said = say_all(home, file, &deck.id, &todo, &progress) => said?,
+            said = say_all(home, key.as_deref(), file, &deck.id, &todo, &progress) => said?,
             _ = stop.notified() => return Err(Error::msg(CANCELLED)),
         };
         progress(RenderProgress {
@@ -389,15 +452,20 @@ impl Drop for Clear<'_> {
     }
 }
 
-/// Says each job in one worker; dropping the future (on cancel) kills the worker.
+/// Says each job, in one worker of the local model or with the hosted service `key` is for;
+/// dropping the future (on cancel) kills the worker or the request.
 async fn say_all(
     home: &Path,
+    key: Option<&str>,
     file: &Path,
     deck: &str,
     todo: &[Job],
     progress: &impl Fn(RenderProgress),
 ) -> Result<()> {
-    let mut worker = engine::Worker::start(&model_dir(home)).await?;
+    let mut worker = match key {
+        None => Some(engine::Worker::start(&model_dir(home)).await?),
+        Some(_) => None,
+    };
     let dir = audio_dir(file);
     fs::create_dir_all(&dir)?;
     for (done, job) in todo.iter().enumerate() {
@@ -409,14 +477,28 @@ async fn say_all(
         });
         let dest = audio_file(file, &job.slide);
         let part = dest.with_extension("wav.part");
-        let request = engine::Request {
-            text: job.text.clone(),
-            speaker: job.voice.to_string(),
-            language: job.language.to_string(),
-            output: part.clone(),
+        let said = match (&mut worker, key) {
+            (Some(worker), _) => {
+                let request = engine::Request {
+                    text: job.text.clone(),
+                    speaker: job.voice.clone(),
+                    language: job.language.engine.to_string(),
+                    output: part.clone(),
+                };
+                worker.say(&request).await.map(|samples| (samples, None))
+            }
+            (None, Some(key)) => {
+                let said =
+                    cloud::say(job.provider, key, &job.text, &job.voice, job.language.name).await;
+                said.and_then(|said| {
+                    audio::write_wav(&part, &said.samples, audio::RATE)?;
+                    Ok((said.samples.len(), said.words))
+                })
+            }
+            (None, None) => unreachable!("a worker or a key"),
         };
-        let samples = match worker.say(&request).await {
-            Ok(samples) => samples,
+        let (samples, words) = match said {
+            Ok(said) => said,
             Err(e) => {
                 let _ = fs::remove_file(&part);
                 return Err(Error::msg(format!("Slide {}: {e}", job.slide)));
@@ -430,14 +512,18 @@ async fn say_all(
                     fingerprint: job.fingerprint.clone(),
                     seconds: samples as f64 / f64::from(audio::RATE),
                     recorded: false,
-                    words: None,
+                    // The service said when each word is: as good as hearing it again.
+                    timing: if words.is_some() { WORD_TIMING } else { 0 },
+                    words,
                     imported: false,
-                    timing: 0,
                 },
             );
         })?;
     }
-    worker.shutdown().await
+    match worker {
+        Some(worker) => worker.shutdown().await,
+        None => Ok(()),
+    }
 }
 
 async fn download_model(app: &AppHandle, dir: &Path) -> Result<()> {
@@ -474,24 +560,39 @@ async fn download_model(app: &AppHandle, dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The deck's voice and language, as its `<meta>` tags name them (defaults otherwise).
+/// Who says the deck's narration, in which voice and language, as its `<meta>` tags name them
+/// (defaults otherwise, also for a voice the provider does not have).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
+    /// One of [`cloud::PROVIDERS`]' ids.
+    pub provider: String,
     pub voice: String,
     pub language: String,
 }
 
 impl Settings {
     pub fn of(html: &str) -> Self {
+        let provider = provider_of(html);
         let voice = crate::html::narration_voice(html)
-            .filter(|v| voice(v).is_some())
-            .unwrap_or_else(|| DEFAULT_VOICE.into());
+            .filter(|v| provider.accepts_voice(v))
+            .unwrap_or_else(|| provider.default_voice().into());
         let language = crate::html::narration_language(html)
             .filter(|l| language(l).is_some())
             .unwrap_or_else(|| DEFAULT_LANGUAGE.into());
-        Settings { voice, language }
+        Settings {
+            provider: provider.id().into(),
+            voice,
+            language,
+        }
     }
+}
+
+/// The provider the deck's `<meta>` names; the local model without one, or for an unknown one.
+pub fn provider_of(html: &str) -> Provider {
+    crate::html::narration_provider(html)
+        .and_then(|p| Provider::parse(&p))
+        .unwrap_or(Provider::Local)
 }
 
 /// Where a deck's narration audio lives: `narration/` next to it, or `narration/<name>/`
@@ -531,10 +632,16 @@ pub fn file_stem(slide: &str) -> String {
 }
 
 /// What a slide's audio is made from: its script, voice and language, and the model and
-/// engine saying it. Audio with another fingerprint is out of date.
-pub fn fingerprint(text: &str, voice: &str, language: &str) -> String {
+/// engine (or hosted service and its model) saying it. Audio with another fingerprint is out
+/// of date.
+pub fn fingerprint(provider: Provider, text: &str, voice: &str, language: &str) -> String {
     let mut hasher = Sha256::new();
-    for part in [MODEL_REVISION, ENGINE_REVISION, voice, language, text] {
+    // The local model's audio keeps the fingerprints it had before there were providers.
+    let maker = match provider {
+        Provider::Local => [MODEL_REVISION, ENGINE_REVISION],
+        cloud => [cloud.id(), cloud.model()],
+    };
+    for part in maker.into_iter().chain([voice, language, text]) {
         hasher.update(part.as_bytes());
         hasher.update([0]);
     }
@@ -653,16 +760,19 @@ pub struct SlideAudio {
 struct Job {
     slide: String,
     text: String,
-    voice: &'static str,
-    language: &'static str,
+    provider: Provider,
+    voice: String,
+    language: &'static Language,
     fingerprint: String,
 }
 
-fn settings(file: &Path) -> (&'static Voice, &'static Language) {
+/// Who says the deck `file`'s narration, in which voice and language.
+fn settings(file: &Path) -> (Provider, String, &'static Language) {
     let html = deck::read_html(file).unwrap_or_default();
     let settings = Settings::of(&html);
     (
-        voice(&settings.voice).expect("a known voice"),
+        Provider::parse(&settings.provider).expect("a known provider"),
+        settings.voice,
         language(&settings.language).expect("a known language"),
     )
 }
@@ -708,7 +818,7 @@ pub fn spoken(narration: &str) -> String {
 
 /// The slides whose narration has no up-to-date audio.
 fn jobs(file: &Path, deck: &Deck) -> Vec<Job> {
-    let (voice, language) = settings(file);
+    let (provider, voice, language) = settings(file);
     let audio = statuses(file, deck);
     deck.slides
         .iter()
@@ -717,16 +827,17 @@ fn jobs(file: &Path, deck: &Deck) -> Vec<Job> {
         .map(|(slide, _)| Job {
             slide: slide.id.clone(),
             text: spoken(&slide.narration),
-            voice: voice.id,
-            language: language.engine,
-            fingerprint: fingerprint(&spoken(&slide.narration), voice.id, language.id),
+            provider,
+            voice: voice.clone(),
+            language,
+            fingerprint: fingerprint(provider, &spoken(&slide.narration), &voice, language.id),
         })
         .collect()
 }
 
 /// Every slide's audio, in slide order.
 pub fn statuses(file: &Path, deck: &Deck) -> Vec<SlideAudio> {
-    let (voice, language) = settings(file);
+    let (provider, voice, language) = settings(file);
     let manifest = Manifest::read(&audio_dir(file));
     deck.slides
         .iter()
@@ -742,7 +853,7 @@ pub fn statuses(file: &Path, deck: &Deck) -> Vec<SlideAudio> {
                 _ if recorded => AudioState::Ready,
                 _ if text.is_empty() => AudioState::None,
                 None => AudioState::Missing,
-                Some(e) if e.fingerprint == fingerprint(&text, voice.id, language.id) => {
+                Some(e) if e.fingerprint == fingerprint(provider, &text, &voice, language.id) => {
                     AudioState::Ready
                 }
                 Some(_) => AudioState::Stale,
@@ -891,7 +1002,7 @@ pub async fn time_words(
     progress: impl Fn(TimingProgress),
 ) -> Result<Vec<SlideAudio>> {
     let deck = deck::load(file)?;
-    let (_, language) = settings(file);
+    let (_, _, language) = settings(file);
     let todo: Vec<SlideAudio> = statuses(file, &deck)
         .into_iter()
         .filter(|a| a.state == AudioState::Ready && !a.timed)
@@ -1015,17 +1126,19 @@ mod tests {
     }
 
     #[test]
-    fn the_agent_is_told_every_voice_and_language() {
+    fn the_agent_is_told_every_provider_voice_and_language() {
         let prompt = include_str!("../../prompts/system.md");
         let at = prompt
-            .find("slopslide-narration-voice` meta")
+            .find("slopslide-narration-provider` meta")
             .expect("the narration rules");
-        let words: Vec<&str> = prompt[at..at + 600]
+        let words: Vec<&str> = prompt[at..at + 900]
             .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
             .collect();
         let ids = VOICES
             .iter()
             .map(|v| v.id)
+            .chain(cloud::OPENAI_VOICES.iter().map(|v| v.id))
+            .chain(cloud::PROVIDERS.iter().map(|p| p.id()))
             .chain(LANGUAGES.iter().map(|l| l.id));
         for id in ids {
             assert!(words.contains(&id), "{id}");
@@ -1039,6 +1152,7 @@ mod tests {
         assert_eq!(
             Settings::of(&html("")),
             Settings {
+                provider: "local".into(),
                 voice: "ryan".into(),
                 language: "en".into()
             }
@@ -1049,12 +1163,32 @@ mod tests {
         assert_eq!(
             Settings::of(&set),
             Settings {
+                provider: "local".into(),
                 voice: "sohee".into(),
                 language: "ko".into()
             }
         );
         let unknown = html("<meta name=\"slopslide-narration-voice\" content=\"bob\">");
         assert_eq!(Settings::of(&unknown).voice, "ryan");
+        assert_eq!(Settings::of(&unknown).provider, "local");
+        let openai = html(
+            "<meta name=\"slopslide-narration-provider\" content=\"openai\"><meta name=\"slopslide-narration-voice\" content=\"coral\">",
+        );
+        assert_eq!(
+            Settings::of(&openai),
+            Settings {
+                provider: "openai".into(),
+                voice: "coral".into(),
+                language: "en".into()
+            }
+        );
+        // A voice the provider does not have falls back to its default.
+        let mixed = html(
+            "<meta name=\"slopslide-narration-provider\" content=\"elevenlabs\"><meta name=\"slopslide-narration-voice\" content=\"sohee\">",
+        );
+        assert_eq!(Settings::of(&mixed).voice, cloud::ELEVENLABS_VOICES[0].id);
+        let nobody = html("<meta name=\"slopslide-narration-provider\" content=\"acme\">");
+        assert_eq!(Settings::of(&nobody).provider, "local");
     }
 
     #[test]
@@ -1090,7 +1224,7 @@ mod tests {
             slides: BTreeMap::from([(
                 "a".to_string(),
                 Entry {
-                    fingerprint: fingerprint("Say this.", &voice, &language),
+                    fingerprint: fingerprint(Provider::Local, "Say this.", &voice, &language),
                     seconds: 1.0,
                     recorded: false,
                     words: None,
@@ -1135,13 +1269,113 @@ mod tests {
 
     #[test]
     fn fingerprints_change_with_script_voice_and_language() {
-        let base = fingerprint("Hello.", "ryan", "en");
-        assert_eq!(base, fingerprint("Hello.", "ryan", "en"));
-        assert_ne!(base, fingerprint("Hello!", "ryan", "en"));
-        assert_ne!(base, fingerprint("Hello.", "aiden", "en"));
-        assert_ne!(base, fingerprint("Hello.", "ryan", "de"));
+        let base = fingerprint(Provider::Local, "Hello.", "ryan", "en");
+        assert_eq!(base, fingerprint(Provider::Local, "Hello.", "ryan", "en"));
+        assert_ne!(base, fingerprint(Provider::Local, "Hello!", "ryan", "en"));
+        assert_ne!(base, fingerprint(Provider::Local, "Hello.", "aiden", "en"));
+        assert_ne!(base, fingerprint(Provider::Local, "Hello.", "ryan", "de"));
         // Parts cannot run into each other.
-        assert_ne!(fingerprint("b", "a", "en"), fingerprint("", "ab", "en"));
+        assert_ne!(
+            fingerprint(Provider::Local, "b", "a", "en"),
+            fingerprint(Provider::Local, "", "ab", "en")
+        );
+    }
+
+    #[test]
+    fn local_audio_keeps_its_fingerprint_and_providers_have_their_own() {
+        // As it was before there were providers, so no deck's audio goes out of date.
+        let mut legacy = Sha256::new();
+        for part in [MODEL_REVISION, ENGINE_REVISION, "ryan", "en", "Hello."] {
+            legacy.update(part.as_bytes());
+            legacy.update([0]);
+        }
+        let local = fingerprint(Provider::Local, "Hello.", "ryan", "en");
+        assert_eq!(local, hex(&legacy.finalize()));
+        let openai = fingerprint(Provider::OpenAi, "Hello.", "ryan", "en");
+        let eleven = fingerprint(Provider::ElevenLabs, "Hello.", "ryan", "en");
+        assert_ne!(local, openai);
+        assert_ne!(local, eleven);
+        assert_ne!(openai, eleven);
+    }
+
+    #[test]
+    fn changing_the_provider_makes_the_audio_stale() {
+        let dir = temp_dir();
+        let file = deck_with(
+            &dir,
+            "deck.html",
+            "",
+            r#"<section class="slide" id="a"><aside class="narration">Say A.</aside></section>"#,
+        );
+        fs::create_dir_all(audio_dir(&file)).unwrap();
+        fs::write(audio_file(&file, "a"), "").unwrap();
+        Manifest {
+            slides: BTreeMap::from([(
+                "a".to_string(),
+                Entry {
+                    fingerprint: fingerprint(Provider::Local, "Say A.", "ryan", "en"),
+                    seconds: 1.0,
+                    recorded: false,
+                    words: None,
+                    imported: false,
+                    timing: 0,
+                },
+            )]),
+        }
+        .write(&audio_dir(&file))
+        .unwrap();
+        let state = |file: &Path| statuses(file, &deck::load(file).unwrap())[0].state;
+        assert_eq!(state(&file), AudioState::Ready);
+        let html = fs::read_to_string(&file).unwrap();
+        fs::write(
+            &file,
+            crate::html::set_narration_provider(&html, Some("openai")),
+        )
+        .unwrap();
+        assert_eq!(state(&file), AudioState::Stale);
+        let jobs = jobs(&file, &deck::load(&file).unwrap());
+        assert_eq!(jobs[0].provider, Provider::OpenAi);
+        // The local voice is none of OpenAI's: its default says it.
+        assert_eq!(jobs[0].voice, "marin");
+        assert_eq!(
+            jobs[0].fingerprint,
+            fingerprint(Provider::OpenAi, "Say A.", "marin", "en")
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_hosted_provider_needs_its_key_before_saying_anything() {
+        let dir = temp_dir();
+        let file = deck_with(
+            &dir,
+            "deck.html",
+            r#"<meta name="slopslide-narration-provider" content="elevenlabs">"#,
+            r#"<section class="slide" id="a"><aside class="narration">Hi.</aside></section>"#,
+        );
+        let narration = Narration::default();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        // The app home has no key saved; only an environment key could get past this.
+        if std::env::var("ELEVENLABS_API_KEY").is_err() {
+            let err = rt
+                .block_on(narration.render(&dir, &file, None, |_| {}))
+                .unwrap_err();
+            assert!(err.to_string().contains("ElevenLabs API key"), "{err}");
+        }
+        let status = narration.status(&dir);
+        let ids: Vec<&str> = status.providers.iter().map(|p| p.id).collect();
+        assert_eq!(ids, ["local", "elevenlabs", "openai"]);
+        assert!(!status.providers[0].needs_key);
+        assert_eq!(status.providers[0].voices[0].id, "ryan");
+        assert_eq!(status.providers[0].voices[0].native.as_deref(), Some("en"));
+        assert_eq!(status.providers[2].voices[0].id, "marin");
+        cloud::set_key(&dir, Provider::OpenAi, Some("sk-x")).unwrap();
+        let status = narration.status(&dir);
+        assert_eq!(status.providers[2].key, Some(cloud::KeySource::Saved));
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -1171,7 +1405,7 @@ mod tests {
         manifest.slides.insert(
             "a".into(),
             Entry {
-                fingerprint: fingerprint("Say A.", "ryan", "en"),
+                fingerprint: fingerprint(Provider::Local, "Say A.", "ryan", "en"),
                 seconds: 0.5,
                 recorded: false,
                 words: None,
@@ -1182,7 +1416,7 @@ mod tests {
         manifest.slides.insert(
             "b".into(),
             Entry {
-                fingerprint: fingerprint("Old B.", "ryan", "en"),
+                fingerprint: fingerprint(Provider::Local, "Old B.", "ryan", "en"),
                 seconds: 1.0,
                 recorded: false,
                 words: None,
@@ -1204,8 +1438,8 @@ mod tests {
             (
                 todo[0].slide.as_str(),
                 todo[0].text.as_str(),
-                todo[0].voice,
-                todo[0].language
+                todo[0].voice.as_str(),
+                todo[0].language.engine
             ),
             ("b", "Say B.", "ryan", "English")
         );
@@ -1245,7 +1479,7 @@ mod tests {
             m.slides.insert(
                 "a".into(),
                 Entry {
-                    fingerprint: fingerprint("Say A.", "ryan", "en"),
+                    fingerprint: fingerprint(Provider::Local, "Say A.", "ryan", "en"),
                     seconds: 2.0,
                     recorded: false,
                     words: None,
@@ -1314,7 +1548,7 @@ mod tests {
         audio::write_wav(&audio_file(&file, "a"), &[0.0; 24_000], audio::RATE).unwrap();
         audio::write_wav(&audio_file(&file, "b"), &[0.0; 24_000], audio::RATE).unwrap();
         let entry = |text: &str| Entry {
-            fingerprint: fingerprint(text, "ryan", "en"),
+            fingerprint: fingerprint(Provider::Local, text, "ryan", "en"),
             seconds: 1.0,
             recorded: false,
             words: None,
@@ -1400,7 +1634,7 @@ mod tests {
             m.slides.insert(
                 "a".into(),
                 Entry {
-                    fingerprint: fingerprint("Say A.", "ryan", "en"),
+                    fingerprint: fingerprint(Provider::Local, "Say A.", "ryan", "en"),
                     seconds: 1.0,
                     recorded: false,
                     imported: false,

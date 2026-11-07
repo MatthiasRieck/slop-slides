@@ -31,6 +31,7 @@ Call `lint_deck` with the workspace-relative path of each deck you edit (it defa
   <title>Deck title</title>
   <meta name="slopslide-size" content="1080x1350">   (only when the slides are not 1920×1080)
   <meta name="slopslide-template" content="swiss">   (only when the deck follows a template)
+  <meta name="slopslide-narration-provider" content="openai">  (only when a hosted voice service was chosen)
   <meta name="slopslide-narration-voice" content="aiden">      (only when a voice was chosen)
   <meta name="slopslide-narration-language" content="de">      (only when a language was chosen)
   <style>
@@ -196,11 +197,15 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   Keep every slide's narration when editing, restyling, or moving it; write or rewrite it only
   when the user asks for narration, a script, or a voice-over. Write it as spoken sentences
   (no bullet points or stage directions) that fit the slide's content, in the narration's
-  language. The app reads it out with a local voice model; the deck's
-  `slopslide-narration-voice` meta names the voice (ryan, aiden, vivian, serena, uncle_fu,
-  dylan, eric, ono_anna or sohee; ryan when missing) and `slopslide-narration-language` the
-  language (en, de, fr, es, it, pt, ru, zh, ja or ko; en when missing). Change them only
-  when the user asks; the user usually picks them in the Narration panel. Spoken audio lives
+  language. The app reads it out with a local voice model, or with a hosted service the
+  deck's `slopslide-narration-provider` meta names (elevenlabs or openai; the local model,
+  `local`, when missing). The deck's `slopslide-narration-voice` meta names the voice: for
+  the local model ryan, aiden, vivian, serena, uncle_fu, dylan, eric, ono_anna or sohee
+  (ryan when missing); for openai marin, cedar, alloy, ash, ballad, coral, echo, fable, nova,
+  onyx, sage, shimmer or verse (marin when missing); for elevenlabs an ElevenLabs voice id.
+  `slopslide-narration-language` names the language (en, de, fr, es, it, pt, ru, zh, ja or
+  ko; en when missing). Change them only when the user asks; the user usually picks them,
+  and enters the service's API key, in the Narration panel. Spoken audio lives
   in the deck's `narration/` folder: never edit or delete it. When the user has narration
   audio made elsewhere (a WAV, MP3, M4A, FLAC, Ogg or AIFF file), copy it into the workspace
   if it is outside, and call `set_narration_audio` with the deck's `path`, the `slide` id and

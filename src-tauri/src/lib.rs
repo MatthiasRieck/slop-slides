@@ -1180,6 +1180,45 @@ fn set_narration_voice(id: String, voice: String) -> Result<Deck> {
 }
 
 #[tauri::command]
+fn set_narration_provider(id: String, provider: String) -> Result<Deck> {
+    changing(
+        &id,
+        Change::new(Source::Narration, "Change narration provider"),
+        |file| deck::set_narration_provider(file, &provider),
+    )
+}
+
+/// Saves the API key of a hosted narration provider in `~/.slopslides`, or forgets it for
+/// None; returns what narration can do now.
+#[tauri::command]
+fn set_speech_key(
+    narration: State<narration::Narration>,
+    provider: String,
+    key: Option<String>,
+) -> Result<narration::SpeechStatus> {
+    let provider = narration::Provider::parse(&provider)
+        .ok_or_else(|| error::Error::msg(format!("unknown narration provider: {provider}")))?;
+    let home = deck::app_home()?;
+    narration::cloud::set_key(&home, provider, key.as_deref())?;
+    Ok(narration.status(&home))
+}
+
+/// Every voice the provider's account can use: for ElevenLabs, its premade voices and the
+/// account's own; for the others, their built-in ones.
+#[tauri::command]
+async fn speech_voices(provider: String) -> Result<Vec<narration::cloud::VoiceOption>> {
+    let provider = narration::Provider::parse(&provider)
+        .ok_or_else(|| error::Error::msg(format!("unknown narration provider: {provider}")))?;
+    let home = deck::app_home()?;
+    match (provider, narration::cloud::key(&home, provider)) {
+        (narration::Provider::ElevenLabs, Some((key, _))) => {
+            narration::cloud::elevenlabs_voices(&key).await
+        }
+        _ => Ok(provider.voices().iter().map(Into::into).collect()),
+    }
+}
+
+#[tauri::command]
 fn set_narration_language(id: String, language: String) -> Result<Deck> {
     changing(
         &id,
@@ -1361,6 +1400,9 @@ pub fn run() {
             time_narration,
             narration_words,
             set_narration_voice,
+            set_narration_provider,
+            set_speech_key,
+            speech_voices,
             set_narration_language,
         ])
         .build(context)

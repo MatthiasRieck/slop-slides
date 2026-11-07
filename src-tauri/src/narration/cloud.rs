@@ -1,0 +1,830 @@
+//! Narration said by a hosted text-to-speech service instead of the local model: ElevenLabs
+//! or OpenAI. The deck names which in its `slopslide-narration-provider` meta (see
+//! [`crate::html::narration_provider`]); without one it is the local model.
+//!
+//! Both are asked for raw 16-bit PCM at [`audio::RATE`], the rate the local model makes, so
+//! their audio is kept, played and exported the same way. ElevenLabs also says when each
+//! character is spoken, which becomes the slide's word timing at once (see [`words_of`]).
+//!
+//! The API keys are the user's, shared by every deck: saved in `~/.slopslides/speech-keys.json`
+//! (readable by the user only), or else taken from `ELEVENLABS_API_KEY` / `OPENAI_API_KEY` in
+//! the environment. They never go into a deck, and the frontend only learns whether one is set.
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use super::audio;
+use crate::error::{Error, Result};
+use crate::voice::Word;
+
+/// Who says a deck's narration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provider {
+    /// The local model (see the parent module).
+    Local,
+    ElevenLabs,
+    OpenAi,
+}
+
+pub const PROVIDERS: [Provider; 3] = [Provider::Local, Provider::ElevenLabs, Provider::OpenAi];
+
+impl Provider {
+    /// The id the deck names it by.
+    pub fn id(self) -> &'static str {
+        match self {
+            Provider::Local => "local",
+            Provider::ElevenLabs => "elevenlabs",
+            Provider::OpenAi => "openai",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Provider::Local => "Local voice model",
+            Provider::ElevenLabs => "ElevenLabs",
+            Provider::OpenAi => "OpenAI",
+        }
+    }
+
+    pub fn parse(id: &str) -> Option<Provider> {
+        PROVIDERS.into_iter().find(|p| p.id() == id)
+    }
+
+    /// The hosted model that says it; part of every audio fingerprint.
+    pub fn model(self) -> &'static str {
+        match self {
+            Provider::Local => "",
+            Provider::ElevenLabs => ELEVENLABS_MODEL,
+            Provider::OpenAi => OPENAI_MODEL,
+        }
+    }
+
+    /// The environment variable its key may come from.
+    fn key_env(self) -> Option<&'static str> {
+        match self {
+            Provider::Local => None,
+            Provider::ElevenLabs => Some("ELEVENLABS_API_KEY"),
+            Provider::OpenAi => Some("OPENAI_API_KEY"),
+        }
+    }
+
+    /// Its built-in voices, the default first. ElevenLabs has many more (the account's own
+    /// too, see [`elevenlabs_voices`]); any of its voice ids will do.
+    pub fn voices(self) -> &'static [CloudVoice] {
+        match self {
+            Provider::Local => &[],
+            Provider::ElevenLabs => ELEVENLABS_VOICES,
+            Provider::OpenAi => OPENAI_VOICES,
+        }
+    }
+
+    pub fn default_voice(self) -> &'static str {
+        match self {
+            Provider::Local => super::DEFAULT_VOICE,
+            _ => self.voices()[0].id,
+        }
+    }
+
+    /// Whether the deck may name `voice` for it.
+    pub fn accepts_voice(self, voice: &str) -> bool {
+        match self {
+            Provider::Local => super::voice(voice).is_some(),
+            Provider::OpenAi => OPENAI_VOICES.iter().any(|v| v.id == voice),
+            Provider::ElevenLabs => is_elevenlabs_voice_id(voice),
+        }
+    }
+}
+
+/// A hosted voice the app knows of.
+#[derive(Debug, Clone, Copy)]
+pub struct CloudVoice {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+}
+
+const ELEVENLABS_MODEL: &str = "eleven_multilingual_v2";
+const OPENAI_MODEL: &str = "gpt-4o-mini-tts";
+
+/// ElevenLabs' premade voices, there for every account.
+pub const ELEVENLABS_VOICES: &[CloudVoice] = &[
+    CloudVoice {
+        id: "JBFqnCBsd6RMkjVDRZzb",
+        name: "George",
+        description: "Warm British male narrator",
+    },
+    CloudVoice {
+        id: "EXAVITQu4vr4xnSDxMaL",
+        name: "Sarah",
+        description: "Soft American female voice",
+    },
+    CloudVoice {
+        id: "nPczCjzI2devNBz1zQrb",
+        name: "Brian",
+        description: "Deep American male voice",
+    },
+    CloudVoice {
+        id: "Xb7hH8MSUJpSbSDYk0k2",
+        name: "Alice",
+        description: "Confident British female voice",
+    },
+    CloudVoice {
+        id: "onwK4e9ZLuTAKqWW03F9",
+        name: "Daniel",
+        description: "Authoritative British male voice",
+    },
+    CloudVoice {
+        id: "pFZP5JQG7iQjIQuC4Bku",
+        name: "Lily",
+        description: "Warm British female voice",
+    },
+    CloudVoice {
+        id: "IKne3meq5aSn9XLyUdCD",
+        name: "Charlie",
+        description: "Casual Australian male voice",
+    },
+    CloudVoice {
+        id: "XrExE9yKIg1WjnnlVkGX",
+        name: "Matilda",
+        description: "Friendly American female voice",
+    },
+];
+
+/// OpenAI's voices for [`OPENAI_MODEL`].
+pub const OPENAI_VOICES: &[CloudVoice] = &[
+    CloudVoice {
+        id: "marin",
+        name: "Marin",
+        description: "Natural, clear voice",
+    },
+    CloudVoice {
+        id: "cedar",
+        name: "Cedar",
+        description: "Natural, warm voice",
+    },
+    CloudVoice {
+        id: "alloy",
+        name: "Alloy",
+        description: "Neutral, balanced voice",
+    },
+    CloudVoice {
+        id: "ash",
+        name: "Ash",
+        description: "Clear, confident voice",
+    },
+    CloudVoice {
+        id: "ballad",
+        name: "Ballad",
+        description: "Soft, expressive voice",
+    },
+    CloudVoice {
+        id: "coral",
+        name: "Coral",
+        description: "Warm, friendly voice",
+    },
+    CloudVoice {
+        id: "echo",
+        name: "Echo",
+        description: "Calm voice",
+    },
+    CloudVoice {
+        id: "fable",
+        name: "Fable",
+        description: "Storytelling voice",
+    },
+    CloudVoice {
+        id: "nova",
+        name: "Nova",
+        description: "Bright, energetic voice",
+    },
+    CloudVoice {
+        id: "onyx",
+        name: "Onyx",
+        description: "Deep voice",
+    },
+    CloudVoice {
+        id: "sage",
+        name: "Sage",
+        description: "Calm, thoughtful voice",
+    },
+    CloudVoice {
+        id: "shimmer",
+        name: "Shimmer",
+        description: "Light, gentle voice",
+    },
+    CloudVoice {
+        id: "verse",
+        name: "Verse",
+        description: "Versatile, expressive voice",
+    },
+];
+
+/// The most text OpenAI says in one request.
+pub const OPENAI_MAX_CHARS: usize = 4096;
+/// The most text ElevenLabs' [`ELEVENLABS_MODEL`] says in one request.
+pub const ELEVENLABS_MAX_CHARS: usize = 10_000;
+
+/// ElevenLabs voice ids are letters and digits (premade ones are 20 long).
+pub fn is_elevenlabs_voice_id(id: &str) -> bool {
+    (8..=64).contains(&id.len()) && id.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+const KEYS_FILE: &str = "speech-keys.json";
+
+/// `~/.slopslides/speech-keys.json`.
+pub fn keys_file(home: &Path) -> PathBuf {
+    home.join(KEYS_FILE)
+}
+
+/// Where a provider's key comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeySource {
+    /// Saved in the app (and removable there).
+    Saved,
+    /// The provider's environment variable.
+    Environment,
+}
+
+fn read_keys(home: &Path) -> BTreeMap<String, String> {
+    fs::read_to_string(keys_file(home))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// The key to call `provider` with, and where it comes from.
+pub fn key(home: &Path, provider: Provider) -> Option<(String, KeySource)> {
+    let saved = read_keys(home)
+        .remove(provider.id())
+        .filter(|k| !k.trim().is_empty());
+    if let Some(saved) = saved {
+        return Some((saved, KeySource::Saved));
+    }
+    let env = std::env::var(provider.key_env()?).ok()?;
+    let env = env.trim();
+    (!env.is_empty()).then(|| (env.to_string(), KeySource::Environment))
+}
+
+/// Saves `provider`'s key, or forgets the saved one for None. The file is the user's alone.
+pub fn set_key(home: &Path, provider: Provider, key: Option<&str>) -> Result<()> {
+    if provider == Provider::Local {
+        return Err(Error::msg("The local voice model needs no API key."));
+    }
+    let mut keys = read_keys(home);
+    match key.map(str::trim).filter(|k| !k.is_empty()) {
+        Some(key) => {
+            if key.chars().any(|c| c.is_whitespace() || c.is_control()) {
+                return Err(Error::msg("An API key has no spaces in it."));
+            }
+            keys.insert(provider.id().to_string(), key.to_string());
+        }
+        None => {
+            keys.remove(provider.id());
+        }
+    }
+    fs::create_dir_all(home)?;
+    let file = keys_file(home);
+    let part = file.with_extension("json.part");
+    let json = serde_json::to_string_pretty(&keys).map_err(|e| Error::msg(e.to_string()))?;
+    write_private(&part, &(json + "\n"))?;
+    fs::rename(part, file)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn write_private(path: &Path, text: &str) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(text.as_bytes())?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_private(path: &Path, text: &str) -> Result<()> {
+    fs::write(path, text)?;
+    Ok(())
+}
+
+/// A request to a provider, ready to send: kept apart from sending so it can be checked.
+#[derive(Debug, PartialEq)]
+pub struct Request {
+    pub url: String,
+    pub headers: Vec<(&'static str, String)>,
+    pub body: Value,
+}
+
+/// How to ask `provider` to say `text` in `voice`, in the language named `language` (English,
+/// German…), with `key`.
+pub fn request(
+    provider: Provider,
+    key: &str,
+    text: &str,
+    voice: &str,
+    language: &str,
+) -> Result<Request> {
+    let too_long = |max: usize| {
+        Error::msg(format!(
+            "{} says at most {max} characters at a time; this narration has {}. Shorten it or split the slide.",
+            provider.name(),
+            text.chars().count()
+        ))
+    };
+    match provider {
+        Provider::Local => Err(Error::msg("The local voice model is not a hosted service.")),
+        Provider::ElevenLabs => {
+            // It goes into the URL.
+            if !is_elevenlabs_voice_id(voice) {
+                return Err(Error::msg(format!(
+                    "\"{voice}\" is no ElevenLabs voice id."
+                )));
+            }
+            if text.chars().count() > ELEVENLABS_MAX_CHARS {
+                return Err(too_long(ELEVENLABS_MAX_CHARS));
+            }
+            Ok(Request {
+                url: format!(
+                    "https://api.elevenlabs.io/v1/text-to-speech/{voice}/with-timestamps?output_format=pcm_{}",
+                    audio::RATE
+                ),
+                headers: vec![("xi-api-key", key.to_string())],
+                body: json!({ "text": text, "model_id": ELEVENLABS_MODEL }),
+            })
+        }
+        Provider::OpenAi => {
+            if text.chars().count() > OPENAI_MAX_CHARS {
+                return Err(too_long(OPENAI_MAX_CHARS));
+            }
+            Ok(Request {
+                url: "https://api.openai.com/v1/audio/speech".into(),
+                headers: vec![("Authorization", format!("Bearer {key}"))],
+                body: json!({
+                    "model": OPENAI_MODEL,
+                    "voice": voice,
+                    "input": text,
+                    // Raw 16-bit mono PCM at 24 kHz.
+                    "response_format": "pcm",
+                    "instructions": format!(
+                        "Speak in {language}, as a clear, engaging presenter narrating a slide. Keep a natural, steady pace."
+                    ),
+                }),
+            })
+        }
+    }
+}
+
+/// What a provider said: the samples at [`audio::RATE`], and when each word is, if it says.
+#[derive(Debug, PartialEq)]
+pub struct Said {
+    pub samples: Vec<f32>,
+    pub words: Option<Vec<Word>>,
+}
+
+/// Mono 16-bit little-endian PCM as samples; an odd last byte is dropped.
+pub fn pcm16(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(2)
+        .map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32768.0)
+        .collect()
+}
+
+/// ElevenLabs' `with-timestamps` answer: its audio, and its words from the characters' times.
+pub fn parse_elevenlabs(body: &[u8]) -> Result<Said> {
+    #[derive(Deserialize)]
+    struct Answer {
+        audio_base64: String,
+        alignment: Option<Alignment>,
+    }
+    #[derive(Deserialize)]
+    struct Alignment {
+        characters: Vec<String>,
+        character_start_times_seconds: Vec<f64>,
+        character_end_times_seconds: Vec<f64>,
+    }
+    use base64::Engine as _;
+    let answer: Answer = serde_json::from_slice(body)
+        .map_err(|e| Error::msg(format!("ElevenLabs answered in an unknown way: {e}")))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(answer.audio_base64.trim())
+        .map_err(|e| Error::msg(format!("ElevenLabs sent unreadable audio: {e}")))?;
+    let words = answer.alignment.map(|a| {
+        words_of(
+            &a.characters,
+            &a.character_start_times_seconds,
+            &a.character_end_times_seconds,
+        )
+    });
+    Ok(Said {
+        samples: pcm16(&bytes),
+        words: words.filter(|w| !w.is_empty()),
+    })
+}
+
+/// The words in spoken `characters`, each from its first character's start to its last one's
+/// end. Runs of punctuation alone (a dash between words) are no word.
+pub fn words_of(characters: &[String], starts: &[f64], ends: &[f64]) -> Vec<Word> {
+    let mut words = Vec::new();
+    let mut current: Option<Word> = None;
+    let finish = |current: &mut Option<Word>, words: &mut Vec<Word>| {
+        if let Some(word) = current.take() {
+            if word.text.chars().any(char::is_alphanumeric) {
+                words.push(word);
+            }
+        }
+    };
+    let timed = characters.len().min(starts.len()).min(ends.len());
+    for i in 0..timed {
+        let c = &characters[i];
+        if c.chars().all(char::is_whitespace) {
+            finish(&mut current, &mut words);
+            continue;
+        }
+        match current.as_mut() {
+            Some(word) => {
+                word.text.push_str(c);
+                word.end = ends[i].max(word.end);
+            }
+            None => {
+                current = Some(Word {
+                    text: c.clone(),
+                    start: starts[i],
+                    end: ends[i],
+                })
+            }
+        }
+    }
+    finish(&mut current, &mut words);
+    words
+}
+
+/// The message in a provider's error answer, if it has one.
+pub fn error_message(body: &[u8]) -> Option<String> {
+    let value: Value = serde_json::from_slice(body).ok()?;
+    let found = [
+        &value["error"]["message"],
+        &value["detail"]["message"],
+        &value["detail"],
+        &value["message"],
+    ]
+    .into_iter()
+    .find_map(|v| v.as_str().map(str::to_string));
+    found.filter(|m| !m.trim().is_empty())
+}
+
+/// What to tell the user when `provider` answered with `status` and `body`.
+pub fn failure(provider: Provider, status: u16, body: &[u8]) -> Error {
+    let name = provider.name();
+    let detail = error_message(body);
+    let message = match status {
+        401 | 403 => format!(
+            "{name} did not accept the API key{}. Check it in the Narration panel.",
+            detail.map(|d| format!(" ({d})")).unwrap_or_default()
+        ),
+        429 => format!(
+            "{name} is limiting requests or the account is out of credit{}. Try again later.",
+            detail.map(|d| format!(" ({d})")).unwrap_or_default()
+        ),
+        _ => format!(
+            "{name} could not say the narration (HTTP {status}){}",
+            detail.map(|d| format!(": {d}")).unwrap_or_default()
+        ),
+    };
+    Error::msg(message)
+}
+
+fn client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(180))
+        .build()
+        .map_err(|e| Error::msg(e.to_string()))
+}
+
+/// Has `provider` say `text`.
+pub async fn say(
+    provider: Provider,
+    key: &str,
+    text: &str,
+    voice: &str,
+    language: &str,
+) -> Result<Said> {
+    let request = request(provider, key, text, voice, language)?;
+    let mut call = client()?
+        .post(&request.url)
+        .header("Content-Type", "application/json")
+        .body(request.body.to_string());
+    for (name, value) in &request.headers {
+        call = call.header(*name, value);
+    }
+    let unreachable =
+        |e: reqwest::Error| Error::msg(format!("Could not reach {}: {e}", provider.name()));
+    let response = call.send().await.map_err(unreachable)?;
+    let status = response.status();
+    let body = response.bytes().await.map_err(unreachable)?;
+    if !status.is_success() {
+        return Err(failure(provider, status.as_u16(), &body));
+    }
+    let said = match provider {
+        Provider::ElevenLabs => parse_elevenlabs(&body)?,
+        _ => Said {
+            samples: pcm16(&body),
+            words: None,
+        },
+    };
+    if said.samples.is_empty() {
+        return Err(Error::msg(format!("{} sent no audio.", provider.name())));
+    }
+    Ok(said)
+}
+
+/// A voice to pick in the Narration panel.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceOption {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// The language it speaks natively, for the local model's voices.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native: Option<String>,
+}
+
+impl From<&CloudVoice> for VoiceOption {
+    fn from(v: &CloudVoice) -> Self {
+        VoiceOption {
+            id: v.id.into(),
+            name: v.name.into(),
+            description: v.description.into(),
+            native: None,
+        }
+    }
+}
+
+/// The voices of ElevenLabs' `/v1/voices` answer: the premade ones and the account's own.
+pub fn parse_elevenlabs_voices(body: &[u8]) -> Result<Vec<VoiceOption>> {
+    let value: Value = serde_json::from_slice(body)
+        .map_err(|e| Error::msg(format!("ElevenLabs answered in an unknown way: {e}")))?;
+    let voices = value["voices"].as_array().cloned().unwrap_or_default();
+    Ok(voices
+        .iter()
+        .filter_map(|v| {
+            let id = v["voice_id"]
+                .as_str()
+                .filter(|id| is_elevenlabs_voice_id(id))?;
+            let name = v["name"].as_str().unwrap_or(id);
+            let labels = &v["labels"];
+            let mut about: Vec<&str> =
+                ["descriptive", "description", "gender", "accent", "use_case"]
+                    .iter()
+                    .filter_map(|k| labels[*k].as_str())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            about.dedup();
+            let mut description = about.join(", ");
+            if v["category"].as_str().is_some_and(|c| c != "premade") {
+                description = match description.is_empty() {
+                    true => "Your voice".into(),
+                    false => format!("Your voice, {description}"),
+                };
+            }
+            Some(VoiceOption {
+                id: id.into(),
+                name: name.into(),
+                description,
+                native: None,
+            })
+        })
+        .collect())
+}
+
+/// Every voice the ElevenLabs account with `key` can use.
+pub async fn elevenlabs_voices(key: &str) -> Result<Vec<VoiceOption>> {
+    let unreachable = |e: reqwest::Error| Error::msg(format!("Could not reach ElevenLabs: {e}"));
+    let response = client()?
+        .get("https://api.elevenlabs.io/v1/voices")
+        .header("xi-api-key", key)
+        .send()
+        .await
+        .map_err(unreachable)?;
+    let status = response.status();
+    let body = response.bytes().await.map_err(unreachable)?;
+    if !status.is_success() {
+        return Err(failure(Provider::ElevenLabs, status.as_u16(), &body));
+    }
+    parse_elevenlabs_voices(&body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_home() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("slopslide-speech-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn providers_are_named_by_id() {
+        for p in PROVIDERS {
+            assert_eq!(Provider::parse(p.id()), Some(p));
+        }
+        assert_eq!(Provider::parse("ElevenLabs"), None);
+        assert_eq!(Provider::parse("google"), None);
+    }
+
+    #[test]
+    fn each_provider_has_its_own_voices() {
+        assert_eq!(Provider::Local.default_voice(), "ryan");
+        assert_eq!(Provider::OpenAi.default_voice(), "marin");
+        assert_eq!(Provider::ElevenLabs.default_voice(), "JBFqnCBsd6RMkjVDRZzb");
+        assert!(Provider::Local.accepts_voice("sohee"));
+        assert!(!Provider::Local.accepts_voice("marin"));
+        assert!(Provider::OpenAi.accepts_voice("coral"));
+        assert!(!Provider::OpenAi.accepts_voice("ryan"));
+        // Any ElevenLabs voice id, the account's own too.
+        assert!(Provider::ElevenLabs.accepts_voice("21m00Tcm4TlvDq8ikWAM"));
+        for bad in [
+            "",
+            "ryan",
+            "has space here",
+            "../../etc/passwd",
+            "a/b/c/d/e/f",
+        ] {
+            assert!(!Provider::ElevenLabs.accepts_voice(bad), "{bad}");
+        }
+        assert!(ELEVENLABS_VOICES
+            .iter()
+            .all(|v| is_elevenlabs_voice_id(v.id)));
+    }
+
+    #[test]
+    fn keys_are_saved_for_the_user_alone_and_can_be_forgotten() {
+        let home = temp_home();
+        assert_eq!(key(&home, Provider::Local), None);
+        set_key(&home, Provider::OpenAi, Some("  sk-test  ")).unwrap();
+        assert_eq!(
+            key(&home, Provider::OpenAi),
+            Some(("sk-test".into(), KeySource::Saved))
+        );
+        set_key(&home, Provider::ElevenLabs, Some("el-key")).unwrap();
+        assert_eq!(key(&home, Provider::OpenAi).unwrap().0, "sk-test");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(keys_file(&home)).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        set_key(&home, Provider::OpenAi, None).unwrap();
+        assert!(key(&home, Provider::OpenAi).is_none_or(|(_, s)| s == KeySource::Environment));
+        assert_eq!(key(&home, Provider::ElevenLabs).unwrap().0, "el-key");
+        assert!(set_key(&home, Provider::OpenAi, Some("two words")).is_err());
+        assert!(set_key(&home, Provider::Local, Some("x")).is_err());
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn elevenlabs_is_asked_for_pcm_with_timestamps() {
+        let r = request(
+            Provider::ElevenLabs,
+            "k",
+            "Hello.",
+            "JBFqnCBsd6RMkjVDRZzb",
+            "German",
+        )
+        .unwrap();
+        assert_eq!(
+            r.url,
+            "https://api.elevenlabs.io/v1/text-to-speech/JBFqnCBsd6RMkjVDRZzb/with-timestamps?output_format=pcm_24000"
+        );
+        assert_eq!(r.headers, vec![("xi-api-key", "k".to_string())]);
+        assert_eq!(r.body["text"], "Hello.");
+        assert_eq!(r.body["model_id"], "eleven_multilingual_v2");
+    }
+
+    #[test]
+    fn openai_is_asked_for_pcm_in_the_narrations_language() {
+        let r = request(Provider::OpenAi, "sk", "Hallo.", "coral", "German").unwrap();
+        assert_eq!(r.url, "https://api.openai.com/v1/audio/speech");
+        assert_eq!(r.headers, vec![("Authorization", "Bearer sk".to_string())]);
+        assert_eq!(r.body["model"], "gpt-4o-mini-tts");
+        assert_eq!(r.body["voice"], "coral");
+        assert_eq!(r.body["input"], "Hallo.");
+        assert_eq!(r.body["response_format"], "pcm");
+        assert!(r.body["instructions"].as_str().unwrap().contains("German"));
+    }
+
+    #[test]
+    fn too_long_a_narration_is_refused_before_sending() {
+        let long = "a".repeat(OPENAI_MAX_CHARS + 1);
+        let err = request(Provider::OpenAi, "sk", &long, "coral", "English").unwrap_err();
+        assert!(err.to_string().contains("4096"), "{err}");
+        assert!(request(
+            Provider::ElevenLabs,
+            "k",
+            &long,
+            "JBFqnCBsd6RMkjVDRZzb",
+            "English"
+        )
+        .is_ok());
+        assert!(request(Provider::Local, "", "Hi", "ryan", "English").is_err());
+        assert!(request(Provider::ElevenLabs, "k", "Hi", "../voices", "English").is_err());
+    }
+
+    #[test]
+    fn pcm_becomes_samples() {
+        let bytes = [0x00, 0x00, 0x00, 0x40, 0x00, 0x80, 0xff, 0x7f, 0x01];
+        assert_eq!(pcm16(&bytes), vec![0.0, 0.5, -1.0, 32767.0 / 32768.0]);
+    }
+
+    #[test]
+    fn character_times_become_words() {
+        let chars: Vec<String> = "Hi, all — go!".chars().map(String::from).collect();
+        let starts: Vec<f64> = (0..chars.len()).map(|i| i as f64 * 0.1).collect();
+        let ends: Vec<f64> = starts.iter().map(|s| s + 0.1).collect();
+        let words = words_of(&chars, &starts, &ends);
+        let texts: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(texts, ["Hi,", "all", "go!"]);
+        assert_eq!(words[0].start, 0.0);
+        assert!((words[0].end - 0.3).abs() < 1e-9);
+        assert!((words[1].start - 0.4).abs() < 1e-9);
+        assert!(words_of(&[], &[], &[]).is_empty());
+        // Missing times cut it short rather than failing.
+        assert_eq!(words_of(&chars, &starts[..2], &ends).len(), 1);
+    }
+
+    #[test]
+    fn elevenlabs_answers_carry_audio_and_word_times() {
+        use base64::Engine as _;
+        let audio = base64::engine::general_purpose::STANDARD.encode([0x00, 0x40, 0x00, 0xc0]);
+        let body = json!({
+            "audio_base64": audio,
+            "alignment": {
+                "characters": ["H", "i", " ", "y", "o", "u"],
+                "character_start_times_seconds": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
+                "character_end_times_seconds": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+            },
+            "normalized_alignment": null
+        });
+        let said = parse_elevenlabs(body.to_string().as_bytes()).unwrap();
+        assert_eq!(said.samples, vec![0.5, -0.5]);
+        let words = said.words.unwrap();
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[1].text, "you");
+        assert_eq!(words[1].start, 0.3);
+        let bare = json!({ "audio_base64": audio });
+        assert_eq!(
+            parse_elevenlabs(bare.to_string().as_bytes()).unwrap().words,
+            None
+        );
+        assert!(parse_elevenlabs(b"<html>").is_err());
+        assert!(parse_elevenlabs(br#"{"audio_base64":"!!"}"#).is_err());
+    }
+
+    #[test]
+    fn failures_say_what_went_wrong() {
+        let openai = br#"{"error":{"message":"Incorrect API key provided"}}"#;
+        let err = failure(Provider::OpenAi, 401, openai).to_string();
+        assert!(err.contains("OpenAI did not accept the API key"), "{err}");
+        assert!(err.contains("Incorrect API key"), "{err}");
+        let eleven = br#"{"detail":{"status":"quota_exceeded","message":"Out of credits"}}"#;
+        let err = failure(Provider::ElevenLabs, 429, eleven).to_string();
+        assert!(
+            err.contains("out of credit") && err.contains("Out of credits"),
+            "{err}"
+        );
+        let err = failure(Provider::ElevenLabs, 500, b"oops").to_string();
+        assert!(err.contains("HTTP 500"), "{err}");
+        assert_eq!(
+            error_message(br#"{"detail":"Not found"}"#).as_deref(),
+            Some("Not found")
+        );
+    }
+
+    #[test]
+    fn elevenlabs_voices_are_listed_with_the_accounts_own_marked() {
+        let body = json!({ "voices": [
+            { "voice_id": "JBFqnCBsd6RMkjVDRZzb", "name": "George", "category": "premade",
+              "labels": { "accent": "british", "gender": "male" } },
+            { "voice_id": "abcdefghij1234567890", "name": "Me", "category": "cloned", "labels": {} },
+            { "voice_id": "bad id", "name": "Broken" }
+        ]});
+        let voices = parse_elevenlabs_voices(body.to_string().as_bytes()).unwrap();
+        assert_eq!(voices.len(), 2);
+        assert_eq!(voices[0].description, "male, british");
+        assert_eq!(voices[1].name, "Me");
+        assert_eq!(voices[1].description, "Your voice");
+        assert!(parse_elevenlabs_voices(b"{}").unwrap().is_empty());
+    }
+}

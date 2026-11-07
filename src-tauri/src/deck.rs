@@ -607,12 +607,36 @@ pub fn set_slide_size(file: &Path, size: SlideSize) -> Result<Deck> {
     .0)
 }
 
-/// Sets the voice the deck's narration is said in (one of [`narration::VOICES`]).
+/// Sets the voice the deck's narration is said in: one its provider has (see
+/// [`narration::Provider::accepts_voice`]).
 pub fn set_narration_voice(file: &Path, voice: &str) -> Result<Deck> {
-    if narration::voice(voice).is_none() {
-        return Err(Error::msg(format!("unknown narration voice: {voice}")));
-    }
-    Ok(edit(file, |s| Ok((html::set_narration_voice(s, voice), ())))?.0)
+    Ok(edit(file, |s| {
+        if !narration::provider_of(s).accepts_voice(voice) {
+            return Err(format!("unknown narration voice: {voice}"));
+        }
+        Ok((html::set_narration_voice(s, voice), ()))
+    })?
+    .0)
+}
+
+/// Sets who says the deck's narration (one of [`narration::cloud::PROVIDERS`]); the local
+/// model has no meta. A voice the new provider does not have becomes its default.
+pub fn set_narration_provider(file: &Path, provider: &str) -> Result<Deck> {
+    let Some(provider) = narration::Provider::parse(provider) else {
+        return Err(Error::msg(format!(
+            "unknown narration provider: {provider}"
+        )));
+    };
+    Ok(edit(file, |s| {
+        let named = (provider != narration::Provider::Local).then(|| provider.id());
+        let mut out = html::set_narration_provider(s, named);
+        let voice = html::narration_voice(&out);
+        if voice.is_some_and(|v| !provider.accepts_voice(&v)) {
+            out = html::set_narration_voice(&out, provider.default_voice());
+        }
+        Ok((out, ()))
+    })?
+    .0)
 }
 
 /// Sets the language the deck's narration is in (one of [`narration::LANGUAGES`]).
@@ -1593,6 +1617,48 @@ mod tests {
         let html = deck.html();
         assert!(set_narration_voice(&deck.file(), "nobody").is_err());
         assert!(set_narration_language(&deck.file(), "xx").is_err());
+        assert_eq!(deck.html(), html);
+    }
+
+    #[test]
+    fn the_narration_provider_is_kept_in_the_deck_with_a_voice_it_has() {
+        let deck = TempDeck::new(EDITED);
+        let narration = |d: &Deck| d.narration.clone();
+        set_narration_voice(&deck.file(), "sohee").unwrap();
+        // An OpenAI voice is no voice of the local model.
+        assert!(set_narration_voice(&deck.file(), "coral").is_err());
+
+        let openai = narration(&set_narration_provider(&deck.file(), "openai").unwrap());
+        assert_eq!(openai.provider, "openai");
+        // The local voice is replaced by OpenAI's default rather than left invalid.
+        assert_eq!(openai.voice, "marin");
+        assert!(deck
+            .html()
+            .contains("<meta name=\"slopslide-narration-provider\" content=\"openai\">"));
+        assert!(deck
+            .html()
+            .contains("<meta name=\"slopslide-narration-voice\" content=\"marin\">"));
+        assert_eq!(
+            narration(&set_narration_voice(&deck.file(), "coral").unwrap()).voice,
+            "coral"
+        );
+        assert!(set_narration_voice(&deck.file(), "sohee").is_err());
+
+        let eleven = narration(&set_narration_provider(&deck.file(), "elevenlabs").unwrap());
+        assert_eq!(eleven.voice, "JBFqnCBsd6RMkjVDRZzb");
+        // Any ElevenLabs voice id, such as the user's own.
+        let own = set_narration_voice(&deck.file(), "abcdefghij1234567890").unwrap();
+        assert_eq!(narration(&own).voice, "abcdefghij1234567890");
+
+        // Back to the local model: no provider meta, and one of its voices.
+        let local = narration(&set_narration_provider(&deck.file(), "local").unwrap());
+        assert_eq!(
+            (local.provider.as_str(), local.voice.as_str()),
+            ("local", "ryan")
+        );
+        assert!(!deck.html().contains("slopslide-narration-provider"));
+        let html = deck.html();
+        assert!(set_narration_provider(&deck.file(), "acme").is_err());
         assert_eq!(deck.html(), html);
     }
 

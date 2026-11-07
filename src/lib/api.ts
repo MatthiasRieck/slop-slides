@@ -261,6 +261,8 @@ export type AgentEvent =
   | { type: "usage"; contextTokens: number | null; contextWindow: number | null }
   | { type: "compacting" }
   | { type: "compacted" }
+  /** The user's message `message` went into the running turn; what follows answers it. */
+  | { type: "steered"; message: string | null }
   | { type: "finished"; interrupted: boolean };
 
 export interface AgentEventEnvelope {
@@ -637,6 +639,12 @@ export const api = {
   respondApproval: (workspace: string, id: string, decision: ApprovalDecision) =>
     invoke<void>("respond_approval", { workspace, id, decision }),
   interruptAgent: (id: string) => invoke<void>("interrupt_agent", { id }),
+  /**
+   * Sends `prompt` into the running turn, for chat message `message`; false when it did not
+   * get in (the turn was ending), and it should run as the next turn instead.
+   */
+  steerAgent: (workspace: string, prompt: string, message: string) =>
+    invoke<boolean>("steer_agent", { workspace, prompt, message }),
   agentRunning: (id: string) => invoke<boolean>("agent_running", { id }),
   listProviders: () => invoke<ProviderInfo[]>("list_providers"),
   /** The user's templates first, then the built-in ones. */

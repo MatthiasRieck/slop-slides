@@ -6,10 +6,12 @@ import {
   ArrowUp,
   Check,
   Copy,
+  CornerDownRight,
   FileText,
   FoldVertical,
   Globe,
   History,
+  ListEnd,
   Loader2,
   MousePointerClick,
   Paperclip,
@@ -32,7 +34,7 @@ import { COMPACT_THRESHOLD, contextPercent, formatTokens, latestContext, windowT
 import { claimDrop, dropCovered, dropPoint, isImage } from "../lib/drop";
 import type { EditElement } from "../lib/editTools";
 import { PROVIDERS, type Provider } from "../lib/models";
-import { basename, cn, dirname, isSessionFile, workspaceChatFileUrl } from "../lib/utils";
+import { basename, cn, dirname, isMac, isSessionFile, workspaceChatFileUrl } from "../lib/utils";
 import { insertTranscript } from "../lib/voice";
 import {
   type AssistantMessage,
@@ -711,15 +713,18 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     if (picked) await importPaths(Array.isArray(picked) ? picked : [picked]);
   };
 
-  const send = (message: string) => {
+  /** Sends the message, or while the agent works queues it; `steer` sends it into the turn. */
+  const send = (message: string, steer = false) => {
     const text = message.trim();
-    if (!text || running) return;
-    void useApp.getState().send(text, {
+    if (!text) return;
+    const options = {
       includeSlide: includeSlide && slideNumber > 0,
       attachments,
       ...(screenshot && { screenshot }),
       ...(element && { element }),
-    });
+    };
+    const app = useApp.getState();
+    void (steer && running ? app.steer(text, options) : app.send(text, options));
     setDraft("");
     setAttachments([]);
     setScreenshot(null);
@@ -727,237 +732,335 @@ function Composer(props: { draft: string; setDraft: (text: string) => void }) {
     setGridOpen(false);
   };
 
-  const submit = () => {
-    if (!dictation) send(draft);
+  const submit = (steer = false) => {
+    if (!dictation) send(draft, steer);
+  };
+
+  /** Takes a queued message back into the composer, after what is there. */
+  const editQueued = (id: string) => {
+    const item = useApp.getState().takeQueued(id);
+    if (!item) return;
+    setDraft(draft.trim() ? `${draft.trimEnd()}\n\n${item.text}` : item.text);
+    const { options } = item;
+    setAttachments((prev) => [...prev, ...options.attachments.filter((a) => !prev.includes(a))]);
+    if (options.screenshot) setScreenshot(options.screenshot);
+    if (options.element) setElement(options.element);
+    setIncludeSlide(options.includeSlide);
+    textareaRef.current?.focus();
   };
 
   return (
-    <div className="relative mx-auto w-full max-w-3xl shrink-0 px-3 pb-3">
-      {workspace &&
-        images.length > 0 &&
-        (gridOpen ? (
-          <ImageGrid
-            workspacePath={workspace.path}
-            images={images}
-            onRemove={(path) => {
-              removeAttachment(path);
-              if (images.length === 1) setGridOpen(false);
-            }}
-            onClose={() => setGridOpen(false)}
-          />
-        ) : (
-          <ImageFan workspacePath={workspace.path} images={images} onOpen={() => setGridOpen(true)} />
-        ))}
-      <ContextMeter />
-      {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: clicking padding focuses the keyboard-accessible textarea. */}
-      {/* biome-ignore lint/a11y/noStaticElementInteractions: this is a focus convenience, not a separate control. */}
-      {/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard users can tab directly to the textarea. */}
-      <div
-        onClick={(e) => {
-          if (e.target === e.currentTarget) textareaRef.current?.focus();
-        }}
-        className={cn(
-          "relative z-10 rounded-2xl border bg-card/95 shadow-composer backdrop-blur-xl transition-colors focus-within:border-ring/50",
-          dragging && "border-primary ring-2 ring-primary/30",
-        )}
-      >
-        {/* biome-ignore lint/a11y/useSemanticElements: a focusable window splitter supports resizing; hr cannot contain the grip. */}
+    <div className="mx-auto w-full max-w-3xl shrink-0 px-3 pb-3">
+      <QueuedMessages onEdit={editQueued} />
+      <div className="relative">
+        {workspace &&
+          images.length > 0 &&
+          (gridOpen ? (
+            <ImageGrid
+              workspacePath={workspace.path}
+              images={images}
+              onRemove={(path) => {
+                removeAttachment(path);
+                if (images.length === 1) setGridOpen(false);
+              }}
+              onClose={() => setGridOpen(false)}
+            />
+          ) : (
+            <ImageFan workspacePath={workspace.path} images={images} onOpen={() => setGridOpen(true)} />
+          ))}
+        <ContextMeter />
+        {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: clicking padding focuses the keyboard-accessible textarea. */}
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: this is a focus convenience, not a separate control. */}
+        {/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard users can tab directly to the textarea. */}
         <div
-          role="separator"
-          aria-label="Resize message input"
-          aria-orientation="horizontal"
-          aria-valuemin={64}
-          aria-valuemax={maxInputHeight}
-          aria-valuenow={inputHeight ?? 64}
-          tabIndex={0}
-          title="Drag up to make the message input taller"
-          className="group flex h-4 w-full cursor-ns-resize touch-none items-center justify-center rounded-t-2xl outline-none focus-visible:ring-2 focus-visible:ring-primary"
-          onPointerDown={(e) => {
-            if (e.button !== 0) return;
-            e.preventDefault();
-            resizeStart.current = { y: e.clientY, height: textareaRef.current?.getBoundingClientRect().height ?? 64 };
-            e.currentTarget.setPointerCapture(e.pointerId);
+          onClick={(e) => {
+            if (e.target === e.currentTarget) textareaRef.current?.focus();
           }}
-          onPointerMove={(e) => {
-            const start = resizeStart.current;
-            if (start) resizeInput(start.height + start.y - e.clientY);
-          }}
-          onPointerUp={(e) => {
-            resizeStart.current = null;
-            if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
-          }}
-          onPointerCancel={() => {
-            resizeStart.current = null;
-          }}
-          onLostPointerCapture={() => {
-            resizeStart.current = null;
-          }}
-          onKeyDown={(e) => {
-            const height = textareaRef.current?.getBoundingClientRect().height ?? 64;
-            if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "Home" || e.key === "End") {
-              e.preventDefault();
-              resizeInput(
-                e.key === "Home" ? 64 : e.key === "End" ? maxInputHeight : height + (e.key === "ArrowUp" ? 16 : -16),
-              );
-            }
-          }}
+          className={cn(
+            "relative z-10 rounded-2xl border bg-card/95 shadow-composer backdrop-blur-xl transition-colors focus-within:border-ring/50",
+            dragging && "border-primary ring-2 ring-primary/30",
+          )}
         >
-          <span className="h-1 w-8 rounded-full bg-border group-hover:bg-muted-foreground group-focus-visible:bg-primary" />
-        </div>
-        {(files.length > 0 || slideNumber > 0 || element || revertNotes.length > 0) && (
-          <div className="@container flex flex-wrap gap-1 px-3.5 pt-3">
-            {slideNumber > 0 && (
-              <button
-                type="button"
-                onClick={() => setIncludeSlide((v) => !v)}
-                title={
-                  includeSlide ? "The agent will know which slide you are on" : "Not referencing the current slide"
-                }
-                className={cn(
-                  "flex h-5 items-center gap-1 rounded-md border px-1.5 text-xs",
-                  includeSlide ? "border-primary/30 bg-primary/10 text-primary" : "text-muted-foreground line-through",
-                )}
-              >
-                <Presentation className="size-3" />
-                Slide {slideNumber}
-              </button>
-            )}
-            {element && (
-              <span
-                title={`The agent gets this element's markup:\n${element.path}`}
-                className="flex h-5 min-w-0 items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 text-xs text-primary"
-              >
-                <MousePointerClick className="size-3 shrink-0" />
-                <span className="truncate">{element.name}</span>
-                <button
-                  type="button"
-                  aria-label="Don't send element"
-                  onClick={() => setElement(null)}
-                  className="hover:text-foreground"
-                >
-                  <X className="size-3" />
-                </button>
-              </span>
-            )}
-            {sendsSketch && (
-              <span
-                title="A screenshot of the slide with your marks is sent along; the marks stay on the slide as a review"
-                className="flex h-5 items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 text-xs text-primary"
-              >
-                <PenLine className="size-3" />
-                Sketch
-                <button
-                  type="button"
-                  aria-label="Don't send sketch"
-                  title="Don't send these marks; they stay on the slide"
-                  onClick={() => selected && useApp.getState().skipSketch(selected)}
-                  className="hover:text-foreground"
-                >
-                  <X className="size-3" />
-                </button>
-              </span>
-            )}
-            <ComposerComments />
-            {revertNotes.map((note) => (
-              <span
-                key={note.message}
-                title={`The agent is told that you undid what its turn for ${note.label} changed in the deck`}
-                className="flex h-5 min-w-0 items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 text-xs text-primary"
-              >
-                <Undo2 className="size-3 shrink-0" />
-                <span className="truncate">Undone: {note.label}</span>
-                <button
-                  type="button"
-                  aria-label="Don't tell the agent"
-                  onClick={() => useApp.getState().dropRevertNote(note.message)}
-                  className="hover:text-foreground"
-                >
-                  <X className="size-3" />
-                </button>
-              </span>
-            ))}
-            {files.map((a) => (
-              <span
-                key={a}
-                className="flex h-5 items-center gap-1 rounded-md border px-1.5 text-xs text-muted-foreground"
-              >
-                <FileText className="size-3" />
-                {a.replace(/^assets\//, "")}
-                <button
-                  type="button"
-                  aria-label={`Remove ${a.replace(/^assets\//, "")}`}
-                  onClick={() => removeAttachment(a)}
-                  className="hover:text-foreground"
-                >
-                  <X className="size-3" />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-        <textarea
-          ref={textareaRef}
-          value={shownDraft}
-          rows={1}
-          readOnly={!!dictation}
-          onChange={(e) => setDraft(e.target.value)}
-          onPaste={onPaste}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+          {/* biome-ignore lint/a11y/useSemanticElements: a focusable window splitter supports resizing; hr cannot contain the grip. */}
+          <div
+            role="separator"
+            aria-label="Resize message input"
+            aria-orientation="horizontal"
+            aria-valuemin={64}
+            aria-valuemax={maxInputHeight}
+            aria-valuenow={inputHeight ?? 64}
+            tabIndex={0}
+            title="Drag up to make the message input taller"
+            className="group flex h-4 w-full cursor-ns-resize touch-none items-center justify-center rounded-t-2xl outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            onPointerDown={(e) => {
+              if (e.button !== 0) return;
               e.preventDefault();
-              submit();
+              resizeStart.current = { y: e.clientY, height: textareaRef.current?.getBoundingClientRect().height ?? 64 };
+              e.currentTarget.setPointerCapture(e.pointerId);
+            }}
+            onPointerMove={(e) => {
+              const start = resizeStart.current;
+              if (start) resizeInput(start.height + start.y - e.clientY);
+            }}
+            onPointerUp={(e) => {
+              resizeStart.current = null;
+              if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+            }}
+            onPointerCancel={() => {
+              resizeStart.current = null;
+            }}
+            onLostPointerCapture={() => {
+              resizeStart.current = null;
+            }}
+            onKeyDown={(e) => {
+              const height = textareaRef.current?.getBoundingClientRect().height ?? 64;
+              if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "Home" || e.key === "End") {
+                e.preventDefault();
+                resizeInput(
+                  e.key === "Home" ? 64 : e.key === "End" ? maxInputHeight : height + (e.key === "ArrowUp" ? 16 : -16),
+                );
+              }
+            }}
+          >
+            <span className="h-1 w-8 rounded-full bg-border group-hover:bg-muted-foreground group-focus-visible:bg-primary" />
+          </div>
+          {(files.length > 0 || slideNumber > 0 || element || revertNotes.length > 0) && (
+            <div className="@container flex flex-wrap gap-1 px-3.5 pt-3">
+              {slideNumber > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setIncludeSlide((v) => !v)}
+                  title={
+                    includeSlide ? "The agent will know which slide you are on" : "Not referencing the current slide"
+                  }
+                  className={cn(
+                    "flex h-5 items-center gap-1 rounded-md border px-1.5 text-xs",
+                    includeSlide
+                      ? "border-primary/30 bg-primary/10 text-primary"
+                      : "text-muted-foreground line-through",
+                  )}
+                >
+                  <Presentation className="size-3" />
+                  Slide {slideNumber}
+                </button>
+              )}
+              {element && (
+                <span
+                  title={`The agent gets this element's markup:\n${element.path}`}
+                  className="flex h-5 min-w-0 items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 text-xs text-primary"
+                >
+                  <MousePointerClick className="size-3 shrink-0" />
+                  <span className="truncate">{element.name}</span>
+                  <button
+                    type="button"
+                    aria-label="Don't send element"
+                    onClick={() => setElement(null)}
+                    className="hover:text-foreground"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              )}
+              {sendsSketch && (
+                <span
+                  title="A screenshot of the slide with your marks is sent along; the marks stay on the slide as a review"
+                  className="flex h-5 items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 text-xs text-primary"
+                >
+                  <PenLine className="size-3" />
+                  Sketch
+                  <button
+                    type="button"
+                    aria-label="Don't send sketch"
+                    title="Don't send these marks; they stay on the slide"
+                    onClick={() => selected && useApp.getState().skipSketch(selected)}
+                    className="hover:text-foreground"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              )}
+              <ComposerComments />
+              {revertNotes.map((note) => (
+                <span
+                  key={note.message}
+                  title={`The agent is told that you undid what its turn for ${note.label} changed in the deck`}
+                  className="flex h-5 min-w-0 items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-1.5 text-xs text-primary"
+                >
+                  <Undo2 className="size-3 shrink-0" />
+                  <span className="truncate">Undone: {note.label}</span>
+                  <button
+                    type="button"
+                    aria-label="Don't tell the agent"
+                    onClick={() => useApp.getState().dropRevertNote(note.message)}
+                    className="hover:text-foreground"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              ))}
+              {files.map((a) => (
+                <span
+                  key={a}
+                  className="flex h-5 items-center gap-1 rounded-md border px-1.5 text-xs text-muted-foreground"
+                >
+                  <FileText className="size-3" />
+                  {a.replace(/^assets\//, "")}
+                  <button
+                    type="button"
+                    aria-label={`Remove ${a.replace(/^assets\//, "")}`}
+                    onClick={() => removeAttachment(a)}
+                    className="hover:text-foreground"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <textarea
+            ref={textareaRef}
+            value={shownDraft}
+            rows={1}
+            readOnly={!!dictation}
+            onChange={(e) => setDraft(e.target.value)}
+            onPaste={onPaste}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                submit(e.metaKey || e.ctrlKey);
+              }
+            }}
+            placeholder={
+              dictation
+                ? "Listening…"
+                : running
+                  ? `Queue a message, or ${STEER_KEY} to steer the agent now…`
+                  : "Ask for slides or changes…"
             }
-          }}
-          placeholder={dictation ? "Listening…" : running ? "The agent is working…" : "Ask for slides or changes…"}
-          className="block max-h-[max(64px,min(240px,40vh))] min-h-16 w-full resize-none bg-transparent px-3.5 pt-3 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/70"
-        />
-        <div className="@container px-2 pt-2 pb-2">
-          <div className="relative flex flex-nowrap items-center gap-1">
-            {/* While dictating, the waveform that VoiceInput shows takes the place of the options. */}
-            {!dictation && (
-              <>
-                <ModelPicker />
-                <div className="mx-0.5 h-4 w-px bg-border" />
-                <EffortPicker />
-                <PermissionPicker />
-                <div className="min-w-0 flex-1" />
-              </>
-            )}
-            <VoiceInput ref={voiceInput} {...dictationHandlers} />
-            {!dictation && (
-              <button
-                type="button"
-                onClick={pickFiles}
-                title="Attach images or files"
-                className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
-              >
-                <Paperclip className="size-4" />
-              </button>
-            )}
-            {running ? (
-              <button
-                type="button"
-                onClick={() => useApp.getState().interrupt()}
-                title="Stop"
-                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80"
-              >
-                <Square className="size-3 fill-current" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => (dictation ? voiceInput.current?.finishAndSend() : submit())}
-                disabled={!dictation && !draft.trim()}
-                title={dictation ? "Stop and send" : "Send"}
-                className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background hover:opacity-90 disabled:opacity-30"
-              >
-                <ArrowUp className="size-4" />
-              </button>
-            )}
+            className="block max-h-[max(64px,min(240px,40vh))] min-h-16 w-full resize-none bg-transparent px-3.5 pt-3 text-sm leading-relaxed outline-none placeholder:text-muted-foreground/70"
+          />
+          <div className="@container px-2 pt-2 pb-2">
+            <div className="relative flex flex-nowrap items-center gap-1">
+              {/* While dictating, the waveform that VoiceInput shows takes the place of the options. */}
+              {!dictation && (
+                <>
+                  <ModelPicker />
+                  <div className="mx-0.5 h-4 w-px bg-border" />
+                  <EffortPicker />
+                  <PermissionPicker />
+                  <div className="min-w-0 flex-1" />
+                </>
+              )}
+              <VoiceInput ref={voiceInput} {...dictationHandlers} />
+              {!dictation && (
+                <button
+                  type="button"
+                  onClick={pickFiles}
+                  title="Attach images or files"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  <Paperclip className="size-4" />
+                </button>
+              )}
+              {running && !dictation && draft.trim() && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => submit(true)}
+                    title={`Steer: send into the agent's turn now (${STEER_KEY})`}
+                    aria-label="Steer"
+                    className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+                  >
+                    <CornerDownRight className="size-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => submit()}
+                    title="Queue: send when the agent finishes (↵)"
+                    aria-label="Queue"
+                    className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+                  >
+                    <ListEnd className="size-4" />
+                  </button>
+                </>
+              )}
+              {running ? (
+                <button
+                  type="button"
+                  onClick={() => useApp.getState().interrupt()}
+                  title="Stop"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background hover:opacity-80"
+                >
+                  <Square className="size-3 fill-current" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => (dictation ? voiceInput.current?.finishAndSend() : submit())}
+                  disabled={!dictation && !draft.trim()}
+                  title={dictation ? "Stop and send" : "Send"}
+                  className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background hover:opacity-90 disabled:opacity-30"
+                >
+                  <ArrowUp className="size-4" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+/** The key that steers the agent with the composer's message. */
+const STEER_KEY = isMac ? "⌘↵" : "Ctrl+↵";
+
+/**
+ * Messages waiting for the agent's turn to end, above the composer: each can steer the turn
+ * now (or, while the agent is idle, be sent), go back into the composer, or be dropped.
+ */
+function QueuedMessages({ onEdit }: { onEdit: (id: string) => void }) {
+  const queue = useApp((s) => s.queue);
+  const running = useApp((s) => s.running);
+  if (queue.length === 0) return null;
+  return (
+    <section
+      aria-label="Queued messages"
+      className="mx-3 mb-1.5 rounded-xl border bg-card/95 p-1 shadow-composer backdrop-blur-xl"
+    >
+      <p className="px-2 pt-0.5 pb-1 text-2xs text-muted-foreground">
+        {running ? "Sent when the agent finishes" : "Waiting: the last turn did not finish"}
+      </p>
+      <ul>
+        {queue.map((item) => (
+          <li
+            key={item.id}
+            className="flex items-center gap-1 rounded-lg py-0.5 pr-0.5 pl-2 text-sm hover:bg-accent/50"
+          >
+            <span className="min-w-0 flex-1 truncate" title={item.text}>
+              {item.text}
+            </span>
+            {/* One made ready for a steer that came too late can only wait for the turn. */}
+            {(!running || !item.ready) && (
+              <ToolButton
+                label={running ? "Steer: send into the agent's turn now" : "Send now"}
+                onClick={() => void useApp.getState().steerQueued(item.id)}
+              >
+                {running ? <CornerDownRight className="size-3.5" /> : <ArrowUp className="size-3.5" />}
+              </ToolButton>
+            )}
+            {!item.ready && (
+              <ToolButton label="Edit" onClick={() => onEdit(item.id)}>
+                <Pencil className="size-3.5" />
+              </ToolButton>
+            )}
+            <ToolButton label="Remove" onClick={() => useApp.getState().takeQueued(item.id)}>
+              <X className="size-3.5" />
+            </ToolButton>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

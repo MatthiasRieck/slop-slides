@@ -277,6 +277,11 @@ fn codex_payloads_match_pinned_protocol_schemas() {
             add("McpServerElicitationRequestResponse", response);
         }
     }
+    // Steering a running turn; its Params schema is not pinned as a file.
+    add(
+        "ClientRequest",
+        json!({"id":1,"method":"turn/steer","params":steer_params("thread-1","turn-1","Bluer")}),
+    );
     // Capture the real transport's startup and interrupt messages too, rather than
     // maintaining hand-written copies of initialize/turn-start/config payloads.
     tokio::runtime::Builder::new_current_thread()
@@ -299,6 +304,7 @@ fn codex_payloads_match_pinned_protocol_schemas() {
                 run_turn(
                     a,
                     &mut rx,
+                    &mut crate::agent::no_steers(),
                     &|e| {
                         if matches!(e, AgentEvent::ApprovalRequested { .. }) {
                             tx.send(true).unwrap();
@@ -660,6 +666,7 @@ mod process {
                 let outcome = run_turn(
                     a,
                     &mut rx,
+                    &mut crate::agent::no_steers(),
                     &|e| {
                         if let AgentEvent::ApprovalRequested { approval } = e {
                             *seen.lock().unwrap() = true;
@@ -692,6 +699,45 @@ mod process {
     }
 
     #[test]
+    fn steers_the_running_turn() {
+        run(async {
+            for (scenario, accepted) in [("accept", true), ("reject", false)] {
+                let f = Fixture::new(json!({ "steer": scenario }));
+                let (_tx, mut rx) = watch::channel(false);
+                let (steer_tx, mut steers) = tokio::sync::mpsc::unbounded_channel();
+                let (steer, delivered) = crate::agent::Steer::new("Make it blue", Some("m2"));
+                steer_tx.send(steer).unwrap();
+                let events = Mutex::new(Vec::new());
+                let outcome = run_turn(
+                    f.args(),
+                    &mut rx,
+                    &mut steers,
+                    &|e| events.lock().unwrap().push(e.clone()),
+                    &|_| Ok(()),
+                )
+                .await
+                .unwrap();
+                assert!(matches!(outcome, Outcome::Done));
+                assert_eq!(delivered.await, Ok(accepted), "{scenario}");
+                let steer = f
+                    .requests()
+                    .into_iter()
+                    .find(|r| r["method"] == "turn/steer")
+                    .expect("the turn is steered");
+                assert_eq!(
+                    steer["params"],
+                    steer_params("thread-1", "turn-1", "Make it blue")
+                );
+                let events = events.into_inner().unwrap();
+                let steered = AgentEvent::Steered {
+                    message: Some("m2".into()),
+                };
+                assert_eq!(events.contains(&steered), accepted, "{scenario}");
+            }
+        });
+    }
+
+    #[test]
     fn reverts_the_thread_before_the_turn_and_reports_the_turn() {
         run(async {
             for (scenario, prompt) in [
@@ -708,7 +754,12 @@ mod process {
                     started: Some(&record),
                 };
                 let (_tx, mut rx) = watch::channel(false);
-                let outcome = run_turn(a, &mut rx, &|_| {}, &|_| Ok(())).await.unwrap();
+                let outcome =
+                    run_turn(a, &mut rx, &mut crate::agent::no_steers(), &|_| {}, &|_| {
+                        Ok(())
+                    })
+                    .await
+                    .unwrap();
                 assert!(matches!(outcome, Outcome::Done));
                 let requests = f.requests();
                 let at = |method: &str| requests.iter().position(|r| r["method"] == method);
@@ -738,6 +789,7 @@ mod process {
             let outcome = run_turn(
                 f.args(),
                 &mut rx,
+                &mut crate::agent::no_steers(),
                 &|e| assert!(!matches!(e, AgentEvent::ApprovalRequested { .. })),
                 &|_| Ok(()),
             )
@@ -763,6 +815,7 @@ mod process {
                 run_turn(
                     f.args(),
                     &mut rx,
+                    &mut crate::agent::no_steers(),
                     &|e| assert!(!matches!(e, AgentEvent::ApprovalRequested { .. })),
                     &|_| Ok(()),
                 )
@@ -787,6 +840,7 @@ mod process {
             let outcome = run_turn(
                 a,
                 &mut rx,
+                &mut crate::agent::no_steers(),
                 &|e| events.lock().unwrap().push(e.clone()),
                 &|s| {
                     *session.lock().unwrap() = Some(s.to_string());
@@ -856,6 +910,7 @@ mod process {
             let outcome = run_turn(
                 a,
                 &mut rx,
+                &mut crate::agent::no_steers(),
                 &|e| {
                     events.lock().unwrap().push(e.clone());
                     if let AgentEvent::ApprovalRequested { approval } = e {
@@ -920,6 +975,7 @@ mod process {
             run_turn(
                 a,
                 &mut rx,
+                &mut crate::agent::no_steers(),
                 &|e| {
                     if let AgentEvent::ApprovalRequested { approval } = e {
                         broker
@@ -955,6 +1011,7 @@ mod process {
             let outcome = run_turn(
                 a,
                 &mut rx,
+                &mut crate::agent::no_steers(),
                 &|e| {
                     if let AgentEvent::ApprovalRequested { approval } = e {
                         *id.lock().unwrap() = approval.id.clone();
@@ -993,6 +1050,7 @@ mod process {
                 run_turn(
                     a,
                     &mut rx,
+                    &mut crate::agent::no_steers(),
                     &|e| {
                         if matches!(e, AgentEvent::ApprovalRequested { .. }) {
                             tx.send(true).unwrap();
@@ -1024,6 +1082,7 @@ mod process {
             run_turn(
                 a,
                 &mut rx,
+                &mut crate::agent::no_steers(),
                 &|e| match e {
                     AgentEvent::ApprovalRequested { approval } => {
                         *id.lock().unwrap() = approval.id.clone()
@@ -1056,7 +1115,11 @@ mod process {
                 a.session = Some("saved");
                 a.mode = mode;
                 let (_tx, mut rx) = watch::channel(false);
-                run_turn(a, &mut rx, &|_| {}, &|_| Ok(())).await.unwrap();
+                run_turn(a, &mut rx, &mut crate::agent::no_steers(), &|_| {}, &|_| {
+                    Ok(())
+                })
+                .await
+                .unwrap();
                 let p = f
                     .requests()
                     .into_iter()
@@ -1083,7 +1146,10 @@ mod process {
                 let mut a = f.args();
                 a.session = Some("saved");
                 let (_tx, mut rx) = watch::channel(false);
-                let r = run_turn(a, &mut rx, &|_| {}, &|_| Ok(())).await;
+                let r = run_turn(a, &mut rx, &mut crate::agent::no_steers(), &|_| {}, &|_| {
+                    Ok(())
+                })
+                .await;
                 if missing {
                     assert!(matches!(r, Ok(Outcome::ResumeFailed)));
                 } else {
@@ -1106,6 +1172,7 @@ mod process {
             run_turn(
                 a,
                 &mut rx,
+                &mut crate::agent::no_steers(),
                 &|e| events.lock().unwrap().push(e.clone()),
                 &|_| Ok(()),
             )
@@ -1125,13 +1192,29 @@ mod process {
             let f = Fixture::new(json!({"requirements":{"allowedSandboxModes":["read-only"]}}));
             let a = f.args();
             let (_tx, mut rx) = watch::channel(false);
-            assert!(run_turn(a, &mut rx, &|_| {}, &|_| Ok(())).await.is_err());
+            assert!(run_turn(
+                a,
+                &mut rx,
+                &mut crate::agent::no_steers(),
+                &|_| {},
+                &|_| Ok(())
+            )
+            .await
+            .is_err());
             assert!(!f.requests().iter().any(|r| r["method"] == "thread/start"));
             let f = Fixture::new(json!({"exitEarly":true}));
             let a = f.args();
             let broker = a.approvals.clone();
             let (_tx, mut rx) = watch::channel(false);
-            assert!(run_turn(a, &mut rx, &|_| {}, &|_| Ok(())).await.is_err());
+            assert!(run_turn(
+                a,
+                &mut rx,
+                &mut crate::agent::no_steers(),
+                &|_| {},
+                &|_| Ok(())
+            )
+            .await
+            .is_err());
             assert!(broker.is_empty());
         });
     }
@@ -1156,7 +1239,11 @@ mod process {
                 }
                 tx.send(true).unwrap();
             };
-            let (outcome, ()) = tokio::join!(run_turn(a, &mut rx, &|_| {}, &|_| Ok(())), cancel);
+            let mut steers = crate::agent::no_steers();
+            let (outcome, ()) = tokio::join!(
+                run_turn(a, &mut rx, &mut steers, &|_| {}, &|_| Ok(())),
+                cancel
+            );
             assert!(matches!(outcome, Ok(Outcome::Interrupted)));
             assert!(broker.is_empty());
             assert!(!f.requests().iter().any(|r| r["method"] == "thread/start"));
@@ -1171,7 +1258,14 @@ mod process {
             let (tx, mut rx) = watch::channel(false);
             tx.send(true).unwrap();
             assert!(matches!(
-                run_turn(a, &mut rx, &|_| {}, &|_| Ok(())).await,
+                run_turn(
+                    a,
+                    &mut rx,
+                    &mut crate::agent::no_steers(),
+                    &|_| {},
+                    &|_| Ok(())
+                )
+                .await,
                 Ok(Outcome::Interrupted)
             ));
         });
@@ -1202,7 +1296,7 @@ fn real_codex_lint_approval_test() {
         a.prompt = "Call the slopslide MCP lint_deck tool exactly once, then briefly report its findings. Do not run shell commands, use any other tool, or change any files.";
         let (_tx, mut rx) = watch::channel(false);
         let outcome = tokio::time::timeout(Duration::from_secs(90), run_turn(
-            a, &mut rx,
+            a, &mut rx, &mut crate::agent::no_steers(),
             &|e| events.lock().unwrap().push(e.clone()),
             &|_| Ok(()),
         )).await.expect("live lint turn timed out").unwrap();
@@ -1290,7 +1384,7 @@ fn real_codex_smoke_test() {
             let saved=Mutex::new(None);
             let mut a=args(&dir);a.bin=&bin;a.lint_server=&lint;a.model=Some(model);a.effort=Some("low");a.prompt=prompt;a.mode=mode;a.session=session.as_deref();
             let (_tx,mut rx)=watch::channel(false);
-            let outcome=tokio::time::timeout(Duration::from_secs(90),run_turn(a,&mut rx,&|e|events.lock().unwrap().push(e.clone()),&|s|{*saved.lock().unwrap()=Some(s.to_string());Ok(())})).await.expect("real turn timed out").unwrap();
+            let outcome=tokio::time::timeout(Duration::from_secs(90),run_turn(a,&mut rx, &mut crate::agent::no_steers(),&|e|events.lock().unwrap().push(e.clone()),&|s|{*saved.lock().unwrap()=Some(s.to_string());Ok(())})).await.expect("real turn timed out").unwrap();
             let events=events.into_inner().unwrap();
             assert!(matches!(outcome,Outcome::Done));
             assert!(matches!(events.last(),Some(AgentEvent::Result{is_error:false,..})),"{events:?}");

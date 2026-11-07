@@ -956,6 +956,18 @@ fn interrupt_agent(agent: State<AgentManager>, id: String) {
     agent.interrupt(&id);
 }
 
+/// Sends `prompt` into the workspace's running turn; false when it did not get in (no turn
+/// is running, or it is ending), and the frontend runs it as the next turn instead.
+#[tauri::command]
+async fn steer_agent(
+    agent: State<'_, AgentManager>,
+    workspace: String,
+    prompt: String,
+    message: Option<String>,
+) -> Result<bool> {
+    Ok(agent.steer(&workspace, &prompt, message.as_deref()).await)
+}
+
 #[tauri::command]
 fn agent_running(agent: State<AgentManager>, id: String) -> bool {
     agent.is_running(&id)
@@ -1312,6 +1324,7 @@ pub fn run() {
             select_chat_thread,
             send_message,
             interrupt_agent,
+            steer_agent,
             permission_modes,
             respond_approval,
             agent_running,

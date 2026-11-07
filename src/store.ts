@@ -482,7 +482,7 @@ interface AppState {
   setSidebarOpen: (open: boolean) => void;
   /** Shows the sidebar on `tab`, opening that tab (after the others) if it is closed. */
   setSidebarTab: (tab: SidebarTab) => void;
-  /** Closes the sidebar tab `tab`; when it was showing, the tab beside it shows instead. */
+  /** Closes the sidebar tab `tab`; when it was showing, the tab beside it shows instead. Closing the last one collapses the sidebar. */
   closeSidebarTab: (tab: SidebarTab) => void;
   setSidebarMaximized: (maximized: boolean) => void;
   setRailOpen: (open: boolean) => void;
@@ -1001,6 +1001,8 @@ export const useApp = create<AppState>((set, get) => ({
   setCodeDirty: (codeDirty) => set({ codeDirty }),
 
   setSidebarOpen: (sidebarOpen) => {
+    // Opening it with every tab closed brings back the chat, rather than an empty panel.
+    if (sidebarOpen && get().sidebarTab === null) return get().setSidebarTab("chat");
     localStorage.setItem(SIDEBAR_OPEN_KEY, String(sidebarOpen));
     // A closed sidebar does not cover the window either.
     set(sidebarOpen ? { sidebarOpen } : { sidebarOpen, sidebarMaximized: false });
@@ -1010,8 +1012,8 @@ export const useApp = create<AppState>((set, get) => ({
     const open = get().sidebarTabs;
     const sidebarTabs = open.includes(sidebarTab) ? open : [...open, sidebarTab];
     saveSidebarTabs(sidebarTabs, sidebarTab);
-    if (!get().sidebarOpen) get().setSidebarOpen(true);
     set({ sidebarTabs, sidebarTab });
+    if (!get().sidebarOpen) get().setSidebarOpen(true);
   },
 
   closeSidebarTab: (tab) => {
@@ -1022,6 +1024,8 @@ export const useApp = create<AppState>((set, get) => ({
     const sidebarTab = active === tab ? (sidebarTabs[Math.min(at, sidebarTabs.length - 1)] ?? null) : active;
     saveSidebarTabs(sidebarTabs, sidebarTab);
     set({ sidebarTabs, sidebarTab });
+    // With nothing left to show, the sidebar folds away, leaving the room to the slides.
+    if (sidebarTabs.length === 0) get().setSidebarOpen(false);
   },
 
   setRailOpen: (railOpen) => {

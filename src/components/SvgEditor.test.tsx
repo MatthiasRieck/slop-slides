@@ -75,6 +75,9 @@ async function open(changes: Partial<SvgOpen> = {}) {
       size: { w: 200, h: 200 },
       color: "rgb(1, 2, 3)",
       vars: { "--brand": "#00f" },
+      css: "",
+      fonts: "",
+      ancestors: [],
       ...changes,
     }),
   );
@@ -98,7 +101,8 @@ describe("SvgEditor", () => {
     const svg = shown().querySelector("svg")!;
     expect(svg.querySelector("script")).toBeNull();
     expect(svg.querySelector("#box")).not.toBeNull();
-    expect(svg.style.translate).toBe("");
+    expect(svg.style.getPropertyValue("translate")).toBe("none");
+    expect(svg.style.getPropertyPriority("translate")).toBe("important");
     const frame = shown().querySelector<HTMLElement>(".frame")!;
     expect(frame.style.getPropertyValue("--brand")).toBe("#00f");
     expect(frame.style.color).toBe("rgb(1, 2, 3)");
@@ -121,6 +125,38 @@ describe("SvgEditor", () => {
     await open();
     expect(screen.getByTestId("svg-drawing").parentElement!.dataset.backdrop).toBe("light");
     expect(screen.getByRole("button", { name: /^Dark backdrop/ }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("styles the drawing with the deck's rules, inside the elements it sits in on the slide", async () => {
+    await open({
+      css: ".hub circle { fill: navy; }",
+      fonts: '@font-face { font-family: Brand; src: url("https://fonts.example/brand.woff2"); }',
+      ancestors: [
+        { tag: "body", attrs: { class: "dark" } },
+        { tag: "section", attrs: { class: "slide hub", id: "intro", style: "color: white" } },
+        { tag: "script", attrs: { class: "odd" } },
+      ],
+    });
+    const svg = shown().querySelector("svg")!;
+    const deck = [...shown().querySelectorAll("style")].map((s) => s.textContent);
+    expect(deck).toContain(".hub circle { fill: navy; }");
+    // Mirrored, outermost first, drawing no boxes; anything active is only a <div>.
+    const section = svg.closest<HTMLElement>("section.hub")!;
+    expect(section.id).toBe("intro");
+    expect(section.style.color).toBe("white");
+    expect(section.style.getPropertyValue("display")).toBe("contents");
+    expect(section.parentElement!.localName).toBe("body");
+    expect(svg.parentElement!.localName).toBe("div");
+    expect(svg.parentElement!.className).toBe("odd");
+    expect(shown().querySelector("script")).toBeNull();
+    // The deck's rules cannot move or resize it.
+    expect(svg.style.getPropertyPriority("position")).toBe("important");
+    expect(svg.style.getPropertyPriority("width")).toBe("important");
+    // Web fonts load in the app's document while the drawing is open.
+    const fonts = () => document.head.querySelector("style[data-slop-svg-fonts]");
+    expect(fonts()!.textContent).toContain("font-family: Brand");
+    await act(() => useSvgEditor.getState().close());
+    expect(fonts()).toBeNull();
   });
 
   it("selects what is clicked and shows its look and attributes", async () => {

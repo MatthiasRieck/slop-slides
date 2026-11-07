@@ -6,10 +6,12 @@ import {
   type Deck,
   errorMessage,
   type NarrationRenderProgress,
+  type NarrationTimingProgress,
   type SlideAudio,
   type SpeechStatus,
   type VoiceDownloadProgress,
 } from "./lib/api";
+import { dirname } from "./lib/utils";
 import { useApp } from "./store";
 
 /** The backend's error for a render the user cancelled. */
@@ -28,6 +30,8 @@ interface NarrationState {
   download: VoiceDownloadProgress | null;
   /** While narration is said, how far it has got. */
   render: NarrationRenderProgress | null;
+  /** While narration audio is heard again to time its words, how far it has got; `downloading` while the speech-to-text model downloads first. */
+  timing: (NarrationTimingProgress & { downloading?: boolean }) | null;
   loadSpeech: () => Promise<void>;
   /** Reads the deck's audio state again (after its narration, voice or language changed). */
   refreshAudio: (deck: string) => Promise<void>;
@@ -35,6 +39,11 @@ interface NarrationState {
   /** Says the `slides`' (all for null) narration that has no up-to-date audio; false when it failed or was cancelled. */
   renderAudio: (deck: string, slides: string[] | null) => Promise<boolean>;
   cancelRender: () => Promise<void>;
+  /**
+   * Has the speech-to-text model hear the `slides`' (all for null) up-to-date audio again to
+   * time each word, downloading the model first when needed; false when it failed.
+   */
+  timeWords: (deck: string, slides: string[] | null) => Promise<boolean>;
   /** Deletes the slide's recording, so the voice model can say its narration again. */
   deleteRecording: (deck: string, slide: string) => Promise<void>;
 }
@@ -54,6 +63,7 @@ export const useNarration = create<NarrationState>((set, get) => ({
   audioDeck: null,
   download: null,
   render: null,
+  timing: null,
 
   loadSpeech: async () => {
     try {
@@ -102,6 +112,26 @@ export const useNarration = create<NarrationState>((set, get) => ({
     await api.cancelNarration();
   },
 
+  timeWords: async (deck, slides) => {
+    if (get().timing) return false;
+    set({ timing: { deck, slide: null, done: 0, total: 0 } });
+    try {
+      if (!(await api.voiceStatus()).modelReady) {
+        set({ timing: { deck, slide: null, done: 0, total: 0, downloading: true } });
+        await api.downloadVoiceModel();
+      }
+      const audio = await api.timeNarration(deck, slides);
+      set({ audio: byId(audio), audioDeck: deck });
+      return true;
+    } catch (error) {
+      fail(error);
+      await get().refreshAudio(deck);
+      return false;
+    } finally {
+      set({ timing: null });
+    }
+  },
+
   deleteRecording: async (deck, slide) => {
     try {
       const audio = await api.deleteRecordedNarration(deck, slide);
@@ -111,6 +141,16 @@ export const useNarration = create<NarrationState>((set, get) => ({
     }
   },
 }));
+
+/**
+ * Whether workspace-relative `paths` touch the narration audio of the deck at `deckPath`, as
+ * the agent's `set_narration_audio` tool does from outside the app.
+ */
+export function touchesNarration(paths: string[], deckPath: string): boolean {
+  const folder = dirname(deckPath);
+  const audio = folder ? `${folder}/narration/` : "narration/";
+  return paths.some((path) => path.startsWith(audio));
+}
 
 /** Keeps the narration state in step with backend events and the open deck. */
 export async function initNarrationEvents() {
@@ -122,15 +162,30 @@ export async function initNarrationEvents() {
     useNarration.setState({ render: payload.slide === null ? null : payload });
     if (payload.deck === useApp.getState().deck?.id) void useNarration.getState().refreshAudio(payload.deck);
   });
+  await listen<NarrationTimingProgress>("narration-timing", ({ payload }) => {
+    // Only the window timing the words shows its progress.
+    if (useNarration.getState().timing?.deck === payload.deck && payload.slide !== null) {
+      useNarration.setState({ timing: payload });
+    }
+    if (payload.deck === useApp.getState().deck?.id) void useNarration.getState().refreshAudio(payload.deck);
+  });
   // Recorded in the presenter view, maybe in its own window.
   await listen<string>("narration-recorded", ({ payload }) => {
     if (payload === useApp.getState().deck?.id) void useNarration.getState().refreshAudio(payload);
   });
   // A changed deck (a script, the voice or language) changes which audio is up to date.
   let last: Deck | null = null;
+  // Audio written outside the app, such as by the agent, changes it too.
+  let change = useApp.getState().workspaceChange;
   useApp.subscribe((state) => {
-    if (state.deck === last) return;
-    last = state.deck;
-    if (state.deck) void useNarration.getState().refreshAudio(state.deck.id);
+    const changed = state.workspaceChange !== change;
+    change = state.workspaceChange;
+    if (state.deck !== last) {
+      last = state.deck;
+      if (state.deck) void useNarration.getState().refreshAudio(state.deck.id);
+    } else if (changed && state.deck && state.openedFile && change) {
+      if (touchesNarration(change.paths, state.openedFile.path))
+        void useNarration.getState().refreshAudio(state.deck.id);
+    }
   });
 }

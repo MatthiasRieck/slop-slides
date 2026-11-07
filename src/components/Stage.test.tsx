@@ -9,9 +9,9 @@ vi.mock("../lib/drop", async (importOriginal) => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-
 import { claimDrop, dropCovered } from "../lib/drop";
 import { DEFAULT_EDIT_STYLES } from "../lib/editTools";
+import { setSlideClock } from "../lib/slideClock";
 import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
 import { useSvgEditor } from "../svgStore";
 import { DECK_HTML, deckFor } from "../test/fixtures";
@@ -906,6 +906,29 @@ describe("Stage", () => {
       expect(useApp.getState().editing).toBe(false);
     });
 
+    it("shows the slide as it plays while narration plays over it, even in edit mode", () => {
+      const { container } = render(<Stage />);
+      toggleEditing();
+      const sources = () => [...container.querySelectorAll("iframe")].map((f) => f.getAttribute("src") ?? "");
+      expect(sources().some((src) => src.includes("edit="))).toBe(true);
+      const selected = useApp.getState().selected!;
+      act(() => setSlideClock({ slide: selected, at: 1 }));
+      expect(sources().some((src) => !src.includes("edit=") && !src.includes("static"))).toBe(true);
+      // Every frame of the slide gets the clock as it moves.
+      const frames = [...container.querySelectorAll("iframe")];
+      for (const frame of frames) fireEvent.load(frame);
+      const posts = frames.map((frame) => vi.spyOn(frame.contentWindow!, "postMessage"));
+      act(() => setSlideClock({ slide: selected, at: 1.1 }));
+      const clocks = posts.flatMap((post) => post.mock.calls.map(([data]) => data));
+      expect(clocks).toContainEqual({ type: "slop:clock", slide: selected, at: 1.1 });
+      // Paused, or on another slide, it is the editor's again.
+      act(() => setSlideClock({ slide: "elsewhere", at: 1.1 }));
+      expect(sources().some((src) => src.includes("edit="))).toBe(true);
+      act(() => setSlideClock(null));
+      expect(sources().some((src) => src.includes("edit="))).toBe(true);
+      toggleEditing();
+    });
+
     const sketchTools = () => screen.queryByRole("toolbar", { name: "Sketch tools" });
 
     it("shares its row with the search, after the review tools", () => {
@@ -1244,6 +1267,30 @@ describe("Stage", () => {
         );
         fromFrame(frame, { type: "slop:edit-tool", slide: "intro", tool: "select" });
         expect(useApp.getState().editTool).toBe("select");
+      });
+
+      it("offers diagram shapes in a picker, and shows the one picked", () => {
+        const { frame, post } = enter();
+        for (const [name, tool, family] of [
+          ["Add a diamond (a decision in a flowchart)", "diamond", "shape"],
+          ["Add a chevron (a step in a process)", "chevron", "shape"],
+          ["Add a block arrow", "block-arrow", "shape"],
+          ["Add a double-headed arrow", "double-arrow", "shape"],
+          ["Add a bracket", "bracket", "draw"],
+          ["Add a brace", "brace", "draw"],
+        ] as const) {
+          fireEvent.click(button("More shapes"));
+          fireEvent.click(button(name));
+          expect(post).toHaveBeenLastCalledWith(
+            { type: "slop:edit-tool", tool, style: DEFAULT_EDIT_STYLES[family] },
+            "*",
+          );
+          // The picker closes; its button stands for the shape picked.
+          expect(screen.queryByRole("dialog", { name: "More shapes" })).toBeNull();
+          expect(button("More shapes").getAttribute("aria-pressed")).toBe("true");
+        }
+        fromFrame(frame, { type: "slop:edit-tool", slide: "intro", tool: "select" });
+        expect(button("More shapes").getAttribute("aria-pressed")).toBe("false");
       });
 
       it("arms the format painter on the selection, and disarms it", () => {
@@ -1829,8 +1876,20 @@ describe("Stage", () => {
           geometry: { count: 3, x: 10, y: 20, w: 300, h: 200, rotation: null },
         });
         fireEvent.click(button("Arrange"));
+        // Several elements line up with each other unless the slide is picked.
+        expect(button("Selection").getAttribute("aria-pressed")).toBe("true");
         fireEvent.click(button("Align left edges"));
-        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-align", to: "left" }, "*");
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-align", to: "left", target: "selection" }, "*");
+        fireEvent.click(button("Slide"));
+        fireEvent.click(button("Align left edges with the slide"));
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-align", to: "left", target: "slide" }, "*");
+        fireEvent.click(button("Match width"));
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-match", axis: "w" }, "*");
+        fireEvent.click(button("Match height"));
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-match", axis: "h" }, "*");
+        // Several elements have no one look to flip, nor one rotation to turn.
+        expect(button("Flip horizontally").hasAttribute("disabled")).toBe(true);
+        expect(button("Rotate 90° clockwise").hasAttribute("disabled")).toBe(true);
         fireEvent.click(button("Distribute vertically"));
         expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-distribute", axis: "v" }, "*");
         const x = screen.getByLabelText("Distance from the slide's left edge") as HTMLInputElement;
@@ -1862,8 +1921,11 @@ describe("Stage", () => {
         });
         fireEvent.click(button("Arrange"));
         expect(button("Distribute horizontally").hasAttribute("disabled")).toBe(true);
+        // One element can only line up with the slide.
+        expect(button("Selection").hasAttribute("disabled")).toBe(true);
+        expect(button("Match width").hasAttribute("disabled")).toBe(true);
         fireEvent.click(button("Align with the slide's right edges"));
-        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-align", to: "right" }, "*");
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-align", to: "right", target: "slide" }, "*");
         const width = screen.getByLabelText("Width") as HTMLInputElement;
         fireEvent.change(width, { target: { value: "0" } });
         fireEvent.blur(width);
@@ -1874,6 +1936,63 @@ describe("Stage", () => {
         fireEvent.change(rotation, { target: { value: "-30" } });
         fireEvent.blur(rotation);
         expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-geometry", rotation: -30 }, "*");
+        // A quarter turn either way, from the rotation the editor reports.
+        fireEvent.click(button("Rotate 90° clockwise"));
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-geometry", rotation: 105 }, "*");
+        fireEvent.click(button("Rotate 90° counterclockwise"));
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-geometry", rotation: -75 }, "*");
+      });
+
+      it("keeps the arrange panel open through the reload after a save, for the next change", () => {
+        const button = (name: string) => screen.getByRole("button", { name });
+        const { container } = render(<Stage />);
+        toggleEditing();
+        const { frame, post } = loaded(container);
+        const geometry = { count: 1, x: 10, y: 20, w: 300, h: 200, rotation: 0 };
+        fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry });
+        fireEvent.click(button("Arrange"));
+        fireEvent.click(button("Align with the slide's left edges"));
+        // The save reloads the preview, which has nothing selected until the editor restores it.
+        fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry: null });
+        expect(screen.getByRole("dialog", { name: "Arrange" })).toBeTruthy();
+        expect(button("Align with the slide's top edges").hasAttribute("disabled")).toBe(true);
+        fromFrame(frame, { type: "slop:edit-geometry", slide: "intro", geometry: { ...geometry, x: 0 } });
+        fireEvent.click(button("Align with the slide's top edges"));
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-align", to: "top", target: "slide" }, "*");
+        expect((screen.getByLabelText("Distance from the slide's left edge") as HTMLInputElement).value).toBe("0");
+      });
+
+      it("flips a shape from the arrange panel, keeping it open", () => {
+        const button = (name: string) => screen.getByRole("button", { name });
+        const { container } = render(<Stage />);
+        toggleEditing();
+        const { frame, post } = loaded(container);
+        fromFrame(frame, {
+          type: "slop:edit-geometry",
+          slide: "intro",
+          geometry: { count: 1, x: 10, y: 20, w: 300, h: 200, rotation: 0 },
+        });
+        fromFrame(frame, {
+          type: "slop:edit-selection",
+          slide: "intro",
+          selected: true,
+          selection: { kind: "shape", text: true, flippable: true, flipX: true },
+        });
+        fireEvent.click(button("Arrange"));
+        expect(button("Flip horizontally").getAttribute("aria-pressed")).toBe("true");
+        fireEvent.click(button("Flip horizontally"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { flipX: false } }, "*");
+        fireEvent.click(button("Flip vertically"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { flipY: true } }, "*");
+        expect(screen.getByRole("dialog", { name: "Arrange" })).toBeTruthy();
+        // A text box would mirror its text, so it does not flip.
+        fromFrame(frame, {
+          type: "slop:edit-selection",
+          slide: "intro",
+          selected: true,
+          selection: { kind: "text", text: true, flippable: false },
+        });
+        expect(button("Flip horizontally").hasAttribute("disabled")).toBe(true);
       });
 
       it("rotates the selection in 3D from the toolbar, with the reset in the middle", () => {
@@ -2311,6 +2430,25 @@ describe("Stage", () => {
         fireEvent.click(item(name));
         expect(post).toHaveBeenCalledWith(message, "*");
         expect(screen.queryByRole("menu")).toBeNull();
+      });
+
+      it("flips what can be flipped, offered only then", () => {
+        const { frame, post } = open();
+        expect(screen.queryByRole("menuitem", { name: "Flip horizontally" })).toBeNull();
+        fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+        fromFrame(frame, {
+          type: "slop:edit-selection",
+          slide: "intro",
+          selected: true,
+          selection: { kind: "shape", text: true, flippable: true, flipY: true },
+        });
+        fromFrame(frame, { type: "slop:edit-menu", slide: "intro", x: 1, y: 1, element: ELEMENT });
+        fireEvent.click(item("Flip horizontally"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { flipX: true } }, "*");
+        expect(screen.queryByRole("menu")).toBeNull();
+        fromFrame(frame, { type: "slop:edit-menu", slide: "intro", x: 1, y: 1, element: ELEMENT });
+        fireEvent.click(item("Flip vertically"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { flipY: false } }, "*");
       });
 
       it("opens a drawing in the SVG editor, offered only for drawings", () => {

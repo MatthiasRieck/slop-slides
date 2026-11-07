@@ -977,11 +977,16 @@ pub fn lint(file: &Path, session: Option<&Path>) -> Result<Vec<lint::Issue>> {
         let rel = percent_encoding::percent_decode_str(rel).decode_utf8_lossy();
         resolve_in_deck(folder(file), &rel).is_ok_and(|path| path.is_file())
     };
-    Ok(lint::lint(
-        &source,
-        asset_exists,
-        &read_guard(file, session),
-    ))
+    let mut issues = lint::lint(&source, asset_exists, &read_guard(file, session));
+    if let Ok(deck) = load(file) {
+        let slides = narration::timeline::layout(file, &deck, &narration::timeline::DEFAULTS);
+        let overlaps = narration::timeline::overlaps(&slides);
+        if !overlaps.is_empty() {
+            issues.extend(lint::narration_overlaps(&source, &overlaps));
+            issues.sort_by_key(|i| (i.line, i.severity));
+        }
+    }
+    Ok(issues)
 }
 
 pub fn mime_for(path: &str) -> &'static str {

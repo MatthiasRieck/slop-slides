@@ -263,6 +263,9 @@ describe("slide editor", () => {
         height: number;
         color: string | null;
         vars: Record<string, string>;
+        css: string;
+        fonts: string;
+        ancestors: { tag: string; attrs: Record<string, string> }[];
       }[];
     const button = (e: ReturnType<typeof editor>) => e.$("[data-slop-svg-open]") as HTMLButtonElement;
 
@@ -298,6 +301,33 @@ describe("slide editor", () => {
       expect(open!.markup).toBe(`<svg viewBox="0 0 10 10"><circle r="1"></circle></svg>`);
       expect(Number.isFinite(open!.width) && Number.isFinite(open!.height)).toBe(true);
       expect(e.commits()).toEqual([]);
+    });
+
+    it("hands over the deck's rules and the elements the drawing sits in, so it looks the same", () => {
+      const STYLED = DECK.replace(
+        "<head></head>",
+        `<head><style>
+          @font-face { font-family: Brand; }
+          .slide svg circle { fill: navy; background: url("assets/dot.png"); }
+          .mark { background: url(data:image/png;base64,AA==); }
+        </style></head>`,
+      );
+      const e = editor({ markup: STYLED });
+      e.down(e.$("svg"));
+      e.up(e.$("svg"));
+      button(e).click();
+      const [open] = opened(e);
+      expect(open!.css).toContain("fill: navy");
+      expect(open!.css).toContain('url("https://example.test/assets/dot.png")');
+      expect(open!.css).toContain("data:image/png;base64,AA==");
+      expect(open!.css).not.toContain("@font-face");
+      // Not the editor's own marks.
+      expect(open!.css).not.toContain("data-slop-hover");
+      expect(open!.fonts).toContain("@font-face");
+      expect(open!.fonts).toContain("font-family: Brand");
+      expect(open!.ancestors.map((a) => a.tag)).toEqual(["html", "body", "main", "section"]);
+      expect(open!.ancestors[3]!.attrs).toMatchObject({ class: expect.stringContaining("slide"), id: "intro" });
+      expect(open!.ancestors[2]!.attrs.class).toContain("deck");
     });
 
     it("opens the selected drawing when the app asks, and nothing else", () => {
@@ -2072,6 +2102,7 @@ describe("slide editor", () => {
           fit: null,
           fitPosition: null,
           alt: null,
+          flippable: false,
           flipX: false,
           flipY: false,
         },
@@ -3476,40 +3507,185 @@ describe("slide editor: shapes, styling and media", () => {
     });
   });
 
-  describe("cut-out shapes", () => {
-    it.each(["triangle", "star", "bubble"])("drags out a %s that holds text, with no border", (tool) => {
+  describe("figures", () => {
+    /** The SVG a figure's background draws it with. */
+    const drawn = (el: HTMLElement) =>
+      decodeURIComponent(
+        el.style
+          .getPropertyValue("background-image")
+          .replace(/^url\(["']?data:image\/svg\+xml,/, "")
+          .replace(/["']?\)$/, ""),
+      );
+    /** Its padding: top, right, bottom, left. */
+    const pads = (el: HTMLElement) =>
+      [el.style.paddingTop, el.style.paddingRight, el.style.paddingBottom, el.style.paddingLeft].map((n) =>
+        Number.parseFloat(n),
+      );
+
+    it.each(["triangle", "star", "bubble", "diamond", "chevron", "block-arrow", "double-arrow"])(
+      "drags out a %s that holds text and takes a border",
+      (tool) => {
+        const e = editor();
+        e.fromParent({
+          type: "slop:edit-tool",
+          tool,
+          style: { ...SHAPE_STYLE, stroke: "#000000", strokeWidth: 4 },
+        });
+        dragOut(e, [100, 100], [400, 300]);
+        const [shape] = added(e);
+        expect(shape!.getAttribute("data-added")).toBe("shape");
+        expect(shape!.getAttribute("data-shape")).toBe(tool);
+        expect(shape!.tagName.toLowerCase()).toBe("div");
+        expect(shape!.style.getPropertyValue("clip-path")).toBe("");
+        expect(shape!.style.backgroundColor).toBe("");
+        expect(shape!.style.border).toBe("");
+        expect(drawn(shape!)).toContain("fill='#3b82f6'");
+        // The border is an inner stroke: twice as wide, cut to the shape.
+        expect(drawn(shape!)).toContain("stroke='#000000' stroke-width='8'");
+        expect(pads(shape!).every((n) => n >= 8)).toBe(true);
+        expect(e.selected()).toEqual([shape]);
+        expect(lastSelection(e)).toMatchObject({
+          kind: "shape",
+          text: true,
+          clipped: false,
+          radius: null,
+          fill: "#3b82f6",
+          stroke: "#000000",
+          strokeWidth: 4,
+          flippable: true,
+        });
+        expect(e.commits()[0]!.markup).toContain('data-shape="' + tool + '"');
+      },
+    );
+
+    it("keeps the size it is given, however wide: its padding comes from its height, not its width", () => {
       const e = editor();
-      e.fromParent({
-        type: "slop:edit-tool",
-        tool,
-        style: { ...SHAPE_STYLE, stroke: "#000000", strokeWidth: 4 },
-      });
+      e.fromParent({ type: "slop:edit-tool", tool: "triangle", style: SHAPE_STYLE });
       dragOut(e, [100, 100], [400, 300]);
-      const [shape] = added(e);
-      expect(shape!.getAttribute("data-added")).toBe("shape");
-      expect(shape!.tagName.toLowerCase()).toBe("div");
-      expect(shape!.style.getPropertyValue("clip-path")).toMatch(/^polygon\(/);
-      expect(e.selected()).toEqual([shape]);
-      expect(lastSelection(e)).toMatchObject({
-        kind: "shape",
-        text: true,
-        clipped: true,
-        radius: null,
-        stroke: null,
-        strokeWidth: 0,
-      });
-      expect(e.commits()[0]!.markup).toContain("clip-path: polygon(");
+      const shape = added(e)[0]!;
+      e.fromParent({ type: "slop:edit-geometry", w: 1900, h: 172 });
+      expect(shape.style.width).toBe("1900px");
+      expect(shape.style.height).toBe("172px");
+      const [top, right, bottom, left] = pads(shape);
+      expect(top).toBe(Math.round(0.42 * 172));
+      expect(bottom).toBe(Math.round(0.06 * 172));
+      expect(top! + bottom!).toBeLessThan(172);
+      expect([right, left]).toEqual([Math.round(0.22 * 1900), Math.round(0.22 * 1900)]);
+      expect(shape.style.padding).not.toContain("%");
     });
 
-    it("ignores border, shadow and radius, which the cut would only slice", () => {
+    it("centers a speech bubble's text in its body, above the tail", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "bubble", style: SHAPE_STYLE });
+      dragOut(e, [100, 100], [400, 300]);
+      const shape = added(e)[0]!;
+      e.fromParent({ type: "slop:edit-geometry", w: 600, h: 400 });
+      expect(shape.style.justifyContent).toBe("center");
+      expect(pads(shape)).toEqual([24, 30, 104, 30]);
+    });
+
+    it("takes a shadow that follows its shape, and loses its border again", () => {
       const e = editor();
       e.fromParent({ type: "slop:edit-tool", tool: "star", style: SHAPE_STYLE });
       dragOut(e, [100, 100], [400, 300]);
-      style(e, { stroke: "#000000", strokeWidth: 4, shadow: 20, radius: 10 });
+      style(e, { stroke: "#ff0000" });
       const shape = added(e)[0]!;
+      // Picking a border color shows a border.
+      expect(lastSelection(e)).toMatchObject({ stroke: "#ff0000", strokeWidth: 4 });
+      style(e, { shadow: 24, radius: 10 });
+      expect(shape.style.getPropertyValue("filter")).toContain("drop-shadow(0px 8px 24px");
       expect(shape.style.getPropertyValue("box-shadow")).toBe("");
-      expect(shape.style.getPropertyValue("border-radius")).toBe("0px");
-      expect(lastSelection(e)).toMatchObject({ strokeWidth: 0, shadow: 0, radius: null });
+      expect(shape.style.getPropertyValue("border-radius")).toBe("");
+      expect(lastSelection(e)).toMatchObject({ shadow: 24, radius: null });
+      style(e, { strokeWidth: 0, fill: "#00ff00" });
+      expect(drawn(shape)).not.toContain("stroke=");
+      expect(lastSelection(e)).toMatchObject({ fill: "#00ff00", stroke: null, strokeWidth: 0 });
+    });
+
+    it("mirrors its shape, not its text, and moves its padding with the shape", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "bubble", style: SHAPE_STYLE });
+      dragOut(e, [100, 100], [400, 300]);
+      const shape = added(e)[0]!;
+      e.fromParent({ type: "slop:edit-geometry", w: 600, h: 400 });
+      style(e, { flipY: true });
+      expect(shape.style.transform).toBe("");
+      expect(drawn(shape)).toContain("matrix(1 0 0 -1 0 100)");
+      // The tail is on top now, so the text keeps clear of the top.
+      expect(pads(shape)).toEqual([104, 30, 24, 30]);
+      expect(lastSelection(e)).toMatchObject({ flipX: false, flipY: true });
+      style(e, { flipX: true });
+      expect(drawn(shape)).toContain("matrix(-1 0 0 -1 100 100)");
+      expect(lastSelection(e)).toMatchObject({ flipX: true, flipY: true });
+      expect(e.commits().at(-1)!.markup).toContain("data-shape=");
+    });
+
+    it("redraws an old clip-path cut-out as a figure when it is restyled or resized", () => {
+      const e = editor({
+        markup: DECK.replace(
+          '<div class="card">',
+          '<div id="old" data-added="shape" style="position: absolute; left: 0px; top: 0px; width: 1900px; height: 172px; box-sizing: border-box; padding: 25% 16px 16px; background-color: #3b82f6; clip-path: polygon(50% 0%, 100% 100%, 0% 100%)">Hi</div><div class="card">',
+        ),
+      });
+      const old = e.$("#old");
+      e.down(old);
+      // A border can be picked, as on any figure.
+      expect(lastSelection(e)).toMatchObject({ clipped: false, fill: "#3b82f6", flippable: true });
+      e.fromParent({ type: "slop:edit-geometry", h: 172 });
+      expect(old.getAttribute("data-shape")).toBe("triangle");
+      expect(old.style.getPropertyValue("clip-path")).toBe("");
+      expect(old.style.padding).not.toContain("%");
+      expect(drawn(old)).toContain("fill='#3b82f6'");
+      style(e, { strokeWidth: 6 });
+      expect(lastSelection(e)).toMatchObject({ fill: "#3b82f6", stroke: "#111111", strokeWidth: 6 });
+    });
+
+    it("still keeps a clip-path it cannot redraw from border and shadow", () => {
+      const e = editor({
+        markup: DECK.replace(
+          '<div class="card">',
+          '<div id="cut" style="position: absolute; width: 200px; height: 200px; clip-path: polygon(0% 0%, 100% 0%, 50% 100%)">Hi</div><div class="card">',
+        ),
+      });
+      e.down(e.$("#cut"));
+      style(e, { stroke: "#000000", strokeWidth: 4, shadow: 20 });
+      expect(e.$("#cut").style.getPropertyValue("box-shadow")).toBe("");
+      expect(e.$("#cut").style.border).toBe("");
+      expect(lastSelection(e)).toMatchObject({ clipped: true, strokeWidth: 0, shadow: 0, flippable: false });
+    });
+
+    it.each(["bracket", "brace"])("drags out a %s as a drawing's one stroke", (tool) => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool, style: LINE_STYLE });
+      dragOut(e, [100, 100], [160, 300]);
+      const [svg] = added(e);
+      expect(svg!.tagName.toLowerCase()).toBe("svg");
+      expect(svg!.getAttribute("data-added")).toBe("drawing");
+      expect(svg!.getAttribute("data-outline")).toBe(tool);
+      const path = svg!.querySelector("path")!;
+      expect(path.getAttribute("fill")).toBe("none");
+      expect(path.getAttribute("stroke")).toBe("#ef4444");
+      expect(path.getAttribute("d")).toMatch(tool === "brace" ? /Q/ : /^M[\d. ]+L[\d. ]+L[\d. ]+L[\d. ]+$/);
+      expect(e.selected()).toEqual([svg]);
+      // Not a line: it has no points to drag, and it flips.
+      expect(e.doc.querySelector("[data-slop-points] > *")).toBeNull();
+      expect(lastSelection(e)).toMatchObject({ kind: "drawing", vector: true, flippable: true });
+      style(e, { flipX: true });
+      expect(svg!.style.transform).toBe("scaleX(-1)");
+    });
+
+    it("does not flip a line, whose ends may be stuck to elements, or a text box", () => {
+      const e = editor();
+      e.fromParent({ type: "slop:edit-tool", tool: "arrow", style: LINE_STYLE });
+      dragOut(e, [100, 100], [300, 200]);
+      const [line] = added(e);
+      expect(lastSelection(e)).toMatchObject({ flippable: false });
+      style(e, { flipX: true });
+      expect(line!.style.transform).toBe("");
+      e.down(e.$(".card"));
+      expect(lastSelection(e)).toMatchObject({ flippable: false });
+      style(e, { flipX: true });
+      expect(e.$(".card").style.transform).toBe("");
     });
   });
 

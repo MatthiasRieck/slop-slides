@@ -48,6 +48,16 @@ describe("layoutTimeline", () => {
     ]);
   });
 
+  it("ends pinned slides on the frame nearest where they should, so rounding never adds up", () => {
+    const pinned = Array.from({ length: 20 }, (_, i) => slide(`s${i}`, { duration: 3.33 }));
+    for (const fps of [24, 30, 60]) {
+      const t = layoutTimeline(pinned, {}, options({ fps }));
+      t.slides.forEach((s, i) => {
+        expect(Math.abs(s.end - 3.33 * (i + 1))).toBeLessThanOrEqual(0.5 / fps + 1e-9);
+      });
+    }
+  });
+
   it("never has narration talking over the narration before it", () => {
     const t = layoutTimeline([slide("a", { duration: 1 }), slide("b")], { a: 5, b: 1 }, options({ pauseBefore: 0 }));
     expect(t.clips.map((c) => c.start)).toEqual([0, 5]);

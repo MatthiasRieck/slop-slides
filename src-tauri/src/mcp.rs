@@ -1,6 +1,7 @@
 //! Workspace MCP tools: lint_deck validates a workspace-relative deck, open_file queues a
 //! request in the current workspace session for the app to show a file, and render_slide
-//! asks the app, the same way, for images of slides (see render.rs).
+//! asks the app, the same way, for images of slides (see render.rs). set_narration_audio
+//! makes an audio file the narration of a slide and times its words.
 //! Started as `slopslide --lint-mcp [workspace root]`.
 
 use std::io::{BufRead, Write};
@@ -9,15 +10,21 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value};
 
 use crate::deck;
+use crate::error::{Error, Result};
 use crate::lint;
+use crate::narration;
 use crate::render;
 use crate::sessions::Sessions;
+use crate::voice;
 
 pub const FLAG: &str = "--lint-mcp";
 pub const SERVER: &str = "slopslide";
 pub const TOOL: &str = "lint_deck";
 pub const OPEN_TOOL: &str = "open_file";
 pub const RENDER_TOOL: &str = "render_slide";
+pub const NARRATION_TOOL: &str = "set_narration_audio";
+pub const TIMELINE_TOOL: &str = "narration_timeline";
+pub const BEATS_TOOL: &str = "narration_beats";
 const OPEN_REQUESTS: &str = "open-requests";
 /// Claude Code's rule for every tool of this server, for `--allowedTools`; its tools are
 /// named `mcp__slopslide__<tool>`.
@@ -74,6 +81,10 @@ pub fn serve(dir: &Path) {
             }
         }
     }
+    // A speech model still loaded aborts the process as it exits on macOS (see Voice::shutdown).
+    if let Some(voice) = VOICE.get() {
+        voice.shutdown();
+    }
 }
 
 /// Answers one JSON-RPC message; notifications get no response. `session` finds the workspace's current session.
@@ -116,10 +127,14 @@ pub fn handle(
         }, {
             "name": RENDER_TOOL,
             "description": format!("See slides of a deck as the app renders them: returns an \
-                image of each slide, hidden ones too, with every entrance animation finished, \
-                and lists the elements that run past the slide or are cut off by their own \
-                box. Use it to check the look after building or reworking slides, instead of \
-                a browser or screenshots from the shell. Takes at most {} slides per call.",
+                image of each slide, hidden ones too, with every animation finished, and lists \
+                the elements that run past the slide or are cut off by their own box. With \
+                `at`, each slide is shown that many seconds after it shows instead, its \
+                animations where they are then, as that frame of a video export: use it to \
+                check timed animations (what is on screen when a word is sung, say). The images \
+                are what video exports and PDFs draw. Use it to check the look after building \
+                or reworking slides, instead of a browser or screenshots from the shell. Takes \
+                at most {} slides per call.",
                 render::MAX_SLIDES),
             "inputSchema": { "type": "object", "properties": {
                 "path": {
@@ -131,7 +146,69 @@ pub fn handle(
                     "items": { "type": "string" },
                     "description": "The ids of the slides to render.",
                 },
+                "at": {
+                    "type": "number",
+                    "description": "Seconds after each slide shows to render it at (the time into the slide, as narration_timeline gives it); every animation finished when left out.",
+                },
             }, "required": ["slides"] }
+        }, {
+            "name": NARRATION_TOOL,
+            "description": format!("Make an existing audio file (WAV, MP3, M4A/AAC, FLAC, Ogg \
+                Vorbis or AIFF) the narration audio of a slide, in place of any it has. It plays \
+                from the moment the slide shows (it sets data-narration-start=\"0\") and goes on \
+                playing over the next slides when it is longer than the slide: music for several \
+                slides goes on the first, and those after it get no narration of their own. Like \
+                a recording, it is the slide's audio whatever its narration script says; the \
+                script is not changed. Its words are then timed with the speech-to-text model. \
+                The audio file must be in the workspace: copy it in first if needed. Then call \
+                {TIMELINE_TOOL} for when its words fall on the slides and {BEATS_TOOL} for its \
+                beat."),
+            "inputSchema": { "type": "object", "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The deck file, relative to the workspace root; deck.html when left out.",
+                },
+                "slide": { "type": "string", "description": "The id of the slide it starts on." },
+                "audio": {
+                    "type": "string",
+                    "description": "The audio file, relative to the workspace root.",
+                },
+                "replace": {
+                    "type": "boolean",
+                    "description": "Replace the user's own recording of the slide; only when the user agreed. Without it a recorded slide keeps its audio.",
+                },
+            }, "required": ["slide", "audio"] }
+        }, {
+            "name": TIMELINE_TOOL,
+            "description": "How a deck plays out with its narration, as a video export and \
+                the self-running show play it: when each shown slide starts and ends, when each \
+                slide's narration audio plays and over which slides, and when each word of it is \
+                said (timed first where needed), as seconds into the show and into the slide \
+                showing then. Use the time into a slide for animation delays on that slide when \
+                timing animations to the narration; never count from the audio file alone.",
+            "inputSchema": { "type": "object", "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The deck file, relative to the workspace root; deck.html when left out.",
+                },
+                "words": {
+                    "type": "boolean",
+                    "description": "List when each word is said (the default); false for the slides and narration only.",
+                },
+            } }
+        }, {
+            "name": BEATS_TOOL,
+            "description": format!("The beat of a slide's narration audio, for music: its \
+                tempo and when each beat falls, as seconds into the show and into the slide \
+                showing then (as {TIMELINE_TOOL} counts), with how strong each is. Use it to \
+                time animations to the music instead of analysing the audio yourself."),
+            "inputSchema": { "type": "object", "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The deck file, relative to the workspace root; deck.html when left out.",
+                },
+                "slide": { "type": "string", "description": "The id of the slide whose narration audio it is." },
+            }, "required": ["slide"] }
         }]}),
         "tools/call" if request["params"]["name"] == TOOL => {
             let rel = request["params"]["arguments"]["path"]
@@ -193,9 +270,16 @@ pub fn handle(
                     .filter_map(|slide| slide.as_str().map(str::to_string))
                     .collect();
                 render::check_slides(&slides)?;
+                let at = match &arguments["at"] {
+                    Value::Null => None,
+                    at => Some(at.as_f64().ok_or_else(|| {
+                        crate::error::Error::msg("at is seconds after the slide shows, a number")
+                    })?),
+                };
+                render::check_at(at)?;
                 let session =
                     session(dir).ok_or_else(|| crate::error::Error::msg("no workspace session"))?;
-                let slides = render::ask(&session, rel, slides, render::WAIT)?;
+                let slides = render::ask(&session, rel, slides, at, render::WAIT)?;
                 Ok(render_content(&slides))
             })();
             let (content, failed) = match rendered {
@@ -204,10 +288,412 @@ pub fn handle(
             };
             json!({ "content": content, "isError": failed })
         }
+        "tools/call" if request["params"]["name"] == NARRATION_TOOL => {
+            let arguments = &request["params"]["arguments"];
+            let session = session(dir);
+            text_result(
+                deck::app_home().and_then(|home| {
+                    set_narration_audio(dir, arguments, &home, session.as_deref())
+                }),
+            )
+        }
+        "tools/call" if request["params"]["name"] == TIMELINE_TOOL => {
+            let arguments = &request["params"]["arguments"];
+            let session = session(dir);
+            text_result(
+                deck::app_home()
+                    .and_then(|home| narration_timeline(dir, arguments, &home, session.as_deref())),
+            )
+        }
+        "tools/call" if request["params"]["name"] == BEATS_TOOL => {
+            let session = session(dir);
+            text_result(narration_beats(
+                dir,
+                &request["params"]["arguments"],
+                session.as_deref(),
+            ))
+        }
         "tools/call" => return Some(error(id, -32602, "unknown tool")),
         method => return Some(error(id, -32601, &format!("method not found: {method}"))),
     };
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+}
+
+/// A tool result of `text`, or of what went wrong.
+fn text_result(text: Result<String>) -> Value {
+    let (text, failed) = match text {
+        Ok(text) => (text, false),
+        Err(e) => (e.to_string(), true),
+    };
+    json!({ "content": [{ "type": "text", "text": text }], "isError": failed })
+}
+
+/// The speech-to-text model, kept loaded between calls.
+static VOICE: std::sync::OnceLock<voice::Voice> = std::sync::OnceLock::new();
+
+/// The deck file `path` of `arguments` names (deck.html when left out): its workspace-relative
+/// path and where it is.
+fn deck_argument(dir: &Path, arguments: &Value) -> Result<(String, PathBuf)> {
+    let rel = arguments["path"]
+        .as_str()
+        .filter(|v| !v.is_empty())
+        .unwrap_or(deck::DECK_FILE);
+    let file = crate::workspace::open_file(dir, rel)?;
+    Ok((rel.to_string(), PathBuf::from(file.absolute)))
+}
+
+/// Times the words of the up-to-date audio of the deck `file`'s `slides` (all for None) that
+/// are not timed yet, with the speech-to-text model in `home`.
+fn time_words(file: &Path, slides: Option<&[String]>, home: &Path) -> Result<()> {
+    let voice = VOICE.get_or_init(voice::Voice::default);
+    tauri::async_runtime::block_on(narration::time_words(voice, home, file, slides, |_| {}))
+        .map(|_| ())
+}
+
+/// Makes the workspace file `audio` the narration of `slide` of the deck at `path`
+/// (`arguments`), starting with the slide, then times its words with the speech-to-text model
+/// in `home`; what it did, for the agent. A slide locked in the deck, or in the turn's guard in
+/// the workspace's `session`, keeps its audio.
+fn set_narration_audio(
+    dir: &Path,
+    arguments: &Value,
+    home: &Path,
+    session: Option<&Path>,
+) -> Result<String> {
+    let text = |key: &str| arguments[key].as_str().filter(|v| !v.is_empty());
+    let (rel, file) = deck_argument(dir, arguments)?;
+    let slide = text("slide").ok_or_else(|| Error::msg("slide is required"))?;
+    let audio = text("audio").ok_or_else(|| Error::msg("audio is required"))?;
+    let source = crate::workspace::open_file(dir, audio)?;
+    if source.kind == crate::workspace::FileKind::Directory {
+        return Err(Error::msg(format!(
+            "{audio} is a folder, not an audio file"
+        )));
+    }
+    let deck = deck::load(&file)?;
+    let Some(found) = deck.slides.iter().find(|s| s.id == slide) else {
+        return Err(Error::msg(format!("{rel} has no slide `{slide}`")));
+    };
+    let duration = found.duration;
+    // Checked before the audio is replaced: audio is not in the deck's history to undo.
+    let markup = std::fs::read_to_string(&file)?;
+    if crate::html::is_locked(&markup, slide)
+        || deck::read_guard(&file, session)
+            .iter()
+            .any(|locked| locked.id == slide)
+    {
+        return Err(Error::msg(format!(
+            "The slide `{slide}` is locked; unlock it to change its narration."
+        )));
+    }
+    // The presenter's own recording cannot be made again: replaced only when asked to.
+    if arguments["replace"].as_bool() != Some(true) && narration::has_own_recording(&file, slide) {
+        return Err(Error::msg(format!(
+            "The slide `{slide}` is narrated by the user's own recording, which would be lost. Ask the user first; call again with replace: true to replace it."
+        )));
+    }
+    let seconds = narration::import_audio(&file, slide, Path::new(&source.absolute))?;
+    let kept = narration::audio_file(&file, slide);
+    // Workspace-relative, with `/` as the agent writes paths on every platform.
+    let kept: Vec<String> = kept
+        .strip_prefix(dir)
+        .unwrap_or(&kept)
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let kept = kept.join("/");
+    let mut out =
+        format!("Slide `{slide}` is narrated by {audio} now ({seconds:.2} s, kept as {kept}).");
+    // Audio made elsewhere plays from the moment the slide shows, whatever the app's pause.
+    let pinned = deck::set_slide_timing(
+        &file,
+        &[deck::SlideTiming {
+            slide: slide.to_string(),
+            duration,
+            narration_start: Some(0.0),
+        }],
+    );
+    match pinned {
+        Ok(_) => out.push_str(&format!(
+            " It starts as the slide shows ({}=\"0\").",
+            crate::html::NARRATION_START_ATTR
+        )),
+        Err(e) => out.push_str(&format!(" Its start is not pinned to the slide's: {e}.")),
+    }
+    let slides = [slide.to_string()];
+    match time_words(&file, Some(&slides), home).map(|_| narration::words(&file, slide)) {
+        Ok(Some(words)) if words.is_empty() => out.push_str(" No words are heard in it."),
+        Ok(Some(words)) => out.push_str(&format!(" Its {} words are timed.", words.len())),
+        Ok(None) => out.push_str(" Its words are not timed."),
+        Err(e) => out.push_str(&format!(
+            " Its words are not timed: {}. The user can time them in the Narration panel.",
+            e.to_string().trim_end_matches('.')
+        )),
+    }
+    out.push_str(&format!(
+        " Call {TIMELINE_TOOL} for when its words fall on the slides, {BEATS_TOOL} for its beat."
+    ));
+    Ok(out)
+}
+
+/// Seconds as the timing tools show them.
+fn secs(seconds: f64) -> String {
+    format!("{seconds:.2}")
+}
+
+/// Seconds as the timing tools save them: to the millisecond.
+fn ms(seconds: f64) -> f64 {
+    (seconds * 1000.0).round() / 1000.0
+}
+
+/// Writes `data` to `name` in the `timing/` folder of the workspace's `session`, for the agent's
+/// scripts to read; a line telling where, or nothing without a session.
+fn saved(session: Option<&Path>, rel: &str, what: &str, data: &Value) -> String {
+    let Some(session) = session else {
+        return String::new();
+    };
+    let folder = session.join("timing");
+    // `what` may hold a slide id, which the agent writes: keep it one plain file name.
+    let name = format!(
+        "{}.{}.json",
+        rel.replace(['/', '\\'], "_"),
+        narration::file_stem(what)
+    );
+    let written = std::fs::create_dir_all(&folder).and_then(|_| {
+        let text = serde_json::to_string_pretty(data).unwrap_or_default();
+        std::fs::write(folder.join(&name), text)
+    });
+    match written {
+        Ok(()) => format!(
+            "\n\nThe same as JSON, for your scripts to read rather than copy: {}",
+            folder.join(name).display()
+        ),
+        Err(e) => format!("\n\n(Its JSON could not be saved: {e}.)"),
+    }
+}
+
+/// How the deck at `path` (`arguments`) plays out with its narration, with when each word is
+/// said (timing them first with the model in `home` where needed) unless `words` is false; also
+/// saved as JSON in the workspace's `session`.
+fn narration_timeline(
+    dir: &Path,
+    arguments: &Value,
+    home: &Path,
+    session: Option<&Path>,
+) -> Result<String> {
+    use narration::timeline;
+    let (rel, file) = deck_argument(dir, arguments)?;
+    let with_words = arguments["words"].as_bool().unwrap_or(true);
+    let deck = deck::load(&file)?;
+    let mut slides = timeline::layout(&file, &deck, &timeline::DEFAULTS);
+    let mut untimed = None;
+    if with_words {
+        if let Err(e) = time_words(&file, None, home) {
+            untimed = Some(e.to_string());
+        }
+        slides = timeline::layout(&file, &deck, &timeline::DEFAULTS);
+    }
+    let d = timeline::DEFAULTS;
+    let mut out = format!(
+        "How {rel} plays in a video export and the self-running show, in seconds from its \
+         start. What a slide does not pin follows the app's default export settings: a slide \
+         shows at least {} s, its narration starts {} s in and the slide stays {} s after it; \
+         the user may export with others, so pin `{}` and `{}` on slides you time to narration. \
+         A narration never talks over the one before it: it waits. An animation on a slide \
+         starts as the slide shows, so its delay is the time into that slide.\n",
+        d.seconds_per_slide,
+        d.pause_before,
+        d.pause_after,
+        crate::html::DURATION_ATTR,
+        crate::html::NARRATION_START_ATTR,
+    );
+    let mut data_slides = Vec::new();
+    let mut data_words = Vec::new();
+    for (i, slide) in slides.iter().enumerate() {
+        let pinned = |set: Option<f64>| if set.is_some() { "pinned" } else { "default" };
+        data_slides.push(json!({
+            "id": slide.id,
+            "start": ms(slide.start),
+            "end": ms(slide.end),
+            "duration": slide.duration,
+            "narrationStart": slide.narration_start,
+            "narration": slide.narration.as_ref().map(|clip| json!({
+                "start": ms(clip.start),
+                "end": ms(clip.end),
+                "source": match (clip.imported, clip.recorded) {
+                    (true, _) => "imported",
+                    (_, true) => "recording",
+                    _ => "voice",
+                },
+                "waits": ms(clip.start - clip.planned.max(0.0)).max(0.0),
+            })),
+            "unspoken": slide.unspoken,
+        }));
+        out.push_str(&format!(
+            "\n{}. `{}` shows {}–{} ({} s, {})",
+            i + 1,
+            slide.id,
+            secs(slide.start),
+            secs(slide.end),
+            secs(slide.end - slide.start),
+            pinned(slide.duration),
+        ));
+        if let Some(clip) = &slide.narration {
+            let over: Vec<String> = slides
+                .iter()
+                .filter(|s| s.id != slide.id && s.start < clip.end - 0.005 && s.end > clip.start)
+                .map(|s| format!("`{}`", s.id))
+                .collect();
+            out.push_str(&format!(
+                "\n   narration ({}, {} s) plays {}–{}, starting {} s into the slide ({})",
+                match (clip.imported, clip.recorded) {
+                    (true, _) => "imported audio",
+                    (_, true) => "the presenter's recording",
+                    _ => "voice model",
+                },
+                secs(clip.end - clip.start),
+                secs(clip.start),
+                secs(clip.end),
+                secs(clip.start - slide.start),
+                if clip.start > clip.planned + 0.005 {
+                    "waiting for the narration before it"
+                } else {
+                    pinned(slide.narration_start)
+                },
+            ));
+            if !over.is_empty() {
+                out.push_str(&format!("; plays on over {}", over.join(", ")));
+            }
+        } else if slide.unspoken {
+            out.push_str("\n   narration script without up-to-date audio: the user has it spoken in the Narration panel (an export does it first); until then its timing is unknown");
+        }
+    }
+    if with_words {
+        for slide in slides.iter().filter(|s| s.narration.is_some()) {
+            out.push_str(&format!("\n\nWords of `{}`'s narration", slide.id));
+            match narration::words(&file, &slide.id) {
+                None => out.push_str(&format!(
+                    ": not timed{}.",
+                    untimed.as_ref().map_or(String::new(), |e| format!(
+                        " ({}; the user can time them in the Narration panel)",
+                        e.trim_end_matches('.')
+                    ))
+                )),
+                Some(words) if words.is_empty() => out.push_str(": none heard."),
+                Some(words) => {
+                    out.push_str(
+                        ": start–end in the show, then the slide showing at the start and the \
+                         seconds into it.",
+                    );
+                    for word in words {
+                        let Some(at) = timeline::place(&slides, &slide.id, word.start) else {
+                            continue;
+                        };
+                        out.push_str(&format!(
+                            "\n{}–{} {} +{} {}",
+                            secs(at.at),
+                            secs(at.at + word.end - word.start),
+                            at.slide,
+                            secs(at.into_slide),
+                            word.text
+                        ));
+                        data_words.push(json!({
+                            "audio": slide.id,
+                            "text": word.text,
+                            "start": ms(at.at),
+                            "end": ms(at.at + word.end - word.start),
+                            "slide": at.slide,
+                            "intoSlide": ms(at.into_slide),
+                        }));
+                    }
+                }
+            }
+        }
+    }
+    let data = json!({
+        "deck": rel,
+        "assumed": {
+            "secondsPerSlide": d.seconds_per_slide,
+            "pauseBefore": d.pause_before,
+            "pauseAfter": d.pause_after,
+        },
+        "end": slides.last().map_or(0.0, |s| ms(s.end)),
+        "slides": data_slides,
+        "words": data_words,
+    });
+    out.push_str(&saved(session, &rel, "timeline", &data));
+    Ok(out)
+}
+
+/// The beat of the narration audio of `slide` of the deck at `path` (`arguments`), placed on
+/// the deck's timeline; also saved as JSON in the workspace's `session`.
+fn narration_beats(dir: &Path, arguments: &Value, session: Option<&Path>) -> Result<String> {
+    use narration::timeline;
+    let (rel, file) = deck_argument(dir, arguments)?;
+    let slide = arguments["slide"]
+        .as_str()
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| Error::msg("slide is required"))?;
+    let deck = deck::load(&file)?;
+    if !deck.slides.iter().any(|s| s.id == slide) {
+        return Err(Error::msg(format!("{rel} has no slide `{slide}`")));
+    }
+    let slides = timeline::layout(&file, &deck, &timeline::DEFAULTS);
+    if !slides
+        .iter()
+        .any(|s| s.id == slide && s.narration.is_some())
+    {
+        return Err(Error::msg(format!(
+            "slide `{slide}` has no up-to-date narration audio that plays"
+        )));
+    }
+    let (samples, rate) = narration::audio::read_wav(&narration::audio_file(&file, slide))?;
+    let Some(found) = narration::beats::find(&samples, rate) else {
+        return Ok(format!("No beat is heard in slide `{slide}`'s narration."));
+    };
+    let mut out = format!(
+        "Slide `{slide}`'s narration has a beat of {:.1} BPM (one every {} s), {} beats. Each: \
+         when it falls in the show (as {TIMELINE_TOOL} counts), the slide showing then and the \
+         seconds into it, how strong its onset is (0 to 1, 1 the strongest), and bar.beat: \
+         bars of four, beat 1 their downbeat, found from the accents and shifting where the \
+         music does (bar 0 is before the first downbeat).",
+        found.tempo,
+        secs(60.0 / found.tempo),
+        found.beats.len(),
+    );
+    let mut bar = 0;
+    let mut data_beats = Vec::new();
+    for ((at, strength), &in_bar) in found.beats.iter().zip(&found.in_bar) {
+        if in_bar == 0 {
+            bar += 1;
+        }
+        let Some(placed) = timeline::place(&slides, slide, *at) else {
+            continue;
+        };
+        out.push_str(&format!(
+            "\n{} {} +{} {strength:.2} {bar}.{}",
+            secs(placed.at),
+            placed.slide,
+            secs(placed.into_slide),
+            in_bar + 1
+        ));
+        data_beats.push(json!({
+            "at": ms(placed.at),
+            "slide": placed.slide,
+            "intoSlide": ms(placed.into_slide),
+            "strength": (strength * 100.0).round() / 100.0,
+            "bar": bar,
+            "beat": in_bar + 1,
+        }));
+    }
+    let data = json!({
+        "deck": rel,
+        "audio": slide,
+        "tempo": (found.tempo * 10.0).round() / 10.0,
+        "beats": data_beats,
+    });
+    out.push_str(&saved(session, &rel, &format!("beats-{slide}"), &data));
+    Ok(out)
 }
 
 /// A tool result for rendered `slides`: what was found on each, followed by its image.
@@ -312,7 +798,19 @@ mod tests {
     fn lists_the_lint_tool() {
         let res = call(Path::new("/nonexistent"), "tools/list", json!({}));
         let tools = res["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 3);
+        assert_eq!(tools.len(), 6);
+        assert_eq!(tools[4]["name"], TIMELINE_TOOL);
+        assert_eq!(tools[5]["name"], BEATS_TOOL);
+        assert_eq!(tools[5]["inputSchema"]["required"], json!(["slide"]));
+        for tool in [TIMELINE_TOOL, BEATS_TOOL] {
+            assert!(crate::agent::SYSTEM_PROMPT.contains(tool), "{tool}");
+        }
+        assert_eq!(tools[3]["name"], NARRATION_TOOL);
+        assert_eq!(
+            tools[3]["inputSchema"]["required"],
+            json!(["slide", "audio"])
+        );
+        assert!(crate::agent::SYSTEM_PROMPT.contains(NARRATION_TOOL));
         assert_eq!(tools[2]["name"], RENDER_TOOL);
         assert_eq!(tools[2]["inputSchema"]["required"], json!(["slides"]));
         assert!(crate::agent::SYSTEM_PROMPT.contains(RENDER_TOOL));
@@ -326,6 +824,9 @@ mod tests {
         assert!(is_claude_tool("mcp__slopslide__lint_deck"));
         assert!(is_claude_tool("mcp__slopslide__open_file"));
         assert!(is_claude_tool("mcp__slopslide__render_slide"));
+        assert!(is_claude_tool("mcp__slopslide__set_narration_audio"));
+        assert!(is_claude_tool("mcp__slopslide__narration_timeline"));
+        assert!(is_claude_tool("mcp__slopslide__narration_beats"));
         assert!(!is_claude_tool("mcp__slopslide__"));
         assert!(!is_claude_tool("mcp__slopslides__lint_deck"));
         assert!(!is_claude_tool("mcp__github__push"));
@@ -339,6 +840,10 @@ mod tests {
         assert_eq!(display_name("slopslide-open_file"), OPEN_TOOL);
         assert_eq!(display_name("mcp__slopslide__render_slide"), RENDER_TOOL);
         assert_eq!(display_name("slopslide-render_slide"), RENDER_TOOL);
+        assert_eq!(
+            display_name("slopslide-set_narration_audio"),
+            NARRATION_TOOL
+        );
         assert_eq!(display_name("lint_deck"), TOOL);
         assert_eq!(display_name("mcp__github__push"), "mcp__github__push");
         assert_eq!(display_name("github-push"), "github-push");
@@ -551,6 +1056,380 @@ mod tests {
             assert_eq!(res["result"]["isError"], true, "{arguments}");
         }
         assert!(render::take_requests(&dir.join("session")).is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn narrated_deck() -> PathBuf {
+        let dir = temp_deck(
+            r#"<main class="deck"><section class="slide" id="intro"><aside class="narration">Hi.</aside></section></main>"#,
+        );
+        std::fs::create_dir_all(dir.join("talks/sound")).unwrap();
+        std::fs::write(
+            dir.join("talks/q3.html"),
+            r#"<main class="deck"><section class="slide" id="intro"></section></main>"#,
+        )
+        .unwrap();
+        narration::audio::write_wav(&dir.join("talks/sound/quiet.wav"), &[0.0; 16_000], 16_000)
+            .unwrap();
+        let tone: Vec<f32> = (0..16_000).map(|i| (i as f32 / 20.0).sin() * 0.3).collect();
+        narration::audio::write_wav(&dir.join("talks/sound/talk.wav"), &tone, 16_000).unwrap();
+        std::fs::write(dir.join("talks/sound/notes.txt"), "not audio").unwrap();
+        dir
+    }
+
+    #[test]
+    fn narration_tool_makes_audio_the_slides_narration_and_times_its_words() {
+        let dir = narrated_deck();
+        // Silence is timed as no words, with no speech model needed.
+        let res = call(
+            &dir,
+            "tools/call",
+            json!({"name": NARRATION_TOOL, "arguments": {"slide": "intro", "audio": "talks/sound/quiet.wav"}}),
+        );
+        assert_eq!(res["result"]["isError"], false, "{res}");
+        let text = res["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("Slide `intro` is narrated by talks/sound/quiet.wav now (1.00 s, kept as narration/intro.wav)."), "{text}");
+        assert!(
+            text.contains("It starts as the slide shows (data-narration-start=\"0\")."),
+            "{text}"
+        );
+        assert!(
+            text.contains("No words are heard in it. Call narration_timeline"),
+            "{text}"
+        );
+        let file = dir.join(deck::DECK_FILE);
+        let deck = deck::load(&file).unwrap();
+        assert_eq!(deck.slides[0].narration_start, Some(0.0));
+        assert_eq!(
+            deck.slides[0].duration, None,
+            "its length is left as it was"
+        );
+        assert_eq!(narration::words(&file, "intro"), Some(vec![]));
+        let manifest = std::fs::read_to_string(dir.join("narration/manifest.json")).unwrap();
+        assert!(manifest.contains("\"recorded\": true"), "{manifest}");
+
+        // Speech without the model is kept, untimed; another deck keeps its audio apart.
+        let args =
+            json!({"path": "talks/q3.html", "slide": "intro", "audio": "talks/sound/talk.wav"});
+        let text = set_narration_audio(&dir, &args, Path::new("/nonexistent"), None).unwrap();
+        assert!(
+            text.contains("kept as talks/narration/q3/intro.wav"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Its words are not timed: Slide intro: The speech model is not downloaded. The user can time them in the Narration panel."),
+            "{text}"
+        );
+        assert_eq!(narration::words(&dir.join("talks/q3.html"), "intro"), None);
+        assert_eq!(narration::words(&file, "intro"), Some(vec![]));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn narration_tool_leaves_a_locked_slides_audio_alone() {
+        let dir = temp_deck(
+            r#"<main class="deck"><section class="slide" id="intro" data-locked><aside class="narration">Hi.</aside></section></main>"#,
+        );
+        narration::audio::write_wav(&dir.join("quiet.wav"), &[0.0; 16_000], 16_000).unwrap();
+        let res = call(
+            &dir,
+            "tools/call",
+            json!({"name": NARRATION_TOOL, "arguments": {"slide": "intro", "audio": "quiet.wav"}}),
+        );
+        assert_eq!(res["result"]["isError"], true, "{res}");
+        assert!(
+            text_of(&res).contains("The slide `intro` is locked"),
+            "{res}"
+        );
+        // Nothing was replaced: no audio, no manifest, no pinned start.
+        assert!(!dir.join("narration").exists());
+        let deck = deck::load(&dir.join(deck::DECK_FILE)).unwrap();
+        assert_eq!(deck.slides[0].narration_start, None);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn narration_tool_replaces_the_users_own_recording_only_when_asked() {
+        let dir = narrated_deck();
+        let file = dir.join(deck::DECK_FILE);
+        let take: Vec<f32> = (0..8_000).map(|i| (i as f32 / 30.0).sin() * 0.2).collect();
+        narration::append_recording(&file, "intro", &take, 16_000).unwrap();
+        let recording = std::fs::read(narration::audio_file(&file, "intro")).unwrap();
+        let args = json!({"name": NARRATION_TOOL, "arguments": {"slide": "intro", "audio": "talks/sound/quiet.wav"}});
+        let res = call(&dir, "tools/call", args.clone());
+        assert_eq!(res["result"]["isError"], true, "{res}");
+        assert!(
+            text_of(&res).contains("the user's own recording, which would be lost"),
+            "{res}"
+        );
+        assert_eq!(
+            std::fs::read(narration::audio_file(&file, "intro")).unwrap(),
+            recording,
+            "the take is kept"
+        );
+        // Asked to, it replaces it; audio brought in before is replaced without asking.
+        let mut replace = args.clone();
+        replace["arguments"]["replace"] = json!(true);
+        let res = call(&dir, "tools/call", replace);
+        assert_eq!(res["result"]["isError"], false, "{res}");
+        assert!(!narration::has_own_recording(&file, "intro"));
+        let res = call(&dir, "tools/call", args);
+        assert_eq!(res["result"]["isError"], false, "{res}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn timing_data_saved_for_a_slide_stays_in_the_sessions_timing_folder() {
+        let session =
+            std::env::temp_dir().join(format!("slopslide-saved-{}", uuid::Uuid::new_v4()));
+        let data = json!({"beats": []});
+        // Slide ids are written by the agent; none may lead out of the folder or name a stream
+        // (`:` on Windows) or a folder (`/`, `\`).
+        for id in ["../../escape", "a/b", "a\\b", "c:x", "intro"] {
+            let text = saved(
+                Some(&session),
+                "talks/deck.html",
+                &format!("beats-{id}"),
+                &data,
+            );
+            assert!(!text.contains("could not be saved"), "{id}: {text}");
+        }
+        let names: Vec<String> = std::fs::read_dir(session.join("timing"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 5, "{names:?}");
+        assert!(names.contains(&"talks_deck.html.beats-intro.json".to_string()));
+        assert!(names
+            .iter()
+            .all(|n| n.starts_with("talks_deck.html.") && n.ends_with(".json")));
+        assert!(!session.parent().unwrap().join("escape.json").exists());
+        std::fs::remove_dir_all(session).unwrap();
+    }
+
+    /// `seconds` of a kick drum at 120 BPM, at `rate`.
+    fn drums(seconds: f64, rate: u32) -> Vec<f32> {
+        (0..(seconds * f64::from(rate)) as usize)
+            .map(|i| {
+                let t = i as f64 / f64::from(rate);
+                let since = t % 0.5;
+                ((-since * 25.0).exp()
+                    * (std::f64::consts::TAU * (50.0 + 120.0 * (-since * 40.0).exp()) * t).sin()
+                    * 0.8) as f32
+            })
+            .collect()
+    }
+
+    fn text_of(res: &Value) -> String {
+        res["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// A deck whose short first slide `song` has 8 s of drums that play on over `verse`.
+    fn song_deck() -> PathBuf {
+        let dir = temp_deck(concat!(
+            r#"<main class="deck">"#,
+            r#"<section class="slide" id="song" data-duration="2"></section>"#,
+            r#"<section class="slide" id="verse" data-duration="10"></section>"#,
+            r#"<section class="slide" id="outro"><aside class="narration">Bye.</aside></section>"#,
+            r#"</main>"#,
+        ));
+        narration::audio::write_wav(&dir.join("song.wav"), &drums(8.0, 22_050), 22_050).unwrap();
+        let args = json!({"slide": "song", "audio": "song.wav"});
+        set_narration_audio(&dir, &args, Path::new("/nonexistent"), None).unwrap();
+        dir
+    }
+
+    #[test]
+    fn timeline_tool_places_slides_narration_and_words_on_the_show() {
+        let dir = song_deck();
+        // Words as the model timed them.
+        let manifest = dir.join("narration/manifest.json");
+        let json = std::fs::read_to_string(&manifest).unwrap().replace(
+            "\"recorded\": true",
+            r#""recorded": true, "timing": 3, "words": [{"text": "One,", "start": 1.0, "end": 1.4}, {"text": "two.", "start": 3.25, "end": 3.5}]"#,
+        );
+        std::fs::write(&manifest, json).unwrap();
+        let res = call(
+            &dir,
+            "tools/call",
+            json!({"name": TIMELINE_TOOL, "arguments": {}}),
+        );
+        assert_eq!(res["result"]["isError"], false, "{res}");
+        let text = text_of(&res);
+        for line in [
+            "1. `song` shows 0.00–2.00 (2.00 s, pinned)",
+            "narration (imported audio, 8.00 s) plays 0.00–8.00, starting 0.00 s into the slide (pinned); plays on over `verse`",
+            "2. `verse` shows 2.00–12.00 (10.00 s, pinned)",
+            "3. `outro` shows 12.00–17.00 (5.00 s, default)",
+            "narration script without up-to-date audio",
+            "Words of `song`'s narration: start–end in the show",
+            "\n1.00–1.40 song +1.00 One,",
+            "\n3.25–3.50 verse +1.25 two.",
+        ] {
+            assert!(text.contains(line), "{line}\n{text}");
+        }
+        assert!(!text.contains("Words of `outro`"), "{text}");
+        // The same as JSON in the session, for scripts.
+        let saved = dir
+            .join("session")
+            .join("timing")
+            .join("deck.html.timeline.json");
+        assert!(text.ends_with(&saved.display().to_string()), "{text}");
+        let data: Value = serde_json::from_str(&std::fs::read_to_string(&saved).unwrap()).unwrap();
+        assert_eq!(data["slides"][0]["id"], "song");
+        assert_eq!(data["slides"][0]["narration"]["source"], "imported");
+        assert_eq!(data["slides"][1]["start"], 2.0);
+        assert_eq!(data["slides"][2]["unspoken"], true);
+        assert_eq!(
+            data["words"][1],
+            json!({"audio": "song", "text": "two.", "start": 3.25, "end": 3.5, "slide": "verse", "intoSlide": 1.25})
+        );
+        assert_eq!(data["end"], 17.0);
+        // Without words, just the slides.
+        let res = call(
+            &dir,
+            "tools/call",
+            json!({"name": TIMELINE_TOOL, "arguments": {"words": false}}),
+        );
+        assert!(!text_of(&res).contains("Words of"));
+        let res = call(
+            &dir,
+            "tools/call",
+            json!({"name": TIMELINE_TOOL, "arguments": {"path": "nope.html"}}),
+        );
+        assert_eq!(res["result"]["isError"], true);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn timeline_tool_says_why_words_are_not_timed() {
+        let dir = song_deck();
+        let text = narration_timeline(&dir, &json!({}), Path::new("/nonexistent"), None).unwrap();
+        assert!(
+            text.contains("Words of `song`'s narration: not timed (Slide song: The speech model is not downloaded; the user can time them in the Narration panel)."),
+            "{text}"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn beats_tool_finds_the_beat_on_the_show() {
+        let dir = song_deck();
+        let res = call(
+            &dir,
+            "tools/call",
+            json!({"name": BEATS_TOOL, "arguments": {"slide": "song"}}),
+        );
+        assert_eq!(res["result"]["isError"], false, "{res}");
+        let text = text_of(&res);
+        assert!(
+            text.starts_with("Slide `song`'s narration has a beat of 12"),
+            "{text}"
+        );
+        assert!(text.contains("(one every 0.50 s)"), "{text}");
+        // Beats after the first slide fall on `verse`, counted from its start.
+        let line = text
+            .lines()
+            .find(|l| l.starts_with("2.50 "))
+            .unwrap_or_default();
+        assert!(line.starts_with("2.50 verse +0.50 "), "{text}");
+        // Each ends in its bar and beat.
+        assert!(
+            line.rsplit(' ').next().is_some_and(|b| b.contains('.')),
+            "{line}"
+        );
+        let saved = dir.join("session/timing/deck.html.beats-song.json");
+        let data: Value = serde_json::from_str(&std::fs::read_to_string(saved).unwrap()).unwrap();
+        assert!(
+            (data["tempo"].as_f64().unwrap() - 120.0).abs() < 2.0,
+            "{data}"
+        );
+        let beat = data["beats"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| (b["at"].as_f64().unwrap() - 2.5).abs() < 0.01)
+            .unwrap();
+        assert_eq!(beat["slide"], "verse");
+        assert!((beat["intoSlide"].as_f64().unwrap() - 0.5).abs() < 0.01);
+        assert!((1..=4).contains(&beat["beat"].as_u64().unwrap()));
+        for (arguments, why) in [
+            (json!({}), "slide is required"),
+            (
+                json!({"slide": "chorus"}),
+                "deck.html has no slide `chorus`",
+            ),
+            (
+                json!({"slide": "verse"}),
+                "slide `verse` has no up-to-date narration audio",
+            ),
+        ] {
+            let res = call(
+                &dir,
+                "tools/call",
+                json!({"name": BEATS_TOOL, "arguments": arguments}),
+            );
+            assert_eq!(res["result"]["isError"], true, "{arguments}");
+            assert!(
+                text_of(&res).contains(why),
+                "{arguments}: {}",
+                text_of(&res)
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn narration_tool_refuses_what_it_cannot_use() {
+        let dir = narrated_deck();
+        for (arguments, why) in [
+            (
+                json!({"audio": "talks/sound/quiet.wav"}),
+                "slide is required",
+            ),
+            (json!({"slide": "intro"}), "audio is required"),
+            (
+                json!({"slide": "outro", "audio": "talks/sound/quiet.wav"}),
+                "deck.html has no slide `outro`",
+            ),
+            (
+                json!({"slide": "intro", "audio": "talks/sound/missing.wav"}),
+                "missing: talks/sound/missing.wav",
+            ),
+            (
+                json!({"slide": "intro", "audio": "../outside.wav"}),
+                "invalid path",
+            ),
+            (
+                json!({"slide": "intro", "audio": "/etc/hosts"}),
+                "invalid path",
+            ),
+            (
+                json!({"slide": "intro", "audio": "talks/sound"}),
+                "is a folder",
+            ),
+            (
+                json!({"slide": "intro", "audio": "talks/sound/notes.txt"}),
+                "is no usable audio",
+            ),
+            (
+                json!({"path": "missing.html", "slide": "intro", "audio": "talks/sound/quiet.wav"}),
+                "missing.html",
+            ),
+        ] {
+            let res = call(
+                &dir,
+                "tools/call",
+                json!({"name": NARRATION_TOOL, "arguments": arguments}),
+            );
+            assert_eq!(res["result"]["isError"], true, "{arguments}");
+            let text = res["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains(why), "{arguments}: {text}");
+        }
+        assert!(!dir.join("narration").exists(), "nothing was kept");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

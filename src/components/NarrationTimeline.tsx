@@ -1,8 +1,9 @@
 import { Minus, Pause, Play, Plus, RotateCcw } from "lucide-react";
 import { type KeyboardEvent, type PointerEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { api, type Deck, type Slide, type SlideAudio, type SlideTiming } from "../lib/api";
+import { api, type Deck, type NarrationWord, type Slide, type SlideAudio, type SlideTiming } from "../lib/api";
 import { formatDuration } from "../lib/narrationAudio";
+import { setSlideClock } from "../lib/slideClock";
 import { pixelsOf } from "../lib/slideSize";
 import {
   layoutTimeline,
@@ -96,29 +97,39 @@ function Tracks(props: {
   useEffect(() => stop ?? undefined, [stop]);
   // A changed deck has another timeline than the one playing.
   // biome-ignore lint/correctness/useExhaustiveDependencies: Runs on every change of the deck.
-  useEffect(() => setStop(null), [deck]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: The clock starts where playing did.
   useEffect(() => {
-    if (!stop) return;
-    const started = Date.now() - time * 1000;
-    const clock = setInterval(() => setTime((Date.now() - started) / 1000), 100);
-    return () => clearInterval(clock);
-  }, [stop]);
+    setStop(null);
+    setSlideClock(null);
+  }, [deck]);
+  useEffect(() => () => setSlideClock(null), []);
 
+  /** Puts the slide showing at `at` (and its timed animations) where the timeline is then. */
+  const clockAt = (at: number) => {
+    const slide = timeline.slides[slideAt(timeline, at)];
+    setSlideClock(slide ? { slide: slide.id, at: at - slide.start } : null);
+  };
   const select = (index: number) => {
     const slide = timeline.slides[index];
     if (slide) useApp.getState().select(slide.id);
   };
   const play = () => {
-    if (stop) return setStop(null);
+    if (stop) {
+      setSlideClock(null);
+      return setStop(null);
+    }
     const from = time >= timeline.end ? 0 : time;
     setTime(from);
     select(slideAt(timeline, from));
     const stopping = playTimeline(deck.id, timeline, from, {
       slide: select,
+      tick: (at) => {
+        setTime(at);
+        clockAt(at);
+      },
       ended: () => {
         setStop(null);
         setTime(0);
+        setSlideClock(null);
       },
     });
     setStop(() => stopping);
@@ -176,6 +187,7 @@ function Tracks(props: {
     setStop(null);
     setTime(at);
     select(slideAt(timeline, at));
+    setSlideClock(null);
   };
 
   const reset = slides
@@ -388,6 +400,7 @@ function Clip(props: {
       current = false;
     };
   }, [deck, clip.slide, seconds, audio?.state]);
+  const words = useWords(deck, clip.slide, audio);
   const label =
     seconds === null
       ? `Narration of ${clip.slide}, not spoken yet`
@@ -411,7 +424,49 @@ function Clip(props: {
       style={{ left: `${(clip.start / end) * 100}%`, width: `${((clip.end - clip.start) / end) * 100}%` }}
     >
       {peaks.length > 0 && <Waveform peaks={peaks} />}
+      {words.length > 0 && seconds !== null && <Words words={words} seconds={seconds} />}
     </button>
+  );
+}
+
+/** When each word of the slide's up-to-date audio is said, once that is known. */
+function useWords(deck: string, slide: string, audio: SlideAudio | undefined): NarrationWord[] {
+  const [words, setWords] = useState<NarrationWord[]>([]);
+  const timed = audio?.state === "ready" && !!audio.timed;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: New audio has other words.
+  useEffect(() => {
+    if (!timed) return setWords([]);
+    let current = true;
+    api.narrationWords(deck, slide).then(
+      (found) => current && setWords(found ?? []),
+      () => current && setWords([]),
+    );
+    return () => {
+      current = false;
+    };
+  }, [deck, slide, timed, audio?.seconds]);
+  return words;
+}
+
+/** `words` along audio `seconds` long, each at its start, cut off where the next begins. */
+function Words({ words, seconds }: { words: NarrationWord[]; seconds: number }) {
+  const at = (time: number) => (Math.min(time, seconds) / seconds) * 100;
+  return (
+    <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-3.5">
+      {words.map((word, i) => {
+        const next = words[i + 1]?.start ?? seconds;
+        return (
+          <span
+            key={`${word.start}-${word.end}-${word.text}`}
+            data-word={word.text}
+            className="absolute bottom-0 overflow-hidden whitespace-nowrap border-l border-current/40 pl-px text-left text-[9px] leading-3.5 text-foreground/80"
+            style={{ left: `${at(word.start)}%`, width: `${Math.max(0, at(next) - at(word.start))}%` }}
+          >
+            {word.text}
+          </span>
+        );
+      })}
+    </span>
   );
 }
 

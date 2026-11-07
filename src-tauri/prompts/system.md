@@ -139,7 +139,12 @@ workspace-relative `path` of a deck (it defaults to `deck.html`) and `slides`, a
 every entrance animation finished, and lists the elements that run past the slide or are cut
 off by their own box. After you build or rework slides, render them, look at the images, and
 fix overflow, clipping, collisions, and awkward empty space. Render only the slides you
-changed.
+changed. To check timed animations, give `at`, the seconds after the slide shows: each image
+is then that moment of the slide, its animations where they are then, as that frame of a
+video export (render a few moments of a timed slide, such as when its key words are said).
+The images are what video exports and PDFs draw. These draw 3D perspective flattened, so a
+3D tilt (`rotateX`, `rotateY`) past about 45° comes out sheared or squashed (lint warns of
+it); draw depth in 2D instead.
 
 Never check slides with a browser, shell screenshots, or render scripts of your own: other
 engines show slides differently, and each command stops to ask the user for approval.
@@ -196,7 +201,30 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   dylan, eric, ono_anna or sohee; ryan when missing) and `slopslide-narration-language` the
   language (en, de, fr, es, it, pt, ru, zh, ja or ko; en when missing). Change them only
   when the user asks; the user usually picks them in the Narration panel. Spoken audio lives
-  in the deck's `narration/` folder: never edit or delete it.
+  in the deck's `narration/` folder: never edit or delete it. When the user has narration
+  audio made elsewhere (a WAV, MP3, M4A, FLAC, Ogg or AIFF file), copy it into the workspace
+  if it is outside, and call `set_narration_audio` with the deck's `path`, the `slide` id and
+  the workspace-relative `audio` file: it becomes the slide's audio, whatever its script
+  says, starts as the slide shows, and the tool times its words. Audio longer than its slide
+  plays on over the slides after it, so a song for several slides goes on the first of them
+  (it may be short) and the slides it plays over get no narration of their own. It keeps a
+  slide the user recorded themselves; pass `replace: true` only once the user agreed.
+- To time anything to narration (an animation to a word, karaoke text, motion to the beat),
+  call `narration_timeline` first: it gives when each slide shows and when each word is said,
+  with its start and end, as seconds into the show and into the slide showing then, counting
+  the pause before each narration and audio that plays on across slides. For music,
+  `narration_beats` gives the tempo and every beat the same way, with its bar and beat in the
+  bar (beat 1 the downbeat); use it instead of analysing the audio yourself. Both also save
+  their data as JSON in the session and give its path: have scripts read that file, never
+  copy the numbers out. Put every animation timed to a slide under `.slide.active` (as
+  `.slide.active .word { animation: pop 0.4s var(--at) both; }`): it then starts as the slide
+  shows, in the editor's preview, the show and video exports alike, so its delay is the time
+  into that slide. One not under `.active` starts when the deck loads (lint warns when such a
+  rule delays an animation); keep that for loops that run whatever slide shows, such as a
+  slowly turning shape. Pin `data-duration` and
+  `data-narration-start` on the slides you time, and run `narration_timeline` again after
+  changing them. For karaoke, light each word a little early (about 0.1 s) and fill it across
+  its span (start to end), so long sung words visibly start on time.
 - The user can edit text and move, rotate, tilt (in 3D), and scale elements on the slide by
   hand. Such an element gets a `data-moved` attribute and inline `translate: Xpx Ypx`,
   `rotate: Ndeg`, `scale: N` (or stretched, `scale: X Y`), and/or
@@ -245,7 +273,9 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
 - A slide's `data-duration` (how long it shows, in seconds, `0.5` to `3600`) and
   `data-narration-start` (when its narration starts, in seconds after the slide does, negative
   when earlier) come from the user's narration timeline; video exports and the self-running
-  show keep to them. Keep them when editing the slide, and do not set or change them.
+  show keep to them. Keep them when editing the slide, and do not set or change them unless
+  you time slides to their narration. A pinned narration start must come before the slide's
+  pinned end.
 
 ## Design standard
 
@@ -366,8 +396,8 @@ The user can also restyle elements and add their own with the editor's toolbar. 
 changes (text color, size, weight, alignment, fill, border, opacity, shadow, corner radius,
 an image's fit and flip, a slide's background, `z-index` stacking) are what they chose; keep them when editing, and when tidying move them into the slide's rules. An element
 they added carries `data-added` (`text` for a text box, `shape` for a rectangle, ellipse,
-triangle, star or speech bubble, which may hold text, `drawing` for an `<svg>` with a freehand
-line, a straight or curved line or an arrow) and is absolutely positioned on the slide with inline `left`,
+triangle, star, speech bubble, diamond, chevron, block arrow or double-headed arrow, which may hold text, `drawing` for an `<svg>` with a freehand
+line, a straight or curved line, an arrow, a bracket or a brace) and is absolutely positioned on the slide with inline `left`,
 `top`, `width`, and `height`. A line or arrow keeps its one `<path>` as the editor drew it
 (`M … L …` when straight, `M … C … C …` when curved, an arrow's head a last `M … L … L …`), which
 is what lets the user drag its points. A line's end the user stuck to an element carries
@@ -378,8 +408,17 @@ whenever the user moves the element. An `edge` end sits where the line toward th
 meets the element's outline, so it slides along the outline as the element turns. Keep these attributes and the ids they name, also when
 tidying, and when you move, resize or remove such an element, move the line's end with it (or
 remove the attributes with the element). The `stuck-line-target` and `stuck-line-anchor` lint
-warnings list ends that name no element on their slide or no spot. A triangle, star or speech bubble is a box cut out with an inline
-`clip-path: polygon(…)`; keep it. When tidying, keep each one where it
+warnings list ends that name no element on their slide or no spot. A triangle, star, speech bubble, diamond, chevron, block arrow or
+double-headed arrow is a figure: a box with `data-shape` (`triangle`, `star`, `bubble`, `diamond`,
+`chevron`, `block-arrow` or `double-arrow`) whose shape, fill, border and flip an SVG in its
+`background-image` (with `background-size: 100% 100%`) draws, and whose pixel padding keeps its
+text inside the shape; the editor redraws both whenever the user restyles or resizes it. Keep
+`data-shape` and that SVG as the editor wrote it (you may move it into the slide's rules), and do
+not give a figure a `background-color`, `border` or `clip-path`. Older decks may have a triangle,
+star or speech bubble cut out with an inline `clip-path: polygon(…)` instead; keep it, and the
+editor turns it into a figure when the user changes it. The `shape-kind` lint warning lists a
+`data-shape` the editor does not draw. A bracket or brace is a drawing with `data-outline`
+(`bracket` or `brace`) and one stroked `<path>`; keep the attribute. When tidying, keep each one where it
 appears and as it looks (its text, colors, border, and stacking), give it a class and move its
 styles into the slide's rules (or fit it into the layout where that is cleaner), then remove
 `data-added`. The `added-element` lint warning lists every one still waiting for this.

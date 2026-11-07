@@ -54,6 +54,7 @@ const SELECTION: EditSelection = {
   fit: null,
   fitPosition: null,
   alt: null,
+  flippable: false,
   flipX: false,
   flipY: false,
 };
@@ -158,9 +159,11 @@ describe("edit tools", () => {
       fit: null,
       fitPosition: null,
       alt: null,
+      flippable: false,
       flipX: false,
       flipY: false,
     });
+    expect(parseSelection({ kind: "shape", flippable: true })?.flippable).toBe(true);
   });
 
   it("keeps a restyle's look as the next element's default, but not its script or fit", () => {
@@ -226,6 +229,16 @@ describe("edit tools", () => {
     expect(familyOf("triangle")).toBe("shape");
     expect(familyOf("star")).toBe("shape");
     expect(familyOf("bubble")).toBe("shape");
+    expect(["diamond", "chevron", "block-arrow", "double-arrow"].map((t) => familyOf(t as never))).toEqual([
+      "shape",
+      "shape",
+      "shape",
+      "shape",
+    ]);
+    // Brackets and braces are open outlines, drawn like a line.
+    expect(familyOf("bracket")).toBe("draw");
+    expect(familyOf("brace")).toBe("draw");
+    expect(toolbarState(null, "brace", DEFAULT_EDIT_STYLES)?.vector).toBe(true);
     expect(familyOf("paint")).toBeNull();
     expect(toolbarState(null, "paint", DEFAULT_EDIT_STYLES)).toBeNull();
     expect(toolbarState(null, "arrow", DEFAULT_EDIT_STYLES)?.vector).toBe(true);

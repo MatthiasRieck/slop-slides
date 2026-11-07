@@ -281,7 +281,9 @@ function ExportMenu(props: {
         <Popover
           anchor={buttonRef}
           placement="below"
+          align="end"
           width={300}
+          portal
           label="Export video"
           onClose={() => setVideoOpen(false)}
         >

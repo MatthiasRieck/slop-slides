@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseGeometry, parseGeometryValue } from "./arrange";
+import { parseGeometry, parseGeometryValue, quarterTurn } from "./arrange";
 
 describe("parseGeometry", () => {
   it("takes the editor's report, a null rotation meaning several elements", () => {
@@ -36,5 +36,16 @@ describe("parseGeometryValue", () => {
     expect(parseGeometryValue("x", "")).toBeNull();
     expect(parseGeometryValue("y", "-")).toBeNull();
     expect(parseGeometryValue("y", "1.2.3")).toBeNull();
+  });
+});
+
+describe("quarterTurn", () => {
+  it("turns a quarter either way, staying within ±180°", () => {
+    expect(quarterTurn(0, 1)).toBe(90);
+    expect(quarterTurn(0, -1)).toBe(-90);
+    expect(quarterTurn(90, 1)).toBe(180);
+    expect(quarterTurn(180, 1)).toBe(-90);
+    expect(quarterTurn(-90, -1)).toBe(180);
+    expect(quarterTurn(15.4, 1)).toBe(105);
   });
 });

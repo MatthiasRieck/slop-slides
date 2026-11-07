@@ -10,7 +10,7 @@ import {
   Wand2,
   X,
 } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api, errorMessage, type Slide } from "../lib/api";
 import { type EditGeometry, parseGeometry } from "../lib/arrange";
@@ -34,6 +34,7 @@ import {
   parseSelection,
 } from "../lib/editTools";
 import { type Stroke, zoomBox } from "../lib/ink";
+import { getSlideClock, onSlideClock, postSlideClock } from "../lib/slideClock";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn, deckFileUrl } from "../lib/utils";
 import { deckMode, editedSlidesOf, SKETCH_TARGET_ATTR, searchHighlight, useApp } from "../store";
@@ -261,6 +262,7 @@ export function Stage() {
         <EditContextMenu
           {...editFrames.menu}
           running={running}
+          flippable={!!editFrames.selection?.flippable}
           onAction={editFrames.runMenuAction}
           onClose={editFrames.closeMenu}
         />
@@ -460,18 +462,29 @@ function CurrentSlide(props: {
   onFrameReady: (frame: HTMLIFrameElement) => void;
 }) {
   const editReload = useApp((s) => s.editReload);
+  const id = props.slide.id;
+  // While narration plays over the slide, it shows as it plays, its animations kept with the
+  // narration, rather than as the editor's still of their last frame.
+  const played = useSyncExternalStore(onSlideClock, () => {
+    const clock = getSlideClock();
+    return clock?.slide === id;
+  });
+  const frame = useRef<HTMLIFrameElement | null>(null);
+  useEffect(() => onSlideClock(() => postSlideClock(frame.current, id)), [id]);
   return (
     <SlideFrame
       deckId={props.deckId}
-      slideId={props.slide.id}
+      slideId={id}
       version={useSlideVersion(props.slide)}
-      editKey={props.editing ? String(editReload) : undefined}
+      editKey={props.editing && !played ? String(editReload) : undefined}
       arena={props.arena}
       size={props.size}
-      onFrameReady={(frame) => {
+      onFrameReady={(loaded) => {
+        frame.current = loaded;
+        postSlideClock(loaded, id);
         const canvas = props.canvas.current;
-        if (canvas) frame.contentWindow?.postMessage({ type: "slop:canvas", ...canvasColors(canvas) }, "*");
-        props.onFrameReady(frame);
+        if (canvas) loaded.contentWindow?.postMessage({ type: "slop:canvas", ...canvasColors(canvas) }, "*");
+        props.onFrameReady(loaded);
       }}
     />
   );
@@ -789,7 +802,11 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
     else if (action === "duplicate") post({ type: "slop:edit-duplicate" });
     else if (action === "delete") post({ type: "slop:edit-delete" });
     else if (action === "svg") post({ type: "slop:edit-open-svg" });
-    else if (action === "ask" || action === "tidy") {
+    else if (action === "flip-x" || action === "flip-y") {
+      const look = selection?.slide === current ? selection.selection : null;
+      if (!look?.flippable) return;
+      post({ type: "slop:edit-style", style: action === "flip-x" ? { flipX: !look.flipX } : { flipY: !look.flipY } });
+    } else if (action === "ask" || action === "tidy") {
       if (!element) return;
       // The screenshot shows the whole slide, with the element selected and the menu gone.
       resetView();
@@ -887,6 +904,12 @@ const TOOL_NAMES: Record<EditTool, true> = {
   triangle: true,
   star: true,
   bubble: true,
+  diamond: true,
+  chevron: true,
+  "block-arrow": true,
+  "double-arrow": true,
+  bracket: true,
+  brace: true,
   draw: true,
   line: true,
   arrow: true,

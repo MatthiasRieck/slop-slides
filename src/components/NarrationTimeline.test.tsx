@@ -6,6 +6,7 @@ vi.mock("../lib/timelinePlayback", () => ({ playTimeline: vi.fn() }));
 
 import type { Deck, RailEdit, Slide } from "../lib/api";
 import { formatDuration } from "../lib/narrationAudio";
+import { getSlideClock } from "../lib/slideClock";
 import { playTimeline } from "../lib/timelinePlayback";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
@@ -58,6 +59,39 @@ describe("NarrationTimeline", () => {
     expect(clip.style.left).not.toBe("");
     expect(clip.querySelector("path")?.getAttribute("d")).toBe("M0 0.5V1.5M1 0V2");
     expect(invoke).toHaveBeenCalledWith("narration_peaks", { id: deckOf().id, slide: "intro" });
+  });
+
+  it("shows when each word of timed audio is said", async () => {
+    open();
+    await act(async () => {});
+    const clip = () => screen.getByRole("button", { name: "Narration of intro" });
+    expect(clip().querySelector("[data-word]")).toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith("narration_words", expect.anything());
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "narration_peaks") return [0.5, 1];
+      if (command === "narration_words")
+        return [
+          { text: "Hello,", start: 0.3, end: 0.9 },
+          { text: "world.", start: 1.5, end: 2.4 },
+        ];
+      return null;
+    });
+    act(() => useNarration.setState({ audio: { intro: { slide: "intro", state: "ready", seconds: 3, timed: true } } }));
+    await act(async () => {});
+    expect(invoke).toHaveBeenCalledWith("narration_words", { id: deckOf().id, slide: "intro" });
+    const words = [...clip().querySelectorAll<HTMLElement>("[data-word]")];
+    expect(words.map((w) => w.textContent)).toEqual(["Hello,", "world."]);
+    // Each word starts where it is said and reaches to the next.
+    expect(words.map((w) => [w.style.left, w.style.width])).toEqual([
+      ["10%", "40%"],
+      ["50%", "50%"],
+    ]);
+
+    // Out-of-date audio's words are not shown.
+    act(() => useNarration.setState({ audio: { intro: { slide: "intro", state: "stale", seconds: 3, timed: true } } }));
+    await act(async () => {});
+    const stale = screen.getByRole("button", { name: "Narration of intro, out of date" });
+    expect(stale.querySelector("[data-word]")).toBeNull();
   });
 
   it("marks narration not spoken yet and out-of-date audio", async () => {
@@ -313,6 +347,29 @@ describe("NarrationTimeline", () => {
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     expect(stop).toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Play" })).toBeTruthy();
+  });
+
+  it("keeps the showing slide's animations with the playhead", () => {
+    play.mockReturnValue(vi.fn());
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    const [, timeline, , events] = play.mock.calls[0] as [
+      string,
+      { slides: { id: string; start: number }[] },
+      number,
+      { tick: (t: number) => void },
+    ];
+    const outro = timeline.slides.find((s) => s.id === "outro")!;
+    act(() => events.tick(outro.start + 1.5));
+    expect(getSlideClock()).toEqual({ slide: "outro", at: 1.5 });
+    expect(screen.getByText(`${formatDuration(outro.start + 1.5)} / ${formatDuration(15)}`)).toBeTruthy();
+    // Paused, the slides run on their own: nothing is left frozen.
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    expect(getSlideClock()).toBeNull();
+    // Played to the end, the slides run on their own again.
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    act(() => (play.mock.calls[1]![3] as { ended: () => void }).ended());
+    expect(getSlideClock()).toBeNull();
   });
 
   it("goes back to the start when it ends", () => {

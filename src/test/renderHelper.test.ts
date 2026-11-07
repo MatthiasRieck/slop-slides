@@ -26,7 +26,7 @@ afterEach(() => {
 
 interface Helper {
   ready: () => void;
-  show: (id: string) => void;
+  show: (id: string, at?: number | null) => void;
 }
 
 const box = (left: number, top: number, width: number, height: number) => ({
@@ -65,6 +65,39 @@ function helper() {
 const answered = (answer: string) => new URLSearchParams(answer);
 
 describe("the render helper", () => {
+  it("holds the slide's animations where they are a moment after it shows, everything else done", () => {
+    const { render, window } = helper();
+    const animation = (target: Element, endTime: number, name: string | null) => ({
+      animationName: name,
+      effect: { target, getComputedTiming: () => ({ endTime }) },
+      currentTime: 0,
+      state: "running",
+      pause() {
+        this.state = "paused";
+      },
+      finish() {
+        if (endTime === Number.POSITIVE_INFINITY) throw new Error("InvalidStateError");
+        this.state = "finished";
+      },
+    });
+    const long = window.document.getElementById("long")!;
+    const word = animation(long.querySelector(".big")!, 4000, "pop");
+    const short = animation(long.querySelector(".glow")!, 800, "glow");
+    const fade = animation(long, 350, null);
+    const elsewhere = animation(window.document.getElementById("intro")!, Number.POSITIVE_INFINITY, "spin");
+    const animations = [word, short, fade, elsewhere];
+    Object.assign(window.document, { getAnimations: () => animations });
+    render.show("long", 2.5);
+    expect([word.currentTime, word.state]).toEqual([2500, "paused"]);
+    expect([short.currentTime, short.state]).toEqual([800, "paused"]);
+    expect(fade.state).toBe("finished");
+    expect(elsewhere.state).toBe("paused");
+    // Without a moment, the page (loaded still) is left as it is.
+    word.state = "running";
+    render.show("long", null);
+    expect(word.state).toBe("running");
+  });
+
   it("reports every slide once fonts and images are ready, hidden ones too", async () => {
     const { answers } = helper();
     await vi.waitFor(() => {

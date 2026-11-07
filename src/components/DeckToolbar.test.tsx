@@ -417,6 +417,14 @@ describe("video export", () => {
     expect(screen.queryByRole("dialog", { name: "Export video" })).toBeNull();
   });
 
+  it("opens in the body, so the panes beside the deck don't cover it", () => {
+    const { container } = render(<DeckActions />);
+    openPanel();
+    const dialog = screen.getByRole("dialog", { name: "Export video" });
+    expect(container.contains(dialog)).toBe(false);
+    expect(dialog.parentElement).toBe(document.body);
+  });
+
   it("remembers the last choice", async () => {
     save.mockResolvedValue(null);
     render(<DeckActions />);

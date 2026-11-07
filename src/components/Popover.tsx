@@ -67,6 +67,8 @@ const LOOKS = {
  * both. It is fixed in place, on top of everything (the rail and the stage bar would clip it).
  *
  * - `placement`: the anchor's side to open on; `auto` takes the side with more room.
+ * - `align`: `start` lines the panel's left edge up with the anchor's, `end` its right edge, for
+ *   an anchor near the right of its pane.
  * - `label`: makes the panel a dialog named `label`.
  * - `variant`: `dialog` for panels of controls, `menu` for the chat composer's menus.
  * - `portal`: renders into the body, outside container-query and scroll compositing layers.
@@ -80,6 +82,7 @@ export function Popover(props: {
   onClose: () => void;
   width: number;
   placement?: "above" | "below" | "auto";
+  align?: "start" | "end";
   label?: string;
   variant?: keyof typeof LOOKS;
   className?: string;
@@ -89,7 +92,7 @@ export function Popover(props: {
   initialFocus?: RefObject<HTMLElement | null>;
   children: ReactNode;
 }) {
-  const { anchor, width, placement = "auto", follow = false } = props;
+  const { anchor, width, placement = "auto", align = "start", follow = false } = props;
   const look = LOOKS[props.variant ?? "dialog"];
   const { gap } = look;
   const panel = useRef<HTMLDivElement>(null);
@@ -102,10 +105,11 @@ export function Popover(props: {
       const panelWidth = Math.min(width, window.innerWidth - MARGIN * 2);
       const above = rect.top - MARGIN * 2;
       const below = window.innerHeight - rect.bottom - MARGIN * 2;
+      const left = align === "end" ? rect.right - panelWidth : rect.left;
       const opensAbove = placement === "auto" ? above >= below : placement === "above";
       setPosition({
         width: panelWidth,
-        left: Math.max(MARGIN, Math.min(rect.left, window.innerWidth - panelWidth - MARGIN)),
+        left: Math.max(MARGIN, Math.min(left, window.innerWidth - panelWidth - MARGIN)),
         ...(opensAbove ? { bottom: window.innerHeight - rect.top + gap } : { top: rect.bottom + gap }),
         maxHeight: Math.max(0, opensAbove ? above : below),
       });
@@ -122,7 +126,7 @@ export function Popover(props: {
       window.removeEventListener("resize", place);
       document.removeEventListener("scroll", place, true);
     };
-  }, [anchor, placement, width, gap, follow]);
+  }, [anchor, placement, align, width, gap, follow]);
 
   useDismiss(true, [anchor, panel], props.onClose, { escape: true, capture: props.capture });
 

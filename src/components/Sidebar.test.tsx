@@ -89,6 +89,16 @@ describe("Sidebar", () => {
     expect(useApp.getState().sidebarMaximized).toBe(false);
   });
 
+  it("hides itself from the button beside maximize", () => {
+    useApp.setState({ sidebarMaximized: true });
+    render(<Sidebar />);
+    const maximize = screen.getByRole("button", { name: "Restore the sidebar" });
+    const hide = screen.getByRole("button", { name: "Hide sidebar" });
+    expect(maximize.nextElementSibling).toBe(hide);
+    fireEvent.click(hide);
+    expect(useApp.getState()).toMatchObject({ sidebarOpen: false, sidebarMaximized: false });
+  });
+
   it("closes the SVG editor's tab through the editor, which asks about changes not accepted", async () => {
     const markup = "<svg></svg>";
     useApp.setState({ sidebarTabs: ["chat", "svg"], sidebarTab: "svg" });
@@ -104,6 +114,9 @@ describe("Sidebar", () => {
         size: { w: 10, h: 10 },
         color: null,
         vars: {},
+        css: "",
+        fonts: "",
+        ancestors: [],
         saving: false,
       },
     });

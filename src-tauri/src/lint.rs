@@ -10,7 +10,7 @@ use crate::comments;
 use crate::html::{
     self, find_ci, has_class, parse_tag, ADDED_ATTR, AUTOFIT_ATTR, DROPPED_ATTR, DURATION_ATTR,
     EDITOR_ATTRS, HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR, NARRATION_CLASS, NARRATION_START_ATTR,
-    SECTION_CLASS, SECTION_TITLE_ATTR, TIME_ATTR,
+    SECTION_CLASS, SECTION_TITLE_ATTR, SHAPE_ATTR, SHAPE_KINDS, TIME_ATTR,
 };
 use crate::narration;
 use crate::review;
@@ -118,6 +118,8 @@ pub fn lint(
     check_slide_size(&mut l);
     check_narration_settings(&mut l);
     check_entrances(&mut l);
+    check_tilts(&mut l);
+    check_untimed_delays(&mut l);
     check_morphs(&mut l);
     check_stuck_lines(&mut l);
     check_assets(&mut l, asset_exists);
@@ -341,6 +343,19 @@ fn check_markup(l: &mut Linter) {
                             i,
                             format!(
                                 "`{AUTOFIT_ATTR}=\"{value}\"` means nothing; use \"shrink\" (the text shrinks to fit its box) or \"grow\" (the box grows with its text), or remove it."
+                            ),
+                        );
+                    }
+                }
+                if let Some((_, value, ..)) = tag.attrs.iter().find(|(n, ..)| n == SHAPE_ATTR) {
+                    if !SHAPE_KINDS.contains(&value.as_str()) {
+                        l.report(
+                            "shape-kind",
+                            Severity::Warning,
+                            i,
+                            format!(
+                                "`{SHAPE_ATTR}=\"{value}\"` is not a shape the editor draws ({}), so it cannot restyle, flip or fit this one. Use one of those kinds, or remove the attribute and draw the shape some other way.",
+                                SHAPE_KINDS.join(", ")
                             ),
                         );
                     }
@@ -692,7 +707,59 @@ fn check_slides(l: &mut Linter) {
                 ),
             );
         }
+        let pinned = |attr: &Option<(std::ops::Range<usize>, String)>,
+                      parse: fn(&str) -> Option<f64>| {
+            attr.as_ref().and_then(|(_, v)| parse(v))
+        };
+        if let (Some(start), Some(duration)) = (
+            pinned(&slide.narration_start, html::parse_narration_start),
+            pinned(&slide.duration, html::parse_duration),
+        ) {
+            if start >= duration {
+                l.report(
+                    "narration-start-after-end",
+                    Severity::Error,
+                    at,
+                    format!(
+                        "The slide's narration starts {start} s in (`{NARRATION_START_ATTR}`), but the slide only shows for {duration} s (`{DURATION_ATTR}`): start it before the slide ends. Audio that is to play on over the next slides starts on a short first slide."
+                    ),
+                );
+            }
+        }
     }
+}
+
+/// The slides whose narration has to wait for an earlier slide's, still playing over them (see
+/// [`crate::narration::timeline::overlaps`]), as issues of `source`.
+pub fn narration_overlaps(
+    source: &str,
+    overlaps: &[crate::narration::timeline::Overlap],
+) -> Vec<Issue> {
+    let mut l = Linter::new(source);
+    let slides = l.slides.clone();
+    for overlap in overlaps {
+        let Some(span) = slides
+            .iter()
+            .find(|s| s.id.as_deref() == Some(&overlap.slide))
+        else {
+            continue;
+        };
+        let (slide, under, waits) = (&overlap.slide, &overlap.under, overlap.waits);
+        let late = if overlap.after_end {
+            ", after the slide stopped showing"
+        } else {
+            ""
+        };
+        l.report(
+            "narration-overlap",
+            Severity::Warning,
+            span.range.start,
+            format!(
+                "The narration audio of slide `{under}` still plays when slide `{slide}`'s own narration is to start, so that waits {waits:.1} s{late}. Audio that plays on over later slides leaves them without narration of their own: remove theirs (script and audio), or end `{under}`'s audio sooner."
+            ),
+        );
+    }
+    l.issues
 }
 
 /// Narration: one `<aside class="narration">` of Markdown text per slide, no HTML in it.
@@ -1214,6 +1281,310 @@ fn check_entrances(l: &mut Linter) {
             }
         }
     }
+}
+
+/// The steepest a 3D tilt (rotateX/rotateY) draws about right in exports, PDFs and renders.
+const STEEPEST_TILT: f64 = 45.0;
+
+/// The shortest animation delay taken to time something to its slide, in seconds.
+const TIMED_DELAY: f64 = 1.0;
+
+/// Animations delayed to time them (by [`TIMED_DELAY`] or more, or by a `var()` or `calc()`) in
+/// rules not under `.active`: such an animation starts when the page loads, so in the show and
+/// in video exports its delay counts from then rather than from when its slide shows, and what
+/// it is timed to has long passed. A loop that runs whatever slide shows has no such delay.
+fn check_untimed_delays(l: &mut Linter) {
+    let html = l.html;
+    let easings = easing_vars(html);
+    let mut from = 0;
+    while let Some(open) = find_ci(html, from, "<style") {
+        let Some(start) = html[open..].find('>').map(|i| open + i + 1) else {
+            break;
+        };
+        let end = find_ci(html, start, "</style").unwrap_or(html.len());
+        from = end;
+        if !in_markup(l, open) {
+            continue;
+        }
+        for (at, selector) in untimed_delays(&html[start..end], &easings) {
+            l.report(
+                "untimed-animation-delay",
+                Severity::Warning,
+                start + at,
+                format!(
+                    "`{}` delays an animation to time it, but the rule is not under `.active`: the animation starts when the deck loads, so in the show and video exports its delay counts from then, not from when its slide shows. Put it under `.slide.active` (as `.slide.active .word {{ animation: … var(--at) both; }}`), so it starts as the slide shows.",
+                    truncate(selector.trim(), 80)
+                ),
+            );
+        }
+    }
+}
+
+/// The rules of `css` (outside `@keyframes`) that delay an animation to time it without being
+/// under `.active`: where each starts, and its selector. `easings` are custom properties that
+/// hold an easing, not a time.
+fn untimed_delays<'a>(css: &'a str, easings: &HashSet<&str>) -> Vec<(usize, &'a str)> {
+    let mut found = Vec::new();
+    let bytes = css.as_bytes();
+    // Where the text since the last rule (a selector or an at-rule's prelude) starts.
+    let mut head = 0;
+    // A rule's declarations are skipped whole, so the scan only ever is between rules here.
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i = css[i + 2..]
+                    .find("*/")
+                    .map_or(bytes.len(), |e| i + 2 + e + 2);
+                head = i;
+                continue;
+            }
+            // A statement at-rule (`@import url(…);`) ends before the next rule.
+            b';' => head = i + 1,
+            b'{' => {
+                let prelude = css[head..i].trim();
+                if prelude.starts_with("@keyframes") || prelude.starts_with("@-webkit-keyframes") {
+                    // Skip the whole block: its "rules" are keyframes.
+                    let mut depth = 0;
+                    while i < bytes.len() {
+                        match bytes[i] {
+                            b'{' => depth += 1,
+                            b'}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                    head = i + 1;
+                } else if prelude.starts_with('@') {
+                    head = i + 1;
+                } else {
+                    let body_end = css[i..].find('}').map_or(css.len(), |e| i + e);
+                    let body = &css[i + 1..body_end];
+                    let selector = &css[head..i];
+                    let ungated = selector.split(',').any(|part| !part.contains(".active"));
+                    if ungated && delays_to_time(body, easings) {
+                        let lead = selector.len() - selector.trim_start().len();
+                        found.push((head + lead, selector));
+                    }
+                    i = body_end;
+                    head = i + 1;
+                }
+            }
+            b'}' => head = i + 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    found
+}
+
+/// Whether `declarations` delay an animation by [`TIMED_DELAY`] or more, or by a `var()` or
+/// `calc()` (as times set per element are): in `animation-delay`, or as the second time of the
+/// `animation` shorthand, where a `var()` of one of the `easings` is the easing, not a time.
+fn delays_to_time(declarations: &str, easings: &HashSet<&str>) -> bool {
+    let easing = |word: &str| {
+        word.strip_prefix("var(")
+            .and_then(|rest| rest.split([',', ')']).next())
+            .is_some_and(|name| easings.contains(name.trim()))
+    };
+    let timed = |value: &str| {
+        let value = value.trim();
+        value.starts_with("var(")
+            || value.starts_with("calc(")
+            || seconds(value).is_some_and(|s| s >= TIMED_DELAY)
+    };
+    declarations.split(';').any(|declaration| {
+        let Some((name, value)) = declaration.split_once(':') else {
+            return false;
+        };
+        let value = value.trim().trim_end_matches("!important").trim();
+        match name.trim().to_ascii_lowercase().as_str() {
+            "animation-delay" => value.split(',').any(timed),
+            "animation" => value.split(',').any(|one| {
+                // The first time is the duration, the second the delay.
+                let times: Vec<&str> = css_words(one)
+                    .into_iter()
+                    .filter(|w| {
+                        seconds(w).is_some()
+                            || (w.starts_with("var(") && !easing(w))
+                            || w.starts_with("calc(")
+                    })
+                    .collect();
+                times.get(1).is_some_and(|delay| timed(delay))
+            }),
+            _ => false,
+        }
+    })
+}
+
+/// Custom properties `html` sets to an easing (`--spring: cubic-bezier(…)`), in its styles or
+/// inline: in the `animation` shorthand such a `var()` sits where a delay may, but is none.
+fn easing_vars(html: &str) -> HashSet<&str> {
+    let mut found = HashSet::new();
+    for (at, _) in html.match_indices("--") {
+        let rest = &html[at..];
+        let name_end = rest[2..]
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+            .map_or(rest.len(), |e| e + 2);
+        let Some(value) = rest[name_end..].trim_start().strip_prefix(':') else {
+            continue;
+        };
+        let value = value.trim_start().to_ascii_lowercase();
+        let easing = [
+            "cubic-bezier(",
+            "steps(",
+            "linear(",
+            "ease",
+            "step-start",
+            "step-end",
+        ]
+        .iter()
+        .any(|start| value.starts_with(start));
+        if easing && name_end > 2 {
+            found.insert(&rest[..name_end]);
+        }
+    }
+    found
+}
+
+/// The words of a CSS value, a function call with its arguments being one.
+fn css_words(value: &str) -> Vec<&str> {
+    let mut words = Vec::new();
+    let (mut depth, mut start) = (0, None);
+    for (i, c) in value.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            c if c.is_whitespace() && depth == 0 => {
+                if let Some(s) = start.take() {
+                    words.push(&value[s..i]);
+                }
+                continue;
+            }
+            _ => {}
+        }
+        start.get_or_insert(i);
+    }
+    if let Some(s) = start {
+        words.push(&value[s..]);
+    }
+    words
+}
+
+/// A CSS time in seconds: `s` or `ms`; None for anything else.
+fn seconds(time: &str) -> Option<f64> {
+    let time = time.trim().to_ascii_lowercase();
+    if let Some(ms) = time.strip_suffix("ms") {
+        return ms.parse::<f64>().ok().map(|ms| ms / 1000.0);
+    }
+    time.strip_suffix('s')?.parse().ok()
+}
+
+/// 3D tilts steeper than [`STEEPEST_TILT`] in the deck's styles: WebKit draws a page off screen
+/// (video and image exports, PDFs, `render_slide`) with perspective flattened, so a steep tilt
+/// comes out sheared and squashed, or as a thin line, though the editor shows it right. The
+/// user's own tilts (on `data-moved` elements) are theirs.
+fn check_tilts(l: &mut Linter) {
+    let html = l.html;
+    let mut found = Vec::new();
+    let mut from = 0;
+    while let Some(open) = find_ci(html, from, "<style") {
+        let Some(start) = html[open..].find('>').map(|i| open + i + 1) else {
+            break;
+        };
+        let end = find_ci(html, start, "</style").unwrap_or(html.len());
+        from = end;
+        if in_markup(l, open) {
+            found.extend(
+                steep_tilts(&html[start..end])
+                    .into_iter()
+                    .map(|(at, deg)| (start + at, deg)),
+            );
+        }
+    }
+    for (at, _) in html.match_indices("style=\"") {
+        let value_end = html[at + 7..].find('"').map_or(html.len(), |e| at + 7 + e);
+        // Nearly no style tilts, so the costlier checks below run only for one that does.
+        let tilts = steep_tilts(&html[at + 7..value_end]);
+        if tilts.is_empty() {
+            continue;
+        }
+        // The whole tag: the editor writes `data-moved` after the style it sets.
+        let tag_start = html[..at].rfind('<').unwrap_or(at);
+        let tag_end = html[value_end..]
+            .find('>')
+            .map_or(html.len(), |e| value_end + e);
+        let moved = html[tag_start..tag_end]
+            .split(|c: char| c.is_whitespace() || c == '=' || c == '"')
+            .any(|word| word == MOVED_ATTR);
+        if moved || !in_markup(l, at) {
+            continue;
+        }
+        found.extend(tilts.into_iter().map(|(i, deg)| (at + 7 + i, deg)));
+    }
+    for (at, degrees) in found {
+        l.report(
+            "steep-3d-tilt",
+            Severity::Warning,
+            at,
+            format!(
+                "A 3D tilt of {degrees:.0}° shows right in the editor, but video and image exports, PDFs and render_slide draw perspective flattened: past about {STEEPEST_TILT:.0}° it comes out sheared and squashed, or as a thin line. Draw depth in 2D instead (a trapezoid with clip-path, rows that widen toward the viewer, scale), or keep the tilt within {STEEPEST_TILT:.0}°."
+            ),
+        );
+    }
+}
+
+/// Where `css` tilts something in 3D by more than [`STEEPEST_TILT`], and by how much, in degrees.
+fn steep_tilts(css: &str) -> Vec<(usize, f64)> {
+    let lower = css.to_ascii_lowercase();
+    let mut found = Vec::new();
+    for function in ["rotatex(", "rotatey(", "rotate3d("] {
+        for (at, _) in lower.match_indices(function) {
+            let args = &lower[at + function.len()..];
+            let Some(close) = args.find(')') else {
+                continue;
+            };
+            // rotate3d(x, y, z, angle) tilts in 3D unless it turns about z alone.
+            let args = &args[..close];
+            let angle = if function == "rotate3d(" {
+                let parts: Vec<&str> = args.split(',').map(str::trim).collect();
+                let flat =
+                    parts.len() == 4 && parts[..2].iter().all(|p| p.parse::<f64>() == Ok(0.0));
+                if parts.len() != 4 || flat {
+                    continue;
+                }
+                parts[3]
+            } else {
+                args.trim()
+            };
+            if let Some(degrees) = degrees(angle).filter(|d| {
+                d.abs() % 180.0 > STEEPEST_TILT && d.abs() % 180.0 < 180.0 - STEEPEST_TILT
+            }) {
+                found.push((at, degrees.abs()));
+            }
+        }
+    }
+    found.sort_by_key(|(at, _)| *at);
+    found
+}
+
+/// A CSS angle in degrees: `deg`, `rad`, `grad` or `turn`; None for anything else (a `var()`).
+fn degrees(angle: &str) -> Option<f64> {
+    let angle = angle.trim();
+    let split = angle.find(|c: char| c.is_ascii_alphabetic())?;
+    let value: f64 = angle[..split].trim().parse().ok()?;
+    Some(match &angle[split..] {
+        "deg" => value,
+        "rad" => value.to_degrees(),
+        "grad" => value * 0.9,
+        "turn" => value * 360.0,
+        _ => return None,
+    })
 }
 
 /// `@keyframes` blocks in `css` that set `transform`: where each starts, and its name.
@@ -1842,6 +2213,184 @@ mod tests {
     }
 
     #[test]
+    fn flags_narration_that_starts_after_its_slide_ends() {
+        let slide = |attrs: &str| {
+            rules(&deck(&format!(
+                "<section class=\"slide\" id=\"a\" {attrs}></section>"
+            )))
+        };
+        assert_eq!(
+            slide("data-duration=\"4\" data-narration-start=\"5\""),
+            ["narration-start-after-end"]
+        );
+        assert_eq!(
+            slide("data-duration=\"4\" data-narration-start=\"4\""),
+            ["narration-start-after-end"]
+        );
+        for fine in [
+            "data-duration=\"4\" data-narration-start=\"3.9\"",
+            "data-duration=\"4\" data-narration-start=\"-2\"",
+            // Without a pinned length the slide lasts its narration out.
+            "data-narration-start=\"30\"",
+            "data-duration=\"4\"",
+        ] {
+            assert!(slide(fine).is_empty(), "{fine}");
+        }
+        // A value the app cannot read is reported as that alone.
+        assert_eq!(
+            slide("data-duration=\"soon\" data-narration-start=\"5\""),
+            ["duration-value"]
+        );
+    }
+
+    #[test]
+    fn reports_narration_that_waits_for_audio_still_playing() {
+        use crate::narration::timeline::Overlap;
+        let source = deck(
+            "<section class=\"slide\" id=\"song\"></section>\n<section class=\"slide\" id=\"talk\"></section>",
+        );
+        let overlap = |slide: &str, after_end| Overlap {
+            slide: slide.into(),
+            under: "song".into(),
+            waits: 2.54,
+            after_end,
+        };
+        let issues = narration_overlaps(&source, &[overlap("talk", true), overlap("gone", false)]);
+        assert_eq!(issues.len(), 1, "slides no longer there are skipped");
+        let issue = &issues[0];
+        assert_eq!(
+            (issue.rule, issue.severity),
+            ("narration-overlap", Severity::Warning)
+        );
+        assert_eq!(issue.slide.as_deref(), Some("talk"));
+        assert!(
+            issue.message.contains("slide `song` still plays")
+                && issue
+                    .message
+                    .contains("waits 2.5 s, after the slide stopped showing"),
+            "{}",
+            issue.message
+        );
+        assert!(narration_overlaps(&source, &[]).is_empty());
+    }
+
+    #[test]
+    fn flags_3d_tilts_exports_draw_flattened() {
+        let with = |css: &str, slide: &str| {
+            let html =
+                deck(slide).replace("<style>.slide {}</style>", &format!("<style>{css}</style>"));
+            rules(&html)
+        };
+        let plain = "<section class=\"slide\" id=\"a\"></section>";
+        assert_eq!(
+            with(
+                ".floor { transform: perspective(900px) rotateX(58deg); }",
+                plain
+            ),
+            ["steep-3d-tilt"]
+        );
+        for steep in [
+            "rotateY(-50deg)",
+            "rotateX(1rad)",
+            "rotate3d(1, 0, 0, 0.2turn)",
+            "ROTATEX(60DEG)",
+        ] {
+            assert_eq!(
+                with(&format!(".a {{ transform: {steep}; }}"), plain),
+                ["steep-3d-tilt"],
+                "{steep}"
+            );
+        }
+        for fine in [
+            "rotateX(20deg)",
+            "rotateY(-44deg)",
+            "rotateX(45deg)",
+            "rotateX(180deg)",
+            "rotate(90deg)",
+            "rotate3d(0, 0, 1, 90deg)",
+            "rotateX(var(--tilt))",
+        ] {
+            assert!(
+                with(&format!(".a {{ transform: {fine}; }}"), plain).is_empty(),
+                "{fine}"
+            );
+        }
+        // In an inline style too, but not on what the user tilted by hand.
+        let inline = "<section class=\"slide\" id=\"a\"><div style=\"transform: rotateX(60deg)\">x</div></section>";
+        assert_eq!(with(".slide {}", inline), ["steep-3d-tilt"]);
+        let moved = inline.replace("<div style", "<div data-moved style");
+        assert!(!with(".slide {}", &moved).contains(&"steep-3d-tilt"));
+        // The editor writes the style first and marks the element after it.
+        let moved = inline.replace("60deg)\"", "60deg)\" data-moved=\"\"");
+        assert!(
+            !with(".slide {}", &moved).contains(&"steep-3d-tilt"),
+            "{moved}"
+        );
+        // Only the attribute itself counts, not a word in another one.
+        let named = inline.replace("<div style", "<div class=\"not-data-moved\" style");
+        assert_eq!(with(".slide {}", &named), ["steep-3d-tilt"]);
+    }
+
+    #[test]
+    fn tilt_lint_stays_fast_on_decks_with_many_inline_styles() {
+        // A big deck: thousands of inline styles, none tilted (lint runs on every change).
+        let body: String = (0..4000)
+            .map(|i| format!("<p style=\"translate: {i}px 0; color: #123\">Word {i}</p>\n"))
+            .collect();
+        let html = deck(&format!(
+            "<section class=\"slide\" id=\"a\">{body}</section>"
+        ));
+        let started = std::time::Instant::now();
+        let found = rules(&html);
+        assert!(!found.contains(&"steep-3d-tilt"), "{found:?}");
+        // Quadratic in the deck's size this took seconds in debug builds.
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn flags_animations_timed_to_a_slide_that_start_with_the_deck() {
+        let with = |css: &str| {
+            rules(
+                &deck("<section class=\"slide\" id=\"a\"></section>")
+                    .replace("<style>.slide {}</style>", &format!("<style>{css}</style>")),
+            )
+        };
+        for untimed in [
+            ".word { animation: pop 0.4s ease-out 3.2s both; }",
+            ".word { animation: pop .4s var(--at) both; }",
+            ".scene .tile { animation-delay: calc(var(--b0) + 0.5s); }",
+            ".a, .slide.active .b { animation: pop 1s 2s; }",
+            "@media (min-width: 1px) { .word { animation-delay: 1500ms; } }",
+            ".a { opacity: 0; } .word { animation: spin 2s linear infinite, pop 1s 4s both; }",
+            // A font import before the rule does not hide it.
+            "@import url(https://fonts.googleapis.com/css2?family=Inter); .word { animation-delay: 2s; }",
+        ] {
+            assert_eq!(with(untimed), ["untimed-animation-delay"], "{untimed}");
+        }
+        for fine in [
+            ".slide.active .word { animation: pop 0.4s ease-out var(--at, 0s) both; }",
+            ".logo { animation: spin 8s linear infinite; }",
+            ".dot { animation: pulse 1s ease 0.2s infinite; }",
+            ".slide.active .a, .slide.active .b { animation-delay: 2s; }",
+            "@keyframes pop { 0% { opacity: 0; } 100% { opacity: 1; } } .x { color: red; }",
+            "/* .word { animation-delay: 3s; } */ .x { color: red; }",
+            ".x { transition: opacity 0.3s 2s; }",
+            // A var() holding an easing is no delay, set in the styles or inline.
+            ":root { --spring: cubic-bezier(.3, 1.4, .5, 1); } .badge { animation: pop .4s var(--spring) both; }",
+            ":root { --ease: ease-in-out; } .logo { animation: float 3s var(--ease) infinite; }",
+        ] {
+            assert!(with(fine).is_empty(), "{fine}: {:?}", with(fine));
+        }
+        // A var() holding a time still delays, beside an easing one.
+        let both = ":root { --spring: cubic-bezier(.3, 1.4, .5, 1); --at: 2s; } .w { animation: pop .4s var(--spring) var(--at) both; }";
+        assert_eq!(with(both), ["untimed-animation-delay"], "{both}");
+    }
+
+    #[test]
     fn flags_valued_hidden_attributes() {
         assert_eq!(
             rules(&deck(
@@ -1983,6 +2532,34 @@ mod tests {
         );
         let rules: Vec<_> = found.iter().map(|i| i.rule).collect();
         assert_eq!(rules, ["added-element", "added-element", "remote-image"]);
+    }
+
+    #[test]
+    fn figures_need_no_rules_of_their_own() {
+        // A figure is a box an SVG in its background draws, with the shape's kind in `data-shape`;
+        // brackets and braces are drawings with one stroke.
+        let found = lint(
+            &deck(
+                "<section class=\"slide\" id=\"a\">\n<div data-added=\"shape\" data-shape=\"block-arrow\" style=\"position: absolute; left: 0px; top: 0px; width: 320px; height: 200px; padding: 54px 96px 54px 13px; background-image: url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'%3E%3Cg transform='matrix(-1 0 0 1 100 0)'%3E%3Cpath d='M0 25 L65 25 L65 0 L100 50 L65 100 L65 75 L0 75 Z' fill='%233b82f6'/%3E%3C/g%3E%3C/svg%3E&quot;); background-size: 100% 100%; background-repeat: no-repeat; filter: drop-shadow(0px 8px 24px rgba(0, 0, 0, 0.35))\">Next</div>\n<svg data-added=\"drawing\" data-outline=\"brace\" viewBox=\"0 0 60 200\" style=\"position: absolute; left: 400px; top: 0px; width: 60px; height: 200px\"><path d=\"M57 3 Q30 3 30 57 L30 46 Q30 100 3 100\" stroke=\"#111111\" stroke-width=\"6\" fill=\"none\"/></svg>\n</section>",
+            ),
+            |_| true,
+            &[],
+        );
+        let rules: Vec<_> = found.iter().map(|i| i.rule).collect();
+        assert_eq!(rules, ["added-element", "added-element"]);
+    }
+
+    #[test]
+    fn flags_shapes_the_editor_cannot_draw() {
+        let found = lint(
+            &deck(
+                "<section class=\"slide\" id=\"a\">\n<div data-shape=\"hexagon\">Hi</div>\n<div data-shape=\"diamond\">Ok</div>\n</section>",
+            ),
+            |_| true,
+            &[],
+        );
+        let found: Vec<_> = found.iter().map(|i| (i.rule, i.line)).collect();
+        assert_eq!(found, [("shape-kind", 11)]);
     }
 
     #[test]

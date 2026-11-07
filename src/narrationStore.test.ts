@@ -1,5 +1,5 @@
 import { act } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke, listen } from "./test/tauri";
 
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
@@ -8,7 +8,7 @@ listen.mockImplementation(async (event: string, handler: (event: { payload: unkn
   return () => {};
 });
 
-import { initNarrationEvents, NARRATION_CANCELLED, useNarration } from "./narrationStore";
+import { initNarrationEvents, NARRATION_CANCELLED, touchesNarration, useNarration } from "./narrationStore";
 import { useApp } from "./store";
 import { DECK_HTML, deckFor } from "./test/fixtures";
 
@@ -16,7 +16,7 @@ const deck = deckFor(DECK_HTML);
 
 beforeEach(() => {
   invoke.mockReset();
-  useNarration.setState({ speech: null, audio: {}, audioDeck: null, render: null, download: null });
+  useNarration.setState({ speech: null, audio: {}, audioDeck: null, render: null, download: null, timing: null });
   useApp.setState({ deck: null, error: null });
 });
 
@@ -28,6 +28,28 @@ describe("narration store", () => {
     expect(invoke).toHaveBeenCalledWith("narration_audio", { id: deck.id });
     expect(useNarration.getState().audioDeck).toBe(deck.id);
     expect(useNarration.getState().audio.intro?.seconds).toBe(3);
+  });
+
+  it("reads the audio again when its files change outside the app", async () => {
+    await initNarrationEvents();
+    invoke.mockResolvedValue([]);
+    await act(async () =>
+      useApp.setState({ deck, openedFile: { path: "talks/deck.html", absolute: deck.id, kind: "deck" } }),
+    );
+    invoke.mockClear();
+    invoke.mockResolvedValue([{ slide: "intro", state: "ready", seconds: 4, recorded: true, timed: true }]);
+    await act(async () => useApp.setState({ workspaceChange: { paths: ["talks/notes.md"], rev: 1 } }));
+    expect(invoke).not.toHaveBeenCalled();
+    await act(async () => useApp.setState({ workspaceChange: { paths: ["talks/narration/manifest.json"], rev: 2 } }));
+    expect(invoke).toHaveBeenCalledWith("narration_audio", { id: deck.id });
+    expect(useNarration.getState().audio.intro?.timed).toBe(true);
+  });
+
+  it("knows which changed files are a deck's narration audio", () => {
+    expect(touchesNarration(["narration/intro.wav"], "deck.html")).toBe(true);
+    expect(touchesNarration(["talks/narration/q3/intro.wav"], "talks/q3.html")).toBe(true);
+    expect(touchesNarration(["other/narration/intro.wav"], "talks/deck.html")).toBe(false);
+    expect(touchesNarration(["narration.md", "deck.html"], "deck.html")).toBe(false);
   });
 
   it("follows renders as they go, from any window", async () => {
@@ -75,5 +97,41 @@ describe("narration store", () => {
     await done;
     expect(useNarration.getState().download).toBeNull();
     expect(invoke).toHaveBeenCalledWith("speech_status");
+  });
+  it("times words, downloading the speech-to-text model first when it is missing", async () => {
+    await initNarrationEvents();
+    useApp.setState({ deck });
+    let ready = false;
+    let finish!: (audio: unknown) => void;
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "voice_status") return { modelReady: ready };
+      if (command === "download_voice_model") ready = true;
+      if (command === "time_narration") return new Promise((r) => (finish = r));
+      return [];
+    });
+    const done = useNarration.getState().timeWords(deck.id, null);
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith("time_narration", { id: deck.id, slides: null }));
+    expect(invoke).toHaveBeenCalledWith("download_voice_model");
+    // Another timing waits for this one.
+    expect(await useNarration.getState().timeWords(deck.id, null)).toBe(false);
+    const timing = listeners.get("narration-timing");
+    act(() => timing?.({ payload: { deck: deck.id, slide: "intro", done: 0, total: 1 } }));
+    expect(useNarration.getState().timing).toEqual({ deck: deck.id, slide: "intro", done: 0, total: 1 });
+    finish([{ slide: "intro", state: "ready", seconds: 3, timed: true }]);
+    expect(await done).toBe(true);
+    expect(useNarration.getState().timing).toBeNull();
+    expect(useNarration.getState().audio.intro?.timed).toBe(true);
+
+    // With the model there, it is not downloaded again; a failure is reported.
+    invoke.mockClear();
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "voice_status") return { modelReady: true };
+      if (command === "time_narration") throw "Slide intro: Transcription failed";
+      return [];
+    });
+    expect(await useNarration.getState().timeWords(deck.id, ["intro"])).toBe(false);
+    expect(invoke).not.toHaveBeenCalledWith("download_voice_model");
+    expect(useApp.getState().error).toBe("Slide intro: Transcription failed");
+    expect(useNarration.getState().timing).toBeNull();
   });
 });

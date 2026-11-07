@@ -396,8 +396,8 @@ The user can also restyle elements and add their own with the editor's toolbar. 
 changes (text color, size, weight, alignment, fill, border, opacity, shadow, corner radius,
 an image's fit and flip, a slide's background, `z-index` stacking) are what they chose; keep them when editing, and when tidying move them into the slide's rules. An element
 they added carries `data-added` (`text` for a text box, `shape` for a rectangle, ellipse,
-triangle, star or speech bubble, which may hold text, `drawing` for an `<svg>` with a freehand
-line, a straight or curved line or an arrow) and is absolutely positioned on the slide with inline `left`,
+triangle, star, speech bubble, diamond, chevron, block arrow or double-headed arrow, which may hold text, `drawing` for an `<svg>` with a freehand
+line, a straight or curved line, an arrow, a bracket or a brace) and is absolutely positioned on the slide with inline `left`,
 `top`, `width`, and `height`. A line or arrow keeps its one `<path>` as the editor drew it
 (`M … L …` when straight, `M … C … C …` when curved, an arrow's head a last `M … L … L …`), which
 is what lets the user drag its points. A line's end the user stuck to an element carries
@@ -408,8 +408,17 @@ whenever the user moves the element. An `edge` end sits where the line toward th
 meets the element's outline, so it slides along the outline as the element turns. Keep these attributes and the ids they name, also when
 tidying, and when you move, resize or remove such an element, move the line's end with it (or
 remove the attributes with the element). The `stuck-line-target` and `stuck-line-anchor` lint
-warnings list ends that name no element on their slide or no spot. A triangle, star or speech bubble is a box cut out with an inline
-`clip-path: polygon(…)`; keep it. When tidying, keep each one where it
+warnings list ends that name no element on their slide or no spot. A triangle, star, speech bubble, diamond, chevron, block arrow or
+double-headed arrow is a figure: a box with `data-shape` (`triangle`, `star`, `bubble`, `diamond`,
+`chevron`, `block-arrow` or `double-arrow`) whose shape, fill, border and flip an SVG in its
+`background-image` (with `background-size: 100% 100%`) draws, and whose pixel padding keeps its
+text inside the shape; the editor redraws both whenever the user restyles or resizes it. Keep
+`data-shape` and that SVG as the editor wrote it (you may move it into the slide's rules), and do
+not give a figure a `background-color`, `border` or `clip-path`. Older decks may have a triangle,
+star or speech bubble cut out with an inline `clip-path: polygon(…)` instead; keep it, and the
+editor turns it into a figure when the user changes it. The `shape-kind` lint warning lists a
+`data-shape` the editor does not draw. A bracket or brace is a drawing with `data-outline`
+(`bracket` or `brace`) and one stroked `<path>`; keep the attribute. When tidying, keep each one where it
 appears and as it looks (its text, colors, border, and stacking), give it a class and move its
 styles into the slide's rules (or fit it into the layout where that is cleaner), then remove
 `data-added`. The `added-element` lint warning lists every one still waiting for this.

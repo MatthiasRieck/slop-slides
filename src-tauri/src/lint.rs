@@ -10,7 +10,7 @@ use crate::comments;
 use crate::html::{
     self, find_ci, has_class, parse_tag, ADDED_ATTR, AUTOFIT_ATTR, DROPPED_ATTR, DURATION_ATTR,
     EDITOR_ATTRS, HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR, NARRATION_CLASS, NARRATION_START_ATTR,
-    SECTION_CLASS, SECTION_TITLE_ATTR, TIME_ATTR,
+    SECTION_CLASS, SECTION_TITLE_ATTR, SHAPE_ATTR, SHAPE_KINDS, TIME_ATTR,
 };
 use crate::narration;
 use crate::review;
@@ -343,6 +343,19 @@ fn check_markup(l: &mut Linter) {
                             i,
                             format!(
                                 "`{AUTOFIT_ATTR}=\"{value}\"` means nothing; use \"shrink\" (the text shrinks to fit its box) or \"grow\" (the box grows with its text), or remove it."
+                            ),
+                        );
+                    }
+                }
+                if let Some((_, value, ..)) = tag.attrs.iter().find(|(n, ..)| n == SHAPE_ATTR) {
+                    if !SHAPE_KINDS.contains(&value.as_str()) {
+                        l.report(
+                            "shape-kind",
+                            Severity::Warning,
+                            i,
+                            format!(
+                                "`{SHAPE_ATTR}=\"{value}\"` is not a shape the editor draws ({}), so it cannot restyle, flip or fit this one. Use one of those kinds, or remove the attribute and draw the shape some other way.",
+                                SHAPE_KINDS.join(", ")
                             ),
                         );
                     }
@@ -2519,6 +2532,34 @@ mod tests {
         );
         let rules: Vec<_> = found.iter().map(|i| i.rule).collect();
         assert_eq!(rules, ["added-element", "added-element", "remote-image"]);
+    }
+
+    #[test]
+    fn figures_need_no_rules_of_their_own() {
+        // A figure is a box an SVG in its background draws, with the shape's kind in `data-shape`;
+        // brackets and braces are drawings with one stroke.
+        let found = lint(
+            &deck(
+                "<section class=\"slide\" id=\"a\">\n<div data-added=\"shape\" data-shape=\"block-arrow\" style=\"position: absolute; left: 0px; top: 0px; width: 320px; height: 200px; padding: 54px 96px 54px 13px; background-image: url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'%3E%3Cg transform='matrix(-1 0 0 1 100 0)'%3E%3Cpath d='M0 25 L65 25 L65 0 L100 50 L65 100 L65 75 L0 75 Z' fill='%233b82f6'/%3E%3C/g%3E%3C/svg%3E&quot;); background-size: 100% 100%; background-repeat: no-repeat; filter: drop-shadow(0px 8px 24px rgba(0, 0, 0, 0.35))\">Next</div>\n<svg data-added=\"drawing\" data-outline=\"brace\" viewBox=\"0 0 60 200\" style=\"position: absolute; left: 400px; top: 0px; width: 60px; height: 200px\"><path d=\"M57 3 Q30 3 30 57 L30 46 Q30 100 3 100\" stroke=\"#111111\" stroke-width=\"6\" fill=\"none\"/></svg>\n</section>",
+            ),
+            |_| true,
+            &[],
+        );
+        let rules: Vec<_> = found.iter().map(|i| i.rule).collect();
+        assert_eq!(rules, ["added-element", "added-element"]);
+    }
+
+    #[test]
+    fn flags_shapes_the_editor_cannot_draw() {
+        let found = lint(
+            &deck(
+                "<section class=\"slide\" id=\"a\">\n<div data-shape=\"hexagon\">Hi</div>\n<div data-shape=\"diamond\">Ok</div>\n</section>",
+            ),
+            |_| true,
+            &[],
+        );
+        let found: Vec<_> = found.iter().map(|i| (i.rule, i.line)).collect();
+        assert_eq!(found, [("shape-kind", 11)]);
     }
 
     #[test]

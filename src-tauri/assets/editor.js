@@ -74,9 +74,13 @@
 
    The app's edit toolbar drives the rest with messages:
    - { type: "slop:edit-tool", tool, style } picks a tool: "select", "text" (click or drag out a
-     text box), "rect" / "rounded" / "ellipse" / "triangle" / "star" / "bubble" (drag out a shape,
-     Shift keeps it even; the last three are boxes cut out with a `clip-path`, so they hold text
-     but show no border, shadow or corner radius), "draw" (freehand), "line" / "arrow" (drag out a
+     text box), "rect" / "rounded" / "ellipse" (drag out a shape, Shift keeps it even), "triangle" /
+     "star" / "bubble" / "diamond" / "chevron" / "block-arrow" / "double-arrow" (a figure: a box
+     with `data-shape` whose shape, fill and border an SVG in its `background-image` draws, so it
+     holds text, takes a border, shadow and flips, and keeps its text inside the shape with a
+     padding fitted to its size; an old `clip-path` cut-out becomes one when it is restyled or
+     resized), "bracket" / "brace" (an open outline: a drawing, `data-outline`, with one stroke
+     through the box), "draw" (freehand), "line" / "arrow" (drag out a
      straight line, Shift snaps to 45°) or "paint" (the format painter: takes the selection's look
      and gives it to the next element clicked). `style` is what new elements get. Added elements
      are absolutely positioned on the slide with inline styles and carry `data-added` ("text",
@@ -93,8 +97,9 @@
      min-height, so it grows with its text) or null (overflow is only reported). Any element also
      takes `opacity` (0.05 to 1, so it stays clickable), `shadow` (blur in pixels, 0 for none; SVG
      gets a drop-shadow filter) and `radius` (corner radius in pixels), and an image `fit`
-     ("contain", "cover" or "fill"), `fitPosition` ("50% 0%"), `alt`, `flipX` and `flipY` (an
-     inline `transform`, after any tilt).
+     ("contain", "cover" or "fill"), `fitPosition` ("50% 0%") and `alt`. Images, figures and
+     drawings that are not lines take `flipX` and `flipY` (an inline `transform`, after any tilt;
+     a figure mirrors its shape, not its text).
    - { type: "slop:edit-replace-image", src } points the selected image at another `assets/…`
      file, keeping its box (and cropping to it with `object-fit: cover`, unless it has a fit).
    - { type: "slop:edit-background", color } sets the slide's own background, or with null, goes
@@ -112,8 +117,12 @@
    - { type: "slop:edit-size-mode", mode: "resize" | "stretch" } sets how handles change size.
    - { type: "slop:edit-delete" } removes it.
    - { type: "slop:edit-select-all" } selects everything on the slide, like ⌘A.
-   - { type: "slop:edit-align", to } lines several elements up with their bounds, or one with the
-     slide: "left", "center", "right", "top", "middle" or "bottom".
+   - { type: "slop:edit-align", to, target } lines the selection up: "left", "center", "right",
+     "top", "middle" or "bottom", with the slide (`target` "slide", each element on its own) or
+     with the bounds of several (`target` "selection"). Without a target, one element goes by
+     the slide and several by their bounds.
+   - { type: "slop:edit-match", axis: "w" | "h" } gives the other selected elements the primary
+     one's width or height.
    - { type: "slop:edit-distribute", axis: "h" | "v" } evens out the gaps between three or more.
    - { type: "slop:edit-geometry", x, y, w, h, rotation } sets any of them, in slide pixels from
      the slide's top left. Several elements only take x and y, which move them together.
@@ -183,9 +192,13 @@
   var sizeMode = "resize";
   var ADDED = overflow.ADDED;
   var SVG_NS = "http://www.w3.org/2000/svg";
-  var TOOLS = ["select", "text", "rect", "rounded", "ellipse", "triangle", "star", "bubble", "draw", "line", "arrow", "paint"];
-  var RADIUS = { rect: "0px", rounded: "24px", ellipse: "50%", triangle: "0px", star: "0px", bubble: "0px" };
+  var TOOLS = [
+    "select", "text", "rect", "rounded", "ellipse", "triangle", "star", "bubble", "diamond", "chevron", "block-arrow",
+    "double-arrow", "bracket", "brace", "draw", "line", "arrow", "paint",
+  ];
+  var RADIUS = { rect: "0px", rounded: "24px", ellipse: "50%" };
   var SHAPE_SIZE = { w: 320, h: 200 };
+  var OUTLINE_SIZE = { w: 60, h: 200 };
   var DRAW_STEP = 2;
   var BORDER_WIDTH = 4;
   var BORDER_COLOR = "#111111";
@@ -210,17 +223,34 @@
   var ARROW_HEAD_ANGLE = Math.PI / 6;
   // Spots checked along each stretch of a curved line for the box around it.
   var LINE_SAMPLES = 16;
-  // Shapes cut out of a box, as percentages of it; their padding keeps the text in the shape.
-  var CUTOUTS = {
-    triangle: { clip: "polygon(50% 0%, 100% 100%, 0% 100%)", padding: "25% 16px 16px" },
-    star: { clip: "polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)" },
+  // Shapes drawn by an SVG in their box's background (see "Figures"), as paths in a 100 × 100
+  // box, which stretches with the box. `inset` is the share of the box's height and width
+  // (top, right, bottom, left) the text keeps clear of, so it stays inside the shape.
+  var FIGURES = {
+    triangle: { d: "M50 0 L100 100 L0 100 Z", inset: [0.42, 0.22, 0.06, 0.22] },
+    star: { d: "M50 0 L61 35 L98 35 L68 57 L79 91 L50 70 L21 91 L32 57 L2 35 L39 35 Z", inset: [0.32, 0.27, 0.3, 0.27] },
     bubble: {
-      clip:
-        "polygon(8% 0%, 92% 0%, 96% 1.1%, 98.9% 4%, 100% 8%, 100% 72%, 98.9% 76%, 96% 78.9%, 92% 80%, 45% 80%, 22% 100%," +
-        " 25% 80%, 8% 80%, 4% 78.9%, 1.1% 76%, 0% 72%, 0% 8%, 1.1% 4%, 4% 1.1%)",
-      padding: "16px 16px 20%",
+      d: "M8 0 L92 0 Q100 0 100 8 L100 72 Q100 80 92 80 L45 80 L22 100 L25 80 L8 80 Q0 80 0 72 L0 8 Q0 0 8 0 Z",
+      inset: [0.06, 0.05, 0.26, 0.05],
     },
+    diamond: { d: "M50 0 L100 50 L50 100 L0 50 Z", inset: [0.25, 0.25, 0.25, 0.25] },
+    chevron: { d: "M0 0 L75 0 L100 50 L75 100 L0 100 L25 50 Z", inset: [0.08, 0.27, 0.08, 0.27] },
+    "block-arrow": { d: "M0 25 L65 25 L65 0 L100 50 L65 100 L65 75 L0 75 Z", inset: [0.27, 0.3, 0.27, 0.04] },
+    "double-arrow": { d: "M0 50 L25 0 L25 25 L75 25 L75 0 L100 50 L75 100 L75 75 L25 75 L25 100 Z", inset: [0.27, 0.22, 0.27, 0.22] },
   };
+  var SHAPE_ATTR = "data-shape";
+  // A figure's text keeps at least this far from its box.
+  var FIGURE_PADDING = 8;
+  // The `clip-path` cut-outs earlier versions made, which the editor redraws as figures when it changes one.
+  var CUT_OUTS = {
+    triangle: "polygon(50% 0%, 100% 100%, 0% 100%)",
+    star: "polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)",
+    bubble:
+      "polygon(8% 0%, 92% 0%, 96% 1.1%, 98.9% 4%, 100% 8%, 100% 72%, 98.9% 76%, 96% 78.9%, 92% 80%, 45% 80%, 22% 100%," +
+      " 25% 80%, 8% 80%, 4% 78.9%, 1.1% 76%, 0% 72%, 0% 8%, 1.1% 4%, 4% 1.1%)",
+  };
+  // Open shapes, drawn as a drawing's one stroke through the box they are dragged out to.
+  var OUTLINES = { bracket: true, brace: true };
   // Fully transparent elements can no longer be picked.
   var MIN_OPACITY = 0.05;
   var SHADOW_COLOR = "rgba(0, 0, 0, 0.35)";
@@ -639,6 +669,7 @@
     var fit = autofit ? autofit.scale(el.closest('[data-autofit="shrink"]') || el) : 1;
     var spacing = parseFloat(text.letterSpacing);
     var look = lookOf(el, style);
+    var figure = figureOf(el) ? figurePaint(el) : null;
     return {
       kind: kind,
       text: kind !== "drawing" && kind !== "media",
@@ -660,9 +691,9 @@
       autofit: /^(shrink|grow)$/.test(el.getAttribute("data-autofit") || "") ? el.getAttribute("data-autofit") : null,
       editing: editing === el,
       range: !!range && !range.collapsed,
-      fill: first ? paintOf(first, "fill") : toHex(style.backgroundColor),
-      stroke: first ? paintOf(first, "stroke") : borderWidth ? toHex(style.borderTopColor) : null,
-      strokeWidth: first ? parseFloat(first.getAttribute("stroke-width")) || 0 : borderWidth,
+      fill: figure ? figure.fill : first ? paintOf(first, "fill") : toHex(style.backgroundColor),
+      stroke: figure ? figure.stroke : first ? paintOf(first, "stroke") : borderWidth ? toHex(style.borderTopColor) : null,
+      strokeWidth: figure ? figure.width : first ? parseFloat(first.getAttribute("stroke-width")) || 0 : borderWidth,
       opacity: look.opacity,
       shadow: look.shadow,
       radius: look.radius,
@@ -671,6 +702,7 @@
       fit: look.fit,
       fitPosition: look.fitPosition,
       alt: look.alt,
+      flippable: look.flippable,
       flipX: look.flipX,
       flipY: look.flipY,
     };
@@ -1123,6 +1155,7 @@
     if (computed.display === "inline") el.style.display = "inline-block";
     if (computed.whiteSpace === "nowrap") el.style.whiteSpace = "normal";
     if (drag.vectors && w && h) spreadVectors(drag.vectors, nw / w, nh / h);
+    fitFigure(el);
     // Layout grows from the top left; translate compensates to keep the opposite handle fixed.
     moveTo(el, drag.offset.x + shift.x - (nw - w) / 2, drag.offset.y + shift.y - (nh - h) / 2);
   }
@@ -2160,13 +2193,70 @@
   }
 
   function newShape(kind, x, y, w, h) {
+    if (OUTLINES[kind]) return newOutline(kind, x, y, w, h);
     var el = addElement(
       "shape",
       "position: absolute; left: " + x + "px; top: " + y + "px; width: " + w + "px; height: " + h + "px; margin: 0;" +
-        " box-sizing: border-box; padding: 16px; border-radius: " + RADIUS[kind] + ";" + textCss(),
+        " box-sizing: border-box; padding: 16px;" + (RADIUS[kind] ? " border-radius: " + RADIUS[kind] + ";" : "") + textCss(),
     );
-    if (CUTOUTS[kind]) cutOut(el, CUTOUTS[kind]);
+    if (FIGURES[kind]) {
+      var width = styleFor("strokeWidth");
+      var paint = { fill: styleFor("fill") || null, stroke: width > 0 ? styleFor("stroke") || null : null, width: width };
+      el.style.removeProperty("background-color");
+      el.style.removeProperty("border");
+      el.setAttribute(SHAPE_ATTR, kind);
+      paintFigure(el, paint);
+    }
     return el;
+  }
+
+  /** A bracket or brace: a drawing with one stroke through its box (see `outlineData`). */
+  function newOutline(kind, x, y, w, h) {
+    var drawing = newDrawing({ x: x, y: y });
+    drawing.path.setAttribute("fill", "none");
+    drawing.svg.setAttribute("data-outline", kind);
+    drawOutline(drawing.svg, x, y, w, h);
+    return drawing.svg;
+  }
+
+  /** Fits outline `svg` (see newOutline) to the box at (x, y), w × h, in slide pixels. */
+  function drawOutline(svg, x, y, w, h) {
+    var path = vectorsOf(svg)[0];
+    var stroke = parseFloat(path.getAttribute("stroke-width")) || 0;
+    w = Math.max(w, stroke + 2);
+    h = Math.max(h, stroke + 2);
+    place(svg, x, y, w, h);
+    svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+    path.setAttribute("d", outlineData(svg.getAttribute("data-outline"), w, h, Math.ceil(stroke / 2)));
+  }
+
+  /**
+   * The stroke of an outline `kind` across a w × h box, `pad` in from its edges: a bracket's
+   * three straight sides, or a brace's curls (quadratic curves, so it never reads as a line).
+   */
+  function outlineData(kind, w, h, pad) {
+    var r = function (n) {
+      return roundTenth(n);
+    };
+    var left = pad;
+    var right = w - pad;
+    var top = pad;
+    var bottom = h - pad;
+    if (kind === "bracket") {
+      return "M" + r(right) + " " + r(top) + " L" + r(left) + " " + r(top) + " L" + r(left) + " " + r(bottom) + " L" + r(right) + " " + r(bottom);
+    }
+    var mid = (left + right) / 2;
+    var center = h / 2;
+    var curl = Math.min(right - left, (bottom - top) / 4);
+    return (
+      "M" + r(right) + " " + r(top) +
+      " Q" + r(mid) + " " + r(top) + " " + r(mid) + " " + r(top + curl) +
+      " L" + r(mid) + " " + r(center - curl) +
+      " Q" + r(mid) + " " + r(center) + " " + r(left) + " " + r(center) +
+      " Q" + r(mid) + " " + r(center) + " " + r(mid) + " " + r(center + curl) +
+      " L" + r(mid) + " " + r(bottom - curl) +
+      " Q" + r(mid) + " " + r(bottom) + " " + r(right) + " " + r(bottom)
+    );
   }
 
   function newDrawing(at) {
@@ -2243,7 +2333,9 @@
     var x = at.x < create.at.x ? create.at.x - w : create.at.x;
     var y = at.y < create.at.y ? create.at.y - h : create.at.y;
     if (!create.el) create.el = create.tool === "text" ? newText(x, y, w) : newShape(create.tool, x, y, w, h);
-    place(create.el, x, y, w, create.tool === "text" ? null : h);
+    if (OUTLINES[create.tool]) drawOutline(create.el, x, y, w, h);
+    else place(create.el, x, y, w, create.tool === "text" ? null : h);
+    fitFigure(create.el);
     placeHandles();
   }
 
@@ -2268,7 +2360,9 @@
     }
     var el = done.el;
     if (!el) {
-      el = done.tool === "text" ? newText(done.at.x, done.at.y) : newShape(done.tool, done.at.x, done.at.y, SHAPE_SIZE.w, SHAPE_SIZE.h);
+      var size = OUTLINES[done.tool] ? OUTLINE_SIZE : SHAPE_SIZE;
+      el = done.tool === "text" ? newText(done.at.x, done.at.y) : newShape(done.tool, done.at.x, done.at.y, size.w, size.h);
+      fitFigure(el);
     }
     useTool("select", true);
     select(el);
@@ -2356,8 +2450,21 @@
         el.style[/column/.test(computed.flexDirection || "") ? "justifyContent" : "alignItems"] = JUSTIFY[changes.valign];
       }
     }
+    // An old cut-out becomes a figure to take what only a figure can show.
+    if (["stroke", "strokeWidth", "shadow", "flipX", "flipY"].some(has)) upgradeCutOut(el);
     var vectors = vectorsOf(el);
-    if (vectors.length) {
+    if (figureOf(el)) {
+      if (has("fill") || has("stroke") || has("strokeWidth")) {
+        var paint = figurePaint(el);
+        if (has("fill")) paint.fill = changes.fill || null;
+        if (has("stroke")) paint.stroke = changes.stroke || null;
+        if (has("strokeWidth")) paint.width = Math.max(0, changes.strokeWidth || 0);
+        // Picking a border color shows a border; picking a width gives it a color.
+        if (has("stroke") && paint.stroke && !paint.width) paint.width = BORDER_WIDTH;
+        if (has("strokeWidth") && paint.width && !paint.stroke) paint.stroke = BORDER_COLOR;
+        paintFigure(el, paint);
+      }
+    } else if (vectors.length) {
       vectors.forEach(function (vector) {
         if (has("fill")) vector.setAttribute("fill", changes.fill || "none");
         if (has("stroke")) vector.setAttribute("stroke", changes.stroke || "none");
@@ -3251,20 +3358,43 @@
     moveTo(el, at.x + dx, at.y + dy);
   }
 
-  /** Lines up several elements with their bounds, or one with the slide. */
-  function alignSelection(to) {
+  /**
+   * Lines up the selection with the slide (each element on its own) or, with several and a
+   * `target` of "selection", with their bounds. Without a target, one element goes by the
+   * slide and several by their bounds.
+   */
+  function alignSelection(to, target) {
     if (ALIGN_TO.indexOf(to) < 0) return;
     finishEditing();
     if (nudgeTimer) commit();
     var group = allSelected();
     if (!group.length) return;
-    var area = group.length > 1 ? boundsOf(group) : { left: 0, top: 0, right: slideWidth(), bottom: slideHeight() };
+    var bySlide = target === "slide" || group.length === 1;
+    var area = bySlide ? { left: 0, top: 0, right: slideWidth(), bottom: slideHeight() } : boundsOf(group);
     group.forEach(function (el) {
       var box = boxOf(el);
       var dx = to === "left" ? area.left - box.left : to === "right" ? area.right - box.right : to === "center" ? (area.left + area.right - box.left - box.right) / 2 : 0;
       var dy = to === "top" ? area.top - box.top : to === "bottom" ? area.bottom - box.bottom : to === "middle" ? (area.top + area.bottom - box.top - box.bottom) / 2 : 0;
       moveBy(el, dx, dy);
     });
+    commit();
+  }
+
+  /** Gives the other selected elements the primary one's width ("w") or height ("h"). */
+  function matchSize(axis) {
+    if (axis !== "w" && axis !== "h") return;
+    finishEditing();
+    if (nudgeTimer) commit();
+    if (!selected || !extras.length) return;
+    var frame = frameOf(selected);
+    var size = axis === "w" ? frame.right - frame.left : frame.bottom - frame.top;
+    if (!(size > 0)) return;
+    extras.forEach(function (el) {
+      if (lineOf(el)) return;
+      setSize(el, axis === "w" ? size : null, axis === "h" ? size : null);
+      refit(el);
+    });
+    placeHandles();
     commit();
   }
 
@@ -3562,7 +3692,8 @@
   function arrangeMessage(data) {
     if (data.type === "slop:edit-duplicate") duplicate();
     else if (data.type === "slop:edit-select-all") selectAll();
-    else if (data.type === "slop:edit-align") alignSelection(String(data.to));
+    else if (data.type === "slop:edit-align") alignSelection(String(data.to), data.target);
+    else if (data.type === "slop:edit-match") matchSize(String(data.axis));
     else if (data.type === "slop:edit-distribute") distributeSelection(String(data.axis));
     else if (data.type === "slop:edit-geometry") setGeometry(data);
     else if (data.type === "slop:edit-tilt") stepTilt(data);
@@ -3977,7 +4108,43 @@
     var size = sizeOf(el);
     var w = size.w || 1;
     var h = size.h || 1;
-    return clipOutline(el, w, h) || vectorOutline(el) || cornerOutline(el, w, h);
+    return figureOutline(el) || clipOutline(el, w, h) || vectorOutline(el) || cornerOutline(el, w, h);
+  }
+
+  /** A figure's outline (see FIGURES), mirrored as it is drawn; null for anything else. */
+  function figureOutline(el) {
+    var kind = figureOf(el);
+    if (!kind) return null;
+    var paint = figurePaint(el);
+    var parts = FIGURES[kind].d.match(/[MLQZ]|-?[\d.]+/g);
+    var ring = [];
+    var at = [0, 0];
+    var command = null;
+    for (var i = 0; i < parts.length; ) {
+      if (/^[MLQZ]$/.test(parts[i])) command = parts[i++];
+      if (command === "Z") break;
+      if (command === "Q") {
+        var control = [parseFloat(parts[i]), parseFloat(parts[i + 1])];
+        var to = [parseFloat(parts[i + 2]), parseFloat(parts[i + 3])];
+        i += 4;
+        for (var k = 1; k <= ARC_SAMPLES; k++) {
+          var t = k / ARC_SAMPLES;
+          var u = 1 - t;
+          ring.push([u * u * at[0] + 2 * u * t * control[0] + t * t * to[0], u * u * at[1] + 2 * u * t * control[1] + t * t * to[1]]);
+        }
+        at = to;
+      } else {
+        at = [parseFloat(parts[i]), parseFloat(parts[i + 1])];
+        i += 2;
+        ring.push(at);
+      }
+    }
+    return [{
+      closed: true,
+      points: ring.map(function (p) {
+        return [paint.flipX ? 1 - p[0] / 100 : p[0] / 100, paint.flipY ? 1 - p[1] / 100 : p[1] / 100];
+      }),
+    }];
   }
 
   /** A CSS length ("12px", "25%" of `base`), or NaN. */
@@ -4643,15 +4810,130 @@
     return { x: Math.round(from.x + length * Math.cos(angle)), y: Math.round(from.y + length * Math.sin(angle)) };
   }
 
-  /** Cuts a box to a shape, which only its fill and text survive: not a border, nor a shadow. */
-  function cutOut(el, shape) {
-    el.style.setProperty("clip-path", shape.clip);
-    el.style.border = "none";
-    if (shape.padding) el.style.padding = shape.padding;
+  // ---- Figures: a box whose shape an SVG in its background draws (see FIGURES), with its
+  // fill and border (an inner stroke, as wide as a CSS border would be) and its flips, which
+  // mirror the shape while the text stays readable. Its padding, in pixels from its size,
+  // keeps the text inside the shape, so it is fitted again whenever the box changes size.
+
+  /** The kind of figure `el` is, or null. */
+  function figureOf(el) {
+    var kind = el && el.getAttribute ? el.getAttribute(SHAPE_ATTR) : null;
+    return kind && Object.prototype.hasOwnProperty.call(FIGURES, kind) ? kind : null;
   }
 
+  /** The old `clip-path` cut-out (see CUT_OUTS) `el` is, or null. */
+  function cutOutKind(el) {
+    if (!el || !el.style || el.namespaceURI === SVG_NS || figureOf(el)) return null;
+    var squash = function (text) {
+      return String(text || "").replace(/\s+/g, "");
+    };
+    var clip = squash(el.style.getPropertyValue("clip-path"));
+    if (!clip) return null;
+    for (var kind in CUT_OUTS) {
+      if (squash(CUT_OUTS[kind]) === clip) return kind;
+    }
+    return null;
+  }
+
+  /** Redraws an old cut-out as a figure, keeping its fill, so it takes a border, shadow and flips. */
+  function upgradeCutOut(el) {
+    var kind = cutOutKind(el);
+    if (!kind) return;
+    var fill = toHex(getComputedStyle(el).backgroundColor);
+    el.style.removeProperty("clip-path");
+    setOwn(el, "background-color", null, "rgba(0, 0, 0, 0)");
+    el.setAttribute(SHAPE_ATTR, kind);
+    paintFigure(el, { fill: fill, stroke: null, width: 0, flipX: false, flipY: false });
+  }
+
+  // What an SVG paint may be in a figure's image (it cannot see the deck's CSS variables).
+  var FIGURE_COLOR = /^(#[0-9a-f]{3,8}|rgba?\([\d.,\s%/]+\)|[a-z]+)$/i;
+
+  /** Draws figure `el` with `paint`: { fill, stroke, width, flipX, flipY } (null colors for none). */
+  function paintFigure(el, paint) {
+    var d = FIGURES[figureOf(el)].d;
+    var color = function (value) {
+      return value && FIGURE_COLOR.test(value) ? value : "none";
+    };
+    var width = Math.max(0, Math.round(Number(paint.width) || 0));
+    var edge = paint.stroke && width > 0;
+    var svg =
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'>" +
+      (edge ? "<clipPath id='edge'><path d='" + d + "'/></clipPath>" : "") +
+      "<g transform='matrix(" + (paint.flipX ? -1 : 1) + " 0 0 " + (paint.flipY ? -1 : 1) + " " + (paint.flipX ? 100 : 0) +
+      " " + (paint.flipY ? 100 : 0) + ")'>" +
+      "<path d='" + d + "' fill='" + color(paint.fill) + "'/>" +
+      // Twice as wide, and cut to the shape: what shows is inside it, as wide as `width`.
+      (edge
+        ? "<path d='" + d + "' fill='none' stroke='" + color(paint.stroke) + "' stroke-width='" + 2 * width +
+          "' stroke-linejoin='round' vector-effect='non-scaling-stroke' clip-path='url(#edge)'/>"
+        : "") +
+      "</g></svg>";
+    var data = svg.replace(/%/g, "%25").replace(/#/g, "%23").replace(/</g, "%3C").replace(/>/g, "%3E");
+    el.style.setProperty("background-image", 'url("data:image/svg+xml,' + data + '")');
+    el.style.setProperty("background-size", "100% 100%");
+    el.style.setProperty("background-repeat", "no-repeat");
+    fitFigure(el);
+  }
+
+  /** How figure `el` is drawn, as paintFigure takes it. */
+  function figurePaint(el) {
+    // Tidying may have moved it into the slide's rules.
+    var image = String(el.style.getPropertyValue("background-image") || getComputedStyle(el).backgroundImage || "");
+    var svg = "";
+    try {
+      svg = decodeURIComponent(image.replace(/^url\(\s*["']?data:image\/svg\+xml,/, "").replace(/["']?\s*\)$/, ""));
+    } catch (e) {
+      // Not one the editor drew.
+    }
+    var fill = svg.match(/<path d='[^']*' fill='([^']*)'\/>/);
+    var stroke = svg.match(/stroke='([^']*)' stroke-width='([\d.]+)'/);
+    var flips = svg.match(/matrix\((-?1) 0 0 (-?1)/);
+    var paintOf = function (value) {
+      return value && value !== "none" ? toHex(value) || value : null;
+    };
+    return {
+      fill: fill ? paintOf(fill[1]) : null,
+      stroke: stroke ? paintOf(stroke[1]) : null,
+      width: stroke ? Math.round(parseFloat(stroke[2]) / 2) : 0,
+      flipX: !!flips && flips[1] === "-1",
+      flipY: !!flips && flips[2] === "-1",
+    };
+  }
+
+  /** Gives figure `el` (or an old cut-out, made one) the padding that keeps its text inside it. */
+  function fitFigure(el) {
+    upgradeCutOut(el);
+    var kind = figureOf(el);
+    if (!kind) return;
+    var size = sizeOf(el);
+    if (!size.w || !size.h) return;
+    var paint = figurePaint(el);
+    var inset = FIGURES[kind].inset;
+    var top = inset[paint.flipY ? 2 : 0];
+    var bottom = inset[paint.flipY ? 0 : 2];
+    var right = inset[paint.flipX ? 3 : 1];
+    var left = inset[paint.flipX ? 1 : 3];
+    var px = function (share, length) {
+      return Math.max(FIGURE_PADDING, Math.round(share * length)) + "px";
+    };
+    el.style.padding = [px(top, size.h), px(right, size.w), px(bottom, size.h), px(left, size.w)].join(" ");
+  }
+
+  /** A box cut out with a `clip-path` polygon the editor cannot redraw, which shows no border or shadow. */
   function isCutOut(el) {
-    return /polygon/.test(getComputedStyle(el).getPropertyValue("clip-path") || "");
+    return /polygon/.test(getComputedStyle(el).getPropertyValue("clip-path") || "") && !cutOutKind(el);
+  }
+
+  /** Whether flipping `el` mirrors what it shows without mirroring text: images, figures and drawings that are not lines. */
+  function flippable(el) {
+    if (!el || !el.tagName) return false;
+    if (isImage(el) || figureOf(el) || cutOutKind(el)) return true;
+    if (el.namespaceURI !== SVG_NS || el.tagName.toLowerCase() !== "svg") return false;
+    // A line, even one still being drawn (with no viewBox yet), moves its points instead.
+    var vectors = vectorsOf(el);
+    var line = vectors.length === 1 && vectors[0].tagName.toLowerCase() === "path" && LINE_PATH.test((vectors[0].getAttribute("d") || "").trim());
+    return !line && !lineOf(el);
   }
 
   function isImage(el) {
@@ -4666,20 +4948,23 @@
     var corner = style.getPropertyValue("border-radius") || "0";
     var radius = parseFloat(corner) || 0;
     if (/%/.test(corner)) radius = (radius / 100) * Math.min(size.w, size.h);
-    var blur = (style.getPropertyValue(svg ? "filter" : "box-shadow") || "").match(SHADOW_LENGTHS);
+    var figure = figureOf(el) ? figurePaint(el) : null;
+    var shaped = !!figure || !!cutOutKind(el);
+    var blur = (style.getPropertyValue(svg || figure ? "filter" : "box-shadow") || "").match(SHADOW_LENGTHS);
     var image = isImage(el);
     var flips = el.style.transform || "";
     return {
       opacity: Math.round((parseFloat(style.opacity === "" ? "1" : style.opacity) || 0) * 100) / 100,
       shadow: blur && !clipped ? Math.round(parseFloat(blur[1])) : 0,
-      radius: svg || clipped ? null : Math.round(radius),
+      radius: svg || clipped || shaped ? null : Math.round(radius),
       clipped: clipped,
       image: image,
       fit: image ? style.getPropertyValue("object-fit") || "fill" : null,
       fitPosition: image ? style.getPropertyValue("object-position") || "50% 50%" : null,
       alt: image ? el.getAttribute("alt") || "" : null,
-      flipX: /scaleX\(-1\)/.test(flips),
-      flipY: /scaleY\(-1\)/.test(flips),
+      flippable: flippable(el),
+      flipX: figure ? figure.flipX : /scaleX\(-1\)/.test(flips),
+      flipY: figure ? figure.flipY : /scaleY\(-1\)/.test(flips),
     };
   }
 
@@ -4697,7 +4982,8 @@
   }
 
   function setShadow(el, blur) {
-    if (el.namespaceURI !== SVG_NS) {
+    // A figure's shadow follows its shape, as a drawing's does.
+    if (el.namespaceURI !== SVG_NS && !figureOf(el)) {
       setOwn(el, "box-shadow", blur > 0 ? shadowValue(blur) : null, "none");
       return;
     }
@@ -4735,8 +5021,21 @@
     }
     var cut = isCutOut(el);
     if (has("shadow") && changes.shadow >= 0 && !cut) setShadow(el, Math.round(changes.shadow));
-    if (has("radius") && changes.radius >= 0 && !cut && el.namespaceURI !== SVG_NS) {
+    if (has("radius") && changes.radius >= 0 && !cut && !figureOf(el) && el.namespaceURI !== SVG_NS) {
       setOwn(el, "border-radius", changes.radius > 0 ? Math.round(changes.radius) + "px" : null, "0px");
+    }
+    if ((has("flipX") || has("flipY")) && flippable(el)) {
+      var now = lookOf(el, getComputedStyle(el));
+      var x = has("flipX") ? !!changes.flipX : now.flipX;
+      var y = has("flipY") ? !!changes.flipY : now.flipY;
+      if (figureOf(el)) {
+        var paint = figurePaint(el);
+        paint.flipX = x;
+        paint.flipY = y;
+        paintFigure(el, paint);
+      } else {
+        flipTo(el, x, y);
+      }
     }
     if (!isImage(el)) return;
     if (has("fit") && /^(contain|cover|fill)$/.test(changes.fit)) {
@@ -4745,10 +5044,6 @@
     }
     if (has("fitPosition") && /^\d+% \d+%$/.test(changes.fitPosition)) el.style.setProperty("object-position", changes.fitPosition);
     if (has("alt") && typeof changes.alt === "string") el.setAttribute("alt", changes.alt);
-    if (has("flipX") || has("flipY")) {
-      var now = lookOf(el, getComputedStyle(el));
-      flipTo(el, has("flipX") ? !!changes.flipX : now.flipX, has("flipY") ? !!changes.flipY : now.flipY);
-    }
   }
 
   /** Puts another `assets/…` file in the selected image, whose box stays as it is. */

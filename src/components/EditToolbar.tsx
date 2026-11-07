@@ -5,13 +5,19 @@ import {
   AlignVerticalJustifyCenter,
   AlignVerticalJustifyEnd,
   AlignVerticalJustifyStart,
+  ArrowBigRight,
   ArrowDown,
+  ArrowLeftRight,
   ArrowUp,
   Ban,
   Baseline,
   Bold,
+  Braces,
+  Brackets,
   BringToFront,
+  ChevronRight,
   Circle,
+  Diamond,
   ImagePlus,
   Italic,
   Link,
@@ -89,6 +95,16 @@ const TOOLS: { tool: EditTool; label: string; icon: ReactNode }[] = [
   { tool: "draw", label: "Draw freehand (D)", icon: <PenLine /> },
   { tool: "line", label: "Add a line (L, Shift snaps to 45°)", icon: <Slash /> },
   { tool: "arrow", label: "Add an arrow (A, Shift snaps to 45°)", icon: <MoveUpRight /> },
+];
+
+/** Shapes for diagrams, in the Insert section's "More shapes" picker. */
+const MORE_SHAPES: { tool: EditTool; label: string; icon: ReactNode }[] = [
+  { tool: "diamond", label: "Add a diamond (a decision in a flowchart)", icon: <Diamond /> },
+  { tool: "chevron", label: "Add a chevron (a step in a process)", icon: <ChevronRight /> },
+  { tool: "block-arrow", label: "Add a block arrow", icon: <ArrowBigRight /> },
+  { tool: "double-arrow", label: "Add a double-headed arrow", icon: <ArrowLeftRight /> },
+  { tool: "bracket", label: "Add a bracket", icon: <Brackets /> },
+  { tool: "brace", label: "Add a brace", icon: <Braces /> },
 ];
 
 const ALIGN: { value: TextAlign; label: string; icon: ReactNode }[] = [
@@ -196,6 +212,7 @@ export function EditToolbar(props: {
                 {t.icon}
               </ToolButton>
             ))}
+            {index === 0 && <MoreShapes tool={props.tool} onTool={props.onTool} />}
             {index === 1 && (
               <ToolButton keepFocus label="Add an image from a file" onClick={() => props.onPickImage?.(false)}>
                 <ImagePlus />
@@ -428,7 +445,13 @@ export function EditToolbar(props: {
             <option value="resize">Resize</option>
             <option value="stretch">Stretch</option>
           </select>
-          <ArrangeControls geometry={props.geometry ?? null} onArrange={props.onArrange} onDone={returnFocus} />
+          <ArrangeControls
+            geometry={props.geometry ?? null}
+            selection={selection}
+            onArrange={props.onArrange}
+            onStyle={props.onStyle}
+            onDone={returnFocus}
+          />
           <TiltControls geometry={props.geometry ?? null} onArrange={props.onArrange} />
         </RibbonRow>
         <RibbonRow>
@@ -448,6 +471,46 @@ export function EditToolbar(props: {
           </ToolButton>
         </RibbonRow>
       </RibbonSection>
+    </div>
+  );
+}
+
+/** The "More shapes" picker: diagram shapes, which go back to Select once one is added. */
+function MoreShapes(props: { tool: EditTool; onTool: (tool: EditTool) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useDismiss(open, ref, () => setOpen(false));
+  const current = MORE_SHAPES.find((s) => s.tool === props.tool);
+  return (
+    <div ref={ref} className="relative">
+      <ToolButton
+        keepFocus
+        label="More shapes"
+        title={current ? `More shapes: ${current.label.replace(/^Add an? /, "")}` : "More shapes"}
+        aria-expanded={open}
+        active={!!current || open}
+        onClick={() => setOpen(!open)}
+      >
+        {current?.icon ?? <Plus />}
+      </ToolButton>
+      {open && (
+        <DropdownPanel role="dialog" aria-label="More shapes" className="grid w-max grid-cols-3 gap-0.5 p-1">
+          {MORE_SHAPES.map((s) => (
+            <ToolButton
+              keepFocus
+              key={s.tool}
+              label={s.label}
+              active={props.tool === s.tool}
+              onClick={() => {
+                props.onTool(s.tool);
+                setOpen(false);
+              }}
+            >
+              {s.icon}
+            </ToolButton>
+          ))}
+        </DropdownPanel>
+      )}
     </div>
   );
 }

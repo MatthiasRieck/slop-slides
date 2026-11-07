@@ -89,6 +89,19 @@ pub const DROPPED_ATTR: &str = "data-dropped";
 /// it fits, see `assets/runtime.js`) or `grow` (the editor turned its height into a
 /// `min-height`, so it grows with its text).
 pub const AUTOFIT_ATTR: &str = "data-autofit";
+/// The kind of figure a shape the user added is (a triangle, a diamond…), which an SVG in its
+/// `background-image` draws (see `FIGURES` in assets/editor.js).
+pub const SHAPE_ATTR: &str = "data-shape";
+/// The figures the editor draws, by their `data-shape`.
+pub const SHAPE_KINDS: &[&str] = &[
+    "triangle",
+    "star",
+    "bubble",
+    "diamond",
+    "chevron",
+    "block-arrow",
+    "double-arrow",
+];
 
 /// Attributes the in-editor slide editor puts on elements while it works. They never belong
 /// in deck.html; the editor strips them before saving.

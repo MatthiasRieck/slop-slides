@@ -323,6 +323,8 @@ impl AgentManager {
             };
             let _renders =
                 crate::render::start(app.clone(), turn.dir.clone(), turn.session_dir.clone());
+            let _exports =
+                crate::export::start(app.clone(), turn.dir.clone(), turn.session_dir.clone());
             for message in &turn.extensions.warnings {
                 turn.emit(&AgentEvent::Error {
                     message: message.clone(),

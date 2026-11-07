@@ -80,7 +80,7 @@ static RUNNING: AtomicBool = AtomicBool::new(false);
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// How the video is made, as the export dialog chose.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Options {
     /// How long each slide is shown, in seconds; with narration, at least.

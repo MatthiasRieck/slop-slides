@@ -109,7 +109,7 @@ pub fn check_slides(slides: &[String]) -> Result<()> {
 }
 
 /// Writes `value` to `dir`/`name`.json in one step, so the reader never sees half of it.
-fn put<T: Serialize>(dir: &Path, name: &str, value: &T) -> Result<()> {
+pub(crate) fn put<T: Serialize>(dir: &Path, name: &str, value: &T) -> Result<()> {
     std::fs::create_dir_all(dir)?;
     let temp = dir.join(format!("{name}.tmp"));
     std::fs::write(
@@ -154,7 +154,12 @@ pub fn ask(
 
 /// Drains the inbox, oldest first, skipping what cannot be read.
 pub fn take_requests(session: &Path) -> Vec<(String, Request)> {
-    let Ok(entries) = std::fs::read_dir(session.join(REQUESTS)) else {
+    take(&session.join(REQUESTS))
+}
+
+/// Drains the `inbox` folder of requests, oldest first, skipping what cannot be read.
+pub(crate) fn take<T: serde::de::DeserializeOwned>(inbox: &Path) -> Vec<(String, T)> {
+    let Ok(entries) = std::fs::read_dir(inbox) else {
         return Vec::new();
     };
     let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
@@ -205,7 +210,7 @@ fn parse_overflow(json: Option<&String>) -> Vec<String> {
 }
 
 /// Stops serving the inbox when dropped, with the turn.
-pub struct Serving(Arc<AtomicBool>);
+pub struct Serving(pub(crate) Arc<AtomicBool>);
 
 impl Drop for Serving {
     fn drop(&mut self) {

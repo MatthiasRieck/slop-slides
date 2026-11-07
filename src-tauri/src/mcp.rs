@@ -2,7 +2,8 @@
 //! request in the current workspace session for the app to show a file, and render_slide
 //! asks the app, the same way, for images of slides (see render.rs). set_narration_audio
 //! makes an audio file the narration of a slide and times its words, and
-//! generate_narration_audio has the deck's voice say slides' narration scripts.
+//! generate_narration_audio has the deck's voice say slides' narration scripts. export_deck
+//! exports a deck as the Export menu does (see export.rs).
 //! Started as `slopslide --lint-mcp [workspace root]`.
 
 use std::io::{BufRead, Write};
@@ -12,10 +13,12 @@ use serde_json::{json, Value};
 
 use crate::deck;
 use crate::error::{Error, Result};
+use crate::export;
 use crate::lint;
 use crate::narration;
 use crate::render;
 use crate::sessions::Sessions;
+use crate::video;
 use crate::voice;
 
 pub const FLAG: &str = "--lint-mcp";
@@ -27,6 +30,7 @@ pub const NARRATION_TOOL: &str = "set_narration_audio";
 pub const TIMELINE_TOOL: &str = "narration_timeline";
 pub const BEATS_TOOL: &str = "narration_beats";
 pub const GENERATE_TOOL: &str = "generate_narration_audio";
+pub const EXPORT_TOOL: &str = "export_deck";
 const OPEN_REQUESTS: &str = "open-requests";
 /// Claude Code's rule for every tool of this server, for `--allowedTools`; its tools are
 /// named `mcp__slopslide__<tool>`.
@@ -235,6 +239,62 @@ pub fn handle(
                     "description": "The ids of the slides to say; every slide when left out.",
                 },
             } }
+        }, {
+            "name": EXPORT_TOOL,
+            "description": format!("Export a deck as the app's Export menu does, when the user \
+                asks for an export: `html` (one standalone HTML file with its assets inlined), \
+                `pdf` (one page per shown slide, selectable text), `pptx` (PowerPoint, one slide \
+                per shown slide), `video` (an MP4 of the deck playing, with its animations and \
+                narration audio, timed as {TIMELINE_TOOL} says; narration audio that is missing \
+                is generated first) or `images` (a PNG of every slide, the canvas size, in a \
+                folder). It goes to `dest` in the workspace, or to `{}/` next to the deck, named \
+                after its title. Lint the deck first. A video takes a while (minutes for a long \
+                deck); ask for it once. Then tell the user where it is, or show it with \
+                {OPEN_TOOL}.", export::FOLDER),
+            "inputSchema": { "type": "object", "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The deck file, relative to the workspace root; deck.html when left out.",
+                },
+                "format": {
+                    "type": "string",
+                    "enum": export::Format::ALL.iter().map(|f| f.name()).collect::<Vec<_>>(),
+                    "description": "What to export the deck as.",
+                },
+                "dest": {
+                    "type": "string",
+                    "description": "Where it goes, relative to the workspace root: the file (its extension is added when left out), or the folder for images.",
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "description": "Replace an existing file, or write images into a folder that is not empty; only when the user agreed.",
+                },
+                "seconds_per_slide": {
+                    "type": "number",
+                    "description": format!("video: how long each slide shows, in seconds ({} to {}); with narration, at least. Default {}.", video::MIN_SECONDS, video::MAX_SECONDS, narration::timeline::DEFAULTS.seconds_per_slide),
+                },
+                "fps": {
+                    "type": "integer",
+                    "enum": video::FRAME_RATES,
+                    "description": format!("video: frames per second. Default {}.", narration::timeline::DEFAULTS.fps),
+                },
+                "animate": {
+                    "type": "boolean",
+                    "description": "video: play animations, slide fades and morphs; false for still slides. Default true.",
+                },
+                "narration": {
+                    "type": "boolean",
+                    "description": "video: say each slide's narration over it. Default true.",
+                },
+                "pause_before": {
+                    "type": "number",
+                    "description": format!("video: seconds of silence before a slide's narration, 0 to {}. Default {}.", video::MAX_PAUSE, narration::timeline::DEFAULTS.pause_before),
+                },
+                "pause_after": {
+                    "type": "number",
+                    "description": format!("video: seconds the slide stays after its narration, 0 to {}. Default {}.", video::MAX_PAUSE, narration::timeline::DEFAULTS.pause_after),
+                },
+            }, "required": ["format"] }
         }]}),
         "tools/call" if request["params"]["name"] == TOOL => {
             let rel = request["params"]["arguments"]["path"]
@@ -345,6 +405,15 @@ pub fn handle(
             text_result(deck::app_home().and_then(|home| {
                 generate_narration_audio(dir, arguments, &home, session.as_deref())
             }))
+        }
+        "tools/call" if request["params"]["name"] == EXPORT_TOOL => {
+            let session = session(dir);
+            text_result(export_deck(
+                dir,
+                &request["params"]["arguments"],
+                session.as_deref(),
+                export::WAIT,
+            ))
         }
         "tools/call" => return Some(error(id, -32602, "unknown tool")),
         method => return Some(error(id, -32601, &format!("method not found: {method}"))),
@@ -574,6 +643,89 @@ fn generate_narration_audio(
         if said == 1 { "" } else { "s" },
         lines.join("\n")
     ))
+}
+
+/// The video options `arguments` give, over the narration timeline's defaults.
+fn video_options(arguments: &Value) -> Result<video::Options> {
+    let mut options = narration::timeline::DEFAULTS;
+    let number = |key: &str, into: &mut f64| -> Result<()> {
+        match &arguments[key] {
+            Value::Null => Ok(()),
+            value => {
+                *into = value
+                    .as_f64()
+                    .ok_or_else(|| Error::msg(format!("{key} is a number of seconds")))?;
+                Ok(())
+            }
+        }
+    };
+    let flag = |key: &str, into: &mut bool| -> Result<()> {
+        match &arguments[key] {
+            Value::Null => Ok(()),
+            value => {
+                *into = value
+                    .as_bool()
+                    .ok_or_else(|| Error::msg(format!("{key} is true or false")))?;
+                Ok(())
+            }
+        }
+    };
+    number("seconds_per_slide", &mut options.seconds_per_slide)?;
+    number("pause_before", &mut options.pause_before)?;
+    number("pause_after", &mut options.pause_after)?;
+    flag("animate", &mut options.animate)?;
+    flag("narration", &mut options.narration)?;
+    if !arguments["fps"].is_null() {
+        options.fps = arguments["fps"]
+            .as_u64()
+            .and_then(|fps| u32::try_from(fps).ok())
+            .ok_or_else(|| Error::msg("fps is a whole number of frames per second"))?;
+    }
+    options.check()?;
+    Ok(options)
+}
+
+/// Exports the deck at `path` (`arguments`) as its `format` asks: a standalone HTML file here,
+/// anything else by the app serving the workspace's `session`, waiting at most `wait`. What it
+/// made, for the agent.
+fn export_deck(
+    dir: &Path,
+    arguments: &Value,
+    session: Option<&Path>,
+    wait: std::time::Duration,
+) -> Result<String> {
+    let format = export::Format::parse(
+        arguments["format"]
+            .as_str()
+            .ok_or_else(|| Error::msg("format is required"))?,
+    )?;
+    let video = match format {
+        export::Format::Video => Some(video_options(arguments)?),
+        _ => None,
+    };
+    let (rel, file) = deck_argument(dir, arguments)?;
+    let deck = deck::load(&file)?;
+    let dest = export::destination(
+        dir,
+        &rel,
+        &deck.title,
+        format,
+        arguments["dest"].as_str(),
+        arguments["overwrite"].as_bool() == Some(true),
+    )?;
+    let request = export::Request {
+        path: rel,
+        format,
+        dest,
+        video,
+    };
+    if format == export::Format::Html {
+        let path = dir.join(&request.dest);
+        deck::export(&file, &path)?;
+        return Ok(export::report(&request, None, &path));
+    }
+    let session = session.ok_or_else(|| Error::msg("no workspace session"))?;
+    export::ask(session, &request, wait)
 }
 
 /// Seconds as the timing tools show them.
@@ -938,7 +1090,14 @@ mod tests {
     fn lists_the_lint_tool() {
         let res = call(Path::new("/nonexistent"), "tools/list", json!({}));
         let tools = res["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), 8);
+        assert_eq!(tools[7]["name"], EXPORT_TOOL);
+        assert_eq!(tools[7]["inputSchema"]["required"], json!(["format"]));
+        assert_eq!(
+            tools[7]["inputSchema"]["properties"]["format"]["enum"],
+            json!(["html", "pdf", "pptx", "video", "images"])
+        );
+        assert!(crate::agent::SYSTEM_PROMPT.contains(EXPORT_TOOL));
         assert_eq!(tools[4]["name"], TIMELINE_TOOL);
         assert_eq!(tools[5]["name"], BEATS_TOOL);
         assert_eq!(tools[5]["inputSchema"]["required"], json!(["slide"]));
@@ -969,6 +1128,7 @@ mod tests {
         assert!(is_claude_tool("mcp__slopslide__set_narration_audio"));
         assert!(is_claude_tool("mcp__slopslide__narration_timeline"));
         assert!(is_claude_tool("mcp__slopslide__narration_beats"));
+        assert!(is_claude_tool("mcp__slopslide__export_deck"));
         assert!(!is_claude_tool("mcp__slopslide__"));
         assert!(!is_claude_tool("mcp__slopslides__lint_deck"));
         assert!(!is_claude_tool("mcp__github__push"));
@@ -1175,6 +1335,148 @@ mod tests {
             json!({"type": "image", "data": "cG5n", "mimeType": "image/png"})
         );
         assert!(content[2]["text"].as_str().unwrap().contains("no slide"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    const TITLED: &str = "<!DOCTYPE html><html><head><title>Q3 Plan</title></head><body><main class=\"deck\"><section class=\"slide\" id=\"a\">A</section></main></body></html>";
+
+    #[test]
+    fn export_tool_writes_standalone_html_itself() {
+        let dir = temp_deck(TITLED);
+        let res = call(
+            &dir,
+            "tools/call",
+            json!({"name": EXPORT_TOOL, "arguments": {"format": "html"}}),
+        );
+        assert_eq!(res["result"]["isError"], false, "{res}");
+        let text = res["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.starts_with(
+                "Exported deck.html as a standalone HTML file to exports/Q3 Plan.html ("
+            ),
+            "{text}"
+        );
+        let written = std::fs::read_to_string(dir.join("exports/Q3 Plan.html")).unwrap();
+        assert!(written.contains("id=\"a\""), "{written}");
+        // Exported again, it is not replaced unless asked.
+        let again = call(
+            &dir,
+            "tools/call",
+            json!({"name": EXPORT_TOOL, "arguments": {"format": "html"}}),
+        );
+        assert_eq!(again["result"]["isError"], true);
+        let replaced = call(
+            &dir,
+            "tools/call",
+            json!({"name": EXPORT_TOOL, "arguments": {"format": "html", "overwrite": true}}),
+        );
+        assert_eq!(replaced["result"]["isError"], false);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn export_tool_asks_the_app_for_other_formats() {
+        let dir = temp_deck(TITLED);
+        let session = dir.join("session");
+        let app = {
+            let session = session.clone();
+            std::thread::spawn(move || {
+                let mut seen = Vec::new();
+                while seen.len() < 2 {
+                    for (name, request) in export::take_requests(&session) {
+                        export::answer(&session, &name, &Ok(format!("made {}", request.dest)))
+                            .unwrap();
+                        seen.push(request);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                seen
+            })
+        };
+        let pdf = call(
+            &dir,
+            "tools/call",
+            json!({"name": EXPORT_TOOL, "arguments": {"format": "pdf", "dest": "out/handout"}}),
+        );
+        assert_eq!(pdf["result"]["content"][0]["text"], "made out/handout.pdf");
+        let video = call(
+            &dir,
+            "tools/call",
+            json!({"name": EXPORT_TOOL, "arguments": {"format": "video", "fps": 60, "narration": false}}),
+        );
+        assert_eq!(video["result"]["isError"], false, "{video}");
+        let seen = app.join().unwrap();
+        assert_eq!(seen[0].format, export::Format::Pdf);
+        assert_eq!(seen[0].video, None);
+        assert_eq!(seen[1].dest, "exports/Q3 Plan.mp4");
+        assert_eq!(
+            seen[1].video,
+            Some(video::Options {
+                fps: 60,
+                narration: false,
+                ..narration::timeline::DEFAULTS
+            })
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn export_tool_refuses_bad_requests_without_asking_the_app() {
+        let dir = temp_deck(TITLED);
+        for (arguments, expected) in [
+            (json!({}), "format is required"),
+            (json!({"format": "gif"}), "format is one of"),
+            (json!({"format": "pdf", "path": "missing.html"}), "missing"),
+            (
+                json!({"format": "pdf", "dest": "../out.pdf"}),
+                "invalid path",
+            ),
+            (
+                json!({"format": "pptx", "dest": "out.pdf"}),
+                "is a .pptx file",
+            ),
+            (
+                json!({"format": "video", "fps": 25}),
+                "unsupported frame rate",
+            ),
+            (
+                json!({"format": "video", "seconds_per_slide": "long"}),
+                "is a number",
+            ),
+            (json!({"format": "video", "animate": 1}), "true or false"),
+            (
+                json!({"format": "html", "dest": "deck.html", "overwrite": true}),
+                "the deck itself",
+            ),
+        ] {
+            let res = call(
+                &dir,
+                "tools/call",
+                json!({"name": EXPORT_TOOL, "arguments": arguments}),
+            );
+            assert_eq!(res["result"]["isError"], true, "{arguments}");
+            let text = res["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains(expected), "{arguments}: {text}");
+        }
+        assert!(export::take_requests(&dir.join("session")).is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn without_the_app_an_export_times_out() {
+        let dir = temp_deck(TITLED);
+        let session = dir.join("session");
+        let arguments = json!({"format": "pdf"});
+        let error = export_deck(
+            &dir,
+            &arguments,
+            Some(&session),
+            std::time::Duration::from_millis(20),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("did not finish"), "{error}");
+        let error = export_deck(&dir, &arguments, None, export::WAIT).unwrap_err();
+        assert_eq!(error.to_string(), "no workspace session");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

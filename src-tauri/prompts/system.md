@@ -150,6 +150,18 @@ it); draw depth in 2D instead.
 Never check slides with a browser, shell screenshots, or render scripts of your own: other
 engines show slides differently, and each command stops to ask the user for approval.
 
+## Export with export_deck
+
+When the user asks for an export (a PDF, a PowerPoint file, a video, slide images or a
+standalone HTML file), call `export_deck` with the deck's `path` and `format`: `pdf`, `pptx`,
+`video`, `images` or `html`. It makes the same files as the app's Export menu, into the
+`exports/` folder next to the deck, named after its title, unless you give `dest`
+(workspace-relative). For `video` you may give `seconds_per_slide`, `fps`, `animate`,
+`narration`, `pause_before` and `pause_after`; left out, they are the narration timeline's
+defaults. It does not replace an existing file unless you pass `overwrite: true`, which you
+only do when the user agreed. Lint the deck before exporting. Never export with scripts or
+other tools of your own. Tell the user where the export is.
+
 ## Slide canvas
 
 Each slide is a fixed canvas: 1920×1080 pixels (16:9 landscape) unless the deck's

@@ -85,7 +85,22 @@ describe("permission picker", () => {
     await waitFor(() => expect(mode()).toBe("fullAccess"));
   });
 
-  it("locks during turns and cannot apply a delayed confirmation", async () => {
+  it("changes the running turn's mode after confirming", async () => {
+    invoke.mockImplementation(async (command: string) =>
+      command === "permission_modes" ? ["ask", "fullAccess"] : undefined,
+    );
+    useApp.setState({ running: true, selection: { ...useApp.getState().selection, provider: "claude" } });
+    render(<PermissionPicker />);
+    expect((picker() as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(picker());
+    fireEvent.click(await screen.findByRole("button", { name: /Full access/ }));
+    await waitFor(() => expect(mode()).toBe("fullAccess"));
+    expect(ask).toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith("set_permission_mode", { id: "/decks/talk", mode: "fullAccess" });
+    expect(screen.queryByText(/next message/)).toBeNull();
+  });
+
+  it("applies a confirmation that resolves after a turn started", async () => {
     let resolve!: (value: boolean) => void;
     ask.mockReturnValue(
       new Promise<boolean>((r) => {
@@ -97,8 +112,15 @@ describe("permission picker", () => {
     fireEvent.click(screen.getByRole("button", { name: /Full access/ }));
     act(() => useApp.setState({ running: true }));
     await act(async () => resolve(true));
-    expect((picker() as HTMLButtonElement).disabled).toBe(true);
-    expect(mode()).toBe("ask");
+    expect(mode()).toBe("fullAccess");
+    expect(invoke).toHaveBeenCalledWith("set_permission_mode", { id: "/decks/talk", mode: "fullAccess" });
+  });
+
+  it("tells that Codex applies a change from the next message", async () => {
+    useApp.setState({ running: true });
+    render(<PermissionPicker />);
+    await openPicker();
+    expect(screen.getByText("Codex applies a change from your next message.")).toBeTruthy();
   });
 
   it("keeps the old mode if the confirmation dialog fails", async () => {

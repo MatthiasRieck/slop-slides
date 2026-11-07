@@ -172,6 +172,13 @@ fn present_on(
     screens::present(&app, &window, audience, presenter)
 }
 
+/// Opens the presenter view in a window of its own beside the show, which stays where it is.
+/// Off the main thread, which building a window from a command needs on Windows.
+#[tauri::command(async)]
+fn present_in_windows(app: AppHandle) -> Result<()> {
+    screens::present_in_windows(&app)
+}
+
 /// Closes the presenter view window when the show ends.
 #[tauri::command]
 fn close_presenter_view(app: AppHandle) {
@@ -1297,6 +1304,7 @@ pub fn run() {
             screen_previews,
             present_on,
             close_presenter_view,
+            present_in_windows,
             take_pending_folder,
             open_workspace,
             close_workspace,

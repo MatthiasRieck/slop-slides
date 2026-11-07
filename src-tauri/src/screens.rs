@@ -1,6 +1,8 @@
 //! Screens for presenting. With several attached, the show goes on one of them and the
 //! presenter view (notes, next slide, timers) in a window of its own on another; the frontend
-//! lets the user pick (see `ScreenPicker`). The presenter view is the same frontend loaded
+//! lets the user pick (see `ScreenPicker`). On any number of screens the show can also run in
+//! windows instead ([`present_in_windows`]): the slides in the app window and the presenter
+//! view in a window beside it, so a call can share the slides' window alone. The presenter view is the same frontend loaded
 //! with `?presenter`: it renders from what the show window sends it and never opens a
 //! workspace itself (slides are served to any window while a workspace has them open).
 //!
@@ -12,8 +14,8 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{
-    ipc::Channel, AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, Position,
-    WebviewUrl, WebviewWindowBuilder, Window,
+    ipc::Channel, AppHandle, Emitter, LogicalPosition, Manager, Monitor, PhysicalPosition,
+    Position, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent,
 };
 
 use crate::error::{Error, Result};
@@ -26,6 +28,9 @@ const PREVIEW_TIMEOUT: Duration = Duration::from_secs(3);
 /// windows get. Each gets a label of its own: destroying a window only queues that, so a label
 /// stays taken for a moment after, and the next show may be starting already.
 pub const LABEL_PREFIX: &str = "presenter-";
+
+/// What the show hears when the presenter view asks to end it (see `usePresenterFeed`).
+const EXIT_EVENT: &str = "presenter:exit";
 
 /// Whether the system lays out screens in points, each screen with its own scale, rather than
 /// in the physical pixels of one desktop.
@@ -304,22 +309,59 @@ pub fn present(
     let Some(presenter) = presenter else {
         return Ok(());
     };
+    open_presenter_view(app, Some(&screens[presenter]))
+}
+
+/// Opens the presenter view in an ordinary window, leaving the show window where it is and as
+/// it is: on one screen, the slides' window can be shared in a call and the presenter keeps the
+/// notes to themselves.
+pub fn present_in_windows(app: &AppHandle) -> Result<()> {
+    close_presenter_view(app);
+    open_presenter_view(app, None)
+}
+
+/// How a presenter view window starts: full screen on `screen`, or else an ordinary window.
+fn presenter_window_size(screen: Option<&Screen>) -> (f64, f64) {
+    match screen {
+        Some(_) => (1000.0, 640.0),
+        // Room for the slide, the next one and the notes, while the show's window stays in view.
+        None => (1100.0, 720.0),
+    }
+}
+
+/// Opens a presenter view window: full screen on `screen` if given, else an ordinary window in
+/// the middle of the screen. Closing it ends the show, as Escape in it does.
+fn open_presenter_view(app: &AppHandle, screen: Option<&Screen>) -> Result<()> {
     let open = |e: tauri::Error| Error::msg(format!("cannot open the presenter view: {e}"));
+    let (width, height) = presenter_window_size(screen);
     // Hidden until it is on its screen, so it does not flash up on another.
-    let view = WebviewWindowBuilder::new(
+    let mut builder = WebviewWindowBuilder::new(
         app,
         format!("{LABEL_PREFIX}{}", uuid::Uuid::new_v4().simple()),
         WebviewUrl::App("index.html?presenter".into()),
     )
     .title("Presenter view")
-    .inner_size(1000.0, 640.0)
-    .visible(false)
-    .build()
-    .map_err(open)?;
-    view.set_position(origin(&screens[presenter], LAID_OUT_IN_POINTS))
-        .map_err(open)?;
+    .inner_size(width, height)
+    .visible(false);
+    if screen.is_none() {
+        builder = builder.center();
+    }
+    let view = builder.build().map_err(open)?;
+    let events = app.clone();
+    view.on_window_event(move |event| {
+        // Closing by the user only: the show destroys it when it ends, which asks nothing.
+        if let WindowEvent::CloseRequested { .. } = event {
+            let _ = events.emit(EXIT_EVENT, ());
+        }
+    });
+    if let Some(screen) = screen {
+        view.set_position(origin(screen, LAID_OUT_IN_POINTS))
+            .map_err(open)?;
+    }
     view.show().map_err(open)?;
-    view.set_fullscreen(true).map_err(open)?;
+    if screen.is_some() {
+        view.set_fullscreen(true).map_err(open)?;
+    }
     Ok(())
 }
 
@@ -366,6 +408,20 @@ mod tests {
             pixel_height: 100,
             primary: false,
         }
+    }
+
+    #[test]
+    fn a_presenter_view_in_a_window_leaves_room_for_the_notes() {
+        let at = screen(0.0, 0.0, "laptop");
+        assert_eq!(presenter_window_size(Some(&at)), (1000.0, 640.0));
+        let (width, height) = presenter_window_size(None);
+        assert!(width > 1000.0 && height > 640.0);
+    }
+
+    #[test]
+    fn closing_the_presenter_view_ends_the_show_as_the_frontend_listens_for() {
+        let presenter = include_str!("../../src/components/Presenter.tsx");
+        assert!(presenter.contains(&format!("\"{EXIT_EVENT}\"")));
     }
 
     #[test]

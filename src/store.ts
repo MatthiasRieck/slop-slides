@@ -44,7 +44,7 @@ import {
   type PermissionMode,
   type PermissionModes,
 } from "./lib/permissions";
-import type { ScreenChoice } from "./lib/screens";
+import type { Placement } from "./lib/screens";
 import { applyOrder, railItems, stepRows } from "./lib/sections";
 import { DEFAULT_SIZE, pixelsOf, resizePrompt, type SlideSize, sameSize } from "./lib/slideSize";
 import { basename, dirname, layoutLabel } from "./lib/utils";
@@ -359,8 +359,8 @@ interface AppState {
   /** `provider:model` keys starred in the model picker. */
   favoriteModels: string[];
   presenting: boolean;
-  /** Where the show goes when several screens are attached; null: the screen it is on. */
-  screens: ScreenChoice | null;
+  /** Where the show goes: picked screens, or windows; null: full screen where it is. */
+  screens: Placement | null;
   /** Installed agent CLIs and their models; `undefined` while loading. */
   providers: ProviderInfo[] | undefined;
   error: string | null;
@@ -491,7 +491,7 @@ interface AppState {
   setContextWindow: (contextWindow: string) => void;
   refreshProviders: () => Promise<void>;
   toggleFavoriteModel: (key: string) => void;
-  setPresenting: (presenting: boolean, screens?: ScreenChoice | null) => void;
+  setPresenting: (presenting: boolean, screens?: Placement | null) => void;
   setError: (error: string | null) => void;
   refreshLint: () => Promise<void>;
   fillComposer: (text: string, options?: { screenshot?: string | null; element?: EditElement }) => void;

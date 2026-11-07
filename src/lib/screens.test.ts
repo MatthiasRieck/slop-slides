@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Screen } from "./api";
-import { arrange, choose, defaultChoice } from "./screens";
+import { arrange, choose, defaultChoice, hasPresenterWindow } from "./screens";
 
 const screen = (index: number, x: number, y: number, width = 1920, height = 1080): Screen => ({
   index,
@@ -57,5 +57,14 @@ describe("choose", () => {
   it("moves one to a free screen", () => {
     expect(choose({ audience: 2, presenter: 0 }, "presenter", 1)).toEqual({ audience: 2, presenter: 1 });
     expect(choose({ audience: 2, presenter: null }, "audience", 1)).toEqual({ audience: 1, presenter: null });
+  });
+});
+
+describe("hasPresenterWindow", () => {
+  it("is so in windows and with a screen for the presenter view, not otherwise", () => {
+    expect(hasPresenterWindow("windows")).toBe(true);
+    expect(hasPresenterWindow({ audience: 1, presenter: 0 })).toBe(true);
+    expect(hasPresenterWindow({ audience: 1, presenter: null })).toBe(false);
+    expect(hasPresenterWindow(null)).toBe(false);
   });
 });

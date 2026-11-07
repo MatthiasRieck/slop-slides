@@ -462,6 +462,8 @@ export const api = {
     invoke<(string | null)[]>("screen_previews", { grabbed: new Channel<null>(onGrabbed) }),
   /** Moves this window to the `audience` screen and opens the presenter view on `presenter`. */
   presentOn: (audience: number, presenter: number | null) => invoke<void>("present_on", { audience, presenter }),
+  /** Opens the presenter view in a window of its own; this window stays where and as it is. */
+  presentInWindows: () => invoke<void>("present_in_windows"),
   /** Closes the presenter view window, if open. */
   closePresenterView: () => invoke<void>("close_presenter_view"),
   /** Opens another app window, on the start screen; each window has a folder of its own. */

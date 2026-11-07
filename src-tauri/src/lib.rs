@@ -7,6 +7,7 @@ mod copilot;
 mod deck;
 mod env;
 mod error;
+mod export;
 mod export_smoke;
 mod extensions;
 mod find;

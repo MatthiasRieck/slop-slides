@@ -108,7 +108,7 @@ pub async fn save_slide_image(
 }
 
 /// The widest a slide image may be: `width`, or [`SLIDE_WIDTH`], within the size limit.
-fn slide_image_width(width: Option<u32>) -> u32 {
+pub(crate) fn slide_image_width(width: Option<u32>) -> u32 {
     width.unwrap_or(SLIDE_WIDTH).clamp(1, crate::size::MAX_PX)
 }
 

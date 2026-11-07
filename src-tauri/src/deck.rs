@@ -978,7 +978,7 @@ pub fn create_export_dir(parent: &Path, title: &str) -> Result<PathBuf> {
 }
 
 /// `text` without characters file systems reject, trimmed of spaces and trailing dots.
-fn safe_file_name(text: &str) -> String {
+pub(crate) fn safe_file_name(text: &str) -> String {
     let cleaned: String = text
         .chars()
         .filter(|c| !c.is_control() && !r#"\/:*?"<>|"#.contains(*c))

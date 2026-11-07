@@ -82,7 +82,7 @@ function AppearanceButton(props: {
       <ToolButton
         keepFocus
         label="Appearance"
-        title="Opacity, shadow and corner radius"
+        title="Opacity, shadow, corner radius and a shape's proportions"
         aria-expanded={open}
         disabled={!s}
         onClick={() => setOpen(!open)}
@@ -118,6 +118,18 @@ function AppearanceButton(props: {
             disabled={s.radius === null}
             onCommit={(radius) => change({ radius })}
           />
+          {s.adjust && (
+            <Slider
+              label={s.adjust.label}
+              value={s.adjust.value}
+              min={s.adjust.min}
+              max={s.adjust.max}
+              step={s.adjust.step}
+              // A star counts its points; the others go by a share of the shape's height.
+              unit={s.adjust.label === "Points" ? "" : "%"}
+              onCommit={(adjust) => change({ adjust })}
+            />
+          )}
         </DropdownPanel>
       )}
     </div>

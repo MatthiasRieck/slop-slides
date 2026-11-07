@@ -18,11 +18,22 @@ export type EditTool =
   | "chevron"
   | "block-arrow"
   | "double-arrow"
+  | "hexagon"
+  | "octagon"
+  | "pentagon"
+  | "parallelogram"
+  | "trapezoid"
+  | "plus"
+  | "cylinder"
+  | "document"
+  | "heart"
   | "bracket"
   | "brace"
   | "draw"
   | "line"
   | "arrow"
+  | "elbow"
+  | "curve"
   | "paint";
 
 /** Tools whose new elements share style defaults. */
@@ -37,6 +48,33 @@ export type Script = "sup" | "sub";
 export type Autofit = "shrink" | "grow";
 /** How an image fills its box. */
 export type ImageFit = "contain" | "cover" | "fill";
+/** How a line or border is drawn. */
+export type Dash = "solid" | "dashed" | "dotted";
+/** What a line ends in. */
+export type HeadKind = "arrow" | "triangle" | "bar" | "dot";
+/** How a line goes between its ends: straight or curved through its points, or as a connector. */
+export type LineRoute = "straight" | "elbow" | "curved";
+
+/** A figure's proportions, as the slide editor reports them (see `FIGURES` in editor.js). */
+export interface ShapeAdjust {
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  /** What it changes: "Points" for a star, "Tail" for a speech bubble… */
+  label: string;
+}
+
+/** A line's ends and route, as the slide editor reports them. */
+export interface LineLook {
+  start: HeadKind | null;
+  end: HeadKind | null;
+  route: LineRoute;
+}
+
+export const DASHES: Dash[] = ["solid", "dashed", "dotted"];
+export const HEAD_KINDS: HeadKind[] = ["arrow", "triangle", "bar", "dot"];
+export const LINE_ROUTES: LineRoute[] = ["straight", "elbow", "curved"];
 
 /** A style for new elements, or the changes to apply to the selection. Null colors mean none. */
 export interface EditStyle {
@@ -60,6 +98,13 @@ export interface EditStyle {
   /** Border color, or a drawing's stroke. */
   stroke?: string | null;
   strokeWidth?: number;
+  dash?: Dash;
+  /** A line's heads, at the end it starts from and the one it goes to; null for none. */
+  headStart?: HeadKind | null;
+  headEnd?: HeadKind | null;
+  route?: LineRoute;
+  /** A figure's proportions (see ShapeAdjust). */
+  adjust?: number;
   /** 0.05 to 1. */
   opacity?: number;
   /** Blur of its shadow in pixels; 0 for none. */
@@ -108,6 +153,11 @@ export interface EditSelection {
   fill: string | null;
   stroke: string | null;
   strokeWidth: number;
+  dash: Dash;
+  /** Its heads and route, when it is a line. */
+  line: LineLook | null;
+  /** A figure's proportions, when it has any to change. */
+  adjust: ShapeAdjust | null;
   opacity: number;
   shadow: number;
   radius: number | null;
@@ -122,6 +172,10 @@ export interface EditSelection {
   flippable: boolean;
   flipX: boolean;
   flipY: boolean;
+  /** A group the user made: its restyles go to everything in it. */
+  group: boolean;
+  /** Locked, or in something locked: it cannot be moved or deleted. */
+  locked: boolean;
 }
 
 /** The element a right-click selected, as the slide editor reports it (see `slop:edit-menu` in editor.js). */
@@ -187,7 +241,8 @@ export function stepFontSize(size: number, step: 1 | -1): number {
 
 export function familyOf(tool: EditTool): ToolFamily | null {
   if (tool === "text" || tool === "draw") return tool;
-  if (tool === "line" || tool === "arrow" || tool === "bracket" || tool === "brace") return "draw";
+  if (tool === "line" || tool === "arrow" || tool === "elbow" || tool === "curve") return "draw";
+  if (tool === "bracket" || tool === "brace") return "draw";
   return tool === "select" || tool === "paint" ? null : "shape";
 }
 
@@ -203,7 +258,7 @@ export function familyOfKind(kind: string): ToolFamily | null {
 export function toolbarState(selection: EditSelection | null, tool: EditTool, styles: Record<ToolFamily, EditStyle>) {
   if (selection) {
     return {
-      style: selection as EditStyle,
+      style: { ...selection, adjust: selection.adjust?.value } as EditStyle,
       text: selection.text,
       vector: selection.vector,
       valign: selection.valign !== null,
@@ -264,6 +319,9 @@ export function parseSelection(value: unknown): EditSelection | null {
     fill: color(v.fill),
     stroke: color(v.stroke),
     strokeWidth: num(v.strokeWidth) ?? 0,
+    dash: v.dash === "dashed" || v.dash === "dotted" ? v.dash : "solid",
+    line: parseLine(v.line),
+    adjust: parseAdjust(v.adjust),
     opacity: num(v.opacity) ?? 1,
     shadow: num(v.shadow) ?? 0,
     radius: num(v.radius),
@@ -275,12 +333,42 @@ export function parseSelection(value: unknown): EditSelection | null {
     flippable: v.flippable === true,
     flipX: v.flipX === true,
     flipY: v.flipY === true,
+    group: v.group === true,
+    locked: v.locked === true,
   };
 }
 
-/** What a restyle also makes the default for the next element of its kind: its look, not its links or fit. */
+/** A figure's proportions from the slide editor, or null when it has none. */
+function parseAdjust(value: unknown): ShapeAdjust | null {
+  if (!value || typeof value !== "object") return null;
+  const { value: at, min, max, step, label } = value as Record<string, unknown>;
+  const numbers = [at, min, max, step];
+  if (!numbers.every((n) => typeof n === "number" && Number.isFinite(n)) || typeof label !== "string") return null;
+  return { value: at as number, min: min as number, max: max as number, step: step as number, label };
+}
+
+/** A line's heads and route from the slide editor, or null when it is not a line. */
+function parseLine(value: unknown): LineLook | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  const head = (h: unknown) => (HEAD_KINDS.includes(h as HeadKind) ? (h as HeadKind) : null);
+  return {
+    start: head(v.start),
+    end: head(v.end),
+    route: LINE_ROUTES.includes(v.route as LineRoute) ? (v.route as LineRoute) : "straight",
+  };
+}
+
+/**
+ * What a restyle also makes the default for the next element of its kind: its look, not its
+ * links, fit, or a line's heads and route (which its tool picks).
+ */
 export function defaultsFrom(changes: EditStyle): EditStyle {
   const {
+    headStart: _headStart,
+    headEnd: _headEnd,
+    route: _route,
+    adjust: _adjust,
     script: _script,
     autofit: _autofit,
     opacity: _opacity,

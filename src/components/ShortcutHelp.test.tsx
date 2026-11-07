@@ -17,6 +17,15 @@ describe("ShortcutHelp", () => {
     }
   });
 
+  it("says what the modifiers do while dragging, and with snapping and nudging", () => {
+    render(<ShortcutHelp />);
+    fireEvent.keyDown(document.body, { key: "?" });
+    for (const keys of ["⇧ moving", "⇧ resizing", "⌥ resizing", "⇧ rotating or tilting", "⌘", "Snapping", "Nudging"]) {
+      expect(screen.getByText(keys)).toBeTruthy();
+    }
+    expect(screen.getByText("⌘G / ⇧⌘G")).toBeTruthy();
+  });
+
   it("lists every tool's key", () => {
     const listed = SECTIONS.find((s) => s.title === "Tools")?.keys.map(([key]) => key.toLowerCase());
     expect(listed?.sort()).toEqual(Object.keys(EDIT_TOOL_KEYS).sort());

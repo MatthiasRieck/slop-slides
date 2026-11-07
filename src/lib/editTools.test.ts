@@ -46,6 +46,9 @@ const SELECTION: EditSelection = {
   fill: null,
   stroke: null,
   strokeWidth: 0,
+  dash: "dashed",
+  line: { start: "dot", end: "triangle", route: "elbow" },
+  adjust: { value: 7, min: 3, max: 12, step: 1, label: "Points" },
   opacity: 0.5,
   shadow: 12,
   radius: 8,
@@ -57,6 +60,8 @@ const SELECTION: EditSelection = {
   flippable: false,
   flipX: false,
   flipY: false,
+  group: false,
+  locked: true,
 };
 
 describe("edit tools", () => {
@@ -90,7 +95,7 @@ describe("edit tools", () => {
 
   it("shows the selection, else what the tool adds, else nothing", () => {
     expect(toolbarState(SELECTION, "rect", DEFAULT_EDIT_STYLES)).toMatchObject({
-      style: SELECTION,
+      style: { ...SELECTION, adjust: 7 },
       text: true,
       valign: true,
       selected: true,
@@ -151,6 +156,9 @@ describe("edit tools", () => {
       fill: "#abcdef",
       stroke: null,
       strokeWidth: 0,
+      dash: "solid",
+      line: null,
+      adjust: null,
       opacity: 1,
       shadow: 0,
       radius: null,
@@ -162,8 +170,31 @@ describe("edit tools", () => {
       flippable: false,
       flipX: false,
       flipY: false,
+      group: false,
+      locked: false,
     });
     expect(parseSelection({ kind: "shape", flippable: true })?.flippable).toBe(true);
+    expect(
+      parseSelection({ kind: "drawing", dash: "wavy", line: { start: "star", end: "arrow", route: "zigzag" } }),
+    ).toMatchObject({
+      dash: "solid",
+      line: { start: null, end: "arrow", route: "straight" },
+    });
+  });
+
+  it("puts lines and connectors with the drawings, and leaves a line's heads and route to its tool", () => {
+    expect(["line", "arrow", "elbow", "curve"].map((t) => familyOf(t as never))).toEqual([
+      "draw",
+      "draw",
+      "draw",
+      "draw",
+    ]);
+    expect(defaultsFrom({ dash: "dotted", headStart: "dot", headEnd: "arrow", route: "elbow", adjust: 8 })).toEqual({
+      dash: "dotted",
+    });
+    expect(
+      parseSelection({ kind: "shape", adjust: { value: 5, min: 3, max: "12", step: 1, label: "Points" } })?.adjust,
+    ).toBeNull();
   });
 
   it("keeps a restyle's look as the next element's default, but not its script or fit", () => {

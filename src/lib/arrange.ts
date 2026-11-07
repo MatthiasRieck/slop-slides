@@ -27,6 +27,43 @@ export type GeometryField = "x" | "y" | "w" | "h" | "rotation";
 /** Degrees one press of a 3D rotate button turns the selection. */
 export const TILT_STEP = 5;
 
+/** One of the slide's layers, as the slide editor lists them, the top-most first (see `layers` in editor.js). */
+export interface EditLayer {
+  /** Where it is in the slide, to select it by. */
+  path: number[];
+  name: string;
+  group: boolean;
+  /** Locked itself. */
+  locked: boolean;
+  /** In something locked, so it cannot be picked either. */
+  held: boolean;
+  selected: boolean;
+  /** How many groups in it is. */
+  depth: number;
+}
+
+/** The layer list from the slide editor; malformed rows are dropped. */
+export function parseLayers(value: unknown): EditLayer[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((row) => {
+    if (!row || typeof row !== "object") return [];
+    const { path, name, group, locked, held, selected, depth } = row as Record<string, unknown>;
+    const steps = Array.isArray(path) && path.every((n) => Number.isInteger(n) && (n as number) >= 0);
+    if (!steps || typeof name !== "string") return [];
+    return [
+      {
+        path: path as number[],
+        name,
+        group: group === true,
+        locked: locked === true,
+        held: held === true,
+        selected: selected === true,
+        depth: typeof depth === "number" && Number.isInteger(depth) && depth >= 0 ? depth : 0,
+      },
+    ];
+  });
+}
+
 /** What the arrange controls ask the slide editor to do. */
 export type ArrangeMessage =
   | { type: "slop:edit-align"; to: AlignTo; target: AlignTarget }
@@ -34,7 +71,15 @@ export type ArrangeMessage =
   | { type: "slop:edit-distribute"; axis: DistributeAxis }
   | ({ type: "slop:edit-geometry" } & Partial<Record<GeometryField, number>>)
   | { type: "slop:edit-tilt"; x: number; y: number }
-  | { type: "slop:edit-tilt"; reset: true };
+  | { type: "slop:edit-tilt"; reset: true }
+  | { type: "slop:edit-group" }
+  | { type: "slop:edit-ungroup" }
+  /** Locks the selection, or with a path, that layer. */
+  | { type: "slop:edit-lock"; locked: boolean; path?: number[] }
+  /** Selects a layer from the Layers panel. */
+  | { type: "slop:edit-select"; path: number[] }
+  /** Moves a layer past the next one up or down, whether or not they overlap. */
+  | { type: "slop:edit-order"; to: "forward" | "backward"; path: number[]; any: true };
 
 /** The rotation a quarter turn clockwise (`step` 1) or counterclockwise (-1) from `rotation` gives, within ±180°. */
 export function quarterTurn(rotation: number, step: 1 | -1): number {

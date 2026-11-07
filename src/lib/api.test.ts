@@ -298,6 +298,12 @@ const CASES = [
     { workspace: "talk", id: "request-1", decision: "decline" },
   ],
   ["interruptAgent", () => api.interruptAgent("talk"), "interrupt_agent", { id: "talk" }],
+  [
+    "steerAgent",
+    () => api.steerAgent("talk", "Bluer", "m1"),
+    "steer_agent",
+    { workspace: "talk", prompt: "Bluer", message: "m1" },
+  ],
   ["agentRunning", () => api.agentRunning("talk"), "agent_running", { id: "talk" }],
   ["listProviders", () => api.listProviders(), "list_providers", undefined],
   ["listTemplates", () => api.listTemplates(), "list_templates", undefined],

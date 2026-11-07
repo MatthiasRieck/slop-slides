@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::deck;
 use crate::env;
@@ -100,11 +100,56 @@ pub struct AgentManager {
     pub approvals: Arc<Approvals>,
 }
 
-/// The handles on a workspace's running turn.
+/// A workspace's turn in progress: how to stop it and how to steer it.
 struct Running {
     cancel: watch::Sender<bool>,
+    steer: mpsc::UnboundedSender<Steer>,
     /// The turn's permission mode, which the user may change while it runs.
     mode: watch::Sender<PermissionMode>,
+}
+
+/// A message the user sent while a turn runs, to go into that turn rather than wait for it to
+/// end. Dropping it unanswered tells the sender it did not get in.
+#[derive(Debug)]
+pub(crate) struct Steer {
+    pub prompt: String,
+    /// The chat message it comes from, reported back with [`AgentEvent::Steered`].
+    pub message: Option<String>,
+    reply: oneshot::Sender<bool>,
+}
+
+impl Steer {
+    pub(crate) fn new(prompt: &str, message: Option<&str>) -> (Self, oneshot::Receiver<bool>) {
+        let (reply, rx) = oneshot::channel();
+        let steer = Steer {
+            prompt: prompt.into(),
+            message: message.map(str::to_string),
+            reply,
+        };
+        (steer, rx)
+    }
+
+    /// The agent took the message into its turn; the chat shows it from here on.
+    pub(crate) fn delivered(self, emit: &(dyn Fn(&AgentEvent) + Sync)) {
+        emit(&AgentEvent::Steered {
+            message: self.message,
+        });
+        let _ = self.reply.send(true);
+    }
+
+    /// The turn cannot take it (it is ending, or compacting); the sender runs it next.
+    pub(crate) fn refused(self) {
+        let _ = self.reply.send(false);
+    }
+}
+
+/// The steers waiting for the running turn (see [`AgentManager::steer`]).
+pub(crate) type Steers = mpsc::UnboundedReceiver<Steer>;
+
+/// Steers for a turn nobody steers.
+#[cfg(test)]
+pub(crate) fn no_steers() -> Steers {
+    mpsc::unbounded_channel().1
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -164,6 +209,10 @@ pub enum AgentEvent {
     OpenFile {
         path: String,
     },
+    /// The user's message `message` went into the running turn; what follows answers it.
+    Steered {
+        message: Option<String>,
+    },
     Finished {
         interrupted: bool,
     },
@@ -222,6 +271,7 @@ impl AgentManager {
         let extensions = Extensions::load(&app_home, &dir);
         let (cancel_tx, cancel_rx) = watch::channel(false);
         let (mode_tx, mode_rx) = watch::channel(args.permission_mode);
+        let (steer_tx, steers) = mpsc::unbounded_channel();
         {
             let mut running = self.running.lock().unwrap();
             if running.contains_key(&args.workspace) {
@@ -233,6 +283,7 @@ impl AgentManager {
                 Running {
                     cancel: cancel_tx,
                     mode: mode_tx,
+                    steer: steer_tx,
                 },
             );
         }
@@ -268,6 +319,7 @@ impl AgentManager {
                 permission_mode: mode_rx,
                 approvals,
                 extensions,
+                steers: tokio::sync::Mutex::new(steers),
             };
             let _renders =
                 crate::render::start(app.clone(), turn.dir.clone(), turn.session_dir.clone());
@@ -332,6 +384,17 @@ impl AgentManager {
             running.mode.send_replace(mode);
         }
     }
+
+    /// Sends `prompt` into the workspace's running turn. False when there is no turn, or it
+    /// could not take the message: the caller then runs it as the next turn.
+    pub async fn steer(&self, workspace: &str, prompt: &str, message: Option<&str>) -> bool {
+        let (steer, delivered) = Steer::new(prompt, message);
+        let sent = match self.running.lock().unwrap().get(workspace) {
+            Some(running) => running.steer.send(steer).is_ok(),
+            None => false,
+        };
+        sent && delivered.await.unwrap_or(false)
+    }
 }
 
 /// Tells the user which locked slides the agent changed and the app put back.
@@ -364,6 +427,8 @@ struct Turn {
     approvals: Arc<Approvals>,
     /// The user's MCP servers, skills, plugins and instructions.
     extensions: Extensions,
+    /// Messages to send into the turn while it runs.
+    steers: tokio::sync::Mutex<Steers>,
 }
 
 /// The prompt Claude Code runs as its built-in compaction command.
@@ -483,6 +548,8 @@ impl Turn {
     ) -> Result<Outcome> {
         let model = self.model.as_deref();
         let effort = self.effort.as_deref();
+        let mut steers = self.steers.lock().await;
+        let steers = &mut *steers;
         let started = |point: &str| self.started_at(Some(point));
         let rewind = rewind::TurnRewind {
             cut,
@@ -507,7 +574,8 @@ impl Turn {
             let on_session = |id: &str| {
                 deck::write_session(&self.session_dir, self.provider.session_file(), Some(id))
             };
-            return copilot::run_turn(args, cancel, &|event| self.emit(event), &on_session).await;
+            return copilot::run_turn(args, cancel, steers, &|event| self.emit(event), &on_session)
+                .await;
         }
         if self.provider == Provider::Codex {
             let mode = *self.permission_mode.borrow();
@@ -527,6 +595,7 @@ impl Turn {
                     rewind,
                 },
                 cancel,
+                steers,
                 &|event| self.emit(event),
                 &|id| {
                     deck::write_session(&self.session_dir, self.provider.session_file(), Some(id))
@@ -623,6 +692,8 @@ impl Turn {
         let mut lines = BufReader::new(child.stdout.take().expect("piped stdout")).lines();
         let mut saw_init = false;
         let mut result_text = None;
+        // A steer ends the segment it interrupts with a result of its own; the turn goes on.
+        let mut steered = false;
         loop {
             tokio::select! {
                 biased;
@@ -639,6 +710,16 @@ impl Turn {
                     if mode == PermissionMode::FullAccess {
                         run.accept_all();
                     }
+                }
+                Some(steer) = steers.recv() => {
+                    // Once stdin is closed the turn is ending; a compaction takes no message.
+                    if stdin.is_none() || self.compact {
+                        steer.refused();
+                        continue;
+                    }
+                    write_line(stdin.as_mut(), &claude_steer_message(&steer.prompt)).await?;
+                    steered = true;
+                    steer.delivered(&|event| self.emit(event));
                 }
                 line = lines.next_line() => {
                     let Some(line) = line? else { break };
@@ -664,6 +745,7 @@ impl Turn {
                             }
                             continue;
                         }
+                        Some("result") if steered && is_steer_abort(&value) => continue,
                         Some("result") => stdin = None,
                         Some("assistant") if value["parent_tool_use_id"].is_null() => {
                             if let Some(uuid) = value["uuid"].as_str() {
@@ -868,6 +950,22 @@ async fn write_line(stdin: Option<&mut tokio::process::ChildStdin>, value: &Valu
 
 fn claude_user_message(prompt: &str) -> Value {
     json!({"type": "user", "message": {"role": "user", "content": prompt}})
+}
+
+/// A message for the running turn: priority `now` makes Claude Code stop what it is doing
+/// (generating, or waiting on tools) and take the message in, rather than queue it.
+fn claude_steer_message(prompt: &str) -> Value {
+    let mut message = claude_user_message(prompt);
+    message["priority"] = json!("now");
+    message
+}
+
+/// The result Claude Code reports for the segment a steer cut short; more follows.
+fn is_steer_abort(result: &Value) -> bool {
+    matches!(
+        result["terminal_reason"].as_str(),
+        Some("aborted_streaming" | "aborted_tools")
+    )
 }
 
 /// Answers control request `id`: `Ok` with the response, `Err` with a refusal.
@@ -1801,11 +1899,15 @@ mod tests {
         let manager = AgentManager::default();
         let (cancel, _) = watch::channel(false);
         let (mode, live) = watch::channel(PermissionMode::Ask);
-        manager
-            .running
-            .lock()
-            .unwrap()
-            .insert("talk".into(), Running { cancel, mode });
+        let (steer, _) = mpsc::unbounded_channel();
+        manager.running.lock().unwrap().insert(
+            "talk".into(),
+            Running {
+                cancel,
+                steer,
+                mode,
+            },
+        );
         manager.set_permission_mode("talk", PermissionMode::FullAccess);
         assert_eq!(*live.borrow(), PermissionMode::FullAccess);
         manager.set_permission_mode("other", PermissionMode::Ask);
@@ -1821,6 +1923,64 @@ mod tests {
         let manager = AgentManager::default();
         assert!(!manager.is_running("talk"));
         manager.interrupt("talk"); // no-op, must not panic
+    }
+
+    #[tokio::test]
+    async fn steering_without_a_turn_does_not_get_in() {
+        let manager = AgentManager::default();
+        assert!(!manager.steer("talk", "Bluer", Some("m1")).await);
+    }
+
+    #[tokio::test]
+    async fn steering_reaches_the_running_turn() {
+        let manager = AgentManager::default();
+        let (cancel, _) = watch::channel(false);
+        let (steer, mut steers) = mpsc::unbounded_channel();
+        let (mode, _) = watch::channel(PermissionMode::Ask);
+        manager.running.lock().unwrap().insert(
+            "talk".into(),
+            Running {
+                cancel,
+                steer,
+                mode,
+            },
+        );
+        let turn = async {
+            let steer = steers.recv().await.unwrap();
+            assert_eq!(steer.prompt, "Bluer");
+            assert_eq!(steer.message.as_deref(), Some("m1"));
+            steer.delivered(&|_| {});
+            // The turn ends: what is still waiting is refused.
+            steers.recv().await.unwrap().refused();
+        };
+        let (first, second, ()) = tokio::join!(
+            manager.steer("talk", "Bluer", Some("m1")),
+            async {
+                tokio::task::yield_now().await;
+                manager.steer("talk", "Greener", None).await
+            },
+            turn
+        );
+        assert!(first);
+        assert!(!second);
+    }
+
+    #[test]
+    fn steers_claude_with_priority_now() {
+        assert_eq!(
+            claude_steer_message("Bluer"),
+            json!({"type": "user", "message": {"role": "user", "content": "Bluer"}, "priority": "now"})
+        );
+        assert!(is_steer_abort(
+            &json!({"type": "result", "terminal_reason": "aborted_streaming"})
+        ));
+        assert!(is_steer_abort(
+            &json!({"type": "result", "terminal_reason": "aborted_tools"})
+        ));
+        assert!(!is_steer_abort(
+            &json!({"type": "result", "terminal_reason": "completed"})
+        ));
+        assert!(!is_steer_abort(&json!({"type": "result"})));
     }
 
     /// Runs whole turns against a shell script standing in for the `claude` CLI.
@@ -1901,7 +2061,16 @@ mod tests {
                     permission_mode: crate::permissions::fixed_mode(self.mode),
                     approvals,
                     extensions: Extensions::default(),
+                    steers: tokio::sync::Mutex::new(no_steers()),
                 }
+            }
+
+            /// A turn plus the sender that steers it.
+            fn steered_turn(&self) -> (Turn, mpsc::UnboundedSender<Steer>) {
+                let mut turn = self.turn();
+                let (tx, rx) = mpsc::unbounded_channel();
+                turn.steers = tokio::sync::Mutex::new(rx);
+                (turn, tx)
             }
 
             async fn run_compact(&self) -> bool {
@@ -1983,6 +2152,102 @@ mod tests {
 
         fn has_flag(args: &[String], flag: &str, value: &str) -> bool {
             args.windows(2).any(|w| w[0] == flag && w[1] == value)
+        }
+
+        #[tokio::test]
+        async fn a_steer_goes_into_the_running_turn() {
+            // Claude Code ends the segment the steer cut short with a result of its own, then
+            // answers the steer in the same process.
+            let fx = Fixture::new(&format!(
+                r#"{INIT}
+IFS= read -r steer; printf '%s' "$steer" > "$LOG/steer.log"
+echo '{{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"aborted_streaming"}}'
+echo '{{"type":"stream_event","event":{{"type":"content_block_delta","delta":{{"type":"text_delta","text":"Blue"}}}}}}'
+{OK}"#
+            ));
+            let (turn, steer) = fx.steered_turn();
+            let (message, delivered) = Steer::new("Make it blue", Some("m2"));
+            steer.send(message).unwrap();
+            let (_cancel, rx) = watch::channel(false);
+            let interrupted = tokio::time::timeout(Duration::from_secs(20), turn.run("Go", rx))
+                .await
+                .expect("turn timed out");
+            assert!(!interrupted);
+            assert_eq!(delivered.await, Ok(true));
+            let line = fs::read_to_string(fx.dir.join(LOG_DIR).join("steer.log")).unwrap();
+            let written: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(written, claude_steer_message("Make it blue"));
+            let events = fx.events();
+            let steered = AgentEvent::Steered {
+                message: Some("m2".into()),
+            };
+            let at = |wanted: &AgentEvent| events.iter().position(|e| e == wanted).unwrap();
+            assert!(
+                at(&steered)
+                    < at(&AgentEvent::TextDelta {
+                        text: "Blue".into()
+                    })
+            );
+            let results: Vec<_> = events
+                .iter()
+                .filter(|e| matches!(e, AgentEvent::Result { .. }))
+                .collect();
+            assert_eq!(
+                results,
+                [&AgentEvent::Result {
+                    is_error: false,
+                    text: Some("Done.".into()),
+                    cost_usd: Some(0.01),
+                    duration_ms: Some(5)
+                }],
+                "the cut-short segment's result is not the turn's"
+            );
+            assert!(fx.errors().is_empty(), "{:?}", fx.errors());
+        }
+
+        #[tokio::test]
+        async fn a_steer_after_the_result_does_not_get_in() {
+            let fx = Fixture::new(&format!("{INIT}\n{OK}\nsleep 1"));
+            let (turn, steer) = fx.steered_turn();
+            let (_cancel, rx) = watch::channel(false);
+            let late = async {
+                while !fx
+                    .events()
+                    .iter()
+                    .any(|e| matches!(e, AgentEvent::Result { .. }))
+                {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                let (message, delivered) = Steer::new("Too late", None);
+                steer.send(message).unwrap();
+                delivered.await
+            };
+            let (interrupted, delivered) = tokio::time::timeout(Duration::from_secs(20), async {
+                tokio::join!(turn.run("Go", rx), late)
+            })
+            .await
+            .expect("turn timed out");
+            assert!(!interrupted);
+            assert_eq!(delivered, Ok(false));
+            assert!(!fx
+                .events()
+                .iter()
+                .any(|e| matches!(e, AgentEvent::Steered { .. })));
+        }
+
+        #[tokio::test]
+        async fn a_compaction_takes_no_steer() {
+            let fx = Fixture::new(&format!("{INIT}\n{OK}"));
+            deck::write_session(&fx.session_dir(), "claude-session", Some("s1")).unwrap();
+            let (mut turn, steer) = fx.steered_turn();
+            turn.compact = true;
+            let (message, delivered) = Steer::new("Bluer", None);
+            steer.send(message).unwrap();
+            let (_cancel, rx) = watch::channel(false);
+            tokio::time::timeout(Duration::from_secs(20), turn.run("ignored", rx))
+                .await
+                .expect("turn timed out");
+            assert_eq!(delivered.await, Ok(false));
         }
 
         #[tokio::test]

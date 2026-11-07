@@ -110,6 +110,23 @@ describe("SvgEditor", () => {
     expect(draft()).toContain("<script>");
   });
 
+  it("puts light drawings on a dark backdrop, which the user can change", async () => {
+    await open({ markup: '<svg viewBox="0 0 10 10"><path d="M0 0 L5 5" stroke="#fff"></path></svg>' });
+    const content = () => screen.getByTestId("svg-drawing").parentElement!;
+    expect(content().dataset.backdrop).toBe("dark");
+    fireEvent.click(screen.getByRole("button", { name: /^Light backdrop/ }));
+    expect(content().dataset.backdrop).toBe("light");
+    fireEvent.click(screen.getByRole("button", { name: /^Dark backdrop/ }));
+    expect(content().dataset.backdrop).toBe("dark");
+    expect(screen.getByRole("button", { name: /from the drawing's colors/ })).toBeTruthy();
+  });
+
+  it("keeps dark drawings on a light backdrop", async () => {
+    await open();
+    expect(screen.getByTestId("svg-drawing").parentElement!.dataset.backdrop).toBe("light");
+    expect(screen.getByRole("button", { name: /^Dark backdrop/ }).getAttribute("aria-pressed")).toBe("false");
+  });
+
   it("styles the drawing with the deck's rules, inside the elements it sits in on the slide", async () => {
     await open({
       css: ".hub circle { fill: navy; }",

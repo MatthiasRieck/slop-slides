@@ -853,13 +853,25 @@ describe("model choice", () => {
 describe("sending a message", () => {
   const prompt = () => (calls("send_message")[0]!.args as { prompt: string }).prompt;
 
-  it("does nothing without a workspace or while the agent runs", async () => {
+  it("does nothing without a workspace", async () => {
     const useApp = await freshStore(false);
-    await useApp.getState().send("hi", { includeSlide: true, attachments: [] });
-    useApp.setState({ deck: DECK, running: true });
     await useApp.getState().send("hi", { includeSlide: true, attachments: [] });
     expect(calls("send_message")).toEqual([]);
     expect(useApp.getState().messages).toEqual([]);
+    expect(useApp.getState().queue).toEqual([]);
+  });
+
+  it("queues the message while the agent runs, keeping the slide it is about", async () => {
+    const useApp = await freshStore();
+    useApp.setState({ deck: DECK, running: true, selected: "#2" });
+    await useApp.getState().send("hi", { includeSlide: true, attachments: ["assets/a.png"] });
+    await useApp.getState().send("later", { includeSlide: false, attachments: [] });
+    expect(calls("send_message")).toEqual([]);
+    expect(useApp.getState().messages).toEqual([]);
+    expect(useApp.getState().queue).toMatchObject([
+      { text: "hi", options: { includeSlide: true, attachments: ["assets/a.png"], slide: "#2" } },
+      { text: "later", options: { includeSlide: false, slide: null } },
+    ]);
   });
 
   it("adds the user message and a streaming reply, and marks the agent running", async () => {
@@ -3244,5 +3256,157 @@ describe("cleaning up recorded narration", () => {
     useApp.setState({ fillComposer, sidebarOpen: true, sidebarTab: "chat" });
     useApp.getState().cleanNarration("intro");
     expect(fillComposer.mock.calls[0]?.[0]).toContain("the narration of slide `intro`");
+  });
+});
+
+describe("queueing and steering", () => {
+  const sendPrompts = () => calls("send_message").map((c) => (c.args as { prompt: string }).prompt);
+
+  async function running(handlers: Record<string, Handler> = {}) {
+    const store = await freshModule();
+    const emit = (event: AgentEvent) => listeners.get("agent-event")!({ payload: { workspace: "/decks/talk", event } });
+    backend({ list_providers: () => [], ...handlers });
+    await store.initEventBridge();
+    store.useApp.setState({
+      deck: DECK,
+      selected: "intro",
+      messages: [userMessage("first"), assistantMessage({ status: "streaming", thinking: true })],
+      running: true,
+    });
+    return { useApp: store.useApp, emit };
+  }
+
+  it("sends the first queued message once the turn finishes cleanly, on the slide it was queued on", async () => {
+    const { useApp, emit } = await running();
+    await useApp.getState().send("second", { includeSlide: true, attachments: [] });
+    await useApp.getState().send("third", { includeSlide: false, attachments: [] });
+    useApp.setState({ selected: "outro" });
+    emit({ type: "finished", interrupted: false });
+    await vi.waitFor(() => expect(calls("send_message")).toHaveLength(1));
+    expect(sendPrompts()[0]).toContain(`Current slide: <section id="intro">`);
+    expect(sendPrompts()[0]).toMatch(/second$/);
+    expect(useApp.getState().queue.map((q) => q.text)).toEqual(["third"]);
+    expect(useApp.getState().running).toBe(true);
+    expect(useApp.getState().messages.at(-2)).toMatchObject({ role: "user", text: "second", slide: "intro" });
+  });
+
+  it("drops the slide of a queued message when the slide is gone", async () => {
+    const { useApp, emit } = await running();
+    useApp.setState({ selected: "outro" });
+    await useApp.getState().send("second", { includeSlide: true, attachments: [] });
+    useApp.setState({ deck: deckFor(DECK_HTML.replace(`id="outro"`, `id="end"`)), selected: "end" });
+    emit({ type: "finished", interrupted: false });
+    await vi.waitFor(() => expect(calls("send_message")).toHaveLength(1));
+    expect(sendPrompts()[0]).not.toContain("Current slide");
+  });
+
+  it("keeps the queue waiting after a stop or an error, until sent by hand", async () => {
+    for (const ending of ["stopped", "failed"] as const) {
+      const { useApp, emit } = await running();
+      invoke.mockClear();
+      await useApp.getState().send("second", { includeSlide: false, attachments: [] });
+      if (ending === "failed") emit({ type: "error", message: "boom" });
+      emit({ type: "finished", interrupted: ending === "stopped" });
+      await Promise.resolve();
+      expect(calls("send_message")).toEqual([]);
+      expect(useApp.getState().running).toBe(false);
+      const [queued] = useApp.getState().queue;
+      // Idle, a queued message is sent rather than steered.
+      await useApp.getState().steerQueued(queued!.id);
+      expect(calls("steer_agent")).toEqual([]);
+      expect(sendPrompts()).toHaveLength(1);
+      expect(useApp.getState().queue).toEqual([]);
+    }
+  });
+
+  it("takes a message out of the queue", async () => {
+    const { useApp } = await running();
+    await useApp.getState().send("second", { includeSlide: false, attachments: ["assets/a.png"] });
+    const [queued] = useApp.getState().queue;
+    expect(useApp.getState().takeQueued(queued!.id)).toMatchObject({ text: "second" });
+    expect(useApp.getState().queue).toEqual([]);
+    expect(useApp.getState().takeQueued(queued!.id)).toBeNull();
+  });
+
+  it("steers the running turn: the chat shows the message where the agent took it", async () => {
+    let emitLater: (() => void) | null = null;
+    const { useApp, emit } = await running({
+      steer_agent: (args) => {
+        emitLater = () => emit({ type: "steered", message: args.message as string });
+        return true;
+      },
+    });
+    emit({ type: "toolUse", id: "t1", name: "Edit", input: {} });
+    const steering = useApp.getState().steer("Make it blue", { includeSlide: true, attachments: [] });
+    await vi.waitFor(() => expect(calls("steer_agent")).toHaveLength(1));
+    const [args] = calls("steer_agent");
+    expect(args).toMatchObject({ workspace: "/decks/talk" });
+    expect(args!.prompt).toContain(`Current slide: <section id="intro">`);
+    expect(args!.prompt).toMatch(/Make it blue$/);
+    // Nothing shows until the agent takes it.
+    expect(useApp.getState().messages).toHaveLength(2);
+    emitLater!();
+    await steering;
+    const messages = useApp.getState().messages;
+    expect(messages).toHaveLength(4);
+    expect(messages[1]).toMatchObject({ role: "assistant", status: "done", thinking: false });
+    expect((messages[1] as AssistantMessage).parts).toMatchObject([{ kind: "tool", status: "done" }]);
+    expect(messages[2]).toMatchObject({ role: "user", text: "Make it blue", id: args!.message, slide: "intro" });
+    expect(messages[3]).toMatchObject({ role: "assistant", status: "streaming", thinking: true });
+    emit({ type: "textDelta", text: "Blue it is" });
+    expect((useApp.getState().messages[3] as AssistantMessage).parts).toEqual([{ kind: "text", text: "Blue it is" }]);
+    expect(useApp.getState().running).toBe(true);
+    expect(calls("send_message")).toEqual([]);
+    expect(useApp.getState().queue).toEqual([]);
+  });
+
+  it("runs a steer the turn could not take as the next turn, made ready once", async () => {
+    const { useApp, emit } = await running({ steer_agent: () => false });
+    await useApp.getState().steer("Make it blue", { includeSlide: true, attachments: [] });
+    const [queued] = useApp.getState().queue;
+    expect(queued).toMatchObject({ text: "Make it blue", ready: { user: { text: "Make it blue" } } });
+    expect(useApp.getState().messages).toHaveLength(2);
+    // While the turn runs, it can only wait for it.
+    await useApp.getState().steerQueued(queued!.id);
+    expect(calls("steer_agent")).toHaveLength(1);
+    expect(useApp.getState().queue).toHaveLength(1);
+    emit({ type: "finished", interrupted: false });
+    await vi.waitFor(() => expect(calls("send_message")).toHaveLength(1));
+    expect(sendPrompts()).toEqual([calls("steer_agent")[0]!.prompt]);
+    expect(calls("send_message")[0]!.args).toMatchObject({ message: queued!.id });
+    expect(useApp.getState().messages.at(-2)).toMatchObject({ id: queued!.id, text: "Make it blue" });
+  });
+
+  it("sends a steer at once when the turn ended before it got in", async () => {
+    const { useApp, emit } = await running({
+      steer_agent: () => {
+        emit({ type: "finished", interrupted: false });
+        return false;
+      },
+    });
+    await useApp.getState().steer("Make it blue", { includeSlide: false, attachments: [] });
+    expect(calls("send_message")).toHaveLength(1);
+    expect(sendPrompts()[0]).toMatch(/Make it blue$/);
+    expect(useApp.getState().queue).toEqual([]);
+    expect(useApp.getState().running).toBe(true);
+  });
+
+  it("sends instead of steering while idle, and queues a compaction", async () => {
+    const { useApp } = await running();
+    await useApp.getState().steer("/compact", { includeSlide: false, attachments: [] });
+    expect(calls("steer_agent")).toEqual([]);
+    expect(useApp.getState().queue.map((q) => q.text)).toEqual(["/compact"]);
+    useApp.setState({ running: false, queue: [] });
+    await useApp.getState().steer("Make it blue", { includeSlide: false, attachments: [] });
+    expect(calls("steer_agent")).toEqual([]);
+    expect(sendPrompts()).toHaveLength(1);
+  });
+
+  it("forgets the queue with the chat", async () => {
+    const { useApp } = await running();
+    await useApp.getState().send("second", { includeSlide: false, attachments: [] });
+    useApp.setState({ running: false });
+    await useApp.getState().resetChat();
+    expect(useApp.getState().queue).toEqual([]);
   });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   addHandle,
+  backdropFor,
   displayCopy,
   editMarkup,
   elementsOf,
@@ -9,6 +10,7 @@ import {
   handlesOf,
   hexOf,
   labelOf,
+  luminanceOf,
   moveHandle,
   parsePath,
   parseSvg,
@@ -325,5 +327,43 @@ describe("replaceSvgInSlide", () => {
 
   it("refuses a draft that is not one drawing", () => {
     expect(() => replaceSvgInSlide(slide(), [1], ORIGINAL, "<div></div>")).toThrow(/not one <svg>/);
+  });
+});
+
+describe("the backdrop", () => {
+  const backdrop = (markup: string, color: string | null = null, vars: Record<string, string> = {}) =>
+    backdropFor(parseSvg(markup)!, color, vars);
+
+  it("reads how light plain colors are", () => {
+    expect(luminanceOf("#fff")).toBeCloseTo(1);
+    expect(luminanceOf("White")).toBe(1);
+    expect(luminanceOf("black")).toBe(0);
+    expect(luminanceOf("rgb(0, 0, 0)")).toBe(0);
+    expect(luminanceOf("none")).toBeNull();
+    expect(luminanceOf("url(#g)")).toBeNull();
+  });
+
+  it("is light for dark drawings and drawings without colors", () => {
+    expect(backdrop('<svg><rect fill="#123"></rect></svg>')).toBe("light");
+    expect(backdrop("<svg><rect></rect></svg>")).toBe("light");
+    expect(backdrop('<svg><rect fill="url(#g)"></rect></svg>')).toBe("light");
+  });
+
+  it("is dark when most colors are light, in attributes, styles and style sheets", () => {
+    expect(backdrop('<svg><path stroke="white" fill="none"></path></svg>')).toBe("dark");
+    expect(backdrop('<svg><rect style="fill: #f8f8f8"></rect></svg>')).toBe("dark");
+    expect(backdrop('<svg><style>.a { fill: #fff; stroke: #eee }</style><rect class="a"></rect></svg>')).toBe("dark");
+    expect(backdrop('<svg><rect fill="#fff"></rect><rect fill="#000"></rect><rect fill="#111"></rect></svg>')).toBe(
+      "light",
+    );
+  });
+
+  it("follows currentColor and variables as the slide does", () => {
+    expect(backdrop('<svg><path stroke="currentColor"></path></svg>', "rgb(255, 255, 255)")).toBe("dark");
+    expect(backdrop('<svg><path stroke="currentColor"></path></svg>', "rgb(0, 0, 0)")).toBe("light");
+    expect(
+      backdrop('<svg><rect fill="var(--ink)"></rect></svg>', null, { "--ink": "var(--white)", "--white": "#fff" }),
+    ).toBe("dark");
+    expect(backdrop('<svg><rect fill="var(--missing, white)"></rect></svg>')).toBe("dark");
   });
 });

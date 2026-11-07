@@ -6,10 +6,12 @@ import {
   CornerLeftUp,
   Maximize,
   Minus,
+  Moon,
   Plus,
   Redo2,
   RotateCcw,
   Shapes,
+  Sun,
   Trash2,
   Undo2,
   X,
@@ -28,6 +30,8 @@ import {
 import { SWATCHES } from "../lib/palette";
 import {
   addHandle,
+  type Backdrop,
+  backdropFor,
   displayCopy,
   editMarkup,
   elementsOf,
@@ -61,8 +65,11 @@ const FIT_MARGIN = 32;
 const DRAG_THRESHOLD = 3;
 /** Changes to the same field this close together are one undo step. */
 const COALESCE_MS = 800;
-/** The darker squares of the checkerboard behind the drawing. */
-const CHECK = "color-mix(in srgb, var(--paper) 90%, var(--stage))";
+/** The checkerboard behind the drawing, as squares and the ground between them. */
+const CHECKERS: Record<Backdrop, { ground: string; check: string }> = {
+  light: { ground: "var(--paper)", check: "color-mix(in srgb, var(--paper) 90%, var(--stage))" },
+  dark: { ground: "var(--color-neutral-900)", check: "var(--color-neutral-800)" },
+};
 
 /**
  * The SVG editor, in a sidebar tab: one drawing from a slide (opened with the "Edit SVG" button
@@ -100,6 +107,10 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
   const [point, setPoint] = useState<string | null>(null);
   const [zoom, setZoom] = useState<number | null>(null);
   const [tab, setTab] = useState<InspectorTab>("properties");
+  // The backdrop the user picked; null follows the drawing's colors.
+  const [picked, setPicked] = useState<Backdrop | null>(null);
+  const auto = useMemo(() => (svg ? backdropFor(svg, edit.color, edit.vars) : "light"), [svg, edit.color, edit.vars]);
+  const backdrop = picked ?? auto;
   const lastChange = useRef<{ key: string; at: number }>({ key: "", at: 0 });
   const dirty = isDirty(edit);
   const elements = useMemo(() => (svg ? elementsOf(svg) : []), [svg]);
@@ -216,6 +227,19 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
         </ToolButton>
         <div className="mx-1 h-4 w-px bg-border" />
         <ZoomControls zoom={zoom} onZoom={setZoom} />
+        <div className="mx-1 h-4 w-px bg-border" />
+        <ToolButton
+          variant="panel"
+          label={`${backdrop === "dark" ? "Light" : "Dark"} backdrop (now ${backdrop}${picked ? "" : ", from the drawing's colors"})`}
+          active={backdrop === "dark"}
+          onClick={() => {
+            const next = backdrop === "dark" ? "light" : "dark";
+            // Picking what the colors suggest follows them again.
+            setPicked(next === auto ? null : next);
+          }}
+        >
+          {backdrop === "dark" ? <Moon /> : <Sun />}
+        </ToolButton>
         <div className="min-w-2 flex-1" />
         {dirty && <span className="mr-1 hidden text-xs text-muted-foreground @xs:inline">Not accepted yet</span>}
         <Button
@@ -256,6 +280,7 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
               selected={selected}
               point={point}
               zoom={zoom}
+              backdrop={backdrop}
               onZoom={setZoom}
               onSelect={select}
               onPoint={setPoint}
@@ -312,6 +337,12 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
       </div>
     </div>
   );
+}
+
+/** A checkerboard of `check` squares over the ground color. */
+function checkerboard(check: string) {
+  const squares = `linear-gradient(45deg, ${check} 25%, transparent 25%, transparent 75%, ${check} 75%)`;
+  return `${squares}, ${squares}`;
 }
 
 function ZoomControls({ zoom, onZoom }: { zoom: number | null; onZoom: (zoom: number | null) => void }) {
@@ -398,12 +429,13 @@ function Canvas(props: {
   selected: number | null;
   point: string | null;
   zoom: number | null;
+  backdrop: Backdrop;
   onZoom: (zoom: number) => void;
   onSelect: (index: number | null) => void;
   onPoint: (id: string | null) => void;
   onChange: (draft: string, key?: string) => void;
 }) {
-  const { edit, svg, selected, point, zoom, onZoom, onSelect, onPoint, onChange } = props;
+  const { edit, svg, selected, point, zoom, backdrop, onZoom, onSelect, onPoint, onChange } = props;
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
@@ -650,13 +682,14 @@ function Canvas(props: {
         {/* biome-ignore lint/a11y/noNoninteractiveElementInteractions: pointer editing of the drawing; its keys are the canvas's. */}
         <div
           ref={contentRef}
+          data-backdrop={backdrop}
           className="relative touch-none select-none"
           style={{
             width: w,
             height: h,
             // A checkerboard shows what the drawing leaves see-through.
-            backgroundColor: "var(--paper)",
-            backgroundImage: `linear-gradient(45deg, ${CHECK} 25%, transparent 25%, transparent 75%, ${CHECK} 75%), linear-gradient(45deg, ${CHECK} 25%, transparent 25%, transparent 75%, ${CHECK} 75%)`,
+            backgroundColor: CHECKERS[backdrop].ground,
+            backgroundImage: checkerboard(CHECKERS[backdrop].check),
             backgroundSize: "16px 16px",
             backgroundPosition: "0 0, 8px 8px",
           }}

@@ -206,7 +206,12 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   `slopslide-narration-language` names the language (en, de, fr, es, it, pt, ru, zh, ja or
   ko; en when missing). Change them only when the user asks; the user usually picks them,
   and enters the service's API key, in the Narration panel. Spoken audio lives
-  in the deck's `narration/` folder: never edit or delete it. When the user has narration
+  in the deck's `narration/` folder: never edit or delete it. When the user asks for the
+  narration audio to be made (generated, spoken, read out), call `generate_narration_audio`
+  with the deck's `path` and the `slides` ids (leave `slides` out for every slide): it says
+  each slide whose audio is missing or out of date, with the deck's provider and voice, and
+  keeps the rest, the user's recordings too. It takes a while, so ask only for the slides
+  that need it. When the user has narration
   audio made elsewhere (a WAV, MP3, M4A, FLAC, Ogg or AIFF file), copy it into the workspace
   if it is outside, and call `set_narration_audio` with the deck's `path`, the `slide` id and
   the workspace-relative `audio` file: it becomes the slide's audio, whatever its script

@@ -188,7 +188,7 @@ export function canSpeakWith(speech: SpeechStatus | null, provider: NarrationPro
 
 /**
  * Whether workspace-relative `paths` touch the narration audio of the deck at `deckPath`, as
- * the agent's `set_narration_audio` tool does from outside the app.
+ * the agent's `set_narration_audio` and `generate_narration_audio` tools do from outside the app.
  */
 export function touchesNarration(paths: string[], deckPath: string): boolean {
   const folder = dirname(deckPath);

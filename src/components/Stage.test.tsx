@@ -1269,39 +1269,41 @@ describe("Stage", () => {
         expect(useApp.getState().editTool).toBe("select");
       });
 
-      it("offers diagram shapes in a picker, and shows the one picked", () => {
+      // One case per shape: looping them all in one test outruns the timeout
+      // on slower CI runners.
+      it.each([
+        ["Add a diamond (a decision in a flowchart)", "diamond", "shape"],
+        ["Add a chevron (a step in a process)", "chevron", "shape"],
+        ["Add a block arrow", "block-arrow", "shape"],
+        ["Add a double-headed arrow", "double-arrow", "shape"],
+        ["Add a hexagon (a preparation step)", "hexagon", "shape"],
+        ["Add an octagon", "octagon", "shape"],
+        ["Add a pentagon", "pentagon", "shape"],
+        ["Add a parallelogram (input or output)", "parallelogram", "shape"],
+        ["Add a trapezoid", "trapezoid", "shape"],
+        ["Add a plus", "plus", "shape"],
+        ["Add a cylinder (a database)", "cylinder", "shape"],
+        ["Add a document", "document", "shape"],
+        ["Add a heart", "heart", "shape"],
+        ["Add a bracket", "bracket", "draw"],
+        ["Add a brace", "brace", "draw"],
+        ["Add an elbow connector (turns at right angles between the elements its ends stick to)", "elbow", "draw"],
+        ["Add a curved connector (curves between the elements its ends stick to)", "curve", "draw"],
+      ] as const)("offers %s in the shapes picker, and shows it picked", (name, tool, family) => {
         const { frame, post } = enter();
-        for (const [name, tool, family] of [
-          ["Add a diamond (a decision in a flowchart)", "diamond", "shape"],
-          ["Add a chevron (a step in a process)", "chevron", "shape"],
-          ["Add a block arrow", "block-arrow", "shape"],
-          ["Add a double-headed arrow", "double-arrow", "shape"],
-          ["Add a hexagon (a preparation step)", "hexagon", "shape"],
-          ["Add an octagon", "octagon", "shape"],
-          ["Add a pentagon", "pentagon", "shape"],
-          ["Add a parallelogram (input or output)", "parallelogram", "shape"],
-          ["Add a trapezoid", "trapezoid", "shape"],
-          ["Add a plus", "plus", "shape"],
-          ["Add a cylinder (a database)", "cylinder", "shape"],
-          ["Add a document", "document", "shape"],
-          ["Add a heart", "heart", "shape"],
-          ["Add a bracket", "bracket", "draw"],
-          ["Add a brace", "brace", "draw"],
-          ["Add an elbow connector (turns at right angles between the elements its ends stick to)", "elbow", "draw"],
-          ["Add a curved connector (curves between the elements its ends stick to)", "curve", "draw"],
-        ] as const) {
-          fireEvent.click(button("More shapes"));
-          fireEvent.click(button(name));
-          expect(post).toHaveBeenLastCalledWith(
-            { type: "slop:edit-tool", tool, style: DEFAULT_EDIT_STYLES[family] },
-            "*",
-          );
-          // The picker closes; its button stands for the shape picked.
-          expect(screen.queryByRole("dialog", { name: "More shapes" })).toBeNull();
-          expect(button("More shapes").getAttribute("aria-pressed")).toBe("true");
-        }
+        const more = button("More shapes");
+        fireEvent.click(more);
+        const picker = screen.getByRole("dialog", { name: "More shapes" });
+        fireEvent.click(within(picker).getByRole("button", { name }));
+        expect(post).toHaveBeenLastCalledWith(
+          { type: "slop:edit-tool", tool, style: DEFAULT_EDIT_STYLES[family] },
+          "*",
+        );
+        // The picker closes; its button stands for the shape picked.
+        expect(screen.queryByRole("dialog", { name: "More shapes" })).toBeNull();
+        expect(more.getAttribute("aria-pressed")).toBe("true");
         fromFrame(frame, { type: "slop:edit-tool", slide: "intro", tool: "select" });
-        expect(button("More shapes").getAttribute("aria-pressed")).toBe("false");
+        expect(more.getAttribute("aria-pressed")).toBe("false");
       });
 
       it("dashes the selection's line or border", () => {

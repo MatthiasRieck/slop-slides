@@ -5,13 +5,17 @@
    resize its box while the opposite side stays put (Shift keeps the aspect ratio, Alt resizes
    from the center); the round handle above it rotates it and the diamond next to it tilts it
    in depth, in 3D with perspective (Shift snaps to 15°). Double-click a handle to reset.
-   Resize keeps text and borders at their size; drawings spread their points. The toolbar
-   can switch to Stretch, which scales the contents too. On the first box resize, an in-flow
+   Resize keeps text and borders at their size; drawings spread their points, and a group spreads
+   what it holds. The toolbar can switch to Stretch, which scales the contents too, and lock the
+   aspect ratio ({ type: "slop:edit-keep-ratio", on }), so resizes keep it without Shift (and
+   Shift frees it). A figure with proportions (see FIGURES) shows a yellow handle on the spot they
+   change (a chevron's point, a bubble's tail), which drags them; double-click resets them. On the first box resize, an in-flow
    element leaves an invisible placeholder in its original slot so its siblings stay put.
    A line or arrow has no box: a handle at each end and on each point it bends at moves that
    point (snapping like a resize; Shift snaps to 45° from the point before it, ⌘ / Ctrl moves
    freely), dragging the small handle on a stretch of the line adds a point there, which curves
-   it, and double-clicking a point in between removes it.
+   it, and double-clicking a point in between removes it. A connector (see "Lines") has handles
+   on its ends only: it routes itself between them.
    An end dropped on an element (or dragged out from one) sticks to it, like a connector: the
    line keeps `data-from` / `data-to` with the element's id (one is given to it if it has none)
    and `data-from-at` / `data-to-at`, the spot on its box as percentages ("50% 100%", in its own
@@ -20,14 +24,17 @@
    a drawing, its own strokes), which shows highlighted, the end sticks to its edge instead:
    the spot on the outline is kept with " edge" ("0% 0% edge"), and the end goes where the line
    toward that spot first meets the outline, so as the element turns the end slides along its
-   edge while the line still points at the spot. Dragging the end off it, or the line on its
-   own, lets go; so does deleting the element.
+   edge while the line still points at the spot. Close to the middle of a side (a connection
+   site, shown as dots while an end is near), the end goes right onto it, a spot kept without
+   " edge". Dragging the end off it, or the line on its own, lets go; so does deleting the
+   element.
    Double-click (or Enter) edits its text, Escape selects the parent (see "Editing text" below).
    A list is selected and edited whole, from any of its items: the text element it was made
    from when the list is all that element holds, otherwise the outermost list.
    Dragging and resizing snap to the slide's edges and center and to other elements' edges and
    centers, with guide lines (hold ⌘ / Ctrl to move freely; Shift-resizes, and turned elements'
-   resizes, do not snap), and a readout by the pointer shows the position and size.
+   resizes, do not snap), and a readout by the pointer shows the position and size. Shift keeps a
+   move straight across or straight up and down. Nudges never snap.
    Shift- or ⌘-click adds to the selection or takes out of it, and dragging from empty space on
    the slide (or from a see-through wrapper that is not selected) draws a marquee around what to
    select (with Shift or ⌘, adding to the selection). ⌘A selects everything on the slide and Tab
@@ -35,6 +42,19 @@
    delete, copy and duplicate together; their handles make way for a frame around each.
    ⌘D (or { type: "slop:edit-duplicate" } from the app) duplicates the selection, offset so the
    copy shows; Alt-drag leaves the original and drags a copy.
+   ⌘G (or { type: "slop:edit-group" }) puts the selection in a group: a `<div data-group>` at the
+   slide's top level, absolutely positioned around what it holds, which sits in it absolutely
+   positioned (an element that was in the layout leaves its placeholder slot behind). A click on
+   what it holds selects the group, which moves, resizes, turns, copies and restyles (what it
+   holds) as one; a double-click goes into it, to select what it holds, until something outside it
+   is picked. ⇧⌘G (or { type: "slop:edit-ungroup" }) takes it apart, everything staying where it
+   shows. { type: "slop:edit-lock", locked, path } locks (`data-lock`) or unlocks the selection, or
+   the element at `path`: a locked element (and what it holds) cannot be picked on the slide, by
+   the marquee, ⌘A or Tab, and when selected (from the Layers panel) shows its frame without
+   handles and is not moved, aligned or deleted. The editor reports the slide's layers, the
+   top-most first, whenever they change: { type: "slop:edit-layers", slide, layers: [{ path, name,
+   group, locked, held, selected, depth }] }, `held` when something it is in is locked, `depth` how
+   many groups in it is.
    Delete (or Backspace, or
    { type: "slop:edit-delete" } from the app) removes it; an in-flow element leaves an invisible
    `data-delete-placeholder` in its slot (or takes over its resize placeholder) so the rest of
@@ -75,17 +95,21 @@
    The app's edit toolbar drives the rest with messages:
    - { type: "slop:edit-tool", tool, style } picks a tool: "select", "text" (click or drag out a
      text box), "rect" / "rounded" / "ellipse" (drag out a shape, Shift keeps it even), "triangle" /
-     "star" / "bubble" / "diamond" / "chevron" / "block-arrow" / "double-arrow" (a figure: a box
-     with `data-shape` whose shape, fill and border an SVG in its `background-image` draws, so it
-     holds text, takes a border, shadow and flips, and keeps its text inside the shape with a
-     padding fitted to its size; an old `clip-path` cut-out becomes one when it is restyled or
-     resized), "bracket" / "brace" (an open outline: a drawing, `data-outline`, with one stroke
-     through the box), "draw" (freehand), "line" / "arrow" (drag out a
-     straight line, Shift snaps to 45°) or "paint" (the format painter: takes the selection's look
-     and gives it to the next element clicked). `style` is what new elements get. Added elements
-     are absolutely positioned on the slide with inline styles and carry `data-added` ("text",
-     "shape" or "drawing", which lines and arrows are too: one <path>, `M L` when straight and
-     `M C C …` through its points when curved, an arrow's head a last stroke in it, `M L L`).
+     "star" / "bubble" / "diamond" / "chevron" / "block-arrow" / "double-arrow" / "hexagon" /
+     "octagon" / "pentagon" / "parallelogram" / "trapezoid" / "plus" / "cylinder" / "document" /
+     "heart" (a figure: a box with `data-shape` whose shape, fill and border an SVG in its
+     `background-image` draws at its size, so it holds text, takes a border, dashes, a shadow
+     (around the shape, not on its text: a second SVG in its `border-image`) and flips, and keeps
+     its text inside the shape with a padding fitted to its size; its proportions are in
+     `data-adjust`; an old `clip-path` cut-out becomes one when it is restyled or resized),
+     "bracket" / "brace" (an open outline: a drawing, `data-outline`, with one stroke through the
+     box), "draw" (freehand), "line" / "arrow" (drag out a straight line, Shift snaps to 45°),
+     "elbow" / "curve" (a connector, see "Lines") or "paint" (the format painter: takes the
+     selection's look and gives it to the next element clicked). `style` is what new elements get.
+     Added elements are absolutely positioned on the slide with inline styles and carry
+     `data-added` ("text", "shape" or "drawing", which lines are too: a stroke <path>, `M L` when
+     straight and `M C C …` through its points when curved, and a <path> for each head with
+     `data-head`; arrows from earlier versions keep their head in the stroke, a last `M L L`).
      After a text box, shape, line or painted element the tool goes back to
      "select", and Escape puts any tool away; the editor tells the app with
      { type: "slop:edit-tool", slide, tool }.
@@ -97,9 +121,12 @@
      min-height, so it grows with its text) or null (overflow is only reported). Any element also
      takes `opacity` (0.05 to 1, so it stays clickable), `shadow` (blur in pixels, 0 for none; SVG
      gets a drop-shadow filter) and `radius` (corner radius in pixels), and an image `fit`
-     ("contain", "cover" or "fill"), `fitPosition` ("50% 0%") and `alt`. Images, figures and
-     drawings that are not lines take `flipX` and `flipY` (an inline `transform`, after any tilt;
-     a figure mirrors its shape, not its text).
+     ("contain", "cover" or "fill"), `fitPosition` ("50% 0%") and `alt`. Lines, borders and
+     figures take `dash` ("solid", "dashed" or "dotted"), lines `headStart` / `headEnd` (see HEADS,
+     or null) and `route` ("straight", "elbow" or "curved"), figures with proportions `adjust`.
+     Images, figures and drawings take `flipX` and `flipY` (an inline `transform`, after any tilt;
+     a figure mirrors its shape, not its text; a line is mirrored through its points, each time,
+     and its ends stick to what they land on). A group's restyle goes to what it holds.
    - { type: "slop:edit-replace-image", src } points the selected image at another `assets/…`
      file, keeping its box (and cropping to it with `object-fit: cover`, unless it has a fit).
    - { type: "slop:edit-background", color } sets the slide's own background, or with null, goes
@@ -112,8 +139,9 @@
      in an <a>; `#slide-id` links go to another slide) or with a null href removes its link.
    - { type: "slop:edit-finish" } ends text editing (the app sends it on a click outside its
      edit toolbar).
-   - { type: "slop:edit-order", to } moves it "front", "forward", "backward" or "back" among the
-     elements it overlaps, with an inline z-index.
+   - { type: "slop:edit-order", to, path, any } moves it "front", "forward", "backward" or "back"
+     among the elements it overlaps, with an inline z-index; with `path` (from the Layers panel),
+     the element there, and with `any`, past the next layer whether or not they overlap.
    - { type: "slop:edit-size-mode", mode: "resize" | "stretch" } sets how handles change size.
    - { type: "slop:edit-delete" } removes it.
    - { type: "slop:edit-select-all" } selects everything on the slide, like ⌘A.
@@ -160,7 +188,10 @@
   var pasteboard = window.slopPasteboard;
   if (!slide || !pasteboard || window.parent === window) return;
   var overflow = window.__slopOverflow;
-  var paints = overflow.paints;
+  // A group shows what it holds.
+  var paints = function (el) {
+    return el.hasAttribute(GROUP_ATTR) ? Array.prototype.some.call(el.children, paints) : overflow.paints(el);
+  };
   var paintsBox = overflow.paintsBox;
   var nameOf = overflow.nameOf;
 
@@ -190,11 +221,14 @@
   var TILT = /^perspective\([\d.]+px\) rotateX\((-?[\d.]+)deg\) rotateY\((-?[\d.]+)deg\)\s*/;
   var MIN_SCALE = 0.1;
   var sizeMode = "resize";
+  // Resizes keep the aspect ratio (Shift then frees it); see slop:edit-keep-ratio.
+  var keepRatio = false;
   var ADDED = overflow.ADDED;
   var SVG_NS = "http://www.w3.org/2000/svg";
   var TOOLS = [
     "select", "text", "rect", "rounded", "ellipse", "triangle", "star", "bubble", "diamond", "chevron", "block-arrow",
-    "double-arrow", "bracket", "brace", "draw", "line", "arrow", "paint",
+    "double-arrow", "hexagon", "octagon", "pentagon", "parallelogram", "trapezoid", "plus", "cylinder", "document", "heart",
+    "bracket", "brace", "draw", "line", "arrow", "elbow", "curve", "paint",
   ];
   var RADIUS = { rect: "0px", rounded: "24px", ellipse: "50%" };
   var SHAPE_SIZE = { w: 320, h: 200 };
@@ -221,24 +255,330 @@
   var ARROW_HEAD_MIN = 24;
   var ARROW_HEAD_PER_WIDTH = 4;
   var ARROW_HEAD_ANGLE = Math.PI / 6;
+  // What a line can end in (see "Lines"): an open arrowhead, a filled triangle, a bar across
+  // the end or a dot on it. Each is a <path> of its own with `data-head="<end> <kind>"`.
+  var HEADS = { arrow: true, triangle: true, bar: true, dot: true };
+  var HEAD_ATTR = "data-head";
+  // A connector's route between its ends, instead of straight or curved through its points.
+  var ROUTES = { elbow: true, curved: true };
+  var ROUTE_ATTR = "data-route";
+  // How far an elbow connector leaves the element it is stuck to before it turns.
+  var ELBOW_STUB = 24;
+  // How a line or border is drawn: dashes and dots as multiples of its width.
+  var DASHES = { solid: true, dashed: true, dotted: true };
   // Spots checked along each stretch of a curved line for the box around it.
   var LINE_SAMPLES = 16;
-  // Shapes drawn by an SVG in their box's background (see "Figures"), as paths in a 100 × 100
-  // box, which stretches with the box. `inset` is the share of the box's height and width
-  // (top, right, bottom, left) the text keeps clear of, so it stays inside the shape.
+  // Shapes drawn by an SVG in their box's background (see "Figures"), as path data in the box's
+  // own pixels (w × h), so a head or notch keeps its size as the box stretches. A figure that
+  // has an `adjust` takes a number in `data-adjust` (its default when it has none) for its
+  // proportions, as a share of its height (a chevron's notch, an arrow's head), or for a star
+  // its points; `handle` puts the yellow handle that drags it, `fromHandle` reads it back.
+  // `inset` is how far (top, right, bottom, left) the text keeps clear of the box, so it stays
+  // inside the shape. `rim` is more stroke, drawn inside the shape (a cylinder's top).
+  var KAPPA = 0.5523;
+  function pt(x, y) {
+    return roundTenth(x) + " " + roundTenth(y);
+  }
+  function poly(points) {
+    return points.map(function (p, i) {
+      return (i ? "L" : "M") + pt(p[0], p[1]);
+    }).join(" ") + " Z";
+  }
+  function share(a) {
+    return a / 100;
+  }
+  function insets(w, h, t, r, b, l) {
+    return [t * h, r * w, b * h, l * w];
+  }
   var FIGURES = {
-    triangle: { d: "M50 0 L100 100 L0 100 Z", inset: [0.42, 0.22, 0.06, 0.22] },
-    star: { d: "M50 0 L61 35 L98 35 L68 57 L79 91 L50 70 L21 91 L32 57 L2 35 L39 35 Z", inset: [0.32, 0.27, 0.3, 0.27] },
-    bubble: {
-      d: "M8 0 L92 0 Q100 0 100 8 L100 72 Q100 80 92 80 L45 80 L22 100 L25 80 L8 80 Q0 80 0 72 L0 8 Q0 0 8 0 Z",
-      inset: [0.06, 0.05, 0.26, 0.05],
+    triangle: {
+      adjust: { value: 50, min: 0, max: 100, step: 1, label: "Apex" },
+      path: function (w, h, a) {
+        return poly([[share(a) * w, 0], [w, h], [0, h]]);
+      },
+      inset: function (w, h) {
+        return insets(w, h, 0.42, 0.22, 0.06, 0.22);
+      },
+      handle: function (w, h, a) {
+        return [share(a) * w, 0];
+      },
+      fromHandle: function (w, h, p) {
+        return (p[0] / w) * 100;
+      },
     },
-    diamond: { d: "M50 0 L100 50 L50 100 L0 50 Z", inset: [0.25, 0.25, 0.25, 0.25] },
-    chevron: { d: "M0 0 L75 0 L100 50 L75 100 L0 100 L25 50 Z", inset: [0.08, 0.27, 0.08, 0.27] },
-    "block-arrow": { d: "M0 25 L65 25 L65 0 L100 50 L65 100 L65 75 L0 75 Z", inset: [0.27, 0.3, 0.27, 0.04] },
-    "double-arrow": { d: "M0 50 L25 0 L25 25 L75 25 L75 0 L100 50 L75 100 L75 75 L25 75 L25 100 Z", inset: [0.27, 0.22, 0.27, 0.22] },
+    star: {
+      adjust: { value: 5, min: 3, max: 12, step: 1, label: "Points" },
+      path: function (w, h, a) {
+        var n = Math.round(a);
+        // A five-pointed star's inner points lie where its outer ones' lines cross.
+        var inner = n <= 5 ? 0.382 : 0.5;
+        var points = [];
+        for (var i = 0; i < 2 * n; i++) {
+          var angle = -Math.PI / 2 + (i * Math.PI) / n;
+          var r = i % 2 ? inner : 1;
+          points.push([w / 2 + (w / 2) * r * Math.cos(angle), h / 2 + (h / 2) * r * Math.sin(angle)]);
+        }
+        return poly(points);
+      },
+      inset: function (w, h) {
+        return insets(w, h, 0.32, 0.27, 0.3, 0.27);
+      },
+    },
+    bubble: {
+      adjust: { value: 22, min: 0, max: 100, step: 1, label: "Tail" },
+      path: function (w, h, a) {
+        var rx = 0.08 * w;
+        var ry = 0.08 * h;
+        var body = 0.8 * h;
+        var tip = share(a) * w;
+        // The tail leaves the body's bottom edge next to where it points.
+        var left = Math.min(0.7, Math.max(0.1, share(a) + 0.03)) * w;
+        var right = left + 0.2 * w;
+        return (
+          "M" + pt(rx, 0) + " L" + pt(w - rx, 0) + " Q" + pt(w, 0) + " " + pt(w, ry) + " L" + pt(w, body - ry) +
+          " Q" + pt(w, body) + " " + pt(w - rx, body) + " L" + pt(right, body) + " L" + pt(tip, h) + " L" + pt(left, body) +
+          " L" + pt(rx, body) + " Q" + pt(0, body) + " " + pt(0, body - ry) + " L" + pt(0, ry) + " Q" + pt(0, 0) + " " + pt(rx, 0) + " Z"
+        );
+      },
+      inset: function (w, h) {
+        return insets(w, h, 0.06, 0.05, 0.26, 0.05);
+      },
+      handle: function (w, h, a) {
+        return [share(a) * w, h];
+      },
+      fromHandle: function (w, h, p) {
+        return (p[0] / w) * 100;
+      },
+    },
+    diamond: {
+      path: function (w, h) {
+        return poly([[w / 2, 0], [w, h / 2], [w / 2, h], [0, h / 2]]);
+      },
+      inset: function (w, h) {
+        return insets(w, h, 0.25, 0.25, 0.25, 0.25);
+      },
+    },
+    chevron: {
+      adjust: { value: 40, min: 0, max: 200, step: 1, label: "Point" },
+      path: function (w, h, a) {
+        var d = Math.min(w / 2, share(a) * h);
+        return poly([[0, 0], [w - d, 0], [w, h / 2], [w - d, h], [0, h], [d, h / 2]]);
+      },
+      inset: function (w, h, a) {
+        var d = Math.min(w / 2, share(a) * h);
+        return [0.08 * h, 1.08 * d, 0.08 * h, 1.08 * d];
+      },
+      handle: function (w, h, a) {
+        return [w - Math.min(w / 2, share(a) * h), 0];
+      },
+      fromHandle: function (w, h, p) {
+        return ((w - p[0]) / h) * 100;
+      },
+    },
+    "block-arrow": {
+      adjust: { value: 56, min: 0, max: 400, step: 1, label: "Head" },
+      path: function (w, h, a) {
+        var head = Math.min(w, share(a) * h);
+        return poly([[0, 0.25 * h], [w - head, 0.25 * h], [w - head, 0], [w, h / 2], [w - head, h], [w - head, 0.75 * h], [0, 0.75 * h]]);
+      },
+      inset: function (w, h, a) {
+        return [0.27 * h, 0.86 * Math.min(w, share(a) * h), 0.27 * h, 0.04 * w];
+      },
+      handle: function (w, h, a) {
+        return [w - Math.min(w, share(a) * h), 0];
+      },
+      fromHandle: function (w, h, p) {
+        return ((w - p[0]) / h) * 100;
+      },
+    },
+    "double-arrow": {
+      adjust: { value: 40, min: 0, max: 200, step: 1, label: "Heads" },
+      path: function (w, h, a) {
+        var head = Math.min(w / 2, share(a) * h);
+        return poly([
+          [0, h / 2], [head, 0], [head, 0.25 * h], [w - head, 0.25 * h], [w - head, 0], [w, h / 2], [w - head, h],
+          [w - head, 0.75 * h], [head, 0.75 * h], [head, h],
+        ]);
+      },
+      inset: function (w, h, a) {
+        var head = Math.min(w / 2, share(a) * h);
+        return [0.27 * h, 0.88 * head, 0.27 * h, 0.88 * head];
+      },
+      handle: function (w, h, a) {
+        return [Math.min(w / 2, share(a) * h), 0];
+      },
+      fromHandle: function (w, h, p) {
+        return (p[0] / h) * 100;
+      },
+    },
+    hexagon: {
+      adjust: { value: 29, min: 0, max: 100, step: 1, label: "Corners" },
+      path: function (w, h, a) {
+        var c = Math.min(w / 2, share(a) * h);
+        return poly([[c, 0], [w - c, 0], [w, h / 2], [w - c, h], [c, h], [0, h / 2]]);
+      },
+      inset: function (w, h, a) {
+        var c = Math.min(w / 2, share(a) * h);
+        return [0.08 * h, c, 0.08 * h, c];
+      },
+      handle: function (w, h, a) {
+        return [Math.min(w / 2, share(a) * h), 0];
+      },
+      fromHandle: function (w, h, p) {
+        return (p[0] / h) * 100;
+      },
+    },
+    octagon: {
+      adjust: { value: 29, min: 0, max: 50, step: 1, label: "Corners" },
+      path: function (w, h, a) {
+        var c = Math.min(w / 2, h / 2, share(a) * Math.min(w, h));
+        return poly([[c, 0], [w - c, 0], [w, c], [w, h - c], [w - c, h], [c, h], [0, h - c], [0, c]]);
+      },
+      inset: function (w, h, a) {
+        var c = Math.min(w / 2, h / 2, share(a) * Math.min(w, h)) / 2;
+        return [c, c, c, c];
+      },
+      handle: function (w, h, a) {
+        return [Math.min(w / 2, h / 2, share(a) * Math.min(w, h)), 0];
+      },
+      fromHandle: function (w, h, p) {
+        return (p[0] / Math.min(w, h)) * 100;
+      },
+    },
+    pentagon: {
+      path: function (w, h) {
+        return poly([[w / 2, 0], [w, 0.38 * h], [0.81 * w, h], [0.19 * w, h], [0, 0.38 * h]]);
+      },
+      inset: function (w, h) {
+        return insets(w, h, 0.3, 0.2, 0.05, 0.2);
+      },
+    },
+    parallelogram: {
+      adjust: { value: 25, min: 0, max: 200, step: 1, label: "Slant" },
+      path: function (w, h, a) {
+        var s = Math.min(w, share(a) * h);
+        return poly([[s, 0], [w, 0], [w - s, h], [0, h]]);
+      },
+      inset: function (w, h, a) {
+        var s = 0.8 * Math.min(w, share(a) * h);
+        return [0.08 * h, s, 0.08 * h, s];
+      },
+      handle: function (w, h, a) {
+        return [Math.min(w, share(a) * h), 0];
+      },
+      fromHandle: function (w, h, p) {
+        return (p[0] / h) * 100;
+      },
+    },
+    trapezoid: {
+      adjust: { value: 25, min: 0, max: 100, step: 1, label: "Slope" },
+      path: function (w, h, a) {
+        var t = Math.min(w / 2, share(a) * h);
+        return poly([[t, 0], [w - t, 0], [w, h], [0, h]]);
+      },
+      inset: function (w, h, a) {
+        var t = 0.8 * Math.min(w / 2, share(a) * h);
+        return [0.08 * h, t, 0.08 * h, t];
+      },
+      handle: function (w, h, a) {
+        return [Math.min(w / 2, share(a) * h), 0];
+      },
+      fromHandle: function (w, h, p) {
+        return (p[0] / h) * 100;
+      },
+    },
+    plus: {
+      adjust: { value: 30, min: 0, max: 50, step: 1, label: "Arms" },
+      path: function (w, h, a) {
+        var c = Math.min(w / 2, h / 2, share(a) * Math.min(w, h));
+        return poly([
+          [c, 0], [w - c, 0], [w - c, c], [w, c], [w, h - c], [w - c, h - c], [w - c, h], [c, h], [c, h - c], [0, h - c],
+          [0, c], [c, c],
+        ]);
+      },
+      inset: function (w, h, a) {
+        var c = Math.min(w / 2, h / 2, share(a) * Math.min(w, h));
+        return [c, c, c, c];
+      },
+      handle: function (w, h, a) {
+        return [Math.min(w / 2, h / 2, share(a) * Math.min(w, h)), 0];
+      },
+      fromHandle: function (w, h, p) {
+        return (p[0] / Math.min(w, h)) * 100;
+      },
+    },
+    cylinder: {
+      adjust: { value: 12, min: 0, max: 50, step: 1, label: "Top" },
+      path: function (w, h, a) {
+        var ry = Math.min(h / 2, share(a) * h);
+        var kx = (KAPPA * w) / 2;
+        var ky = KAPPA * ry;
+        return (
+          "M" + pt(0, ry) + " C" + pt(0, ry - ky) + " " + pt(w / 2 - kx, 0) + " " + pt(w / 2, 0) + " C" + pt(w / 2 + kx, 0) + " " +
+          pt(w, ry - ky) + " " + pt(w, ry) + " L" + pt(w, h - ry) + " C" + pt(w, h - ry + ky) + " " + pt(w / 2 + kx, h) + " " +
+          pt(w / 2, h) + " C" + pt(w / 2 - kx, h) + " " + pt(0, h - ry + ky) + " " + pt(0, h - ry) + " Z"
+        );
+      },
+      rim: function (w, h, a) {
+        var ry = Math.min(h / 2, share(a) * h);
+        var kx = (KAPPA * w) / 2;
+        var ky = KAPPA * ry;
+        return (
+          "M" + pt(0, ry) + " C" + pt(0, ry + ky) + " " + pt(w / 2 - kx, 2 * ry) + " " + pt(w / 2, 2 * ry) + " C" +
+          pt(w / 2 + kx, 2 * ry) + " " + pt(w, ry + ky) + " " + pt(w, ry)
+        );
+      },
+      inset: function (w, h, a) {
+        var ry = Math.min(h / 2, share(a) * h);
+        return [2.2 * ry, 0.05 * w, 1.2 * ry, 0.05 * w];
+      },
+      handle: function (w, h, a) {
+        return [w / 2, 2 * Math.min(h / 2, share(a) * h)];
+      },
+      fromHandle: function (w, h, p) {
+        return (p[1] / 2 / h) * 100;
+      },
+    },
+    document: {
+      adjust: { value: 8, min: 0, max: 25, step: 1, label: "Wave" },
+      path: function (w, h, a) {
+        var wave = Math.min(h / 4, share(a) * h);
+        return (
+          "M0 0 L" + pt(w, 0) + " L" + pt(w, h - wave) + " Q" + pt(0.75 * w, h - 3 * wave) + " " + pt(w / 2, h - wave) +
+          " Q" + pt(0.25 * w, h + wave) + " " + pt(0, h - wave) + " Z"
+        );
+      },
+      inset: function (w, h, a) {
+        var wave = Math.min(h / 4, share(a) * h);
+        return [0.06 * h, 0.05 * w, 2 * wave + 0.04 * h, 0.05 * w];
+      },
+      handle: function (w, h, a) {
+        return [0.75 * w, h - 2 * Math.min(h / 4, share(a) * h)];
+      },
+      fromHandle: function (w, h, p) {
+        return ((h - p[1]) / 2 / h) * 100;
+      },
+    },
+    heart: {
+      path: function (w, h) {
+        var c = function (x1, y1, x2, y2, x, y) {
+          return " C" + pt(x1 * w, y1 * h) + " " + pt(x2 * w, y2 * h) + " " + pt(x * w, y * h);
+        };
+        return (
+          "M" + pt(0.5 * w, 0.25 * h) + c(0.5, 0.1, 0.38, 0, 0.25, 0) + c(0.1, 0, 0, 0.12, 0, 0.3) + c(0, 0.55, 0.25, 0.75, 0.5, 1) +
+          c(0.75, 0.75, 1, 0.55, 1, 0.3) + c(1, 0.12, 0.9, 0, 0.75, 0) + c(0.62, 0, 0.5, 0.1, 0.5, 0.25) + " Z"
+        );
+      },
+      inset: function (w, h) {
+        return insets(w, h, 0.22, 0.18, 0.3, 0.18);
+      },
+    },
   };
   var SHAPE_ATTR = "data-shape";
+  var ADJUST_ATTR = "data-adjust";
+  // A group the user made (see "Groups, locks and layers"), and an element they locked.
+  var GROUP_ATTR = "data-group";
+  var LOCK_ATTR = "data-lock";
   // A figure's text keeps at least this far from its box.
   var FIGURE_PADDING = 8;
   // The `clip-path` cut-outs earlier versions made, which the editor redraws as figures when it changes one.
@@ -289,6 +629,11 @@
     " left: 50%; top: -48px; cursor: grab; }" +
     "[data-slop-ui] > [data-handle=tilt] { width: 14px; height: 14px; margin: 2px 0 0 18px; left: 50%; top: -48px;" +
     " transform: rotate(45deg); cursor: move; }" +
+    // A figure's proportions (see FIGURES), on the spot they change.
+    "[data-slop-ui] > [data-handle=adjust] { width: 12px; height: 12px; margin: -6px 0 0 -6px; transform: rotate(45deg);" +
+    " background: var(--slop-search); border-color: var(--slop-accent); cursor: pointer; }" +
+    "[data-slop-ui] > [data-handle=adjust][hidden], [data-slop-ui][data-locked] [data-handle]," +
+    " [data-slop-ui][data-locked] [data-stem] { display: none; }" +
     // A line's points, in place of the frame and handles.
     "[data-slop-points] { position: fixed; inset: 0; z-index: 2147483647; pointer-events: none; }" +
     "[data-slop-points] > * { position: absolute; box-sizing: border-box; pointer-events: auto; touch-action: none; cursor: move;" +
@@ -309,6 +654,8 @@
     "[data-slop-edge] { position: fixed; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; z-index: 2147483646; pointer-events: none; }" +
     "[data-slop-edge] path { fill: none; stroke: var(--slop-accent); stroke-width: 3px; stroke-linejoin: round; }" +
     "[data-slop-edge] circle { fill: var(--slop-accent); stroke: var(--slop-handle); stroke-width: 2px; }" +
+    "[data-slop-edge] circle[data-site] { fill: var(--slop-handle); stroke: var(--slop-accent); }" +
+    "[data-slop-edge] circle[data-site=on] { fill: var(--slop-accent); stroke: var(--slop-handle); r: 6px; }" +
     "[data-slop-overflow][data-quiet] { display: none; }" +
     "[data-slop-overflow] > * { position: absolute; box-sizing: border-box; }" +
     "[data-slop-overflow] > [data-wire] { outline: 3px dashed var(--slop-danger); outline-offset: -1px; background: color-mix(in srgb, var(--slop-danger) 8%, transparent); }" +
@@ -340,6 +687,7 @@
   ui.innerHTML =
     '<div data-stem></div><div data-handle="rotate" title="Rotate (Shift snaps to 15°, double-click resets)"></div>' +
     '<div data-handle="tilt" title="Tilt in 3D (Shift snaps to 15°, double-click resets)"></div>' +
+    '<div data-handle="adjust" title="Drag to change the shape (double-click resets)"></div>' +
     [[-1, -1], [0, -1], [1, -1], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0]]
       .map(function (d) {
         var cursor = d[0] === 0 ? "ns" : d[1] === 0 ? "ew" : d[0] === d[1] ? "nwse" : "nesw";
@@ -412,6 +760,8 @@
   var reportedOverflow = null;
   var tool = "select";
   var toolStyle = {};
+  // The group a double-click went into: clicks select what it holds.
+  var enteredGroup = null;
   // The text box, shape or drawing being dragged out with a tool.
   var create = null;
   // The look the format painter took, until it is clicked onto an element.
@@ -509,7 +859,22 @@
       if (getComputedStyle(el.parentElement).display === "contents") break;
       el = el.parentElement;
     }
-    return el;
+    return groupFor(el);
+  }
+
+  /**
+   * What selecting `el` selects: the outermost group it is in, or once that group was entered
+   * (with a double-click), the next one in, or `el`.
+   */
+  function groupFor(el) {
+    var chain = [];
+    for (var up = el.parentElement; up && up !== slide; up = up.parentElement) {
+      if (up.hasAttribute(GROUP_ATTR)) chain.push(up);
+    }
+    if (!chain.length) return el;
+    var at = enteredGroup ? chain.indexOf(enteredGroup) : -1;
+    if (at < 0) return chain[chain.length - 1];
+    return at === 0 ? el : chain[at - 1];
   }
 
   /**
@@ -526,7 +891,8 @@
     for (var i = 0; i < stack.length; i++) {
       if (stack[i] === slide) return null;
       var el = selectable(stack[i]);
-      if (el && paints(el)) return el;
+      // A locked element is out of the way: what is under it is picked.
+      if (el && paints(el) && !isLocked(el)) return el;
     }
     return null;
   }
@@ -538,6 +904,8 @@
   }
 
   function select(el) {
+    // Selecting what is outside the group being worked in leaves it.
+    if (enteredGroup && !(el && el !== enteredGroup && enteredGroup.contains(el))) enteredGroup = null;
     if (el === selected && !extras.length) return;
     clearExtras();
     mark(selected, "data-slop-selected", false);
@@ -652,6 +1020,24 @@
   /** What the toolbar shows for `el`: its kind, text styles (of the selected text, while typing), fill and border. */
   function describe(el) {
     if (!el) return null;
+    if (isGroup(el)) {
+      // A group shows the look of the first thing in it, which its restyles go to as well.
+      var first = leavesOf([el])[0];
+      var inside = first ? describe(first) : describe(document.createElement("div"));
+      return Object.assign(inside, {
+        kind: "group",
+        group: true,
+        locked: isLocked(el),
+        flippable: false,
+        flipX: false,
+        flipY: false,
+        line: null,
+        adjust: null,
+        editing: false,
+        range: false,
+        list: null,
+      });
+    }
     var style = getComputedStyle(el);
     var tag = el.tagName.toLowerCase();
     var kind = el.getAttribute(ADDED) || (/^(img|svg|video|canvas|picture|iframe|object|embed)$/.test(tag) ? "media" : "element");
@@ -670,6 +1056,8 @@
     var spacing = parseFloat(text.letterSpacing);
     var look = lookOf(el, style);
     var figure = figureOf(el) ? figurePaint(el) : null;
+    var line = kind === "drawing" ? lineOf(el) : null;
+    var borderDash = /^(dashed|dotted)$/.test(style.borderTopStyle || "") ? style.borderTopStyle : "solid";
     return {
       kind: kind,
       text: kind !== "drawing" && kind !== "media",
@@ -694,6 +1082,11 @@
       fill: figure ? figure.fill : first ? paintOf(first, "fill") : toHex(style.backgroundColor),
       stroke: figure ? figure.stroke : first ? paintOf(first, "stroke") : borderWidth ? toHex(style.borderTopColor) : null,
       strokeWidth: figure ? figure.width : first ? parseFloat(first.getAttribute("stroke-width")) || 0 : borderWidth,
+      dash: figure ? figure.dash : first ? dashOf(first) : borderDash,
+      line: line ? { start: line.heads.start, end: line.heads.end, route: line.route || "straight" } : null,
+      adjust: figure && FIGURES[figureOf(el)].adjust
+        ? Object.assign({}, FIGURES[figureOf(el)].adjust, { value: adjustOf(el) })
+        : null,
       opacity: look.opacity,
       shadow: look.shadow,
       radius: look.radius,
@@ -705,6 +1098,8 @@
       flippable: look.flippable,
       flipX: look.flipX,
       flipY: look.flipY,
+      group: false,
+      locked: isLocked(el),
     };
   }
 
@@ -887,6 +1282,9 @@
   function placeHandles() {
     scheduleOverflow();
     scheduleGeometry();
+    scheduleLayers();
+    // A locked element shows its frame, but no handles to change it.
+    mark(ui, "data-locked", !!selected && isLocked(selected));
     placeFrames();
     placeSvgButton();
     if (placePoints() || !selected || editing || extras.length || !slide.contains(selected)) {
@@ -903,6 +1301,37 @@
     // Edge handles only where there is room for them between the corners.
     mark(ui, "data-narrow", frame.w < 40);
     mark(ui, "data-flat", frame.h < 40);
+    placeAdjust();
+  }
+
+  /** Puts the handle that changes a figure's proportions on its spot, turned and flipped with the figure. */
+  function placeAdjust() {
+    var handle = ui.querySelector("[data-handle=adjust]");
+    var kind = figureOf(selected);
+    var spec = kind && FIGURES[kind];
+    var tilt = kind ? tiltOf(selected) : null;
+    handle.hidden = !spec || !spec.handle || !!tilt.x || !!tilt.y;
+    if (handle.hidden) return;
+    var size = figureSize(selected);
+    var paint = figurePaint(selected);
+    var at = spec.handle(size.w, size.h, adjustOf(selected));
+    var fx = at[0] / size.w;
+    var fy = at[1] / size.h;
+    handle.style.left = roundTenth((paint.flipX ? 1 - fx : fx) * 100) + "%";
+    handle.style.top = roundTenth((paint.flipY ? 1 - fy : fy) * 100) + "%";
+  }
+
+  /** Drags a figure's proportions (see FIGURES) to where the pointer is. */
+  function adjustTo(event) {
+    var el = drag.el;
+    var spec = FIGURES[figureOf(el)];
+    var at = anchorOf(el, slidePoint(event.clientX, event.clientY));
+    var paint = figurePaint(el);
+    var size = figureSize(el);
+    var x = (paint.flipX ? 1 - at[0] : at[0]) * size.w;
+    var y = (paint.flipY ? 1 - at[1] : at[1]) * size.h;
+    setAdjust(el, spec.fromHandle(size.w, size.h, [x, y]));
+    placeHandles();
   }
 
   // ---- The SVG editor's button: a selected drawing opens in the app's SVG editor.
@@ -959,7 +1388,7 @@
 
   ui.addEventListener("pointerdown", function (event) {
     var kind = event.target.getAttribute && event.target.getAttribute("data-handle");
-    if (event.button !== 0 || !kind || !selected) return;
+    if (event.button !== 0 || !kind || !selected || isLocked(selected)) return;
     event.preventDefault();
     event.stopPropagation();
     if (nudgeTimer) commit();
@@ -979,6 +1408,8 @@
       dir: { x: dir[0], y: dir[1] },
       resize: sizeMode === "resize",
       vectors: sizeMode === "resize" && selected.getAttribute(ADDED) === "drawing" ? vectorShapes(selected) : null,
+      // A group's resize spreads what it holds.
+      members: sizeMode === "resize" && isGroup(selected) ? memberBoxes(selected) : null,
       moved: false,
     };
     if (event.target.setPointerCapture) {
@@ -995,7 +1426,11 @@
     if (!kind || !selected) return;
     if (kind === "rotate") rotateTo(selected, 0);
     else if (kind === "tilt") tiltTo(selected, 0, 0);
-    else scaleTo(selected, 1, 1);
+    else if (kind === "adjust") {
+      selected.removeAttribute(ADJUST_ATTR);
+      paintFigure(selected, figurePaint(selected));
+      placeHandles();
+    } else scaleTo(selected, 1, 1);
     commit();
   });
 
@@ -1005,8 +1440,17 @@
     return { x: x * Math.cos(a) - y * Math.sin(a), y: x * Math.sin(a) + y * Math.cos(a) };
   }
 
+  /** Whether a resize keeps the aspect ratio: with Shift, or with the ratio locked, without it. */
+  function keepsRatio(event) {
+    return !!event.shiftKey !== keepRatio;
+  }
+
   /** Applies a handle drag to the pointer at `event`. */
   function transformTo(event) {
+    if (drag.mode === "adjust") {
+      adjustTo(event);
+      return;
+    }
     if (drag.mode === "rotate") {
       var c = drag.center;
       var start = Math.atan2(drag.start.y - c.y, drag.start.x - c.x);
@@ -1025,7 +1469,7 @@
       return;
     }
     var to = snapResize(event);
-    stretchTo(to.x, to.y, event.shiftKey, event.altKey);
+    stretchTo(to.x, to.y, keepsRatio(event), event.altKey);
   }
 
   /**
@@ -1155,6 +1599,7 @@
     if (computed.display === "inline") el.style.display = "inline-block";
     if (computed.whiteSpace === "nowrap") el.style.whiteSpace = "normal";
     if (drag.vectors && w && h) spreadVectors(drag.vectors, nw / w, nh / h);
+    if (drag.members && w && h) spreadMembers(drag.members, nw / w, nh / h);
     fitFigure(el);
     // Layout grows from the top left; translate compensates to keep the opposite handle fixed.
     moveTo(el, drag.offset.x + shift.x - (nw - w) / 2, drag.offset.y + shift.y - (nh - h) / 2);
@@ -1225,9 +1670,9 @@
         if (a[name] !== undefined) item.el.setAttribute(name, String(roundTenth(map.y(parseFloat(a[name]) || 0))));
       });
     });
-    // A line's curve and head are redrawn through its spread points, not spread with them.
+    // A line's curve and heads are redrawn through its spread points, not spread with them.
     var line = lineOf(shapes.el);
-    if (line) line.path.setAttribute("d", lineData(line.points, line.arrow, line.width, 0, 0));
+    if (line) drawLineShape(shapes.el, line.path, lineShape(line.points, line.heads, line.width, line.route, null), 0, 0);
   }
 
   function roundTenth(n) {
@@ -1238,10 +1683,11 @@
   // What each parameter of a path command is: X / Y a point's coordinate, x / y a length
   // along that axis, - anything else (an angle or a flag).
   var PATH_PARAMS = { M: "XY", L: "XY", T: "XY", C: "XY", S: "XY", Q: "XY", H: "X", V: "Y", A: "xy---XY", Z: "" };
-  // A line's path (see lineData): its stroke, straight or curved, and then an arrow's head.
+  // A line's stroke (see "Lines"): straight, through points, curved, or an elbow connector's
+  // straight stretches; earlier versions put an arrow's head in it too, as a last `M L L`.
   var PATH_POINT = "\\s*" + NUMBER.source + "[\\s,]+" + NUMBER.source + "\\s*";
   var LINE_PATH = new RegExp(
-    "^\\s*(M" + PATH_POINT + "(?:L" + PATH_POINT + "|(?:C" + PATH_POINT + PATH_POINT + PATH_POINT + ")+))" +
+    "^\\s*(M" + PATH_POINT + "(?:(?:L" + PATH_POINT + ")+|(?:C" + PATH_POINT + PATH_POINT + PATH_POINT + ")+))" +
       "(M" + PATH_POINT + "L" + PATH_POINT + "L" + PATH_POINT + ")?$",
   );
 
@@ -1306,7 +1752,7 @@
   }
 
   function startEditing(el, x, y) {
-    if (!el || editing || /^(img|svg|video|canvas|iframe|hr|br)$/i.test(el.tagName)) return;
+    if (!el || editing || /^(img|svg|video|canvas|iframe|hr|br)$/i.test(el.tagName) || isGroup(el) || isLocked(el)) return;
     if (!el.textContent.trim() && !/^(text|shape)$/.test(el.getAttribute(ADDED) || "")) return;
     select(el);
     editing = el;
@@ -2158,8 +2604,8 @@
     if (h !== null) el.style.height = h + "px";
   }
 
-  function borderCss(color, width) {
-    return color && width > 0 ? width + "px solid " + color : "none";
+  function borderCss(color, width, dash) {
+    return color && width > 0 ? width + "px " + (dash === "dashed" || dash === "dotted" ? dash : "solid") + " " + color : "none";
   }
 
   /** Inline styles for text laid out in a flex column, so it can align top, middle or bottom. */
@@ -2178,7 +2624,7 @@
       (styleFor("letterSpacing") ? " letter-spacing: " + Number(styleFor("letterSpacing")) + "px;" : "") +
       (styleFor("lineHeight") > 0 ? " line-height: " + Number(styleFor("lineHeight")) + ";" : "") +
       (styleFor("fill") ? " background-color: " + styleFor("fill") + ";" : "") +
-      (stroke && width > 0 ? " border: " + borderCss(stroke, width) + ";" : "")
+      (stroke && width > 0 ? " border: " + borderCss(stroke, width, styleFor("dash")) + ";" : "")
     );
   }
 
@@ -2201,9 +2647,16 @@
     );
     if (FIGURES[kind]) {
       var width = styleFor("strokeWidth");
-      var paint = { fill: styleFor("fill") || null, stroke: width > 0 ? styleFor("stroke") || null : null, width: width };
+      var paint = {
+        fill: styleFor("fill") || null,
+        stroke: width > 0 ? styleFor("stroke") || null : null,
+        width: width,
+        dash: DASHES[styleFor("dash")] ? styleFor("dash") : "solid",
+      };
       el.style.removeProperty("background-color");
-      el.style.removeProperty("border");
+      ["border", "border-width", "border-style", "border-color"].forEach(function (prop) {
+        el.style.removeProperty(prop);
+      });
       el.setAttribute(SHAPE_ATTR, kind);
       paintFigure(el, paint);
     }
@@ -2267,6 +2720,7 @@
     path.setAttribute("stroke-width", String(styleFor("strokeWidth") || BORDER_WIDTH));
     path.setAttribute("stroke-linecap", "round");
     path.setAttribute("stroke-linejoin", "round");
+    if (DASHES[styleFor("dash")]) setDash(path, styleFor("dash"), parseFloat(path.getAttribute("stroke-width")));
     svg.appendChild(path);
     return { svg: svg, path: path, points: [[at.x, at.y]] };
   }
@@ -2302,6 +2756,11 @@
       create.el = create.drawing.svg;
       create.drawing.path.setAttribute("d", pathData(create.drawing.points, 0, 0));
     }
+    if (create.line) {
+      // An arrow or connector has a head where it is dragged to; a connector routes itself.
+      create.heads = { start: null, end: tool === "line" ? null : "arrow" };
+      if (tool === "elbow" || tool === "curve") create.el.setAttribute(ROUTE_ATTR, tool === "elbow" ? "elbow" : "curved");
+    }
   }
 
   function createTo(event) {
@@ -2313,9 +2772,8 @@
     if (create.line) {
       var to = event.shiftKey ? snapLine(create.at, at) : at;
       var hit = event.metaKey || event.ctrlKey ? null : stickTarget(to, create.el);
-      // Close to an element's outline, the end goes onto it, where the line toward the spot meets it.
-      if (hit && hit.edge && !event.shiftKey) to = toPoint(edgePoint(hit.el, [create.at.x, create.at.y], [hit.at.x, hit.at.y]));
-      drawLine(create, to);
+      if (hit && (hit.edge || hit.site) && !event.shiftKey) to = endSpot(hit, [create.at.x, create.at.y], create.el);
+      drawLine(create, to, hit);
       previewStick(hit);
       return;
     }
@@ -2342,18 +2800,25 @@
   function finishCreating() {
     var done = create;
     create = null;
+    if (done.line) {
+      if (!done.moved) drawLine(done, { x: done.at.x + SHAPE_SIZE.w, y: done.at.y });
+      previewStick(null);
+      var ends = done.points;
+      var stuck = false;
+      ENDS.forEach(function (end, i) {
+        var hit = stickTarget({ x: ends[i][0], y: ends[i][1] }, done.el);
+        if (hit) stick(done.el, end, hit);
+        stuck = stuck || !!hit;
+      });
+      // A connector leaves what its ends are stuck to out of their sides.
+      if (stuck && routeOf(done.el)) writeLine(done.el, ends, done.heads, true);
+      useTool("select", true);
+      select(done.el);
+      commit();
+      placeHandles();
+      return;
+    }
     if (done.drawing) {
-      if (done.line) {
-        if (!done.moved) drawLine(done, { x: done.at.x + SHAPE_SIZE.w, y: done.at.y });
-        previewStick(null);
-        var ends = done.drawing.strokes[0];
-        ENDS.forEach(function (end, i) {
-          var hit = stickTarget({ x: ends[i][0], y: ends[i][1] }, done.el);
-          if (hit) stick(done.el, end, hit);
-        });
-        useTool("select", true);
-        select(done.el);
-      }
       finishDrawing(done.drawing);
       placeHandles();
       return;
@@ -2373,7 +2838,7 @@
 
   /** Fits the drawing's box around its line, so it moves, scales and rotates like any element. */
   function finishDrawing(drawing) {
-    var points = drawing.strokes ? drawing.strokes[0].concat(drawing.strokes[1] || []) : drawing.points;
+    var points = drawing.points;
     var xs = points.map(function (p) {
       return p[0];
     });
@@ -2387,7 +2852,7 @@
     var h = Math.max.apply(null, ys) - top + pad;
     place(drawing.svg, left, top, w, h);
     drawing.svg.setAttribute("viewBox", "0 0 " + w + " " + h);
-    drawing.path.setAttribute("d", drawing.strokes ? strokesData(drawing.strokes, left, top) : pathData(drawing.points, left, top));
+    drawing.path.setAttribute("d", pathData(drawing.points, left, top));
     commit();
   }
 
@@ -2451,38 +2916,57 @@
       }
     }
     // An old cut-out becomes a figure to take what only a figure can show.
-    if (["stroke", "strokeWidth", "shadow", "flipX", "flipY"].some(has)) upgradeCutOut(el);
+    if (["stroke", "strokeWidth", "dash", "shadow", "flipX", "flipY"].some(has)) upgradeCutOut(el);
     var vectors = vectorsOf(el);
     if (figureOf(el)) {
-      if (has("fill") || has("stroke") || has("strokeWidth")) {
+      if (has("adjust")) setAdjust(el, Number(changes.adjust));
+      if (has("fill") || has("stroke") || has("strokeWidth") || has("dash")) {
         var paint = figurePaint(el);
         if (has("fill")) paint.fill = changes.fill || null;
         if (has("stroke")) paint.stroke = changes.stroke || null;
         if (has("strokeWidth")) paint.width = Math.max(0, changes.strokeWidth || 0);
-        // Picking a border color shows a border; picking a width gives it a color.
-        if (has("stroke") && paint.stroke && !paint.width) paint.width = BORDER_WIDTH;
-        if (has("strokeWidth") && paint.width && !paint.stroke) paint.stroke = BORDER_COLOR;
+        if (has("dash") && DASHES[changes.dash]) paint.dash = changes.dash;
+        // Picking a border color or dashes shows a border; picking a width gives it a color.
+        if (((has("stroke") && paint.stroke) || (has("dash") && paint.dash !== "solid")) && !paint.width) paint.width = BORDER_WIDTH;
+        if ((has("strokeWidth") || has("dash")) && paint.width && !paint.stroke) paint.stroke = BORDER_COLOR;
         paintFigure(el, paint);
       }
     } else if (vectors.length) {
+      var line = lineOf(el);
       vectors.forEach(function (vector) {
+        // A line's heads take its color and width when it is redrawn.
+        if (vector.hasAttribute(HEAD_ATTR) && line) return;
         if (has("fill")) vector.setAttribute("fill", changes.fill || "none");
         if (has("stroke")) vector.setAttribute("stroke", changes.stroke || "none");
         if (has("strokeWidth")) vector.setAttribute("stroke-width", String(Math.max(0, changes.strokeWidth || 0)));
+        if (has("dash") || has("strokeWidth")) {
+          setDash(vector, has("dash") && DASHES[changes.dash] ? changes.dash : dashOf(vector), parseFloat(vector.getAttribute("stroke-width")));
+        }
       });
-      // An arrow's head and the box around a line go with its width.
-      var line = has("strokeWidth") ? lineOf(el) : null;
-      if (line) writeLine(el, slidePoints(el, line), line.arrow);
+      // A line's heads and the box around it go with its width; its route and heads change how it is drawn.
+      if (line && ["stroke", "strokeWidth", "headStart", "headEnd", "route"].some(has)) {
+        var heads = {
+          start: has("headStart") ? (HEADS[changes.headStart] ? changes.headStart : null) : line.heads.start,
+          end: has("headEnd") ? (HEADS[changes.headEnd] ? changes.headEnd : null) : line.heads.end,
+        };
+        var points = slidePoints(el, line);
+        if (has("route")) {
+          if (ROUTES[changes.route]) el.setAttribute(ROUTE_ATTR, changes.route);
+          else el.removeAttribute(ROUTE_ATTR);
+        }
+        writeLine(el, points, heads);
+      }
     } else {
       if (has("fill")) el.style.backgroundColor = changes.fill || "transparent";
-      if ((has("stroke") || has("strokeWidth")) && !isCutOut(el)) {
+      if ((has("stroke") || has("strokeWidth") || has("dash")) && !isCutOut(el)) {
         var now = describe(el);
         var color = has("stroke") ? changes.stroke : now.stroke;
         var width = has("strokeWidth") ? changes.strokeWidth : now.strokeWidth;
-        // Picking a border color shows a border; picking a width gives it a color.
-        if (has("stroke") && color && !width) width = BORDER_WIDTH;
-        if (has("strokeWidth") && width && !color) color = BORDER_COLOR;
-        el.style.border = borderCss(color, width);
+        var dash = has("dash") && DASHES[changes.dash] ? changes.dash : now.dash;
+        // Picking a border color or dashes shows a border; picking a width gives it a color.
+        if ((has("stroke") && color) || (has("dash") && dash !== "solid")) width = width || BORDER_WIDTH;
+        if ((has("strokeWidth") || has("dash")) && width && !color) color = BORDER_COLOR;
+        el.style.border = borderCss(color, width, dash);
       }
     }
     applyLook(el, changes);
@@ -2502,14 +2986,15 @@
 
   /**
    * Moves the selection up or down the stack among its siblings with an inline z-index, so the
-   * layout stays put: "forward" / "backward" past the next element it overlaps, "front" /
-   * "back" past all of them.
+   * layout stays put: "forward" / "backward" past the next element it overlaps (with `any`, the
+   * next one, overlapping or not), "front" / "back" past all of them.
    */
-  function restack(where) {
+  function restack(where, any) {
     var el = selected;
     if (!el || !slide.contains(el) || ["front", "forward", "backward", "back"].indexOf(where) < 0) return;
     var parent = el.parentElement;
-    var siblings = Array.prototype.filter.call(parent.children, function (s) {
+    // From the Layers panel, it goes among the layers it is listed with, wherever they sit.
+    var siblings = any ? inDocumentOrder(layerPeers(el)) : Array.prototype.filter.call(parent.children, function (s) {
       return !/^(script|style|template)$/i.test(s.tagName) && !s.classList.contains("notes") && !s.classList.contains("narration") && !s.classList.contains("slop-review");
     });
     var layer = function (s) {
@@ -2525,7 +3010,7 @@
     var up = where === "front" || where === "forward";
     var past = siblings
       .filter(function (s) {
-        return s !== el && (where === "front" || where === "back" || overlaps(s, el));
+        return s !== el && (any || where === "front" || where === "back" || overlaps(s, el));
       })
       .map(layer)
       .filter(function (o) {
@@ -2548,7 +3033,7 @@
   }
 
   function removeSelected() {
-    var group = allSelected();
+    var group = movable();
     if (!group.length) return;
     finishEditing();
     select(null);
@@ -2606,6 +3091,15 @@
     if (!isSelected(el)) select(el);
     if (!el) {
       pasteboard.startPan(event);
+      return;
+    }
+    if (double && isGroup(el)) {
+      // Into the group: what it holds is picked now.
+      event.preventDefault();
+      enteredGroup = el;
+      var inner = pickable(event.target, event.clientX, event.clientY);
+      if (inner && inner !== el) select(inner);
+      lastDown = { el: inner, at: 0 };
       return;
     }
     if (double) {
@@ -3112,10 +3606,29 @@
     commit();
   }
 
+  /** Restyles the selection; a group's restyle goes to everything in it. */
   function applyToSelection(changes) {
-    forEachSelected(function () {
+    var targets = leavesOf(allSelected());
+    if (targets.length === allSelected().length && targets.every(isSelected)) {
+      forEachSelected(function () {
+        applyStyle(changes);
+      });
+      return;
+    }
+    var primary = selected;
+    var others = extras;
+    batching = true;
+    extras = [];
+    targets.forEach(function (el) {
+      selected = el;
       applyStyle(changes);
     });
+    selected = primary;
+    extras = others;
+    batching = false;
+    placeHandles();
+    report();
+    commit();
   }
 
   function inDocumentOrder(list) {
@@ -3126,7 +3639,7 @@
 
   /** Whether `el` is only a see-through wrapper around other elements: no text or box of its own. */
   function isBackdrop(el) {
-    if (el.hasAttribute(ADDED) || paintsBox(getComputedStyle(el))) return false;
+    if (el.hasAttribute(ADDED) || el.hasAttribute(GROUP_ATTR) || paintsBox(getComputedStyle(el))) return false;
     var ownText = Array.prototype.some.call(el.childNodes, function (node) {
       return node.nodeType === 3 && node.data.trim();
     });
@@ -3225,6 +3738,7 @@
   function elementsIn(area) {
     var found = [];
     walkContent(slide, function (el) {
+      if (isLocked(el)) return true;
       if (!arrangeable(el)) return false;
       var box = boxOf(el);
       var inside = box.right > box.left && box.bottom > box.top && box.left >= area.left && box.right <= area.right && box.top >= area.top && box.bottom <= area.bottom;
@@ -3266,6 +3780,7 @@
     if (nudgeTimer) commit();
     var found = [];
     walkContent(slide, function (el) {
+      if (isLocked(el)) return true;
       if (!arrangeable(el)) return false;
       found.push(el);
       return true;
@@ -3278,8 +3793,10 @@
     if (nudgeTimer) commit();
     var list = [];
     walkContent(slide, function (el) {
-      if (arrangeable(el)) list.push(el);
-      return false;
+      if (isLocked(el)) return true;
+      if (arrangeable(el) && selectable(el) === el) list.push(el);
+      // What a group holds is the group's, unless it was entered.
+      return isGroup(el) && el !== enteredGroup;
     });
     if (!list.length) return;
     var at = list.indexOf(selected);
@@ -3367,7 +3884,7 @@
     if (ALIGN_TO.indexOf(to) < 0) return;
     finishEditing();
     if (nudgeTimer) commit();
-    var group = allSelected();
+    var group = movable();
     if (!group.length) return;
     var bySlide = target === "slide" || group.length === 1;
     var area = bySlide ? { left: 0, top: 0, right: slideWidth(), bottom: slideHeight() } : boundsOf(group);
@@ -3390,7 +3907,7 @@
     var size = axis === "w" ? frame.right - frame.left : frame.bottom - frame.top;
     if (!(size > 0)) return;
     extras.forEach(function (el) {
-      if (lineOf(el)) return;
+      if (lineOf(el) || isLocked(el)) return;
       setSize(el, axis === "w" ? size : null, axis === "h" ? size : null);
       refit(el);
     });
@@ -3402,7 +3919,7 @@
   function distributeSelection(axis) {
     finishEditing();
     if (nudgeTimer) commit();
-    var group = allSelected();
+    var group = movable();
     if (group.length < 3) return;
     var across = axis === "h";
     var start = across ? "left" : "top";
@@ -3470,6 +3987,7 @@
       offset: offset,
       zoom: zoom(),
       vectors: resize && el.getAttribute(ADDED) === "drawing" ? vectorShapes(el) : null,
+      members: resize && isGroup(el) ? memberBoxes(el) : null,
     };
     if (resize) {
       resizeTo(sx, sy, shift);
@@ -3487,16 +4005,24 @@
     var given = function (n) {
       return typeof n === "number" && isFinite(n);
     };
-    if (!geometry()) return;
+    if (!geometry() || !movable().length) return;
     if (!extras.length) {
-      if (given(data.w) || given(data.h)) setSize(selected, given(data.w) && data.w > 0 ? data.w : null, given(data.h) && data.h > 0 ? data.h : null);
+      var w = given(data.w) && data.w > 0 ? data.w : null;
+      var h = given(data.h) && data.h > 0 ? data.h : null;
+      // With the ratio locked, a typed width or height brings the other along.
+      var before = geometry();
+      if (keepRatio && (w === null) !== (h === null) && before.w > 0 && before.h > 0) {
+        if (w === null) w = (h * before.w) / before.h;
+        else h = (w * before.h) / before.w;
+      }
+      if (w !== null || h !== null) setSize(selected, w, h);
       if (given(data.rotation)) rotateTo(selected, data.rotation);
     }
     var now = geometry();
     var dx = given(data.x) ? data.x - now.x : 0;
     var dy = given(data.y) ? data.y - now.y : 0;
     if (dx || dy) {
-      allSelected().forEach(function (el) {
+      movable().forEach(function (el) {
         moveBy(el, dx, dy);
       });
     }
@@ -3612,7 +4138,7 @@
       drag.targets = snapTargets([drag.el]);
     }
     var box = drag.box;
-    if (event.metaKey || event.ctrlKey || event.shiftKey || drag.angle % 360 || box.right <= box.left || box.bottom <= box.top) {
+    if (event.metaKey || event.ctrlKey || keepsRatio(event) || drag.angle % 360 || box.right <= box.left || box.bottom <= box.top) {
       guides.textContent = "";
       return { x: dx, y: dy };
     }
@@ -3669,7 +4195,14 @@
 
   function moveDrag(event, dx, dy) {
     if (!drag.group) startMove(event);
+    // Shift keeps a move straight across or straight up and down, whichever it mostly goes.
+    var across = Math.abs(dx) >= Math.abs(dy);
+    if (event.shiftKey) {
+      if (across) dy = 0;
+      else dx = 0;
+    }
     var by = snapMove(dx / drag.zoom, dy / drag.zoom, event);
+    if (event.shiftKey) by = across ? { x: by.x, y: 0 } : { x: 0, y: by.y };
     drag.group.forEach(function (item) {
       moveTo(item.el, item.from.x + by.x, item.from.y + by.y);
     });
@@ -3680,7 +4213,7 @@
   /** The position and size (or turn) next to the pointer while dragging. */
   function showReadout(event) {
     var now = geometry();
-    if (!now || drag.mode === "tilt") return;
+    if (!now || drag.mode === "tilt" || drag.mode === "adjust") return;
     readout.textContent =
       drag.mode === "rotate" ? now.rotation + "°"
       : drag.mode === "point" ? "X " + drag.at.x + "  Y " + drag.at.y
@@ -3697,6 +4230,293 @@
     else if (data.type === "slop:edit-distribute") distributeSelection(String(data.axis));
     else if (data.type === "slop:edit-geometry") setGeometry(data);
     else if (data.type === "slop:edit-tilt") stepTilt(data);
+    else return false;
+    return true;
+  }
+
+  // ----- Groups, locks and layers (see the top of this file). -----
+
+  /** Whether `el` is a group the user made: a box around the elements it holds, which go together. */
+  function isGroup(el) {
+    return !!el && el.nodeType === 1 && el.hasAttribute(GROUP_ATTR);
+  }
+
+  /** Whether `el` is locked, or sits in something locked: it cannot be picked, moved or deleted. */
+  function isLocked(el) {
+    var lock = el && el.nodeType === 1 ? el.closest("[" + LOCK_ATTR + "]") : null;
+    return !!lock && slide.contains(lock) && lock !== slide;
+  }
+
+  /** The selected elements that may move or go: not the locked ones. */
+  function movable() {
+    return allSelected().filter(function (el) {
+      return !isLocked(el);
+    });
+  }
+
+  /** What a group holds that shows, in order: its members. */
+  function membersOf(group) {
+    return Array.prototype.filter.call(group.children, function (el) {
+      return !NOT_CONTENT.test(el.tagName);
+    });
+  }
+
+  /** The elements a restyle of `list` goes to: each one, or for a group, everything in it. */
+  function leavesOf(list) {
+    var out = [];
+    list.forEach(function (el) {
+      if (isGroup(el)) out = out.concat(leavesOf(membersOf(el)));
+      else out.push(el);
+    });
+    return out;
+  }
+
+  /**
+   * Gives `el` a fixed box at (left, top), w × h (its border box), positioned in what holds it,
+   * and drops the translate that moved it: its place is all in left and top now.
+   */
+  function freeBox(el, left, top, w, h) {
+    var computed = getComputedStyle(el);
+    var px = function (name) { return parseFloat(computed[name]) || 0; };
+    var contentBox = computed.boxSizing !== "border-box";
+    var padX = contentBox ? px("paddingLeft") + px("paddingRight") + px("borderLeftWidth") + px("borderRightWidth") : 0;
+    var padY = contentBox ? px("paddingTop") + px("paddingBottom") + px("borderTopWidth") + px("borderBottomWidth") : 0;
+    el.style.position = "absolute";
+    el.style.margin = "0px";
+    el.style.left = roundTenth(left) + "px";
+    el.style.top = roundTenth(top) + "px";
+    el.style.right = el.style.bottom = "auto";
+    el.style.width = roundTenth(Math.max(0, w - padX)) + "px";
+    if (el.getAttribute("data-autofit") !== "grow") el.style.height = roundTenth(Math.max(0, h - padY)) + "px";
+    el.style.flex = "none";
+    moveTo(el, 0, 0);
+  }
+
+  /**
+   * ⌘G: puts the selected elements in a group at the slide's top level, on top where the last of
+   * them was: a box around them all, which they keep their places and looks in. One that was
+   * in the layout leaves its placeholder behind, so the layout stays put.
+   */
+  function groupSelection() {
+    finishEditing();
+    if (nudgeTimer) commit();
+    var members = inDocumentOrder(movable());
+    if (members.length < 2) return;
+    var bounds = boundsOf(members);
+    var places = members.map(function (el) {
+      var f = frameOf(el);
+      var size = sizeOf(el);
+      return { el: el, x: (f.left + f.right) / 2, y: (f.top + f.bottom) / 2, w: size.w, h: size.h };
+    });
+    var group = document.createElement("div");
+    group.setAttribute(GROUP_ATTR, "");
+    group.setAttribute(
+      "style",
+      "position: absolute; left: " + roundTenth(bounds.left) + "px; top: " + roundTenth(bounds.top) + "px; width: " +
+        roundTenth(bounds.right - bounds.left) + "px; height: " + roundTenth(bounds.bottom - bounds.top) + "px; margin: 0px;",
+    );
+    var last = members[members.length - 1];
+    while (last.parentElement !== slide) last = last.parentElement;
+    slide.insertBefore(group, last.nextSibling);
+    places.forEach(function (p) {
+      var el = p.el;
+      if (!/^(absolute|fixed)$/.test(getComputedStyle(el).position) && !placeholderOf(el)) {
+        el.parentElement.insertBefore(slotFor(el, PLACEHOLDER), el.nextSibling);
+      }
+      group.appendChild(el);
+      freeBox(el, p.x - bounds.left - p.w / 2, p.y - bounds.top - p.h / 2, p.w, p.h);
+    });
+    select(group);
+    commit();
+  }
+
+  /** ⇧⌘G: takes the selected groups apart, their elements staying where they show, turned and scaled as they look. */
+  function ungroupSelection() {
+    finishEditing();
+    if (nudgeTimer) commit();
+    var freed = [];
+    movable().filter(isGroup).forEach(function (group) {
+      var angle = angleOf(group);
+      var scale = scaleOf(group);
+      var origin = slide.getBoundingClientRect();
+      var k = zoom();
+      var places = membersOf(group).map(function (el) {
+        var center = centerOf(el);
+        return { el: el, x: (center.x - origin.left) / k, y: (center.y - origin.top) / k, size: sizeOf(el), scale: scaleOf(el) };
+      });
+      places.forEach(function (p) {
+        var el = p.el;
+        slide.insertBefore(el, group);
+        el.style.left = roundTenth(p.x - p.size.w / 2) + "px";
+        el.style.top = roundTenth(p.y - p.size.h / 2) + "px";
+        moveTo(el, 0, 0);
+        if (angle) rotateTo(el, angleOf(el) + angle);
+        if (scale.x !== 1 || scale.y !== 1) scaleTo(el, p.scale.x * scale.x, p.scale.y * scale.y);
+        freed.push(el);
+      });
+      group.parentNode.removeChild(group);
+    });
+    if (!freed.length) return;
+    enteredGroup = null;
+    selectMany(freed);
+    commit();
+  }
+
+  /** The boxes of what `group` holds, as they are when its resize starts, and of what its groups hold. */
+  function memberBoxes(group) {
+    return membersOf(group).map(function (el) {
+      var computed = getComputedStyle(el);
+      return {
+        el: el,
+        left: parseFloat(computed.left) || 0,
+        top: parseFloat(computed.top) || 0,
+        size: sizeOf(el),
+        offset: offsetOf(el),
+        vectors: el.getAttribute(ADDED) === "drawing" ? vectorShapes(el) : null,
+        members: isGroup(el) ? memberBoxes(el) : null,
+      };
+    });
+  }
+
+  /** Spreads what a group holds by kx × ky with its box: their places and sizes, not their text or line widths. */
+  function spreadMembers(boxes, kx, ky) {
+    boxes.forEach(function (b) {
+      var el = b.el;
+      var w = b.size.w * kx;
+      var h = b.size.h * ky;
+      freeBox(el, b.left * kx, b.top * ky, w, h);
+      moveTo(el, b.offset.x * kx, b.offset.y * ky);
+      if (b.vectors && b.size.w && b.size.h) spreadVectors(b.vectors, kx, ky);
+      if (b.members) spreadMembers(b.members, kx, ky);
+      fitFigure(el);
+    });
+  }
+
+  /** Locks or unlocks `list` (with nothing given, the selection). */
+  function lockElements(list, on) {
+    finishEditing();
+    if (nudgeTimer) commit();
+    list.forEach(function (el) {
+      mark(el, LOCK_ATTR, !!on);
+    });
+    placeHandles();
+    report();
+    commit();
+  }
+
+  // ---- The layer list: what is on the slide, the top-most first, for the app's Layers panel.
+
+  var reportedLayers = null;
+  var layersFrame = 0;
+  var TAG_NAMES = {
+    p: "Paragraph", ul: "List", ol: "List", li: "List", img: "Image", picture: "Image", video: "Video", canvas: "Canvas",
+    table: "Table", figure: "Figure", blockquote: "Quote", span: "Text", a: "Link", button: "Button", iframe: "Embed",
+  };
+  var FIGURE_NAMES = {
+    "block-arrow": "Block arrow",
+    "double-arrow": "Double arrow",
+    bubble: "Speech bubble",
+  };
+
+  /** What the Layers panel calls `el`: its kind, and the start of its text. */
+  function layerName(el) {
+    var text = String(el.textContent || "").replace(/\s+/g, " ").trim();
+    var clip = function (kind) {
+      return text ? kind + ": " + (text.length > 32 ? text.slice(0, 31) + "…" : text) : kind;
+    };
+    if (isGroup(el)) return "Group of " + membersOf(el).length;
+    var figure = figureOf(el);
+    if (figure) return clip(FIGURE_NAMES[figure] || figure.charAt(0).toUpperCase() + figure.slice(1));
+    var line = lineOf(el);
+    if (line) return line.route ? "Connector" : line.heads.start || line.heads.end ? "Arrow" : "Line";
+    if (el.getAttribute("data-outline")) return el.getAttribute("data-outline") === "brace" ? "Brace" : "Bracket";
+    if (el.getAttribute(ADDED) === "drawing") return "Drawing";
+    if (isImage(el)) return el.getAttribute("alt") ? "Image: " + el.getAttribute("alt") : "Image";
+    if (el.getAttribute(ADDED) === "shape") return clip("Shape");
+    if (el.getAttribute(ADDED) === "text") return clip("Text");
+    var tag = el.tagName.toLowerCase();
+    var kind = /^h[1-6]$/.test(tag) ? "Heading" : TAG_NAMES[tag] || (el.namespaceURI === SVG_NS ? "Drawing" : "Box");
+    return clip(kind);
+  }
+
+  /**
+   * `list` in the order it paints, the top-most last: by z-index (positioned elements above the
+   * others, as with no z-index at all), then in the slide's order.
+   */
+  function paintOrder(list) {
+    return inDocumentOrder(list).map(function (el, i) {
+      var style = getComputedStyle(el);
+      var z = parseInt(style.zIndex, 10);
+      return { el: el, i: i, z: style.position && style.position !== "static" ? (isNaN(z) ? 0 : z) : STATIC_Z };
+    }).sort(function (a, b) {
+      return a.z - b.z || a.i - b.i;
+    }).map(function (o) {
+      return o.el;
+    });
+  }
+
+  /** The layers `el` is listed among (see layers): what its group holds, or the slide's top-level ones. */
+  function layerPeers(el) {
+    var group = el.parentElement && isGroup(el.parentElement) ? el.parentElement : null;
+    if (group) return membersOf(group).filter(paints);
+    var top = [];
+    walkContent(slide, function (other) {
+      if (!arrangeable(other)) return false;
+      top.push(other);
+      return true;
+    });
+    return top.indexOf(el) >= 0 ? top : [el];
+  }
+
+  /** The slide's layers, the top-most first: what can be selected on it, and in a group what it holds. */
+  function layers() {
+    var rows = [];
+    var add = function (list, depth) {
+      paintOrder(list).reverse().forEach(function (el) {
+        rows.push({
+          path: pathOf(el),
+          name: layerName(el),
+          group: isGroup(el),
+          locked: el.hasAttribute(LOCK_ATTR),
+          held: !el.hasAttribute(LOCK_ATTR) && isLocked(el),
+          selected: isSelected(el),
+          depth: depth,
+        });
+        if (isGroup(el)) add(membersOf(el).filter(function (m) {
+          return paints(m);
+        }), depth + 1);
+      });
+    };
+    var top = [];
+    walkContent(slide, function (el) {
+      if (!arrangeable(el)) return false;
+      top.push(el);
+      return true;
+    });
+    add(top, 0);
+    return rows;
+  }
+
+  function reportLayers() {
+    layersFrame = 0;
+    var now = layers();
+    var key = JSON.stringify(now);
+    if (key === reportedLayers) return;
+    reportedLayers = key;
+    window.parent.postMessage({ type: "slop:edit-layers", slide: slide.id, layers: now }, "*");
+  }
+
+  function scheduleLayers() {
+    if (!layersFrame) layersFrame = window.requestAnimationFrame(reportLayers);
+  }
+  scheduleLayers();
+
+  /** Handles the app's messages for this section; true when `data` was one. */
+  function groupMessage(data) {
+    var target = Array.isArray(data.path) ? atPath(data.path) : null;
+    if (data.type === "slop:edit-group") groupSelection();
+    else if (data.type === "slop:edit-ungroup") ungroupSelection();
+    else if (data.type === "slop:edit-lock") lockElements(target ? [target] : allSelected(), !!data.locked);
     else return false;
     return true;
   }
@@ -3760,15 +4580,22 @@
           event.stopImmediatePropagation();
           return;
         }
-        if (letter === "a" || letter === "d") {
+        if (letter === "a" || letter === "d" || letter === "g") {
           if (letter === "a") selectAll();
-          else duplicate();
+          else if (letter === "d") duplicate();
+          else groupSelection();
           event.preventDefault();
           event.stopImmediatePropagation();
           return;
         }
         // The app pastes: the player forwards the key. Nothing here takes a native paste.
         if (letter === "v") event.preventDefault();
+      }
+      if (mod && event.shiftKey && !event.altKey && letter === "g") {
+        ungroupSelection();
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
       }
       if (event.key === "Tab" && !mod && tool === "select") {
         cycleSelection(event.shiftKey ? -1 : 1);
@@ -3785,10 +4612,10 @@
       var step = event.shiftKey ? 10 : 1;
       var nudge = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[event.key];
       if (nudge) {
-        allSelected().forEach(function (el) {
+        movable().forEach(function (el) {
           moveBy(el, nudge[0], nudge[1]);
         });
-        followLines(allSelected());
+        followLines(movable());
         clearTimeout(nudgeTimer);
         nudgeTimer = setTimeout(commit, NUDGE_SAVE_MS);
       } else if (event.key === "Escape") {
@@ -3809,7 +4636,7 @@
   window.addEventListener("message", function (event) {
     var data = event.data;
     if (event.source !== window.parent || !data) return;
-    if (arrangeMessage(data)) return;
+    if (arrangeMessage(data) || groupMessage(data)) return;
     if (data.type === "slop:edit-select") {
       finishEditing();
       select(atPath(data.path));
@@ -3818,6 +4645,13 @@
       if (data.quiet) mark(wires, "data-quiet", true);
     } else if (data.type === "slop:edit-open-svg") {
       openSvg(selected);
+    } else if (data.type === "slop:edit-keep-ratio") {
+      keepRatio = !!data.on;
+      ui.querySelectorAll('[data-handle="scale"]').forEach(function (handle) {
+        handle.title = keepRatio
+          ? "Resize, keeping the aspect ratio (Shift frees it, Alt resizes from the center)"
+          : "Resize (Shift keeps the aspect ratio, Alt resizes from the center)";
+      });
     } else if (data.type === "slop:edit-size-mode") {
       if (data.mode !== "resize" && data.mode !== "stretch") return;
       sizeMode = data.mode;
@@ -3846,8 +4680,10 @@
       if (editing) insertAtCaret(textFragment(data.text));
     } else if (data.type === "slop:edit-order") {
       finishEditing();
+      // From the Layers panel: that layer, past the next one whether or not they overlap.
+      if (Array.isArray(data.path) && atPath(data.path)) select(atPath(data.path));
       forEachSelected(function () {
-        restack(String(data.to));
+        restack(String(data.to), !!data.any);
       });
     } else if (data.type === "slop:edit-delete") {
       finishEditing();
@@ -3874,15 +4710,7 @@
   // images, the slide's background, deck colors and the format painter.
 
   function isLine(name) {
-    return name === "line" || name === "arrow";
-  }
-
-  /** `from` to `to` as strokes (point lists); an arrow's second stroke is its head, at `to`. */
-  function lineStrokes(from, to, arrow, width) {
-    var strokes = [[[from.x, from.y], [to.x, to.y]]];
-    var head = arrow ? arrowHead(strokes[0], width) : null;
-    if (head) strokes.push(head);
-    return strokes;
+    return name === "line" || name === "arrow" || name === "elbow" || name === "curve";
   }
 
   function distance(a, b) {
@@ -3922,58 +4750,328 @@
     });
   }
 
-  /** An arrow's head at the end of the line through `points`, facing the way the line ends; null if it has no length. */
-  function arrowHead(points, width) {
-    var last = points.length - 1;
-    var tip = points[last];
-    var length = points.slice(1).reduce(function (sum, point, i) {
-      return sum + distance(points[i], point);
-    }, 0);
-    if (!length) return null;
-    var size = Math.min(Math.max(ARROW_HEAD_MIN, ARROW_HEAD_PER_WIDTH * width), length);
-    var from = last > 1 ? curveThrough(points)[last - 1][2] : points[last - 1];
-    var angle = Math.atan2(tip[1] - from[1], tip[0] - from[0]);
-    var barb = function (side) {
-      var a = angle + Math.PI + side * ARROW_HEAD_ANGLE;
-      return [Math.round(tip[0] + size * Math.cos(a)), Math.round(tip[1] + size * Math.sin(a))];
-    };
-    return [barb(1), tip, barb(-1)];
+  // ---- Lines: a drawing with one stroked <path> through its points (`M L` when straight,
+  // `M C C …` through them when curved) and a <path> of its own for each head, with
+  // `data-head="start arrow"` or `"end triangle"` (see HEADS). A connector, `data-route="elbow"`
+  // or `"curved"`, goes from end to end by straight stretches that turn at right angles, or by
+  // one curve, leaving an element it is stuck to straight out of the side it is stuck to. Its
+  // dashes are a `stroke-dasharray` on the stroke, never on the heads.
+
+  /** The route of line `el`, or null for one straight or curved through its points. */
+  function routeOf(el) {
+    var route = el && el.getAttribute ? el.getAttribute(ROUTE_ATTR) : null;
+    return route && ROUTES[route] ? route : null;
   }
 
-  /** The path of a line through `points`, moved by (-dx, -dy): straight with two, else curved. */
-  function lineData(points, arrow, width, dx, dy) {
-    var local = function (list) {
-      return list.map(function (p) {
-        return [roundTenth(p[0] - dx), roundTenth(p[1] - dy)];
-      });
-    };
-    var own = local(points);
-    var data = pathData(own, 0, 0);
-    if (own.length > 2) {
-      data = "M" + own[0].join(" ") + curveThrough(own).map(function (segment) {
-        return " C" + segment.slice(1).map(function (p) {
-          return roundTenth(p[0]) + " " + roundTenth(p[1]);
-        }).join(" ");
-      }).join("");
-    }
-    var head = arrow ? arrowHead(points, width) : null;
-    return head ? data + " " + pathData(local(head), 0, 0) : data;
+  /** "end arrow" as { end, kind }, or null when it says nothing usable. */
+  function parseHead(value) {
+    var words = String(value || "").trim().split(/\s+/);
+    return words.length === 2 && /^(start|end)$/.test(words[0]) && HEADS[words[1]] ? { end: words[0], kind: words[1] } : null;
   }
 
-  /** What makes `el` a line: its path, points (in the viewBox), head and width. Null for anything else. */
+  /** How the stroke `vector` is dashed: "dashed", "dotted" or "solid". */
+  function dashOf(vector) {
+    var parts = String((vector && vector.getAttribute("stroke-dasharray")) || "").trim().split(/[\s,]+/).map(parseFloat);
+    if (!parts.length || !isFinite(parts[0]) || parts.every(function (n) { return !n; })) return "solid";
+    return parts[0] === 0 ? "dotted" : "dashed";
+  }
+
+  /**
+   * Dashes the stroke `vector`, `width` wide: a dash of two widths and a gap of three (so with
+   * round caps, three and two), or dots one width across, two apart.
+   */
+  function setDash(vector, dash, width) {
+    var w = Math.max(1, Number(width) || 0);
+    if (dash === "dashed") vector.setAttribute("stroke-dasharray", roundTenth(2 * w) + " " + roundTenth(3 * w));
+    else if (dash === "dotted") vector.setAttribute("stroke-dasharray", "0 " + roundTenth(2 * w));
+    else vector.removeAttribute("stroke-dasharray");
+  }
+
+  /** What makes `el` a line: its stroke, points (in the viewBox), heads, width and route. Null for anything else. */
   function lineOf(el) {
     if (!el || !el.getAttribute || !viewBoxOf(el)) return null;
     var vectors = vectorsOf(el);
-    if (vectors.length !== 1 || vectors[0].tagName.toLowerCase() !== "path") return null;
-    var parts = (vectors[0].getAttribute("d") || "").trim().match(LINE_PATH);
+    var strokes = vectors.filter(function (v) {
+      return !v.hasAttribute(HEAD_ATTR);
+    });
+    if (strokes.length !== 1 || strokes[0].tagName.toLowerCase() !== "path" || vectors.length - strokes.length > 2) return null;
+    var heads = { start: null, end: null };
+    var headless = vectors.every(function (v) {
+      if (!v.hasAttribute(HEAD_ATTR)) return true;
+      var head = parseHead(v.getAttribute(HEAD_ATTR));
+      if (!head || heads[head.end] || v.tagName.toLowerCase() !== "path") return false;
+      heads[head.end] = head.kind;
+      return true;
+    });
+    if (!headless) return null;
+    var parts = (strokes[0].getAttribute("d") || "").trim().match(LINE_PATH);
     if (!parts) return null;
+    if (parts[2]) {
+      if (heads.start || heads.end) return null;
+      heads.end = "arrow";
+    }
+    var route = routeOf(el);
     var numbers = parts[1].match(NUMBER).map(parseFloat);
-    var step = parts[1].indexOf("C") >= 0 ? 6 : 2;
+    var curved = parts[1].indexOf("C") >= 0;
+    var step = curved ? 6 : 2;
     var points = [numbers.slice(0, 2)];
     for (var i = step; i < numbers.length; i += step) points.push(numbers.slice(i, i + 2));
+    // A freehand stroke goes through its points straight.
+    if (!curved && points.length > 2 && !route) return null;
+    // A connector's route follows from its ends.
+    if (route) points = [points[0], points[points.length - 1]];
     // A tap of the freehand tool leaves a dot.
     if (points.length === 2 && !distance(points[0], points[1])) return null;
-    return { path: vectors[0], points: points, arrow: !!parts[2], width: parseFloat(vectors[0].getAttribute("stroke-width")) || 0 };
+    return {
+      path: strokes[0],
+      points: points,
+      heads: heads,
+      route: route,
+      dash: dashOf(strokes[0]),
+      width: parseFloat(strokes[0].getAttribute("stroke-width")) || 0,
+    };
+  }
+
+  /** The unit vector along the axis `v` mostly goes along. */
+  function axisOf(v) {
+    return Math.abs(v[0]) >= Math.abs(v[1]) ? [v[0] < 0 ? -1 : 1, 0] : [0, v[1] < 0 ? -1 : 1];
+  }
+
+  /**
+   * The way a connector leaves each of its ends, as unit vectors pointing from the end into
+   * the line, and whether that end is stuck (so it first goes `ELBOW_STUB` straight out). A
+   * stuck end leaves its element out of the side it is stuck to, turned with the element; a
+   * free one heads off toward the other end. `el` may be null, for ends stuck to nothing.
+   */
+  function endDirections(el, points) {
+    var last = points.length - 1;
+    return ENDS.map(function (end, n) {
+      var tip = points[n ? last : 0];
+      var other = points[n ? 0 : last];
+      var target = el ? stuckTo(el, end) : null;
+      if (!target) return { dir: axisOf([other[0] - tip[0], other[1] - tip[1]]), stuck: false };
+      return { dir: sideOut(target, parseAnchor(el.getAttribute(end.at)).at), stuck: true };
+    });
+  }
+
+  /** The way out of `el` through the side of its box closest to the spot `at` (fractions of its box), turned with it. */
+  function sideOut(el, at) {
+    var sides = [[at[0], [-1, 0]], [1 - at[0], [1, 0]], [at[1], [0, -1]], [1 - at[1], [0, 1]]].sort(function (a, b) {
+      return a[0] - b[0];
+    });
+    var out = turn(sides[0][1][0], sides[0][1][1], angleOf(el));
+    return [out.x, out.y];
+  }
+
+  /**
+   * endDirections for line `el` while its end `n` is dragged to `points[n]`: free, or leaving
+   * what `hit` (see stickTarget) would stick it to.
+   */
+  function draggedDirections(el, points, n, hit) {
+    var dirs = endDirections(el, points);
+    var last = points.length - 1;
+    var tip = points[n ? last : 0];
+    var other = points[n ? 0 : last];
+    dirs[n] = hit
+      ? { dir: sideOut(hit.el, anchorOf(hit.el, hit.at)), stuck: true }
+      : { dir: axisOf([other[0] - tip[0], other[1] - tip[1]]), stuck: false };
+    return dirs;
+  }
+
+  /** Drops points that repeat the one before or lie on the straight stretch through their neighbors. */
+  function simplify(points) {
+    var out = [];
+    points.forEach(function (p) {
+      var prev = out[out.length - 1];
+      if (prev && Math.abs(prev[0] - p[0]) < 0.05 && Math.abs(prev[1] - p[1]) < 0.05) return;
+      var before = out[out.length - 2];
+      if (before && prev && ((Math.abs(before[0] - prev[0]) < 0.05 && Math.abs(prev[0] - p[0]) < 0.05) ||
+          (Math.abs(before[1] - prev[1]) < 0.05 && Math.abs(prev[1] - p[1]) < 0.05))) {
+        out[out.length - 1] = p;
+        return;
+      }
+      out.push(p);
+    });
+    return out;
+  }
+
+  /**
+   * An elbow connector from `s` to `e`: straight stretches that turn at right angles, leaving
+   * each end the way `dirs` says (see endDirections), and a stub's length straight out of an
+   * element first. Worked out for a start that leaves sideways; one that leaves up or down
+   * swaps the axes there and back.
+   */
+  function elbowRoute(s, e, dirs) {
+    var sideways = Math.abs(dirs[0].dir[0]) >= Math.abs(dirs[0].dir[1]);
+    var swap = function (p) {
+      return sideways ? [p[0], p[1]] : [p[1], p[0]];
+    };
+    var S = swap(s);
+    var E = swap(e);
+    var ds = swap(axisOf(dirs[0].dir));
+    var de = swap(axisOf(dirs[1].dir));
+    var a = [S[0] + ds[0] * (dirs[0].stuck ? ELBOW_STUB : 0), S[1]];
+    var b = [E[0] + de[0] * (dirs[1].stuck ? ELBOW_STUB : 0), E[1] + de[1] * (dirs[1].stuck ? ELBOW_STUB : 0)];
+    var go = ds[0];
+    var turns;
+    if (de[1] === 0) {
+      if (de[0] === -go && (b[0] - a[0]) * go >= 0) {
+        // Facing each other: across at half way.
+        var mx = (a[0] + b[0]) / 2;
+        turns = [[mx, a[1]], [mx, b[1]]];
+      } else if (de[0] === go) {
+        // Both out the same way: around the one further out.
+        var x = go > 0 ? Math.max(a[0], b[0]) : Math.min(a[0], b[0]);
+        turns = [[x, a[1]], [x, b[1]]];
+      } else {
+        // Facing away from each other: over at half height.
+        var my = (a[1] + b[1]) / 2;
+        turns = [[a[0], my], [b[0], my]];
+      }
+    } else if ((b[0] - a[0]) * go >= 0 && (a[1] - b[1]) * de[1] >= 0) {
+      // One turn, where the start's way across meets the end's way up or down.
+      turns = [[b[0], a[1]]];
+    } else {
+      var half = (a[1] + b[1]) / 2;
+      turns = [[a[0], half], [b[0], half]];
+    }
+    return simplify([S, a].concat(turns, [b, E]).map(swap));
+  }
+
+  /** A curved connector's control points: out of each end the way `dirs` says, by 40% of the way between them. */
+  function curvedControls(s, e, dirs) {
+    var reach = Math.max(ELBOW_STUB, distance(s, e) * 0.4);
+    return dirs.map(function (d, n) {
+      var from = n ? e : s;
+      return [from[0] + d.dir[0] * reach, from[1] + d.dir[1] * reach];
+    });
+  }
+
+  /**
+   * A head of `kind` at `tip`, for a line coming from `from`, `size` long: its points, whether it
+   * closes, and whether it is filled. An arrow is two barbs, a triangle closes and fills them, a
+   * bar crosses the end and a dot sits on it (`dot` its center and radius).
+   */
+  function headShape(kind, tip, from, size) {
+    var angle = Math.atan2(tip[1] - from[1], tip[0] - from[0]);
+    var at = function (a, length) {
+      return [Math.round(tip[0] + length * Math.cos(a)), Math.round(tip[1] + length * Math.sin(a))];
+    };
+    if (kind === "bar") return { points: [at(angle + Math.PI / 2, size / 2), at(angle - Math.PI / 2, size / 2)] };
+    if (kind === "dot") return { dot: { at: tip, r: roundTenth(size / 3) }, filled: true };
+    var barbs = [at(angle + Math.PI + ARROW_HEAD_ANGLE, size), tip, at(angle + Math.PI - ARROW_HEAD_ANGLE, size)];
+    return kind === "triangle" ? { points: barbs, closed: true, filled: true } : { points: barbs };
+  }
+
+  /**
+   * What a line through `points` (in any coordinates) draws: its stroke, as `poly` (straight
+   * stretches through the points) or `curve` (Bézier segments), and its `heads`, with the spots
+   * that reach furthest, for the box around it. `dirs` (see endDirections) route a connector;
+   * without them its ends head off toward each other.
+   */
+  function lineShape(points, heads, width, route, dirs) {
+    var last = points.length - 1;
+    var s = points[0];
+    var e = points[last];
+    var shape = { poly: null, curve: null, spots: [], heads: {} };
+    var into;
+    if (route) dirs = dirs || endDirections(null, [s, e]);
+    if (route === "elbow") {
+      shape.poly = elbowRoute(s, e, dirs);
+    } else if (route === "curved") {
+      var c = curvedControls(s, e, dirs);
+      shape.curve = [[s, c[0], c[1], e]];
+    } else if (last > 1) {
+      shape.curve = curveThrough(points);
+    } else {
+      shape.poly = [s, e];
+    }
+    if (shape.poly) {
+      shape.spots = shape.poly.slice();
+      into = [shape.poly[1], shape.poly[shape.poly.length - 2]];
+    } else {
+      shape.spots = [s];
+      shape.curve.forEach(function (segment) {
+        for (var i = 1; i <= LINE_SAMPLES; i++) shape.spots.push(curveAt(segment, i / LINE_SAMPLES));
+      });
+      into = [shape.curve[0][1], shape.curve[shape.curve.length - 1][2]];
+    }
+    var length = shape.spots.slice(1).reduce(function (sum, p, i) {
+      return sum + distance(shape.spots[i], p);
+    }, 0);
+    var size = Math.min(Math.max(ARROW_HEAD_MIN, ARROW_HEAD_PER_WIDTH * width), length);
+    ENDS.forEach(function (end, n) {
+      var kind = heads && heads[n ? "end" : "start"];
+      var tip = n ? e : s;
+      // A control point on the tip points the head along the stretch before it.
+      var from = into[n];
+      if (!distance(from, tip)) from = n ? shape.spots[shape.spots.length - 2] || s : shape.spots[1] || e;
+      if (!kind || !size || !distance(from, tip)) return;
+      var head = headShape(kind, tip, from, size);
+      shape.heads[n ? "end" : "start"] = head;
+      if (head.points) shape.spots = shape.spots.concat(head.points);
+      else shape.spots.push([tip[0] - head.dot.r, tip[1] - head.dot.r], [tip[0] + head.dot.r, tip[1] + head.dot.r]);
+    });
+    return shape;
+  }
+
+  /** The path data of a head (see headShape), moved by (-dx, -dy). */
+  function headData(head, dx, dy) {
+    var r = function (n) {
+      return roundTenth(n);
+    };
+    if (head.dot) {
+      var x = head.dot.at[0] - dx;
+      var y = head.dot.at[1] - dy;
+      var rad = head.dot.r;
+      return "M" + r(x - rad) + " " + r(y) + " A" + rad + " " + rad + " 0 1 0 " + r(x + rad) + " " + r(y) +
+        " A" + rad + " " + rad + " 0 1 0 " + r(x - rad) + " " + r(y) + " Z";
+    }
+    return pathData(head.points.map(function (p) {
+      return [r(p[0] - dx), r(p[1] - dy)];
+    }), 0, 0) + (head.closed ? " Z" : "");
+  }
+
+  /**
+   * Draws `shape` (see lineShape) into line `el`, moved by (-dx, -dy): the stroke into `path`,
+   * and each head into a <path> of its own, which takes the stroke's color and width.
+   */
+  function drawLineShape(el, path, shape, dx, dy) {
+    var local = function (p) {
+      return roundTenth(p[0] - dx) + " " + roundTenth(p[1] - dy);
+    };
+    var data = shape.poly
+      ? shape.poly.map(function (p, i) {
+          return (i ? "L" : "M") + local(p);
+        }).join(" ")
+      : "M" + local(shape.curve[0][0]) + shape.curve.map(function (segment) {
+          return " C" + segment.slice(1).map(local).join(" ");
+        }).join("");
+    path.setAttribute("d", data);
+    var stroke = path.getAttribute("stroke") || BORDER_COLOR;
+    ["start", "end"].forEach(function (end) {
+      var head = shape.heads[end];
+      var node = Array.prototype.find.call(el.querySelectorAll("[" + HEAD_ATTR + "]"), function (n) {
+        var now = parseHead(n.getAttribute(HEAD_ATTR));
+        return now && now.end === end;
+      });
+      if (!head) {
+        if (node) node.parentNode.removeChild(node);
+        return;
+      }
+      if (!node) {
+        node = document.createElementNS(SVG_NS, "path");
+        path.parentNode.insertBefore(node, end === "start" ? path.nextSibling : null);
+      }
+      var kind = head.dot ? "dot" : head.closed ? "triangle" : head.points.length === 2 ? "bar" : "arrow";
+      node.setAttribute(HEAD_ATTR, end + " " + kind);
+      node.setAttribute("d", headData(head, dx, dy));
+      node.setAttribute("fill", head.filled ? stroke : "none");
+      node.setAttribute("stroke", stroke);
+      node.setAttribute("stroke-width", path.getAttribute("stroke-width") || String(BORDER_WIDTH));
+      node.setAttribute("stroke-linecap", "round");
+      node.setAttribute("stroke-linejoin", "round");
+    });
   }
 
   /** `line`'s points in slide pixels, wherever turning and scaling `el` took them. */
@@ -3988,19 +5086,21 @@
     });
   }
 
-  /** Redraws line `el` through `points` (in slide pixels), its box fitted around it, unturned. */
-  function writeLine(el, points, arrow) {
-    var path = vectorsOf(el)[0];
+  /**
+   * Redraws line `el` through `points` (in slide pixels) with `heads`, its box fitted around it,
+   * unturned. A `fresh` line, still being added, sits on the slide untransformed, so its box
+   * goes right where the points are.
+   */
+  function writeLine(el, points, heads, fresh, dirs) {
+    var path = vectorsOf(el).filter(function (v) {
+      return !v.hasAttribute(HEAD_ATTR);
+    })[0];
     var width = parseFloat(path.getAttribute("stroke-width")) || 0;
-    var spots = points.slice();
-    if (points.length > 2) {
-      curveThrough(points).forEach(function (segment) {
-        for (var i = 1; i < LINE_SAMPLES; i++) spots.push(curveAt(segment, i / LINE_SAMPLES));
-      });
-    }
-    spots = spots.concat((arrow && arrowHead(points, width)) || []);
+    var route = routeOf(el);
+    if (route) points = [points[0], points[points.length - 1]];
+    var shape = lineShape(points, heads, width, route, route ? dirs || endDirections(el, points) : null);
     var bound = function (axis, pick, round) {
-      return round(pick.apply(null, spots.map(function (p) {
+      return round(pick.apply(null, shape.spots.map(function (p) {
         return p[axis];
       })));
     };
@@ -4009,22 +5109,53 @@
     var top = bound(1, Math.min, Math.floor) - pad;
     var w = Math.max(1, bound(0, Math.max, Math.ceil) + pad - left);
     var h = Math.max(1, bound(1, Math.max, Math.ceil) + pad - top);
-    // Turning and scaling go around the center, so the box's unscaled corner is where it lays out.
-    var frame = frameOf(el);
-    var size = sizeOf(el);
-    var computed = getComputedStyle(el);
-    place(
-      el,
-      (parseFloat(computed.left) || 0) + left - ((frame.left + frame.right) / 2 - size.w / 2),
-      (parseFloat(computed.top) || 0) + top - ((frame.top + frame.bottom) / 2 - size.h / 2),
-      w,
-      h,
-    );
+    if (fresh) {
+      place(el, left, top, w, h);
+    } else {
+      // Turning and scaling go around the center, so the box's unscaled corner is where it lays out.
+      var frame = frameOf(el);
+      var size = sizeOf(el);
+      var computed = getComputedStyle(el);
+      place(
+        el,
+        (parseFloat(computed.left) || 0) + left - ((frame.left + frame.right) / 2 - size.w / 2),
+        (parseFloat(computed.top) || 0) + top - ((frame.top + frame.bottom) / 2 - size.h / 2),
+        w,
+        h,
+      );
+    }
     el.setAttribute("viewBox", "0 0 " + w + " " + h);
-    path.setAttribute("d", lineData(points, arrow, width, left, top));
+    drawLineShape(el, path, shape, left, top);
     if (angleOf(el)) rotateTo(el, 0);
     var scale = scaleOf(el);
     if (scale.x !== 1 || scale.y !== 1) scaleTo(el, 1, 1);
+  }
+
+  /** Mirrors line `el` across the middle of its points, then sticks its ends to whatever they land on. */
+  function flipLine(el, x, y) {
+    var line = lineOf(el);
+    if (!line || (!x && !y)) return;
+    var points = slidePoints(el, line);
+    var middle = function (axis) {
+      var values = points.map(function (p) {
+        return p[axis];
+      });
+      return Math.min.apply(null, values) + Math.max.apply(null, values);
+    };
+    var mx = middle(0);
+    var my = middle(1);
+    points = points.map(function (p) {
+      return [roundTenth(x ? mx - p[0] : p[0]), roundTenth(y ? my - p[1] : p[1])];
+    });
+    ENDS.forEach(function (end) {
+      unstick(el, end);
+    });
+    writeLine(el, points, line.heads);
+    ENDS.forEach(function (end, n) {
+      var hit = stickTarget(toPoint(points[n ? points.length - 1 : 0]), el);
+      if (hit) stick(el, end, hit);
+    });
+    if (routeOf(el)) writeLine(el, points, line.heads);
   }
 
   // ---- Sticky ends: a line's end dropped on an element goes wherever that element goes.
@@ -4116,25 +5247,28 @@
     var kind = figureOf(el);
     if (!kind) return null;
     var paint = figurePaint(el);
-    var parts = FIGURES[kind].d.match(/[MLQZ]|-?[\d.]+/g);
+    var size = figureSize(el);
+    var parts = FIGURES[kind].path(size.w, size.h, adjustOf(el)).match(/[MLQCZ]|-?[\d.]+/g);
     var ring = [];
     var at = [0, 0];
     var command = null;
+    var num = function (n) {
+      return parseFloat(parts[i + n]);
+    };
     for (var i = 0; i < parts.length; ) {
-      if (/^[MLQZ]$/.test(parts[i])) command = parts[i++];
+      if (/^[MLQCZ]$/.test(parts[i])) command = parts[i++];
       if (command === "Z") break;
-      if (command === "Q") {
-        var control = [parseFloat(parts[i]), parseFloat(parts[i + 1])];
-        var to = [parseFloat(parts[i + 2]), parseFloat(parts[i + 3])];
-        i += 4;
+      if (command === "Q" || command === "C") {
+        var controls = command === "Q" ? [[num(0), num(1)]] : [[num(0), num(1)], [num(2), num(3)]];
+        var to = command === "Q" ? [num(2), num(3)] : [num(4), num(5)];
+        var all = [at].concat(controls, [to]);
+        i += command === "Q" ? 4 : 6;
         for (var k = 1; k <= ARC_SAMPLES; k++) {
-          var t = k / ARC_SAMPLES;
-          var u = 1 - t;
-          ring.push([u * u * at[0] + 2 * u * t * control[0] + t * t * to[0], u * u * at[1] + 2 * u * t * control[1] + t * t * to[1]]);
+          ring.push(command === "C" ? curveAt(all, k / ARC_SAMPLES) : quadAt(all, k / ARC_SAMPLES));
         }
         at = to;
       } else {
-        at = [parseFloat(parts[i]), parseFloat(parts[i + 1])];
+        at = [num(0), num(1)];
         i += 2;
         ring.push(at);
       }
@@ -4142,9 +5276,17 @@
     return [{
       closed: true,
       points: ring.map(function (p) {
-        return [paint.flipX ? 1 - p[0] / 100 : p[0] / 100, paint.flipY ? 1 - p[1] / 100 : p[1] / 100];
+        var x = p[0] / size.w;
+        var y = p[1] / size.h;
+        return [paint.flipX ? 1 - x : x, paint.flipY ? 1 - y : y];
       }),
     }];
+  }
+
+  /** The spot `t` of the way along a quadratic Bézier [from, control, to]. */
+  function quadAt(q, t) {
+    var u = 1 - t;
+    return [u * u * q[0][0] + 2 * u * t * q[1][0] + t * t * q[2][0], u * u * q[0][1] + 2 * u * t * q[1][1] + t * t * q[2][1]];
   }
 
   /** A CSS length ("12px", "25%" of `base`), or NaN. */
@@ -4529,7 +5671,30 @@
       }
       return false;
     });
+    // Close to one of its connection sites, the end goes right onto it, a spot like one inside it.
+    var site = best && connectionSites(best.el).filter(function (q) {
+      return distance(q, [p.x, p.y]) <= tolerance * SITE_REACH;
+    }).sort(function (a, b) {
+      return distance(a, [p.x, p.y]) - distance(b, [p.x, p.y]);
+    })[0];
+    if (site) best = { el: best.el, edge: false, site: true, at: toPoint(site) };
     return best;
+  }
+
+  // How much further than its outline a connection site pulls an end in.
+  var SITE_REACH = 1.6;
+
+  /**
+   * Where lines connect to `el`, in slide pixels: the middle of each side of its box, turned
+   * with it, or of its outline where the shape (an ellipse, a triangle) does not reach the side.
+   */
+  function connectionSites(el) {
+    var rings = slideOutline(el);
+    return [[0.5, 0], [1, 0.5], [0.5, 1], [0, 0.5]].map(function (at) {
+      var p = anchorPoint(el, at);
+      var near = nearestOnOutline(rings, toPoint(p)).point || p;
+      return [roundTenth(near[0]), roundTenth(near[1])];
+    });
   }
 
   function toPoint(xy) {
@@ -4540,12 +5705,23 @@
   function previewStick(hit) {
     hover(hit && !hit.edge ? hit.el : null);
     edgeUi.textContent = "";
-    if (!hit || !hit.edge) return;
+    if (!hit) return;
     var origin = slide.getBoundingClientRect();
     var k = zoom();
     var screen = function (p) {
       return roundTenth(origin.left + p[0] * k) + " " + roundTenth(origin.top + p[1] * k);
     };
+    // Its connection sites, the one the end is on filled.
+    connectionSites(hit.el).forEach(function (q) {
+      var dot = document.createElementNS(SVG_NS, "circle");
+      var at = screen(q).split(" ");
+      dot.setAttribute("data-site", hit.site && q[0] === hit.at.x && q[1] === hit.at.y ? "on" : "");
+      dot.setAttribute("cx", at[0]);
+      dot.setAttribute("cy", at[1]);
+      dot.setAttribute("r", "4");
+      edgeUi.appendChild(dot);
+    });
+    if (!hit.edge) return;
     var path = document.createElementNS(SVG_NS, "path");
     path.setAttribute("d", slideOutline(hit.el).map(function (ring) {
       return ring.points.map(function (p, i) {
@@ -4607,7 +5783,7 @@
         if (!spot) return;
         var i = end.first ? 0 : points.length - 1;
         var to = spot.at;
-        if (spot.edge) {
+        if (spot.edge && !line.route) {
           // The line comes toward the spot from the point before the end: on a straight line,
           // the other end, or the spot that end is stuck to.
           var other = spots[1 - n];
@@ -4620,7 +5796,7 @@
         }
       });
       // Both ends on one spot would leave no line.
-      if (changed && (points.length > 2 || distance(points[0], points[1]) > 0)) writeLine(el, points, line.arrow);
+      if (changed && (points.length > 2 || distance(points[0], points[1]) > 0)) writeLine(el, points, line.heads);
     });
     following = false;
   }
@@ -4669,7 +5845,7 @@
   function placePoints() {
     pointUi.textContent = "";
     var el = selected;
-    var line = el && !editing && !extras.length && slide.contains(el) ? lineOf(el) : null;
+    var line = el && !editing && !extras.length && slide.contains(el) && !isLocked(el) ? lineOf(el) : null;
     var tilt = line ? tiltOf(el) : null;
     // A tilted line keeps its box: its points are not where the handles would go.
     if (!line || tilt.x || tilt.y) return false;
@@ -4688,7 +5864,8 @@
       pointUi.appendChild(node);
     };
     var dragging = drag && drag.mode === "point";
-    if (!dragging) {
+    // A connector routes itself between its ends.
+    if (!dragging && !line.route) {
       curveThrough(points).forEach(function (segment, i) {
         handle("add", i + 1, curveAt(segment, 0.5), "Drag to bend the line here");
       });
@@ -4716,7 +5893,7 @@
     if (double) {
       if (index > 0 && index < points.length - 1) {
         points.splice(index, 1);
-        writeLine(selected, points, line.arrow);
+        writeLine(selected, points, line.heads);
         placeHandles();
         commit();
       }
@@ -4726,7 +5903,7 @@
       mode: "point",
       el: selected,
       points: points,
-      arrow: line.arrow,
+      heads: line.heads,
       index: index,
       insert: kind === "add",
       x: event.clientX,
@@ -4771,8 +5948,7 @@
     var hit = null;
     if (!drag.insert && endAt(drag.index, points.length)) {
       hit = event.metaKey || event.ctrlKey ? null : stickTarget(at, drag.el);
-      // Close to an element's outline, the end goes onto it, where the line toward the spot meets it.
-      if (hit && hit.edge && !event.shiftKey) at = toPoint(edgePoint(hit.el, other, [hit.at.x, hit.at.y]));
+      if (hit && (hit.edge || hit.site) && !event.shiftKey) at = endSpot(hit, other, drag.el);
     }
     // Both ends on one spot would leave no line.
     if (points.length === 2 && at.x === other[0] && at.y === other[1]) return;
@@ -4782,23 +5958,30 @@
       drag.stick = hit;
       previewStick(hit);
     }
-    writeLine(drag.el, points, drag.arrow);
+    var end = !drag.insert && endAt(drag.index, points.length);
+    var dirs = end && routeOf(drag.el) ? draggedDirections(drag.el, points, end.first ? 0 : 1, hit) : null;
+    writeLine(drag.el, points, drag.heads, false, dirs);
     placeHandles();
     showReadout(event);
   }
 
-  function strokesData(strokes, dx, dy) {
-    return strokes.map(function (points) {
-      return pathData(points, dx, dy);
-    }).join(" ");
+  /** Redraws the line being added so it ends at `to`, where `hit` (see stickTarget) may stick it. */
+  function drawLine(line, to, hit) {
+    line.points = [[line.at.x, line.at.y], [to.x, to.y]];
+    var start = routeOf(line.el) ? stickTarget(line.at, line.el) : null;
+    var dirs = routeOf(line.el) ? draggedDirections(line.el, line.points, 1, hit || null) : null;
+    if (start) dirs[0] = { dir: sideOut(start.el, anchorOf(start.el, start.at)), stuck: true };
+    writeLine(line.el, line.points, line.heads, true, dirs);
   }
 
-  /** Redraws the line being added so it ends at `to`. */
-  function drawLine(line, to) {
-    var drawing = line.drawing;
-    var width = parseFloat(drawing.path.getAttribute("stroke-width")) || BORDER_WIDTH;
-    drawing.strokes = lineStrokes(line.at, to, line.tool === "arrow", width);
-    drawing.path.setAttribute("d", strokesData(drawing.strokes, 0, 0));
+  /**
+   * Where an end that `hit` (see stickTarget) found close to an element's outline goes: a
+   * line's end where the line toward the spot from `from` first meets the outline, a
+   * connector's on the spot itself, as it leaves the element straight out of it. On a
+   * connection site, any end goes right onto it.
+   */
+  function endSpot(hit, from, line) {
+    return hit.site || routeOf(line) ? { x: hit.at.x, y: hit.at.y } : toPoint(edgePoint(hit.el, from, [hit.at.x, hit.at.y]));
   }
 
   /** `to`, turned around `from` to the nearest 45°. */
@@ -4843,52 +6026,128 @@
     el.style.removeProperty("clip-path");
     setOwn(el, "background-color", null, "rgba(0, 0, 0, 0)");
     el.setAttribute(SHAPE_ATTR, kind);
-    paintFigure(el, { fill: fill, stroke: null, width: 0, flipX: false, flipY: false });
+    paintFigure(el, { fill: fill, stroke: null, width: 0, dash: "solid", flipX: false, flipY: false, shadow: 0 });
   }
 
   // What an SVG paint may be in a figure's image (it cannot see the deck's CSS variables).
   var FIGURE_COLOR = /^(#[0-9a-f]{3,8}|rgba?\([\d.,\s%/]+\)|[a-z]+)$/i;
 
-  /** Draws figure `el` with `paint`: { fill, stroke, width, flipX, flipY } (null colors for none). */
+  /** The size a figure is drawn at: its box, in whole pixels. */
+  function figureSize(el) {
+    var size = sizeOf(el);
+    return { w: Math.max(1, Math.round(size.w)), h: Math.max(1, Math.round(size.h)) };
+  }
+
+  /** The proportions figure `el` is drawn with (see FIGURES): its `data-adjust`, kept in range, or the default. */
+  function adjustOf(el) {
+    var spec = FIGURES[figureOf(el)].adjust;
+    if (!spec) return 0;
+    var value = parseFloat(el.getAttribute(ADJUST_ATTR));
+    return isFinite(value) ? Math.min(spec.max, Math.max(spec.min, value)) : spec.value;
+  }
+
+  /** Sets figure `el`'s proportions (see adjustOf) and redraws it; its default drops the attribute. */
+  function setAdjust(el, value) {
+    var spec = FIGURES[figureOf(el)].adjust;
+    if (!spec || !isFinite(value)) return;
+    value = Math.min(spec.max, Math.max(spec.min, Math.round(value / spec.step) * spec.step));
+    if (value === spec.value) el.removeAttribute(ADJUST_ATTR);
+    else el.setAttribute(ADJUST_ATTR, String(value));
+    paintFigure(el, figurePaint(el));
+  }
+
+  /** What an image's data says, for a figure's SVG. */
+  function svgUrl(svg) {
+    return 'url("data:image/svg+xml,' + svg.replace(/%/g, "%25").replace(/#/g, "%23").replace(/</g, "%3C").replace(/>/g, "%3E") + '")';
+  }
+
+  /** The SVG an image's `url("data:image/svg+xml,…")` holds, or "". */
+  function svgOf(image) {
+    try {
+      return decodeURIComponent(String(image || "").replace(/^url\(\s*["']?data:image\/svg\+xml,/, "").replace(/["']?\s*\)$/, ""));
+    } catch (e) {
+      // Not one the editor drew.
+      return "";
+    }
+  }
+
+  /**
+   * Draws figure `el` with `paint`: { fill, stroke, width, dash, flipX, flipY, shadow } (null
+   * colors for none), at its size and proportions, and fits its text inside the shape. Its
+   * shadow is a second SVG in its `border-image`, reaching past its box: the shape's shadow
+   * where the shape is not, so the text casts none.
+   */
   function paintFigure(el, paint) {
-    var d = FIGURES[figureOf(el)].d;
+    var kind = figureOf(el);
+    var size = figureSize(el);
+    var w = size.w;
+    var h = size.h;
+    var a = adjustOf(el);
+    var d = FIGURES[kind].path(w, h, a);
+    var rim = FIGURES[kind].rim ? FIGURES[kind].rim(w, h, a) : "";
     var color = function (value) {
       return value && FIGURE_COLOR.test(value) ? value : "none";
     };
     var width = Math.max(0, Math.round(Number(paint.width) || 0));
     var edge = paint.stroke && width > 0;
+    var flip = "matrix(" + (paint.flipX ? -1 : 1) + " 0 0 " + (paint.flipY ? -1 : 1) + " " + (paint.flipX ? w : 0) + " " + (paint.flipY ? h : 0) + ")";
+    var dashes = paint.dash === "dashed" ? " stroke-dasharray='" + 3 * width + " " + 2 * width + "'"
+      : paint.dash === "dotted" ? " stroke-dasharray='" + width + " " + width + "'" : "";
     var svg =
-      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'>" +
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 " + w + " " + h + "' preserveAspectRatio='none'>" +
       (edge ? "<clipPath id='edge'><path d='" + d + "'/></clipPath>" : "") +
-      "<g transform='matrix(" + (paint.flipX ? -1 : 1) + " 0 0 " + (paint.flipY ? -1 : 1) + " " + (paint.flipX ? 100 : 0) +
-      " " + (paint.flipY ? 100 : 0) + ")'>" +
+      "<g transform='" + flip + "'>" +
       "<path d='" + d + "' fill='" + color(paint.fill) + "'/>" +
       // Twice as wide, and cut to the shape: what shows is inside it, as wide as `width`.
       (edge
-        ? "<path d='" + d + "' fill='none' stroke='" + color(paint.stroke) + "' stroke-width='" + 2 * width +
-          "' stroke-linejoin='round' vector-effect='non-scaling-stroke' clip-path='url(#edge)'/>"
+        ? "<path d='" + d + (rim ? " " + rim : "") + "' fill='none' stroke='" + color(paint.stroke) + "' stroke-width='" + 2 * width +
+          "'" + dashes + " stroke-linejoin='round' clip-path='url(#edge)'/>"
         : "") +
       "</g></svg>";
-    var data = svg.replace(/%/g, "%25").replace(/#/g, "%23").replace(/</g, "%3C").replace(/>/g, "%3E");
-    el.style.setProperty("background-image", 'url("data:image/svg+xml,' + data + '")');
+    el.style.setProperty("background-image", svgUrl(svg));
     el.style.setProperty("background-size", "100% 100%");
     el.style.setProperty("background-repeat", "no-repeat");
-    fitFigure(el);
+    var blur = Math.max(0, Math.round(Number(paint.shadow) || 0));
+    // An earlier version's shadow, a filter over the whole box, text and all.
+    var others = (el.style.getPropertyValue("filter") || "").replace(SHADOW_FILTER, "").trim();
+    if (others) el.style.setProperty("filter", others);
+    else el.style.removeProperty("filter");
+    if (blur > 0) {
+      var drop = Math.round(blur / 3);
+      var reach = Math.ceil(1.5 * blur + drop) + 2;
+      var box = -reach + " " + -reach + " " + (w + 2 * reach) + " " + (h + 2 * reach);
+      var shadow =
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='" + box + "' preserveAspectRatio='none'><defs>" +
+        "<filter id='blur' x='-50%' y='-50%' width='200%' height='200%'><feGaussianBlur stdDeviation='" + blur / 2 + "'/></filter>" +
+        "<mask id='out' maskUnits='userSpaceOnUse' x='" + -reach + "' y='" + -reach + "' width='" + (w + 2 * reach) + "' height='" + (h + 2 * reach) + "'>" +
+        "<rect x='" + -reach + "' y='" + -reach + "' width='" + (w + 2 * reach) + "' height='" + (h + 2 * reach) + "' fill='white'/>" +
+        "<path d='" + d + "' fill='black' transform='" + flip + "'/></mask></defs>" +
+        "<g mask='url(#out)'><g transform='translate(0 " + drop + ")'><path d='" + d + "' fill='black' fill-opacity='0.35'" +
+        " filter='url(#blur)' transform='" + flip + "'/></g></g></svg>";
+      el.style.setProperty("border-image-source", svgUrl(shadow));
+      el.style.setProperty("border-image-slice", "0 fill");
+      el.style.setProperty("border-image-width", "0");
+      el.style.setProperty("border-image-outset", reach + "px");
+      el.style.setProperty("border-image-repeat", "stretch");
+    } else {
+      ["border-image", "border-image-source", "border-image-slice", "border-image-width", "border-image-outset", "border-image-repeat"].forEach(function (prop) {
+        el.style.removeProperty(prop);
+      });
+    }
+    padFigure(el, paint);
   }
 
   /** How figure `el` is drawn, as paintFigure takes it. */
   function figurePaint(el) {
     // Tidying may have moved it into the slide's rules.
-    var image = String(el.style.getPropertyValue("background-image") || getComputedStyle(el).backgroundImage || "");
-    var svg = "";
-    try {
-      svg = decodeURIComponent(image.replace(/^url\(\s*["']?data:image\/svg\+xml,/, "").replace(/["']?\s*\)$/, ""));
-    } catch (e) {
-      // Not one the editor drew.
-    }
+    var svg = svgOf(el.style.getPropertyValue("background-image") || getComputedStyle(el).backgroundImage);
+    var shadow = svgOf(el.style.getPropertyValue("border-image-source") || getComputedStyle(el).getPropertyValue("border-image-source"));
     var fill = svg.match(/<path d='[^']*' fill='([^']*)'\/>/);
     var stroke = svg.match(/stroke='([^']*)' stroke-width='([\d.]+)'/);
+    var dash = svg.match(/stroke-dasharray='([\d.]+) ([\d.]+)'/);
     var flips = svg.match(/matrix\((-?1) 0 0 (-?1)/);
+    var blur = shadow.match(/stdDeviation='([\d.]+)'/);
+    var filter = blur ? null : (el.style.getPropertyValue("filter") || "").match(SHADOW_LENGTHS);
     var paintOf = function (value) {
       return value && value !== "none" ? toHex(value) || value : null;
     };
@@ -4896,28 +6155,33 @@
       fill: fill ? paintOf(fill[1]) : null,
       stroke: stroke ? paintOf(stroke[1]) : null,
       width: stroke ? Math.round(parseFloat(stroke[2]) / 2) : 0,
+      dash: dash ? (dash[1] === dash[2] ? "dotted" : "dashed") : "solid",
       flipX: !!flips && flips[1] === "-1",
       flipY: !!flips && flips[2] === "-1",
+      shadow: blur ? Math.round(2 * parseFloat(blur[1])) : filter ? Math.round(parseFloat(filter[1])) : 0,
     };
   }
 
-  /** Gives figure `el` (or an old cut-out, made one) the padding that keeps its text inside it. */
-  function fitFigure(el) {
-    upgradeCutOut(el);
-    var kind = figureOf(el);
-    if (!kind) return;
+  /** Gives figure `el` the padding, in pixels from its size, that keeps its text inside its shape. */
+  function padFigure(el, paint) {
     var size = sizeOf(el);
     if (!size.w || !size.h) return;
-    var paint = figurePaint(el);
-    var inset = FIGURES[kind].inset;
+    var inset = FIGURES[figureOf(el)].inset(size.w, size.h, adjustOf(el));
     var top = inset[paint.flipY ? 2 : 0];
     var bottom = inset[paint.flipY ? 0 : 2];
     var right = inset[paint.flipX ? 3 : 1];
     var left = inset[paint.flipX ? 1 : 3];
-    var px = function (share, length) {
-      return Math.max(FIGURE_PADDING, Math.round(share * length)) + "px";
+    var px = function (length) {
+      return Math.max(FIGURE_PADDING, Math.round(length)) + "px";
     };
-    el.style.padding = [px(top, size.h), px(right, size.w), px(bottom, size.h), px(left, size.w)].join(" ");
+    el.style.padding = [px(top), px(right), px(bottom), px(left)].join(" ");
+  }
+
+  /** Redraws figure `el` (or an old cut-out, made one) at its size, as whenever the box changes size. */
+  function fitFigure(el) {
+    upgradeCutOut(el);
+    if (!figureOf(el) || !sizeOf(el).w || !sizeOf(el).h) return;
+    paintFigure(el, figurePaint(el));
   }
 
   /** A box cut out with a `clip-path` polygon the editor cannot redraw, which shows no border or shadow. */
@@ -4925,15 +6189,14 @@
     return /polygon/.test(getComputedStyle(el).getPropertyValue("clip-path") || "") && !cutOutKind(el);
   }
 
-  /** Whether flipping `el` mirrors what it shows without mirroring text: images, figures and drawings that are not lines. */
+  /**
+   * Whether flipping `el` mirrors what it shows without mirroring text: images, figures and
+   * drawings. A line is mirrored through its points, which keeps its ends where they can stick.
+   */
   function flippable(el) {
     if (!el || !el.tagName) return false;
     if (isImage(el) || figureOf(el) || cutOutKind(el)) return true;
-    if (el.namespaceURI !== SVG_NS || el.tagName.toLowerCase() !== "svg") return false;
-    // A line, even one still being drawn (with no viewBox yet), moves its points instead.
-    var vectors = vectorsOf(el);
-    var line = vectors.length === 1 && vectors[0].tagName.toLowerCase() === "path" && LINE_PATH.test((vectors[0].getAttribute("d") || "").trim());
-    return !line && !lineOf(el);
+    return el.namespaceURI === SVG_NS && el.tagName.toLowerCase() === "svg";
   }
 
   function isImage(el) {
@@ -4950,12 +6213,12 @@
     if (/%/.test(corner)) radius = (radius / 100) * Math.min(size.w, size.h);
     var figure = figureOf(el) ? figurePaint(el) : null;
     var shaped = !!figure || !!cutOutKind(el);
-    var blur = (style.getPropertyValue(svg || figure ? "filter" : "box-shadow") || "").match(SHADOW_LENGTHS);
+    var blur = (style.getPropertyValue(svg ? "filter" : "box-shadow") || "").match(SHADOW_LENGTHS);
     var image = isImage(el);
     var flips = el.style.transform || "";
     return {
       opacity: Math.round((parseFloat(style.opacity === "" ? "1" : style.opacity) || 0) * 100) / 100,
-      shadow: blur && !clipped ? Math.round(parseFloat(blur[1])) : 0,
+      shadow: figure ? figure.shadow : blur && !clipped ? Math.round(parseFloat(blur[1])) : 0,
       radius: svg || clipped || shaped ? null : Math.round(radius),
       clipped: clipped,
       image: image,
@@ -4982,8 +6245,14 @@
   }
 
   function setShadow(el, blur) {
-    // A figure's shadow follows its shape, as a drawing's does.
-    if (el.namespaceURI !== SVG_NS && !figureOf(el)) {
+    // A figure's shadow follows its shape, and skips its text (see paintFigure).
+    if (figureOf(el)) {
+      var paint = figurePaint(el);
+      paint.shadow = blur;
+      paintFigure(el, paint);
+      return;
+    }
+    if (el.namespaceURI !== SVG_NS) {
       setOwn(el, "box-shadow", blur > 0 ? shadowValue(blur) : null, "none");
       return;
     }
@@ -5024,7 +6293,10 @@
     if (has("radius") && changes.radius >= 0 && !cut && !figureOf(el) && el.namespaceURI !== SVG_NS) {
       setOwn(el, "border-radius", changes.radius > 0 ? Math.round(changes.radius) + "px" : null, "0px");
     }
-    if ((has("flipX") || has("flipY")) && flippable(el)) {
+    if ((has("flipX") || has("flipY")) && lineOf(el)) {
+      // A line has no flip to keep: each one mirrors it.
+      flipLine(el, !!changes.flipX, !!changes.flipY);
+    } else if ((has("flipX") || has("flipY")) && flippable(el)) {
       var now = lookOf(el, getComputedStyle(el));
       var x = has("flipX") ? !!changes.flipX : now.flipX;
       var y = has("flipY") ? !!changes.flipY : now.flipY;

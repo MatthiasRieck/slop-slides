@@ -13,7 +13,7 @@ import {
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api, errorMessage, type Slide } from "../lib/api";
-import { type EditGeometry, parseGeometry } from "../lib/arrange";
+import { type EditGeometry, type EditLayer, parseGeometry, parseLayers } from "../lib/arrange";
 import { catchDrops, type DropPoint, imageSize, isImage } from "../lib/drop";
 import {
   type DeckColor,
@@ -163,6 +163,8 @@ export function Stage() {
             styles={editStyles}
             sizeMode={editFrames.sizeMode}
             onSizeMode={editFrames.setSizeMode}
+            keepRatio={editFrames.keepRatio}
+            onKeepRatio={editFrames.setKeepRatio}
             fonts={editFrames.fonts}
             colors={editFrames.colors}
             background={editFrames.background}
@@ -177,6 +179,7 @@ export function Stage() {
             onOrder={(to) => postToEditor({ type: "slop:edit-order", to })}
             onDelete={editFrames.deleteSelection}
             geometry={editFrames.geometry}
+            layers={editFrames.layers}
             onArrange={postToEditor}
           />
         </ModeBar>
@@ -263,6 +266,9 @@ export function Stage() {
           {...editFrames.menu}
           running={running}
           flippable={!!editFrames.selection?.flippable}
+          several={(editFrames.geometry?.count ?? 0) > 1}
+          group={!!editFrames.selection?.group}
+          locked={!!editFrames.selection?.locked}
           onAction={editFrames.runMenuAction}
           onClose={editFrames.closeMenu}
         />
@@ -583,6 +589,7 @@ interface PasteboardView {
  */
 function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetView: () => void) {
   const [sizeMode, setSizeMode] = useState<"resize" | "stretch">("resize");
+  const [keepRatio, setKeepRatio] = useState(false);
   // What to select again once the edited slide reloads.
   const restore = useRef<{ slide: string; path: number[]; also: number[][] } | null>(null);
   const frame = useRef<HTMLIFrameElement | null>(null);
@@ -593,6 +600,7 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
   const [fonts, setFonts] = useState<FontChoice[]>(NO_FONTS);
   // Where the selection is, and on which slide.
   const [geometry, setGeometry] = useState<{ slide: string; geometry: EditGeometry | null } | null>(null);
+  const [layers, setLayers] = useState<{ slide: string; layers: EditLayer[] } | null>(null);
   const [colors, setColors] = useState<DeckColor[]>(NO_COLORS);
   const [background, setBackground] = useState<string | null>(null);
   // The menu a right-click in the editor opened, in the app's pixels.
@@ -673,6 +681,8 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
         setSelection({ slide: data.slide, selection: parseSelection(data.selection) });
       } else if (data?.type === "slop:edit-geometry" && data.slide === selected) {
         setGeometry({ slide: data.slide, geometry: parseGeometry(data.geometry) });
+      } else if (data?.type === "slop:edit-layers" && data.slide === selected) {
+        setLayers({ slide: data.slide, layers: parseLayers(data.layers) });
       } else if (data?.type === "slop:edit-tool" && data.slide === selected && typeof data.tool === "string") {
         // The editor put its tool away by itself (after adding a shape, or on Escape).
         if (data.tool in TOOL_NAMES) useApp.getState().setEditTool(data.tool as EditTool);
@@ -802,6 +812,8 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
     else if (action === "duplicate") post({ type: "slop:edit-duplicate" });
     else if (action === "delete") post({ type: "slop:edit-delete" });
     else if (action === "svg") post({ type: "slop:edit-open-svg" });
+    else if (action === "group" || action === "ungroup") post({ type: `slop:edit-${action}` });
+    else if (action === "lock" || action === "unlock") post({ type: "slop:edit-lock", locked: action === "lock" });
     else if (action === "flip-x" || action === "flip-y") {
       const look = selection?.slide === current ? selection.selection : null;
       if (!look?.flippable) return;
@@ -822,11 +834,19 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
       setSizeMode(mode);
       post({ type: "slop:edit-size-mode", mode });
     },
+    /** Resizes keep the aspect ratio. */
+    keepRatio,
+    setKeepRatio: (on: boolean) => {
+      setKeepRatio(on);
+      post({ type: "slop:edit-keep-ratio", on });
+    },
     overflow: editing && overflow?.slide === current ? overflow.items : NO_OVERFLOW,
     /** What the editor has selected, as its toolbar shows it. */
     selection: editing && selection?.slide === current ? selection.selection : null,
     /** Where the selection is, for the arrange controls. */
     geometry: editing && geometry?.slide === current ? geometry.geometry : null,
+    /** What is on the slide, the top-most first, for the Layers panel. */
+    layers: editing && layers?.slide === current ? layers.layers : NO_LAYERS,
     /** The open context menu, and what it does. */
     menu: editing ? menu : null,
     closeMenu,
@@ -875,6 +895,7 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
       const { editing, selected, editTool, editStyles } = useApp.getState();
       if (editing) {
         post({ type: "slop:edit-size-mode", mode: sizeMode });
+        post({ type: "slop:edit-keep-ratio", on: keepRatio });
         post(toolMessage(editTool, editStyles));
       }
       const again = restore.current;
@@ -893,6 +914,7 @@ function useSlideEditing(areaRef: React.RefObject<HTMLDivElement | null>, resetV
 }
 
 const NO_OVERFLOW: string[] = [];
+const NO_LAYERS: EditLayer[] = [];
 const NO_FONTS: FontChoice[] = [];
 const NO_COLORS: DeckColor[] = [];
 const TOOL_NAMES: Record<EditTool, true> = {
@@ -908,11 +930,22 @@ const TOOL_NAMES: Record<EditTool, true> = {
   chevron: true,
   "block-arrow": true,
   "double-arrow": true,
+  hexagon: true,
+  octagon: true,
+  pentagon: true,
+  parallelogram: true,
+  trapezoid: true,
+  plus: true,
+  cylinder: true,
+  document: true,
+  heart: true,
   bracket: true,
   brace: true,
   draw: true,
   line: true,
   arrow: true,
+  elbow: true,
+  curve: true,
   paint: true,
 };
 

@@ -232,15 +232,16 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   "Hand edits" below).
   They can also restyle elements (inline `color`, `font-size`, `font-family`, `font-weight`,
   `font-style`, `text-decoration-line`, `letter-spacing`, `line-height`, `text-align`,
-  `background-color`, `border`, `opacity`, `box-shadow`, `filter: drop-shadow(…)` on an
+  `background-color`, `border` (solid, `dashed` or `dotted`), `opacity`, `box-shadow`, `filter: drop-shadow(…)` on an
   `<svg>`, `border-radius`, on an image `object-fit`, `object-position` and a flipping
   `transform: scaleX(-1)` / `scaleY(-1)` (`!important`, after any tilt), and `position: relative` with a `z-index` to change
   the stacking order), set one slide's background (inline `background-color` and `background-image: none` on its `<section>`),
   restyle words inside text (inline `<span style="…">`, `<sup>`, `<sub>`),
   turn text into lists (`<ul>` / `<ol>` with inline `margin`, `padding-left` and
   `list-style-type`), link text or elements (see links below), and add text boxes, shapes,
-  lines, arrows and freehand drawings, which carry `data-added="text"`, `"shape"`, or
-  `"drawing"`.
+  lines, arrows, connectors and freehand drawings, which carry `data-added="text"`, `"shape"`, or
+  `"drawing"`. They can also group elements (`data-group`) and lock them (`data-lock`), see
+  "Hand edits" below.
 - Links: `<a href="#slide-id">` goes to that slide when clicked in the presentation (the
   player follows the hash); web links carry `target="_blank" rel="noopener"` so the
   presentation stays open. To link an element without text (an image, a shape) without
@@ -256,7 +257,7 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   `assets/<file>` and arrives as `<img src="assets/<file>" alt="" data-dropped data-moved
   style="position: absolute; left: 0px; top: 0px; width: Npx; translate: Xpx Ypx">` at the
   end of the slide, on top of everything else (see "Hand edits" below).
-  Never add `data-moved`, `data-added`, `data-dropped`, `data-resize-placeholder`, `data-delete-placeholder`, `contenteditable`, `spellcheck`, or `data-slop-*`
+  Never add `data-moved`, `data-added`, `data-dropped`, `data-resize-placeholder`, `data-delete-placeholder`, `data-group`, `data-lock`, `contenteditable`, `spellcheck`, or `data-slop-*`
   attributes yourself.
 - A slide with the `data-hidden` attribute is hidden: the user muted it in the editor and
   the player skips it when presenting. Keep the attribute when editing such a slide;
@@ -393,14 +394,21 @@ placeholder (including its hidden contents) and rework the surrounding layout so
 closes cleanly. The `delete-placeholder` lint warning lists these.
 
 The user can also restyle elements and add their own with the editor's toolbar. Inline style
-changes (text color, size, weight, alignment, fill, border, opacity, shadow, corner radius,
+changes (text color, size, weight, alignment, fill, border and its dashes, opacity, shadow, corner radius,
 an image's fit and flip, a slide's background, `z-index` stacking) are what they chose; keep them when editing, and when tidying move them into the slide's rules. An element
 they added carries `data-added` (`text` for a text box, `shape` for a rectangle, ellipse,
-triangle, star, speech bubble, diamond, chevron, block arrow or double-headed arrow, which may hold text, `drawing` for an `<svg>` with a freehand
-line, a straight or curved line, an arrow, a bracket or a brace) and is absolutely positioned on the slide with inline `left`,
-`top`, `width`, and `height`. A line or arrow keeps its one `<path>` as the editor drew it
-(`M … L …` when straight, `M … C … C …` when curved, an arrow's head a last `M … L … L …`), which
-is what lets the user drag its points. A line's end the user stuck to an element carries
+triangle, star, speech bubble, diamond, chevron, block arrow, double-headed arrow, hexagon, octagon, pentagon,
+parallelogram, trapezoid, plus, cylinder, document or heart, which may hold text, `drawing` for an `<svg>` with a freehand
+line, a straight or curved line, an arrow, a connector, a bracket or a brace) and is absolutely positioned on the slide with inline `left`,
+`top`, `width`, and `height`. A line keeps its stroke, one `<path>` as the editor drew it
+(`M … L …` when straight, `M … C … C …` when curved), which is what lets the user drag its
+points, and a `<path>` of its own for each head, with `data-head` saying which end and what kind
+(`"end arrow"`, `"start triangle"`; `arrow`, `triangle`, `bar` or `dot`); lines from older decks may
+still carry an arrow's head in the stroke, as a last `M … L … L …`. Dashes are a
+`stroke-dasharray` on the stroke only. A connector is a line with `data-route` (`elbow`: straight
+stretches turning at right angles, `M … L … L …`; `curved`: one `M … C …`) that the editor
+routes from end to end, out of the sides of what its ends are stuck to; keep the attribute and
+its path as drawn. A line's end the user stuck to an element carries
 `data-from` / `data-to` (that element's id; the editor may have given it one, such as `el-1`)
 and `data-from-at` / `data-to-at` (the spot on its box, `"50% 100%"`, followed by `edge` when
 the end is stuck to the element's outline there, `"0% 0% edge"`); the editor moves that end
@@ -408,17 +416,28 @@ whenever the user moves the element. An `edge` end sits where the line toward th
 meets the element's outline, so it slides along the outline as the element turns. Keep these attributes and the ids they name, also when
 tidying, and when you move, resize or remove such an element, move the line's end with it (or
 remove the attributes with the element). The `stuck-line-target` and `stuck-line-anchor` lint
-warnings list ends that name no element on their slide or no spot. A triangle, star, speech bubble, diamond, chevron, block arrow or
-double-headed arrow is a figure: a box with `data-shape` (`triangle`, `star`, `bubble`, `diamond`,
-`chevron`, `block-arrow` or `double-arrow`) whose shape, fill, border and flip an SVG in its
-`background-image` (with `background-size: 100% 100%`) draws, and whose pixel padding keeps its
-text inside the shape; the editor redraws both whenever the user restyles or resizes it. Keep
-`data-shape` and that SVG as the editor wrote it (you may move it into the slide's rules), and do
-not give a figure a `background-color`, `border` or `clip-path`. Older decks may have a triangle,
+warnings list ends that name no element on their slide or no spot, `line-head` and `line-route`
+heads and routes the editor cannot read. Any shape but a rectangle,
+rounded rectangle or ellipse is a figure: a box with `data-shape` (`triangle`, `star`, `bubble`, `diamond`,
+`chevron`, `block-arrow`, `double-arrow`, `hexagon`, `octagon`, `pentagon`, `parallelogram`,
+`trapezoid`, `plus`, `cylinder`, `document` or `heart`) whose shape, fill, border (and its dashes) and flip an SVG in its
+`background-image` (with `background-size: 100% 100%`) draws at the box's size, and whose pixel padding keeps its
+text inside the shape; the editor redraws both whenever the user restyles or resizes it. Its
+proportions (a chevron's point, an arrow's head, a bubble's tail, a star's points) are a number
+in `data-adjust`, and its shadow a second SVG in its `border-image` (`0 fill / 0 / <reach>px`),
+which falls around the shape and not on its text. Keep `data-shape`, `data-adjust` and those
+SVGs as the editor wrote them (you may move them into the slide's rules), and do
+not give a figure a `background-color`, `border`, `clip-path` or `filter: drop-shadow(…)`
+(an older version's shadow, which the editor moves into the `border-image`). Older decks may have a triangle,
 star or speech bubble cut out with an inline `clip-path: polygon(…)` instead; keep it, and the
 editor turns it into a figure when the user changes it. The `shape-kind` lint warning lists a
-`data-shape` the editor does not draw. A bracket or brace is a drawing with `data-outline`
-(`bracket` or `brace`) and one stroked `<path>`; keep the attribute. When tidying, keep each one where it
+`data-shape` the editor does not draw, `shape-adjust` a `data-adjust` that is no number. A bracket or brace is a drawing with `data-outline`
+(`bracket` or `brace`) and one stroked `<path>`; keep the attribute. A group the user made is a
+`<div data-group>` absolutely positioned at the slide's top level around what it holds, which sits
+in it absolutely positioned (an element that was in the layout left a `data-resize-placeholder`
+in its slot); keep it, and what it holds, together: move, size and tidy it as one, and never take
+it apart unless asked. An element with `data-lock` is locked: the user cannot pick, move or
+delete it by accident; keep the attribute, and do not move it unless asked. When tidying, keep each one where it
 appears and as it looks (its text, colors, border, and stacking), give it a class and move its
 styles into the slide's rules (or fit it into the layout where that is cleaner), then remove
 `data-added`. The `added-element` lint warning lists every one still waiting for this.

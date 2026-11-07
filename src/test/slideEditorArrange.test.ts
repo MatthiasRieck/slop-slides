@@ -437,6 +437,18 @@ describe("smart guides", () => {
     expect(guides(e)).toHaveLength(0);
   });
 
+  it("keeps a move straight across or up and down with Shift, still snapping along it", () => {
+    const e = editor();
+    const a = e.$("#a");
+    e.down(a);
+    e.move(a, 396, 130, { shiftKey: true });
+    // Mostly across: it stays level, and its left edge snaps to b's.
+    expect(a.style.translate).toBe("300px 0px");
+    e.move(a, 130, 400, { shiftKey: true });
+    expect(a.style.translate).toBe("0px 300px");
+    e.up(a, 130, 400);
+  });
+
   it("snaps to the slide's center and edges", () => {
     const e = editor();
     const a = e.$("#a");
@@ -665,5 +677,217 @@ describe("geometry", () => {
     const e = editor();
     e.fromParent({ type: "slop:edit-geometry", x: 10 });
     expect(e.commits()).toEqual([]);
+  });
+});
+
+describe("groups, locks and layers", () => {
+  /** Lays out what sits in a group (or was moved onto the slide) from its inline box, in what holds it. */
+  const nest = (e: ReturnType<typeof editor>) => {
+    const px = (v: string) => Number.parseFloat(v) || 0;
+    const slide = e.$("#intro");
+    const place = (el: HTMLElement) => {
+      const fixed = BOXES[el.id];
+      const [dx = 0, dy = 0] = (el.style.translate.match(/-?[\d.]+/g) ?? []).map(Number);
+      const w = px(el.style.width) || fixed?.[2] || 0;
+      const h = px(el.style.height) || fixed?.[3] || 0;
+      if (el.style.position !== "absolute" && fixed) return new e.window.DOMRect(fixed[0]! + dx, fixed[1]! + dy, w, h);
+      const holder = el.parentElement!;
+      const base = holder === slide ? { left: 0, top: 0 } : holder.getBoundingClientRect();
+      return new e.window.DOMRect(base.left + px(el.style.left) + dx, base.top + px(el.style.top) + dy, w, h);
+    };
+    for (const el of [...slide.querySelectorAll<HTMLElement>("*")]) el.getBoundingClientRect = () => place(el);
+    const group = () => e.$("[data-group]");
+    return { group, place };
+  };
+  const grouped = () => {
+    const e = editor();
+    nest(e);
+    e.pick("#a", "#b");
+    e.key("g", { metaKey: true });
+    const group = e.$("[data-group]");
+    group.getBoundingClientRect = () => {
+      const px = (v: string) => Number.parseFloat(v) || 0;
+      const [dx = 0, dy = 0] = (group.style.translate.match(/-?[\d.]+/g) ?? []).map(Number);
+      return new e.window.DOMRect(
+        px(group.style.left) + dx,
+        px(group.style.top) + dy,
+        px(group.style.width),
+        px(group.style.height),
+      );
+    };
+    Object.defineProperty(group, "offsetWidth", {
+      get: () => Number.parseFloat(group.style.width),
+      configurable: true,
+    });
+    Object.defineProperty(group, "offsetHeight", {
+      get: () => Number.parseFloat(group.style.height),
+      configurable: true,
+    });
+    return { e, group };
+  };
+  const double = (e: ReturnType<typeof editor>, el: Element) => {
+    e.click(el);
+    e.click(el);
+  };
+  const layers = async (e: ReturnType<typeof editor>) => {
+    await vi.waitFor(() => expect(e.posted().some((m) => m.type === "slop:edit-layers")).toBe(true));
+    return e
+      .posted()
+      .filter((m) => m.type === "slop:edit-layers")
+      .at(-1)!.layers as { path: number[]; name: string; depth: number; locked: boolean; selected: boolean }[];
+  };
+
+  it("groups the selection with ⌘G into a box around it, saved and selected as one", () => {
+    const { e, group } = grouped();
+    expect(group.parentElement).toBe(e.$("#intro"));
+    expect(group.style).toMatchObject({
+      position: "absolute",
+      left: "100px",
+      top: "100px",
+      width: "500px",
+      height: "300px",
+    });
+    expect([...group.children].map((el) => el.id)).toEqual(["a", "b"]);
+    expect(e.$("#a").style).toMatchObject({
+      position: "absolute",
+      left: "0px",
+      top: "0px",
+      width: "200px",
+      height: "100px",
+    });
+    expect(e.$("#b").style).toMatchObject({ left: "300px", top: "200px" });
+    // What was in the layout leaves its slot behind, so the rest stays put.
+    expect(e.doc.querySelectorAll("#intro > [data-resize-placeholder]")).toHaveLength(2);
+    expect(e.selected()).toEqual([group]);
+    expect(e.commits()).toHaveLength(1);
+    expect(e.commits()[0]!.markup).toContain("<div data-group=");
+    // Dragging what it holds moves the group, as one; a click on it selects the group.
+    e.drag(e.$("#b"), 20, 10);
+    expect(group.style.translate).toBe("20px 10px");
+    expect(e.$("#b").style.translate).toBe("");
+    e.click(e.$("#c"));
+    e.click(e.$("#a"));
+    expect(e.selected()).toEqual([group]);
+  });
+
+  it("goes into a group on a double-click, to select what it holds, until something else is picked", () => {
+    const { e, group } = grouped();
+    double(e, e.$("#a"));
+    expect(e.ids()).toEqual(["a"]);
+    e.click(e.$("#b"));
+    expect(e.ids()).toEqual(["b"]);
+    // Escape goes back out to the group.
+    e.key("Escape");
+    expect(e.selected()).toEqual([group]);
+    e.click(e.$("#a"));
+    expect(e.selected()).toEqual([group]);
+    double(e, e.$("#a"));
+    e.click(e.$("#c"));
+    e.click(e.$("#a"));
+    expect(e.selected()).toEqual([group]);
+  });
+
+  it("takes a group apart with ⇧⌘G, everything staying where it shows", () => {
+    const { e, group } = grouped();
+    e.drag(group, 50, 0);
+    e.key("g", { metaKey: true, shiftKey: true });
+    expect(e.doc.querySelector("[data-group]")).toBeNull();
+    expect(e.ids()).toEqual(["a", "b"]);
+    expect(e.$("#a").parentElement).toBe(e.$("#intro"));
+    expect(e.$("#a").style).toMatchObject({ left: "150px", top: "100px", translate: "" });
+    expect(e.$("#b").style).toMatchObject({ left: "450px", top: "300px" });
+    expect(e.commits().at(-1)!.markup).not.toContain("data-group");
+  });
+
+  it("gives a group a size to type, which spreads what it holds", () => {
+    const { e } = grouped();
+    e.fromParent({ type: "slop:edit-geometry", w: 1000 });
+    expect(e.$("[data-group]").style.width).toBe("1000px");
+    expect(e.$("#a").style).toMatchObject({ left: "0px", width: "400px", height: "100px" });
+    expect(e.$("#b").style).toMatchObject({ left: "600px", width: "400px" });
+  });
+
+  it("restyles everything in a group, in one save", () => {
+    const { e } = grouped();
+    e.fromParent({ type: "slop:edit-style", style: { color: "#00ff00" } });
+    expect(e.$("#a").style.color).toBe("rgb(0, 255, 0)");
+    expect(e.$("#b").style.color).toBe("rgb(0, 255, 0)");
+    expect(e.$("[data-group]").style.color).toBe("");
+    expect(e.commits()).toHaveLength(2);
+    expect(e.selected()).toEqual([e.$("[data-group]")]);
+  });
+
+  it("reports a group as one, with its first element's look", () => {
+    const { e } = grouped();
+    const selection = e
+      .posted()
+      .filter((m) => m.type === "slop:edit-selection")
+      .at(-1)!.selection as Record<string, unknown>;
+    expect(selection).toMatchObject({ kind: "group", group: true, fill: "#ff0000", flippable: false });
+  });
+
+  it("does not group one element", () => {
+    const e = editor();
+    e.click(e.$("#a"));
+    e.key("g", { metaKey: true });
+    expect(e.doc.querySelector("[data-group]")).toBeNull();
+    expect(e.commits()).toEqual([]);
+  });
+
+  it("keeps a locked element from being picked, moved or deleted, but lets it be unlocked", () => {
+    const e = editor();
+    e.click(e.$("#a"));
+    e.fromParent({ type: "slop:edit-lock", locked: true });
+    expect(e.$("#a").hasAttribute("data-lock")).toBe(true);
+    expect(e.commits().at(-1)!.markup).toContain('id="a" style="background: red" data-lock=""');
+    // Still selected, with its frame but no handles.
+    expect(e.$("[data-slop-ui]").hasAttribute("data-locked")).toBe(true);
+    e.key("ArrowRight");
+    expect(e.$("#a").style.translate).toBe("");
+    e.key("Delete");
+    expect(e.$("#a").isConnected).toBe(true);
+    e.fromParent({ type: "slop:edit-geometry", x: 500 });
+    expect(e.$("#a").style.translate).toBe("");
+    e.key("Escape");
+    e.click(e.$("#a"));
+    expect(e.ids()).toEqual([]);
+    e.fromParent({ type: "slop:edit-select-all" });
+    expect(e.ids()).toEqual(["b", "c", "d"]);
+    e.fromParent({ type: "slop:edit-lock", locked: false, path: [0] });
+    expect(e.$("#a").hasAttribute("data-lock")).toBe(false);
+    e.click(e.$("#a"));
+    expect(e.ids()).toEqual(["a"]);
+  });
+
+  it("lists the slide's layers, the top-most first, with what a group holds under it", async () => {
+    const { e } = grouped();
+    const rows = await layers(e);
+    // The group is positioned, so above what is not; what is in a wrapper comes later on the slide.
+    expect(rows.map((r) => [r.name, r.depth])).toEqual([
+      ["Group of 2", 0],
+      ["Box: B", 1],
+      ["Box: A", 1],
+      ["Box: D", 0],
+      ["Box: C", 0],
+    ]);
+    expect(rows.map((r) => r.selected)).toEqual([true, false, false, false, false]);
+    const group = rows[0]!.path;
+    expect(rows[1]!.path).toEqual([...group, 1]);
+    // A layer goes up past the next one, whether or not they overlap.
+    e.fromParent({ type: "slop:edit-order", to: "forward", path: rows[3]!.path, any: true });
+    // As high as the group, and later in the slide, so above it.
+    expect(e.$("#d").style).toMatchObject({ position: "relative", zIndex: "0" });
+    await vi.waitFor(async () => expect((await layers(e))[0]!.name).toBe("Box: D"));
+    e.fromParent({ type: "slop:edit-lock", locked: true, path: rows[4]!.path });
+    await vi.waitFor(async () => expect((await layers(e)).at(-1)).toMatchObject({ name: "Box: C", locked: true }));
+  });
+});
+
+describe("the layer list on load", () => {
+  it("is reported once the editor starts, before anything changes", async () => {
+    const e = editor();
+    await vi.waitFor(() => expect(e.posted().some((m) => m.type === "slop:edit-layers")).toBe(true));
+    const rows = e.posted().find((m) => m.type === "slop:edit-layers")!.layers as { name: string }[];
+    expect(rows.map((r) => r.name)).toEqual(["Box: D", "Box: C", "Box: B", "Box: A"]);
   });
 });

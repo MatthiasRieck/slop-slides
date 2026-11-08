@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The tabs' contents have their own tests.
@@ -6,6 +6,8 @@ vi.mock("./ChatPanel", () => ({ ChatPanel: () => <div data-testid="chat" /> }));
 vi.mock("./FileTree", () => ({ FileTree: () => <div data-testid="files" /> }));
 vi.mock("./SettingsPanel", () => ({ SettingsPanel: () => <div data-testid="settings" /> }));
 vi.mock("./SvgEditor", () => ({ SvgEditor: () => <div data-testid="svg" /> }));
+vi.mock("./NarrationPanel", () => ({ NarrationPanel: () => <div data-testid="narration" /> }));
+vi.mock("./NotesPanel", () => ({ NotesPanel: () => <div data-testid="notes" /> }));
 
 import { useApp } from "../store";
 import { useSvgEditor } from "../svgStore";
@@ -42,6 +44,32 @@ describe("Sidebar", () => {
     expect(shown("chat")).toBe(false);
   });
 
+  it("shows the slide's narration and notes in tabs of their own", () => {
+    render(<Sidebar />);
+    fireEvent.click(screen.getByRole("button", { name: "Open a tab" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Narration" }));
+    expect(tabNames()).toEqual(["Chat", "Files", "Narration"]);
+    expect(shown("narration")).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Open a tab" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Notes" }));
+    expect(shown("notes")).toBe(true);
+    expect(shown("narration")).toBe(false);
+    expect(useApp.getState()).toMatchObject({ sidebarTabs: ["chat", "files", "narration", "notes"], sidebarTab: "notes" });
+  });
+
+  it("marks the Narration tab when the selected slide has narration", () => {
+    useApp.setState({ sidebarTabs: ["chat", "narration"], selected: "intro" });
+    render(<Sidebar />);
+    expect(screen.queryByTestId("has-narration")).toBeNull();
+    const deck = deckFor(DECK_HTML);
+    act(() =>
+      useApp.setState({
+        deck: { ...deck, slides: deck.slides.map((s) => (s.id === "intro" ? { ...s, narration: "Hello." } : s)) },
+      }),
+    );
+    expect(tab("Narration").contains(screen.getByTestId("has-narration"))).toBe(true);
+  });
+
   it("shows workspace chat without an open deck", () => {
     useApp.setState({ deck: null });
     render(<Sidebar />);
@@ -71,7 +99,7 @@ describe("Sidebar", () => {
     useApp.setState({ sidebarTabs: ["files"], sidebarTab: "files" });
     render(<Sidebar />);
     fireEvent.click(screen.getByRole("button", { name: "Open a tab" }));
-    expect(screen.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Chat", "SVG", "Settings"]);
+    expect(screen.getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Chat", "Narration", "Notes", "SVG", "Settings"]);
     fireEvent.click(screen.getByRole("menuitem", { name: "Chat" }));
     expect(screen.queryByRole("menu")).toBeNull();
     expect(tabNames()).toEqual(["Files", "Chat"]);
@@ -133,7 +161,7 @@ describe("Sidebar", () => {
   });
 
   it("turns off + once every surface is open", () => {
-    useApp.setState({ sidebarTabs: ["chat", "files", "svg", "settings"] });
+    useApp.setState({ sidebarTabs: ["chat", "files", "narration", "notes", "svg", "settings"] });
     render(<Sidebar />);
     expect((screen.getByRole("button", { name: "Open a tab" }) as HTMLButtonElement).disabled).toBe(true);
   });

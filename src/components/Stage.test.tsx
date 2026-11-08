@@ -680,7 +680,7 @@ describe("Stage", () => {
       it("shows pins in View only, and not while the review is hidden", () => {
         useApp.setState({ comments: { intro: [comment] } });
         render(<Stage />);
-        act(() => useApp.getState().setMode("narration"));
+        act(() => useApp.getState().setMode("settings"));
         expect(screen.queryByTestId("comment-pin")).toBeNull();
         act(() => useApp.getState().setMode("view"));
         expect(screen.getByTestId("comment-pin")).toBeTruthy();
@@ -940,7 +940,7 @@ describe("Stage", () => {
 
     it("has the search in View mode only", () => {
       render(<Stage />);
-      act(() => useApp.getState().setMode("narration"));
+      act(() => useApp.getState().setMode("settings"));
       expect(screen.queryByRole("textbox", { name: "Search slides" })).toBeNull();
       act(() => useApp.getState().setMode("view"));
       act(() => useApp.getState().setMode("edit"));
@@ -989,7 +989,7 @@ describe("Stage", () => {
     it("puts a sketch tool away when leaving view mode", () => {
       render(<Stage />);
       fireEvent.click(screen.getByRole("button", { name: "Draw on the slide" }));
-      act(() => useApp.getState().setMode("narration"));
+      act(() => useApp.getState().setMode("settings"));
       act(() => useApp.getState().setMode("view"));
       expect(screen.getByRole("button", { name: "Draw on the slide" }).getAttribute("aria-pressed")).toBe("false");
     });

@@ -5,7 +5,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("./components/Home", () => ({ Home: () => <div data-testid="stub-home" /> }));
 vi.mock("./components/TopBar", () => ({ TopBar: () => <div data-testid="stub-top-bar" /> }));
 vi.mock("./components/DeckSettings", () => ({ DeckSettings: () => <div data-testid="stub-settings" /> }));
-vi.mock("./components/DeckToolbar", () => ({ DeckToolbar: () => <div data-testid="stub-deck-toolbar" /> }));
+vi.mock("./components/NarrationTimeline", () => ({
+  NarrationTimeline: () => <div data-testid="stub-timeline" />,
+}));
 vi.mock("./components/SlideRail", () => ({ SlideRail: () => <div data-testid="stub-rail" /> }));
 vi.mock("./components/Stage", () => ({ Stage: () => <div data-testid="stub-stage" /> }));
 vi.mock("./components/Sidebar", () => ({ Sidebar: () => <div data-testid="stub-sidebar-tabs" /> }));
@@ -16,7 +18,7 @@ vi.mock("./components/CodeView", () => ({
 }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { App, SIDEBAR_MAX_SIZE } from "./App";
+import { App, narrationTabShown, SIDEBAR_MAX_SIZE } from "./App";
 import { useApp } from "./store";
 import { DECK_HTML, deckFor } from "./test/fixtures";
 
@@ -29,7 +31,11 @@ beforeEach(() => {
     deck: null,
     view: "slides",
     slideMode: "view",
+    editing: false,
     sidebarOpen: true,
+    sidebarMaximized: false,
+    sidebarTabs: ["chat", "files"],
+    sidebarTab: "chat",
     railOpen: true,
     presenting: false,
     error: null,
@@ -84,6 +90,34 @@ describe("App", () => {
     render(<App />);
     expect(screen.getByTestId("stub-settings")).toBeTruthy();
     expect(screen.queryByTestId("stub-stage")).toBeNull();
+  });
+
+  it("runs the narration timeline under the slide while the sidebar shows the Narration tab", () => {
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) });
+    render(<App />);
+    expect(shown("timeline")).toBe(false);
+    act(() => useApp.getState().setSidebarTab("narration"));
+    expect(shown("timeline")).toBe(true);
+    // In Edit mode too, but not in place of the HTML or the settings.
+    act(() => useApp.setState({ editing: true }));
+    expect(shown("timeline")).toBe(true);
+    act(() => useApp.getState().setMode("code"));
+    expect(shown("timeline")).toBe(false);
+    act(() => useApp.getState().setMode("settings"));
+    expect(shown("timeline")).toBe(false);
+    act(() => useApp.getState().setMode("view"));
+    expect(shown("timeline")).toBe(true);
+    act(() => useApp.getState().setSidebarTab("notes"));
+    expect(shown("timeline")).toBe(false);
+  });
+
+  it("shows the timeline only while the Narration tab is beside the slide", () => {
+    const state = { sidebarOpen: true, sidebarMaximized: false, sidebarTab: "narration" as const };
+    expect(narrationTabShown(state)).toBe(true);
+    expect(narrationTabShown({ ...state, sidebarOpen: false })).toBe(false);
+    expect(narrationTabShown({ ...state, sidebarMaximized: true })).toBe(false);
+    expect(narrationTabShown({ ...state, sidebarTab: "chat" })).toBe(false);
+    expect(narrationTabShown({ ...state, sidebarTab: null })).toBe(false);
   });
 
   it("keeps the HTML view mounted while showing slides, so unsaved edits survive", () => {

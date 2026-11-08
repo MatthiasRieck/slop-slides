@@ -1,4 +1,4 @@
-import { AudioLines, Code2, Eye, GitCompare, Pencil, StickyNote } from "lucide-react";
+import { Code2, Eye, GitCompare, Pencil } from "lucide-react";
 import { useEffect } from "react";
 
 import { useChanges } from "../changesStore";
@@ -11,8 +11,6 @@ type TabMode = Exclude<DeckMode, "settings">;
 const MODES: { id: TabMode; label: string; icon: typeof Eye }[] = [
   { id: "view", label: "View", icon: Eye },
   { id: "edit", label: "Edit", icon: Pencil },
-  { id: "narration", label: "Narration", icon: AudioLines },
-  { id: "notes", label: "Notes", icon: StickyNote },
   { id: "git", label: "Git", icon: GitCompare },
   { id: "code", label: "HTML", icon: Code2 },
 ];
@@ -45,7 +43,6 @@ export function ModeTabs() {
   const mode = useApp(deckMode);
   const hasSlide = useApp((s) => s.deck?.slides.some((slide) => slide.id === s.selected) ?? false);
   const locked = useApp((s) => !!s.deck?.slides.find((slide) => slide.id === s.selected)?.locked);
-  const narrated = useApp((s) => !!s.deck?.slides.find((slide) => slide.id === s.selected)?.narration);
   const codeDirty = useApp((s) => s.codeDirty);
   const file = useApp((s) => basename(s.deck?.id ?? ""));
   const inRepository = useInRepository();
@@ -55,12 +52,9 @@ export function ModeTabs() {
     edit: locked
       ? "This slide is locked; unlock it in the slide list to edit it"
       : "Edit the slide: click to select, drag to move, drag the handles to resize or rotate, double-click to edit text, drop images onto it to add them",
-    narration: narrated ? "Show this slide's narration" : "Write narration for this slide",
-    notes: "Write speaker notes for this slide; only the presenter sees them",
     git: "See what changed since the last commit, and compare each slide before and after",
     code: `Show ${file}, scrolled to the selected slide`,
   };
-  const needsSlide = (id: TabMode) => id === "edit" || id === "narration" || id === "notes";
   const modes = MODES.filter(({ id }) => id !== "git" || inRepository);
 
   return (
@@ -72,7 +66,7 @@ export function ModeTabs() {
           role="tab"
           aria-selected={mode === id}
           title={titles[id]}
-          disabled={(needsSlide(id) && !hasSlide) || (id === "edit" && locked)}
+          disabled={id === "edit" && (!hasSlide || locked)}
           onClick={() => useApp.getState().setMode(id)}
           className={cn(
             "flex min-w-14 flex-col items-center justify-center gap-0.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
@@ -81,13 +75,6 @@ export function ModeTabs() {
         >
           <span className="relative">
             <Icon className="size-5" strokeWidth={1.75} />
-            {id === "narration" && narrated && (
-              <span
-                data-testid="has-narration"
-                className="absolute -top-0.5 -right-1 size-1.5 rounded-full bg-primary"
-                aria-hidden
-              />
-            )}
             {id === "code" && codeDirty && (
               <span title="Unsaved changes" className="absolute -top-0.5 -right-1 size-1.5 rounded-full bg-primary" />
             )}

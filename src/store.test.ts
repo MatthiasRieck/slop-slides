@@ -114,7 +114,7 @@ describe("sidebar", () => {
     expect(useApp.getState()).toMatchObject({ sidebarTab: "files", sidebarOpen: true });
     useApp = await freshStore();
     expect(useApp.getState().sidebarTab).toBe("files");
-    // Narration was a sidebar tab before it became a mode.
+    // A tab that is not open is not shown, even when it was the last one picked.
     localStorage.setItem("slopslide.sidebarTab", "narration");
     expect((await freshStore()).getState().sidebarTab).toBe("chat");
     localStorage.setItem("slopslide.sidebarTab", "bogus");
@@ -193,7 +193,7 @@ describe("sidebar", () => {
 
   it("drops saved tabs that are no more, and a showing tab that is not open", async () => {
     localStorage.clear();
-    localStorage.setItem("slopslide.sidebarTabs", JSON.stringify(["narration", "files", "files", 3]));
+    localStorage.setItem("slopslide.sidebarTabs", JSON.stringify(["bogus", "files", "files", 3]));
     localStorage.setItem("slopslide.sidebarTab", "chat");
     expect((await freshStore()).getState()).toMatchObject({ sidebarTabs: ["files"], sidebarTab: "files" });
     localStorage.setItem("slopslide.sidebarTabs", "not json");
@@ -408,13 +408,13 @@ describe("stage view", () => {
     const mode = () => deckMode(useApp.getState());
     useApp.getState().setMode("edit");
     expect(mode()).toBe("edit");
-    useApp.getState().setMode("narration");
-    expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "narration" });
+    useApp.getState().setMode("git");
+    expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "git" });
     useApp.getState().setMode("code");
     expect(useApp.getState()).toMatchObject({ view: "code", slideMode: "view" });
     expect(localStorage.getItem("slopslide.view")).toBe("code");
-    useApp.getState().setMode("narration");
-    expect(mode()).toBe("narration");
+    useApp.getState().setMode("git");
+    expect(mode()).toBe("git");
     expect(localStorage.getItem("slopslide.view")).toBe("slides");
     useApp.getState().setMode("settings");
     expect(mode()).toBe("settings");
@@ -427,9 +427,9 @@ describe("stage view", () => {
   it("setMode stays put rather than edit a locked slide", async () => {
     const { useApp, deckMode } = await freshModule();
     const locked = { ...DECK, slides: DECK.slides.map((s) => ({ ...s, locked: true })) };
-    useApp.setState({ deck: locked, selected: "intro", view: "slides", editing: false, slideMode: "narration" });
+    useApp.setState({ deck: locked, selected: "intro", view: "slides", editing: false, slideMode: "settings" });
     useApp.getState().setMode("edit");
-    expect(deckMode(useApp.getState())).toBe("narration");
+    expect(deckMode(useApp.getState())).toBe("settings");
   });
 
   it("setView switches and persists", async () => {
@@ -3063,13 +3063,14 @@ describe("slide rail changes", () => {
     expect(useApp.getState().deck).toBe(next);
   });
 
-  it("notes are a mode of their own", async () => {
+  it("notes and narration are sidebar tabs, leaving the deck's mode as it is", async () => {
     const { useApp, deckMode } = await freshModule();
-    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro" });
-    useApp.getState().setMode("notes");
-    expect(deckMode(useApp.getState())).toBe("notes");
-    useApp.getState().setMode("view");
-    expect(deckMode(useApp.getState())).toBe("view");
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", editing: true, view: "slides" });
+    useApp.getState().setSidebarTab("notes");
+    useApp.getState().setSidebarTab("narration");
+    expect(useApp.getState()).toMatchObject({ sidebarTab: "narration", sidebarOpen: true });
+    expect(useApp.getState().sidebarTabs).toEqual(expect.arrayContaining(["notes", "narration"]));
+    expect(deckMode(useApp.getState())).toBe("edit");
   });
 });
 

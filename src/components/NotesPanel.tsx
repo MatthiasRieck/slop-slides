@@ -4,14 +4,14 @@ import type { Deck, Slide } from "../lib/api";
 import { useDraftText } from "../lib/useDraftText";
 import { useApp } from "../store";
 import { ScriptField } from "./ScriptMarkdown";
-import { SlideBand, SlideBandHeader } from "./SlideBand";
+import { SlidePanel, SlidePanelHeader } from "./SlidePanel";
 
 /** How long typing pauses before the notes are saved to the deck. */
 export const NOTES_SAVE_DELAY = 800;
 
 /**
- * Notes mode's tools, in a band above the slide: the speaker notes of the current slide, to view
- * and edit, in Markdown. Only the presenter sees them, in the show's presenter view.
+ * The Notes tab of the right sidebar: the speaker notes of the selected slide, to view and edit,
+ * in Markdown. Only the presenter sees them, in the show's presenter view.
  */
 export function NotesPanel() {
   const deck = useApp((s) => s.deck);
@@ -20,12 +20,12 @@ export function NotesPanel() {
   const slide = deck?.slides[index];
   const [preview, setPreview] = useState(false);
   return (
-    <SlideBand label="Speaker notes" noun="notes" deck={deck} slide={slide}>
+    <SlidePanel label="Speaker notes" noun="notes" deck={deck} slide={slide}>
       {(deck, slide) => (
         // One editor per slide: switching slides saves the last one's pending text as it unmounts.
         <NotesEditor key={slide.id} deck={deck} slide={slide} index={index} preview={preview} onPreview={setPreview} />
       )}
-    </SlideBand>
+    </SlidePanel>
   );
 }
 
@@ -41,8 +41,8 @@ function NotesEditor(props: {
     useApp.getState().setNotes(slide.id, text),
   );
   return (
-    <div className="flex min-w-0 max-w-3xl flex-1 flex-col gap-2 p-3">
-      <SlideBandHeader
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 p-3">
+      <SlidePanelHeader
         slide={slide}
         index={index}
         total={deck.slides.length}

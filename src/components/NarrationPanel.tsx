@@ -13,7 +13,7 @@ import { useApp } from "../store";
 import { Button } from "./Button";
 import { Field, inputClass, wideSelectClass } from "./Field";
 import { ScriptField } from "./ScriptMarkdown";
-import { SlideBand, SlideBandHeader } from "./SlideBand";
+import { SlidePanel, SlidePanelHeader } from "./SlidePanel";
 import { SlideTime } from "./SlideTime";
 
 /** How long typing pauses before the narration is saved to the deck. */
@@ -23,9 +23,9 @@ export const NARRATION_SAVE_DELAY = 800;
 const NO_AUDIO: Record<string, SlideAudio> = {};
 
 /**
- * Narration mode's tools, in a band above the slide: what is said over the current slide, to
- * view, edit and hear. The text stays a readable width however wide the stage is, with the
- * voice beside it.
+ * The Narration tab of the right sidebar: what is said over the selected slide, to view, edit
+ * and hear, with the deck's voice and its audio as a whole under it. While it shows, the
+ * narration timeline runs under the slide (see App.tsx).
  */
 export function NarrationPanel() {
   const [preview, setPreview] = useState(false);
@@ -38,7 +38,7 @@ export function NarrationPanel() {
   const index = deck?.slides.findIndex((s) => s.id === selected) ?? -1;
   const slide = deck?.slides[index];
   return (
-    <SlideBand label="Narration tools" noun="narration" deck={deck} slide={slide}>
+    <SlidePanel label="Narration tools" noun="narration" deck={deck} slide={slide}>
       {(deck, slide) => (
         <>
           {/* One editor per slide: switching slides saves the last one's pending text as it unmounts. */}
@@ -51,7 +51,7 @@ export function NarrationPanel() {
             preview={preview}
             onPreview={setPreview}
           />
-          <div className="flex w-72 shrink-0 flex-col justify-between overflow-y-auto border-l">
+          <div className="flex shrink-0 flex-col border-t">
             <SpeechSettings deck={deck} />
             <CleanUpAll deck={deck} />
             <DeckAudio deck={deck} />
@@ -59,7 +59,7 @@ export function NarrationPanel() {
           </div>
         </>
       )}
-    </SlideBand>
+    </SlidePanel>
   );
 }
 
@@ -255,14 +255,14 @@ function NarrationEditor(props: {
   const spoken = markdownText(draft);
   const words = wordCount(spoken);
   return (
-    <div className="flex min-w-0 max-w-3xl flex-1 flex-col gap-2 p-3">
-      <SlideBandHeader slide={slide} index={index} total={total} preview={preview} onPreview={props.onPreview}>
+    <div className="flex min-h-64 min-w-0 flex-1 flex-col gap-2 p-3">
+      <SlidePanelHeader slide={slide} index={index} total={total} preview={preview} onPreview={props.onPreview}>
         <span className="ml-auto shrink-0 tabular-nums">
           {words} {words === 1 ? "word" : "words"} ·{" "}
           <span title="Estimated at 150 words per minute">~{speakingTime(spoken)}</span>
         </span>
         <SlideTime deck={deck} />
-      </SlideBandHeader>
+      </SlidePanelHeader>
       <ScriptField
         label="Narration"
         draft={draft}
@@ -327,7 +327,7 @@ function SlideAudioControls(props: {
   if (!props.hasText && !recorded) return null;
   const busy = render?.slide === slide || (render !== null && render.slide === null && render.deck === deck.id);
   return (
-    <div className="flex items-center justify-between gap-2 text-xs">
+    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
       <span className="flex min-w-0 items-center gap-1 text-muted-foreground">
         {busy ? (
           <>
@@ -338,7 +338,7 @@ function SlideAudioControls(props: {
           audioLabel(audio)
         )}
       </span>
-      <div className="flex shrink-0 gap-1">
+      <div className="flex shrink-0 flex-wrap gap-1">
         {props.hasText && !props.locked && (
           <Button
             size="md"

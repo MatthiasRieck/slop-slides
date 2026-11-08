@@ -239,7 +239,7 @@ function loadFavorites(): string[] {
 export type StageView = "slides" | "code";
 
 /** What the deck is open for; the top bar's tabs pick it (see components/ModeTabs.tsx). */
-export type DeckMode = "view" | "edit" | "narration" | "notes" | "settings" | "git" | "code";
+export type DeckMode = "view" | "edit" | "settings" | "git" | "code";
 
 /** The mode of the deck: the HTML view and editing have their own state, the rest is `slideMode`. */
 export function deckMode(state: Pick<AppState, "view" | "editing" | "slideMode">): DeckMode {
@@ -299,7 +299,7 @@ export function searchHighlight(state: Pick<AppState, "search" | "selected">) {
 }
 
 /** What the right sidebar can show, each in a tab of its own, in menu order (see components/Sidebar.tsx). */
-export const SIDEBAR_TABS = ["chat", "files", "svg", "settings"] as const;
+export const SIDEBAR_TABS = ["chat", "files", "narration", "notes", "svg", "settings"] as const;
 export type SidebarTab = (typeof SIDEBAR_TABS)[number];
 const isSidebarTab = (value: unknown): value is SidebarTab => SIDEBAR_TABS.includes(value as SidebarTab);
 /** The tabs a first start opens. */
@@ -318,7 +318,7 @@ export interface WorkspaceChange {
   rev: number;
 }
 
-interface AppState {
+export interface AppState {
   /** The folder open in the file tree; null on the start screen. */
   workspace: WorkspaceInfo | null;
   /** The workspace file shown in the main area: a deck (also in `deck`) or another page. */
@@ -398,7 +398,7 @@ interface AppState {
   search: SlideSearch;
   editing: boolean;
   /** The mode shown over the rendered slide when not editing; see `deckMode`. */
-  slideMode: "view" | "narration" | "notes" | "settings" | "git";
+  slideMode: "view" | "settings" | "git";
   /** Bumped when a slide edit could not be saved, so the stage reloads the slide from disk. */
   editReload: number;
   /** The edit toolbar's tool: select, or what a drag on the slide adds. */
@@ -1758,7 +1758,7 @@ async function promptAboutElement(text: string, element: EditElement, { leaveEdi
   promptAgent(text, { screenshot, element });
 }
 
-/** The sidebar's tabs as last left; tabs that are no more (narration was one) are dropped. */
+/** The sidebar's tabs as last left; tabs that are no more are dropped. */
 function loadSidebarTabs(): { sidebarTabs: SidebarTab[]; sidebarTab: SidebarTab | null } {
   let sidebarTabs = DEFAULT_SIDEBAR_TABS;
   try {

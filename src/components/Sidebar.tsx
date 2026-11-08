@@ -1,4 +1,15 @@
-import { Files, Maximize2, MessageSquare, Minimize2, Plus, Settings, Shapes, X } from "lucide-react";
+import {
+  AudioLines,
+  Files,
+  Maximize2,
+  MessageSquare,
+  Minimize2,
+  Plus,
+  Settings,
+  Shapes,
+  StickyNote,
+  X,
+} from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
 
 import { cn, isMac } from "../lib/utils";
@@ -7,6 +18,8 @@ import { useSvgEditor } from "../svgStore";
 import { ToolButton } from "./Button";
 import { ChatPanel } from "./ChatPanel";
 import { FileTree } from "./FileTree";
+import { NarrationPanel } from "./NarrationPanel";
+import { NotesPanel } from "./NotesPanel";
 import { useDismiss } from "./Popover";
 import { SettingsPanel } from "./SettingsPanel";
 import { SvgEditor } from "./SvgEditor";
@@ -25,6 +38,18 @@ interface TabKind {
 const TABS: Record<SidebarTab, TabKind> = {
   chat: { label: "Chat", hint: "Talk to the agent about the deck", icon: MessageSquare, render: () => <ChatPanel /> },
   files: { label: "Files", hint: "The workspace's folders and files", icon: Files, render: () => <FileTree /> },
+  narration: {
+    label: "Narration",
+    hint: "Write, hear and time what is said over each slide",
+    icon: AudioLines,
+    render: () => <NarrationPanel />,
+  },
+  notes: {
+    label: "Notes",
+    hint: "Speaker notes for each slide; only the presenter sees them",
+    icon: StickyNote,
+    render: () => <NotesPanel />,
+  },
   svg: {
     label: "SVG",
     hint: "Edit a drawing from a slide",
@@ -37,7 +62,7 @@ const TABS: Record<SidebarTab, TabKind> = {
 
 /**
  * The right sidebar, from the top of the window to the bottom: a tab for each surface open in it
- * (the chat, the workspace's files, the settings, …), each closable, and a `+` to open another;
+ * (the chat, the workspace's files, the slide's narration and notes, the settings, …), each closable, and a `+` to open another;
  * the maximize and hide buttons at its top right, the settings button at its bottom left. Maximized, it covers the whole window.
  */
 export function Sidebar() {
@@ -107,7 +132,10 @@ function Tab({ id, active }: { id: SidebarTab; active: boolean }) {
         onClick={() => useApp.getState().setSidebarTab(id)}
         className="flex items-center gap-1.5 py-1 pl-2 pr-2.5"
       >
-        <Icon className="size-3.5 group-focus-within:invisible group-hover:invisible" />
+        <span className="relative group-focus-within:invisible group-hover:invisible">
+          <Icon className="size-3.5" />
+          {id === "narration" && <NarrationMark />}
+        </span>
         {label}
       </button>
       <button
@@ -120,6 +148,19 @@ function Tab({ id, active }: { id: SidebarTab; active: boolean }) {
         <X className="size-3.5" />
       </button>
     </div>
+  );
+}
+
+/** A dot on the Narration tab when the selected slide has narration. */
+function NarrationMark() {
+  const narrated = useApp((s) => !!s.deck?.slides.find((slide) => slide.id === s.selected)?.narration);
+  if (!narrated) return null;
+  return (
+    <span
+      data-testid="has-narration"
+      title="This slide has narration"
+      className="absolute -top-0.5 -right-1 size-1.5 rounded-full bg-primary"
+    />
   );
 }
 

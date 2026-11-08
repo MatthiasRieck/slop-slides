@@ -39,13 +39,12 @@ beforeEach(() => {
 describe("ModeTabs", () => {
   it("lists the modes, with View selected", () => {
     render(<ModeTabs />);
-    expect(tabs()).toEqual(["View", "Edit", "Narration", "Notes", "Git", "HTML"]);
+    expect(tabs()).toEqual(["View", "Edit", "Git", "HTML"]);
     expect(selected()).toEqual(["View"]);
   });
 
   it.each([
     ["Edit", "edit"],
-    ["Narration", "narration"],
     ["HTML", "code"],
   ])("switches to %s and back to View", (name, mode) => {
     render(<ModeTabs />);
@@ -59,19 +58,19 @@ describe("ModeTabs", () => {
 
   it("shows each mode as an icon over its label, highlighting the selected one", () => {
     render(<ModeTabs />);
-    fireEvent.click(tab("Notes"));
+    fireEvent.click(tab("HTML"));
     for (const t of screen.getAllByRole("tab")) {
       expect(t.querySelector("svg")).not.toBeNull();
       expect(t.className).toContain("flex-col");
-      expect(t.classList.contains("text-primary")).toBe(t.textContent === "Notes");
+      expect(t.classList.contains("text-primary")).toBe(t.textContent === "HTML");
     }
   });
 
   it("leaves edit mode when switching to another mode", () => {
     render(<ModeTabs />);
     fireEvent.click(tab("Edit"));
-    fireEvent.click(tab("Narration"));
-    expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "narration" });
+    fireEvent.click(tab("View"));
+    expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "view" });
   });
 
   it("cannot edit a locked slide, and says why", () => {
@@ -79,7 +78,7 @@ describe("ModeTabs", () => {
     render(<ModeTabs />);
     expect(tab("Edit").disabled).toBe(true);
     expect(tab("Edit").title).toContain("locked");
-    expect(tab("Narration").disabled).toBe(false);
+    expect(tab("HTML").disabled).toBe(false);
   });
 
   it("has no Settings tab, and selects no tab in Settings mode", () => {
@@ -105,7 +104,7 @@ describe("ModeTabs", () => {
       inRepository(false);
       render(<ModeTabs />);
       await settled();
-      expect(tabs()).toEqual(["View", "Edit", "Narration", "Notes", "HTML"]);
+      expect(tabs()).toEqual(["View", "Edit", "HTML"]);
     });
 
     it("shows up once the deck is found in a repository", async () => {
@@ -160,20 +159,10 @@ describe("ModeTabs", () => {
     });
   });
 
-  it("marks a slide that has narration", () => {
-    const deck = deckFor(DECK_HTML);
-    useApp.setState({
-      deck: { ...deck, slides: deck.slides.map((s) => (s.id === "intro" ? { ...s, narration: "Hello." } : s)) },
-    });
+  it("has no Narration or Notes tab: they are in the sidebar", () => {
     render(<ModeTabs />);
-    expect(screen.queryByTestId("has-narration")).not.toBeNull();
-    expect(tab("Narration").title).toBe("Show this slide's narration");
-  });
-
-  it("shows no narration mark on a slide without narration", () => {
-    render(<ModeTabs />);
-    expect(screen.queryByTestId("has-narration")).toBeNull();
-    expect(tab("Narration").title).toBe("Write narration for this slide");
+    expect(screen.queryByRole("tab", { name: "Narration" })).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Notes" })).toBeNull();
   });
 
   it("shows an unsaved-changes dot on the HTML tab", () => {

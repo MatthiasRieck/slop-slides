@@ -3039,6 +3039,58 @@ describe("slide editor: shapes, styling and media", () => {
       e.doc.body.dispatchEvent(new e.window.PointerEvent("pointerup", { button: 0, bubbles: true }));
     };
 
+    /** Two lines drawn on top of each other's box, `under` first; the pointer hits them both, `over` on top. */
+    const crossing = () => {
+      const { e, svg: under } = drawn("line", [100, 100], [300, 300]);
+      e.fromParent({ type: "slop:edit-tool", tool: "arrow", style: LINE_STYLE });
+      dragOut(e, [100, 300], [300, 100]);
+      const over = added(e)[1]!;
+      keepBox(e, over);
+      // The browser hits each line's whole box, whatever it draws there.
+      e.doc.elementsFromPoint = () => [over, under, e.$("#intro"), e.doc.body];
+      return { e, under, over };
+    };
+
+    it("picks a line only on its stroke, so one under another's box can still be selected", () => {
+      const { e, under, over } = crossing();
+      at(e, "pointerdown", 150, 150);
+      at(e, "pointerup", 150, 150);
+      expect(e.selected()).toEqual([under]);
+      at(e, "pointerdown", 150, 250);
+      at(e, "pointerup", 150, 250);
+      expect(e.selected()).toEqual([over]);
+      // Just off the stroke still counts, its arrowhead too.
+      at(e, "pointerdown", 156, 150);
+      at(e, "pointerup", 156, 150);
+      expect(e.selected()).toEqual([under]);
+      at(e, "pointerdown", 292, 125);
+      at(e, "pointerup", 292, 125);
+      expect(e.selected()).toEqual([over]);
+      // In both boxes, but on neither line: nothing.
+      at(e, "pointerdown", 200, 120);
+      at(e, "pointerup", 200, 120);
+      expect(e.selected()).toEqual([]);
+    });
+
+    it("glows along a hovered line instead of outlining its box, and saves none of it", () => {
+      const { e, under, over } = crossing();
+      at(e, "pointermove", 150, 150);
+      expect(under.getAttribute("data-slop-hover")).toBe("line");
+      expect(over.hasAttribute("data-slop-hover")).toBe(false);
+      at(e, "pointermove", 200, 120);
+      expect(under.hasAttribute("data-slop-hover")).toBe(false);
+      expect(e.commits().at(-1)!.markup).not.toContain("data-slop-hover");
+      const css = [...e.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
+      expect(css).toContain("[data-slop-hover=line] { outline: none !important;");
+    });
+
+    it("gives the bend handles room to be grabbed", () => {
+      const { e } = drawn("line", [100, 100], [300, 200]);
+      const css = [...e.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
+      expect(css).toContain("[data-point=add] { width: 14px; height: 14px;");
+      expect(css).toContain("[data-slop-points] > *::before { content: ''; position: absolute; inset: -8px;");
+    });
+
     it("shows its ends and where to bend it instead of a box", () => {
       const { e } = drawn("line", [100, 100], [300, 200]);
       expect(handles(e, "point").map(spot)).toEqual([

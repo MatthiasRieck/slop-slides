@@ -11,7 +11,8 @@
    Shift frees it). A figure with proportions (see FIGURES) shows a yellow handle on the spot they
    change (a chevron's point, a bubble's tail), which drags them; double-click resets them. On the first box resize, an in-flow
    element leaves an invisible placeholder in its original slot so its siblings stay put.
-   A line or arrow has no box: a handle at each end and on each point it bends at moves that
+   A line or arrow has no box: it is picked only on (or just off) its stroke and heads, so a line
+   in another's box stays clickable, and glows when hovered instead of being outlined; a handle at each end and on each point it bends at moves that
    point (snapping like a resize; Shift snaps to 45° from the point before it, ⌘ / Ctrl moves
    freely), dragging the small handle on a stretch of the line adds a point there, which curves
    it, and double-clicking a point in between removes it. A connector (see "Lines") has handles
@@ -268,6 +269,9 @@
   var DASHES = { solid: true, dashed: true, dotted: true };
   // Spots checked along each stretch of a curved line for the box around it.
   var LINE_SAMPLES = 16;
+  // A line is picked within this many screen pixels of its stroke or heads, not anywhere in its
+  // box, so a line lying over (or under) another one leaves it clickable.
+  var LINE_HIT_SLOP = 6;
   // Shapes drawn by an SVG in their box's background (see "Figures"), as path data in the box's
   // own pixels (w × h), so a head or notch keeps its size as the box stretches. A figure that
   // has an `adjust` takes a number in `data-adjust` (its default when it has none) for its
@@ -611,6 +615,8 @@
     ".deck, .deck > .slide.active { overflow: visible !important; }" +
     ".deck > .slide.active, .deck > .slide.active * { -webkit-user-select: none; user-select: none; }" +
     "[data-slop-hover] { outline: 3px dashed color-mix(in srgb, var(--slop-accent) 70%, transparent) !important; outline-offset: 4px; }" +
+    // A line has no box to outline: it glows along its stroke instead.
+    "[data-slop-hover=line] { outline: none !important; filter: drop-shadow(0 0 2px var(--slop-accent)) drop-shadow(0 0 2px var(--slop-accent)) !important; }" +
     // The selection frame is drawn by the handle overlay, so it keeps its size on screen.
     "[data-slop-selected] { cursor: move !important; }" +
     "[data-slop-editing] { outline: 3px solid var(--slop-accent) !important; outline-offset: 4px; }" +
@@ -640,7 +646,9 @@
     " width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: var(--slop-handle); border: 2px solid var(--slop-accent);" +
     " box-shadow: 0 1px 3px var(--slop-scrim); }" +
     "[data-slop-points] > [data-bound] { background: var(--slop-accent); border-color: var(--slop-handle); }" +
-    "[data-slop-points] > [data-point=add] { width: 10px; height: 10px; margin: -5px 0 0 -5px; background: var(--slop-accent);" +
+    // Each point can be grabbed a little way off it, the bend handles too, small as they look.
+    "[data-slop-points] > *::before { content: ''; position: absolute; inset: -8px; border-radius: 50%; }" +
+    "[data-slop-points] > [data-point=add] { width: 14px; height: 14px; margin: -7px 0 0 -7px; background: var(--slop-accent);" +
     " border-color: var(--slop-handle); cursor: crosshair; }" +
     // The button that opens the selected drawing in the app's SVG editor.
     "[data-slop-svg-open] { position: fixed; z-index: 2147483647; display: flex; align-items: center; gap: 4px;" +
@@ -883,6 +891,8 @@
    */
   function pickable(target, x, y) {
     var stack = document.elementsFromPoint && x !== undefined ? document.elementsFromPoint(x, y) : [];
+    // Only a spot the pointer is at can miss a line in its box; the target alone was hit.
+    var spot = stack.length > 0;
     if (!stack.length) {
       for (var node = target && target.nodeType === 1 ? target : target && target.parentElement; node; node = node.parentElement) {
         stack.push(node);
@@ -891,8 +901,9 @@
     for (var i = 0; i < stack.length; i++) {
       if (stack[i] === slide) return null;
       var el = selectable(stack[i]);
-      // A locked element is out of the way: what is under it is picked.
-      if (el && paints(el) && !isLocked(el)) return el;
+      // A locked element is out of the way: what is under it is picked. So is the empty part of
+      // a line's box.
+      if (el && paints(el) && !isLocked(el) && (!spot || !lineOf(el) || onLine(el, lineOf(el), x, y))) return el;
     }
     return null;
   }
@@ -1103,11 +1114,12 @@
     };
   }
 
+  /** Marks `el` as under the pointer: outlined, or a line glowing along its stroke rather than boxed in. */
   function hover(el) {
     if (el === hovered) return;
     mark(hovered, "data-slop-hover", false);
     hovered = el;
-    mark(hovered, "data-slop-hover", true);
+    if (hovered) hovered.setAttribute("data-slop-hover", lineOf(hovered) ? "line" : "");
   }
 
   /** The element's inline `translate` offset in slide pixels. */
@@ -4965,15 +4977,16 @@
 
   /**
    * What a line through `points` (in any coordinates) draws: its stroke, as `poly` (straight
-   * stretches through the points) or `curve` (Bézier segments), and its `heads`, with the spots
-   * that reach furthest, for the box around it. `dirs` (see endDirections) route a connector;
+   * stretches through the points) or `curve` (Bézier segments), and as `track` (straight
+   * stretches either way, close along a curve), and its `heads`, with the spots that reach
+   * furthest, for the box around it. `dirs` (see endDirections) route a connector;
    * without them its ends head off toward each other.
    */
   function lineShape(points, heads, width, route, dirs) {
     var last = points.length - 1;
     var s = points[0];
     var e = points[last];
-    var shape = { poly: null, curve: null, spots: [], heads: {} };
+    var shape = { poly: null, curve: null, track: [], spots: [], heads: {} };
     var into;
     if (route) dirs = dirs || endDirections(null, [s, e]);
     if (route === "elbow") {
@@ -4988,12 +5001,14 @@
     }
     if (shape.poly) {
       shape.spots = shape.poly.slice();
+      shape.track = shape.poly.slice();
       into = [shape.poly[1], shape.poly[shape.poly.length - 2]];
     } else {
       shape.spots = [s];
       shape.curve.forEach(function (segment) {
         for (var i = 1; i <= LINE_SAMPLES; i++) shape.spots.push(curveAt(segment, i / LINE_SAMPLES));
       });
+      shape.track = shape.spots.slice();
       into = [shape.curve[0][1], shape.curve[shape.curve.length - 1][2]];
     }
     var length = shape.spots.slice(1).reduce(function (sum, p, i) {
@@ -5083,6 +5098,45 @@
     return line.points.map(function (p) {
       var at = turn((p[0] - box[0] - box[2] / 2) * kx, (p[1] - box[1] - box[3] / 2) * ky, angleOf(el));
       return [(frame.left + frame.right) / 2 + at.x, (frame.top + frame.bottom) / 2 + at.y];
+    });
+  }
+
+  /** How far `p` is from the stretch from `a` to `b`. */
+  function segmentDistance(p, a, b) {
+    var dx = b[0] - a[0];
+    var dy = b[1] - a[1];
+    var length = dx * dx + dy * dy;
+    var t = length ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length)) : 0;
+    return distance(p, [a[0] + t * dx, a[1] + t * dy]);
+  }
+
+  /** How far `p` is from the straight stretches through `points`. */
+  function polyDistance(p, points) {
+    if (points.length === 1) return distance(p, points[0]);
+    var best = Infinity;
+    for (var i = 1; i < points.length; i++) best = Math.min(best, segmentDistance(p, points[i - 1], points[i]));
+    return best;
+  }
+
+  /**
+   * Whether the pointer at (x, y) is on what line `el` draws: its stroke or a head, give or take
+   * `LINE_HIT_SLOP` on screen. A tilted line is hit anywhere in its box, as it is framed by one.
+   */
+  function onLine(el, line, x, y) {
+    var tilt = tiltOf(el);
+    if (tilt.x || tilt.y) return true;
+    var at = slidePoint(x, y);
+    var p = [at.x, at.y];
+    var points = slidePoints(el, line);
+    var shape = lineShape(points, line.heads, line.width, line.route, line.route ? endDirections(el, points) : null);
+    var scale = scaleOf(el);
+    var reach = (line.width * Math.max(scale.x, scale.y)) / 2 + LINE_HIT_SLOP / (zoom() || 1);
+    if (polyDistance(p, shape.track) <= reach) return true;
+    return ["start", "end"].some(function (end) {
+      var head = shape.heads[end];
+      if (!head) return false;
+      if (head.dot) return distance(p, head.dot.at) <= head.dot.r + reach;
+      return polyDistance(p, head.closed ? head.points.concat([head.points[0]]) : head.points) <= reach;
     });
   }
 

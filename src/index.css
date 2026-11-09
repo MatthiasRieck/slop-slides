@@ -289,3 +289,11 @@
 .cm-editor .tok-punctuation,
 .cm-editor .tok-meta { color: var(--tok-punct); }
 .cm-editor .tok-invalid { color: var(--destructive); }
+
+/* Scrolls without showing a scrollbar, for strips that bring their own scroll buttons. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}

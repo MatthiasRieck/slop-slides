@@ -242,4 +242,51 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(tabNames()).toEqual(["Chat", "Files", "Settings"]);
   });
+
+  describe("when the tabs don't fit", () => {
+    // jsdom lays nothing out, so give the strip its sizes by hand.
+    const lay = (
+      strip: HTMLElement,
+      { width, content, left = 0 }: { width: number; content: number; left?: number },
+    ) => {
+      Object.defineProperty(strip, "clientWidth", { configurable: true, value: width });
+      Object.defineProperty(strip, "scrollWidth", { configurable: true, value: content });
+      strip.scrollLeft = left;
+      fireEvent.scroll(strip);
+    };
+    const scrollButtons = () => screen.queryAllByRole("button", { name: /^Scroll tabs/ });
+
+    it("shows no scroll buttons or fade while the tabs fit", () => {
+      render(<Sidebar />);
+      const strip = screen.getByRole("tablist");
+      expect(strip.className).toContain("no-scrollbar");
+      lay(strip, { width: 200, content: 200 });
+      expect(scrollButtons()).toEqual([]);
+      expect(strip.dataset.fade).toBeUndefined();
+    });
+
+    it("fades the cut-off ends and scrolls with the buttons, each off at its end", () => {
+      render(<Sidebar />);
+      const strip = screen.getByRole("tablist");
+      const scrollBy = vi.fn();
+      strip.scrollBy = scrollBy;
+
+      lay(strip, { width: 100, content: 300 });
+      const left = screen.getByRole("button", { name: "Scroll tabs left" }) as HTMLButtonElement;
+      const right = screen.getByRole("button", { name: "Scroll tabs right" }) as HTMLButtonElement;
+      expect(left.disabled).toBe(true);
+      expect(right.disabled).toBe(false);
+      expect(strip.dataset.fade).toBe("right");
+
+      fireEvent.click(right);
+      expect(scrollBy).toHaveBeenCalledWith({ left: 75, behavior: "smooth" });
+
+      lay(strip, { width: 100, content: 300, left: 200 });
+      expect(left.disabled).toBe(false);
+      expect(right.disabled).toBe(true);
+      expect(strip.dataset.fade).toBe("left");
+      fireEvent.click(left);
+      expect(scrollBy).toHaveBeenLastCalledWith({ left: -75, behavior: "smooth" });
+    });
+  });
 });

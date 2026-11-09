@@ -1,5 +1,7 @@
 import {
   AudioLines,
+  ChevronLeft,
+  ChevronRight,
   Code2,
   Files,
   Maximize2,
@@ -11,7 +13,7 @@ import {
   StickyNote,
   X,
 } from "lucide-react";
-import { type ReactNode, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { cn, isMac } from "../lib/utils";
 import { confirmDiscardEdits, SIDEBAR_TABS, type SidebarTab, useApp } from "../store";
@@ -98,12 +100,7 @@ export function Sidebar() {
           maximized && isMac && "pl-[84px]",
         )}
       >
-        <div role="tablist" aria-label="Sidebar" className="flex min-w-0 items-center gap-1 overflow-x-auto">
-          {tabs.map((id) => (
-            <Tab key={id} id={id} active={id === active} />
-          ))}
-        </div>
-        <OpenTabMenu open={tabs} />
+        <TabStrip tabs={tabs} active={active} />
         <div data-tauri-drag-region className="flex-1" />
         <ToolButton
           variant="panel"
@@ -138,6 +135,94 @@ export function Sidebar() {
         </ToolButton>
       </div>
     </div>
+  );
+}
+
+/** How far a tab strip can scroll each way, in pixels. */
+interface Overflow {
+  left: number;
+  right: number;
+}
+
+/**
+ * The open tabs, then `+`. When they don't fit, the strip scrolls without a scrollbar: its cut-off
+ * ends fade out, and ‹ › after the `+` scroll it a page at a time. The active tab scrolls into view.
+ */
+function TabStrip({ tabs, active }: { tabs: SidebarTab[]; active: SidebarTab | null }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [overflow, setOverflow] = useState<Overflow>({ left: 0, right: 0 });
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measures, and watches the new tabs, when tabs open or close
+  useEffect(() => {
+    const strip = ref.current;
+    if (!strip) return;
+    const measure = () => {
+      const left = Math.max(0, Math.round(strip.scrollLeft));
+      const right = Math.max(0, Math.round(strip.scrollWidth - strip.clientWidth - strip.scrollLeft));
+      setOverflow((o) => (o.left === left && o.right === right ? o : { left, right }));
+    };
+    measure();
+    strip.addEventListener("scroll", measure, { passive: true });
+    const observer = new ResizeObserver(measure);
+    observer.observe(strip);
+    for (const child of strip.children) observer.observe(child);
+    return () => {
+      strip.removeEventListener("scroll", measure);
+      observer.disconnect();
+    };
+  }, [tabs]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: brings the active tab into view whenever it or the tabs change
+  useEffect(() => {
+    ref.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [active, tabs]);
+
+  const scroll = (direction: -1 | 1) => {
+    const strip = ref.current;
+    if (strip) strip.scrollBy({ left: direction * strip.clientWidth * 0.75, behavior: "smooth" });
+  };
+  const fade = 24;
+  const mask = `linear-gradient(to right, ${overflow.left ? "transparent" : "black"}, black ${overflow.left ? fade : 0}px, black calc(100% - ${overflow.right ? fade : 0}px), ${overflow.right ? "transparent" : "black"})`;
+  const overflowing = overflow.left > 0 || overflow.right > 0;
+
+  return (
+    <>
+      <div
+        ref={ref}
+        role="tablist"
+        aria-label="Sidebar"
+        className="no-scrollbar flex min-w-0 items-center gap-1 overflow-x-auto"
+        data-fade={[overflow.left && "left", overflow.right && "right"].filter(Boolean).join(" ") || undefined}
+        style={overflowing ? { maskImage: mask, WebkitMaskImage: mask } : undefined}
+      >
+        {tabs.map((id) => (
+          <Tab key={id} id={id} active={id === active} />
+        ))}
+      </div>
+      <OpenTabMenu open={tabs} />
+      {overflowing && (
+        <div className="flex shrink-0 items-center">
+          <ToolButton
+            variant="panel"
+            size="sm"
+            label="Scroll tabs left"
+            disabled={!overflow.left}
+            onClick={() => scroll(-1)}
+          >
+            <ChevronLeft className="size-4" />
+          </ToolButton>
+          <ToolButton
+            variant="panel"
+            size="sm"
+            label="Scroll tabs right"
+            disabled={!overflow.right}
+            onClick={() => scroll(1)}
+          >
+            <ChevronRight className="size-4" />
+          </ToolButton>
+        </div>
+      )}
+    </>
   );
 }
 

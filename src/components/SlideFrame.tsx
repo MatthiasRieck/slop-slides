@@ -12,6 +12,8 @@ interface SlideFrameProps {
   version: string;
   /** Thumbnails render the final animation frame and ignore pointer input. */
   thumbnail?: boolean;
+  /** Renders the final animation frame, as thumbnails do, with the slide still taking pointer input. */
+  still?: boolean;
   /** Loads the slide editor (final animation frame, editable); changing the key reloads it. */
   editKey?: string;
   /**
@@ -37,6 +39,7 @@ export function SlideFrame({
   slideId,
   version,
   thumbnail,
+  still,
   editKey,
   arena,
   className,
@@ -47,7 +50,14 @@ export function SlideFrame({
   const { width: stageW, height: stageH } = canvas;
   const src =
     url ??
-    slideUrl(deckId, slideId, version, thumbnail || editKey !== undefined, editKey, arena !== undefined && !thumbnail);
+    slideUrl(
+      deckId,
+      slideId,
+      version,
+      thumbnail || still || editKey !== undefined,
+      editKey,
+      arena !== undefined && !thumbnail,
+    );
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0);

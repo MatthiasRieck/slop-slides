@@ -1337,6 +1337,19 @@ describe("sending a message", () => {
       expect(useApp.getState().reviewVisible).toBe(false);
       localStorage.removeItem("slopslide.reviewVisible");
     });
+
+    it("remembers whether slides show their final state, playing their animations until asked", async () => {
+      localStorage.removeItem("slopslide.finalState");
+      let useApp = await freshStore();
+      expect(useApp.getState().finalState).toBe(false);
+      useApp.getState().setFinalState(true);
+      useApp = await freshStore();
+      expect(useApp.getState().finalState).toBe(true);
+      useApp.getState().setFinalState(false);
+      useApp = await freshStore();
+      expect(useApp.getState().finalState).toBe(false);
+      localStorage.removeItem("slopslide.finalState");
+    });
   });
 
   it("interrupt asks the backend to stop the workspace agent", async () => {

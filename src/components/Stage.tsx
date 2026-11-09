@@ -44,14 +44,13 @@ import { AreaDrawer, CommentEditor, CommentPins, useSlideComments } from "./Comm
 import { Dialog } from "./Dialog";
 import { EditContextMenu, type EditMenuAction } from "./EditContextMenu";
 import { EditToolbar } from "./EditToolbar";
-import { SlideSearch } from "./FindReplace";
 import { LintStatus } from "./LintStatus";
 import { Popover } from "./Popover";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { ShortcutHelp } from "./ShortcutHelp";
-import { SketchToolbar } from "./SketchToolbar";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { LayoutPicker } from "./Templates";
+import { ViewToolbar } from "./ViewToolbar";
 
 /** The stage area's padding (Tailwind p-8), which the pasteboard covers too. */
 const AREA_PADDING = 32;
@@ -186,7 +185,7 @@ export function Stage() {
       )}
       {slide && mode === "view" && (
         <ModeBar>
-          <SketchToolbar
+          <ViewToolbar
             annotations={annotations}
             commenting={commentPins.commenting}
             onCommenting={commentPins.setCommenting}
@@ -195,8 +194,6 @@ export function Stage() {
             areaShape={commentPins.areaShape}
             onAreaShape={commentPins.setAreaShape}
           />
-          <div className="flex-1" />
-          <SlideSearch />
         </ModeBar>
       )}
       {/* Clips the ink, which zooms past the slide along with the pasteboard, so it stays off the bar below. */}
@@ -468,9 +465,11 @@ function CurrentSlide(props: {
   onFrameReady: (frame: HTMLIFrameElement) => void;
 }) {
   const editReload = useApp((s) => s.editReload);
+  // Play mode is for watching the slide play, whatever View's tools ask for.
+  const finalState = useApp((s) => s.finalState && deckMode(s) !== "play");
   const id = props.slide.id;
   // While narration plays over the slide, it shows as it plays, its animations kept with the
-  // narration, rather than as the editor's still of their last frame.
+  // narration, rather than as the editor's still of their last frame, or the one View's tools ask for.
   const played = useSyncExternalStore(onSlideClock, () => {
     const clock = getSlideClock();
     return clock?.slide === id;
@@ -483,6 +482,7 @@ function CurrentSlide(props: {
       slideId={id}
       version={useSlideVersion(props.slide)}
       editKey={props.editing && !played ? String(editReload) : undefined}
+      still={finalState && !played}
       arena={props.arena}
       size={props.size}
       onFrameReady={(loaded) => {

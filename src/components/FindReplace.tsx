@@ -5,13 +5,15 @@ import { api, type ReplacedText } from "../lib/api";
 import { activeMatch, useApp } from "../store";
 import { ToolButton } from "./Button";
 import { Popover } from "./Popover";
+import { RibbonRow, useRibbonReveal } from "./Ribbon";
 
 /** How long typing settles before it searches. */
 const SEARCH_DELAY_MS = 150;
 
 /**
  * Searches the text on the deck's slides and in their notes (see src-tauri/src/find.rs), right in
- * View mode's toolbar; ⌘F focuses it, in the app or in the slide. While it holds a query the slide
+ * View mode's ribbon, as the two rows of its Find section; ⌘F focuses it, in the app or in the
+ * slide, opening the section first if the ribbon has collapsed it. While it holds a query the slide
  * rail lists only the slides with a match and the slide shown highlights them (see
  * `searchHighlight`). The arrows and Enter go through the matches; leaving View ends the search.
  */
@@ -24,9 +26,11 @@ export function SlideSearch() {
   const matches = useApp((s) => s.search.matches);
   const active = useApp(activeMatch);
   const input = useRef<HTMLInputElement>(null);
+  const reveal = useRibbonReveal();
 
   useEffect(() => {
     const focus = () => {
+      reveal();
       input.current?.focus();
       input.current?.select();
     };
@@ -46,7 +50,7 @@ export function SlideSearch() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("message", onMessage);
     };
-  }, []);
+  }, [reveal]);
 
   useEffect(() => useApp.getState().clearSearch, []);
 
@@ -73,8 +77,8 @@ export function SlideSearch() {
   const step = "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30";
 
   return (
-    <search className="flex min-w-0 items-center gap-0.5">
-      <div className="flex h-7 w-72 min-w-0 items-center gap-1 rounded-md border pl-2 pr-0.5 focus-within:ring-1 focus-within:ring-ring">
+    <search className="flex min-w-0 flex-col gap-0.5">
+      <div className="flex h-6 w-64 min-w-0 items-center gap-1 rounded-md border pl-2 pr-0.5 focus-within:ring-1 focus-within:ring-ring">
         <Search className="size-3.5 shrink-0 text-muted-foreground" />
         <input
           ref={input}
@@ -133,27 +137,29 @@ export function SlideSearch() {
           <WholeWord />
         </ToolButton>
       </div>
-      <button
-        type="button"
-        aria-label="Previous match"
-        title="Previous match (⇧Enter)"
-        disabled={found === 0}
-        onClick={() => stepSearch(-1)}
-        className={step}
-      >
-        <ChevronUp className="size-4" />
-      </button>
-      <button
-        type="button"
-        aria-label="Next match"
-        title="Next match (Enter)"
-        disabled={found === 0}
-        onClick={() => stepSearch(1)}
-        className={step}
-      >
-        <ChevronDown className="size-4" />
-      </button>
-      <ReplaceButton />
+      <RibbonRow>
+        <button
+          type="button"
+          aria-label="Previous match"
+          title="Previous match (⇧Enter)"
+          disabled={found === 0}
+          onClick={() => stepSearch(-1)}
+          className={step}
+        >
+          <ChevronUp className="size-4" />
+        </button>
+        <button
+          type="button"
+          aria-label="Next match"
+          title="Next match (Enter)"
+          disabled={found === 0}
+          onClick={() => stepSearch(1)}
+          className={step}
+        >
+          <ChevronDown className="size-4" />
+        </button>
+        <ReplaceButton />
+      </RibbonRow>
     </search>
   );
 }
@@ -169,7 +175,6 @@ function ReplaceButton() {
     <>
       <ToolButton
         ref={anchor}
-        size="md"
         label="Replace"
         title="Replace what the search finds"
         aria-expanded={open}

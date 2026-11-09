@@ -33,7 +33,7 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   web pages, email addresses or other slides. While typing, these apply to the selected words;
   otherwise to the whole element. A text box can shrink its text or grow to fit instead of
   overflowing. Pasting into text keeps bold, italic, links and line breaks (⌘⇧V pastes plain
-  text). The search field in the View toolbar (⌘F) searches the text of all slides and their
+  text). The search field in the View ribbon (⌘F) searches the text of all slides and their
   notes as you type: the slide list shows only the slides that contain it, the slide you pick
   highlights it, and the arrows (or Enter and ⇧Enter) go through the matches. The button next to
   it replaces them, leaving locked slides alone. Moved
@@ -136,7 +136,11 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   a short pause, and the slide stays until the narration and a pause after it end; the set
   seconds become the least a slide is shown. Slides timed on the narration timeline keep to
   that instead.
-- **Marks and comments:** the View mode's toolbar has a pen, a highlighter and an eraser for
+- **View ribbon:** View mode's tools sit in a ribbon like the edit tools', in sections that
+  collapse to an icon when the window gets narrow: Mark up, Review, Animations and Find. Under
+  Animations, **Play** runs a slide's animations whenever it is shown, and **Final state** shows
+  every slide as it ends up, with no animations, as the slide list does.
+- **Marks and comments:** the View ribbon has a pen, a highlighter and an eraser for
   marking up the slide, and the comment tool: click an element (or the slide) and write what
   should change. Comments show as numbered pins that follow their element; click a pin to change
   or delete it. Marks and comments are saved in the deck file and can be hidden together. The

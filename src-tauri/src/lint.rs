@@ -54,6 +54,28 @@ const FOREIGN: &[&str] = &["svg", "math"];
 struct Open {
     name: String,
     at: usize,
+    /// Whether its inline style lays its children out as flex or grid items.
+    items: bool,
+}
+
+/// Whether the inline `style` of a tag makes it a flex or grid box, where each child (even a
+/// `<br>` or a run of text) is laid out as an item of its own.
+fn lays_out_items(tag: &html::Tag) -> bool {
+    tag.attrs
+        .iter()
+        .find(|(n, ..)| n == "style")
+        .is_some_and(|(_, style, ..)| {
+            style.split(';').any(|declaration| {
+                let Some((property, value)) = declaration.split_once(':') else {
+                    return false;
+                };
+                property.trim().eq_ignore_ascii_case("display")
+                    && matches!(
+                        value.trim().to_ascii_lowercase().as_str(),
+                        "flex" | "inline-flex" | "grid" | "inline-grid"
+                    )
+            })
+        })
 }
 
 struct Linter<'a> {
@@ -420,6 +442,14 @@ fn check_markup(l: &mut Linter) {
             }
         }
 
+        if !tag.closing && tag.name == "br" && stack.last().is_some_and(|o| o.items) {
+            l.report(
+                "line-break-in-flex",
+                Severity::Warning,
+                i,
+                "This <br> sits directly in a flex or grid box, where it is an item of its own: a blank line between the text around it, which is laid out as separate items too. Put the box's lines in one element, like <div>One<br>Two</div>.".into(),
+            );
+        }
         let in_foreign = stack.iter().any(|o| FOREIGN.contains(&o.name.as_str()));
         if tag.closing {
             close(l, &mut stack, &tag.name, i);
@@ -443,6 +473,7 @@ fn check_markup(l: &mut Linter) {
                 stack.push(Open {
                     name: tag.name.clone(),
                     at: i,
+                    items: lays_out_items(&tag),
                 });
             }
         } else {
@@ -458,6 +489,7 @@ fn check_markup(l: &mut Linter) {
             stack.push(Open {
                 name: tag.name.clone(),
                 at: i,
+                items: lays_out_items(&tag),
             });
             if RAW_TEXT.contains(&tag.name.as_str()) {
                 i = find_ci(html, tag.end, &format!("</{}", tag.name)).unwrap_or(bytes.len());
@@ -2687,6 +2719,36 @@ mod tests {
         );
         let rules: Vec<_> = found.iter().map(|i| i.rule).collect();
         assert_eq!(rules, ["added-element"]);
+    }
+
+    #[test]
+    fn flags_line_breaks_laid_out_as_flex_items() {
+        let slide = |inner: &str| {
+            deck(&format!(
+                "<section class=\"slide\" id=\"a\">\n{inner}\n</section>"
+            ))
+        };
+        // Directly in a flex or grid box, a <br> is a blank line of its own.
+        for display in ["flex", "inline-flex", "grid", "DISPLAY : Inline-Grid"] {
+            let (property, value) = display.split_once(':').unwrap_or(("display", display));
+            assert_eq!(
+                rules(&slide(&format!(
+                    "<div style=\"color: red; {property}: {value}; flex-direction: column\">One<br>Two</div>"
+                ))),
+                ["line-break-in-flex"],
+                "{display}"
+            );
+        }
+        // Lines kept in one element, or in a box laid out as blocks, are fine.
+        for fine in [
+            "<div style=\"display: flex; flex-direction: column\"><div>One<br>Two</div></div>",
+            "<div style=\"display: block\">One<br>Two</div>",
+            "<div style=\"display: flexible\">One<br>Two</div>",
+            "<p>One<br>Two</p>",
+            "<div style=\"display: flex\"><span>One</span></div><br>",
+        ] {
+            assert_eq!(rules(&slide(fine)), Vec::<&str>::new(), "{fine}");
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.1.0 to build installers for macOS (Apple Silicon + Intel),
+# Push a tag like v0.1.0 to build installers for macOS (Apple Silicon),
 # Windows, and Linux and attach them to a draft GitHub release.
 on:
   push:
@@ -17,8 +17,6 @@ jobs:
         include:
           - platform: macos-latest
             args: --target aarch64-apple-darwin
-          - platform: macos-latest
-            args: --target x86_64-apple-darwin
           - platform: ubuntu-22.04
             args: ""
           - platform: windows-latest
@@ -41,7 +39,7 @@ jobs:
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin' || '' }}
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target

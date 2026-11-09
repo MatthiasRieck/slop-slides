@@ -5,6 +5,8 @@ export interface Playback {
   /** Resolves when the audio has played to its end, or was stopped. */
   ended: Promise<void>;
   stop: () => void;
+  /** Where it is in the audio, in seconds. */
+  time: () => number;
 }
 
 /**
@@ -36,7 +38,7 @@ export async function playNarration(deck: string, slide: string, from: number | 
     stop();
     throw error;
   }
-  return { ended, stop };
+  return { ended, stop, time: () => audio.currentTime };
 }
 
 /** `seconds` as "0:12". */

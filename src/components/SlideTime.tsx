@@ -9,7 +9,7 @@ import { formatElapsed } from "./PresenterPanel";
 const asText = (seconds: number | undefined) => (seconds ? formatElapsed(seconds * 1000) : "");
 
 /**
- * Narration mode's field for the time the presenter expects to spend on the selected slide, which
+ * The Narration tab's field for the time the presenter expects to spend on the selected slide, which
  * the presenter view counts down, and what the times of the slides shown add up to.
  */
 export function SlideTime({ deck }: { deck: Deck }) {

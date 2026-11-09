@@ -105,10 +105,10 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   Two more buttons there record the narration while you talk through the deck. **Text** adds
   what you say to the narration of the slide on screen; **audio** adds your voice to that
   slide's narration audio, which then plays in place of the voice model (in the show and in
-  videos) until you delete it in the Narration mode. Go back and forth through the slides as
+  videos) until you delete it in the sidebar's Narration tab. Go back and forth through the slides as
   you like: what you say is always added to the end of the slide on screen, and going back
   to a slide starts a new paragraph. The raw text keeps every stutter; **Clean up** in the Narration
-  mode (for one slide or all of them) puts a request in the chat for the agent to turn it into clean, fluent
+  tab (for one slide or all of them) puts a request in the chat for the agent to turn it into clean, fluent
   sentences. Text needs the Whisper model, and nothing is kept for locked slides. The
   microphone does one thing at a time: teleprompter, text or audio.
 - **PowerPoint:** **Import PowerPoint…** turns a `.pptx` into a new deck: slides, layouts and
@@ -144,19 +144,19 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   lists them so you can leave some out. Each goes out once, and again if you change it.
 - **Notes and narration in Markdown:** both are written in Markdown, with a preview in their
   panels; the presenter view shows them formatted and narration is spoken without the marks.
-- **Narration:** the Narration mode holds what is said over each slide. It is spoken
+- **Narration:** the sidebar's Narration tab holds what is said over each slide (open it, like Notes and the deck's HTML, from the sidebar's `+`). It is spoken
   on your computer by [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) 0.6B CustomVoice, in
   one of its nine voices and ten languages, chosen per deck. Its model (2.5 GB, all voices
   included) is downloaded on request to `~/.slopslides/models`. Each slide's audio is
   `narration/<slide id>.wav` next to the deck; a slide whose narration, voice or language
-  changed is spoken again, the rest never. When presenting, the play button between the
+  changed is spoken again, the rest never. The tab shows the slide's audio as a waveform above its text, with each word where it is said once the words are timed: press it to play from there. When presenting, the play button between the
   arrows runs the show by itself, speaking each slide's narration with the video export's
-  timing. The timeline under the slide shows the slides above the audio: drag the end of a
+  timing. The Play mode's timeline under the slide shows the slides above the audio: drag the end of a
   slide to change how long it shows, and the slides after it follow, each narration keeping
   its place in its slide. Drag a narration to move it, up to the narration on either side, so
   it can run over into the next slide, with the slide changing mid-sentence; video
   exports and the self-running show follow it, and the slide keeps its timing in the deck
-  (`data-duration`, `data-narration-start`). Speaking needs macOS or Linux (with OpenBLAS); Windows builds can write narration
+  (`data-duration`, `data-narration-start`). Play, pause and the step buttons (a tenth of a second; a second with Shift) are in the middle of its bar; paused, stepped or with the playhead moved on the ruler, the slide is frozen as it is at that moment, its animations that far in. Speaking needs macOS or Linux (with OpenBLAS); Windows builds can write narration
   but not speak it yet.
 
 Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.

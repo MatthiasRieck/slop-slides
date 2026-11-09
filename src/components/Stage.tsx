@@ -476,7 +476,7 @@ function CurrentSlide(props: {
     return clock?.slide === id;
   });
   const frame = useRef<HTMLIFrameElement | null>(null);
-  useEffect(() => onSlideClock(() => postSlideClock(frame.current, id)), [id]);
+  useEffect(() => onSlideClock(() => postSlideClock(frame.current, id, true)), [id]);
   return (
     <SlideFrame
       deckId={props.deckId}

@@ -10,8 +10,7 @@ import { SlideBand, SlideBandHeader } from "./SlideBand";
 export const NOTES_SAVE_DELAY = 800;
 
 /**
- * Notes mode's tools, in a band above the slide: the speaker notes of the current slide, to view
- * and edit, in Markdown. Only the presenter sees them, in the show's presenter view.
+ * The sidebar's Notes tab: the speaker notes of the current slide, to view and edit, in Markdown. Only the presenter sees them, in the show's presenter view.
  */
 export function NotesPanel() {
   const deck = useApp((s) => s.deck);
@@ -41,7 +40,7 @@ function NotesEditor(props: {
     useApp.getState().setNotes(slide.id, text),
   );
   return (
-    <div className="flex min-w-0 max-w-3xl flex-1 flex-col gap-2 p-3">
+    <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col gap-2 p-3">
       <SlideBandHeader
         slide={slide}
         index={index}

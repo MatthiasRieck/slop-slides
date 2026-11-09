@@ -209,6 +209,13 @@ const extensions: Extension[] = [
   theme,
 ];
 
+/** The sidebar's HTML tab: the open deck's source, or a line saying there is no deck to show. */
+export function CodePanel({ active }: { active: boolean }) {
+  const hasDeck = useApp((s) => s.deck !== null);
+  if (!hasDeck) return <p className="p-4 text-sm text-muted-foreground">Open a deck to see its HTML.</p>;
+  return <CodeView active={active} />;
+}
+
 /**
  * The deck file's source with the selected slide highlighted and kept in view. Edits are saved
  * with ⌘S; if the file changes on disk meanwhile (the agent), the user picks which wins.
@@ -383,27 +390,29 @@ export function CodeView({ active }: { active: boolean }) {
   const mod = isMac ? "⌘" : "Ctrl+";
 
   return (
-    <div className={cn("h-full flex-col bg-background", active ? "flex" : "hidden")}>
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 text-xs text-muted-foreground">
-        <FileCode2 className="size-3.5" />
-        <span className="font-medium text-foreground">{fileName}</span>
-        {dirty && <span title="Unsaved changes" className="size-1.5 rounded-full bg-primary" />}
+    <div className={cn("@container h-full flex-col bg-background", active ? "flex" : "hidden")}>
+      {/* The sidebar can be narrow: the details go first, the file's name and the buttons stay. */}
+      <div className="flex h-9 shrink-0 items-center gap-2 whitespace-nowrap border-b px-3 text-xs text-muted-foreground">
+        <FileCode2 className="size-3.5 shrink-0" />
+        <span className="min-w-0 truncate font-medium text-foreground">{fileName}</span>
+        {dirty && <span title="Unsaved changes" className="size-1.5 shrink-0 rounded-full bg-primary" />}
         {span && (
           <>
-            <span className="text-muted-foreground/40">·</span>
-            <span>
+            <span className="hidden text-muted-foreground/40 @md:inline">·</span>
+            <span className="hidden min-w-0 truncate @md:inline">
               Slide {index + 1} <span className="font-mono text-2xs">#{span.id.replace(/^#/, "")}</span>
             </span>
             {lines && (
-              <span className="tabular-nums">
+              <span className="hidden tabular-nums @xl:inline">
                 lines {lines[0]}–{lines[1]}
               </span>
             )}
           </>
         )}
-        <span className="ml-auto text-2xs">
+        <span className="ml-auto hidden text-2xs @2xl:inline">
           {mod}F search · {mod}S save
         </span>
+        <span className="ml-auto @2xl:hidden" />
         <Button
           variant="ghost"
           size="sm"

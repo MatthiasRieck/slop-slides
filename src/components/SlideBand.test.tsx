@@ -40,7 +40,7 @@ describe("SlideBand", () => {
       </SlideBand>,
     );
     const band = screen.getByRole("region", { name: "Speaker notes" });
-    expect(band.className).toBe("flex h-52 shrink-0 justify-center border-b bg-background");
+    expect(band.className).toBe("flex h-full min-h-0 flex-col overflow-y-auto bg-background");
     expect(band.textContent).toBe(`${deck.slides.length} · ${slide.id}`);
   });
 });

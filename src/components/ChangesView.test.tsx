@@ -81,7 +81,6 @@ beforeEach(() => {
   useApp.setState({
     deck: deckFor(DECK_HTML),
     selected: "intro",
-    view: "slides",
     editing: false,
     slideMode: "view",
     error: null,

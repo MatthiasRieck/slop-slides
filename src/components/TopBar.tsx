@@ -27,8 +27,7 @@ import { useDismiss } from "./Popover";
  * the workspace folder with the deck's title under it, which opens a menu to open the deck's
  * settings, close the file (back to the workspace) or reveal it in the file manager, then undo /
  * redo; for a deck, its mode tabs in the middle with the chat button after a separator, then export
- * and present; then the sidebar toggle while the sidebar is closed (open, it sits in the sidebar). The tools of each mode live above the slide (DeckToolbar,
- * Stage), and the lint status beside Tidy layout under it.
+ * and present; then the sidebar toggle while the sidebar is closed (open, it sits in the sidebar). The tools of each mode live above the slide (Stage), and the lint status beside Tidy layout under it.
  */
 export function TopBar() {
   const workspace = useApp((s) => s.workspace);

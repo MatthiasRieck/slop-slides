@@ -8,7 +8,6 @@ import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { DeckActions } from "./DeckActions";
-import { DeckToolbar } from "./DeckToolbar";
 
 const WORKSPACE = { path: "/decks", name: "decks" };
 const OPENED = { path: "talk/deck.html", absolute: "/decks/talk/deck.html", kind: "deck" as const };
@@ -27,7 +26,6 @@ beforeEach(() => {
     workspace: WORKSPACE,
     openedFile: OPENED,
     deck: deckFor(DECK_HTML),
-    view: "slides",
     editing: false,
     slideMode: "view",
     sidebarOpen: true,
@@ -628,36 +626,5 @@ describe("video export", () => {
       "Could not save the video: the deck took too long to get ready for recording the video",
     );
     expect(unlisten).toHaveBeenCalled();
-  });
-});
-
-describe("deck toolbar", () => {
-  it("renders nothing without a deck", () => {
-    useApp.setState({ deck: null });
-    const { container } = render(<DeckToolbar />);
-    expect(container.innerHTML).toBe("");
-  });
-
-  it.each([
-    ["view", {}],
-    ["edit", { editing: true }],
-    ["settings", { slideMode: "settings" as const }],
-    ["code", { view: "code" as const }],
-  ])("leaves the row out in %s mode", (_mode, state) => {
-    useApp.setState(state);
-    const { container } = render(<DeckToolbar />);
-    expect(container.innerHTML).toBe("");
-  });
-
-  it("becomes the narration in narration mode", () => {
-    useApp.setState({ slideMode: "narration", selected: "intro" });
-    render(<DeckToolbar />);
-    expect(screen.getByRole("textbox", { name: "Narration" })).toBeTruthy();
-  });
-
-  it("becomes the notes in notes mode", () => {
-    useApp.setState({ slideMode: "notes", selected: "intro" });
-    render(<DeckToolbar />);
-    expect(screen.getByRole("region", { name: "Speaker notes" })).toBeTruthy();
   });
 });

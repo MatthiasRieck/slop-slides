@@ -46,7 +46,7 @@ interface Drag {
 }
 
 /**
- * The deck on a timeline, under the slide in Narration mode: the shown slides above their audio,
+ * The deck on a timeline, under the slide while the sidebar shows the Narration tab: the shown slides above their audio,
  * as a video export and the self-running show play them. Dragging the end of a slide changes
  * how long it shows, the slides after it following with their narration. Dragging a narration
  * moves it, up to the narration on either side: so a slide can change in the middle of the

@@ -3,9 +3,7 @@ import { type ReactNode, useEffect, useRef } from "react";
 import { Group, Panel, type PanelSize, Separator, usePanelRef } from "react-resizable-panels";
 
 import { ChangesRail, ChangesView } from "./components/ChangesView";
-import { CodeView } from "./components/CodeView";
 import { DeckSettings } from "./components/DeckSettings";
-import { DeckToolbar } from "./components/DeckToolbar";
 import { FileViewer } from "./components/FileViewer";
 import { Home } from "./components/Home";
 import { NarrationTimeline } from "./components/NarrationTimeline";
@@ -55,14 +53,16 @@ export const SIDEBAR_MAX_SIZE = "67%";
 
 /**
  * An open workspace: the top bar over the open file (a deck in the slide editor, with its slide
- * rail, or another page as it is), and on the right the sidebar with the chat, the files and the
- * settings, from the top of the window to the bottom, so the top bar ends where it starts.
+ * rail, or another page as it is), and on the right the sidebar with the chat, the files, the
+ * slide's narration and notes, the deck's HTML and the settings, from the top of the window to
+ * the bottom, so the top bar ends where it starts.
  * Maximized, the sidebar covers the whole window, the rest staying as it is underneath.
  */
 function Workbench() {
   const hasDeck = useApp((s) => s.deck !== null);
-  const view = useApp((s) => s.view);
   const mode = useApp(deckMode);
+  // The timeline needs the width of the stage, so it stays under the slide while the sidebar shows the narration.
+  const narrating = useApp((s) => s.sidebarOpen && s.sidebarTab === "narration");
   const sidebarOpen = useApp((s) => s.sidebarOpen);
   const sidebarMaximized = useApp((s) => s.sidebarMaximized);
   const railOpen = useApp((s) => s.railOpen);
@@ -102,14 +102,10 @@ function Workbench() {
             <Panel id="stage" minSize={360}>
               {hasDeck ? (
                 <div className="flex h-full flex-col">
-                  <DeckToolbar />
                   <div className="min-h-0 flex-1">
-                    {/* The HTML view stays mounted so unsaved edits survive switching to the slides. */}
-                    <CodeView active={view === "code"} />
-                    {view === "slides" &&
-                      (mode === "settings" ? <DeckSettings /> : mode === "git" ? <ChangesView /> : <Stage />)}
+                    {mode === "settings" ? <DeckSettings /> : mode === "git" ? <ChangesView /> : <Stage />}
                   </div>
-                  {mode === "narration" && <NarrationTimeline />}
+                  {narrating && (mode === "view" || mode === "edit") && <NarrationTimeline />}
                 </div>
               ) : (
                 <FileViewer />

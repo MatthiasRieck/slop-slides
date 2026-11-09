@@ -23,9 +23,9 @@ export const NARRATION_SAVE_DELAY = 800;
 const NO_AUDIO: Record<string, SlideAudio> = {};
 
 /**
- * Narration mode's tools, in a band above the slide: what is said over the current slide, to
- * view, edit and hear. The text stays a readable width however wide the stage is, with the
- * voice beside it.
+ * The sidebar's Narration tab: what is said over the current slide, to view, edit and hear, with
+ * the deck's voice under it. The timeline of the whole deck stays under the slide meanwhile (see
+ * NarrationTimeline), where it has the width.
  */
 export function NarrationPanel() {
   const [preview, setPreview] = useState(false);
@@ -51,7 +51,7 @@ export function NarrationPanel() {
             preview={preview}
             onPreview={setPreview}
           />
-          <div className="flex w-72 shrink-0 flex-col justify-between overflow-y-auto border-l">
+          <div className="mx-auto flex w-full max-w-3xl shrink-0 flex-col border-t">
             <SpeechSettings deck={deck} />
             <CleanUpAll deck={deck} />
             <DeckAudio deck={deck} />
@@ -255,7 +255,7 @@ function NarrationEditor(props: {
   const spoken = markdownText(draft);
   const words = wordCount(spoken);
   return (
-    <div className="flex min-w-0 max-w-3xl flex-1 flex-col gap-2 p-3">
+    <div className="mx-auto flex min-h-64 w-full max-w-3xl flex-1 flex-col gap-2 p-3">
       <SlideBandHeader slide={slide} index={index} total={total} preview={preview} onPreview={props.onPreview}>
         <span className="ml-auto shrink-0 tabular-nums">
           {words} {words === 1 ? "word" : "words"} ·{" "}

@@ -5,15 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("./components/Home", () => ({ Home: () => <div data-testid="stub-home" /> }));
 vi.mock("./components/TopBar", () => ({ TopBar: () => <div data-testid="stub-top-bar" /> }));
 vi.mock("./components/DeckSettings", () => ({ DeckSettings: () => <div data-testid="stub-settings" /> }));
-vi.mock("./components/DeckToolbar", () => ({ DeckToolbar: () => <div data-testid="stub-deck-toolbar" /> }));
+vi.mock("./components/NarrationTimeline", () => ({ NarrationTimeline: () => <div data-testid="stub-timeline" /> }));
 vi.mock("./components/SlideRail", () => ({ SlideRail: () => <div data-testid="stub-rail" /> }));
 vi.mock("./components/Stage", () => ({ Stage: () => <div data-testid="stub-stage" /> }));
 vi.mock("./components/Sidebar", () => ({ Sidebar: () => <div data-testid="stub-sidebar-tabs" /> }));
 vi.mock("./components/FileViewer", () => ({ FileViewer: () => <div data-testid="stub-viewer" /> }));
 vi.mock("./components/Presenter", () => ({ Presenter: () => <div data-testid="stub-presenter" /> }));
-vi.mock("./components/CodeView", () => ({
-  CodeView: ({ active }: { active: boolean }) => <div data-testid="stub-code" data-active={String(active)} />,
-}));
 
 import { invoke } from "@tauri-apps/api/core";
 import { App, SIDEBAR_MAX_SIZE } from "./App";
@@ -27,7 +24,6 @@ beforeEach(() => {
     workspace: null,
     openedFile: null,
     deck: null,
-    view: "slides",
     slideMode: "view",
     sidebarOpen: true,
     railOpen: true,
@@ -50,7 +46,7 @@ describe("App", () => {
     useApp.setState({ workspace: WORKSPACE });
     render(<App />);
     expect(["top-bar", "viewer", "sidebar-tabs"].map(shown)).toEqual([true, true, true]);
-    expect(["home", "rail", "stage", "code"].map(shown)).toEqual([false, false, false, false]);
+    expect(["home", "rail", "stage"].map(shown)).toEqual([false, false, false]);
   });
 
   it("shows the editor for an open deck", () => {
@@ -86,13 +82,23 @@ describe("App", () => {
     expect(screen.queryByTestId("stub-stage")).toBeNull();
   });
 
-  it("keeps the HTML view mounted while showing slides, so unsaved edits survive", () => {
-    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) });
+  it("keeps the slide on the stage, with the timeline under it, while the sidebar shows the narration", () => {
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML), sidebarTabs: ["chat"], sidebarTab: "chat" });
     render(<App />);
-    expect(screen.getByTestId("stub-code").dataset.active).toBe("false");
-    act(() => useApp.getState().setView("code"));
-    expect(screen.getByTestId("stub-code").dataset.active).toBe("true");
-    expect(shown("stage")).toBe(false);
+    expect(shown("timeline")).toBe(false);
+    act(() => useApp.getState().setSidebarTab("narration"));
+    expect(["stage", "timeline"].map(shown)).toEqual([true, true]);
+    // Not with the sidebar hidden, or over the deck's settings or its changes.
+    act(() => useApp.getState().setSidebarOpen(false));
+    expect(shown("timeline")).toBe(false);
+    act(() => useApp.getState().setSidebarOpen(true));
+    expect(shown("timeline")).toBe(true);
+    act(() => useApp.getState().setMode("settings"));
+    expect(shown("timeline")).toBe(false);
+    act(() => useApp.getState().setMode("edit"));
+    expect(shown("timeline")).toBe(true);
+    act(() => useApp.getState().setSidebarTab("chat"));
+    expect(shown("timeline")).toBe(false);
   });
 
   // Closed panels stay mounted (collapsed), so reopening them does not reload their contents.

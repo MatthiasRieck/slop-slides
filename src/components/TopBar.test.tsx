@@ -24,7 +24,6 @@ beforeEach(() => {
     workspace: WORKSPACE,
     openedFile: OPENED,
     deck: deckFor(DECK_HTML),
-    view: "slides",
     editing: false,
     slideMode: "view",
     sidebarOpen: true,

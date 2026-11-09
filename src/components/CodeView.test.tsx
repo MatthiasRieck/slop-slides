@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
-import { CodeView } from "./CodeView";
+import { CodePanel, CodeView } from "./CodeView";
 
 /** deck.html as the fake backend currently has it. */
 let disk = DECK_HTML;
@@ -21,7 +21,6 @@ beforeEach(() => {
     deck: deckFor(disk, String(rev)),
     selected: "intro",
     revealRev: 0,
-    view: "code",
     codeDirty: false,
     error: null,
   });
@@ -55,6 +54,28 @@ const highlighted = (container: HTMLElement) =>
   [...container.querySelectorAll(".cm-slide-line")].map((l) => l.textContent);
 const header = () => document.querySelector(".h-9")!.textContent;
 const button = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
+
+describe("CodePanel: the sidebar's HTML tab", () => {
+  it("asks for a deck when none is open, and shows the deck's source once one is", async () => {
+    useApp.setState({ deck: null, selected: null });
+    const { container } = render(<CodePanel active />);
+    expect(screen.getByText("Open a deck to see its HTML.")).toBeTruthy();
+    expect(container.querySelector(".cm-editor")).toBeNull();
+    await act(async () => useApp.setState({ deck: deckFor(disk, "0"), selected: "intro" }));
+    const view = EditorView.findFromDOM(container.querySelector(".cm-editor") as HTMLElement)!;
+    await waitFor(() => expect(view.state.doc.toString()).toBe(disk));
+    expect(screen.queryByText("Open a deck to see its HTML.")).toBeNull();
+  });
+
+  it("keeps the file's name and the save button in a narrow sidebar, the details giving way", async () => {
+    const { container } = render(<CodePanel active />);
+    await waitFor(() => expect(header()).toContain("Slide 1"));
+    expect(container.firstElementChild!.classList.contains("@container")).toBe(true);
+    expect(screen.getByText("deck.html").className).toContain("truncate");
+    expect(screen.getByText(/Slide 1/).className).toContain("hidden");
+    expect(button("Save").className).not.toContain("hidden");
+  });
+});
 
 describe("CodeView: showing deck.html", () => {
   it("loads deck.html from the deck's file URL", async () => {

@@ -3091,6 +3091,14 @@ describe("slide editor: shapes, styling and media", () => {
       expect(css).toContain("[data-slop-points] > *::before { content: ''; position: absolute; inset: -8px;");
     });
 
+    it("marks each bend handle with a small plus", () => {
+      const { e } = drawn("line", [100, 100], [300, 200]);
+      const css = [...e.doc.querySelectorAll("style")].map((s) => s.textContent).join("");
+      expect(css).toContain("[data-slop-points] > [data-point=add]::after { content: '';");
+      expect(css).toContain("center / 6px 2px no-repeat");
+      expect(css).toContain("center / 2px 6px no-repeat");
+    });
+
     it("shows its ends and where to bend it instead of a box", () => {
       const { e } = drawn("line", [100, 100], [300, 200]);
       expect(handles(e, "point").map(spot)).toEqual([

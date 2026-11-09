@@ -1,17 +1,19 @@
 import { ask } from "@tauri-apps/plugin-dialog";
 import { AudioLines, Download, KeyRound, Loader2, Play, Sparkles, Square, Timer, Trash2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
 
 import { type Deck, errorMessage, type NarrationProvider, type Slide, type SlideAudio } from "../lib/api";
 import { markdownText } from "../lib/markdown";
 import { speakingTime, wordCount } from "../lib/narration";
 import { formatDuration, type Playback, playNarration } from "../lib/narrationAudio";
 import { useDraftText } from "../lib/useDraftText";
+import { cn } from "../lib/utils";
 import { formatBytes } from "../lib/voice";
 import { canSpeakWith, deckProvider, useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { Button } from "./Button";
 import { Field, inputClass, wideSelectClass } from "./Field";
+import { usePeaks, useWords, Waveform, Words } from "./NarrationWave";
 import { ScriptField } from "./ScriptMarkdown";
 import { SlideBand, SlideBandHeader } from "./SlideBand";
 import { SlideTime } from "./SlideTime";
@@ -24,8 +26,8 @@ const NO_AUDIO: Record<string, SlideAudio> = {};
 
 /**
  * The sidebar's Narration tab: what is said over the current slide, to view, edit and hear, with
- * the deck's voice under it. The timeline of the whole deck stays under the slide meanwhile (see
- * NarrationTimeline), where it has the width.
+ * the deck's voice under it. Playing the whole deck on its timeline is a mode of its own, Play (see
+ * NarrationTimeline).
  */
 export function NarrationPanel() {
   const [preview, setPreview] = useState(false);
@@ -263,6 +265,14 @@ function NarrationEditor(props: {
         </span>
         <SlideTime deck={deck} />
       </SlideBandHeader>
+      {/* The audio above the words it says: its waveform, to hear and to make again. */}
+      <SlideAudioControls
+        deck={deck}
+        slide={slide.id}
+        hasText={draft.trim() !== ""}
+        locked={!!slide.locked}
+        flush={flush}
+      />
       <ScriptField
         label="Narration"
         draft={draft}
@@ -272,18 +282,78 @@ function NarrationEditor(props: {
         onBlur={() => void flush()}
         placeholder={slide.locked ? "No narration." : "What is said while this slide is shown…"}
       />
-      <SlideAudioControls
-        deck={deck}
-        slide={slide.id}
-        hasText={draft.trim() !== ""}
-        locked={!!slide.locked}
-        flush={flush}
-      />
     </div>
   );
 }
 
-/** What the slide's audio is, and buttons to hear it and to (re)make it. */
+/** How often the waveform's playhead moves while the audio plays, in ms. */
+const PLAYHEAD_TICK = 50;
+/** How wide a second of audio is at least once its words are shown, in pixels, so they can be read. */
+const WORDS_SECOND_WIDTH = 80;
+
+/**
+ * The slide's audio as its waveform, with when each word is said once that is known. Pressing
+ * it plays the audio from there; a line shows where it is while it plays. With words, it is as
+ * wide as they need and scrolls, following the line.
+ */
+function SlideWave(props: {
+  deck: string;
+  slide: string;
+  audio: SlideAudio;
+  seconds: number;
+  playback: Playback | null;
+  onPlay: (from: number) => void;
+}) {
+  const { deck, slide, audio, seconds, playback } = props;
+  const peaks = usePeaks(deck, slide, audio);
+  const words = useWords(deck, slide, audio);
+  const [at, setAt] = useState<number | null>(null);
+  const playhead = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!playback) return setAt(null);
+    const tick = () => setAt(Math.min(seconds, playback.time()));
+    tick();
+    const ticking = setInterval(tick, PLAYHEAD_TICK);
+    return () => clearInterval(ticking);
+  }, [playback, seconds]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: The line moves with the time.
+  useEffect(() => {
+    playhead.current?.scrollIntoView?.({ inline: "nearest", block: "nearest" });
+  }, [at]);
+  const press = (event: MouseEvent<HTMLButtonElement>) => {
+    const box = event.currentTarget.getBoundingClientRect();
+    props.onPlay(Math.min(seconds, Math.max(0, ((event.clientX - box.left) / (box.width || 1)) * seconds)));
+  };
+  const stale = audio.state === "stale";
+  return (
+    <div className="overflow-x-auto overflow-y-hidden rounded-md border">
+      <button
+        type="button"
+        aria-label={stale ? "Narration audio, out of date" : "Narration audio"}
+        title="Press to play from there"
+        onClick={press}
+        className={cn(
+          "relative block h-16 min-w-full cursor-pointer bg-primary/15 text-primary",
+          stale && "text-muted-foreground",
+        )}
+        style={words.length > 0 ? { width: seconds * WORDS_SECOND_WIDTH } : undefined}
+      >
+        {peaks.length > 0 && <Waveform peaks={peaks} />}
+        {words.length > 0 && <Words words={words} seconds={seconds} />}
+        {at !== null && (
+          <span
+            ref={playhead}
+            data-testid="wave-playhead"
+            className="pointer-events-none absolute inset-y-0 w-px bg-destructive"
+            style={{ left: `${(at / seconds) * 100}%` }}
+          />
+        )}
+      </button>
+    </div>
+  );
+}
+
+/** What the slide's audio is: its waveform, and buttons to hear it and to (re)make it. */
 function SlideAudioControls(props: {
   deck: Deck;
   slide: string;
@@ -305,10 +375,12 @@ function SlideAudioControls(props: {
     await props.flush();
     await useNarration.getState().renderAudio(deck.id, [slide]);
   };
-  const play = async () => {
-    if (playback) return playback.stop();
+  const play = async (from?: number) => {
+    // Pressed on the waveform, it starts over from there; the button stops what plays.
+    playback?.stop();
+    if (playback && from === undefined) return;
     try {
-      const started = await playNarration(deck.id, slide);
+      const started = await playNarration(deck.id, slide, from ?? 0);
       setPlayback(started);
       void started.ended.then(() => setPlayback((p) => (p === started ? null : p)));
     } catch (error) {
@@ -327,66 +399,78 @@ function SlideAudioControls(props: {
   if (!props.hasText && !recorded) return null;
   const busy = render?.slide === slide || (render !== null && render.slide === null && render.deck === deck.id);
   return (
-    <div className="flex items-center justify-between gap-2 text-xs">
-      <span className="flex min-w-0 items-center gap-1 text-muted-foreground">
-        {busy ? (
-          <>
-            <Loader2 className="size-3.5 animate-spin" />
-            Speaking…
-          </>
-        ) : (
-          audioLabel(audio)
-        )}
-      </span>
-      <div className="flex shrink-0 gap-1">
-        {props.hasText && !props.locked && (
+    <div className="flex shrink-0 flex-col gap-1.5">
+      {audio?.seconds != null && audio.seconds > 0 && (
+        <SlideWave
+          deck={deck.id}
+          slide={slide}
+          audio={audio}
+          seconds={audio.seconds}
+          playback={playback}
+          onPlay={(from) => void play(from)}
+        />
+      )}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+        <span className="flex min-w-0 items-center gap-1 text-muted-foreground">
+          {busy ? (
+            <>
+              <Loader2 className="size-3.5 animate-spin" />
+              Speaking…
+            </>
+          ) : (
+            audioLabel(audio)
+          )}
+        </span>
+        <div className="flex shrink-0 gap-1">
+          {props.hasText && !props.locked && (
+            <Button
+              size="md"
+              onClick={() => void clean()}
+              title="Ask the agent to turn this slide's recorded words into clean, fluent sentences"
+            >
+              <Sparkles />
+              Clean up
+            </Button>
+          )}
           <Button
             size="md"
-            onClick={() => void clean()}
-            title="Ask the agent to turn this slide's recorded words into clean, fluent sentences"
+            disabled={!audio?.seconds || busy}
+            onClick={() => void play()}
+            title={audio?.state === "stale" ? "Play the out-of-date audio" : "Play the audio"}
           >
-            <Sparkles />
-            Clean up
+            {playback ? <Square /> : <Play />}
+            {playback ? "Stop" : "Play"}
           </Button>
-        )}
-        <Button
-          size="md"
-          disabled={!audio?.seconds || busy}
-          onClick={() => void play()}
-          title={audio?.state === "stale" ? "Play the out-of-date audio" : "Play the audio"}
-        >
-          {playback ? <Square /> : <Play />}
-          {playback ? "Stop" : "Play"}
-        </Button>
-        {recorded ? (
-          <Button
-            size="md"
-            disabled={props.locked}
-            onClick={() => void remove()}
-            title={
-              audio?.imported ? "Remove the audio brought in for this slide" : "Delete your recording of this slide"
-            }
-          >
-            <Trash2 />
-            {audio?.imported ? "Remove audio" : "Delete recording"}
-          </Button>
-        ) : (
-          <Button
-            size="md"
-            disabled={!canSpeak || render !== null}
-            onClick={() => void generate()}
-            title={
-              canSpeak
-                ? "Speak this slide's narration"
-                : provider?.needsKey
-                  ? `Add your ${provider.name} API key first`
-                  : "Download the voice model first"
-            }
-          >
-            <AudioLines />
-            {audio?.state === "ready" ? "Regenerate" : "Generate"}
-          </Button>
-        )}
+          {recorded ? (
+            <Button
+              size="md"
+              disabled={props.locked}
+              onClick={() => void remove()}
+              title={
+                audio?.imported ? "Remove the audio brought in for this slide" : "Delete your recording of this slide"
+              }
+            >
+              <Trash2 />
+              {audio?.imported ? "Remove audio" : "Delete recording"}
+            </Button>
+          ) : (
+            <Button
+              size="md"
+              disabled={!canSpeak || render !== null}
+              onClick={() => void generate()}
+              title={
+                canSpeak
+                  ? "Speak this slide's narration"
+                  : provider?.needsKey
+                    ? `Add your ${provider.name} API key first`
+                    : "Download the voice model first"
+              }
+            >
+              <AudioLines />
+              {audio?.state === "ready" ? "Regenerate" : "Generate"}
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );

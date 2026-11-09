@@ -40,4 +40,18 @@ describe("slide clock", () => {
     ]);
     postSlideClock(null, "intro");
   });
+
+  it("says when the clock is held at a moment, and lets go of it when asked to", () => {
+    const { frame: page, postMessage } = frame();
+    setSlideClock({ slide: "intro", at: 1.2, paused: true });
+    postSlideClock(page, "intro", true);
+    setSlideClock(null);
+    // Only who asks for it hears that the clock is gone.
+    postSlideClock(page, "intro");
+    postSlideClock(page, "intro", true);
+    expect(postMessage.mock.calls).toEqual([
+      [{ type: "slop:clock", slide: "intro", at: 1.2, paused: true }, "*"],
+      [{ type: "slop:clock", slide: "intro", at: null }, "*"],
+    ]);
+  });
 });

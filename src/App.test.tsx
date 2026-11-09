@@ -82,23 +82,24 @@ describe("App", () => {
     expect(screen.queryByTestId("stub-stage")).toBeNull();
   });
 
-  it("keeps the slide on the stage, with the timeline under it, while the sidebar shows the narration", () => {
+  it("shows the timeline under the slide in Play mode only, whatever the sidebar shows", () => {
     useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML), sidebarTabs: ["chat"], sidebarTab: "chat" });
     render(<App />);
     expect(shown("timeline")).toBe(false);
+    // The Narration tab does not bring it.
     act(() => useApp.getState().setSidebarTab("narration"));
+    expect(["stage", "timeline"].map(shown)).toEqual([true, false]);
+    act(() => useApp.getState().setMode("play"));
     expect(["stage", "timeline"].map(shown)).toEqual([true, true]);
-    // Not with the sidebar hidden, or over the deck's settings or its changes.
-    act(() => useApp.getState().setSidebarOpen(false));
-    expect(shown("timeline")).toBe(false);
-    act(() => useApp.getState().setSidebarOpen(true));
-    expect(shown("timeline")).toBe(true);
-    act(() => useApp.getState().setMode("settings"));
-    expect(shown("timeline")).toBe(false);
-    act(() => useApp.getState().setMode("edit"));
-    expect(shown("timeline")).toBe(true);
+    // It stays with the sidebar on another tab, or hidden.
     act(() => useApp.getState().setSidebarTab("chat"));
-    expect(shown("timeline")).toBe(false);
+    expect(shown("timeline")).toBe(true);
+    act(() => useApp.getState().setSidebarOpen(false));
+    expect(shown("timeline")).toBe(true);
+    for (const mode of ["view", "edit", "settings"] as const) {
+      act(() => useApp.getState().setMode(mode));
+      expect(shown("timeline")).toBe(false);
+    }
   });
 
   // Closed panels stay mounted (collapsed), so reopening them does not reload their contents.

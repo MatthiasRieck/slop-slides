@@ -1,7 +1,15 @@
-import { Minus, Pause, Play, Plus, RotateCcw } from "lucide-react";
-import { type KeyboardEvent, type PointerEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Minus, Pause, Play, Plus, RotateCcw, StepBack, StepForward } from "lucide-react";
+import {
+  type KeyboardEvent,
+  type MouseEvent,
+  type PointerEvent,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
-import { api, type Deck, type NarrationWord, type Slide, type SlideAudio, type SlideTiming } from "../lib/api";
+import type { Deck, Slide, SlideAudio, SlideTiming } from "../lib/api";
 import { formatDuration } from "../lib/narrationAudio";
 import { setSlideClock } from "../lib/slideClock";
 import { pixelsOf } from "../lib/slideSize";
@@ -21,6 +29,7 @@ import { loadVideoOptions } from "../lib/video";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { Button } from "./Button";
+import { usePeaks, useWords, Waveform, Words } from "./NarrationWave";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
 const NO_AUDIO: Record<string, SlideAudio> = {};
@@ -46,12 +55,14 @@ interface Drag {
 }
 
 /**
- * The deck on a timeline, under the slide while the sidebar shows the Narration tab: the shown slides above their audio,
+ * The deck on a timeline, under the slide in Play mode: the shown slides above their audio,
  * as a video export and the self-running show play them. Dragging the end of a slide changes
  * how long it shows, the slides after it following with their narration. Dragging a narration
  * moves it, up to the narration on either side: so a slide can change in the middle of the
  * narration, and narration can run on over the next slide. The ruler moves the playhead, and
- * Play plays it from there, the stage following along.
+ * Play plays it from there, the stage following along. Not playing, the slide on the stage is
+ * frozen as it is at the playhead, its animations that far in: pausing, pressing or dragging on
+ * the ruler and stepping back or forward all leave it so, to look at one moment.
  */
 export function NarrationTimeline() {
   const deck = useApp((s) => s.deck);
@@ -103,20 +114,17 @@ function Tracks(props: {
   }, [deck]);
   useEffect(() => () => setSlideClock(null), []);
 
-  /** Puts the slide showing at `at` (and its timed animations) where the timeline is then. */
-  const clockAt = (at: number) => {
+  /** Puts the slide showing at `at` (and its timed animations) where the timeline is then; `paused`, they stay there. */
+  const clockAt = (at: number, paused = false) => {
     const slide = timeline.slides[slideAt(timeline, at)];
-    setSlideClock(slide ? { slide: slide.id, at: at - slide.start } : null);
+    setSlideClock(slide ? { slide: slide.id, at: at - slide.start, ...(paused && { paused }) } : null);
   };
   const select = (index: number) => {
     const slide = timeline.slides[index];
     if (slide) useApp.getState().select(slide.id);
   };
   const play = () => {
-    if (stop) {
-      setSlideClock(null);
-      return setStop(null);
-    }
+    if (stop) return freeze(time);
     const from = time >= timeline.end ? 0 : time;
     setTime(from);
     select(slideAt(timeline, from));
@@ -181,14 +189,22 @@ function Tracks(props: {
     setHeld(null);
     if (dragged?.moved && preview) finish(preview);
   };
-  const seek = (event: PointerEvent<HTMLDivElement>) => {
-    const box = event.currentTarget.getBoundingClientRect();
-    const at = Math.min(end, Math.max(0, ((event.clientX - box.left) / (box.width || 1)) * end));
+  /** Stops at `at`, the stage showing that moment and staying on it. */
+  const freeze = (at: number) => {
+    const to = Math.min(timeline.end, Math.max(0, at));
     setStop(null);
-    setTime(at);
-    select(slideAt(timeline, at));
-    setSlideClock(null);
+    setTime(to);
+    select(slideAt(timeline, to));
+    clockAt(to, true);
   };
+  const seek = (event: PointerEvent<HTMLDivElement>) => {
+    // Pressed, or dragged along with the button down.
+    if (event.type === "pointermove" ? !(event.buttons & 1) : event.button !== 0) return;
+    if (event.type === "pointerdown") event.currentTarget.setPointerCapture?.(event.pointerId);
+    const box = event.currentTarget.getBoundingClientRect();
+    freeze(((event.clientX - box.left) / (box.width || 1)) * end);
+  };
+  const step = (event: MouseEvent, direction: 1 | -1) => freeze(time + direction * (event.shiftKey ? 1 : STEP));
 
   const reset = slides
     .filter((s) => !s.locked && (s.duration != null || s.narrationStart != null))
@@ -196,36 +212,58 @@ function Tracks(props: {
 
   return (
     <section aria-label="Narration timeline" className="flex h-44 shrink-0 flex-col border-t bg-background">
-      <div className="flex shrink-0 items-center gap-1.5 border-b px-2 py-1 text-xs">
-        <Button size="xs" onClick={play}>
-          {stop ? <Pause /> : <Play />}
-          {stop ? "Pause" : "Play"}
-        </Button>
+      {/* The time on the left, zoom on the right, and what plays it in the middle between them. */}
+      <div className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-1.5 border-b px-2 py-1 text-xs">
         <span className="tabular-nums text-muted-foreground">
           {formatDuration(now)} / {formatDuration(shown.end)}
         </span>
-        <span className="ml-auto" />
-        {reset.length > 0 && (
+        <div data-testid="transport" className="flex items-center gap-1">
           <Button
             size="xs"
-            title="Let every slide follow its narration again"
-            onClick={() => void useApp.getState().setSlideTiming(reset)}
+            aria-label="Step back"
+            title="Step back a tenth of a second, the slide frozen there; with Shift, a second"
+            disabled={now <= 0}
+            onClick={(event) => step(event, -1)}
           >
-            <RotateCcw />
-            Reset timing
+            <StepBack />
           </Button>
-        )}
-        <Button size="xs" aria-label="Zoom out" disabled={zoom === ZOOMS[0]} onClick={() => setZoom((z) => z / 2)}>
-          <Minus />
-        </Button>
-        <Button
-          size="xs"
-          aria-label="Zoom in"
-          disabled={zoom === ZOOMS[ZOOMS.length - 1]}
-          onClick={() => setZoom((z) => z * 2)}
-        >
-          <Plus />
-        </Button>
+          <Button size="xs" onClick={play}>
+            {stop ? <Pause /> : <Play />}
+            {stop ? "Pause" : "Play"}
+          </Button>
+          <Button
+            size="xs"
+            aria-label="Step forward"
+            title="Step forward a tenth of a second, the slide frozen there; with Shift, a second"
+            disabled={now >= timeline.end}
+            onClick={(event) => step(event, 1)}
+          >
+            <StepForward />
+          </Button>
+        </div>
+        <div className="flex items-center justify-end gap-1.5">
+          {reset.length > 0 && (
+            <Button
+              size="xs"
+              title="Let every slide follow its narration again"
+              onClick={() => void useApp.getState().setSlideTiming(reset)}
+            >
+              <RotateCcw />
+              Reset timing
+            </Button>
+          )}
+          <Button size="xs" aria-label="Zoom out" disabled={zoom === ZOOMS[0]} onClick={() => setZoom((z) => z / 2)}>
+            <Minus />
+          </Button>
+          <Button
+            size="xs"
+            aria-label="Zoom in"
+            disabled={zoom === ZOOMS[ZOOMS.length - 1]}
+            onClick={() => setZoom((z) => z * 2)}
+          >
+            <Plus />
+          </Button>
+        </div>
       </div>
       {/* Clear of the panels' resize handles, which take a press a few pixels either side of them. */}
       <div className="mx-1.5 min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
@@ -318,6 +356,7 @@ function Ruler({ end, onSeek }: { end: number; onSeek: (event: PointerEvent<HTML
     <div
       data-testid="ruler"
       onPointerDown={onSeek}
+      onPointerMove={onSeek}
       className="relative h-4 shrink-0 cursor-pointer select-none overflow-hidden border-b text-2xs tabular-nums text-muted-foreground"
     >
       {marks.map((at) => (
@@ -385,21 +424,8 @@ function Clip(props: {
   onKeyDown: (event: KeyboardEvent) => void;
 }) {
   const { deck, clip, audio, end } = props;
-  const [peaks, setPeaks] = useState<number[]>([]);
   const seconds = audio?.seconds ?? null;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: Regenerated audio has another waveform.
-  useEffect(() => {
-    if (seconds === null) return setPeaks([]);
-    let current = true;
-    // Without a waveform, the clip still shows where the audio is.
-    const show = (found: number[] | null) => {
-      if (current) setPeaks(found ?? []);
-    };
-    api.narrationPeaks(deck, clip.slide).then(show, () => show(null));
-    return () => {
-      current = false;
-    };
-  }, [deck, clip.slide, seconds, audio?.state]);
+  const peaks = usePeaks(deck, clip.slide, audio);
   const words = useWords(deck, clip.slide, audio);
   const label =
     seconds === null
@@ -426,63 +452,5 @@ function Clip(props: {
       {peaks.length > 0 && <Waveform peaks={peaks} />}
       {words.length > 0 && seconds !== null && <Words words={words} seconds={seconds} />}
     </button>
-  );
-}
-
-/** When each word of the slide's up-to-date audio is said, once that is known. */
-function useWords(deck: string, slide: string, audio: SlideAudio | undefined): NarrationWord[] {
-  const [words, setWords] = useState<NarrationWord[]>([]);
-  const timed = audio?.state === "ready" && !!audio.timed;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: New audio has other words.
-  useEffect(() => {
-    if (!timed) return setWords([]);
-    let current = true;
-    api.narrationWords(deck, slide).then(
-      (found) => current && setWords(found ?? []),
-      () => current && setWords([]),
-    );
-    return () => {
-      current = false;
-    };
-  }, [deck, slide, timed, audio?.seconds]);
-  return words;
-}
-
-/** `words` along audio `seconds` long, each at its start, cut off where the next begins. */
-function Words({ words, seconds }: { words: NarrationWord[]; seconds: number }) {
-  const at = (time: number) => (Math.min(time, seconds) / seconds) * 100;
-  return (
-    <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-3.5">
-      {words.map((word, i) => {
-        const next = words[i + 1]?.start ?? seconds;
-        return (
-          <span
-            key={`${word.start}-${word.end}-${word.text}`}
-            data-word={word.text}
-            className="absolute bottom-0 overflow-hidden whitespace-nowrap border-l border-current/40 pl-px text-left text-[9px] leading-3.5 text-foreground/80"
-            style={{ left: `${at(word.start)}%`, width: `${Math.max(0, at(next) - at(word.start))}%` }}
-          >
-            {word.text}
-          </span>
-        );
-      })}
-    </span>
-  );
-}
-
-/** `peaks`, one bar each, mirrored around the middle and stretched to fit. */
-function Waveform({ peaks }: { peaks: number[] }) {
-  const bars = peaks.map((peak, i) => `M${i} ${1 - peak}V${1 + peak}`).join("");
-  return (
-    <svg
-      aria-hidden="true"
-      className="size-full"
-      viewBox={`0 0 ${peaks.length} 2`}
-      preserveAspectRatio="none"
-      fill="none"
-      stroke="currentColor"
-    >
-      <path d={bars} strokeWidth="0.8" />
-    </svg>
   );
 }

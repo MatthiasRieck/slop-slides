@@ -341,8 +341,8 @@ describe("player: in the presenter", () => {
     const elsewhere = fake(other, 5000, 1000);
     const fade = fake(intro, 350, 1000, null);
     animations = [word, beat, loop, still, elsewhere, fade];
-    const clock = (at: unknown, slide = "intro") =>
-      p.window.dispatchEvent(new p.window.MessageEvent("message", { data: { type: "slop:clock", slide, at } }));
+    const clock = (at: unknown, slide = "intro", paused = false) =>
+      p.window.dispatchEvent(new p.window.MessageEvent("message", { data: { type: "slop:clock", slide, at, paused } }));
 
     clock(2.5);
     expect([word.currentTime, word.playState]).toEqual([2500, "running"]);
@@ -368,6 +368,27 @@ describe("player: in the presenter", () => {
     clock("later");
     clock(-1);
     expect(word.currentTime).toBe(1000);
+
+    // Held at a moment (the timeline's playhead, not playing), they stop exactly there, however
+    // little they drifted, and move with it; what was paused on purpose or runs across slides is left.
+    clock(1.02, "intro", true);
+    expect([word.currentTime, word.playState]).toEqual([1020, "paused"]);
+    expect([beat.currentTime, beat.playState]).toEqual([1020, "paused"]);
+    clock(0.4, "intro", true);
+    expect([word.currentTime, word.playState]).toEqual([400, "paused"]);
+    expect([loop.currentTime, loop.playState, still.playState]).toEqual([0, "running", "paused"]);
+    // Playing again takes them on from there.
+    clock(0.5);
+    expect([word.currentTime, word.playState]).toEqual([500, "running"]);
+    // Let go of while held, they run on their own again; one resting on its end stays there.
+    clock(2, "intro", true);
+    clock(null);
+    expect([word.currentTime, word.playState, beat.playState]).toEqual([2000, "running", "running"]);
+    expect(still.playState).toBe("paused");
+    clock(9, "intro", true);
+    clock(null);
+    expect([word.currentTime, word.playState]).toEqual([5000, "paused"]);
+    expect(beat.playState).toBe("running");
   });
 
   it("counts animations that began within a frame of the slide showing as the slide's", () => {

@@ -38,6 +38,10 @@ describe("playNarration", () => {
     expect(invoke).toHaveBeenCalledWith("narration_wav", { id: "deck", slide: "intro" });
     expect(made[0]?.currentTime).toBe(1.5);
     expect(made[0]?.paused).toBe(false);
+    // Where it is, for a playhead to follow.
+    expect(playing.time()).toBe(1.5);
+    made[0]!.currentTime = 2.25;
+    expect(playing.time()).toBe(2.25);
     playing.stop();
     await playing.ended;
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:narration");

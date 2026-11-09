@@ -1,4 +1,4 @@
-import { Eye, GitCompare, Pencil } from "lucide-react";
+import { Eye, GitCompare, Pencil, Play } from "lucide-react";
 import { useEffect } from "react";
 
 import { useChanges } from "../changesStore";
@@ -11,6 +11,7 @@ type TabMode = Exclude<DeckMode, "settings">;
 const MODES: { id: TabMode; label: string; icon: typeof Eye }[] = [
   { id: "view", label: "View", icon: Eye },
   { id: "edit", label: "Edit", icon: Pencil },
+  { id: "play", label: "Play", icon: Play },
   { id: "git", label: "Git", icon: GitCompare },
 ];
 
@@ -52,6 +53,7 @@ export function ModeTabs() {
     edit: locked
       ? "This slide is locked; unlock it in the slide list to edit it"
       : "Edit the slide: click to select, drag to move, drag the handles to resize or rotate, double-click to edit text, drop images onto it to add them",
+    play: "Play the deck on its timeline, as a video or a self-running show does, and set how long each slide shows and when its narration starts",
     git: "See what changed since the last commit, and compare each slide before and after",
   };
   const modes = MODES.filter(({ id }) => id !== "git" || inRepository);
@@ -65,7 +67,7 @@ export function ModeTabs() {
           role="tab"
           aria-selected={mode === id}
           title={titles[id]}
-          disabled={id === "edit" && (!hasSlide || locked)}
+          disabled={(id === "edit" && (!hasSlide || locked)) || (id === "play" && !hasSlide)}
           onClick={() => useApp.getState().setMode(id)}
           className={cn(
             "flex min-w-14 flex-col items-center justify-center gap-0.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40",

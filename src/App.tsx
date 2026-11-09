@@ -61,8 +61,6 @@ export const SIDEBAR_MAX_SIZE = "67%";
 function Workbench() {
   const hasDeck = useApp((s) => s.deck !== null);
   const mode = useApp(deckMode);
-  // The timeline needs the width of the stage, so it stays under the slide while the sidebar shows the narration.
-  const narrating = useApp((s) => s.sidebarOpen && s.sidebarTab === "narration");
   const sidebarOpen = useApp((s) => s.sidebarOpen);
   const sidebarMaximized = useApp((s) => s.sidebarMaximized);
   const railOpen = useApp((s) => s.railOpen);
@@ -105,7 +103,8 @@ function Workbench() {
                   <div className="min-h-0 flex-1">
                     {mode === "settings" ? <DeckSettings /> : mode === "git" ? <ChangesView /> : <Stage />}
                   </div>
-                  {narrating && (mode === "view" || mode === "edit") && <NarrationTimeline />}
+                  {/* Play mode: the deck's timeline under the slide, whatever the sidebar shows. */}
+                  {mode === "play" && <NarrationTimeline />}
                 </div>
               ) : (
                 <FileViewer />

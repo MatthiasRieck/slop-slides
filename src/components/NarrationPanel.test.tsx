@@ -8,6 +8,12 @@ import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
 import { NARRATION_SAVE_DELAY, NarrationPanel } from "./NarrationPanel";
 
+const playNarration = vi.fn();
+vi.mock("../lib/narrationAudio", async (original) => ({
+  ...(await original<typeof import("../lib/narrationAudio")>()),
+  playNarration: (...args: unknown[]) => playNarration(...args),
+}));
+
 const setNarration = vi.fn(async (_slide: string, _text: string) => {});
 
 function deckWith(narration: Record<string, string>, locked: string[] = []): Deck {
@@ -77,6 +83,9 @@ beforeEach(() => {
   vi.useFakeTimers();
   setNarration.mockClear();
   invoke.mockReset();
+  // A backend that knows nothing, until a test says what it answers.
+  invoke.mockResolvedValue(null);
+  playNarration.mockReset();
   useNarration.setState({
     speech: null,
     accountVoices: {},
@@ -169,6 +178,107 @@ describe("NarrationPanel", () => {
     useApp.setState({ deck: { ...deckFor(DECK_HTML), slides: [] } });
     rerender(<NarrationPanel />);
     expect(screen.getByText(/Add a slide/)).toBeTruthy();
+  });
+});
+
+describe("NarrationPanel audio", () => {
+  const WORDS = [
+    { text: "Welcome,", start: 0.4, end: 1 },
+    { text: "everyone.", start: 2, end: 3 },
+  ];
+  /** The first slide's audio, four seconds long, with its waveform and maybe its words. */
+  async function withAudio(audio: Partial<SlideAudio> = {}) {
+    backend(SPEECH, { narration_peaks: [0.5, 1], narration_words: WORDS });
+    audioOf([{ slide: "intro", state: "ready", seconds: 4, ...audio }]);
+    const view = render(<NarrationPanel />);
+    await act(async () => {});
+    return view;
+  }
+  const wave = (name = "Narration audio") => screen.getByRole("button", { name }) as HTMLButtonElement;
+  /** A playback standing still at `at` until it is stopped. */
+  function playing(at: number) {
+    let end = () => {};
+    const playback = {
+      ended: new Promise<void>((resolve) => (end = resolve)),
+      stop: vi.fn(() => end()),
+      time: () => at,
+    };
+    playNarration.mockResolvedValueOnce(playback);
+    return playback;
+  }
+
+  it("shows the audio's waveform above the words, with the buttons to hear and remake it", async () => {
+    await withAudio();
+    expect(wave().querySelector("path")?.getAttribute("d")).toBe("M0 0.5V1.5M1 0V2");
+    expect(invoke).toHaveBeenCalledWith("narration_peaks", { id: deckFor(DECK_HTML).id, slide: "intro" });
+    expect(wave().compareDocumentPosition(box()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const regenerate = screen.getByRole("button", { name: "Regenerate" });
+    expect(regenerate.compareDocumentPosition(box()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await act(async () => fireEvent.click(regenerate));
+    expect(invoke).toHaveBeenCalledWith("render_narration", { id: deckFor(DECK_HTML).id, slides: ["intro"] });
+  });
+
+  it("has no waveform before there is audio", async () => {
+    backend(SPEECH);
+    render(<NarrationPanel />);
+    await act(async () => {});
+    expect(screen.queryByRole("button", { name: /Narration audio/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Generate" })).toBeTruthy();
+  });
+
+  it("shows when each word is said once the audio is timed, wide enough to read and scroll", async () => {
+    const { unmount } = await withAudio();
+    expect(wave().querySelector("[data-word]")).toBeNull();
+    expect(wave().style.width).toBe("");
+    unmount();
+    await withAudio({ timed: true });
+    const words = [...wave().querySelectorAll<HTMLElement>("[data-word]")];
+    expect(words.map((w) => [w.textContent, w.style.left])).toEqual([
+      ["Welcome,", "10%"],
+      ["everyone.", "50%"],
+    ]);
+    expect(wave().style.width).toBe("320px");
+    expect(wave().parentElement!.className).toContain("overflow-x-auto");
+  });
+
+  it("marks out-of-date audio, without its words", async () => {
+    await withAudio({ state: "stale", timed: true });
+    expect(wave("Narration audio, out of date").querySelector("[data-word]")).toBeNull();
+  });
+
+  it("plays from where the waveform is pressed, a line showing where it is, and stops from the button", async () => {
+    await withAudio();
+    wave().getBoundingClientRect = () => ({ left: 0, width: 200 }) as DOMRect;
+    const first = playing(3);
+    await act(async () => fireEvent.click(wave(), { clientX: 100 }));
+    expect(playNarration).toHaveBeenLastCalledWith(deckFor(DECK_HTML).id, "intro", 2);
+    expect(screen.getByTestId("wave-playhead").style.left).toBe("75%");
+    // Pressed again elsewhere, it starts over from there.
+    const second = playing(1);
+    await act(async () => fireEvent.click(wave(), { clientX: 50 }));
+    expect(first.stop).toHaveBeenCalled();
+    expect(playNarration).toHaveBeenLastCalledWith(deckFor(DECK_HTML).id, "intro", 1);
+    expect(screen.getByTestId("wave-playhead").style.left).toBe("25%");
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Stop" })));
+    expect(second.stop).toHaveBeenCalled();
+    expect(playNarration).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId("wave-playhead")).toBeNull();
+    // The button plays it from the start.
+    playing(0);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Play" })));
+    expect(playNarration).toHaveBeenLastCalledWith(deckFor(DECK_HTML).id, "intro", 0);
+  });
+
+  it("follows the audio with the line as it plays", async () => {
+    await withAudio();
+    let at = 1;
+    playNarration.mockResolvedValueOnce({ ended: new Promise<void>(() => {}), stop: vi.fn(), time: () => at });
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Play" })));
+    expect(screen.getByTestId("wave-playhead").style.left).toBe("25%");
+    at = 9;
+    await act(async () => void vi.advanceTimersByTime(60));
+    // Never past the end of the audio.
+    expect(screen.getByTestId("wave-playhead").style.left).toBe("100%");
   });
 });
 

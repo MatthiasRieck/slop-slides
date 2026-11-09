@@ -939,7 +939,7 @@ describe("Stage", () => {
 
     it("has the search in View mode only", () => {
       render(<Stage />);
-      act(() => useApp.getState().setMode("settings"));
+      act(() => useApp.getState().setMode("play"));
       expect(screen.queryByRole("textbox", { name: "Search slides" })).toBeNull();
       act(() => useApp.getState().setMode("view"));
       act(() => useApp.getState().setMode("edit"));

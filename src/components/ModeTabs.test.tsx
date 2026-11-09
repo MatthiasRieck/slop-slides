@@ -38,7 +38,7 @@ beforeEach(() => {
 describe("ModeTabs", () => {
   it("lists the modes, with View selected", () => {
     render(<ModeTabs />);
-    expect(tabs()).toEqual(["View", "Edit", "Git"]);
+    expect(tabs()).toEqual(["View", "Edit", "Play", "Git"]);
     expect(selected()).toEqual(["View"]);
   });
 
@@ -49,6 +49,7 @@ describe("ModeTabs", () => {
 
   it.each([
     ["Edit", "edit"],
+    ["Play", "play"],
     ["Git", "git"],
   ])("switches to %s and back to View", (name, mode) => {
     render(<ModeTabs />);
@@ -108,7 +109,7 @@ describe("ModeTabs", () => {
       inRepository(false);
       render(<ModeTabs />);
       await settled();
-      expect(tabs()).toEqual(["View", "Edit"]);
+      expect(tabs()).toEqual(["View", "Edit", "Play"]);
     });
 
     it("shows up once the deck is found in a repository", async () => {

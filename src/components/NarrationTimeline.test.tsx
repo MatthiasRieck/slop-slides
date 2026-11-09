@@ -284,7 +284,7 @@ describe("NarrationTimeline", () => {
     expect(timingCalls()).toEqual([]);
   });
 
-  it("moves the playhead from the ruler, the stage following", () => {
+  it("moves the playhead from the ruler, the stage following, frozen at that moment", () => {
     open();
     const ruler = screen.getByTestId("ruler");
     ruler.getBoundingClientRect = () => ({ left: 0, width: 300 }) as DOMRect;
@@ -292,6 +292,77 @@ describe("NarrationTimeline", () => {
     expect(useApp.getState().selected).toBe("#2");
     expect(screen.getByTestId("playhead").style.left).toBe("50%");
     expect(screen.getByText("0:08 / 0:15")).toBeTruthy();
+    // The second slide starts at 5 s: it shows as it is 2.5 s in, and stays so.
+    expect(getSlideClock()).toEqual({ slide: "#2", at: 2.5, paused: true });
+  });
+
+  it("scrubs along the ruler while the button is down, and not past its ends", () => {
+    open();
+    const ruler = screen.getByTestId("ruler");
+    ruler.getBoundingClientRect = () => ({ left: 0, width: 300 }) as DOMRect;
+    // Passing over it without pressing moves nothing.
+    fireEvent.pointerMove(ruler, { clientX: 150, buttons: 0 });
+    expect(getSlideClock()).toBeNull();
+    fireEvent.pointerDown(ruler, { clientX: 20, button: 2 });
+    expect(getSlideClock()).toBeNull();
+    fireEvent.pointerDown(ruler, { clientX: 20 });
+    expect(getSlideClock()).toEqual({ slide: "intro", at: 1, paused: true });
+    fireEvent.pointerMove(ruler, { clientX: 220, buttons: 1 });
+    expect(getSlideClock()).toEqual({ slide: "outro", at: 1, paused: true });
+    expect(useApp.getState().selected).toBe("outro");
+    fireEvent.pointerMove(ruler, { clientX: -50, buttons: 1 });
+    expect(getSlideClock()).toEqual({ slide: "intro", at: 0, paused: true });
+    expect(screen.getByTestId("playhead").style.left).toBe("0%");
+  });
+
+  it("has step back, play and step forward together in the middle of the bar", () => {
+    open();
+    const transport = screen.getByTestId("transport");
+    expect([...transport.querySelectorAll("button")].map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual(
+      ["Step back", "Play", "Step forward"],
+    );
+    const bar = transport.parentElement!;
+    expect(bar.className).toContain("grid-cols-[1fr_auto_1fr]");
+    expect([...bar.children].indexOf(transport)).toBe(1);
+  });
+
+  it("steps a tenth of a second back and forward, a second with Shift, the slide frozen there", () => {
+    const stop = vi.fn();
+    play.mockReturnValue(stop);
+    open();
+    const back = screen.getByRole("button", { name: "Step back" }) as HTMLButtonElement;
+    const forward = screen.getByRole("button", { name: "Step forward" }) as HTMLButtonElement;
+    const at = () => getSlideClock()?.at.toFixed(1);
+    expect(back.disabled).toBe(true);
+    fireEvent.click(forward);
+    expect(getSlideClock()).toMatchObject({ slide: "intro", paused: true });
+    expect(at()).toBe("0.1");
+    fireEvent.click(forward, { shiftKey: true });
+    expect(at()).toBe("1.1");
+    expect(back.disabled).toBe(false);
+    fireEvent.click(back);
+    expect(at()).toBe("1.0");
+    // Across a slide change, the stage follows.
+    const ruler = screen.getByTestId("ruler");
+    ruler.getBoundingClientRect = () => ({ left: 0, width: 300 }) as DOMRect;
+    fireEvent.pointerDown(ruler, { clientX: 100 });
+    expect(getSlideClock()).toEqual({ slide: "#2", at: 0, paused: true });
+    fireEvent.click(back);
+    expect(getSlideClock()).toMatchObject({ slide: "intro", paused: true });
+    expect(at()).toBe("4.9");
+    expect(useApp.getState().selected).toBe("intro");
+    // Not before the start or past the end.
+    fireEvent.pointerDown(ruler, { clientX: 300 });
+    expect(forward.disabled).toBe(true);
+    fireEvent.pointerDown(ruler, { clientX: 0 });
+    fireEvent.click(back, { shiftKey: true });
+    expect(at()).toBe("0.0");
+    // Stepping while it plays stops it there.
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    fireEvent.click(forward);
+    expect(stop).toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Play" })).toBeTruthy();
+    expect(at()).toBe("0.1");
   });
 
   it("does not change locked slides, but lets the one before move them", () => {
@@ -363,11 +434,15 @@ describe("NarrationTimeline", () => {
     act(() => events.tick(outro.start + 1.5));
     expect(getSlideClock()).toEqual({ slide: "outro", at: 1.5 });
     expect(screen.getByText(`${formatDuration(outro.start + 1.5)} / ${formatDuration(15)}`)).toBeTruthy();
-    // Paused, the slides run on their own: nothing is left frozen.
+    // Paused, the slide stays frozen where it got to.
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
-    expect(getSlideClock()).toBeNull();
-    // Played to the end, the slides run on their own again.
+    expect(getSlideClock()).toEqual({ slide: "outro", at: 1.5, paused: true });
+    // Playing on from there runs it again.
     fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    expect(play.mock.calls[1]![2]).toBe(outro.start + 1.5);
+    act(() => (play.mock.calls[1]![3] as { tick: (t: number) => void }).tick(outro.start + 2));
+    expect(getSlideClock()).toEqual({ slide: "outro", at: 2 });
+    // Played to the end, the slides run on their own again.
     act(() => (play.mock.calls[1]![3] as { ended: () => void }).ended());
     expect(getSlideClock()).toBeNull();
   });

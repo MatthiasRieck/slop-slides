@@ -393,6 +393,9 @@ describe("deck mode", () => {
     expect(mode()).toBe("edit");
     useApp.getState().setMode("git");
     expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "git" });
+    useApp.getState().setMode("play");
+    expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "play" });
+    expect(mode()).toBe("play");
     useApp.getState().setMode("settings");
     expect(mode()).toBe("settings");
     useApp.getState().setMode("edit");

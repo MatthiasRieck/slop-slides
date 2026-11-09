@@ -33,8 +33,6 @@ jobs:
           node-version: 22
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ runner.os == 'macOS' && 'x86_64-apple-darwin' || '' }}
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
@@ -63,12 +61,6 @@ jobs:
           name: export-smoke-${{ runner.os }}
           path: ${{ runner.temp }}/export-smoke
           if-no-files-found: ignore
-      # Runners are Apple Silicon, so only the release would otherwise link the Intel app.
-      - name: Verify Intel Mac build links
-        if: runner.os == 'macOS'
-        env:
-          SLOPSLIDE_REQUIRE_NARRATION_ENGINE: '1'
-        run: cargo build --manifest-path src-tauri/Cargo.toml --target x86_64-apple-darwin --bin slopslide
       - name: Verify explicit no-engine build
         if: runner.os == 'Windows'
         shell: bash

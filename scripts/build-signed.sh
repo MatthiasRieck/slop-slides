@@ -2,7 +2,6 @@
 # Build a signed (and notarized) SlopSlide for macOS: SlopSlide.app and a .dmg.
 #
 #   scripts/build-signed.sh                 sign and notarize for this Mac's architecture
-#   scripts/build-signed.sh --universal     one build for Apple Silicon and Intel
 #   scripts/build-signed.sh --no-notarize   sign only (e.g. with an Apple Development cert)
 #   scripts/build-signed.sh --check         validate the signing settings, do not build
 #
@@ -11,16 +10,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-universal=0
 notarize=1
 check_only=0
 for arg in "$@"; do
   case "$arg" in
-    --universal) universal=1 ;;
     --no-notarize) notarize=0 ;;
     --check) check_only=1 ;;
     -h | --help)
-      sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -108,11 +105,6 @@ fi
 
 args=(--bundles app,dmg)
 bundle_dir=src-tauri/target/release/bundle
-if ((universal)); then
-  rustup target add aarch64-apple-darwin x86_64-apple-darwin
-  args+=(--target universal-apple-darwin)
-  bundle_dir=src-tauri/target/universal-apple-darwin/release/bundle
-fi
 
 step "Building SlopSlide (signed with \"$name\")"
 pnpm tauri build "${args[@]}"

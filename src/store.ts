@@ -237,14 +237,14 @@ function loadFavorites(): string[] {
   }
 }
 
-export type StageView = "slides" | "code";
+/**
+ * What the deck is open for; the top bar's tabs pick it (see components/ModeTabs.tsx). A slide's
+ * narration and notes and the deck's HTML are not modes: they are tabs of the sidebar, beside the slide.
+ */
+export type DeckMode = "view" | "edit" | "play" | "settings" | "git";
 
-/** What the deck is open for; the top bar's tabs pick it (see components/ModeTabs.tsx). */
-export type DeckMode = "view" | "edit" | "narration" | "notes" | "settings" | "git" | "code";
-
-/** The mode of the deck: the HTML view and editing have their own state, the rest is `slideMode`. */
-export function deckMode(state: Pick<AppState, "view" | "editing" | "slideMode">): DeckMode {
-  if (state.view === "code") return "code";
+/** The mode of the deck: editing has its own state, the rest is `slideMode`. */
+export function deckMode(state: Pick<AppState, "editing" | "slideMode">): DeckMode {
   return state.editing ? "edit" : state.slideMode;
 }
 
@@ -300,7 +300,7 @@ export function searchHighlight(state: Pick<AppState, "search" | "selected">) {
 }
 
 /** What the right sidebar can show, each in a tab of its own, in menu order (see components/Sidebar.tsx). */
-export const SIDEBAR_TABS = ["chat", "files", "svg", "settings"] as const;
+export const SIDEBAR_TABS = ["chat", "files", "narration", "notes", "code", "svg", "settings"] as const;
 export type SidebarTab = (typeof SIDEBAR_TABS)[number];
 const isSidebarTab = (value: unknown): value is SidebarTab => SIDEBAR_TABS.includes(value as SidebarTab);
 /** The tabs a first start opens. */
@@ -333,9 +333,7 @@ interface AppState {
   selected: string | null;
   /** Bumped whenever the user picks a slide, so views can reveal it even if unchanged. */
   revealRev: number;
-  /** Whether the stage shows the rendered slide or the deck file's source. */
-  view: StageView;
-  /** The HTML view holds edits that are not saved to the deck file yet. */
+  /** The sidebar's HTML tab holds edits that are not saved to the deck file yet. */
   codeDirty: boolean;
   /** The right sidebar is shown; the user can collapse it to give the stage more room. */
   sidebarOpen: boolean;
@@ -401,7 +399,7 @@ interface AppState {
   search: SlideSearch;
   editing: boolean;
   /** The mode shown over the rendered slide when not editing; see `deckMode`. */
-  slideMode: "view" | "narration" | "notes" | "settings" | "git";
+  slideMode: "view" | "play" | "settings" | "git";
   /** Bumped when a slide edit could not be saved, so the stage reloads the slide from disk. */
   editReload: number;
   /** The edit toolbar's tool: select, or what a drag on the slide adds. */
@@ -480,7 +478,6 @@ interface AppState {
   /** Goes to the next (1) or previous (-1) match, around the deck. */
   stepSearch: (delta: 1 | -1) => void;
   clearSearch: () => void;
-  setView: (view: StageView) => void;
   setCodeDirty: (dirty: boolean) => void;
   setSidebarOpen: (open: boolean) => void;
   /** Shows the sidebar on `tab`, opening that tab (after the others) if it is closed. */
@@ -669,7 +666,6 @@ export const useApp = create<AppState>((set, get) => ({
   deck: null,
   selected: null,
   revealRev: 0,
-  view: localStorage.getItem("slopslide.view") === "code" ? "code" : "slides",
   codeDirty: false,
   sidebarOpen: localStorage.getItem(SIDEBAR_OPEN_KEY) !== "false",
   ...loadSidebarTabs(),
@@ -998,11 +994,6 @@ export const useApp = create<AppState>((set, get) => ({
 
   clearSearch: () => set({ search: NO_SEARCH }),
 
-  setView: (view) => {
-    localStorage.setItem("slopslide.view", view);
-    set({ view });
-  },
-
   setCodeDirty: (codeDirty) => set({ codeDirty }),
 
   setSidebarOpen: (sidebarOpen) => {
@@ -1188,9 +1179,8 @@ export const useApp = create<AppState>((set, get) => ({
 
   setMode: (mode) => {
     if (mode === "edit" && selectedSlide()?.locked) return;
-    get().setView(mode === "code" ? "code" : "slides");
     get().setEditing(mode === "edit");
-    set({ slideMode: mode === "edit" || mode === "code" ? "view" : mode });
+    set({ slideMode: mode === "edit" ? "view" : mode });
   },
 
   setEditTool: (editTool) => set({ editTool }),
@@ -1736,7 +1726,8 @@ function editRail(change: (id: string) => Promise<RailEdit>): Promise<RailEdit |
   return done;
 }
 
-async function confirmDiscardEdits(): Promise<boolean> {
+/** Whether the user gives up the unsaved edits in the sidebar's HTML tab. */
+export async function confirmDiscardEdits(): Promise<boolean> {
   const name = basename(useApp.getState().deck?.id ?? "") || "the deck";
   const message = `You have unsaved changes to ${name}. Discard them?`;
   try {
@@ -1768,7 +1759,7 @@ async function promptAboutElement(text: string, element: EditElement, { leaveEdi
   promptAgent(text, { screenshot, element });
 }
 
-/** The sidebar's tabs as last left; tabs that are no more (narration was one) are dropped. */
+/** The sidebar's tabs as last left; anything saved that is not a tab is dropped. */
 function loadSidebarTabs(): { sidebarTabs: SidebarTab[]; sidebarTab: SidebarTab | null } {
   let sidebarTabs = DEFAULT_SIDEBAR_TABS;
   try {

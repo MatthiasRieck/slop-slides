@@ -28,7 +28,6 @@ beforeEach(() => {
     sketches: {},
     reviewVisible: true,
     finalState: false,
-    view: "slides",
     editing: false,
     slideMode: "view",
   });
@@ -691,7 +690,7 @@ describe("Stage", () => {
       it("shows pins in View only, and not while the review is hidden", () => {
         useApp.setState({ comments: { intro: [comment] } });
         render(<Stage />);
-        act(() => useApp.getState().setMode("narration"));
+        act(() => useApp.getState().setMode("settings"));
         expect(screen.queryByTestId("comment-pin")).toBeNull();
         act(() => useApp.getState().setMode("view"));
         expect(screen.getByTestId("comment-pin")).toBeTruthy();
@@ -976,6 +975,12 @@ describe("Stage", () => {
       expect(sources().some((src) => src.includes("slide=outro") && !src.includes("static"))).toBe(true);
       act(() => setSlideClock(null));
 
+      // Play mode plays it too, and View has the still back.
+      act(() => useApp.getState().setMode("play"));
+      expect(sources().every((src) => !src.includes("static"))).toBe(true);
+      act(() => useApp.getState().setMode("view"));
+      expect(sources().some((src) => src.includes("slide=outro") && src.endsWith("&static&pan"))).toBe(true);
+
       fireEvent.click(choice(/^Play the slide's animations/));
       expect(chosen()).toEqual([true, false]);
       expect(sources().some((src) => src.includes("slide=outro") && !src.includes("static"))).toBe(true);
@@ -983,7 +988,7 @@ describe("Stage", () => {
 
     it("has the search in View mode only", () => {
       render(<Stage />);
-      act(() => useApp.getState().setMode("narration"));
+      act(() => useApp.getState().setMode("play"));
       expect(screen.queryByRole("textbox", { name: "Search slides" })).toBeNull();
       act(() => useApp.getState().setMode("view"));
       act(() => useApp.getState().setMode("edit"));
@@ -1032,7 +1037,7 @@ describe("Stage", () => {
     it("puts a sketch tool away when leaving view mode", () => {
       render(<Stage />);
       fireEvent.click(screen.getByRole("button", { name: "Draw on the slide" }));
-      act(() => useApp.getState().setMode("narration"));
+      act(() => useApp.getState().setMode("settings"));
       act(() => useApp.getState().setMode("view"));
       expect(screen.getByRole("button", { name: "Draw on the slide" }).getAttribute("aria-pressed")).toBe("false");
     });

@@ -30,7 +30,7 @@ const found = (matches: FindMatch[]) =>
 beforeEach(() => {
   invoke.mockReset();
   useApp.getState().clearSearch();
-  useApp.setState({ deck: DECK, selected: "intro", view: "slides", error: null });
+  useApp.setState({ deck: DECK, selected: "intro", error: null });
 });
 
 describe("search", () => {

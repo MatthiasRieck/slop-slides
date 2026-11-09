@@ -631,7 +631,7 @@ describe("moving a section", () => {
 
 describe("double-clicking a thumbnail", () => {
   const button = (index: number) => items()[index]!.querySelector("button")!;
-  beforeEach(() => useApp.setState({ deck: withSlides("a", "b"), selected: "a", editing: false, view: "slides" }));
+  beforeEach(() => useApp.setState({ deck: withSlides("a", "b"), selected: "a", editing: false }));
   afterEach(() => useApp.getState().setMode("view"));
 
   it("edits that slide", () => {

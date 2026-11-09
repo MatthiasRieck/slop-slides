@@ -465,7 +465,8 @@ function CurrentSlide(props: {
   onFrameReady: (frame: HTMLIFrameElement) => void;
 }) {
   const editReload = useApp((s) => s.editReload);
-  const finalState = useApp((s) => s.finalState);
+  // Play mode is for watching the slide play, whatever View's tools ask for.
+  const finalState = useApp((s) => s.finalState && deckMode(s) !== "play");
   const id = props.slide.id;
   // While narration plays over the slide, it shows as it plays, its animations kept with the
   // narration, rather than as the editor's still of their last frame, or the one View's tools ask for.
@@ -474,7 +475,7 @@ function CurrentSlide(props: {
     return clock?.slide === id;
   });
   const frame = useRef<HTMLIFrameElement | null>(null);
-  useEffect(() => onSlideClock(() => postSlideClock(frame.current, id)), [id]);
+  useEffect(() => onSlideClock(() => postSlideClock(frame.current, id, true)), [id]);
   return (
     <SlideFrame
       deckId={props.deckId}

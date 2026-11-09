@@ -627,11 +627,19 @@ describe("opening and creating decks", () => {
 
   it("closeDeck resets the editor state", async () => {
     const useApp = await freshStore();
-    useApp.setState({ deck: DECK, selected: "intro", messages: [userMessage("x")], running: true, presenting: true });
+    useApp.setState({
+      deck: DECK,
+      selected: "intro",
+      messages: [userMessage("x")],
+      running: true,
+      presenting: true,
+      collapsedSections: ["#2"],
+    });
     await useApp.getState().closeDeck();
     expect(useApp.getState()).toMatchObject({
       deck: null,
       selected: null,
+      collapsedSections: [],
       messages: [userMessage("x")],
       running: true,
       presenting: false,

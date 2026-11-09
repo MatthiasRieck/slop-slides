@@ -17,6 +17,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   ArrowDown,
   ArrowUp,
+  ChevronRight,
   Copy,
   Eye,
   EyeOff,
@@ -34,10 +35,13 @@ import { api, type Deck, errorMessage, type Section, type Slide } from "../lib/a
 import {
   dropRows,
   dropSection,
+  foldedSlides,
+  foldHolding,
   type RailItem,
   railItems,
   sectionBlocks,
   sectionKey,
+  sectionStarts,
   startsSection,
 } from "../lib/sections";
 import { pixelsOf } from "../lib/slideSize";
@@ -60,6 +64,7 @@ export function SlideRail() {
   const addButton = useRef<HTMLButtonElement>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const matches = useApp((s) => s.search.matches);
+  const collapsed = useApp((s) => s.collapsedSections);
   // While a search runs the rail lists what it found. The rest stay mounted, hidden, so ending it
   // doesn't reload every thumbnail, and can't be dragged: an order needs all the slides in view.
   const found = useMemo(() => matches && new Set(matches.map((m) => m.slide)), [matches]);
@@ -72,6 +77,13 @@ export function SlideRail() {
   const stopHolding = useRef<() => void>(undefined);
   const list = useRef<HTMLOListElement>(null);
   useEffect(() => releaseIframes, []);
+  // Going to a slide folded away, with the keys or from the stage, opens its section to show it.
+  useEffect(() => {
+    const { deck, collapsedSections, toggleSection } = useApp.getState();
+    if (!deck || !selected) return;
+    const first = foldHolding(sectionBlocks(railItems(deck)), collapsedSections, selected);
+    if (first !== undefined) toggleSection(first, false);
+  }, [selected]);
   useEffect(() => () => stopHolding.current?.(), []);
   useLayoutEffect(() => {
     const rows = list.current;
@@ -100,6 +112,9 @@ export function SlideRail() {
   const blocks = sectionBlocks(items);
   const keys = moving ? blocks.map((block) => block.key) : items.map((item) => item.key);
   const looseSlides = items.findIndex((item) => item.kind === "section");
+  const starts = sectionStarts(blocks);
+  // A search shows what it found wherever it is, and a section's drag folds every section anyway.
+  const folded = found || moving ? new Set<string>() : foldedSlides(blocks, collapsed);
   const selectedIndex = deck.slides.findIndex((s) => s.id === selected);
   const canAddSection = selectedIndex >= 0 && !startsSection(deck, selectedIndex);
 
@@ -116,7 +131,7 @@ export function SlideRail() {
     closestCenter(
       moving
         ? { ...args, droppableContainers: args.droppableContainers.filter((c) => keys.includes(`${c.id}`)) }
-        : args,
+        : { ...args, droppableContainers: args.droppableContainers.filter((c) => !folded.has(`${c.id}`)) },
     );
 
   /** Opens the sections again, with the one dragged ending up `at` this place among them. */
@@ -239,7 +254,7 @@ export function SlideRail() {
                       deckId={deck.id}
                       slide={item.slide}
                       index={item.index}
-                      filteredOut={!!found && !found.has(item.slide.id)}
+                      filteredOut={(!!found && !found.has(item.slide.id)) || folded.has(item.slide.id)}
                       folded={!!moving}
                       still={!!moving || settling}
                     />
@@ -252,6 +267,9 @@ export function SlideRail() {
                       filteredOut={!!found}
                       still={!!moving || settling}
                       slides={moving ? blocks.find((block) => block.key === item.key)!.rows.length - 1 : undefined}
+                      first={starts.get(item.key)}
+                      collapsed={collapsed.includes(starts.get(item.key) ?? "")}
+                      count={blocks.find((block) => block.key === item.key)!.rows.length - 1}
                       editing={editingSection === item.section.index}
                       onEditing={(editing) => setEditingSection(editing ? item.section.index : null)}
                     />
@@ -437,6 +455,12 @@ function SectionHeader(props: {
   slides?: number;
   /** Keeps dnd-kit from sliding the row anywhere while the slides fold and open. */
   still: boolean;
+  /** The section's first slide, which names its fold; none when the section has no slides. */
+  first?: string;
+  /** Whether the user folded the section's slides away under it. */
+  collapsed: boolean;
+  /** How many slides the section holds. */
+  count: number;
   editing: boolean;
   onEditing: (editing: boolean) => void;
 }) {
@@ -475,7 +499,23 @@ function SectionHeader(props: {
       {...attributes}
       {...listeners}
     >
-      <span className="w-4 shrink-0" />
+      {props.first === undefined || props.slides !== undefined ? (
+        <span className="w-4 shrink-0" />
+      ) : (
+        <button
+          type="button"
+          title={props.collapsed ? "Expand section" : "Collapse section"}
+          aria-expanded={!props.collapsed}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            useApp.getState().toggleSection(props.first!);
+          }}
+          className="flex w-4 shrink-0 justify-end rounded text-muted-foreground hover:text-foreground"
+        >
+          <ChevronRight className={cn("size-3 transition-transform duration-200", !props.collapsed && "rotate-90")} />
+        </button>
+      )}
       {editing ? (
         <input
           autoFocus
@@ -510,14 +550,21 @@ function SectionHeader(props: {
               {slideCount(props.slides)}
             </span>
           ) : (
-            <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">
-              <SectionAction title="Rename section" onClick={() => onEditing(true)}>
-                <Pencil className="size-3" />
-              </SectionAction>
-              <SectionAction title="Remove section" onClick={remove}>
-                <X className="size-3" />
-              </SectionAction>
-            </div>
+            <>
+              {props.collapsed && (
+                <span data-testid="folded-count" className="shrink-0 text-2xs text-muted-foreground">
+                  {slideCount(props.count)}
+                </span>
+              )}
+              <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">
+                <SectionAction title="Rename section" onClick={() => onEditing(true)}>
+                  <Pencil className="size-3" />
+                </SectionAction>
+                <SectionAction title="Remove section" onClick={remove}>
+                  <X className="size-3" />
+                </SectionAction>
+              </div>
+            </>
           )}
         </>
       )}

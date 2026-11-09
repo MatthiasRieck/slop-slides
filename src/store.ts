@@ -409,6 +409,8 @@ interface AppState {
   templates: TemplateSummary[] | undefined;
   /** The slides picked in the rail when there are several; empty when it is just `selected`. */
   railSelected: string[];
+  /** The rail's folded sections, each named by its first slide's id, which moves with the section. */
+  collapsedSections: string[];
   /**
    * What undo and redo would do in the open deck: its one history of every change, whatever
    * made it (see src-tauri/src/history.rs). Null until known.
@@ -449,6 +451,8 @@ interface AppState {
   extendRailSelection: (slide: string, how: "toggle" | "range") => void;
   /** Back to just the selected slide. */
   clearRailSelection: () => void;
+  /** Folds the rail's section that starts with slide `first` to its header, or opens it again. */
+  toggleSection: (first: string, collapsed?: boolean) => void;
   /** Deletes `slides`, leaving locked ones alone, and selects a slide next to them if need be. */
   deleteSlides: (slides: string[]) => Promise<void>;
   /** Runs a change to the deck file as one the slide list can undo; null when it failed. */
@@ -712,6 +716,7 @@ export const useApp = create<AppState>((set, get) => ({
   editTool: "select",
   editStyles: DEFAULT_EDIT_STYLES,
   railSelected: [],
+  collapsedSections: [],
   history: null,
   editBase: null,
   editedSlides: [],
@@ -888,6 +893,15 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   clearRailSelection: () => set({ railSelected: [] }),
+
+  toggleSection: (first, collapsed) =>
+    set((s) => {
+      const now = s.collapsedSections.includes(first);
+      if ((collapsed ?? !now) === now) return {};
+      return {
+        collapsedSections: now ? s.collapsedSections.filter((id) => id !== first) : [...s.collapsedSections, first],
+      };
+    }),
 
   editRail: (change) => editRail(change),
 
@@ -1549,7 +1563,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 }));
 
-const NO_RAIL_STATE = { railSelected: [] };
+const NO_RAIL_STATE = { railSelected: [], collapsedSections: [] };
 const NO_EDIT_STATE = { editBase: null, editedSlides: [] };
 
 /** The slides edited since edit mode started that are not as they were then any more. */

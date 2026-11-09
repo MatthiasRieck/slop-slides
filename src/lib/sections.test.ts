@@ -5,9 +5,12 @@ import {
   applyOrder,
   dropRows,
   dropSection,
+  foldedSlides,
+  foldHolding,
   railItems,
   sectionBlocks,
   sectionKey,
+  sectionStarts,
   startsSection,
   stepRows,
 } from "./sections";
@@ -230,5 +233,35 @@ describe("dropSection", () => {
       ["One", 2],
       ["Two", 4],
     ]);
+  });
+});
+
+describe("folding sections", () => {
+  const blocks = sectionBlocks(
+    railItems(
+      deck(
+        [
+          ["One", 1],
+          ["Empty", 3],
+        ],
+        ["a", "b", "c"],
+      ),
+    ),
+  );
+
+  it("names each section with slides by its first slide", () => {
+    expect([...sectionStarts(blocks)]).toEqual([[sectionKey(0), "b"]]);
+  });
+
+  it("folds the slides of the sections named, and leaves loose slides alone", () => {
+    expect([...foldedSlides(blocks, ["b"])]).toEqual(["b", "c"]);
+    expect([...foldedSlides(blocks, ["a"])]).toEqual([]);
+    expect([...foldedSlides(blocks, [])]).toEqual([]);
+  });
+
+  it("finds the fold that holds a slide", () => {
+    expect(foldHolding(blocks, ["b"], "c")).toBe("b");
+    expect(foldHolding(blocks, ["b"], "a")).toBeUndefined();
+    expect(foldHolding(blocks, [], "c")).toBeUndefined();
   });
 });

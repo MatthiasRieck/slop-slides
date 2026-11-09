@@ -8,6 +8,7 @@ import {
   getClientRect,
   MeasuringStrategy,
   PointerSensor,
+  useDndContext,
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
@@ -76,6 +77,7 @@ export function SlideRail() {
   const landing = useRef<SectionMove | null>(null);
   const stopHolding = useRef<() => void>(undefined);
   const list = useRef<HTMLOListElement>(null);
+  const remeasure = useRef<() => void>(undefined);
   useEffect(() => releaseIframes, []);
   // Going to a slide folded away, with the keys or from the stage, opens its section to show it.
   useEffect(() => {
@@ -91,7 +93,8 @@ export function SlideRail() {
     if (moving) {
       foldSlides(rows, moving.slideHeight, false);
       stopHolding.current?.();
-      stopHolding.current = holdRow(rows, moving.key, moving.top, moving.top);
+      // dnd-kit measured the rows before they folded; it sorts by where they are, so keep it told.
+      stopHolding.current = holdRow(rows, moving.key, moving.top, moving.top, () => remeasure.current?.());
       return;
     }
     const dropped = landing.current;
@@ -100,7 +103,7 @@ export function SlideRail() {
     const end = openTop(rows, dropped);
     foldSlides(rows, dropped.slideHeight, true);
     stopHolding.current?.();
-    stopHolding.current = holdRow(rows, dropped.key, dropped.top, end, () => {
+    stopHolding.current = holdRow(rows, dropped.key, dropped.top, end, undefined, () => {
       rows.style.paddingTop = "";
       rows.style.paddingBottom = "";
       setSettling(false);
@@ -113,8 +116,8 @@ export function SlideRail() {
   const keys = moving ? blocks.map((block) => block.key) : items.map((item) => item.key);
   const looseSlides = items.findIndex((item) => item.kind === "section");
   const starts = sectionStarts(blocks);
-  // A search shows what it found wherever it is, and a section's drag folds every section anyway.
-  const folded = found || moving ? new Set<string>() : foldedSlides(blocks, collapsed);
+  // A search shows what it found wherever it is.
+  const folded = found ? new Set<string>() : foldedSlides(blocks, collapsed);
   const selectedIndex = deck.slides.findIndex((s) => s.id === selected);
   const canAddSection = selectedIndex >= 0 && !startsSection(deck, selectedIndex);
 
@@ -122,7 +125,8 @@ export function SlideRail() {
     holdIframes();
     const key = String(active.id);
     const top = blocks.some((block) => block.key === key) ? rowTop(list.current, key) : null;
-    const slideHeight = list.current?.querySelector<HTMLElement>("[data-rail-slide]")?.offsetHeight ?? 0;
+    // A slide in a collapsed section has no height to tell.
+    const slideHeight = list.current?.querySelector<HTMLElement>("[data-rail-slide]:not(.hidden)")?.offsetHeight ?? 0;
     if (top != null) setMoving({ key, top, slideHeight });
   };
 
@@ -244,6 +248,7 @@ export function SlideRail() {
             {found?.size === 0 && (
               <p className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">No slide contains this text.</p>
             )}
+            <Remeasure handle={remeasure} />
             <SortableContext items={keys} strategy={verticalListSortingStrategy} disabled={!!found}>
               <ol ref={list} className="flex flex-col gap-3">
                 {moving && looseSlides > 0 && <LooseSlides count={looseSlides} />}
@@ -365,6 +370,18 @@ function releaseIframes() {
   document.getElementById(IFRAME_HOLD_ID)?.remove();
 }
 
+/** Hands out a way to have dnd-kit measure every row again, which it only does when a drag starts. */
+function Remeasure({ handle }: { handle: React.RefObject<(() => void) | undefined> }) {
+  const { measureDroppableContainers } = useDndContext();
+  useEffect(() => {
+    handle.current = () => measureDroppableContainers([]);
+    return () => {
+      handle.current = undefined;
+    };
+  }, [handle, measureDroppableContainers]);
+  return null;
+}
+
 type SectionMove = { key: string; top: number; slideHeight: number };
 
 const FOLD = { duration: 240, easing: "cubic-bezier(0.4, 0, 0.2, 1)" };
@@ -404,15 +421,23 @@ function openTop(rows: HTMLElement, { key, top }: SectionMove) {
   return row - Math.min(Math.max(row - top, 0), scroller.scrollHeight - scroller.clientHeight);
 }
 
-/** Keeps the row `key` in place, on its way `from` one height `to` another, while the slides fold. */
-function holdRow(rows: HTMLElement, key: string, from: number, to: number, done?: () => void) {
+/**
+ * Keeps the row `key` in place, on its way `from` one height `to` another, while the slides fold.
+ * Calls `placed` each time the rows have moved, and `done` at the end.
+ */
+function holdRow(rows: HTMLElement, key: string, from: number, to: number, placed?: () => void, done?: () => void) {
   const start = performance.now();
   let frame = 0;
+  // The slides' own animation starts up to a frame later, so one frame more sees them all the way.
+  let last = false;
   const step = () => {
     const t = Math.min((performance.now() - start) / FOLD.duration, 1);
     placeRow(rows, key, from + (to - from) * t * t * (3 - 2 * t));
-    if (t < 1) frame = requestAnimationFrame(step);
-    else done?.();
+    placed?.();
+    if (t < 1 || (placed && !last)) frame = requestAnimationFrame(step);
+    if (t < 1) return;
+    if (!last) done?.();
+    last = true;
   };
   step();
   return () => cancelAnimationFrame(frame);

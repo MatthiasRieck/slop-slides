@@ -575,6 +575,43 @@ describe("moving a section", () => {
     expect(animate.mock.calls[0]![0][1]).toMatchObject({ opacity: 1 });
   });
 
+  it("has the rows measured again as they fold, as they are sorted by where they are", async () => {
+    render(<SlideRail />);
+    const measured = () =>
+      vi.mocked(HTMLElement.prototype.getBoundingClientRect).mock.contexts.filter((el) => el === header("One")).length;
+    pickUp(header("Two"));
+    const before = measured();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 60)));
+    expect(measured()).toBeGreaterThan(before);
+  });
+
+  it("leaves a collapsed section's slides hidden while a section is dragged, and after", async () => {
+    useApp.setState({ collapsedSections: ["b"] });
+    render(<SlideRail />);
+    const hidden = () => items().filter((li) => li.classList.contains("hidden"));
+    expect(hidden()).toHaveLength(2);
+    pickUp(header("Two"));
+    expect(hidden()).toHaveLength(2);
+    expect(headers().map((li) => li.textContent)).toEqual(["One2 slides", "Two2 slides"]);
+    await letGo();
+    expect(hidden()).toHaveLength(2);
+    expect(useApp.getState().collapsedSections).toEqual(["b"]);
+  });
+
+  it("folds by the height of a slide that shows, not one in a collapsed section", () => {
+    useApp.setState({
+      deck: { ...deck, sections: [section(0, "One", 0), section(1, "Two", 3)] },
+      collapsedSections: ["a"],
+    });
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("hidden") ? 0 : 108;
+    });
+    render(<SlideRail />);
+    pickUp(header("Two"));
+    const shrinking = animate.mock.calls.filter(([frames]) => frames[0].height !== undefined);
+    expect(shrinking[0]![0][0]).toMatchObject({ height: "108px" });
+  });
+
   it("does not fold anything while a slide is dragged", () => {
     render(<SlideRail />);
     pickUp(items()[0]!);

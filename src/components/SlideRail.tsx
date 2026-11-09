@@ -8,6 +8,7 @@ import {
   getClientRect,
   MeasuringStrategy,
   PointerSensor,
+  useDndContext,
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
@@ -17,6 +18,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   ArrowDown,
   ArrowUp,
+  ChevronRight,
   Copy,
   Eye,
   EyeOff,
@@ -34,10 +36,13 @@ import { api, type Deck, errorMessage, type Section, type Slide } from "../lib/a
 import {
   dropRows,
   dropSection,
+  foldedSlides,
+  foldHolding,
   type RailItem,
   railItems,
   sectionBlocks,
   sectionKey,
+  sectionStarts,
   startsSection,
 } from "../lib/sections";
 import { pixelsOf } from "../lib/slideSize";
@@ -60,6 +65,7 @@ export function SlideRail() {
   const addButton = useRef<HTMLButtonElement>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const matches = useApp((s) => s.search.matches);
+  const collapsed = useApp((s) => s.collapsedSections);
   // While a search runs the rail lists what it found. The rest stay mounted, hidden, so ending it
   // doesn't reload every thumbnail, and can't be dragged: an order needs all the slides in view.
   const found = useMemo(() => matches && new Set(matches.map((m) => m.slide)), [matches]);
@@ -71,7 +77,15 @@ export function SlideRail() {
   const landing = useRef<SectionMove | null>(null);
   const stopHolding = useRef<() => void>(undefined);
   const list = useRef<HTMLOListElement>(null);
+  const remeasure = useRef<() => void>(undefined);
   useEffect(() => releaseIframes, []);
+  // Going to a slide folded away, with the keys or from the stage, opens its section to show it.
+  useEffect(() => {
+    const { deck, collapsedSections, toggleSection } = useApp.getState();
+    if (!deck || !selected) return;
+    const first = foldHolding(sectionBlocks(railItems(deck)), collapsedSections, selected);
+    if (first !== undefined) toggleSection(first, false);
+  }, [selected]);
   useEffect(() => () => stopHolding.current?.(), []);
   useLayoutEffect(() => {
     const rows = list.current;
@@ -79,7 +93,8 @@ export function SlideRail() {
     if (moving) {
       foldSlides(rows, moving.slideHeight, false);
       stopHolding.current?.();
-      stopHolding.current = holdRow(rows, moving.key, moving.top, moving.top);
+      // dnd-kit measured the rows before they folded; it sorts by where they are, so keep it told.
+      stopHolding.current = holdRow(rows, moving.key, moving.top, moving.top, () => remeasure.current?.());
       return;
     }
     const dropped = landing.current;
@@ -88,7 +103,7 @@ export function SlideRail() {
     const end = openTop(rows, dropped);
     foldSlides(rows, dropped.slideHeight, true);
     stopHolding.current?.();
-    stopHolding.current = holdRow(rows, dropped.key, dropped.top, end, () => {
+    stopHolding.current = holdRow(rows, dropped.key, dropped.top, end, undefined, () => {
       rows.style.paddingTop = "";
       rows.style.paddingBottom = "";
       setSettling(false);
@@ -100,6 +115,9 @@ export function SlideRail() {
   const blocks = sectionBlocks(items);
   const keys = moving ? blocks.map((block) => block.key) : items.map((item) => item.key);
   const looseSlides = items.findIndex((item) => item.kind === "section");
+  const starts = sectionStarts(blocks);
+  // A search shows what it found wherever it is.
+  const folded = found ? new Set<string>() : foldedSlides(blocks, collapsed);
   const selectedIndex = deck.slides.findIndex((s) => s.id === selected);
   const canAddSection = selectedIndex >= 0 && !startsSection(deck, selectedIndex);
 
@@ -107,7 +125,8 @@ export function SlideRail() {
     holdIframes();
     const key = String(active.id);
     const top = blocks.some((block) => block.key === key) ? rowTop(list.current, key) : null;
-    const slideHeight = list.current?.querySelector<HTMLElement>("[data-rail-slide]")?.offsetHeight ?? 0;
+    // A slide in a collapsed section has no height to tell.
+    const slideHeight = list.current?.querySelector<HTMLElement>("[data-rail-slide]:not(.hidden)")?.offsetHeight ?? 0;
     if (top != null) setMoving({ key, top, slideHeight });
   };
 
@@ -116,7 +135,7 @@ export function SlideRail() {
     closestCenter(
       moving
         ? { ...args, droppableContainers: args.droppableContainers.filter((c) => keys.includes(`${c.id}`)) }
-        : args,
+        : { ...args, droppableContainers: args.droppableContainers.filter((c) => !folded.has(`${c.id}`)) },
     );
 
   /** Opens the sections again, with the one dragged ending up `at` this place among them. */
@@ -229,6 +248,7 @@ export function SlideRail() {
             {found?.size === 0 && (
               <p className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">No slide contains this text.</p>
             )}
+            <Remeasure handle={remeasure} />
             <SortableContext items={keys} strategy={verticalListSortingStrategy} disabled={!!found}>
               <ol ref={list} className="flex flex-col gap-3">
                 {moving && looseSlides > 0 && <LooseSlides count={looseSlides} />}
@@ -239,7 +259,7 @@ export function SlideRail() {
                       deckId={deck.id}
                       slide={item.slide}
                       index={item.index}
-                      filteredOut={!!found && !found.has(item.slide.id)}
+                      filteredOut={(!!found && !found.has(item.slide.id)) || folded.has(item.slide.id)}
                       folded={!!moving}
                       still={!!moving || settling}
                     />
@@ -252,6 +272,9 @@ export function SlideRail() {
                       filteredOut={!!found}
                       still={!!moving || settling}
                       slides={moving ? blocks.find((block) => block.key === item.key)!.rows.length - 1 : undefined}
+                      first={starts.get(item.key)}
+                      collapsed={collapsed.includes(starts.get(item.key) ?? "")}
+                      count={blocks.find((block) => block.key === item.key)!.rows.length - 1}
                       editing={editingSection === item.section.index}
                       onEditing={(editing) => setEditingSection(editing ? item.section.index : null)}
                     />
@@ -347,6 +370,18 @@ function releaseIframes() {
   document.getElementById(IFRAME_HOLD_ID)?.remove();
 }
 
+/** Hands out a way to have dnd-kit measure every row again, which it only does when a drag starts. */
+function Remeasure({ handle }: { handle: React.RefObject<(() => void) | undefined> }) {
+  const { measureDroppableContainers } = useDndContext();
+  useEffect(() => {
+    handle.current = () => measureDroppableContainers([]);
+    return () => {
+      handle.current = undefined;
+    };
+  }, [handle, measureDroppableContainers]);
+  return null;
+}
+
 type SectionMove = { key: string; top: number; slideHeight: number };
 
 const FOLD = { duration: 240, easing: "cubic-bezier(0.4, 0, 0.2, 1)" };
@@ -386,15 +421,23 @@ function openTop(rows: HTMLElement, { key, top }: SectionMove) {
   return row - Math.min(Math.max(row - top, 0), scroller.scrollHeight - scroller.clientHeight);
 }
 
-/** Keeps the row `key` in place, on its way `from` one height `to` another, while the slides fold. */
-function holdRow(rows: HTMLElement, key: string, from: number, to: number, done?: () => void) {
+/**
+ * Keeps the row `key` in place, on its way `from` one height `to` another, while the slides fold.
+ * Calls `placed` each time the rows have moved, and `done` at the end.
+ */
+function holdRow(rows: HTMLElement, key: string, from: number, to: number, placed?: () => void, done?: () => void) {
   const start = performance.now();
   let frame = 0;
+  // The slides' own animation starts up to a frame later, so one frame more sees them all the way.
+  let last = false;
   const step = () => {
     const t = Math.min((performance.now() - start) / FOLD.duration, 1);
     placeRow(rows, key, from + (to - from) * t * t * (3 - 2 * t));
-    if (t < 1) frame = requestAnimationFrame(step);
-    else done?.();
+    placed?.();
+    if (t < 1 || (placed && !last)) frame = requestAnimationFrame(step);
+    if (t < 1) return;
+    if (!last) done?.();
+    last = true;
   };
   step();
   return () => cancelAnimationFrame(frame);
@@ -437,6 +480,12 @@ function SectionHeader(props: {
   slides?: number;
   /** Keeps dnd-kit from sliding the row anywhere while the slides fold and open. */
   still: boolean;
+  /** The section's first slide, which names its fold; none when the section has no slides. */
+  first?: string;
+  /** Whether the user folded the section's slides away under it. */
+  collapsed: boolean;
+  /** How many slides the section holds. */
+  count: number;
   editing: boolean;
   onEditing: (editing: boolean) => void;
 }) {
@@ -475,7 +524,23 @@ function SectionHeader(props: {
       {...attributes}
       {...listeners}
     >
-      <span className="w-4 shrink-0" />
+      {props.first === undefined || props.slides !== undefined ? (
+        <span className="w-4 shrink-0" />
+      ) : (
+        <button
+          type="button"
+          title={props.collapsed ? "Expand section" : "Collapse section"}
+          aria-expanded={!props.collapsed}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            useApp.getState().toggleSection(props.first!);
+          }}
+          className="flex w-4 shrink-0 justify-end rounded text-muted-foreground hover:text-foreground"
+        >
+          <ChevronRight className={cn("size-3 transition-transform duration-200", !props.collapsed && "rotate-90")} />
+        </button>
+      )}
       {editing ? (
         <input
           autoFocus
@@ -510,14 +575,21 @@ function SectionHeader(props: {
               {slideCount(props.slides)}
             </span>
           ) : (
-            <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">
-              <SectionAction title="Rename section" onClick={() => onEditing(true)}>
-                <Pencil className="size-3" />
-              </SectionAction>
-              <SectionAction title="Remove section" onClick={remove}>
-                <X className="size-3" />
-              </SectionAction>
-            </div>
+            <>
+              {props.collapsed && (
+                <span data-testid="folded-count" className="shrink-0 text-2xs text-muted-foreground">
+                  {slideCount(props.count)}
+                </span>
+              )}
+              <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">
+                <SectionAction title="Rename section" onClick={() => onEditing(true)}>
+                  <Pencil className="size-3" />
+                </SectionAction>
+                <SectionAction title="Remove section" onClick={remove}>
+                  <X className="size-3" />
+                </SectionAction>
+              </div>
+            </>
           )}
         </>
       )}

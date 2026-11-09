@@ -109,3 +109,27 @@ export function dropRows(keys: string[], moved: string[], active: string, over: 
   rest.splice(at, 0, ...keys.filter((key) => moving.has(key)));
   return rest;
 }
+
+/** The first slide of each section that has one, by the section's key; it names the section's fold. */
+export function sectionStarts(blocks: SectionBlock[]): Map<string, string> {
+  const starts = new Map<string, string>();
+  for (const block of blocks) if (block.rows[1] !== undefined) starts.set(block.key, block.rows[1]);
+  return starts;
+}
+
+/** The slides folded away under their section's header, given the folds' first slides. */
+export function foldedSlides(blocks: SectionBlock[], collapsed: string[]): Set<string> {
+  const folded = new Set<string>();
+  for (const block of blocks) {
+    const [, first, ...rest] = block.rows;
+    if (first !== undefined && collapsed.includes(first)) for (const row of [first, ...rest]) folded.add(row);
+  }
+  return folded;
+}
+
+/** The first slide of the folded section that holds `slide`, if one does. */
+export function foldHolding(blocks: SectionBlock[], collapsed: string[], slide: string): string | undefined {
+  const block = blocks.find((b) => b.rows.includes(slide));
+  const first = block?.rows[1];
+  return first !== undefined && collapsed.includes(first) ? first : undefined;
+}

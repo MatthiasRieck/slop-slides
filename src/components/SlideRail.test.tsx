@@ -19,6 +19,7 @@ beforeEach(() => {
     selected: "intro",
     error: null,
     revealRev: 0,
+    collapsedSections: [],
     templates: [{ id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title"] }],
   });
 });
@@ -574,6 +575,43 @@ describe("moving a section", () => {
     expect(animate.mock.calls[0]![0][1]).toMatchObject({ opacity: 1 });
   });
 
+  it("has the rows measured again as they fold, as they are sorted by where they are", async () => {
+    render(<SlideRail />);
+    const measured = () =>
+      vi.mocked(HTMLElement.prototype.getBoundingClientRect).mock.contexts.filter((el) => el === header("One")).length;
+    pickUp(header("Two"));
+    const before = measured();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 60)));
+    expect(measured()).toBeGreaterThan(before);
+  });
+
+  it("leaves a collapsed section's slides hidden while a section is dragged, and after", async () => {
+    useApp.setState({ collapsedSections: ["b"] });
+    render(<SlideRail />);
+    const hidden = () => items().filter((li) => li.classList.contains("hidden"));
+    expect(hidden()).toHaveLength(2);
+    pickUp(header("Two"));
+    expect(hidden()).toHaveLength(2);
+    expect(headers().map((li) => li.textContent)).toEqual(["One2 slides", "Two2 slides"]);
+    await letGo();
+    expect(hidden()).toHaveLength(2);
+    expect(useApp.getState().collapsedSections).toEqual(["b"]);
+  });
+
+  it("folds by the height of a slide that shows, not one in a collapsed section", () => {
+    useApp.setState({
+      deck: { ...deck, sections: [section(0, "One", 0), section(1, "Two", 3)] },
+      collapsedSections: ["a"],
+    });
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("hidden") ? 0 : 108;
+    });
+    render(<SlideRail />);
+    pickUp(header("Two"));
+    const shrinking = animate.mock.calls.filter(([frames]) => frames[0].height !== undefined);
+    expect(shrinking[0]![0][0]).toMatchObject({ height: "108px" });
+  });
+
   it("does not fold anything while a slide is dragged", () => {
     render(<SlideRail />);
     pickUp(items()[0]!);
@@ -626,6 +664,88 @@ describe("moving a section", () => {
       slides: ["a", "section:1", "d", "e", "section:0", "b", "c"],
     });
     expect(headers().map((li) => li.textContent)).toEqual(["Two", "One"]);
+  });
+});
+
+describe("collapsing a section", () => {
+  const section = (index: number, title: string, before: number) => ({ index, title, before }) as Section;
+  const deck: Deck = {
+    ...withSlides("a", "b", "c", "d", "e"),
+    sections: [section(0, "One", 1), section(1, "Two", 3), section(2, "Empty", 5)],
+  };
+  const shownSlides = () =>
+    items()
+      .filter((li) => "railSlide" in li.dataset && !li.classList.contains("hidden"))
+      .map((li) => li.textContent);
+  const header = (title: string) => within(headers().find((li) => li.textContent?.includes(title))!);
+
+  beforeEach(() => useApp.setState({ deck, selected: "a", railSelected: [] }));
+  afterEach(() => useApp.getState().clearSearch());
+
+  it("folds a section's slides under its header, saying how many, and opens it again", () => {
+    render(<SlideRail />);
+    expect(shownSlides()).toEqual(["1", "2", "3", "4", "5"]);
+    const toggle = header("One").getByTitle("Collapse section");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(toggle);
+    expect(useApp.getState().collapsedSections).toEqual(["b"]);
+    expect(shownSlides()).toEqual(["1", "4", "5"]);
+    expect(header("One").getByTestId("folded-count").textContent).toBe("2 slides");
+    // The thumbnails stay mounted, so opening the section does not reload them.
+    expect(items().filter((li) => "railSlide" in li.dataset)).toHaveLength(5);
+    fireEvent.click(header("One").getByTitle("Expand section"));
+    expect(shownSlides()).toEqual(["1", "2", "3", "4", "5"]);
+    expect(header("One").queryByTestId("folded-count")).toBeNull();
+  });
+
+  it("offers no toggle on a section without slides", () => {
+    render(<SlideRail />);
+    expect(header("Empty").queryByTitle("Collapse section")).toBeNull();
+  });
+
+  it("toggling does not select or start dragging the header", () => {
+    render(<SlideRail />);
+    fireEvent.click(header("Two").getByTitle("Collapse section"));
+    expect(useApp.getState().selected).toBe("a");
+    expect(shownSlides()).toEqual(["1", "2", "3"]);
+  });
+
+  it("opens a folded section when its slide is selected from elsewhere", () => {
+    useApp.setState({ collapsedSections: ["b", "d"] });
+    render(<SlideRail />);
+    expect(shownSlides()).toEqual(["1"]);
+    act(() => useApp.getState().selectRelative(1));
+    expect(useApp.getState().collapsedSections).toEqual(["d"]);
+    expect(shownSlides()).toEqual(["1", "2", "3"]);
+  });
+
+  it("keeps the section folded when it holds the slide already selected", () => {
+    useApp.setState({ selected: "b" });
+    render(<SlideRail />);
+    fireEvent.click(header("One").getByTitle("Collapse section"));
+    expect(shownSlides()).toEqual(["1", "4", "5"]);
+  });
+
+  it("shows a search's matches in folded sections", () => {
+    useApp.setState({ collapsedSections: ["b"] });
+    render(<SlideRail />);
+    act(() => {
+      useApp.getState().setSearch({ query: "x" });
+      useApp
+        .getState()
+        .setSearchMatches([{ slide: "c", index: 0, locked: false, notes: false, before: "", text: "x", after: "" }]);
+    });
+    expect(shownSlides()).toEqual(["3"]);
+  });
+
+  it("toggles a fold, or sets it either way when told which", () => {
+    useApp.setState({ collapsedSections: ["b"] });
+    act(() => useApp.getState().toggleSection("d"));
+    expect(useApp.getState().collapsedSections).toEqual(["b", "d"]);
+    act(() => useApp.getState().toggleSection("d", true));
+    expect(useApp.getState().collapsedSections).toEqual(["b", "d"]);
+    act(() => useApp.getState().toggleSection("b", false));
+    expect(useApp.getState().collapsedSections).toEqual(["d"]);
   });
 });
 

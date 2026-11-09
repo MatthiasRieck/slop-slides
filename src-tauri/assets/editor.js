@@ -14,7 +14,7 @@
    A line or arrow has no box: it is picked only on (or just off) its stroke and heads, so a line
    in another's box stays clickable, and glows when hovered instead of being outlined; a handle at each end and on each point it bends at moves that
    point (snapping like a resize; Shift snaps to 45° from the point before it, ⌘ / Ctrl moves
-   freely), dragging the small handle on a stretch of the line adds a point there, which curves
+   freely), dragging the small + handle on a stretch of the line adds a point there, which curves
    it, and double-clicking a point in between removes it. A connector (see "Lines") has handles
    on its ends only: it routes itself between them.
    An end dropped on an element (or dragged out from one) sticks to it, like a connector: the
@@ -650,6 +650,10 @@
     "[data-slop-points] > *::before { content: ''; position: absolute; inset: -8px; border-radius: 50%; }" +
     "[data-slop-points] > [data-point=add] { width: 14px; height: 14px; margin: -7px 0 0 -7px; background: var(--slop-accent);" +
     " border-color: var(--slop-handle); cursor: crosshair; }" +
+    // A small + in each bend handle says dragging it adds a point.
+    "[data-slop-points] > [data-point=add]::after { content: ''; position: absolute; inset: 0; pointer-events: none;" +
+    " background: linear-gradient(var(--slop-handle), var(--slop-handle)) center / 6px 2px no-repeat," +
+    " linear-gradient(var(--slop-handle), var(--slop-handle)) center / 2px 6px no-repeat; }" +
     // The button that opens the selected drawing in the app's SVG editor.
     "[data-slop-svg-open] { position: fixed; z-index: 2147483647; display: flex; align-items: center; gap: 4px;" +
     " margin: 0; padding: 4px 8px 4px 10px; border: 0; border-radius: 999px; background: var(--slop-accent);" +

@@ -194,6 +194,17 @@ describe("SlideFrame", () => {
     expect(frame!.style.pointerEvents).toBe("none");
   });
 
+  it("shows the final state on request, still taking pointer input", () => {
+    const arena = { width: 1600, height: 900 };
+    const { container } = render(
+      <SlideFrame deckId="/decks/talk/deck.html" slideId="intro" version="v1" still arena={arena} />,
+    );
+    const [frame] = frames(container);
+    expect(frame!.getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?embed&slide=intro&v=v1&static&pan");
+    expect(frame!.tabIndex).not.toBe(-1);
+    expect(frame!.style.pointerEvents).toBe("auto");
+  });
+
   it("loads a new version behind the current one and swaps once it has loaded", () => {
     const onFrameReady = vi.fn();
     const { container, rerender } = render(

@@ -27,6 +27,7 @@ beforeEach(() => {
     presenting: false,
     sketches: {},
     reviewVisible: true,
+    finalState: false,
     view: "slides",
     editing: false,
     slideMode: "view",
@@ -445,18 +446,25 @@ describe("Stage", () => {
       expect(useApp.getState().sketches.intro?.[0]).toMatchObject({ tool: "highlighter", color: "#facc15" });
     });
 
-    it("offers colors while inking", () => {
+    it("offers colors, which pick up the pen when no ink tool is in hand", () => {
       render(<Stage />);
-      expect(screen.queryByRole("button", { name: /^Color/ })).toBeNull();
-      fireEvent.click(tool("Draw on the slide"));
+      // With neither in hand the swatches show the pen's color.
+      expect(pressed("Color #ef4444")).toBe(true);
+      fireEvent.click(tool("Comment on an element"));
       fireEvent.click(tool("Color #3b82f6"));
+      expect([pressed("Draw on the slide"), pressed("Comment on an element")]).toEqual([true, false]);
+      expect(pressed("Color #3b82f6")).toBe(true);
       draw([[10, 10]]);
       expect(useApp.getState().sketches.intro?.[0]?.color).toBe("#3b82f6");
+      // The highlighter keeps a color of its own.
+      fireEvent.click(tool("Highlight on the slide"));
+      expect(pressed("Color #facc15")).toBe(true);
     });
 
     it("undoes and clears marks", () => {
       render(<Stage />);
-      expect(screen.queryByRole("button", { name: "Undo mark" })).toBeNull();
+      const off = (name: string) => (tool(name) as HTMLButtonElement).disabled;
+      expect([off("Undo mark"), off("Clear marks on this slide")]).toEqual([true, true]);
       fireEvent.click(tool("Draw on the slide"));
       draw([[10, 10]]);
       draw([[20, 20]]);
@@ -464,23 +472,25 @@ describe("Stage", () => {
       expect(useApp.getState().sketches.intro).toHaveLength(1);
       fireEvent.click(tool("Clear marks on this slide"));
       expect(useApp.getState().sketches.intro).toEqual([]);
-      expect(screen.queryByRole("button", { name: "Clear marks on this slide" })).toBeNull();
+      expect([off("Undo mark"), off("Clear marks on this slide")]).toEqual([true, true]);
     });
 
-    it("puts the review toggle before the sketch tools", () => {
+    it("has the review toggle with the comment tools", () => {
       const mark = { tool: "pen" as const, color: "#ef4444", points: [[0.5, 0.5]] as [number, number][] };
       act(() => useApp.setState({ sketches: { intro: [mark] } }));
       render(<Stage />);
-      const toggle = tool("Hide review marks and comments");
-      expect(toggle.compareDocumentPosition(tool("Draw on the slide")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      const review = within(screen.getByRole("group", { name: "Review" }));
+      expect(review.getByRole("button", { name: "Hide review marks and comments" }).textContent).toBe("Shown");
+      expect(review.getByRole("button", { name: "Comment on an element" })).toBeTruthy();
     });
 
     it("shows and hides the review marks", () => {
       const mark = { tool: "pen" as const, color: "#ef4444", points: [[0.5, 0.5]] as [number, number][] };
       render(<Stage />);
-      expect(screen.queryByRole("button", { name: "Hide review marks and comments" })).toBeNull();
+      expect((tool("Hide review marks and comments") as HTMLButtonElement).disabled).toBe(true);
       // Marks on any slide offer the toggle, even when the current slide has none.
       act(() => useApp.setState({ sketches: { "#2": [mark] } }));
+      expect((tool("Hide review marks and comments") as HTMLButtonElement).disabled).toBe(false);
       fireEvent.click(tool("Draw on the slide"));
       draw([[10, 10]]);
       expect(layer().querySelectorAll("[data-stroke]")).toHaveLength(1);
@@ -488,8 +498,9 @@ describe("Stage", () => {
       expect(useApp.getState().reviewVisible).toBe(false);
       expect(pressed("Draw on the slide")).toBe(false);
       expect(layer().querySelectorAll("[data-stroke]")).toHaveLength(0);
-      expect(screen.queryByRole("button", { name: "Undo mark" })).toBeNull();
+      expect((tool("Undo mark") as HTMLButtonElement).disabled).toBe(true);
       expect(useApp.getState().sketches.intro).toHaveLength(1);
+      expect(tool("Show review marks and comments").textContent).toBe("Hidden");
       fireEvent.click(tool("Show review marks and comments"));
       expect(layer().querySelectorAll("[data-stroke]")).toHaveLength(1);
     });
@@ -929,13 +940,45 @@ describe("Stage", () => {
       toggleEditing();
     });
 
-    const sketchTools = () => screen.queryByRole("toolbar", { name: "Sketch tools" });
-
-    it("shares its row with the search, after the review tools", () => {
+    it("has the search in the view ribbon, as its last section", () => {
       render(<Stage />);
-      const search = screen.getByRole("textbox", { name: "Search slides" });
-      expect(sketchTools()?.parentElement).toBe(search.closest("div.relative.z-20"));
-      expect(sketchTools()!.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      const ribbon = screen.getByRole("toolbar", { name: "View tools" });
+      const sections = within(ribbon)
+        .getAllByRole("group")
+        .map((group) => group.getAttribute("aria-label"));
+      expect(sections).toEqual(["Mark up", "Review", "Animations", "Find"]);
+      const find = within(ribbon).getByRole("group", { name: "Find" });
+      expect(within(find).getByRole("textbox", { name: "Search slides" })).toBeTruthy();
+    });
+
+    it("plays the slide's animations, or shows its final state when asked to", () => {
+      const { container } = render(<Stage />);
+      const sources = () => [...container.querySelectorAll("iframe")].map((f) => f.getAttribute("src") ?? "");
+      const choice = (name: RegExp) => screen.getByRole("button", { name });
+      const chosen = () =>
+        [/^Play the slide's animations/, /^Show the slide's final state/].map(
+          (name) => choice(name).getAttribute("aria-pressed") === "true",
+        );
+      expect(chosen()).toEqual([true, false]);
+      expect(sources().every((src) => !src.includes("static"))).toBe(true);
+
+      fireEvent.click(choice(/^Show the slide's final state/));
+      expect(chosen()).toEqual([false, true]);
+      expect(useApp.getState().finalState).toBe(true);
+      // A still like the thumbnail's, on the pasteboard and without the editor.
+      expect(sources().some((src) => src.endsWith("&static&pan"))).toBe(true);
+      // The other slides show their final state too.
+      act(() => useApp.getState().select("outro"));
+      expect(sources().some((src) => src.includes("slide=outro") && src.endsWith("&static&pan"))).toBe(true);
+
+      // Narration playing over the slide still plays it.
+      act(() => setSlideClock({ slide: "outro", at: 1 }));
+      expect(sources().some((src) => src.includes("slide=outro") && !src.includes("static"))).toBe(true);
+      act(() => setSlideClock(null));
+
+      fireEvent.click(choice(/^Play the slide's animations/));
+      expect(chosen()).toEqual([true, false]);
+      expect(sources().some((src) => src.includes("slide=outro") && !src.includes("static"))).toBe(true);
     });
 
     it("has the search in View mode only", () => {
@@ -949,7 +992,7 @@ describe("Stage", () => {
 
     it("shows each mode's tools above the slide, and only there", () => {
       render(<Stage />);
-      const sketch = () => screen.queryByRole("toolbar", { name: "Sketch tools" });
+      const sketch = () => screen.queryByRole("toolbar", { name: "View tools" });
       const edit = () => screen.queryByRole("toolbar", { name: "Edit tools" });
       expect(sketch()).not.toBeNull();
       expect(edit()).toBeNull();

@@ -1,5 +1,15 @@
 import { ChevronDown } from "lucide-react";
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { flushSync } from "react-dom";
 
 import { popupShift, sectionsToCollapse } from "../lib/ribbon";
 import { cn } from "../lib/utils";
@@ -20,7 +30,9 @@ export function useRibbonFit() {
     if (!ribbon) return;
     const place = () => {
       const bounds = (ribbon.parentElement ?? ribbon).getBoundingClientRect();
-      for (const el of ribbon.querySelectorAll<HTMLElement>("[data-ribbon-body], [role=dialog]")) {
+      // A `Popover` places itself, against the window.
+      const popups = "[data-ribbon-body], [role=dialog]:not([data-popover])";
+      for (const el of ribbon.querySelectorAll<HTMLElement>(popups)) {
         el.style.marginLeft = "";
         if (!el.matches("[data-flyout], [role=dialog]")) continue;
         const box = el.getBoundingClientRect();
@@ -49,6 +61,17 @@ export function useRibbonFit() {
   return { ref, collapsedFrom };
 }
 
+const RevealContext = createContext<() => void>(() => {});
+
+/**
+ * Brings the tools of the ribbon section around the caller into view, at once: opens its flyout
+ * if the section is collapsed. For a tool a keyboard shortcut reaches, such as the search field.
+ * Outside a ribbon it does nothing.
+ */
+export function useRibbonReveal() {
+  return useContext(RevealContext);
+}
+
 /**
  * A captioned group of tools in a ribbon. Collapsed, it is just `icon`, which opens its tools in a
  * flyout. `closeOn` closes the flyout when it changes, for tools that go on to work on the slide.
@@ -67,6 +90,11 @@ export function RibbonSection(props: {
   // biome-ignore lint/correctness/useExhaustiveDependencies: `closeOn` is only what to watch
   useEffect(() => setOpen(false), [props.closeOn]);
   if (open && !collapsed) setOpen(false);
+  const collapsedNow = useRef(collapsed);
+  collapsedNow.current = collapsed;
+  const reveal = useCallback(() => {
+    if (collapsedNow.current) flushSync(() => setOpen(true));
+  }, []);
 
   return (
     <fieldset
@@ -100,7 +128,9 @@ export function RibbonSection(props: {
           collapsed && "absolute top-full left-0 z-30 mt-1 gap-1 rounded-md border bg-card py-1.5 shadow-md",
         )}
       >
-        <div className="flex flex-col gap-0.5">{props.children}</div>
+        <div className="flex flex-col gap-0.5">
+          <RevealContext value={reveal}>{props.children}</RevealContext>
+        </div>
         <span className="text-[10px] leading-3 text-muted-foreground">{props.title}</span>
       </div>
     </fieldset>

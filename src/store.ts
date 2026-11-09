@@ -174,6 +174,7 @@ function loadPermissions(): PermissionModes {
 
 const SELECTION_KEY = "slopslide.selection";
 const REVIEW_VISIBLE_KEY = "slopslide.reviewVisible";
+const FINAL_STATE_KEY = "slopslide.finalState";
 const FAVORITES_KEY = "slopslide.favoriteModels";
 
 const DEFAULT_SELECTION: ModelSelection = {
@@ -383,6 +384,8 @@ interface AppState {
   sketchesSent: Record<string, Stroke[]>;
   /** Review marks and comments are shown on the stage (and sent to the agent). */
   reviewVisible: boolean;
+  /** The stage shows each slide's final state, its animations done, as the slide list does, rather than playing them. */
+  finalState: boolean;
   /** Comments on slides, by slide id. Saved in the deck file. */
   comments: Record<string, SlideComment[]>;
   /** Which comments the next message takes along. */
@@ -504,6 +507,7 @@ interface AppState {
   /** Keeps the slide's current marks out of the next message. */
   skipSketch: (slide: string) => void;
   setReviewVisible: (visible: boolean) => void;
+  setFinalState: (finalState: boolean) => void;
   addComment: (slide: string, comment: SlideComment) => void;
   updateComment: (slide: string, id: string, text: string) => void;
   removeComment: (slide: string, id: string) => void;
@@ -701,6 +705,7 @@ export const useApp = create<AppState>((set, get) => ({
   sketches: {},
   sketchesSent: {},
   reviewVisible: localStorage.getItem(REVIEW_VISIBLE_KEY) !== "false",
+  finalState: localStorage.getItem(FINAL_STATE_KEY) === "true",
   comments: {},
   commentScope: "slide",
   commentsHeld: {},
@@ -1120,6 +1125,11 @@ export const useApp = create<AppState>((set, get) => ({
   setReviewVisible: (reviewVisible) => {
     localStorage.setItem(REVIEW_VISIBLE_KEY, String(reviewVisible));
     set({ reviewVisible });
+  },
+
+  setFinalState: (finalState) => {
+    localStorage.setItem(FINAL_STATE_KEY, String(finalState));
+    set({ finalState });
   },
 
   addComment: (slide, comment) => {

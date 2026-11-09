@@ -146,6 +146,7 @@ export function Popover(props: {
   const content = (
     <div
       ref={panel}
+      data-popover=""
       {...(props.label !== undefined && { role: "dialog", "aria-label": props.label })}
       style={{ width, ...position }}
       className={`fixed z-50 rounded-xl border bg-card text-foreground ${look.className} ${props.className ?? ""}`}

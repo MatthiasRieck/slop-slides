@@ -884,6 +884,81 @@ describe("slide editor", () => {
     expect(e.commits()[0]!.markup).toContain("<p>Uno</p>");
   });
 
+  describe("lines of an added shape", () => {
+    const FLEX =
+      "position: absolute; left: 0px; top: 0px; width: 300px; height: 200px; display: flex; flex-direction: column; justify-content: center;";
+    const withShape = (inner: string) =>
+      editor({
+        markup: DECK.replace(
+          `<div class="shape" style="background: rgb(10, 20, 30)"></div>\n  </section>`,
+          `<div class="shape" style="background: rgb(10, 20, 30)"></div>\n    <div data-added="shape" style="${FLEX}">${inner}</div>\n  </section>`,
+        ),
+      });
+    const shape = (e: ReturnType<typeof editor>) => e.$('[data-added="shape"]');
+    const edit = (e: ReturnType<typeof editor>) => {
+      e.down(shape(e));
+      e.key("Enter");
+      expect(shape(e).getAttribute("contenteditable")).toBe("true");
+    };
+
+    // In a flex box every child is an item of its own: a <br> a blank line, a <span> a line.
+    it("keeps the lines typed into it in one block, so Enter breaks a line and adds no gap", () => {
+      const e = withShape("Uno dos");
+      edit(e);
+      const lines = shape(e).firstElementChild as HTMLElement;
+      expect(lines.tagName).toBe("DIV");
+      expect(shape(e).childNodes).toHaveLength(1);
+      placeCaret(e, lines.firstChild as Text, 3);
+      e.key("Enter");
+      expect(lines.querySelector("br")).not.toBeNull();
+      e.key("Escape");
+      const markup = e.commits()[0]!.markup;
+      expect(markup).toContain(`style="${FLEX}"><div>Uno<br> dos</div></div>`);
+      expect(markup).not.toMatch(/data-slop/);
+    });
+
+    it("leaves a plain line as it was when nothing changed", () => {
+      const e = withShape("Uno");
+      edit(e);
+      e.key("Escape");
+      expect(shape(e).innerHTML).toBe("Uno");
+      expect(e.commits()).toEqual([]);
+    });
+
+    it("keeps a line with formatting together, and gives an empty shape a line to type in", () => {
+      const e = withShape("Uno <b>dos</b>");
+      edit(e);
+      e.key("Escape");
+      expect(shape(e).innerHTML).toBe("<div>Uno <b>dos</b></div>");
+
+      const empty = withShape("");
+      edit(empty);
+      expect(shape(empty).innerHTML).toBe('<div data-slop-lines=""><br></div>');
+      empty.key("Escape");
+      expect(shape(empty).innerHTML).toBe("");
+    });
+
+    it("gathers lines saved loose when the shape is restyled", () => {
+      const e = withShape("Uno<br>dos");
+      e.down(shape(e));
+      e.fromParent({ type: "slop:edit-style", style: { fontSize: 20 } });
+      expect(shape(e).innerHTML).toBe("<div>Uno<br>dos</div>");
+      expect(shape(e).style.fontSize).toBe("20px");
+    });
+
+    it("leaves the children of other flex boxes alone", () => {
+      const e = editor({
+        markup: DECK.replace('<h1 class="title">', '<h1 class="title" style="display: flex">'),
+      });
+      const h1 = e.$("h1");
+      e.down(h1);
+      e.key("Enter");
+      e.key("Escape");
+      e.fromParent({ type: "slop:edit-style", style: { fontSize: 20 } });
+      expect(h1.innerHTML).toBe("Hello <em>there</em>");
+    });
+  });
+
   it("keeps focus in the text it starts editing, and lets clicks through overlays while typing", () => {
     const e = editor();
     const p = e.$(".card p");

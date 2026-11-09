@@ -116,7 +116,9 @@
      { type: "slop:edit-tool", slide, tool }.
    - { type: "slop:edit-style", style } restyles the selection: text color, size, font, bold,
      italic, underline, strikethrough, superscript / subscript (`script`), letter spacing, line
-     height, alignment (vertical only in flex boxes, which added text boxes and shapes are),
+     height, alignment (vertical only in flex boxes, which added text boxes and shapes are; their
+     lines, when more than a plain run of text, go in one <div>, as each child of a flex box is an
+     item of its own),
      fill and border (a drawing's fill and stroke), and `autofit`: "shrink" (data-autofit, the
      runtime shrinks the text until it fits the box), "grow" (the box's height becomes a
      min-height, so it grows with its text) or null (overflow is only reported). Any element also
@@ -197,7 +199,9 @@
   var nameOf = overflow.nameOf;
 
   // Attributes the editor adds while it works; stripped from the markup it saves.
-  var EDITOR_ATTRS = ["contenteditable", "spellcheck", "data-slop-selected", "data-slop-hover", "data-slop-editing", "data-slop-typing"];
+  var EDITOR_ATTRS = ["contenteditable", "spellcheck", "data-slop-selected", "data-slop-hover", "data-slop-editing", "data-slop-typing", "data-slop-lines"];
+  // The block that holds the lines of an added text box or shape while it is edited (see `gatherLines`).
+  var LINES_ATTR = "data-slop-lines";
   var MOVED = "data-moved";
   var PLACEHOLDER = overflow.PLACEHOLDER;
   var DELETED = overflow.DELETED;
@@ -1769,6 +1773,7 @@
     select(el);
     editing = el;
     textRange = null;
+    gatherLines(el, true);
     el.setAttribute("contenteditable", "true");
     el.setAttribute("spellcheck", "true");
     el.setAttribute("data-slop-editing", "");
@@ -1805,12 +1810,80 @@
       if (selected === el) select(null);
       el.parentElement.removeChild(el);
     } else {
+      settleLines(el);
       dropTrailingBreaks(el);
       refit(el);
     }
     placeHandles();
     if (selected === el) report();
     commit();
+  }
+
+  /** Whether `node` is laid out in a line of text: text, a line break or an inline element. */
+  function isLoose(node) {
+    return node.nodeType === 3 || (node.nodeType === 1 && (node.nodeName === "BR" || INLINE.test(node.tagName)));
+  }
+
+  /** Whether `node` shows anything: an element, or text that is not just white space. */
+  function shows(node) {
+    return node.nodeType === 1 || (node.nodeType === 3 && /\S/.test(node.data));
+  }
+
+  /**
+   * Keeps the lines of an added text box or shape together. They lay their text out in a flex
+   * column (to align it top, middle or bottom), where every child is an item of its own: a <br>
+   * would be a blank line between the text around it, and a <span> a line of its own. So runs of
+   * text and inline elements go in one <div>: each run of more than one, or (`editing`) every run,
+   * marked so `settleLines` can take it out again when it turns out not to be needed.
+   */
+  function gatherLines(el, editing) {
+    if (!/^(text|shape)$/.test(el.getAttribute(ADDED) || "")) return;
+    if (!/flex|grid/.test(getComputedStyle(el).display || "")) return;
+    var runs = [];
+    var run = [];
+    Array.prototype.slice.call(el.childNodes).forEach(function (child) {
+      if (isLoose(child)) {
+        run.push(child);
+        return;
+      }
+      runs.push(run);
+      run = [];
+    });
+    runs.push(run);
+    var gathered = false;
+    runs.forEach(function (nodes) {
+      var showing = nodes.filter(shows);
+      if (!showing.length || (showing.length < 2 && !editing)) return;
+      var lines = document.createElement("div");
+      if (editing) lines.setAttribute(LINES_ATTR, "");
+      el.insertBefore(lines, nodes[0]);
+      nodes.forEach(function (node) {
+        lines.appendChild(node);
+      });
+      gathered = true;
+    });
+    // An empty box gets a line to type in, so what is typed lands in it.
+    if (editing && !gathered && !Array.prototype.some.call(el.childNodes, shows)) {
+      var empty = document.createElement("div");
+      empty.setAttribute(LINES_ATTR, "");
+      empty.appendChild(document.createElement("br"));
+      el.appendChild(empty);
+    }
+  }
+
+  /**
+   * Once editing is done: the lines `gatherLines` put in a block stay there only when they
+   * need it (more than one thing in a line of text), and lines that got out of it are gathered.
+   */
+  function settleLines(el) {
+    Array.prototype.slice.call(el.querySelectorAll("[" + LINES_ATTR + "]")).forEach(function (lines) {
+      lines.removeAttribute(LINES_ATTR);
+      dropTrailingBreaks(lines);
+      var showing = Array.prototype.filter.call(lines.childNodes, shows);
+      if (lines.parentNode !== el || showing.length > 1 || (showing.length && !isLoose(showing[0]))) return;
+      unwrap(lines);
+    });
+    gatherLines(el, false);
   }
 
   /** Enter at the end of the text leaves line breaks for the caret that would stay as blank lines. */
@@ -2886,6 +2959,8 @@
       return Object.prototype.hasOwnProperty.call(changes, key);
     };
     if (autofit) autofit.unfit(el);
+    // Lines saved loose in a flex box (before they were gathered while editing) come together.
+    if (el !== editing) gatherLines(el, false);
     var text = {};
     TEXT_KEYS.forEach(function (key) {
       if (has(key) && key !== "link" && key !== "script") text[key] = changes[key];

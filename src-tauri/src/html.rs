@@ -131,6 +131,7 @@ pub const EDITOR_ATTRS: &[&str] = &[
     "data-slop-hover",
     "data-slop-editing",
     "data-slop-typing",
+    "data-slop-lines",
 ];
 
 /// Class of the marker element that starts a section; its title is the `data-title` attribute.

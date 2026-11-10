@@ -32,15 +32,15 @@ use rav1e::data::{FrameType, Packet, Rational};
 use rav1e::prelude::{FrameParameters, FrameTypeOverride};
 use rav1e::{Config, Context, EncoderConfig, EncoderStatus};
 use serde::{Deserialize, Serialize};
-use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::AppHandle;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::capture::{decode_png, Image, Rect, Size};
+use crate::capture::{decode_png, Image};
 use crate::error::{Error, Result};
+use crate::export_window::{self, Helper, Page};
 use crate::mp4::{AudioTrack, Mp4Writer};
 use crate::narration::{self, Narration};
-use crate::{deck, html, pdf, protocol, sound};
+use crate::{deck, html, pdf, sound};
 
 /// Where the page's helper answers; the navigation is caught, never made.
 const SIGNAL_PATH: &str = "/.video-signal";
@@ -295,35 +295,21 @@ pub async fn export(
     } else {
         "static&print"
     };
-    let url = protocol::file_url(file, query)
-        .parse()
-        .map_err(|e| Error::msg(format!("cannot open the deck for recording: {e}")))?;
-
-    let (window_width, window_height) = pdf::window_size(canvas, pdf::screen_area(app));
-    let (signal_tx, signals) = mpsc::unbounded_channel::<Url>();
-    let label = format!("video-export-{}", uuid::Uuid::new_v4().simple());
-    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::CustomProtocol(url))
-        .title("Video export")
-        .inner_size(window_width, window_height)
-        // No title bar: WebKit would inset the page under it, and captures would be off.
-        .decorations(false);
-    let window = pdf::out_of_sight(builder)
-        .on_page_load(|webview, payload| {
-            if payload.event() == PageLoadEvent::Finished {
-                let _ = webview.eval(VIDEO_JS);
-            }
-        })
-        .on_navigation(move |url| {
-            if url.path() != SIGNAL_PATH {
-                return true;
-            }
-            let _ = signal_tx.send(url.clone());
-            false
-        })
-        .build()
-        .map_err(|e| Error::msg(format!("cannot open the deck for recording: {e}")))?;
-
-    let mut helper = pdf::Helper {
+    let (window, signals) = export_window::open(
+        app,
+        file,
+        canvas,
+        Page {
+            label: "video-export",
+            title: "Video export",
+            query,
+            script: VIDEO_JS,
+            signal: SIGNAL_PATH,
+            purpose: "recording",
+            out_of_sight: true,
+        },
+    )?;
+    let mut helper = Helper {
         window: &window,
         signals,
         task: TASK,
@@ -439,7 +425,7 @@ pub fn encode_opus(samples: &[f32]) -> Result<AudioTrack> {
 
 /// Plays the deck in the helper's window, frame by frame, into the MP4 at `dest`.
 async fn record(
-    helper: &mut pdf::Helper<'_>,
+    helper: &mut Helper<'_>,
     dest: &Path,
     size: (u32, u32),
     options: Options,
@@ -447,7 +433,7 @@ async fn record(
     progress: impl Fn(Progress),
 ) -> Result<()> {
     let ready = helper.answer("ready").await?;
-    pdf::check_view(&ready)?;
+    export_window::check_view(&ready)?;
     let slides: u32 = ready
         .get("slides")
         .and_then(|n| n.parse().ok())
@@ -455,8 +441,8 @@ async fn record(
     if slides == 0 {
         return Err(Error::msg("the deck has no shown slides to export"));
     }
-    let (rect, viewport) = pdf::geometry(&ready)?;
-    let rect = pdf::inside_whole_points(rect);
+    let (rect, viewport) = export_window::geometry(&ready)?;
+    let rect = export_window::inside_whole_points(rect);
     let timings: Vec<Timing> = (0..slides as usize)
         .map(|i| {
             cues.get(i).map_or_else(Timing::default, |cue| Timing {
@@ -505,7 +491,7 @@ async fn record(
                         .run(&format!("window.__slopVideo.frame({at:.3})"), "frame")
                         .await?;
                     settled = answer.get("busy").map(String::as_str) == Some("0");
-                    Job::Png(capture(helper.window, rect, viewport, size.0).await?)
+                    Job::Png(export_window::capture(helper.window, rect, viewport, size.0).await?)
                 };
                 jobs.send(job).await.map_err(|_| encoder_gone())?;
                 progress(Progress {
@@ -523,19 +509,6 @@ async fn record(
     drop(jobs);
     let written = encoded.await.map_err(|_| encoder_gone())?;
     played.and(written)
-}
-
-/// A PNG of `rect` of the window, `width` pixels wide.
-pub(crate) async fn capture(
-    window: &WebviewWindow,
-    rect: Rect,
-    viewport: Size,
-    width: u32,
-) -> Result<Vec<u8>> {
-    #[cfg(target_os = "macos")]
-    return crate::capture::render_region(window.as_ref(), rect, viewport, width).await;
-    #[cfg(not(target_os = "macos"))]
-    return crate::capture::snapshot(window.as_ref(), rect, viewport, width).await;
 }
 
 /// What the encoder does next.

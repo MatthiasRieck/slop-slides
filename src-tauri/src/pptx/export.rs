@@ -14,15 +14,14 @@ use std::path::Path;
 
 use base64::Engine as _;
 use serde::Deserialize;
-use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use tokio::sync::mpsc;
+use tauri::AppHandle;
 use zip::write::SimpleFileOptions;
 
 use super::{EMU_PER_CSS_PX, WIDESCREEN_EMU};
 use crate::capture::{self, Image};
 use crate::error::{Error, Result};
-use crate::{deck, html, pdf, protocol};
+use crate::export_window::{self, Helper, Page};
+use crate::{deck, html};
 
 /// Where the page's helper answers; the navigation is caught, never made.
 const SIGNAL_PATH: &str = "/.pptx-signal";
@@ -261,34 +260,22 @@ pub(super) struct Meta {
 pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
     let loaded = deck::load(file)?;
     let canvas = html::slide_size(&deck::read_html(file)?).pixels();
-    let url = protocol::file_url(file, "static&print")
-        .parse()
-        .map_err(|e| Error::msg(format!("cannot open the deck for export: {e}")))?;
-    let (window_width, window_height) = pdf::window_size(canvas, pdf::screen_area(app));
-    let (signal_tx, signals) = mpsc::unbounded_channel::<Url>();
-    let label = format!("pptx-export-{}", uuid::Uuid::new_v4().simple());
-    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::CustomProtocol(url))
-        .title("PowerPoint export")
-        .inner_size(window_width, window_height)
-        // No title bar: WebKit would inset the page under it, and captures would be off.
-        .decorations(false);
-    let window = pdf::out_of_sight(builder)
-        .on_page_load(|webview, payload| {
-            if payload.event() == PageLoadEvent::Finished {
-                let _ = webview.eval(PPTX_JS);
-            }
-        })
-        .on_navigation(move |url| {
-            if url.path() != SIGNAL_PATH {
-                return true;
-            }
-            let _ = signal_tx.send(url.clone());
-            false
-        })
-        .build()
-        .map_err(|e| Error::msg(format!("cannot open the deck for export: {e}")))?;
+    let (window, signals) = export_window::open(
+        app,
+        file,
+        canvas,
+        Page {
+            label: "pptx-export",
+            title: "PowerPoint export",
+            query: "static&print",
+            script: PPTX_JS,
+            signal: SIGNAL_PATH,
+            purpose: "export",
+            out_of_sight: true,
+        },
+    )?;
 
-    let mut helper = pdf::Helper {
+    let mut helper = Helper {
         window: &window,
         signals,
         task: TASK,
@@ -358,7 +345,7 @@ fn deck_sections(loaded: &deck::Deck) -> Vec<(String, String)> {
 }
 
 /// Reads the scene from the page and captures its pictures.
-async fn read_scene(helper: &mut pdf::Helper<'_>) -> Result<(Scene, HashMap<usize, Vec<u8>>)> {
+async fn read_scene(helper: &mut Helper<'_>) -> Result<(Scene, HashMap<usize, Vec<u8>>)> {
     let ready = helper.answer("ready").await?;
     let count: usize = ready
         .get("slides")
@@ -367,7 +354,7 @@ async fn read_scene(helper: &mut pdf::Helper<'_>) -> Result<(Scene, HashMap<usiz
     if count == 0 {
         return Err(Error::msg("the deck has no shown slides to export"));
     }
-    pdf::check_view(&ready)?;
+    export_window::check_view(&ready)?;
     let scanned = helper.run("window.__slopPptx.scan()", "scanned").await?;
     let chunks: usize = scanned
         .get("chunks")
@@ -404,7 +391,7 @@ async fn read_scene(helper: &mut pdf::Helper<'_>) -> Result<(Scene, HashMap<usiz
 }
 
 async fn capture_shot(
-    helper: &mut pdf::Helper<'_>,
+    helper: &mut Helper<'_>,
     index: usize,
     paper: Option<&str>,
 ) -> Result<Vec<u8>> {
@@ -415,7 +402,7 @@ async fn capture_shot(
             "isolated",
         )
         .await?;
-    let (rect, viewport) = pdf::geometry(&shown)?;
+    let (rect, viewport) = export_window::geometry(&shown)?;
     let scale: f64 = shown
         .get("scale")
         .and_then(|s| s.parse().ok())
@@ -424,19 +411,7 @@ async fn capture_shot(
     let pixels = (rect.width / scale * SHOT_SCALE)
         .round()
         .clamp(1.0, f64::from(crate::size::MAX_PX)) as u32;
-    capture_region(helper.window, rect, viewport, pixels).await
-}
-
-async fn capture_region(
-    window: &WebviewWindow,
-    rect: capture::Rect,
-    viewport: capture::Size,
-    pixels: u32,
-) -> Result<Vec<u8>> {
-    #[cfg(target_os = "macos")]
-    return capture::render_region(window.as_ref(), rect, viewport, pixels).await;
-    #[cfg(not(target_os = "macos"))]
-    return capture::snapshot(window.as_ref(), rect, viewport, pixels).await;
+    export_window::capture(helper.window, rect, viewport, pixels).await
 }
 
 /// The picture with its transparency, from the same picture over white and over black. A pixel

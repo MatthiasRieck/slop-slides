@@ -19,7 +19,7 @@ use tauri::{AppHandle, Manager, RunEvent};
 use crate::capture::{self, Image};
 use crate::error::{Error, Result};
 use crate::workspace::OpenWorkspace;
-use crate::{deck, html, pdf, pptx, protocol, render, video};
+use crate::{deck, export_window, html, pdf, pptx, protocol, render, video};
 
 pub const FLAG: &str = "--export-smoke";
 /// The label the workspace is opened under; no window has it, the exports only need the
@@ -294,7 +294,7 @@ async fn slide_images(
     canvas: (u32, u32),
 ) -> Result<Vec<PathBuf>> {
     let (window, signals) = render::open(app, file, false)?;
-    let mut helper = pdf::Helper {
+    let mut helper = export_window::Helper {
         window: &window,
         signals,
         task: render::TASK,
@@ -306,9 +306,9 @@ async fn slide_images(
             let answer = render::show(&mut helper, id, None)
                 .await?
                 .ok_or_else(|| Error::msg(format!("slide {id} was not found")))?;
-            let (rect, viewport) = pdf::geometry(&answer)?;
+            let (rect, viewport) = export_window::geometry(&answer)?;
             // The fitted slide sits at a fraction of a pixel; keep its edge out of the image.
-            let rect = pdf::inside_whole_points(rect);
+            let rect = export_window::inside_whole_points(rect);
             let path = capture::save_slide_image(
                 window.as_ref(),
                 dir,

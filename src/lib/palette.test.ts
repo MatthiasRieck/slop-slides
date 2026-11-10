@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { DEFAULT_EDIT_STYLES, EDIT_COLORS } from "./editTools";
 import { DEFAULT_COLORS, INK_COLORS, LASER_RGB } from "./ink";

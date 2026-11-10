@@ -153,7 +153,6 @@ export function installBrowserMock() {
           return [];
         case "narration_words":
           return null;
-        case "download_speech_model":
         case "render_narration":
         case "time_narration":
         case "set_narration_voice":

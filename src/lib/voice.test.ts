@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import { formatBytes, insertTranscript, WAVEFORM_BAR, WAVEFORM_STEP, waveformBars } from "./voice";

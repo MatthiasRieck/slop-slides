@@ -1,6 +1,7 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
-import { cleanNarrationPrompt, normalizeNarration, speakingTime, wordCount } from "./narration";
+import { cleanNarrationPrompt, formatDuration, normalizeNarration, speakingTime, wordCount } from "./narration";
 
 describe("normalizeNarration", () => {
   it("trims line ends and keeps one blank line between paragraphs", () => {
@@ -19,6 +20,17 @@ describe("wordCount and speakingTime", () => {
     expect(speakingTime("")).toBe("0:00");
     expect(speakingTime(Array(150).fill("word").join(" "))).toBe("1:00");
     expect(speakingTime(Array(25).fill("word").join(" "))).toBe("0:10");
+  });
+});
+
+describe("formatDuration", () => {
+  it.each([
+    [0, "0:00"],
+    [12.4, "0:12"],
+    [59.6, "1:00"],
+    [754, "12:34"],
+  ])("shows %s seconds as %s", (seconds, shown) => {
+    expect(formatDuration(seconds)).toBe(shown);
   });
 });
 

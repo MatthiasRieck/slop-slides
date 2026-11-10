@@ -39,6 +39,11 @@ export function wordsSeconds(text: string): number {
 
 /** About how long `text` takes to say, like `0:45`. */
 export function speakingTime(text: string): string {
-  const seconds = Math.round(wordsSeconds(text));
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  return formatDuration(wordsSeconds(text));
+}
+
+/** `seconds` as "0:12". */
+export function formatDuration(seconds: number): string {
+  const total = Math.round(seconds);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }

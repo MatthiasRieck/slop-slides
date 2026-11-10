@@ -1,5 +1,3 @@
-import { useSyncExternalStore } from "react";
-
 /**
  * Where narration playing in this window is on the slide showing: `at` seconds since the slide
  * showed. The slide's page (src-tauri/assets/runtime.js) moves the animations that began with
@@ -32,11 +30,6 @@ export function getSlideClock(): SlideClock | null {
 export function onSlideClock(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
-}
-
-/** The clock, rendering again as it changes. */
-export function useSlideClock(): SlideClock | null {
-  return useSyncExternalStore(onSlideClock, getSlideClock);
 }
 
 /**

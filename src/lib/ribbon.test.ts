@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import { COLLAPSED_SECTION_WIDTH, popupShift, sectionsToCollapse } from "./ribbon";

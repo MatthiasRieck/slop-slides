@@ -374,7 +374,6 @@ export interface VoiceDownloadProgress {
   total: number;
 }
 
-/** An attached screen (see src-tauri/src/screens.rs). */
 /** How a slide differs from the last commit (see src-tauri/src/git.rs). */
 export type SlideStatus = "added" | "removed" | "modified" | "moved" | "unchanged";
 
@@ -425,6 +424,7 @@ export interface DeckChanges {
   hasUnstaged: boolean;
 }
 
+/** An attached screen (see src-tauri/src/screens.rs). */
 export interface Screen {
   /** Position in the list, which `presentOn` takes. */
   index: number;
@@ -492,11 +492,11 @@ export const api = {
     invoke<RailEdit>("set_slides_hidden", { id, slides, hidden }),
   setSlideLocked: (id: string, slide: string, locked: boolean) =>
     invoke<Deck>("set_slide_locked", { id, slide, locked }),
-  /** Sets what is said over the slide; empty `text` removes its narration. */
   /** Sets the seconds expected on a slide; 0 removes them. */
   setSlideTime: (id: string, slide: string, seconds: number) => invoke<Deck>("set_slide_time", { id, slide, seconds }),
   /** Sets the timing of slides on the narration timeline, all in one write. */
   setSlideTiming: (id: string, timing: SlideTiming[]) => invoke<RailEdit>("set_slide_timing", { id, timing }),
+  /** Sets what is said over the slide; empty `text` removes its narration. */
   setSlideNarration: (id: string, slide: string, text: string) =>
     invoke<Deck>("set_slide_narration", { id, slide, text }),
   /** Sets the slide's speaker notes; empty `text` removes them. */

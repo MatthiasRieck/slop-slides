@@ -1,12 +1,13 @@
+// @vitest-environment node
 /**
  * The video export helper (src-tauri/assets/video.js), run by the app in the hidden window that
  * records a deck. It answers each step by navigating to /.video-signal?<answer>, and moves every
  * animation in the page to the video's clock.
  */
-import { JSDOM } from "jsdom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import VIDEO_JS from "../../src-tauri/assets/video.js?raw";
+import { openHelper } from "./deckDom";
 
 const DECK = `<!DOCTYPE html><html><head></head><body>
 <main class="deck">
@@ -14,14 +15,6 @@ const DECK = `<!DOCTYPE html><html><head></head><body>
   <section class="slide" data-hidden><p>Hidden</p></section>
   <section class="slide" id="end"><p id="body">End</p><div id="logo-b" data-morph="logo"></div></section>
 </main></body></html>`;
-
-let doms: JSDOM[] = [];
-
-afterEach(() => {
-  for (const d of doms) d.window.close();
-  doms = [];
-  vi.useRealTimers();
-});
 
 interface Helper {
   next: (at: number) => void;
@@ -90,48 +83,39 @@ function place(el: HTMLElement, x: number, y: number, width: number, height: num
 
 /** Loads the deck, runs the helper, and records its answers instead of navigating. */
 function helper(options: { url?: string; matrix?: boolean } = {}) {
-  vi.useFakeTimers({ toFake: ["setTimeout"] });
-  const dom = new JSDOM(DECK, {
-    url: options.url ?? "https://example.test/talk/deck.html?print",
-    runScripts: "outside-only",
-  });
-  doms.push(dom);
-  const { window } = dom;
-  const doc = window.document;
-  const answers: string[] = [];
   const animations: FakeAnimation[] = [];
   const keys: string[] = [];
   const poses: { el: Element; keyframes: Keyframe[]; timing: KeyframeAnimationOptions }[] = [];
-  // jsdom cannot navigate, which is how the helper answers in the app.
-  Object.assign(window, { __slopVideoSignal: (answer: string) => answers.push(answer) });
-  Object.assign(doc, {
-    getAnimations: () => animations.filter((a) => !a.finished),
-    startViewTransition: () => {
-      throw new Error("a hidden page skips view transitions");
+  const { window, doc, api, answers, settle } = openHelper<Helper>(DECK, "Video", {
+    url: options.url ?? "https://example.test/talk/deck.html?print",
+    setup(window) {
+      const doc = window.document;
+      Object.assign(doc, {
+        getAnimations: () => animations.filter((a) => !a.finished),
+        startViewTransition: () => {
+          throw new Error("a hidden page skips view transitions");
+        },
+      });
+      if (options.matrix !== false) Object.assign(window, { DOMMatrix: FakeMatrix });
+      Object.assign(window.HTMLElement.prototype, {
+        animate(this: Element, keyframes: Keyframe[], timing: KeyframeAnimationOptions) {
+          poses.push({ el: this, keyframes, timing });
+          const animation = new FakeAnimation(this, Number(timing.duration));
+          animations.push(animation);
+          return animation;
+        },
+      });
+      // The player moves on with → as the presenter does; this stands in for it.
+      window.addEventListener("keydown", (event) => {
+        keys.push(event.key);
+        const slides = doc.querySelectorAll(".deck > .slide:not([data-hidden])");
+        slides.forEach((el, i) => {
+          el.classList.toggle("active", i === 1);
+        });
+      });
     },
+    scripts: [VIDEO_JS],
   });
-  if (options.matrix !== false) Object.assign(window, { DOMMatrix: FakeMatrix });
-  Object.assign(window.HTMLElement.prototype, {
-    animate(this: Element, keyframes: Keyframe[], timing: KeyframeAnimationOptions) {
-      poses.push({ el: this, keyframes, timing });
-      const animation = new FakeAnimation(this, Number(timing.duration));
-      animations.push(animation);
-      return animation;
-    },
-  });
-  // The player moves on with → as the presenter does; this stands in for it.
-  window.addEventListener("keydown", (event) => {
-    keys.push(event.key);
-    const slides = doc.querySelectorAll(".deck > .slide:not([data-hidden])");
-    slides.forEach((el, i) => {
-      el.classList.toggle("active", i === 1);
-    });
-  });
-  window.eval(VIDEO_JS);
-  const api = (window as unknown as { __slopVideo: Helper }).__slopVideo;
-  const settle = async () => {
-    for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(5000);
-  };
   const animate = (id: string, end: number) => {
     const animation = new FakeAnimation(doc.getElementById(id)!, end);
     animations.push(animation);

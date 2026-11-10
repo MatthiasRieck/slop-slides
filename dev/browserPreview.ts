@@ -38,6 +38,12 @@ function listTemplates() {
   return [...own, ...builtin];
 }
 
+/** `html` with `scripts` (markup) at the end of its body, as the app adds them to a page it serves. */
+function beforeBodyEnd(html: string, scripts: string): string {
+  const at = html.toLowerCase().lastIndexOf("</body");
+  return at < 0 ? html + scripts : html.slice(0, at) + scripts + html.slice(at);
+}
+
 /** A template's deck.html with the player runtime, as the app serves it. */
 function templateHtml(id: string): string | null {
   const own = path.join(userTemplates, id, "deck.html");
@@ -49,9 +55,7 @@ function templateHtml(id: string): string | null {
   if (html.includes("slopslide:runtime-js")) return html;
   const css = `<style>\n${asset("runtime.css")}</style><script>document.documentElement.setAttribute("data-slop-player", "");</script>`;
   const withCss = html.replace(/<head[^>]*>/i, (head) => head + css);
-  const at = withCss.toLowerCase().lastIndexOf("</body");
-  const js = `<script>\n${asset("runtime.js")}</script>`;
-  return at < 0 ? withCss + js : withCss.slice(0, at) + js + withCss.slice(at);
+  return beforeBodyEnd(withCss, `<script>\n${asset("runtime.js")}</script>`);
 }
 /** Roughly src-tauri/src/git.rs: a file as of the last commit; null when it has none. */
 function atHead(file: string): Buffer | null {
@@ -196,10 +200,7 @@ export function browserPreview(): Plugin {
           const file = url.searchParams.get("id") ?? "";
           return json(file.startsWith(library + path.sep) && fs.existsSync(file) ? deckChanges(file) : null);
         }
-        if (url.pathname === "/__api/templates") {
-          res.setHeader("content-type", "application/json");
-          return res.end(JSON.stringify(listTemplates()));
-        }
+        if (url.pathname === "/__api/templates") return json(listTemplates());
         if (!url.pathname.startsWith("/__deck/")) return next();
         const template = /^\/__deck\/\.template\/([^/]+)\/deck\.html$/.exec(url.pathname);
         if (template) {
@@ -241,9 +242,7 @@ export function browserPreview(): Plugin {
           ];
           if (names.length > 0) {
             const scripts = names.map((name) => `<script>\n${asset(name)}</script>\n`).join("");
-            const html = fs.readFileSync(file, "utf8");
-            const at = html.toLowerCase().lastIndexOf("</body");
-            return res.end(at < 0 ? html + scripts : html.slice(0, at) + scripts + html.slice(at));
+            return res.end(beforeBodyEnd(fs.readFileSync(file, "utf8"), scripts));
           }
         }
         fs.createReadStream(file).pipe(res);

@@ -1,3 +1,5 @@
+import { loadJson, saveJson } from "./storage";
+
 /** How a video export is made (src-tauri/src/video.rs reads the same fields). */
 export interface VideoOptions {
   /** How long each slide is shown, in seconds; with narration, at least. */
@@ -72,32 +74,33 @@ export function slideFrames(options: VideoOptions, narration: number | null): nu
 
 /** The options last used, or the defaults. */
 export function loadVideoOptions(): VideoOptions {
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as Partial<VideoOptions> | null;
-    if (!saved || typeof saved !== "object") return DEFAULT_VIDEO_OPTIONS;
-    const seconds = Number(saved.secondsPerSlide);
-    const pause = (value: unknown, fallback: number) => {
-      const n = Number(value);
-      return value !== undefined && Number.isFinite(n) && n >= 0 && n <= MAX_PAUSE ? n : fallback;
-    };
-    return {
-      secondsPerSlide:
-        Number.isFinite(seconds) && seconds >= MIN_SECONDS && seconds <= MAX_SECONDS
-          ? seconds
-          : DEFAULT_VIDEO_OPTIONS.secondsPerSlide,
-      fps: FRAME_RATES.includes(saved.fps as (typeof FRAME_RATES)[number])
-        ? (saved.fps as number)
-        : DEFAULT_VIDEO_OPTIONS.fps,
-      animate: typeof saved.animate === "boolean" ? saved.animate : DEFAULT_VIDEO_OPTIONS.animate,
-      narration: typeof saved.narration === "boolean" ? saved.narration : DEFAULT_VIDEO_OPTIONS.narration,
-      pauseBefore: pause(saved.pauseBefore, DEFAULT_VIDEO_OPTIONS.pauseBefore),
-      pauseAfter: pause(saved.pauseAfter, DEFAULT_VIDEO_OPTIONS.pauseAfter),
-    };
-  } catch {
-    return DEFAULT_VIDEO_OPTIONS;
-  }
+  return loadJson(STORAGE_KEY, DEFAULT_VIDEO_OPTIONS, readVideoOptions);
+}
+
+/** Saved options, each one that is missing or out of range replaced by its default. */
+function readVideoOptions(stored: unknown): VideoOptions {
+  const saved = stored as Partial<VideoOptions> | null;
+  if (!saved || typeof saved !== "object") return DEFAULT_VIDEO_OPTIONS;
+  const seconds = Number(saved.secondsPerSlide);
+  const pause = (value: unknown, fallback: number) => {
+    const n = Number(value);
+    return value !== undefined && Number.isFinite(n) && n >= 0 && n <= MAX_PAUSE ? n : fallback;
+  };
+  return {
+    secondsPerSlide:
+      Number.isFinite(seconds) && seconds >= MIN_SECONDS && seconds <= MAX_SECONDS
+        ? seconds
+        : DEFAULT_VIDEO_OPTIONS.secondsPerSlide,
+    fps: FRAME_RATES.includes(saved.fps as (typeof FRAME_RATES)[number])
+      ? (saved.fps as number)
+      : DEFAULT_VIDEO_OPTIONS.fps,
+    animate: typeof saved.animate === "boolean" ? saved.animate : DEFAULT_VIDEO_OPTIONS.animate,
+    narration: typeof saved.narration === "boolean" ? saved.narration : DEFAULT_VIDEO_OPTIONS.narration,
+    pauseBefore: pause(saved.pauseBefore, DEFAULT_VIDEO_OPTIONS.pauseBefore),
+    pauseAfter: pause(saved.pauseAfter, DEFAULT_VIDEO_OPTIONS.pauseAfter),
+  };
 }
 
 export function saveVideoOptions(options: VideoOptions) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(options));
+  saveJson(STORAGE_KEY, options);
 }

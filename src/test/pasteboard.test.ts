@@ -1,14 +1,15 @@
+// @vitest-environment node
 /**
  * The pasteboard (src-tauri/assets/pasteboard.js) that the backend adds to the stage's slide
  * preview, in view mode on its own and in edit mode under the slide editor. It runs after the
  * player, in the slide's iframe. How it pans and zooms with the editor on top is covered in
  * slideEditor.test.ts.
  */
-import { JSDOM } from "jsdom";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import PASTEBOARD from "../../src-tauri/assets/pasteboard.js?raw";
 import RUNTIME from "../../src-tauri/assets/runtime.js?raw";
+import { openDeck } from "./deckDom";
 import { placement } from "./placement";
 
 const DECK = (bodyStyle = "") => `<!DOCTYPE html><html><head><style>${bodyStyle}</style></head><body>
@@ -16,13 +17,6 @@ const DECK = (bodyStyle = "") => `<!DOCTYPE html><html><head><style>${bodyStyle}
   <section class="slide" id="intro"><h1>Hello</h1><a href="#x">Link</a></section>
   <section class="slide" id="outro"><p>Bye</p></section>
 </main></body></html>`;
-
-let doms: JSDOM[] = [];
-
-afterEach(() => {
-  for (const d of doms) d.window.close();
-  doms = [];
-});
 
 interface View {
   type: string;
@@ -45,28 +39,16 @@ function pasteboard({
 } = {}) {
   const posted: unknown[] = [];
   const parent = { postMessage: (data: unknown) => posted.push(data) };
-  const dom = new JSDOM(DECK(bodyStyle), {
+  const window = openDeck(DECK(bodyStyle), {
     url: show
       ? "https://example.test/deck.html?v=1&show#intro"
       : "https://example.test/deck.html?embed&slide=intro&pan",
-    runScripts: "outside-only",
-    pretendToBeVisual: true,
-    beforeParse(window) {
-      Object.defineProperty(window, "innerWidth", { value: 2560, configurable: true });
-      Object.defineProperty(window, "innerHeight", { value: 1440, configurable: true });
-      if (framed) Object.defineProperty(window, "parent", { value: parent, configurable: true });
-    },
+    size: [2560, 1440],
+    parent: framed ? parent : undefined,
+    stage,
+    visual: true,
+    scripts: [RUNTIME, PASTEBOARD],
   });
-  doms.push(dom);
-  // The runtime CSS lays the stage out at the deck's slide size; jsdom lays nothing out.
-  const stageEl = dom.window.document.querySelector(".deck");
-  if (stage && stageEl) {
-    Object.defineProperty(stageEl, "offsetWidth", { value: stage[0], configurable: true });
-    Object.defineProperty(stageEl, "offsetHeight", { value: stage[1], configurable: true });
-  }
-  dom.window.eval(RUNTIME);
-  dom.window.eval(PASTEBOARD);
-  const { window } = dom;
   const doc = window.document;
   const $ = (selector: string) => doc.querySelector<HTMLElement>(selector)!;
   const pointer = (type: string, target: Element, x: number, y: number, button = 0) =>

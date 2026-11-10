@@ -1255,8 +1255,7 @@
 
   /** Screen pixels per slide pixel. */
   function zoom() {
-    var value = slide.getBoundingClientRect().width / slide.offsetWidth;
-    return isFinite(value) && value > 0 ? value : 1;
+    return overflow.zoom(slide);
   }
 
   /**
@@ -6848,20 +6847,14 @@
     applyStyle(changes);
   }
 
-  /** The colors in the deck's CSS variables, for the color popover's deck swatches. */
-  /** The CSS variables the deck's stylesheets define (not the app's own), with the value each first has. */
-  function cssVariableNames() {
-    var names = [];
-    var scoped = {};
+  /**
+   * Calls `fn` with each rule of the deck's stylesheets (not the editor's own), nested rules after
+   * the rule that holds them.
+   */
+  function forEachDeckRule(fn) {
     var visit = function (rules) {
       Array.prototype.forEach.call(rules || [], function (rule) {
-        var props = rule.style || [];
-        for (var i = 0; i < props.length; i++) {
-          var name = props[i];
-          if (!/^--/.test(name) || /^--slop-/.test(name) || names.indexOf(name) >= 0) continue;
-          names.push(name);
-          scoped[name] = props.getPropertyValue(name);
-        }
+        fn(rule);
         if (rule.cssRules) visit(rule.cssRules);
       });
     };
@@ -6871,6 +6864,21 @@
         visit(sheet.cssRules);
       } catch (e) {
         // A stylesheet from another origin (a web font service) cannot be read.
+      }
+    });
+  }
+
+  /** The CSS variables the deck's stylesheets define (not the app's own), with the value each first has. */
+  function cssVariableNames() {
+    var names = [];
+    var scoped = {};
+    forEachDeckRule(function (rule) {
+      var props = rule.style || [];
+      for (var i = 0; i < props.length; i++) {
+        var name = props[i];
+        if (!/^--/.test(name) || /^--slop-/.test(name) || names.indexOf(name) >= 0) continue;
+        names.push(name);
+        scoped[name] = props.getPropertyValue(name);
       }
     });
     return { names: names, scoped: scoped };
@@ -6945,6 +6953,7 @@
     return chain;
   }
 
+  /** The colors in the deck's CSS variables, for the color popover's deck swatches. */
   function deckColors() {
     var found = cssVariableNames();
     var names = found.names;
@@ -6981,19 +6990,8 @@
       seen[name.toLowerCase()] = true;
       fonts.push({ name: name, stack: String(stack).trim() });
     };
-    var visit = function (rules) {
-      Array.prototype.forEach.call(rules || [], function (rule) {
-        if (rule.style && rule.type !== 5 && rule.style.fontFamily) add(rule.style.fontFamily);
-        if (rule.cssRules) visit(rule.cssRules);
-      });
-    };
-    Array.prototype.forEach.call(document.styleSheets, function (sheet) {
-      if (sheet.ownerNode === style) return;
-      try {
-        visit(sheet.cssRules);
-      } catch (e) {
-        // A stylesheet from another origin (a web font service) cannot be read.
-      }
+    forEachDeckRule(function (rule) {
+      if (rule.style && rule.type !== 5 && rule.style.fontFamily) add(rule.style.fontFamily);
     });
     if (document.fonts && document.fonts.forEach) {
       document.fonts.forEach(function (face) {

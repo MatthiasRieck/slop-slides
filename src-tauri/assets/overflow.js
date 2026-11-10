@@ -105,5 +105,6 @@ window.__slopOverflow = (function () {
     find: find,
     nameOf: nameOf,
     describe: describe,
+    zoom: zoom,
   };
 })();

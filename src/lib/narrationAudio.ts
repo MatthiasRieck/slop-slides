@@ -1,5 +1,7 @@
 import { api } from "./api";
 
+export { formatDuration } from "./narration";
+
 /** A slide's narration audio, playing; `stop` ends it early. */
 export interface Playback {
   /** Resolves when the audio has played to its end, or was stopped. */
@@ -39,10 +41,4 @@ export async function playNarration(deck: string, slide: string, from: number | 
     throw error;
   }
   return { ended, stop, time: () => audio.currentTime };
-}
-
-/** `seconds` as "0:12". */
-export function formatDuration(seconds: number): string {
-  const total = Math.round(seconds);
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }

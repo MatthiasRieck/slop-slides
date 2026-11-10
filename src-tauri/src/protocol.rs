@@ -12,7 +12,7 @@
 //!
 //! With `?pan` in the query, a deck is served with the pasteboard (`assets/pasteboard.js`)
 //! added, so the stage can pan and zoom around the slide. With `?edit`, it also gets the slide
-//! editor (`assets/editor.js`), which builds on the pasteboard, so the stage can edit text and
+//! editor (`assets/editor/`), which builds on the pasteboard, so the stage can edit text and
 //! move elements in place. With `?show`, the presenter's whole-deck player gets the pasteboard
 //! too, to zoom and pan the slide being shown. None of them ever becomes part of the deck file
 //! or an export. With `?print`, a deck is served with its player runtime brought up to date,
@@ -53,9 +53,11 @@ const URI_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b')');
 
 const PASTEBOARD_JS: &str = include_str!("../assets/pasteboard.js");
+/// Overflow detection, then the slide editor that builds on it. The editor's source is the files
+/// of `assets/editor/`, which build.rs joins in the order of their names.
 const EDITOR_JS: &str = concat!(
     include_str!("../assets/overflow.js"),
-    include_str!("../assets/editor.js"),
+    include_str!(concat!(env!("OUT_DIR"), "/editor.js")),
 );
 
 pub fn handle(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
@@ -442,6 +444,38 @@ mod tests {
         assert!(pasteboard < editor);
         assert!(editor < out.find("</BODY>").unwrap());
         assert!(with_scripts("<p>no body", &[EDITOR_JS]).starts_with("<p>no body<script>"));
+    }
+
+    #[test]
+    fn embeds_the_editor_parts_after_overflow_in_the_order_of_their_names() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/editor");
+        let mut parts: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "js"))
+            .collect();
+        parts.sort();
+        assert!(parts.len() > 1, "the editor comes in parts");
+        let joined: String = parts
+            .iter()
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect();
+        let editor = EDITOR_JS
+            .strip_prefix(include_str!("../assets/overflow.js"))
+            .expect("overflow detection comes first");
+        assert_eq!(editor, joined);
+        let first = std::fs::read_to_string(&parts[0]).unwrap();
+        let last = std::fs::read_to_string(parts.last().unwrap()).unwrap();
+        assert!(first.starts_with("/* SlopSlide slide editor."));
+        assert!(
+            first.trim_end().ends_with("(function () {"),
+            "the first part opens the closure"
+        );
+        assert!(
+            last.trim_end().ends_with("})();"),
+            "the last part closes it"
+        );
+        assert!(editor.starts_with(&first) && editor.ends_with(&last));
     }
 
     /// As the frontend sends it: the absolute path without its leading slash.

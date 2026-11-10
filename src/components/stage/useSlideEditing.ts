@@ -31,7 +31,7 @@ const NO_FONTS: FontChoice[] = [];
 const NO_COLORS: DeckColor[] = [];
 
 /**
- * Connects the stage to the slide editor running in its preview (src-tauri/assets/editor.js):
+ * Connects the stage to the slide editor running in its preview (src-tauri/assets/editor/):
  * saves the markup it posts, keeps the selection across the reload that follows, and
  * handles undo and leaving edit mode. Images dropped on the stage go onto the slide. The
  * editor copies elements through the system clipboard, and ⌘V pastes from it: an element
@@ -175,7 +175,7 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
       }
     };
     // A press anywhere in the app but the edit toolbar ends typing in the slide, keeping the
-    // text; the toolbar restyles the text being typed (see editor.js), and a press on the frame
+    // text; the toolbar restyles the text being typed (see assets/editor/), and a press on the frame
     // is one passed on from the slide, where the editor sees it itself.
     const onPress = (event: PointerEvent) => {
       if (!useApp.getState().editing) return;

@@ -36,7 +36,7 @@ pub const ADDED_ATTR: &str = "data-added";
 /// Marks the one block (`<div data-text-body>`) that holds the text of a text box or shape the
 /// user added: the box is a flex column, which would lay out each formatted run of text directly
 /// in it as an item on a line of its own. The editor selects, moves and edits the box and
-/// everything in the body as one text (see `assets/editor.js`).
+/// everything in the body as one text (see `assets/editor/`).
 pub const TEXT_BODY_ATTR: &str = "data-text-body";
 
 /// Marks an image the user dropped onto a slide in the editor. It sits on top of the slide,
@@ -49,7 +49,7 @@ pub const DROPPED_ATTR: &str = "data-dropped";
 /// `min-height`, so it grows with its text).
 pub const AUTOFIT_ATTR: &str = "data-autofit";
 /// The kind of figure a shape the user added is (a triangle, a diamond…), which an SVG in its
-/// `background-image` draws (see `FIGURES` in assets/editor.js).
+/// `background-image` draws (see `FIGURES` in assets/editor/).
 pub const SHAPE_ATTR: &str = "data-shape";
 /// The figures the editor draws, by their `data-shape`.
 pub const SHAPE_KINDS: &[&str] = &[

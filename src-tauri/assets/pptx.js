@@ -772,7 +772,7 @@
 
   /**
    * Whether `el`'s children are all paragraphs of plain text: <p>s, or the one block the editor
-   * keeps the text of a text box or shape in (`data-text-body`, see assets/editor.js).
+   * keeps the text of a text box or shape in (`data-text-body`, see assets/editor/).
    */
   function plainParagraphs(el) {
     var items = Array.prototype.slice.call(el.children);

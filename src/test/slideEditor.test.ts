@@ -1,14 +1,13 @@
 // @vitest-environment node
 /**
- * The slide editor (src-tauri/assets/editor.js) that the backend adds to the stage's slide
+ * The slide editor (src-tauri/assets/editor/) that the backend adds to the stage's slide
  * preview in edit mode. It runs after the player and the pasteboard, in the slide's iframe.
  */
 import { describe, expect, it, vi } from "vitest";
-
-import EDITOR from "../../src-tauri/assets/editor.js?raw";
 import OVERFLOW from "../../src-tauri/assets/overflow.js?raw";
 import RUNTIME from "../../src-tauri/assets/runtime.js?raw";
 import { openDeck } from "./deckDom";
+import { EDITOR } from "./editorSource";
 import { placement } from "./placement";
 import { editorPage } from "./slideEditorPage";
 

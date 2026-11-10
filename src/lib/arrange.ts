@@ -1,6 +1,6 @@
 /**
  * Arranging the selection: the pure parts, shared by the arrange controls and their tests. The
- * slide editor (src-tauri/assets/editor.js) moves the elements in the slide's preview.
+ * slide editor (src-tauri/assets/editor/) moves the elements in the slide's preview.
  */
 
 export type AlignTo = "left" | "center" | "right" | "top" | "middle" | "bottom";
@@ -10,7 +10,7 @@ export type AlignTarget = "slide" | "selection";
 /** The size matching gives the other selected elements from the primary one. */
 export type MatchAxis = "w" | "h";
 
-/** Where the selection is, in slide pixels (see `geometry` in editor.js). */
+/** Where the selection is, in slide pixels (see `geometry` in assets/editor/). */
 export interface EditGeometry {
   /** How many elements are selected. */
   count: number;
@@ -27,7 +27,7 @@ export type GeometryField = "x" | "y" | "w" | "h" | "rotation";
 /** Degrees one press of a 3D rotate button turns the selection. */
 export const TILT_STEP = 5;
 
-/** One of the slide's layers, as the slide editor lists them, the top-most first (see `layers` in editor.js). */
+/** One of the slide's layers, as the slide editor lists them, the top-most first (see `layers` in assets/editor/). */
 export interface EditLayer {
   /** Where it is in the slide, to select it by. */
   path: number[];

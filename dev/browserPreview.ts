@@ -13,6 +13,30 @@ const userTemplates = path.join(os.homedir(), ".slopslides", "templates");
 const builtinTemplates = new URL("../src-tauri/templates/", import.meta.url);
 const asset = (name: string) => fs.readFileSync(new URL(`../src-tauri/assets/${name}`, import.meta.url), "utf8");
 
+/** The slide editor: the parts in src-tauri/assets/editor/, joined in the order of their names, as src-tauri/build.rs joins them. */
+export function editorScript(): string {
+  const dir = new URL("../src-tauri/assets/editor/", import.meta.url);
+  return fs
+    .readdirSync(dir)
+    .filter((name) => name.endsWith(".js"))
+    .sort()
+    .map((name) => fs.readFileSync(new URL(name, dir), "utf8"))
+    .join("");
+}
+
+/**
+ * Like `stage_scripts` in src-tauri/src/protocol.rs: the scripts a deck page gets for its query, in
+ * the order they run. `?pan` and `?show` add the pasteboard; `?edit` adds it too, then overflow
+ * detection with the slide editor, which needs it, in one script.
+ */
+export function stageScripts(query: URLSearchParams): string[] {
+  const edit = query.has("edit");
+  return [
+    ...(edit || query.has("pan") || query.has("show") ? [asset("pasteboard.js")] : []),
+    ...(edit ? [asset("overflow.js") + editorScript()] : []),
+  ];
+}
+
 /** Like src-tauri/src/templates.rs: the user's templates first, then the built-in ones they do not replace. */
 function listTemplates() {
   const read = (id: string, file: string, builtin: boolean) => {
@@ -233,15 +257,9 @@ export function browserPreview(): Plugin {
         }
         if (file.endsWith(".html")) {
           res.setHeader("content-type", "text/html; charset=utf-8");
-          // Like src-tauri/src/protocol.rs: `?pan` and `?show` add the pasteboard, `?edit` the
-          // slide editor on top of it.
-          const { searchParams: q } = url;
-          const names = [
-            ...(q.has("pan") || q.has("show") || q.has("edit") ? ["pasteboard.js"] : []),
-            ...(q.has("edit") ? ["editor.js"] : []),
-          ];
-          if (names.length > 0) {
-            const scripts = names.map((name) => `<script>\n${asset(name)}</script>\n`).join("");
+          const added = stageScripts(url.searchParams);
+          if (added.length > 0) {
+            const scripts = added.map((script) => `<script>\n${script}</script>\n`).join("");
             return res.end(beforeBodyEnd(fs.readFileSync(file, "utf8"), scripts));
           }
         }

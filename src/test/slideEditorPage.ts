@@ -3,11 +3,12 @@
  * scripts the backend adds for editing (the player, the pasteboard, overflow detection and the
  * editor, in that order), and ways to point, type and message at it as the app does.
  */
-import EDITOR from "../../src-tauri/assets/editor.js?raw";
+
 import OVERFLOW from "../../src-tauri/assets/overflow.js?raw";
 import PASTEBOARD from "../../src-tauri/assets/pasteboard.js?raw";
 import RUNTIME from "../../src-tauri/assets/runtime.js?raw";
 import { openDeck } from "./deckDom";
+import { EDITOR } from "./editorSource";
 
 /** A message the editor posted to the app. */
 export interface Message {

@@ -1,6 +1,4 @@
 import { Spline } from "lucide-react";
-import { useRef, useState } from "react";
-
 import {
   DASHES,
   type Dash,
@@ -13,7 +11,8 @@ import {
 } from "../lib/editTools";
 import { cn } from "../lib/utils";
 import { keepFocus, ToolButton } from "./Button";
-import { DropdownPanel, useDismiss } from "./Popover";
+import { useDropdown } from "./editing/useDropdown";
+import { DropdownPanel } from "./Popover";
 
 const DASH_LABELS: Record<Dash, string> = { solid: "Solid", dashed: "Dashed", dotted: "Dotted" };
 const HEAD_LABELS: Record<HeadKind, string> = { arrow: "Arrow", triangle: "Triangle", bar: "Bar", dot: "Dot" };
@@ -59,11 +58,8 @@ export function LineButton(props: {
   onChange: (changes: EditStyle) => void;
   onDone: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useDismiss(open, ref, () => setOpen(false));
   const line = props.selection?.line ?? null;
-  if (!line && open) setOpen(false);
+  const { open, ref, toggle } = useDropdown({ disabled: !line });
   const change = (changes: EditStyle) => {
     props.onChange(changes);
     props.onDone();
@@ -97,7 +93,7 @@ export function LineButton(props: {
         title={line ? "Arrowheads at either end, and how the line goes" : "Line ends and route (select a line)"}
         aria-expanded={open}
         disabled={!line}
-        onClick={() => setOpen(!open)}
+        onClick={toggle}
       >
         <Spline />
       </ToolButton>

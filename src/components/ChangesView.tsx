@@ -13,15 +13,16 @@ import {
   Trash2,
   Undo2,
 } from "lucide-react";
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { useChanges, visibleRows } from "../changesStore";
 import type { Change, Deck, DeckChanges, Slide, SlideChange, SlideStatus } from "../lib/api";
 import { MAX_FEATHER, normalAngle } from "../lib/compare";
-import { type Pixels, pixelsOf } from "../lib/slideSize";
+import { pixelsOf } from "../lib/slideSize";
 import { cn, headSlideUrl } from "../lib/utils";
 import { useApp } from "../store";
 import { ToolButton } from "./Button";
+import { useContentSize } from "./editing/useContentSize";
 import { SectionLabel } from "./SectionLabel";
 import { SlideComparison } from "./SlideComparison";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
@@ -618,16 +619,7 @@ function ValueSlider(props: {
 /** The picked slide as large as fits, and what the list says about it under it. */
 function SlideArea({ deck, changes, row }: { deck: Deck; changes: DeckChanges; row: SlideChange }) {
   const area = useRef<HTMLDivElement>(null);
-  const [room, setRoom] = useState<Pixels | null>(null);
-  useLayoutEffect(() => {
-    const el = area.current;
-    if (!el) return;
-    const observer = new ResizeObserver(([entry]) => {
-      if (entry) setRoom({ width: entry.contentRect.width, height: entry.contentRect.height });
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+  const room = useContentSize(area);
   const canvas = pixelsOf({ size: deck.size });
   const oldCanvas = pixelsOf({ size: changes.oldSize });
   const scale = room ? Math.max(0, Math.min(room.width / canvas.width, room.height / canvas.height)) : 0;

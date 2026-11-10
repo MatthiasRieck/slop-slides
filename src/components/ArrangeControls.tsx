@@ -48,8 +48,9 @@ import {
 import type { EditSelection, EditStyle } from "../lib/editTools";
 import { cn } from "../lib/utils";
 import { keepFocus, ToolButton } from "./Button";
+import { useDropdown } from "./editing/useDropdown";
 import { DraftInput } from "./Field";
-import { DropdownPanel, useDismiss } from "./Popover";
+import { DropdownPanel } from "./Popover";
 import { SectionLabel } from "./SectionLabel";
 
 const ALIGN: { to: AlignTo; label: string; icon: ReactNode }[] = [
@@ -105,9 +106,8 @@ export function ArrangeControls(props: {
   keepRatio?: boolean;
   onKeepRatio?: (on: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const { open, ref, toggle } = useDropdown();
   const [target, setTarget] = useState<AlignTarget>("selection");
-  const ref = useRef<HTMLDivElement>(null);
   // What the panel shows while the selection is away, so it does not jump or close.
   const shown = useRef<EditGeometry | null>(null);
   if (props.geometry) shown.current = props.geometry;
@@ -136,8 +136,6 @@ export function ArrangeControls(props: {
   const flips = !off && !many && !!selection?.flippable;
   const rotation = geometry?.rotation ?? null;
 
-  useDismiss(open, ref, () => setOpen(false));
-
   return (
     <div ref={ref} className="relative">
       <ToolButton
@@ -147,7 +145,7 @@ export function ArrangeControls(props: {
         aria-expanded={open}
         active={open}
         disabled={off && !open}
-        onClick={() => setOpen(!open)}
+        onClick={toggle}
       >
         <Move />
       </ToolButton>
@@ -314,9 +312,7 @@ function alignLabel(edges: string, many: boolean, target: AlignTarget) {
  * until the editor restores it.
  */
 export function TiltControls(props: { geometry: EditGeometry | null; onArrange?: (message: ArrangeMessage) => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useDismiss(open, ref, () => setOpen(false));
+  const { open, ref, toggle } = useDropdown();
   const off = !props.geometry;
   const tilt = (t: (typeof TILTS)[number]) => (
     <ToolButton
@@ -331,7 +327,7 @@ export function TiltControls(props: { geometry: EditGeometry | null; onArrange?:
   );
   return (
     <div ref={ref} className="relative">
-      <ToolButton keepFocus label="3D rotate" active={open} disabled={off && !open} onClick={() => setOpen(!open)}>
+      <ToolButton keepFocus label="3D rotate" active={open} disabled={off && !open} onClick={toggle}>
         <Rotate3d />
       </ToolButton>
       {open && (
@@ -433,9 +429,7 @@ export function GroupControls(props: {
  * the next one. The panel stays open through the preview's reload after each change.
  */
 export function LayersPanel(props: { layers: EditLayer[]; onArrange?: (message: ArrangeMessage) => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useDismiss(open, ref, () => setOpen(false));
+  const { open, ref, toggle } = useDropdown();
   const { layers } = props;
   const send = (message: ArrangeMessage) => props.onArrange?.(message);
   return (
@@ -447,7 +441,7 @@ export function LayersPanel(props: { layers: EditLayer[]; onArrange?: (message: 
         aria-expanded={open}
         active={open}
         disabled={!layers.length && !open}
-        onClick={() => setOpen(!open)}
+        onClick={toggle}
       >
         <Layers />
       </ToolButton>

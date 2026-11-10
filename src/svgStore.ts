@@ -1,8 +1,8 @@
-import { ask } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
 
 import { parseSvg, replaceSvgInSlide } from "./lib/svgEdit";
 import { useApp } from "./store";
+import { confirmDiscard } from "./store/confirm";
 
 /** What the slide editor hands over to open a drawing (see "slop:edit-open-svg" in editor.js). */
 export interface SvgOpen {
@@ -108,14 +108,7 @@ interface SvgEditorState {
 
 export const isDirty = (edit: SvgEdit | null) => !!edit && edit.draft !== edit.original;
 
-async function confirmLeave(): Promise<boolean> {
-  const message = "The drawing has changes you have not accepted. Discard them?";
-  try {
-    return await ask(message, { title: "Unsaved changes", kind: "warning", okLabel: "Discard" });
-  } catch {
-    return window.confirm(message);
-  }
-}
+const confirmLeave = () => confirmDiscard("The drawing has changes you have not accepted. Discard them?");
 
 export const useSvgEditor = create<SvgEditorState>((set, get) => ({
   edit: null,

@@ -1,3 +1,4 @@
+// @vitest-environment node
 // The app's colors come from one palette (src/index.css). These checks read the source, so a color
 // picked by hand fails here instead of drifting in unnoticed.
 import { readdirSync, readFileSync } from "node:fs";

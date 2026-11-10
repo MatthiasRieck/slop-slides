@@ -1,15 +1,16 @@
+// @vitest-environment node
 /**
  * The slide editor (src-tauri/assets/editor.js) that the backend adds to the stage's slide
  * preview in edit mode. It runs after the player and the pasteboard, in the slide's iframe.
  */
-import { JSDOM } from "jsdom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import EDITOR from "../../src-tauri/assets/editor.js?raw";
 import OVERFLOW from "../../src-tauri/assets/overflow.js?raw";
-import PASTEBOARD from "../../src-tauri/assets/pasteboard.js?raw";
 import RUNTIME from "../../src-tauri/assets/runtime.js?raw";
+import { openDeck } from "./deckDom";
 import { placement } from "./placement";
+import { editorPage } from "./slideEditorPage";
 
 const DECK = `<!DOCTYPE html><html><head></head><body>
 <main class="deck">
@@ -23,74 +24,7 @@ const DECK = `<!DOCTYPE html><html><head></head><body>
   <section class="slide" id="outro"><p>Bye</p></section>
 </main></body></html>`;
 
-let doms: JSDOM[] = [];
-
-afterEach(() => {
-  for (const d of doms) d.window.close();
-  doms = [];
-  vi.useRealTimers();
-});
-
-interface Commit {
-  type: string;
-  slide: string;
-  markup: string;
-  select: number[] | null;
-}
-
-function editor({ slide = "intro", framed = true, markup = DECK } = {}) {
-  const posted: unknown[] = [];
-  const parent = { postMessage: (data: unknown) => posted.push(data) };
-  const dom = new JSDOM(markup, {
-    url: `https://example.test/deck.html?embed&slide=${slide}&static&edit=0`,
-    runScripts: "outside-only",
-    pretendToBeVisual: true,
-    beforeParse(window) {
-      Object.defineProperty(window, "innerWidth", { value: 1920, configurable: true });
-      Object.defineProperty(window, "innerHeight", { value: 1080, configurable: true });
-      if (framed) Object.defineProperty(window, "parent", { value: parent, configurable: true });
-    },
-  });
-  doms.push(dom);
-  dom.window.eval(RUNTIME);
-  dom.window.eval(PASTEBOARD);
-  dom.window.eval(OVERFLOW);
-  dom.window.eval(EDITOR);
-  const { window } = dom;
-  const doc = window.document;
-  const $ = (selector: string) => doc.querySelector<HTMLElement>(selector)!;
-  const pointer = (type: string, target: Element, x: number, y: number) =>
-    target.dispatchEvent(
-      new window.PointerEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true }),
-    );
-  return {
-    window,
-    doc,
-    $,
-    posted: () => posted,
-    commits: () => posted.filter((m) => (m as Commit).type === "slop:edit-commit") as Commit[],
-    keys: () => posted.filter((m) => (m as { type: string }).type === "slop:key"),
-    down: (target: Element, x = 100, y = 100) => pointer("pointerdown", target, x, y),
-    move: (target: Element, x: number, y: number) => pointer("pointermove", target, x, y),
-    up: (target: Element, x = 100, y = 100) => pointer("pointerup", target, x, y),
-    drag(target: Element, dx: number, dy: number) {
-      this.down(target, 100, 100);
-      this.move(target, 100 + dx, 100 + dy);
-      this.up(target, 100 + dx, 100 + dy);
-    },
-    key: (key: string, init: KeyboardEventInit = {}) => {
-      const event = new window.KeyboardEvent("keydown", { key, cancelable: true, bubbles: true, ...init });
-      (doc.activeElement ?? doc.body).dispatchEvent(event);
-      return event;
-    },
-    fromParent: (data: unknown) => {
-      const event = new window.MessageEvent("message", { data });
-      Object.defineProperty(event, "source", { value: parent });
-      window.dispatchEvent(event);
-    },
-    selected: () => [...doc.querySelectorAll("[data-slop-selected]")],
-  };
-}
+const editor = ({ slide = "intro", framed = true, markup = DECK } = {}) => editorPage({ markup, slide, framed });
 
 describe("slide editor", () => {
   it("does nothing outside the app's preview", () => {
@@ -255,7 +189,7 @@ describe("slide editor", () => {
   describe("the SVG editor's button", () => {
     const VARS = DECK.replace("<head></head>", "<head><style>:root { --brand: #ff0000; --gap: 8px; }</style></head>");
     const opened = (e: ReturnType<typeof editor>) =>
-      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-open-svg") as {
+      e.messages<{
         slide: string;
         path: number[];
         markup: string;
@@ -266,7 +200,7 @@ describe("slide editor", () => {
         css: string;
         fonts: string;
         ancestors: { tag: string; attrs: Record<string, string> }[];
-      }[];
+      }>("slop:edit-open-svg");
     const button = (e: ReturnType<typeof editor>) => e.$("[data-slop-svg-open]") as HTMLButtonElement;
 
     it("shows only while a drawing is selected on its own with the select tool", () => {
@@ -378,12 +312,12 @@ describe("slide editor", () => {
 
   describe("context menu", () => {
     const menus = (e: ReturnType<typeof editor>) =>
-      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-menu") as {
+      e.messages<{
         slide: string;
         x: number;
         y: number;
         element: { path: string; markup: string; name: string; added: boolean } | null;
-      }[];
+      }>("slop:edit-menu");
     const rightClick = (e: ReturnType<typeof editor>, target: Element, init: MouseEventInit = {}) => {
       const event = new e.window.MouseEvent("contextmenu", {
         clientX: 120,
@@ -556,7 +490,7 @@ describe("slide editor", () => {
     it("reports the dropped image to the edit toolbar as media", () => {
       const e = editor();
       drop(e, [{ src: "assets/logo.png", w: 200, h: 100 }]);
-      const reports = e.posted().filter((m) => (m as { type: string }).type === "slop:edit-selection");
+      const reports = e.messages("slop:edit-selection");
       expect(reports.at(-1)).toMatchObject({
         slide: "intro",
         selected: true,
@@ -581,8 +515,7 @@ describe("slide editor", () => {
       html: string;
       text: string;
     }
-    const copied = (e: ReturnType<typeof editor>) =>
-      e.posted().filter((m) => (m as Copied).type === "slop:edit-copied") as Copied[];
+    const copied = (e: ReturnType<typeof editor>) => e.messages<Copied>("slop:edit-copied");
     const header = (html: string) => JSON.parse(/^<!--slopslides:(.*?)-->/.exec(html)![1]!);
     const FREE = DECK.replace(
       '<div class="shape"',
@@ -803,11 +736,11 @@ describe("slide editor", () => {
   it("tells the app whether anything is selected, whenever the selection changes", () => {
     const e = editor();
     const reports = () =>
-      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-selection") as {
+      e.messages<{
         slide: string;
         selected: boolean;
         selection: unknown;
-      }[];
+      }>("slop:edit-selection");
     e.down(e.$("h1"));
     e.down(e.$("h1"));
     e.down(e.$(".card p"));
@@ -1472,12 +1405,12 @@ describe("slide editor", () => {
 
   describe("pasteboard around the slide", () => {
     const views = (e: ReturnType<typeof editor>) =>
-      e.posted().filter((m) => (m as { type: string }).type === "slop:view") as {
+      e.messages<{
         slide: string;
         x: number;
         y: number;
         k: number;
-      }[];
+      }>("slop:view");
     // Wheel events carry their time so tests can say which belong to one gesture; by default
     // each call starts a new one.
     let clock = 0;
@@ -1533,16 +1466,12 @@ describe("slide editor", () => {
     });
 
     it("does nothing without the pasteboard", () => {
-      const dom = new JSDOM(DECK, {
+      const window = openDeck(DECK, {
         url: "https://example.test/deck.html?embed&slide=intro&static&edit=0",
-        runScripts: "outside-only",
+        parent: { postMessage() {} },
+        scripts: [RUNTIME, OVERFLOW, EDITOR],
       });
-      doms.push(dom);
-      Object.defineProperty(dom.window, "parent", { value: { postMessage() {} }, configurable: true });
-      dom.window.eval(RUNTIME);
-      dom.window.eval(OVERFLOW);
-      dom.window.eval(EDITOR);
-      expect(dom.window.document.querySelector("[data-slop-ui]")).toBeNull();
+      expect(window.document.querySelector("[data-slop-ui]")).toBeNull();
     });
 
     it("lets an element that sits outside the slide be picked and dragged back in", () => {
@@ -1762,10 +1691,7 @@ describe("slide editor", () => {
         ({ left: 50, top: 500, right: 300, bottom: 640, width: 250, height: 140 }) as DOMRect;
       e.key("Tab");
       await new Promise((resolve) => setTimeout(resolve, 40));
-      const report = e
-        .posted()
-        .filter((m) => (m as { type: string }).type === "slop:edit-overflow")
-        .at(-1) as { items: string[] };
+      const report = e.messages<{ items: string[] }>("slop:edit-overflow").at(-1)!;
       expect(report.items[0]).toContain("runs past the bottom edge by 200px");
     });
   });
@@ -1785,10 +1711,10 @@ describe("slide editor", () => {
       }) as DOMRect;
     const frame = () => new Promise((resolve) => setTimeout(resolve, 40));
     const overflows = (e: ReturnType<typeof editor>) =>
-      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-overflow") as {
+      e.messages<{
         slide: string;
         items: string[];
-      }[];
+      }>("slop:edit-overflow");
 
     function laidOut(e: ReturnType<typeof editor>, boxes: Record<string, DOMRect>) {
       e.$("#intro").getBoundingClientRect = () => rect(0, 0, 1920, 1080);
@@ -1908,13 +1834,12 @@ describe("slide editor", () => {
       at(e, "pointermove", ...to, init);
       at(e, "pointerup", ...to);
     };
-    const toolTold = (e: ReturnType<typeof editor>) =>
-      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-tool") as { slide: string; tool: string }[];
+    const toolTold = (e: ReturnType<typeof editor>) => e.messages<{ slide: string; tool: string }>("slop:edit-tool");
     const reports = (e: ReturnType<typeof editor>) =>
-      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-selection") as {
+      e.messages<{
         slide: string;
         selection: Record<string, unknown> | null;
-      }[];
+      }>("slop:edit-selection");
     const added = (e: ReturnType<typeof editor>) => [...e.doc.querySelectorAll<HTMLElement>("#intro [data-added]")];
 
     it("drags out a shape with the app's style, then selects it and goes back to the select tool", () => {
@@ -2429,14 +2354,7 @@ describe("slide editor", () => {
     };
     const selectedText = (e: ReturnType<typeof editor>) => e.window.getSelection()!.toString();
     const lastReport = (e: ReturnType<typeof editor>) =>
-      (
-        e
-          .posted()
-          .filter((m) => (m as { type: string }).type === "slop:edit-selection")
-          .at(-1) as {
-          selection: Record<string, unknown>;
-        }
-      ).selection;
+      e.messages<{ selection: Record<string, unknown> }>("slop:edit-selection").at(-1)!.selection;
     const style = (e: ReturnType<typeof editor>, changes: Record<string, unknown>) =>
       e.fromParent({ type: "slop:edit-style", style: changes });
 
@@ -3277,14 +3195,13 @@ describe("slide editor: shapes, styling and media", () => {
     at(e, "pointermove", to[0]!, to[1]!, init);
     at(e, "pointerup", to[0]!, to[1]!);
   };
-  const toolTold = (e: ReturnType<typeof editor>) =>
-    e.posted().filter((m) => (m as { type: string }).type === "slop:edit-tool");
+  const toolTold = (e: ReturnType<typeof editor>) => e.messages("slop:edit-tool");
   const lastSelection = (e: ReturnType<typeof editor>) =>
-    (
-      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-selection") as {
+    e
+      .messages<{
         selection: Record<string, unknown>;
-      }[]
-    ).at(-1)!.selection;
+      }>("slop:edit-selection")
+      .at(-1)!.selection;
   const added = (e: ReturnType<typeof editor>) => [...e.doc.querySelectorAll<HTMLElement>("#intro [data-added]")];
   const style = (e: ReturnType<typeof editor>, changes: unknown) =>
     e.fromParent({ type: "slop:edit-style", style: changes });
@@ -4272,7 +4189,7 @@ describe("slide editor: shapes, styling and media", () => {
       pull(e, handles(e)[1]!, [600, 400]);
       click(e, a, { shiftKey: true });
       e.fromParent({ type: "slop:edit-copy" });
-      const copied = e.posted().find((m) => (m as { type: string }).type === "slop:edit-copied") as { html: string };
+      const copied = e.messages<{ html: string }>("slop:edit-copied")[0]!;
       e.fromParent({ type: "slop:edit-paste", html: copied.html });
       const [aCopy, lineCopy] = e.selected() as HTMLElement[];
       expect(aCopy!.id).toBe("el-1");
@@ -4644,8 +4561,7 @@ describe("slide editor: shapes, styling and media", () => {
   });
 
   describe("deck colors", () => {
-    const colors = (e: ReturnType<typeof editor>) =>
-      (e.posted().find((m) => (m as { type: string }).type === "slop:edit-colors") as { colors: unknown }).colors;
+    const colors = (e: ReturnType<typeof editor>) => e.messages<{ colors: unknown }>("slop:edit-colors")[0]!.colors;
 
     it("reports the colors in the deck's CSS variables once, skipping non-colors, the app's own and repeats", () => {
       const e = editor({ markup: IMAGE });
@@ -4755,8 +4671,7 @@ describe("slide editor: shapes, styling and media", () => {
   });
 
   describe("slide background", () => {
-    const told = (e: ReturnType<typeof editor>) =>
-      e.posted().filter((m) => (m as { type: string }).type === "slop:edit-background") as { color: string | null }[];
+    const told = (e: ReturnType<typeof editor>) => e.messages<{ color: string | null }>("slop:edit-background");
 
     it("reports it on load, sets it on the slide, and drops it again", () => {
       const e = editor();

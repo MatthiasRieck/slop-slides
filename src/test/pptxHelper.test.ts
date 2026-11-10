@@ -1,19 +1,13 @@
+// @vitest-environment node
 /**
  * The PowerPoint export helper (src-tauri/assets/pptx.js), run by the app in the hidden window
  * that exports a deck. It answers each step by navigating to /.pptx-signal?<answer>.
  */
-import { JSDOM } from "jsdom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { DOMWindow } from "jsdom";
+import { describe, expect, it } from "vitest";
 
 import PPTX_JS from "../../src-tauri/assets/pptx.js?raw";
-
-let doms: JSDOM[] = [];
-
-afterEach(() => {
-  for (const d of doms) d.window.close();
-  doms = [];
-  vi.useRealTimers();
-});
+import { openHelper } from "./deckDom";
 
 interface Helper {
   scan: () => void;
@@ -47,34 +41,28 @@ function box(el: Element) {
 
 /** Loads a deck of `slides`, runs the helper, and records its answers instead of navigating. */
 function helper(slides: string, css = "") {
-  vi.useFakeTimers({ toFake: ["setTimeout"] });
   const page = `<!DOCTYPE html><html><head><style>${css}</style></head><body><main class="deck">${slides}</main></body></html>`;
-  const dom = new JSDOM(page, { url: "https://example.test/talk/deck.html?static&print", runScripts: "outside-only" });
-  doms.push(dom);
-  const { window } = dom;
-  const answers: string[] = [];
-  Object.assign(window, { __slopPptxSignal: (answer: string) => answers.push(answer) });
-  // jsdom has no layout.
-  window.Element.prototype.getBoundingClientRect = function (this: Element) {
-    // The empty mark measuring the top of a line: lines start where their block does.
-    if ((this as HTMLElement).style?.verticalAlign === "top" && this.parentElement)
-      return box(this.parentElement) as DOMRect;
-    return box(this) as DOMRect;
-  };
-  window.Range.prototype.getBoundingClientRect = function (this: Range) {
-    const node = this.startContainer as Element;
-    const child = node.childNodes[this.startOffset] as Element | undefined;
-    return box(child?.nodeType === 1 ? child : node) as DOMRect;
-  };
-  window.Range.prototype.getClientRects = function (this: Range) {
-    const node = this.startContainer as Element;
-    return [{ ...box(node), height: 10 }] as unknown as DOMRectList;
-  };
-  window.eval(PPTX_JS);
-  const api = (window as unknown as { __slopPptx: Helper }).__slopPptx;
-  const settle = async () => {
-    for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(5000);
-  };
+  const { window, api, answers, settle } = openHelper<Helper>(page, "Pptx", {
+    // jsdom has no layout.
+    setup(window) {
+      window.Element.prototype.getBoundingClientRect = function (this: Element) {
+        // The empty mark measuring the top of a line: lines start where their block does.
+        if ((this as HTMLElement).style?.verticalAlign === "top" && this.parentElement)
+          return box(this.parentElement) as DOMRect;
+        return box(this) as DOMRect;
+      };
+      window.Range.prototype.getBoundingClientRect = function (this: Range) {
+        const node = this.startContainer as Element;
+        const child = node.childNodes[this.startOffset] as Element | undefined;
+        return box(child?.nodeType === 1 ? child : node) as DOMRect;
+      };
+      window.Range.prototype.getClientRects = function (this: Range) {
+        const node = this.startContainer as Element;
+        return [{ ...box(node), height: 10 }] as unknown as DOMRectList;
+      };
+    },
+    scripts: [PPTX_JS],
+  });
   const scan = async (): Promise<Scene> => {
     await settle();
     api.scan();
@@ -92,7 +80,7 @@ function helper(slides: string, css = "") {
 }
 
 /** Gives `selector::before` and `::after` the `content`, which jsdom does not compute. */
-function withPseudos(window: JSDOM["window"], selector: string, before: string, after: string) {
+function withPseudos(window: DOMWindow, selector: string, before: string, after: string) {
   const computed = window.getComputedStyle.bind(window);
   window.getComputedStyle = ((el: Element, which?: string) => {
     if (!which || !el.matches(selector)) return computed(el, which);

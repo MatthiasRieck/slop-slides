@@ -1,13 +1,15 @@
+// @vitest-environment node
 /**
  * The player embedded in every deck.html (src-tauri/assets/runtime.js). It runs in the
  * editor's slide iframes, in the presenter, and in exported files opened in any browser.
  */
 import { readFileSync } from "node:fs";
-import { type DOMWindow, JSDOM } from "jsdom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { DOMWindow } from "jsdom";
+import { describe, expect, it, vi } from "vitest";
 
 import RUNTIME from "../../src-tauri/assets/runtime.js?raw";
 import { strokePath, toPixels } from "../lib/ink";
+import { openDeck } from "./deckDom";
 
 const DECK = `<!DOCTYPE html><html><body>
 <main class="deck">
@@ -15,13 +17,6 @@ const DECK = `<!DOCTYPE html><html><body>
   <section class="slide"><p>No id</p></section>
   <section class="slide" id="end"><a href="#x">link</a></section>
 </main></body></html>`;
-
-let doms: JSDOM[] = [];
-
-afterEach(() => {
-  for (const d of doms) d.window.close();
-  doms = [];
-});
 
 interface PlayerOptions {
   /** Query string and hash, e.g. `?embed&slide=end` or `#2`. */
@@ -37,25 +32,15 @@ interface PlayerOptions {
 }
 
 function player({ at = "", html = DECK, parent, size = [1920, 1080], stage, setup }: PlayerOptions = {}) {
-  const dom = new JSDOM(html, {
+  const window = openDeck(html, {
     url: `https://example.test/deck.html${at}`,
-    runScripts: "outside-only",
-    pretendToBeVisual: true,
-    beforeParse(window) {
-      Object.defineProperty(window, "innerWidth", { value: size[0], configurable: true });
-      Object.defineProperty(window, "innerHeight", { value: size[1], configurable: true });
-      if (parent) Object.defineProperty(window, "parent", { value: parent, configurable: true });
-    },
+    size,
+    parent,
+    stage,
+    visual: true,
+    setup,
+    scripts: [RUNTIME],
   });
-  doms.push(dom);
-  const stageEl = dom.window.document.querySelector(".deck");
-  if (stage && stageEl) {
-    Object.defineProperty(stageEl, "offsetWidth", { value: stage[0], configurable: true });
-    Object.defineProperty(stageEl, "offsetHeight", { value: stage[1], configurable: true });
-  }
-  setup?.(dom.window);
-  dom.window.eval(RUNTIME);
-  const { window } = dom;
   const doc = window.document;
   const topSlides = () => [...doc.querySelectorAll<HTMLElement>(".deck > .slide")];
   return {
@@ -717,10 +702,9 @@ describe("player: without JavaScript", () => {
       "<html>",
       `<html${flagged ? " data-slop-player" : ""}><head><style>${CSS}</style></head>`,
     ).replace('<section class="slide"><p>No id</p>', '<section class="slide" data-hidden><p class="reveal">No id</p>');
-    const dom = new JSDOM(html, { pretendToBeVisual: true });
-    doms.push(dom);
-    const doc = dom.window.document;
-    const style = (selector: string) => dom.window.getComputedStyle(doc.querySelector(selector)!);
+    const window = openDeck(html, { visual: true });
+    const doc = window.document;
+    const style = (selector: string) => window.getComputedStyle(doc.querySelector(selector)!);
     return { doc, style };
   }
 
@@ -745,9 +729,8 @@ describe("player: without JavaScript", () => {
       "<p>No id</p>",
       '<p class="reveal">No id</p>',
     );
-    const dom = new JSDOM(html, { pretendToBeVisual: true });
-    doms.push(dom);
-    const style = (selector: string) => dom.window.getComputedStyle(dom.window.document.querySelector(selector)!);
+    const window = openDeck(html, { visual: true });
+    const style = (selector: string) => window.getComputedStyle(window.document.querySelector(selector)!);
     expect(style("#intro").visibility).toBe("visible");
     expect(style("#intro").opacity).toBe("1");
     expect(style(".reveal").opacity).toBe("1");

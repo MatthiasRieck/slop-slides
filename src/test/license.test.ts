@@ -1,3 +1,4 @@
+// @vitest-environment node
 /** The repository is MIT licensed; every manifest that ships with the app must say so. */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";

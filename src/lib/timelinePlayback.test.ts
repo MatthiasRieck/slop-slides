@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 import { playNarration } from "./narrationAudio";

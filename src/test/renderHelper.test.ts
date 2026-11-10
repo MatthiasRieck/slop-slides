@@ -1,13 +1,14 @@
+// @vitest-environment node
 /**
  * The render helper (src-tauri/assets/render.js), run by the app, after overflow.js, in the
  * hidden window that renders slides for the agent. It answers each step by navigating to
  * /.render-signal?<answer>.
  */
-import { JSDOM } from "jsdom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import OVERFLOW from "../../src-tauri/assets/overflow.js?raw";
 import RENDER from "../../src-tauri/assets/render.js?raw";
+import { openHelper } from "./deckDom";
 
 const DECK = `<!DOCTYPE html><html><head></head><body>
 <main class="deck">
@@ -15,14 +16,6 @@ const DECK = `<!DOCTYPE html><html><head></head><body>
   <section class="slide" id="secret" data-hidden><p>Hidden</p></section>
   <section class="slide" id="long"><p class="big">Too long</p><div class="glow" aria-hidden="true">x</div></section>
 </main></body></html>`;
-
-let doms: JSDOM[] = [];
-
-afterEach(() => {
-  for (const d of doms) d.window.close();
-  doms = [];
-  vi.useRealTimers();
-});
 
 interface Helper {
   ready: () => void;
@@ -40,24 +33,24 @@ const box = (left: number, top: number, width: number, height: number) => ({
 
 /** Loads the deck, lays it out at half size, runs the helper, and records its answers. */
 function helper() {
-  vi.useFakeTimers({ toFake: ["setTimeout"] });
-  const dom = new JSDOM(DECK, { url: "https://example.test/talk/deck.html?static&print", runScripts: "outside-only" });
-  doms.push(dom);
-  const { window } = dom;
-  const answers: string[] = [];
   const resizes = vi.fn();
-  window.addEventListener("resize", resizes);
-  Object.assign(window, { __slopRenderSignal: (answer: string) => answers.push(answer) });
-  window.HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
-    if (this.matches(".slide")) return box(0, 0, 960, 540) as DOMRect;
-    if (this.matches(".big")) return box(0, 500, 200, 100) as DOMRect;
-    if (this.matches(".glow")) return box(900, 0, 200, 100) as DOMRect;
-    return box(0, 0, 100, 100) as DOMRect;
-  };
-  Object.defineProperty(window.HTMLElement.prototype, "offsetWidth", { get: () => 1920 });
-  window.eval(OVERFLOW);
-  window.eval(RENDER);
-  const render = (window as unknown as { __slopRender: Helper }).__slopRender;
+  const {
+    window,
+    api: render,
+    answers,
+  } = openHelper<Helper>(DECK, "Render", {
+    setup(window) {
+      window.addEventListener("resize", resizes);
+      window.HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+        if (this.matches(".slide")) return box(0, 0, 960, 540) as DOMRect;
+        if (this.matches(".big")) return box(0, 500, 200, 100) as DOMRect;
+        if (this.matches(".glow")) return box(900, 0, 200, 100) as DOMRect;
+        return box(0, 0, 100, 100) as DOMRect;
+      };
+      Object.defineProperty(window.HTMLElement.prototype, "offsetWidth", { get: () => 1920 });
+    },
+    scripts: [OVERFLOW, RENDER],
+  });
   const slide = (id: string) => window.document.getElementById(id) as HTMLElement;
   return { render, answers, slide, resizes, window };
 }

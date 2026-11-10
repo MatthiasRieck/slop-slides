@@ -1,16 +1,13 @@
+// @vitest-environment node
 /**
  * Selection and arrangement in the slide editor (src-tauri/assets/editor.js): several selected
  * elements, the marquee, ⌘A and Tab, duplicates, smart guides, align and distribute, geometry.
  * jsdom lays nothing out, so each element gets a box that follows its inline `translate`.
  */
-import { JSDOM } from "jsdom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import EDITOR from "../../src-tauri/assets/editor.js?raw";
-import OVERFLOW from "../../src-tauri/assets/overflow.js?raw";
-import PASTEBOARD from "../../src-tauri/assets/pasteboard.js?raw";
-import RUNTIME from "../../src-tauri/assets/runtime.js?raw";
 import { placement } from "./placement";
+import { editorPage } from "./slideEditorPage";
 
 const DECK = `<!DOCTYPE html><html><head></head><body>
 <main class="deck">
@@ -32,39 +29,9 @@ const BOXES: Record<string, number[]> = {
   wrap: [50, 50, 1800, 980],
 };
 
-let doms: JSDOM[] = [];
-
-afterEach(() => {
-  for (const d of doms) d.window.close();
-  doms = [];
-});
-
-interface Message {
-  type: string;
-  [key: string]: unknown;
-}
-
 function editor() {
-  const posted: Message[] = [];
-  const parent = { postMessage: (data: Message) => posted.push(data) };
-  const dom = new JSDOM(DECK, {
-    url: "https://example.test/deck.html?embed&slide=intro&static&edit=0",
-    runScripts: "outside-only",
-    pretendToBeVisual: true,
-    beforeParse(window) {
-      Object.defineProperty(window, "innerWidth", { value: 1920, configurable: true });
-      Object.defineProperty(window, "innerHeight", { value: 1080, configurable: true });
-      Object.defineProperty(window, "parent", { value: parent, configurable: true });
-    },
-  });
-  doms.push(dom);
-  dom.window.eval(RUNTIME);
-  dom.window.eval(PASTEBOARD);
-  dom.window.eval(OVERFLOW);
-  dom.window.eval(EDITOR);
-  const { window } = dom;
-  const doc = window.document;
-  const $ = (selector: string) => doc.querySelector<HTMLElement>(selector)!;
+  const page = editorPage({ markup: DECK });
+  const { window, $ } = page;
   const lay = (el: HTMLElement, x: number, y: number, w: number, h: number) => {
     Object.defineProperty(el, "offsetWidth", { get: () => Number.parseFloat(el.style.width) || w, configurable: true });
     Object.defineProperty(el, "offsetHeight", {
@@ -85,49 +52,15 @@ function editor() {
   };
   lay($("#intro"), 0, 0, 1920, 1080);
   for (const [id, box] of Object.entries(BOXES)) lay($(`#${id}`), box[0]!, box[1]!, box[2]!, box[3]!);
-  const pointer = (type: string, target: Element, x: number, y: number, init: PointerEventInit = {}) =>
-    target.dispatchEvent(
-      new window.PointerEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true, ...init }),
-    );
   const e = {
-    window,
-    doc,
-    $,
+    ...page,
     lay,
-    posted: () => posted,
-    commits: () => posted.filter((m) => m.type === "slop:edit-commit"),
-    pointer,
-    down: (target: Element, x = 100, y = 100, init: PointerEventInit = {}) =>
-      pointer("pointerdown", target, x, y, init),
-    move: (target: Element, x: number, y: number, init: PointerEventInit = {}) =>
-      pointer("pointermove", target, x, y, init),
-    up: (target: Element, x = 100, y = 100) => pointer("pointerup", target, x, y),
-    click(target: Element, init: PointerEventInit = {}) {
-      e.down(target, 100, 100, init);
-      e.up(target);
-    },
-    drag(target: Element, dx: number, dy: number, init: PointerEventInit = {}) {
-      e.down(target, 100, 100, init);
-      e.move(target, 100 + dx, 100 + dy, init);
-      e.up(target, 100 + dx, 100 + dy);
-    },
     pick(...selectors: string[]) {
       selectors.forEach((s, i) => {
-        e.click($(s), i ? { shiftKey: true } : {});
+        page.click($(s), i ? { shiftKey: true } : {});
       });
     },
-    key: (key: string, init: KeyboardEventInit = {}) => {
-      const event = new window.KeyboardEvent("keydown", { key, cancelable: true, bubbles: true, ...init });
-      (doc.activeElement ?? doc.body).dispatchEvent(event);
-      return event;
-    },
-    fromParent: (data: unknown) => {
-      const event = new window.MessageEvent("message", { data });
-      Object.defineProperty(event, "source", { value: parent });
-      window.dispatchEvent(event);
-    },
-    selected: () => [...doc.querySelectorAll("[data-slop-selected]")],
-    ids: () => e.selected().map((el) => el.id),
+    ids: () => page.selected().map((el) => el.id),
     last: () => $("#intro").lastElementChild as HTMLElement,
   };
   return e;

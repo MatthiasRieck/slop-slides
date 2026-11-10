@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * The signed macOS build: the bundle config (src-tauri/tauri.conf.json, Entitlements.plist)
  * and the settings validation in scripts/build-signed.sh.

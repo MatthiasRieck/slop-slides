@@ -1,11 +1,12 @@
+// @vitest-environment node
 /**
  * The PDF export helper (src-tauri/assets/pdf.js), run by the app in the hidden window that
  * prints a deck. It answers each step by navigating to /.pdf-signal?<answer>.
  */
-import { JSDOM } from "jsdom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import PDF_JS from "../../src-tauri/assets/pdf.js?raw";
+import { openHelper } from "./deckDom";
 
 const DECK = `<!DOCTYPE html><html><head></head><body>
 <main class="deck">
@@ -13,14 +14,6 @@ const DECK = `<!DOCTYPE html><html><head></head><body>
   <section class="slide" data-hidden><p>Hidden</p></section>
   <section class="slide" id="end"><p>End</p></section>
 </main></body></html>`;
-
-let doms: JSDOM[] = [];
-
-afterEach(() => {
-  for (const d of doms) d.window.close();
-  doms = [];
-  vi.useRealTimers();
-});
 
 interface Helper {
   ready: () => void;
@@ -33,23 +26,15 @@ interface Helper {
 
 /** Loads the deck, runs the helper, and records its answers instead of navigating. */
 function helper() {
-  vi.useFakeTimers({ toFake: ["setTimeout"] });
-  const dom = new JSDOM(DECK, { url: "https://example.test/talk/deck.html?static&print", runScripts: "outside-only" });
-  doms.push(dom);
-  const { window } = dom;
-  const answers: string[] = [];
-  // jsdom cannot navigate, which is how the helper answers in the app.
-  Object.assign(window, { __slopPdfSignal: (answer: string) => answers.push(answer) });
-  // Text filled with its background, as gradient headings do.
-  const style = window.document.createElement("style");
-  style.textContent = ".clip { background-clip: text; }";
-  window.document.head.appendChild(style);
-  window.eval(PDF_JS);
-  const api = (window as unknown as { __slopPdf: Helper }).__slopPdf;
-  const settle = async () => {
-    for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(5000);
-  };
-  return { window, doc: window.document, api, answers, settle };
+  return openHelper<Helper>(DECK, "Pdf", {
+    setup(window) {
+      // Text filled with its background, as gradient headings do.
+      const style = window.document.createElement("style");
+      style.textContent = ".clip { background-clip: text; }";
+      window.document.head.appendChild(style);
+    },
+    scripts: [PDF_JS],
+  });
 }
 
 describe("PDF helper", () => {

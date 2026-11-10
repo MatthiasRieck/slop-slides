@@ -216,16 +216,53 @@ describe("deck actions", () => {
     expect(useApp.getState().presenting).toBe(true);
   });
 
-  it("exports to the chosen file and reveals it", async () => {
-    save.mockResolvedValue("/Users/me/Desktop/Talk.html");
+  const FILES = [
+    ["HTML file", "Talk.html", "HTML presentation", "export_deck", ""],
+    ["PDF", "Talk.pdf", "PDF document", "export_pdf", "Could not save the PDF: "],
+    ["PowerPoint", "Talk.pptx", "PowerPoint presentation", "export_pptx", "Could not save the PowerPoint file: "],
+  ] as const;
+
+  it.each(FILES)("exports a %s to the chosen file and reveals it", async (item, name, filter, command) => {
+    const dest = `/Users/me/Desktop/${name}`;
+    const extension = name.split(".")[1];
+    save.mockResolvedValue(dest);
     render(<DeckActions />);
-    await exportAs("HTML file");
-    expect(save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: "Talk.html" }));
-    expect(invoke).toHaveBeenCalledWith("export_deck", {
-      id: "/decks/talk/deck.html",
-      dest: "/Users/me/Desktop/Talk.html",
+    await exportAs(item);
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultPath: name, filters: [{ name: filter, extensions: [extension] }] }),
+    );
+    expect(invoke).toHaveBeenCalledWith(command, { id: "/decks/talk/deck.html", dest });
+    expect(revealItemInDir).toHaveBeenCalledWith(dest);
+    expect(useApp.getState().imageExport).toBeNull();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it.each(FILES)("does not export a %s when the save dialog is cancelled", async (item) => {
+    save.mockResolvedValue(null);
+    render(<DeckActions />);
+    await exportAs(item);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(revealItemInDir).not.toHaveBeenCalled();
+  });
+
+  it.each(FILES)("reports a %s export that fails", async (item, name, _filter, _command, failure) => {
+    save.mockResolvedValue(`/read-only/${name}`);
+    invoke.mockRejectedValueOnce("Permission denied (os error 13)");
+    render(<DeckActions />);
+    await exportAs(item);
+    expect(useApp.getState().error).toBe(`${failure}Permission denied (os error 13)`);
+    expect(revealItemInDir).not.toHaveBeenCalled();
+    expect(exportButton().disabled).toBe(false);
+  });
+
+  it("reports an export that fails with an error, by its message", async () => {
+    save.mockResolvedValue("/Users/me/Desktop/Talk.pptx");
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "export_pptx") throw new Error("disk full");
     });
-    expect(revealItemInDir).toHaveBeenCalledWith("/Users/me/Desktop/Talk.html");
+    render(<DeckActions />);
+    await exportAs("PowerPoint");
+    await vi.waitFor(() => expect(useApp.getState().error).toBe("Could not save the PowerPoint file: disk full"));
   });
 
   it.each([
@@ -238,23 +275,6 @@ describe("deck actions", () => {
     render(<DeckActions />);
     await exportAs("HTML file");
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ defaultPath: expected }));
-  });
-
-  it("does nothing when the save dialog is cancelled", async () => {
-    save.mockResolvedValue(null);
-    render(<DeckActions />);
-    await exportAs("HTML file");
-    expect(invoke).not.toHaveBeenCalled();
-    expect(revealItemInDir).not.toHaveBeenCalled();
-  });
-
-  it("reports a failed export", async () => {
-    save.mockResolvedValue("/read-only/Talk.html");
-    invoke.mockRejectedValue("Permission denied (os error 13)");
-    render(<DeckActions />);
-    await exportAs("HTML file");
-    expect(useApp.getState().error).toBe("Permission denied (os error 13)");
-    expect(revealItemInDir).not.toHaveBeenCalled();
   });
 
   it("opens and closes the export menu", () => {
@@ -292,50 +312,6 @@ describe("deck actions", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("prints a PDF to the chosen file and reveals it", async () => {
-    save.mockResolvedValue("/Users/me/Desktop/Talk.pdf");
-    render(<DeckActions />);
-    await exportAs("PDF");
-    expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({ defaultPath: "Talk.pdf", filters: [{ name: "PDF document", extensions: ["pdf"] }] }),
-    );
-    expect(invoke).toHaveBeenCalledWith("export_pdf", {
-      id: "/decks/talk/deck.html",
-      dest: "/Users/me/Desktop/Talk.pdf",
-    });
-    expect(revealItemInDir).toHaveBeenCalledWith("/Users/me/Desktop/Talk.pdf");
-    expect(useApp.getState().imageExport).toBeNull();
-    expect(screen.queryByRole("menu")).toBeNull();
-  });
-
-  it("writes a PowerPoint file to the chosen place and reveals it", async () => {
-    save.mockResolvedValue("/Users/me/Desktop/Talk.pptx");
-    render(<DeckActions />);
-    await exportAs("PowerPoint");
-    expect(save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        defaultPath: "Talk.pptx",
-        filters: [{ name: "PowerPoint presentation", extensions: ["pptx"] }],
-      }),
-    );
-    expect(invoke).toHaveBeenCalledWith("export_pptx", {
-      id: useApp.getState().deck?.id,
-      dest: "/Users/me/Desktop/Talk.pptx",
-    });
-    expect(revealItemInDir).toHaveBeenCalledWith("/Users/me/Desktop/Talk.pptx");
-  });
-
-  it("reports a PowerPoint export that fails", async () => {
-    save.mockResolvedValue("/Users/me/Desktop/Talk.pptx");
-    invoke.mockImplementation(async (command: string) => {
-      if (command === "export_pptx") throw new Error("disk full");
-    });
-    render(<DeckActions />);
-    await exportAs("PowerPoint");
-    await vi.waitFor(() => expect(useApp.getState().error).toBe("Could not save the PowerPoint file: disk full"));
-    expect(revealItemInDir).not.toHaveBeenCalled();
-  });
-
   it("shows the PDF is being written, and blocks another export meanwhile", async () => {
     let finish!: () => void;
     save.mockResolvedValue("/Users/me/Desktop/Talk.pdf");
@@ -347,24 +323,6 @@ describe("deck actions", () => {
     await act(async () => finish());
     expect(exportButton().getAttribute("aria-label")).toBe("Export");
     expect(exportButton().textContent).toBe("");
-    expect(exportButton().disabled).toBe(false);
-  });
-
-  it("does not export a PDF when the save dialog is cancelled", async () => {
-    save.mockResolvedValue(null);
-    render(<DeckActions />);
-    await exportAs("PDF");
-    expect(invoke).not.toHaveBeenCalled();
-    expect(revealItemInDir).not.toHaveBeenCalled();
-  });
-
-  it("reports a PDF that cannot be printed", async () => {
-    save.mockResolvedValue("/Users/me/Desktop/Talk.pdf");
-    invoke.mockRejectedValue("the deck took too long to load");
-    render(<DeckActions />);
-    await exportAs("PDF");
-    expect(useApp.getState().error).toBe("Could not save the PDF: the deck took too long to load");
-    expect(revealItemInDir).not.toHaveBeenCalled();
     expect(exportButton().disabled).toBe(false);
   });
 
@@ -383,13 +341,6 @@ describe("deck actions", () => {
     await exportAs("PNG images");
     expect(useApp.getState().error).toBe("Permission denied (os error 13)");
     expect(useApp.getState().imageExport).toBeNull();
-  });
-
-  it("starts the presentation", async () => {
-    invoke.mockResolvedValue([]);
-    render(<DeckActions />);
-    await act(async () => fireEvent.click(presentButton()));
-    expect(useApp.getState().presenting).toBe(true);
   });
 
   it("cannot export or present an empty deck", () => {

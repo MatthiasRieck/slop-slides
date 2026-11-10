@@ -62,6 +62,65 @@ fn skill_roots_leave_out_the_workspace_codex_reads_itself() {
     assert!(skill_roots(&Extensions::default()).is_empty());
 }
 
+#[test]
+fn parses_models() {
+    let model = json!({
+        "id": "gpt-6-astra", "model": "gpt-6-astra", "displayName": "gpt-6-astra",
+        "description": "", "hidden": false, "isDefault": true,
+        "defaultReasoningEffort": "medium",
+        "supportedReasoningEfforts": [
+            {"reasoningEffort": "low", "description": ""},
+            {"reasoningEffort": "high", "description": ""}
+        ]
+    });
+    assert_eq!(
+        parse_model(&model),
+        Some(ModelInfo {
+            id: "gpt-6-astra".into(),
+            label: "GPT-6-Astra".into(),
+            is_default: true,
+            efforts: vec!["low".into(), "high".into()],
+            default_effort: Some("medium".into()),
+            context_windows: Vec::new(),
+            default_context_window: None,
+        })
+    );
+    assert_eq!(parse_model(&json!({"model": "x", "hidden": true})), None);
+}
+
+#[test]
+fn formats_model_names() {
+    assert_eq!(format_name("gpt-5.6-sol"), "GPT-5.6-Sol");
+    assert_eq!(format_name("GPT-6 Luna"), "GPT-6 Luna");
+    assert_eq!(format_name("o3"), "o3");
+}
+
+/// A stand-in `codex app-server` that answers by line order, paging `model/list` once.
+#[cfg(unix)]
+#[test]
+fn lists_models_over_app_server() {
+    let script = r#"#!/bin/sh
+read -r _; echo '{"method":"thread/started","params":{}}'; echo '{"id":1,"result":{"userAgent":"mock/0"}}'
+read -r _
+read -r _; echo '{"id":2,"result":{"data":[{"model":"gpt-a","displayName":"gpt-a","hidden":false,"isDefault":true,"defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}],"nextCursor":"p2"}}'
+read -r _; echo '{"id":3,"result":{"data":[{"model":"gpt-b","displayName":"gpt-b","hidden":true,"isDefault":false,"supportedReasoningEfforts":[]},{"model":"gpt-c","displayName":"gpt-c","hidden":false,"isDefault":false,"supportedReasoningEfforts":[]}]}}'
+"#;
+    let dir = TempDir::new("mock-codex");
+    let path = dir.join("codex");
+    crate::test_support::write_script(&path, script);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let ids: Vec<_> = runtime
+        .block_on(list_models(&path))
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(ids, ["gpt-a", "gpt-c"]);
+}
+
 fn mcp_approval_params() -> Value {
     json!({"serverName":"docs","mode":"form","message":"Allow search?",
         "requestedSchema":{"type":"object","properties":{}},

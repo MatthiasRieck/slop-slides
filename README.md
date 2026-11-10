@@ -29,9 +29,12 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   opens them when the window gets narrow. It styles text: font (the deck's fonts and system
   fonts), size (±, or type one), color, bold / italic / underline (⌘B / ⌘I / ⌘U),
   strikethrough, superscript and subscript, line height and letter spacing, bulleted and
-  numbered lists (Enter starts a new item, Tab / Shift+Tab indent and outdent), and links to
-  web pages, email addresses or other slides. While typing, these apply to the selected words;
-  otherwise to the whole element. A text box can shrink its text or grow to fit instead of
+  numbered lists (Enter starts a new item, Tab / Shift+Tab indent and outdent, Backspace at
+  the start of an item or Enter on an empty one takes its bullet away), and links to
+  web pages, email addresses or other slides. While typing, these apply to the selected words
+  (a list, to the lines the selection is in, so plain lines and lists mix in one text);
+  otherwise to the whole element. A text box or shape stays one element whatever its text
+  holds: it is selected, moved and resized whole. A text box can shrink its text or grow to fit instead of
   overflowing. Pasting into text keeps bold, italic, links and line breaks (⌘⇧V pastes plain
   text). The search field in the View ribbon (⌘F) searches the text of all slides and their
   notes as you type: the slide list shows only the slides that contain it, the slide you pick

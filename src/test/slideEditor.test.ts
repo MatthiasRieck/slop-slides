@@ -787,7 +787,7 @@ describe("slide editor", () => {
         style: { fontSize: 64, color: "#ff0000" },
       });
       const box = e.$("[data-added=text]");
-      expect(box.innerHTML).toBe("First line<br>Second &lt;b&gt;line&lt;/b&gt;");
+      expect(box.innerHTML).toBe(`<div data-text-body="">First line<br>Second &lt;b&gt;line&lt;/b&gt;</div>`);
       expect(box.style.fontSize).toBe("64px");
       expect(box.style.color).toBe("rgb(255, 0, 0)");
       expect(box.style.position).toBe("absolute");
@@ -1969,7 +1969,9 @@ describe("slide editor", () => {
       dragOut(e, [200, 120], [200, 120]);
       const [box] = added(e);
       expect(box!.getAttribute("data-added")).toBe("text");
-      expect(box!.textContent).toBe("Text");
+      // Its text sits in one block, so formatted runs stay in their lines (the box is a flex column).
+      expect(box!.innerHTML).toBe(`<div data-text-body="">Text</div>`);
+      expect(e.window.getSelection()!.toString()).toBe("Text");
       expect(box!.getAttribute("contenteditable")).toBe("true");
       expect(box!.style).toMatchObject({
         left: "200px",
@@ -1982,7 +1984,8 @@ describe("slide editor", () => {
       expect(e.commits()).toEqual([]);
       box!.textContent = "Note to self";
       e.key("Escape");
-      expect(e.commits()[0]!.markup).toContain(">Note to self</div></section>");
+      // Typing over everything took the body away: the text goes back into one.
+      expect(e.commits()[0]!.markup).toContain(`><div data-text-body="">Note to self</div></div></section>`);
       // A dragged-out text box wraps at the width it was given; one left empty goes away unsaved.
       e.fromParent({ type: "slop:edit-tool", tool: "text", style: TEXT_STYLE });
       dragOut(e, [300, 400], [700, 420]);
@@ -2007,13 +2010,17 @@ describe("slide editor", () => {
       expect(toolTold(e).at(-1)!.tool).toBe("select");
       shape.textContent = "Inside";
       e.key("Escape");
-      expect(e.commits().at(-1)!.markup).toContain(">Inside</div></section>");
-      // An empty shape can be typed into too.
+      expect(e.commits().at(-1)!.markup).toContain(`><div data-text-body="">Inside</div></div></section>`);
+      // An empty shape can be typed into too: it gets a body with a line for the caret, which
+      // goes again when nothing was typed.
       const other = added(e)[0]!;
       other.textContent = "";
       e.down(other);
       e.key("Enter");
       expect(other.getAttribute("contenteditable")).toBe("true");
+      expect(other.innerHTML).toBe(`<div data-text-body=""><br></div>`);
+      e.key("Escape");
+      expect(other.innerHTML).toBe("");
     });
 
     it("draws freehand, fitting the drawing's box around its line, and keeps drawing", () => {
@@ -2593,7 +2600,7 @@ describe("slide editor", () => {
         expect(e.keys()).toEqual([]);
       });
 
-      it("outdents an empty nested item with Enter, and ends the list on an empty last item", () => {
+      it("outdents an empty nested item with Enter, and goes on in a plain line after an empty last item", () => {
         const e = editor({ markup: TEXT_DECK });
         const lines = e.$("#lines");
         e.down(lines);
@@ -2608,8 +2615,17 @@ describe("slide editor", () => {
         expect(lines.querySelector("ul ul")).toBeNull();
         expect(lines.getAttribute("contenteditable")).toBe("true");
         e.key("Enter");
-        expect(lines.hasAttribute("contenteditable")).toBe(false);
+        // The empty item left the list: typing goes on below it, without a bullet.
+        expect(lines.getAttribute("contenteditable")).toBe("true");
         expect([...lines.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["One", "Two", "Three"]);
+        expect(lines.lastChild!.nodeName).toBe("BR");
+        expect(lines.lastChild!.previousSibling!.nodeName).toBe("UL");
+        const caret = e.window.getSelection()!.getRangeAt(0);
+        expect([caret.startContainer, caret.startOffset]).toEqual([lines, 1]);
+        expect(lastReport(e)).toMatchObject({ list: null });
+        // Left empty, the line goes with the editing.
+        e.key("Escape");
+        expect(lines.lastChild!.nodeName).toBe("UL");
       });
 
       it("selects and edits a saved list as one text again, so items can still be added", () => {
@@ -2651,12 +2667,452 @@ describe("slide editor", () => {
         selectText(e, lines, 3);
         e.key("Enter");
         expect(lines.getAttribute("contenteditable")).toBe("true");
-        expect([...lines.querySelectorAll(":scope > ul > li")].map((li) => li.firstChild?.textContent)).toEqual([
-          "One",
-          "",
-          "Two",
-        ]);
+        expect(lines.innerHTML).toMatch(/^<div data-text-body=""><ul /);
+        expect(
+          [...lines.querySelectorAll("[data-text-body] > ul > li")].map((li) => li.firstChild?.textContent),
+        ).toEqual(["One", "", "Two"]);
         expect(lastReport(e)).toMatchObject({ list: "ul" });
+      });
+    });
+
+    describe("lists of some lines", () => {
+      const LIST = `style="margin: 0px; padding-left: 1.2em; list-style-type: disc;"`;
+      const NUMBERS = `style="margin: 0px; padding-left: 1.2em; list-style-type: decimal;"`;
+      const list = (e: ReturnType<typeof editor>, kind: string) => e.fromParent({ type: "slop:edit-list", list: kind });
+      /** Puts the caret in `el`'s text, `offset` characters into the first text that reads `text`. */
+      const caretIn = (e: ReturnType<typeof editor>, el: Element, text: string, offset = 0) => {
+        const at = el.textContent!.indexOf(text);
+        expect(at).toBeGreaterThanOrEqual(0);
+        selectText(e, el, at + offset + (offset ? 0 : 1));
+        if (!offset) {
+          const range = e.window.getSelection()!.getRangeAt(0);
+          range.setStart(range.startContainer, range.startOffset - 1);
+          range.collapse(true);
+        }
+      };
+
+      it("makes only the line the caret is in an item, next to plain lines, and joins items that meet", () => {
+        const { e, el } = editText("#lines");
+        caretIn(e, el, "Two", 1);
+        list(e, "ul");
+        expect(el.innerHTML).toBe(`One<ul ${LIST}><li>Two</li></ul>Three`);
+        // The caret stays where it was, and the toolbar shows the list for this line only.
+        const caret = e.window.getSelection()!.getRangeAt(0);
+        expect([caret.startContainer.textContent, caret.startOffset, caret.collapsed]).toEqual(["Two", 1, true]);
+        expect(lastReport(e)).toMatchObject({ list: "ul" });
+        caretIn(e, el, "One", 2);
+        e.fromParent({ type: "slop:edit-style", style: {} });
+        expect(lastReport(e)).toMatchObject({ list: null });
+        // The line below joins the list above it.
+        caretIn(e, el, "Three", 2);
+        list(e, "ul");
+        expect(el.innerHTML).toBe(`One<ul ${LIST}><li>Two</li><li>Three</li></ul>`);
+        // One item goes back to a plain line; the list keeps the rest.
+        caretIn(e, el, "Two", 1);
+        list(e, "ul");
+        expect(el.innerHTML).toBe(`One<br>Two<ul ${LIST}><li>Three</li></ul>`);
+        expect(lastReport(e)).toMatchObject({ list: null });
+        expect(el.getAttribute("contenteditable")).toBe("true");
+        expect(e.commits()).toEqual([]);
+        e.key("Escape");
+        expect(e.commits()).toHaveLength(1);
+      });
+
+      it("lists the lines the text selection is in, and turns them back only when all of them are items", () => {
+        const { e, el } = editText("#lines");
+        // "ne", the line break, "Tw".
+        selectText(e, el, 1, 5);
+        list(e, "ol");
+        expect(el.innerHTML).toBe(`<ol ${NUMBERS}><li>One</li><li>Two</li></ol>Three`);
+        expect(selectedText(e)).toBe("neTw");
+        // Two items and a plain line: not all are items, so all become items.
+        selectText(e, el, 4, 9);
+        style(e, {});
+        expect(lastReport(e)).toMatchObject({ list: null });
+        list(e, "ol");
+        expect(el.innerHTML).toBe(`<ol ${NUMBERS}><li>One</li><li>Two</li><li>Three</li></ol>`);
+        list(e, "ol");
+        expect(el.innerHTML).toBe(`<ol ${NUMBERS}><li>One</li></ol>Two<br>Three`);
+        // A selection that ends at the start of a line leaves that line out.
+        selectText(e, el, 0, 3);
+        const range = e.window.getSelection()!.getRangeAt(0);
+        range.setEnd(el.childNodes[1]!, 0);
+        list(e, "ol");
+        expect(el.innerHTML).toBe("One<br>Two<br>Three");
+      });
+
+      it("switches the kind of the items it is asked for, splitting their list", () => {
+        const { e, el } = editText("#lines");
+        selectText(e, el, 0, 11);
+        list(e, "ul");
+        caretIn(e, el, "Two", 1);
+        list(e, "ol");
+        expect(el.innerHTML).toBe(
+          `<ul ${LIST}><li>One</li></ul><ol ${NUMBERS}><li>Two</li></ol><ul ${LIST}><li>Three</li></ul>`,
+        );
+        expect(lastReport(e)).toMatchObject({ list: "ol" });
+        // Back to bullets: one list again.
+        list(e, "ul");
+        expect(el.innerHTML).toBe(`<ul ${LIST}><li>One</li><li>Two</li><li>Three</li></ul>`);
+      });
+
+      it("keeps blank lines blank, and lists a blank line only when the caret is in it", () => {
+        const e = editor({ markup: TEXT_DECK.replace("One<br>Two<br>Three", "One<br><br>Two") });
+        const el = e.$("#lines");
+        e.down(el);
+        list(e, "ul");
+        expect(el.innerHTML).toBe(`<ul ${LIST}><li>One</li></ul><br><ul ${LIST}><li>Two</li></ul>`);
+        expect(lastReport(e)).toMatchObject({ list: "ul" });
+        list(e, "ul");
+        expect(el.innerHTML).toBe("One<br><br>Two");
+        e.key("Enter");
+        const caret = e.doc.createRange();
+        caret.setStart(el, 2);
+        caret.collapse(true);
+        e.window.getSelection()!.removeAllRanges();
+        e.window.getSelection()!.addRange(caret);
+        list(e, "ul");
+        expect(el.innerHTML).toBe(`One<ul ${LIST}><li><br></li></ul>Two`);
+        // The caret is in the new item, ready to type.
+        const now = e.window.getSelection()!.getRangeAt(0);
+        expect([now.startContainer, now.startOffset]).toEqual([el.querySelector("li"), 0]);
+      });
+
+      it("keeps the nesting of the items around a changed one, and a list's own attributes", () => {
+        const markup = TEXT_DECK.replace(
+          "One<br>Two<br>Three",
+          `Intro<ul class="points" id="pts"><li class="first">One<ul><li>Deep</li><li>Deeper</li></ul></li><li>Two</li></ul>`,
+        );
+        const e = editor({ markup });
+        const el = e.$("#lines");
+        e.down(el);
+        e.key("Enter");
+        caretIn(e, el, "Two", 1);
+        list(e, "ul");
+        expect(el.innerHTML).toBe(
+          `Intro<ul class="points" id="pts"><li class="first">One<ul><li>Deep</li><li>Deeper</li></ul></li></ul>Two`,
+        );
+        // A nested item that leaves takes the ones after it out to the top; the copy has no id twice.
+        caretIn(e, el, "Deep", 1);
+        list(e, "ul");
+        expect(el.innerHTML).toBe(
+          `Intro<ul class="points" id="pts"><li class="first">One</li></ul>Deep<ul><li>Deeper</li></ul>Two`,
+        );
+      });
+
+      it("splits lines at line breaks inside formatted text", () => {
+        const markup = TEXT_DECK.replace("One<br>Two<br>Three", `<span style="font-weight: 700;">One<br>Two</span>`);
+        const e = editor({ markup });
+        const el = e.$("#lines");
+        e.down(el);
+        e.key("Enter");
+        caretIn(e, el, "Two", 1);
+        list(e, "ul");
+        expect(el.innerHTML).toBe(
+          `<span style="font-weight: 700;">One</span><ul ${LIST}><li><span style="font-weight: 700;">Two</span></li></ul>`,
+        );
+        const caret = e.window.getSelection()!.getRangeAt(0);
+        expect([caret.startContainer.textContent, caret.startOffset]).toEqual(["Two", 1]);
+      });
+
+      it("takes an item out of its list with Backspace at its start, and nowhere else", () => {
+        const { e, el } = editText("#lines");
+        selectText(e, el, 0, 11);
+        list(e, "ul");
+        caretIn(e, el, "Two", 1);
+        expect(e.key("Backspace").defaultPrevented).toBe(false);
+        caretIn(e, el, "Two");
+        expect(e.key("Backspace").defaultPrevented).toBe(true);
+        expect(el.innerHTML).toBe(`<ul ${LIST}><li>One</li></ul>Two<ul ${LIST}><li>Three</li></ul>`);
+        const caret = e.window.getSelection()!.getRangeAt(0);
+        expect(caret.collapsed).toBe(true);
+        expect(caret.startContainer === el || caret.startContainer.textContent === "Two").toBe(true);
+        // A nested item moves out a level first, and stays an item.
+        caretIn(e, el, "One", 3);
+        e.key("Enter");
+        el.querySelectorAll("li")[1]!.textContent = "Sub";
+        caretIn(e, el, "Sub", 1);
+        e.key("Tab");
+        expect(el.querySelector("ul ul li")!.textContent).toBe("Sub");
+        caretIn(e, el, "Sub");
+        expect(e.key("Backspace").defaultPrevented).toBe(true);
+        expect(el.querySelector("ul ul")).toBeNull();
+        expect([...el.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["One", "Sub", "Three"]);
+      });
+
+      it("leaves a list that is selected on its own a list", () => {
+        const markup = TEXT_DECK.replace(
+          `<div id="lines">One<br>Two<br>Three</div>`,
+          `<ul id="lines"><li>One</li><li>Two</li></ul>`,
+        );
+        const e = editor({ markup });
+        e.down(e.$("#lines li"));
+        expect(e.selected()).toEqual([e.$("#lines")]);
+        list(e, "ul");
+        expect([e.$("#lines").tagName, e.$("#lines").innerHTML]).toEqual(["UL", "<li>One</li><li>Two</li>"]);
+        list(e, "ol");
+        expect([e.$("#lines").tagName, e.$("#lines").innerHTML]).toEqual(["OL", "<li>One</li><li>Two</li>"]);
+        expect(e.selected()).toEqual([e.$("#lines")]);
+        // Backspace at the start of its item is the browser's.
+        e.key("Enter");
+        selectText(e, e.$("#lines"), 4);
+        const range = e.window.getSelection()!.getRangeAt(0);
+        range.setStart(e.$("#lines li:nth-child(2)").firstChild!, 0);
+        range.collapse(true);
+        expect(e.key("Backspace").defaultPrevented).toBe(false);
+      });
+
+      it("keeps bullets next to centered and right-aligned text", () => {
+        const e = editor({ markup: TEXT_DECK });
+        const el = e.$("#lines");
+        e.down(el);
+        list(e, "ul");
+        style(e, { align: "center" });
+        // Outside the item, the marker would stay at the box's left edge, far from the text.
+        expect(el.querySelector("ul")!.style).toMatchObject({
+          margin: "0px",
+          paddingLeft: "0px",
+          listStyleType: "disc",
+          listStylePosition: "inside",
+        });
+        expect([...el.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["One", "Two", "Three"]);
+        // A nested list keeps its indent, and a list made in centered text starts out the same way.
+        e.key("Enter");
+        caretIn(e, el, "Two", 1);
+        e.key("Tab");
+        expect(el.querySelector<HTMLElement>("ul ul")!.style).toMatchObject({
+          paddingLeft: "1.2em",
+          listStyleType: "circle",
+          listStylePosition: "inside",
+        });
+        e.key("Tab", { shiftKey: true });
+        caretIn(e, el, "Three", 1);
+        list(e, "ol");
+        expect(el.querySelector("ol")!.style).toMatchObject({
+          paddingLeft: "0px",
+          listStyleType: "decimal",
+          listStylePosition: "inside",
+        });
+        e.key("Escape");
+        style(e, { align: "right" });
+        expect(el.querySelector("ul")!.style.listStylePosition).toBe("inside");
+        style(e, { align: "left" });
+        for (const made of el.querySelectorAll<HTMLElement>("ul, ol")) {
+          expect(made.style).toMatchObject({ paddingLeft: "1.2em", listStylePosition: "" });
+        }
+        expect(el.innerHTML.replace(/ style="[^"]*"/g, "")).toBe(
+          "<ul><li>One</li><li>Two</li></ul><ol><li>Three</li></ol>",
+        );
+        // A list styled by the deck keeps its own indent.
+        const own = TEXT_DECK.replace("One<br>Two<br>Three", `<ul style="padding-left: 40px;"><li>One</li></ul>`);
+        const other = editor({ markup: own });
+        other.down(other.$("#lines"));
+        other.fromParent({ type: "slop:edit-style", style: { align: "center" } });
+        expect(other.$("#lines ul").style).toMatchObject({ paddingLeft: "40px", listStylePosition: "inside" });
+      });
+    });
+
+    describe("text boxes and shapes as one text", () => {
+      const BOX = `position: absolute; left: 100px; top: 100px; width: 600px; height: 300px; display: flex; flex-direction: column; justify-content: center;`;
+      const BOX_DECK = `<!DOCTYPE html><html><head></head><body>
+<main class="deck">
+  <section class="slide" id="intro">
+    <div id="shape" data-added="shape" style="${BOX}"><div data-text-body="">One<br><span style="font-weight: 700;">Two</span><ul><li>Three</li></ul></div></div>
+    <div id="old" data-added="shape" style="${BOX}">One<br><span id="run" style="font-weight: 700;">Two</span><br>Three</div>
+    <div id="flex" style="display: flex; align-items: center;">Hello brave world</div>
+    <div id="row" style="display: flex;"><i class="icon"></i>Label<div class="badge">New</div></div>
+    <div id="block">Hello brave world</div>
+  </section>
+</main></body></html>`;
+      /** A click on the empty slide, so the next press is no double-click. */
+      const away = (e: ReturnType<typeof editor>) => {
+        e.down(e.$("#intro"));
+        e.up(e.$("#intro"));
+      };
+      const edit = (selector: string) => {
+        const e = editor({ markup: BOX_DECK });
+        const el = e.$(selector);
+        e.down(el);
+        e.key("Enter");
+        expect(el.getAttribute("contenteditable")).toBe("true");
+        return { e, el };
+      };
+
+      it("selects the box from anything in it: its body, a formatted run, a list item", () => {
+        const e = editor({ markup: BOX_DECK });
+        const shape = e.$("#shape");
+        for (const inner of ["[data-text-body]", "span", "li", "ul"]) {
+          away(e);
+          e.down(e.$(`#shape ${inner}`));
+          e.up(e.$(`#shape ${inner}`));
+          expect(e.selected()).toEqual([shape]);
+        }
+        // Dragging from the bold line moves the whole box, not the line.
+        away(e);
+        e.drag(e.$("#shape span"), 30, 20);
+        expect(shape.style.translate).toBe("30px 20px");
+        expect(e.$("#shape span").getAttribute("style")).toBe("font-weight: 700;");
+        // Tab and ⌘A never land on what is inside it, and the layers list it once.
+        const seen: Element[] = [];
+        for (let i = 0; i < 8; i++) {
+          e.key("Tab");
+          seen.push(...e.selected());
+        }
+        expect(seen.some((el) => el.closest("[data-added]") !== el && el.closest("[data-added]"))).toBe(false);
+        e.key("a", { metaKey: true });
+        expect(e.selected().filter((el) => shape.contains(el))).toEqual([shape]);
+      });
+
+      it("selects a box saved without a body whole too: a flex box makes each run in it an item", () => {
+        const e = editor({ markup: BOX_DECK });
+        const old = e.$("#old");
+        // In a browser the bold run is a block-level flex item here, which was picked on its own.
+        const computed = e.window.getComputedStyle.bind(e.window);
+        e.window.getComputedStyle = ((el: Element, pseudo?: string) => {
+          const style = computed(el, pseudo);
+          if (el.id !== "run") return style;
+          return new Proxy(style, { get: (target, key) => (key === "display" ? "block" : Reflect.get(target, key)) });
+        }) as typeof e.window.getComputedStyle;
+        e.down(e.$("#run"));
+        e.up(e.$("#run"));
+        expect(e.selected()).toEqual([old]);
+        away(e);
+        e.drag(e.$("#run"), 10, 10);
+        expect(old.style.translate).toBe("10px 10px");
+        expect(e.$("#run").style.translate).toBe("");
+        // Editing it puts its text in a body, so the run is part of its line again.
+        e.key("Enter");
+        expect(old.innerHTML).toBe(
+          `<div data-text-body="">One<br><span id="run" style="font-weight: 700;">Two</span><br>Three</div>`,
+        );
+        e.key("Escape");
+        expect(e.commits().at(-1)!.markup).toContain(`<div data-text-body="">One<br><span id="run"`);
+      });
+
+      it("formats part of a shape's text inside its body, where it stays in its line", () => {
+        const e = editor();
+        e.fromParent({ type: "slop:edit-tool", tool: "rect", style: {} });
+        const slide = e.$("#intro");
+        for (const [type, x, y] of [
+          ["pointerdown", 100, 100],
+          ["pointermove", 500, 400],
+          ["pointerup", 500, 400],
+        ] as const) {
+          slide.dispatchEvent(new e.window.PointerEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true }));
+        }
+        const shape = e.doc.querySelector<HTMLElement>("[data-added=shape]")!;
+        expect(shape.innerHTML).toBe("");
+        e.key("Enter");
+        const body = shape.firstElementChild!;
+        expect(body.outerHTML).toBe(`<div data-text-body=""><br></div>`);
+        body.innerHTML = "One<br>Two<br>Three";
+        selectText(e, shape, 3, 6);
+        style(e, { bold: true });
+        expect(shape.innerHTML).toBe(
+          `<div data-text-body="">One<br><span style="font-weight: 700;">Two</span><br>Three</div>`,
+        );
+        expect(selectedText(e)).toBe("Two");
+        // A list of one of its lines goes in the body as well.
+        e.fromParent({ type: "slop:edit-list", list: "ul" });
+        expect(shape.querySelector("[data-text-body] > ul > li > span")!.textContent).toBe("Two");
+        expect(shape.children).toHaveLength(1);
+        e.key("Escape");
+        e.down(slide);
+        e.down(shape.querySelector("span")!);
+        expect(e.selected()).toEqual([shape]);
+      });
+
+      it("keeps everything typed in the body: text beside it, and a second body, go into it", () => {
+        const { e, el } = edit("#shape");
+        const body = el.firstElementChild!;
+        el.insertBefore(e.doc.createTextNode("Before"), body);
+        el.appendChild(e.doc.createTextNode("After"));
+        const second = e.doc.createElement("div");
+        second.setAttribute("data-text-body", "");
+        second.textContent = "More";
+        el.appendChild(second);
+        selectText(e, el, 7, 8);
+        el.dispatchEvent(new e.window.Event("input", { bubbles: true }));
+        expect(el.children).toHaveLength(1);
+        expect(el.firstElementChild).toBe(body);
+        expect(body.innerHTML).toBe(
+          `BeforeOne<br><span style="font-weight: 700;">Two</span><ul><li>Three</li></ul>After<br>More`,
+        );
+        // The text selection is still the same text.
+        expect(selectedText(e)).toBe("n");
+        // Typing over the body itself makes a new one around what was typed.
+        el.textContent = "Fresh";
+        el.dispatchEvent(new e.window.Event("input", { bubbles: true }));
+        expect(el.innerHTML).toBe(`<div data-text-body="">Fresh</div>`);
+        // An input method is left to finish composing first.
+        el.textContent = "か";
+        const composing = new e.window.Event("input", { bubbles: true });
+        Object.defineProperty(composing, "isComposing", { value: true });
+        el.dispatchEvent(composing);
+        expect(el.innerHTML).toBe("か");
+        e.key("Escape");
+        expect(el.innerHTML).toBe(`<div data-text-body="">か</div>`);
+      });
+
+      it("gives any flex box a body once its own text is formatted, and not before", () => {
+        const { e, el } = edit("#flex");
+        selectText(e, el, 3);
+        el.firstChild!.textContent = "Hello bold world";
+        e.key("Escape");
+        // Fixing a word leaves the markup as it was.
+        expect(el.innerHTML).toBe("Hello bold world");
+        e.key("Enter");
+        selectText(e, el, 6, 10);
+        style(e, { fill: "#ff0000" });
+        expect(el.innerHTML).toBe("Hello bold world");
+        style(e, { bold: true });
+        expect(el.innerHTML).toBe(
+          `<div data-text-body="">Hello <span style="font-weight: 700;">bold</span> world</div>`,
+        );
+        expect(selectedText(e)).toBe("bold");
+        e.key("Escape");
+        // From then on it is one text, like a text box.
+        e.down(e.$("#intro"));
+        e.down(e.$("#flex span"));
+        expect(e.selected()).toEqual([el]);
+        // A block has no need for one, and a box with elements of its own next to its text is left alone.
+        const block = edit("#block");
+        selectText(block.e, block.el, 6, 11);
+        block.e.fromParent({ type: "slop:edit-style", style: { bold: true } });
+        expect(block.el.innerHTML).toBe(`Hello <span style="font-weight: 700;">brave</span> world`);
+        const row = edit("#row");
+        selectText(row.e, row.el, 0, 5);
+        row.e.fromParent({ type: "slop:edit-style", style: { bold: true } });
+        expect(row.el.querySelector("[data-text-body]")).toBeNull();
+      });
+
+      it("puts the text of a box saved without a body into one when the box is restyled", () => {
+        const e = editor({ markup: BOX_DECK });
+        const old = e.$("#old");
+        e.down(old);
+        style(e, { fill: "#ff0000" });
+        expect(old.innerHTML).toBe(
+          `<div data-text-body="">One<br><span id="run" style="font-weight: 700;">Two</span><br>Three</div>`,
+        );
+        // A shape without text stays empty.
+        old.textContent = "";
+        style(e, { fill: "#00ff00" });
+        expect(old.innerHTML).toBe("");
+      });
+
+      it("links and raises a box's text inside its body", () => {
+        const e = editor({ markup: BOX_DECK });
+        const old = e.$("#old");
+        e.down(old);
+        e.fromParent({ type: "slop:edit-link", href: "#intro" });
+        expect(old.innerHTML).toBe(
+          `<div data-text-body=""><a href="#intro">One<br><span id="run" style="font-weight: 700;">Two</span><br>Three</a></div>`,
+        );
+        expect(lastReport(e)).toMatchObject({ link: "#intro" });
+        e.fromParent({ type: "slop:edit-link", href: null });
+        style(e, { script: "sup" });
+        expect(old.firstElementChild!.firstElementChild!.tagName).toBe("SUP");
+        expect(old.children).toHaveLength(1);
       });
     });
 

@@ -80,6 +80,12 @@ pub const MOVED_ATTR: &str = "data-moved";
 /// the agent tidies the slide's layout.
 pub const ADDED_ATTR: &str = "data-added";
 
+/// Marks the one block (`<div data-text-body>`) that holds the text of a text box or shape the
+/// user added: the box is a flex column, which would lay out each formatted run of text directly
+/// in it as an item on a line of its own. The editor selects, moves and edits the box and
+/// everything in the body as one text (see `assets/editor.js`).
+pub const TEXT_BODY_ATTR: &str = "data-text-body";
+
 /// Marks an image the user dropped onto a slide in the editor. It sits on top of the slide,
 /// placed with inline `position: absolute; left: 0; top: 0; width` (and moved with
 /// [`MOVED_ATTR`]'s `translate`) until the agent gives it a place in the layout.

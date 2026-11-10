@@ -770,14 +770,18 @@
     this.push({ kind: "text", x: r.x, y: r.y, w: r.w, h: r.h, rotation: ctx.rotation, wrap: true, paragraphs: paragraphs }, ctx);
   };
 
-  /** Whether `el`'s children are all paragraphs of plain text. */
+  /**
+   * Whether `el`'s children are all paragraphs of plain text: <p>s, or the one block the editor
+   * keeps the text of a text box or shape in (`data-text-body`, see assets/editor.js).
+   */
   function plainParagraphs(el) {
     var items = Array.prototype.slice.call(el.children);
     return (
       items.length > 0 &&
       items.every(function (child) {
         var cs = getComputedStyle(child);
-        return child.tagName.toLowerCase() === "p" && !hasBox(cs) && Array.prototype.every.call(child.childNodes, isInline);
+        var paragraph = child.tagName.toLowerCase() === "p" || child.hasAttribute("data-text-body");
+        return paragraph && !hasBox(cs) && Array.prototype.every.call(child.childNodes, isInline);
       }) &&
       !Array.prototype.some.call(el.childNodes, function (node) {
         return node.nodeType === 3 && hasText(node);

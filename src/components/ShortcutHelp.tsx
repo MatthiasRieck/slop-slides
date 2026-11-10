@@ -38,6 +38,7 @@ export const SECTIONS: { title: string; keys: [string, string][] }[] = [
       ["⌘B / ⌘I / ⌘U", "Bold / italic / underline"],
       ["Enter while typing", "Line break, or a new list item"],
       ["⇧Enter while typing", "Line break, also in a list"],
+      ["Backspace at the start of a list item", "Take the item out of its list"],
       ["⌘Enter", "Finish the text"],
       ["⌘⇧V", "Paste as plain text"],
     ],

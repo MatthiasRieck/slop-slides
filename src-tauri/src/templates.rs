@@ -208,9 +208,7 @@ pub fn stage(session: &Path, root: &Path, id: &str) -> Result<String> {
 /// titled `title`, naming the template.
 pub fn deck_shell(source: &str, id: &str, title: &str) -> String {
     let shell = html::strip_slides(source);
-    let shell = review::write(&shell, &Default::default());
-    let shell = comments::write(&shell, &Default::default());
-    let shell = html::set_title(&shell, title);
+    let shell = html::set_title(&without_marks(&shell), title);
     html::ensure_runtime(&html::set_template(&shell, Some(id)))
 }
 
@@ -232,9 +230,7 @@ pub fn create_from_deck(deck_file: &Path, root: &Path, name: &str) -> Result<Tem
         ));
     }
     let cleaned = html::with_placeholder_text(&source);
-    let cleaned = review::write(&cleaned, &Default::default());
-    let cleaned = comments::write(&cleaned, &Default::default());
-    let cleaned = html::set_template(&html::set_title(&cleaned, name), None);
+    let cleaned = html::set_template(&html::set_title(&without_marks(&cleaned), name), None);
     let dir = root.join(&id);
     fs::create_dir_all(&dir)?;
     fs::write(dir.join(DECK_FILE), &cleaned)?;
@@ -243,6 +239,14 @@ pub fn create_from_deck(deck_file: &Path, root: &Path, name: &str) -> Result<Tem
         copy_dir(&assets, &dir.join("assets"))?;
     }
     Ok(summary(&id, &cleaned, Some(&dir)))
+}
+
+/// `html` without the user's review marks and comments, which a template does not take along.
+fn without_marks(html: &str) -> String {
+    comments::write(
+        &review::write(html, &Default::default()),
+        &Default::default(),
+    )
 }
 
 fn copy_dir(from: &Path, to: &Path) -> Result<()> {

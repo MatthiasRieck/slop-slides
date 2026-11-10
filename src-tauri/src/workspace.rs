@@ -280,20 +280,20 @@ pub fn remember(app_home: &Path, root: &Path) -> Result<()> {
     );
     list.truncate(RECENT_KEPT);
     fs::create_dir_all(app_home)?;
-    fs::write(
-        app_home.join(RECENT_FILE),
-        serde_json::to_string_pretty(&list).expect("json"),
-    )?;
-    Ok(())
+    write_recent(app_home, &list)
 }
 
 /// Takes `root` off the recent workspaces.
 pub fn forget(app_home: &Path, root: &str) -> Result<()> {
     let mut list = read_recent(app_home);
     list.retain(|w| w.path != root);
+    write_recent(app_home, &list)
+}
+
+fn write_recent(app_home: &Path, list: &[RecentWorkspace]) -> Result<()> {
     fs::write(
         app_home.join(RECENT_FILE),
-        serde_json::to_string_pretty(&list).expect("json"),
+        serde_json::to_string_pretty(list).expect("json"),
     )?;
     Ok(())
 }

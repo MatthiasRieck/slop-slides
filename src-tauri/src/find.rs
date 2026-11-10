@@ -12,7 +12,7 @@ use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
 
-use crate::html::{self, find_ci, parse_tag};
+use crate::html::{self, find_ci, parse_tag, VOID_ELEMENTS};
 
 /// How the query matches.
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -54,13 +54,9 @@ const CONTEXT: usize = 40;
 
 /// Elements whose content is not text on the slide.
 const RAW_TEXT: &[&str] = &["script", "style", "textarea", "title", "template"];
-const VOID: &[&str] = &[
-    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
-    "track", "wbr",
-];
-const PLACEHOLDERS: &[&str] = &["data-resize-placeholder", "data-delete-placeholder"];
+const PLACEHOLDERS: &[&str] = &[html::RESIZE_PLACEHOLDER_ATTR, html::DELETE_PLACEHOLDER_ATTR];
 /// Classes of a slide's elements the player never shows.
-const OFF_SLIDE: &[&str] = &["notes", "narration"];
+const OFF_SLIDE: &[&str] = &[html::NOTES_CLASS, html::NARRATION_CLASS];
 
 /// The slide's text as characters, each with the source bytes it came from.
 type Chars = Vec<(char, Range<usize>)>;
@@ -113,7 +109,7 @@ pub fn replace(
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
     let mut slides = Vec::new();
     let mut skipped = Vec::new();
-    let escaped = escape_text(replacement);
+    let escaped = html::escape(replacement);
     if !needle.is_empty() {
         for slide in html::find_slides(source) {
             let Some(id) = slide.id.clone() else { continue };
@@ -185,7 +181,8 @@ fn text_runs(source: &str, range: Range<usize>) -> Vec<Range<usize>> {
         }
         if bytes[i] == b'<' {
             if let Some(tag) = parse_tag(source, i) {
-                let void = VOID.contains(&tag.name.as_str()) || source[..tag.end].ends_with("/>");
+                let void =
+                    VOID_ELEMENTS.contains(&tag.name.as_str()) || source[..tag.end].ends_with("/>");
                 if !tag.closing && RAW_TEXT.contains(&tag.name.as_str()) {
                     let close = find_ci(source, tag.end, &format!("</{}", tag.name));
                     i = close
@@ -387,13 +384,6 @@ fn matches(chars: &Chars, needle: &[char], options: Options) -> Vec<Range<usize>
         }
     }
     found
-}
-
-/// Plain text as HTML text.
-fn escape_text(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 #[cfg(test)]

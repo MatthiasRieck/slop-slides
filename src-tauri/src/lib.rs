@@ -1,4 +1,5 @@
 mod agent;
+mod app_block;
 mod assets;
 mod capture;
 mod clipboard;

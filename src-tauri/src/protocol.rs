@@ -19,7 +19,7 @@
 //! as an export has it, for printing to PDF (see pdf.rs).
 
 use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use tauri::http::{header, Request, Response, StatusCode};
@@ -229,6 +229,11 @@ fn read_in_session(sessions: &Sessions, path: &str) -> Result<(&'static str, Vec
     Ok((crate::assets::mime_for(path), bytes))
 }
 
+/// Whether `file` stays where it says, without a `..`.
+fn is_plain_path(file: &Path) -> bool {
+    !file.components().any(|c| c == Component::ParentDir)
+}
+
 /// A file of the open workspace as of the last commit, by its absolute path without the leading
 /// `/`. It may be gone from the disk, so its closest remaining folder must be inside instead.
 fn read_at_head(
@@ -237,7 +242,7 @@ fn read_at_head(
 ) -> Result<(&'static str, Vec<u8>), StatusCode> {
     let file = absolute(path);
     let inside = git::existing_folder(&file).is_some_and(|dir| workspace.contains(dir));
-    if !git::is_plain_path(&file) || !inside {
+    if !is_plain_path(&file) || !inside {
         return Err(StatusCode::FORBIDDEN);
     }
     match git::read_at_head(&file) {
@@ -249,6 +254,12 @@ fn read_at_head(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_paths_have_no_way_up() {
+        assert!(is_plain_path(Path::new("/a/b/deck.html")));
+        assert!(!is_plain_path(Path::new("/a/../b/deck.html")));
+    }
 
     fn split(raw: &str) -> Result<(String, String), StatusCode> {
         split_path(raw)

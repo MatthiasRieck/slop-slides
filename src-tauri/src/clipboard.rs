@@ -12,6 +12,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 
+use crate::capture;
 use crate::deck;
 use crate::error::{Error, Result};
 use crate::find;
@@ -207,16 +208,8 @@ fn encode_png(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<u8>> {
     if width == 0 || height == 0 || rgba.len() != width * height * 4 {
         return Err(Error::msg("the copied image is empty or malformed"));
     }
-    let mut out = Vec::new();
-    let mut encoder = png::Encoder::new(&mut out, width as u32, height as u32);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let fail =
-        |e: png::EncodingError| Error::msg(format!("could not encode the copied image: {e}"));
-    let mut writer = encoder.write_header().map_err(fail)?;
-    writer.write_image_data(rgba).map_err(fail)?;
-    writer.finish().map_err(fail)?;
-    Ok(out)
+    capture::rgba_png(width as u32, height as u32, rgba)
+        .map_err(|e| Error::msg(format!("could not encode the copied image: {e}")))
 }
 
 // One clipboard for the app's lifetime: on Linux, what it copied is only offered while it lives.

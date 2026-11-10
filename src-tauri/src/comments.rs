@@ -11,12 +11,12 @@
 //! The block is not part of any slide, so commenting never reloads a slide's preview, and works
 //! on locked slides. The player ignores it.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
 
-use crate::review::Block;
+use crate::app_block::{Block, BySlide};
 
 pub const START: &str = "<!-- slopslide:comments (managed by SlopSlide, do not edit) -->";
 pub const END: &str = "<!-- /slopslide:comments -->";
@@ -25,6 +25,8 @@ const BLOCK: Block = Block {
     end: END,
     script_id: "slopslide-comments",
     name: "comments",
+    entries: "comments",
+    problem: "a missing id or text, a bad position, or a bad area",
 };
 
 /// The element a comment is about, so its pin can follow it when the slide changes.
@@ -90,7 +92,7 @@ pub struct Comment {
 }
 
 /// Comments by slide id.
-pub type Comments = BTreeMap<String, Vec<Comment>>;
+pub type Comments = BySlide<Comment>;
 
 /// The whole block, from its start comment to the end of its end comment.
 pub fn block_range(html: &str) -> Option<Range<usize>> {
@@ -99,20 +101,7 @@ pub fn block_range(html: &str) -> Option<Range<usize>> {
 
 /// The comments in `html`; empty when there is no block. Fails when the block is damaged.
 pub fn parse(html: &str) -> Result<Comments, String> {
-    let Some(json) = BLOCK.json(html)? else {
-        return Ok(Comments::new());
-    };
-    let comments: Comments =
-        serde_json::from_str(json).map_err(|e| format!("The comments are not valid: {e}"))?;
-    if let Some((slide, _)) = comments
-        .iter()
-        .find(|(_, comments)| !comments.iter().all(valid))
-    {
-        return Err(format!(
-            "The comments for slide `{slide}` have a missing id or text, a bad position, or a bad area."
-        ));
-    }
-    Ok(comments)
+    BLOCK.parse(html, valid)
 }
 
 /// The comments in `html`, or none when the block is missing or damaged.
@@ -134,31 +123,13 @@ fn valid(comment: &Comment) -> bool {
 /// `html` with its comments block holding `comments`: slides without any are left out, and the
 /// block is removed when nothing is left. Comments that are not valid are dropped.
 pub fn write(html: &str, comments: &Comments) -> String {
-    let kept: Comments = comments
-        .iter()
-        .map(|(slide, comments)| {
-            let comments: Vec<Comment> = comments.iter().filter(|c| valid(c)).cloned().collect();
-            (slide.clone(), comments)
-        })
-        .filter(|(_, comments)| !comments.is_empty())
-        .collect();
-    if kept.is_empty() {
-        return BLOCK.put(html, None);
-    }
-    let json = serde_json::to_string(&kept).expect("comments serialize");
-    BLOCK.put(html, Some(&json))
+    BLOCK.write(html, comments, valid)
 }
 
 /// Drops the comments of slides that are gone; None when there is nothing to drop (or the
 /// block is damaged, which lint reports instead).
 pub fn prune(html: &str, slide_ids: &HashSet<&str>) -> Option<String> {
-    let comments = parse(html).ok()?;
-    let kept: Comments = comments
-        .iter()
-        .filter(|(slide, _)| slide_ids.contains(slide.as_str()))
-        .map(|(slide, comments)| (slide.clone(), comments.clone()))
-        .collect();
-    (kept.len() != comments.len()).then(|| write(html, &kept))
+    BLOCK.prune(html, slide_ids, valid)
 }
 
 #[cfg(test)]
@@ -201,12 +172,6 @@ mod tests {
             .iter()
             .map(|(id, c)| (id.to_string(), c.clone()))
             .collect()
-    }
-
-    #[test]
-    fn a_deck_without_a_block_has_no_comments() {
-        assert_eq!(parse(DOC), Ok(Comments::new()));
-        assert_eq!(write(DOC, &Comments::new()), DOC);
     }
 
     #[test]
@@ -268,15 +233,6 @@ mod tests {
     }
 
     #[test]
-    fn rewriting_replaces_the_block_and_removing_every_comment_restores_the_file() {
-        let once = write(DOC, &comments(&[("intro", vec![comment("a", "One")])]));
-        let twice = write(&once, &comments(&[("plan", vec![comment("b", "Two")])]));
-        assert_eq!(twice.matches(START).count(), 1);
-        assert_eq!(read(&twice).keys().collect::<Vec<_>>(), ["plan"]);
-        assert_eq!(write(&twice, &comments(&[("plan", vec![])])), DOC);
-    }
-
-    #[test]
     fn sits_next_to_the_review_marks_without_disturbing_them() {
         let stroke = review::Stroke {
             tool: review::InkTool::Pen,
@@ -291,14 +247,6 @@ mod tests {
         let without_marks = review::write(&html, &review::Review::new());
         assert_eq!(parse(&without_marks), Ok(all));
         assert_eq!(write(&without_marks, &Comments::new()), DOC);
-    }
-
-    #[test]
-    fn markup_in_a_comment_stays_out_of_the_file() {
-        let text = "</script><!-- /slopslide:comments --><b>";
-        let html = write(DOC, &comments(&[("a", vec![comment("x", text)])]));
-        assert!(!html.contains("</script><!--"));
-        assert_eq!(read(&html)["a"][0].text, text);
     }
 
     #[test]
@@ -322,24 +270,6 @@ mod tests {
         let html = write(DOC, &comments(&[("a", vec![comment("x", "One")])]));
         assert!(parse(&html.replace("\"text\"", "\"note\"")).is_err());
         assert!(parse(&html.replace("\"x\",", "\"\",")).is_err());
-        assert!(parse(&html.replace(END, "")).is_err());
-        assert!(parse(&html.replace("</script>\n", "\n")).is_err());
-        assert_eq!(read(&html.replace(END, "")), Comments::new());
-    }
-
-    #[test]
-    fn prunes_comments_of_slides_that_are_gone() {
-        let html = write(
-            DOC,
-            &comments(&[
-                ("kept", vec![comment("a", "One")]),
-                ("gone", vec![comment("b", "Two")]),
-            ]),
-        );
-        let ids = HashSet::from(["kept"]);
-        let pruned = prune(&html, &ids).unwrap();
-        assert_eq!(read(&pruned).keys().collect::<Vec<_>>(), ["kept"]);
-        assert_eq!(prune(&pruned, &ids), None);
-        assert_eq!(prune(&pruned, &HashSet::new()).as_deref(), Some(DOC));
+        assert_eq!(read(&html.replace("\"text\"", "\"note\"")), Comments::new());
     }
 }

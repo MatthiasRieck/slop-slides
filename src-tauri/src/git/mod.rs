@@ -8,11 +8,19 @@
 //! Git stages whole files, so staging one slide writes the deck as the index has it with just
 //! that slide changed to the index, leaving the file on disk alone. Restoring goes the other
 //! way: the deck on disk, and the index, take the slide from the commit.
+//!
+//! The parts: [`process`] runs git and reads what it gives back, [`diff`] compares two versions
+//! of a deck slide by slide, and [`merge`] makes one version with a slide (or the styles) of
+//! another; this module stages, restores and commits with them.
 
-use std::collections::HashMap;
-use std::io::Write;
-use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+mod diff;
+mod merge;
+mod process;
+
+#[cfg(test)]
+mod fixtures;
+
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +30,14 @@ use crate::error::{Error, Result};
 use crate::html;
 use crate::review;
 use crate::size::SizeInfo;
+
+use diff::{compare, mark_staged, same_slides, shell, slide_of, snapshots, strip_slides};
+use merge::{adopt_slide, empty_deck, move_slide, with_slides_of};
+use process::{
+    changed_files, git, git_write, head_commit, in_work_tree, matching_endings, paths, read_index,
+    split, staged_files, unstaged_files, untracked, write_index,
+};
+pub use process::{existing_folder, is_plain_path, read_at_head};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,9 +112,6 @@ pub struct DeckChanges {
     pub has_unstaged: bool,
 }
 
-/// A deck's source changed, or why it could not be.
-type Edited = std::result::Result<String, String>;
-
 /// A change to stage or restore, by the ids the list has for it.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(
@@ -118,180 +131,6 @@ pub enum Change {
     Styles,
 }
 
-fn command(dir: &Path, args: &[&str]) -> Command {
-    let mut command = Command::new("git");
-    command.args(args).current_dir(dir);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
-    }
-    command
-}
-
-/// `git <args>` in `dir`: its output, or None when it failed or git is not there. Optional locks
-/// are off because the user's own git may be running in the repository at the same time.
-fn git(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let output = command(dir, args)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    output.status.success().then_some(output.stdout)
-}
-
-/// `git <args>` that changes the repository, with `input` on its stdin: its output, or what git
-/// says went wrong.
-fn git_write(dir: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u8>> {
-    let mut child = command(dir, args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| Error::msg(format!("could not run git: {e}")))?;
-    let mut stdin = child.stdin.take().expect("stdin is piped");
-    let input = input.to_vec();
-    let writer = std::thread::spawn(move || stdin.write_all(&input));
-    let output = child.wait_with_output()?;
-    let _ = writer.join();
-    if output.status.success() {
-        return Ok(output.stdout);
-    }
-    let said = [&output.stderr, &output.stdout]
-        .map(|text| String::from_utf8_lossy(text).trim().to_string());
-    let said = said.into_iter().find(|text| !text.is_empty());
-    Err(Error::msg(said.unwrap_or_else(|| "git failed".into())))
-}
-
-/// The closest folder of `file` that exists; a file of a commit may be gone by now, folder and all.
-pub fn existing_folder(file: &Path) -> Option<&Path> {
-    file.ancestors().skip(1).find(|dir| dir.is_dir())
-}
-
-/// Whether `file` stays where it says, without a `..`.
-pub fn is_plain_path(file: &Path) -> bool {
-    !file.components().any(|c| c == Component::ParentDir)
-}
-
-/// `file` as of the last commit, as it would be checked out, so that line endings and the like
-/// do not look like changes; None when the commit does not have it.
-pub fn read_at_head(file: &Path) -> Option<Vec<u8>> {
-    let dir = existing_folder(file)?;
-    let relative: PathBuf = file.strip_prefix(dir).ok()?.into();
-    let relative = relative.to_str()?.replace('\\', "/");
-    git(
-        dir,
-        &["cat-file", "--filters", &format!("HEAD:./{relative}")],
-    )
-}
-
-/// The last commit of the repository around `dir`.
-fn head_commit(dir: &Path) -> Option<Commit> {
-    let out = git(dir, &["log", "-1", "--format=%h%x00%s"])?;
-    let out = String::from_utf8_lossy(&out);
-    let (hash, subject) = out.trim_end().split_once('\0')?;
-    Some(Commit {
-        hash: hash.into(),
-        subject: subject.into(),
-    })
-}
-
-/// The files around `dir`, relative to it, that differ from the last commit.
-fn changed_files(dir: &Path) -> Vec<String> {
-    let args = ["diff", "--name-only", "-z", "--relative", "HEAD", "--", "."];
-    let out = git(dir, &args).unwrap_or_default();
-    String::from_utf8_lossy(&out)
-        .split('\0')
-        .filter(|path| !path.is_empty())
-        .map(String::from)
-        .collect()
-}
-
-/// The NUL-separated paths git printed.
-fn paths(out: Option<Vec<u8>>) -> Vec<String> {
-    String::from_utf8_lossy(&out.unwrap_or_default())
-        .split('\0')
-        .filter(|path| !path.is_empty())
-        .map(String::from)
-        .collect()
-}
-
-/// The files around `dir`, relative to it, that differ from the index.
-fn unstaged_files(dir: &Path) -> Vec<String> {
-    let args = ["diff", "--name-only", "-z", "--relative", "--", "."];
-    paths(git(dir, &args))
-}
-
-/// What the next commit takes in: every file of it, and those around `dir`.
-fn staged_files(dir: &Path) -> (usize, usize) {
-    let all = ["diff", "--cached", "--name-only", "-z"];
-    let here = [
-        "diff",
-        "--cached",
-        "--name-only",
-        "-z",
-        "--relative",
-        "--",
-        ".",
-    ];
-    (paths(git(dir, &all)).len(), paths(git(dir, &here)).len())
-}
-
-/// `text`, from git, with the line endings of `deck`. Checkouts can get other ones than the file
-/// has (`core.autocrlf`, the default of git for Windows), and those are not changes to the deck.
-fn matching_endings(text: &str, deck: &str) -> String {
-    let lf = text.replace("\r\n", "\n");
-    match deck.contains("\r\n") {
-        true => lf.replace('\n', "\r\n"),
-        false => lf,
-    }
-}
-
-/// The deck as the index has it; None when it does not have it.
-fn read_index(file: &Path) -> Option<String> {
-    let (dir, name) = split(file).ok()?;
-    let out = git(dir, &["cat-file", "--filters", &format!(":./{name}")])?;
-    Some(String::from_utf8_lossy(&out).into_owned())
-}
-
-/// The deck's folder and file name.
-fn split(file: &Path) -> Result<(&Path, &str)> {
-    let dir = file
-        .parent()
-        .ok_or_else(|| Error::msg("the deck is not in a folder"))?;
-    let name = file.file_name().and_then(|name| name.to_str());
-    Ok((
-        dir,
-        name.ok_or_else(|| Error::msg("the deck's name is not text"))?,
-    ))
-}
-
-/// What the deck's file is staged as from now on, without touching it on disk.
-fn write_index(file: &Path, text: &str) -> Result<()> {
-    let (dir, name) = split(file)?;
-    let listed = git(dir, &["ls-files", "-s", "--", name]).unwrap_or_default();
-    let listed = String::from_utf8_lossy(&listed);
-    let mode = listed
-        .split(' ')
-        .next()
-        .filter(|m| !m.is_empty())
-        .unwrap_or("100644");
-    let path = format!("--path={name}");
-    let args = ["hash-object", "-w", "--stdin", &path];
-    let blob = git_write(dir, &args, text.as_bytes())?;
-    let blob = String::from_utf8_lossy(&blob);
-    let prefix = git(dir, &["rev-parse", "--show-prefix"]).unwrap_or_default();
-    let prefix = String::from_utf8_lossy(&prefix);
-    let entry = format!(
-        "{mode},{},{}{name}",
-        blob.trim(),
-        prefix.trim_end_matches('\n')
-    );
-    git_write(dir, &["update-index", "--add", "--cacheinfo", &entry], b"")?;
-    Ok(())
-}
-
 /// The three versions of a deck.
 struct Versions {
     /// The deck at the last commit; a deck never committed is its shell without any slide, so
@@ -306,21 +145,12 @@ struct Versions {
     in_index: bool,
 }
 
-/// `source` without any of its slides, and without the whitespace before them, so that its
-/// shell hashes like the shell of `source` does: what a deck not committed yet is compared with.
-fn empty_deck(source: &str) -> String {
-    match slides_range(source) {
-        Some(range) => format!(
-            "{}{}",
-            source[..range.start].trim_end(),
-            &source[range.end..]
-        ),
-        None => source.to_string(),
-    }
+fn versions(file: &Path) -> Result<Versions> {
+    Ok(versions_of(file, deck::read_html(file)?))
 }
 
-fn versions(file: &Path) -> Result<Versions> {
-    let work = deck::read_html(file)?;
+/// The versions of the deck `file` that is `work` on disk.
+fn versions_of(file: &Path, work: String) -> Versions {
     let committed = read_at_head(file);
     let in_head = committed.is_some();
     let index = read_index(file).map(|index| matching_endings(&index, &work));
@@ -328,13 +158,13 @@ fn versions(file: &Path) -> Result<Versions> {
         || empty_deck(index.as_deref().unwrap_or(&work)),
         |head| matching_endings(&String::from_utf8_lossy(&head), &work),
     );
-    Ok(Versions {
+    Versions {
         in_index: index.is_some(),
         index: index.unwrap_or_else(|| head.clone()),
         work,
         head,
         in_head,
-    })
+    }
 }
 
 /// What the index has the deck as from now on. A deck not committed yet leaves the index again
@@ -348,17 +178,6 @@ fn update_index(file: &Path, v: &Versions, text: &str) -> Result<()> {
         git_write(dir, &["update-index", "--force-remove", "--", name], b"")?;
     }
     Ok(())
-}
-
-/// Whether `a` and `b` have the same slides in the same order, whatever is between them.
-fn same_slides(a: &str, b: &str) -> bool {
-    let key = |source: &str| -> Vec<(String, String)> {
-        snapshots(source)
-            .into_iter()
-            .map(|slide| (slide.id, slide.hash))
-            .collect()
-    };
-    key(a) == key(b)
 }
 
 /// Adds the changed or new files around the deck that `text` refers to, so that a commit of it
@@ -497,150 +316,9 @@ pub fn commit(file: &Path, message: &str) -> Result<()> {
     Ok(())
 }
 
-/// The markup of the slide `id`, or nothing when `source` does not have it.
-fn slide_of<'a>(source: &'a str, id: &str) -> &'a str {
-    let slides = html::find_slides(source);
-    let at = snapshots(source).iter().position(|slide| slide.id == id);
-    at.map_or("", |at| &source[slides[at].range.clone()])
-}
-
-/// The slide of `base` that is the slide `id` of `version`.
-fn locate(base: &str, version: &str, id: &str) -> Option<usize> {
-    let slides = snapshots(version);
-    let at = slides.iter().position(|slide| slide.id == id)?;
-    match_slides(&snapshots(base), &slides)[at]
-}
-
-/// `base` with `markup` put in where it goes by the order of `from`, whose slide `at` it is:
-/// after the closest slide before it that `base` also has. The slide `leaving` of `base` goes out.
-fn place(base: &str, from: &str, at: usize, markup: &str, leaving: Option<usize>) -> Edited {
-    let spans = html::find_slides(base);
-    let matches = match_slides(&snapshots(base), &snapshots(from));
-    let before = matches[..at]
-        .iter()
-        .rev()
-        .flatten()
-        .copied()
-        .find(|&slide| Some(slide) != leaving);
-    let next = spans
-        .iter()
-        .enumerate()
-        .find(|(index, _)| Some(*index) != leaving)
-        .map(|(_, span)| span);
-    let (spot, piece) = match (before.map(|slide| &spans[slide]), next) {
-        (Some(span), _) => {
-            let indent = html::indent_before(base, span.range.start);
-            (span.range.end, format!("\n{indent}{markup}"))
-        }
-        (None, Some(span)) => {
-            let indent = html::indent_before(base, span.range.start);
-            (span.range.start, format!("{markup}\n{indent}"))
-        }
-        (None, None) if leaving.is_some() => return Ok(base.to_string()),
-        (None, None) => (html::end_of_deck(base)?, format!("\n    {markup}")),
-    };
-    let Some(out) = leaving.map(|slide| out_range(base, &spans[slide])) else {
-        return Ok(format!("{}{piece}{}", &base[..spot], &base[spot..]));
-    };
-    Ok(if spot >= out.end {
-        format!(
-            "{}{}{piece}{}",
-            &base[..out.start],
-            &base[out.end..spot],
-            &base[spot..]
-        )
-    } else {
-        format!(
-            "{}{piece}{}{}",
-            &base[..spot],
-            &base[spot..out.start],
-            &base[out.end..]
-        )
-    })
-}
-
-/// A slide with the whitespace before it.
-fn out_range(source: &str, span: &html::SlideSpan) -> std::ops::Range<usize> {
-    source[..span.range.start].trim_end().len()..span.range.end
-}
-
-/// `base` with one slide made as it is in `from`, where it goes by `id`, or taken out when `from`
-/// does not have it. `other` is that slide's version and id elsewhere, to find it in `base` by.
-fn adopt_slide(base: &str, from: &str, id: Option<&str>, other: (&str, Option<&str>)) -> Edited {
-    let spans = html::find_slides(base);
-    let elsewhere = || other.1.and_then(|other_id| locate(base, other.0, other_id));
-    let Some(id) = id else {
-        return Ok(match elsewhere() {
-            Some(slide) => {
-                let out = out_range(base, &spans[slide]);
-                format!("{}{}", &base[..out.start], &base[out.end..])
-            }
-            None => base.to_string(),
-        });
-    };
-    let slides = snapshots(from);
-    let at = slides
-        .iter()
-        .position(|slide| slide.id == id)
-        .ok_or_else(|| format!("Slide not found: {id}"))?;
-    Ok(match locate(base, from, id).or_else(elsewhere) {
-        Some(slide) => {
-            let range = spans[slide].range.clone();
-            format!(
-                "{}{}{}",
-                &base[..range.start],
-                slides[at].markup,
-                &base[range.end..]
-            )
-        }
-        None => place(base, from, at, &slides[at].markup, None)?,
-    })
-}
-
-/// `base` with the slide `id` of `from` where `from` has it, as far as `base` has the same slides.
-fn move_slide(base: &str, from: &str, id: &str) -> Edited {
-    let at = snapshots(from)
-        .iter()
-        .position(|slide| slide.id == id)
-        .ok_or_else(|| format!("Slide not found: {id}"))?;
-    let Some(slide) = locate(base, from, id) else {
-        return Ok(base.to_string());
-    };
-    let span = &html::find_slides(base)[slide];
-    place(base, from, at, &base[span.range.clone()], Some(slide))
-}
-
-/// Where a deck's slides and section markers are, from the first to the last.
-fn slides_range(source: &str) -> Option<std::ops::Range<usize>> {
-    let slides = html::find_slides(source).into_iter().map(|s| s.range);
-    let sections = html::find_sections(source).into_iter().map(|s| s.range);
-    let ranges: Vec<_> = slides.chain(sections).collect();
-    let start = ranges.iter().map(|r| r.start).min()?;
-    let end = ranges.iter().map(|r| r.end).max()?;
-    Some(start..end)
-}
-
-/// Everything of `shell` but its slides and section markers, which are those of `slides`.
-fn with_slides_of(shell: &str, slides: &str) -> String {
-    let content = slides_range(slides).map_or("", |range| &slides[range]);
-    match slides_range(shell) {
-        Some(range) => format!("{}{content}{}", &shell[..range.start], &shell[range.end..]),
-        None => match html::end_of_deck(shell) {
-            Ok(at) if !content.is_empty() => {
-                format!("{}\n    {content}{}", &shell[..at], &shell[at..])
-            }
-            _ => shell.to_string(),
-        },
-    }
-}
-
 /// Whether the deck `file` is in a git repository; never when git is not installed.
 pub fn in_repository(file: &Path) -> Result<bool> {
     Ok(in_work_tree(split(file)?.0))
-}
-
-fn in_work_tree(dir: &Path) -> bool {
-    git(dir, &["rev-parse", "--is-inside-work-tree"]).is_some()
 }
 
 /// What changed in the deck `file` since the last commit.
@@ -654,20 +332,19 @@ pub fn changes(file: &Path) -> Result<DeckChanges> {
     // A deck in the repository but not in its last commit is compared with its shell alone:
     // every slide is new, and the shell changed once it differs from the index's. Staging
     // works all the same.
-    let commit = head_commit(dir);
-    let committed = commit.as_ref().and_then(|_| read_at_head(file));
-    let commit = commit.filter(|_| committed.is_some());
-    let index = read_index(file).map(|index| matching_endings(&index, &source));
-    let committed = match committed {
-        Some(head) => matching_endings(&String::from_utf8_lossy(&head), &source),
-        None => empty_deck(index.as_deref().unwrap_or(&source)),
-    };
+    let Versions {
+        head: committed,
+        index,
+        work: source,
+        in_head,
+        ..
+    } = versions_of(file, source);
+    let commit = head_commit(dir).filter(|_| in_head);
     let others = |files: Vec<String>| -> Vec<String> {
         files.into_iter().filter(|path| path != name).collect()
     };
     let assets = others(changed_files(dir));
     let old = snapshots(&committed);
-    let index = index.unwrap_or_else(|| committed.clone());
     let staged = snapshots(&index);
     let unstaged = others(unstaged_files(dir));
     let styles_changed = shell(&committed) != shell(&source)
@@ -698,33 +375,6 @@ pub fn changes(file: &Path) -> Result<DeckChanges> {
     })
 }
 
-/// New files around `dir`, relative to it, that are not ignored.
-fn untracked(dir: &Path) -> Vec<String> {
-    paths(git(dir, &["ls-files", "-o", "--exclude-standard", "-z"]))
-}
-
-/// Says of each row of `list`, the deck against the commit, whether the index has that change
-/// already: when the deck against the index, in `against_index`, no longer shows it.
-fn mark_staged(
-    list: &mut [SlideChange],
-    against_index: &[SlideChange],
-    index: &str,
-    committed: &str,
-) {
-    for row in list.iter_mut() {
-        let Some(id) = &row.id else {
-            let old_id = row.old_id.as_deref().unwrap_or("");
-            row.staged = locate(index, committed, old_id).is_none();
-            continue;
-        };
-        let now = against_index.iter().find(|r| r.id.as_ref() == Some(id));
-        let same =
-            now.is_some_and(|r| matches!(r.status, SlideStatus::Unchanged | SlideStatus::Moved));
-        row.staged = same && matches!(row.status, SlideStatus::Added | SlideStatus::Modified);
-        row.move_staged = row.moved && now.is_some_and(|r| !r.moved);
-    }
-}
-
 fn no_repository() -> DeckChanges {
     DeckChanges {
         tracking: Tracking::NoRepository,
@@ -739,412 +389,14 @@ fn no_repository() -> DeckChanges {
     }
 }
 
-/// `source` without its slides.
-fn strip_slides(source: &str) -> String {
-    let mut rest = String::with_capacity(source.len());
-    let mut at = 0;
-    for slide in html::find_slides(source) {
-        rest.push_str(&source[at..slide.range.start]);
-        at = slide.range.end;
-    }
-    rest.push_str(&source[at..]);
-    rest
-}
-
-/// Hash of what the slides share. The player runtime does not count: the app brings it up to date
-/// by itself, and that should not show as a change to every slide.
-fn shell(source: &str) -> String {
-    let source = html::ensure_runtime(source);
-    let spans = html::find_slides(&source);
-    html::shell_hash(&source, &spans, &html::find_sections(&source))
-}
-
-/// One slide of one version of a deck.
-struct Snapshot {
-    id: String,
-    /// Hash of its markup but for its id, which the app may have given it since.
-    hash: String,
-    markup: String,
-    /// The parts that do not show on the slide, under the name [`SlideChange::details`] gives them.
-    parts: [(&'static str, String); 5],
-}
-
-fn snapshots(source: &str) -> Vec<Snapshot> {
-    html::find_slides(source)
-        .iter()
-        .enumerate()
-        .map(|(index, span)| {
-            let markup = &source[span.range.clone()];
-            let unnamed = without_id(source, span);
-            let attr = |attr: &Option<(std::ops::Range<usize>, String)>| {
-                attr.as_ref()
-                    .map(|(_, value)| value.clone())
-                    .unwrap_or_default()
-            };
-            Snapshot {
-                id: span.id.clone().unwrap_or_else(|| format!("#{}", index + 1)),
-                hash: html::content_hash(&unnamed),
-                markup: markup.to_string(),
-                parts: [
-                    ("speaker notes", html::notes(markup)),
-                    ("narration", html::narration(markup)),
-                    ("hidden", span.hidden.is_some().to_string()),
-                    ("locked", span.locked.is_some().to_string()),
-                    (
-                        "timing",
-                        [&span.time, &span.duration, &span.narration_start]
-                            .map(attr)
-                            .join(","),
-                    ),
-                ],
-            }
-        })
-        .collect()
-}
-
-/// A slide's markup without its `id` attribute, however that is written.
-fn without_id(source: &str, span: &html::SlideSpan) -> String {
-    let markup = &source[span.range.clone()];
-    let Some(id) = &span.id_value else {
-        return markup.to_string();
-    };
-    let before = source[span.range.start..id.start].trim_end_matches(['"', '\'']);
-    let name = before.trim_end().strip_suffix('=').unwrap_or(before);
-    let tag = name.trim_end();
-    let tag = tag[..tag.len().saturating_sub("id".len())].trim_end();
-    let after = &source[id.end..span.range.end];
-    format!("{tag}{}", after.trim_start_matches(['"', '\'']))
-}
-
-/// For each slide in `new`, the slide in `old` it is: by id, and failing that by content.
-fn match_slides(old: &[Snapshot], new: &[Snapshot]) -> Vec<Option<usize>> {
-    let mut by_id: HashMap<&str, usize> = HashMap::new();
-    let mut by_hash: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (index, slide) in old.iter().enumerate().rev() {
-        // `#2` only says where a slide without an id is; another slide may be there now.
-        if !slide.id.starts_with('#') {
-            by_id.insert(&slide.id, index);
-        }
-    }
-    let mut matches: Vec<Option<usize>> = new.iter().map(|s| by_id.remove(s.id.as_str())).collect();
-    for (index, slide) in old.iter().enumerate().rev() {
-        if !matches.contains(&Some(index)) {
-            by_hash.entry(&slide.hash).or_default().push(index);
-        }
-    }
-    for (found, slide) in matches.iter_mut().zip(new) {
-        if found.is_none() {
-            *found = by_hash.get_mut(slide.hash.as_str()).and_then(Vec::pop);
-        }
-    }
-    matches
-}
-
-/// The slides that stayed in order: the most `matches` that rise, so that moving one slide far
-/// marks that slide and not all those it passed.
-fn in_order(matches: &[Option<usize>]) -> Vec<bool> {
-    let mut best: Vec<(usize, Option<usize>)> = Vec::with_capacity(matches.len());
-    let mut last = None;
-    for (i, old) in matches.iter().enumerate() {
-        let before = (0..i)
-            .filter(|&j| matches[j].is_some() && matches[j] < *old)
-            .max_by_key(|&j| best[j].0);
-        best.push((1 + before.map_or(0, |j| best[j].0), before));
-        if old.is_some() && last.map_or(true, |l: usize| best[l].0 < best[i].0) {
-            last = Some(i);
-        }
-    }
-    let mut kept = vec![false; matches.len()];
-    while let Some(i) = last {
-        kept[i] = true;
-        last = best[i].1;
-    }
-    kept
-}
-
-/// Every slide of `new` and `old` in deck order, each removed one after the slide it followed.
-/// `assets` are the files around the deck that changed, as slides refer to them.
-fn compare(old: &[Snapshot], new: &[Snapshot], assets: &[String]) -> Vec<SlideChange> {
-    let matches = match_slides(old, new);
-    let kept = in_order(&matches);
-    let new_index: HashMap<usize, usize> = matches
-        .iter()
-        .enumerate()
-        .filter_map(|(new, old)| old.map(|old| (old, new)))
-        .collect();
-
-    // Keyed by where each removed slide goes back in: after that slide of `new`, or at the start.
-    let mut removed: HashMap<Option<usize>, Vec<SlideChange>> = HashMap::new();
-    let mut after = None;
-    for (index, slide) in old.iter().enumerate() {
-        if let Some(&new) = new_index.get(&index) {
-            after = Some(new);
-            continue;
-        }
-        removed.entry(after).or_default().push(SlideChange {
-            key: format!("removed:{index}"),
-            status: SlideStatus::Removed,
-            id: None,
-            old_id: Some(slide.id.clone()),
-            details: Vec::new(),
-            moved: false,
-            old_number: Some(index + 1),
-            staged: false,
-            move_staged: false,
-        });
-    }
-
-    let mut list = removed.remove(&None).unwrap_or_default();
-    for (index, slide) in new.iter().enumerate() {
-        let was = matches[index].map(|i| (i, &old[i]));
-        list.push(change(slide, was, kept[index], assets));
-        list.extend(removed.remove(&Some(index)).unwrap_or_default());
-    }
-    list
-}
-
-fn change(
-    slide: &Snapshot,
-    old: Option<(usize, &Snapshot)>,
-    in_place: bool,
-    assets: &[String],
-) -> SlideChange {
-    let row = |status, old_id, details, moved, old_number| SlideChange {
-        key: slide.id.clone(),
-        status,
-        id: Some(slide.id.clone()),
-        old_id,
-        details,
-        moved,
-        old_number,
-        staged: false,
-        move_staged: false,
-    };
-    let Some((index, old)) = old else {
-        return row(SlideStatus::Added, None, Vec::new(), false, None);
-    };
-    let parts = slide.parts.iter().zip(&old.parts);
-    let details: Vec<String> = parts
-        .filter(|(new, old)| new.1 != old.1)
-        .map(|(new, _)| new.0.to_string())
-        .chain(assets.iter().filter(|a| slide.markup.contains(*a)).cloned())
-        .collect();
-    let status = if slide.hash != old.hash || !details.is_empty() {
-        SlideStatus::Modified
-    } else if in_place {
-        SlideStatus::Unchanged
-    } else {
-        SlideStatus::Moved
-    };
-    row(
-        status,
-        Some(old.id.clone()),
-        details,
-        !in_place,
-        Some(index + 1),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::fixtures::*;
     use std::fs;
-
-    fn deck(slides: &[&str]) -> String {
-        deck_styled("red", slides)
-    }
-
-    fn deck_styled(color: &str, slides: &[&str]) -> String {
-        let slides: Vec<String> = slides
-            .iter()
-            .map(|slide| match slide.split_once('=') {
-                Some((id, text)) => {
-                    format!("<section class=\"slide\" id=\"{id}\"><h1>{text}</h1></section>")
-                }
-                None => format!("<section class=\"slide\"><h1>{slide}</h1></section>"),
-            })
-            .collect();
-        format!(
-            "<!DOCTYPE html><html><head><title>Talk</title><style>h1 {{ color: {color} }}</style></head>\n<body><main class=\"deck\">\n{}\n</main></body></html>\n",
-            slides.join("\n")
-        )
-    }
-
-    /// `(status, id, old id)` of each row.
-    fn rows(old: &str, new: &str) -> Vec<(SlideStatus, Option<String>, Option<String>)> {
-        compare(&snapshots(old), &snapshots(new), &[])
-            .into_iter()
-            .map(|row| (row.status, row.id, row.old_id))
-            .collect()
-    }
-
-    fn statuses(old: &str, new: &str) -> Vec<(SlideStatus, String)> {
-        rows(old, new)
-            .into_iter()
-            .map(|(status, id, old_id)| (status, id.or(old_id).unwrap()))
-            .collect()
-    }
-
-    use SlideStatus::{Added, Modified, Moved, Removed, Unchanged};
-
-    fn expect(rows: &[(SlideStatus, &str)]) -> Vec<(SlideStatus, String)> {
-        rows.iter().map(|(s, id)| (*s, id.to_string())).collect()
-    }
-
-    #[test]
-    fn tells_added_removed_and_modified_slides_apart() {
-        let old = deck(&["a=A", "b=B", "c=C"]);
-        let new = deck(&["a=A", "b=Bee", "d=D"]);
-        assert_eq!(
-            statuses(&old, &new),
-            expect(&[
-                (Unchanged, "a"),
-                (Modified, "b"),
-                (Removed, "c"),
-                (Added, "d")
-            ])
-        );
-    }
-
-    #[test]
-    fn removed_slides_stay_where_they_were() {
-        let old = deck(&["a=A", "b=B", "c=C", "d=D"]);
-        assert_eq!(
-            statuses(&old, &deck(&["c=C", "d=D"])),
-            expect(&[
-                (Removed, "a"),
-                (Removed, "b"),
-                (Unchanged, "c"),
-                (Unchanged, "d")
-            ])
-        );
-        assert_eq!(
-            statuses(&old, &deck(&["a=A", "d=D"])),
-            expect(&[
-                (Unchanged, "a"),
-                (Removed, "b"),
-                (Removed, "c"),
-                (Unchanged, "d")
-            ])
-        );
-    }
-
-    #[test]
-    fn a_slide_moved_far_is_the_one_marked() {
-        let old = deck(&["a=A", "b=B", "c=C", "d=D"]);
-        let new = deck(&["d=D", "a=A", "b=B", "c=C"]);
-        assert_eq!(
-            statuses(&old, &new),
-            expect(&[
-                (Moved, "d"),
-                (Unchanged, "a"),
-                (Unchanged, "b"),
-                (Unchanged, "c")
-            ])
-        );
-    }
-
-    #[test]
-    fn a_changed_slide_that_moved_is_both() {
-        let old = deck(&["a=A", "b=B", "c=C"]);
-        let new = deck(&["c=Cee", "a=A", "b=B"]);
-        let list = compare(&snapshots(&old), &snapshots(&new), &[]);
-        assert_eq!(list[0].status, Modified);
-        assert!(list[0].moved, "the edit must not hide the move");
-        assert_eq!(list[0].old_number, Some(3));
-        assert!(!list[1].moved);
-    }
-
-    #[test]
-    fn a_slide_that_got_its_id_later_is_still_the_same_slide() {
-        let old = deck(&["A", "B"]);
-        let new = deck(&["intro=A", "plan=B"]);
-        assert_eq!(
-            rows(&old, &new),
-            vec![
-                (Unchanged, Some("intro".into()), Some("#1".into())),
-                (Unchanged, Some("plan".into()), Some("#2".into())),
-            ]
-        );
-    }
-
-    #[test]
-    fn ignores_the_id_however_it_is_written() {
-        let hash = |tag: &str| {
-            snapshots(&format!("<main class=\"deck\">{tag}A</section></main>"))[0]
-                .hash
-                .clone()
-        };
-        let plain = hash("<section class=\"slide\">");
-        assert_eq!(hash("<section id=\"a\" class=\"slide\">"), plain);
-        assert_eq!(hash("<section class=\"slide\" id='a'>"), plain);
-        assert_eq!(hash("<section class=\"slide\" id = \"a\">"), plain);
-        assert_eq!(hash("<section class=\"slide\" id=a>"), plain);
-    }
-
-    #[test]
-    fn a_position_is_not_an_identity() {
-        // The second slide of each deck is another slide, though both go by `#2`.
-        let old = deck(&["A", "B"]);
-        let new = deck(&["A", "C"]);
-        assert_eq!(
-            statuses(&old, &new),
-            expect(&[(Unchanged, "#1"), (Removed, "#2"), (Added, "#2")])
-        );
-    }
-
-    #[test]
-    fn equal_slides_pair_up_once_each() {
-        let old = deck(&["same", "same"]);
-        let new = deck(&["x=same", "y=same", "z=same"]);
-        assert_eq!(
-            statuses(&old, &new),
-            expect(&[(Unchanged, "x"), (Unchanged, "y"), (Added, "z")])
-        );
-    }
-
-    #[test]
-    fn names_what_the_picture_does_not_show() {
-        let old = deck(&["a=A", "b=B"]);
-        let new = old
-            .replace(
-                "<h1>A</h1>",
-                "<h1>A</h1><aside class=\"notes\">Say hello</aside>",
-            )
-            .replace("id=\"b\"", "id=\"b\" data-hidden");
-        let list = compare(&snapshots(&old), &snapshots(&new), &[]);
-        assert_eq!(list[0].status, Modified);
-        assert_eq!(list[0].details, ["speaker notes"]);
-        assert_eq!(list[1].details, ["hidden"]);
-    }
-
-    #[test]
-    fn a_slide_showing_a_changed_asset_is_modified() {
-        let old = deck(&["a=<img src='assets/a.png'>", "b=B"]);
-        let assets = ["assets/a.png".to_string()];
-        let list = compare(&snapshots(&old), &snapshots(&old), &assets);
-        assert_eq!(list[0].status, Modified);
-        assert_eq!(list[0].details, assets);
-        assert_eq!(list[1].status, Unchanged);
-    }
-
-    #[test]
-    fn the_runtime_is_not_a_change_but_the_styles_are() {
-        let plain = deck(&["a=A"]);
-        assert_eq!(shell(&plain), shell(&html::ensure_runtime(&plain)));
-        assert_ne!(shell(&plain), shell(&deck_styled("blue", &["a=A"])));
-        assert_eq!(
-            shell(&plain),
-            shell(&deck(&["a=A", "b=B"])),
-            "slides are not styles"
-        );
-    }
-
-    #[test]
-    fn plain_paths_have_no_way_up() {
-        assert!(is_plain_path(Path::new("/a/b/deck.html")));
-        assert!(!is_plain_path(Path::new("/a/../b/deck.html")));
-    }
+    use std::path::PathBuf;
+    use std::process::Command;
+    use SlideStatus::{Added, Modified, Removed, Unchanged};
 
     /// A folder with a git repository in it, with the repository's commits made by a fixed person.
     struct Repo(PathBuf);
@@ -1830,11 +1082,5 @@ mod tests {
         assert!(found.slides[0].staged);
         assert!(!found.has_unstaged);
         assert!(!found.styles_changed);
-    }
-
-    #[test]
-    fn matches_the_line_endings_of_the_deck() {
-        assert_eq!(matching_endings("a\r\nb\n", "x\ny"), "a\nb\n");
-        assert_eq!(matching_endings("a\r\nb\n", "x\r\ny"), "a\r\nb\r\n");
     }
 }

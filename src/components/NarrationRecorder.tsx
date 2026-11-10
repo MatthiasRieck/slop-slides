@@ -1,9 +1,10 @@
-import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 
-import { api, errorMessage, type NarrationRecordMode, type VoiceDownloadProgress } from "../lib/api";
+import { type SpeechModelPhase, useSpeechModel } from "../hooks/useSpeechModel";
+import { useTauriEvent } from "../hooks/useTauriEvent";
+import { api, type NarrationRecordMode } from "../lib/api";
 
-export type RecorderPhase = "off" | "offer" | "downloading" | "starting" | "recording" | "saving";
+export type RecorderPhase = SpeechModelPhase | "recording" | "saving";
 
 /**
  * Takes down what the presenter says while they go through the slides, to make the deck's
@@ -15,106 +16,63 @@ export type RecorderPhase = "off" | "offer" | "downloading" | "starting" | "reco
  * with it, and what was recorded is kept.
  */
 export function useNarrationRecorder(deck: string, slide: string | null) {
-  const [phase, setPhase] = useState<RecorderPhase>("off");
+  // Ends the recording, if it runs; what was said is kept.
+  const model = useSpeechModel<"recording" | "saving">(
+    "narration-record-failed",
+    () => void api.stopNarrationRecording(),
+  );
+  const { phase, setPhase } = model;
   const [mode, setMode] = useState<NarrationRecordMode>("text");
-  const [modelBytes, setModelBytes] = useState(0);
-  const [progress, setProgress] = useState<VoiceDownloadProgress | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const active = useRef(false);
-  const mounted = useRef(true);
   const slideRef = useRef(slide);
   slideRef.current = slide;
-
-  const fail = (reason: unknown) => {
-    active.current = false;
-    setPhase("off");
-    setError(errorMessage(reason));
-  };
 
   const record = async (next: NarrationRecordMode) => {
     const from = slideRef.current;
     if (!from) return setPhase("off");
     setPhase("starting");
     await api.startNarrationRecording(deck, from, next);
-    active.current = true;
-    if (mounted.current) setPhase("recording");
-    else endRecording(active);
-  };
-
-  const download = async () => {
-    setProgress(null);
-    setPhase("downloading");
-    try {
-      await api.downloadVoiceModel();
-      if (mounted.current) await record("text");
-    } catch (reason) {
-      fail(reason);
-    }
+    model.started("recording");
   };
 
   const stop = async () => {
-    active.current = false;
+    model.released();
     setPhase("saving");
     try {
       await api.stopNarrationRecording();
-      if (mounted.current) setPhase("off");
+      if (model.isMounted()) setPhase("off");
     } catch (reason) {
-      fail(reason);
+      model.fail(reason);
     }
   };
 
   const toggle = async (next: NarrationRecordMode) => {
-    setError(null);
+    model.setError(null);
     if (phase === "recording") return mode === next ? stop() : undefined;
     if (phase === "offer") return setPhase("off");
     if (phase !== "off") return;
     setMode(next);
     try {
       if (next === "audio") return await record(next);
-      const status = await api.voiceStatus();
-      setModelBytes(status.modelBytes);
-      if (status.modelReady) await record(next);
-      // A download already running (started from the chat) is waited for.
-      else if (status.downloading) await download();
-      else setPhase("offer");
+      await model.withModel(() => record(next));
     } catch (reason) {
-      fail(reason);
+      model.fail(reason);
     }
   };
-
-  useEffect(() => {
-    mounted.current = true;
-    const off = listen<string>("narration-record-failed", (event) => {
-      if (!active.current) return;
-      endRecording(active);
-      setPhase("off");
-      setError(event.payload);
-    });
-    return () => {
-      mounted.current = false;
-      void off.then((fn) => fn());
-      endRecording(active);
-    };
-  }, []);
 
   useEffect(() => {
     if (phase === "recording" && slide) void api.narrationRecordingSlide(slide);
   }, [phase, slide]);
 
-  useEffect(() => {
-    if (phase !== "downloading") return;
-    const off = listen<VoiceDownloadProgress>("voice-download", (event) => setProgress(event.payload));
-    return () => void off.then((fn) => fn());
-  }, [phase]);
-
-  return { phase, mode, modelBytes, progress, error, toggle, download, decline: () => setPhase("off") };
-}
-
-/** Ends the recording, if it runs; what was said is kept. */
-function endRecording(active: { current: boolean }) {
-  if (!active.current) return;
-  active.current = false;
-  void api.stopNarrationRecording();
+  return {
+    phase,
+    mode,
+    modelBytes: model.modelBytes,
+    progress: model.progress,
+    error: model.error,
+    toggle,
+    download: () => model.download(() => record("text")),
+    decline: () => setPhase("off"),
+  };
 }
 
 /** What is being recorded, and that the microphone hears the presenter. */
@@ -144,10 +102,7 @@ export function RecordingStatus(props: { recorder: ReturnType<typeof useNarratio
 
 function LevelDot() {
   const [level, setLevel] = useState(0);
-  useEffect(() => {
-    const off = listen<number>("voice-level", (event) => setLevel(event.payload));
-    return () => void off.then((fn) => fn());
-  }, []);
+  useTauriEvent("voice-level", setLevel);
   return (
     <span
       aria-hidden

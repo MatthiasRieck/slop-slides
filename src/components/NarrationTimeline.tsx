@@ -1,58 +1,34 @@
 import { Minus, Pause, Play, Plus, RotateCcw, StepBack, StepForward } from "lucide-react";
-import {
-  type KeyboardEvent,
-  type MouseEvent,
-  type PointerEvent,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { type KeyboardEvent, type MouseEvent, type PointerEvent, useLayoutEffect, useRef, useState } from "react";
 
 import type { Deck, Slide, SlideAudio, SlideTiming } from "../lib/api";
 import { formatDuration } from "../lib/narrationAudio";
-import { setSlideClock } from "../lib/slideClock";
 import { pixelsOf } from "../lib/slideSize";
 import {
   layoutTimeline,
   moveClip,
   moveEdge,
-  slideAt,
   spokenSeconds,
   type Timeline,
   type TimelineClip,
   withTiming,
 } from "../lib/timeline";
-import { playTimeline } from "../lib/timelinePlayback";
 import { cn } from "../lib/utils";
 import { loadVideoOptions } from "../lib/video";
-import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { Button } from "./Button";
 import { usePeaks, useWords, Waveform, Words } from "./NarrationWave";
+import { useDeckAudio } from "./narration/useDeckAudio";
+import { useTimelinePlayback } from "./narration/useTimelinePlayback";
+import { type Move, useTimingEdits } from "./narration/useTimingEdits";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
-const NO_AUDIO: Record<string, SlideAudio> = {};
 /** The zoom steps of the track: how many times the width of the panel it is. */
 const ZOOMS = [1, 2, 4, 8, 16];
-/** How far the pointer goes before pressing something is moving it, in pixels. */
-const DRAG_START = 3;
-/** How far the arrow keys move an edge or a narration, in seconds; with Shift, a second. */
+/** How far the step buttons move the playhead, in seconds; with Shift, a second. */
 const STEP = 0.1;
 /** How narrow a slide can be and still have room for its picture, in pixels. */
 const PICTURE_WIDTH = 72;
-
-/** What to save for what is pressed to move by some seconds. */
-type Move = (by: number) => SlideTiming[];
-
-/** A drag in progress: what it moves, where the pointer started, and how far a pixel goes. */
-interface Drag {
-  move: Move;
-  target: Element;
-  x: number;
-  secondsPerPixel: number;
-  moved: boolean;
-}
 
 /**
  * The deck on a timeline, under the slide in Play mode: the shown slides above their audio,
@@ -66,7 +42,7 @@ interface Drag {
  */
 export function NarrationTimeline() {
   const deck = useApp((s) => s.deck);
-  const audio = useNarration((s) => (s.audioDeck === deck?.id ? s.audio : NO_AUDIO));
+  const audio = useDeckAudio(deck?.id);
   if (!deck) return null;
   const slides = deck.slides.filter((s) => !s.hidden);
   if (slides.length === 0) return null;
@@ -87,14 +63,9 @@ function Tracks(props: {
   const timeline = layout([]);
   const selected = useApp((s) => s.selected);
   const [zoom, setZoom] = useState(1);
-  const [time, setTime] = useState(0);
-  const [stop, setStop] = useState<(() => void) | null>(null);
-  // What a drag would save, until it is saved.
-  const [preview, setPreview] = useState<SlideTiming[] | null>(null);
-  // How long the track was when a drag took off: until it ends, a second stays as wide.
-  const [held, setHeld] = useState<number | null>(null);
-  const drag = useRef<Drag | null>(null);
   const track = useRef<HTMLDivElement>(null);
+  const { time, playing, play, freeze, select } = useTimelinePlayback(deck, timeline);
+  const { shown, end, held, press, pointed, release, nudge } = useTimingEdits(layout, timeline, track);
 
   const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
@@ -104,99 +75,9 @@ function Tracks(props: {
     return () => observer.disconnect();
   }, []);
 
-  // Replacing what stops it stops it, and so does leaving.
-  useEffect(() => stop ?? undefined, [stop]);
-  // A changed deck has another timeline than the one playing.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: Runs on every change of the deck.
-  useEffect(() => {
-    setStop(null);
-    setSlideClock(null);
-  }, [deck]);
-  useEffect(() => () => setSlideClock(null), []);
-
-  /** Puts the slide showing at `at` (and its timed animations) where the timeline is then; `paused`, they stay there. */
-  const clockAt = (at: number, paused = false) => {
-    const slide = timeline.slides[slideAt(timeline, at)];
-    setSlideClock(slide ? { slide: slide.id, at: at - slide.start, ...(paused && { paused }) } : null);
-  };
-  const select = (index: number) => {
-    const slide = timeline.slides[index];
-    if (slide) useApp.getState().select(slide.id);
-  };
-  const play = () => {
-    if (stop) return freeze(time);
-    const from = time >= timeline.end ? 0 : time;
-    setTime(from);
-    select(slideAt(timeline, from));
-    const stopping = playTimeline(deck.id, timeline, from, {
-      slide: select,
-      tick: (at) => {
-        setTime(at);
-        clockAt(at);
-      },
-      ended: () => {
-        setStop(null);
-        setTime(0);
-        setSlideClock(null);
-      },
-    });
-    setStop(() => stopping);
-  };
-
-  const shown = preview ? layout(preview) : timeline;
-  const end = Math.max(timeline.end, shown.end);
   const percent = (seconds: number) => `${(seconds / end) * 100}%`;
   const now = Math.min(time, shown.end);
 
-  // Past the end of the panel, the track scrolls to keep what is dragged in sight.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: What is dragged moves with the preview.
-  useLayoutEffect(() => {
-    drag.current?.target.scrollIntoView?.({ inline: "nearest", block: "nearest" });
-  }, [preview]);
-
-  const finish = (timing: SlideTiming[]) => {
-    setPreview(timing);
-    void useApp
-      .getState()
-      .setSlideTiming(timing)
-      .then(() => setPreview((current) => (current === timing ? null : current)));
-  };
-  const nudge = (event: KeyboardEvent, move: Move) => {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-    event.preventDefault();
-    event.stopPropagation();
-    finish(move((event.shiftKey ? 1 : STEP) * (event.key === "ArrowLeft" ? -1 : 1)));
-  };
-  const press = (event: PointerEvent, move: Move) => {
-    if (event.button !== 0) return;
-    event.stopPropagation();
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    const secondsPerPixel = end / (track.current?.getBoundingClientRect().width || 1);
-    drag.current = { move, target: event.currentTarget, x: event.clientX, secondsPerPixel, moved: false };
-  };
-  const pointed = (event: PointerEvent) => {
-    const dragged = drag.current;
-    if (!dragged) return;
-    const pixels = event.clientX - dragged.x;
-    if (!dragged.moved && Math.abs(pixels) < DRAG_START) return;
-    dragged.moved = true;
-    setHeld((length) => length ?? end);
-    setPreview(dragged.move(pixels * dragged.secondsPerPixel));
-  };
-  const release = () => {
-    const dragged = drag.current;
-    drag.current = null;
-    setHeld(null);
-    if (dragged?.moved && preview) finish(preview);
-  };
-  /** Stops at `at`, the stage showing that moment and staying on it. */
-  const freeze = (at: number) => {
-    const to = Math.min(timeline.end, Math.max(0, at));
-    setStop(null);
-    setTime(to);
-    select(slideAt(timeline, to));
-    clockAt(to, true);
-  };
   const seek = (event: PointerEvent<HTMLDivElement>) => {
     // Pressed, or dragged along with the button down.
     if (event.type === "pointermove" ? !(event.buttons & 1) : event.button !== 0) return;
@@ -228,8 +109,8 @@ function Tracks(props: {
             <StepBack />
           </Button>
           <Button size="xs" onClick={play}>
-            {stop ? <Pause /> : <Play />}
-            {stop ? "Pause" : "Play"}
+            {playing ? <Pause /> : <Play />}
+            {playing ? "Pause" : "Play"}
           </Button>
           <Button
             size="xs"

@@ -4,8 +4,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import EDITOR from "../../src-tauri/assets/editor.js?raw";
 import PASTEBOARD from "../../src-tauri/assets/pasteboard.js?raw";
+import { EDITOR } from "./editorSource";
 
 const SCALES =
   "red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|slate|gray|zinc|neutral|stone";

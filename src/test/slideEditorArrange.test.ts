@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * Selection and arrangement in the slide editor (src-tauri/assets/editor.js): several selected
+ * Selection and arrangement in the slide editor (src-tauri/assets/editor/): several selected
  * elements, the marquee, ⌘A and Tab, duplicates, smart guides, align and distribute, geometry.
  * jsdom lays nothing out, so each element gets a box that follows its inline `translate`.
  */

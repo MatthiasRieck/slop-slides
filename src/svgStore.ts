@@ -4,7 +4,7 @@ import { parseSvg, replaceSvgInSlide } from "./lib/svgEdit";
 import { useApp } from "./store";
 import { confirmDiscard } from "./store/confirm";
 
-/** What the slide editor hands over to open a drawing (see "slop:edit-open-svg" in editor.js). */
+/** What the slide editor hands over to open a drawing (see "slop:edit-open-svg" in assets/editor/). */
 export interface SvgOpen {
   deckId: string;
   slide: string;

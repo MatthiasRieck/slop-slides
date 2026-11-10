@@ -1,6 +1,6 @@
 /**
  * The edit toolbar's tools and styles: the pure parts, shared by the stage and its tests. The
- * slide editor (src-tauri/assets/editor.js) applies them in the slide's preview.
+ * slide editor (src-tauri/assets/editor/) applies them in the slide's preview.
  */
 
 import { SWATCHES } from "./palette";
@@ -55,7 +55,7 @@ export type HeadKind = "arrow" | "triangle" | "bar" | "dot";
 /** How a line goes between its ends: straight or curved through its points, or as a connector. */
 export type LineRoute = "straight" | "elbow" | "curved";
 
-/** A figure's proportions, as the slide editor reports them (see `FIGURES` in editor.js). */
+/** A figure's proportions, as the slide editor reports them (see `FIGURES` in assets/editor/). */
 export interface ShapeAdjust {
   value: number;
   min: number;
@@ -119,7 +119,7 @@ export interface EditStyle {
   flipY?: boolean;
 }
 
-/** What the slide editor reports about the selected element (see `describe` in editor.js). */
+/** What the slide editor reports about the selected element (see `describe` in assets/editor/). */
 export interface EditSelection {
   /** `text`, `shape` or `drawing` for elements the user added; `media` or `element` otherwise. */
   kind: string;
@@ -178,7 +178,7 @@ export interface EditSelection {
   locked: boolean;
 }
 
-/** The element a right-click selected, as the slide editor reports it (see `slop:edit-menu` in editor.js). */
+/** The element a right-click selected, as the slide editor reports it (see `slop:edit-menu` in assets/editor/). */
 export interface EditElement {
   /** A CSS selector for it, starting at its slide. */
   path: string;
@@ -415,7 +415,7 @@ export const SYSTEM_FONTS: FontChoice[] = [
   { name: "Courier New", stack: '"Courier New", Courier, monospace' },
 ];
 
-/** The deck fonts the slide editor reported (see `deckFonts` in editor.js). */
+/** The deck fonts the slide editor reported (see `deckFonts` in assets/editor/). */
 export function parseFonts(value: unknown): FontChoice[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((f) =>
@@ -437,7 +437,7 @@ export interface DeckColor {
   value: string;
 }
 
-/** The deck colors the slide editor reported (see `deckColors` in editor.js). */
+/** The deck colors the slide editor reported (see `deckColors` in assets/editor/). */
 export function parseDeckColors(value: unknown): DeckColor[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((c) => {

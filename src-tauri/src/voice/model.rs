@@ -122,12 +122,7 @@ fn finish_download(part: &Path, dest: &Path, hash: &str, expected: &str) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("slopslide-voice-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use crate::test_support::TempDir;
 
     #[test]
     fn the_model_lives_in_the_app_home_models_folder() {
@@ -148,26 +143,24 @@ mod tests {
 
     #[test]
     fn a_download_with_the_right_checksum_moves_into_place() {
-        let dir = temp_dir();
+        let dir = TempDir::new("voice");
         let (part, dest) = (dir.join("m.part"), dir.join("m.bin"));
         fs::write(&part, b"hello").unwrap();
         let hash = format!("{:x}", Sha256::digest(b"hello"));
         finish_download(&part, &dest, &hash, &hash.to_uppercase()).unwrap();
         assert_eq!(fs::read(&dest).unwrap(), b"hello");
         assert!(!part.exists());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn a_damaged_download_is_deleted() {
-        let dir = temp_dir();
+        let dir = TempDir::new("voice");
         let (part, dest) = (dir.join("m.part"), dir.join("m.bin"));
         fs::write(&part, b"hello").unwrap();
         let err = finish_download(&part, &dest, "abc", MODEL.sha256).unwrap_err();
         assert!(err.to_string().contains("checksum"));
         assert!(!part.exists());
         assert!(!dest.exists());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

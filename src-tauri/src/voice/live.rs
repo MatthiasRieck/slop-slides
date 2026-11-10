@@ -249,12 +249,7 @@ mod tests {
 
     use super::*;
     use crate::error::Error;
-
-    fn temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("slopslide-voice-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use crate::test_support::TempDir;
 
     #[test]
     fn a_pass_comes_after_the_interval_unless_the_session_ended() {
@@ -296,8 +291,8 @@ mod tests {
         assert_eq!(take.samples.len() + samples.len(), rate * 25);
     }
 
-    fn narrated_deck() -> (PathBuf, PathBuf) {
-        let dir = temp_dir();
+    fn narrated_deck() -> (TempDir, PathBuf) {
+        let dir = TempDir::new("voice");
         let file = dir.join("deck.html");
         fs::write(
             &file,
@@ -331,7 +326,7 @@ mod tests {
 
     #[test]
     fn text_goes_on_within_a_visit_and_starts_a_paragraph_on_a_new_one() {
-        let (dir, file) = narrated_deck();
+        let (_dir, file) = narrated_deck();
         let target = target(&file, RecordMode::Text);
         let say = |text: &'static str, goes_on: bool| {
             keep_take(&target, &speech("a"), WHISPER_RATE, goes_on, |_| {
@@ -345,12 +340,11 @@ mod tests {
         // Whisper heard nothing.
         assert!(!say("", true).unwrap());
         assert_eq!(narration_of(&file, "a"), "So, um this one\n\nand again");
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn silence_and_locked_slides_are_not_kept() {
-        let (dir, file) = narrated_deck();
+        let (_dir, file) = narrated_deck();
         for mode in [RecordMode::Text, RecordMode::Audio] {
             let target = target(&file, mode);
             let never = |_: &[f32]| panic!("nothing to transcribe");
@@ -362,12 +356,11 @@ mod tests {
         }
         assert_eq!(narration_of(&file, "a"), "So,");
         assert!(!narration::audio_dir(&file).exists());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn audio_goes_to_the_slides_recording_without_transcribing() {
-        let (dir, file) = narrated_deck();
+        let (_dir, file) = narrated_deck();
         let target = target(&file, RecordMode::Audio);
         let never = |_: &[f32]| panic!("audio needs no transcript");
         assert!(keep_take(&target, &speech("a"), WHISPER_RATE, false, never).unwrap());
@@ -375,17 +368,15 @@ mod tests {
         assert!(audio[0].recorded);
         assert_eq!(audio[0].seconds, Some(1.0));
         assert_eq!(narration_of(&file, "a"), "So,");
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn transcribing_a_take_that_fails_says_so() {
-        let (dir, file) = narrated_deck();
+        let (_dir, file) = narrated_deck();
         let target = target(&file, RecordMode::Text);
         let result = keep_take(&target, &speech("a"), WHISPER_RATE, false, |_| {
             Err(Error::msg("no model"))
         });
         assert_eq!(result.unwrap_err().to_string(), "no model");
-        fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -346,13 +346,13 @@ fn canonical(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
 
-    struct Temp(PathBuf);
+    struct Temp(TempDir);
 
     impl Temp {
         fn new() -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("slopslide-sessions-{}", uuid::Uuid::new_v4()));
+            let dir = TempDir::new("sessions");
             fs::create_dir_all(dir.join("library")).unwrap();
             fs::create_dir_all(dir.join("home")).unwrap();
             Temp(dir)
@@ -368,12 +368,6 @@ mod tests {
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join("deck.html"), "<html></html>").unwrap();
             dir
-        }
-    }
-
-    impl Drop for Temp {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
         }
     }
 

@@ -286,10 +286,11 @@ fn encoded_image() -> Option<(Vec<u8>, &'static str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
     use std::fs;
 
-    fn workspace() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("slop-clipboard-{}", uuid::Uuid::new_v4()));
+    fn workspace() -> TempDir {
+        let dir = TempDir::new("clipboard");
         fs::create_dir_all(dir.join("talk")).unwrap();
         fs::write(dir.join("talk/deck.html"), "<main class=\"deck\"></main>").unwrap();
         dir

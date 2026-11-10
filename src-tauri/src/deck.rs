@@ -802,6 +802,7 @@ pub fn lint(file: &Path, session: Option<&Path>) -> Result<Vec<lint::Issue>> {
 mod tests {
     use super::*;
     use crate::guard::guard_locked;
+    use crate::test_support::TempDir;
     use std::time::SystemTime;
 
     #[test]
@@ -837,7 +838,8 @@ mod tests {
     }
 
     /// A throwaway deck folder holding `html` as deck.html.
-    struct TempDeck(PathBuf);
+    /// A deck folder, `deck/` in a temporary folder that also holds its session.
+    struct TempDeck(PathBuf, TempDir);
 
     impl TempDeck {
         /// The deck file, deck.html.
@@ -845,24 +847,18 @@ mod tests {
             self.0.join(DECK_FILE)
         }
         fn new(html: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("slopslide-test-{}", uuid::Uuid::new_v4()));
+            let temp = TempDir::new("test");
+            let dir = temp.join("deck");
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join(DECK_FILE), html).unwrap();
-            TempDeck(dir)
+            TempDeck(dir, temp)
         }
         fn html(&self) -> String {
             fs::read_to_string(self.0.join(DECK_FILE)).unwrap()
         }
         /// The deck's session folder, outside the deck.
         fn session(&self) -> PathBuf {
-            PathBuf::from(format!("{}-session", self.0.display()))
-        }
-    }
-
-    impl Drop for TempDeck {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(self.session());
-            let _ = fs::remove_dir_all(&self.0);
+            self.1.join("session")
         }
     }
 
@@ -1322,25 +1318,17 @@ mod tests {
     }
 
     /// A throwaway library folder.
-    struct TempLib(PathBuf);
+    struct TempLib(TempDir);
 
     impl TempLib {
         fn new() -> Self {
-            let dir = std::env::temp_dir().join(format!("slopslide-lib-{}", uuid::Uuid::new_v4()));
-            fs::create_dir_all(&dir).unwrap();
-            TempLib(dir)
+            TempLib(TempDir::new("lib"))
         }
         fn add(&self, id: &str, html: &str) -> PathBuf {
             let dir = self.0.join(id);
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join(DECK_FILE), html).unwrap();
             dir
-        }
-    }
-
-    impl Drop for TempLib {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
         }
     }
 

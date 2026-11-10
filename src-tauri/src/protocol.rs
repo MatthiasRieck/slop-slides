@@ -254,6 +254,7 @@ fn read_at_head(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
 
     #[test]
     fn plain_paths_have_no_way_up() {
@@ -335,8 +336,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn serves_a_file_url_from_a_canonical_windows_workspace() {
-        let root =
-            std::env::temp_dir().join(format!("slopslide-canonical-{}", uuid::Uuid::new_v4()));
+        let root = TempDir::new("canonical");
         std::fs::create_dir_all(root.join("my talk")).unwrap();
         let file = root.join("my talk/deck.html");
         std::fs::write(&file, "<html>canonical deck</html>").unwrap();
@@ -352,7 +352,6 @@ mod tests {
             .unwrap();
         let (_, path) = split(raw).unwrap();
         let served = read_in_workspace(&open, &path);
-        std::fs::remove_dir_all(root).unwrap();
         assert_eq!(
             served,
             Ok((
@@ -453,7 +452,7 @@ mod tests {
 
     #[test]
     fn serves_files_inside_the_open_workspace_only() {
-        let root = std::env::temp_dir().join(format!("slopslide-proto-{}", uuid::Uuid::new_v4()));
+        let root = TempDir::new("proto");
         let ws = root.join("ws");
         std::fs::create_dir_all(ws.join("talk/assets")).unwrap();
         std::fs::write(ws.join("talk/q3.html"), "<html>").unwrap();
@@ -487,13 +486,11 @@ mod tests {
             read(ws.join("talk/../../secret.txt")),
             Err(StatusCode::FORBIDDEN)
         );
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn serves_committed_files_inside_the_open_workspace_only() {
-        let root = std::env::temp_dir().join(format!("slopslide-proto-{}", uuid::Uuid::new_v4()));
+        let root = TempDir::new("proto");
         let ws = root.join("ws");
         std::fs::create_dir_all(ws.join("assets")).unwrap();
         std::fs::write(ws.join("deck.html"), "old").unwrap();
@@ -550,13 +547,11 @@ mod tests {
             Err(StatusCode::FORBIDDEN),
             "the commit has it, but it is outside the workspace"
         );
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn serves_files_inside_sessions_only() {
-        let root = std::env::temp_dir().join(format!("slopslide-proto-{}", uuid::Uuid::new_v4()));
+        let root = TempDir::new("proto");
         let deck = root.join("deck");
         std::fs::create_dir_all(&deck).unwrap();
         std::fs::write(deck.join("deck.html"), "<html>").unwrap();
@@ -583,7 +578,5 @@ mod tests {
             Err(StatusCode::FORBIDDEN),
             "a missing file is not known to be inside"
         );
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

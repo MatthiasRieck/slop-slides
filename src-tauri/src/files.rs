@@ -96,33 +96,16 @@ pub fn slide_image_name(index: usize, total: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A throwaway folder.
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new() -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("slopslide-files-{}", uuid::Uuid::new_v4()));
-            fs::create_dir_all(&dir).unwrap();
-            TempDir(dir)
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::test_support::TempDir;
 
     #[test]
     fn atomic_write_leaves_no_temp_files() {
-        let dir = TempDir::new();
-        let file = dir.0.join("deck.html");
+        let dir = TempDir::new("files");
+        let file = dir.join("deck.html");
         fs::write(&file, "old").unwrap();
         atomic_write(&file, b"new").unwrap();
         assert_eq!(fs::read_to_string(&file).unwrap(), "new");
-        let names: Vec<_> = fs::read_dir(&dir.0)
+        let names: Vec<_> = fs::read_dir(&dir)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
@@ -131,48 +114,48 @@ mod tests {
 
     #[test]
     fn export_dir_is_named_after_the_deck() {
-        let parent = TempDir::new();
-        let dir = create_export_dir(&parent.0, "Q3 Review").unwrap();
-        assert_eq!(dir, parent.0.join("Q3 Review"));
+        let parent = TempDir::new("files");
+        let dir = create_export_dir(&parent, "Q3 Review").unwrap();
+        assert_eq!(dir, parent.join("Q3 Review"));
         assert!(dir.is_dir());
     }
 
     #[test]
     fn export_dir_never_reuses_an_existing_folder() {
-        let parent = TempDir::new();
-        fs::create_dir(parent.0.join("Talk")).unwrap();
-        fs::write(parent.0.join("Talk").join("slide-01.png"), b"keep").unwrap();
+        let parent = TempDir::new("files");
+        fs::create_dir(parent.join("Talk")).unwrap();
+        fs::write(parent.join("Talk").join("slide-01.png"), b"keep").unwrap();
         assert_eq!(
-            create_export_dir(&parent.0, "Talk").unwrap(),
-            parent.0.join("Talk 2")
+            create_export_dir(&parent, "Talk").unwrap(),
+            parent.join("Talk 2")
         );
         assert_eq!(
-            create_export_dir(&parent.0, "Talk").unwrap(),
-            parent.0.join("Talk 3")
+            create_export_dir(&parent, "Talk").unwrap(),
+            parent.join("Talk 3")
         );
         assert_eq!(
-            fs::read(parent.0.join("Talk").join("slide-01.png")).unwrap(),
+            fs::read(parent.join("Talk").join("slide-01.png")).unwrap(),
             b"keep"
         );
     }
 
     #[test]
     fn export_dir_names_are_safe() {
-        let parent = TempDir::new();
-        let dir = create_export_dir(&parent.0, " A/B: \"why?\" <draft>. ").unwrap();
+        let parent = TempDir::new("files");
+        let dir = create_export_dir(&parent, " A/B: \"why?\" <draft>. ").unwrap();
         assert_eq!(dir.file_name().unwrap(), "AB why draft");
-        let dir = create_export_dir(&parent.0, "../..").unwrap();
-        assert_eq!(dir, parent.0.join("presentation"));
-        let dir = create_export_dir(&parent.0, "\t").unwrap();
-        assert_eq!(dir, parent.0.join("presentation 2"));
+        let dir = create_export_dir(&parent, "../..").unwrap();
+        assert_eq!(dir, parent.join("presentation"));
+        let dir = create_export_dir(&parent, "\t").unwrap();
+        assert_eq!(dir, parent.join("presentation 2"));
     }
 
     #[test]
     fn export_dir_needs_an_existing_parent() {
-        let parent = TempDir::new();
-        let file = parent.0.join("deck.html");
+        let parent = TempDir::new("files");
+        let file = parent.join("deck.html");
         fs::write(&file, "").unwrap();
-        assert!(create_export_dir(&parent.0.join("missing"), "Talk").is_err());
+        assert!(create_export_dir(&parent.join("missing"), "Talk").is_err());
         assert!(create_export_dir(&file, "Talk").is_err());
     }
 

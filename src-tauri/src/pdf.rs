@@ -642,12 +642,10 @@ mod tests {
 
     #[test]
     fn destinations_must_be_in_an_existing_folder() {
-        let dir = std::env::temp_dir().join(format!("slopslide-pdf-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::test_support::TempDir::new("pdf");
         let dest = absolute_dest(&dir.join("Talk.pdf")).unwrap();
         assert!(dest.is_absolute());
         assert_eq!(dest.file_name().unwrap(), "Talk.pdf");
         assert!(absolute_dest(&dir.join("missing").join("Talk.pdf")).is_err());
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }

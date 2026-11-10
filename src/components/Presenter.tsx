@@ -1,10 +1,9 @@
 import { emit } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ChevronLeft, ChevronRight, type LucideIcon, Maximize, PanelRight, Pause, Play, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { useTauriEvent } from "../hooks/useTauriEvent";
-import { api, type Deck, errorMessage } from "../lib/api";
+import type { Deck } from "../lib/api";
 import { zoomBox } from "../lib/ink";
 import { hasPresenterWindow } from "../lib/screens";
 import { onSlideClock, postSlideClock, setSlideClock } from "../lib/slideClock";
@@ -16,17 +15,9 @@ import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { PresenterPanel } from "./PresenterPanel";
 import { AnnotationLayer, PresenterToolbar, useAnnotations, useReveal } from "./PresenterTools";
+import { useShowPlacement } from "./presenter/useShowPlacement";
 
 const PANEL_KEY = "slopslide.presenterPanel";
-
-// Placing the show on its screens and closing the presenter view run one after the other, in
-// the order asked: they take a moment off the main thread, and a show can end as it starts.
-let placing: Promise<unknown> = Promise.resolve();
-function inOrder<T>(command: () => Promise<T>): Promise<T> {
-  const run = placing.then(command);
-  placing = run.catch(() => {});
-  return run;
-}
 
 /**
  * Full-screen slideshow. Plays the deck file with its own embedded player (the same thing
@@ -60,35 +51,9 @@ export function Presenter() {
   const [startedAt, setStartedAt] = useState(() => Date.now());
   useEffect(() => localStorage.setItem(PANEL_KEY, String(panelOpen)), [panelOpen]);
 
+  useShowPlacement();
+
   useEffect(() => {
-    const window_ = getCurrentWindow();
-    // With several screens, the show first moves to the one picked (and the presenter view opens).
-    // In windows, it stays as it is and the presenter view opens beside it.
-    const screens = useApp.getState().screens;
-    const windowed = screens === "windows";
-    let ended = false;
-    let placed = false;
-    if (windowed) {
-      queueMicrotask(() => {
-        if (ended) return;
-        placed = true;
-        inOrder(() => api.presentInWindows()).catch((error) => useApp.getState().setError(errorMessage(error)));
-      });
-    } else if (screens) {
-      // A moment later: StrictMode runs this twice in dev, and closing a presenter view that
-      // macOS is still taking full screen makes the system beep.
-      queueMicrotask(() => {
-        if (ended) return;
-        placed = true;
-        inOrder(() => api.presentOn(screens.audience, screens.presenter))
-          .catch((error) => useApp.getState().setError(errorMessage(error)))
-          .finally(() => {
-            if (!ended) void window_.setFullscreen(true);
-          });
-      });
-    } else {
-      void window_.setFullscreen(true);
-    }
     const exit = () => useApp.getState().setPresenting(false);
     /** Tool shortcuts first; Escape puts a tool away before it ends the show. */
     const handle = (key: string, mod: boolean) => {
@@ -136,9 +101,6 @@ export function Presenter() {
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("message", onMessage);
-      ended = true;
-      if (!windowed) void window_.setFullscreen(false);
-      if (placed) void inOrder(() => api.closePresenterView()).catch(() => {});
     };
   }, []);
 

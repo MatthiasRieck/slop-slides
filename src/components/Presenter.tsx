@@ -7,6 +7,7 @@ import type { Deck } from "../lib/api";
 import { zoomBox } from "../lib/ink";
 import { hasPresenterWindow } from "../lib/screens";
 import { onSlideClock, postSlideClock, setSlideClock } from "../lib/slideClock";
+import { loadFlag, saveFlag } from "../lib/storage";
 import { layoutTimeline, slideAt } from "../lib/timeline";
 import { playTimeline } from "../lib/timelinePlayback";
 import { cn, fileUrl } from "../lib/utils";
@@ -47,9 +48,9 @@ export function Presenter() {
   const nav = useReveal(annotations.peek);
   const top = useReveal(annotations.peek);
   const moved = !(zoom.x === 0 && zoom.y === 0 && zoom.k === 1);
-  const [panelOpen, setPanelOpen] = useState(() => localStorage.getItem(PANEL_KEY) === "true");
+  const [panelOpen, setPanelOpen] = useState(() => loadFlag(PANEL_KEY, false));
   const [startedAt, setStartedAt] = useState(() => Date.now());
-  useEffect(() => localStorage.setItem(PANEL_KEY, String(panelOpen)), [panelOpen]);
+  useEffect(() => saveFlag(PANEL_KEY, panelOpen), [panelOpen]);
 
   useShowPlacement();
 

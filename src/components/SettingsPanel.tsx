@@ -2,9 +2,9 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { FolderOpen } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
-import { api, errorMessage } from "../lib/api";
+import { api } from "../lib/api";
 import { revealLabel } from "../lib/utils";
-import { REWIND_KEY, type RewindChoice, useApp } from "../store";
+import { type RewindChoice, rememberedRewind, rememberRewind, showError, useApp } from "../store";
 import { Button } from "./Button";
 import { SectionLabel } from "./SectionLabel";
 
@@ -12,8 +12,7 @@ import { SectionLabel } from "./SectionLabel";
 type RewindSetting = RewindChoice | "ask";
 
 function loadRewind(): RewindSetting {
-  const saved = localStorage.getItem(REWIND_KEY);
-  return saved === "rewind" || saved === "deck" ? saved : "ask";
+  return rememberedRewind() ?? "ask";
 }
 
 /** The app's settings, in a sidebar tab: how undoing an agent's changes treats the chat, review marks, the library. */
@@ -22,8 +21,7 @@ export function SettingsPanel() {
   const reviewVisible = useApp((s) => s.reviewVisible);
 
   const pickRewind = (value: RewindSetting) => {
-    if (value === "ask") localStorage.removeItem(REWIND_KEY);
-    else localStorage.setItem(REWIND_KEY, value);
+    rememberRewind(value === "ask" ? null : value);
     setRewind(value);
   };
 
@@ -31,7 +29,7 @@ export function SettingsPanel() {
     try {
       await revealItemInDir(await api.libraryFolder());
     } catch (error) {
-      useApp.getState().setError(errorMessage(error));
+      showError(error);
     }
   };
 

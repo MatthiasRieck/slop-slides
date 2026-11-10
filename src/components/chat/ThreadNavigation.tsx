@@ -1,9 +1,9 @@
 import { Check, History, RotateCcw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
+import { useDropdown } from "../../hooks/useDropdown";
 import { api, errorMessage } from "../../lib/api";
 import { useApp } from "../../store";
-import { useDismiss } from "../Popover";
 
 /**
  * The chat's header: past conversations of the workspace, to search and switch to, and a new
@@ -18,13 +18,11 @@ export function ThreadNavigation({
 }) {
   const workspace = useApp((s) => s.workspace);
   const running = useApp((s) => s.running);
-  const [open, setOpen] = useState(false);
+  const { open, setOpen, ref } = useDropdown({ escape: true, capture: true });
   const [threads, setThreads] = useState<Awaited<ReturnType<typeof api.listChatThreads>>>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const ref = useRef<HTMLDivElement>(null);
-  useDismiss(open, ref, () => setOpen(false), { escape: true, capture: true });
   useEffect(() => {
     if (!open || !workspace) return;
     let cancelled = false;

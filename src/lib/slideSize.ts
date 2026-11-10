@@ -122,13 +122,3 @@ export const SIZE_PRESETS: { label: string; size: SlideSize }[] = [
   { label: "A4", size: { width: 21, height: 29.7, unit: "cm" } },
   { label: "US Letter", size: { width: 8.5, height: 11, unit: "in" } },
 ];
-
-/** The prompt asking the agent to adapt the deck after the slide size changed. */
-export function resizePrompt(from: SlideSize, to: SlideSize): string {
-  const shape = (s: SlideSize) => `${orientationOf(s)}, ${describeSize(s)}`;
-  return (
-    `I changed the slide size from ${shape(from)} to ${shape(to)}. ` +
-    "Re-lay out every slide for the new canvas: rework each layout for its shape and rescale type, spacing and any fixed sizes or positions so nothing is clipped, overflows or leaves awkward empty space. " +
-    "Keep all content, slide ids, sections, hidden slides, speaker notes and narration, and keep the design system."
-  );
-}

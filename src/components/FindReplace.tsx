@@ -2,6 +2,7 @@ import { CaseSensitive, ChevronDown, ChevronUp, Replace, Search, Undo2, WholeWor
 import { useEffect, useRef, useState } from "react";
 
 import { api, type ReplacedText } from "../lib/api";
+import { plural } from "../lib/utils";
 import { activeMatch, useApp } from "../store";
 import { ToolButton } from "./Button";
 import { Popover } from "./Popover";
@@ -64,7 +65,7 @@ export function SlideSearch() {
         {matches && (
           <span
             role="status"
-            title={`${plural(found, "match", "matches")} on ${plural(slideCount, "slide", "slides")}`}
+            title={`${plural(found, "match", "matches")} on ${plural(slideCount, "slide")}`}
             className="shrink-0 text-2xs tabular-nums text-muted-foreground"
           >
             {active >= 0 ? `${active + 1} / ${found}` : found === 0 ? "No matches" : found}
@@ -261,7 +262,7 @@ function ReplacePanel() {
       {done && (
         <div className="flex items-center gap-2 rounded-md bg-accent px-2 py-1.5">
           <span className="flex-1">
-            Replaced {plural(done.count, "match", "matches")} on {plural(done.slides.length, "slide", "slides")}.
+            Replaced {plural(done.count, "match", "matches")} on {plural(done.slides.length, "slide")}.
             {done.skipped.length > 0 &&
               ` ${plural(done.skipped.length, "locked slide was", "locked slides were")} left as ${done.skipped.length === 1 ? "it was" : "they were"}.`}
           </span>
@@ -280,8 +281,4 @@ function ReplacePanel() {
       )}
     </div>
   );
-}
-
-function plural(n: number, one: string, many: string) {
-  return `${n} ${n === 1 ? one : many}`;
 }

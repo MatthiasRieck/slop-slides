@@ -1,7 +1,7 @@
 import { act, createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { emit, invoke, listen } from "../test/tauri";
+import { calls, emit, invoke, listen } from "../test/tauri";
 
 const setFullscreen = vi.fn(async () => {});
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
@@ -945,7 +945,6 @@ describe("presenter view", () => {
     const record = (name: RegExp) => screen.getByRole("button", { name });
     const text = () => record(/recording the text|narration as text/i);
     const audio = () => record(/recording the audio|narration as audio/i);
-    const calls = (name: string) => invoke.mock.calls.filter(([n]) => n === name).map(([, args]) => args);
     const open = () => {
       render(<Presenter />);
       fromFrame({ type: "slop:slide", id: "intro", index: 0 });

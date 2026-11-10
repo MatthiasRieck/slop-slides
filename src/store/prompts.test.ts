@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import type { LintIssue, OpenedFile } from "../lib/api";
+import { DEFAULT_SIZE } from "../lib/slideSize";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import type { UserMessage } from "./messages";
-import { buildPrompt, lintFixPrompt, type PromptContext, withRevertNotes } from "./prompts";
+import {
+  buildPrompt,
+  cleanNarrationPrompt,
+  lintFixPrompt,
+  type PromptContext,
+  resizePrompt,
+  withRevertNotes,
+} from "./prompts";
 import { DECK } from "./testing";
 
 describe("the context sent with a message", () => {
@@ -94,5 +102,28 @@ describe("requests for the agent", () => {
     expect(withRevertNotes([{ label: '"a"' }, { label: '"b"' }], "P")).toMatch(
       /^\[note\]The user undid the changes your turns for the messages "a", "b" made to the deck;.*\[\/note\]\n\nP$/,
     );
+  });
+});
+
+describe("cleanNarrationPrompt", () => {
+  it("names the slide, or every slide", () => {
+    expect(cleanNarrationPrompt("intro")).toContain("the narration of slide `intro`");
+    expect(cleanNarrationPrompt(null)).toContain("every slide");
+  });
+
+  it("asks for clean, fluent text and keeps the agent to the narration", () => {
+    const prompt = cleanNarrationPrompt(null);
+    for (const part of ["stutters", "clean, fluent", "same language", '<aside class="narration">', "locked slides"]) {
+      expect(prompt).toContain(part);
+    }
+  });
+});
+
+describe("resizePrompt", () => {
+  it("asks the agent to lay the deck out again for the new size", () => {
+    const prompt = resizePrompt(DEFAULT_SIZE, { width: 8.5, height: 11, unit: "in" });
+    expect(prompt).toContain("from landscape, 1920 × 1080 px to portrait, 8.5 × 11 in (816 × 1056 px)");
+    expect(prompt).toContain("Re-lay out every slide for the new canvas");
+    expect(prompt).toContain("Keep all content, slide ids");
   });
 });

@@ -2,11 +2,11 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { AudioLines, Loader2, Play, Sparkles, Square, Trash2 } from "lucide-react";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
 
-import { type Deck, errorMessage, type SlideAudio } from "../../lib/api";
+import type { Deck, SlideAudio } from "../../lib/api";
 import { formatDuration, type Playback, playNarration } from "../../lib/narrationAudio";
 import { cn } from "../../lib/utils";
 import { canSpeakWith, deckProvider, useNarration } from "../../narrationStore";
-import { useApp } from "../../store";
+import { showError, useApp } from "../../store";
 import { Button } from "../Button";
 import { usePeaks, useWords, Waveform, Words } from "../NarrationWave";
 
@@ -108,7 +108,7 @@ export function SlideAudioControls(props: {
       setPlayback(started);
       void started.ended.then(() => setPlayback((p) => (p === started ? null : p)));
     } catch (error) {
-      useApp.getState().setError(`Could not play the narration: ${errorMessage(error)}`);
+      showError(error, "Could not play the narration: ");
     }
   };
   const clean = async () => {

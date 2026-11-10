@@ -1,6 +1,7 @@
 import { Sparkles } from "lucide-react";
 import { type ReactNode, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { useContentSize } from "../hooks/useContentSize";
 import { defaultsFrom, type EditStyle, familyOf, familyOfKind } from "../lib/editTools";
 import type { Stroke } from "../lib/ink";
 import { pixelsOf } from "../lib/slideSize";
@@ -8,7 +9,6 @@ import { deckMode, SKETCH_TARGET_ATTR, searchHighlight, useApp } from "../store"
 import { AreaDrawer, CommentEditor, CommentPins, useSlideComments } from "./Comments";
 import { EditContextMenu } from "./EditContextMenu";
 import { EditToolbar } from "./EditToolbar";
-import { useContentSize } from "./editing/useContentSize";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
 import { ShortcutHelp } from "./ShortcutHelp";
 import { CurrentSlide } from "./stage/CurrentSlide";

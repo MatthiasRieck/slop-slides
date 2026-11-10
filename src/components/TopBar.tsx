@@ -12,15 +12,14 @@ import {
   Undo2,
   X,
 } from "lucide-react";
-import { useRef, useState } from "react";
 
+import { useDropdown } from "../hooks/useDropdown";
 import type { HistoryEntry, OpenedFile } from "../lib/api";
 import { basename, cn, isMac, revealLabel } from "../lib/utils";
 import { useApp } from "../store";
 import { ToolButton } from "./Button";
 import { DeckActions, MenuItem } from "./DeckActions";
 import { ModeTabs } from "./ModeTabs";
-import { useDismiss } from "./Popover";
 
 /**
  * The workspace's bar. On the left, the slide rail toggle (for a deck), the open file's path from
@@ -116,9 +115,7 @@ function Breadcrumbs({ workspace, path, small }: { workspace: string; path: stri
  * the deck's settings (for a deck), close the file, or show it in the file manager.
  */
 function FileMenu({ workspace, file, deckTitle }: { workspace: string; file: OpenedFile; deckTitle: string | null }) {
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  useDismiss(open, menuRef, () => setOpen(false), { escape: true });
+  const { open, setOpen, ref: menuRef } = useDropdown({ escape: true });
   const name = basename(file.path);
 
   const choose = (action: () => void) => () => {

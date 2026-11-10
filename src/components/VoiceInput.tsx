@@ -2,10 +2,10 @@ import { Loader2, Mic, Square } from "lucide-react";
 import { type Ref, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 import { useTauriEvent } from "../hooks/useTauriEvent";
-import { api, errorMessage, type VoiceDownloadProgress } from "../lib/api";
+import { api, type VoiceDownloadProgress } from "../lib/api";
 import { cn } from "../lib/utils";
 import { formatBytes, WAVEFORM_BAR, WAVEFORM_STEP, waveformBars } from "../lib/voice";
-import { useApp } from "../store";
+import { showError } from "../store";
 import { Popover } from "./Popover";
 
 type Phase = "idle" | "offer" | "downloading" | "starting" | "recording" | "transcribing";
@@ -125,7 +125,7 @@ export function VoiceInput(
 
   const fail = (error: unknown) => {
     setPhase("idle");
-    useApp.getState().setError(errorMessage(error));
+    showError(error);
   };
 
   const record = async () => {

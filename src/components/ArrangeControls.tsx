@@ -33,7 +33,7 @@ import {
   Ungroup,
 } from "lucide-react";
 import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
-
+import { useDropdown } from "../hooks/useDropdown";
 import {
   type AlignTarget,
   type AlignTo,
@@ -48,7 +48,6 @@ import {
 import type { EditSelection, EditStyle } from "../lib/editTools";
 import { cn } from "../lib/utils";
 import { keepFocus, ToolButton } from "./Button";
-import { useDropdown } from "./editing/useDropdown";
 import { DraftInput } from "./Field";
 import { DropdownPanel } from "./Popover";
 import { SectionLabel } from "./SectionLabel";

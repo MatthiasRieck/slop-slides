@@ -45,10 +45,9 @@ import {
   startsSection,
 } from "../lib/sections";
 import { pixelsOf } from "../lib/slideSize";
-import { cn } from "../lib/utils";
-import { railSelection, useApp } from "../store";
+import { cn, plural } from "../lib/utils";
+import { railSelection, reportingErrors, useApp } from "../store";
 import { ToolButton } from "./Button";
-import { reportingErrors } from "./editing/errors";
 import { Popover } from "./Popover";
 import { foldSlides, holdIframes, holdRow, openTop, releaseIframes, rowTop, type SectionMove } from "./rail/fold";
 import { SectionLabel } from "./SectionLabel";
@@ -286,7 +285,7 @@ export function SlideRail() {
                   <SectionLabel className="min-w-0 truncate">{sectionTitle(items, moving.key)}</SectionLabel>
                   <span className="h-px flex-1 bg-border" />
                   <span className="shrink-0 text-2xs text-muted-foreground">
-                    {slideCount((blocks.find((block) => block.key === moving.key)?.rows.length ?? 1) - 1)}
+                    {plural((blocks.find((block) => block.key === moving.key)?.rows.length ?? 1) - 1, "slide")}
                   </span>
                 </div>
               </DragOverlay>
@@ -370,8 +369,6 @@ function sectionTitle(items: RailItem[], key: string) {
   return (row?.kind === "section" && row.section.title) || "Untitled section";
 }
 
-const slideCount = (count: number) => `${count} ${count === 1 ? "slide" : "slides"}`;
-
 /** Stands in for the slides before the first section, which stay put while sections move. */
 function LooseSlides({ count }: { count: number }) {
   return (
@@ -381,7 +378,7 @@ function LooseSlides({ count }: { count: number }) {
       className="flex items-center gap-2 pt-1 text-2xs text-muted-foreground"
     >
       <span className="w-4 shrink-0" />
-      {slideCount(count)}
+      {plural(count, "slide")}
     </li>
   );
 }
@@ -478,13 +475,13 @@ function SectionHeader(props: {
           <span className="h-px flex-1 bg-border" />
           {props.slides !== undefined ? (
             <span data-fold-label className="shrink-0 pr-1 text-2xs text-muted-foreground">
-              {slideCount(props.slides)}
+              {plural(props.slides, "slide")}
             </span>
           ) : (
             <>
               {props.collapsed && (
                 <span data-testid="folded-count" className="shrink-0 text-2xs text-muted-foreground">
-                  {slideCount(props.count)}
+                  {plural(props.count, "slide")}
                 </span>
               )}
               <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">

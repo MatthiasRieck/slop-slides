@@ -1,4 +1,5 @@
 import { Spline } from "lucide-react";
+import { useDropdown } from "../hooks/useDropdown";
 import {
   DASHES,
   type Dash,
@@ -11,7 +12,6 @@ import {
 } from "../lib/editTools";
 import { cn } from "../lib/utils";
 import { keepFocus, ToolButton } from "./Button";
-import { useDropdown } from "./editing/useDropdown";
 import { DropdownPanel } from "./Popover";
 
 const DASH_LABELS: Record<Dash, string> = { solid: "Solid", dashed: "Dashed", dotted: "Dotted" };

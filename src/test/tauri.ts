@@ -24,3 +24,15 @@ export const open: Mock = vi.fn();
 export const revealItemInDir: Mock = vi.fn(async () => {});
 
 export const tauriMocks = [invoke, listen, emit, ask, save, open, revealItemInDir];
+
+/** Answers a backend command, given its arguments. */
+export type Handler = (args: Record<string, unknown>) => unknown;
+
+/** Answers `invoke(command, args)` from a table; unknown commands resolve to undefined. */
+export function backend(handlers: Record<string, Handler>) {
+  invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => handlers[command]?.(args ?? {}));
+}
+
+/** The arguments of every call of `command`, in order. */
+export const calls = (command: string) =>
+  invoke.mock.calls.filter(([c]) => c === command).map(([, args]) => args as Record<string, unknown>);

@@ -9,9 +9,6 @@ import { ScriptMarkdown } from "./ScriptMarkdown";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { FollowedScript, TeleprompterNotice, useTeleprompter } from "./Teleprompter";
 
-// Kept here too for what imports them from the presenter view.
-export { type Budget, formatElapsed, loadBudget, remaining } from "./presenter/time";
-
 /**
  * The presenter's side of the show: time since the show started (against the total time the
  * presenter set, if any), the time on this slide (against the time per slide), the speaker

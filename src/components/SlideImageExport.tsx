@@ -1,11 +1,10 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-
-import { api, type Deck, errorMessage, type Slide } from "../lib/api";
+import { useContentSize } from "../hooks/useContentSize";
+import { api, type Deck, type Slide } from "../lib/api";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
-import { useApp } from "../store";
-import { useContentSize } from "./editing/useContentSize";
+import { showError, useApp } from "../store";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
 /** Wait after a slide loads before capturing it, for web fonts and images to paint. */
@@ -83,7 +82,7 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
     try {
       await api.exportSlideImage(dir, index, total, { x, y, width: w, height: h }, viewport, canvas.width);
     } catch (error) {
-      useApp.getState().setError(`Could not save slide ${index + 1} as an image: ${errorMessage(error)}`);
+      showError(error, `Could not save slide ${index + 1} as an image: `);
       useApp.getState().endImageExport();
       return;
     }

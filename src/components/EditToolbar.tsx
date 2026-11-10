@@ -58,6 +58,7 @@ import {
   Wallpaper,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useDropdown } from "../hooks/useDropdown";
 import type { ArrangeMessage, EditGeometry, EditLayer } from "../lib/arrange";
 import {
   type Autofit,
@@ -87,7 +88,6 @@ import { SWATCHES } from "../lib/palette";
 import { cn } from "../lib/utils";
 import { ArrangeControls, GroupControls, LayersPanel, TiltControls } from "./ArrangeControls";
 import { keepFocus, ToolButton } from "./Button";
-import { useDropdown } from "./editing/useDropdown";
 import { DraftInput } from "./Field";
 import { DashSelect, LineButton, Parallelogram, Trapezoid } from "./LineTools";
 import { LookTools } from "./LookTools";

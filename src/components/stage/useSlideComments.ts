@@ -12,8 +12,8 @@ import {
   parseTarget,
   type SlideComment,
 } from "../../lib/comments";
+import { loadText, trySaveText } from "../../lib/storage";
 import { useApp } from "../../store";
-import { readChoice, writeChoice } from "../editing/storedChoice";
 import { fromFrameIn } from "./frames";
 
 /** The comment being written or changed; a new one has no id yet. */
@@ -34,7 +34,7 @@ export interface OpenComment {
 const AREA_SHAPE_KEY = "slopslides.areaShape";
 
 function loadAreaShape(): AreaShape {
-  const saved = readChoice(AREA_SHAPE_KEY);
+  const saved = loadText(AREA_SHAPE_KEY);
   return saved === "ellipse" || saved === "lasso" ? saved : "rect";
 }
 
@@ -172,7 +172,7 @@ export function useSlideComments(
     areaShape,
     setAreaShape: useCallback((shape: AreaShape) => {
       setShape(shape);
-      writeChoice(AREA_SHAPE_KEY, shape);
+      trySaveText(AREA_SHAPE_KEY, shape);
     }, []),
     commentOnArea,
     capturing,

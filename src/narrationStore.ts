@@ -13,7 +13,7 @@ import {
   type SpeechStatus,
 } from "./lib/api";
 import { dirname } from "./lib/utils";
-import { useApp } from "./store";
+import { showError, useApp } from "./store";
 
 /** The backend's error for a render the user cancelled. */
 export const NARRATION_CANCELLED = "the narration was cancelled";
@@ -54,7 +54,7 @@ interface NarrationState {
 
 function fail(error: unknown) {
   const message = errorMessage(error);
-  if (message !== NARRATION_CANCELLED) useApp.getState().setError(message);
+  if (message !== NARRATION_CANCELLED) showError(message);
 }
 
 /** The state for `audio`, the audio of deck `deck`'s slides as the backend lists it. */

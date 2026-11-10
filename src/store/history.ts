@@ -1,5 +1,6 @@
-import { api, type DeckHistory, errorMessage } from "../lib/api";
+import { api, type DeckHistory } from "../lib/api";
 import { queueEdit } from "./editQueue";
+import { showErrorIn } from "./errors";
 import { adoptReview, flushReview } from "./review";
 import { turnRedone, turnUndone } from "./rewind";
 import type { AppStore, Slice } from "./types";
@@ -65,7 +66,7 @@ function stepHistory(app: AppStore, back: boolean): Promise<void> {
         else turnRedone(app, entry);
       }
     } catch (error) {
-      app.setState({ error: errorMessage(error) });
+      showErrorIn(app, error);
     }
   });
 }

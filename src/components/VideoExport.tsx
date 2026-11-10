@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import type { Slide, SlideAudio } from "../lib/api";
+import type { Slide } from "../lib/api";
 import { formatDuration } from "../lib/narrationAudio";
 import { layoutTimeline, spokenSeconds } from "../lib/timeline";
 import { cn } from "../lib/utils";
@@ -19,8 +19,7 @@ import { canSpeakWith, deckProvider, useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { Button } from "./Button";
 import { CheckboxRow, Field, NumberField, selectClass } from "./Field";
-
-const NO_AUDIO: Record<string, SlideAudio> = {};
+import { useDeckAudio } from "./narration/useDeckAudio";
 
 /**
  * Picks how a video export is made: how long each slide is shown, the frame rate, whether
@@ -42,7 +41,7 @@ export function VideoExportPanel(props: {
   const [after, setAfter] = useState(String(initial.pauseAfter));
   const openDeck = useApp((s) => s.deck);
   const deck = openDeck?.id;
-  const audio = useNarration((s) => (s.audioDeck === deck ? s.audio : NO_AUDIO));
+  const audio = useDeckAudio(deck);
   const speech = useNarration((s) => s.speech);
   useEffect(() => {
     void useNarration.getState().loadSpeech();

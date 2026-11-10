@@ -10,6 +10,11 @@ export const isWindows = navigator.userAgent.includes("Windows");
 /** What revealing a file in the system's file manager is called here. */
 export const revealLabel = revealLabelFor(navigator.userAgent);
 
+/** `n` and the word for that many, like `1 slide` or `3 slides`; `many` is `one` with an s unless given. */
+export function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
 export function revealLabelFor(userAgent: string): string {
   if (userAgent.includes("Mac")) return "Show in Finder";
   if (userAgent.includes("Windows")) return "Show in File Explorer";

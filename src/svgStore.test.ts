@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { useApp } from "./store";
 import { isDirty, parseSvgOpen, type SvgOpen, useSvgEditor } from "./svgStore";
 import { DECK_HTML, deckFor } from "./test/fixtures";
-import { ask, invoke } from "./test/tauri";
+import { ask, calls, invoke } from "./test/tauri";
 
 const DECK = "/decks/talk/deck.html";
 const ORIGINAL = '<svg viewBox="0 0 10 10"><circle r="1"></circle></svg>';
@@ -23,9 +23,6 @@ const drawing = (changes: Partial<SvgOpen> = {}): SvgOpen => ({
   ancestors: [],
   ...changes,
 });
-
-const calls = (command: string) =>
-  invoke.mock.calls.filter(([c]) => c === command).map(([, args]) => args as Record<string, unknown>);
 
 beforeEach(() => {
   invoke.mockReset().mockResolvedValue(undefined);

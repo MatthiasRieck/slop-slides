@@ -1,8 +1,8 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect } from "react";
 
-import { api, errorMessage } from "../../lib/api";
-import { useApp } from "../../store";
+import { api } from "../../lib/api";
+import { showError, useApp } from "../../store";
 
 // Placing the show on its screens and closing the presenter view run one after the other, in
 // the order asked: they take a moment off the main thread, and a show can end as it starts.
@@ -30,7 +30,7 @@ export function useShowPlacement() {
       queueMicrotask(() => {
         if (ended) return;
         placed = true;
-        inOrder(() => api.presentInWindows()).catch((error) => useApp.getState().setError(errorMessage(error)));
+        inOrder(() => api.presentInWindows()).catch((error) => showError(error));
       });
     } else if (screens) {
       // A moment later: StrictMode runs this twice in dev, and closing a presenter view that
@@ -39,7 +39,7 @@ export function useShowPlacement() {
         if (ended) return;
         placed = true;
         inOrder(() => api.presentOn(screens.audience, screens.presenter))
-          .catch((error) => useApp.getState().setError(errorMessage(error)))
+          .catch((error) => showError(error))
           .finally(() => {
             if (!ended) void window_.setFullscreen(true);
           });

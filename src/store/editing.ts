@@ -9,6 +9,7 @@ import {
 import { captureSlide } from "./capture";
 import { promptAgent } from "./composer";
 import { editsSaved, queueEdit } from "./editQueue";
+import { showErrorIn } from "./errors";
 import { refreshHistory } from "./history";
 import { TIDY_ELEMENT_PROMPT, tidyPrompt } from "./prompts";
 import { selectedSlide } from "./slides";
@@ -149,7 +150,7 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
         if (get().deck?.id === deck.id) showEdited(app, slide, next);
         return true;
       } catch (error) {
-        set({ error: errorMessage(error) });
+        showErrorIn(app, error);
         return false;
       }
     }),
@@ -181,7 +182,7 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
           editReload: s.editReload + 1,
         }));
       } catch (error) {
-        set({ error: errorMessage(error) });
+        showErrorIn(app, error);
       }
     }),
 

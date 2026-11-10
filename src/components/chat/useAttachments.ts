@@ -3,11 +3,11 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type React from "react";
 import { useEffect, useState } from "react";
 
-import { api, errorMessage } from "../../lib/api";
+import { api } from "../../lib/api";
 import { claimDrop, dropCovered, dropPoint, isImage } from "../../lib/drop";
 import type { EditElement } from "../../lib/editTools";
 import { basename, dirname } from "../../lib/utils";
-import { relativePath, useApp } from "../../store";
+import { relativePath, showError, useApp } from "../../store";
 import { pastedName, readBase64 } from "./pastedFiles";
 
 /**
@@ -66,7 +66,7 @@ export function useAttachments() {
     try {
       add((await api.importAssets(assetTarget, paths)).map(attachmentRef));
     } catch (error) {
-      useApp.getState().setError(errorMessage(error));
+      showError(error);
     }
   };
 
@@ -80,7 +80,7 @@ export function useAttachments() {
       }
       add(saved);
     } catch (error) {
-      useApp.getState().setError(errorMessage(error));
+      showError(error);
     }
   };
 

@@ -1,7 +1,8 @@
-import { api, type Deck, errorMessage } from "../lib/api";
+import { api, type Deck } from "../lib/api";
 import { type CommentScope, type PlacedComment, placeComments, type SlideComment } from "../lib/comments";
 import type { Stroke } from "../lib/ink";
-import { loadFlag, saveFlag } from "./persist";
+import { loadFlag, saveFlag } from "../lib/storage";
+import { showErrorIn } from "./errors";
 import type { AppState, AppStore, Slice } from "./types";
 
 /** The review on the slides: ink drawn on them and comments, saved in the deck file and sent to the agent. */
@@ -189,7 +190,7 @@ export async function flushReview(app: AppStore) {
       savedComments = reviewKey(notes);
     }
   } catch (error) {
-    app.setState({ error: `Could not save the review marks and comments: ${errorMessage(error)}` });
+    showErrorIn(app, error, "Could not save the review marks and comments: ");
   } finally {
     reviewSaving--;
   }

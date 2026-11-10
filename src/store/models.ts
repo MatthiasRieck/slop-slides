@@ -1,4 +1,4 @@
-import { api, errorMessage } from "../lib/api";
+import { api } from "../lib/api";
 import {
   defaultModel,
   PROVIDER_IDS,
@@ -15,7 +15,8 @@ import {
   type PermissionMode,
   type PermissionModes,
 } from "../lib/permissions";
-import { loadJson, saveJson } from "./persist";
+import { loadJson, loadText, saveJson } from "../lib/storage";
+import { showErrorIn } from "./errors";
 import type { AppState, AppStore, Slice } from "./types";
 
 export interface ModelSelection {
@@ -62,11 +63,13 @@ const DEFAULT_SELECTION: ModelSelection = {
 };
 
 function loadSelection(): ModelSelection {
-  const saved = loadJson(SELECTION_KEY) as Partial<ModelSelection> | null;
-  if (saved?.provider && saved.model && saved.label && saved.effort) {
-    return { ...saved, contextWindow: saved.contextWindow ?? null } as ModelSelection;
-  }
-  return DEFAULT_SELECTION;
+  return loadJson(SELECTION_KEY, DEFAULT_SELECTION, (stored) => {
+    const saved = stored as Partial<ModelSelection> | null;
+    if (saved?.provider && saved.model && saved.label && saved.effort) {
+      return { ...saved, contextWindow: saved.contextWindow ?? null } as ModelSelection;
+    }
+    return DEFAULT_SELECTION;
+  });
 }
 
 function saveSelection(app: AppStore, selection: ModelSelection) {
@@ -76,21 +79,23 @@ function saveSelection(app: AppStore, selection: ModelSelection) {
 
 function loadPermissions(): PermissionModes {
   const modes = { ...DEFAULT_PERMISSION_MODES };
-  const legacy = localStorage.getItem(CODEX_PERMISSION_KEY);
+  const legacy = loadText(CODEX_PERMISSION_KEY);
   if (isPermissionMode(legacy)) modes.codex = legacy;
-  const saved = loadJson(PERMISSIONS_KEY);
-  if (saved && typeof saved === "object") {
-    for (const provider of PROVIDER_IDS) {
-      const mode = (saved as Record<string, unknown>)[provider];
-      if (Object.hasOwn(saved, provider) && isPermissionMode(mode)) modes[provider] = mode;
+  return loadJson(PERMISSIONS_KEY, modes, (saved) => {
+    if (saved && typeof saved === "object") {
+      for (const provider of PROVIDER_IDS) {
+        const mode = (saved as Record<string, unknown>)[provider];
+        if (Object.hasOwn(saved, provider) && isPermissionMode(mode)) modes[provider] = mode;
+      }
     }
-  }
-  return modes;
+    return modes;
+  });
 }
 
 function loadFavorites(): string[] {
-  const saved = loadJson(FAVORITES_KEY);
-  return Array.isArray(saved) ? saved.filter((k): k is string => typeof k === "string") : [];
+  return loadJson(FAVORITES_KEY, [], (saved) =>
+    Array.isArray(saved) ? saved.filter((k): k is string => typeof k === "string") : [],
+  );
 }
 
 /** Moves a selection that is no longer offered onto an installed provider's default model. */
@@ -169,7 +174,7 @@ export const createModelsSlice: Slice<ModelsSlice> = (set, get, app) => ({
     // The provider cannot change during a turn, so the running turn is the selected provider's.
     const { running, workspace } = get();
     if (running && workspace) {
-      api.setPermissionMode(workspace.path, mode).catch((error) => set({ error: errorMessage(error) }));
+      api.setPermissionMode(workspace.path, mode).catch((error) => showErrorIn(app, error));
     }
   },
 

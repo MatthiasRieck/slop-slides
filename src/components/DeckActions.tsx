@@ -16,12 +16,12 @@ import {
 } from "lucide-react";
 import { useRef, useState } from "react";
 
+import { useDropdown } from "../hooks/useDropdown";
 import { api, type Deck, errorMessage, type Screen, type Slide } from "../lib/api";
 import { VIDEO_CANCELLED, type VideoOptions, type VideoProgress } from "../lib/video";
-import { useApp } from "../store";
+import { reportingErrors, showError, useApp } from "../store";
 import { Button, ToolButton } from "./Button";
-import { reportingErrors, showError } from "./editing/errors";
-import { Popover, useDismiss } from "./Popover";
+import { Popover } from "./Popover";
 import { ScreenPicker } from "./ScreenPicker";
 import { VideoExportPanel } from "./VideoExport";
 
@@ -188,9 +188,7 @@ function useScreenPicker() {
  * it in a call, and the presenter view in a window of its own. That works on a single screen.
  */
 function PresentButton(props: { disabled: boolean; onPresent: () => void; onWindows: () => void }) {
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  useDismiss(open, menuRef, () => setOpen(false), { escape: true });
+  const { open, setOpen, ref: menuRef } = useDropdown({ escape: true });
 
   return (
     <div ref={menuRef} className="relative flex">
@@ -257,12 +255,9 @@ function ExportMenu(props: {
   onImages: () => void;
   onVideo: (options: VideoOptions) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const { open, setOpen, ref: menuRef } = useDropdown({ escape: true });
   const [videoOpen, setVideoOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
-
-  useDismiss(open, menuRef, () => setOpen(false), { escape: true });
   const label = props.progress !== null ? progressLabel(props.progress) : props.busy ? "Exporting…" : null;
 
   const choose = (action: () => void) => () => {

@@ -1,10 +1,9 @@
 import { Blend, FlipHorizontal2, FlipVertical2, Image, Paintbrush, Replace } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-
+import { useDropdown } from "../hooks/useDropdown";
 import { type EditSelection, type EditStyle, type EditTool, FIT_POSITIONS, type ImageFit } from "../lib/editTools";
 import { cn } from "../lib/utils";
 import { keepFocus, ToolButton } from "./Button";
-import { useDropdown } from "./editing/useDropdown";
 import { DropdownPanel } from "./Popover";
 
 const FITS: { value: ImageFit; label: string }[] = [

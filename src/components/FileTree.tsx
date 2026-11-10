@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, errorMessage, type FileKind, type WorkspaceEntry } from "../lib/api";
 import { ancestorsOf, foldersToReload, toggleFolder, visibleRows } from "../lib/fileTree";
+import { loadJson, saveJson } from "../lib/storage";
 import { cn, revealLabel } from "../lib/utils";
 import { useApp } from "../store";
 import { ToolButton } from "./Button";
@@ -88,12 +89,11 @@ export function useDirectoryEntries(root: string) {
 }
 
 function loadExpanded(root: string): Set<string> {
-  try {
-    const saved: unknown = JSON.parse(localStorage.getItem(EXPANDED_KEY + root) ?? "[]");
-    return new Set(Array.isArray(saved) ? saved.filter((p): p is string => typeof p === "string") : []);
-  } catch {
-    return new Set();
-  }
+  return loadJson(
+    EXPANDED_KEY + root,
+    new Set(),
+    (saved) => new Set(Array.isArray(saved) ? saved.filter((p): p is string => typeof p === "string") : []),
+  );
 }
 
 /** The open workspace's files. Clicking a file opens it in the viewer its kind calls for. */
@@ -112,7 +112,7 @@ function WorkspaceTree({ root, name }: { root: string; name: string }) {
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    localStorage.setItem(EXPANDED_KEY + root, JSON.stringify([...expanded]));
+    saveJson(EXPANDED_KEY + root, [...expanded]);
     for (const folder of expanded) void load(folder);
   }, [root, expanded, load]);
 

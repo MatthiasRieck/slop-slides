@@ -1,7 +1,8 @@
 import { api, errorMessage, type TemplateSummary } from "../lib/api";
-import { DEFAULT_SIZE, resizePrompt, type SlideSize, sameSize } from "../lib/slideSize";
+import { DEFAULT_SIZE, type SlideSize, sameSize } from "../lib/slideSize";
 import { promptAgent } from "./composer";
-import { addLayoutPrompt, changeLayoutPrompt, stylePrompt } from "./prompts";
+import { showErrorIn } from "./errors";
+import { addLayoutPrompt, changeLayoutPrompt, resizePrompt, stylePrompt } from "./prompts";
 import { selectedSlide } from "./slides";
 import type { Slice } from "./types";
 
@@ -58,7 +59,7 @@ export const createTemplatesSlice: Slice<TemplatesSlice> = (set, get, app) => {
         const path = await api.stageTemplate(deck.id, id);
         promptAgent(app, stylePrompt(template, path));
       } catch (error) {
-        set({ error: errorMessage(error) });
+        showErrorIn(app, error);
       }
     },
 
@@ -78,7 +79,7 @@ export const createTemplatesSlice: Slice<TemplatesSlice> = (set, get, app) => {
         const path = await api.stageTemplate(deck.id, id);
         promptAgent(app, addLayoutPrompt(template, slide, path, selected));
       } catch (error) {
-        set({ error: errorMessage(error) });
+        showErrorIn(app, error);
       }
     },
 
@@ -90,7 +91,7 @@ export const createTemplatesSlice: Slice<TemplatesSlice> = (set, get, app) => {
         const path = await api.stageTemplate(deck.id, id);
         promptAgent(app, changeLayoutPrompt(template, slide, path));
       } catch (error) {
-        set({ error: errorMessage(error) });
+        showErrorIn(app, error);
       }
     },
 
@@ -102,7 +103,7 @@ export const createTemplatesSlice: Slice<TemplatesSlice> = (set, get, app) => {
         await get().refreshTemplates();
         return created;
       } catch (error) {
-        set({ error: errorMessage(error) });
+        showErrorIn(app, error);
         return null;
       }
     },
@@ -118,7 +119,7 @@ export const createTemplatesSlice: Slice<TemplatesSlice> = (set, get, app) => {
         get().setDeck(resized);
         if (resized.slides.length > 0) promptAgent(app, resizePrompt(from, resized.size ?? size));
       } catch (error) {
-        set({ error: errorMessage(error) });
+        showErrorIn(app, error);
       }
     },
   };

@@ -1,6 +1,7 @@
 import { Minus, Pause, Play, Plus, RotateCcw, StepBack, StepForward } from "lucide-react";
-import { type KeyboardEvent, type MouseEvent, type PointerEvent, useLayoutEffect, useRef, useState } from "react";
+import { type KeyboardEvent, type MouseEvent, type PointerEvent, useRef, useState } from "react";
 
+import { useContentSize } from "../hooks/useContentSize";
 import type { Deck, Slide, SlideAudio, SlideTiming } from "../lib/api";
 import { formatDuration } from "../lib/narrationAudio";
 import { pixelsOf } from "../lib/slideSize";
@@ -67,13 +68,7 @@ function Tracks(props: {
   const { time, playing, play, freeze, select } = useTimelinePlayback(deck, timeline);
   const { shown, end, held, press, pointed, release, nudge } = useTimingEdits(layout, timeline, track);
 
-  const [width, setWidth] = useState(0);
-  useLayoutEffect(() => {
-    if (!track.current) return;
-    const observer = new ResizeObserver(([entry]) => setWidth(entry?.contentRect.width ?? 0));
-    observer.observe(track.current);
-    return () => observer.disconnect();
-  }, []);
+  const width = useContentSize(track)?.width ?? 0;
 
   const percent = (seconds: number) => `${(seconds / end) * 100}%`;
   const now = Math.min(time, shown.end);

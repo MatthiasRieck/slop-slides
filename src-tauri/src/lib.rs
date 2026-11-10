@@ -31,6 +31,7 @@ mod safety;
 mod screens;
 mod sessions;
 mod size;
+mod sound;
 mod templates;
 #[cfg(all(test, unix))]
 mod test_support;

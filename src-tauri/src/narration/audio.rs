@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use crate::error::{Error, Result};
-use crate::voice;
+use crate::sound;
 
 /// The sample rate narration audio is kept at (and the services are asked for).
 pub const RATE: u32 = 24_000;
@@ -80,11 +80,7 @@ fn parse_wav(bytes: &[u8]) -> Option<(Vec<f32>, u32)> {
             }
             b"data" => {
                 let data = bytes.get(body..(body + size).min(bytes.len()))?;
-                let samples = data
-                    .chunks_exact(2)
-                    .map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32768.0)
-                    .collect();
-                return Some((samples, rate?));
+                return Some((sound::pcm16(data), rate?));
             }
             _ => {}
         }
@@ -147,7 +143,7 @@ pub fn decode(path: &Path) -> Result<(Vec<f32>, u32)> {
                 rate.get_or_insert(spec.rate);
                 let mut buffer = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
                 buffer.copy_interleaved_ref(decoded);
-                samples.extend(voice::downmix(buffer.samples(), spec.channels.count()));
+                samples.extend(sound::downmix(buffer.samples(), spec.channels.count()));
             }
             // A damaged packet: the rest still plays.
             Err(Decoding::DecodeError(_)) => continue,

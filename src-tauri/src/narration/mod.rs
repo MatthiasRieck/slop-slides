@@ -29,7 +29,7 @@ use tokio::sync::Notify;
 
 use crate::deck::{self, Deck};
 use crate::error::{Error, Result};
-use crate::voice;
+use crate::{sound, voice};
 pub use cloud::{Provider, DEFAULT_PROVIDER};
 
 /// A language narration can be said in.
@@ -599,11 +599,11 @@ pub fn append_recording(file: &Path, slide: &str, samples: &[f32], rate: u32) ->
         .is_some_and(|e| e.recorded && !e.imported);
     let mut all = if recorded && dest.is_file() {
         let (kept, kept_rate) = audio::read_wav(&dest)?;
-        voice::resample(&kept, kept_rate, audio::RATE)
+        sound::resample(&kept, kept_rate, audio::RATE)
     } else {
         Vec::new()
     };
-    all.extend(voice::resample(samples, rate, audio::RATE));
+    all.extend(sound::resample(samples, rate, audio::RATE));
     let part = dest.with_extension("wav.part");
     audio::write_wav(&part, &all, audio::RATE)?;
     fs::rename(&part, &dest)?;
@@ -657,7 +657,7 @@ pub fn delete_recording(file: &Path, slide: &str) -> Result<()> {
 /// plays, in seconds.
 pub fn import_audio(file: &Path, slide: &str, source: &Path) -> Result<f64> {
     let (samples, rate) = audio::decode(source)?;
-    let samples = voice::resample(&samples, rate, audio::RATE);
+    let samples = sound::resample(&samples, rate, audio::RATE);
     let seconds = samples.len() as f64 / f64::from(audio::RATE);
     let dir = audio_dir(file);
     fs::create_dir_all(&dir)?;

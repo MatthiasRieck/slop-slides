@@ -40,7 +40,7 @@ use crate::capture::{decode_png, Image, Rect, Size};
 use crate::error::{Error, Result};
 use crate::mp4::{AudioTrack, Mp4Writer};
 use crate::narration::{self, Narration};
-use crate::{deck, html, pdf, protocol, voice};
+use crate::{deck, html, pdf, protocol, sound};
 
 /// Where the page's helper answers; the navigation is caught, never made.
 const SIGNAL_PATH: &str = "/.video-signal";
@@ -378,7 +378,7 @@ async fn narrate(app: &AppHandle, file: &Path, progress: &impl Fn(Progress)) -> 
         .map(|s| Cue {
             clip: ready.remove(&s.id).map(|(samples, rate)| match rate {
                 narration::audio::RATE => samples,
-                rate => voice::resample(&samples, rate, narration::audio::RATE),
+                rate => sound::resample(&samples, rate, narration::audio::RATE),
             }),
             duration: s.duration,
             narration_start: s.narration_start,
@@ -400,7 +400,7 @@ pub fn soundtrack(frames: u32, fps: u32, clips: &[(f64, &[f32])]) -> Vec<f32> {
     let mut out = vec![0.0; (f64::from(frames) / f64::from(fps) * rate).round() as usize];
     for (start, clip) in clips {
         let from = ((start * rate).round() as usize).min(out.len());
-        let clip = voice::resample(clip, narration::audio::RATE, AudioTrack::RATE);
+        let clip = sound::resample(clip, narration::audio::RATE, AudioTrack::RATE);
         let len = clip.len().min(out.len() - from);
         out[from..from + len].copy_from_slice(&clip[..len]);
     }

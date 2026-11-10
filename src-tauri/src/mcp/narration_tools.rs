@@ -1,6 +1,7 @@
 //! The narration tools: set_narration_audio, narration_timeline, narration_beats and
 //! generate_narration_audio. Each takes the deck the call names and reports, for the agent,
-//! what it did or found.
+//! what it did or found: what is done, and what is found, is the narration module's to decide
+//! (see [`crate::narration`]); these read the arguments and word its answers.
 
 use std::path::Path;
 
@@ -183,47 +184,36 @@ pub(super) fn set_narration_audio(
     let Some(found) = deck.slides.iter().find(|s| s.id == slide) else {
         return Err(Error::msg(format!("{rel} has no slide `{slide}`")));
     };
-    let duration = found.duration;
-    // Checked before the audio is replaced: audio is not in the deck's history to undo.
-    let markup = std::fs::read_to_string(&file)?;
-    if crate::html::is_locked(&markup, slide)
-        || crate::guard::read_guard(&file, session)
-            .iter()
-            .any(|locked| locked.id == slide)
-    {
-        return Err(Error::msg(format!(
-            "The slide `{slide}` is locked; unlock it to change its narration."
-        )));
+    let replace = arguments["replace"].as_bool() == Some(true);
+    match narration::refusal(&file, slide, session, replace)? {
+        Some(narration::Refusal::Locked) => {
+            return Err(Error::msg(format!(
+                "The slide `{slide}` is locked; unlock it to change its narration."
+            )))
+        }
+        Some(narration::Refusal::OwnRecording) => {
+            return Err(Error::msg(format!(
+                "The slide `{slide}` is narrated by the user's own recording, which would be lost. Ask the user first; call again with replace: true to replace it."
+            )))
+        }
+        None => {}
     }
-    // The presenter's own recording cannot be made again: replaced only when asked to.
-    if arguments["replace"].as_bool() != Some(true) && narration::has_own_recording(&file, slide) {
-        return Err(Error::msg(format!(
-            "The slide `{slide}` is narrated by the user's own recording, which would be lost. Ask the user first; call again with replace: true to replace it."
-        )));
-    }
-    let seconds = narration::import_audio(&file, slide, Path::new(&source.absolute))?;
-    let kept = narration::audio_file(&file, slide);
+    let set = narration::set_audio(&file, found, Path::new(&source.absolute))?;
     // Workspace-relative, with `/` as the agent writes paths on every platform.
-    let kept: Vec<String> = kept
+    let kept: Vec<String> = set
+        .kept
         .strip_prefix(dir)
-        .unwrap_or(&kept)
+        .unwrap_or(&set.kept)
         .components()
         .map(|part| part.as_os_str().to_string_lossy().into_owned())
         .collect();
     let kept = kept.join("/");
-    let mut out =
-        format!("Slide `{slide}` is narrated by {audio} now ({seconds:.2} s, kept as {kept}).");
-    // Audio made elsewhere plays from the moment the slide shows, whatever the app's pause.
-    let pinned = deck::set_slide_timing(
-        &file,
-        &[deck::SlideTiming {
-            slide: slide.to_string(),
-            duration,
-            narration_start: Some(0.0),
-        }],
+    let mut out = format!(
+        "Slide `{slide}` is narrated by {audio} now ({:.2} s, kept as {kept}).",
+        set.seconds
     );
-    match pinned {
-        Ok(_) => out.push_str(&format!(
+    match set.pinned {
+        Ok(()) => out.push_str(&format!(
             " It starts as the slide shows ({}=\"0\").",
             crate::html::NARRATION_START_ATTR
         )),
@@ -258,6 +248,7 @@ pub(super) fn generate_narration_audio(
     home: &Path,
     session: Option<&Path>,
 ) -> Result<String> {
+    use narration::Outcome;
     let (rel, file) = deck_argument(dir, arguments)?;
     let asked = slides_argument(arguments)?;
     let deck = deck::load(&file)?;
@@ -268,60 +259,38 @@ pub(super) fn generate_narration_audio(
     {
         return Err(Error::msg(format!("{rel} has no slide `{missing}`")));
     }
-    let guard = crate::guard::read_guard(&file, session);
-    let locked = |slide: &deck::Slide| slide.locked || guard.iter().any(|l| l.id == slide.id);
-    let wanted: Vec<&deck::Slide> = deck
-        .slides
+    let speech = NARRATION.get_or_init(narration::Narration::default);
+    let outcomes = tauri::async_runtime::block_on(speech.say_slides(
+        home,
+        &file,
+        &deck,
+        asked.as_deref(),
+        session,
+    ))
+    .map_err(|e| Error::msg(format!("Generating the narration audio failed: {e}")))?;
+    let said = outcomes
         .iter()
-        .filter(|s| asked.as_ref().map_or(true, |ids| ids.contains(&s.id)))
-        .collect();
-    let to_say: Vec<String> = wanted
+        .filter(|o| o.outcome == Outcome::Said)
+        .count();
+    let lines: Vec<String> = outcomes
         .iter()
-        .filter(|s| !locked(s))
-        .map(|s| s.id.clone())
+        .map(|o| {
+            let seconds = o
+                .seconds
+                .map(|s| format!(" ({s:.2} s)"))
+                .unwrap_or_default();
+            let line = match o.outcome {
+                Outcome::Locked => "locked, its audio is left as it was".to_string(),
+                Outcome::KeepsImported => format!("keeps the audio set for it{seconds}"),
+                Outcome::KeepsRecording => format!("keeps the user's own recording{seconds}"),
+                Outcome::NoScript => "has no narration script; nothing to say".to_string(),
+                Outcome::UpToDate => format!("already up to date{seconds}"),
+                Outcome::Said => format!("said{seconds}"),
+                Outcome::NoAudio => "has no audio".to_string(),
+            };
+            format!("- `{}`: {line}", o.slide)
+        })
         .collect();
-    let before = narration::statuses(&file, &deck);
-    let after = if to_say.is_empty() {
-        before.clone()
-    } else {
-        let speech = NARRATION.get_or_init(narration::Narration::default);
-        tauri::async_runtime::block_on(speech.render(home, &file, Some(&to_say), |_| {}))
-            .map_err(|e| Error::msg(format!("Generating the narration audio failed: {e}")))?
-    };
-    let state_of =
-        |all: &[narration::SlideAudio], id: &str| all.iter().find(|a| a.slide == id).cloned();
-    let mut lines = Vec::new();
-    let mut said = 0;
-    for slide in &wanted {
-        let id = &slide.id;
-        let was = state_of(&before, id);
-        let now = state_of(&after, id);
-        let seconds = now
-            .as_ref()
-            .and_then(|a| a.seconds)
-            .map(|s| format!(" ({s:.2} s)"))
-            .unwrap_or_default();
-        let line = match now {
-            _ if locked(slide) => "locked, its audio is left as it was".to_string(),
-            Some(a) if a.recorded && a.imported => {
-                format!("keeps the audio set for it{seconds}")
-            }
-            Some(a) if a.recorded => format!("keeps the user's own recording{seconds}"),
-            Some(a) if a.state == narration::AudioState::None => {
-                "has no narration script; nothing to say".to_string()
-            }
-            Some(a) if a.state == narration::AudioState::Ready => {
-                if was.is_some_and(|w| w.state == narration::AudioState::Ready) {
-                    format!("already up to date{seconds}")
-                } else {
-                    said += 1;
-                    format!("said{seconds}")
-                }
-            }
-            _ => "has no audio".to_string(),
-        };
-        lines.push(format!("- `{id}`: {line}"));
-    }
     Ok(format!(
         "Narration audio of {rel}: {said} slide{} said.\n{}\n\nCall {TIMELINE_TOOL} for when its words fall on the slides.",
         if said == 1 { "" } else { "s" },
@@ -332,11 +301,6 @@ pub(super) fn generate_narration_audio(
 /// Seconds as the timing tools show them.
 fn secs(seconds: f64) -> String {
     format!("{seconds:.2}")
-}
-
-/// Seconds as the timing tools save them: to the millisecond.
-fn ms(seconds: f64) -> f64 {
-    (seconds * 1000.0).round() / 1000.0
 }
 
 /// Writes `data` to `name` in the `timing/` folder of the workspace's `session`, for the agent's
@@ -374,18 +338,18 @@ pub(super) fn narration_timeline(
     home: &Path,
     session: Option<&Path>,
 ) -> Result<String> {
-    use narration::timeline;
+    use narration::timeline::{self, Source, Words};
     let (rel, file) = deck_argument(dir, arguments)?;
     let with_words = arguments["words"].as_bool().unwrap_or(true);
     let deck = deck::load(&file)?;
-    let mut slides = timeline::layout(&file, &deck, &timeline::DEFAULTS);
     let mut untimed = None;
     if with_words {
         if let Err(e) = time_words(&file, None, home) {
             untimed = Some(e.to_string());
         }
-        slides = timeline::layout(&file, &deck, &timeline::DEFAULTS);
     }
+    let found = timeline::timeline(&file, &deck, with_words);
+    let slides = &found.slides;
     let d = timeline::DEFAULTS;
     let mut out = format!(
         "How {rel} plays in a video export and the self-running show, in seconds from its \
@@ -400,28 +364,8 @@ pub(super) fn narration_timeline(
         crate::html::DURATION_ATTR,
         crate::html::NARRATION_START_ATTR,
     );
-    let mut data_slides = Vec::new();
-    let mut data_words = Vec::new();
     for (i, slide) in slides.iter().enumerate() {
         let pinned = |set: Option<f64>| if set.is_some() { "pinned" } else { "default" };
-        data_slides.push(json!({
-            "id": slide.id,
-            "start": ms(slide.start),
-            "end": ms(slide.end),
-            "duration": slide.duration,
-            "narrationStart": slide.narration_start,
-            "narration": slide.narration.as_ref().map(|clip| json!({
-                "start": ms(clip.start),
-                "end": ms(clip.end),
-                "source": match (clip.imported, clip.recorded) {
-                    (true, _) => "imported",
-                    (_, true) => "recording",
-                    _ => "voice",
-                },
-                "waits": ms(clip.start - clip.planned.max(0.0)).max(0.0),
-            })),
-            "unspoken": slide.unspoken,
-        }));
         out.push_str(&format!(
             "\n{}. `{}` shows {}–{} ({} s, {})",
             i + 1,
@@ -432,23 +376,22 @@ pub(super) fn narration_timeline(
             pinned(slide.duration),
         ));
         if let Some(clip) = &slide.narration {
-            let over: Vec<String> = slides
+            let over: Vec<String> = timeline::plays_over(slides, slide)
                 .iter()
-                .filter(|s| s.id != slide.id && s.start < clip.end - 0.005 && s.end > clip.start)
-                .map(|s| format!("`{}`", s.id))
+                .map(|id| format!("`{id}`"))
                 .collect();
             out.push_str(&format!(
                 "\n   narration ({}, {} s) plays {}–{}, starting {} s into the slide ({})",
-                match (clip.imported, clip.recorded) {
-                    (true, _) => "imported audio",
-                    (_, true) => "the presenter's recording",
-                    _ => "generated speech",
+                match clip.source() {
+                    Source::Imported => "imported audio",
+                    Source::Recording => "the presenter's recording",
+                    Source::Voice => "generated speech",
                 },
                 secs(clip.end - clip.start),
                 secs(clip.start),
                 secs(clip.end),
                 secs(clip.start - slide.start),
-                if clip.start > clip.planned + 0.005 {
+                if clip.waited() {
                     "waiting for the narration before it"
                 } else {
                     pinned(slide.narration_start)
@@ -461,67 +404,47 @@ pub(super) fn narration_timeline(
             out.push_str("\n   narration script without up-to-date audio: the user has it spoken in the Narration panel (an export does it first); until then its timing is unknown");
         }
     }
-    if with_words {
-        for slide in slides.iter().filter(|s| s.narration.is_some()) {
-            out.push_str(&format!("\n\nWords of `{}`'s narration", slide.id));
-            match narration::words(&file, &slide.id) {
-                None => out.push_str(&format!(
-                    ": not timed{}.",
-                    untimed.as_ref().map_or(String::new(), |e| format!(
-                        " ({}; the user can time them in the Narration panel)",
-                        e.trim_end_matches('.')
-                    ))
-                )),
-                Some(words) if words.is_empty() => out.push_str(": none heard."),
-                Some(words) => {
-                    out.push_str(
-                        ": start–end in the show, then the slide showing at the start and the \
-                         seconds into it.",
-                    );
-                    for word in words {
-                        let Some(at) = timeline::place(&slides, &slide.id, word.start) else {
-                            continue;
-                        };
-                        out.push_str(&format!(
-                            "\n{}–{} {} +{} {}",
-                            secs(at.at),
-                            secs(at.at + word.end - word.start),
-                            at.slide,
-                            secs(at.into_slide),
-                            word.text
-                        ));
-                        data_words.push(json!({
-                            "audio": slide.id,
-                            "text": word.text,
-                            "start": ms(at.at),
-                            "end": ms(at.at + word.end - word.start),
-                            "slide": at.slide,
-                            "intoSlide": ms(at.into_slide),
-                        }));
-                    }
+    for (audio, words) in found.words.iter().flatten() {
+        out.push_str(&format!("\n\nWords of `{audio}`'s narration"));
+        match words {
+            Words::NotTimed => out.push_str(&format!(
+                ": not timed{}.",
+                untimed.as_ref().map_or(String::new(), |e| format!(
+                    " ({}; the user can time them in the Narration panel)",
+                    e.trim_end_matches('.')
+                ))
+            )),
+            Words::NoneHeard => out.push_str(": none heard."),
+            Words::Said(words) => {
+                out.push_str(
+                    ": start–end in the show, then the slide showing at the start and the \
+                     seconds into it.",
+                );
+                for word in words {
+                    out.push_str(&format!(
+                        "\n{}–{} {} +{} {}",
+                        secs(word.start),
+                        secs(word.end),
+                        word.slide,
+                        secs(word.into_slide),
+                        word.text
+                    ));
                 }
             }
         }
     }
-    let data = json!({
-        "deck": rel,
-        "assumed": {
-            "secondsPerSlide": d.seconds_per_slide,
-            "pauseBefore": d.pause_before,
-            "pauseAfter": d.pause_after,
-        },
-        "end": slides.last().map_or(0.0, |s| ms(s.end)),
-        "slides": data_slides,
-        "words": data_words,
-    });
-    out.push_str(&saved(session, &rel, "timeline", &data));
+    out.push_str(&saved(session, &rel, "timeline", &found.data(&rel)));
     Ok(out)
 }
 
 /// The beat of the narration audio of `slide` of the deck at `path` (`arguments`), placed on
 /// the deck's timeline; also saved as JSON in the workspace's `session`.
-fn narration_beats(dir: &Path, arguments: &Value, session: Option<&Path>) -> Result<String> {
-    use narration::timeline;
+pub(super) fn narration_beats(
+    dir: &Path,
+    arguments: &Value,
+    session: Option<&Path>,
+) -> Result<String> {
+    use narration::beats::SlideBeat;
     let (rel, file) = deck_argument(dir, arguments)?;
     let slide = arguments["slide"]
         .as_str()
@@ -531,18 +454,16 @@ fn narration_beats(dir: &Path, arguments: &Value, session: Option<&Path>) -> Res
     if !deck.slides.iter().any(|s| s.id == slide) {
         return Err(Error::msg(format!("{rel} has no slide `{slide}`")));
     }
-    let slides = timeline::layout(&file, &deck, &timeline::DEFAULTS);
-    if !slides
-        .iter()
-        .any(|s| s.id == slide && s.narration.is_some())
-    {
-        return Err(Error::msg(format!(
-            "slide `{slide}` has no up-to-date narration audio that plays"
-        )));
-    }
-    let (samples, rate) = narration::audio::read_wav(&narration::audio_file(&file, slide))?;
-    let Some(found) = narration::beats::find(&samples, rate) else {
-        return Ok(format!("No beat is heard in slide `{slide}`'s narration."));
+    let found = match narration::beats::on_show(&file, &deck, slide)? {
+        SlideBeat::NoAudio => {
+            return Err(Error::msg(format!(
+                "slide `{slide}` has no up-to-date narration audio that plays"
+            )))
+        }
+        SlideBeat::NoBeat => {
+            return Ok(format!("No beat is heard in slide `{slide}`'s narration."))
+        }
+        SlideBeat::Found(found) => found,
     };
     let mut out = format!(
         "Slide `{slide}`'s narration has a beat of {:.1} BPM (one every {} s), {} beats. Each: \
@@ -552,39 +473,20 @@ fn narration_beats(dir: &Path, arguments: &Value, session: Option<&Path>) -> Res
          music does (bar 0 is before the first downbeat).",
         found.tempo,
         secs(60.0 / found.tempo),
-        found.beats.len(),
+        found.count,
     );
-    let mut bar = 0;
-    let mut data_beats = Vec::new();
-    for ((at, strength), &in_bar) in found.beats.iter().zip(&found.in_bar) {
-        if in_bar == 0 {
-            bar += 1;
-        }
-        let Some(placed) = timeline::place(&slides, slide, *at) else {
-            continue;
-        };
+    for beat in &found.beats {
         out.push_str(&format!(
-            "\n{} {} +{} {strength:.2} {bar}.{}",
-            secs(placed.at),
-            placed.slide,
-            secs(placed.into_slide),
-            in_bar + 1
+            "\n{} {} +{} {:.2} {}.{}",
+            secs(beat.at),
+            beat.slide,
+            secs(beat.into_slide),
+            beat.strength,
+            beat.bar,
+            beat.beat
         ));
-        data_beats.push(json!({
-            "at": ms(placed.at),
-            "slide": placed.slide,
-            "intoSlide": ms(placed.into_slide),
-            "strength": (strength * 100.0).round() / 100.0,
-            "bar": bar,
-            "beat": in_bar + 1,
-        }));
     }
-    let data = json!({
-        "deck": rel,
-        "audio": slide,
-        "tempo": (found.tempo * 10.0).round() / 10.0,
-        "beats": data_beats,
-    });
+    let data = found.data(&rel, slide);
     out.push_str(&saved(session, &rel, &format!("beats-{slide}"), &data));
     Ok(out)
 }

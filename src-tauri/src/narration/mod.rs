@@ -10,11 +10,12 @@
 //! A slide's audio can also be the presenter's own voice, recorded in the presenter view (see
 //! [`crate::voice::Voice::record_narration`]) and marked so in the manifest. It is the slide's
 //! audio whatever its script says, and is never said again; deleting it brings the service's
-//! audio back. Audio made elsewhere (see [`import_audio`]) is kept the same way.
+//! audio back. Audio made elsewhere (see [`set_audio`]) is kept the same way.
 
 pub mod audio;
 pub mod beats;
 pub mod cloud;
+mod generate;
 mod manifest;
 mod recordings;
 mod settings;
@@ -33,9 +34,10 @@ use tokio::sync::Notify;
 use crate::deck::{self, Deck};
 use crate::error::{Error, Result};
 pub use cloud::{Provider, DEFAULT_PROVIDER};
+pub use generate::Outcome;
 pub use manifest::{audio_dir, audio_file, file_stem, fingerprint};
 use manifest::{Entry, Manifest};
-pub use recordings::{append_recording, delete_recording, has_own_recording, import_audio};
+pub use recordings::{append_recording, delete_recording, refusal, set_audio, Refusal};
 use settings::settings;
 pub use settings::{language, provider_of, Language, Settings, DEFAULT_LANGUAGE, LANGUAGES};
 pub use words::{time_words, words, TimingProgress, TIMING_EVENT};
@@ -241,7 +243,7 @@ pub struct SlideAudio {
     pub seconds: Option<f64>,
     /// It is the presenter's own recording, or audio made elsewhere.
     pub recorded: bool,
-    /// It is audio made elsewhere (see [`import_audio`]).
+    /// It is audio made elsewhere (see [`set_audio`]).
     pub imported: bool,
     /// When each word of the audio is said is known (see [`time_words`]).
     pub timed: bool,

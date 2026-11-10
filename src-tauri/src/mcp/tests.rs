@@ -1,5 +1,5 @@
 use super::narration_tools::{
-    generate_narration_audio, narration_timeline, saved, set_narration_audio,
+    generate_narration_audio, narration_beats, narration_timeline, saved, set_narration_audio,
 };
 use super::tools::export_deck;
 use super::*;
@@ -486,15 +486,11 @@ fn narration_tool_makes_audio_the_slides_narration_and_times_its_words() {
         json!({"name": NARRATION_TOOL, "arguments": {"slide": "intro", "audio": "talks/sound/quiet.wav"}}),
     );
     assert_eq!(res["result"]["isError"], false, "{res}");
-    let text = res["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("Slide `intro` is narrated by talks/sound/quiet.wav now (1.00 s, kept as narration/intro.wav)."), "{text}");
-    assert!(
-        text.contains("It starts as the slide shows (data-narration-start=\"0\")."),
-        "{text}"
-    );
-    assert!(
-        text.contains("No words are heard in it. Call narration_timeline"),
-        "{text}"
+    assert_eq!(
+        text_of(&res),
+        "Slide `intro` is narrated by talks/sound/quiet.wav now (1.00 s, kept as narration/intro.wav). \
+         It starts as the slide shows (data-narration-start=\"0\"). No words are heard in it. \
+         Call narration_timeline for when its words fall on the slides, narration_beats for its beat."
     );
     let file = dir.join(deck::DECK_FILE);
     let deck = deck::load(&file).unwrap();
@@ -510,13 +506,12 @@ fn narration_tool_makes_audio_the_slides_narration_and_times_its_words() {
     // Speech without the model is kept, untimed; another deck keeps its audio apart.
     let args = json!({"path": "talks/q3.html", "slide": "intro", "audio": "talks/sound/talk.wav"});
     let text = set_narration_audio(&dir, &args, Path::new("/nonexistent"), None).unwrap();
-    assert!(
-        text.contains("kept as talks/narration/q3/intro.wav"),
-        "{text}"
-    );
-    assert!(
-        text.contains("Its words are not timed: Slide intro: The speech model is not downloaded. The user can time them in the Narration panel."),
-        "{text}"
+    assert_eq!(
+        text,
+        "Slide `intro` is narrated by talks/sound/talk.wav now (1.00 s, kept as talks/narration/q3/intro.wav). \
+         It starts as the slide shows (data-narration-start=\"0\"). Its words are not timed: Slide intro: \
+         The speech model is not downloaded. The user can time them in the Narration panel. \
+         Call narration_timeline for when its words fall on the slides, narration_beats for its beat."
     );
     assert_eq!(narration::words(&dir.join("talks/q3.html"), "intro"), None);
     assert_eq!(narration::words(&file, "intro"), Some(vec![]));
@@ -534,9 +529,9 @@ fn narration_tool_leaves_a_locked_slides_audio_alone() {
         json!({"name": NARRATION_TOOL, "arguments": {"slide": "intro", "audio": "quiet.wav"}}),
     );
     assert_eq!(res["result"]["isError"], true, "{res}");
-    assert!(
-        text_of(&res).contains("The slide `intro` is locked"),
-        "{res}"
+    assert_eq!(
+        text_of(&res),
+        "The slide `intro` is locked; unlock it to change its narration."
     );
     // Nothing was replaced: no audio, no manifest, no pinned start.
     assert!(!dir.join("narration").exists());
@@ -554,9 +549,9 @@ fn narration_tool_replaces_the_users_own_recording_only_when_asked() {
     let args = json!({"name": NARRATION_TOOL, "arguments": {"slide": "intro", "audio": "talks/sound/quiet.wav"}});
     let res = call(&dir, "tools/call", args.clone());
     assert_eq!(res["result"]["isError"], true, "{res}");
-    assert!(
-        text_of(&res).contains("the user's own recording, which would be lost"),
-        "{res}"
+    assert_eq!(
+        text_of(&res),
+        "The slide `intro` is narrated by the user's own recording, which would be lost. Ask the user first; call again with replace: true to replace it."
     );
     assert_eq!(
         std::fs::read(narration::audio_file(&file, "intro")).unwrap(),
@@ -568,7 +563,11 @@ fn narration_tool_replaces_the_users_own_recording_only_when_asked() {
     replace["arguments"]["replace"] = json!(true);
     let res = call(&dir, "tools/call", replace);
     assert_eq!(res["result"]["isError"], false, "{res}");
-    assert!(!narration::has_own_recording(&file, "intro"));
+    assert_eq!(
+        narration::refusal(&file, "intro", None, false).unwrap(),
+        None,
+        "no recording of the user's is left"
+    );
     let res = call(&dir, "tools/call", args);
     assert_eq!(res["result"]["isError"], false, "{res}");
 }
@@ -651,43 +650,51 @@ fn timeline_tool_places_slides_narration_and_words_on_the_show() {
         json!({"name": TIMELINE_TOOL, "arguments": {}}),
     );
     assert_eq!(res["result"]["isError"], false, "{res}");
-    let text = text_of(&res);
-    for line in [
-        "1. `song` shows 0.00–2.00 (2.00 s, pinned)",
-        "narration (imported audio, 8.00 s) plays 0.00–8.00, starting 0.00 s into the slide (pinned); plays on over `verse`",
-        "2. `verse` shows 2.00–12.00 (10.00 s, pinned)",
-        "3. `outro` shows 12.00–17.00 (5.00 s, default)",
-        "narration script without up-to-date audio",
-        "Words of `song`'s narration: start–end in the show",
-        "\n1.00–1.40 song +1.00 One,",
-        "\n3.25–3.50 verse +1.25 two.",
-    ] {
-        assert!(text.contains(line), "{line}\n{text}");
-    }
-    assert!(!text.contains("Words of `outro`"), "{text}");
-    // The same as JSON in the session, for scripts.
     let saved = dir
         .join("session")
         .join("timing")
         .join("deck.html.timeline.json");
-    assert!(text.ends_with(&saved.display().to_string()), "{text}");
+    let intro = "How deck.html plays in a video export and the self-running show, in seconds from \
+        its start. What a slide does not pin follows the app's default export settings: a slide \
+        shows at least 5 s, its narration starts 0.5 s in and the slide stays 1 s after it; the \
+        user may export with others, so pin `data-duration` and `data-narration-start` on slides \
+        you time to narration. A narration never talks over the one before it: it waits. An \
+        animation on a slide starts as the slide shows, so its delay is the time into that slide.\n";
+    let slides = "
+1. `song` shows 0.00–2.00 (2.00 s, pinned)
+   narration (imported audio, 8.00 s) plays 0.00–8.00, starting 0.00 s into the slide (pinned); plays on over `verse`
+2. `verse` shows 2.00–12.00 (10.00 s, pinned)
+3. `outro` shows 12.00–17.00 (5.00 s, default)
+   narration script without up-to-date audio: the user has it spoken in the Narration panel (an export does it first); until then its timing is unknown";
+    let words = "
+
+Words of `song`'s narration: start–end in the show, then the slide showing at the start and the seconds into it.
+1.00–1.40 song +1.00 One,
+3.25–3.50 verse +1.25 two.";
+    let json_at = format!(
+        "\n\nThe same as JSON, for your scripts to read rather than copy: {}",
+        saved.display()
+    );
+    assert_eq!(text_of(&res), format!("{intro}{slides}{words}{json_at}"));
+    // The same as JSON in the session, for scripts (see narration::timeline for its data).
     let data: Value = serde_json::from_str(&std::fs::read_to_string(&saved).unwrap()).unwrap();
-    assert_eq!(data["slides"][0]["id"], "song");
-    assert_eq!(data["slides"][0]["narration"]["source"], "imported");
-    assert_eq!(data["slides"][1]["start"], 2.0);
-    assert_eq!(data["slides"][2]["unspoken"], true);
+    let file = dir.join(deck::DECK_FILE);
+    let deck = deck::load(&file).unwrap();
+    assert_eq!(
+        data,
+        narration::timeline::timeline(&file, &deck, true).data("deck.html")
+    );
     assert_eq!(
         data["words"][1],
         json!({"audio": "song", "text": "two.", "start": 3.25, "end": 3.5, "slide": "verse", "intoSlide": 1.25})
     );
-    assert_eq!(data["end"], 17.0);
     // Without words, just the slides.
     let res = call(
         &dir,
         "tools/call",
         json!({"name": TIMELINE_TOOL, "arguments": {"words": false}}),
     );
-    assert!(!text_of(&res).contains("Words of"));
+    assert_eq!(text_of(&res), format!("{intro}{slides}{json_at}"));
     let res = call(
         &dir,
         "tools/call",
@@ -716,11 +723,28 @@ fn beats_tool_finds_the_beat_on_the_show() {
     );
     assert_eq!(res["result"]["isError"], false, "{res}");
     let text = text_of(&res);
-    assert!(
-        text.starts_with("Slide `song`'s narration has a beat of 12"),
-        "{text}"
+    let saved = dir.join("session/timing/deck.html.beats-song.json");
+    let data: Value = serde_json::from_str(&std::fs::read_to_string(&saved).unwrap()).unwrap();
+    let beats = data["beats"].as_array().unwrap();
+    let header = format!(
+        "Slide `song`'s narration has a beat of {:.1} BPM (one every 0.50 s), {} beats. Each: \
+         when it falls in the show (as narration_timeline counts), the slide showing then and \
+         the seconds into it, how strong its onset is (0 to 1, 1 the strongest), and bar.beat: \
+         bars of four, beat 1 their downbeat, found from the accents and shifting where the \
+         music does (bar 0 is before the first downbeat).",
+        data["tempo"].as_f64().unwrap(),
+        beats.len()
     );
-    assert!(text.contains("(one every 0.50 s)"), "{text}");
+    let mut lines = text.lines();
+    assert_eq!(lines.next(), Some(header.as_str()), "{text}");
+    assert_eq!(lines.clone().count(), beats.len() + 2, "{text}");
+    assert_eq!(
+        lines.last().unwrap_or_default(),
+        format!(
+            "The same as JSON, for your scripts to read rather than copy: {}",
+            saved.display()
+        )
+    );
     // Beats after the first slide fall on `verse`, counted from its start.
     let line = text
         .lines()
@@ -732,21 +756,23 @@ fn beats_tool_finds_the_beat_on_the_show() {
         line.rsplit(' ').next().is_some_and(|b| b.contains('.')),
         "{line}"
     );
-    let saved = dir.join("session/timing/deck.html.beats-song.json");
-    let data: Value = serde_json::from_str(&std::fs::read_to_string(saved).unwrap()).unwrap();
-    assert!(
-        (data["tempo"].as_f64().unwrap() - 120.0).abs() < 2.0,
-        "{data}"
-    );
-    let beat = data["beats"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|b| (b["at"].as_f64().unwrap() - 2.5).abs() < 0.01)
-        .unwrap();
-    assert_eq!(beat["slide"], "verse");
-    assert!((beat["intoSlide"].as_f64().unwrap() - 0.5).abs() < 0.01);
-    assert!((1..=4).contains(&beat["beat"].as_u64().unwrap()));
+    // The saved data is the beats placed on the show (see narration::beats for them).
+    let file = dir.join(deck::DECK_FILE);
+    let deck = deck::load(&file).unwrap();
+    let narration::beats::SlideBeat::Found(found) =
+        narration::beats::on_show(&file, &deck, "song").unwrap()
+    else {
+        panic!("no beat");
+    };
+    assert_eq!(data, found.data("deck.html", "song"));
+
+    // Silence has no beat.
+    narration::audio::write_wav(&dir.join("quiet.wav"), &[0.0; 16_000 * 4], 16_000).unwrap();
+    let args = json!({"slide": "outro", "audio": "quiet.wav"});
+    set_narration_audio(&dir, &args, Path::new("/nonexistent"), None).unwrap();
+    let text = narration_beats(&dir, &json!({"slide": "outro"}), None).unwrap();
+    assert_eq!(text, "No beat is heard in slide `outro`'s narration.");
+
     for (arguments, why) in [
         (json!({}), "slide is required"),
         (
@@ -755,7 +781,7 @@ fn beats_tool_finds_the_beat_on_the_show() {
         ),
         (
             json!({"slide": "verse"}),
-            "slide `verse` has no up-to-date narration audio",
+            "slide `verse` has no up-to-date narration audio that plays",
         ),
     ] {
         let res = call(
@@ -764,11 +790,7 @@ fn beats_tool_finds_the_beat_on_the_show() {
             json!({"name": BEATS_TOOL, "arguments": arguments}),
         );
         assert_eq!(res["result"]["isError"], true, "{arguments}");
-        assert!(
-            text_of(&res).contains(why),
-            "{arguments}: {}",
-            text_of(&res)
-        );
+        assert_eq!(text_of(&res), why, "{arguments}");
     }
 }
 
@@ -839,29 +861,30 @@ fn generate_tool_reports_slides_it_leaves_alone_without_an_api_key() {
     let file = dir.join(deck::DECK_FILE);
     let take: Vec<f32> = (0..8_000).map(|i| (i as f32 / 30.0).sin() * 0.2).collect();
     narration::append_recording(&file, "own", &take, 16_000).unwrap();
-    let args = json!({"slides": ["intro", "plain", "own"]});
-    let text = generate_narration_audio(&dir, &args, Path::new("/nonexistent"), None).unwrap();
-    assert!(
-        text.starts_with("Narration audio of deck.html: 0 slides said."),
-        "{text}"
+    // `talk` is locked in the turn's guard, though the turn unlocked it since.
+    let session = dir.join("session");
+    std::fs::create_dir_all(&session).unwrap();
+    let html = std::fs::read_to_string(&file).unwrap();
+    let locked = html.replace(r#"id="talk">"#, r#"id="talk" data-locked>"#);
+    std::fs::write(&file, &locked).unwrap();
+    crate::guard::guard_locked(&file, &session).unwrap();
+    std::fs::write(&file, &html).unwrap();
+    let res = call(
+        &dir,
+        "tools/call",
+        json!({"name": GENERATE_TOOL, "arguments": {"slides": ["intro", "plain", "own", "talk"]}}),
     );
-    assert!(
-        text.contains("- `intro`: locked, its audio is left as it was"),
-        "{text}"
+    assert_eq!(res["result"]["isError"], false, "{res}");
+    assert_eq!(
+        text_of(&res),
+        "Narration audio of deck.html: 0 slides said.
+- `intro`: locked, its audio is left as it was
+- `plain`: has no narration script; nothing to say
+- `own`: keeps the user's own recording (0.50 s)
+- `talk`: locked, its audio is left as it was
+
+Call narration_timeline for when its words fall on the slides."
     );
-    assert!(
-        text.contains("- `plain`: has no narration script; nothing to say"),
-        "{text}"
-    );
-    assert!(
-        text.contains("- `own`: keeps the user's own recording (0.50 s)"),
-        "{text}"
-    );
-    assert!(
-        !text.contains("`talk`"),
-        "only the slides asked for: {text}"
-    );
-    assert!(text.contains("Call narration_timeline"), "{text}");
     assert!(
         !narration::audio_file(&file, "intro").exists(),
         "a locked slide gets no audio"
@@ -879,36 +902,11 @@ fn generate_tool_needs_an_api_key_to_say_a_script() {
     let err = generate_narration_audio(&dir, &json!({}), Path::new("/nonexistent"), None)
         .unwrap_err()
         .to_string();
-    assert!(
-        err.starts_with("Generating the narration audio failed: "),
-        "{err}"
+    assert_eq!(
+        err,
+        "Generating the narration audio failed: Add your OpenAI API key in the Narration tab first."
     );
-    assert!(err.contains("Add your OpenAI API key"), "{err}");
     assert!(!narration::audio_file(&file, "talk").exists());
-}
-
-#[test]
-fn generate_tool_leaves_slides_locked_in_the_turn_alone() {
-    let dir = speaking_deck();
-    let file = dir.join(deck::DECK_FILE);
-    let session = dir.join("session");
-    std::fs::create_dir_all(&session).unwrap();
-    let html = std::fs::read_to_string(&file).unwrap();
-    let html = html.replace(r#"id="talk">"#, r#"id="talk" data-locked>"#);
-    std::fs::write(&file, &html).unwrap();
-    crate::guard::guard_locked(&file, &session).unwrap();
-    std::fs::write(
-        &file,
-        html.replace(r#"id="talk" data-locked>"#, r#"id="talk">"#),
-    )
-    .unwrap();
-    let args = json!({"slides": ["talk"]});
-    let text =
-        generate_narration_audio(&dir, &args, Path::new("/nonexistent"), Some(&session)).unwrap();
-    assert!(
-        text.contains("- `talk`: locked, its audio is left as it was"),
-        "{text}"
-    );
 }
 
 #[test]

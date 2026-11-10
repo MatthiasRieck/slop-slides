@@ -1,7 +1,7 @@
 import { api, type Deck, errorMessage } from "../lib/api";
 import { type CommentScope, type PlacedComment, placeComments, type SlideComment } from "../lib/comments";
 import type { Stroke } from "../lib/ink";
-import { loadFlag, saveFlag } from "./persist";
+import { loadFlag, saveFlag } from "../lib/storage";
 import type { AppState, AppStore, Slice } from "./types";
 
 /** The review on the slides: ink drawn on them and comments, saved in the deck file and sent to the agent. */

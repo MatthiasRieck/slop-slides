@@ -1,4 +1,5 @@
 import { api, errorMessage, type HistoryEntry } from "../lib/api";
+import { loadText, saveText } from "../lib/storage";
 import { persistChat } from "./messages";
 import { quoteLabel, rewindNote } from "./prompts";
 import type { AppStore, Slice } from "./types";
@@ -7,6 +8,17 @@ import type { AppStore, Slice } from "./types";
 export type RewindChoice = "rewind" | "deck";
 /** The answer to keep giving, once the user asked not to be asked again. */
 export const REWIND_KEY = "slopslide.rewindChoice";
+
+/** The answer kept under `REWIND_KEY`; null while the user wants to be asked. */
+export function rememberedRewind(): RewindChoice | null {
+  const saved = loadText(REWIND_KEY);
+  return saved === "rewind" || saved === "deck" ? saved : null;
+}
+
+/** Keeps giving `choice` from now on; null asks again. Throws when storage is full or unavailable. */
+export function rememberRewind(choice: RewindChoice | null) {
+  saveText(REWIND_KEY, choice);
+}
 
 /** The chat following the deck's history: an undone agent turn takes the chat back, or the agent is told. */
 export interface RewindSlice {
@@ -33,7 +45,7 @@ export const createRewindSlice: Slice<RewindSlice> = (set, get, app) => ({
     const entry = get().rewindAsk;
     set({ rewindAsk: null });
     if (!entry || !choice) return;
-    if (remember) localStorage.setItem(REWIND_KEY, choice);
+    if (remember) rememberRewind(choice);
     await applyRewind(app, entry, choice);
   },
 
@@ -44,8 +56,8 @@ export const createRewindSlice: Slice<RewindSlice> = (set, get, app) => ({
 export function turnUndone(app: AppStore, entry: HistoryEntry) {
   const message = app.getState().messages.find((m) => m.id === entry.message);
   if (message?.role !== "user" || message.reverted) return;
-  const remembered = localStorage.getItem(REWIND_KEY);
-  if (remembered === "rewind" || remembered === "deck") void applyRewind(app, entry, remembered);
+  const remembered = rememberedRewind();
+  if (remembered) void applyRewind(app, entry, remembered);
   else app.setState({ rewindAsk: entry });
 }
 

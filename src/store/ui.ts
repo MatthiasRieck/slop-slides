@@ -1,5 +1,5 @@
 import type { Placement } from "../lib/screens";
-import { loadFlag, loadJson, saveFlag, saveJson } from "./persist";
+import { loadFlag, loadJson, loadText, saveFlag, saveJson, saveText } from "../lib/storage";
 import type { Slice } from "./types";
 
 /** What the right sidebar can show, each in a tab of its own, in menu order (see components/Sidebar.tsx). */
@@ -48,17 +48,17 @@ export interface UiSlice {
 
 /** The sidebar's tabs as last left; anything saved that is not a tab is dropped. */
 function loadSidebarTabs(): { sidebarTabs: SidebarTab[]; sidebarTab: SidebarTab | null } {
-  const saved = loadJson(SIDEBAR_TABS_KEY);
-  const sidebarTabs = Array.isArray(saved) ? [...new Set(saved.filter(isSidebarTab))] : DEFAULT_SIDEBAR_TABS;
-  const active = localStorage.getItem(SIDEBAR_TAB_KEY);
+  const sidebarTabs = loadJson(SIDEBAR_TABS_KEY, DEFAULT_SIDEBAR_TABS, (saved) =>
+    Array.isArray(saved) ? [...new Set(saved.filter(isSidebarTab))] : DEFAULT_SIDEBAR_TABS,
+  );
+  const active = loadText(SIDEBAR_TAB_KEY);
   const sidebarTab = isSidebarTab(active) && sidebarTabs.includes(active) ? active : (sidebarTabs[0] ?? null);
   return { sidebarTabs, sidebarTab };
 }
 
 function saveSidebarTabs(tabs: SidebarTab[], active: SidebarTab | null) {
   saveJson(SIDEBAR_TABS_KEY, tabs);
-  if (active) localStorage.setItem(SIDEBAR_TAB_KEY, active);
-  else localStorage.removeItem(SIDEBAR_TAB_KEY);
+  saveText(SIDEBAR_TAB_KEY, active);
 }
 
 export const createUiSlice: Slice<UiSlice> = (set, get) => ({

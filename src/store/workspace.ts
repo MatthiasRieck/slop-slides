@@ -1,4 +1,5 @@
 import { api, type Deck, errorMessage, type OpenedFile, type WorkspaceInfo } from "../lib/api";
+import { loadText, saveText } from "../lib/storage";
 import { basename } from "../lib/utils";
 import { loadWorkspaceChat } from "./chat";
 import { confirmDiscard } from "./confirm";
@@ -62,7 +63,7 @@ export function confirmDiscardEdits(app: AppStore): Promise<boolean> {
 /** Reopens `path` the next time its workspace opens. */
 function rememberFile(app: AppStore, path: string) {
   const { workspace } = app.getState();
-  if (workspace) localStorage.setItem(LAST_FILE_KEY + workspace.path, path);
+  if (workspace) saveText(LAST_FILE_KEY + workspace.path, path);
 }
 
 /** Shows the workspace file `path` in the viewer its kind calls for: a deck in the editor. */
@@ -126,13 +127,13 @@ export const createWorkspaceSlice: Slice<WorkspaceSlice> = (set, get, app) => ({
       return;
     }
     const workspacePath = get().workspace!.path;
-    const last = localStorage.getItem(LAST_FILE_KEY + workspacePath);
+    const last = loadText(LAST_FILE_KEY + workspacePath);
     if (last === null) return get().setSidebarTab("files");
     // A file that is gone since just leaves the viewer empty.
     try {
       await openFileAt(app, last, await api.openFile(last));
     } catch {
-      localStorage.removeItem(LAST_FILE_KEY + workspacePath);
+      saveText(LAST_FILE_KEY + workspacePath, null);
       get().setSidebarTab("files");
     }
   },

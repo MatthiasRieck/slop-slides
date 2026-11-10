@@ -4,9 +4,9 @@ import { useEffect, useState } from "react";
 
 import type { TemplateSummary } from "../lib/api";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
+import { loadText, trySaveText } from "../lib/storage";
 import { cn, layoutLabel, templateSlideUrl } from "../lib/utils";
 import { useApp } from "../store";
-import { readChoice, writeChoice } from "./editing/storedChoice";
 import { SlideFrame } from "./SlideFrame";
 
 const LAST_TEMPLATE_KEY = "slopslide.layoutTemplate";
@@ -38,7 +38,7 @@ export function TemplateSlide(props: { template: string; slide: string; size?: P
 /** The template a picker starts on: the deck's own, else the one picked last, else the first. */
 function initialTemplate(templates: TemplateSummary[], deckTemplate: string | null | undefined): string | null {
   const known = (id: string | null | undefined) => (id && templates.some((t) => t.id === id) ? id : null);
-  return known(deckTemplate) ?? known(readChoice(LAST_TEMPLATE_KEY)) ?? templates[0]?.id ?? null;
+  return known(deckTemplate) ?? known(loadText(LAST_TEMPLATE_KEY)) ?? templates[0]?.id ?? null;
 }
 
 /**
@@ -57,7 +57,7 @@ export function LayoutPicker(props: { mode: "add" | "change"; onDone: () => void
 
   const choose = (slide: string) => {
     if (!template) return;
-    writeChoice(LAST_TEMPLATE_KEY, template.id);
+    trySaveText(LAST_TEMPLATE_KEY, template.id);
     const app = useApp.getState();
     void (props.mode === "add" ? app.addLayoutSlide(template.id, slide) : app.changeLayout(template.id, slide));
     props.onDone();

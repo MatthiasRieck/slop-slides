@@ -1,4 +1,5 @@
 import type { Slide } from "../../lib/api";
+import { loadJson, saveJson } from "../../lib/storage";
 
 /** Time since the show started, like `4:07` or `1:04:07`. */
 export function formatElapsed(ms: number): string {
@@ -28,17 +29,16 @@ export interface Budget {
 
 /** The times the presenter set last, kept on this computer. */
 export function loadBudget(): Budget {
-  try {
-    const saved = JSON.parse(localStorage.getItem(BUDGET_KEY) ?? "{}");
-    const minutes = (value: unknown) => (typeof value === "number" && value > 0 && value < 1000 ? value : 0);
+  const minutes = (value: unknown) => (typeof value === "number" && value > 0 && value < 1000 ? value : 0);
+  // A stored null fails the read, and falls back too.
+  return loadJson(BUDGET_KEY, { total: 0, perSlide: 0 }, (stored) => {
+    const saved = stored as Partial<Record<keyof Budget, unknown>>;
     return { total: minutes(saved.total), perSlide: minutes(saved.perSlide) };
-  } catch {
-    return { total: 0, perSlide: 0 };
-  }
+  });
 }
 
 export function saveBudget(budget: Budget) {
-  localStorage.setItem(BUDGET_KEY, JSON.stringify(budget));
+  saveJson(BUDGET_KEY, budget);
 }
 
 /**

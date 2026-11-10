@@ -44,7 +44,7 @@ export {
   withRevertNotes,
 } from "./store/prompts";
 export { commentsInScope, heldComment } from "./store/review";
-export { REWIND_KEY, type RewindChoice } from "./store/rewind";
+export { REWIND_KEY, type RewindChoice, rememberedRewind, rememberRewind } from "./store/rewind";
 export { activeMatch, type SlideSearch, searchHighlight } from "./store/search";
 export { railSelection } from "./store/slides";
 export { SIDEBAR_TABS, type SidebarTab } from "./store/ui";

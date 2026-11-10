@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import type { UserMessage } from "./messages";
+import { REWIND_KEY, rememberedRewind, rememberRewind } from "./rewind";
 import { backend, calls, freshStore, historyEntry, historyStatus, resetBackend } from "./testing";
 
 beforeEach(resetBackend);
@@ -104,5 +105,19 @@ describe("the chat following an undone agent turn", () => {
     backend({ undo_deck: () => ({ deck: deckFor(DECK_HTML), entry: turn, status: status() }) });
     await useApp.getState().undo();
     expect(useApp.getState().rewindAsk).toBeNull();
+  });
+});
+
+describe("the remembered rewind answer", () => {
+  beforeEach(() => localStorage.removeItem(REWIND_KEY));
+
+  it("is kept until asked again, and only a known answer counts", () => {
+    expect(rememberedRewind()).toBeNull();
+    rememberRewind("rewind");
+    expect(rememberedRewind()).toBe("rewind");
+    rememberRewind(null);
+    expect(localStorage.getItem(REWIND_KEY)).toBeNull();
+    localStorage.setItem(REWIND_KEY, "always");
+    expect(rememberedRewind()).toBeNull();
   });
 });

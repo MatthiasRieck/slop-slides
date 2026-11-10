@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Slide } from "./api";
-import { layoutTimeline, moveClip, moveEdge, slideAt, spokenSeconds, withTiming } from "./timeline";
+import { filmstripFrames, layoutTimeline, moveClip, moveEdge, slideAt, spokenSeconds, withTiming } from "./timeline";
 import { DEFAULT_VIDEO_OPTIONS, type VideoOptions } from "./video";
 
 const slide = (id: string, more: Partial<Slide> = {}): Slide => ({
@@ -225,5 +225,27 @@ describe("slideAt", () => {
   it("finds the slide showing at a time, the last past the end", () => {
     const t = layoutTimeline([slide("a"), slide("b")], {}, options());
     expect([0, 2.9, 3, 5.9, 100].map((time) => slideAt(t, time))).toEqual([0, 0, 1, 1, 1]);
+  });
+});
+
+describe("filmstripFrames", () => {
+  it("fills the strip with pictures, the last one cut off", () => {
+    expect(filmstripFrames(250, 100, 0, 1000)).toEqual([0, 1, 2]);
+    expect(filmstripFrames(200, 100, 0, 1000)).toEqual([0, 1]);
+    // Narrower than a picture, a strip still shows the start of one.
+    expect(filmstripFrames(30, 100, 0, 1000)).toEqual([0]);
+  });
+
+  it("leaves out the pictures out of sight", () => {
+    expect(filmstripFrames(1000, 100, 250, 520)).toEqual([2, 3, 4, 5]);
+    expect(filmstripFrames(1000, 100, -300, 150)).toEqual([0, 1]);
+    // A strip wholly before or after what is in sight.
+    expect(filmstripFrames(1000, 100, 1200, 1500)).toEqual([]);
+    expect(filmstripFrames(1000, 100, -500, -100)).toEqual([]);
+  });
+
+  it("shows nothing before the strip is measured", () => {
+    expect(filmstripFrames(0, 100, 0, 1000)).toEqual([]);
+    expect(filmstripFrames(500, 0, 0, 1000)).toEqual([]);
   });
 });

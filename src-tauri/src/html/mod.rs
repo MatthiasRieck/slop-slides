@@ -56,7 +56,7 @@ pub use placeholder::with_placeholder_text;
 pub(crate) use runtime::PLAYER_FLAG;
 pub use runtime::{ensure_runtime, without_runtime};
 pub(crate) use runtime::{CSS_START, JS_START};
-pub(crate) use scan::{find_ci, has_class, parse_tag, VOID_ELEMENTS};
+pub(crate) use scan::{find_ci, has_class, parse_tag, Tag, VOID_ELEMENTS};
 pub use sections::{add_section, delete_section, rename_section};
 pub use slide_attrs::{
     is_locked, parse_duration, parse_narration_start, parse_time, set_duration, set_hidden,

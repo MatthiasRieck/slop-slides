@@ -1,8 +1,8 @@
 import { create } from "zustand";
 
-import { api, type Change, type DeckChanges, errorMessage, type SlideChange } from "./lib/api";
+import { api, type Change, type DeckChanges, type SlideChange } from "./lib/api";
 import { DEFAULT_DIVIDER, type Divider } from "./lib/compare";
-import { useApp } from "./store";
+import { showError, useApp } from "./store";
 
 /**
  * Git mode (see components/ChangesView.tsx): what changed in the open deck since the last commit,
@@ -70,7 +70,7 @@ export const useChanges = create<ChangesState>((set, get) => {
       await action();
       return true;
     } catch (error) {
-      useApp.getState().setError(errorMessage(error));
+      showError(error);
       return false;
     } finally {
       await get().refresh(deck);
@@ -103,7 +103,7 @@ export const useChanges = create<ChangesState>((set, get) => {
         const picked = keepPicked(changes, previous, useApp.getState().selected);
         set({ changes, deck, picked });
       } catch (error) {
-        if (ticket === lastRefresh) useApp.getState().setError(errorMessage(error));
+        if (ticket === lastRefresh) showError(error);
       }
     },
 

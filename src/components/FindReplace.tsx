@@ -2,6 +2,7 @@ import { CaseSensitive, ChevronDown, ChevronUp, Replace, Search, Undo2, WholeWor
 import { useEffect, useRef, useState } from "react";
 
 import { api, type ReplacedText } from "../lib/api";
+import { plural } from "../lib/utils";
 import { activeMatch, useApp } from "../store";
 import { ToolButton } from "./Button";
 import { Popover } from "./Popover";
@@ -18,9 +19,6 @@ const SEARCH_DELAY_MS = 150;
  * `searchHighlight`). The arrows and Enter go through the matches; leaving View ends the search.
  */
 export function SlideSearch() {
-  const deckId = useApp((s) => s.deck?.id ?? "");
-  // Searches again whenever a slide changes, as after a replace.
-  const version = useApp((s) => s.deck?.slides.map((slide) => slide.hash).join(",") ?? "");
   const query = useApp((s) => s.search.query);
   const options = useApp((s) => s.search.options);
   const matches = useApp((s) => s.search.matches);
@@ -28,48 +26,15 @@ export function SlideSearch() {
   const input = useRef<HTMLInputElement>(null);
   const reveal = useRibbonReveal();
 
-  useEffect(() => {
-    const focus = () => {
-      reveal();
-      input.current?.focus();
-      input.current?.select();
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (!isFind(event.key, event.metaKey || event.ctrlKey, event.shiftKey, event.altKey)) return;
-      event.preventDefault();
-      focus();
-    };
-    // The slide preview forwards the keys pressed in it.
-    const onMessage = (event: MessageEvent) => {
-      const data = event.data;
-      if (data?.type === "slop:key" && isFind(String(data.key), !!data.mod, !!data.shift)) focus();
-    };
-    window.addEventListener("keydown", onKey);
-    window.addEventListener("message", onMessage);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("message", onMessage);
-    };
-  }, [reveal]);
+  useFindShortcut(() => {
+    reveal();
+    input.current?.focus();
+    input.current?.select();
+  });
 
   useEffect(() => useApp.getState().clearSearch, []);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `version` changes with the slides' text
-  useEffect(() => {
-    if (!deckId || !query.trim()) return;
-    const { setSearchMatches } = useApp.getState();
-    let live = true;
-    const timer = setTimeout(() => {
-      api
-        .findInDeck(deckId, query, options)
-        .then((found) => live && setSearchMatches(Array.isArray(found) ? found : []))
-        .catch(() => live && setSearchMatches([]));
-    }, SEARCH_DELAY_MS);
-    return () => {
-      live = false;
-      clearTimeout(timer);
-    };
-  }, [deckId, query, options, version]);
+  useDeckSearch();
 
   const { setSearch, stepSearch } = useApp.getState();
   const found = matches?.length ?? 0;
@@ -100,7 +65,7 @@ export function SlideSearch() {
         {matches && (
           <span
             role="status"
-            title={`${plural(found, "match", "matches")} on ${plural(slideCount, "slide", "slides")}`}
+            title={`${plural(found, "match", "matches")} on ${plural(slideCount, "slide")}`}
             className="shrink-0 text-2xs tabular-nums text-muted-foreground"
           >
             {active >= 0 ? `${active + 1} / ${found}` : found === 0 ? "No matches" : found}
@@ -166,6 +131,56 @@ export function SlideSearch() {
 
 const isFind = (key: string, mod: boolean, shift: boolean, alt = false) =>
   mod && !shift && !alt && key.toLowerCase() === "f";
+
+/** ⌘F, in the app or in the slide (whose preview forwards the keys pressed in it), calls `focus`. */
+function useFindShortcut(focus: () => void) {
+  const focusRef = useRef(focus);
+  focusRef.current = focus;
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!isFind(event.key, event.metaKey || event.ctrlKey, event.shiftKey, event.altKey)) return;
+      event.preventDefault();
+      focusRef.current();
+    };
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (data?.type === "slop:key" && isFind(String(data.key), !!data.mod, !!data.shift)) focusRef.current();
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("message", onMessage);
+    };
+  }, []);
+}
+
+/**
+ * Searches the deck for the query in the store once typing settles, and again whenever a slide
+ * changes, as after a replace; the matches go to the store.
+ */
+function useDeckSearch() {
+  const deckId = useApp((s) => s.deck?.id ?? "");
+  const version = useApp((s) => s.deck?.slides.map((slide) => slide.hash).join(",") ?? "");
+  const query = useApp((s) => s.search.query);
+  const options = useApp((s) => s.search.options);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `version` changes with the slides' text
+  useEffect(() => {
+    if (!deckId || !query.trim()) return;
+    const { setSearchMatches } = useApp.getState();
+    let live = true;
+    const timer = setTimeout(() => {
+      api
+        .findInDeck(deckId, query, options)
+        .then((found) => live && setSearchMatches(Array.isArray(found) ? found : []))
+        .catch(() => live && setSearchMatches([]));
+    }, SEARCH_DELAY_MS);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [deckId, query, options, version]);
+}
 
 /** Opens the replacing of what the search finds. */
 function ReplaceButton() {
@@ -247,7 +262,7 @@ function ReplacePanel() {
       {done && (
         <div className="flex items-center gap-2 rounded-md bg-accent px-2 py-1.5">
           <span className="flex-1">
-            Replaced {plural(done.count, "match", "matches")} on {plural(done.slides.length, "slide", "slides")}.
+            Replaced {plural(done.count, "match", "matches")} on {plural(done.slides.length, "slide")}.
             {done.skipped.length > 0 &&
               ` ${plural(done.skipped.length, "locked slide was", "locked slides were")} left as ${done.skipped.length === 1 ? "it was" : "they were"}.`}
           </span>
@@ -266,8 +281,4 @@ function ReplacePanel() {
       )}
     </div>
   );
-}
-
-function plural(n: number, one: string, many: string) {
-  return `${n} ${n === 1 ? one : many}`;
 }

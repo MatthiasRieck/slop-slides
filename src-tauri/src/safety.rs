@@ -87,7 +87,7 @@ impl Guard {
         fs::write(session.join("locked.json"), "{}")?;
         for file in before.keys() {
             history::checkpoint(home, file)?;
-            deck::guard_locked(file, session)?;
+            crate::guard::guard_locked(file, session)?;
         }
         Ok(Self {
             root: root.into(),
@@ -109,7 +109,7 @@ impl Guard {
                 continue;
             }
             let changed = fs::read(file).map_or(true, |now| now != *original);
-            match deck::release_guard(file, &self.session) {
+            match crate::guard::release_guard(file, &self.session) {
                 Ok(ids) if !ids.is_empty() => restored.push((
                     file.strip_prefix(&self.root)
                         .unwrap()
@@ -160,6 +160,7 @@ impl Guard {
 mod tests {
     use super::*;
     use crate::sessions::Sessions;
+    use crate::test_support::TempDir;
 
     fn turn() -> Change {
         Change::chat("Tidy the slides", Some("m1".into()))
@@ -167,7 +168,7 @@ mod tests {
 
     #[test]
     fn protects_other_decks_snapshots_per_file_and_normalizes_new_decks() {
-        let temp = std::env::temp_dir().join(format!("slopslide-guard-{}", uuid::Uuid::new_v4()));
+        let temp = TempDir::new("guard");
         let root = temp.join("work");
         fs::create_dir_all(root.join("talks").join("quarterly")).unwrap();
         let a = root.join("deck.html");
@@ -218,12 +219,11 @@ mod tests {
         let created = history::status(&home, &new, false).unwrap();
         assert!(created.undo.is_none() && created.current.is_some());
         assert!(!session.join("locked.json").exists());
-        fs::remove_dir_all(temp).unwrap();
     }
 
     #[test]
     fn restores_deleted_locked_decks_and_refreshes_only_the_users_file() {
-        let temp = std::env::temp_dir().join(format!("slopslide-delete-{}", uuid::Uuid::new_v4()));
+        let temp = TempDir::new("delete");
         let root = temp.join("work");
         fs::create_dir_all(root.join("talks")).unwrap();
         let a = root.join("deck.html");
@@ -234,8 +234,8 @@ mod tests {
         let session = Sessions::new(&temp.join("home")).start(&root).unwrap();
         let guard = Guard::start(&root, &session, &temp.join("home")).unwrap();
         deck::set_slide_locked(&a, Some(&session), "a", false).unwrap();
-        assert!(deck::read_guard(&a, Some(&session)).is_empty());
-        assert_eq!(deck::read_guard(&b, Some(&session)).len(), 1);
+        assert!(crate::guard::read_guard(&a, Some(&session)).is_empty());
+        assert_eq!(crate::guard::read_guard(&b, Some(&session)).len(), 1);
         fs::remove_dir_all(root.join("talks")).unwrap();
         assert_eq!(
             guard.finish(&turn()).unwrap(),
@@ -251,12 +251,11 @@ mod tests {
         let restored = fs::read_to_string(&b).unwrap();
         assert!(restored.contains(">A</section>"));
         assert!(restored.contains("slopslide:runtime-js"));
-        fs::remove_dir_all(temp).unwrap();
     }
 
     #[test]
     fn skips_dot_folders_and_pages_and_fails_closed_at_limits() {
-        let root = std::env::temp_dir().join(format!("slopslide-scan-{}", uuid::Uuid::new_v4()));
+        let root = TempDir::new("scan");
         fs::create_dir_all(root.join(".git")).unwrap();
         fs::write(
             root.join(".git/hidden.html"),
@@ -268,6 +267,5 @@ mod tests {
         assert_eq!(scan(&root, 10, 1000).unwrap().len(), 1);
         assert!(scan(&root, 1, 1000).is_err());
         assert!(scan(&root, 10, 1).is_err());
-        fs::remove_dir_all(root).unwrap();
     }
 }

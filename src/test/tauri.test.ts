@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { Channel as CoreChannel, invoke as coreInvoke } from "@tauri-apps/api/core";
 import { emit as eventEmit, listen as eventListen } from "@tauri-apps/api/event";
 import { ask as dialogAsk, open as dialogOpen, save as dialogSave } from "@tauri-apps/plugin-dialog";
@@ -15,13 +16,6 @@ describe("shared Tauri mocks", () => {
     expect(dialogSave).toBe(save);
     expect(dialogOpen).toBe(open);
     expect(openerReveal).toBe(revealItemInDir);
-  });
-
-  it("resolve listen to a no-op unlisten and revealItemInDir to nothing", async () => {
-    const unlisten = await eventListen("anything", () => {});
-    expect(unlisten).toBeTypeOf("function");
-    expect(() => unlisten()).not.toThrow();
-    await expect(openerReveal("/tmp")).resolves.toBeUndefined();
   });
 
   it("keep implementations across tests but record calls afresh", async () => {

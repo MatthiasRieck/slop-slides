@@ -114,18 +114,6 @@ describe("ViewToolbar ribbon", () => {
     expect(onDrawingArea).toHaveBeenCalledWith(false);
   });
 
-  it("chooses between playing the animations and the final state", () => {
-    render(toolbar());
-    const play = () => inGroup("Animations", /^Play the slide's animations/);
-    const still = () => inGroup("Animations", /^Show the slide's final state/);
-    expect([play().getAttribute("aria-pressed"), still().getAttribute("aria-pressed")]).toEqual(["true", "false"]);
-    fireEvent.click(still());
-    expect(useApp.getState().finalState).toBe(true);
-    expect([play().getAttribute("aria-pressed"), still().getAttribute("aria-pressed")]).toEqual(["false", "true"]);
-    fireEvent.click(play());
-    expect(useApp.getState().finalState).toBe(false);
-  });
-
   it("collapses sections to an icon from the right as it narrows, and opens them again as it widens", () => {
     render(toolbar());
     for (const name of SECTIONS) expect(collapsedButton(name)).toBeNull();

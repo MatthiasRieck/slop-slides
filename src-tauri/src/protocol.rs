@@ -12,20 +12,19 @@
 //!
 //! With `?pan` in the query, a deck is served with the pasteboard (`assets/pasteboard.js`)
 //! added, so the stage can pan and zoom around the slide. With `?edit`, it also gets the slide
-//! editor (`assets/editor.js`), which builds on the pasteboard, so the stage can edit text and
+//! editor (`assets/editor/`), which builds on the pasteboard, so the stage can edit text and
 //! move elements in place. With `?show`, the presenter's whole-deck player gets the pasteboard
 //! too, to zoom and pan the slide being shown. None of them ever becomes part of the deck file
 //! or an export. With `?print`, a deck is served with its player runtime brought up to date,
 //! as an export has it, for printing to PDF (see pdf.rs).
 
 use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use tauri::http::{header, Request, Response, StatusCode};
 use tauri::{AppHandle, Manager};
 
-use crate::deck;
 use crate::git;
 use crate::html;
 use crate::sessions::Sessions;
@@ -54,9 +53,11 @@ const URI_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b')');
 
 const PASTEBOARD_JS: &str = include_str!("../assets/pasteboard.js");
+/// Overflow detection, then the slide editor that builds on it. The editor's source is the files
+/// of `assets/editor/`, which build.rs joins in the order of their names.
 const EDITOR_JS: &str = concat!(
     include_str!("../assets/overflow.js"),
-    include_str!("../assets/editor.js"),
+    include_str!(concat!(env!("OUT_DIR"), "/editor.js")),
 );
 
 pub fn handle(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
@@ -98,7 +99,7 @@ fn serve(app: &AppHandle, raw_path: &str) -> Result<(&'static str, Vec<u8>), Sta
         return templates::read_file(&root, template, rel).ok_or(StatusCode::NOT_FOUND);
     }
     if prefix == SESSION_PREFIX {
-        let home = deck::app_home().map_err(|_| StatusCode::NOT_FOUND)?;
+        let home = crate::files::app_home().map_err(|_| StatusCode::NOT_FOUND)?;
         return read_in_session(&Sessions::new(&home), &rel);
     }
     if prefix == HEAD_PREFIX {
@@ -217,7 +218,7 @@ fn read_in_workspace(
         return Err(StatusCode::NOT_FOUND);
     }
     let bytes = std::fs::read(&file).map_err(|_| StatusCode::NOT_FOUND)?;
-    Ok((deck::mime_for(path), bytes))
+    Ok((crate::assets::mime_for(path), bytes))
 }
 
 /// A session file, by its absolute path without the leading `/` (`C:/…` on Windows).
@@ -227,7 +228,12 @@ fn read_in_session(sessions: &Sessions, path: &str) -> Result<(&'static str, Vec
         return Err(StatusCode::FORBIDDEN);
     }
     let bytes = std::fs::read(&file).map_err(|_| StatusCode::NOT_FOUND)?;
-    Ok((deck::mime_for(path), bytes))
+    Ok((crate::assets::mime_for(path), bytes))
+}
+
+/// Whether `file` stays where it says, without a `..`.
+fn is_plain_path(file: &Path) -> bool {
+    !file.components().any(|c| c == Component::ParentDir)
 }
 
 /// A file of the open workspace as of the last commit, by its absolute path without the leading
@@ -238,11 +244,11 @@ fn read_at_head(
 ) -> Result<(&'static str, Vec<u8>), StatusCode> {
     let file = absolute(path);
     let inside = git::existing_folder(&file).is_some_and(|dir| workspace.contains(dir));
-    if !git::is_plain_path(&file) || !inside {
+    if !is_plain_path(&file) || !inside {
         return Err(StatusCode::FORBIDDEN);
     }
     match git::read_at_head(&file) {
-        Some(bytes) => Ok((deck::mime_for(path), bytes)),
+        Some(bytes) => Ok((crate::assets::mime_for(path), bytes)),
         None => read_in_workspace(workspace, path),
     }
 }
@@ -250,6 +256,13 @@ fn read_at_head(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
+
+    #[test]
+    fn plain_paths_have_no_way_up() {
+        assert!(is_plain_path(Path::new("/a/b/deck.html")));
+        assert!(!is_plain_path(Path::new("/a/../b/deck.html")));
+    }
 
     fn split(raw: &str) -> Result<(String, String), StatusCode> {
         split_path(raw)
@@ -325,8 +338,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn serves_a_file_url_from_a_canonical_windows_workspace() {
-        let root =
-            std::env::temp_dir().join(format!("slopslide-canonical-{}", uuid::Uuid::new_v4()));
+        let root = TempDir::new("canonical");
         std::fs::create_dir_all(root.join("my talk")).unwrap();
         let file = root.join("my talk/deck.html");
         std::fs::write(&file, "<html>canonical deck</html>").unwrap();
@@ -342,7 +354,6 @@ mod tests {
             .unwrap();
         let (_, path) = split(raw).unwrap();
         let served = read_in_workspace(&open, &path);
-        std::fs::remove_dir_all(root).unwrap();
         assert_eq!(
             served,
             Ok((
@@ -435,6 +446,38 @@ mod tests {
         assert!(with_scripts("<p>no body", &[EDITOR_JS]).starts_with("<p>no body<script>"));
     }
 
+    #[test]
+    fn embeds_the_editor_parts_after_overflow_in_the_order_of_their_names() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/editor");
+        let mut parts: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "js"))
+            .collect();
+        parts.sort();
+        assert!(parts.len() > 1, "the editor comes in parts");
+        let joined: String = parts
+            .iter()
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect();
+        let editor = EDITOR_JS
+            .strip_prefix(include_str!("../assets/overflow.js"))
+            .expect("overflow detection comes first");
+        assert_eq!(editor, joined);
+        let first = std::fs::read_to_string(&parts[0]).unwrap();
+        let last = std::fs::read_to_string(parts.last().unwrap()).unwrap();
+        assert!(first.starts_with("/* SlopSlide slide editor."));
+        assert!(
+            first.trim_end().ends_with("(function () {"),
+            "the first part opens the closure"
+        );
+        assert!(
+            last.trim_end().ends_with("})();"),
+            "the last part closes it"
+        );
+        assert!(editor.starts_with(&first) && editor.ends_with(&last));
+    }
+
     /// As the frontend sends it: the absolute path without its leading slash.
     fn url_path(path: &Path) -> String {
         let path = path.to_string_lossy().replace('\\', "/");
@@ -443,7 +486,7 @@ mod tests {
 
     #[test]
     fn serves_files_inside_the_open_workspace_only() {
-        let root = std::env::temp_dir().join(format!("slopslide-proto-{}", uuid::Uuid::new_v4()));
+        let root = TempDir::new("proto");
         let ws = root.join("ws");
         std::fs::create_dir_all(ws.join("talk/assets")).unwrap();
         std::fs::write(ws.join("talk/q3.html"), "<html>").unwrap();
@@ -477,13 +520,11 @@ mod tests {
             read(ws.join("talk/../../secret.txt")),
             Err(StatusCode::FORBIDDEN)
         );
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn serves_committed_files_inside_the_open_workspace_only() {
-        let root = std::env::temp_dir().join(format!("slopslide-proto-{}", uuid::Uuid::new_v4()));
+        let root = TempDir::new("proto");
         let ws = root.join("ws");
         std::fs::create_dir_all(ws.join("assets")).unwrap();
         std::fs::write(ws.join("deck.html"), "old").unwrap();
@@ -540,13 +581,11 @@ mod tests {
             Err(StatusCode::FORBIDDEN),
             "the commit has it, but it is outside the workspace"
         );
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn serves_files_inside_sessions_only() {
-        let root = std::env::temp_dir().join(format!("slopslide-proto-{}", uuid::Uuid::new_v4()));
+        let root = TempDir::new("proto");
         let deck = root.join("deck");
         std::fs::create_dir_all(&deck).unwrap();
         std::fs::write(deck.join("deck.html"), "<html>").unwrap();
@@ -573,7 +612,5 @@ mod tests {
             Err(StatusCode::FORBIDDEN),
             "a missing file is not known to be inside"
         );
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

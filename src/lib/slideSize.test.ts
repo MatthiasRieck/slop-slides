@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import {
@@ -7,7 +8,6 @@ import {
   formatSize,
   orientationOf,
   pixelsOf,
-  resizePrompt,
   SIZE_PRESETS,
   sameSize,
   sizeProblem,
@@ -71,12 +71,5 @@ describe("slide sizes", () => {
     expect(describeSize({ width: 21, height: 29.7, unit: "cm" })).toBe("21 × 29.7 cm (794 × 1123 px)");
     expect(sameSize(DEFAULT_SIZE, { width: 1920, height: 1080, unit: "px" })).toBe(true);
     expect(sameSize(DEFAULT_SIZE, { width: 20, height: 11.25, unit: "in" })).toBe(false);
-  });
-
-  it("asks the agent to lay the deck out again for the new size", () => {
-    const prompt = resizePrompt(DEFAULT_SIZE, { width: 8.5, height: 11, unit: "in" });
-    expect(prompt).toContain("from landscape, 1920 × 1080 px to portrait, 8.5 × 11 in (816 × 1056 px)");
-    expect(prompt).toContain("Re-lay out every slide for the new canvas");
-    expect(prompt).toContain("Keep all content, slide ids");
   });
 });

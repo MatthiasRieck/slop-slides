@@ -10,6 +10,11 @@ export const isWindows = navigator.userAgent.includes("Windows");
 /** What revealing a file in the system's file manager is called here. */
 export const revealLabel = revealLabelFor(navigator.userAgent);
 
+/** `n` and the word for that many, like `1 slide` or `3 slides`; `many` is `one` with an s unless given. */
+export function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
 export function revealLabelFor(userAgent: string): string {
   if (userAgent.includes("Mac")) return "Show in Finder";
   if (userAgent.includes("Windows")) return "Show in File Explorer";
@@ -68,15 +73,6 @@ export function deckFileUrl(deckId: string, path: string, query?: string): strin
 /** Files the app keeps in the deck's session (screenshots) come as absolute paths. */
 export function isSessionFile(path: string): boolean {
   return path.startsWith("/") || path.startsWith("\\\\") || /^[A-Za-z]:[\\/]/.test(path);
-}
-
-/**
- * URL of a file shown in the chat: deck files (attached assets) are deck-relative, while
- * screenshots live in the deck's session outside it and come as absolute paths.
- */
-export function chatFileUrl(deckId: string, path: string): string {
-  if (!isSessionFile(path)) return deckFileUrl(deckId, path);
-  return servedUrl(SESSION_PREFIX, urlPath(path));
 }
 
 /** Chat attachments are workspace-relative; screenshots are absolute session paths. */

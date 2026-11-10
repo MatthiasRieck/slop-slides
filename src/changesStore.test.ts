@@ -47,22 +47,18 @@ beforeEach(() => {
 });
 
 describe("refresh", () => {
-  it("starts at the selected slide when it changed", async () => {
-    answer(changes(row("modified", "other"), row("modified", "intro")));
+  it.each([
+    ["the selected slide when it changed", [row("modified", "other"), row("modified", "intro")], "intro"],
+    [
+      "the first change when the selected slide did not change",
+      [row("unchanged", "intro"), row("removed", "gone"), row("added", "new")],
+      "removed:gone",
+    ],
+    ["the selected slide when nothing changed", [row("unchanged", "a"), row("unchanged", "intro")], "intro"],
+  ])("starts at %s", async (_, rows, picked) => {
+    answer(changes(...rows));
     await useChanges.getState().refresh(DECK);
-    expect(useChanges.getState().picked).toBe("intro");
-  });
-
-  it("starts at the first change when the selected slide did not change", async () => {
-    answer(changes(row("unchanged", "intro"), row("removed", "gone"), row("added", "new")));
-    await useChanges.getState().refresh(DECK);
-    expect(useChanges.getState().picked).toBe("removed:gone");
-  });
-
-  it("starts at the selected slide when nothing changed", async () => {
-    answer(changes(row("unchanged", "a"), row("unchanged", "intro")));
-    await useChanges.getState().refresh(DECK);
-    expect(useChanges.getState().picked).toBe("intro");
+    expect(useChanges.getState().picked).toBe(picked);
   });
 
   it("stays on the picked row", async () => {

@@ -5,7 +5,6 @@ import {
   type DragEndEvent,
   DragOverlay,
   type DragStartEvent,
-  getClientRect,
   MeasuringStrategy,
   PointerSensor,
   useDndContext,
@@ -32,7 +31,7 @@ import {
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { api, type Deck, errorMessage, type Section, type Slide } from "../lib/api";
+import { api, type Deck, type Section, type Slide } from "../lib/api";
 import {
   dropRows,
   dropSection,
@@ -46,10 +45,11 @@ import {
   startsSection,
 } from "../lib/sections";
 import { pixelsOf } from "../lib/slideSize";
-import { cn } from "../lib/utils";
-import { railSelection, useApp } from "../store";
+import { cn, plural } from "../lib/utils";
+import { railSelection, reportingErrors, useApp } from "../store";
 import { ToolButton } from "./Button";
 import { Popover } from "./Popover";
+import { foldSlides, holdIframes, holdRow, openTop, releaseIframes, rowTop, type SectionMove } from "./rail/fold";
 import { SectionLabel } from "./SectionLabel";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { LayoutPicker } from "./Templates";
@@ -167,27 +167,20 @@ export function SlideRail() {
     await useApp.getState().reorderRail(dropRows(keys, moved, key, String(over.id)));
   };
 
-  const addSlide = async () => {
-    const { selected } = useApp.getState();
-    try {
-      const created = await api.addSlide(deck.id, selected);
+  const addSlide = () =>
+    reportingErrors(async () => {
+      const created = await api.addSlide(deck.id, useApp.getState().selected);
       useApp.getState().setDeck(created.deck);
       useApp.getState().select(created.slide);
-    } catch (error) {
-      useApp.getState().setError(errorMessage(error));
-    }
-  };
+    });
 
-  const addSection = async () => {
-    try {
+  const addSection = () =>
+    reportingErrors(async () => {
       const next = await api.addSection(deck.id, selected, "New section");
       useApp.getState().setDeck(next);
       const created = next.sections.filter((s) => s.before === selectedIndex).at(-1);
       setEditingSection(created?.index ?? null);
-    } catch (error) {
-      useApp.getState().setError(errorMessage(error));
-    }
-  };
+    });
 
   return (
     <div data-slide-rail className="flex h-full flex-col bg-sidebar">
@@ -292,7 +285,7 @@ export function SlideRail() {
                   <SectionLabel className="min-w-0 truncate">{sectionTitle(items, moving.key)}</SectionLabel>
                   <span className="h-px flex-1 bg-border" />
                   <span className="shrink-0 text-2xs text-muted-foreground">
-                    {slideCount((blocks.find((block) => block.key === moving.key)?.rows.length ?? 1) - 1)}
+                    {plural((blocks.find((block) => block.key === moving.key)?.rows.length ?? 1) - 1, "slide")}
                   </span>
                 </div>
               </DragOverlay>
@@ -351,23 +344,12 @@ function BulkActions({ deck }: { deck: Deck }) {
   );
 }
 
-const IFRAME_HOLD_ID = "slide-drag-iframe-hold";
+const noLayoutAnimation = () => false;
 
-/**
- * A pointer over an iframe (the stage's slide) sends its events to the iframe's document, so a
- * drag that crossed it lost the moves and the release and stayed stuck. Keep iframes out of the
- * way while a slide is dragged.
- */
-function holdIframes() {
-  if (document.getElementById(IFRAME_HOLD_ID)) return;
-  const style = document.createElement("style");
-  style.id = IFRAME_HOLD_ID;
-  style.textContent = "iframe { pointer-events: none !important; }";
-  document.head.appendChild(style);
-}
-
-function releaseIframes() {
-  document.getElementById(IFRAME_HOLD_ID)?.remove();
+/** Shows the deck as `change` leaves it, or what went wrong. */
+async function updateDeck(change: () => Promise<Deck>) {
+  const next = await reportingErrors(change);
+  if (next) useApp.getState().setDeck(next);
 }
 
 /** Hands out a way to have dnd-kit measure every row again, which it only does when a drag starts. */
@@ -382,79 +364,10 @@ function Remeasure({ handle }: { handle: React.RefObject<(() => void) | undefine
   return null;
 }
 
-type SectionMove = { key: string; top: number; slideHeight: number };
-
-const FOLD = { duration: 240, easing: "cubic-bezier(0.4, 0, 0.2, 1)" };
-const noLayoutAnimation = () => false;
-
-/** Shrinks the slides' rows to nothing, or grows them back. The -mt-3 takes back the list's gap. */
-function foldSlides(rows: HTMLElement, height: number, opening: boolean) {
-  const open = { height: `${height}px`, marginTop: "0px", opacity: 1, overflow: "hidden" };
-  const shut = { height: "0px", marginTop: "-12px", opacity: 0, overflow: "hidden" };
-  for (const slide of rows.querySelectorAll("[data-rail-slide]"))
-    slide.animate(opening ? [shut, open] : [open, shut], FOLD);
-  if (opening) return;
-  for (const label of rows.querySelectorAll("[data-fold-label]")) label.animate([{ opacity: 0 }, { opacity: 1 }], FOLD);
-}
-
-/** Scrolls or pads the rail so the row `key` sits at `top` in the window. */
-function placeRow(rows: HTMLElement, key: string, top: number) {
-  const scroller = rows.parentElement;
-  const at = rowTop(rows, key);
-  if (!scroller || at == null) return;
-  const padded = Number.parseFloat(rows.style.paddingTop || "0");
-  const scroll = scroller.scrollTop - padded + at - top;
-  const content = rows.offsetHeight - padded - Number.parseFloat(rows.style.paddingBottom || "0");
-  rows.style.paddingTop = `${Math.max(-scroll, 0)}px`;
-  rows.style.paddingBottom = `${Math.max(scroll + scroller.clientHeight - content, 0)}px`;
-  scroller.scrollTop = Math.max(scroll, 0);
-}
-
-/** Where the row of a section put down ends up once the slides are open and nothing is padded. */
-function openTop(rows: HTMLElement, { key, top }: SectionMove) {
-  const scroller = rows.parentElement;
-  rows.style.paddingTop = "";
-  rows.style.paddingBottom = "";
-  const at = rowTop(rows, key);
-  if (!scroller || at == null) return top;
-  const row = at + scroller.scrollTop;
-  return row - Math.min(Math.max(row - top, 0), scroller.scrollHeight - scroller.clientHeight);
-}
-
-/**
- * Keeps the row `key` in place, on its way `from` one height `to` another, while the slides fold.
- * Calls `placed` each time the rows have moved, and `done` at the end.
- */
-function holdRow(rows: HTMLElement, key: string, from: number, to: number, placed?: () => void, done?: () => void) {
-  const start = performance.now();
-  let frame = 0;
-  // The slides' own animation starts up to a frame later, so one frame more sees them all the way.
-  let last = false;
-  const step = () => {
-    const t = Math.min((performance.now() - start) / FOLD.duration, 1);
-    placeRow(rows, key, from + (to - from) * t * t * (3 - 2 * t));
-    placed?.();
-    if (t < 1 || (placed && !last)) frame = requestAnimationFrame(step);
-    if (t < 1) return;
-    if (!last) done?.();
-    last = true;
-  };
-  step();
-  return () => cancelAnimationFrame(frame);
-}
-
-/** Where the section row `key` sits in the window, whatever a drag is doing to it. */
-function rowTop(list: HTMLElement | null, key: string) {
-  const row = list?.querySelector(`[data-section-key="${key}"]`);
-  return row ? getClientRect(row, { ignoreTransform: true }).top : null;
-}
-
 function sectionTitle(items: RailItem[], key: string) {
   const row = items.find((item) => item.key === key);
   return (row?.kind === "section" && row.section.title) || "Untitled section";
 }
-
-const slideCount = (count: number) => `${count} ${count === 1 ? "slide" : "slides"}`;
 
 /** Stands in for the slides before the first section, which stay put while sections move. */
 function LooseSlides({ count }: { count: number }) {
@@ -465,7 +378,7 @@ function LooseSlides({ count }: { count: number }) {
       className="flex items-center gap-2 pt-1 text-2xs text-muted-foreground"
     >
       <span className="w-4 shrink-0" />
-      {slideCount(count)}
+      {plural(count, "slide")}
     </li>
   );
 }
@@ -499,20 +412,10 @@ function SectionHeader(props: {
     onEditing(false);
     const next = title.trim();
     if (!next || next === section.title) return;
-    try {
-      useApp.getState().setDeck(await api.renameSection(deckId, section.index, next));
-    } catch (error) {
-      useApp.getState().setError(errorMessage(error));
-    }
+    await updateDeck(() => api.renameSection(deckId, section.index, next));
   };
 
-  const remove = async () => {
-    try {
-      useApp.getState().setDeck(await api.deleteSection(deckId, section.index));
-    } catch (error) {
-      useApp.getState().setError(errorMessage(error));
-    }
-  };
+  const remove = () => updateDeck(() => api.deleteSection(deckId, section.index));
 
   return (
     <li
@@ -572,13 +475,13 @@ function SectionHeader(props: {
           <span className="h-px flex-1 bg-border" />
           {props.slides !== undefined ? (
             <span data-fold-label className="shrink-0 pr-1 text-2xs text-muted-foreground">
-              {slideCount(props.slides)}
+              {plural(props.slides, "slide")}
             </span>
           ) : (
             <>
               {props.collapsed && (
                 <span data-testid="folded-count" className="shrink-0 text-2xs text-muted-foreground">
-                  {slideCount(props.count)}
+                  {plural(props.count, "slide")}
                 </span>
               )}
               <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">
@@ -638,13 +541,7 @@ function Thumbnail(props: {
 
   const deckSize = useApp((s) => s.deck?.size);
 
-  const toggleLocked = async () => {
-    try {
-      useApp.getState().setDeck(await api.setSlideLocked(deckId, slide.id, !slide.locked));
-    } catch (error) {
-      useApp.getState().setError(errorMessage(error));
-    }
-  };
+  const toggleLocked = () => updateDeck(() => api.setSlideLocked(deckId, slide.id, !slide.locked));
 
   const onClick = (event: React.MouseEvent) => {
     const app = useApp.getState();

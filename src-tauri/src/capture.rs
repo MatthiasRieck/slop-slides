@@ -102,7 +102,7 @@ pub async fn save_slide_image(
     width: Option<u32>,
 ) -> Result<PathBuf> {
     let png = snapshot(webview, rect, viewport, slide_image_width(width)).await?;
-    let path = dir.join(crate::deck::slide_image_name(index, total));
+    let path = dir.join(crate::files::slide_image_name(index, total));
     std::fs::write(&path, png)?;
     Ok(path)
 }
@@ -254,14 +254,23 @@ pub fn mask_outside(image: &mut Image, outline: &[[f64; 2]]) {
 }
 
 pub fn encode_png(image: &Image) -> Result<Vec<u8>> {
+    rgba_png(image.width, image.height, &image.rgba)
+        .map_err(|e| Error::msg(format!("cannot encode the screenshot: {e}")))
+}
+
+/// A PNG of `width` × `height` 8-bit RGBA pixels, rows top to bottom.
+pub fn rgba_png(
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> std::result::Result<Vec<u8>, png::EncodingError> {
     let mut out = Vec::new();
-    let mut encoder = png::Encoder::new(&mut out, image.width, image.height);
+    let mut encoder = png::Encoder::new(&mut out, width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    let fail = |e: png::EncodingError| Error::msg(format!("cannot encode the screenshot: {e}"));
-    let mut writer = encoder.write_header().map_err(fail)?;
-    writer.write_image_data(&image.rgba).map_err(fail)?;
-    writer.finish().map_err(fail)?;
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(rgba)?;
+    writer.finish()?;
     Ok(out)
 }
 

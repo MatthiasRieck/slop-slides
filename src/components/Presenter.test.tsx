@@ -1,7 +1,7 @@
 import { act, createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { emit, invoke, listen } from "../test/tauri";
+import { calls, emit, invoke, listen } from "../test/tauri";
 
 const setFullscreen = vi.fn(async () => {});
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
@@ -20,7 +20,7 @@ import { useApp } from "../store";
 import { fakeCanvas2D } from "../test/fakeCanvas";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Presenter } from "./Presenter";
-import { fitWidth, formatElapsed, remaining } from "./PresenterPanel";
+import { fitWidth } from "./PresenterPanel";
 import { PresenterWindow } from "./PresenterWindow";
 
 beforeEach(() => {
@@ -821,6 +821,12 @@ describe("presenter view", () => {
       slides: base.slides.map((s) => ({ ...s, notes: `Notes of ${s.id}`, hidden: hidden.includes(s.id) })),
     };
   };
+  /** Starts the show with the presenter view open. */
+  const showPanel = () => {
+    const view = render(<Presenter />);
+    fireEvent.keyDown(document.body, { key: "n" });
+    return view;
+  };
   beforeEach(() => useApp.setState({ deck: deck(), selected: "intro" }));
   afterEach(() => vi.useRealTimers());
 
@@ -835,8 +841,7 @@ describe("presenter view", () => {
   });
 
   it("N toggles it, from the app or from inside the slide", () => {
-    render(<Presenter />);
-    fireEvent.keyDown(document.body, { key: "n" });
+    showPanel();
     expect(panel()).toBeTruthy();
     fromFrame({ type: "slop:key", key: "N" });
     expect(panel()).toBeNull();
@@ -845,8 +850,7 @@ describe("presenter view", () => {
   });
 
   it("shows the notes of the slide on screen and follows the show", () => {
-    render(<Presenter />);
-    fireEvent.keyDown(document.body, { key: "n" });
+    showPanel();
     expect(notes()).toBe("Notes of intro");
     fromFrame({ type: "slop:slide", id: "outro", index: 2 });
     expect(notes()).toBe("Notes of outro");
@@ -854,15 +858,13 @@ describe("presenter view", () => {
 
   it("says when a slide has no notes", () => {
     useApp.setState({ deck: deckFor(DECK_HTML) });
-    render(<Presenter />);
-    fireEvent.keyDown(document.body, { key: "n" });
+    showPanel();
     expect(notes()).toBe("No notes for this slide.");
   });
 
   it("previews the next shown slide, skipping hidden ones, and says when there is none", () => {
     useApp.setState({ deck: deck(["#2"]) });
-    render(<Presenter />);
-    fireEvent.keyDown(document.body, { key: "n" });
+    showPanel();
     expect(screen.getByText("Slide 1 of 2")).toBeTruthy();
     fromFrame({ type: "slop:slide", id: "outro", index: 1 });
     expect(screen.getByText("Slide 2 of 2")).toBeTruthy();
@@ -885,8 +887,7 @@ describe("presenter view", () => {
 
   it("shows the time left against the total time and the time on the slide against its own", () => {
     vi.useFakeTimers();
-    render(<Presenter />);
-    fireEvent.keyDown(document.body, { key: "n" });
+    showPanel();
     fireEvent.change(screen.getByLabelText("Total time in minutes"), { target: { value: "1" } });
     fireEvent.change(screen.getByLabelText("Per slide in minutes"), { target: { value: "0.5" } });
     act(() => void vi.advanceTimersByTime(20_000));
@@ -903,8 +904,7 @@ describe("presenter view", () => {
 
   it("remembers the times and shows no budget without one", () => {
     localStorage.setItem("slopslide.presenterBudget", JSON.stringify({ total: 20, perSlide: -3 }));
-    render(<Presenter />);
-    fireEvent.keyDown(document.body, { key: "n" });
+    showPanel();
     expect((screen.getByLabelText("Total time in minutes") as HTMLInputElement).value).toBe("20");
     expect((screen.getByLabelText("Per slide in minutes") as HTMLInputElement).value).toBe("");
     expect(screen.getByTestId("total-left").textContent).toBe("20:00 left");
@@ -915,28 +915,12 @@ describe("presenter view", () => {
     const deck = deckFor(DECK_HTML);
     const slides = deck.slides.map((s) => ({ ...s, time: s.id === "intro" ? 90 : 0 }));
     useApp.setState({ deck: { ...deck, slides }, selected: "intro" });
-    render(<Presenter />);
-    fireEvent.keyDown(document.body, { key: "n" });
+    showPanel();
     expect(screen.getByTestId("slide-time").textContent).toBe("slide0:00 / 1:30");
     expect(screen.getByTestId("total-left").textContent).toBe("1:30 left");
     // A slide without a time of its own has the time per slide.
     fromFrame({ type: "slop:slide", index: 1, id: "outro" });
     expect(screen.getByTestId("slide-time").textContent).toBe("slide0:00 / 5:00");
-  });
-
-  it("counts down the rest and then up past the end", () => {
-    expect(remaining(0, 1)).toEqual({ text: "1:00", over: false });
-    expect(remaining(59_500, 1)).toEqual({ text: "0:01", over: false });
-    expect(remaining(60_000, 1)).toEqual({ text: "0:00", over: false });
-    expect(remaining(65_000, 1)).toEqual({ text: "+0:05", over: true });
-  });
-
-  it("formats the time", () => {
-    expect(formatElapsed(-5)).toBe("0:00");
-    expect(formatElapsed(59_999)).toBe("0:59");
-    expect(formatElapsed(247_000)).toBe("4:07");
-    expect(formatElapsed(3_847_000)).toBe("1:04:07");
-    expect(formatElapsed(36_000_000)).toBe("10:00:00");
   });
 
   it("shows notes as formatted Markdown, without links that would leave the app", () => {
@@ -948,8 +932,7 @@ describe("presenter view", () => {
         ),
       },
     });
-    render(<Presenter />);
-    fireEvent.keyDown(document.body, { key: "n" });
+    showPanel();
     const box = screen.getByTestId("presenter-notes");
     expect(box.querySelector("strong")?.textContent).toBe("this");
     expect(box.querySelector("li")?.textContent).toBe("One");
@@ -962,7 +945,6 @@ describe("presenter view", () => {
     const record = (name: RegExp) => screen.getByRole("button", { name });
     const text = () => record(/recording the text|narration as text/i);
     const audio = () => record(/recording the audio|narration as audio/i);
-    const calls = (name: string) => invoke.mock.calls.filter(([n]) => n === name).map(([, args]) => args);
     const open = () => {
       render(<Presenter />);
       fromFrame({ type: "slop:slide", id: "intro", index: 0 });
@@ -1099,8 +1081,7 @@ describe("presenter view", () => {
       useApp.setState({ deck: { ...deck(), slides: slides() } });
     });
     async function turnOn() {
-      render(<Presenter />);
-      fireEvent.keyDown(document.body, { key: "n" });
+      showPanel();
       await act(async () => fireEvent.click(button()));
     }
     const hear = (text: string) => act(() => listeners.get("voice-heard")?.({ payload: text }));
@@ -1207,8 +1188,7 @@ describe("presenter view", () => {
   });
 
   it("keeps the slide's focus when its buttons are pressed", () => {
-    render(<Presenter />);
-    fireEvent.keyDown(document.body, { key: "n" });
+    showPanel();
     const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
     screen.getByRole("button", { name: "Restart the timer" }).dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);

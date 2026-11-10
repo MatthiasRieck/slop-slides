@@ -7,7 +7,7 @@
 use symphonia::core::dsp::complex::Complex;
 use symphonia::core::dsp::fft::Fft;
 
-use crate::voice;
+use crate::sound;
 
 /// The rate the audio is looked at.
 const RATE: u32 = 16_000;
@@ -40,7 +40,7 @@ pub const BAR: usize = 4;
 /// The beat of `samples` (mono, at `rate`); None when there is none to find, as in silence or
 /// audio shorter than a few beats.
 pub fn find(samples: &[f32], rate: u32) -> Option<Beats> {
-    let audio = voice::resample(samples, rate, RATE);
+    let audio = sound::resample(samples, rate, RATE);
     let (onsets, bass) = onset_strength(&audio);
     let fps = f64::from(RATE) / HOP as f64;
     let period = tempo_period(&onsets, fps)?;
@@ -298,6 +298,115 @@ fn track(onsets: &[f64], period: f64) -> Vec<usize> {
     beats[first..end].to_vec()
 }
 
+/// A beat of a slide's narration audio placed on the show's timeline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedBeat {
+    /// When it falls, in seconds into the show.
+    pub at: f64,
+    /// The slide showing then, and seconds since it started showing.
+    pub slide: String,
+    pub into_slide: f64,
+    /// How strong its onset is, 0 to 1.
+    pub strength: f64,
+    /// Its bar, counted from 1 at the first downbeat (0 before it), and its beat in that bar,
+    /// from 1.
+    pub bar: usize,
+    pub beat: usize,
+}
+
+/// The beat of a slide's narration audio on the show.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SlideBeat {
+    /// The slide has no up-to-date narration audio that plays.
+    NoAudio,
+    /// No beat is heard in it.
+    NoBeat,
+    Found(ShowBeats),
+}
+
+/// The beat found in a slide's narration audio, on the show.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShowBeats {
+    /// Beats per minute.
+    pub tempo: f64,
+    /// How many beats the audio has.
+    pub count: usize,
+    /// Those that fall on the show, in order.
+    pub beats: Vec<PlacedBeat>,
+}
+
+/// The beat of the narration audio of `slide` of the deck `file`, placed on its timeline as
+/// [`super::timeline::layout`] lays it out with its [`super::timeline::DEFAULTS`].
+pub fn on_show(
+    file: &std::path::Path,
+    deck: &crate::deck::Deck,
+    slide: &str,
+) -> crate::error::Result<SlideBeat> {
+    use super::timeline;
+    let slides = timeline::layout(file, deck, &timeline::DEFAULTS);
+    if !slides
+        .iter()
+        .any(|s| s.id == slide && s.narration.is_some())
+    {
+        return Ok(SlideBeat::NoAudio);
+    }
+    let (samples, rate) = super::audio::read_wav(&super::audio_file(file, slide))?;
+    let Some(found) = find(&samples, rate) else {
+        return Ok(SlideBeat::NoBeat);
+    };
+    let mut bar = 0;
+    let mut beats = Vec::new();
+    for ((at, strength), &in_bar) in found.beats.iter().zip(&found.in_bar) {
+        if in_bar == 0 {
+            bar += 1;
+        }
+        let Some(placed) = timeline::place(&slides, slide, *at) else {
+            continue;
+        };
+        beats.push(PlacedBeat {
+            at: placed.at,
+            slide: placed.slide,
+            into_slide: placed.into_slide,
+            strength: *strength,
+            bar,
+            beat: in_bar + 1,
+        });
+    }
+    Ok(SlideBeat::Found(ShowBeats {
+        tempo: found.tempo,
+        count: found.beats.len(),
+        beats,
+    }))
+}
+
+impl ShowBeats {
+    /// The beats of slide `audio`'s narration as JSON for the agent's scripts, of the deck
+    /// `deck` (as the agent named it), times to the millisecond.
+    pub fn data(&self, deck: &str, audio: &str) -> serde_json::Value {
+        use super::timeline::ms;
+        let beats: Vec<serde_json::Value> = self
+            .beats
+            .iter()
+            .map(|b| {
+                serde_json::json!({
+                    "at": ms(b.at),
+                    "slide": b.slide,
+                    "intoSlide": ms(b.into_slide),
+                    "strength": (b.strength * 100.0).round() / 100.0,
+                    "bar": b.bar,
+                    "beat": b.beat,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "deck": deck,
+            "audio": audio,
+            "tempo": (self.tempo * 10.0).round() / 10.0,
+            "beats": beats,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,5 +550,91 @@ mod tests {
         assert_eq!(find(&vec![0.0; 16_000 * 10], 16_000), None);
         assert_eq!(find(&drums(120.0, 0.0, 1.0, 16_000), 16_000), None);
         assert_eq!(find(&[], 16_000), None);
+    }
+
+    #[test]
+    fn a_slides_beats_are_placed_on_the_show_in_bars() {
+        use crate::narration::recordings::import_audio;
+        let dir = crate::test_support::TempDir::new("narration-beats");
+        let file = dir.write(
+            "deck.html",
+            concat!(
+                r#"<main class="deck">"#,
+                r#"<section class="slide" id="song" data-duration="2" data-narration-start="0"></section>"#,
+                r#"<section class="slide" id="verse" data-duration="10"></section>"#,
+                r#"<section class="slide" id="hush"></section>"#,
+                r#"</main>"#,
+            ),
+        );
+        let deck = |file: &std::path::Path| crate::deck::load(file).unwrap();
+        assert_eq!(
+            on_show(&file, &deck(&file), "song").unwrap(),
+            SlideBeat::NoAudio
+        );
+        crate::narration::audio::write_wav(
+            &dir.join("song.wav"),
+            &drums(120.0, 0.0, 8.0, 16_000),
+            16_000,
+        )
+        .unwrap();
+        import_audio(&file, "song", &dir.join("song.wav")).unwrap();
+        crate::narration::audio::write_wav(&dir.join("hush.wav"), &[0.0; 16_000 * 5], 16_000)
+            .unwrap();
+        import_audio(&file, "hush", &dir.join("hush.wav")).unwrap();
+        assert_eq!(
+            on_show(&file, &deck(&file), "hush").unwrap(),
+            SlideBeat::NoBeat
+        );
+        assert_eq!(
+            on_show(&file, &deck(&file), "verse").unwrap(),
+            SlideBeat::NoAudio
+        );
+
+        let SlideBeat::Found(found) = on_show(&file, &deck(&file), "song").unwrap() else {
+            panic!("no beat found");
+        };
+        assert!((found.tempo - 120.0).abs() < 2.0, "{}", found.tempo);
+        assert_eq!(found.count, found.beats.len(), "all fall on the show");
+        let mut bar = 0;
+        for beat in &found.beats {
+            // The song starts with the show; beats after its first 2 s fall on `verse`.
+            let (slide, into) = if beat.at < 2.0 {
+                ("song", beat.at)
+            } else {
+                ("verse", beat.at - 2.0)
+            };
+            assert_eq!(beat.slide, slide, "{beat:?}");
+            assert!((beat.into_slide - into).abs() < 1e-9, "{beat:?}");
+            assert!((1..=BAR).contains(&beat.beat), "{beat:?}");
+            if beat.beat == 1 {
+                bar += 1;
+            }
+            assert_eq!(beat.bar, bar, "a bar starts at each downbeat: {beat:?}");
+        }
+    }
+
+    #[test]
+    fn beats_are_saved_rounded_for_scripts() {
+        let found = ShowBeats {
+            tempo: 120.26,
+            count: 3,
+            beats: vec![PlacedBeat {
+                at: 2.50049,
+                slide: "verse".into(),
+                into_slide: 0.50049,
+                strength: 0.456,
+                bar: 0,
+                beat: 4,
+            }],
+        };
+        assert_eq!(
+            found.data("talks/deck.html", "song"),
+            serde_json::json!({
+                "deck": "talks/deck.html",
+                "audio": "song",
+                "tempo": 120.3,
+                "beats": [{"at": 2.5, "slide": "verse", "intoSlide": 0.5, "strength": 0.46, "bar": 0, "beat": 4}],
+            })
+        );
     }
 }

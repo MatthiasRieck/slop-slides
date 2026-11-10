@@ -11,41 +11,36 @@
 //! ([`DECK_FILE`]); any other file passing [`crate::workspace::classify`] opens as a deck too.
 //! Nothing of the app's goes next to the deck: chat history and the other app state about a
 //! workspace live in its sessions ([`crate::sessions`]), and what every deck shares lives in the
-//! app ([`crate::agent::SYSTEM_PROMPT`]) or in the user's [`app_home`] folder (user templates,
-//! the agent's MCP config, sessions). Functions taking a `session` keep their part of that
-//! state in the workspace's current session folder.
+//! app ([`crate::agent::SYSTEM_PROMPT`]) or in the user's [`crate::files::app_home`] folder
+//! (user templates, the agent's MCP config, sessions). Functions taking a `session` keep the
+//! locked-slide guard of a running agent turn there (see [`crate::guard`]); the media in
+//! `assets/` is handled by [`crate::assets`].
 //!
 //! A deck opens directly in any browser as a slideshow; [`export`] inlines the assets so the
 //! single file can be shared on its own.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
 
+use crate::assets::{bring_assets, mime_for};
 use crate::comments::{self, Comments};
 use crate::error::{Error, Result};
+use crate::files::{atomic_write, unique_dir};
 use crate::find;
+use crate::guard::{self, read_guard, refresh_guard};
 use crate::html;
 use crate::lint;
 use crate::narration;
 use crate::review::{self, Review};
-use crate::sessions;
 use crate::size::{SizeInfo, SlideSize, SIZE_META};
 use crate::templates;
 
-/// The app's folder in the user's home.
-pub const HOME_DIR: &str = ".slopslides";
 /// The file name of decks the app creates.
 pub const DECK_FILE: &str = "deck.html";
 const DECK_TEMPLATE: &str = include_str!("../assets/deck-template.html");
 const BLANK_SLIDE: &str = include_str!("../assets/blank-slide.html");
-const SKETCHES_KEPT: usize = 30;
-/// The locked slides as they were when the agent's turn started (see [`guard_locked`]).
-const LOCKS_FILE: &str = "locked.json";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -117,18 +112,6 @@ pub struct Deck {
     pub narration: narration::Settings,
 }
 
-/// `~/Documents/SlopSlide`, where decks lived before workspaces; the default workspace.
-pub fn library_root(app: &AppHandle) -> Result<PathBuf> {
-    let base = app
-        .path()
-        .document_dir()
-        .or_else(|_| app.path().home_dir())
-        .map_err(|e| Error::msg(format!("cannot locate documents folder: {e}")))?;
-    let root = base.join("SlopSlide");
-    fs::create_dir_all(&root)?;
-    Ok(root)
-}
-
 /// The deck file a command's deck id names: the absolute path of an existing HTML file.
 pub fn deck_file(id: &str) -> Result<PathBuf> {
     let file = PathBuf::from(id);
@@ -169,14 +152,16 @@ pub fn read_html(file: &Path) -> Result<String> {
     Ok(fs::read_to_string(file)?)
 }
 
-fn write_html(file: &Path, html: &str) -> Result<()> {
+pub(crate) fn write_html(file: &Path, html: &str) -> Result<()> {
     atomic_write(file, html.as_bytes())
 }
 
-pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    let tmp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4().simple()));
-    fs::write(&tmp, bytes)?;
-    fs::rename(&tmp, path)?;
+/// Writes `updated` over the deck unless it is `source`, the text it has now, so the watcher
+/// stays quiet when nothing changed.
+fn write_if_changed(file: &Path, source: &str, updated: &str) -> Result<()> {
+    if updated != source {
+        write_html(file, updated)?;
+    }
     Ok(())
 }
 
@@ -191,14 +176,6 @@ fn fallback_title(file: &Path) -> String {
         .unwrap_or_default()
 }
 
-pub fn unique_dir(root: &Path, stem: &str) -> PathBuf {
-    let stem = if stem.is_empty() { "untitled" } else { stem };
-    std::iter::once(root.join(stem))
-        .chain((2..).map(|n| root.join(format!("{stem}-{n}"))))
-        .find(|p| !p.exists())
-        .expect("unbounded")
-}
-
 /// Keeps the deck consistent: unique slide ids and the current player runtime. Safe to call
 /// repeatedly; only writes when something changed.
 pub fn normalize(file: &Path) -> Result<()> {
@@ -206,19 +183,7 @@ pub fn normalize(file: &Path) -> Result<()> {
     let fixed = html::normalize_ids(&source).unwrap_or_else(|| source.clone());
     let fixed = html::ensure_runtime(&fixed);
     let fixed = prune_review(&fixed).unwrap_or(fixed);
-    if fixed != source {
-        write_html(file, &fixed)?;
-    }
-    Ok(())
-}
-
-/// `~/.slopslides`, created on first use. Not through Tauri: the lint server, which runs
-/// without the app, needs it too.
-pub fn app_home() -> Result<PathBuf> {
-    let home = std::env::home_dir().ok_or_else(|| Error::msg("cannot locate home folder"))?;
-    let root = home.join(HOME_DIR);
-    fs::create_dir_all(&root)?;
-    Ok(root)
+    write_if_changed(file, &source, &fixed)
 }
 
 /// `html` without review marks and comments of slides it no longer has; None when there are
@@ -261,7 +226,7 @@ pub fn open(file: &Path, session: Option<&Path>, normalize_first: bool) -> Resul
         normalize(file)?;
         // No turn is running: a guard left behind (say, the app quit mid-turn) is stale.
         if let Some(session) = session {
-            let _ = fs::remove_file(session.join(LOCKS_FILE));
+            guard::drop_stale(session);
         }
     }
     load(file)
@@ -274,29 +239,32 @@ pub fn load(file: &Path) -> Result<Deck> {
     let slides = spans
         .iter()
         .enumerate()
-        .map(|(index, span)| Slide {
-            // A slide the agent has not given an id yet is addressed by position until
-            // the turn ends and `normalize` assigns one.
-            id: span.id.clone().unwrap_or_else(|| format!("#{}", index + 1)),
-            hash: html::content_hash(&source[span.range.clone()]),
-            hidden: span.hidden.is_some(),
-            locked: span.locked.is_some(),
-            moved: html::has_moved(&source[span.range.clone()]),
-            narration: html::narration(&source[span.range.clone()]),
-            notes: html::notes(&source[span.range.clone()]),
-            time: span
-                .time
-                .as_ref()
-                .and_then(|(_, value)| html::parse_time(value))
-                .unwrap_or(0),
-            duration: span
-                .duration
-                .as_ref()
-                .and_then(|(_, value)| html::parse_duration(value)),
-            narration_start: span
-                .narration_start
-                .as_ref()
-                .and_then(|(_, value)| html::parse_narration_start(value)),
+        .map(|(index, span)| {
+            let markup = &source[span.range.clone()];
+            Slide {
+                // A slide the agent has not given an id yet is addressed by position until
+                // the turn ends and `normalize` assigns one.
+                id: span.id.clone().unwrap_or_else(|| format!("#{}", index + 1)),
+                hash: html::content_hash(markup),
+                hidden: span.hidden.is_some(),
+                locked: span.locked.is_some(),
+                moved: html::has_moved(markup),
+                narration: html::narration(markup),
+                notes: html::notes(markup),
+                time: span
+                    .time
+                    .as_ref()
+                    .and_then(|(_, value)| html::parse_time(value))
+                    .unwrap_or(0),
+                duration: span
+                    .duration
+                    .as_ref()
+                    .and_then(|(_, value)| html::parse_duration(value)),
+                narration_start: span
+                    .narration_start
+                    .as_ref()
+                    .and_then(|(_, value)| html::parse_narration_start(value)),
+            }
         })
         .collect();
     let path = file.to_string_lossy().into_owned();
@@ -323,101 +291,53 @@ pub fn load(file: &Path) -> Result<Deck> {
     })
 }
 
-fn guard_key(file: &Path, root: &Path) -> Result<String> {
-    // Canonicalize the parent, so a deleted deck still has its original key.
-    let mut parent = folder(file);
-    let mut missing = Vec::new();
-    while !parent.exists() {
-        missing.push(
-            parent
-                .file_name()
-                .ok_or_else(|| Error::msg("missing parent"))?
-                .to_os_string(),
-        );
-        parent = parent
-            .parent()
-            .ok_or_else(|| Error::msg("missing parent"))?;
-    }
-    let mut parent = parent.canonicalize()?;
-    for part in missing.iter().rev() {
-        parent.push(part);
-    }
-    let root = root.canonicalize()?;
-    let path = parent.join(
-        file.file_name()
-            .ok_or_else(|| Error::msg("missing file name"))?,
-    );
-    Ok(path
-        .strip_prefix(root)
-        .map_err(|_| Error::msg("deck outside workspace"))?
-        .to_string_lossy()
-        .replace('\\', "/"))
-}
+type EditResult<T> = std::result::Result<T, String>;
 
-/// Saves a screenshot of a sketched-on slide under the session's `sketches/`, keeping the
-/// newest few. Returns its absolute path, for the agent to read.
-pub fn save_sketch(session: &Path, png: &[u8]) -> Result<String> {
-    let sketches = session.join("sketches");
-    fs::create_dir_all(&sketches)?;
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let short = &uuid::Uuid::new_v4().simple().to_string()[..8];
-    let name = format!("{stamp}-{short}.png");
-    fs::write(sketches.join(&name), png)?;
-    prune_oldest(&sketches, SKETCHES_KEPT)?;
-    Ok(sketches.join(name).to_string_lossy().into_owned())
-}
-
-/// Deletes all but the `keep` newest files of `dir`, whose names start with a timestamp.
-fn prune_oldest(dir: &Path, keep: usize) -> Result<()> {
-    let mut files: Vec<_> = fs::read_dir(dir)?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .collect();
-    files.sort();
-    for old in files.iter().rev().skip(keep) {
-        let _ = fs::remove_file(old);
-    }
-    Ok(())
-}
-
-type EditResult<T> = std::result::Result<(String, T), String>;
-
-fn edit<T>(file: &Path, f: impl FnOnce(&str) -> EditResult<T>) -> Result<(Deck, T)> {
-    let source = read_html(file)?;
-    let (updated, value) = f(&source).map_err(Error::Message)?;
+/// Writes the deck's source as `f` changes it; returns the source before and after, and what
+/// else `f` gave. `f` refuses the change with a message for the user.
+fn rewrite<T>(
+    file: &Path,
+    f: impl FnOnce(&str) -> EditResult<(String, T)>,
+) -> Result<(String, String, T)> {
+    let previous = read_html(file)?;
+    let (updated, value) = f(&previous).map_err(Error::Message)?;
     write_html(file, &updated)?;
+    Ok((previous, updated, value))
+}
+
+/// Writes the deck's source as `f` changes it; returns the deck as it is then.
+fn edit(file: &Path, f: impl FnOnce(&str) -> EditResult<String>) -> Result<Deck> {
+    Ok(edit_with(file, |s| Ok((f(s)?, ())))?.0)
+}
+
+/// Like [`edit`], also returning the value `f` gives alongside the new source.
+fn edit_with<T>(file: &Path, f: impl FnOnce(&str) -> EditResult<(String, T)>) -> Result<(Deck, T)> {
+    let (_, _, value) = rewrite(file, f)?;
     Ok((load(file)?, value))
 }
 
-/// Stores the user's review marks in deck.html, dropping those of slides that are gone.
-/// Leaves the file alone when nothing changed, so the watcher stays quiet.
-pub fn save_review(file: &Path, review: &Review) -> Result<()> {
+/// Stores `marks` (review marks or comments) in deck.html with `write`, dropping those of
+/// slides that are gone. Leaves the file alone when nothing changed, so the watcher stays quiet.
+fn save_marks<M>(file: &Path, marks: &M, write: fn(&str, &M) -> String) -> Result<()> {
     let source = read_html(file)?;
-    let updated = review::write(&source, review);
+    let updated = write(&source, marks);
     let updated = prune_review(&updated).unwrap_or(updated);
-    if updated != source {
-        write_html(file, &updated)?;
-    }
-    Ok(())
+    write_if_changed(file, &source, &updated)
 }
 
-/// Stores the user's comments in deck.html, dropping those of slides that are gone. Leaves the
-/// file alone when nothing changed, so the watcher stays quiet.
+/// Stores the user's review marks in deck.html (see [`save_marks`]).
+pub fn save_review(file: &Path, review: &Review) -> Result<()> {
+    save_marks(file, review, review::write)
+}
+
+/// Stores the user's comments in deck.html (see [`save_marks`]).
 pub fn save_comments(file: &Path, comments: &Comments) -> Result<()> {
-    let source = read_html(file)?;
-    let updated = comments::write(&source, comments);
-    let updated = prune_review(&updated).unwrap_or(updated);
-    if updated != source {
-        write_html(file, &updated)?;
-    }
-    Ok(())
+    save_marks(file, comments, comments::write)
 }
 
 pub fn rename(file: &Path, title: &str) -> Result<Deck> {
     let title = title.trim().to_string();
-    Ok(edit(file, |s| Ok((html::set_title(s, &title), ())))?.0)
+    edit(file, |s| Ok(html::set_title(s, &title)))
 }
 
 /// What a change from the slide rail did, with the deck's source before and after, so it can be
@@ -432,10 +352,11 @@ pub struct RailEdit {
     pub created: Vec<String>,
 }
 
-fn rail_edit(file: &Path, f: impl FnOnce(&str) -> EditResult<Vec<String>>) -> Result<RailEdit> {
-    let previous = read_html(file)?;
-    let (source, created) = f(&previous).map_err(Error::Message)?;
-    write_html(file, &source)?;
+fn rail_edit(
+    file: &Path,
+    f: impl FnOnce(&str) -> EditResult<(String, Vec<String>)>,
+) -> Result<RailEdit> {
+    let (previous, source, created) = rewrite(file, f)?;
     Ok(RailEdit {
         deck: load(file)?,
         previous,
@@ -449,14 +370,14 @@ pub fn reorder(file: &Path, slides: Vec<String>) -> Result<RailEdit> {
 }
 
 pub fn add_blank(file: &Path, after: Option<String>) -> Result<(Deck, String)> {
-    edit(file, |s| {
+    edit_with(file, |s| {
         html::insert(s, after.as_deref(), BLANK_SLIDE, "slide")
     })
 }
 
 /// Gives a deck without slides the template's design (styles, fonts), keeping its title.
 pub fn apply_template(file: &Path, template: TemplateSource) -> Result<Deck> {
-    Ok(edit(file, |s| {
+    edit(file, |s| {
         if !html::find_slides(s).is_empty() {
             return Err("Only a deck without slides takes a template's styles directly.".into());
         }
@@ -467,9 +388,8 @@ pub fn apply_template(file: &Path, template: TemplateSource) -> Result<Deck> {
             Some(_) => html::ensure_runtime(&html::set_slide_size(&shell, html::slide_size(s))),
             None => shell,
         };
-        Ok((shell, ()))
-    })?
-    .0)
+        Ok(shell)
+    })
 }
 
 /// Inserts a copy of the template's slide `slide` after `after` (or at the end).
@@ -479,13 +399,13 @@ pub fn add_template_slide(
     template: &str,
     slide: &str,
 ) -> Result<(Deck, String)> {
-    edit(file, |s| {
+    edit_with(file, |s| {
         html::copy_slide(s, after.as_deref(), template, slide)
     })
 }
 
 /// Inserts `markup`, a slide copied from deck `from` (this one or another), after `after`.
-/// Its assets come along into this deck's `assets/` (see [`bring_assets`]).
+/// Its assets come along into this deck's `assets/` (see [`crate::assets::bring_assets`]).
 pub fn paste_slide(
     file: &Path,
     after: Option<String>,
@@ -496,7 +416,7 @@ pub fn paste_slide(
         Some(from) => bring_assets(markup, from, file)?,
         None => markup.to_string(),
     };
-    edit(file, |s| html::paste_slide(s, after.as_deref(), &markup))
+    edit_with(file, |s| html::paste_slide(s, after.as_deref(), &markup))
 }
 
 /// Puts a copy of each of `slides` right after it, all in one write.
@@ -536,11 +456,10 @@ pub fn set_slides_hidden(
 /// Sets what is said over a slide (see [`html::set_narration`]); empty `text` removes it.
 /// A locked slide keeps its narration too.
 pub fn set_slide_narration(file: &Path, slide: &str, text: &str) -> Result<Deck> {
-    Ok(edit(file, |s| {
+    edit(file, |s| {
         ensure_unlocked(s, slide)?;
-        Ok((html::set_narration(s, slide, text)?, ()))
-    })?
-    .0)
+        html::set_narration(s, slide, text)
+    })
 }
 
 /// Adds `text` to what is said over a slide (see [`html::append_narration`]). A locked slide
@@ -551,11 +470,10 @@ pub fn append_slide_narration(
     text: &str,
     paragraph: bool,
 ) -> Result<Deck> {
-    Ok(edit(file, |s| {
+    edit(file, |s| {
         ensure_unlocked(s, slide)?;
-        Ok((html::append_narration(s, slide, text, paragraph)?, ()))
-    })?
-    .0)
+        html::append_narration(s, slide, text, paragraph)
+    })
 }
 
 /// Whether the slide is locked.
@@ -566,21 +484,19 @@ pub fn slide_locked(file: &Path, slide: &str) -> Result<bool> {
 /// Sets a slide's speaker notes (see [`html::set_notes`]); empty `text` removes them. A locked
 /// slide keeps its notes too.
 pub fn set_slide_notes(file: &Path, slide: &str, text: &str) -> Result<Deck> {
-    Ok(edit(file, |s| {
+    edit(file, |s| {
         ensure_unlocked(s, slide)?;
-        Ok((html::set_notes(s, slide, text)?, ()))
-    })?
-    .0)
+        html::set_notes(s, slide, text)
+    })
 }
 
 /// Sets the seconds the presenter expects to spend on a slide (see [`html::set_time`]); 0 removes
 /// them. A locked slide keeps its time too.
 pub fn set_slide_time(file: &Path, slide: &str, seconds: u32) -> Result<Deck> {
-    Ok(edit(file, |s| {
+    edit(file, |s| {
         ensure_unlocked(s, slide)?;
-        Ok((html::set_time(s, slide, seconds)?, ()))
-    })?
-    .0)
+        html::set_time(s, slide, seconds)
+    })
 }
 
 /// Sets the timing of slides on the narration timeline, all in one write: resetting it changes
@@ -601,42 +517,35 @@ pub fn set_slide_timing(file: &Path, timing: &[SlideTiming]) -> Result<RailEdit>
 /// content stays as it is; the agent lays it out again for the new size.
 pub fn set_slide_size(file: &Path, size: SlideSize) -> Result<Deck> {
     size.check().map_err(Error::Message)?;
-    Ok(edit(file, |s| {
-        Ok((html::ensure_runtime(&html::set_slide_size(s, size)), ()))
-    })?
-    .0)
+    edit(file, |s| {
+        Ok(html::ensure_runtime(&html::set_slide_size(s, size)))
+    })
 }
 
 /// Sets the voice the deck's narration is said in: one its provider has (see
 /// [`narration::Provider::accepts_voice`]).
 pub fn set_narration_voice(file: &Path, voice: &str) -> Result<Deck> {
-    Ok(edit(file, |s| {
+    edit(file, |s| {
         if !narration::provider_of(s).accepts_voice(voice) {
             return Err(format!("unknown narration voice: {voice}"));
         }
-        Ok((html::set_narration_voice(s, voice), ()))
-    })?
-    .0)
+        Ok(html::set_narration_voice(s, voice))
+    })
 }
 
 /// Sets who says the deck's narration (one of [`narration::cloud::PROVIDERS`]); the default
 /// provider has no meta. A voice the new provider does not have becomes its default.
 pub fn set_narration_provider(file: &Path, provider: &str) -> Result<Deck> {
-    let Some(provider) = narration::Provider::parse(provider) else {
-        return Err(Error::msg(format!(
-            "unknown narration provider: {provider}"
-        )));
-    };
-    Ok(edit(file, |s| {
+    let provider = narration::Provider::named(provider)?;
+    edit(file, |s| {
         let named = (provider != narration::DEFAULT_PROVIDER).then(|| provider.id());
         let mut out = html::set_narration_provider(s, named);
         let voice = html::narration_voice(&out);
         if voice.is_some_and(|v| !provider.accepts_voice(&v)) {
             out = html::set_narration_voice(&out, provider.default_voice());
         }
-        Ok((out, ()))
-    })?
-    .0)
+        Ok(out)
+    })
 }
 
 /// Sets the language the deck's narration is in (one of [`narration::LANGUAGES`]).
@@ -646,10 +555,7 @@ pub fn set_narration_language(file: &Path, language: &str) -> Result<Deck> {
             "unknown narration language: {language}"
         )));
     }
-    Ok(edit(file, |s| {
-        Ok((html::set_narration_language(s, language), ()))
-    })?
-    .0)
+    edit(file, |s| Ok(html::set_narration_language(s, language)))
 }
 
 /// Locks or unlocks a slide. Neither the user nor the agent can change a locked slide.
@@ -659,7 +565,7 @@ pub fn set_slide_locked(
     slide: &str,
     locked: bool,
 ) -> Result<Deck> {
-    let deck = edit(file, |s| Ok((html::set_locked(s, slide, locked)?, ())))?.0;
+    let deck = edit(file, |s| html::set_locked(s, slide, locked))?;
     refresh_guard(file, session, slide)?;
     Ok(deck)
 }
@@ -673,103 +579,16 @@ fn ensure_unlocked(source: &str, slide: &str) -> std::result::Result<(), String>
     Ok(())
 }
 
-/// The locked slides an agent turn must leave alone; empty when no turn is guarded.
-pub fn read_guard(file: &Path, session: Option<&Path>) -> Vec<html::LockedSlide> {
-    let Some(session) = session else {
-        return Vec::new();
-    };
-    let raw = fs::read_to_string(session.join(LOCKS_FILE)).unwrap_or_default();
-    if let Some(root) = sessions::workspace_of(session) {
-        let entries: std::collections::BTreeMap<String, Vec<html::LockedSlide>> =
-            serde_json::from_str(&raw).unwrap_or_default();
-        guard_key(file, &root)
-            .ok()
-            .and_then(|key| entries.get(&key).cloned())
-            .unwrap_or_default()
-    } else {
-        serde_json::from_str(&raw).unwrap_or_default()
-    }
-}
-
-fn write_guard(file: &Path, session: &Path, locked: &[html::LockedSlide]) -> Result<()> {
-    fs::create_dir_all(session)?;
-    let value = if let Some(root) = sessions::workspace_of(session) {
-        let mut entries: std::collections::BTreeMap<String, Vec<html::LockedSlide>> =
-            fs::read_to_string(session.join(LOCKS_FILE))
-                .ok()
-                .and_then(|raw| serde_json::from_str(&raw).ok())
-                .unwrap_or_default();
-        entries.insert(guard_key(file, &root)?, locked.to_vec());
-        serde_json::to_string(&entries).expect("json")
-    } else {
-        serde_json::to_string(locked).expect("json")
-    };
-    atomic_write(&session.join(LOCKS_FILE), value.as_bytes())
-}
-
-/// Records the locked slides before an agent turn, so [`release_guard`] can put back any the
-/// agent changes and the lint tool can tell it about them.
-pub fn guard_locked(file: &Path, session: &Path) -> Result<()> {
-    write_guard(file, session, &html::locked_slides(&read_html(file)?))
-}
-
-/// Keeps a running turn's guard in step with what the user did to `slide`: locking,
-/// unlocking or hiding it mid-turn is theirs to do, and must not be undone after the turn.
-fn refresh_guard(file: &Path, session: Option<&Path>, slide: &str) -> Result<()> {
-    let Some(session) = session.filter(|s| s.join(LOCKS_FILE).is_file()) else {
-        return Ok(());
-    };
-    let mut guard = read_guard(file, Some(session));
-    let now = html::locked_slides(&read_html(file)?);
-    guard.retain(|l| l.id != slide);
-    guard.extend(now.into_iter().filter(|l| l.id == slide));
-    write_guard(file, session, &guard)
-}
-
-/// Ends an agent turn's guard: puts back every locked slide the agent changed or removed.
-/// Returns their ids.
-pub fn release_guard(file: &Path, session: &Path) -> Result<Vec<String>> {
-    let guard = read_guard(file, Some(session));
-    if sessions::workspace_of(session).is_none() {
-        let _ = fs::remove_file(session.join(LOCKS_FILE));
-    }
-    if guard.is_empty() {
-        return Ok(Vec::new());
-    }
-    let source = if file.exists() {
-        String::from_utf8_lossy(&fs::read(file)?).into_owned()
-    } else {
-        String::from("<html><body><main class=\"deck\"></main></body></html>")
-    };
-    let (mut restored, mut ids) = html::restore_locked(&source, &guard);
-    if !html::changed_locked(&restored, &guard).is_empty() {
-        // A removed or broken slide container cannot host the missing locked slides.
-        // Rebuild their container; the deck's history keeps the complete pre-turn deck.
-        (restored, ids) = html::restore_locked(
-            "<html><body><main class=\"deck\"></main></body></html>",
-            &guard,
-        );
-    }
-    if !ids.is_empty() {
-        fs::create_dir_all(folder(file))?;
-        write_html(file, &restored)?;
-    }
-    Ok(ids)
-}
-
 pub fn add_section(file: &Path, before: Option<String>, title: &str) -> Result<Deck> {
-    Ok(edit(file, |s| {
-        Ok((html::add_section(s, before.as_deref(), title)?, ()))
-    })?
-    .0)
+    edit(file, |s| html::add_section(s, before.as_deref(), title))
 }
 
 pub fn rename_section(file: &Path, index: usize, title: &str) -> Result<Deck> {
-    Ok(edit(file, |s| Ok((html::rename_section(s, index, title)?, ())))?.0)
+    edit(file, |s| html::rename_section(s, index, title))
 }
 
 pub fn delete_section(file: &Path, index: usize) -> Result<Deck> {
-    Ok(edit(file, |s| Ok((html::delete_section(s, index)?, ())))?.0)
+    edit(file, |s| html::delete_section(s, index))
 }
 
 /// Deletes `slides` along with their review marks and comments, all in one write; none if any is locked.
@@ -832,7 +651,7 @@ pub fn update_slide(file: &Path, slide: &str, markup: &str, base: &str) -> Resul
             "The slide changed while you were editing it; your last change was not saved.",
         ));
     }
-    edit(file, |s| html::replace_slide(s, slide, markup))
+    edit_with(file, |s| html::replace_slide(s, slide, markup))
 }
 
 /// Puts `slides` back as they are in `version`, an earlier version of the deck, all in one
@@ -840,7 +659,7 @@ pub fn update_slide(file: &Path, slide: &str, markup: &str, base: &str) -> Resul
 /// them is locked.
 pub fn restore_slides(file: &Path, version: &str, slides: &[String]) -> Result<Deck> {
     let old = html::find_slides(version);
-    Ok(edit(file, |source| {
+    edit(file, |source| {
         let mut out = source.to_string();
         for slide in slides {
             let Some(span) = old.iter().find(|s| s.id.as_deref() == Some(slide.as_str())) else {
@@ -855,18 +674,23 @@ pub fn restore_slides(file: &Path, version: &str, slides: &[String]) -> Result<D
             ensure_unlocked(&out, slide)?;
             out = html::replace_slide(&out, slide, &version[span.range.clone()])?.0;
         }
-        Ok((out, ()))
-    })?
-    .0)
+        Ok(out)
+    })
 }
 
 /// What [`replace_text`] did, with the deck's source before and after, so it can be undone by
 /// saving `previous` back over `source`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReplacedText {
     pub deck: Deck,
+    /// How many matches were replaced.
     pub count: usize,
+    /// The slides that changed.
     pub slides: Vec<String>,
+    /// Locked slides with matches, left as they were.
     pub skipped: Vec<String>,
+    /// The deck's source before and after, to undo the replace by saving `previous` over `source`.
     pub previous: String,
     pub source: String,
 }
@@ -950,49 +774,6 @@ pub fn export(file: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Creates a new folder for exported slide images inside `parent`, named after the deck
-/// title (made safe for file systems); `Title 2`, `Title 3`, … if that name is taken.
-pub fn create_export_dir(parent: &Path, title: &str) -> Result<PathBuf> {
-    if !parent.is_dir() {
-        return Err(Error::msg(format!("not a folder: {}", parent.display())));
-    }
-    let name = safe_file_name(title);
-    let name = if name.is_empty() {
-        "presentation".into()
-    } else {
-        name
-    };
-    for n in 1.. {
-        let dir = parent.join(if n == 1 {
-            name.clone()
-        } else {
-            format!("{name} {n}")
-        });
-        match fs::create_dir(&dir) {
-            Ok(()) => return Ok(dir),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(e.into()),
-        }
-    }
-    unreachable!("unbounded")
-}
-
-/// `text` without characters file systems reject, trimmed of spaces and trailing dots.
-pub(crate) fn safe_file_name(text: &str) -> String {
-    let cleaned: String = text
-        .chars()
-        .filter(|c| !c.is_control() && !r#"\/:*?"<>|"#.contains(*c))
-        .collect();
-    cleaned.trim().trim_end_matches('.').trim().to_string()
-}
-
-/// File name of the `index`th (0-based) of `total` exported slides: `slide-01.png`, with
-/// enough digits that the files sort in slide order.
-pub fn slide_image_name(index: usize, total: usize) -> String {
-    let digits = total.max(1).to_string().len().max(2);
-    format!("slide-{:0digits$}.png", index + 1)
-}
-
 /// Lints the deck file; asset references are checked against the files next to it, and during
 /// an agent turn, locked slides against how they were when it started.
 pub fn lint(file: &Path, session: Option<&Path>) -> Result<Vec<lint::Issue>> {
@@ -1013,194 +794,12 @@ pub fn lint(file: &Path, session: Option<&Path>) -> Result<Vec<lint::Issue>> {
     Ok(issues)
 }
 
-pub fn mime_for(path: &str) -> &'static str {
-    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-    match ext.as_str() {
-        "html" | "htm" => "text/html; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "js" | "mjs" => "text/javascript; charset=utf-8",
-        "json" => "application/json",
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "avif" => "image/avif",
-        "ico" => "image/x-icon",
-        "mp4" => "video/mp4",
-        "webm" => "video/webm",
-        "mp3" => "audio/mpeg",
-        "woff" => "font/woff",
-        "woff2" => "font/woff2",
-        "ttf" => "font/ttf",
-        "otf" => "font/otf",
-        "pdf" => "application/pdf",
-        _ => "application/octet-stream",
-    }
-}
-
-pub fn import_assets(file: &Path, paths: Vec<String>) -> Result<Vec<String>> {
-    let assets = if file.is_dir() { file } else { folder(file) }.join("assets");
-    fs::create_dir_all(&assets)?;
-    let mut imported = Vec::new();
-    for source in paths {
-        let source = PathBuf::from(source);
-        if !source.is_file() {
-            continue;
-        }
-        let dest = free_asset_path(&assets, &source);
-        fs::copy(&source, &dest)?;
-        imported.push(asset_ref(&dest));
-    }
-    Ok(imported)
-}
-
-/// `markup` copied from the deck (or folder) `from`, for pasting into `to`: the `assets/…`
-/// files it references are copied into `to`'s assets and the references point at the copies.
-/// Nothing changes between decks sharing a folder; a file `to` already has with the same name
-/// and contents is used as it is, and references to missing files are left alone.
-pub fn bring_assets(markup: &str, from: &Path, to: &Path) -> Result<String> {
-    let dir = |p: &Path| if p.is_dir() { p } else { folder(p) }.to_path_buf();
-    let (from, to) = (dir(from), dir(to));
-    let same = |a: &Path, b: &Path| match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
-    };
-    if same(&from, &to) {
-        return Ok(markup.to_string());
-    }
-    let assets = to.join("assets");
-    let mut brought: HashMap<String, String> = HashMap::new();
-    let mut out = String::with_capacity(markup.len());
-    let mut at = 0;
-    for (range, rel) in html::asset_refs(markup) {
-        let new_ref = match brought.get(rel) {
-            Some(new_ref) => new_ref.clone(),
-            None => {
-                let Some(source) = resolve_in_deck(&from, rel).ok().filter(|p| p.is_file()) else {
-                    continue;
-                };
-                let bytes = fs::read(&source)?;
-                let new_ref = asset_ref(&same_or_new_asset(&assets, &source, &bytes)?);
-                brought.insert(rel.to_string(), new_ref.clone());
-                new_ref
-            }
-        };
-        out.push_str(&markup[at..range.start]);
-        out.push_str(&new_ref);
-        at = range.end;
-    }
-    out.push_str(&markup[at..]);
-    Ok(out)
-}
-
-/// Writes pasted file contents (base64) into `assets/`, named after `name`; returns its ref.
-pub fn save_asset(file: &Path, name: &str, data: &str) -> Result<String> {
-    use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data.trim())
-        .map_err(|e| Error::msg(format!("invalid pasted data: {e}")))?;
-    write_asset(file, name, &bytes)
-}
-
-/// Writes `bytes` into `assets/`, named after `name` (without overwriting); returns its ref.
-pub fn write_asset(file: &Path, name: &str, bytes: &[u8]) -> Result<String> {
-    let assets = if file.is_dir() { file } else { folder(file) }.join("assets");
-    fs::create_dir_all(&assets)?;
-    // Only the file name counts; a pasted name must not reach outside `assets/`.
-    let name = Path::new(name).file_name().unwrap_or_default();
-    let dest = free_asset_path(&assets, Path::new(name));
-    fs::write(&dest, bytes)?;
-    Ok(asset_ref(&dest))
-}
-
-/// A path in `assets` for a file named like `source`: slugged, lowercase extension, unused.
-fn free_asset_path(assets: &Path, source: &Path) -> PathBuf {
-    asset_paths(assets, source)
-        .find(|p| !p.exists())
-        .expect("unbounded")
-}
-
-/// Paths in `assets` for a file named like `source`, in the order they are taken: slugged,
-/// lowercase extension, then numbered.
-fn asset_paths<'a>(assets: &'a Path, source: &Path) -> impl Iterator<Item = PathBuf> + 'a {
-    let stem = html::slugify(&source.file_stem().unwrap_or_default().to_string_lossy());
-    let stem = if stem.is_empty() {
-        "asset".to_string()
-    } else {
-        stem
-    };
-    let ext = source
-        .extension()
-        .map(|e| format!(".{}", e.to_string_lossy().to_lowercase()))
-        .unwrap_or_default();
-    std::iter::once(assets.join(format!("{stem}{ext}")))
-        .chain((2..).map(move |n| assets.join(format!("{stem}-{n}{ext}"))))
-}
-
-/// The asset in `assets` holding `bytes` under a name like `source`'s, writing it unless
-/// an earlier copy is there.
-fn same_or_new_asset(assets: &Path, source: &Path, bytes: &[u8]) -> Result<PathBuf> {
-    fs::create_dir_all(assets)?;
-    for path in asset_paths(assets, source) {
-        match fs::read(&path) {
-            Ok(existing) if existing == bytes => return Ok(path),
-            Ok(_) => continue,
-            Err(_) if path.exists() => continue,
-            Err(_) => {
-                fs::write(&path, bytes)?;
-                return Ok(path);
-            }
-        }
-    }
-    unreachable!("unbounded")
-}
-
-fn asset_ref(path: &Path) -> String {
-    format!("assets/{}", path.file_name().unwrap().to_string_lossy())
-}
-
-/// The session's chat; Null for a deck without one yet.
-pub fn load_chat(session: Option<&Path>) -> Result<serde_json::Value> {
-    let Some(session) = session else {
-        return Ok(serde_json::Value::Null);
-    };
-    match fs::read_to_string(session.join(sessions::CHAT_FILE)) {
-        Ok(raw) => Ok(serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::Value::Null),
-        Err(e) => Err(e.into()),
-    }
-}
-
-pub fn save_chat(session: &Path, chat: &serde_json::Value) -> Result<()> {
-    fs::create_dir_all(session)?;
-    atomic_write(
-        &session.join(sessions::CHAT_FILE),
-        serde_json::to_string(chat).expect("json").as_bytes(),
-    )
-}
-
-/// Each agent provider keeps its own resumable session id in the session, stored under `name`.
-pub fn read_session(session: &Path, name: &str) -> Option<String> {
-    fs::read_to_string(session.join(name))
-        .ok()
-        .map(|s| s.trim().to_string())
-}
-
-pub fn write_session(session: &Path, name: &str, session_id: Option<&str>) -> Result<()> {
-    fs::create_dir_all(session)?;
-    let path = session.join(name);
-    match session_id {
-        Some(id) => fs::write(path, id)?,
-        None if path.exists() => fs::remove_file(path)?,
-        None => {}
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::guard::guard_locked;
+    use crate::test_support::TempDir;
+    use std::time::SystemTime;
 
     #[test]
     fn resolve_rejects_escapes() {
@@ -1211,61 +810,13 @@ mod tests {
         assert!(resolve_in_deck(dir, "assets/photo.png").is_ok());
     }
 
-    /// Two decks in their own folders of a throwaway workspace: `from` with `assets/Photo.PNG`.
-    fn two_decks() -> (PathBuf, PathBuf) {
-        let root = std::env::temp_dir().join(format!("slopslide-bring-{}", uuid::Uuid::new_v4()));
-        for name in ["from", "to"] {
-            fs::create_dir_all(root.join(name)).unwrap();
-            fs::write(
-                root.join(name).join(DECK_FILE),
-                "<main class=\"deck\">\n    <section class=\"slide\" id=\"a\">A</section>\n</main>",
-            )
-            .unwrap();
-        }
-        fs::create_dir_all(root.join("from/assets")).unwrap();
-        fs::write(root.join("from/assets/Photo.PNG"), b"photo").unwrap();
-        (
-            root.join("from").join(DECK_FILE),
-            root.join("to").join(DECK_FILE),
-        )
-    }
-
-    #[test]
-    fn copied_markup_brings_its_assets_into_another_deck() {
-        let (from, to) = two_decks();
-        let markup = r#"<img src="assets/Photo.PNG?v=2"><div style="background: url('./assets/Photo.PNG')"></div><img src="assets/gone.png"><a href="https://x.dev/assets/y.png">y</a>"#;
-        let out = bring_assets(markup, &from, &to).unwrap();
-        assert_eq!(
-            out,
-            r#"<img src="assets/photo.png?v=2"><div style="background: url('assets/photo.png')"></div><img src="assets/gone.png"><a href="https://x.dev/assets/y.png">y</a>"#
-        );
-        let assets = folder(&to).join("assets");
-        assert_eq!(fs::read(assets.join("photo.png")).unwrap(), b"photo");
-
-        // Pasting it again reuses the copy; another image of the same name gets its own.
-        assert_eq!(bring_assets(markup, &from, &to).unwrap(), out);
-        assert!(!assets.join("photo-2.png").exists());
-        fs::write(folder(&from).join("assets/Photo.PNG"), b"another").unwrap();
-        let next = bring_assets(r#"<img src="assets/Photo.PNG">"#, &from, &to).unwrap();
-        assert_eq!(next, r#"<img src="assets/photo-2.png">"#);
-    }
-
-    #[test]
-    fn markup_pasted_within_its_folder_is_left_alone() {
-        let (from, _) = two_decks();
-        let markup = r#"<img src="assets/Photo.PNG">"#;
-        assert_eq!(bring_assets(markup, &from, &from).unwrap(), markup);
-        assert_eq!(bring_assets(markup, &from, folder(&from)).unwrap(), markup);
-        assert_eq!(
-            fs::read_dir(folder(&from).join("assets")).unwrap().count(),
-            1,
-            "nothing is copied"
-        );
-    }
-
     #[test]
     fn pastes_a_slide_from_another_deck_with_its_assets() {
-        let (from, to) = two_decks();
+        let lib = TempLib::new();
+        let from = lib.add("from", ORIGINAL).join(DECK_FILE);
+        let to = lib.add("to", ORIGINAL).join(DECK_FILE);
+        fs::create_dir_all(folder(&from).join("assets")).unwrap();
+        fs::write(folder(&from).join("assets/Photo.PNG"), b"photo").unwrap();
         let markup = r#"<section class="slide" id="a"><img src="assets/Photo.PNG"></section>"#;
         let (deck, id) = paste_slide(&to, Some("a".into()), Some(&from), markup).unwrap();
         assert_eq!(id, "a-2");
@@ -1282,14 +833,9 @@ mod tests {
         assert!(paste_slide(&to, None, None, "<p>x</p>").is_err());
     }
 
-    #[test]
-    fn falls_back_to_the_file_or_folder_name_for_the_title() {
-        assert_eq!(fallback_title(Path::new("/w/q3-review.html")), "q3 review");
-        assert_eq!(fallback_title(Path::new("/w/my_talk/deck.html")), "my talk");
-    }
-
     /// A throwaway deck folder holding `html` as deck.html.
-    struct TempDeck(PathBuf);
+    /// A deck folder, `deck/` in a temporary folder that also holds its session.
+    struct TempDeck(PathBuf, TempDir);
 
     impl TempDeck {
         /// The deck file, deck.html.
@@ -1297,24 +843,18 @@ mod tests {
             self.0.join(DECK_FILE)
         }
         fn new(html: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("slopslide-test-{}", uuid::Uuid::new_v4()));
+            let temp = TempDir::new("test");
+            let dir = temp.join("deck");
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join(DECK_FILE), html).unwrap();
-            TempDeck(dir)
+            TempDeck(dir, temp)
         }
         fn html(&self) -> String {
             fs::read_to_string(self.0.join(DECK_FILE)).unwrap()
         }
         /// The deck's session folder, outside the deck.
         fn session(&self) -> PathBuf {
-            PathBuf::from(format!("{}-session", self.0.display()))
-        }
-    }
-
-    impl Drop for TempDeck {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(self.session());
-            let _ = fs::remove_dir_all(&self.0);
+            self.1.join("session")
         }
     }
 
@@ -1734,64 +1274,6 @@ mod tests {
     }
 
     #[test]
-    fn a_guarded_turn_puts_back_the_locked_slides() {
-        let deck = TempDeck::new(LOCKED);
-        guard_locked(&deck.file(), &deck.session()).unwrap();
-        assert_eq!(read_guard(&deck.file(), Some(&deck.session())).len(), 1);
-        // The agent rewrites everything, dropping the locked slide.
-        let agent = "<html><head><title>Talk</title></head><body><main>\n<section class=\"slide\" id=\"b\">New B</section>\n</main></body></html>";
-        fs::write(deck.0.join(DECK_FILE), agent).unwrap();
-        let issues = lint(&deck.file(), Some(&deck.session())).unwrap();
-        assert!(
-            issues.iter().any(|i| i.rule == "locked-slide-changed"),
-            "{issues:?}"
-        );
-
-        assert_eq!(release_guard(&deck.file(), &deck.session()).unwrap(), ["a"]);
-        assert_eq!(
-            deck.html(),
-            "<html><head><title>Talk</title></head><body><main>\n<section class=\"slide\" id=\"a\" data-locked>A</section>\n<section class=\"slide\" id=\"b\">New B</section>\n</main></body></html>"
-        );
-        assert!(
-            read_guard(&deck.file(), Some(&deck.session())).is_empty(),
-            "the guard ends with the turn"
-        );
-        assert!(!lint(&deck.file(), Some(&deck.session()))
-            .unwrap()
-            .iter()
-            .any(|i| i.rule == "locked-slide-changed"));
-        assert!(release_guard(&deck.file(), &deck.session())
-            .unwrap()
-            .is_empty());
-    }
-
-    #[test]
-    fn locking_mid_turn_updates_the_guard() {
-        let deck = TempDeck::new(LOCKED);
-        guard_locked(&deck.file(), &deck.session()).unwrap();
-        // The user unlocks `a`, locks `b` and hides it while the agent works.
-        set_slide_locked(&deck.file(), Some(&deck.session()), "a", false).unwrap();
-        set_slide_locked(&deck.file(), Some(&deck.session()), "b", true).unwrap();
-        set_slides_hidden(&deck.file(), Some(&deck.session()), &ids(&["b"]), true).unwrap();
-        let ids: Vec<_> = read_guard(&deck.file(), Some(&deck.session()))
-            .into_iter()
-            .map(|l| l.id)
-            .collect();
-        assert_eq!(ids, ["b"]);
-        let mine = deck.html();
-        let agent = mine.replace(">A<", ">Agent A<");
-        fs::write(deck.0.join(DECK_FILE), &agent).unwrap();
-        assert!(release_guard(&deck.file(), &deck.session())
-            .unwrap()
-            .is_empty());
-        assert_eq!(
-            deck.html(),
-            agent,
-            "unlocked `a` keeps the agent's edit, `b` stays hidden"
-        );
-    }
-
-    #[test]
     fn opening_a_deck_drops_a_stale_guard() {
         let deck = TempDeck::new(LOCKED);
         guard_locked(&deck.file(), &deck.session()).unwrap();
@@ -1832,25 +1314,17 @@ mod tests {
     }
 
     /// A throwaway library folder.
-    struct TempLib(PathBuf);
+    struct TempLib(TempDir);
 
     impl TempLib {
         fn new() -> Self {
-            let dir = std::env::temp_dir().join(format!("slopslide-lib-{}", uuid::Uuid::new_v4()));
-            fs::create_dir_all(&dir).unwrap();
-            TempLib(dir)
+            TempLib(TempDir::new("lib"))
         }
         fn add(&self, id: &str, html: &str) -> PathBuf {
             let dir = self.0.join(id);
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join(DECK_FILE), html).unwrap();
             dir
-        }
-    }
-
-    impl Drop for TempLib {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
         }
     }
 
@@ -2036,90 +1510,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn save_sketch_writes_a_png_and_prunes_old_ones() {
-        let deck = TempDeck::new(ORIGINAL);
-        let sketches = deck.session().join("sketches");
-        fs::create_dir_all(&sketches).unwrap();
-        for n in 0..SKETCHES_KEPT + 3 {
-            let name = format!("{}-old.png", 1_000_000_000_000u64 + n as u64);
-            fs::write(sketches.join(name), b"old").unwrap();
-        }
-        let path = save_sketch(&deck.session(), b"\x89PNG fake").unwrap();
-        assert!(
-            Path::new(&path).starts_with(&sketches) && path.ends_with(".png"),
-            "absolute, in the session: {path}"
-        );
-        assert_eq!(fs::read(&path).unwrap(), b"\x89PNG fake");
-        let names: Vec<_> = fs::read_dir(&sketches)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(names.len(), SKETCHES_KEPT);
-        assert!(
-            !names.contains(&"1000000000000-old.png".to_string()),
-            "oldest pruned"
-        );
-        assert!(
-            path.ends_with(names.iter().max().unwrap().as_str()),
-            "new sketch kept"
-        );
-    }
-
-    #[test]
-    fn export_dir_is_named_after_the_deck() {
-        let parent = TempDeck::new(ORIGINAL);
-        let dir = create_export_dir(&parent.0, "Q3 Review").unwrap();
-        assert_eq!(dir, parent.0.join("Q3 Review"));
-        assert!(dir.is_dir());
-    }
-
-    #[test]
-    fn export_dir_never_reuses_an_existing_folder() {
-        let parent = TempDeck::new(ORIGINAL);
-        fs::create_dir(parent.0.join("Talk")).unwrap();
-        fs::write(parent.0.join("Talk").join("slide-01.png"), b"keep").unwrap();
-        assert_eq!(
-            create_export_dir(&parent.0, "Talk").unwrap(),
-            parent.0.join("Talk 2")
-        );
-        assert_eq!(
-            create_export_dir(&parent.0, "Talk").unwrap(),
-            parent.0.join("Talk 3")
-        );
-        assert_eq!(
-            fs::read(parent.0.join("Talk").join("slide-01.png")).unwrap(),
-            b"keep"
-        );
-    }
-
-    #[test]
-    fn export_dir_names_are_safe() {
-        let parent = TempDeck::new(ORIGINAL);
-        let dir = create_export_dir(&parent.0, " A/B: \"why?\" <draft>. ").unwrap();
-        assert_eq!(dir.file_name().unwrap(), "AB why draft");
-        let dir = create_export_dir(&parent.0, "../..").unwrap();
-        assert_eq!(dir, parent.0.join("presentation"));
-        let dir = create_export_dir(&parent.0, "\t").unwrap();
-        assert_eq!(dir, parent.0.join("presentation 2"));
-    }
-
-    #[test]
-    fn export_dir_needs_an_existing_parent() {
-        let parent = TempDeck::new(ORIGINAL);
-        assert!(create_export_dir(&parent.0.join("missing"), "Talk").is_err());
-        assert!(create_export_dir(&parent.0.join(DECK_FILE), "Talk").is_err());
-    }
-
-    #[test]
-    fn slide_images_sort_in_slide_order() {
-        assert_eq!(slide_image_name(0, 1), "slide-01.png");
-        assert_eq!(slide_image_name(8, 12), "slide-09.png");
-        assert_eq!(slide_image_name(99, 120), "slide-100.png");
-        assert_eq!(slide_image_name(4, 120), "slide-005.png");
-        assert_eq!(slide_image_name(0, 0), "slide-01.png");
-    }
-
     fn marks(ids: &[&str]) -> Review {
         ids.iter()
             .map(|id| {
@@ -2176,26 +1566,6 @@ mod tests {
     }
 
     #[test]
-    fn comments_leave_slide_and_shell_hashes_alone() {
-        let deck = TempDeck::new(THREE);
-        let before = load(&deck.file()).unwrap();
-        save_comments(&deck.file(), &notes(&["a", "c"])).unwrap();
-        let after = load(&deck.file()).unwrap();
-        assert_eq!(after.shell_hash, before.shell_hash);
-        let hashes = |d: &Deck| d.slides.iter().map(|s| s.hash.clone()).collect::<Vec<_>>();
-        assert_eq!(hashes(&after), hashes(&before));
-    }
-
-    #[test]
-    fn deleting_a_slide_drops_its_comments() {
-        let deck = TempDeck::new(THREE);
-        save_comments(&deck.file(), &notes(&["a", "b"])).unwrap();
-        let deleted = delete_slides(&deck.file(), &ids(&["b"])).unwrap();
-        assert_eq!(deleted.deck.comments, notes(&["a"]));
-        assert_eq!(load(&deck.file()).unwrap().comments, notes(&["a"]));
-    }
-
-    #[test]
     fn normalizing_drops_marks_and_comments_of_slides_that_are_gone() {
         let html = comments::write(
             &review::write(THREE, &marks(&["a", "gone"])),
@@ -2220,38 +1590,15 @@ mod tests {
     }
 
     #[test]
-    fn review_marks_leave_slide_and_shell_hashes_alone() {
+    fn review_marks_and_comments_leave_slide_and_shell_hashes_alone() {
         let deck = TempDeck::new(THREE);
         let before = load(&deck.file()).unwrap();
         save_review(&deck.file(), &marks(&["a", "c"])).unwrap();
+        save_comments(&deck.file(), &notes(&["a", "c"])).unwrap();
         let after = load(&deck.file()).unwrap();
         assert_eq!(before.shell_hash, after.shell_hash);
-        assert!(before
-            .slides
-            .iter()
-            .zip(&after.slides)
-            .all(|(a, b)| a.hash == b.hash));
-    }
-
-    #[test]
-    fn normalize_drops_marks_of_deleted_slides() {
-        let deck = TempDeck::new(&review::write(THREE, &marks(&["a", "b"])));
-        fs::write(
-            deck.0.join(DECK_FILE),
-            deck.html()
-                .replace("<section class=\"slide\" id=\"b\">B</section>", ""),
-        )
-        .unwrap();
-        normalize(&deck.file()).unwrap();
-        assert_eq!(load(&deck.file()).unwrap().review, marks(&["a"]));
-    }
-
-    #[test]
-    fn save_sketch_names_are_unique() {
-        let deck = TempDeck::new(ORIGINAL);
-        let a = save_sketch(&deck.session(), b"a").unwrap();
-        let b = save_sketch(&deck.session(), b"b").unwrap();
-        assert_ne!(a, b);
+        let hashes = |d: &Deck| d.slides.iter().map(|s| s.hash.clone()).collect::<Vec<_>>();
+        assert_eq!(hashes(&after), hashes(&before));
     }
 
     #[test]
@@ -2316,21 +1663,6 @@ mod tests {
         assert!(restore_slides(&deck.file(), &version, &ids(&["b"])).is_err());
     }
 
-    #[test]
-    fn duplicate_and_delete_slides_on_disk() {
-        let deck = TempDeck::new(THREE);
-        let copied = duplicate_slides(&deck.file(), &ids(&["b"])).unwrap();
-        assert_eq!(copied.created, ["b-copy"]);
-        assert_eq!(slide_ids(&copied.deck), ["a", "b", "b-copy", "c"]);
-        assert!(deck.html().contains("id=\"b-copy\">B</section>"));
-
-        let deleted = delete_slides(&deck.file(), &ids(&["b"])).unwrap();
-        assert_eq!(slide_ids(&deleted.deck), ["a", "b-copy", "c"]);
-
-        assert!(duplicate_slides(&deck.file(), &ids(&["nope"])).is_err());
-        assert!(delete_slides(&deck.file(), &ids(&["nope"])).is_err());
-    }
-
     fn ids(slides: &[&str]) -> Vec<String> {
         slides.iter().map(|s| s.to_string()).collect()
     }
@@ -2351,6 +1683,11 @@ mod tests {
         let copied = duplicate_slides(&deck.file(), &ids(&["a", "c"])).unwrap();
         assert_eq!(copied.created, ["a-copy", "c-copy"]);
         assert_eq!(slide_ids(&copied.deck), ["a", "a-copy", "b", "c", "c-copy"]);
+        assert_eq!(
+            deck.html().matches(">C</section>").count(),
+            2,
+            "copies the markup"
+        );
         let deleted = delete_slides(&deck.file(), &ids(&["a", "b"])).unwrap();
         assert_eq!(slide_ids(&deleted.deck), ["a-copy", "c", "c-copy"]);
     }
@@ -2397,20 +1734,6 @@ mod tests {
     }
 
     #[test]
-    fn hiding_many_slides_keeps_a_running_turns_guard_in_step() {
-        let deck = TempDeck::new(THREE);
-        set_slide_locked(&deck.file(), None, "a", true).unwrap();
-        set_slide_locked(&deck.file(), None, "c", true).unwrap();
-        guard_locked(&deck.file(), &deck.session()).unwrap();
-        set_slides_hidden(&deck.file(), Some(&deck.session()), &ids(&["a", "c"]), true).unwrap();
-        assert_eq!(
-            release_guard(&deck.file(), &deck.session()).unwrap(),
-            Vec::<String>::new()
-        );
-        assert!(load(&deck.file()).unwrap().slides[2].hidden);
-    }
-
-    #[test]
     fn notes_are_loaded_saved_and_refused_on_locked_slides() {
         let deck = TempDeck::new(EDITED);
         let notes = |d: &Deck| d.slides.iter().map(|s| s.notes.clone()).collect::<Vec<_>>();
@@ -2435,12 +1758,18 @@ mod tests {
     }
 
     #[test]
-    fn deleting_a_slide_drops_its_review_marks() {
+    fn deleting_a_slide_drops_its_review_marks_and_comments() {
         let deck = TempDeck::new(THREE);
         save_review(&deck.file(), &marks(&["a", "b"])).unwrap();
+        save_comments(&deck.file(), &notes(&["a", "b"])).unwrap();
         let deleted = delete_slides(&deck.file(), &ids(&["b"])).unwrap();
         assert_eq!(deleted.deck.review, marks(&["a"]));
-        assert_eq!(load(&deck.file()).unwrap().review, marks(&["a"]));
+        assert_eq!(deleted.deck.comments, notes(&["a"]));
+        let loaded = load(&deck.file()).unwrap();
+        assert_eq!(
+            (loaded.review, loaded.comments),
+            (marks(&["a"]), notes(&["a"]))
+        );
 
         delete_slides(&deck.file(), &ids(&["a"])).unwrap();
         assert!(
@@ -2532,156 +1861,6 @@ mod tests {
     }
 
     #[test]
-    fn mime_types() {
-        assert_eq!(mime_for("deck.html"), "text/html; charset=utf-8");
-        assert_eq!(mime_for("assets/PHOTO.JPG"), "image/jpeg");
-        assert_eq!(mime_for("assets/a.jpeg"), "image/jpeg");
-        assert_eq!(mime_for("assets/logo.svg"), "image/svg+xml");
-        assert_eq!(mime_for("assets/font.woff2"), "font/woff2");
-        assert_eq!(mime_for("assets/clip.webm"), "video/webm");
-        assert_eq!(mime_for("assets/data.json"), "application/json");
-        assert_eq!(mime_for("assets/x.tar.gz"), "application/octet-stream");
-        assert_eq!(mime_for("assets/no-extension"), "application/octet-stream");
-        assert_eq!(mime_for(""), "application/octet-stream");
-    }
-
-    #[test]
-    fn imports_assets_with_slugged_unique_names() {
-        let deck = TempDeck::new(ORIGINAL);
-        let src = TempLib::new();
-        let photo = src.0.join("My Photo.PNG");
-        fs::write(&photo, "png").unwrap();
-        let nameless = src.0.join("日本.jpg");
-        fs::write(&nameless, "jpg").unwrap();
-        let no_ext = src.0.join("README");
-        fs::write(&no_ext, "txt").unwrap();
-        let path = |p: &PathBuf| p.to_string_lossy().into_owned();
-
-        let imported = import_assets(
-            &deck.file(),
-            vec![
-                path(&photo),
-                path(&photo),
-                path(&nameless),
-                path(&no_ext),
-                path(&src.0.join("does-not-exist.png")),
-                path(&src.0),
-            ],
-        )
-        .unwrap();
-        assert_eq!(
-            imported,
-            [
-                "assets/my-photo.png",
-                "assets/my-photo-2.png",
-                "assets/asset.jpg",
-                "assets/readme"
-            ]
-        );
-        assert_eq!(
-            fs::read_to_string(deck.0.join("assets/my-photo-2.png")).unwrap(),
-            "png"
-        );
-        assert!(import_assets(&deck.file(), vec![]).unwrap().is_empty());
-    }
-
-    #[test]
-    fn saves_pasted_assets_with_unique_names() {
-        let deck = TempDeck::new(ORIGINAL);
-        // "aGk=" is "hi".
-        assert_eq!(
-            save_asset(&deck.file(), "Screen Shot.PNG", "aGk=").unwrap(),
-            "assets/screen-shot.png"
-        );
-        assert_eq!(
-            save_asset(&deck.file(), "Screen Shot.PNG", "aGk=").unwrap(),
-            "assets/screen-shot-2.png"
-        );
-        assert_eq!(
-            fs::read_to_string(deck.0.join("assets/screen-shot-2.png")).unwrap(),
-            "hi"
-        );
-        assert_eq!(
-            save_asset(&deck.file(), "../../evil.png", "aGk=").unwrap(),
-            "assets/evil.png"
-        );
-        assert_eq!(
-            save_asset(&deck.file(), "", "aGk=").unwrap(),
-            "assets/asset"
-        );
-        assert!(save_asset(&deck.file(), "x.png", "not base64!").is_err());
-        assert!(!deck.0.join("assets/x.png").exists());
-    }
-
-    #[test]
-    fn chat_round_trips_and_tolerates_bad_files() {
-        let deck = TempDeck::new(ORIGINAL);
-        assert_eq!(
-            load_chat(Some(&deck.session())).unwrap(),
-            serde_json::Value::Null
-        );
-        let chat = serde_json::json!([{"id": "1", "role": "user", "text": "hi ✨"}]);
-        save_chat(&deck.session(), &chat).unwrap();
-        assert_eq!(load_chat(Some(&deck.session())).unwrap(), chat);
-        fs::write(deck.session().join("chat.json"), "{not json").unwrap();
-        assert_eq!(
-            load_chat(Some(&deck.session())).unwrap(),
-            serde_json::Value::Null
-        );
-        save_chat(&deck.session(), &serde_json::Value::Null).unwrap();
-        assert_eq!(
-            load_chat(Some(&deck.session())).unwrap(),
-            serde_json::Value::Null
-        );
-    }
-
-    #[test]
-    fn session_is_stored_trimmed_and_cleared() {
-        let deck = TempDeck::new(ORIGINAL);
-        fs::create_dir_all(deck.session()).unwrap();
-        assert_eq!(read_session(&deck.session(), "session"), None);
-        write_session(&deck.session(), "session", Some("abc-123")).unwrap();
-        assert_eq!(
-            read_session(&deck.session(), "session").as_deref(),
-            Some("abc-123")
-        );
-        fs::write(deck.session().join("session"), "  xyz\n").unwrap();
-        assert_eq!(
-            read_session(&deck.session(), "session").as_deref(),
-            Some("xyz")
-        );
-        write_session(&deck.session(), "session", None).unwrap();
-        assert_eq!(read_session(&deck.session(), "session"), None);
-        write_session(&deck.session(), "session", None).unwrap();
-    }
-
-    #[test]
-    fn sessions_are_kept_per_provider() {
-        let deck = TempDeck::new(ORIGINAL);
-        fs::create_dir_all(deck.session()).unwrap();
-        write_session(&deck.session(), "session", Some("claude-1")).unwrap();
-        write_session(&deck.session(), "codex-session", Some("codex-1")).unwrap();
-        assert_eq!(
-            read_session(&deck.session(), "session").as_deref(),
-            Some("claude-1")
-        );
-        assert_eq!(
-            read_session(&deck.session(), "codex-session").as_deref(),
-            Some("codex-1")
-        );
-    }
-
-    #[test]
-    fn workspace_assets_without_a_deck() {
-        let deck = TempDeck::new(ORIGINAL);
-        assert_eq!(
-            save_asset(&deck.0, "photo.png", "aGk=").unwrap(),
-            "assets/photo.png"
-        );
-        assert_eq!(fs::read(deck.0.join("assets/photo.png")).unwrap(), b"hi");
-    }
-
-    #[test]
     fn named_decks_resolve_their_own_assets_and_reject_shared_parent_images() {
         let deck = TempDeck::new(ORIGINAL);
         fs::create_dir_all(deck.0.join("assets")).unwrap();
@@ -2691,18 +1870,6 @@ mod tests {
         let issues = lint(&file, None).unwrap();
         assert!(!issues.iter().any(|i| i.rule == "missing-asset"));
         assert!(issues.iter().any(|i| i.rule == "asset-outside-deck"));
-    }
-
-    #[test]
-    fn atomic_write_leaves_no_temp_files() {
-        let deck = TempDeck::new(ORIGINAL);
-        write_html(&deck.file(), EDITED).unwrap();
-        assert_eq!(deck.html(), EDITED);
-        let names: Vec<_> = fs::read_dir(&deck.0)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(names, [DECK_FILE]);
     }
 
     const SECTIONED: &str = "<html><head><title>S</title></head><body><main class=\"deck\">\n  <section class=\"slide\" id=\"a\">A</section>\n  <div class=\"deck-section\" data-title=\"Part two\"></div>\n  <section class=\"slide\" id=\"b\">B</section>\n  <section class=\"slide\" id=\"c\">C</section>\n</main></body></html>";

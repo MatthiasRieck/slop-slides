@@ -1,6 +1,6 @@
 import { createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { Button, buttonClass, keepFocus, ToolButton, toolButtonClass } from "./Button";
+import { Button, buttonClass, ToolButton, toolButtonClass } from "./Button";
 
 const classes = (value: string) => new Set(value.split(/\s+/).filter(Boolean));
 const ICON_SIZE = "[&_svg:not([class*='size-'])]:size-4";
@@ -67,19 +67,15 @@ describe("ToolButton", () => {
     expect(button.classList.contains("bg-accent")).toBe(false);
   });
 
-  it("is disabled and not clicked when disabled", () => {
+  it("clicks, but not while disabled", () => {
     const onClick = vi.fn();
-    render(<ToolButton label="Undo" disabled onClick={onClick} />);
+    const { rerender } = render(<ToolButton label="Undo" onClick={onClick} />);
     const button = screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement;
+    fireEvent.click(button);
+    expect(onClick).toHaveBeenCalledOnce();
+    rerender(<ToolButton label="Undo" disabled onClick={onClick} />);
     expect(button.disabled).toBe(true);
     fireEvent.click(button);
-    expect(onClick).not.toHaveBeenCalled();
-  });
-
-  it("clicks", () => {
-    const onClick = vi.fn();
-    render(<ToolButton label="Undo" onClick={onClick} />);
-    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
     expect(onClick).toHaveBeenCalledOnce();
   });
 
@@ -230,13 +226,5 @@ describe("Button", () => {
     ],
   ])("looks the same as before: %s", (_, actual, expected) => {
     expect(classes(actual)).toEqual(classes(expected));
-  });
-});
-
-describe("keepFocus", () => {
-  it("cancels the default press, so focus stays in the slide", () => {
-    const preventDefault = vi.fn();
-    keepFocus({ preventDefault } as unknown as React.MouseEvent);
-    expect(preventDefault).toHaveBeenCalledOnce();
   });
 });

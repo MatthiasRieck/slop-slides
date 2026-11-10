@@ -174,18 +174,6 @@ export function parseTarget(value: unknown): CommentTarget | null {
   return { path, tag, label: typeof label === "string" ? label : "", at };
 }
 
-const SHAPES: readonly string[] = ["rect", "ellipse", "lasso"] satisfies AreaShape[];
-
-/** An area as saved, if it has the right shape. */
-export function parseArea(value: unknown): CommentArea | null {
-  const area = value as Partial<CommentArea> | null | undefined;
-  const { shape, points } = area ?? {};
-  if (typeof shape !== "string" || !SHAPES.includes(shape) || !Array.isArray(points)) return null;
-  const valid = points.every((p) => Array.isArray(p) && p.length === 2 && p.every(isFraction));
-  const enough = shape === "lasso" ? points.length >= 3 : points.length === 2;
-  return valid && enough ? { shape: shape as AreaShape, points } : null;
-}
-
 /** The spots the preview reported, by comment id, without any that make no sense. */
 export function parseSpots(value: unknown): Record<string, CommentSpot> {
   if (!Array.isArray(value)) return {};

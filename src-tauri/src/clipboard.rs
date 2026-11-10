@@ -12,6 +12,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 
+use crate::capture;
 use crate::deck;
 use crate::error::{Error, Result};
 use crate::find;
@@ -88,7 +89,7 @@ pub fn paste(contents: Contents, target: &Path) -> Result<Pasted> {
         .map(|f| f.to_string_lossy().into_owned())
         .collect();
     if !files.is_empty() {
-        let images = deck::import_assets(target, files)?;
+        let images = crate::assets::import_assets(target, files)?;
         if !images.is_empty() {
             return Ok(Pasted::Images { images });
         }
@@ -102,7 +103,7 @@ pub fn paste(contents: Contents, target: &Path) -> Result<Pasted> {
         _ => None,
     };
     if let Some((bytes, ext)) = image {
-        let src = deck::write_asset(target, &format!("pasted-image.{ext}"), &bytes)?;
+        let src = crate::assets::write_asset(target, &format!("pasted-image.{ext}"), &bytes)?;
         return Ok(Pasted::Images { images: vec![src] });
     }
     match contents.text {
@@ -170,7 +171,7 @@ fn localized_element(element: &str, target: &Path) -> Result<String> {
     let Some(source) = source_deck(&header) else {
         return Ok(element.to_string());
     };
-    let markup = deck::bring_assets(&element[at..], &source, target)?;
+    let markup = crate::assets::bring_assets(&element[at..], &source, target)?;
     Ok(format!("{}{markup}", &element[..at]))
 }
 
@@ -207,16 +208,8 @@ fn encode_png(width: usize, height: usize, rgba: &[u8]) -> Result<Vec<u8>> {
     if width == 0 || height == 0 || rgba.len() != width * height * 4 {
         return Err(Error::msg("the copied image is empty or malformed"));
     }
-    let mut out = Vec::new();
-    let mut encoder = png::Encoder::new(&mut out, width as u32, height as u32);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let fail =
-        |e: png::EncodingError| Error::msg(format!("could not encode the copied image: {e}"));
-    let mut writer = encoder.write_header().map_err(fail)?;
-    writer.write_image_data(rgba).map_err(fail)?;
-    writer.finish().map_err(fail)?;
-    Ok(out)
+    capture::rgba_png(width as u32, height as u32, rgba)
+        .map_err(|e| Error::msg(format!("could not encode the copied image: {e}")))
 }
 
 // One clipboard for the app's lifetime: on Linux, what it copied is only offered while it lives.
@@ -293,10 +286,11 @@ fn encoded_image() -> Option<(Vec<u8>, &'static str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
     use std::fs;
 
-    fn workspace() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("slop-clipboard-{}", uuid::Uuid::new_v4()));
+    fn workspace() -> TempDir {
+        let dir = TempDir::new("clipboard");
         fs::create_dir_all(dir.join("talk")).unwrap();
         fs::write(dir.join("talk/deck.html"), "<main class=\"deck\"></main>").unwrap();
         dir

@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
+import { useDropdown } from "../hooks/useDropdown";
 import { cn, isMac } from "../lib/utils";
 import { confirmDiscardEdits, SIDEBAR_TABS, type SidebarTab, useApp } from "../store";
 import { useSvgEditor } from "../svgStore";
@@ -24,7 +25,6 @@ import { CodePanel } from "./CodeView";
 import { FileTree } from "./FileTree";
 import { NarrationPanel } from "./NarrationPanel";
 import { NotesPanel } from "./NotesPanel";
-import { useDismiss } from "./Popover";
 import { SettingsPanel } from "./SettingsPanel";
 import { SvgEditor } from "./SvgEditor";
 import { SidebarToggle } from "./TopBar";
@@ -270,9 +270,7 @@ function Tab({ id, active }: { id: SidebarTab; active: boolean }) {
 
 /** `+`: a menu of the surfaces not open in a tab yet. */
 function OpenTabMenu({ open: openTabs }: { open: SidebarTab[] }) {
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  useDismiss(open, menuRef, () => setOpen(false), { escape: true });
+  const { open, setOpen, ref: menuRef } = useDropdown({ escape: true });
   const closed = SIDEBAR_TABS.filter((id) => !openTabs.includes(id));
   return (
     <div ref={menuRef} className="relative shrink-0">

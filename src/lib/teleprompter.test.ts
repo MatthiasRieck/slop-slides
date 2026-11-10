@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import { follow, pieces, type Script, startTrack, type Track, toScript } from "./teleprompter";

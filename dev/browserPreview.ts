@@ -13,6 +13,30 @@ const userTemplates = path.join(os.homedir(), ".slopslides", "templates");
 const builtinTemplates = new URL("../src-tauri/templates/", import.meta.url);
 const asset = (name: string) => fs.readFileSync(new URL(`../src-tauri/assets/${name}`, import.meta.url), "utf8");
 
+/** The slide editor: the parts in src-tauri/assets/editor/, joined in the order of their names, as src-tauri/build.rs joins them. */
+export function editorScript(): string {
+  const dir = new URL("../src-tauri/assets/editor/", import.meta.url);
+  return fs
+    .readdirSync(dir)
+    .filter((name) => name.endsWith(".js"))
+    .sort()
+    .map((name) => fs.readFileSync(new URL(name, dir), "utf8"))
+    .join("");
+}
+
+/**
+ * Like `stage_scripts` in src-tauri/src/protocol.rs: the scripts a deck page gets for its query, in
+ * the order they run. `?pan` and `?show` add the pasteboard; `?edit` adds it too, then overflow
+ * detection with the slide editor, which needs it, in one script.
+ */
+export function stageScripts(query: URLSearchParams): string[] {
+  const edit = query.has("edit");
+  return [
+    ...(edit || query.has("pan") || query.has("show") ? [asset("pasteboard.js")] : []),
+    ...(edit ? [asset("overflow.js") + editorScript()] : []),
+  ];
+}
+
 /** Like src-tauri/src/templates.rs: the user's templates first, then the built-in ones they do not replace. */
 function listTemplates() {
   const read = (id: string, file: string, builtin: boolean) => {
@@ -38,6 +62,12 @@ function listTemplates() {
   return [...own, ...builtin];
 }
 
+/** `html` with `scripts` (markup) at the end of its body, as the app adds them to a page it serves. */
+function beforeBodyEnd(html: string, scripts: string): string {
+  const at = html.toLowerCase().lastIndexOf("</body");
+  return at < 0 ? html + scripts : html.slice(0, at) + scripts + html.slice(at);
+}
+
 /** A template's deck.html with the player runtime, as the app serves it. */
 function templateHtml(id: string): string | null {
   const own = path.join(userTemplates, id, "deck.html");
@@ -49,9 +79,7 @@ function templateHtml(id: string): string | null {
   if (html.includes("slopslide:runtime-js")) return html;
   const css = `<style>\n${asset("runtime.css")}</style><script>document.documentElement.setAttribute("data-slop-player", "");</script>`;
   const withCss = html.replace(/<head[^>]*>/i, (head) => head + css);
-  const at = withCss.toLowerCase().lastIndexOf("</body");
-  const js = `<script>\n${asset("runtime.js")}</script>`;
-  return at < 0 ? withCss + js : withCss.slice(0, at) + js + withCss.slice(at);
+  return beforeBodyEnd(withCss, `<script>\n${asset("runtime.js")}</script>`);
 }
 /** Roughly src-tauri/src/git.rs: a file as of the last commit; null when it has none. */
 function atHead(file: string): Buffer | null {
@@ -196,10 +224,7 @@ export function browserPreview(): Plugin {
           const file = url.searchParams.get("id") ?? "";
           return json(file.startsWith(library + path.sep) && fs.existsSync(file) ? deckChanges(file) : null);
         }
-        if (url.pathname === "/__api/templates") {
-          res.setHeader("content-type", "application/json");
-          return res.end(JSON.stringify(listTemplates()));
-        }
+        if (url.pathname === "/__api/templates") return json(listTemplates());
         if (!url.pathname.startsWith("/__deck/")) return next();
         const template = /^\/__deck\/\.template\/([^/]+)\/deck\.html$/.exec(url.pathname);
         if (template) {
@@ -232,18 +257,10 @@ export function browserPreview(): Plugin {
         }
         if (file.endsWith(".html")) {
           res.setHeader("content-type", "text/html; charset=utf-8");
-          // Like src-tauri/src/protocol.rs: `?pan` and `?show` add the pasteboard, `?edit` the
-          // slide editor on top of it.
-          const { searchParams: q } = url;
-          const names = [
-            ...(q.has("pan") || q.has("show") || q.has("edit") ? ["pasteboard.js"] : []),
-            ...(q.has("edit") ? ["editor.js"] : []),
-          ];
-          if (names.length > 0) {
-            const scripts = names.map((name) => `<script>\n${asset(name)}</script>\n`).join("");
-            const html = fs.readFileSync(file, "utf8");
-            const at = html.toLowerCase().lastIndexOf("</body");
-            return res.end(at < 0 ? html + scripts : html.slice(0, at) + scripts + html.slice(at));
+          const added = stageScripts(url.searchParams);
+          if (added.length > 0) {
+            const scripts = added.map((script) => `<script>\n${script}</script>\n`).join("");
+            return res.end(beforeBodyEnd(fs.readFileSync(file, "utf8"), scripts));
           }
         }
         fs.createReadStream(file).pipe(res);

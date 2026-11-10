@@ -1,29 +1,27 @@
-//! Drives a coding agent CLI headless inside a deck folder, one process per turn, resuming
-//! the workspace's session between turns: Claude Code (`claude -p --output-format stream-json`)
-//! OpenAI Codex (`codex app-server`), or GitHub Copilot (see [`crate::copilot`]). Stream events are normalized into [`AgentEvent`]s
-//! and emitted to the frontend as `agent-event`.
+//! Runs the agent's turns, one at a time per workspace, provider-neutrally: a turn resumes the
+//! workspace's session, takes back what the user rewound, and is guarded, steered,
+//! interrupted and reported the same way whichever CLI runs it. The CLIs are driven by their
+//! own modules, all given a [`TurnArgs`]: Claude Code ([`crate::claude`]), OpenAI Codex
+//! ([`crate::codex`]) and GitHub Copilot ([`crate::copilot`]). Their events are normalized
+//! into [`AgentEvent`]s and emitted to the frontend as `agent-event`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot, watch};
 
-use crate::deck;
 use crate::env;
 use crate::error::{Error, Result};
 use crate::extensions::Extensions;
 use crate::mcp;
-use crate::permissions::{Approval, Approvals, Choices, Decision, LiveMode, PermissionMode};
+use crate::permissions::{Approval, Approvals, LiveMode, PermissionMode};
 use crate::rewind;
 use crate::sessions::Sessions;
-use crate::{codex, copilot};
+use crate::{claude, codex, copilot};
 
 /// The agent's instructions, with the design reference it consults appended.
 pub(crate) const SYSTEM_PROMPT: &str = concat!(
@@ -31,14 +29,6 @@ pub(crate) const SYSTEM_PROMPT: &str = concat!(
     "\n\n",
     include_str!("../prompts/design-reference.md"),
 );
-/// The agent's built-in tools, besides MCP servers (see [`crate::extensions`]). What runs
-/// without asking depends on the permission mode (see [`build_claude_args`]).
-const TOOLS: &str = "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Skill";
-/// Tools that never ask in Ask mode, besides the app's MCP tools. Claude Code itself lets
-/// file tools work inside the workspace and asks outside it; the shell always asks. Loading
-/// a skill only reads its instructions.
-const ALLOWED_TOOLS: &str = "WebSearch,WebFetch,Skill";
-const STDERR_LIMIT: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -59,14 +49,6 @@ impl Provider {
             Provider::Claude => "claude-session",
             Provider::Codex => "codex-session",
             Provider::Copilot => "copilot-session",
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Provider::Claude => "Claude Code",
-            Provider::Codex => "Codex",
-            Provider::Copilot => "GitHub Copilot",
         }
     }
 
@@ -265,7 +247,7 @@ impl AgentManager {
 
     pub fn send(&self, app: AppHandle, args: SendArgs) -> Result<()> {
         let dir = crate::workspace::root(&args.workspace)?;
-        let app_home = deck::app_home()?;
+        let app_home = crate::files::app_home()?;
         let session_dir = Sessions::new(&app_home).current_or_start(&dir)?;
         let bin = args.provider.resolve()?;
         let extensions = Extensions::load(&app_home, &dir);
@@ -309,7 +291,7 @@ impl AgentManager {
                     .model
                     .filter(|m| !m.is_empty())
                     .map(|m| match args.provider {
-                        Provider::Claude => claude_model(m, args.context_window.as_deref()),
+                        Provider::Claude => claude::model(m, args.context_window.as_deref()),
                         _ => m,
                     }),
                 effort: args.effort.filter(|e| !e.is_empty()),
@@ -413,7 +395,7 @@ struct Turn {
     emit: Box<dyn Fn(&AgentEvent) + Send + Sync>,
     /// The workspace root, where the agent works.
     dir: PathBuf,
-    /// Where the files every deck's agent shares are written (see [`deck::app_home`]).
+    /// Where the files every deck's agent shares are written (see [`crate::files::app_home`]).
     app_home: PathBuf,
     /// The workspace's session this turn belongs to: chat state, provider session ids.
     session_dir: PathBuf,
@@ -433,13 +415,40 @@ struct Turn {
     steers: tokio::sync::Mutex<Steers>,
 }
 
-/// The prompt Claude Code runs as its built-in compaction command.
-const CLAUDE_COMPACT: &str = "/compact";
-
+/// How a provider's turn ended.
 pub(crate) enum Outcome {
     Done,
     Interrupted,
+    /// The stored session could not be resumed; the turn did not run.
     ResumeFailed,
+}
+
+/// What a provider's turn runs with (see [`claude::run_turn`], [`codex::run_turn`],
+/// [`copilot::run_turn`]).
+pub(crate) struct TurnArgs<'a> {
+    /// The provider's CLI.
+    pub bin: &'a Path,
+    /// The workspace root, where the agent works.
+    pub dir: &'a Path,
+    /// Where the files every deck's agent shares are written (see [`crate::files::app_home`]).
+    pub app_home: &'a Path,
+    /// The workspace's session the turn belongs to (see [`crate::sessions`]).
+    pub session_dir: &'a Path,
+    /// This app's binary, which serves the app's MCP tools (`mcp.rs`).
+    pub lint_server: &'a Path,
+    pub workspace: &'a str,
+    pub prompt: &'a str,
+    pub model: Option<&'a str>,
+    pub effort: Option<&'a str>,
+    /// The provider's session to resume; a new conversation when None.
+    pub session: Option<&'a str>,
+    /// Summarize the session's history instead of sending `prompt`.
+    pub compact: bool,
+    /// The turn's permission mode, which the user may change while it runs.
+    pub mode: LiveMode,
+    pub approvals: Arc<Approvals>,
+    pub extensions: &'a Extensions,
+    pub rewind: rewind::TurnRewind<'a>,
 }
 
 impl Turn {
@@ -469,7 +478,7 @@ impl Turn {
     /// Returns whether the turn was interrupted.
     async fn run(&self, prompt: &str, mut cancel: watch::Receiver<bool>) -> bool {
         let session_file = self.provider.session_file();
-        let session = deck::read_session(&self.session_dir, session_file);
+        let session = crate::sessions::read_session(&self.session_dir, session_file);
         if self.compact {
             if let Some(message) = compact_refusal(self.provider, session.as_deref()) {
                 self.emit(&AgentEvent::Error {
@@ -489,7 +498,7 @@ impl Turn {
         let mut cut = None;
         match plan {
             Some(rewind::Plan::Fresh) => {
-                let _ = deck::write_session(&self.session_dir, session_file, None);
+                let _ = crate::sessions::write_session(&self.session_dir, session_file, None);
                 session = None;
             }
             Some(rewind::Plan::At { point, note }) if session.is_some() => {
@@ -508,7 +517,7 @@ impl Turn {
             .await;
         if self.compact && matches!(outcome, Ok(Outcome::ResumeFailed)) {
             // Starting fresh would leave nothing to compact.
-            let _ = deck::write_session(&self.session_dir, session_file, None);
+            let _ = crate::sessions::write_session(&self.session_dir, session_file, None);
             self.emit(&AgentEvent::Error {
                 message: "The conversation could not be resumed, so there is nothing to compact."
                     .into(),
@@ -517,7 +526,7 @@ impl Turn {
         }
         if matches!(outcome, Ok(Outcome::ResumeFailed)) {
             // The stored session is gone (other machine, cleared history): start fresh.
-            let _ = deck::write_session(&self.session_dir, session_file, None);
+            let _ = crate::sessions::write_session(&self.session_dir, session_file, None);
             outcome = self.run_once(&prompt, None, None, &mut cancel).await;
         }
         match outcome {
@@ -548,258 +557,43 @@ impl Turn {
         cut: Option<(&str, &str)>,
         cancel: &mut watch::Receiver<bool>,
     ) -> Result<Outcome> {
-        let model = self.model.as_deref();
-        let effort = self.effort.as_deref();
         let mut steers = self.steers.lock().await;
         let steers = &mut *steers;
-        let started = |point: &str| self.started_at(Some(point));
-        let rewind = rewind::TurnRewind {
-            cut,
-            started: Some(&started),
-        };
-        if self.provider == Provider::Copilot {
-            let args = copilot::TurnArgs {
-                bin: &self.bin,
-                dir: &self.dir,
-                lint_server: &std::env::current_exe()?,
-                prompt,
-                model,
-                effort,
-                session,
-                compact: self.compact,
-                workspace: &self.workspace,
-                mode: self.permission_mode.clone(),
-                approvals: self.approvals.clone(),
-                extensions: &self.extensions,
-                rewind,
-            };
-            let on_session = |id: &str| {
-                deck::write_session(&self.session_dir, self.provider.session_file(), Some(id))
-            };
-            return copilot::run_turn(args, cancel, steers, &|event| self.emit(event), &on_session)
-                .await;
-        }
-        if self.provider == Provider::Codex {
-            let mode = *self.permission_mode.borrow();
-            return codex::run_turn(
-                codex::TurnArgs {
-                    bin: &self.bin,
-                    dir: &self.dir,
-                    lint_server: &std::env::current_exe()?,
-                    workspace: &self.workspace,
-                    prompt,
-                    model,
-                    effort,
-                    session,
-                    mode,
-                    approvals: self.approvals.clone(),
-                    extensions: &self.extensions,
-                    rewind,
-                },
-                cancel,
-                steers,
-                &|event| self.emit(event),
-                &|id| {
-                    deck::write_session(&self.session_dir, self.provider.session_file(), Some(id))
-                },
-            )
-            .await;
-        }
-        // A file rather than an argument: the prompt outgrows Windows command lines.
-        let system_prompt = self.app_home.join("system-prompt.md");
-        write_if_changed(
-            &system_prompt,
-            &self.extensions.system_prompt(SYSTEM_PROMPT),
-        )?;
-        // Per workspace, as it holds the workspace's servers. Claude Code leaves out the
-        // servers of the plugins it loads (`--strict-mcp-config`), so they are added here.
-        let mcp_config = self.session_dir.join(CLAUDE_MCP_CONFIG);
-        write_if_changed(
-            &mcp_config,
-            &mcp_config_json(
-                &std::env::current_exe()?,
-                &self.extensions.all_mcp_servers(),
-            ),
-        )?;
-        let mut plugins = self.extensions.plugins.clone();
-        plugins.extend(
-            self.extensions
-                .claude_skills_plugin(&self.session_dir.join(CLAUDE_PLUGINS))?,
-        );
-        // Changes from here on reach Claude Code as control requests.
-        let mut mode = self.permission_mode.clone();
-        let launched = *mode.borrow_and_update();
-        let mut args = build_claude_args(
-            &system_prompt,
-            &mcp_config,
-            &self.session_dir,
-            model,
-            effort,
+        let started = |point: Option<&str>| self.started_at(point);
+        let lint_server = std::env::current_exe()?;
+        let args = TurnArgs {
+            bin: &self.bin,
+            dir: &self.dir,
+            app_home: &self.app_home,
+            session_dir: &self.session_dir,
+            lint_server: &lint_server,
+            workspace: &self.workspace,
+            prompt,
+            model: self.model.as_deref(),
+            effort: self.effort.as_deref(),
             session,
-            launched,
-        );
-        if let (Some(_), Some((point, _))) = (session, cut) {
-            // Drops the conversation after this message (see `rewind`).
-            args.extend(["--resume-session-at".into(), point.into()]);
-        }
-        args.extend(plugin_args(&plugins));
-        // The conversation's newest message before this turn, where taking it back resumes.
-        let tail = match (session, cut) {
-            (None, _) => None,
-            (Some(_), Some((point, _))) => Some(point.to_string()),
-            (Some(_), None) => rewind::claude_tail(&self.session_dir),
+            compact: self.compact,
+            mode: self.permission_mode.clone(),
+            approvals: self.approvals.clone(),
+            extensions: &self.extensions,
+            rewind: rewind::TurnRewind {
+                cut,
+                started: Some(&started),
+            },
         };
-        self.started_at(tail.as_deref());
-        let mut newest = tail;
-        let started = Instant::now();
-
-        let mut cmd = crate::process::command(&self.bin)?;
-        cmd.args(args)
-            .current_dir(&self.dir)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let mut child = cmd.spawn().map_err(|e| {
-            Error::msg(format!(
-                "Could not start {} ({}): {e}",
-                self.provider.name(),
-                self.bin.display()
-            ))
-        })?;
-        self.emit(&AgentEvent::Started {
-            session_id: session.map(str::to_string),
-        });
-
-        // Stream-json input keeps stdin open for answering permission requests; closing it
-        // after the result lets Claude Code exit.
-        let mut stdin = child.stdin.take();
-        let prompt = if self.compact { CLAUDE_COMPACT } else { prompt };
-        write_line(stdin.as_mut(), &claude_user_message(prompt)).await?;
-        let (run, mut answers) = self.approvals.start(&self.workspace);
-        let mut mode_requests = 0;
-
-        let mut stderr = child.stderr.take().expect("piped stderr");
-        let stderr_task = tokio::spawn(async move {
-            let mut buf = Vec::new();
-            let _ = (&mut stderr)
-                .take(STDERR_LIMIT as u64)
-                .read_to_end(&mut buf)
-                .await;
-            // Keep draining so the child never blocks on a full pipe.
-            let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
-            String::from_utf8_lossy(&buf).into_owned()
-        });
-
-        let mut lines = BufReader::new(child.stdout.take().expect("piped stdout")).lines();
-        let mut saw_init = false;
-        let mut result_text = None;
-        // A steer ends the segment it interrupts with a result of its own; the turn goes on.
-        let mut steered = false;
-        loop {
-            tokio::select! {
-                biased;
-                Some(answer) = answers.recv() => {
-                    let response = claude_control_response(&answer.wire_id, Ok(answer.payload));
-                    write_line(stdin.as_mut(), &response).await?;
-                    self.emit(&AgentEvent::ApprovalResolved { id: answer.id });
-                }
-                Ok(()) = mode.changed() => {
-                    let mode = *mode.borrow_and_update();
-                    mode_requests += 1;
-                    let request = claude_set_mode(&format!("mode-{mode_requests}"), mode);
-                    write_line(stdin.as_mut(), &request).await?;
-                    if mode == PermissionMode::FullAccess {
-                        run.accept_all();
-                    }
-                }
-                Some(steer) = steers.recv() => {
-                    // Once stdin is closed the turn is ending; a compaction takes no message.
-                    if stdin.is_none() || self.compact {
-                        steer.refused();
-                        continue;
-                    }
-                    write_line(stdin.as_mut(), &claude_steer_message(&steer.prompt)).await?;
-                    steered = true;
-                    steer.delivered(&|event| self.emit(event));
-                }
-                line = lines.next_line() => {
-                    let Some(line) = line? else { break };
-                    let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
-                    match value["type"].as_str() {
-                        Some("control_request") => {
-                            let id = &value["request_id"];
-                            let current = *mode.borrow();
-                            match claude_permission(&value["request"], current, &self.session_dir) {
-                                ClaudePermission::Answer(reply) => {
-                                    write_line(stdin.as_mut(), &claude_control_response(id, reply)).await?;
-                                }
-                                ClaudePermission::Ask(approval, choices) => {
-                                    run.ask(id.clone(), &approval, choices);
-                                    self.emit(&AgentEvent::ApprovalRequested { approval });
-                                }
-                            }
-                            continue;
-                        }
-                        Some("control_cancel_request") => {
-                            if let Some(id) = run.resolved(&value["request_id"]) {
-                                self.emit(&AgentEvent::ApprovalResolved { id });
-                            }
-                            continue;
-                        }
-                        Some("result") if steered && is_steer_abort(&value) => continue,
-                        Some("result") => stdin = None,
-                        Some("assistant") if value["parent_tool_use_id"].is_null() => {
-                            if let Some(uuid) = value["uuid"].as_str() {
-                                newest = Some(uuid.to_string());
-                            }
-                        }
-                        _ => {}
-                    }
-                    if let Some(id) = session_id_of_init(&value) {
-                        saw_init = true;
-                        deck::write_session(&self.session_dir, self.provider.session_file(), Some(&id))?;
-                        self.emit(&AgentEvent::Started { session_id: Some(id) });
-                    }
-                    if session.is_some() && !saw_init && is_missing_session(&value) {
-                        let _ = child.kill().await;
-                        return Ok(Outcome::ResumeFailed);
-                    }
-                    for mut event in parse_line(&value) {
-                        if let AgentEvent::Result { text, duration_ms, .. } = &mut event {
-                            result_text = text.clone();
-                            duration_ms.get_or_insert(started.elapsed().as_millis() as u64);
-                        }
-                        self.emit(&event);
-                    }
-                }
-                _ = cancel.changed() => {
-                    let _ = child.kill().await;
-                    let _ = rewind::set_claude_tail(&self.session_dir, newest.as_deref());
-                    return Ok(Outcome::Interrupted);
-                }
-            }
+        let emit = |event: &AgentEvent| self.emit(event);
+        let on_session = |id: &str| {
+            crate::sessions::write_session(
+                &self.session_dir,
+                self.provider.session_file(),
+                Some(id),
+            )
+        };
+        match self.provider {
+            Provider::Claude => claude::run_turn(args, cancel, steers, &emit, &on_session).await,
+            Provider::Codex => codex::run_turn(args, cancel, steers, &emit, &on_session).await,
+            Provider::Copilot => copilot::run_turn(args, cancel, steers, &emit, &on_session).await,
         }
-        let _ = rewind::set_claude_tail(&self.session_dir, newest.as_deref());
-
-        let status = child.wait().await?;
-        let stderr = stderr_task.await.unwrap_or_default();
-        if session.is_some() && !saw_init && stderr.contains(MISSING_SESSION) {
-            return Ok(Outcome::ResumeFailed);
-        }
-        if !status.success() && result_text.is_none() {
-            let detail = stderr.trim();
-            let detail = if detail.is_empty() {
-                format!("exit status {status}")
-            } else {
-                detail.to_string()
-            };
-            return Err(Error::msg(format!(
-                "{} stopped unexpectedly: {detail}",
-                self.provider.name()
-            )));
-        }
-        Ok(Outcome::Done)
     }
 }
 
@@ -814,498 +608,10 @@ fn compact_refusal(provider: Provider, session: Option<&str>) -> Option<&'static
         None
     }
 }
-
-/// Claude Code's MCP config in the session: the user's `servers` and this app binary as the
-/// agent's lint tool server (`mcp.rs`), which lints the deck in its working directory, which
-/// Claude Code sets to its own (the workspace).
-const CLAUDE_MCP_CONFIG: &str = "mcp.json";
-/// Where the session's generated Claude Code plugins go (see [`Extensions::claude_skills_plugin`]).
-const CLAUDE_PLUGINS: &str = "claude-plugins";
-
-fn mcp_config_json(exe: &Path, servers: &serde_json::Map<String, Value>) -> String {
-    let mut servers = servers.clone();
-    servers.insert(
-        mcp::SERVER.into(),
-        json!({
-            "type": "stdio",
-            "command": exe,
-            "args": [mcp::FLAG],
-        }),
-    );
-    json!({ "mcpServers": servers }).to_string()
-}
-
-/// `--plugin-dir` for each plugin folder.
-fn plugin_args(plugins: &[PathBuf]) -> Vec<String> {
-    plugins
-        .iter()
-        .flat_map(|p| ["--plugin-dir".into(), p.to_string_lossy().into_owned()])
-        .collect()
-}
-
-/// Writes `path` unless it already holds `contents`. Turns in other decks may be reading
-/// it, so it is replaced whole rather than rewritten in place.
-fn write_if_changed(path: &Path, contents: &str) -> Result<()> {
-    if std::fs::read_to_string(path).ok().as_deref() == Some(contents) {
-        return Ok(());
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let temp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    std::fs::write(&temp, contents)?;
-    std::fs::rename(&temp, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&temp);
-    })?;
-    Ok(())
-}
-
-/// Claude Code selects the 1M-token context window with a `[1m]` model suffix.
-fn claude_model(model: String, context_window: Option<&str>) -> String {
-    match context_window {
-        Some("1m") if !model.ends_with("[1m]") => format!("{model}[1m]"),
-        _ => model,
-    }
-}
-
-fn build_claude_args(
-    system_prompt: &Path,
-    mcp_config: &Path,
-    session_dir: &Path,
-    model: Option<&str>,
-    effort: Option<&str>,
-    session: Option<&str>,
-    mode: PermissionMode,
-) -> Vec<String> {
-    let mut args: Vec<String> = [
-        "-p",
-        "--input-format",
-        "stream-json",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--include-partial-messages",
-        "--permission-mode",
-        claude_mode(mode),
-        // Lets the user grant Full access while a turn runs (see [`claude_set_mode`]).
-        "--allow-dangerously-skip-permissions",
-        // Requests that would prompt arrive on stdout as `can_use_tool` control requests.
-        "--permission-prompt-tool",
-        "stdio",
-        "--strict-mcp-config",
-        "--tools",
-        TOOLS,
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect();
-    args.extend([
-        "--allowedTools".into(),
-        format!("{ALLOWED_TOOLS},{}", mcp::CLAUDE_TOOLS),
-        "--mcp-config".into(),
-        mcp_config.to_string_lossy().into_owned(),
-        "--append-system-prompt-file".into(),
-        system_prompt.to_string_lossy().into_owned(),
-        // Sketches and staged templates are in the session, outside the deck.
-        "--add-dir".into(),
-        session_dir.to_string_lossy().into_owned(),
-    ]);
-    if let Some(model) = model {
-        args.extend(["--model".into(), model.into()]);
-    }
-    if let Some(effort) = effort {
-        args.extend(["--effort".into(), effort.into()]);
-    }
-    if let Some(session) = session {
-        args.extend(["--resume".into(), session.into()]);
-    }
-    args
-}
-
-/// Claude Code's permission mode for `mode`. Outside Full access the app's handler decides
-/// what asks (see [`claude_permission`]).
-fn claude_mode(mode: PermissionMode) -> &'static str {
-    match mode {
-        PermissionMode::FullAccess => "bypassPermissions",
-        _ => "acceptEdits",
-    }
-}
-
-/// Switches a running Claude Code to `mode`.
-fn claude_set_mode(id: &str, mode: PermissionMode) -> Value {
-    json!({
-        "type": "control_request",
-        "request_id": id,
-        "request": {"subtype": "set_permission_mode", "mode": claude_mode(mode)},
-    })
-}
-
-/// Writes one stream-json line; nothing once stdin is closed.
-async fn write_line(stdin: Option<&mut tokio::process::ChildStdin>, value: &Value) -> Result<()> {
-    let Some(stdin) = stdin else { return Ok(()) };
-    let mut line = serde_json::to_vec(value).expect("serializable JSON");
-    line.push(b'\n');
-    stdin.write_all(&line).await?;
-    stdin.flush().await?;
-    Ok(())
-}
-
-fn claude_user_message(prompt: &str) -> Value {
-    json!({"type": "user", "message": {"role": "user", "content": prompt}})
-}
-
-/// A message for the running turn: priority `now` makes Claude Code stop what it is doing
-/// (generating, or waiting on tools) and take the message in, rather than queue it.
-fn claude_steer_message(prompt: &str) -> Value {
-    let mut message = claude_user_message(prompt);
-    message["priority"] = json!("now");
-    message
-}
-
-/// The result Claude Code reports for the segment a steer cut short; more follows.
-fn is_steer_abort(result: &Value) -> bool {
-    matches!(
-        result["terminal_reason"].as_str(),
-        Some("aborted_streaming" | "aborted_tools")
-    )
-}
-
-/// Answers control request `id`: `Ok` with the response, `Err` with a refusal.
-fn claude_control_response(id: &Value, reply: std::result::Result<Value, &str>) -> Value {
-    let response = match reply {
-        Ok(response) => json!({"subtype": "success", "request_id": id, "response": response}),
-        Err(error) => json!({"subtype": "error", "request_id": id, "error": error}),
-    };
-    json!({"type": "control_response", "response": response})
-}
-
-enum ClaudePermission {
-    /// Answered without the user.
-    Answer(std::result::Result<Value, &'static str>),
-    /// The user decides.
-    Ask(Approval, Choices),
-}
-
-/// How to answer one Claude Code control request. Only tool permission prompts are
-/// handled: the app's MCP tools, reads of the templates staged in `session_dir` and
-/// everything under Full access are allowed outright, anything else asks the user.
-fn claude_permission(
-    request: &Value,
-    mode: PermissionMode,
-    session_dir: &Path,
-) -> ClaudePermission {
-    if request["subtype"] != "can_use_tool" {
-        return ClaudePermission::Answer(Err("SlopSlide does not support this request."));
-    }
-    let tool = request["tool_name"].as_str().unwrap_or_default();
-    let input = &request["input"];
-    let allow = json!({"behavior": "allow", "updatedInput": input});
-    if mode == PermissionMode::FullAccess
-        || mcp::is_claude_tool(tool)
-        || reads_staged_template(tool, input, session_dir)
-    {
-        return ClaudePermission::Answer(Ok(allow));
-    }
-    let text = |key: &str| input[key].as_str().map(str::to_string);
-    let (title, details) = match tool {
-        "Bash" => ("Run a command", text("command")),
-        "Write" | "Edit" | "NotebookEdit" => ("Change files", text("file_path")),
-        "Read" => ("Read files", text("file_path")),
-        "Glob" | "Grep" => ("Read files", text("path").or_else(|| text("pattern"))),
-        "WebFetch" => ("Network access", text("url")),
-        _ => ("Use a tool", None),
-    };
-    let details = details.unwrap_or_else(|| {
-        format!(
-            "{tool}\n{}",
-            serde_json::to_string_pretty(input).unwrap_or_default()
-        )
-    });
-    let reason = request["description"]
-        .as_str()
-        .or_else(|| input["description"].as_str())
-        .map(str::to_string);
-    let mut choices = Choices::from([
-        ("accept", allow.clone()),
-        (
-            "decline",
-            json!({"behavior": "deny", "message": "The user declined this request."}),
-        ),
-    ]);
-    let mut decisions = vec![Decision::Accept];
-    // Claude Code suggests the rules that would allow requests like this one; kept for the
-    // session only, never written to the user's settings.
-    let rules: Vec<Value> = request["permission_suggestions"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|rule| {
-            let mut rule = rule.clone();
-            rule["destination"] = json!("session");
-            rule
-        })
-        .collect();
-    if !rules.is_empty() {
-        let mut session = allow;
-        session["updatedPermissions"] = json!(rules);
-        choices.insert("acceptForSession", session);
-        decisions.push(Decision::AcceptForSession);
-    }
-    decisions.push(Decision::Decline);
-    ClaudePermission::Ask(Approval::new(title, reason, details, decisions), choices)
-}
-
-/// Whether `tool` reads a template staged in `session_dir` (see [`crate::templates::stage`]):
-/// a style the user picked, so reading it never asks.
-fn reads_staged_template(tool: &str, input: &Value, session_dir: &Path) -> bool {
-    let Some(path) = input["file_path"].as_str().map(Path::new) else {
-        return false;
-    };
-    if tool != "Read" {
-        return false;
-    }
-    path.is_absolute()
-        && !path
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-        && path.starts_with(session_dir.join(crate::templates::STAGED_DIR))
-}
-
-const MISSING_SESSION: &str = "No conversation found";
-
-fn is_missing_session(value: &Value) -> bool {
-    value["type"] == "result"
-        && value["errors"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .any(|e| e.as_str().is_some_and(|e| e.contains(MISSING_SESSION)))
-}
-
-fn session_id_of_init(value: &Value) -> Option<String> {
-    (value["type"] == "system" && value["subtype"] == "init")
-        .then(|| value["session_id"].as_str().map(str::to_string))
-        .flatten()
-}
-
-/// Maps one Claude Code stream-json line to UI events. Unknown lines map to nothing.
-fn parse_line(value: &Value) -> Vec<AgentEvent> {
-    // Events from nested agents are not shown.
-    if !value["parent_tool_use_id"].is_null() {
-        return Vec::new();
-    }
-    match value["type"].as_str() {
-        Some("stream_event") => {
-            let event = &value["event"];
-            match (
-                event["type"].as_str(),
-                event["content_block"]["type"].as_str(),
-                event["delta"]["type"].as_str(),
-            ) {
-                (Some("content_block_start"), Some("text"), _) => vec![AgentEvent::TextStart],
-                (Some("content_block_start"), Some("thinking"), _) => vec![AgentEvent::Thinking],
-                (Some("content_block_delta"), _, Some("text_delta")) => event["delta"]["text"]
-                    .as_str()
-                    .map(|text| {
-                        vec![AgentEvent::TextDelta {
-                            text: text.to_string(),
-                        }]
-                    })
-                    .unwrap_or_default(),
-                _ => Vec::new(),
-            }
-        }
-        Some("assistant") => content_blocks(value)
-            .filter(|block| block["type"] == "tool_use")
-            .map(|block| AgentEvent::ToolUse {
-                id: block["id"].as_str().unwrap_or_default().to_string(),
-                name: mcp::display_name(block["name"].as_str().unwrap_or_default()).to_string(),
-                input: block["input"].clone(),
-            })
-            .chain(
-                claude_context_tokens(&value["message"]["usage"]).map(|tokens| AgentEvent::Usage {
-                    context_tokens: Some(tokens),
-                    context_window: None,
-                }),
-            )
-            .collect(),
-        Some("system") => match value["subtype"].as_str() {
-            Some("status") if value["status"] == "compacting" => vec![AgentEvent::Compacting],
-            Some("compact_boundary") => vec![AgentEvent::Compacted],
-            _ => Vec::new(),
-        },
-        Some("user") => content_blocks(value)
-            .filter(|block| block["type"] == "tool_result")
-            .map(|block| AgentEvent::ToolResult {
-                id: block["tool_use_id"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string(),
-                is_error: block["is_error"].as_bool().unwrap_or(false),
-            })
-            .collect(),
-        Some("result") => {
-            let mut events = vec![AgentEvent::Result {
-                is_error: value["is_error"].as_bool().unwrap_or(false)
-                    || value["subtype"] != "success",
-                text: value["result"].as_str().map(str::to_string),
-                cost_usd: value["total_cost_usd"].as_f64(),
-                duration_ms: value["duration_ms"].as_u64(),
-            }];
-            // Only the result says how large the window is. Background calls to smaller
-            // models are listed too, so take the largest.
-            let window = value["modelUsage"]
-                .as_object()
-                .into_iter()
-                .flat_map(|models| models.values())
-                .filter_map(|model| model["contextWindow"].as_u64())
-                .max();
-            if window.is_some() {
-                events.push(AgentEvent::Usage {
-                    context_tokens: None,
-                    context_window: window,
-                });
-            }
-            events
-        }
-        _ => Vec::new(),
-    }
-}
-
-/// Tokens in the context after one model call: everything it read plus what it wrote,
-/// which the next call reads back.
-fn claude_context_tokens(usage: &Value) -> Option<u64> {
-    let input = usage["input_tokens"].as_u64()?;
-    Some(
-        input
-            + usage["cache_creation_input_tokens"].as_u64().unwrap_or(0)
-            + usage["cache_read_input_tokens"].as_u64().unwrap_or(0)
-            + usage["output_tokens"].as_u64().unwrap_or(0),
-    )
-}
-
-fn content_blocks(value: &Value) -> impl Iterator<Item = &Value> {
-    value["message"]["content"].as_array().into_iter().flatten()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn claude_model_adds_1m_suffix() {
-        assert_eq!(
-            claude_model("claude-opus-5-5".into(), Some("1m")),
-            "claude-opus-5-5[1m]"
-        );
-        assert_eq!(
-            claude_model("claude-opus-5-5[1m]".into(), Some("1m")),
-            "claude-opus-5-5[1m]"
-        );
-        assert_eq!(
-            claude_model("claude-sonnet-5".into(), Some("200k")),
-            "claude-sonnet-5"
-        );
-        assert_eq!(
-            claude_model("claude-haiku-4-5".into(), None),
-            "claude-haiku-4-5"
-        );
-    }
-
-    #[test]
-    fn parses_text_stream() {
-        let start = json!({"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}});
-        let delta = json!({"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hi"}}});
-        assert_eq!(parse_line(&start), vec![AgentEvent::TextStart]);
-        assert_eq!(
-            parse_line(&delta),
-            vec![AgentEvent::TextDelta { text: "Hi".into() }]
-        );
-    }
-
-    #[test]
-    fn parses_tools_and_results() {
-        let tool = json!({"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/d/slides/01.html"}}]}});
-        let result = json!({"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}});
-        let done = json!({"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.02,"duration_ms":1200});
-        assert!(
-            matches!(&parse_line(&tool)[0], AgentEvent::ToolUse { name, .. } if name == "Write")
-        );
-        assert_eq!(
-            parse_line(&result),
-            vec![AgentEvent::ToolResult {
-                id: "t1".into(),
-                is_error: false
-            }]
-        );
-        assert!(matches!(
-            &parse_line(&done)[0],
-            AgentEvent::Result {
-                is_error: false,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn parses_context_usage() {
-        let assistant = json!({"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":9,"cache_creation_input_tokens":7662,"cache_read_input_tokens":12313,"output_tokens":4}}});
-        assert_eq!(
-            parse_line(&assistant),
-            vec![AgentEvent::Usage {
-                context_tokens: Some(19988),
-                context_window: None
-            }]
-        );
-        let tool = json!({"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{}}],"usage":{"input_tokens":100}}});
-        assert!(matches!(
-            &parse_line(&tool)[..],
-            [
-                AgentEvent::ToolUse { .. },
-                AgentEvent::Usage {
-                    context_tokens: Some(100),
-                    ..
-                }
-            ]
-        ));
-        let nested = json!({"type":"assistant","parent_tool_use_id":"t1","message":{"content":[],"usage":{"input_tokens":5}}});
-        assert!(
-            parse_line(&nested).is_empty(),
-            "sub-agents have their own context"
-        );
-        let no_usage =
-            json!({"type":"assistant","parent_tool_use_id":null,"message":{"content":[]}});
-        assert!(parse_line(&no_usage).is_empty());
-
-        let result = json!({"type":"result","subtype":"success","is_error":false,"result":"ok","modelUsage":{
-            "claude-haiku-4-5-20251001":{"contextWindow":200000},
-            "claude-opus-5-5":{"contextWindow":1000000}
-        }});
-        assert_eq!(
-            parse_line(&result)[1..],
-            [AgentEvent::Usage {
-                context_tokens: None,
-                context_window: Some(1_000_000)
-            }]
-        );
-        let bare = json!({"type":"result","subtype":"success","is_error":false,"result":"ok"});
-        assert_eq!(parse_line(&bare).len(), 1, "no window, no usage event");
-    }
-
-    #[test]
-    fn parses_compaction() {
-        let status = |status: Value| json!({"type":"system","subtype":"status","status":status});
-        assert_eq!(
-            parse_line(&status(json!("compacting"))),
-            vec![AgentEvent::Compacting]
-        );
-        assert!(parse_line(&status(Value::Null)).is_empty());
-        let boundary = json!({"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":20018,"post_tokens":1512}});
-        assert_eq!(parse_line(&boundary), vec![AgentEvent::Compacted]);
-        let init = json!({"type":"system","subtype":"init","session_id":"s"});
-        assert!(parse_line(&init).is_empty());
-    }
 
     #[test]
     fn refuses_compaction_it_cannot_run() {
@@ -1324,445 +630,6 @@ mod tests {
             locked_restored_message(&["intro".into(), "plan".into()]),
             "The agent changed locked slides; they were put back as they were: `intro`, `plan`."
         );
-    }
-
-    #[test]
-    fn send_args_compact_defaults_to_off() {
-        let args: SendArgs =
-            serde_json::from_value(json!({"workspace":"d","prompt":"hi","provider":"claude"}))
-                .unwrap();
-        assert!(!args.compact);
-        let args: SendArgs = serde_json::from_value(
-            json!({"workspace":"d","prompt":"/compact","provider":"copilot","compact":true}),
-        )
-        .unwrap();
-        assert!(args.compact);
-    }
-
-    #[test]
-    fn serializes_usage_events_in_camel_case() {
-        let usage = AgentEvent::Usage {
-            context_tokens: Some(12),
-            context_window: None,
-        };
-        assert_eq!(
-            serde_json::to_value(&usage).unwrap(),
-            json!({"type":"usage","contextTokens":12,"contextWindow":null})
-        );
-        assert_eq!(
-            serde_json::to_value(&AgentEvent::Compacted).unwrap(),
-            json!({"type":"compacted"})
-        );
-    }
-
-    #[test]
-    fn detects_missing_session() {
-        let missing = json!({"type":"result","subtype":"error_during_execution","is_error":true,"errors":["No conversation found with session ID: x"]});
-        assert!(is_missing_session(&missing));
-        assert!(!is_missing_session(
-            &json!({"type":"result","subtype":"success"})
-        ));
-    }
-
-    #[test]
-    fn reads_session_from_init() {
-        let init = json!({"type":"system","subtype":"init","session_id":"abc"});
-        assert_eq!(session_id_of_init(&init).as_deref(), Some("abc"));
-        assert_eq!(
-            session_id_of_init(&json!({"type":"system","subtype":"status"})),
-            None
-        );
-    }
-
-    #[test]
-    fn parses_thinking_and_ignores_other_stream_events() {
-        let thinking = json!({"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"thinking"}}});
-        assert_eq!(parse_line(&thinking), vec![AgentEvent::Thinking]);
-        for ignored in [
-            json!({"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"tool_use"}}}),
-            json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{"}}}),
-            json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta"}}}),
-            json!({"type":"stream_event","event":{"type":"message_stop"}}),
-            json!({"type":"system","subtype":"init","session_id":"abc"}),
-            json!({"type":"something_new"}),
-            json!({}),
-            json!("just a string"),
-        ] {
-            assert_eq!(parse_line(&ignored), vec![], "{ignored}");
-        }
-    }
-
-    #[test]
-    fn hides_events_from_nested_agents() {
-        let nested = json!({"type":"assistant","parent_tool_use_id":"t0","message":{"content":[{"type":"tool_use","id":"t9","name":"Read","input":{}}]}});
-        assert_eq!(parse_line(&nested), vec![]);
-        let nested_text = json!({"type":"stream_event","parent_tool_use_id":"t0","event":{"type":"content_block_start","content_block":{"type":"text"}}});
-        assert_eq!(parse_line(&nested_text), vec![]);
-    }
-
-    #[test]
-    fn emits_every_tool_use_in_a_message_and_skips_text_blocks() {
-        let message = json!({"type":"assistant","message":{"content":[
-            {"type":"text","text":"Let me look."},
-            {"type":"tool_use","id":"a","name":"Read","input":{"file_path":"deck.html"}},
-            {"type":"tool_use","id":"b","name":"Edit","input":{"old_string":"x","new_string":"y"}}
-        ]}});
-        assert_eq!(
-            parse_line(&message),
-            vec![
-                AgentEvent::ToolUse {
-                    id: "a".into(),
-                    name: "Read".into(),
-                    input: json!({"file_path":"deck.html"})
-                },
-                AgentEvent::ToolUse {
-                    id: "b".into(),
-                    name: "Edit".into(),
-                    input: json!({"old_string":"x","new_string":"y"})
-                },
-            ]
-        );
-        let no_content = json!({"type":"assistant","message":{}});
-        assert_eq!(parse_line(&no_content), vec![]);
-    }
-
-    #[test]
-    fn reports_failed_tool_results() {
-        let result = json!({"type":"user","message":{"content":[
-            {"type":"tool_result","tool_use_id":"a","is_error":true,"content":"denied"},
-            {"type":"text","text":"ignored"}
-        ]}});
-        assert_eq!(
-            parse_line(&result),
-            vec![AgentEvent::ToolResult {
-                id: "a".into(),
-                is_error: true
-            }]
-        );
-    }
-
-    #[test]
-    fn non_success_results_are_errors() {
-        let max_turns =
-            json!({"type":"result","subtype":"error_max_turns","is_error":false,"duration_ms":10});
-        assert_eq!(
-            parse_line(&max_turns),
-            vec![AgentEvent::Result {
-                is_error: true,
-                text: None,
-                cost_usd: None,
-                duration_ms: Some(10)
-            }]
-        );
-        let flagged = json!({"type":"result","subtype":"success","is_error":true,"result":"API Error","total_cost_usd":0.5});
-        assert_eq!(
-            parse_line(&flagged),
-            vec![AgentEvent::Result {
-                is_error: true,
-                text: Some("API Error".into()),
-                cost_usd: Some(0.5),
-                duration_ms: None
-            }]
-        );
-    }
-
-    #[test]
-    fn missing_session_needs_a_result_with_that_error() {
-        assert!(!is_missing_session(
-            &json!({"type":"assistant","errors":["No conversation found"]})
-        ));
-        assert!(!is_missing_session(
-            &json!({"type":"result","errors":["Rate limited"]})
-        ));
-        assert!(!is_missing_session(&json!({"type":"result","errors":[42]})));
-        assert!(!is_missing_session(&json!({"type":"result"})));
-    }
-
-    #[test]
-    fn init_without_session_id_is_ignored() {
-        assert_eq!(
-            session_id_of_init(&json!({"type":"system","subtype":"init"})),
-            None
-        );
-        assert_eq!(
-            session_id_of_init(&json!({"type":"result","subtype":"init","session_id":"x"})),
-            None
-        );
-    }
-
-    #[test]
-    fn builds_cli_arguments() {
-        let prompt = Path::new("/home/.slopslides/system-prompt.md");
-        let mcp = Path::new("/home/.slopslides/sessions/1-ab/mcp.json");
-        let session = Path::new("/home/.slopslides/sessions/1-ab");
-        let base = build_claude_args(prompt, mcp, session, None, None, None, PermissionMode::Ask);
-        assert_eq!(
-            base[..5],
-            [
-                "-p",
-                "--input-format",
-                "stream-json",
-                "--output-format",
-                "stream-json"
-            ]
-        );
-        let after = |args: &[String], flag: &str| {
-            args.iter()
-                .position(|a| a == flag)
-                .map(|i| args[i + 1].clone())
-        };
-        assert_eq!(
-            after(&base, "--permission-mode").as_deref(),
-            Some("acceptEdits")
-        );
-        assert!(
-            base.contains(&"--allow-dangerously-skip-permissions".to_string()),
-            "Full access can be granted while a turn runs"
-        );
-        assert_eq!(after(&base, "--tools").as_deref(), Some(TOOLS));
-        assert_eq!(
-            after(&base, "--allowedTools").as_deref(),
-            Some("WebSearch,WebFetch,Skill,mcp__slopslide"),
-            "the shell and files outside the workspace ask; the app's tools and skills never do"
-        );
-        assert_eq!(
-            after(&base, "--permission-prompt-tool").as_deref(),
-            Some("stdio")
-        );
-        assert_eq!(
-            after(&base, "--mcp-config").as_deref(),
-            Some("/home/.slopslides/sessions/1-ab/mcp.json")
-        );
-        assert_eq!(
-            after(&base, "--append-system-prompt-file").as_deref(),
-            Some("/home/.slopslides/system-prompt.md")
-        );
-        assert_eq!(
-            after(&base, "--add-dir").as_deref(),
-            Some("/home/.slopslides/sessions/1-ab"),
-            "the agent reads sketches and templates in the session"
-        );
-        assert!(base.contains(&"--strict-mcp-config".to_string()));
-        assert!(!base.contains(&"--model".to_string()));
-        assert!(!base.contains(&"--resume".to_string()));
-        assert!(!base.contains(&"--effort".to_string()));
-
-        let full = build_claude_args(
-            prompt,
-            mcp,
-            session,
-            Some("opus"),
-            Some("high"),
-            Some("s-1"),
-            PermissionMode::FullAccess,
-        );
-        assert_eq!(
-            after(&full, "--permission-mode").as_deref(),
-            Some("bypassPermissions")
-        );
-        assert_eq!(after(&full, "--model").as_deref(), Some("opus"));
-        assert_eq!(after(&full, "--effort").as_deref(), Some("high"));
-        assert_eq!(after(&full, "--resume").as_deref(), Some("s-1"));
-    }
-
-    #[test]
-    fn shows_the_apps_tools_by_their_own_names() {
-        let line = json!({"type":"assistant","message":{"content":[
-            {"type":"tool_use","id":"t1","name":"mcp__slopslide__lint_deck","input":{}},
-            {"type":"tool_use","id":"t2","name":"mcp__github__push","input":{}}
-        ]}});
-        let names: Vec<_> = parse_line(&line)
-            .into_iter()
-            .filter_map(|e| match e {
-                AgentEvent::ToolUse { name, .. } => Some(name),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(names, ["lint_deck", "mcp__github__push"]);
-    }
-
-    /// A session dir that is absolute on every platform (`/home/...` is not on Windows).
-    fn session_dir() -> PathBuf {
-        std::env::temp_dir().join("sessions").join("1-ab")
-    }
-
-    #[test]
-    fn claude_reads_staged_templates_without_asking() {
-        let dir = session_dir();
-        let at = |rel: &str| format!("{}/{rel}", dir.display());
-        let path = at("templates/ethereal.html");
-        let request = can_use_tool("Read", json!({"file_path": path}));
-        assert!(matches!(
-            claude_permission(&request, PermissionMode::Ask, &dir),
-            ClaudePermission::Answer(Ok(r)) if r["behavior"] == "allow" && r["updatedInput"]["file_path"] == path.as_str()
-        ));
-        let other = format!("{}/2-cd/templates/x.html", dir.parent().unwrap().display());
-        for (tool, input) in [
-            ("Read", json!({"file_path": at("templates/../chat.json")})),
-            ("Read", json!({"file_path": at("chat.json")})),
-            ("Read", json!({"file_path": other})),
-            ("Read", json!({"file_path": at("templates-x/a.html")})),
-            ("Read", json!({"file_path":"templates/ethereal.html"})),
-            ("Read", json!({})),
-            ("Write", json!({"file_path": path})),
-            ("Grep", json!({"path": at("templates"), "glob": "/etc/*"})),
-        ] {
-            assert!(
-                matches!(
-                    claude_permission(
-                        &can_use_tool(tool, input.clone()),
-                        PermissionMode::Ask,
-                        &dir
-                    ),
-                    ClaudePermission::Ask(..)
-                ),
-                "{tool} {input} asks"
-            );
-        }
-    }
-
-    fn can_use_tool(tool: &str, input: Value) -> Value {
-        json!({"subtype":"can_use_tool","tool_name":tool,"input":input,"permission_suggestions":[]})
-    }
-
-    #[test]
-    fn claude_runs_the_apps_tools_without_asking() {
-        for tool in ["mcp__slopslide__lint_deck", "mcp__slopslide__open_file"] {
-            let request = can_use_tool(tool, json!({"path":"deck.html"}));
-            assert!(matches!(
-                claude_permission(&request, PermissionMode::Ask, &session_dir()),
-                ClaudePermission::Answer(Ok(r)) if r["behavior"] == "allow" && r["updatedInput"]["path"] == "deck.html"
-            ));
-        }
-    }
-
-    #[test]
-    fn claude_asks_before_other_tools() {
-        let cases = [
-            (
-                "Bash",
-                json!({"command":"npm test","description":"Run tests"}),
-                "Run a command",
-                "npm test",
-            ),
-            (
-                "Write",
-                json!({"file_path":"/etc/hosts"}),
-                "Change files",
-                "/etc/hosts",
-            ),
-            (
-                "Read",
-                json!({"file_path":"/Users/me/.ssh/id"}),
-                "Read files",
-                "/Users/me/.ssh/id",
-            ),
-            (
-                "WebFetch",
-                json!({"url":"https://example.com"}),
-                "Network access",
-                "https://example.com",
-            ),
-            (
-                "mcp__github__push",
-                json!({"branch":"main"}),
-                "Use a tool",
-                "mcp__github__push",
-            ),
-        ];
-        for (tool, input, title, details) in cases {
-            let ClaudePermission::Ask(approval, choices) = claude_permission(
-                &can_use_tool(tool, input.clone()),
-                PermissionMode::Ask,
-                &session_dir(),
-            ) else {
-                panic!("{tool} asks");
-            };
-            assert_eq!(approval.title, title);
-            assert!(approval.details.contains(details), "{}", approval.details);
-            assert_eq!(
-                approval.decisions,
-                [Decision::Accept, Decision::Decline],
-                "no rule offered"
-            );
-            assert_eq!(
-                choices["accept"],
-                json!({"behavior":"allow","updatedInput":input})
-            );
-            assert_eq!(choices["decline"]["behavior"], "deny");
-        }
-        let ClaudePermission::Ask(approval, _) = claude_permission(
-            &can_use_tool("Bash", json!({"command":"ls","description":"List files"})),
-            PermissionMode::Ask,
-            &session_dir(),
-        ) else {
-            panic!("asks");
-        };
-        assert_eq!(approval.reason.as_deref(), Some("List files"));
-    }
-
-    #[test]
-    fn claude_full_access_allows_everything() {
-        let request = can_use_tool("Bash", json!({"command":"rm -rf build"}));
-        assert!(matches!(
-            claude_permission(&request, PermissionMode::FullAccess, &session_dir()),
-            ClaudePermission::Answer(Ok(r)) if r["behavior"] == "allow"
-        ));
-    }
-
-    #[test]
-    fn claude_refuses_other_control_requests() {
-        let request = json!({"subtype":"hook_callback"});
-        assert!(matches!(
-            claude_permission(&request, PermissionMode::Ask, &session_dir()),
-            ClaudePermission::Answer(Err(_))
-        ));
-        assert_eq!(
-            claude_control_response(&json!("r1"), Err("no")),
-            json!({"type":"control_response","response":{"subtype":"error","request_id":"r1","error":"no"}})
-        );
-    }
-
-    #[test]
-    fn mcp_config_runs_this_binary_in_the_working_directory() {
-        let config: Value = serde_json::from_str(&mcp_config_json(
-            Path::new("/Apps/SlopSlide"),
-            &serde_json::Map::new(),
-        ))
-        .unwrap();
-        let server = &config["mcpServers"]["slopslide"];
-        assert_eq!(server["type"], "stdio");
-        assert_eq!(server["command"], "/Apps/SlopSlide");
-        assert_eq!(
-            server["args"],
-            json!(["--lint-mcp"]),
-            "no deck: Claude Code runs it in the workspace"
-        );
-    }
-
-    #[test]
-    fn mcp_config_adds_the_users_servers_but_keeps_the_apps() {
-        let servers = json!({"docs": {"url": "https://x/mcp"}, "slopslide": {"command": "evil"}});
-        let config: Value = serde_json::from_str(&mcp_config_json(
-            Path::new("/Apps/SlopSlide"),
-            servers.as_object().unwrap(),
-        ))
-        .unwrap();
-        assert_eq!(config["mcpServers"]["docs"]["url"], "https://x/mcp");
-        assert_eq!(
-            config["mcpServers"]["slopslide"]["command"],
-            "/Apps/SlopSlide"
-        );
-    }
-
-    #[test]
-    fn plugins_are_passed_as_plugin_dirs() {
-        let plugins = [PathBuf::from("/p/a"), PathBuf::from("/p/b")];
-        assert_eq!(
-            plugin_args(&plugins),
-            ["--plugin-dir", "/p/a", "--plugin-dir", "/p/b"]
-        );
-        assert!(plugin_args(&[]).is_empty());
     }
 
     #[test]
@@ -1789,29 +656,6 @@ mod tests {
             "the references are not files in the deck"
         );
     }
-
-    #[test]
-    fn write_if_changed_replaces_only_different_contents() {
-        let dir = std::env::temp_dir().join(format!("slopslide-write-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("mcp.json");
-        write_if_changed(&path, "one").unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "one");
-        let written = std::fs::metadata(&path).unwrap().modified().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        write_if_changed(&path, "one").unwrap();
-        assert_eq!(
-            std::fs::metadata(&path).unwrap().modified().unwrap(),
-            written,
-            "unchanged contents are not rewritten"
-        );
-        write_if_changed(&path, "two").unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "two");
-        let leftovers = std::fs::read_dir(&dir).unwrap().count();
-        assert_eq!(leftovers, 1, "no temporary files left behind");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     #[test]
     fn events_serialize_to_the_frontend_shape() {
         let cases = [
@@ -1859,6 +703,14 @@ mod tests {
                 AgentEvent::Finished { interrupted: true },
                 json!({"type":"finished","interrupted":true}),
             ),
+            (
+                AgentEvent::Usage {
+                    context_tokens: Some(12),
+                    context_window: None,
+                },
+                json!({"type":"usage","contextTokens":12,"contextWindow":null}),
+            ),
+            (AgentEvent::Compacted, json!({"type":"compacted"})),
         ];
         for (event, expected) in cases {
             assert_eq!(serde_json::to_value(&event).unwrap(), expected);
@@ -1894,6 +746,12 @@ mod tests {
         assert_eq!(args.provider, Provider::Codex);
         assert_eq!(args.model.as_deref(), Some("gpt-6-astra"));
         assert_eq!(args.effort.as_deref(), Some("high"));
+        assert!(!args.compact, "off unless asked");
+        let args: SendArgs = serde_json::from_value(
+            json!({"workspace":"d","prompt":"/compact","provider":"copilot","compact":true}),
+        )
+        .unwrap();
+        assert!(args.compact);
     }
 
     #[test]
@@ -1967,28 +825,12 @@ mod tests {
         assert!(!second);
     }
 
-    #[test]
-    fn steers_claude_with_priority_now() {
-        assert_eq!(
-            claude_steer_message("Bluer"),
-            json!({"type": "user", "message": {"role": "user", "content": "Bluer"}, "priority": "now"})
-        );
-        assert!(is_steer_abort(
-            &json!({"type": "result", "terminal_reason": "aborted_streaming"})
-        ));
-        assert!(is_steer_abort(
-            &json!({"type": "result", "terminal_reason": "aborted_tools"})
-        ));
-        assert!(!is_steer_abort(
-            &json!({"type": "result", "terminal_reason": "completed"})
-        ));
-        assert!(!is_steer_abort(&json!({"type": "result"})));
-    }
-
     /// Runs whole turns against a shell script standing in for the `claude` CLI.
     #[cfg(unix)]
     mod process {
         use super::*;
+        use crate::permissions::Decision;
+        use crate::test_support::TempDir;
         use std::fs;
         use std::sync::Arc;
         use std::time::Duration;
@@ -1997,7 +839,7 @@ mod tests {
         const LOG_DIR: &str = ".test-log";
 
         struct Fixture {
-            dir: PathBuf,
+            dir: TempDir,
             events: Arc<Mutex<Vec<AgentEvent>>>,
             /// How the user answers approval requests; unanswered when `None`.
             answer: Option<Decision>,
@@ -2008,8 +850,7 @@ mod tests {
             /// A deck folder plus a fake `claude` that logs its arguments and stdin, then
             /// runs `body` (with `$RESUME` set when `--resume` was passed).
             fn new(body: &str) -> Self {
-                let dir =
-                    std::env::temp_dir().join(format!("slopslide-agent-{}", uuid::Uuid::new_v4()));
+                let dir = TempDir::new("agent");
                 fs::create_dir_all(dir.join(LOG_DIR)).unwrap();
                 fs::create_dir_all(dir.join("home")).unwrap();
                 let script = format!(
@@ -2050,7 +891,7 @@ mod tests {
                             broker.respond("test", &approval.id, decision).unwrap();
                         }
                     }),
-                    dir: self.dir.clone(),
+                    dir: self.dir.to_path_buf(),
                     app_home: self.dir.join("home"),
                     session_dir: self.session_dir(),
                     provider: Provider::Claude,
@@ -2138,13 +979,7 @@ mod tests {
             }
 
             fn session(&self) -> Option<String> {
-                deck::read_session(&self.session_dir(), Provider::Claude.session_file())
-            }
-        }
-
-        impl Drop for Fixture {
-            fn drop(&mut self) {
-                let _ = fs::remove_dir_all(&self.dir);
+                crate::sessions::read_session(&self.session_dir(), Provider::Claude.session_file())
             }
         }
 
@@ -2178,7 +1013,10 @@ echo '{{"type":"stream_event","event":{{"type":"content_block_delta","delta":{{"
             assert_eq!(delivered.await, Ok(true));
             let line = fs::read_to_string(fx.dir.join(LOG_DIR).join("steer.log")).unwrap();
             let written: Value = serde_json::from_str(&line).unwrap();
-            assert_eq!(written, claude_steer_message("Make it blue"));
+            assert_eq!(
+                written,
+                json!({"type": "user", "message": {"role": "user", "content": "Make it blue"}, "priority": "now"})
+            );
             let events = fx.events();
             let steered = AgentEvent::Steered {
                 message: Some("m2".into()),
@@ -2240,7 +1078,8 @@ echo '{{"type":"stream_event","event":{{"type":"content_block_delta","delta":{{"
         #[tokio::test]
         async fn a_compaction_takes_no_steer() {
             let fx = Fixture::new(&format!("{INIT}\n{OK}"));
-            deck::write_session(&fx.session_dir(), "claude-session", Some("s1")).unwrap();
+            crate::sessions::write_session(&fx.session_dir(), "claude-session", Some("s1"))
+                .unwrap();
             let (mut turn, steer) = fx.steered_turn();
             turn.compact = true;
             let (message, delivered) = Steer::new("Bluer", None);
@@ -2446,7 +1285,12 @@ echo "{{\"type\":\"assistant\",\"uuid\":\"u-$$\",\"parent_tool_use_id\":null,\"m
                 r#"echo "{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$RESUME\"}}"
 {OK}"#
             ));
-            deck::write_session(&fx.session_dir(), "claude-session", Some("old-session")).unwrap();
+            crate::sessions::write_session(
+                &fx.session_dir(),
+                "claude-session",
+                Some("old-session"),
+            )
+            .unwrap();
             assert!(!fx.run("Again", None).await);
             let runs = fx.invocations();
             assert_eq!(runs.len(), 1);
@@ -2472,7 +1316,8 @@ fi
 {INIT}
 {OK}"#
             ));
-            deck::write_session(&fx.session_dir(), "claude-session", Some("gone")).unwrap();
+            crate::sessions::write_session(&fx.session_dir(), "claude-session", Some("gone"))
+                .unwrap();
             assert!(!fx.run("Hi", None).await);
             let runs = fx.invocations();
             assert_eq!(runs.len(), 2, "retried once: {:?}", fx.errors());
@@ -2505,7 +1350,8 @@ fi
 {INIT}
 {OK}"#
             ));
-            deck::write_session(&fx.session_dir(), "claude-session", Some("gone")).unwrap();
+            crate::sessions::write_session(&fx.session_dir(), "claude-session", Some("gone"))
+                .unwrap();
             assert!(!fx.run("Hi", None).await);
             assert_eq!(fx.invocations().len(), 2);
             assert_eq!(fx.session().as_deref(), Some("new-session"));
@@ -2674,7 +1520,12 @@ echo "{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$RESUME\"}}"
 echo '{{"type":"system","subtype":"compact_boundary","compact_metadata":{{"trigger":"manual"}}}}'
 {OK}"#
             ));
-            deck::write_session(&fx.session_dir(), "claude-session", Some("old-session")).unwrap();
+            crate::sessions::write_session(
+                &fx.session_dir(),
+                "claude-session",
+                Some("old-session"),
+            )
+            .unwrap();
             assert!(!fx.run_compact().await);
             let runs = fx.invocations();
             assert_eq!(runs.len(), 1);
@@ -2705,7 +1556,8 @@ fi
 {INIT}
 {OK}"#
             ));
-            deck::write_session(&fx.session_dir(), "claude-session", Some("gone")).unwrap();
+            crate::sessions::write_session(&fx.session_dir(), "claude-session", Some("gone"))
+                .unwrap();
             assert!(!fx.run_compact().await);
             assert_eq!(fx.invocations().len(), 1, "not retried without the session");
             assert_eq!(fx.session(), None, "the stale session is forgotten");

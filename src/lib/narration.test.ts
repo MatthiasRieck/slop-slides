@@ -1,6 +1,7 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
-import { cleanNarrationPrompt, normalizeNarration, speakingTime, wordCount } from "./narration";
+import { formatDuration, normalizeNarration, speakingTime, wordCount } from "./narration";
 
 describe("normalizeNarration", () => {
   it("trims line ends and keeps one blank line between paragraphs", () => {
@@ -22,16 +23,13 @@ describe("wordCount and speakingTime", () => {
   });
 });
 
-describe("cleanNarrationPrompt", () => {
-  it("names the slide, or every slide", () => {
-    expect(cleanNarrationPrompt("intro")).toContain("the narration of slide `intro`");
-    expect(cleanNarrationPrompt(null)).toContain("every slide");
-  });
-
-  it("asks for clean, fluent text and keeps the agent to the narration", () => {
-    const prompt = cleanNarrationPrompt(null);
-    for (const part of ["stutters", "clean, fluent", "same language", '<aside class="narration">', "locked slides"]) {
-      expect(prompt).toContain(part);
-    }
+describe("formatDuration", () => {
+  it.each([
+    [0, "0:00"],
+    [12.4, "0:12"],
+    [59.6, "1:00"],
+    [754, "12:34"],
+  ])("shows %s seconds as %s", (seconds, shown) => {
+    expect(formatDuration(seconds)).toBe(shown);
   });
 });

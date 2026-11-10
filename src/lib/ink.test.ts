@@ -11,7 +11,6 @@ import {
   SLIDE_SIZE,
   type Stroke,
   strokePath,
-  TOOL_KEYS,
   TRAIL_FADE_MS,
   TRAIL_HOLD_MS,
   type TrailPoint,
@@ -123,12 +122,6 @@ describe("zoomBox", () => {
   it("lays the layer out where the zoom puts it, at the zoomed size", () => {
     expect(zoomBox(0, 0, 1)).toEqual({ left: "0px", top: "0px", width: "100%", height: "100%" });
     expect(zoomBox(-100, 25.5, 2.5)).toEqual({ left: "-100px", top: "25.5px", width: "250%", height: "250%" });
-  });
-});
-
-describe("TOOL_KEYS", () => {
-  it("binds the drawing tools to their initials", () => {
-    expect(TOOL_KEYS).toEqual({ l: "laser", p: "pen", h: "highlighter", e: "eraser" });
   });
 });
 

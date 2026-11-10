@@ -10,23 +10,19 @@
 //! as an image with its text hidden, and the page prints that image with the text on top,
 //! still as text (see `assets/pdf.js`).
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
-use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Manager, Runtime, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use tokio::sync::{mpsc, oneshot};
+use tauri::AppHandle;
+use tokio::sync::oneshot;
 
 use crate::error::{Error, Result};
-use crate::{deck, html, protocol};
+use crate::export_window::{self, Helper, Page, TIMEOUT};
+use crate::{deck, html};
 
 /// PDF points per CSS pixel: 72 per inch over 96.
 const POINTS_PER_PX: f64 = 0.75;
 /// Where the page's helper answers; the navigation is caught, never made.
 const SIGNAL_PATH: &str = "/.pdf-signal";
-/// Longest wait for the deck to load, for a step of the helper, or for the PDF to be written.
-const TIMEOUT: Duration = Duration::from_secs(60);
 /// Decor images are this many pixels per slide pixel: 3840 wide for a 1920 slide, about
 /// 290 dpi on a page 13.3 inches wide.
 const DECOR_SCALE: f64 = 2.0;
@@ -55,35 +51,21 @@ pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
     let (width, height) = html::slide_size(&deck::read_html(file)?).pixels();
     let dest = absolute_dest(dest)?;
     let dest_file = dest.clone();
-    let url = protocol::file_url(file, "static&print")
-        .parse()
-        .map_err(|e| Error::msg(format!("cannot open the deck for printing: {e}")))?;
-
-    let (window_width, window_height) = window_size((width, height), screen_area(app));
-    let (signal_tx, signals) = mpsc::unbounded_channel::<Url>();
-    let label = format!("pdf-export-{}", uuid::Uuid::new_v4().simple());
-    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::CustomProtocol(url))
-        .title("PDF export")
-        .inner_size(window_width, window_height)
-        .visible(false)
-        // No title bar: WebKit would inset the page under it, and captures would be off.
-        .decorations(false)
-        .focused(false)
-        .skip_taskbar(true)
-        .on_page_load(|webview, payload| {
-            if payload.event() == PageLoadEvent::Finished {
-                let _ = webview.eval(PDF_JS);
-            }
-        })
-        .on_navigation(move |url| {
-            if url.path() != SIGNAL_PATH {
-                return true;
-            }
-            let _ = signal_tx.send(url.clone());
-            false
-        })
-        .build()
-        .map_err(|e| Error::msg(format!("cannot open the deck for printing: {e}")))?;
+    let (window, signals) = export_window::open(
+        app,
+        file,
+        (width, height),
+        Page {
+            label: "pdf-export",
+            title: "PDF export",
+            query: "static&print",
+            script: PDF_JS,
+            signal: SIGNAL_PATH,
+            purpose: "printing",
+            // Only hidden, on Linux too, as printing has always had it.
+            out_of_sight: false,
+        },
+    )?;
 
     let mut helper = Helper {
         window: &window,
@@ -110,7 +92,7 @@ pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
                 .await?;
         }
         if cfg!(target_os = "macos") {
-            helper.flatten_decor(slides, width).await?;
+            flatten_decor(&mut helper, slides, width).await?;
         }
         let (tx, rx) = oneshot::channel::<Result<()>>();
         window
@@ -210,115 +192,34 @@ fn box_top(pdf: &[u8], mut at: usize) -> Option<std::ops::Range<usize>> {
     (pdf.get(at) == Some(&b']')).then_some(number)
 }
 
-/// The room on screen for a window, in logical pixels: the main screen's work area.
-pub(crate) fn screen_area(app: &AppHandle) -> Option<(f64, f64)> {
-    let monitor = app.primary_monitor().ok()??;
-    let area = monitor
-        .work_area()
-        .size
-        .to_logical::<f64>(monitor.scale_factor());
-    Some((area.width, area.height))
-}
-
-/// The hidden window's size: the slides', shrunk to fit well inside `screen` if given. macOS
-/// keeps windows on screen, and a window cut down to fit would show part of the page.
-pub(crate) fn window_size(slide: (u32, u32), screen: Option<(f64, f64)>) -> (f64, f64) {
-    let (w, h) = (f64::from(slide.0), f64::from(slide.1));
-    let scale = screen
-        .filter(|(sw, sh)| *sw >= 1.0 && *sh >= 1.0)
-        .map_or(1.0, |(sw, sh)| (0.8 * sw / w).min(0.8 * sh / h).min(1.0));
-    ((w * scale).floor().max(1.0), (h * scale).floor().max(1.0))
-}
-
-/// Where a Linux export window goes: far off every screen.
-const OFFSCREEN: f64 = -32_000.0;
-
-/// `builder`'s window kept out of sight. WebKitGTK lays out a webview only once its window is
-/// shown, and a hidden one stays 0×0 with nothing to read or capture; on Linux the window is
-/// shown instead, far off screen. The other engines lay out hidden windows.
-pub(crate) fn out_of_sight<'a, R: Runtime, M: Manager<R>>(
-    builder: WebviewWindowBuilder<'a, R, M>,
-) -> WebviewWindowBuilder<'a, R, M> {
-    let builder = builder.focused(false).skip_taskbar(true);
-    if cfg!(target_os = "linux") {
-        builder.visible(true).position(OFFSCREEN, OFFSCREEN)
-    } else {
-        builder.visible(false)
-    }
-}
-
-/// The hidden window's page helper (`assets/pdf.js`, or `assets/video.js` for video.rs) and
-/// its answers.
-pub(crate) struct Helper<'a> {
-    pub window: &'a WebviewWindow,
-    pub signals: mpsc::UnboundedReceiver<Url>,
-    /// What the window is for, as the errors name it ("printing").
-    pub task: &'static str,
-}
-
-impl Helper<'_> {
-    /// Runs `script` in the page, then waits for the answer named `step`.
-    pub async fn run(&mut self, script: &str, step: &str) -> Result<HashMap<String, String>> {
-        self.window
-            .eval(script)
+/// Captures each slide's decor (all but its text) and has the page print that image with
+/// only the text on top.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+async fn flatten_decor(helper: &mut Helper<'_>, slides: usize, width: u32) -> Result<()> {
+    use base64::Engine as _;
+    helper.run("window.__slopPdf.decor()", "decor").await?;
+    let pixels_wide = decor_pixels(width);
+    for index in 0..slides {
+        let shown = helper
+            .run(&format!("window.__slopPdf.show({index})"), "shown")
+            .await?;
+        let (rect, viewport) = export_window::geometry(&shown)?;
+        let rect = export_window::inside_whole_points(rect);
+        let png = export_window::capture(helper.window, rect, viewport, pixels_wide).await?;
+        let url = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(png)
+        );
+        helper
+            .window
+            .eval(format!(
+                "window.__slopPdf.paint({index}, {})",
+                export_window::js_string(&url)
+            ))
             .map_err(|e| Error::msg(format!("cannot reach the deck: {e}")))?;
-        self.answer(step).await
     }
-
-    /// The next answer, which must be the one named `step`, as its query parameters.
-    pub async fn answer(&mut self, step: &str) -> Result<HashMap<String, String>> {
-        let url = tokio::time::timeout(TIMEOUT, self.signals.recv())
-            .await
-            .map_err(|_| {
-                Error::msg(format!(
-                    "the deck took too long to get ready for {}",
-                    self.task
-                ))
-            })?
-            .ok_or_else(|| Error::msg(format!("the deck was closed during {}", self.task)))?;
-        let answer = parse_answer(&url);
-        if !answer.contains_key(step) {
-            return Err(Error::msg(format!(
-                "unexpected answer from the deck: {url}"
-            )));
-        }
-        Ok(answer)
-    }
-
-    /// Captures each slide's decor (all but its text) and has the page print that image with
-    /// only the text on top.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    async fn flatten_decor(&mut self, slides: usize, width: u32) -> Result<()> {
-        use base64::Engine as _;
-        self.run("window.__slopPdf.decor()", "decor").await?;
-        let pixels_wide = decor_pixels(width);
-        for index in 0..slides {
-            let shown = self
-                .run(&format!("window.__slopPdf.show({index})"), "shown")
-                .await?;
-            let (rect, viewport) = geometry(&shown)?;
-            let rect = inside_whole_points(rect);
-            #[cfg(target_os = "macos")]
-            let png =
-                crate::capture::render_region(self.window.as_ref(), rect, viewport, pixels_wide)
-                    .await?;
-            #[cfg(not(target_os = "macos"))]
-            let png =
-                crate::capture::snapshot(self.window.as_ref(), rect, viewport, pixels_wide).await?;
-            let url = format!(
-                "data:image/png;base64,{}",
-                base64::engine::general_purpose::STANDARD.encode(png)
-            );
-            self.window
-                .eval(format!(
-                    "window.__slopPdf.paint({index}, {})",
-                    js_string(&url)
-                ))
-                .map_err(|e| Error::msg(format!("cannot reach the deck: {e}")))?;
-        }
-        self.run("window.__slopPdf.text()", "text").await?;
-        Ok(())
-    }
+    helper.run("window.__slopPdf.text()", "text").await?;
+    Ok(())
 }
 
 /// How wide each slide's decor image is, in pixels: [`DECOR_SCALE`] times the canvas width,
@@ -327,81 +228,6 @@ fn decor_pixels(canvas_width: u32) -> u32 {
     (f64::from(canvas_width) * DECOR_SCALE)
         .round()
         .clamp(1.0, f64::from(crate::size::MAX_PX)) as u32
-}
-
-/// The query parameters of a helper's answer (`/.pdf-signal?shown=0&rect=…`).
-pub(crate) fn parse_answer(url: &Url) -> HashMap<String, String> {
-    url.query_pairs()
-        .map(|(k, v)| (k.into_owned(), v.into_owned()))
-        .collect()
-}
-
-/// Whether the page has a viewport to lay the slides out in; with none, every element has no
-/// size and the slides would come out empty: WebKitGTK does that
-/// to a hidden window (see [`out_of_sight`]).
-pub(crate) fn check_view(ready: &HashMap<String, String>) -> Result<()> {
-    let view: Vec<f64> = ready
-        .get("view")
-        .map(|v| v.split(',').filter_map(|n| n.trim().parse().ok()).collect())
-        .unwrap_or_default();
-    match view[..] {
-        [width, height] if width < 1.0 || height < 1.0 => Err(Error::msg(format!(
-            "the export window was not laid out ({width}×{height} pixels)"
-        ))),
-        _ => Ok(()),
-    }
-}
-
-/// Where a shown slide is: `rect=x,y,w,h` and `view=w,h`, in CSS pixels.
-pub(crate) fn geometry(
-    answer: &HashMap<String, String>,
-) -> Result<(crate::capture::Rect, crate::capture::Size)> {
-    let numbers = |key: &str, n: usize| -> Option<Vec<f64>> {
-        let values: Vec<f64> = answer
-            .get(key)?
-            .split(',')
-            .map(|v| v.trim().parse().ok())
-            .collect::<Option<_>>()?;
-        (values.len() == n).then_some(values)
-    };
-    match (numbers("rect", 4), numbers("view", 2)) {
-        (Some(r), Some(v)) => Ok((
-            crate::capture::Rect {
-                x: r[0],
-                y: r[1],
-                width: r[2],
-                height: r[3],
-            },
-            crate::capture::Size {
-                width: v[0],
-                height: v[1],
-            },
-        )),
-        _ => Err(Error::msg("the deck did not say where its slide is")),
-    }
-}
-
-/// `rect` shrunk to the whole points inside it. The slide sits at a fraction of a point (the
-/// player centres and scales it), and a capture from its exact edge would blend in a hairline
-/// of the black page around it; the image is stretched over the slide, so the lost edge (under
-/// a pixel) does not show.
-pub(crate) fn inside_whole_points(rect: crate::capture::Rect) -> crate::capture::Rect {
-    let (left, top) = (rect.x.ceil(), rect.y.ceil());
-    let (right, bottom) = (
-        (rect.x + rect.width).floor(),
-        (rect.y + rect.height).floor(),
-    );
-    crate::capture::Rect {
-        x: left,
-        y: top,
-        width: (right - left).max(1.0),
-        height: (bottom - top).max(1.0),
-    }
-}
-
-/// `text` as a JavaScript string literal.
-pub(crate) fn js_string(text: &str) -> String {
-    serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into())
 }
 
 /// `dest` as an absolute path (the platforms want one), checking its folder exists.
@@ -733,24 +559,6 @@ mod platform {
 mod tests {
     use super::*;
 
-    fn answer(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
-    }
-
-    #[test]
-    fn a_window_with_no_viewport_is_an_error() {
-        let err = check_view(&answer(&[("slides", "2"), ("view", "0,0")]))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("not laid out"), "{err}");
-        assert!(check_view(&answer(&[("view", "1536,864")])).is_ok());
-        // An older helper that does not report the view.
-        assert!(check_view(&answer(&[("slides", "2")])).is_ok());
-    }
-
     #[test]
     fn pages_are_the_slide_size_in_points() {
         assert_eq!(
@@ -766,28 +574,6 @@ mod tests {
                 width: 810.0,
                 height: 1012.5
             }
-        );
-    }
-
-    #[test]
-    fn the_window_fits_well_inside_the_screen() {
-        assert_eq!(window_size((1920, 1080), None), (1920.0, 1080.0));
-        assert_eq!(
-            window_size((1920, 1080), Some((3008.0, 1667.0))),
-            (1920.0, 1080.0)
-        );
-        // A 1440×875 work area: 80% of its height bounds a 16:9 slide.
-        assert_eq!(
-            window_size((1920, 1080), Some((1440.0, 875.0))),
-            (1152.0, 648.0)
-        );
-        assert_eq!(
-            window_size((1080, 1350), Some((1920.0, 1050.0))),
-            (672.0, 840.0)
-        );
-        assert_eq!(
-            window_size((1920, 1080), Some((0.0, 0.0))),
-            (1920.0, 1080.0)
         );
     }
 
@@ -855,84 +641,11 @@ mod tests {
     }
 
     #[test]
-    fn reads_answers_and_slide_geometry() {
-        let url: Url = "slop://localhost/.pdf-signal?shown=2&rect=0,12.5,1920,1080&view=1920,1105"
-            .parse()
-            .unwrap();
-        let answer = parse_answer(&url);
-        assert_eq!(answer["shown"], "2");
-        let (rect, view) = geometry(&answer).unwrap();
-        assert_eq!(
-            rect,
-            crate::capture::Rect {
-                x: 0.0,
-                y: 12.5,
-                width: 1920.0,
-                height: 1080.0
-            }
-        );
-        assert_eq!(
-            view,
-            crate::capture::Size {
-                width: 1920.0,
-                height: 1105.0
-            }
-        );
-        let ready = parse_answer(
-            &"http://slop.localhost/.pdf-signal?ready&slides=7"
-                .parse()
-                .unwrap(),
-        );
-        assert_eq!(ready["slides"], "7");
-        assert!(ready.contains_key("ready"));
-    }
-
-    #[test]
-    fn captures_only_whole_points_inside_the_slide() {
-        let rect = |x, y, width, height| crate::capture::Rect {
-            x,
-            y,
-            width,
-            height,
-        };
-        // As the player showed an A4 slide: 0.09 px down, its bottom edge mid-pixel.
-        assert_eq!(
-            inside_whole_points(rect(0.0, 0.09375, 1877.0, 1055.8125)),
-            rect(0.0, 1.0, 1877.0, 1054.0)
-        );
-        assert_eq!(
-            inside_whole_points(rect(28.2777, 0.0, 1820.4443, 1024.0)),
-            rect(29.0, 0.0, 1819.0, 1024.0)
-        );
-        assert_eq!(inside_whole_points(rect(10.0, 10.0, 0.5, 0.5)).width, 1.0);
-    }
-
-    #[test]
-    fn rejects_answers_without_geometry() {
-        let answer =
-            |q: &str| parse_answer(&format!("slop://localhost/.pdf-signal?{q}").parse().unwrap());
-        assert!(geometry(&answer("shown=0")).is_err());
-        assert!(geometry(&answer("shown=0&rect=1,2,3&view=4,5")).is_err());
-        assert!(geometry(&answer("shown=0&rect=1,2,x,4&view=4,5")).is_err());
-    }
-
-    #[test]
-    fn quotes_javascript_strings() {
-        assert_eq!(
-            js_string("data:image/png;base64,AB+/="),
-            "\"data:image/png;base64,AB+/=\""
-        );
-        assert_eq!(js_string("a\"b\\"), "\"a\\\"b\\\\\"");
-    }
-
-    #[test]
     fn destinations_must_be_in_an_existing_folder() {
-        let dir = std::env::temp_dir().join(format!("slopslide-pdf-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::test_support::TempDir::new("pdf");
         let dest = absolute_dest(&dir.join("Talk.pdf")).unwrap();
         assert!(dest.is_absolute());
         assert_eq!(dest.file_name().unwrap(), "Talk.pdf");
         assert!(absolute_dest(&dir.join("missing").join("Talk.pdf")).is_err());
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }

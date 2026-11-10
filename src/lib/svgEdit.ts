@@ -289,11 +289,6 @@ const pointList = (value: string | null): Point[] => {
 
 const writePoints = (points: Point[]) => points.map((p) => `${fmt(p[0])},${fmt(p[1])}`).join(" ");
 
-/** The shapes whose points can be edited. */
-export function hasPoints(el: Element): boolean {
-  return /^(path|polyline|polygon|line|rect|circle|ellipse)$/.test(el.localName);
-}
-
 /** The draggable points of shape `el`, in its own user units; none for other elements. */
 export function handlesOf(el: Element): Handle[] {
   const a = (name: string) => num(el.getAttribute(name));

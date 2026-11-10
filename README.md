@@ -330,7 +330,7 @@ src-tauri/src/
                         every provider (see below)
   codex.rs              Codex app-server transport, permissions, and approval responses
   protocol.rs           `slop://` scheme serving deck files to the slide iframes;
-                        adds the slide editor (assets/editor.js) for edit mode
+                        adds the slide editor (assets/editor/) for edit mode
   video.rs              MP4 export: plays the deck frame by frame in a hidden window
                         (assets/video.js) and encodes it as AV1 with rav1e
   mp4.rs                the MP4 file video.rs writes: one AV1 track, held frames stored

@@ -25,7 +25,7 @@
    }. Each is looked up on the slide, then and whenever an animation ends, and the app gets where
    their pins go as { type: "slop:comment-spots", slide, spots: [{ id, x, y, found }] }.
 
-   The slide editor (editor.js) runs after this and builds on window.slopPasteboard.
+   The slide editor (assets/editor/) runs after this and builds on window.slopPasteboard.
 
    With ?show, the presenter plays the whole deck and this zooms and pans the slide being shown
    instead: the view starts with the slide fit to the window, as the player has it, and returns

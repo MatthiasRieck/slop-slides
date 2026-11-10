@@ -6,22 +6,22 @@
 //! turn runs.
 
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
 use crate::error::{Error, Result};
-use crate::render::{self, Serving};
-use crate::{capture, deck, html, pdf, video};
+use crate::inbox::{Inbox, Serving};
+use crate::{capture, deck, export_window, html, pdf, render, video};
 
 /// Longest wait for an export: a long video with narration to say takes a while.
 pub const WAIT: Duration = Duration::from_secs(60 * 60);
-const REQUESTS: &str = "export-requests";
-const RESULTS: &str = "export-results";
-const POLL: Duration = Duration::from_millis(100);
+/// Where export requests and their answers go in a session.
+static INBOX: Inbox = Inbox {
+    requests: "export-requests",
+    results: "export-results",
+};
 /// The folder next to the deck that exports go to unless the agent names another place.
 pub const FOLDER: &str = "exports";
 /// What the hidden window is for, as its errors name it.
@@ -105,7 +105,8 @@ pub struct Request {
 }
 
 /// What the export made, in words, or why it failed.
-pub type Answer = std::result::Result<String, String>;
+#[cfg(test)]
+pub type Answer = crate::inbox::Answer<String>;
 
 /// `rel` as workspace-relative parts, refusing anything that could leave the workspace.
 fn parts(rel: &str) -> Result<Vec<String>> {
@@ -141,7 +142,7 @@ pub fn destination(
         None => {
             let mut parts = parts(deck_rel)?;
             parts.pop();
-            let name = deck::safe_file_name(title);
+            let name = crate::files::safe_file_name(title);
             parts.push(FOLDER.into());
             parts.push(if name.is_empty() {
                 "presentation".into()
@@ -205,56 +206,31 @@ pub fn destination(
 
 /// Asks the app serving `session` for `request` and waits for its answer.
 pub fn ask(session: &Path, request: &Request, wait: Duration) -> Result<String> {
-    let name = uuid::Uuid::new_v4().to_string();
-    render::put(&session.join(REQUESTS), &name, request)?;
-    let result = session.join(RESULTS).join(format!("{name}.json"));
-    let deadline = Instant::now() + wait;
-    while Instant::now() < deadline {
-        if let Ok(raw) = std::fs::read(&result) {
-            let _ = std::fs::remove_file(&result);
-            let answer: Answer = serde_json::from_slice(&raw)
-                .map_err(|e| Error::msg(format!("unreadable export answer: {e}")))?;
-            return answer.map_err(Error::msg);
-        }
-        std::thread::sleep(POLL.min(wait));
-    }
-    let _ = std::fs::remove_file(session.join(REQUESTS).join(format!("{name}.json")));
-    Err(Error::msg(
+    INBOX.ask(
+        session,
+        request,
+        wait,
+        "unreadable export answer",
         "The app did not finish the export in time. It only exports while a turn is running.",
-    ))
+    )
 }
 
 /// Drains the inbox, oldest first, skipping what cannot be read.
+#[cfg(test)]
 pub fn take_requests(session: &Path) -> Vec<(String, Request)> {
-    render::take(&session.join(REQUESTS))
+    INBOX.take(session)
 }
 
+#[cfg(test)]
 pub fn answer(session: &Path, name: &str, answer: &Answer) -> Result<()> {
-    render::put(&session.join(RESULTS), name, answer)
-}
-
-/// Forgets requests and answers a previous turn left behind.
-fn clear(session: &Path) {
-    let _ = std::fs::remove_dir_all(session.join(REQUESTS));
-    let _ = std::fs::remove_dir_all(session.join(RESULTS));
+    INBOX.answer(session, name, answer)
 }
 
 /// Serves the inbox of `session` for a turn in workspace `dir`, one export at a time.
 pub fn start(app: AppHandle, dir: PathBuf, session: PathBuf) -> Serving {
-    let stop = Arc::new(AtomicBool::new(false));
-    let stopped = stop.clone();
-    tauri::async_runtime::spawn(async move {
-        clear(&session);
-        while !stopped.load(Ordering::Relaxed) {
-            for (name, request) in take_requests(&session) {
-                let made = serve(&app, &dir, &request).await;
-                let _ = answer(&session, &name, &made.map_err(|e| e.to_string()));
-            }
-            tokio::time::sleep(POLL).await;
-        }
-        clear(&session);
-    });
-    Serving(stop)
+    INBOX.start(app, dir, session, |app, dir, request: Request| async move {
+        serve(&app, &dir, &request).await
+    })
 }
 
 /// Makes the export `request` asks for. Anything may write to the inbox, so its paths are
@@ -345,7 +321,7 @@ async fn images(app: &AppHandle, file: &Path, dir: &Path) -> Result<usize> {
     let (canvas, _) = html::slide_size(&deck::read_html(file)?).pixels();
     let width = capture::slide_image_width(Some(canvas));
     let (window, signals) = render::open(app, file, false)?;
-    let mut helper = pdf::Helper {
+    let mut helper = export_window::Helper {
         window: &window,
         signals,
         task: TASK,
@@ -356,9 +332,9 @@ async fn images(app: &AppHandle, file: &Path, dir: &Path) -> Result<usize> {
             let shown = render::show(&mut helper, id, None)
                 .await?
                 .ok_or_else(|| Error::msg(format!("the deck has no slide `{id}`")))?;
-            let (rect, viewport) = pdf::geometry(&shown)?;
-            let png = video::capture(helper.window, rect, viewport, width).await?;
-            std::fs::write(dir.join(deck::slide_image_name(i, ids.len())), png)?;
+            let (rect, viewport) = export_window::geometry(&shown)?;
+            let png = export_window::capture(helper.window, rect, viewport, width).await?;
+            std::fs::write(dir.join(crate::files::slide_image_name(i, ids.len())), png)?;
         }
         Ok(ids.len())
     }
@@ -387,28 +363,12 @@ fn remove_old_images(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
 
-    struct Temp(PathBuf);
-
-    impl Temp {
-        fn new() -> Temp {
-            let dir =
-                std::env::temp_dir().join(format!("slopslide-export-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(&dir).unwrap();
-            Temp(dir.canonicalize().unwrap())
-        }
-    }
-
-    impl Drop for Temp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn workspace() -> Temp {
-        let ws = Temp::new();
-        std::fs::create_dir_all(ws.0.join("talk")).unwrap();
-        std::fs::write(ws.0.join("talk/deck.html"), "<main class=\"deck\"></main>").unwrap();
+    fn workspace() -> TempDir {
+        let ws = TempDir::canonical("export");
+        std::fs::create_dir_all(ws.join("talk")).unwrap();
+        std::fs::write(ws.join("talk/deck.html"), "<main class=\"deck\"></main>").unwrap();
         ws
     }
 
@@ -438,14 +398,14 @@ mod tests {
     #[test]
     fn exports_go_next_to_the_deck_named_after_its_title() {
         let ws = workspace();
-        let dest = |format| destination(&ws.0, "talk/deck.html", "Q3: Plans?", format, None, false);
+        let dest = |format| destination(&ws, "talk/deck.html", "Q3: Plans?", format, None, false);
         assert_eq!(dest(Format::Pdf).unwrap(), "talk/exports/Q3 Plans.pdf");
         assert_eq!(dest(Format::Pptx).unwrap(), "talk/exports/Q3 Plans.pptx");
         assert_eq!(dest(Format::Video).unwrap(), "talk/exports/Q3 Plans.mp4");
         assert_eq!(dest(Format::Html).unwrap(), "talk/exports/Q3 Plans.html");
         assert_eq!(dest(Format::Images).unwrap(), "talk/exports/Q3 Plans");
-        assert!(ws.0.join("talk/exports").is_dir(), "its folder is made");
-        let untitled = destination(&ws.0, "deck.html", "", Format::Pdf, None, false);
+        assert!(ws.join("talk/exports").is_dir(), "its folder is made");
+        let untitled = destination(&ws, "deck.html", "", Format::Pdf, None, false);
         assert_eq!(untitled.unwrap(), "exports/presentation.pdf");
     }
 
@@ -453,7 +413,7 @@ mod tests {
     fn a_named_destination_gets_the_formats_extension() {
         let ws = workspace();
         let dest =
-            |format, dest| destination(&ws.0, "talk/deck.html", "T", format, Some(dest), false);
+            |format, dest| destination(&ws, "talk/deck.html", "T", format, Some(dest), false);
         assert_eq!(dest(Format::Pdf, "out/handout").unwrap(), "out/handout.pdf");
         assert_eq!(
             dest(Format::Pdf, "./out/handout.PDF").unwrap(),
@@ -468,15 +428,15 @@ mod tests {
     fn a_destination_stays_in_the_workspace() {
         let ws = workspace();
         for dest in ["../out.pdf", "/tmp/out.pdf", "talk/../../out.pdf", "."] {
-            let found = destination(&ws.0, "talk/deck.html", "T", Format::Pdf, Some(dest), false);
+            let found = destination(&ws, "talk/deck.html", "T", Format::Pdf, Some(dest), false);
             assert!(found.is_err(), "{dest} was allowed");
         }
         #[cfg(unix)]
         {
-            let outside = Temp::new();
-            std::os::unix::fs::symlink(&outside.0, ws.0.join("link")).unwrap();
+            let outside = TempDir::canonical("export");
+            std::os::unix::fs::symlink(&outside, ws.join("link")).unwrap();
             let found = destination(
-                &ws.0,
+                &ws,
                 "talk/deck.html",
                 "T",
                 Format::Pdf,
@@ -490,10 +450,10 @@ mod tests {
     #[test]
     fn an_existing_export_is_replaced_only_when_asked() {
         let ws = workspace();
-        std::fs::write(ws.0.join("talk.pdf"), "old").unwrap();
+        std::fs::write(ws.join("talk.pdf"), "old").unwrap();
         let dest = |overwrite| {
             destination(
-                &ws.0,
+                &ws,
                 "talk/deck.html",
                 "T",
                 Format::Pdf,
@@ -506,9 +466,9 @@ mod tests {
             .to_string()
             .contains("overwrite: true"));
         assert_eq!(dest(true).unwrap(), "talk.pdf");
-        std::fs::create_dir_all(ws.0.join("dir.pdf")).unwrap();
+        std::fs::create_dir_all(ws.join("dir.pdf")).unwrap();
         let folder = destination(
-            &ws.0,
+            &ws,
             "talk/deck.html",
             "T",
             Format::Pdf,
@@ -522,7 +482,7 @@ mod tests {
     fn the_deck_itself_is_never_overwritten() {
         let ws = workspace();
         let found = destination(
-            &ws.0,
+            &ws,
             "talk/deck.html",
             "T",
             Format::Html,
@@ -537,7 +497,7 @@ mod tests {
         let ws = workspace();
         let dest = |rel, overwrite| {
             destination(
-                &ws.0,
+                &ws,
                 "talk/deck.html",
                 "T",
                 Format::Images,
@@ -545,7 +505,7 @@ mod tests {
                 overwrite,
             )
         };
-        std::fs::create_dir_all(ws.0.join("empty")).unwrap();
+        std::fs::create_dir_all(ws.join("empty")).unwrap();
         assert_eq!(dest("empty", false).unwrap(), "empty");
         assert!(dest("talk", false).is_err());
         assert_eq!(dest("talk", true).unwrap(), "talk");
@@ -557,7 +517,7 @@ mod tests {
 
     #[test]
     fn old_slide_images_are_removed_and_nothing_else() {
-        let ws = Temp::new();
+        let ws = TempDir::canonical("export");
         for name in [
             "slide-01.png",
             "slide-12.png",
@@ -565,64 +525,15 @@ mod tests {
             "slide-a.png",
             "notes.png",
         ] {
-            std::fs::write(ws.0.join(name), "x").unwrap();
+            std::fs::write(ws.join(name), "x").unwrap();
         }
-        remove_old_images(&ws.0);
-        let mut left: Vec<String> = std::fs::read_dir(&ws.0)
+        remove_old_images(&ws);
+        let mut left: Vec<String> = std::fs::read_dir(&ws)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
         left.sort();
         assert_eq!(left, ["notes.png", "slide-.png", "slide-a.png"]);
-    }
-
-    #[test]
-    fn a_request_reaches_the_app_and_its_answer_comes_back() {
-        let session = Temp::new();
-        let app = {
-            let dir = session.0.clone();
-            std::thread::spawn(move || loop {
-                if let Some((name, request)) = take_requests(&dir).pop() {
-                    assert_eq!(request, self::request(Format::Pdf));
-                    answer(&dir, &name, &Ok("done".into())).unwrap();
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(5));
-            })
-        };
-        let made = ask(&session.0, &request(Format::Pdf), WAIT).unwrap();
-        app.join().unwrap();
-        assert_eq!(made, "done");
-        assert_eq!(
-            std::fs::read_dir(session.0.join(RESULTS)).unwrap().count(),
-            0
-        );
-    }
-
-    #[test]
-    fn a_failed_export_comes_back_as_its_error() {
-        let session = Temp::new();
-        let app = {
-            let dir = session.0.clone();
-            std::thread::spawn(move || loop {
-                if let Some((name, _)) = take_requests(&dir).pop() {
-                    answer(&dir, &name, &Err("the video export was cancelled".into())).unwrap();
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(5));
-            })
-        };
-        let error = ask(&session.0, &request(Format::Video), WAIT).unwrap_err();
-        app.join().unwrap();
-        assert_eq!(error.to_string(), "the video export was cancelled");
-    }
-
-    #[test]
-    fn without_an_app_the_request_times_out_and_is_withdrawn() {
-        let session = Temp::new();
-        let error = ask(&session.0, &request(Format::Pdf), Duration::from_millis(20)).unwrap_err();
-        assert!(error.to_string().contains("did not finish"), "{error}");
-        assert!(take_requests(&session.0).is_empty());
     }
 
     #[test]
@@ -642,8 +553,8 @@ mod tests {
 
     #[test]
     fn reports_what_it_made() {
-        let ws = Temp::new();
-        let file = ws.0.join("a.pdf");
+        let ws = TempDir::canonical("export");
+        let file = ws.join("a.pdf");
         std::fs::write(&file, vec![0u8; 2048]).unwrap();
         let pdf = request(Format::Pdf);
         assert_eq!(
@@ -653,7 +564,7 @@ mod tests {
         let mut images = request(Format::Images);
         images.dest = "out".into();
         assert_eq!(
-            report(&images, Some(1), &ws.0),
+            report(&images, Some(1), &ws),
             "Exported talk/deck.html as slide images to out/ (1 image)."
         );
         assert_eq!(size(10), "10 bytes");

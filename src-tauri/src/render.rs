@@ -7,18 +7,17 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Url, WebviewWindow};
 use tokio::sync::mpsc;
 
 use crate::error::{Error, Result};
-use crate::{deck, html, pdf, protocol, video};
+use crate::export_window::{self, Helper, Page};
+use crate::inbox::{Inbox, Serving};
+use crate::{deck, html};
 
 /// The most slides one call renders; every image costs the agent context.
 pub const MAX_SLIDES: usize = 6;
@@ -27,9 +26,11 @@ pub const MAX_SLIDES: usize = 6;
 pub const WAIT: Duration = Duration::from_secs(50);
 /// Longest side of an image, in pixels: legible body text, and few tokens for the agent.
 const IMAGE_SIDE: u32 = 1280;
-const REQUESTS: &str = "render-requests";
-const RESULTS: &str = "render-results";
-const POLL: Duration = Duration::from_millis(100);
+/// Where render requests and their answers go in a session.
+static INBOX: Inbox = Inbox {
+    requests: "render-requests",
+    results: "render-results",
+};
 /// Where the page's helper answers; the navigation is caught, never made.
 const SIGNAL_PATH: &str = "/.render-signal";
 /// The page's helper, run once it has loaded; it starts by reporting when it is ready.
@@ -92,7 +93,8 @@ impl Rendered {
     }
 }
 
-pub type Answer = std::result::Result<Vec<Rendered>, String>;
+#[cfg(test)]
+pub type Answer = crate::inbox::Answer<Vec<Rendered>>;
 
 pub fn check_slides(slides: &[String]) -> Result<()> {
     if slides.is_empty() {
@@ -108,18 +110,6 @@ pub fn check_slides(slides: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Writes `value` to `dir`/`name`.json in one step, so the reader never sees half of it.
-pub(crate) fn put<T: Serialize>(dir: &Path, name: &str, value: &T) -> Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let temp = dir.join(format!("{name}.tmp"));
-    std::fs::write(
-        &temp,
-        serde_json::to_vec(value).map_err(|e| Error::msg(e.to_string()))?,
-    )?;
-    std::fs::rename(temp, dir.join(format!("{name}.json")))?;
-    Ok(())
-}
-
 /// Asks the app serving `session` for `slides` of the deck `path` and waits for its answer.
 pub fn ask(
     session: &Path,
@@ -128,72 +118,29 @@ pub fn ask(
     at: Option<f64>,
     wait: Duration,
 ) -> Result<Vec<Rendered>> {
-    let name = uuid::Uuid::new_v4().to_string();
     let request = Request {
         path: path.into(),
         slides,
         at,
     };
-    put(&session.join(REQUESTS), &name, &request)?;
-    let result = session.join(RESULTS).join(format!("{name}.json"));
-    let deadline = Instant::now() + wait;
-    while Instant::now() < deadline {
-        if let Ok(raw) = std::fs::read(&result) {
-            let _ = std::fs::remove_file(&result);
-            let answer: Answer = serde_json::from_slice(&raw)
-                .map_err(|e| Error::msg(format!("unreadable render: {e}")))?;
-            return answer.map_err(Error::msg);
-        }
-        std::thread::sleep(POLL.min(wait));
-    }
-    let _ = std::fs::remove_file(session.join(REQUESTS).join(format!("{name}.json")));
-    Err(Error::msg(
+    INBOX.ask(
+        session,
+        &request,
+        wait,
+        "unreadable render",
         "The app did not render the slides in time. It only renders while a turn is running.",
-    ))
+    )
 }
 
 /// Drains the inbox, oldest first, skipping what cannot be read.
+#[cfg(test)]
 pub fn take_requests(session: &Path) -> Vec<(String, Request)> {
-    take(&session.join(REQUESTS))
+    INBOX.take(session)
 }
 
-/// Drains the `inbox` folder of requests, oldest first, skipping what cannot be read.
-pub(crate) fn take<T: serde::de::DeserializeOwned>(inbox: &Path) -> Vec<(String, T)> {
-    let Ok(entries) = std::fs::read_dir(inbox) else {
-        return Vec::new();
-    };
-    let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|p| p.extension().is_some_and(|ext| ext == "json"))
-        .map(|p| {
-            let made = std::fs::metadata(&p).and_then(|m| m.modified());
-            (made.unwrap_or(std::time::UNIX_EPOCH), p)
-        })
-        .collect();
-    files.sort();
-    let mut requests = Vec::new();
-    for (_, file) in files {
-        let request = std::fs::read(&file)
-            .ok()
-            .and_then(|raw| serde_json::from_slice(&raw).ok());
-        let _ = std::fs::remove_file(&file);
-        let name = file.file_stem().and_then(|name| name.to_str());
-        if let (Some(name), Some(request)) = (name, request) {
-            requests.push((name.to_string(), request));
-        }
-    }
-    requests
-}
-
+#[cfg(test)]
 pub fn answer(session: &Path, name: &str, answer: &Answer) -> Result<()> {
-    put(&session.join(RESULTS), name, answer)
-}
-
-/// Forgets requests and answers a previous turn left behind.
-fn clear(session: &Path) {
-    let _ = std::fs::remove_dir_all(session.join(REQUESTS));
-    let _ = std::fs::remove_dir_all(session.join(RESULTS));
+    INBOX.answer(session, name, answer)
 }
 
 /// The image's width for slides of `canvas`: the slide's own, shrunk so neither side passes
@@ -209,31 +156,11 @@ fn parse_overflow(json: Option<&String>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Stops serving the inbox when dropped, with the turn.
-pub struct Serving(pub(crate) Arc<AtomicBool>);
-
-impl Drop for Serving {
-    fn drop(&mut self) {
-        self.0.store(true, Ordering::Relaxed);
-    }
-}
-
 /// Serves the inbox of `session` for a turn in workspace `dir`, one request at a time.
 pub fn start(app: AppHandle, dir: PathBuf, session: PathBuf) -> Serving {
-    let stop = Arc::new(AtomicBool::new(false));
-    let stopped = stop.clone();
-    tauri::async_runtime::spawn(async move {
-        clear(&session);
-        while !stopped.load(Ordering::Relaxed) {
-            for (name, request) in take_requests(&session) {
-                let rendered = serve(&app, &dir, &request).await;
-                let _ = answer(&session, &name, &rendered.map_err(|e| e.to_string()));
-            }
-            tokio::time::sleep(POLL).await;
-        }
-        clear(&session);
-    });
-    Serving(stop)
+    INBOX.start(app, dir, session, |app, dir, request: Request| async move {
+        serve(&app, &dir, &request).await
+    })
 }
 
 /// The tool checked the request, but anything may write to the inbox: check it again.
@@ -254,7 +181,7 @@ pub(crate) async fn render(
 ) -> Result<Vec<Rendered>> {
     let canvas = html::slide_size(&deck::read_html(file)?).pixels();
     let (window, signals) = open(app, file, at.is_some())?;
-    let mut helper = pdf::Helper {
+    let mut helper = Helper {
         window: &window,
         signals,
         task: TASK,
@@ -273,57 +200,46 @@ pub(crate) fn open(
     moving: bool,
 ) -> Result<(WebviewWindow, mpsc::UnboundedReceiver<Url>)> {
     let canvas = html::slide_size(&deck::read_html(file)?).pixels();
-    // Still, every animation shows its last frame; moving, the helper holds them where asked.
-    let query = if moving { "print" } else { "static&print" };
-    let url = protocol::file_url(file, query)
-        .parse()
-        .map_err(|e| Error::msg(format!("cannot open the deck for rendering: {e}")))?;
-
-    let (window_width, window_height) = pdf::window_size(canvas, pdf::screen_area(app));
-    let (signal_tx, signals) = mpsc::unbounded_channel::<Url>();
-    let label = format!("slide-render-{}", uuid::Uuid::new_v4().simple());
-    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::CustomProtocol(url))
-        .title("Slide render")
-        .inner_size(window_width, window_height)
-        // No title bar: WebKit would inset the page under it, and captures would be off.
-        .decorations(false);
-    let window = pdf::out_of_sight(builder)
-        .on_page_load(|webview, payload| {
-            if payload.event() == PageLoadEvent::Finished {
-                let _ = webview.eval(RENDER_JS);
-            }
-        })
-        .on_navigation(move |url| {
-            if url.path() != SIGNAL_PATH {
-                return true;
-            }
-            let _ = signal_tx.send(url.clone());
-            false
-        })
-        .build()
-        .map_err(|e| Error::msg(format!("cannot open the deck for rendering: {e}")))?;
-    Ok((window, signals))
+    export_window::open(
+        app,
+        file,
+        canvas,
+        Page {
+            label: "slide-render",
+            title: "Slide render",
+            // Still, every animation shows its last frame; moving, the helper holds them where
+            // asked.
+            query: if moving { "print" } else { "static&print" },
+            script: RENDER_JS,
+            signal: SIGNAL_PATH,
+            purpose: "rendering",
+            out_of_sight: true,
+        },
+    )
 }
 
 /// Shows the slide `id` in a window from [`open`]: its answer (`rect`, `view`, `overflow`),
 /// or None if the deck has no such slide.
 pub(crate) async fn show(
-    helper: &mut pdf::Helper<'_>,
+    helper: &mut Helper<'_>,
     id: &str,
     at: Option<f64>,
 ) -> Result<Option<HashMap<String, String>>> {
     let at = at.map_or_else(|| "null".to_string(), |at| at.to_string());
-    let script = format!("window.__slopRender.show({}, {at})", pdf::js_string(id));
+    let script = format!(
+        "window.__slopRender.show({}, {at})",
+        export_window::js_string(id)
+    );
     let shown = helper.run(&script, "shown").await?;
     if shown.contains_key("missing") {
         return Ok(None);
     }
-    pdf::check_view(&shown)?;
+    export_window::check_view(&shown)?;
     Ok(Some(shown))
 }
 
 async fn capture_slides(
-    helper: &mut pdf::Helper<'_>,
+    helper: &mut Helper<'_>,
     slides: &[String],
     at: Option<f64>,
     width: u32,
@@ -342,8 +258,8 @@ async fn capture_slides(
             });
             continue;
         };
-        let (rect, viewport) = pdf::geometry(&shown)?;
-        let png = video::capture(helper.window, rect, viewport, width).await?;
+        let (rect, viewport) = export_window::geometry(&shown)?;
+        let png = export_window::capture(helper.window, rect, viewport, width).await?;
         rendered.push(Rendered {
             id: id.clone(),
             png: Some(base64::engine::general_purpose::STANDARD.encode(png)),
@@ -356,12 +272,7 @@ async fn capture_slides(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn session() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("slopslide-render-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use crate::test_support::TempDir;
 
     fn slide(id: &str, overflow: &[&str]) -> Rendered {
         Rendered {
@@ -373,9 +284,9 @@ mod tests {
 
     #[test]
     fn a_request_reaches_the_app_and_its_answer_comes_back() {
-        let dir = session();
+        let dir = TempDir::new("render");
         let app = {
-            let dir = dir.clone();
+            let dir = dir.to_path_buf();
             std::thread::spawn(move || loop {
                 if let Some((name, request)) = take_requests(&dir).pop() {
                     assert_eq!(
@@ -396,18 +307,17 @@ mod tests {
         app.join().unwrap();
         assert_eq!(rendered, [slide("a", &[])]);
         assert_eq!(
-            std::fs::read_dir(dir.join(RESULTS)).unwrap().count(),
+            std::fs::read_dir(dir.join(INBOX.results)).unwrap().count(),
             0,
             "the answer is read once"
         );
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn a_failed_render_comes_back_as_its_error() {
-        let dir = session();
+        let dir = TempDir::new("render");
         let app = {
-            let dir = dir.clone();
+            let dir = dir.to_path_buf();
             std::thread::spawn(move || loop {
                 if let Some((name, _)) = take_requests(&dir).pop() {
                     answer(&dir, &name, &Err("no slides to render".into())).unwrap();
@@ -419,12 +329,11 @@ mod tests {
         let error = ask(&dir, "deck.html", vec!["a".into()], None, WAIT).unwrap_err();
         app.join().unwrap();
         assert_eq!(error.to_string(), "no slides to render");
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn without_an_app_the_request_times_out_and_is_withdrawn() {
-        let dir = session();
+        let dir = TempDir::new("render");
         let error = ask(
             &dir,
             "deck.html",
@@ -435,28 +344,6 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("did not render"), "{error}");
         assert!(take_requests(&dir).is_empty());
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn takes_requests_oldest_first_and_once_skipping_the_unreadable() {
-        let dir = session();
-        let inbox = dir.join(REQUESTS);
-        let request = |path: &str| Request {
-            path: path.into(),
-            slides: vec!["a".into()],
-            at: None,
-        };
-        put(&inbox, "first", &request("a.html")).unwrap();
-        std::thread::sleep(Duration::from_millis(20));
-        put(&inbox, "second", &request("b.html")).unwrap();
-        std::fs::write(inbox.join("broken.json"), "{").unwrap();
-        std::fs::write(inbox.join("half.tmp"), "{").unwrap();
-        let taken: Vec<String> = take_requests(&dir).into_iter().map(|(n, _)| n).collect();
-        assert_eq!(taken, ["first", "second"]);
-        assert!(take_requests(&dir).is_empty());
-        assert!(inbox.join("half.tmp").exists(), "still being written");
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -470,22 +357,6 @@ mod tests {
         // Requests from before the moment read as every animation finished.
         let old: Request = serde_json::from_str(r#"{"path":"a.html","slides":["a"]}"#).unwrap();
         assert_eq!(old.at, None);
-    }
-
-    #[test]
-    fn clearing_forgets_what_a_turn_left_behind() {
-        let dir = session();
-        let request = Request {
-            path: "a.html".into(),
-            slides: Vec::new(),
-            at: None,
-        };
-        put(&dir.join(REQUESTS), "old", &request).unwrap();
-        answer(&dir, "old", &Err("stale".into())).unwrap();
-        clear(&dir);
-        assert!(take_requests(&dir).is_empty());
-        assert!(!dir.join(RESULTS).exists());
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

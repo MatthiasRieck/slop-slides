@@ -2,17 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   basename,
-  chatFileUrl,
   cn,
   deckFileUrl,
   dirname,
   fileUrl,
   isSessionFile,
   layoutLabel,
+  plural,
   relativeTime,
   revealLabelFor,
   slideUrl,
   templateSlideUrl,
+  workspaceChatFileUrl,
 } from "./utils";
 
 describe("cn", () => {
@@ -20,6 +21,22 @@ describe("cn", () => {
     expect(cn("p-1", false, null, undefined, "text-sm")).toBe("p-1 text-sm");
     expect(cn("p-1 text-xs", "p-2")).toBe("text-xs p-2");
     expect(cn({ hidden: true, block: false })).toBe("hidden");
+  });
+});
+
+describe("plural", () => {
+  it.each([
+    [0, "0 slides"],
+    [1, "1 slide"],
+    [2, "2 slides"],
+  ])("counts %i with the word for that many", (n, text) => {
+    expect(plural(n, "slide")).toBe(text);
+  });
+
+  it("takes the word for many when it is not the one with an s", () => {
+    expect(plural(1, "match", "matches")).toBe("1 match");
+    expect(plural(3, "match", "matches")).toBe("3 matches");
+    expect(plural(2, "locked slide was", "locked slides were")).toBe("2 locked slides were");
   });
 });
 
@@ -80,15 +97,15 @@ describe("deck URLs (browser preview)", () => {
     expect(basename("deck.html")).toBe("deck.html");
   });
 
-  it("serves chat files from the deck, or from its session when absolute", () => {
+  it("serves chat files from the workspace, or from its session when absolute", () => {
     expect(isSessionFile("assets/a.png")).toBe(false);
     expect(isSessionFile("/Users/me/x.png")).toBe(true);
     expect(isSessionFile("C:\\Users\\x.png")).toBe(true);
-    expect(chatFileUrl(TALK, "assets/a.png")).toBe("/__deck/.file/Users/me/talks/assets/a.png");
-    expect(chatFileUrl(TALK, "/Users/me/.slopslides/sessions/1-ab/sketches/2.png")).toBe(
+    expect(workspaceChatFileUrl("/Users/me/talks", "assets/a.png")).toBe("/__deck/.file/Users/me/talks/assets/a.png");
+    expect(workspaceChatFileUrl("/Users/me/talks", "/Users/me/.slopslides/sessions/1-ab/sketches/2.png")).toBe(
       "/__deck/.session/Users/me/.slopslides/sessions/1-ab/sketches/2.png",
     );
-    expect(chatFileUrl(TALK, "C:\\Users\\me\\.slopslides\\sessions\\1-ab\\s 1.png")).toBe(
+    expect(workspaceChatFileUrl("/Users/me/talks", "C:\\Users\\me\\.slopslides\\sessions\\1-ab\\s 1.png")).toBe(
       "/__deck/.session/C%3A/Users/me/.slopslides/sessions/1-ab/s%201.png",
     );
   });
@@ -146,7 +163,7 @@ describe("deck URLs (desktop app)", () => {
     expect(utils.workspaceChatFileUrl(String.raw`\\?\C:\my talks`, "assets/a.png")).toBe(
       "http://slop.localhost/.file/C%3A/my%20talks/assets/a.png",
     );
-    expect(utils.chatFileUrl(deck, String.raw`\\?\C:\sessions\sketches\1.png`)).toBe(
+    expect(utils.workspaceChatFileUrl(String.raw`\\?\C:\my talks`, String.raw`\\?\C:\sessions\sketches\1.png`)).toBe(
       "http://slop.localhost/.session/C%3A/sessions/sketches/1.png",
     );
   });

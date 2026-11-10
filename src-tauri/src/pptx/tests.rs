@@ -469,8 +469,7 @@ fn a_hostile_file_cannot_reach_outside_assets_or_break_out_of_styles() {
 
 #[test]
 fn import_writes_the_deck_and_its_assets_and_leaves_the_file_alone() {
-    let dir = std::env::temp_dir().join(format!("slopslide-pptx-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = crate::test_support::TempDir::new("pptx");
     let source = dir.join("My talk.pptx");
     let bytes = sample();
     std::fs::write(&source, &bytes).unwrap();
@@ -491,7 +490,6 @@ fn import_writes_the_deck_and_its_assets_and_leaves_the_file_alone() {
     // A second import does not touch the first.
     let again = super::import(&source, &dir).unwrap();
     assert_ne!(again.deck.path, imported.deck.path);
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 // --- Export ------------------------------------------------------------------------------------

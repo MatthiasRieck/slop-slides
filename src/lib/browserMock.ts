@@ -2,6 +2,8 @@
 // served by dev/browserPreview.ts. Never loaded inside the desktop app.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 
+import { loadJson } from "./storage";
+
 export function installBrowserMock() {
   mockWindows("main");
   /** The dev server's answer to `/__api/<route>?<query>`; a 404 is an error. */
@@ -153,14 +155,13 @@ export function installBrowserMock() {
           return [];
         case "narration_words":
           return null;
-        case "download_speech_model":
         case "render_narration":
         case "time_narration":
         case "set_narration_voice":
         case "set_narration_language":
           throw new Error("Narration requires the desktop app.");
         case "load_chat":
-          return JSON.parse(localStorage.getItem(`mock-chat-${String(a.id)}`) ?? "null");
+          return loadJson(`mock-chat-${String(a.id)}`, null, (saved) => saved);
         default:
           return null;
       }

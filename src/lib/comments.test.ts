@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
 
 import {
@@ -8,7 +9,6 @@ import {
   areaPath,
   commentLine,
   commentSelector,
-  parseArea,
   parseSpots,
   parseTarget,
   placeComments,
@@ -162,23 +162,6 @@ describe("area comments", () => {
     expect(cut?.rect).toEqual({ x: 350, y: 150, width: 125, height: 200 });
     expect(cut?.outline[1]).toEqual([2, 0]);
     expect(areaCapture(rect, slide, { left: 0, top: 0, width: 300, height: 2000 })).toBeNull();
-  });
-
-  it("checks areas read back from the deck", () => {
-    expect(parseArea({ shape: "rect", points: box })).toEqual({ shape: "rect", points: box });
-    expect(parseArea({ shape: "star", points: box })).toBeNull();
-    expect(parseArea({ shape: "rect", points: [[0, 0]] })).toBeNull();
-    expect(parseArea({ shape: "lasso", points: box })).toBeNull();
-    expect(
-      parseArea({
-        shape: "rect",
-        points: [
-          [0, 0],
-          [0, "1"],
-        ],
-      }),
-    ).toBeNull();
-    expect(parseArea(null)).toBeNull();
   });
 });
 

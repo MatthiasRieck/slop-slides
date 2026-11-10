@@ -58,6 +58,7 @@ import {
   Wallpaper,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useDropdown } from "../hooks/useDropdown";
 import type { ArrangeMessage, EditGeometry, EditLayer } from "../lib/arrange";
 import {
   type Autofit,
@@ -90,7 +91,7 @@ import { keepFocus, ToolButton } from "./Button";
 import { DraftInput } from "./Field";
 import { DashSelect, LineButton, Parallelogram, Trapezoid } from "./LineTools";
 import { LookTools } from "./LookTools";
-import { DropdownPanel, dropdownPanel, useDismiss } from "./Popover";
+import { DropdownPanel, dropdownPanel } from "./Popover";
 import { RibbonRow, RibbonSection, useRibbonFit } from "./Ribbon";
 
 const TOOLS: { tool: EditTool; label: string; icon: ReactNode }[] = [
@@ -149,6 +150,14 @@ const ORDER: { to: StackOrder; label: string; icon: ReactNode }[] = [
   { to: "forward", label: "Bring forward", icon: <ArrowUp /> },
   { to: "backward", label: "Send backward", icon: <ArrowDown /> },
   { to: "back", label: "Send to back", icon: <SendToBack /> },
+];
+
+/** The text's on-or-off looks, each a button of its own. */
+const TEXT_MARKS: { mark: "bold" | "italic" | "underline" | "strike"; label: string; icon: ReactNode }[] = [
+  { mark: "bold", label: "Bold (⌘B)", icon: <Bold /> },
+  { mark: "italic", label: "Italic (⌘I)", icon: <Italic /> },
+  { mark: "underline", label: "Underline (⌘U)", icon: <Underline /> },
+  { mark: "strike", label: "Strikethrough", icon: <Strikethrough /> },
 ];
 
 const SCRIPTS: { value: "sup" | "sub"; label: string; icon: ReactNode }[] = [
@@ -282,42 +291,18 @@ export function EditToolbar(props: {
           </ToolButton>
         </RibbonRow>
         <RibbonRow>
-          <ToolButton
-            keepFocus
-            label="Bold (⌘B)"
-            active={!textOff && !!style.bold}
-            disabled={textOff}
-            onClick={() => props.onStyle({ bold: !style.bold })}
-          >
-            <Bold />
-          </ToolButton>
-          <ToolButton
-            keepFocus
-            label="Italic (⌘I)"
-            active={!textOff && !!style.italic}
-            disabled={textOff}
-            onClick={() => props.onStyle({ italic: !style.italic })}
-          >
-            <Italic />
-          </ToolButton>
-          <ToolButton
-            keepFocus
-            label="Underline (⌘U)"
-            active={!textOff && !!style.underline}
-            disabled={textOff}
-            onClick={() => props.onStyle({ underline: !style.underline })}
-          >
-            <Underline />
-          </ToolButton>
-          <ToolButton
-            keepFocus
-            label="Strikethrough"
-            active={!textOff && !!style.strike}
-            disabled={textOff}
-            onClick={() => props.onStyle({ strike: !style.strike })}
-          >
-            <Strikethrough />
-          </ToolButton>
+          {TEXT_MARKS.map((m) => (
+            <ToolButton
+              keepFocus
+              key={m.mark}
+              label={m.label}
+              active={!textOff && !!style[m.mark]}
+              disabled={textOff}
+              onClick={() => props.onStyle({ [m.mark]: !style[m.mark] })}
+            >
+              {m.icon}
+            </ToolButton>
+          ))}
           {SCRIPTS.map((s) => (
             <ToolButton
               keepFocus
@@ -518,9 +503,7 @@ export function EditToolbar(props: {
 
 /** The "More shapes" picker: diagram shapes, which go back to Select once one is added. */
 function MoreShapes(props: { tool: EditTool; onTool: (tool: EditTool) => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useDismiss(open, ref, () => setOpen(false));
+  const { open, setOpen, ref, toggle } = useDropdown();
   const current = MORE_SHAPES.find((s) => s.tool === props.tool);
   return (
     <div ref={ref} className="relative">
@@ -530,7 +513,7 @@ function MoreShapes(props: { tool: EditTool; onTool: (tool: EditTool) => void })
         title={current ? `More shapes: ${current.label.replace(/^Add an? /, "")}` : "More shapes"}
         aria-expanded={open}
         active={!!current || open}
-        onClick={() => setOpen(!open)}
+        onClick={toggle}
       >
         {current?.icon ?? <Plus />}
       </ToolButton>
@@ -566,13 +549,10 @@ function ColorButton(props: {
   deck?: DeckColor[];
   onChange: (color: string | null) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const { open, setOpen, ref, toggle } = useDropdown({ disabled: props.disabled });
   const custom = useRef<HTMLInputElement>(null);
   const onChange = useRef(props.onChange);
   onChange.current = props.onChange;
-
-  useDismiss(open, ref, () => setOpen(false));
 
   // The system color picker reports every color the user passes over; only the one they settle on counts.
   // biome-ignore lint/correctness/useExhaustiveDependencies: the input mounts and unmounts with the popover
@@ -584,7 +564,6 @@ function ColorButton(props: {
     return () => input.removeEventListener("change", pick);
   }, [open]);
 
-  if (props.disabled && open) setOpen(false);
   const pick = (color: string | null) => {
     props.onChange(color);
     setOpen(false);
@@ -599,7 +578,7 @@ function ColorButton(props: {
         aria-expanded={open}
         disabled={props.disabled}
         onMouseDown={keepFocus}
-        onClick={() => setOpen(!open)}
+        onClick={toggle}
         className="flex flex-col items-center rounded-md px-1 pt-0.5 pb-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-3.5"
       >
         {props.icon}
@@ -614,19 +593,13 @@ function ColorButton(props: {
           {!!props.deck?.length && (
             <fieldset aria-label="Deck colors" className="mb-2 grid w-max grid-cols-6 gap-1 border-b pb-2">
               {props.deck.map((color) => (
-                <button
+                <Swatch
                   key={color.name}
-                  type="button"
-                  aria-label={`Deck color ${color.name}`}
+                  color={color.value}
+                  label={`Deck color ${color.name}`}
                   title={color.name}
-                  aria-pressed={props.value === color.value}
-                  onMouseDown={keepFocus}
-                  onClick={() => pick(color.value)}
-                  className={cn(
-                    "size-5 rounded-full border border-foreground/20",
-                    props.value === color.value && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-card",
-                  )}
-                  style={{ background: color.value }}
+                  picked={props.value === color.value}
+                  onPick={() => pick(color.value)}
                 />
               ))}
             </fieldset>
@@ -649,19 +622,13 @@ function ColorButton(props: {
               </button>
             )}
             {EDIT_COLORS.map((color) => (
-              <button
+              <Swatch
                 key={color}
-                type="button"
-                aria-label={color}
+                color={color}
+                label={color}
                 title={color}
-                aria-pressed={props.value === color}
-                onMouseDown={keepFocus}
-                onClick={() => pick(color)}
-                className={cn(
-                  "size-5 rounded-full border border-foreground/20",
-                  props.value === color && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-card",
-                )}
-                style={{ background: color }}
+                picked={props.value === color}
+                onPick={() => pick(color)}
               />
             ))}
           </div>
@@ -678,6 +645,25 @@ function ColorButton(props: {
         </DropdownPanel>
       )}
     </div>
+  );
+}
+
+/** One color to pick in a color well, ringed while it is the one picked. */
+function Swatch(props: { color: string; label: string; title: string; picked: boolean; onPick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label={props.label}
+      title={props.title}
+      aria-pressed={props.picked}
+      onMouseDown={keepFocus}
+      onClick={props.onPick}
+      className={cn(
+        "size-5 rounded-full border border-foreground/20",
+        props.picked && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-card",
+      )}
+      style={{ background: props.color }}
+    />
   );
 }
 
@@ -753,14 +739,11 @@ function LinkButton(props: {
   onChange: (href: string | null) => void;
   onDone: () => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const { open, setOpen, ref } = useDropdown({ disabled: props.disabled });
   const slideNow = linkedSlide(props.value);
   const [address, setAddress] = useState("");
   const [slide, setSlide] = useState("");
   const [invalid, setInvalid] = useState(false);
-  useDismiss(open, ref, () => setOpen(false));
-  if (props.disabled && open) setOpen(false);
 
   const toggle = () => {
     if (!open) {
@@ -868,10 +851,7 @@ function SpacingButton(props: {
   disabled: boolean;
   onChange: (changes: EditStyle) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useDismiss(open, ref, () => setOpen(false));
-  if (props.disabled && open) setOpen(false);
+  const { open, ref, toggle } = useDropdown({ disabled: props.disabled });
   const heights = [...new Set<number>([...LINE_HEIGHTS, ...(props.lineHeight ? [props.lineHeight] : [])])].sort(
     (a, b) => a - b,
   );
@@ -885,7 +865,7 @@ function SpacingButton(props: {
         title="Line height and letter spacing"
         aria-expanded={open}
         disabled={props.disabled}
-        onClick={() => setOpen(!open)}
+        onClick={toggle}
       >
         <Space />
       </ToolButton>

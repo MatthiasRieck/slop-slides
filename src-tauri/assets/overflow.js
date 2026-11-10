@@ -1,4 +1,4 @@
-/* What runs past a slide or is cut off. Shared by the slide editor (assets/editor.js), which
+/* What runs past a slide or is cut off. Shared by the slide editor (assets/editor/), which
    runs it in the stage's preview, and the agent's slide renders (assets/render.js), which run
    it in a hidden window. It never becomes part of a deck. */
 window.__slopOverflow = (function () {
@@ -105,5 +105,6 @@ window.__slopOverflow = (function () {
     find: find,
     nameOf: nameOf,
     describe: describe,
+    zoom: zoom,
   };
 })();

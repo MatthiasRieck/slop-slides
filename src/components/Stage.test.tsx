@@ -33,6 +33,25 @@ beforeEach(() => {
   });
 });
 
+/** Lays the stage out at 960 × 540, so the slide preview loads; gives back what undoes it. */
+function layOutStage() {
+  const before = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class {
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(target: Element) {
+      this.callback(
+        [{ target, contentRect: { width: 960, height: 540 } } as unknown as ResizeObserverEntry],
+        this as unknown as ResizeObserver,
+      );
+    }
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+  return () => {
+    globalThis.ResizeObserver = before;
+  };
+}
+
 const position = () => screen.getByText(/^\d+ \/ \d+$/).textContent;
 const prev = () => screen.getByRole("button", { name: "Previous slide" });
 const next = () => screen.getByRole("button", { name: "Next slide" });
@@ -520,26 +539,14 @@ describe("Stage", () => {
           target: { path: [1], tag: "h2", label: "Hello", at: [0.5, 0.5] },
         });
       const input = () => screen.getByRole("textbox", { name: "Comment text" });
-      let restoreObserver: typeof ResizeObserver;
+      let undoLayout: () => void;
 
       beforeEach(() => {
-        restoreObserver = globalThis.ResizeObserver;
-        // Lay the stage out so the slide preview loads.
-        globalThis.ResizeObserver = class {
-          constructor(private callback: ResizeObserverCallback) {}
-          observe(target: Element) {
-            this.callback(
-              [{ target, contentRect: { width: 960, height: 540 } } as unknown as ResizeObserverEntry],
-              this as unknown as ResizeObserver,
-            );
-          }
-          unobserve() {}
-          disconnect() {}
-        } as unknown as typeof ResizeObserver;
+        undoLayout = layOutStage();
         useApp.setState({ comments: {}, commentsHeld: {}, reviewVisible: true });
       });
       afterEach(() => {
-        globalThis.ResizeObserver = restoreObserver;
+        undoLayout();
         useApp.setState({ comments: {}, reviewVisible: true });
       });
 
@@ -859,7 +866,6 @@ describe("Stage", () => {
   });
 
   describe("editing the slide", () => {
-    const NoLayout = globalThis.ResizeObserver;
     const { saveSlideEdit, undo, redo, discardSlideEdits, tidyLayout } = useApp.getState();
     const toggleEditing = () => act(() => useApp.getState().setMode(useApp.getState().editing ? "view" : "edit"));
     const stageFrame = (container: HTMLElement) => container.querySelector("iframe")!;
@@ -869,23 +875,14 @@ describe("Stage", () => {
       act(() => void window.dispatchEvent(new MessageEvent("message", { data, source: frame?.contentWindow ?? null })));
     }
 
+    let undoLayout: () => void;
+
     beforeEach(() => {
-      // Lay the stage out at 960px so the slide preview loads.
-      globalThis.ResizeObserver = class {
-        constructor(private callback: ResizeObserverCallback) {}
-        observe(target: Element) {
-          this.callback(
-            [{ target, contentRect: { width: 960, height: 540 } } as unknown as ResizeObserverEntry],
-            this as unknown as ResizeObserver,
-          );
-        }
-        unobserve() {}
-        disconnect() {}
-      } as unknown as typeof ResizeObserver;
+      undoLayout = layOutStage();
       useApp.setState({ editing: false, editReload: 0, editBase: null, editedSlides: [], running: false });
     });
     afterEach(() => {
-      globalThis.ResizeObserver = NoLayout;
+      undoLayout();
       useApp.setState({ saveSlideEdit, undo, redo, discardSlideEdits, tidyLayout });
       vi.restoreAllMocks();
     });

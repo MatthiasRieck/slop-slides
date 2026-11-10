@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { invoke, listen } from "../test/tauri";
+import { calls, invoke, listen } from "../test/tauri";
 
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
 listen.mockImplementation(async (name: string, handler: (event: { payload: unknown }) => void) => {
@@ -45,7 +45,6 @@ const approval = {
 };
 const emit = (event: AgentEvent, workspace = "/decks/talk") =>
   act(() => listeners.get("agent-event")!({ payload: { workspace, event } }));
-const calls = (command: string) => invoke.mock.calls.filter(([name]) => name === command);
 
 beforeEach(async () => {
   listeners.clear();
@@ -72,7 +71,7 @@ beforeEach(async () => {
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "Please lint the deck" } });
   fireEvent.click(screen.getByTitle("Send"));
   await waitFor(() => expect(calls("send_message")).toHaveLength(1));
-  expect(calls("send_message")[0]![1].args).toMatchObject({ provider: "codex", permissionMode: "ask" });
+  expect(calls("send_message")[0]!.args).toMatchObject({ provider: "codex", permissionMode: "ask" });
 });
 
 describe("Codex approval event → store → chat → IPC", () => {
@@ -84,14 +83,14 @@ describe("Codex approval event → store → chat → IPC", () => {
     emit({ type: "approvalRequested", approval });
     fireEvent.click(screen.getByRole("button", { name: label }));
     await waitFor(() => expect(calls("respond_approval")).toHaveLength(1));
-    expect(calls("respond_approval")[0]![1]).toEqual({ workspace: "/decks/talk", id: "mcp-approval", decision });
+    expect(calls("respond_approval")[0]).toEqual({ workspace: "/decks/talk", id: "mcp-approval", decision });
     emit({ type: "approvalResolved", id: approval.id });
     emit({ type: "finished", interrupted: false });
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
     expect(useApp.getState().running).toBe(false);
     await waitFor(() => expect(calls("save_chat")).toHaveLength(1));
-    const saved = calls("save_chat")[0]![1].chat;
-    expect(saved.at(-1).parts).toContainEqual({ kind: "approval", approval, status: "resolved" });
+    const saved = calls("save_chat")[0]!.chat as { parts: unknown[] }[];
+    expect(saved.at(-1)!.parts).toContainEqual({ kind: "approval", approval, status: "resolved" });
   });
 
   it("Stop closes the request without approving it", async () => {

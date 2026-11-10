@@ -1022,13 +1022,6 @@ describe("ChatPanel: attachments", () => {
     });
   });
 
-  it("names a nameless pasted image after its type", async () => {
-    invoke.mockImplementation(async (_cmd: string, args: { name: string }) => `assets/${args.name}`);
-    render(<ChatPanel />);
-    await act(async () => paste([new File(["x"], "", { type: "image/jpeg" })]));
-    await waitFor(() => expect(screen.getByAltText("pasted-image.jpg")).toBeTruthy());
-  });
-
   it("leaves text-only and non-image pastes alone", async () => {
     render(<ChatPanel />);
     const event = new Event("paste", { bubbles: true, cancelable: true });
@@ -1167,23 +1160,6 @@ describe("ChatPanel: transcript", () => {
     );
     expect(container.querySelector("strong")!.textContent).toBe("Done.");
     expect(container.querySelector("table")).not.toBeNull();
-  });
-
-  it.each([
-    ["Write", { file_path: "/decks/talk/deck.html" }, "Wrote deck.html"],
-    ["Edit", { file_path: "\\decks\\talk\\assets\\x.css" }, "Edited assets/x.css"],
-    ["Edit", { file_path: "/decks/talk-old/deck.html" }, "Edited /decks/talk-old/deck.html"],
-    ["MultiEdit", { file_path: "/elsewhere/file.txt" }, "Edited /elsewhere/file.txt"],
-    ["Read", { file_path: "/decks/talk/assets/notes.md" }, "Read assets/notes.md"],
-    ["Grep", { pattern: 'class="slide"' }, 'Searched class="slide"'],
-    ["Glob", { pattern: "assets/*" }, "Searched assets/*"],
-    ["WebSearch", { query: "pitch deck tips" }, "Searched the web for pitch deck tips"],
-    ["WebFetch", { url: "https://example.com" }, "Fetched https://example.com"],
-    ["TodoWrite", { todos: [] }, "TodoWrite"],
-    ["Write", { file_path: 42 }, "Wrote"],
-  ])("describes %s calls", (name, input, label) => {
-    showMessages(reply({ parts: [tool(name, input)] }));
-    expect(toolRow(label)).toBeTruthy();
   });
 
   it("links an edit of deck.html to the slide it touched", () => {

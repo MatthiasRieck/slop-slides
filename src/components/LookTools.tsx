@@ -1,10 +1,10 @@
 import { Blend, FlipHorizontal2, FlipVertical2, Image, Paintbrush, Replace } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-
+import { useDropdown } from "../hooks/useDropdown";
 import { type EditSelection, type EditStyle, type EditTool, FIT_POSITIONS, type ImageFit } from "../lib/editTools";
 import { cn } from "../lib/utils";
 import { keepFocus, ToolButton } from "./Button";
-import { DropdownPanel, useDismiss } from "./Popover";
+import { DropdownPanel } from "./Popover";
 
 const FITS: { value: ImageFit; label: string }[] = [
   { value: "contain", label: "Fit" },
@@ -49,20 +49,6 @@ export function LookTools(props: {
   );
 }
 
-/**
- * A popover's state. Its panel shows only with a selection, and comes back with it: saving
- * reloads the slide's preview, which reports the selection again.
- */
-function usePopover(onClose?: () => void) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useDismiss(open, ref, () => {
-    onClose?.();
-    setOpen(false);
-  });
-  return { open, setOpen, ref };
-}
-
 const popoverPanel = "grid w-max grid-cols-[auto_auto] items-center gap-x-2 gap-y-1.5 text-xs";
 
 /** Opacity, shadow and corner radius of the selection. */
@@ -71,7 +57,9 @@ function AppearanceButton(props: {
   onStyle: (changes: EditStyle) => void;
   onDone: () => void;
 }) {
-  const { open, setOpen, ref } = usePopover();
+  // The panel shows only with a selection, and comes back with it: saving reloads the slide's
+  // preview, which reports the selection again.
+  const { open, ref, toggle } = useDropdown();
   const s = props.selection;
   const change = (changes: EditStyle) => {
     props.onStyle(changes);
@@ -85,7 +73,7 @@ function AppearanceButton(props: {
         title="Opacity, shadow, corner radius and a shape's proportions"
         aria-expanded={open}
         disabled={!s}
-        onClick={() => setOpen(!open)}
+        onClick={toggle}
       >
         <Blend />
       </ToolButton>
@@ -197,7 +185,7 @@ function ImageButton(props: {
   const saveAlt = () => {
     if (s && alt !== (s.alt ?? "")) props.onStyle({ alt });
   };
-  const { open, setOpen, ref } = usePopover(saveAlt);
+  const { open, ref, toggle } = useDropdown({ onClose: saveAlt });
   useEffect(() => setAlt(s?.alt ?? ""), [s?.alt]);
   return (
     <div ref={ref} className="relative">
@@ -207,7 +195,7 @@ function ImageButton(props: {
         title="Replace, fit, flip and describe the image"
         aria-expanded={open}
         disabled={!s}
-        onClick={() => setOpen(!open)}
+        onClick={toggle}
       >
         <Image />
       </ToolButton>

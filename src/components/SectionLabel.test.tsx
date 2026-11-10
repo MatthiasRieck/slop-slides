@@ -6,15 +6,16 @@ import { SectionLabel } from "./SectionLabel";
 const LABEL = "text-2xs font-medium uppercase tracking-wide text-muted-foreground";
 
 describe("SectionLabel", () => {
-  it("is a span by default", () => {
-    render(<SectionLabel>Slides</SectionLabel>);
+  it("is a span by default, or a heading", () => {
+    render(
+      <>
+        <SectionLabel>Slides</SectionLabel>
+        <SectionLabel as="h2">Open</SectionLabel>
+      </>,
+    );
     const label = screen.getByText("Slides");
     expect(label.tagName).toBe("SPAN");
     expect(label.className).toBe(LABEL);
-  });
-
-  it("can be a heading", () => {
-    render(<SectionLabel as="h2">Open</SectionLabel>);
     expect(screen.getByRole("heading", { level: 2, name: "Open" }).className).toBe(LABEL);
   });
 

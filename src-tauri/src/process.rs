@@ -108,6 +108,7 @@ mod windows_job {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
     use std::io::Read;
     use std::path::PathBuf;
     use std::process::Stdio;
@@ -154,32 +155,15 @@ mod tests {
         }
     }
 
-    struct Temp(PathBuf);
-
-    impl Temp {
-        fn new() -> Self {
-            let root =
-                std::env::temp_dir().join(format!("slopslide-process-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(&root).unwrap();
-            Self(root)
-        }
-    }
-
-    impl Drop for Temp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
     #[tokio::test]
     async fn forwards_stdio_arguments_environment_cwd_and_exit_status() {
-        let temp = Temp::new();
+        let temp = TempDir::new("process");
         assert_forwarded(&std::env::current_exe().unwrap(), &temp).await;
         #[cfg(windows)]
-        assert_forwarded(&batch_launcher(&temp.0), &temp).await;
+        assert_forwarded(&batch_launcher(temp.path()), &temp).await;
     }
 
-    async fn assert_forwarded(program: &Path, temp: &Temp) {
+    async fn assert_forwarded(program: &Path, temp: &TempDir) {
         let arguments = [
             "two words",
             "café",
@@ -191,7 +175,7 @@ mod tests {
             .args([FIXTURE_FLAG, "echo"])
             .args(arguments)
             .env("SLOPSLIDE_PROCESS_TEST", "a b=c")
-            .current_dir(&temp.0)
+            .current_dir(temp.path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -216,7 +200,7 @@ mod tests {
             PathBuf::from(value["cwd"].as_str().unwrap())
                 .canonicalize()
                 .unwrap(),
-            temp.0.canonicalize().unwrap()
+            temp.path().canonicalize().unwrap()
         );
         assert!(String::from_utf8_lossy(&output.stderr).contains("fixture stderr"));
     }
@@ -261,7 +245,7 @@ mod tests {
     struct Tree {
         child: tokio::process::Child,
         descendant: std::os::windows::io::OwnedHandle,
-        temp: Temp,
+        temp: TempDir,
     }
 
     #[cfg(windows)]
@@ -270,22 +254,22 @@ mod tests {
             use std::os::windows::io::FromRawHandle;
             use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE};
 
-            let temp = Temp::new();
+            let temp = TempDir::new("process");
             let program = if batch {
-                batch_launcher(&temp.0)
+                batch_launcher(temp.path())
             } else {
                 std::env::current_exe().unwrap()
             };
             let mut command = command(&program).unwrap();
             let child = command
                 .args([FIXTURE_FLAG, "tree"])
-                .arg(&temp.0)
+                .arg(temp.path())
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
                 .unwrap();
-            let pid_file = temp.0.join("child.pid");
+            let pid_file = temp.path().join("child.pid");
             tokio::time::timeout(Duration::from_secs(10), async {
                 while !pid_file.exists() {
                     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -357,7 +341,7 @@ mod tests {
     async fn normal_exit_cleans_up_tools_without_stopping_another_agent() {
         let mut first = Tree::start(true).await;
         let mut other = Tree::start(true).await;
-        std::fs::write(first.temp.0.join("finish"), "").unwrap();
+        std::fs::write(first.temp.path().join("finish"), "").unwrap();
         let status = tokio::time::timeout(Duration::from_secs(5), first.child.wait())
             .await
             .unwrap()

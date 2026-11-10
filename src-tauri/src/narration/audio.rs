@@ -36,6 +36,15 @@ pub fn write_wav(path: &Path, samples: &[f32], rate: u32) -> Result<()> {
     Ok(())
 }
 
+/// Writes `samples` (mono, at `rate`) as the WAV file `path` in one step, through a `.part`
+/// file next to it, so nothing reads half of it.
+pub fn replace_wav(path: &Path, samples: &[f32], rate: u32) -> Result<()> {
+    let part = path.with_extension("wav.part");
+    write_wav(&part, samples, rate)?;
+    fs::rename(&part, path)?;
+    Ok(())
+}
+
 /// How loud `samples` (at `rate`) are along their length: the loudest in each of
 /// [`PEAKS_PER_SECOND`] slices of a second, 0 to 1.
 pub fn peaks(samples: &[f32], rate: u32) -> Vec<f32> {

@@ -142,14 +142,18 @@ pub fn set_claude_tail(session: &Path, tail: Option<&str>) -> Result<()> {
     save(session, &state)
 }
 
+/// Called with the provider's point for a turn once it started: None when the turn starts the
+/// conversation (Claude Code, see [`Anchor`]).
+pub type Started<'a> = &'a (dyn Fn(Option<&str>) + Sync);
+
 /// What a provider's turn needs to take the conversation back and to record where it started.
 #[derive(Default, Clone, Copy)]
 pub struct TurnRewind<'a> {
     /// The point to cut the conversation back at before the turn, with the note to start the
     /// prompt with if that fails (see [`Plan::At`]).
     pub cut: Option<(&'a str, &'a str)>,
-    /// Called with the provider's point for the turn once it started.
-    pub started: Option<&'a (dyn Fn(&str) + Sync)>,
+    /// Called once the turn started (see [`Started`]).
+    pub started: Option<Started<'a>>,
 }
 
 /// `prompt` with `note` before it.

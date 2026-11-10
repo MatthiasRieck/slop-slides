@@ -1,5 +1,6 @@
 mod agent;
 mod capture;
+mod claude;
 mod clipboard;
 mod codex;
 mod comments;
@@ -32,7 +33,7 @@ mod screens;
 mod sessions;
 mod size;
 mod templates;
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod test_support;
 mod video;
 mod voice;

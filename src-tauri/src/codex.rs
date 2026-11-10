@@ -2,7 +2,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -10,10 +9,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, watch};
 
-use crate::agent::{AgentEvent, Outcome, Steers, SYSTEM_PROMPT};
+use crate::agent::{AgentEvent, Outcome, Steers, TurnArgs, SYSTEM_PROMPT};
 use crate::error::{Error, Result};
 use crate::extensions::{self, Extensions};
-use crate::permissions::{Answer, Approval, Approvals, Choices, Decision, PermissionMode, Run};
+use crate::permissions::{self, Answer, Approval, Choices, Decision, PermissionMode, Run};
 use crate::{env, mcp, rewind};
 
 struct Server {
@@ -181,14 +180,15 @@ pub async fn permission_modes(dir: &Path) -> Result<Vec<PermissionMode>> {
     Ok(supported_modes(&config, &requirements))
 }
 
-fn thread_params(args: &TurnArgs<'_>, config: &Value) -> Value {
+/// The `thread/start`/`thread/resume` parameters for a turn in `mode`.
+fn thread_params(args: &TurnArgs<'_>, mode: PermissionMode, config: &Value) -> Value {
     let instructions = args.extensions.system_prompt(SYSTEM_PROMPT);
     let mut p = json!({"cwd":args.dir,"developerInstructions":instructions});
     if let Some(model) = args.model {
         p["model"] = json!(model);
     }
     // Custom must explicitly restore current config when resuming a previously unrestricted thread.
-    let (sandbox, policy, reviewer) = match args.mode {
+    let (sandbox, policy, reviewer) = match mode {
         PermissionMode::Ask => (json!("workspace-write"), json!("on-request"), json!("user")),
         PermissionMode::AutoReview => (
             json!("workspace-write"),
@@ -217,34 +217,22 @@ fn thread_params(args: &TurnArgs<'_>, config: &Value) -> Value {
     if config.get("approvals_reviewer").is_some() {
         p["approvalsReviewer"] = reviewer;
     }
-    if args.mode != PermissionMode::Custom && args.mode != PermissionMode::FullAccess {
+    if mode != PermissionMode::Custom && mode != PermissionMode::FullAccess {
         p["config"] = json!({"sandbox_workspace_write.network_access":false});
     }
     p
 }
 
-pub struct TurnArgs<'a> {
-    pub bin: &'a Path,
-    pub dir: &'a Path,
-    pub lint_server: &'a Path,
-    pub workspace: &'a str,
-    pub prompt: &'a str,
-    pub model: Option<&'a str>,
-    pub effort: Option<&'a str>,
-    pub session: Option<&'a str>,
-    pub mode: PermissionMode,
-    pub approvals: Arc<Approvals>,
-    pub extensions: &'a Extensions,
-    pub rewind: rewind::TurnRewind<'a>,
-}
-
-pub async fn run_turn(
+/// Runs one turn. Codex fixes the permission policy as the turn starts: a mode the user picks
+/// while it runs applies to the next turn. `on_session` persists the thread id once known.
+pub(crate) async fn run_turn(
     args: TurnArgs<'_>,
     cancel: &mut watch::Receiver<bool>,
     steers: &mut Steers,
     emit: &(dyn Fn(&AgentEvent) + Sync),
     on_session: &(dyn Fn(&str) -> Result<()> + Sync),
 ) -> Result<Outcome> {
+    let mode = *args.mode.borrow();
     let mut warnings = Vec::new();
     let mut config = mcp_config_args(args.lint_server, args.dir);
     config.extend(extensions::codex_config_args(
@@ -277,14 +265,16 @@ pub async fn run_turn(
             }
             Ok(Outcome::Interrupted)
         },
-        result = connected_turn(&mut server, &args, &run, &mut answers, steers, emit, on_session) => result,
+        result = connected_turn(&mut server, &args, mode, &run, &mut answers, steers, emit, on_session) => result,
     }
     // Server's kill_on_drop closes the transport, including any pending approvals.
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn connected_turn(
     server: &mut Server,
     args: &TurnArgs<'_>,
+    mode: PermissionMode,
     run: &Run,
     answers: &mut mpsc::UnboundedReceiver<Answer>,
     steers: &mut Steers,
@@ -304,12 +294,12 @@ async fn connected_turn(
         }
     }
     let (config, requirements) = server.configuration(args.dir).await?;
-    if !supported_modes(&config, &requirements).contains(&args.mode) {
+    if !supported_modes(&config, &requirements).contains(&mode) {
         return Err(Error::msg(
             "This permission mode is unavailable in your Codex configuration. Select another mode.",
         ));
     }
-    let mut params = thread_params(args, &config);
+    let mut params = thread_params(args, mode, &config);
     let method = if let Some(id) = args.session {
         params["threadId"] = json!(id);
         "thread/resume"
@@ -359,7 +349,7 @@ async fn connected_turn(
         .ok_or_else(|| Error::msg("Codex returned no turn ID."))?
         .to_string();
     if let Some(started) = args.rewind.started {
-        started(&turn);
+        started(Some(&turn));
     }
     server.active_turn = Some((thread.clone(), turn.clone()));
     let mut mapper = EventMapper::default();
@@ -581,33 +571,20 @@ fn mcp_approval_request(p: &Value) -> Option<(Approval, Choices)> {
     }
     let server = p["serverName"].as_str()?;
     let message = p["message"].as_str()?;
-    let mut decisions = vec![Decision::Accept];
-    let mut result = Choices::from([
-        ("accept", json!({"action":"accept","content":{}})),
-        ("decline", json!({"action":"decline"})),
-    ]);
     let persist = &meta["persist"];
-    if persist == "session"
+    let for_session = (persist == "session"
         || persist
             .as_array()
-            .is_some_and(|a| a.iter().any(|v| v == "session"))
-    {
-        decisions.push(Decision::AcceptForSession);
-        result.insert(
-            "acceptForSession",
-            json!({"action":"accept","content":{},"_meta":{"persist":"session"}}),
-        );
-    }
-    decisions.push(Decision::Decline);
+            .is_some_and(|a| a.iter().any(|v| v == "session")))
+    .then(|| json!({"action":"accept","content":{},"_meta":{"persist":"session"}}));
+    let (decisions, result) = permissions::offer(
+        json!({"action":"accept","content":{}}),
+        for_session,
+        json!({"action":"decline"}),
+    );
+    let details = serde_json::to_string_pretty(&json!({"server":server,"tool":meta})).ok()?;
     Some((
-        Approval {
-            id: uuid::Uuid::new_v4().to_string(),
-            title: "Use an MCP tool".into(),
-            reason: Some(message.into()),
-            details: serde_json::to_string_pretty(&json!({"server":server,"tool":meta})).ok()?,
-            accept_label: "Allow once".into(),
-            decisions,
-        },
+        Approval::new("Use an MCP tool", Some(message.into()), details, decisions),
         result,
     ))
 }

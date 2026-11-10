@@ -164,18 +164,16 @@ pub fn with_note(note: &str, prompt: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
 
-    fn session() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("slopslide-rewind-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).unwrap();
-        dir
+    fn session() -> TempDir {
+        TempDir::new("rewind")
     }
 
     #[test]
     fn nothing_to_take_without_a_request() {
         let dir = session();
         assert_eq!(take(&dir, Provider::Claude).unwrap(), None);
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -191,7 +189,6 @@ mod tests {
             })
         );
         assert_eq!(take(&dir, Provider::Codex).unwrap(), None);
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -200,7 +197,6 @@ mod tests {
         anchor(&dir, "m1", Provider::Claude, None).unwrap();
         request(&dir, "m1", "note").unwrap();
         assert_eq!(take(&dir, Provider::Claude).unwrap(), Some(Plan::Fresh));
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -217,7 +213,6 @@ mod tests {
             take(&dir, Provider::Claude).unwrap(),
             Some(Plan::Note("other".into()))
         );
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -234,7 +229,6 @@ mod tests {
                 note: "one".into()
             })
         );
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -245,7 +239,6 @@ mod tests {
         assert_eq!(claude_tail(&dir).as_deref(), Some("u1"));
         set_claude_tail(&dir, None).unwrap();
         assert_eq!(claude_tail(&dir), None);
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

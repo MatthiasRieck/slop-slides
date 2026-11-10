@@ -375,39 +375,19 @@ pub fn copilot_server(server: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new() -> Self {
-            let dir = std::env::temp_dir().join(format!("ext-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(&dir).unwrap();
-            TempDir(dir)
-        }
-        fn write(&self, rel: &str, contents: &str) {
-            let path = self.0.join(rel);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, contents).unwrap();
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::test_support::TempDir;
 
     fn skill(dir: &TempDir, rel: &str) {
         dir.write(
-            &format!("{rel}/SKILL.md"),
+            format!("{rel}/SKILL.md"),
             "---\nname: x\ndescription: x\n---\n",
         );
     }
 
     #[test]
     fn empty_folders_load_nothing() {
-        let (home, ws) = (TempDir::new(), TempDir::new());
-        let ext = Extensions::load(&home.0, &ws.0);
+        let (home, ws) = (TempDir::new("ext"), TempDir::new("ext"));
+        let ext = Extensions::load(&home, &ws);
         assert!(ext.mcp_servers.is_empty() && ext.plugin_mcp_servers.is_empty());
         assert!(ext.plugins.is_empty() && ext.skill_folders().is_empty());
         assert!(ext.plugin_skill_folders().is_empty());
@@ -417,14 +397,14 @@ mod tests {
 
     #[test]
     fn workspace_mcp_servers_win_and_the_app_server_is_reserved() {
-        let (home, ws) = (TempDir::new(), TempDir::new());
+        let (home, ws) = (TempDir::new("ext"), TempDir::new("ext"));
         home.write(
             "mcp.json",
             r#"{"mcpServers":{"a":{"command":"home"},"b":{"command":"b"},"slopslide":{"command":"old"}}}"#,
         );
         // Without the mcpServers wrapper, as Claude Code also accepts.
         ws.write(".mcp.json", r#"{"a":{"command":"ws"}}"#);
-        let ext = Extensions::load(&home.0, &ws.0);
+        let ext = Extensions::load(&home, &ws);
         assert_eq!(ext.mcp_servers["a"]["command"], "ws");
         assert_eq!(ext.mcp_servers["b"]["command"], "b");
         assert!(!ext.mcp_servers.contains_key(mcp::SERVER));
@@ -432,26 +412,26 @@ mod tests {
 
     #[test]
     fn broken_mcp_files_are_reported_and_skipped() {
-        let (home, ws) = (TempDir::new(), TempDir::new());
+        let (home, ws) = (TempDir::new("ext"), TempDir::new("ext"));
         home.write("mcp.json", "{not json");
         ws.write(".mcp.json", r#"{"mcpServers":[],"x":1}"#);
-        let ext = Extensions::load(&home.0, &ws.0);
+        let ext = Extensions::load(&home, &ws);
         assert!(ext.mcp_servers.is_empty());
         assert_eq!(ext.warnings.len(), 2, "{:?}", ext.warnings);
     }
 
     #[test]
     fn non_object_servers_are_reported() {
-        let (home, ws) = (TempDir::new(), TempDir::new());
+        let (home, ws) = (TempDir::new("ext"), TempDir::new("ext"));
         home.write("mcp.json", r#"{"mcpServers":{"a":"cmd"}}"#);
-        let ext = Extensions::load(&home.0, &ws.0);
+        let ext = Extensions::load(&home, &ws);
         assert!(ext.mcp_servers.is_empty());
         assert_eq!(ext.warnings.len(), 1);
     }
 
     #[test]
     fn plugins_bring_skills_and_servers_with_their_root_filled_in() {
-        let (home, ws) = (TempDir::new(), TempDir::new());
+        let (home, ws) = (TempDir::new("ext"), TempDir::new("ext"));
         home.write(
             "plugins/p/.mcp.json",
             r#"{"mcpServers":{"ps":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/s","args":["${CLAUDE_PLUGIN_ROOT}"]}}}"#,
@@ -466,9 +446,9 @@ mod tests {
             r#"{"ps":{"command":"from-ws"}}"#,
         );
         ws.write(".agents/plugins/marketplace.json", "{}");
-        let ext = Extensions::load(&home.0, &ws.0);
-        let p = home.0.join("plugins/p");
-        assert_eq!(ext.plugins, [ws.0.join(".agents/plugins/q"), p.clone()]);
+        let ext = Extensions::load(&home, &ws);
+        let p = home.join("plugins/p");
+        assert_eq!(ext.plugins, [ws.join(".agents/plugins/q"), p.clone()]);
         assert_eq!(
             ext.plugin_mcp_servers["ps"]["command"], "from-ws",
             "the workspace's plugin comes first"
@@ -478,15 +458,15 @@ mod tests {
         assert_eq!(ext.plugin_skill_folders(), [p.join("skills")]);
         assert!(ext.skill_folders().is_empty());
 
-        let (home2, ws2) = (TempDir::new(), TempDir::new());
+        let (home2, ws2) = (TempDir::new("ext"), TempDir::new("ext"));
         home2.write(
             "plugins/p/.mcp.json",
             r#"{"ps":{"command":"${CLAUDE_PLUGIN_ROOT}/bin/s","args":["${CLAUDE_PLUGIN_ROOT}"]}}"#,
         );
-        let ext = Extensions::load(&home2.0, &ws2.0);
+        let ext = Extensions::load(&home2, &ws2);
         // The folder as listed, with the platform's separators.
         let root = ext.plugins[0].to_string_lossy().into_owned();
-        assert_eq!(ext.plugins[0], home2.0.join("plugins").join("p"));
+        assert_eq!(ext.plugins[0], home2.join("plugins").join("p"));
         assert_eq!(
             ext.plugin_mcp_servers["ps"]["command"],
             format!("{root}/bin/s")
@@ -496,56 +476,60 @@ mod tests {
 
     #[test]
     fn configured_servers_win_over_plugin_servers() {
-        let (home, ws) = (TempDir::new(), TempDir::new());
+        let (home, ws) = (TempDir::new("ext"), TempDir::new("ext"));
         home.write("mcp.json", r#"{"s":{"command":"mine"}}"#);
         home.write(
             "plugins/p/.mcp.json",
             r#"{"s":{"command":"plugin"},"t":{"command":"t"}}"#,
         );
-        let all = Extensions::load(&home.0, &ws.0).all_mcp_servers();
+        let all = Extensions::load(&home, &ws).all_mcp_servers();
         assert_eq!(all["s"]["command"], "mine");
         assert_eq!(all["t"]["command"], "t");
     }
 
     #[test]
     fn skill_folders_list_the_workspace_first() {
-        let (home, ws) = (TempDir::new(), TempDir::new());
+        let (home, ws) = (TempDir::new("ext"), TempDir::new("ext"));
         skill(&home, "skills/a");
         skill(&ws, ".agents/skills/b");
-        let ext = Extensions::load(&home.0, &ws.0);
-        assert_eq!(ext.user_skills, Some(home.0.join("skills")));
+        let ext = Extensions::load(&home, &ws);
+        assert_eq!(ext.user_skills, Some(home.join("skills")));
         assert_eq!(
             ext.skill_folders(),
-            [ws.0.join(".agents/skills"), home.0.join("skills")]
+            [ws.join(".agents/skills"), home.join("skills")]
         );
     }
 
     #[test]
     fn user_instructions_follow_the_app_prompt() {
-        let (home, ws) = (TempDir::new(), TempDir::new());
+        let (home, ws) = (TempDir::new("ext"), TempDir::new("ext"));
         home.write("AGENTS.md", "Use British spelling.\n");
-        let ext = Extensions::load(&home.0, &ws.0);
+        let ext = Extensions::load(&home, &ws);
         assert_eq!(
             ext.system_prompt("App."),
             "App.\n\n# The user's instructions\n\nUse British spelling."
         );
         home.write("AGENTS.md", "  \n");
-        assert!(Extensions::load(&home.0, &ws.0).instructions.is_none());
+        assert!(Extensions::load(&home, &ws).instructions.is_none());
     }
 
     #[test]
     fn claude_skills_plugin_holds_every_skill_once() {
-        let (home, ws, session) = (TempDir::new(), TempDir::new(), TempDir::new());
-        let ext = Extensions::load(&home.0, &ws.0);
-        assert_eq!(ext.claude_skills_plugin(&session.0).unwrap(), None);
+        let (home, ws, session) = (
+            TempDir::new("ext"),
+            TempDir::new("ext"),
+            TempDir::new("ext"),
+        );
+        let ext = Extensions::load(&home, &ws);
+        assert_eq!(ext.claude_skills_plugin(&session).unwrap(), None);
 
         skill(&home, "skills/shared");
         skill(&home, "skills/mine");
         home.write("skills/not-a-skill/README.md", "");
         skill(&ws, ".agents/skills/shared");
         home.write("skills/shared/home-only.txt", "");
-        let ext = Extensions::load(&home.0, &ws.0);
-        let plugin = ext.claude_skills_plugin(&session.0).unwrap().unwrap();
+        let ext = Extensions::load(&home, &ws);
+        let plugin = ext.claude_skills_plugin(&session).unwrap().unwrap();
         let manifest: Value = serde_json::from_str(
             &std::fs::read_to_string(plugin.join(".claude-plugin/plugin.json")).unwrap(),
         )
@@ -565,9 +549,9 @@ mod tests {
         );
 
         // Rebuilt each turn: removed skills disappear.
-        std::fs::remove_dir_all(home.0.join("skills/mine")).unwrap();
-        let ext = Extensions::load(&home.0, &ws.0);
-        let plugin = ext.claude_skills_plugin(&session.0).unwrap().unwrap();
+        std::fs::remove_dir_all(home.join("skills/mine")).unwrap();
+        let ext = Extensions::load(&home, &ws);
+        let plugin = ext.claude_skills_plugin(&session).unwrap().unwrap();
         assert!(!plugin.join("skills/mine").exists());
     }
 

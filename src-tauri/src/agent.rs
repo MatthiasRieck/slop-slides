@@ -631,34 +631,6 @@ mod tests {
     }
 
     #[test]
-    fn send_args_compact_defaults_to_off() {
-        let args: SendArgs =
-            serde_json::from_value(json!({"workspace":"d","prompt":"hi","provider":"claude"}))
-                .unwrap();
-        assert!(!args.compact);
-        let args: SendArgs = serde_json::from_value(
-            json!({"workspace":"d","prompt":"/compact","provider":"copilot","compact":true}),
-        )
-        .unwrap();
-        assert!(args.compact);
-    }
-
-    #[test]
-    fn serializes_usage_events_in_camel_case() {
-        let usage = AgentEvent::Usage {
-            context_tokens: Some(12),
-            context_window: None,
-        };
-        assert_eq!(
-            serde_json::to_value(&usage).unwrap(),
-            json!({"type":"usage","contextTokens":12,"contextWindow":null})
-        );
-        assert_eq!(
-            serde_json::to_value(&AgentEvent::Compacted).unwrap(),
-            json!({"type":"compacted"})
-        );
-    }
-    #[test]
     fn system_prompt_includes_the_design_reference() {
         assert!(SYSTEM_PROMPT.starts_with(include_str!("../prompts/system.md")));
         assert!(SYSTEM_PROMPT.ends_with(include_str!("../prompts/design-reference.md")));
@@ -729,6 +701,14 @@ mod tests {
                 AgentEvent::Finished { interrupted: true },
                 json!({"type":"finished","interrupted":true}),
             ),
+            (
+                AgentEvent::Usage {
+                    context_tokens: Some(12),
+                    context_window: None,
+                },
+                json!({"type":"usage","contextTokens":12,"contextWindow":null}),
+            ),
+            (AgentEvent::Compacted, json!({"type":"compacted"})),
         ];
         for (event, expected) in cases {
             assert_eq!(serde_json::to_value(&event).unwrap(), expected);
@@ -764,6 +744,12 @@ mod tests {
         assert_eq!(args.provider, Provider::Codex);
         assert_eq!(args.model.as_deref(), Some("gpt-6-astra"));
         assert_eq!(args.effort.as_deref(), Some("high"));
+        assert!(!args.compact, "off unless asked");
+        let args: SendArgs = serde_json::from_value(
+            json!({"workspace":"d","prompt":"/compact","provider":"copilot","compact":true}),
+        )
+        .unwrap();
+        assert!(args.compact);
     }
 
     #[test]
@@ -841,6 +827,7 @@ mod tests {
     #[cfg(unix)]
     mod process {
         use super::*;
+        use crate::test_support::TempDir;
         use std::fs;
         use std::sync::Arc;
         use std::time::Duration;
@@ -849,7 +836,7 @@ mod tests {
         const LOG_DIR: &str = ".test-log";
 
         struct Fixture {
-            dir: PathBuf,
+            dir: TempDir,
             events: Arc<Mutex<Vec<AgentEvent>>>,
             /// How the user answers approval requests; unanswered when `None`.
             answer: Option<Decision>,
@@ -860,8 +847,7 @@ mod tests {
             /// A deck folder plus a fake `claude` that logs its arguments and stdin, then
             /// runs `body` (with `$RESUME` set when `--resume` was passed).
             fn new(body: &str) -> Self {
-                let dir =
-                    std::env::temp_dir().join(format!("slopslide-agent-{}", uuid::Uuid::new_v4()));
+                let dir = TempDir::new("agent");
                 fs::create_dir_all(dir.join(LOG_DIR)).unwrap();
                 fs::create_dir_all(dir.join("home")).unwrap();
                 let script = format!(
@@ -902,7 +888,7 @@ mod tests {
                             broker.respond("test", &approval.id, decision).unwrap();
                         }
                     }),
-                    dir: self.dir.clone(),
+                    dir: self.dir.to_path_buf(),
                     app_home: self.dir.join("home"),
                     session_dir: self.session_dir(),
                     provider: Provider::Claude,
@@ -991,12 +977,6 @@ mod tests {
 
             fn session(&self) -> Option<String> {
                 deck::read_session(&self.session_dir(), Provider::Claude.session_file())
-            }
-        }
-
-        impl Drop for Fixture {
-            fn drop(&mut self) {
-                let _ = fs::remove_dir_all(&self.dir);
             }
         }
 

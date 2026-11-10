@@ -1,48 +1,32 @@
-import {
-  ArrowUpDown,
-  Check,
-  GitCompare,
-  ListFilter,
-  type LucideIcon,
-  Minus,
-  Paintbrush,
-  Pencil,
-  Plus,
-  RefreshCw,
-  RotateCcw,
-  Trash2,
-  Undo2,
-} from "lucide-react";
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Check, GitCompare, ListFilter, Minus, Plus, RefreshCw, RotateCcw, Undo2 } from "lucide-react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { useChanges, visibleRows } from "../changesStore";
-import type { Change, Deck, DeckChanges, Slide, SlideChange, SlideStatus } from "../lib/api";
+import type { Change, Deck, DeckChanges, Slide, SlideChange } from "../lib/api";
 import { MAX_FEATHER, normalAngle } from "../lib/compare";
-import { type Pixels, pixelsOf } from "../lib/slideSize";
+import { pixelsOf } from "../lib/slideSize";
 import { cn, headSlideUrl } from "../lib/utils";
 import { useApp } from "../store";
 import { ToolButton } from "./Button";
+import {
+  actionsOf,
+  caption,
+  changeCounts,
+  comparable,
+  contentMarkOf,
+  describeRow,
+  MARKS,
+  type Mark,
+  type MarkActions,
+  marksOf,
+  STYLES,
+  slideNumbers,
+  stageTitle,
+} from "./changes/changeRows";
+import { useContentSize } from "./editing/useContentSize";
 import { SectionLabel } from "./SectionLabel";
 import { SlideComparison } from "./SlideComparison";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
-
-type Mark = { label: string; icon: LucideIcon; color: string; ring: string };
-
-/** What each kind of change looks like, everywhere in this mode. */
-const MARKS: Record<Exclude<SlideStatus, "unchanged">, Mark> = {
-  added: { label: "Added", icon: Plus, color: "bg-success text-success-foreground", ring: "ring-success" },
-  modified: { label: "Modified", icon: Pencil, color: "bg-warning text-warning-foreground", ring: "ring-warning" },
-  removed: {
-    label: "Removed",
-    icon: Trash2,
-    color: "bg-destructive text-destructive-foreground",
-    ring: "ring-destructive",
-  },
-  moved: { label: "Moved", icon: ArrowUpDown, color: "bg-info text-info-foreground", ring: "ring-info" },
-};
-
-/** What the slides share (styles, fonts, scripts), which is no slide's change. */
-const STYLES: Mark = { label: "Styles", icon: Paintbrush, color: MARKS.modified.color, ring: MARKS.modified.ring };
 
 /** A kind of change in the header, with how many slides have it. Every badge has the same height and icon box. */
 function CountBadge(props: { mark: Mark; title: string; count?: number }) {
@@ -62,42 +46,6 @@ function CountBadge(props: { mark: Mark; title: string; count?: number }) {
   );
 }
 
-/** The marks of a row: a slide can have changed and moved. */
-function marksOf(row: SlideChange): Mark[] {
-  const marks = row.status === "unchanged" ? [] : [MARKS[row.status]];
-  return row.moved && row.status !== "moved" ? [...marks, MARKS.moved] : marks;
-}
-
-/** The mark on the slide's picture: what changed in it, which a move is not. */
-function contentMarkOf(row: SlideChange): Mark | null {
-  return row.status === "unchanged" || row.status === "moved" ? null : MARKS[row.status];
-}
-
-/** The change a mark of a row stands for, to stage or restore it. */
-function actionsOf(row: SlideChange, mark: Mark): { change: Change; noun: string; staged: boolean } | null {
-  const { id, oldId } = row;
-  if (mark !== MARKS.moved) return { change: { kind: "slide", id, oldId }, noun: "this slide", staged: row.staged };
-  return id && oldId ? { change: { kind: "move", id, oldId }, noun: "this move", staged: row.moveStaged } : null;
-}
-
-const describe = (row: SlideChange) =>
-  marksOf(row)
-    .map((mark) => mark.label.toLowerCase())
-    .join(" and ");
-
-/** Whether the two versions of a slide can differ to the eye. */
-function comparable(row: SlideChange, changes: DeckChanges) {
-  if (!row.id || !row.oldId) return false;
-  return row.status === "modified" || changes.stylesChanged;
-}
-
-/** Each row's number in the deck; removed slides have none. */
-function slideNumbers(rows: SlideChange[]) {
-  const numbers = new Map<string, number>();
-  for (const row of rows) if (row.id) numbers.set(row.key, numbers.size + 1);
-  return numbers;
-}
-
 /** The left of Git mode: the slides, with the removed ones in between, marked by what changed. */
 export function ChangesRail() {
   const deck = useApp((s) => s.deck);
@@ -107,9 +55,7 @@ export function ChangesRail() {
   const slides = changes?.slides ?? [];
   const numbers = slideNumbers(slides);
   const rows = visibleRows({ changes, onlyChanges });
-  const count = (status: keyof typeof MARKS) =>
-    slides.filter((row) => (status === "moved" ? row.moved : row.status === status)).length;
-  const counts = (["modified", "added", "removed", "moved"] as const).filter((status) => count(status) > 0);
+  const counts = changeCounts(slides);
   const stylesChanged = !!changes?.stylesChanged;
   const canStage = !!changes && changes.tracking !== "noRepository";
 
@@ -119,16 +65,9 @@ export function ChangesRail() {
         <div className="flex min-w-0 items-center gap-1">
           {counts.length === 0 && !stylesChanged && <SectionLabel className="truncate">Changes</SectionLabel>}
           {stylesChanged && <CountBadge mark={STYLES} title="The shared styles changed" />}
-          {counts.map((status) => {
+          {counts.map(({ status, count }) => {
             const mark = MARKS[status];
-            return (
-              <CountBadge
-                key={status}
-                mark={mark}
-                title={`${count(status)} ${mark.label.toLowerCase()}`}
-                count={count(status)}
-              />
-            );
+            return <CountBadge key={status} mark={mark} title={`${count} ${mark.label.toLowerCase()}`} count={count} />;
           })}
         </div>
         <ToolButton
@@ -247,7 +186,7 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
           <button
             type="button"
             aria-pressed={picked}
-            aria-label={[number ? `Slide ${number}` : "Slide", describe(row), content && row.staged && "staged"]
+            aria-label={[number ? `Slide ${number}` : "Slide", describeRow(row), content && row.staged && "staged"]
               .filter(Boolean)
               .join(", ")}
             onClick={() => useChanges.getState().pick(row.key)}
@@ -295,7 +234,7 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
 }
 
 /** The field under a slide that moved: its own change, staged and restored apart from the slide. */
-function MoveRow(props: { row: SlideChange; number?: number; deck: string; actions: ReturnType<typeof actionsOf> }) {
+function MoveRow(props: { row: SlideChange; number?: number; deck: string; actions: MarkActions | null }) {
   const { row, number, deck, actions } = props;
   const from = row.oldNumber === null || number === undefined ? "Moved" : `${row.oldNumber} → ${number}`;
   const title = row.oldNumber === null ? "Moved" : `Moved from slide ${row.oldNumber} to slide ${number ?? "?"}`;
@@ -355,7 +294,7 @@ function StylesRow({ deck, changes, canStage }: { deck: string; changes: DeckCha
 function MarkRow(props: {
   mark: Mark;
   deck: string;
-  actions: ReturnType<typeof actionsOf>;
+  actions: MarkActions | null;
   locked: boolean;
   /** Fits a row of text instead of a slide's picture. */
   small?: boolean;
@@ -369,9 +308,7 @@ function MarkRow(props: {
         <MarkButton
           small={small}
           label={actions.staged ? "Unstage" : "Stage"}
-          title={
-            actions.staged ? `Take ${actions.noun} out of the next commit` : `Add ${actions.noun} to the next commit`
-          }
+          title={stageTitle(actions)}
           onClick={() => void (actions.staged ? unstage : stage)(deck, actions.change)}
         >
           {actions.staged ? <Minus className="size-3.5" /> : <Plus className="size-3.5" />}
@@ -618,16 +555,7 @@ function ValueSlider(props: {
 /** The picked slide as large as fits, and what the list says about it under it. */
 function SlideArea({ deck, changes, row }: { deck: Deck; changes: DeckChanges; row: SlideChange }) {
   const area = useRef<HTMLDivElement>(null);
-  const [room, setRoom] = useState<Pixels | null>(null);
-  useLayoutEffect(() => {
-    const el = area.current;
-    if (!el) return;
-    const observer = new ResizeObserver(([entry]) => {
-      if (entry) setRoom({ width: entry.contentRect.width, height: entry.contentRect.height });
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+  const room = useContentSize(area);
   const canvas = pixelsOf({ size: deck.size });
   const oldCanvas = pixelsOf({ size: changes.oldSize });
   const scale = room ? Math.max(0, Math.min(room.width / canvas.width, room.height / canvas.height)) : 0;
@@ -703,7 +631,7 @@ function ActionGroup(props: {
     <fieldset aria-label={label} className="flex items-center gap-1 text-xs text-muted-foreground">
       <span className="mr-1">{label}</span>
       <ActionButton
-        title={staged ? `Take ${noun} out of the next commit` : `Add ${noun} to the next commit`}
+        title={stageTitle({ staged, noun })}
         onClick={() => void (staged ? unstage(deck, change) : stage(deck, change))}
       >
         {staged ? <Minus className="size-3.5" /> : <Plus className="size-3.5" />}
@@ -749,25 +677,4 @@ function LiveSlide({ deck, slide }: { deck: Deck; slide: Slide }) {
       className="w-full"
     />
   );
-}
-
-/** What the slide shown is, in words. */
-function caption(row: SlideChange, changes: DeckChanges): string {
-  const place = row.moved ? ` It moved from slide ${row.oldNumber}.` : "";
-  const styles = changes.stylesChanged ? " The deck's shared styles changed, so it may still look different." : "";
-  const also = row.details.length > 0 ? ` Changed: ${row.details.join(", ")}.` : "";
-  if (changes.tracking === "notCommitted")
-    return `Not committed yet, so every slide is new; restoring takes it out.${styles}`;
-  switch (row.status) {
-    case "added":
-      return "New since the last commit.";
-    case "removed":
-      return "Removed since the last commit; this is how it looked.";
-    case "modified":
-      return `Modified since the last commit.${also}${place}`;
-    case "moved":
-      return `The same slide, moved from slide ${row.oldNumber}.${styles}`;
-    case "unchanged":
-      return `No changes to this slide.${styles}`;
-  }
 }

@@ -20,14 +20,36 @@ import { api, type Deck, errorMessage, type Screen, type Slide } from "../lib/ap
 import { VIDEO_CANCELLED, type VideoOptions, type VideoProgress } from "../lib/video";
 import { useApp } from "../store";
 import { Button, ToolButton } from "./Button";
+import { reportingErrors, showError } from "./editing/errors";
 import { Popover, useDismiss } from "./Popover";
 import { ScreenPicker } from "./ScreenPicker";
 import { VideoExportPanel } from "./VideoExport";
 
-/** Export (an icon until an export runs) and present, in the top bar next to the lint status. */
 /** The longest the screen picker waits for the screens to be captured before opening anyway. */
 const PICKER_MAX_WAIT_MS = 150;
 
+/** The files Export saves: what the save dialog offers, and what a failure says first. */
+const EXPORT_FILES = {
+  html: { title: "Export presentation", extension: "html", filter: "HTML presentation", failure: "" },
+  pdf: { title: "Export as PDF", extension: "pdf", filter: "PDF document", failure: "Could not save the PDF: " },
+  pptx: {
+    title: "Export as PowerPoint",
+    extension: "pptx",
+    filter: "PowerPoint presentation",
+    failure: "Could not save the PowerPoint file: ",
+  },
+  video: { title: "Export as video", extension: "mp4", filter: "MP4 video", failure: "Could not save the video: " },
+};
+
+type ExportKind = keyof typeof EXPORT_FILES;
+
+/** Asks where to save the deck as `kind`, offering `name`; null when the user cancels. */
+function askWhereToSave(kind: ExportKind, name: string) {
+  const { title, extension, filter } = EXPORT_FILES[kind];
+  return save({ title, defaultPath: `${name}.${extension}`, filters: [{ name: filter, extensions: [extension] }] });
+}
+
+/** Export (an icon until an export runs) and present, in the top bar next to the lint status. */
 export function DeckActions() {
   const deck = useApp((s) => s.deck);
   if (!deck) return null;
@@ -39,11 +61,103 @@ function Actions({ deck }: { deck: Deck }) {
   const [exporting, setExporting] = useState(false);
   // How far a video export has got; null when none is running.
   const [videoProgress, setVideoProgress] = useState<VideoProgress | null>(null);
-  // The attached screens while the picker is open (presenting with several of them).
+  const picker = useScreenPicker();
+
+  const fileName = deck.title.replace(/[\\/:*?"<>|]+/g, "").trim() || "presentation";
+
+  /** Saves the deck as `kind` where the user picks and shows the file; `busy` shows it running. */
+  const exportFile = async (kind: ExportKind, write: (dest: string) => Promise<unknown>, busy: boolean) => {
+    const dest = await askWhereToSave(kind, fileName);
+    if (!dest) return;
+    if (busy) setExporting(true);
+    await reportingErrors(async () => {
+      await write(dest);
+      await revealItemInDir(dest);
+    }, EXPORT_FILES[kind].failure);
+    if (busy) setExporting(false);
+  };
+
+  const exportVideo = async (options: VideoOptions) => {
+    const dest = await askWhereToSave("video", fileName);
+    if (!dest) return;
+    setExporting(true);
+    setVideoProgress({ phase: "video", frame: 0, frames: 0 });
+    const unlisten = await listen<VideoProgress>("video-export-progress", ({ payload }) => setVideoProgress(payload));
+    try {
+      await api.exportVideo(deck.id, dest, options);
+      await revealItemInDir(dest);
+    } catch (error) {
+      const message = errorMessage(error);
+      if (message !== VIDEO_CANCELLED) showError(message, EXPORT_FILES.video.failure);
+    } finally {
+      unlisten();
+      setVideoProgress(null);
+      setExporting(false);
+    }
+  };
+
+  const exportImages = async () => {
+    const parent = await open({ directory: true, title: "Choose where to save the slide images" });
+    if (!parent || Array.isArray(parent)) return;
+    await reportingErrors(async () =>
+      useApp.getState().startImageExport(await api.createImageExportDir(deck.id, parent)),
+    );
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <ExportMenu
+        disabled={deck.slides.length === 0 || exporting}
+        busy={exporting}
+        progress={videoProgress}
+        shownSlides={deck.slides.filter((s) => !s.hidden)}
+        onHtml={() => void exportFile("html", (dest) => api.exportDeck(deck.id, dest), false)}
+        onPdf={() => void exportFile("pdf", (dest) => api.exportPdf(deck.id, dest), true)}
+        onPptx={() => void exportFile("pptx", (dest) => api.exportPptx(deck.id, dest), true)}
+        onImages={() => void exportImages()}
+        onVideo={(options) => void exportVideo(options)}
+      />
+      {videoProgress !== null && (
+        <ToolButton
+          variant="panel"
+          className="-ml-1"
+          aria-label="Cancel video export"
+          title="Cancel video export"
+          onClick={() => void api.cancelVideoExport()}
+        >
+          <X className="size-3.5" />
+        </ToolButton>
+      )}
+      <PresentButton
+        disabled={deck.slides.length === 0}
+        onPresent={() => void picker.present()}
+        onWindows={() => useApp.getState().setPresenting(true, "windows")}
+      />
+      {picker.screens && (
+        <ScreenPicker
+          screens={picker.screens}
+          previews={picker.previews}
+          onCancel={picker.close}
+          onWindows={() => {
+            picker.close();
+            useApp.getState().setPresenting(true, "windows");
+          }}
+          onStart={(choice) => {
+            picker.close();
+            useApp.getState().setPresenting(true, choice);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Presents, asking which screen to present on when there are several. */
+function useScreenPicker() {
+  // The attached screens while the picker is open.
   const [screens, setScreens] = useState<Screen[] | null>(null);
   // Their screenshots; null while they are being taken.
   const [previews, setPreviews] = useState<(string | null)[] | null>(null);
-
   const present = async () => {
     const attached = await api.listScreens().catch(() => []);
     if (attached.length <= 1) {
@@ -66,139 +180,7 @@ function Actions({ deck }: { deck: Deck }) {
     open();
     setPreviews(taken);
   };
-
-  const fileName = deck.title.replace(/[\\/:*?"<>|]+/g, "").trim() || "presentation";
-
-  const exportDeck = async () => {
-    const dest = await save({
-      title: "Export presentation",
-      defaultPath: `${fileName}.html`,
-      filters: [{ name: "HTML presentation", extensions: ["html"] }],
-    });
-    if (!dest) return;
-    try {
-      await api.exportDeck(deck.id, dest);
-      await revealItemInDir(dest);
-    } catch (error) {
-      useApp.getState().setError(errorMessage(error));
-    }
-  };
-
-  const exportPdf = async () => {
-    const dest = await save({
-      title: "Export as PDF",
-      defaultPath: `${fileName}.pdf`,
-      filters: [{ name: "PDF document", extensions: ["pdf"] }],
-    });
-    if (!dest) return;
-    setExporting(true);
-    try {
-      await api.exportPdf(deck.id, dest);
-      await revealItemInDir(dest);
-    } catch (error) {
-      useApp.getState().setError(`Could not save the PDF: ${errorMessage(error)}`);
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  const exportPptx = async () => {
-    const dest = await save({
-      title: "Export as PowerPoint",
-      defaultPath: `${fileName}.pptx`,
-      filters: [{ name: "PowerPoint presentation", extensions: ["pptx"] }],
-    });
-    if (!dest) return;
-    setExporting(true);
-    try {
-      await api.exportPptx(deck.id, dest);
-      await revealItemInDir(dest);
-    } catch (error) {
-      useApp.getState().setError(`Could not save the PowerPoint file: ${errorMessage(error)}`);
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  const exportVideo = async (options: VideoOptions) => {
-    const dest = await save({
-      title: "Export as video",
-      defaultPath: `${fileName}.mp4`,
-      filters: [{ name: "MP4 video", extensions: ["mp4"] }],
-    });
-    if (!dest) return;
-    setExporting(true);
-    setVideoProgress({ phase: "video", frame: 0, frames: 0 });
-    const unlisten = await listen<VideoProgress>("video-export-progress", ({ payload }) => setVideoProgress(payload));
-    try {
-      await api.exportVideo(deck.id, dest, options);
-      await revealItemInDir(dest);
-    } catch (error) {
-      const message = errorMessage(error);
-      if (message !== VIDEO_CANCELLED) useApp.getState().setError(`Could not save the video: ${message}`);
-    } finally {
-      unlisten();
-      setVideoProgress(null);
-      setExporting(false);
-    }
-  };
-
-  const exportImages = async () => {
-    const parent = await open({ directory: true, title: "Choose where to save the slide images" });
-    if (!parent || Array.isArray(parent)) return;
-    try {
-      useApp.getState().startImageExport(await api.createImageExportDir(deck.id, parent));
-    } catch (error) {
-      useApp.getState().setError(errorMessage(error));
-    }
-  };
-
-  return (
-    <div className="flex items-center gap-2">
-      <ExportMenu
-        disabled={deck.slides.length === 0 || exporting}
-        busy={exporting}
-        progress={videoProgress}
-        shownSlides={deck.slides.filter((s) => !s.hidden)}
-        onHtml={() => void exportDeck()}
-        onPdf={() => void exportPdf()}
-        onPptx={() => void exportPptx()}
-        onImages={() => void exportImages()}
-        onVideo={(options) => void exportVideo(options)}
-      />
-      {videoProgress !== null && (
-        <ToolButton
-          variant="panel"
-          className="-ml-1"
-          aria-label="Cancel video export"
-          title="Cancel video export"
-          onClick={() => void api.cancelVideoExport()}
-        >
-          <X className="size-3.5" />
-        </ToolButton>
-      )}
-      <PresentButton
-        disabled={deck.slides.length === 0}
-        onPresent={() => void present()}
-        onWindows={() => useApp.getState().setPresenting(true, "windows")}
-      />
-      {screens && (
-        <ScreenPicker
-          screens={screens}
-          previews={previews}
-          onCancel={() => setScreens(null)}
-          onWindows={() => {
-            setScreens(null);
-            useApp.getState().setPresenting(true, "windows");
-          }}
-          onStart={(choice) => {
-            setScreens(null);
-            useApp.getState().setPresenting(true, choice);
-          }}
-        />
-      )}
-    </div>
-  );
+  return { screens, previews, present, close: () => setScreens(null) };
 }
 
 /**

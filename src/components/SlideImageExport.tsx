@@ -1,14 +1,17 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Loader2 } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api, type Deck, errorMessage, type Slide } from "../lib/api";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { useApp } from "../store";
+import { useContentSize } from "./editing/useContentSize";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
 /** Wait after a slide loads before capturing it, for web fonts and images to paint. */
 export const SETTLE_MS = 400;
+
+const NO_AREA = { width: 0, height: 0 };
 
 /**
  * Saves every slide as a PNG. Each slide is shown in turn, as large as the window allows,
@@ -26,7 +29,7 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
   const [index, setIndex] = useState(0);
   const areaRef = useRef<HTMLDivElement>(null);
   const slideRef = useRef<HTMLDivElement>(null);
-  const [area, setArea] = useState({ width: 0, height: 0 });
+  const area = useContentSize(areaRef) ?? NO_AREA;
   const canvas = pixelsOf(deck);
   // The slide as large as the window allows, in its own shape.
   const width = Math.max(0, Math.min(area.width, (area.height * canvas.width) / canvas.height));
@@ -34,17 +37,6 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
   const captured = useRef(-1);
   const total = slides.length;
   const slide = deck.slides.find((s) => s.id === slides[index]);
-
-  useLayoutEffect(() => {
-    const el = areaRef.current!;
-    const observer = new ResizeObserver(([entry]) => {
-      if (!entry) return;
-      const { width: w, height: h } = entry.contentRect;
-      setArea({ width: w, height: h });
-    });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
 
   const cancel = () => {
     stopped.current = true;

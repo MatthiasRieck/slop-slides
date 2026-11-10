@@ -32,7 +32,6 @@ import {
   addHandle,
   type Backdrop,
   backdropFor,
-  displayCopy,
   editMarkup,
   elementsOf,
   type Handle,
@@ -48,14 +47,14 @@ import {
   serializeSvg,
   setPresentation,
   translateBy,
-  viewBoxOf,
 } from "../lib/svgEdit";
-import { cn, deckFileUrl, isMac } from "../lib/utils";
+import { cn, isMac } from "../lib/utils";
 import { useApp } from "../store";
-import { isDirty, type SvgAncestor, type SvgEdit, useSvgEditor } from "../svgStore";
+import { isDirty, type SvgEdit, useSvgEditor } from "../svgStore";
 import { Button, ToolButton } from "./Button";
 import { Field, inputClass, wideSelectClass } from "./Field";
 import { SectionLabel } from "./SectionLabel";
+import { checkerboard, duplicate, NO_OVERLAY, type Overlay, overlayOf, showDrawing, subtreeSize } from "./svg/drawing";
 
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 64;
@@ -153,22 +152,16 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
   };
   const duplicateSelected = () => {
     if (selected === null || selected === 0) return;
-    const count = element ? element.querySelectorAll("*").length + 1 : 1;
-    editElement((el) => {
-      const copy = el.cloneNode(true) as Element;
-      copy.removeAttribute("id");
-      for (const inner of copy.querySelectorAll("[id]")) inner.removeAttribute("id");
-      el.after(copy);
-    });
+    const count = element ? subtreeSize(element) : 1;
+    editElement(duplicate);
     select(selected + count);
   };
   const restackSelected = (forward: boolean) => {
     if (selected === null || selected === 0 || !element) return;
     const sibling = forward ? element.nextElementSibling : element.previousElementSibling;
     if (!sibling) return;
-    const size = (el: Element) => el.querySelectorAll("*").length + 1;
     editElement((el) => restack(el, forward));
-    select(forward ? selected + size(sibling) : selected - size(sibling));
+    select(forward ? selected + subtreeSize(sibling) : selected - subtreeSize(sibling));
   };
   const selectParent = () => {
     if (point) return setPoint(null);
@@ -339,12 +332,6 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
   );
 }
 
-/** A checkerboard of `check` squares over the ground color. */
-function checkerboard(check: string) {
-  const squares = `linear-gradient(45deg, ${check} 25%, transparent 25%, transparent 75%, ${check} 75%)`;
-  return `${squares}, ${squares}`;
-}
-
 function ZoomControls({ zoom, onZoom }: { zoom: number | null; onZoom: (zoom: number | null) => void }) {
   const by = (factor: number) => onZoom(clampZoom((zoom ?? 1) * factor));
   return (
@@ -367,15 +354,6 @@ function ZoomControls({ zoom, onZoom }: { zoom: number | null; onZoom: (zoom: nu
 
 const clampZoom = (zoom: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
 
-/** What the canvas draws over the drawing, in the canvas content's pixels. */
-interface Overlay {
-  /** The selected element's box, as a polygon (it turns with its transform). */
-  outline: Point[] | null;
-  handles: (Handle & { at: Point })[];
-}
-
-const NO_OVERLAY: Overlay = { outline: null, handles: [] };
-
 interface Drag {
   pointer: number;
   start: { x: number; y: number };
@@ -387,36 +365,6 @@ interface Drag {
   /** Screen to the user units the change is in: the element's own for a point, its parent's for a move. */
   toLocal: DOMMatrix;
   moved: boolean;
-}
-
-/** Elements that would load or run something; around a drawing they are mirrored as a <div>. */
-const ACTIVE_TAGS = /^(script|style|link|iframe|frame|object|embed|template|base|meta|img|video|audio|source)$/;
-
-/**
- * `copy` inside elements mirroring the ones it sits in on the slide (outermost first), so the
- * deck's rules that pick it out by them match; they draw no box of their own.
- */
-export function withAncestors(copy: Element, ancestors: SvgAncestor[]): Element {
-  let outer = copy;
-  for (const { tag, attrs } of [...ancestors].reverse()) {
-    let el: HTMLElement;
-    try {
-      el = document.createElement(ACTIVE_TAGS.test(tag) ? "div" : tag);
-    } catch {
-      continue;
-    }
-    for (const [name, value] of Object.entries(attrs)) {
-      try {
-        el.setAttribute(name, value);
-      } catch {
-        // Not a name an attribute can have.
-      }
-    }
-    el.style.setProperty("display", "contents", "important");
-    el.append(outer);
-    outer = el;
-  }
-  return outer;
 }
 
 /**
@@ -476,79 +424,21 @@ function Canvas(props: {
   useLayoutEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const root = host.shadowRoot ?? host.attachShadow({ mode: "open" });
-    const copy = displayCopy(svg, (url) => deckFileUrl(edit.deckId, url));
-    copy.setAttribute("viewBox", viewBoxOf(svg, size));
-    copy.setAttribute("width", String(size.w * k));
-    copy.setAttribute("height", String(size.h * k));
-    const look = (copy as SVGElement).style;
-    // Where the slide put it does not matter here, whatever the deck's rules say.
-    for (const [name, value] of [
-      ["position", "static"],
-      ["inset", "auto"],
-      ["translate", "none"],
-      ["rotate", "none"],
-      ["scale", "none"],
-      ["transform", "none"],
-      ["margin", "0"],
-      ["width", `${size.w * k}px`],
-      ["height", `${size.h * k}px`],
-      ["min-width", "0"],
-      ["min-height", "0"],
-      ["max-width", "none"],
-      ["max-height", "none"],
-      ["display", "block"],
-      ["overflow", "visible"],
-    ] as const) {
-      look.setProperty(name, value, "important");
-    }
-    const frame = document.createElement("div");
-    frame.className = "frame";
-    for (const [name, value] of Object.entries(edit.vars)) frame.style.setProperty(name, value);
-    if (edit.color) frame.style.color = edit.color;
-    frame.append(withAncestors(copy, edit.ancestors));
-    const base = document.createElement("style");
-    base.textContent = ":host { display: block; } .frame { line-height: normal; } a { pointer-events: none; }";
-    // The deck's own rules, so a drawing styled by them looks as it does on the slide.
-    const deck = document.createElement("style");
-    deck.textContent = edit.css;
-    root.replaceChildren(base, deck, frame);
-    shown.current = copy;
+    const drawing = {
+      deckId: edit.deckId,
+      size,
+      vars: edit.vars,
+      color: edit.color,
+      css: edit.css,
+      ancestors: edit.ancestors,
+    };
+    shown.current = showDrawing(host, svg, drawing, k);
   }, [svg, size, k, edit.deckId, edit.vars, edit.color, edit.css, edit.ancestors]);
 
   // Measures the selection on the drawing as drawn, again whenever it is drawn at another size.
   // biome-ignore lint/correctness/useExhaustiveDependencies: a zoom or a resize moves the drawing on screen
   useLayoutEffect(() => {
-    const content = contentRef.current;
-    const copy = shown.current;
-    const el = selected !== null && copy ? (elementsOf(copy)[selected] as SVGGraphicsElement | undefined) : undefined;
-    const model = selected !== null ? elementsOf(svg)[selected] : undefined;
-    if (!content || !el || !model || typeof el.getScreenCTM !== "function") return setOverlay(NO_OVERLAY);
-    const ctm = el.getScreenCTM();
-    if (!ctm) return setOverlay(NO_OVERLAY);
-    const origin = content.getBoundingClientRect();
-    const at = (x: number, y: number): Point => {
-      const p = new DOMPoint(x, y).matrixTransform(ctm);
-      return [p.x - origin.left, p.y - origin.top];
-    };
-    let outline: Point[] | null = null;
-    try {
-      const box = el.getBBox();
-      outline = [
-        at(box.x, box.y),
-        at(box.x + box.width, box.y),
-        at(box.x + box.width, box.y + box.height),
-        at(box.x, box.y + box.height),
-      ];
-    } catch {
-      // Not drawn (display: none, or inside <defs>).
-    }
-    const handles = handlesOf(model).map((h) => ({
-      ...h,
-      at: at(h.x, h.y),
-      links: h.links?.map((l) => at(l[0], l[1])),
-    }));
-    setOverlay({ outline, handles });
+    setOverlay(overlayOf(shown.current, svg, selected, contentRef.current));
   }, [svg, selected, k, room]);
 
   /** The element of the drawing at the press, by its index; null on empty canvas. */

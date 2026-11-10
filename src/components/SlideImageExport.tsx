@@ -1,11 +1,10 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-
+import { useContentSize } from "../hooks/useContentSize";
 import { api, type Deck, type Slide } from "../lib/api";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { showError, useApp } from "../store";
-import { useContentSize } from "./editing/useContentSize";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
 /** Wait after a slide loads before capturing it, for web fonts and images to paint. */

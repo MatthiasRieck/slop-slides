@@ -2,6 +2,7 @@ import { Check, GitCompare, ListFilter, Minus, Plus, RefreshCw, RotateCcw, Undo2
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import { useChanges, visibleRows } from "../changesStore";
+import { useContentSize } from "../hooks/useContentSize";
 import type { Change, Deck, DeckChanges, Slide, SlideChange } from "../lib/api";
 import { MAX_FEATHER, normalAngle } from "../lib/compare";
 import { pixelsOf } from "../lib/slideSize";
@@ -23,7 +24,6 @@ import {
   slideNumbers,
   stageTitle,
 } from "./changes/changeRows";
-import { useContentSize } from "./editing/useContentSize";
 import { SectionLabel } from "./SectionLabel";
 import { SlideComparison } from "./SlideComparison";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Deck } from "../lib/api";
 import { parseTime } from "../lib/slideTime";
 import { useApp } from "../store";
-import { formatElapsed } from "./PresenterPanel";
+import { formatElapsed } from "./presenter/time";
 
 const asText = (seconds: number | undefined) => (seconds ? formatElapsed(seconds * 1000) : "");
 

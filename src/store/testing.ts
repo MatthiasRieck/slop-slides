@@ -4,7 +4,7 @@ import { vi } from "vitest";
 
 import type { AgentEvent, HistoryEntry } from "../lib/api";
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { ask, invoke, listen } from "../test/tauri";
+import { ask, backend, calls, type Handler, invoke, listen } from "../test/tauri";
 import type { AssistantMessage, UserMessage } from "./messages";
 
 /** Handlers registered through `listen`, by event name. */
@@ -35,16 +35,8 @@ export async function freshStore(withWorkspace = true) {
 
 export type TestStore = Awaited<ReturnType<typeof freshStore>>;
 
-export type Handler = (args: Record<string, unknown>) => unknown;
-
-/** Answers `invoke(command, args)` from a table; unknown commands resolve to undefined. */
-export function backend(handlers: Record<string, Handler>) {
-  invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => handlers[command]?.(args ?? {}));
-}
-
-/** The arguments of every call of `command`, in order. */
-export const calls = (command: string) =>
-  invoke.mock.calls.filter(([c]) => c === command).map(([, args]) => args as Record<string, unknown>);
+// The scripted backend, kept with the Tauri mocks; here too for the store's tests.
+export { backend, calls, type Handler };
 
 /** The prompts sent to the agent, in order. */
 export const prompts = () => calls("send_message").map((c) => (c.args as { prompt: string }).prompt);

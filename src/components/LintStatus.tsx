@@ -1,9 +1,7 @@
 import { AlertTriangle, CheckCircle2, Loader2, XCircle } from "lucide-react";
 
-import { basename, cn } from "../lib/utils";
+import { basename, cn, plural } from "../lib/utils";
 import { lintFixPrompt, useApp } from "../store";
-
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /**
  * Lint result for the deck file, kept small: a checkmark, or the error and warning icons with their

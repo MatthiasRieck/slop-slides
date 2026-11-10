@@ -2,7 +2,7 @@
 // prepares in the composer.
 import type { Deck, LintIssue, OpenedFile, TemplateSummary, WorkspaceInfo } from "../lib/api";
 import { commentLine } from "../lib/comments";
-import { pixelsOf } from "../lib/slideSize";
+import { describeSize, orientationOf, pixelsOf, type SlideSize } from "../lib/slideSize";
 import { layoutLabel } from "../lib/utils";
 import type { UserMessage } from "./messages";
 import { workspaceName } from "./paths";
@@ -122,4 +122,27 @@ export function buildPrompt(message: UserMessage, { workspace, deck, openedFile,
     context.push(`Deck template: ${template} (copy of the deck's template, for its layouts)`);
   }
   return `[context]\n${context.join("\n")}\n[/context]\n\n${message.text}`;
+}
+
+/**
+ * What to ask the agent to turn the raw transcript of a recorded narration into a script, for
+ * `slide` or (null) every slide.
+ */
+export function cleanNarrationPrompt(slide: string | null): string {
+  const scope = slide ? `the narration of slide \`${slide}\`` : "the narration of every slide that has one";
+  return `Clean up ${scope}. It was spoken off the cuff and transcribed as it came, so it is full of stutters, false starts, filler words, repeated words and sentences begun twice, and the speech recognition may have misheard things.
+
+Rewrite it into clean, fluent spoken sentences in the same language, keeping what the speaker meant, their order, and their way of talking. Remove the stutters and repetition, fix what was misheard using the slide's content, and merge what was said in several goes into one flowing text. Do not add facts of your own or shorten it beyond that.
+
+Change only the text inside each slide's \`<aside class="narration">\`, and leave locked slides alone.`;
+}
+
+/** The prompt asking the agent to adapt the deck after the slide size changed. */
+export function resizePrompt(from: SlideSize, to: SlideSize): string {
+  const shape = (s: SlideSize) => `${orientationOf(s)}, ${describeSize(s)}`;
+  return (
+    `I changed the slide size from ${shape(from)} to ${shape(to)}. ` +
+    "Re-lay out every slide for the new canvas: rework each layout for its shape and rescale type, spacing and any fixed sizes or positions so nothing is clipped, overflows or leaves awkward empty space. " +
+    "Keep all content, slide ids, sections, hidden slides, speaker notes and narration, and keep the design system."
+  );
 }

@@ -1,8 +1,8 @@
 import { api, errorMessage, type TemplateSummary } from "../lib/api";
-import { DEFAULT_SIZE, resizePrompt, type SlideSize, sameSize } from "../lib/slideSize";
+import { DEFAULT_SIZE, type SlideSize, sameSize } from "../lib/slideSize";
 import { promptAgent } from "./composer";
 import { showErrorIn } from "./errors";
-import { addLayoutPrompt, changeLayoutPrompt, stylePrompt } from "./prompts";
+import { addLayoutPrompt, changeLayoutPrompt, resizePrompt, stylePrompt } from "./prompts";
 import { selectedSlide } from "./slides";
 import type { Slice } from "./types";
 

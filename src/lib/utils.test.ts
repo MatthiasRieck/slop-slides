@@ -8,6 +8,7 @@ import {
   fileUrl,
   isSessionFile,
   layoutLabel,
+  plural,
   relativeTime,
   revealLabelFor,
   slideUrl,
@@ -20,6 +21,22 @@ describe("cn", () => {
     expect(cn("p-1", false, null, undefined, "text-sm")).toBe("p-1 text-sm");
     expect(cn("p-1 text-xs", "p-2")).toBe("text-xs p-2");
     expect(cn({ hidden: true, block: false })).toBe("hidden");
+  });
+});
+
+describe("plural", () => {
+  it.each([
+    [0, "0 slides"],
+    [1, "1 slide"],
+    [2, "2 slides"],
+  ])("counts %i with the word for that many", (n, text) => {
+    expect(plural(n, "slide")).toBe(text);
+  });
+
+  it("takes the word for many when it is not the one with an s", () => {
+    expect(plural(1, "match", "matches")).toBe("1 match");
+    expect(plural(3, "match", "matches")).toBe("3 matches");
+    expect(plural(2, "locked slide was", "locked slides were")).toBe("2 locked slides were");
   });
 });
 

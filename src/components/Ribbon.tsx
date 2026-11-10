@@ -11,10 +11,10 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 
+import { useDropdown } from "../hooks/useDropdown";
 import { popupShift, sectionsToCollapse } from "../lib/ribbon";
 import { cn } from "../lib/utils";
 import { keepFocus } from "./Button";
-import { useDismiss } from "./Popover";
 
 /**
  * Fits a ribbon's sections to its width. Returns the ref for the ribbon and the index of the first
@@ -84,17 +84,14 @@ export function RibbonSection(props: {
   children: ReactNode;
 }) {
   const { collapsed } = props;
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLFieldSetElement>(null);
-  useDismiss(open, ref, () => setOpen(false));
+  const { open, setOpen, ref } = useDropdown<HTMLFieldSetElement>({ disabled: !collapsed });
   // biome-ignore lint/correctness/useExhaustiveDependencies: `closeOn` is only what to watch
   useEffect(() => setOpen(false), [props.closeOn]);
-  if (open && !collapsed) setOpen(false);
   const collapsedNow = useRef(collapsed);
   collapsedNow.current = collapsed;
   const reveal = useCallback(() => {
     if (collapsedNow.current) flushSync(() => setOpen(true));
-  }, []);
+  }, [setOpen]);
 
   return (
     <fieldset

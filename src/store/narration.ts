@@ -1,8 +1,8 @@
 import { api, type Deck, type SlideTiming } from "../lib/api";
-import { cleanNarrationPrompt } from "../lib/narration";
 import { promptAgent } from "./composer";
 import { queueEdit } from "./editQueue";
 import { showErrorIn } from "./errors";
+import { cleanNarrationPrompt } from "./prompts";
 import { editRail } from "./slides";
 import type { AppStore, Slice } from "./types";
 

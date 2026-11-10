@@ -150,12 +150,8 @@ pub struct Status {
 /// Where the history of `file` is kept.
 fn dir(home: &Path, file: &Path) -> PathBuf {
     let path = file.canonicalize().unwrap_or_else(|_| file.into());
-    let key = hex(&Sha256::digest(path.to_string_lossy().as_bytes()));
+    let key = format!("{:x}", Sha256::digest(path.to_string_lossy().as_bytes()));
     home.join(HISTORY_DIR).join(&key[..20])
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn now() -> u64 {
@@ -210,7 +206,7 @@ impl History {
     fn read(&self) -> Result<Option<(Vec<u8>, String)>> {
         match fs::read(&self.file) {
             Ok(bytes) => {
-                let hash = hex(&Sha256::digest(&bytes));
+                let hash = format!("{:x}", Sha256::digest(&bytes));
                 Ok(Some((bytes, hash)))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -494,6 +490,26 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.temp);
         }
+    }
+
+    #[test]
+    fn a_decks_history_and_versions_are_named_by_the_sha256_of_its_path_and_contents() {
+        let home = Path::new("/home");
+        assert_eq!(
+            dir(home, Path::new("/nonexistent/talk/deck.html")),
+            home.join(HISTORY_DIR).join("99ecaf587ce4951eff4a")
+        );
+        let temp = crate::test_support::TempDir::new("history-hex");
+        let file = temp.write("deck.html", "abc");
+        let (_, hash) = History::load(&temp.join("home"), &file)
+            .unwrap()
+            .read()
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            hash,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     fn edit(label: &str) -> Change {

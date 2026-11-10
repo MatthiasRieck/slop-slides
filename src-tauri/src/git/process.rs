@@ -1,7 +1,7 @@
 //! Running the user's `git`, and reading what it gives back.
 
 use std::io::Write;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::error::{Error, Result};
@@ -57,11 +57,6 @@ pub(super) fn git_write(dir: &Path, args: &[&str], input: &[u8]) -> Result<Vec<u
 /// The closest folder of `file` that exists; a file of a commit may be gone by now, folder and all.
 pub fn existing_folder(file: &Path) -> Option<&Path> {
     file.ancestors().skip(1).find(|dir| dir.is_dir())
-}
-
-/// Whether `file` stays where it says, without a `..`.
-pub fn is_plain_path(file: &Path) -> bool {
-    !file.components().any(|c| c == Component::ParentDir)
 }
 
 /// `file` as of the last commit, as it would be checked out, so that line endings and the like
@@ -189,12 +184,6 @@ pub(super) fn untracked(dir: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn plain_paths_have_no_way_up() {
-        assert!(is_plain_path(Path::new("/a/b/deck.html")));
-        assert!(!is_plain_path(Path::new("/a/../b/deck.html")));
-    }
 
     #[test]
     fn matches_the_line_endings_of_the_deck() {

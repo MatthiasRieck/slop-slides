@@ -37,7 +37,7 @@ use process::{
     changed_files, git, git_write, head_commit, in_work_tree, matching_endings, paths, read_index,
     split, staged_files, unstaged_files, untracked, write_index,
 };
-pub use process::{existing_folder, is_plain_path, read_at_head};
+pub use process::{existing_folder, read_at_head};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

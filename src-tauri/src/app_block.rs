@@ -170,6 +170,8 @@ mod tests {
         problem: "an empty note",
     };
 
+    // The check takes the entries as the block holds them, `String`s.
+    #[allow(clippy::ptr_arg)]
     fn valid(note: &String) -> bool {
         !note.is_empty()
     }

@@ -26,13 +26,12 @@ import {
 import { playTimeline } from "../lib/timelinePlayback";
 import { cn } from "../lib/utils";
 import { loadVideoOptions } from "../lib/video";
-import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { Button } from "./Button";
 import { usePeaks, useWords, Waveform, Words } from "./NarrationWave";
+import { useDeckAudio } from "./narration/useDeckAudio";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
-const NO_AUDIO: Record<string, SlideAudio> = {};
 /** The zoom steps of the track: how many times the width of the panel it is. */
 const ZOOMS = [1, 2, 4, 8, 16];
 /** How far the pointer goes before pressing something is moving it, in pixels. */
@@ -66,7 +65,7 @@ interface Drag {
  */
 export function NarrationTimeline() {
   const deck = useApp((s) => s.deck);
-  const audio = useNarration((s) => (s.audioDeck === deck?.id ? s.audio : NO_AUDIO));
+  const audio = useDeckAudio(deck?.id);
   if (!deck) return null;
   const slides = deck.slides.filter((s) => !s.hidden);
   if (slides.length === 0) return null;

@@ -4208,6 +4208,67 @@ describe("slide editor: shapes, styling and media", () => {
       const e = editor({ markup: IMAGE });
       expect(e.doc.querySelectorAll("body > span")).toHaveLength(0);
     });
+
+    it("shows a color added to the palette at once, and saves it with the first commit that uses it", () => {
+      const e = editor({ markup: IMAGE });
+      e.down(e.$("#note"));
+      e.fromParent({
+        type: "slop:edit-style",
+        style: { color: "var(--custom-1)" },
+        palette: { "custom-1": "#00ff00", unused: "#0000ff", "bad name": "#000" },
+      });
+      expect(e.doc.documentElement.style.getPropertyValue("--custom-1")).toBe("#00ff00");
+      expect(e.$("#note").style.color).toBe("var(--custom-1)");
+      const commits = e.commits() as (Commit & { palette?: Record<string, string> })[];
+      expect(commits.at(-1)!.palette).toEqual({ "custom-1": "#00ff00" });
+      // Saved once: the next commit does not carry it again.
+      style(e, { bold: true });
+      expect((e.commits() as { palette?: unknown }[]).at(-1)!.palette).toBeUndefined();
+      // Nothing of it goes into the slide's markup.
+      expect(commits.at(-1)!.markup).not.toContain("#00ff00");
+    });
+
+    it("paints a drawing in a palette color through its style, heads too, and reports the color", () => {
+      const e = editor({ markup: IMAGE });
+      e.fromParent({ type: "slop:edit-tool", tool: "arrow", style: { ...LINE_STYLE, stroke: "var(--brand)" } });
+      dragOut(e, [100, 100], [300, 200]);
+      const paths = [...added(e)[0]!.querySelectorAll("path")];
+      expect(paths.length).toBeGreaterThan(1);
+      for (const path of paths) {
+        expect(path.getAttribute("stroke")).toBeNull();
+        expect(path.style.getPropertyValue("stroke")).toBe("var(--brand)");
+      }
+      expect(lastSelection(e)).toMatchObject({ stroke: "#ff0000" });
+      // A plain color goes back into the attribute.
+      style(e, { stroke: "#00ff00" });
+      const stroke = added(e)[0]!.querySelector("path")!;
+      expect(stroke.getAttribute("stroke")).toBe("#00ff00");
+      expect(stroke.style.getPropertyValue("stroke")).toBe("");
+    });
+
+    it("draws a figure in a palette color, naming it in its image, and keeps it when redrawn", () => {
+      const e = editor({ markup: IMAGE });
+      e.fromParent({ type: "slop:edit-tool", tool: "star", style: { ...SHAPE_STYLE, fill: "var(--brand)" } });
+      dragOut(e, [100, 100], [300, 300]);
+      const star = added(e)[0]!;
+      const image = () => decodeURIComponent(star.style.getPropertyValue("background-image"));
+      expect(image()).toContain("fill='#ff0000' data-palette-fill='brand'");
+      expect(lastSelection(e)).toMatchObject({ fill: "#ff0000" });
+      style(e, { flipX: true, stroke: "var(--brand-dark)", strokeWidth: 4 });
+      expect(image()).toContain("data-palette-fill='brand'");
+      expect(image()).toContain("stroke='#0000ff' data-palette-stroke='brand-dark'");
+      expect(lastSelection(e)).toMatchObject({ fill: "#ff0000", stroke: "#0000ff", strokeWidth: 4 });
+    });
+
+    it("mixes shadows from the palette's shadow color", () => {
+      const e = editor({ markup: IMAGE });
+      e.down(e.$("#note"));
+      style(e, { shadow: 12 });
+      expect(e.$("#note").style.getPropertyValue("box-shadow")).toContain(
+        "color-mix(in srgb, var(--shadow-color) 35%, transparent)",
+      );
+      expect(lastSelection(e)).toMatchObject({ shadow: 12 });
+    });
   });
 
   describe("images", () => {

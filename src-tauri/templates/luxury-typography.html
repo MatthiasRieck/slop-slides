@@ -62,8 +62,8 @@
       --font-body: "Jost", "Futura", sans-serif;
     }
     .slide { align-items: center; text-align: center; padding: 140px 200px; font-weight: 300; }
-    .slide::before { content: ""; position: absolute; inset: 48px; border: 1px solid rgba(201, 169, 97, 0.55); pointer-events: none; }
-    .slide::after { content: ""; position: absolute; inset: 60px; border: 1px solid rgba(201, 169, 97, 0.2); pointer-events: none; }
+    .slide::before { content: ""; position: absolute; inset: 48px; border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent); pointer-events: none; }
+    .slide::after { content: ""; position: absolute; inset: 60px; border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent); pointer-events: none; }
     .slide h1, .slide h2 { font-weight: 300; letter-spacing: 0.01em; line-height: 1; }
     .slide h1 { font-size: 168px; font-style: italic; }
     .slide h2 { font-size: 104px; }
@@ -86,7 +86,7 @@
     .slide .visual { flex-basis: 640px; height: 760px; }
     .slide .visual .placeholder { border: 1px solid var(--accent); background: var(--panel); color: var(--accent); letter-spacing: 0.4em; font-size: 16px; }
     .slide .stats { gap: 0; }
-    .slide .stat { align-items: center; padding: 0 56px; border-left: 1px solid rgba(201, 169, 97, 0.4); }
+    .slide .stat { align-items: center; padding: 0 56px; border-left: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
     .slide .stat:first-child { border-left: 0; }
     .slide .value { font-weight: 300; font-size: 160px; color: var(--ink); font-style: italic; }
     .slide .label { font-size: 20px; letter-spacing: 0.3em; text-transform: uppercase; color: var(--accent); }

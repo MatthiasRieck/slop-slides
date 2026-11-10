@@ -2701,6 +2701,8 @@ pub(super) fn convert(bytes: Vec<u8>, fallback: &str) -> Result<Converted> {
         minor = font_family(&theme.minor_font).replace("&quot;", "\""),
         css = SHELL_CSS,
     );
+    // Every color the slides use goes into the palette, so the deck recolors as one.
+    let html = crate::palette::adopt(&html);
     Ok(Converted {
         title,
         html,

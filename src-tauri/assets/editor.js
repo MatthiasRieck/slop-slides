@@ -597,10 +597,12 @@
   var OUTLINES = { bracket: true, brace: true };
   // Fully transparent elements can no longer be picked.
   var MIN_OPACITY = 0.05;
-  var SHADOW_COLOR = "rgba(0, 0, 0, 0.35)";
+  // From the palette: the app adds `--shadow-color` to it with the first shadow.
+  var SHADOW_COLOR = "color-mix(in srgb, var(--shadow-color) 35%, transparent)";
   // The blur in a CSS shadow's lengths; a drop-shadow() the editor adds to an element's filter.
   var SHADOW_LENGTHS = /-?[\d.]+px\s+-?[\d.]+px\s+([\d.]+)px/;
-  var SHADOW_FILTER = /drop-shadow\((?:[^()]|\([^()]*\))*\)/;
+  // Two levels of parentheses inside: the color is mixed from a palette color.
+  var SHADOW_FILTER = /drop-shadow\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)/;
   var MAX_DECK_COLORS = 12;
   // At most this many CSS variables go along with a drawing to the SVG editor.
   var MAX_SVG_VARS = 200;
@@ -821,10 +823,10 @@
     var markup = serialize();
     if (markup === saved) return;
     saved = markup;
-    window.parent.postMessage(
-      { type: "slop:edit-commit", slide: slide.id, markup: markup, select: pathOf(selected), also: extras.map(pathOf) },
-      "*",
-    );
+    var message = { type: "slop:edit-commit", slide: slide.id, markup: markup, select: pathOf(selected), also: extras.map(pathOf) };
+    var palette = takePalette(markup);
+    if (palette) message.palette = palette;
+    window.parent.postMessage(message, "*");
   }
 
   /** Child-index path from the slide to `el`, to select it again after the preview reloads. */
@@ -961,8 +963,86 @@
   }
 
   function paintOf(vector, attr) {
-    var value = vector && vector.getAttribute(attr);
-    return value && value !== "none" ? toHex(value) : null;
+    var value = vector && (vector.style.getPropertyValue(attr) || vector.getAttribute(attr));
+    return value && value !== "none" ? colorToHex(value) : null;
+  }
+
+  /**
+   * Gives an SVG shape a paint. A palette color (`var(--accent)`) goes in its style, since
+   * presentation attributes do not take `var()`; anything else in the attribute.
+   */
+  function setPaint(node, attr, value) {
+    if (/^var\(/.test(value || "")) {
+      node.removeAttribute(attr);
+      node.style.setProperty(attr, value);
+      return;
+    }
+    node.style.removeProperty(attr);
+    if (!node.getAttribute("style")) node.removeAttribute("style");
+    node.setAttribute(attr, value);
+  }
+
+  /** An SVG shape's own paint as written, palette reference or color; null when it has none. */
+  function ownPaint(node, attr) {
+    return node.style.getPropertyValue(attr) || node.getAttribute(attr) || null;
+  }
+
+  var colorCanvas = null;
+  /**
+   * `#rrggbb` for any CSS color the slide can see, palette references included (drawn and read
+   * back, so it is sRGB whatever space the color is in); null when it is see-through or not a color.
+   */
+  function colorToHex(value) {
+    value = String(value || "").trim();
+    var plain = toHex(value);
+    if (plain || !value) return plain;
+    var named = value.match(/^var\(\s*(--[\w-]+)\s*\)$/);
+    if (named) value = getComputedStyle(slide).getPropertyValue(named[1]).trim();
+    if (!value || toHex(value)) return toHex(value);
+    try {
+      colorCanvas = colorCanvas || document.createElement("canvas");
+      colorCanvas.width = colorCanvas.height = 1;
+      var ctx = colorCanvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return null;
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.fillStyle = "rgba(0, 0, 0, 0)";
+      ctx.fillStyle = value;
+      ctx.fillRect(0, 0, 1, 1);
+      var px = ctx.getImageData(0, 0, 1, 1).data;
+      if (px[3] === 0) return null;
+      return "#" + [px[0], px[1], px[2]].map(function (n) {
+        return ("0" + n.toString(16)).slice(-2);
+      }).join("");
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Palette colors the app added with a style or tool (name to value) that no commit has
+  // carried yet. They show at once through the root's own style, and go with the next commit
+  // that uses them, which writes them into the deck's palette.
+  var pendingPalette = {};
+
+  function addPalette(colors) {
+    if (!colors || typeof colors !== "object") return;
+    Object.keys(colors).forEach(function (name) {
+      var value = colors[name];
+      if (!/^[a-z][\w-]*$/i.test(name) || typeof value !== "string") return;
+      pendingPalette[name] = value;
+      document.documentElement.style.setProperty("--" + name, value);
+    });
+  }
+
+  /** The pending palette colors `markup` uses, taken off the pending list; null when none. */
+  function takePalette(markup) {
+    var used = null;
+    Object.keys(pendingPalette).forEach(function (name) {
+      if (markup.indexOf("--" + name + ")") < 0 && markup.indexOf("'" + name + "'") < 0) return;
+      used = used || {};
+      used[name] = pendingPalette[name];
+      delete pendingPalette[name];
+    });
+    return used;
   }
 
   /** Which way `el` lays out its text vertically, when it is a flex box; null otherwise. */
@@ -1094,8 +1174,8 @@
       autofit: /^(shrink|grow)$/.test(el.getAttribute("data-autofit") || "") ? el.getAttribute("data-autofit") : null,
       editing: editing === el,
       range: !!range && !range.collapsed,
-      fill: figure ? figure.fill : first ? paintOf(first, "fill") : toHex(style.backgroundColor),
-      stroke: figure ? figure.stroke : first ? paintOf(first, "stroke") : borderWidth ? toHex(style.borderTopColor) : null,
+      fill: figure ? colorToHex(figure.fill) : first ? paintOf(first, "fill") : toHex(style.backgroundColor),
+      stroke: figure ? colorToHex(figure.stroke) : first ? paintOf(first, "stroke") : borderWidth ? toHex(style.borderTopColor) : null,
       strokeWidth: figure ? figure.width : first ? parseFloat(first.getAttribute("stroke-width")) || 0 : borderWidth,
       dash: figure ? figure.dash : first ? dashOf(first) : borderDash,
       line: line ? { start: line.heads.start, end: line.heads.end, route: line.route || "straight" } : null,
@@ -2731,8 +2811,8 @@
   function newDrawing(at) {
     var svg = addElement("drawing", "position: absolute; left: 0px; top: 0px; width: 1px; height: 1px; margin: 0; overflow: visible;", true);
     var path = document.createElementNS(SVG_NS, "path");
-    path.setAttribute("fill", styleFor("fill") || "none");
-    path.setAttribute("stroke", styleFor("stroke") || BORDER_COLOR);
+    setPaint(path, "fill", styleFor("fill") || "none");
+    setPaint(path, "stroke", styleFor("stroke") || BORDER_COLOR);
     path.setAttribute("stroke-width", String(styleFor("strokeWidth") || BORDER_WIDTH));
     path.setAttribute("stroke-linecap", "round");
     path.setAttribute("stroke-linejoin", "round");
@@ -2952,8 +3032,8 @@
       vectors.forEach(function (vector) {
         // A line's heads take its color and width when it is redrawn.
         if (vector.hasAttribute(HEAD_ATTR) && line) return;
-        if (has("fill")) vector.setAttribute("fill", changes.fill || "none");
-        if (has("stroke")) vector.setAttribute("stroke", changes.stroke || "none");
+        if (has("fill")) setPaint(vector, "fill", changes.fill || "none");
+        if (has("stroke")) setPaint(vector, "stroke", changes.stroke || "none");
         if (has("strokeWidth")) vector.setAttribute("stroke-width", String(Math.max(0, changes.strokeWidth || 0)));
         if (has("dash") || has("strokeWidth")) {
           setDash(vector, has("dash") && DASHES[changes.dash] ? changes.dash : dashOf(vector), parseFloat(vector.getAttribute("stroke-width")));
@@ -4677,6 +4757,7 @@
           : "Stretch (Shift keeps the aspect ratio, Alt scales from the center, double-click resets)";
       });
     } else if (data.type === "slop:edit-tool") {
+      addPalette(data.palette);
       toolStyle = data.style && typeof data.style === "object" ? data.style : {};
       if (data.tool !== tool) {
         cancelCreating();
@@ -4684,6 +4765,7 @@
         useTool(String(data.tool));
       }
     } else if (data.type === "slop:edit-style" && data.style && typeof data.style === "object") {
+      addPalette(data.palette);
       if (editing) styleText(data.style);
       else applyToSelection(data.style);
     } else if (data.type === "slop:edit-list") {
@@ -4718,6 +4800,7 @@
     } else if (data.type === "slop:edit-replace-image" && typeof data.src === "string") {
       replaceImage(data.src);
     } else if (data.type === "slop:edit-background" && (data.color === null || typeof data.color === "string")) {
+      addPalette(data.palette);
       setBackground(data.color);
     }
   });
@@ -5067,7 +5150,7 @@
           return " C" + segment.slice(1).map(local).join(" ");
         }).join("");
     path.setAttribute("d", data);
-    var stroke = path.getAttribute("stroke") || BORDER_COLOR;
+    var stroke = ownPaint(path, "stroke") || BORDER_COLOR;
     ["start", "end"].forEach(function (end) {
       var head = shape.heads[end];
       var node = Array.prototype.find.call(el.querySelectorAll("[" + HEAD_ATTR + "]"), function (n) {
@@ -5085,8 +5168,8 @@
       var kind = head.dot ? "dot" : head.closed ? "triangle" : head.points.length === 2 ? "bar" : "arrow";
       node.setAttribute(HEAD_ATTR, end + " " + kind);
       node.setAttribute("d", headData(head, dx, dy));
-      node.setAttribute("fill", head.filled ? stroke : "none");
-      node.setAttribute("stroke", stroke);
+      setPaint(node, "fill", head.filled ? stroke : "none");
+      setPaint(node, "stroke", stroke);
       node.setAttribute("stroke-width", path.getAttribute("stroke-width") || String(BORDER_WIDTH));
       node.setAttribute("stroke-linecap", "round");
       node.setAttribute("stroke-linejoin", "round");
@@ -5527,7 +5610,7 @@
         if (matrix) matrices.push(matrix);
       }
       // A filled shape is an area, even when its outline is left open.
-      var fill = shape.getAttribute("fill") || getComputedStyle(shape).getPropertyValue("fill");
+      var fill = ownPaint(shape, "fill") || getComputedStyle(shape).getPropertyValue("fill");
       var filled = !!fill && fill !== "none" && shape.tagName.toLowerCase() !== "line";
       own.forEach(function (ring) {
         rings.push({
@@ -6143,7 +6226,14 @@
     var a = adjustOf(el);
     var d = FIGURES[kind].path(w, h, a);
     var rim = FIGURES[kind].rim ? FIGURES[kind].rim(w, h, a) : "";
-    var color = function (value) {
+    // A palette color is drawn as its value, named so the app can redraw it when the palette
+    // changes (see palette.rs).
+    var color = function (value, attr) {
+      var named = String(value || "").match(/^var\(\s*--([\w-]+)\s*\)$/);
+      if (named) {
+        var hex = colorToHex(value);
+        return hex ? hex + "' data-palette-" + attr + "='" + named[1] : "none";
+      }
       return value && FIGURE_COLOR.test(value) ? value : "none";
     };
     var width = Math.max(0, Math.round(Number(paint.width) || 0));
@@ -6155,10 +6245,10 @@
       "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 " + w + " " + h + "' preserveAspectRatio='none'>" +
       (edge ? "<clipPath id='edge'><path d='" + d + "'/></clipPath>" : "") +
       "<g transform='" + flip + "'>" +
-      "<path d='" + d + "' fill='" + color(paint.fill) + "'/>" +
+      "<path d='" + d + "' fill='" + color(paint.fill, "fill") + "'/>" +
       // Twice as wide, and cut to the shape: what shows is inside it, as wide as `width`.
       (edge
-        ? "<path d='" + d + (rim ? " " + rim : "") + "' fill='none' stroke='" + color(paint.stroke) + "' stroke-width='" + 2 * width +
+        ? "<path d='" + d + (rim ? " " + rim : "") + "' fill='none' stroke='" + color(paint.stroke, "stroke") + "' stroke-width='" + 2 * width +
           "'" + dashes + " stroke-linejoin='round' clip-path='url(#edge)'/>"
         : "") +
       "</g></svg>";
@@ -6200,8 +6290,8 @@
     // Tidying may have moved it into the slide's rules.
     var svg = svgOf(el.style.getPropertyValue("background-image") || getComputedStyle(el).backgroundImage);
     var shadow = svgOf(el.style.getPropertyValue("border-image-source") || getComputedStyle(el).getPropertyValue("border-image-source"));
-    var fill = svg.match(/<path d='[^']*' fill='([^']*)'\/>/);
-    var stroke = svg.match(/stroke='([^']*)' stroke-width='([\d.]+)'/);
+    var fill = svg.match(/<path d='[^']*' fill='([^']*)'(?: data-palette-fill='([\w-]+)')?\/>/);
+    var stroke = svg.match(/stroke='([^']*)'(?: data-palette-stroke='([\w-]+)')? stroke-width='([\d.]+)'/);
     var dash = svg.match(/stroke-dasharray='([\d.]+) ([\d.]+)'/);
     var flips = svg.match(/matrix\((-?1) 0 0 (-?1)/);
     var blur = shadow.match(/stdDeviation='([\d.]+)'/);
@@ -6209,10 +6299,15 @@
     var paintOf = function (value) {
       return value && value !== "none" ? toHex(value) || value : null;
     };
+    // A palette color stays one, so redrawing the figure keeps its link to the palette.
+    var paint = function (match) {
+      if (!match) return null;
+      return match[2] ? "var(--" + match[2] + ")" : paintOf(match[1]);
+    };
     return {
-      fill: fill ? paintOf(fill[1]) : null,
-      stroke: stroke ? paintOf(stroke[1]) : null,
-      width: stroke ? Math.round(parseFloat(stroke[2]) / 2) : 0,
+      fill: paint(fill),
+      stroke: paint(stroke),
+      width: stroke ? Math.round(parseFloat(stroke[3]) / 2) : 0,
       dash: dash ? (dash[1] === dash[2] ? "dotted" : "dashed") : "solid",
       flipX: !!flips && flips[1] === "-1",
       flipY: !!flips && flips[2] === "-1",

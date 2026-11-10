@@ -53,6 +53,13 @@
 
     /* Bento Grid */
     :root {
+      --glow-tile: #ffb199;
+      --accent-2: #ff9a3c;
+      --stripe: #c9e4ff;
+      --stripe-2: #b2d6ff;
+      --dot: #7cc4ff;
+      --dot-2: #ffd23f;
+      --haze: #e9d9ff;
       --bg: #f1f0ec;
       --ink: #17171a;
       --muted: #5d5d66;
@@ -68,9 +75,9 @@
     .slide h2 { font-size: 76px; }
     .slide .deco { left: auto; right: 96px; top: 96px; bottom: 96px; width: 720px; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1.3fr 1fr; gap: 28px; }
     .slide .deco span { position: relative; border-radius: var(--tile-radius); }
-    .slide .deco span:nth-child(1) { grid-column: span 2; background: radial-gradient(circle at 70% 40%, #ffb199 0 18%, transparent 19%), linear-gradient(135deg, var(--accent), #ff9a3c); }
-    .slide .deco span:nth-child(2) { background: #17171a; }
-    .slide .deco span:nth-child(3) { background: repeating-linear-gradient(45deg, #c9e4ff 0 14px, #b2d6ff 14px 28px); }
+    .slide .deco span:nth-child(1) { grid-column: span 2; background: radial-gradient(circle at 70% 40%, var(--glow-tile) 0 18%, transparent 19%), linear-gradient(135deg, var(--accent), var(--accent-2)); }
+    .slide .deco span:nth-child(2) { background: var(--ink); }
+    .slide .deco span:nth-child(3) { background: repeating-linear-gradient(45deg, var(--stripe) 0 14px, var(--stripe-2) 14px 28px); }
     .slide .deco span:nth-child(4) { display: none; }
     .layout-bullets .deco, .layout-stats .deco, .layout-split .deco, .layout-quote .deco { display: none; }
     .layout-title .frame, .layout-section .frame, .layout-closing .frame { justify-content: flex-end; width: 1000px; height: 100%; padding: 72px; border-radius: var(--tile-radius); background: var(--panel); }
@@ -82,23 +89,23 @@
     .slide .frame-head { width: 100%; max-width: none; padding: 56px 64px; border-radius: var(--tile-radius); background: var(--panel); }
     .slide .points { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; max-width: none; flex: 1; }
     .slide .points li { display: flex; flex-direction: column; justify-content: flex-end; padding: 56px; border-radius: var(--tile-radius); background: var(--panel); font-size: 34px; }
-    .slide .points li:first-child { background: var(--ink); color: rgba(255, 255, 255, 0.7); }
-    .slide .points li:first-child strong { color: #fff; }
+    .slide .points li:first-child { background: var(--ink); color: color-mix(in srgb, var(--panel) 70%, transparent); }
+    .slide .points li:first-child strong { color: var(--panel); }
     .slide .points li::before { left: 56px; top: 56px; width: 64px; height: 64px; border-radius: 20px; }
-    .slide .points li:nth-child(2)::before { background: #7cc4ff; }
-    .slide .points li:nth-child(3)::before { background: #ffd23f; }
+    .slide .points li:nth-child(2)::before { background: var(--dot); }
+    .slide .points li:nth-child(3)::before { background: var(--dot-2); }
     .slide .points strong { display: block; margin-bottom: 8px; font-family: var(--font-display); font-size: 44px; }
     .layout-split { gap: 28px; align-items: stretch; }
     .layout-split .text { justify-content: flex-end; padding: 72px; border-radius: var(--tile-radius); background: var(--panel); }
     .slide .visual { height: auto; flex-basis: 760px; }
-    .slide .visual .placeholder { border-radius: var(--tile-radius); background: linear-gradient(135deg, #c9e4ff, #e9d9ff); color: var(--ink); }
+    .slide .visual .placeholder { border-radius: var(--tile-radius); background: linear-gradient(135deg, var(--stripe), var(--haze)); color: var(--ink); }
     .slide .stats { flex: 1; gap: 28px; grid-template-columns: 1.4fr 1fr 1fr; }
     .slide .stat { justify-content: flex-end; padding: 56px; border-radius: var(--tile-radius); background: var(--panel); }
     .slide .stat:first-child { background: var(--accent); }
-    .slide .stat:first-child .value, .slide .stat:first-child .label { color: #fff; }
+    .slide .stat:first-child .value, .slide .stat:first-child .label { color: var(--panel); }
     .slide .value { color: var(--ink); font-size: 140px; letter-spacing: -0.04em; }
     .layout-quote { padding: 96px; }
-    .layout-quote blockquote { flex: 1; display: flex; align-items: flex-end; max-width: none; width: 100%; padding: 88px; border-radius: var(--tile-radius); background: var(--ink); color: #fff; font-size: 76px; letter-spacing: -0.02em; }
+    .layout-quote blockquote { flex: 1; display: flex; align-items: flex-end; max-width: none; width: 100%; padding: 88px; border-radius: var(--tile-radius); background: var(--ink); color: var(--panel); font-size: 76px; letter-spacing: -0.02em; }
     .layout-quote .cite { width: 100%; padding: 36px 88px; border-radius: var(--tile-radius); background: var(--panel); color: var(--ink); }
     .layout-closing h2 { font-size: 150px; letter-spacing: -0.05em; }
     /* Entrance: tiles pop into place. */

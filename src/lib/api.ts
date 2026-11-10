@@ -117,6 +117,16 @@ export interface Deck {
   size?: SizeInfo;
   /** The voice and language its narration is said in (its `slopslide-narration-*` metas). */
   narration?: NarrationSettings;
+  /** The deck's color palette: the custom properties its `:root` rule sets to one color. */
+  palette?: PaletteEntry[];
+}
+
+/** One color of a deck's palette. */
+export interface PaletteEntry {
+  /** Without the leading `--`. */
+  name: string;
+  /** The CSS color, as written in the deck. */
+  value: string;
 }
 
 export interface NarrationSettings {
@@ -503,14 +513,16 @@ export const api = {
   setSlideNotes: (id: string, slide: string, text: string) => invoke<Deck>("set_slide_notes", { id, slide, text }),
   /** Gives every slide the canvas `size` (the slides' content stays as it is). */
   setSlideSize: (id: string, size: SlideSize) => invoke<Deck>("set_slide_size", { id, size }),
+  setPaletteColors: (id: string, colors: PaletteEntry[]) => invoke<Deck>("set_palette_colors", { id, colors }),
+  adoptPalette: (id: string) => invoke<Deck>("adopt_palette", { id }),
   addSection: (id: string, before: string | null, title: string) => invoke<Deck>("add_section", { id, before, title }),
   renameSection: (id: string, index: number, title: string) => invoke<Deck>("rename_section", { id, index, title }),
   deleteSection: (id: string, index: number) => invoke<Deck>("delete_section", { id, index }),
   /** Deletes `slides` along with their review marks; none of them if any is locked. */
   deleteSlides: (id: string, slides: string[]) => invoke<RailEdit>("delete_slides", { id, slides }),
   /** Replaces one slide's markup; refused when the slide's hash is no longer `base`. */
-  updateSlide: (id: string, slide: string, markup: string, base: string) =>
-    invoke<Deck>("update_slide", { id, slide, markup, base }),
+  updateSlide: (id: string, slide: string, markup: string, base: string, palette?: PaletteEntry[]) =>
+    invoke<Deck>("update_slide", { id, slide, markup, base, ...(palette?.length ? { palette } : {}) }),
   /** One slide's markup as it is in the file, with the hash `updateSlide` takes as its base. */
   slideSource: (id: string, slide: string) => invoke<SlideSource>("slide_source", { id, slide }),
   saveDeckSource: (id: string, source: string, base: string | null) =>

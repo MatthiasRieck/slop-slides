@@ -10,7 +10,8 @@ vi.mock("../lib/drop", async (importOriginal) => ({
 
 import { invoke } from "@tauri-apps/api/core";
 import { claimDrop, dropCovered } from "../lib/drop";
-import { DEFAULT_EDIT_STYLES } from "../lib/editTools";
+import { DEFAULT_EDIT_STYLES, type EditStyle } from "../lib/editTools";
+import { SHADOW, SWATCHES } from "../lib/palette";
 import { setSlideClock } from "../lib/slideClock";
 import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
 import { useSvgEditor } from "../svgStore";
@@ -1055,6 +1056,21 @@ describe("Stage", () => {
     });
 
     describe("edit toolbar", () => {
+      // The test deck has no palette: the editor's default colors are added to it, named for their use.
+      const TOOL_STYLES: Record<"text" | "shape" | "draw", { style: EditStyle; palette: Record<string, string> }> = {
+        text: { style: { ...DEFAULT_EDIT_STYLES.text, color: "var(--ink)" }, palette: { ink: SWATCHES.ink } },
+        shape: {
+          style: { ...DEFAULT_EDIT_STYLES.shape, color: "var(--on-accent)", fill: "var(--accent)" },
+          palette: { "on-accent": SWATCHES.white, accent: SWATCHES.blue },
+        },
+        draw: { style: { ...DEFAULT_EDIT_STYLES.draw, stroke: "var(--ink)" }, palette: { ink: SWATCHES.ink } },
+      };
+      const toolMessage = (tool: string, family: keyof typeof TOOL_STYLES) => ({
+        type: "slop:edit-tool",
+        tool,
+        ...TOOL_STYLES[family],
+      });
+
       const button = (name: string | RegExp) => screen.getByRole("button", { name }) as HTMLButtonElement;
       const SELECTION = {
         kind: "shape",
@@ -1088,15 +1104,9 @@ describe("Stage", () => {
         fireEvent.click(button("Add a rectangle (R)"));
         expect(useApp.getState().editTool).toBe("rect");
         expect(button("Add a rectangle (R)").getAttribute("aria-pressed")).toBe("true");
-        expect(post).toHaveBeenLastCalledWith(
-          { type: "slop:edit-tool", tool: "rect", style: DEFAULT_EDIT_STYLES.shape },
-          "*",
-        );
+        expect(post).toHaveBeenLastCalledWith(toolMessage("rect", "shape"), "*");
         fireEvent.click(button("Draw freehand (D)"));
-        expect(post).toHaveBeenLastCalledWith(
-          { type: "slop:edit-tool", tool: "draw", style: DEFAULT_EDIT_STYLES.draw },
-          "*",
-        );
+        expect(post).toHaveBeenLastCalledWith(toolMessage("draw", "draw"), "*");
         fireEvent.click(button("Select and move (V)"));
         expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-tool", tool: "select", style: undefined }, "*");
       });
@@ -1118,10 +1128,7 @@ describe("Stage", () => {
         fireEvent.click(button("Add text (T)"));
         const post = vi.spyOn(frame.contentWindow!, "postMessage");
         fireEvent.load(frame);
-        expect(post).toHaveBeenCalledWith(
-          { type: "slop:edit-tool", tool: "text", style: DEFAULT_EDIT_STYLES.text },
-          "*",
-        );
+        expect(post).toHaveBeenCalledWith(toolMessage("text", "text"), "*");
       });
 
       it("follows the editor when it puts its tool away", () => {
@@ -1251,13 +1258,14 @@ describe("Stage", () => {
         expect(useApp.getState().editStyles.text.italic).toBe(true);
         expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-style" }), "*");
         expect(post).toHaveBeenLastCalledWith(
-          { type: "slop:edit-tool", tool: "text", style: { ...DEFAULT_EDIT_STYLES.text, italic: true } },
+          { ...toolMessage("text", "text"), style: { ...TOOL_STYLES.text.style, italic: true } },
           "*",
         );
       });
 
-      it("shows the deck's colors above the fixed palette", () => {
+      it("shows the deck's palette above the fixed colors, and picks them by name", () => {
         const { frame, post } = enter();
+        useApp.setState((s) => ({ deck: { ...s.deck!, palette: [{ name: "brand", value: "oklch(0.3 0.05 250)" }] } }));
         select(frame);
         fromFrame(frame, {
           type: "slop:edit-colors",
@@ -1271,9 +1279,53 @@ describe("Stage", () => {
         const dialog = screen.getByRole("dialog", { name: "Fill" });
         const group = screen.getByRole("group", { name: "Deck colors" });
         expect(dialog.firstElementChild).toBe(group);
+        // Only the palette's colors, shown as the slide resolves them.
         expect(group.querySelectorAll("button")).toHaveLength(1);
+        expect(button("Deck color brand").style.background).toBe("rgb(17, 34, 51)");
         fireEvent.click(button("Deck color brand"));
-        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { fill: "#112233" } }, "*");
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { fill: "var(--brand)" } }, "*");
+      });
+
+      it("gives new elements the deck's own colors, and reuses a palette color a pick equals", () => {
+        const { frame, post } = enter();
+        useApp.setState((s) => ({
+          deck: {
+            ...s.deck!,
+            palette: [
+              { name: "ink", value: "#1c1b19" },
+              { name: "accent", value: "#d6461f" },
+              { name: "bg", value: "#f4f1ea" },
+              { name: "red", value: "#EF4444" },
+            ],
+          },
+        }));
+        fireEvent.click(button("Add a rectangle (R)"));
+        expect(post).toHaveBeenLastCalledWith(
+          {
+            type: "slop:edit-tool",
+            tool: "rect",
+            style: { ...DEFAULT_EDIT_STYLES.shape, color: "var(--bg)", fill: "var(--accent)" },
+          },
+          "*",
+        );
+        fireEvent.click(button("Select and move (V)"));
+        select(frame);
+        fireEvent.click(button("Fill"));
+        fireEvent.click(button("#ef4444"));
+        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { fill: "var(--red)" } }, "*");
+      });
+
+      it("adds the palette's shadow color with the first shadow", () => {
+        const { frame, post } = enter();
+        select(frame, { ...SELECTION, opacity: 1, shadow: 0, radius: 8 });
+        fireEvent.click(button("Appearance"));
+        const shadow = screen.getByLabelText("Shadow") as HTMLInputElement;
+        fireEvent.input(shadow, { target: { value: "12" } });
+        act(() => void shadow.dispatchEvent(new Event("change")));
+        expect(post).toHaveBeenCalledWith(
+          { type: "slop:edit-style", style: { shadow: 12 }, palette: { "shadow-color": SHADOW } },
+          "*",
+        );
       });
 
       it("has no deck colors row without any", () => {
@@ -1289,7 +1341,10 @@ describe("Stage", () => {
         expect(screen.getByTestId("Slide background swatch").style.background).toBe("rgb(17, 34, 51)");
         fireEvent.click(button("Slide background"));
         fireEvent.click(button("#ef4444"));
-        expect(post).toHaveBeenCalledWith({ type: "slop:edit-background", color: "#ef4444" }, "*");
+        expect(post).toHaveBeenCalledWith(
+          { type: "slop:edit-background", color: "var(--custom-1)", palette: { "custom-1": "#ef4444" } },
+          "*",
+        );
         fireEvent.click(button("Slide background"));
         fireEvent.click(button("None"));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-background", color: null }, "*");
@@ -1303,16 +1358,10 @@ describe("Stage", () => {
           ["Add a speech bubble", "bubble"],
         ] as const) {
           fireEvent.click(button(name));
-          expect(post).toHaveBeenLastCalledWith(
-            { type: "slop:edit-tool", tool, style: DEFAULT_EDIT_STYLES.shape },
-            "*",
-          );
+          expect(post).toHaveBeenLastCalledWith(toolMessage(tool, "shape"), "*");
         }
         fireEvent.click(button("Add an arrow (A, Shift snaps to 45°)"));
-        expect(post).toHaveBeenLastCalledWith(
-          { type: "slop:edit-tool", tool: "arrow", style: DEFAULT_EDIT_STYLES.draw },
-          "*",
-        );
+        expect(post).toHaveBeenLastCalledWith(toolMessage("arrow", "draw"), "*");
         fromFrame(frame, { type: "slop:edit-tool", slide: "intro", tool: "select" });
         expect(useApp.getState().editTool).toBe("select");
       });
@@ -1343,10 +1392,7 @@ describe("Stage", () => {
         fireEvent.click(more);
         const picker = screen.getByRole("dialog", { name: "More shapes" });
         fireEvent.click(within(picker).getByRole("button", { name }));
-        expect(post).toHaveBeenLastCalledWith(
-          { type: "slop:edit-tool", tool, style: DEFAULT_EDIT_STYLES[family] },
-          "*",
-        );
+        expect(post).toHaveBeenLastCalledWith(toolMessage(tool, family), "*");
         // The picker closes; its button stands for the shape picked.
         expect(screen.queryByRole("dialog", { name: "More shapes" })).toBeNull();
         expect(more.getAttribute("aria-pressed")).toBe("true");
@@ -1616,7 +1662,11 @@ describe("Stage", () => {
         select(frame);
         fireEvent.click(button("Fill"));
         fireEvent.click(button("#ef4444"));
-        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { fill: "#ef4444" } }, "*");
+        // A color the palette lacks joins it, numbered for the agent to name.
+        expect(post).toHaveBeenCalledWith(
+          { type: "slop:edit-style", style: { fill: "var(--custom-1)" }, palette: { "custom-1": "#ef4444" } },
+          "*",
+        );
         expect(screen.queryByRole("dialog", { name: "Fill" })).toBeNull();
         fireEvent.click(button("Border color"));
         fireEvent.click(button("None"));
@@ -1624,7 +1674,10 @@ describe("Stage", () => {
         fireEvent.click(button("Text color"));
         expect(screen.queryByRole("button", { name: "None" })).toBeNull();
         fireEvent.change(screen.getByLabelText("Custom text color"), { target: { value: "#123456" } });
-        expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { color: "#123456" } }, "*");
+        expect(post).toHaveBeenCalledWith(
+          { type: "slop:edit-style", style: { color: "var(--custom-2)" }, palette: { "custom-2": "#123456" } },
+          "*",
+        );
         // Clicking elsewhere closes the picker.
         fireEvent.pointerDown(document.body);
         expect(screen.queryByRole("dialog", { name: "Text color" })).toBeNull();
@@ -1871,13 +1924,23 @@ describe("Stage", () => {
       toggleEditing();
       const frame = stageFrame(container);
       fromFrame(frame, { type: "slop:edit-commit", slide: "intro", markup: MARKUP, select: [0] });
-      expect(save).toHaveBeenCalledWith("intro", MARKUP);
+      expect(save).toHaveBeenCalledWith("intro", MARKUP, undefined);
+      // Palette colors the editor picked go along with the slide.
+      fromFrame(frame, {
+        type: "slop:edit-commit",
+        slide: "intro",
+        markup: MARKUP,
+        select: null,
+        palette: { "custom-1": "#ff0000" },
+      });
+      expect(save).toHaveBeenLastCalledWith("intro", MARKUP, [{ name: "custom-1", value: "#ff0000" }]);
+      save.mockClear();
       // Not from another slide, a stray window, or outside edit mode.
       fromFrame(frame, { type: "slop:edit-commit", slide: "outro", markup: MARKUP, select: null });
       fromFrame(null, { type: "slop:edit-commit", slide: "intro", markup: MARKUP, select: null });
       toggleEditing();
       fromFrame(frame, { type: "slop:edit-commit", slide: "intro", markup: MARKUP, select: null });
-      expect(save).toHaveBeenCalledTimes(1);
+      expect(save).not.toHaveBeenCalled();
     });
 
     it("deletes the editor's selection from the edit tools, enabled only while something is selected", () => {

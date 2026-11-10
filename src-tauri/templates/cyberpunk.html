@@ -64,12 +64,12 @@
       --font-body: "Rajdhani", "Eurostile", sans-serif;
       --cut: polygon(0 0, calc(100% - 48px) 0, 100% 48px, 100% 100%, 48px 100%, 0 calc(100% - 48px));
     }
-    .slide { background: linear-gradient(115deg, transparent 62%, rgba(252, 238, 10, 0.06) 62% 70%, transparent 70%), var(--bg); font-size: 36px; font-weight: 500; }
+    .slide { background: linear-gradient(115deg, transparent 62%, color-mix(in srgb, var(--accent) 6%, transparent) 62% 70%, transparent 70%), var(--bg); font-size: 36px; font-weight: 500; }
     .slide h1, .slide h2 { font-weight: 700; text-transform: uppercase; letter-spacing: -0.01em; line-height: 0.95; }
     .slide h1 { font-size: 150px; color: var(--accent); text-shadow: -6px 0 var(--red), 6px 0 var(--cyan); }
     .slide h2 { font-size: 96px; }
-    .slide .deco span:nth-child(1) { left: 0; right: 0; bottom: 0; height: 40px; background: repeating-linear-gradient(-45deg, var(--accent) 0 28px, #0b0b12 28px 56px); }
-    .slide .deco span:nth-child(2) { right: 140px; top: 120px; padding: 10px 18px; background: var(--red); color: #0b0b12; font-family: var(--font-display); font-weight: 700; font-size: 22px; letter-spacing: 0.1em; }
+    .slide .deco span:nth-child(1) { left: 0; right: 0; bottom: 0; height: 40px; background: repeating-linear-gradient(-45deg, var(--accent) 0 28px, var(--bg) 28px 56px); }
+    .slide .deco span:nth-child(2) { right: 140px; top: 120px; padding: 10px 18px; background: var(--red); color: var(--bg); font-family: var(--font-display); font-weight: 700; font-size: 22px; letter-spacing: 0.1em; }
     .slide .deco span:nth-child(2)::before { content: "SIGNAL // LIVE"; }
     .slide .deco span:nth-child(3) { right: 0; top: 0; width: 14px; height: 100%; background: var(--accent); }
     .slide .eyebrow { font-family: var(--font-display); color: var(--cyan); letter-spacing: 0.24em; }

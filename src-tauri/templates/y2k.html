@@ -53,6 +53,18 @@
 
     /* Y2K Aesthetic */
     :root {
+      --chrome-1: #ffffff;
+      --chrome-2: #b9c3d9;
+      --chrome-3: #5e6a8a;
+      --chrome-4: #e8eefb;
+      --chrome-5: #9aa6c4;
+      --blob: #4dd3ff;
+      --blob-2: #beff78;
+      --echo: #ff9ad5;
+      --echo-2: #8fd8ff;
+      --bubble: #ffd1ec;
+      --bubble-2: #dce4ff;
+      --bubble-3: #c9b8ff;
       --bg: #dfe8ff;
       --ink: #1d1a4f;
       --muted: #4b4f86;
@@ -60,29 +72,29 @@
       --panel: #f6f2ff;
       --font-display: "Rubik Mono One", "Arial Black", sans-serif;
       --font-body: "Questrial", "Trebuchet MS", sans-serif;
-      --chrome: linear-gradient(180deg, #ffffff 0%, #b9c3d9 40%, #5e6a8a 50%, #e8eefb 62%, #9aa6c4 100%);
+      --chrome: linear-gradient(180deg, var(--chrome-1) 0%, var(--chrome-2) 40%, var(--chrome-3) 50%, var(--chrome-4) 62%, var(--chrome-5) 100%);
     }
     .slide {
       background:
-        radial-gradient(circle at 12% 18%, rgba(255, 79, 179, 0.45), transparent 32%),
-        radial-gradient(circle at 88% 82%, rgba(77, 211, 255, 0.5), transparent 36%),
-        radial-gradient(circle at 75% 15%, rgba(190, 255, 120, 0.35), transparent 25%),
+        radial-gradient(circle at 12% 18%, color-mix(in srgb, var(--accent) 45%, transparent), transparent 32%),
+        radial-gradient(circle at 88% 82%, color-mix(in srgb, var(--blob) 50%, transparent), transparent 36%),
+        radial-gradient(circle at 75% 15%, color-mix(in srgb, var(--blob-2) 35%, transparent), transparent 25%),
         var(--bg);
     }
-    .slide h1, .slide h2 { font-weight: 400; letter-spacing: -0.03em; text-transform: lowercase; color: var(--ink); text-shadow: 5px 5px 0 #ff9ad5, 10px 10px 0 #8fd8ff; }
+    .slide h1, .slide h2 { font-weight: 400; letter-spacing: -0.03em; text-transform: lowercase; color: var(--ink); text-shadow: 5px 5px 0 var(--echo), 10px 10px 0 var(--echo-2); }
     .slide h1 { font-size: 120px; }
     .slide h2 { font-size: 80px; }
-    .slide .deco span { clip-path: polygon(50% 0, 60% 40%, 100% 50%, 60% 60%, 50% 100%, 40% 60%, 0 50%, 40% 40%); background: linear-gradient(135deg, #fff, #ff9ad5 50%, #8fd8ff); }
+    .slide .deco span { clip-path: polygon(50% 0, 60% 40%, 100% 50%, 60% 60%, 50% 100%, 40% 60%, 0 50%, 40% 40%); background: linear-gradient(135deg, var(--chrome-1), var(--echo) 50%, var(--echo-2)); }
     .slide .deco span:nth-child(1) { right: 180px; top: 100px; width: 180px; height: 180px; }
     .slide .deco span:nth-child(2) { right: 120px; top: 300px; width: 80px; height: 80px; }
     .slide .deco span:nth-child(3) { left: 90px; bottom: 90px; width: 120px; height: 120px; }
-    .slide .eyebrow { padding: 10px 28px; border-radius: 999px; background: linear-gradient(180deg, #ffd1ec, #ff4fb3); color: #fff; box-shadow: inset 0 6px 8px rgba(255, 255, 255, 0.7), 0 6px 16px rgba(255, 79, 179, 0.4); letter-spacing: 0.1em; }
-    .slide .number { font-size: 180px; color: var(--accent); text-shadow: 6px 6px 0 #8fd8ff; }
-    .slide .points li { padding: 24px 36px 24px 92px; border: 3px solid #fff; border-radius: 999px; background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(220, 228, 255, 0.8)); box-shadow: inset 0 -8px 16px rgba(143, 216, 255, 0.4), 0 8px 24px rgba(29, 26, 79, 0.12); color: var(--muted); }
+    .slide .eyebrow { padding: 10px 28px; border-radius: 999px; background: linear-gradient(180deg, var(--bubble), var(--accent)); color: var(--chrome-1); box-shadow: inset 0 6px 8px color-mix(in srgb, var(--chrome-1) 70%, transparent), 0 6px 16px color-mix(in srgb, var(--accent) 40%, transparent); letter-spacing: 0.1em; }
+    .slide .number { font-size: 180px; color: var(--accent); text-shadow: 6px 6px 0 var(--echo-2); }
+    .slide .points li { padding: 24px 36px 24px 92px; border: 3px solid var(--chrome-1); border-radius: 999px; background: linear-gradient(180deg, color-mix(in srgb, var(--chrome-1) 90%, transparent), color-mix(in srgb, var(--bubble-2) 80%, transparent)); box-shadow: inset 0 -8px 16px color-mix(in srgb, var(--echo-2) 40%, transparent), 0 8px 24px color-mix(in srgb, var(--ink) 12%, transparent); color: var(--muted); }
     .slide .points li::before { left: 32px; top: 50%; width: 32px; height: 32px; margin-top: -16px; clip-path: polygon(50% 0, 60% 40%, 100% 50%, 60% 60%, 50% 100%, 40% 60%, 0 50%, 40% 40%); }
-    .slide .visual .placeholder { border: 4px solid #fff; border-radius: 120px; background: linear-gradient(160deg, #ffd1ec, #c9b8ff 50%, #8fd8ff); color: #fff; box-shadow: inset 0 20px 40px rgba(255, 255, 255, 0.7), 0 30px 60px rgba(29, 26, 79, 0.2); }
-    .slide .stat { padding: 44px; border: 3px solid #fff; border-radius: 64px; background: rgba(255, 255, 255, 0.6); box-shadow: inset 0 10px 20px rgba(255, 255, 255, 0.8), 0 10px 30px rgba(29, 26, 79, 0.12); }
-    .slide .value { font-weight: 400; font-size: 110px; color: var(--accent); text-shadow: 5px 5px 0 #8fd8ff; }
+    .slide .visual .placeholder { border: 4px solid var(--chrome-1); border-radius: 120px; background: linear-gradient(160deg, var(--bubble), var(--bubble-3) 50%, var(--echo-2)); color: var(--chrome-1); box-shadow: inset 0 20px 40px color-mix(in srgb, var(--chrome-1) 70%, transparent), 0 30px 60px color-mix(in srgb, var(--ink) 20%, transparent); }
+    .slide .stat { padding: 44px; border: 3px solid var(--chrome-1); border-radius: 64px; background: color-mix(in srgb, var(--chrome-1) 60%, transparent); box-shadow: inset 0 10px 20px color-mix(in srgb, var(--chrome-1) 80%, transparent), 0 10px 30px color-mix(in srgb, var(--ink) 12%, transparent); }
+    .slide .value { font-weight: 400; font-size: 110px; color: var(--accent); text-shadow: 5px 5px 0 var(--echo-2); }
     .layout-quote blockquote { font-family: var(--font-body); font-size: 76px; color: var(--ink); }
     .slide .cite { color: var(--accent); }
     /* Entrance: zoomed and spun in like a screensaver. */

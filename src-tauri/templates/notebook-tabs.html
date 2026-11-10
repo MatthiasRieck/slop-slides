@@ -53,6 +53,13 @@
 
     /* Notebook Tabs */
     :root {
+      --page: #f8f6f1;
+      --shadow: #000000;
+      --tab: #98d4bb;
+      --tab-2: #c7b8ea;
+      --tab-3: #f4b8c5;
+      --tab-4: #a8d8ea;
+      --tab-5: #ffe6a7;
       --bg: #2d2d2d;
       --ink: #1a1a1a;
       --muted: #4a4a4a;
@@ -65,21 +72,21 @@
     .slide h1, .slide h2 { font-weight: 700; letter-spacing: -0.01em; }
     .slide h1 { font-size: 120px; }
     .slide h2 { font-size: 80px; }
-    .slide .deco span:nth-child(1) { left: 60px; top: 60px; right: 160px; bottom: 60px; border-radius: 12px; background: radial-gradient(circle at 56px 50%, #2d2d2d 14px, transparent 15px) 0 0 / 100% 160px repeat-y, #f8f6f1; box-shadow: 0 30px 60px rgba(0, 0, 0, 0.4); }
-    .slide .deco span:nth-child(2) { right: 92px; top: 160px; width: 68px; height: 220px; border-radius: 0 12px 12px 0; background: #98d4bb; box-shadow: 0 260px 0 #c7b8ea, 0 520px 0 #f4b8c5; }
+    .slide .deco span:nth-child(1) { left: 60px; top: 60px; right: 160px; bottom: 60px; border-radius: 12px; background: radial-gradient(circle at 56px 50%, var(--bg) 14px, transparent 15px) 0 0 / 100% 160px repeat-y, var(--page); box-shadow: 0 30px 60px color-mix(in srgb, var(--shadow) 40%, transparent); }
+    .slide .deco span:nth-child(2) { right: 92px; top: 160px; width: 68px; height: 220px; border-radius: 0 12px 12px 0; background: var(--tab); box-shadow: 0 260px 0 var(--tab-2), 0 520px 0 var(--tab-3); }
     .slide .deco span:nth-child(3) { display: none; }
     .slide .eyebrow { font-size: 22px; font-weight: 700; letter-spacing: 0.24em; }
     .slide .number { font-size: 180px; font-weight: 400; font-style: italic; }
-    .slide .points li::before { width: 24px; height: 24px; border-radius: 6px; background: #98d4bb; }
-    .slide .points li:nth-child(2)::before { background: #c7b8ea; }
-    .slide .points li:nth-child(3)::before { background: #f4b8c5; }
-    .slide .points li:nth-child(4)::before { background: #a8d8ea; }
-    .slide .points li:nth-child(5)::before { background: #ffe6a7; }
+    .slide .points li::before { width: 24px; height: 24px; border-radius: 6px; background: var(--tab); }
+    .slide .points li:nth-child(2)::before { background: var(--tab-2); }
+    .slide .points li:nth-child(3)::before { background: var(--tab-3); }
+    .slide .points li:nth-child(4)::before { background: var(--tab-4); }
+    .slide .points li:nth-child(5)::before { background: var(--tab-5); }
     .slide .visual { flex-basis: 640px; height: 640px; }
-    .slide .visual .placeholder { border-radius: 12px; background: #a8d8ea; color: var(--ink); }
-    .slide .stat { padding: 36px; border-radius: 12px; background: #ffe6a7; }
-    .slide .stat:nth-child(2) { background: #c7b8ea; }
-    .slide .stat:nth-child(3) { background: #98d4bb; }
+    .slide .visual .placeholder { border-radius: 12px; background: var(--tab-4); color: var(--ink); }
+    .slide .stat { padding: 36px; border-radius: 12px; background: var(--tab-5); }
+    .slide .stat:nth-child(2) { background: var(--tab-2); }
+    .slide .stat:nth-child(3) { background: var(--tab); }
     .slide .value { font-size: 120px; color: var(--ink); }
     .layout-quote blockquote { font-style: italic; font-size: 72px; }
     /* Entrance: unfolding like a turned page. */

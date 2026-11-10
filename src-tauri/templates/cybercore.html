@@ -53,6 +53,8 @@
 
     /* Cybercore */
     :root {
+      --glitch: #ff00c8;
+      --glitch-2: #ff00aa;
       --bg: #04060c;
       --ink: #e6fbff;
       --muted: #7fa7b8;
@@ -64,33 +66,33 @@
     }
     .slide {
       background:
-        repeating-linear-gradient(0deg, rgba(0, 240, 255, 0.05) 0 1px, transparent 1px 4px),
-        linear-gradient(rgba(0, 240, 255, 0.08) 1px, transparent 1px) 0 0 / 80px 80px,
-        linear-gradient(90deg, rgba(0, 240, 255, 0.08) 1px, transparent 1px) 0 0 / 80px 80px,
-        radial-gradient(ellipse at 80% 10%, rgba(182, 255, 0, 0.12), transparent 50%),
+        repeating-linear-gradient(0deg, color-mix(in srgb, var(--accent) 5%, transparent) 0 1px, transparent 1px 4px),
+        linear-gradient(color-mix(in srgb, var(--accent) 8%, transparent) 1px, transparent 1px) 0 0 / 80px 80px,
+        linear-gradient(90deg, color-mix(in srgb, var(--accent) 8%, transparent) 1px, transparent 1px) 0 0 / 80px 80px,
+        radial-gradient(ellipse at 80% 10%, color-mix(in srgb, var(--acid) 12%, transparent), transparent 50%),
         var(--bg);
       font-size: 30px;
     }
-    .slide h1, .slide h2 { font-weight: 900; text-transform: uppercase; letter-spacing: 0.02em; text-shadow: 4px 0 rgba(255, 0, 200, 0.7), -4px 0 rgba(0, 240, 255, 0.7); }
+    .slide h1, .slide h2 { font-weight: 900; text-transform: uppercase; letter-spacing: 0.02em; text-shadow: 4px 0 color-mix(in srgb, var(--glitch) 70%, transparent), -4px 0 color-mix(in srgb, var(--accent) 70%, transparent); }
     .slide h1 { font-size: 112px; }
     .slide h2 { font-size: 76px; }
     .slide .eyebrow { color: var(--acid); font-family: var(--font-body); letter-spacing: 0.2em; }
     .slide .eyebrow::before { content: "> "; }
-    .slide .deco span:nth-child(1) { right: 120px; top: 100px; width: 420px; height: 420px; border: 2px solid var(--accent); border-radius: 50%; box-shadow: 0 0 40px rgba(0, 240, 255, 0.4), inset 0 0 40px rgba(0, 240, 255, 0.3); opacity: 0.6; }
+    .slide .deco span:nth-child(1) { right: 120px; top: 100px; width: 420px; height: 420px; border: 2px solid var(--accent); border-radius: 50%; box-shadow: 0 0 40px color-mix(in srgb, var(--accent) 40%, transparent), inset 0 0 40px color-mix(in srgb, var(--accent) 30%, transparent); opacity: 0.6; }
     .slide .deco span:nth-child(2) { right: 200px; top: 180px; width: 260px; height: 260px; border: 2px dashed var(--acid); border-radius: 50%; opacity: 0.5; }
     .slide .deco span:nth-child(3) { left: 140px; right: 140px; bottom: 80px; height: 2px; background: linear-gradient(90deg, var(--accent), transparent 70%); box-shadow: 0 0 16px var(--accent); }
     .layout-bullets .deco span:nth-child(1), .layout-bullets .deco span:nth-child(2), .layout-stats .deco span:nth-child(1), .layout-stats .deco span:nth-child(2), .layout-split .deco span:nth-child(1), .layout-split .deco span:nth-child(2) { display: none; }
-    .slide .number { font-size: 140px; color: var(--acid); text-shadow: 0 0 30px rgba(182, 255, 0, 0.6); }
+    .slide .number { font-size: 140px; color: var(--acid); text-shadow: 0 0 30px color-mix(in srgb, var(--acid) 60%, transparent); }
     .slide .points li::before { content: "▸"; width: auto; height: auto; top: 0; background: none; color: var(--accent); }
     .slide .points strong { color: var(--accent); }
-    .slide .visual .placeholder { border: 2px solid var(--accent); background: var(--panel); color: var(--accent); box-shadow: 0 0 40px rgba(0, 240, 255, 0.25), inset 0 0 60px rgba(0, 240, 255, 0.15); clip-path: polygon(40px 0, 100% 0, 100% calc(100% - 40px), calc(100% - 40px) 100%, 0 100%, 0 40px); }
+    .slide .visual .placeholder { border: 2px solid var(--accent); background: var(--panel); color: var(--accent); box-shadow: 0 0 40px color-mix(in srgb, var(--accent) 25%, transparent), inset 0 0 60px color-mix(in srgb, var(--accent) 15%, transparent); clip-path: polygon(40px 0, 100% 0, 100% calc(100% - 40px), calc(100% - 40px) 100%, 0 100%, 0 40px); }
     .slide .stat { padding: 40px; border-left: 4px solid var(--acid); background: var(--panel); }
-    .slide .value { font-size: 120px; color: var(--ink); text-shadow: 0 0 24px rgba(0, 240, 255, 0.8); }
-    .layout-quote blockquote { font-family: var(--font-body); font-size: 60px; font-weight: 700; color: var(--accent); text-shadow: 0 0 20px rgba(0, 240, 255, 0.5); }
+    .slide .value { font-size: 120px; color: var(--ink); text-shadow: 0 0 24px color-mix(in srgb, var(--accent) 80%, transparent); }
+    .layout-quote blockquote { font-family: var(--font-body); font-size: 60px; font-weight: 700; color: var(--accent); text-shadow: 0 0 20px color-mix(in srgb, var(--accent) 50%, transparent); }
     .slide .cite::before { content: "// "; color: var(--acid); }
     /* Entrance: a chromatic glitch. */
     @keyframes cybercore-reveal {
-      from { opacity: 0; translate: -24px 0; text-shadow: 6px 0 rgba(255, 0, 170, 0.8), -6px 0 rgba(0, 240, 255, 0.8); }
+      from { opacity: 0; translate: -24px 0; text-shadow: 6px 0 color-mix(in srgb, var(--glitch-2) 80%, transparent), -6px 0 color-mix(in srgb, var(--accent) 80%, transparent); }
       25% { opacity: 1; translate: 12px 0; }
       45% { opacity: 0.4; translate: -6px 0; }
       65% { opacity: 1; translate: 3px 0; }

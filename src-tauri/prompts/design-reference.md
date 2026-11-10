@@ -89,20 +89,23 @@ morph comes from the layout change:
 
 ## Background Devices
 
+Colors come from the deck's palette (see "Color palette" in the instructions); see-through
+shades mix a palette color with `transparent`.
+
 ```css
 /* Gradient mesh: layered radial gradients for depth */
 .slide {
   background:
-    radial-gradient(ellipse at 20% 80%, rgba(120, 0, 255, 0.3) 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 20%, rgba(0, 255, 200, 0.2) 0%, transparent 50%),
+    radial-gradient(ellipse at 20% 80%, color-mix(in srgb, var(--accent) 30%, transparent) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, color-mix(in srgb, var(--glow) 20%, transparent) 0%, transparent 50%),
     var(--bg);
 }
 
 /* Grid pattern: subtle structural lines */
 .slide {
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+    linear-gradient(color-mix(in srgb, var(--ink) 3%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--ink) 3%, transparent) 1px, transparent 1px);
   background-size: 50px 50px;
 }
 ```

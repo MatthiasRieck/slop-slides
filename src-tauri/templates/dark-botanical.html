@@ -53,6 +53,8 @@
 
     /* Dark Botanical */
     :root {
+      --bloom: #e8b4b8;
+      --bloom-2: #c9b896;
       --bg: #0f0f0f;
       --ink: #e8e4df;
       --muted: #9a9590;
@@ -64,8 +66,8 @@
     .slide { font-weight: 300; overflow: hidden; }
     .slide h1, .slide h2 { font-weight: 400; letter-spacing: -0.01em; }
     .slide h1 { font-size: 144px; }
-    .slide .deco span:nth-child(1) { right: -160px; top: -160px; width: 640px; height: 640px; border-radius: 50%; background: radial-gradient(circle, rgba(232, 180, 184, 0.45), transparent 70%); filter: blur(40px); }
-    .slide .deco span:nth-child(2) { right: 240px; bottom: -220px; width: 520px; height: 520px; border-radius: 50%; background: radial-gradient(circle, rgba(201, 184, 150, 0.4), transparent 70%); filter: blur(50px); }
+    .slide .deco span:nth-child(1) { right: -160px; top: -160px; width: 640px; height: 640px; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--bloom) 45%, transparent), transparent 70%); filter: blur(40px); }
+    .slide .deco span:nth-child(2) { right: 240px; bottom: -220px; width: 520px; height: 520px; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--bloom-2) 40%, transparent), transparent 70%); filter: blur(50px); }
     .slide .deco span:nth-child(3) { left: 80px; top: 200px; bottom: 200px; width: 1px; background: var(--accent); }
     .layout-title .frame, .layout-section .frame, .layout-closing .frame { align-items: center; margin: 0 auto; text-align: center; }
     .slide .eyebrow { font-family: var(--font-display); font-size: 36px; font-style: italic; font-weight: 400; letter-spacing: 0.02em; text-transform: none; }

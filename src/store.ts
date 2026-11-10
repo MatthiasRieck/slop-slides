@@ -14,6 +14,7 @@ import {
   type HistoryEntry,
   type LintIssue,
   type OpenedFile,
+  type PaletteEntry,
   type RailEdit,
   type ReplacedText,
   type Slide,
@@ -525,7 +526,12 @@ interface AppState {
   setEditTool: (tool: EditTool) => void;
   setEditStyle: (family: ToolFamily, changes: EditStyle) => void;
   /** Saves `markup` as the new version of `slide`, after any edits still being saved. */
-  saveSlideEdit: (slide: string, markup: string) => Promise<void>;
+  /** Sets colors of the deck's palette (adding new ones); a run of them undoes as one. */
+  setPaletteColors: (colors: PaletteEntry[]) => Promise<void>;
+  /** Moves every color the deck writes out into its palette. */
+  adoptPalette: () => Promise<void>;
+  /** Saves a slide the editor changed, adding the palette colors it picked that the deck lacks. */
+  saveSlideEdit: (slide: string, markup: string, palette?: PaletteEntry[]) => Promise<void>;
   /**
    * Saves `slide` of the open deck as `change` makes its markup in the file, after any edits still
    * being saved; false (with the error shown) when `change` throws or the save fails.
@@ -1227,13 +1233,18 @@ export const useApp = create<AppState>((set, get) => ({
     return editQueue.then(() => saved);
   },
 
-  saveSlideEdit: (slide, markup) => {
+  setPaletteColors: (colors) =>
+    colors.length ? editDeck((id) => api.setPaletteColors(id, colors)) : Promise.resolve(),
+
+  adoptPalette: () => editDeck((id) => api.adoptPalette(id)),
+
+  saveSlideEdit: (slide, markup, palette) => {
     const save = async () => {
       const { deck } = get();
       const base = deck?.slides.find((s) => s.id === slide)?.hash;
       if (!deck || !base) return;
       try {
-        const next = await api.updateSlide(deck.id, slide, markup, base);
+        const next = await api.updateSlide(deck.id, slide, markup, base, palette);
         if (get().deck?.id !== deck.id) return;
         get().setDeck(next);
         set((s) => ({ editedSlides: s.editedSlides.includes(slide) ? s.editedSlides : [...s.editedSlides, slide] }));

@@ -92,6 +92,14 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   (16:9, 4:3, 4:5, 9:16, A4, US Letter). It is stored in deck.html as
   `<meta name="slopslide-size" content="1080x1350">`; for a deck with slides it puts a
   message in the chat asking the agent to lay them out again for the new size.
+- **Colors:** every color of a deck comes from its palette, the custom properties its `:root`
+  rule sets to a color (`--accent: #e30613`), which the slides refer to (`var(--accent)`); the
+  lint's `palette-color` warning lists colors written out anywhere else. The Settings mode
+  shows the palette: set a color, apply a preset palette, or turn every color at once on the
+  color wheel, where the palette is a star of dots by hue and chroma (drag a dot to move one
+  color). **Move into the palette** takes the colors a deck writes out into its palette.
+  Colors picked in the editor are palette colors too: one the palette lacks joins it as
+  `--custom-1`, … (the `palette-name` warning asks the agent to name it).
 - **Present:** full-screen slideshow (arrows/space/click to advance, `Esc` to exit). With
   several screens attached, a picker shows them as they are arranged, each with a screenshot
   of what is on it (on macOS this needs the Screen Recording permission; without it the picker
@@ -312,6 +320,8 @@ src-tauri/src/
   html.rs               finds the slide <section>s in deck.html and rewrites them;
                         installs the player runtime (assets/runtime.{css,js})
   size.rs               the deck's slide size (`slopslide-size` meta) and the stage CSS for it
+  palette.rs            the deck's color palette: reads it, finds colors written out
+                        elsewhere (the `palette-color` lint), sets and adopts colors
   templates.rs          built-in and user templates (`~/.slopslides/templates`): listing,
                         new decks in a template's style, saving a deck as a template
   comments.rs           the user's comments on slide elements, in a managed block in deck.html

@@ -189,7 +189,7 @@ export function EditToolbar(props: {
   styles: Record<ToolFamily, EditStyle>;
   /** The fonts the deck's styles use. */
   fonts?: FontChoice[];
-  /** The colors in the deck's CSS variables. */
+  /** The deck's palette colors; picking one writes `var(--name)`. */
   colors?: DeckColor[];
   /** The current slide's background color. */
   background?: string | null;
@@ -621,7 +621,7 @@ function ColorButton(props: {
                   title={color.name}
                   aria-pressed={props.value === color.value}
                   onMouseDown={keepFocus}
-                  onClick={() => pick(color.value)}
+                  onClick={() => pick(`var(--${color.name})`)}
                   className={cn(
                     "size-5 rounded-full border border-foreground/20",
                     props.value === color.value && "ring-2 ring-foreground/60 ring-offset-1 ring-offset-card",

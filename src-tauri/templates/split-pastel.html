@@ -53,6 +53,12 @@
 
     /* Split Pastel */
     :root {
+      --pill: #c8f0d8;
+      --pill-2: #f0f0c8;
+      --pill-3: #f0d4e0;
+      --marker: #6cc596;
+      --marker-2: #d9c94a;
+      --card: #ffffff;
       --bg: #f5e6dc;
       --ink: #1a1a1a;
       --muted: #4a4048;
@@ -61,20 +67,20 @@
       --font-display: "Outfit", "Avenir Next", sans-serif;
       --font-body: "Outfit", "Avenir Next", sans-serif;
     }
-    .slide { background: linear-gradient(90deg, #f5e6dc 50%, #e4dff0 50%); }
+    .slide { background: linear-gradient(90deg, var(--bg) 50%, var(--panel) 50%); }
     .slide h1, .slide h2 { font-weight: 800; letter-spacing: -0.03em; }
-    .slide .deco span:nth-child(1) { left: 50%; right: 0; top: 0; bottom: 0; background-image: linear-gradient(rgba(26, 26, 26, 0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(26, 26, 26, 0.07) 1px, transparent 1px); background-size: 60px 60px; }
-    .slide .deco span:nth-child(2) { right: 160px; top: 120px; padding: 14px 32px; border-radius: 999px; background: #c8f0d8; width: 180px; height: 56px; }
-    .slide .deco span:nth-child(3) { right: 260px; bottom: 120px; width: 240px; height: 56px; border-radius: 999px; background: #f0f0c8; }
-    .slide .eyebrow { padding: 10px 26px; border-radius: 999px; background: #f0d4e0; color: var(--ink); font-size: 22px; font-weight: 700; letter-spacing: 0.08em; }
+    .slide .deco span:nth-child(1) { left: 50%; right: 0; top: 0; bottom: 0; background-image: linear-gradient(color-mix(in srgb, var(--ink) 7%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in srgb, var(--ink) 7%, transparent) 1px, transparent 1px); background-size: 60px 60px; }
+    .slide .deco span:nth-child(2) { right: 160px; top: 120px; padding: 14px 32px; border-radius: 999px; background: var(--pill); width: 180px; height: 56px; }
+    .slide .deco span:nth-child(3) { right: 260px; bottom: 120px; width: 240px; height: 56px; border-radius: 999px; background: var(--pill-2); }
+    .slide .eyebrow { padding: 10px 26px; border-radius: 999px; background: var(--pill-3); color: var(--ink); font-size: 22px; font-weight: 700; letter-spacing: 0.08em; }
     .slide .number { font-weight: 800; }
-    .slide .points li::before { width: 36px; height: 20px; top: 0.45em; border-radius: 999px; background: #6cc596; }
-    .slide .points li:nth-child(2)::before { background: #d9c94a; }
+    .slide .points li::before { width: 36px; height: 20px; top: 0.45em; border-radius: 999px; background: var(--marker); }
+    .slide .points li:nth-child(2)::before { background: var(--marker-2); }
     .slide .points li:nth-child(3)::before { background: var(--accent); }
-    .slide .visual .placeholder { border-radius: 48px; background: #ffffff; }
-    .slide .stat { padding: 36px; border-radius: 36px; background: #ffffff; }
+    .slide .visual .placeholder { border-radius: 48px; background: var(--card); }
+    .slide .stat { padding: 36px; border-radius: 36px; background: var(--card); }
     .slide .value { font-weight: 800; }
-    .layout-closing .byline { padding: 16px 36px; border-radius: 999px; background: var(--ink); color: #ffffff; }
+    .layout-closing .byline { padding: 16px 36px; border-radius: 999px; background: var(--ink); color: var(--card); }
     /* Entrance: a playful bounce up. */
     @keyframes split-pastel-reveal {
       from { opacity: 0; translate: 0 50px; }

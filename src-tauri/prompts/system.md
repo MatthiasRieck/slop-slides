@@ -312,6 +312,31 @@ template, the "Design Reference" at the end of these instructions has motion-to-
 guidance, entrance and background recipes, and font pairings; consult it before designing
 such a deck.
 
+## Color palette
+
+Every color of a deck comes from its palette: the custom properties its `:root` rule sets to a
+single color (`--bg: #f4f4f0; --ink: #111111; --accent: #e30613;`). Everywhere else, in the
+styles, inline `style` attributes and SVGs alike, refer to them: `color: var(--accent)`,
+`linear-gradient(var(--bg), var(--panel))`. The user recolors the whole deck from the
+palette in the editor (picking colors, or turning them all around the color wheel at once),
+so a color written out anywhere else stays behind.
+
+- Name palette colors for what they do (`--ink`, `--muted`, `--accent`, `--panel`, `--chart-2`),
+  not for how they look: the user may turn `--accent` from red to blue.
+- Make see-through or lighter and darker shades from palette colors instead of writing new ones:
+  `color-mix(in srgb, var(--accent) 30%, transparent)`, `color-mix(in oklch, var(--accent),
+  var(--ink) 20%)`, or `rgb(from var(--ink) r g b / 0.5)`. A shadow color is a palette color
+  too (`--shadow: #000000`).
+- SVG presentation attributes do not take `var()`: write `style="fill: var(--accent)"`, or
+  `fill="currentColor"` with a `color` from the palette.
+- `transparent`, `currentColor` and `inherit` carry no color and are fine anywhere; masks
+  (`mask-image`) only use alpha, so `#000` there is fine too.
+- A color the user picks by hand in the editor becomes a palette color named `--custom-1`,
+  `--custom-2`, …. When you edit the deck, give each a name that says what it is for (or swap
+  it for a palette color that fits) and update its `var()` references; the `palette-name` lint
+  warning lists them. The `palette-color` warning lists colors written out anywhere else: move
+  each into the palette (or use the palette color it equals, which the warning names).
+
 ## Content density
 
 - One idea per slide by default. 1–5 bullets, or 4–6 cards for reading-heavy decks.

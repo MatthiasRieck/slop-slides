@@ -16,17 +16,23 @@ import { selectedSlide } from "./slides";
 import type { AppState, AppStore, Slice } from "./types";
 
 /**
- * What the deck is open for; the top bar's tabs pick it (see components/ModeTabs.tsx). A slide's
- * narration and notes and the deck's HTML are not modes: they are tabs of the sidebar, beside the slide.
+ * What the deck is open for; the top bar's tabs pick it (see components/ModeTabs.tsx). View
+ * changes nothing in the deck but its review (marks and comments); Edit changes the slides, their
+ * order and their timing. A slide's narration and notes and the deck's HTML are not modes: they
+ * are tabs of the sidebar, beside the slide. Nor is playing the deck: its timeline opens under
+ * the slide in View and in Edit (see `timelineOpen`).
  */
-export type DeckMode = "view" | "edit" | "play" | "settings" | "git";
+export type DeckMode = "view" | "edit" | "settings" | "git";
 
 /** The deck's mode, and editing slides on the stage: the edits saved, and asking the agent about them. */
 export interface EditingSlice {
-  /** The stage lets the user edit text and move elements on the slide. */
+  /**
+   * Edit mode: the slides, their order and their timing can be changed. The stage lets the user
+   * edit text and move elements on the slide unless it is locked (see `editingSlide`).
+   */
   editing: boolean;
   /** The mode shown over the rendered slide when not editing; see `deckMode`. */
-  slideMode: "view" | "play" | "settings" | "git";
+  slideMode: "view" | "settings" | "git";
   /** Bumped when a slide edit could not be saved, so the stage reloads the slide from disk. */
   editReload: number;
   /** The edit toolbar's tool: select, or what a drag on the slide adds. */
@@ -40,7 +46,7 @@ export interface EditingSlice {
 
   /** Enters or leaves edit mode, keeping the edits made so far. */
   setEditing: (editing: boolean) => void;
-  /** Switches the deck to a mode, leaving the one it is in. A locked slide cannot be edited. */
+  /** Switches the deck to a mode, leaving the one it is in. */
   setMode: (mode: DeckMode) => void;
   setEditTool: (tool: EditTool) => void;
   setEditStyle: (family: ToolFamily, changes: EditStyle) => void;
@@ -74,6 +80,11 @@ export const NO_EDIT_STATE = { editBase: null, editedSlides: [] };
 /** The mode of the deck: editing has its own state, the rest is `slideMode`. */
 export function deckMode(state: Pick<AppState, "editing" | "slideMode">): DeckMode {
   return state.editing ? "edit" : state.slideMode;
+}
+
+/** Whether the stage edits the selected slide: in edit mode, and the slide is not locked. */
+export function editingSlide(state: Pick<AppState, "editing" | "deck" | "selected">): boolean {
+  return state.editing && !selectedSlide(state)?.locked;
 }
 
 /** The slides edited since edit mode started that are not as they were then any more. */
@@ -114,7 +125,6 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
 
   setEditing: (editing) => {
     if (editing === get().editing) return;
-    if (editing && selectedSlide(get())?.locked) return;
     // Each edit session starts with the select tool; leaving keeps the edits.
     set({ editing, editTool: "select", ...NO_EDIT_STATE });
     if (!editing) return;
@@ -130,7 +140,6 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
   },
 
   setMode: (mode) => {
-    if (mode === "edit" && selectedSlide(get())?.locked) return;
     get().setEditing(mode === "edit");
     set({ slideMode: mode === "edit" ? "view" : mode });
   },

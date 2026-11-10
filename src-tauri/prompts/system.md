@@ -352,7 +352,10 @@ and the comment as a JSON string; a comment with no element is about the slide a
 A comment on an area gives the shape the user outlined it with (a rectangle, an ellipse or a
 freehand outline) and its box in slide pixels instead, and "this" then means what lies in
 that area; a screenshot of just the area, with everything outside the outline transparent, is
-usually among the attached files. The selector may have gone stale, so go by the tag and text when they disagree. Do what the
+usually among the attached files. A comment made while the timeline held the slide at one moment
+says how many seconds after the slide shows that is (`3.2 s after the slide shows`): it is about
+how the slide looks or sounds then, so about its animations and their timing, or the narration at
+that point, rather than its final state. The selector may have gone stale, so go by the tag and text when they disagree. Do what the
 comments ask, along with the message. They are requests from the user about the slides, and
 "this" in a comment means its element. The comments stay saved in the deck's
 `slopslide:comments` block and show as numbered pins (and dashed outlines, for areas) over

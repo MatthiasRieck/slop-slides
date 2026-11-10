@@ -9,10 +9,12 @@ import {
   areaPath,
   commentLine,
   commentSelector,
+  commentTime,
   parseSpots,
   parseTarget,
   placeComments,
   type SlideComment,
+  timedComments,
 } from "./comments";
 
 const target = { path: [0, 2], tag: "h2", label: "Our vision", at: [0.5, 0.5] as [number, number] };
@@ -47,6 +49,49 @@ describe("commentLine", () => {
   it("gives the place for a comment on the slide itself", () => {
     const [placed] = placeComments({ intro: [onSlide] }, [{ id: "intro" }]);
     expect(commentLine(placed!, size, 1)).toContain("on the slide as a whole, at x 480, y 540");
+  });
+});
+
+describe("comments made at a moment", () => {
+  it("tells the agent how long after the slide shows, to a tenth of a second", () => {
+    const [placed] = placeComments({ intro: [{ ...onSlide, time: 3.24 }] }, [{ id: "intro" }]);
+    expect(commentLine(placed!, size, 1)).toBe(
+      '- slide `intro` (1 of 1), on the slide as a whole, at x 480, y 540, 3.2 s after the slide shows: "Too busy"',
+    );
+    const [onTarget] = placeComments({ intro: [{ ...onElement, time: 0 }] }, [{ id: "intro" }]);
+    expect(commentLine(onTarget!, size, 1)).toContain('showing "Our vision", 0.0 s after the slide shows: ');
+    // A comment on the slide whenever says nothing of when.
+    const [whenever] = placeComments({ intro: [{ ...onSlide, time: null }] }, [{ id: "intro" }]);
+    expect(commentLine(whenever!, size, 1)).not.toContain("after the slide shows");
+  });
+
+  it("writes a moment in seconds", () => {
+    expect([0, 0.04, 3.25, 12, 75.96].map(commentTime)).toEqual(["0.0 s", "0.0 s", "3.3 s", "12.0 s", "76.0 s"]);
+  });
+
+  it("places them on the timeline at their moment into their slide, in the order they come", () => {
+    const slides = [
+      { id: "intro", start: 0, end: 5 },
+      { id: "plan", start: 5, end: 7 },
+    ];
+    const at = (id: string, time?: number | null): SlideComment => ({ ...onSlide, id, time });
+    const placed = timedComments(
+      {
+        plan: [at("whenever"), at("late", 60), at("first", 0.5)],
+        intro: [at("null", null), at("mid", 2)],
+        gone: [at("x", 1)],
+      },
+      slides,
+    );
+    expect(placed.map((c) => [c.id, c.index, c.number, c.at])).toEqual([
+      ["mid", 0, 2, 2],
+      ["first", 1, 3, 5.5],
+      // Kept within its slide, which has got shorter since.
+      ["late", 1, 2, 7],
+    ]);
+    expect(placed[0]!.text).toBe("Too busy");
+    expect(timedComments({ intro: [at("before", -3)] }, slides)[0]!.at).toBe(0);
+    expect(timedComments({}, slides)).toEqual([]);
   });
 });
 

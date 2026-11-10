@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { TemplateSummary } from "../lib/api";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
@@ -159,6 +159,10 @@ describe("LayoutPicker", () => {
 });
 
 describe("SlideRail pickers", () => {
+  // Adding a slide is Edit mode's.
+  beforeEach(() => useApp.setState({ editing: true }));
+  afterEach(() => useApp.setState({ editing: false }));
+
   it("opens the new slide gallery from + and closes it on Escape", () => {
     useApp.setState({ deck: { ...DECK, template: "swiss" } });
     render(<SlideRail />);

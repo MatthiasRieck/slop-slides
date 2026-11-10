@@ -82,24 +82,37 @@ describe("App", () => {
     expect(screen.queryByTestId("stub-stage")).toBeNull();
   });
 
-  it("shows the timeline under the slide in Play mode only, whatever the sidebar shows", () => {
-    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML), sidebarTabs: ["chat"], sidebarTab: "chat" });
+  it("shows the timeline under the slide in View and in Edit while it is open, whatever the sidebar shows", () => {
+    useApp.setState({
+      workspace: WORKSPACE,
+      deck: deckFor(DECK_HTML),
+      sidebarTabs: ["chat"],
+      sidebarTab: "chat",
+      timelineOpen: false,
+    });
     render(<App />);
     expect(shown("timeline")).toBe(false);
     // The Narration tab does not bring it.
     act(() => useApp.getState().setSidebarTab("narration"));
     expect(["stage", "timeline"].map(shown)).toEqual([true, false]);
-    act(() => useApp.getState().setMode("play"));
+    act(() => useApp.getState().setTimelineOpen(true));
     expect(["stage", "timeline"].map(shown)).toEqual([true, true]);
-    // It stays with the sidebar on another tab, or hidden.
+    // It stays with the sidebar on another tab, or hidden, and from View to Edit and back.
     act(() => useApp.getState().setSidebarTab("chat"));
     expect(shown("timeline")).toBe(true);
     act(() => useApp.getState().setSidebarOpen(false));
     expect(shown("timeline")).toBe(true);
-    for (const mode of ["view", "edit", "settings"] as const) {
+    act(() => useApp.getState().setMode("edit"));
+    expect(shown("timeline")).toBe(true);
+    // The settings and the changes have the place to themselves.
+    for (const mode of ["settings", "git"] as const) {
       act(() => useApp.getState().setMode(mode));
       expect(shown("timeline")).toBe(false);
     }
+    act(() => useApp.getState().setMode("view"));
+    expect(shown("timeline")).toBe(true);
+    act(() => useApp.getState().setTimelineOpen(false));
+    expect(["stage", "timeline"].map(shown)).toEqual([true, false]);
   });
 
   // Closed panels stay mounted (collapsed), so reopening them does not reload their contents.

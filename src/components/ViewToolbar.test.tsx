@@ -6,7 +6,7 @@ import { DECK_HTML, deckFor } from "../test/fixtures";
 import type { Annotations } from "./PresenterTools";
 import { ViewToolbar } from "./ViewToolbar";
 
-const SECTIONS = ["Mark up", "Review", "Animations", "Find"];
+const SECTIONS = ["Mark up", "Review", "Animations", "Timeline", "Find"];
 const SECTION_WIDTH = 200;
 
 let resize: ResizeObserverCallback | null = null;
@@ -87,6 +87,27 @@ describe("ViewToolbar ribbon", () => {
     expect(inGroup("Review", "Comment on an area (rectangle)")).toBeTruthy();
     expect(inGroup("Animations", /final state/)).toBeTruthy();
     expect(inGroup("Find", "Replace")).toBeTruthy();
+  });
+
+  it("shows or folds the timeline away, leaving playing the deck to the timeline's own bar", () => {
+    useApp.setState({ timelineOpen: false });
+    render(toolbar());
+    const timeline = () => inGroup("Timeline", /the timeline under the slide$/);
+    expect(timeline().getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(timeline());
+    expect(useApp.getState().timelineOpen).toBe(true);
+    expect(timeline().getAttribute("aria-label")).toBe("Hide the timeline under the slide");
+    expect(timeline().getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(timeline());
+    expect(useApp.getState().timelineOpen).toBe(false);
+    expect(within(screen.getByRole("group", { name: "Timeline" })).getAllByRole("button")).toHaveLength(1);
+  });
+
+  it("has no timeline to show while every slide is hidden", () => {
+    const deck = deckFor(DECK_HTML);
+    useApp.setState({ deck: { ...deck, slides: deck.slides.map((s) => ({ ...s, hidden: true })) } });
+    render(toolbar());
+    expect(inGroup("Timeline", /the timeline under the slide$/).disabled).toBe(true);
   });
 
   it("keeps every tool in place, off while it has nothing to work on", () => {

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { EditToolbar } from "./EditToolbar";
 
-const SECTIONS = ["Insert", "Text", "Paragraph", "Style", "Arrange"];
+const SECTIONS = ["Insert", "Text", "Paragraph", "Style", "Arrange", "Timeline"];
 const SECTION_WIDTH = 200;
 
 let resize: ResizeObserverCallback | null = null;
@@ -66,6 +66,8 @@ describe("EditToolbar ribbon", () => {
     expect(inGroup("Paragraph", "Bulleted list (Tab indents, Shift+Tab outdents)")).toBeTruthy();
     expect(inGroup("Style", "Fill")).toBeTruthy();
     expect(inGroup("Arrange", "Delete (⌫)")).toBeTruthy();
+    // The timeline's tools are the same as in the view ribbon.
+    expect(inGroup("Timeline", "Show the timeline under the slide")).toBeTruthy();
   });
 
   it("keeps every section open while there is room, and with no layout to go by", () => {

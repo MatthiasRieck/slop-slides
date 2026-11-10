@@ -122,6 +122,7 @@ fn commented() -> String {
         y: 0.5,
         target: None,
         area: None,
+        time: None,
     };
     let on_area = comments::Comment {
         id: "second".into(),
@@ -132,9 +133,15 @@ fn commented() -> String {
         }),
         ..comment.clone()
     };
+    let on_a_moment = comments::Comment {
+        id: "third".into(),
+        text: "Too fast".into(),
+        time: Some(3.25),
+        ..comment.clone()
+    };
     comments::write(
         &deck(r#"<section class="slide" id="intro"><p>Hi</p></section>"#),
-        &[("intro".to_string(), vec![comment, on_area])].into(),
+        &[("intro".to_string(), vec![comment, on_area, on_a_moment])].into(),
     )
 }
 
@@ -160,6 +167,14 @@ fn flags_damaged_or_misplaced_comments() {
         rules(&html.replace("\"lasso\"", "\"blob\"")),
         ["comments-invalid"]
     );
+    // A comment's moment is seconds since its slide showed: a number, and not before that.
+    assert!(html.contains("\"time\":3.25"));
+    for bad in ["\"time\":-3.25", "\"time\":\"soon\""] {
+        assert_eq!(
+            rules(&html.replace("\"time\":3.25", bad)),
+            ["comments-invalid"]
+        );
+    }
     let block = &html[comments::block_range(&html).unwrap()];
     let inside = deck(&format!(
         r#"<section class="slide" id="intro"><p>Hi</p>{block}</section>"#

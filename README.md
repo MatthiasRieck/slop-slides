@@ -3,15 +3,19 @@
 A desktop slide editor you drive by chatting. Describe a presentation, and an agent writes
 the slides. Keep talking to it to restyle, rewrite, split, or add slides while you watch them change.
 
-- **Left:** live thumbnails. Drag to reorder; hover to lock, hide, duplicate, or delete; `+`
+- **View and Edit:** View changes nothing in the deck but its review (marks and comments):
+  it shows the slides, plays them on the timeline and takes your comments. Edit changes the
+  deck: the slide on the stage, the slides and sections in the list on the left, and the
+  timing on the timeline. What changes the deck is off in View.
+- **Left:** live thumbnails. In Edit, drag to reorder; hover to lock, hide, duplicate, or delete; `+`
   adds a slide. A locked slide (lock icon) can be changed by neither you nor the agent: it
   cannot be edited on the stage, deleted, or saved changed from the code view, and if the
   agent changes it anyway the app puts it back after the turn. Unlock it to change it.
   Sections group slides under a heading in this column (never in the presentation): the
   section button starts one at the selected slide; double-click a heading to rename it, drag
   it to move the whole section (every section folds to its heading while you do, and slides before
-  the first section stay put), hover to remove it. Drag a slide across a heading to move the boundary. Out of edit mode, ⌘C copies the selected slide
-  and ⌘V pastes a copied slide after the selected one.
+  the first section stay put), hover to remove it. Drag a slide across a heading to move the boundary. ⌘C copies the selected slide (in Edit, after a press in the slide list),
+  and in Edit ⌘V pastes a copied slide after the selected one. A locked slide stays as it is in Edit too: the stage says so and offers to unlock it.
 - **Middle:** the current slide on a fixed stage (1920×1080 unless the deck has another slide
   size), scaled to fit. Arrow keys navigate.
   The move button below it turns on edit mode: click an element to select it, drag it (or
@@ -140,7 +144,7 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   seconds become the least a slide is shown. Slides timed on the narration timeline keep to
   that instead.
 - **View ribbon:** View mode's tools sit in a ribbon like the edit tools', in sections that
-  collapse to an icon when the window gets narrow: Mark up, Review, Animations and Find. Under
+  collapse to an icon when the window gets narrow: Mark up, Review, Animations, Timeline and Find. Under
   Animations, **Play** runs a slide's animations whenever it is shown, and **Final state** shows
   every slide as it ends up, with no animations, as the slide list does.
 - **Marks and comments:** the View ribbon has a pen, a highlighter and an eraser for
@@ -158,12 +162,12 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   `narration/<slide id>.wav` next to the deck; a slide whose narration, voice or language
   changed is spoken again, the rest never. The tab shows the slide's audio as a waveform above its text, with each word where it is said once the words are timed: press it to play from there. When presenting, the play button between the
   arrows runs the show by itself, speaking each slide's narration with the video export's
-  timing. The Play mode's timeline under the slide shows the slides above the audio: drag the end of a
+  timing. The timeline under the slide (Timeline in the ribbon, in View and in Edit) shows the slides above the audio. In Edit, drag the end of a
   slide to change how long it shows, and the slides after it follow, each narration keeping
   its place in its slide. Drag a narration to move it, up to the narration on either side, so
   it can run over into the next slide, with the slide changing mid-sentence; video
   exports and the self-running show follow it, and the slide keeps its timing in the deck
-  (`data-duration`, `data-narration-start`). Play, pause and the step buttons (a tenth of a second; a second with Shift) are in the middle of its bar; paused, stepped or with the playhead moved on the ruler, the slide is frozen as it is at that moment, its animations that far in.
+  (`data-duration`, `data-narration-start`). Play, pause and the step buttons (a tenth of a second; a second with Shift) are in the middle of its bar; paused, stepped or with the playhead moved on the ruler, the slide is frozen as it is at that moment, its animations that far in (in View; in Edit the slide stays the editor's, and only playing takes it). A comment made in View while the slide is held so is about that moment: it is marked on the timeline's ruler, where pressing the mark goes back to it, and the agent is told how many seconds into the slide it is.
 
 Built with Tauri 2 (Rust) and React. It runs on macOS, Windows, and Linux.
 

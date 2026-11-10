@@ -14,7 +14,7 @@ import { flushSync } from "react-dom";
 import { useDropdown } from "../hooks/useDropdown";
 import { popupShift, sectionsToCollapse } from "../lib/ribbon";
 import { cn } from "../lib/utils";
-import { keepFocus } from "./Button";
+import { keepFocus, toolButtonClass } from "./Button";
 
 /**
  * Fits a ribbon's sections to its width. Returns the ref for the ribbon and the index of the first
@@ -137,4 +137,27 @@ export function RibbonSection(props: {
 /** One line of tools in a ribbon section. */
 export function RibbonRow({ children }: { children: ReactNode }) {
   return <div className="flex h-6 items-center gap-0.5">{children}</div>;
+}
+
+/** A ribbon button with its name next to its icon, filling its row. `active` marks a choice as the one made. */
+export function RibbonToggle(props: {
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={props.label}
+      title={props.label}
+      aria-pressed={props.active}
+      disabled={props.disabled}
+      onClick={props.onClick}
+      className={cn(toolButtonClass("toolbar", "sm", props.active), "flex flex-1 items-center gap-1 px-1.5 text-xs")}
+    >
+      {props.children}
+    </button>
+  );
 }

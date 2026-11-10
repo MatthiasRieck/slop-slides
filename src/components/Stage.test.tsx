@@ -182,7 +182,23 @@ describe("Stage", () => {
       useApp.setState({ editing: false, error: null });
     });
 
-    it("copies the selected slide with ⌘C and pastes one after it with ⌘V", async () => {
+    it("copies the selected slide with ⌘C in View, where ⌘V pastes nothing", async () => {
+      const deck = useApp.getState().deck!;
+      render(<Stage />);
+      const key = (k: string) =>
+        new KeyboardEvent("keydown", { key: k, metaKey: true, cancelable: true, bubbles: true });
+      const [copy, paste] = [key("c"), key("v")];
+      act(() => void document.body.dispatchEvent(copy));
+      expect(copy.defaultPrevented).toBe(true);
+      expect(invoke).toHaveBeenCalledWith("copy_slide", { id: deck.id, slide: "intro" });
+      await act(async () => void document.body.dispatchEvent(paste));
+      expect(paste.defaultPrevented).toBe(false);
+      expect(invoke).not.toHaveBeenCalledWith("paste_slide", expect.anything());
+      expect(useApp.getState().deck).toBe(deck);
+    });
+
+    it("pastes a slide after the selected one with ⌘V in Edit, also on a locked slide", async () => {
+      useApp.setState({ deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)), editing: true });
       const deck = useApp.getState().deck!;
       const pasted = {
         ...deck,
@@ -215,16 +231,24 @@ describe("Stage", () => {
         );
       send("c");
       send("v");
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("copy_slide", expect.anything()));
+      // Pasting changes the deck: only in Edit, where on a locked slide the keys are not the editor's.
+      expect(invoke).not.toHaveBeenCalledWith("paste_slide", expect.anything());
+      act(() =>
+        useApp.setState({ deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)), editing: true }),
+      );
+      send("v");
       await waitFor(() => expect(invoke).toHaveBeenCalledWith("paste_slide", expect.anything()));
-      expect(invoke).toHaveBeenCalledWith("copy_slide", expect.anything());
       frame.remove();
     });
 
     it("leaves a clipboard without a slide alone and reports failures", async () => {
       vi.mocked(invoke).mockResolvedValue(null);
+      useApp.setState({ deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)), editing: true });
       render(<Stage />);
       const before = useApp.getState().deck;
       await act(async () => void fireEvent.keyDown(document.body, { key: "v", metaKey: true }));
+      expect(invoke).toHaveBeenCalledWith("paste_slide", expect.anything());
       expect(useApp.getState().deck).toBe(before);
       expect(useApp.getState().selected).toBe("intro");
       vi.mocked(invoke).mockRejectedValue("could not copy");
@@ -296,13 +320,45 @@ describe("Stage", () => {
       act(() => useApp.getState().setEditing(false));
     });
 
-    it("moves slides with ⌘↑ and ⌘↓ instead of selecting another", () => {
+    /** A rail to press in, so the keys after it are meant for the slides. */
+    const pressRail = () => {
+      const rail = document.createElement("div");
+      rail.setAttribute("data-slide-rail", "");
+      document.body.appendChild(rail);
+      fireEvent.pointerDown(rail);
+      return rail;
+    };
+
+    it("moves slides with ⌘↑ and ⌘↓ in Edit, with the slide rail pressed last, instead of selecting another", () => {
       render(<Stage />);
+      act(() => useApp.getState().setEditing(true));
+      // On the slide the keys are the editor's, and the arrows go on to the next slide.
+      fireEvent.keyDown(document.body, { key: "ArrowDown", metaKey: true });
+      expect(actions.moveSlides).not.toHaveBeenCalled();
+      act(() => useApp.getState().select("intro"));
+      const rail = pressRail();
       fireEvent.keyDown(document.body, { key: "ArrowDown", metaKey: true });
       expect(actions.moveSlides).toHaveBeenLastCalledWith(1);
       fireEvent.keyDown(document.body, { key: "ArrowUp", metaKey: true });
       expect(actions.moveSlides).toHaveBeenLastCalledWith(-1);
       expect(useApp.getState().selected).toBe("intro");
+      rail.remove();
+      act(() => useApp.getState().setEditing(false));
+    });
+
+    it("changes nothing in View: ⌘↑ / ⌘↓ and Delete leave the slides alone, wherever they are pressed", () => {
+      render(<Stage />);
+      const rail = pressRail();
+      useApp.setState({ railSelected: ["intro", "outro"] });
+      fireEvent.keyDown(document.body, { key: "ArrowDown", metaKey: true });
+      fireEvent.keyDown(document.body, { key: "Delete" });
+      fireEvent.keyDown(document.body, { key: "Backspace" });
+      expect(actions.moveSlides).not.toHaveBeenCalled();
+      expect(actions.deleteSlides).not.toHaveBeenCalled();
+      // Escape still clears the pick, which changes nothing in the deck.
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(useApp.getState().railSelected).toEqual([]);
+      rail.remove();
     });
 
     it("takes the same keys forwarded by a slide preview", () => {
@@ -314,15 +370,29 @@ describe("Stage", () => {
         act(
           () => void window.dispatchEvent(new MessageEvent("message", { data: { type: "slop:key", ...data }, source })),
         );
+      // In View the deck's history is there, but not what moves its slides.
       forward({ key: "ArrowDown", mod: true });
-      expect(actions.moveSlides).toHaveBeenLastCalledWith(1);
+      expect(actions.moveSlides).not.toHaveBeenCalled();
       forward({ key: "z", mod: true });
       expect(actions.undo).toHaveBeenCalledOnce();
+      // In Edit on a locked slide, where no editor takes the keys, the moves are too.
+      act(() =>
+        useApp.setState({
+          deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)),
+          selected: "intro",
+          editing: true,
+        }),
+      );
+      forward({ key: "ArrowDown", mod: true });
+      expect(actions.moveSlides).toHaveBeenLastCalledWith(1);
+      act(() => useApp.setState({ editing: false }));
       frame.remove();
     });
 
-    it("Delete and Escape act on several picked slides, and on nothing otherwise", () => {
+    it("Delete and Escape act on several picked slides in Edit, and on nothing otherwise", () => {
       render(<Stage />);
+      act(() => useApp.getState().setEditing(true));
+      const rail = pressRail();
       fireEvent.keyDown(document.body, { key: "Delete" });
       fireEvent.keyDown(document.body, { key: "Backspace" });
       expect(actions.deleteSlides).not.toHaveBeenCalled();
@@ -331,6 +401,8 @@ describe("Stage", () => {
       expect(actions.deleteSlides).toHaveBeenCalledWith(["intro", "outro"]);
       fireEvent.keyDown(document.body, { key: "Escape" });
       expect(useApp.getState().railSelected).toEqual([]);
+      rail.remove();
+      act(() => useApp.getState().setEditing(false));
     });
   });
 
@@ -591,6 +663,36 @@ describe("Stage", () => {
         ]);
         expect(screen.queryByRole("dialog")).toBeNull();
         expect(screen.getAllByTestId("comment-pin").map((p) => p.textContent)).toEqual(["1"]);
+      });
+
+      it("makes a comment about the moment the timeline holds the slide at, and about the slide whenever otherwise", () => {
+        const { container } = render(<Stage />);
+        const write = (text: string) => {
+          fireEvent.click(tool("Comment on an element"));
+          pick(container);
+          fireEvent.change(input(), { target: { value: text } });
+        };
+        const times = () => useApp.getState().comments.intro?.map((c) => c.time);
+        // Held at a moment: the comment is about it, and says so while it is written.
+        act(() => setSlideClock({ slide: "intro", at: 3.2449, paused: true }));
+        write("Too fast");
+        expect(screen.getByTestId("comment-moment").textContent).toBe("At 3.2 s after the slide shows");
+        fireEvent.keyDown(input(), { key: "Enter" });
+        expect(times()).toEqual([3.24]);
+        // Playing on, held on another slide, or not on the timeline at all: about the slide.
+        for (const clock of [{ slide: "intro", at: 1 }, { slide: "outro", at: 1, paused: true }, null]) {
+          act(() => setSlideClock(clock));
+          write("Bigger");
+          expect(screen.queryByTestId("comment-moment")).toBeNull();
+          fireEvent.keyDown(input(), { key: "Enter" });
+        }
+        expect(times()).toEqual([3.24, undefined, undefined, undefined]);
+        // Opened again, it still says when, and changing its text keeps the moment.
+        fireEvent.click(screen.getAllByTestId("comment-pin")[0]!);
+        expect(screen.getByTestId("comment-moment").textContent).toContain("3.2 s");
+        fireEvent.change(input(), { target: { value: "Much too fast" } });
+        fireEvent.keyDown(input(), { key: "Enter" });
+        expect(useApp.getState().comments.intro?.[0]).toMatchObject({ text: "Much too fast", time: 3.24 });
       });
 
       it("focuses the comment's text once it shows", async () => {
@@ -887,7 +989,7 @@ describe("Stage", () => {
       vi.restoreAllMocks();
     });
 
-    it("locks Layout and Tidy layout on a locked slide, and leaves edit mode for one", () => {
+    it("locks Layout and Tidy layout on a locked slide, and edits nothing on one, staying in edit mode", () => {
       const locked = deckFor(DECK_HTML.replace(`id="outro"`, `id="outro" data-locked`));
       useApp.setState({ deck: locked, templates: [] });
       render(<Stage />);
@@ -895,11 +997,39 @@ describe("Stage", () => {
       expect(useApp.getState().editing).toBe(true);
       expect(screen.queryByText("Locked")).toBeNull();
 
+      const edited = () =>
+        [...document.querySelectorAll("iframe")].some((f) => f.getAttribute("src")?.includes("edit="));
+      expect(edited()).toBe(true);
       act(() => useApp.getState().select("outro"));
-      expect(useApp.getState().editing).toBe(false);
+      // Still Edit mode, for the slide list and the timeline, but no editor and none of its tools.
+      expect(useApp.getState().editing).toBe(true);
+      expect(edited()).toBe(false);
+      expect(screen.queryByRole("toolbar", { name: "Edit tools" })).toBeNull();
+      expect(screen.queryByRole("toolbar", { name: "View tools" })).toBeNull();
+      expect(screen.getByRole("status").textContent).toContain("This slide is locked");
+      // The timeline's tools stay, as in either ribbon.
+      expect(screen.getByRole("button", { name: "Show the timeline under the slide" })).toBeTruthy();
       expect(screen.getByText("Locked")).toBeTruthy();
       expect((screen.getByRole("button", { name: /^Layout$/ }) as HTMLButtonElement).disabled).toBe(true);
       expect((screen.getByRole("button", { name: /Tidy layout/ }) as HTMLButtonElement).disabled).toBe(true);
+      // Going back to a slide that is not locked, the editor is there again.
+      act(() => useApp.getState().select("intro"));
+      expect(edited()).toBe(true);
+      expect(screen.getByRole("toolbar", { name: "Edit tools" })).toBeTruthy();
+    });
+
+    it("unlocks a locked slide from edit mode's note, and edits it then", async () => {
+      const locked = deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`));
+      useApp.setState({ deck: locked, templates: [] });
+      vi.mocked(invoke).mockImplementation(async (command) =>
+        command === "set_slide_locked" ? deckFor(DECK_HTML) : undefined,
+      );
+      render(<Stage />);
+      toggleEditing();
+      await act(async () => fireEvent.click(screen.getByRole("button", { name: "Unlock" })));
+      expect(invoke).toHaveBeenCalledWith("set_slide_locked", { id: locked.id, slide: "intro", locked: false });
+      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.getByRole("toolbar", { name: "Edit tools" })).toBeTruthy();
     });
 
     it("loads the slide editor into the preview in edit mode", () => {
@@ -942,7 +1072,7 @@ describe("Stage", () => {
       const sections = within(ribbon)
         .getAllByRole("group")
         .map((group) => group.getAttribute("aria-label"));
-      expect(sections).toEqual(["Mark up", "Review", "Animations", "Find"]);
+      expect(sections).toEqual(["Mark up", "Review", "Animations", "Timeline", "Find"]);
       const find = within(ribbon).getByRole("group", { name: "Find" });
       expect(within(find).getByRole("textbox", { name: "Search slides" })).toBeTruthy();
     });
@@ -972,10 +1102,10 @@ describe("Stage", () => {
       expect(sources().some((src) => src.includes("slide=outro") && !src.includes("static"))).toBe(true);
       act(() => setSlideClock(null));
 
-      // Play mode plays it too, and View has the still back.
-      act(() => useApp.getState().setMode("play"));
-      expect(sources().every((src) => !src.includes("static"))).toBe(true);
-      act(() => useApp.getState().setMode("view"));
+      // So does the timeline holding it at a moment; let go, View has the still back.
+      act(() => setSlideClock({ slide: "outro", at: 1, paused: true }));
+      expect(sources().some((src) => src.includes("slide=outro") && !src.includes("static"))).toBe(true);
+      act(() => setSlideClock(null));
       expect(sources().some((src) => src.includes("slide=outro") && src.endsWith("&static&pan"))).toBe(true);
 
       fireEvent.click(choice(/^Play the slide's animations/));
@@ -985,9 +1115,7 @@ describe("Stage", () => {
 
     it("has the search in View mode only", () => {
       render(<Stage />);
-      act(() => useApp.getState().setMode("play"));
-      expect(screen.queryByRole("textbox", { name: "Search slides" })).toBeNull();
-      act(() => useApp.getState().setMode("view"));
+      expect(screen.getByRole("textbox", { name: "Search slides" })).toBeTruthy();
       act(() => useApp.getState().setMode("edit"));
       expect(screen.queryByRole("textbox", { name: "Search slides" })).toBeNull();
     });

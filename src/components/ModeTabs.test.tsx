@@ -38,7 +38,7 @@ beforeEach(() => {
 describe("ModeTabs", () => {
   it("lists the modes, with View selected", () => {
     render(<ModeTabs />);
-    expect(tabs()).toEqual(["View", "Edit", "Play", "Git"]);
+    expect(tabs()).toEqual(["View", "Edit", "Git"]);
     expect(selected()).toEqual(["View"]);
   });
 
@@ -49,7 +49,6 @@ describe("ModeTabs", () => {
 
   it.each([
     ["Edit", "edit"],
-    ["Play", "play"],
     ["Git", "git"],
   ])("switches to %s and back to View", (name, mode) => {
     render(<ModeTabs />);
@@ -78,12 +77,20 @@ describe("ModeTabs", () => {
     expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "git" });
   });
 
-  it("cannot edit a locked slide, and says why", () => {
+  it("has no Play tab: the deck plays on the timeline, in View and in Edit", () => {
+    render(<ModeTabs />);
+    expect(screen.queryByRole("tab", { name: "Play" })).toBeNull();
+    expect(tab("View").title).toContain("without changing the slides");
+    expect(tab("Edit").title).toContain("set how long each slide shows");
+  });
+
+  it("enters Edit on a locked slide too, and says the slide is locked", () => {
     useApp.setState({ deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)) });
     render(<ModeTabs />);
-    expect(tab("Edit").disabled).toBe(true);
+    expect(tab("Edit").disabled).toBe(false);
     expect(tab("Edit").title).toContain("locked");
-    expect(tab("View").disabled).toBe(false);
+    fireEvent.click(tab("Edit"));
+    expect(deckMode(useApp.getState())).toBe("edit");
   });
 
   it("has no Settings tab, and selects no tab in Settings mode", () => {
@@ -93,11 +100,11 @@ describe("ModeTabs", () => {
     expect(selected()).toEqual([]);
   });
 
-  it("has only View and Git for a deck without slides", () => {
+  it("has Edit for a deck without slides, to add the first one in", () => {
     useApp.setState({ deck: { ...deckFor(DECK_HTML), slides: [] }, selected: null });
     render(<ModeTabs />);
     const enabled = screen.getAllByRole("tab").filter((t) => !(t as HTMLButtonElement).disabled);
-    expect(enabled.map((t) => t.textContent)).toEqual(["View", "Git"]);
+    expect(enabled.map((t) => t.textContent)).toEqual(["View", "Edit", "Git"]);
   });
 
   describe("the Git tab", () => {
@@ -109,7 +116,7 @@ describe("ModeTabs", () => {
       inRepository(false);
       render(<ModeTabs />);
       await settled();
-      expect(tabs()).toEqual(["View", "Edit", "Play"]);
+      expect(tabs()).toEqual(["View", "Edit"]);
     });
 
     it("shows up once the deck is found in a repository", async () => {

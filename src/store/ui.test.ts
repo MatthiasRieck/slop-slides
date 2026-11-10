@@ -114,6 +114,7 @@ describe("flags kept across launches", () => {
     ["railOpen", "setRailOpen", "slopslide.railOpen", true],
     ["reviewVisible", "setReviewVisible", "slopslide.reviewVisible", true],
     ["finalState", "setFinalState", "slopslide.finalState", false],
+    ["timelineOpen", "setTimelineOpen", "slopslide.timelineOpen", false],
   ] as const)(
     "%s (set by %s, saved as %s) starts as %s, and keeps what it is set to",
     async (flag, setter, key, fallback) => {

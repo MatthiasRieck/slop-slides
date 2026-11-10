@@ -1549,6 +1549,7 @@ mod tests {
                     y: 0.5,
                     target: None,
                     area: None,
+                    time: None,
                 };
                 (id.to_string(), vec![comment])
             })

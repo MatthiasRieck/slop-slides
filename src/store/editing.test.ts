@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DECK_HTML, deckFor } from "../test/fixtures";
-import { editedSlidesOf } from "./editing";
+import { editedSlidesOf, editingSlide } from "./editing";
 import { backend, calls, DECK, freshModule, freshStore, resetBackend } from "./testing";
 
 beforeEach(resetBackend);
@@ -15,9 +15,6 @@ describe("deck mode", () => {
     expect(mode()).toBe("edit");
     useApp.getState().setMode("git");
     expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "git" });
-    useApp.getState().setMode("play");
-    expect(useApp.getState()).toMatchObject({ editing: false, slideMode: "play" });
-    expect(mode()).toBe("play");
     useApp.getState().setMode("settings");
     expect(mode()).toBe("settings");
     useApp.getState().setMode("edit");
@@ -26,12 +23,18 @@ describe("deck mode", () => {
     expect(mode()).toBe("view");
   });
 
-  it("setMode stays put rather than edit a locked slide", async () => {
-    const { useApp, deckMode } = await freshModule();
-    const locked = { ...DECK, slides: DECK.slides.map((s) => ({ ...s, locked: true })) };
+  it("edit mode is the deck's, also on a locked slide, which the stage then does not edit", async () => {
+    const { useApp, deckMode, editingSlide } = await freshModule();
+    const locked = { ...DECK, slides: DECK.slides.map((s, i) => ({ ...s, locked: i === 0 })) };
     useApp.setState({ deck: locked, selected: "intro", editing: false, slideMode: "git" });
     useApp.getState().setMode("edit");
-    expect(deckMode(useApp.getState())).toBe("git");
+    expect(deckMode(useApp.getState())).toBe("edit");
+    expect(editingSlide(useApp.getState())).toBe(false);
+    // Going on to a slide that is not locked, the mode is still there to edit it.
+    useApp.getState().select(locked.slides[1]!.id);
+    expect(editingSlide(useApp.getState())).toBe(true);
+    useApp.getState().setMode("view");
+    expect(editingSlide(useApp.getState())).toBe(false);
   });
 
   it("narration, notes and the HTML are sidebar tabs, opened beside whatever mode the deck is in", async () => {
@@ -267,7 +270,7 @@ describe("editing slides on the stage", () => {
     expect(useApp.getState().editStyles.shape.fill).toBe("#ef4444");
   });
 
-  it("does not enter edit mode on a locked slide", async () => {
+  it("enters edit mode on a locked slide too, without editing that slide", async () => {
     const useApp = await freshStore();
     useApp.setState({
       deck: deckFor(DECK_HTML.replace(`id="intro"`, `id="intro" data-locked`)),
@@ -275,10 +278,10 @@ describe("editing slides on the stage", () => {
       editing: false,
     });
     useApp.getState().setEditing(true);
-    expect(useApp.getState().editing).toBe(false);
-    useApp.getState().select("outro");
-    useApp.getState().setEditing(true);
     expect(useApp.getState().editing).toBe(true);
+    expect(editingSlide(useApp.getState())).toBe(false);
+    useApp.getState().select("outro");
+    expect(editingSlide(useApp.getState())).toBe(true);
   });
 
   describe("tidying the layout", () => {

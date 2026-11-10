@@ -3,7 +3,7 @@ import { type RefObject, useEffect, useRef, useSyncExternalStore } from "react";
 import type { Slide } from "../../lib/api";
 import { getSlideClock, onSlideClock, postSlideClock } from "../../lib/slideClock";
 import type { Pixels } from "../../lib/slideSize";
-import { deckMode, useApp } from "../../store";
+import { useApp } from "../../store";
 import { SlideFrame, useSlideVersion } from "../SlideFrame";
 
 /** The stage's preview of the current slide: the editor in edit mode, else the slide as it plays or a still. */
@@ -18,11 +18,11 @@ export function CurrentSlide(props: {
   onFrameReady: (frame: HTMLIFrameElement) => void;
 }) {
   const editReload = useApp((s) => s.editReload);
-  // Play mode is for watching the slide play, whatever View's tools ask for.
-  const finalState = useApp((s) => s.finalState && deckMode(s) !== "play");
+  const finalState = useApp((s) => s.finalState);
   const id = props.slide.id;
-  // While narration plays over the slide, it shows as it plays, its animations kept with the
-  // narration, rather than as the editor's still of their last frame, or the one View's tools ask for.
+  // While the timeline plays over the slide, or holds it at a moment, it shows as it is then, its
+  // animations kept with the narration, rather than as the editor's still of their last frame, or
+  // the one View's tools ask for.
   const played = useSyncExternalStore(onSlideClock, () => {
     const clock = getSlideClock();
     return clock?.slide === id;

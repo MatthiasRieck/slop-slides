@@ -57,8 +57,9 @@ function fail(error: unknown) {
   if (message !== NARRATION_CANCELLED) useApp.getState().setError(message);
 }
 
-function byId(audio: SlideAudio[]): Record<string, SlideAudio> {
-  return Object.fromEntries(audio.map((a) => [a.slide, a]));
+/** The state for `audio`, the audio of deck `deck`'s slides as the backend lists it. */
+function audioOf(deck: string, audio: SlideAudio[]): Pick<NarrationState, "audio" | "audioDeck"> {
+  return { audio: Object.fromEntries(audio.map((a) => [a.slide, a])), audioDeck: deck };
 }
 
 export const useNarration = create<NarrationState>((set, get) => ({
@@ -102,8 +103,7 @@ export const useNarration = create<NarrationState>((set, get) => ({
 
   refreshAudio: async (deck) => {
     try {
-      const audio = await api.narrationAudio(deck);
-      set({ audio: byId(audio), audioDeck: deck });
+      set(audioOf(deck, await api.narrationAudio(deck)));
     } catch {
       // The deck file is mid-write or gone; the next change refreshes it.
     }
@@ -113,7 +113,7 @@ export const useNarration = create<NarrationState>((set, get) => ({
     set({ render: { deck, slide: null, done: 0, total: 0 } });
     try {
       const audio = await api.renderNarration(deck, slides);
-      set({ audio: byId(audio), audioDeck: deck });
+      set(audioOf(deck, audio));
       return true;
     } catch (error) {
       fail(error);
@@ -137,7 +137,7 @@ export const useNarration = create<NarrationState>((set, get) => ({
         await api.downloadVoiceModel();
       }
       const audio = await api.timeNarration(deck, slides);
-      set({ audio: byId(audio), audioDeck: deck });
+      set(audioOf(deck, audio));
       return true;
     } catch (error) {
       fail(error);
@@ -150,8 +150,7 @@ export const useNarration = create<NarrationState>((set, get) => ({
 
   deleteRecording: async (deck, slide) => {
     try {
-      const audio = await api.deleteRecordedNarration(deck, slide);
-      set({ audio: byId(audio), audioDeck: deck });
+      set(audioOf(deck, await api.deleteRecordedNarration(deck, slide)));
     } catch (error) {
       fail(error);
     }

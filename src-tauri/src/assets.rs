@@ -186,16 +186,14 @@ fn asset_ref(path: &Path) -> String {
 mod tests {
     use super::*;
     use crate::deck::DECK_FILE;
+    use crate::test_support::TempDir;
 
     /// A throwaway workspace folder, removed when dropped.
-    struct TempDir(PathBuf);
+    struct TempWorkspace(TempDir);
 
-    impl TempDir {
+    impl TempWorkspace {
         fn new() -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("slopslide-assets-{}", uuid::Uuid::new_v4()));
-            fs::create_dir_all(&dir).unwrap();
-            TempDir(dir)
+            TempWorkspace(TempDir::new("assets"))
         }
 
         /// `<name>/deck.html`, a deck with one slide.
@@ -212,14 +210,8 @@ mod tests {
         }
     }
 
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
     /// Two decks in their own folders of `dir`: `from` with `assets/Photo.PNG`.
-    fn two_decks(dir: &TempDir) -> (PathBuf, PathBuf) {
+    fn two_decks(dir: &TempWorkspace) -> (PathBuf, PathBuf) {
         let (from, to) = (dir.deck("from"), dir.deck("to"));
         fs::create_dir_all(folder(&from).join("assets")).unwrap();
         fs::write(folder(&from).join("assets/Photo.PNG"), b"photo").unwrap();
@@ -228,7 +220,7 @@ mod tests {
 
     #[test]
     fn copied_markup_brings_its_assets_into_another_deck() {
-        let dir = TempDir::new();
+        let dir = TempWorkspace::new();
         let (from, to) = two_decks(&dir);
         let markup = r#"<img src="assets/Photo.PNG?v=2"><div style="background: url('./assets/Photo.PNG')"></div><img src="assets/gone.png"><a href="https://x.dev/assets/y.png">y</a>"#;
         let out = bring_assets(markup, &from, &to).unwrap();
@@ -249,7 +241,7 @@ mod tests {
 
     #[test]
     fn markup_pasted_within_its_folder_is_left_alone() {
-        let dir = TempDir::new();
+        let dir = TempWorkspace::new();
         let (from, _) = two_decks(&dir);
         let markup = r#"<img src="assets/Photo.PNG">"#;
         assert_eq!(bring_assets(markup, &from, &from).unwrap(), markup);
@@ -277,7 +269,7 @@ mod tests {
 
     #[test]
     fn imports_assets_with_slugged_unique_names() {
-        let dir = TempDir::new();
+        let dir = TempWorkspace::new();
         let deck = dir.deck("talk");
         let src = dir.0.join("src");
         fs::create_dir_all(&src).unwrap();
@@ -319,7 +311,7 @@ mod tests {
 
     #[test]
     fn saves_pasted_assets_with_unique_names() {
-        let dir = TempDir::new();
+        let dir = TempWorkspace::new();
         let deck = dir.deck("talk");
         let assets = folder(&deck).join("assets");
         // "aGk=" is "hi".
@@ -346,7 +338,7 @@ mod tests {
 
     #[test]
     fn workspace_assets_without_a_deck() {
-        let dir = TempDir::new();
+        let dir = TempWorkspace::new();
         assert_eq!(
             save_asset(&dir.0, "photo.png", "aGk=").unwrap(),
             "assets/photo.png"
@@ -356,7 +348,7 @@ mod tests {
 
     #[test]
     fn assets_go_to_the_workspace_or_one_of_its_decks() {
-        let dir = TempDir::new();
+        let dir = TempWorkspace::new();
         let root = dir.0.join("work");
         let deck = {
             fs::create_dir_all(&root).unwrap();

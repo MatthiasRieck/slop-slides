@@ -162,21 +162,16 @@ fn take<T: DeserializeOwned>(inbox: &Path) -> Vec<(String, T)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
 
     const INBOX: Inbox = Inbox {
         requests: "test-requests",
         results: "test-results",
     };
 
-    fn session() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("slopslide-inbox-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     #[test]
     fn takes_requests_oldest_first_and_once_skipping_the_unreadable() {
-        let dir = session();
+        let dir = TempDir::new("inbox");
         let inbox = dir.join(INBOX.requests);
         put(&inbox, "first", "a.html").unwrap();
         std::thread::sleep(Duration::from_millis(20));
@@ -193,12 +188,11 @@ mod tests {
         );
         assert!(INBOX.take::<String>(&dir).is_empty());
         assert!(inbox.join("half.tmp").exists(), "still being written");
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn clearing_forgets_what_a_turn_left_behind() {
-        let dir = session();
+        let dir = TempDir::new("inbox");
         put(&dir.join(INBOX.requests), "old", "a.html").unwrap();
         INBOX
             .answer::<String>(&dir, "old", &Err("stale".into()))
@@ -206,14 +200,13 @@ mod tests {
         INBOX.clear(&dir);
         assert!(INBOX.take::<String>(&dir).is_empty());
         assert!(!dir.join(INBOX.results).exists());
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn an_unreadable_answer_says_so() {
-        let dir = session();
+        let dir = TempDir::new("inbox");
         let app = {
-            let dir = dir.clone();
+            let dir = dir.to_path_buf();
             std::thread::spawn(move || loop {
                 if let Some((name, _)) = INBOX.take::<String>(&dir).pop() {
                     put(&dir.join(INBOX.results), &name, "not an answer").unwrap();
@@ -236,6 +229,5 @@ mod tests {
             error.to_string().starts_with("unreadable thing: "),
             "{error}"
         );
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }

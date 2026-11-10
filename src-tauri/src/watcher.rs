@@ -102,6 +102,7 @@ fn in_hidden_folder(rel: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
 
     #[test]
     fn ignores_atomic_write_temp_files() {
@@ -111,33 +112,23 @@ mod tests {
         assert!(!is_temp_file("assets/template.png"));
     }
 
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new() -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("slopslide-watch-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(dir.join("assets")).unwrap();
-            TempDir(dir)
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
+    /// A root with an assets folder.
+    fn temp_root() -> TempDir {
+        let dir = TempDir::new("watch");
+        std::fs::create_dir_all(dir.join("assets")).unwrap();
+        dir
     }
 
     #[test]
     fn relative_paths_use_forward_slashes() {
-        let root = TempDir::new();
-        let file = root.0.join("assets").join("a.png");
+        let root = temp_root();
+        let file = root.join("assets").join("a.png");
         std::fs::write(&file, "x").unwrap();
         // Existing paths are canonicalized (e.g. /var -> /private/var on macOS).
-        let canonical = root.0.canonicalize().unwrap();
+        let canonical = root.canonicalize().unwrap();
         assert_eq!(relative(&canonical, &file).as_deref(), Some("assets/a.png"));
         assert_eq!(
-            relative(&canonical, &root.0),
+            relative(&canonical, &root),
             None,
             "the root itself is not a change"
         );
@@ -149,26 +140,26 @@ mod tests {
 
     #[test]
     fn relative_handles_deleted_files() {
-        let root = TempDir::new();
+        let root = temp_root();
         // A deleted file cannot be canonicalized; matching uses the path as given.
-        let gone = root.0.join("deck.html");
-        assert_eq!(relative(&root.0, &gone).as_deref(), Some("deck.html"));
+        let gone = root.join("deck.html");
+        assert_eq!(relative(&root, &gone).as_deref(), Some("deck.html"));
     }
 
     #[test]
     fn changed_paths_filters_sorts_and_dedups() {
-        let root = TempDir::new();
-        let roots = [root.0.canonicalize().unwrap(), root.0.clone()];
-        let deck = root.0.join("deck.html");
+        let root = temp_root();
+        let roots = [root.canonicalize().unwrap(), root.to_path_buf()];
+        let deck = root.join("deck.html");
         std::fs::write(&deck, "x").unwrap();
         let events = [
             deck.clone(),
-            root.0.join("assets/b.png"),
-            root.0.join("deck.tmp-0a1b2c"),
-            root.0.join("assets/a.png"),
+            root.join("assets/b.png"),
+            root.join("deck.tmp-0a1b2c"),
+            root.join("assets/a.png"),
             deck.clone(),
             PathBuf::from("/somewhere/else.html"),
-            root.0.clone(),
+            root.to_path_buf(),
         ];
         assert_eq!(
             changed_paths(&roots, events.iter().map(PathBuf::as_path)),

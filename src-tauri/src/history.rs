@@ -439,15 +439,15 @@ pub fn version(home: &Path, file: &Path, id: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
 
     struct Deck {
-        temp: PathBuf,
+        temp: TempDir,
     }
 
     impl Deck {
         fn new(source: &str) -> Self {
-            let temp =
-                std::env::temp_dir().join(format!("slopslide-history-{}", uuid::Uuid::new_v4()));
+            let temp = TempDir::new("history");
             fs::create_dir_all(temp.join("work")).unwrap();
             let deck = Self { temp };
             deck.write(source);
@@ -488,12 +488,6 @@ mod tests {
 
     fn change_ok(home: &Path, file: &Path, change: Change, f: impl FnOnce() -> Result<()>) {
         super::change(home, file, change, f).unwrap();
-    }
-
-    impl Drop for Deck {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.temp);
-        }
     }
 
     fn edit(label: &str) -> Change {

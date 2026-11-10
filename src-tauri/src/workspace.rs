@@ -308,28 +308,7 @@ pub fn display_name(root: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    struct Temp(PathBuf);
-
-    impl Temp {
-        fn new() -> Self {
-            let dir = std::env::temp_dir().join(format!("slopslide-ws-{}", uuid::Uuid::new_v4()));
-            fs::create_dir_all(&dir).unwrap();
-            Temp(dir)
-        }
-        fn write(&self, rel: &str, text: &str) -> PathBuf {
-            let path = self.0.join(rel);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(&path, text).unwrap();
-            path
-        }
-    }
-
-    impl Drop for Temp {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::test_support::TempDir;
 
     const DECK: &str = "<!DOCTYPE html><html><head><title>T</title></head><body><main class=\"deck\">\n<section class=\"slide\" id=\"a\">A</section>\n</main></body></html>";
 
@@ -389,7 +368,7 @@ mod tests {
 
     #[test]
     fn lists_one_folder_folders_first_and_tells_files_apart() {
-        let t = Temp::new();
+        let t = TempDir::new("ws");
         t.write("talk/deck.html", DECK);
         t.write("Notes.md", "# notes");
         t.write("about.html", "<h1>About</h1>");
@@ -399,7 +378,7 @@ mod tests {
         t.write(".DS_Store", "");
         t.write("deck.tmp-0a1b", "partial");
 
-        let root = list_dir(&t.0, "").unwrap();
+        let root = list_dir(&t, "").unwrap();
         let names: Vec<_> = root.iter().map(|e| (e.name.as_str(), e.kind)).collect();
         assert_eq!(
             names,
@@ -412,7 +391,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            list_dir(&t.0, "talk").unwrap(),
+            list_dir(&t, "talk").unwrap(),
             [Entry {
                 name: "deck.html".into(),
                 path: "talk/deck.html".into(),
@@ -423,88 +402,85 @@ mod tests {
 
     #[test]
     fn sniffing_reads_the_head_but_opening_reads_it_all() {
-        let t = Temp::new();
+        let t = TempDir::new("ws");
         let late = format!(
             "<html><body>{}<main class=\"deck\"></main></body></html>",
             "x".repeat(SNIFF_BYTES as usize)
         );
         t.write("long.html", &late);
-        assert_eq!(list_dir(&t.0, "").unwrap()[0].kind, FileKind::Webpage);
-        let opened = open_file(&t.0, "long.html").unwrap();
+        assert_eq!(list_dir(&t, "").unwrap()[0].kind, FileKind::Webpage);
+        let opened = open_file(&t, "long.html").unwrap();
         assert_eq!(opened.kind, FileKind::Deck);
         assert_eq!(opened.path, "long.html");
-        assert_eq!(Path::new(&opened.absolute), t.0.join("long.html").as_path());
+        assert_eq!(Path::new(&opened.absolute), t.join("long.html").as_path());
     }
 
     #[test]
     fn paths_stay_inside_the_workspace() {
-        let t = Temp::new();
+        let t = TempDir::new("ws");
         t.write("a/b.txt", "x");
-        assert_eq!(resolve(&t.0, "").unwrap(), t.0);
-        assert_eq!(resolve(&t.0, "a/b.txt").unwrap(), t.0.join("a/b.txt"));
+        assert_eq!(resolve(&t, "").unwrap(), t.path());
+        assert_eq!(resolve(&t, "a/b.txt").unwrap(), t.join("a/b.txt"));
         for bad in ["..", "../x", "a/../../x", "/etc/hosts"] {
-            assert!(resolve(&t.0, bad).is_err(), "{bad}");
-            assert!(list_dir(&t.0, bad).is_err(), "{bad}");
+            assert!(resolve(&t, bad).is_err(), "{bad}");
+            assert!(list_dir(&t, bad).is_err(), "{bad}");
         }
-        assert!(open_file(&t.0, "missing.html").is_err());
+        assert!(open_file(&t, "missing.html").is_err());
         assert!(root("relative/path").is_err());
-        assert!(root(&t.0.join("a/b.txt").to_string_lossy()).is_err());
+        assert!(root(&t.join("a/b.txt").to_string_lossy()).is_err());
         assert_eq!(
-            root(&t.0.to_string_lossy()).unwrap(),
-            t.0.canonicalize().unwrap()
+            root(&t.to_string_lossy()).unwrap(),
+            t.canonicalize().unwrap()
         );
     }
 
     #[test]
     fn the_open_workspace_bounds_what_is_served() {
-        let t = Temp::new();
+        let t = TempDir::new("ws");
         let inner = t.write("ws/talk/deck.html", DECK);
         let outer = t.write("secret.txt", "x");
         let open = OpenWorkspace::default();
         assert!(!open.contains(&inner), "nothing is open");
-        open.set("main", Some(t.0.join("ws")));
+        open.set("main", Some(t.join("ws")));
         assert!(open.contains(&inner));
         assert!(!open.contains(&outer));
-        assert!(!open.contains(&t.0.join("ws/../secret.txt")));
-        assert!(!open.contains(&t.0.join("ws/missing.html")));
+        assert!(!open.contains(&t.join("ws/../secret.txt")));
+        assert!(!open.contains(&t.join("ws/missing.html")));
         open.set("main", None);
         assert!(!open.contains(&inner));
     }
 
     #[test]
     fn each_window_has_its_own_workspace() {
-        let t = Temp::new();
+        let t = TempDir::new("ws");
         let a = t.write("a/talk/deck.html", DECK);
         let b = t.write("b/talk/deck.html", DECK);
         let open = OpenWorkspace::default();
-        open.set("main", Some(t.0.join("a")));
-        open.set("window-2", Some(t.0.join("b")));
-        assert_eq!(
-            open.get("main"),
-            Some(t.0.join("a").canonicalize().unwrap())
-        );
+        open.set("main", Some(t.join("a")));
+        open.set("window-2", Some(t.join("b")));
+        assert_eq!(open.get("main"), Some(t.join("a").canonicalize().unwrap()));
         assert_eq!(
             open.get("window-2"),
-            Some(t.0.join("b").canonicalize().unwrap())
+            Some(t.join("b").canonicalize().unwrap())
         );
         assert_eq!(open.get("window-3"), None);
         assert!(open.contains(&a) && open.contains(&b), "both are served");
         assert_eq!(
-            open.window_with(&t.0.join("a"), "window-2").as_deref(),
+            open.window_with(&t.join("a"), "window-2").as_deref(),
             Some("main")
         );
-        assert_eq!(open.window_with(&t.0.join("a"), "main"), None, "not itself");
+        assert_eq!(open.window_with(&t.join("a"), "main"), None, "not itself");
         open.set("main", None);
         assert!(!open.contains(&a));
         assert!(open.contains(&b));
-        assert_eq!(open.window_with(&t.0.join("a"), "window-2"), None);
+        assert_eq!(open.window_with(&t.join("a"), "window-2"), None);
     }
 
     #[test]
     fn remembers_recent_workspaces_newest_first() {
-        let t = Temp::new();
-        let home = t.0.join("home");
-        let (a, b) = (t.0.join("a"), t.0.join("b"));
+        let t = TempDir::new("ws");
+        let home = t.join("home");
+        let (a, b) = (t.join("a"), t.join("b"));
         fs::create_dir_all(&a).unwrap();
         fs::create_dir_all(&b).unwrap();
         assert!(recent(&home).is_empty());
@@ -521,7 +497,7 @@ mod tests {
         assert!(recent(&home).is_empty());
 
         for n in 0..RECENT_KEPT + 3 {
-            let dir = t.0.join(format!("w{n}"));
+            let dir = t.join(format!("w{n}"));
             fs::create_dir_all(&dir).unwrap();
             remember(&home, &dir).unwrap();
         }

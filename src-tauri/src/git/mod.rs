@@ -393,17 +393,18 @@ fn no_repository() -> DeckChanges {
 mod tests {
     use super::*;
     use crate::git::fixtures::*;
+    use crate::test_support::TempDir;
     use std::fs;
     use std::path::PathBuf;
     use std::process::Command;
     use SlideStatus::{Added, Modified, Removed, Unchanged};
 
     /// A folder with a git repository in it, with the repository's commits made by a fixed person.
-    struct Repo(PathBuf);
+    struct Repo(TempDir);
 
     impl Repo {
         fn new() -> Self {
-            let root = std::env::temp_dir().join(format!("slopslide-git-{}", uuid::Uuid::new_v4()));
+            let root = TempDir::new("git");
             fs::create_dir_all(root.join("talk/assets")).unwrap();
             let repo = Self(root);
             repo.run(&["init", "-q"]);
@@ -442,23 +443,15 @@ mod tests {
         }
     }
 
-    impl Drop for Repo {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
     #[test]
     fn a_deck_outside_a_repository_has_nothing_to_compare() {
-        let root = std::env::temp_dir().join(format!("slopslide-norepo-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&root).unwrap();
+        let root = TempDir::new("norepo");
         let file = root.join("deck.html");
         fs::write(&file, deck(&["a=A"])).unwrap();
         let found = changes(&file).unwrap();
         assert_eq!(found.tracking, Tracking::NoRepository);
         assert!(found.slides.is_empty());
         assert!(!in_repository(&file).unwrap());
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

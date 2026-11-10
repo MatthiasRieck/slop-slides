@@ -976,11 +976,11 @@ mod tests {
     #[test]
     fn the_html_export_of_the_fixture_stands_on_its_own() {
         let file = fixture();
-        let out = tempfile_dir().join("deck.html");
+        let dir = crate::test_support::TempDir::new("export-smoke");
+        let out = dir.join("deck.html");
         deck::export(&file, &out).unwrap();
         let shown = strings(&["title", "shapes"]);
         check_html_export(&std::fs::read_to_string(&out).unwrap(), &shown).unwrap();
-        let _ = std::fs::remove_dir_all(out.parent().unwrap());
     }
 
     #[test]
@@ -1044,12 +1044,6 @@ mod tests {
 
     fn fixture() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/export-smoke/deck.html")
-    }
-
-    fn tempfile_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("export-smoke-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
     }
 
     #[test]

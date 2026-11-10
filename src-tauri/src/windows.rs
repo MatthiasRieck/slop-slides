@@ -364,6 +364,7 @@ pub mod dock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
 
     #[test]
     fn a_click_on_the_dock_icon_comes_back_to_the_app_without_a_new_window() {
@@ -397,21 +398,23 @@ mod tests {
         assert!(!is_app_window("slide-render-1234"));
     }
 
-    fn temp_dirs(names: &[&str]) -> Vec<PathBuf> {
-        let root = std::env::temp_dir().join(format!("slopslide-windows-{}", uuid::Uuid::new_v4()));
-        names
+    /// Folders `names` in a temporary folder, removed when it is dropped.
+    fn temp_dirs(names: &[&str]) -> (TempDir, Vec<PathBuf>) {
+        let root = TempDir::new("windows");
+        let dirs = names
             .iter()
             .map(|name| {
                 let dir = root.join(name);
                 std::fs::create_dir_all(&dir).unwrap();
                 dir
             })
-            .collect()
+            .collect();
+        (root, dirs)
     }
 
     #[test]
     fn a_folder_from_finder_goes_where_it_is_open_else_to_a_free_window_else_a_new_one() {
-        let dirs = temp_dirs(&["a", "b", "c"]);
+        let (_root, dirs) = temp_dirs(&["a", "b", "c"]);
         let (open, pending) = (OpenWorkspace::default(), PendingFolders::default());
         let windows = vec!["main".to_string(), "window-2".to_string()];
         open.set("main", Some(dirs[0].clone()));
@@ -437,7 +440,7 @@ mod tests {
 
     #[test]
     fn a_folder_opened_while_the_app_starts_goes_to_the_first_window() {
-        let dirs = temp_dirs(&["a"]);
+        let (_root, dirs) = temp_dirs(&["a"]);
         let (open, pending) = (OpenWorkspace::default(), PendingFolders::default());
         assert_eq!(
             target(&open, &pending, &[], &dirs[0]),

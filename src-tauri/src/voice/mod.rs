@@ -355,20 +355,15 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::test_support::TempDir;
     use live::Take;
-
-    fn temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("slopslide-voice-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 
     #[test]
     fn shutdown_without_a_recording_or_model_does_nothing() {
         let voice = Voice::default();
         voice.shutdown();
         assert!(voice.whisper.lock().unwrap().is_none());
-        assert!(!voice.status(&temp_dir()).recording);
+        assert!(!voice.status(&TempDir::new("voice")).recording);
     }
 
     #[test]
@@ -400,7 +395,7 @@ mod tests {
 
     #[test]
     fn status_reports_whether_the_model_is_downloaded() {
-        let home = temp_dir();
+        let home = TempDir::new("voice");
         let voice = Voice::default();
         let status = voice.status(&home);
         assert!(!status.model_ready);
@@ -409,7 +404,6 @@ mod tests {
         fs::create_dir_all(model_path(&home).parent().unwrap()).unwrap();
         fs::write(model_path(&home), b"model").unwrap();
         assert!(voice.status(&home).model_ready);
-        fs::remove_dir_all(home).unwrap();
     }
 
     #[test]

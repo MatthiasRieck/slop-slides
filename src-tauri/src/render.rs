@@ -272,12 +272,7 @@ async fn capture_slides(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn session() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("slopslide-render-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
+    use crate::test_support::TempDir;
 
     fn slide(id: &str, overflow: &[&str]) -> Rendered {
         Rendered {
@@ -289,9 +284,9 @@ mod tests {
 
     #[test]
     fn a_request_reaches_the_app_and_its_answer_comes_back() {
-        let dir = session();
+        let dir = TempDir::new("render");
         let app = {
-            let dir = dir.clone();
+            let dir = dir.to_path_buf();
             std::thread::spawn(move || loop {
                 if let Some((name, request)) = take_requests(&dir).pop() {
                     assert_eq!(
@@ -316,14 +311,13 @@ mod tests {
             0,
             "the answer is read once"
         );
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn a_failed_render_comes_back_as_its_error() {
-        let dir = session();
+        let dir = TempDir::new("render");
         let app = {
-            let dir = dir.clone();
+            let dir = dir.to_path_buf();
             std::thread::spawn(move || loop {
                 if let Some((name, _)) = take_requests(&dir).pop() {
                     answer(&dir, &name, &Err("no slides to render".into())).unwrap();
@@ -335,12 +329,11 @@ mod tests {
         let error = ask(&dir, "deck.html", vec!["a".into()], None, WAIT).unwrap_err();
         app.join().unwrap();
         assert_eq!(error.to_string(), "no slides to render");
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
     fn without_an_app_the_request_times_out_and_is_withdrawn() {
-        let dir = session();
+        let dir = TempDir::new("render");
         let error = ask(
             &dir,
             "deck.html",
@@ -351,7 +344,6 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("did not render"), "{error}");
         assert!(take_requests(&dir).is_empty());
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

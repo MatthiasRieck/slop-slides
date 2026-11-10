@@ -22,6 +22,14 @@ impl TempDir {
         TempDir(dir)
     }
 
+    /// [`TempDir::new`], spelled canonically (`/private/var/…` rather than `/var/…` on macOS),
+    /// for tests comparing it with paths the code under test canonicalizes.
+    pub fn canonical(label: &str) -> Self {
+        let mut dir = Self::new(label);
+        dir.0 = dir.0.canonicalize().unwrap();
+        dir
+    }
+
     pub fn path(&self) -> &Path {
         &self.0
     }
@@ -103,6 +111,15 @@ mod tests {
         });
         assert!(panicked.is_err());
         assert!(!kept.into_inner().unwrap().exists());
+    }
+
+    #[test]
+    fn a_canonical_temp_dir_is_spelled_canonically_and_removed_when_dropped() {
+        let dir = TempDir::canonical("support");
+        let kept = dir.to_path_buf();
+        assert_eq!(kept, kept.canonicalize().unwrap());
+        drop(dir);
+        assert!(!kept.exists());
     }
 
     #[cfg(unix)]

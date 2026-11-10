@@ -143,17 +143,17 @@ pub fn release_guard(file: &Path, session: &Path) -> Result<Vec<String>> {
 mod tests {
     use super::*;
     use crate::deck::{self, DECK_FILE};
+    use crate::test_support::TempDir;
     use std::path::PathBuf;
 
     const LOCKED: &str = "<html><head><title>Talk</title></head><body><main>\n<section class=\"slide\" id=\"a\" data-locked>A</section>\n<section class=\"slide\" id=\"b\">B</section>\n</main></body></html>";
 
     /// A throwaway folder with a deck.html and a session folder (outside any workspace).
-    struct TempDeck(PathBuf);
+    struct TempDeck(TempDir);
 
     impl TempDeck {
         fn new(html: &str) -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("slopslide-guard-{}", uuid::Uuid::new_v4()));
+            let dir = TempDir::new("guard");
             fs::create_dir_all(dir.join("deck")).unwrap();
             fs::write(dir.join("deck").join(DECK_FILE), html).unwrap();
             TempDeck(dir)
@@ -166,12 +166,6 @@ mod tests {
         }
         fn session(&self) -> PathBuf {
             self.0.join("session")
-        }
-    }
-
-    impl Drop for TempDeck {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
         }
     }
 

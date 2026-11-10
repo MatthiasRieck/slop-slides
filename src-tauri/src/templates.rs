@@ -281,27 +281,20 @@ pub fn read_file(root: &Path, id: &str, rel: &str) -> Option<(&'static str, Vec<
 mod tests {
     use super::*;
     use crate::lint;
+    use crate::test_support::TempDir;
 
     /// A throwaway folder (the user's templates, or a deck).
-    struct TempDir(PathBuf);
+    struct TempFolder(TempDir);
 
-    impl TempDir {
+    impl TempFolder {
         fn new() -> Self {
-            let dir = std::env::temp_dir().join(format!("slopslide-tpl-{}", uuid::Uuid::new_v4()));
-            fs::create_dir_all(&dir).unwrap();
-            TempDir(dir)
+            TempFolder(TempDir::new("tpl"))
         }
         fn add(&self, id: &str, html: &str) -> PathBuf {
             let dir = self.0.join(id);
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join(DECK_FILE), html).unwrap();
             dir
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
         }
     }
 
@@ -392,7 +385,7 @@ mod tests {
 
     #[test]
     fn lists_user_templates_first_and_lets_them_replace_builtins() {
-        let root = TempDir::new();
+        let root = TempFolder::new();
         root.add("mine", MINE);
         root.add("swiss", &MINE.replace("Mine", "My Swiss"));
         root.add("empty", "<html><head><title>Empty</title></head></html>");
@@ -424,7 +417,7 @@ mod tests {
 
     #[test]
     fn reads_sources_and_serves_files() {
-        let root = TempDir::new();
+        let root = TempFolder::new();
         let dir = root.add("mine", MINE);
         fs::create_dir_all(dir.join("assets")).unwrap();
         fs::write(dir.join("assets/logo.svg"), "<svg/>").unwrap();
@@ -462,9 +455,9 @@ mod tests {
 
     #[test]
     fn stages_a_copy_without_the_runtime_for_the_agent() {
-        let root = TempDir::new();
+        let root = TempFolder::new();
         root.add("mine", &html::ensure_runtime(MINE));
-        let session = TempDir::new();
+        let session = TempFolder::new();
         let path = stage(&session.0, &root.0, "mine").unwrap();
         assert_eq!(Path::new(&path), session.0.join("templates/mine.html"));
         let staged = fs::read_to_string(&path).unwrap();
@@ -494,8 +487,8 @@ mod tests {
 
     #[test]
     fn saves_a_deck_as_a_template_with_placeholder_content() {
-        let root = TempDir::new();
-        let deck = TempDir::new();
+        let root = TempFolder::new();
+        let deck = TempFolder::new();
         let marks = [(
             "cover".to_string(),
             vec![review::Stroke {

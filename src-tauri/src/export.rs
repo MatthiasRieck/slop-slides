@@ -363,28 +363,12 @@ fn remove_old_images(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempDir;
 
-    struct Temp(PathBuf);
-
-    impl Temp {
-        fn new() -> Temp {
-            let dir =
-                std::env::temp_dir().join(format!("slopslide-export-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(&dir).unwrap();
-            Temp(dir.canonicalize().unwrap())
-        }
-    }
-
-    impl Drop for Temp {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn workspace() -> Temp {
-        let ws = Temp::new();
-        std::fs::create_dir_all(ws.0.join("talk")).unwrap();
-        std::fs::write(ws.0.join("talk/deck.html"), "<main class=\"deck\"></main>").unwrap();
+    fn workspace() -> TempDir {
+        let ws = TempDir::canonical("export");
+        std::fs::create_dir_all(ws.join("talk")).unwrap();
+        std::fs::write(ws.join("talk/deck.html"), "<main class=\"deck\"></main>").unwrap();
         ws
     }
 
@@ -414,14 +398,14 @@ mod tests {
     #[test]
     fn exports_go_next_to_the_deck_named_after_its_title() {
         let ws = workspace();
-        let dest = |format| destination(&ws.0, "talk/deck.html", "Q3: Plans?", format, None, false);
+        let dest = |format| destination(&ws, "talk/deck.html", "Q3: Plans?", format, None, false);
         assert_eq!(dest(Format::Pdf).unwrap(), "talk/exports/Q3 Plans.pdf");
         assert_eq!(dest(Format::Pptx).unwrap(), "talk/exports/Q3 Plans.pptx");
         assert_eq!(dest(Format::Video).unwrap(), "talk/exports/Q3 Plans.mp4");
         assert_eq!(dest(Format::Html).unwrap(), "talk/exports/Q3 Plans.html");
         assert_eq!(dest(Format::Images).unwrap(), "talk/exports/Q3 Plans");
-        assert!(ws.0.join("talk/exports").is_dir(), "its folder is made");
-        let untitled = destination(&ws.0, "deck.html", "", Format::Pdf, None, false);
+        assert!(ws.join("talk/exports").is_dir(), "its folder is made");
+        let untitled = destination(&ws, "deck.html", "", Format::Pdf, None, false);
         assert_eq!(untitled.unwrap(), "exports/presentation.pdf");
     }
 
@@ -429,7 +413,7 @@ mod tests {
     fn a_named_destination_gets_the_formats_extension() {
         let ws = workspace();
         let dest =
-            |format, dest| destination(&ws.0, "talk/deck.html", "T", format, Some(dest), false);
+            |format, dest| destination(&ws, "talk/deck.html", "T", format, Some(dest), false);
         assert_eq!(dest(Format::Pdf, "out/handout").unwrap(), "out/handout.pdf");
         assert_eq!(
             dest(Format::Pdf, "./out/handout.PDF").unwrap(),
@@ -444,15 +428,15 @@ mod tests {
     fn a_destination_stays_in_the_workspace() {
         let ws = workspace();
         for dest in ["../out.pdf", "/tmp/out.pdf", "talk/../../out.pdf", "."] {
-            let found = destination(&ws.0, "talk/deck.html", "T", Format::Pdf, Some(dest), false);
+            let found = destination(&ws, "talk/deck.html", "T", Format::Pdf, Some(dest), false);
             assert!(found.is_err(), "{dest} was allowed");
         }
         #[cfg(unix)]
         {
-            let outside = Temp::new();
-            std::os::unix::fs::symlink(&outside.0, ws.0.join("link")).unwrap();
+            let outside = TempDir::canonical("export");
+            std::os::unix::fs::symlink(&outside, ws.join("link")).unwrap();
             let found = destination(
-                &ws.0,
+                &ws,
                 "talk/deck.html",
                 "T",
                 Format::Pdf,
@@ -466,10 +450,10 @@ mod tests {
     #[test]
     fn an_existing_export_is_replaced_only_when_asked() {
         let ws = workspace();
-        std::fs::write(ws.0.join("talk.pdf"), "old").unwrap();
+        std::fs::write(ws.join("talk.pdf"), "old").unwrap();
         let dest = |overwrite| {
             destination(
-                &ws.0,
+                &ws,
                 "talk/deck.html",
                 "T",
                 Format::Pdf,
@@ -482,9 +466,9 @@ mod tests {
             .to_string()
             .contains("overwrite: true"));
         assert_eq!(dest(true).unwrap(), "talk.pdf");
-        std::fs::create_dir_all(ws.0.join("dir.pdf")).unwrap();
+        std::fs::create_dir_all(ws.join("dir.pdf")).unwrap();
         let folder = destination(
-            &ws.0,
+            &ws,
             "talk/deck.html",
             "T",
             Format::Pdf,
@@ -498,7 +482,7 @@ mod tests {
     fn the_deck_itself_is_never_overwritten() {
         let ws = workspace();
         let found = destination(
-            &ws.0,
+            &ws,
             "talk/deck.html",
             "T",
             Format::Html,
@@ -513,7 +497,7 @@ mod tests {
         let ws = workspace();
         let dest = |rel, overwrite| {
             destination(
-                &ws.0,
+                &ws,
                 "talk/deck.html",
                 "T",
                 Format::Images,
@@ -521,7 +505,7 @@ mod tests {
                 overwrite,
             )
         };
-        std::fs::create_dir_all(ws.0.join("empty")).unwrap();
+        std::fs::create_dir_all(ws.join("empty")).unwrap();
         assert_eq!(dest("empty", false).unwrap(), "empty");
         assert!(dest("talk", false).is_err());
         assert_eq!(dest("talk", true).unwrap(), "talk");
@@ -533,7 +517,7 @@ mod tests {
 
     #[test]
     fn old_slide_images_are_removed_and_nothing_else() {
-        let ws = Temp::new();
+        let ws = TempDir::canonical("export");
         for name in [
             "slide-01.png",
             "slide-12.png",
@@ -541,10 +525,10 @@ mod tests {
             "slide-a.png",
             "notes.png",
         ] {
-            std::fs::write(ws.0.join(name), "x").unwrap();
+            std::fs::write(ws.join(name), "x").unwrap();
         }
-        remove_old_images(&ws.0);
-        let mut left: Vec<String> = std::fs::read_dir(&ws.0)
+        remove_old_images(&ws);
+        let mut left: Vec<String> = std::fs::read_dir(&ws)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
@@ -569,8 +553,8 @@ mod tests {
 
     #[test]
     fn reports_what_it_made() {
-        let ws = Temp::new();
-        let file = ws.0.join("a.pdf");
+        let ws = TempDir::canonical("export");
+        let file = ws.join("a.pdf");
         std::fs::write(&file, vec![0u8; 2048]).unwrap();
         let pdf = request(Format::Pdf);
         assert_eq!(
@@ -580,7 +564,7 @@ mod tests {
         let mut images = request(Format::Images);
         images.dest = "out".into();
         assert_eq!(
-            report(&images, Some(1), &ws.0),
+            report(&images, Some(1), &ws),
             "Exported talk/deck.html as slide images to out/ (1 image)."
         );
         assert_eq!(size(10), "10 bytes");

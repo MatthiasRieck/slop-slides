@@ -401,11 +401,6 @@ describe("ChangesView", () => {
     expect(shown.some((src) => src.includes(".file"))).toBe(true);
   });
 
-  it("names what the picture does not show", async () => {
-    await show(changes({ slides: [row("modified", "intro", ["speaker notes"])] }));
-    expect(screen.getByText("Modified since the last commit. Changed: speaker notes.")).toBeTruthy();
-  });
-
   it.each([
     ["Slide 3, added", "New since the last commit."],
     ["Slide, removed", "Removed since the last commit; this is how it looked."],

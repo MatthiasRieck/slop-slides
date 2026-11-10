@@ -43,7 +43,7 @@ pub struct Shown {
 pub struct Clip {
     pub start: f64,
     pub end: f64,
-    /// It is the presenter's own recording or audio made elsewhere, not the voice model's.
+    /// It is the presenter's own recording or audio made elsewhere, not a narration service's.
     pub recorded: bool,
     /// It is audio made elsewhere.
     pub imported: bool,

@@ -338,7 +338,6 @@ const CASES = [
     { id: "talk", slide: "a" },
   ],
   ["speechStatus", () => api.speechStatus(), "speech_status", undefined],
-  ["downloadSpeechModel", () => api.downloadSpeechModel(), "download_speech_model", undefined],
   ["narrationAudio", () => api.narrationAudio("talk"), "narration_audio", { id: "talk" }],
   ["renderNarration", () => api.renderNarration("talk", ["a"]), "render_narration", { id: "talk", slides: ["a"] }],
   ["renderNarration", () => api.renderNarration("talk", null), "render_narration", { id: "talk", slides: null }],

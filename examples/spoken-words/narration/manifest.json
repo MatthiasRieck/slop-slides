@@ -1,8 +1,10 @@
 {
   "slides": {
     "end": {
-      "fingerprint": "b867c5aad853ec8090fdcf1cef398c04f73e51bf2b8b8b0504859fa9fadd40e3",
+      "fingerprint": "",
       "seconds": 3.702625,
+      "recorded": true,
+      "imported": true,
       "words": [
         {
           "text": "That",
@@ -48,8 +50,10 @@
       "timing": 3
     },
     "how": {
-      "fingerprint": "fa553d0397b61fd927cf15f7328a6070307e47077409e3f8fd72fed02fd67c47",
+      "fingerprint": "",
       "seconds": 15.141958333333331,
+      "recorded": true,
+      "imported": true,
       "words": [
         {
           "text": "It",
@@ -225,8 +229,10 @@
       "timing": 3
     },
     "welcome": {
-      "fingerprint": "a780422ab4d8d21ae5992339b93507d6546251bcf4726ef70c70ebbeac90ff40",
+      "fingerprint": "",
       "seconds": 9.966916666666666,
+      "recorded": true,
+      "imported": true,
       "words": [
         {
           "text": "Welcome!",
@@ -342,8 +348,10 @@
       "timing": 3
     },
     "why": {
-      "fingerprint": "1b8bcc5958f8fa0673469dd44410ef5d3fd929f9c4d61eaa8e38b04ff111bea3",
+      "fingerprint": "",
       "seconds": 15.329625,
+      "recorded": true,
+      "imported": true,
       "words": [
         {
           "text": "Timing",

@@ -24,14 +24,14 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Windows narration dependencies
+      - name: Set up the Windows build environment
         if: runner.os == 'Windows'
-        uses: ./.github/actions/windows-narration
+        uses: ./.github/actions/windows-build
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libopenblas-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev patchelf
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

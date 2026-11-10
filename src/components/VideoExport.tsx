@@ -59,11 +59,7 @@ export function VideoExportPanel(props: {
       : (secondsProblem(seconds) ??
         (speaks ? (pauseProblem(before) ?? pauseProblem(after)) : null) ??
         (speaks && pending.length > 0 && speech && !canSpeak
-          ? provider?.needsKey
-            ? `Add your ${provider.name} API key in the Narration tab, or leave the narration out.`
-            : speech.available
-              ? "Download the voice model in the Narration tab, or leave the narration out."
-              : "Narration cannot be spoken on this platform; leave it out."
+          ? `Add your ${provider?.name ?? "narration service's"} API key in the Narration tab, or leave the narration out.`
           : null));
 
   const options = (): VideoOptions => ({

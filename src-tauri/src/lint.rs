@@ -1003,15 +1003,16 @@ fn check_narration_settings(l: &mut Linter) {
         |content| {
             narration::Provider::parse(content).is_none().then(|| {
                 format!(
-                    "<meta name=\"{}\"> names no known narration provider (\"{}\"): use one of {}. Remove it for the local voice model.",
+                    "<meta name=\"{}\"> names no known narration provider (\"{}\"): use one of {}. Remove it for the default, {}.",
                     html::NARRATION_PROVIDER_META,
                     truncate(content, 40),
                     list(narration::cloud::PROVIDERS.iter().map(|p| p.id()).collect()),
+                    narration::DEFAULT_PROVIDER.id(),
                 )
             })
         },
     );
-    // The voice is checked against the provider the deck names (the local model otherwise).
+    // The voice is checked against the provider the deck names (the default otherwise).
     let provider = narration::provider_of(l.html);
     check_app_meta(
         l,
@@ -1026,9 +1027,6 @@ fn check_narration_settings(l: &mut Linter) {
                 return None;
             }
             let choices = match provider {
-                narration::Provider::Local => {
-                    list(narration::VOICES.iter().map(|v| v.id).collect())
-                }
                 narration::Provider::ElevenLabs => format!(
                     "an ElevenLabs voice id (letters and digits, e.g. {})",
                     provider.default_voice()
@@ -3059,25 +3057,25 @@ mod tests {
         let set = html::set_narration_language(
             &html::set_narration_voice(
                 &deck(r#"<section class="slide" id="a"></section>"#),
-                "aiden",
+                "coral",
             ),
             "de",
         );
         assert_eq!(rules(&set), Vec::<&str>::new());
         assert_eq!(rules(&html::ensure_runtime(&set)), Vec::<&str>::new());
-        for bad in ["", "Aiden", "bob"] {
-            let html = set.replace("content=\"aiden\"", &format!("content=\"{bad}\""));
+        for bad in ["", "Coral", "bob"] {
+            let html = set.replace("content=\"coral\"", &format!("content=\"{bad}\""));
             assert_eq!(rules(&html), ["narration-voice-invalid"], "{bad}");
         }
         for bad in ["", "german", "xx"] {
             let html = set.replace("content=\"de\"", &format!("content=\"{bad}\""));
             assert_eq!(rules(&html), ["narration-language-invalid"], "{bad}");
         }
-        let message = &lint(&set.replace("aiden", "bob"), |_| true, &[])[0].message;
-        assert!(message.contains("ryan, aiden"), "{message}");
+        let message = &lint(&set.replace("coral", "bob"), |_| true, &[])[0].message;
+        assert!(message.contains("marin, cedar"), "{message}");
         let twice = set.replace(
             "<title>Talk</title>",
-            "<title>Talk</title><meta name=\"slopslide-narration-voice\" content=\"ryan\">",
+            "<title>Talk</title><meta name=\"slopslide-narration-voice\" content=\"marin\">",
         );
         assert_eq!(rules(&twice), ["narration-voice-duplicate"]);
         let in_body = deck(
@@ -3093,7 +3091,6 @@ mod tests {
             html::set_narration_voice(&html::set_narration_provider(&base, Some(provider)), voice)
         };
         for (provider, voice) in [
-            ("local", "ryan"),
             ("openai", "coral"),
             ("elevenlabs", "JBFqnCBsd6RMkjVDRZzb"),
             ("elevenlabs", "abcdefghij1234567890"),
@@ -3103,12 +3100,14 @@ mod tests {
             assert_eq!(rules(&html::ensure_runtime(&html)), Vec::<&str>::new());
         }
         // A voice of another provider.
-        assert_eq!(rules(&with("openai", "ryan")), ["narration-voice-invalid"]);
+        assert_eq!(
+            rules(&with("openai", "JBFqnCBsd6RMkjVDRZzb")),
+            ["narration-voice-invalid"]
+        );
         assert_eq!(
             rules(&with("elevenlabs", "coral")),
             ["narration-voice-invalid"]
         );
-        assert_eq!(rules(&with("local", "marin")), ["narration-voice-invalid"]);
         let message = &lint(&with("openai", "ryan"), |_| true, &[])[0].message;
         assert!(
             message.contains("OpenAI") && message.contains("marin, cedar"),
@@ -3116,14 +3115,18 @@ mod tests {
         );
         let message = &lint(&with("elevenlabs", "x"), |_| true, &[])[0].message;
         assert!(message.contains("ElevenLabs voice id"), "{message}");
-        // An unknown provider: the voice is checked as the local model's.
-        for bad in ["", "ElevenLabs", "google"] {
-            let html =
-                with("openai", "ryan").replace("content=\"openai\"", &format!("content=\"{bad}\""));
+        // An unknown provider (the removed local model too): the voice is checked as the
+        // default's.
+        for bad in ["", "ElevenLabs", "google", "local"] {
+            let html = with("openai", "coral")
+                .replace("content=\"openai\"", &format!("content=\"{bad}\""));
             assert_eq!(rules(&html), ["narration-provider-invalid"], "{bad}");
         }
-        let message = &lint(&with("acme", "ryan"), |_| true, &[])[0].message;
-        assert!(message.contains("local, elevenlabs, openai"), "{message}");
+        let message = &lint(&with("acme", "coral"), |_| true, &[])[0].message;
+        assert!(
+            message.contains("openai, elevenlabs") && message.contains("default, openai"),
+            "{message}"
+        );
         let twice = with("openai", "coral").replace(
             "<title>Talk</title>",
             "<title>Talk</title><meta name=\"slopslide-narration-provider\" content=\"openai\">",

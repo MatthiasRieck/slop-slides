@@ -11,7 +11,6 @@ import {
   type NarrationVoice,
   type SlideAudio,
   type SpeechStatus,
-  type VoiceDownloadProgress,
 } from "./lib/api";
 import { dirname } from "./lib/utils";
 import { useApp } from "./store";
@@ -20,8 +19,8 @@ import { useApp } from "./store";
 export const NARRATION_CANCELLED = "the narration was cancelled";
 
 /**
- * Spoken narration (see src-tauri/src/narration/): whether the voice model is there, the open
- * deck's audio per slide, and the download or render running.
+ * Spoken narration (see src-tauri/src/narration/): the providers and their keys, the open
+ * deck's audio per slide, and the render running.
  */
 interface NarrationState {
   speech: SpeechStatus | null;
@@ -30,8 +29,6 @@ interface NarrationState {
   /** The audio of `audioDeck`'s slides, by slide id. */
   audio: Record<string, SlideAudio>;
   audioDeck: string | null;
-  /** While the model downloads, how far it has got. */
-  download: VoiceDownloadProgress | null;
   /** While narration is said, how far it has got. */
   render: NarrationRenderProgress | null;
   /** While narration audio is heard again to time its words, how far it has got; `downloading` while the speech-to-text model downloads first. */
@@ -43,7 +40,6 @@ interface NarrationState {
   setKey: (provider: string, key: string | null) => Promise<boolean>;
   /** Reads the deck's audio state again (after its narration, voice or language changed). */
   refreshAudio: (deck: string) => Promise<void>;
-  downloadModel: () => Promise<void>;
   /** Says the `slides`' (all for null) narration that has no up-to-date audio; false when it failed or was cancelled. */
   renderAudio: (deck: string, slides: string[] | null) => Promise<boolean>;
   cancelRender: () => Promise<void>;
@@ -52,7 +48,7 @@ interface NarrationState {
    * time each word, downloading the model first when needed; false when it failed.
    */
   timeWords: (deck: string, slides: string[] | null) => Promise<boolean>;
-  /** Deletes the slide's recording, so the voice model can say its narration again. */
+  /** Deletes the slide's recording, so the narration service can say its script again. */
   deleteRecording: (deck: string, slide: string) => Promise<void>;
 }
 
@@ -70,7 +66,6 @@ export const useNarration = create<NarrationState>((set, get) => ({
   accountVoices: {},
   audio: {},
   audioDeck: null,
-  download: null,
   render: null,
   timing: null,
 
@@ -112,17 +107,6 @@ export const useNarration = create<NarrationState>((set, get) => ({
     } catch {
       // The deck file is mid-write or gone; the next change refreshes it.
     }
-  },
-
-  downloadModel: async () => {
-    set({ download: { received: 0, total: get().speech?.modelBytes ?? 0 } });
-    try {
-      await api.downloadSpeechModel();
-    } catch (error) {
-      fail(error);
-    }
-    set({ download: null });
-    await get().loadSpeech();
   },
 
   renderAudio: async (deck, slides) => {
@@ -174,16 +158,15 @@ export const useNarration = create<NarrationState>((set, get) => ({
   },
 }));
 
-/** Who says the deck's narration: its provider, or the local model when the deck names none (or one unknown). */
+/** Who says the deck's narration: its provider, or the default (the first) when the deck names none (or one unknown). */
 export function deckProvider(deck: Deck, speech: SpeechStatus): NarrationProvider | undefined {
-  const id = deck.narration?.provider ?? "local";
-  return speech.providers.find((p) => p.id === id) ?? speech.providers.find((p) => p.id === "local");
+  const id = deck.narration?.provider;
+  return speech.providers.find((p) => p.id === id) ?? speech.providers[0];
 }
 
-/** Whether `provider` can say narration now: the local model downloaded here, a hosted service with its key. */
+/** Whether `provider` can say narration now: it has an API key. */
 export function canSpeakWith(speech: SpeechStatus | null, provider: NarrationProvider | undefined): boolean {
-  if (!speech || !provider) return false;
-  return provider.needsKey ? provider.key !== null : speech.available && speech.modelReady;
+  return !!speech && !!provider && provider.key !== null;
 }
 
 /**
@@ -198,9 +181,6 @@ export function touchesNarration(paths: string[], deckPath: string): boolean {
 
 /** Keeps the narration state in step with backend events and the open deck. */
 export async function initNarrationEvents() {
-  await listen<VoiceDownloadProgress>("speech-download", ({ payload }) => {
-    if (useNarration.getState().download) useNarration.setState({ download: payload });
-  });
   await listen<NarrationRenderProgress>("narration-render", ({ payload }) => {
     // Renders started in another window, or by a video export, show here too.
     useNarration.setState({ render: payload.slide === null ? null : payload });

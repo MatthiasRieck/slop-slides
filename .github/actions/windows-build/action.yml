@@ -1,0 +1,10 @@
+name: Windows build environment
+description: Activate the x64 MSVC environment and pin Rust to its linker
+runs:
+  using: composite
+  steps:
+    - shell: pwsh
+      run: |
+        & ./scripts/setup-windows.ps1
+        "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER" >> $env:GITHUB_ENV
+        (Split-Path (Get-Command cmake.exe -ErrorAction Stop).Source) >> $env:GITHUB_PATH

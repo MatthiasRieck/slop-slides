@@ -209,11 +209,9 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   Keep every slide's narration when editing, restyling, or moving it; write or rewrite it only
   when the user asks for narration, a script, or a voice-over. Write it as spoken sentences
   (no bullet points or stage directions) that fit the slide's content, in the narration's
-  language. The app reads it out with a local voice model, or with a hosted service the
-  deck's `slopslide-narration-provider` meta names (elevenlabs or openai; the local model,
-  `local`, when missing). The deck's `slopslide-narration-voice` meta names the voice: for
-  the local model ryan, aiden, vivian, serena, uncle_fu, dylan, eric, ono_anna or sohee
-  (ryan when missing); for openai marin, cedar, alloy, ash, ballad, coral, echo, fable, nova,
+  language. The app reads it out with the hosted text-to-speech service the deck's
+  `slopslide-narration-provider` meta names (openai or elevenlabs; openai when missing). The
+  deck's `slopslide-narration-voice` meta names the voice: for openai marin, cedar, alloy, ash, ballad, coral, echo, fable, nova,
   onyx, sage, shimmer or verse (marin when missing); for elevenlabs an ElevenLabs voice id.
   `slopslide-narration-language` names the language (en, de, fr, es, it, pt, ru, zh, ja or
   ko; en when missing). Change them only when the user asks; the user usually picks them,

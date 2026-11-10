@@ -26,39 +26,24 @@ function deckWith(narration: Record<string, string>, locked: string[] = []): Dec
 
 const box = () => screen.getByRole("textbox", { name: "Narration" }) as HTMLTextAreaElement;
 
+/** OpenAI, the default provider, has a key; ElevenLabs none. */
 const SPEECH: SpeechStatus = {
-  available: true,
-  modelReady: true,
-  modelBytes: 2_498_383_610,
-  downloading: false,
   rendering: null,
   providers: [
     {
-      id: "local",
-      name: "Local voice model",
-      needsKey: false,
-      key: null,
+      id: "openai",
+      name: "OpenAI",
+      key: "saved",
       voices: [
-        { id: "ryan", name: "Ryan", description: "Dynamic male voice", native: "en" },
-        { id: "sohee", name: "Sohee", description: "Warm female voice", native: "ko" },
+        { id: "marin", name: "Marin", description: "Natural, clear voice" },
+        { id: "coral", name: "Coral", description: "Warm, friendly voice" },
       ],
     },
     {
       id: "elevenlabs",
       name: "ElevenLabs",
-      needsKey: true,
       key: null,
       voices: [{ id: "JBFqnCBsd6RMkjVDRZzb", name: "George", description: "Warm British male narrator" }],
-    },
-    {
-      id: "openai",
-      name: "OpenAI",
-      needsKey: true,
-      key: null,
-      voices: [
-        { id: "marin", name: "Marin", description: "Natural, clear voice" },
-        { id: "coral", name: "Coral", description: "Warm, friendly voice" },
-      ],
     },
   ],
   languages: [
@@ -92,7 +77,6 @@ beforeEach(() => {
     audio: {},
     audioDeck: null,
     render: null,
-    download: null,
     timing: null,
   });
   useApp.setState({ deck: deckWith({ intro: "Welcome, everyone." }), selected: "intro", setNarration });
@@ -295,23 +279,23 @@ describe("NarrationPanel speech", () => {
     const setNarrationVoice = vi.fn(async () => {});
     const setNarrationLanguage = vi.fn(async () => {});
     useApp.setState({
-      deck: { ...deckWith({ intro: "Hi." }), narration: { voice: "sohee", language: "ko" } },
+      deck: { ...deckWith({ intro: "Hi." }), narration: { voice: "coral", language: "ko" } },
       setNarrationVoice,
       setNarrationLanguage,
     });
     await show();
     const voice = screen.getByRole("combobox", { name: "Narration voice" }) as HTMLSelectElement;
     const language = screen.getByRole("combobox", { name: "Narration language" }) as HTMLSelectElement;
-    expect(voice.value).toBe("sohee");
+    expect(voice.value).toBe("coral");
     expect(language.value).toBe("ko");
-    expect(screen.getByRole("option", { name: "Sohee — Warm female voice (Korean)" })).toBeTruthy();
-    fireEvent.change(voice, { target: { value: "ryan" } });
+    expect(screen.getByRole("option", { name: "Coral — Warm, friendly voice" })).toBeTruthy();
+    fireEvent.change(voice, { target: { value: "marin" } });
     fireEvent.change(language, { target: { value: "en" } });
-    expect(setNarrationVoice).toHaveBeenCalledWith("ryan");
+    expect(setNarrationVoice).toHaveBeenCalledWith("marin");
     expect(setNarrationLanguage).toHaveBeenCalledWith("en");
   });
 
-  /** SPEECH with the hosted provider `id`'s key coming from `key`. */
+  /** SPEECH with the provider `id`'s key coming from `key`. */
   function withKey(id: string, key: "saved" | "environment" | null): SpeechStatus {
     return { ...SPEECH, providers: SPEECH.providers.map((p) => (p.id === id ? { ...p, key } : p)) };
   }
@@ -322,14 +306,14 @@ describe("NarrationPanel speech", () => {
     useApp.setState({ setNarrationProvider });
     await show();
     const provider = screen.getByRole("combobox", { name: "Narration provider" }) as HTMLSelectElement;
-    expect(provider.value).toBe("local");
-    expect([...provider.options].map((o) => o.text)).toEqual(["Local voice model", "ElevenLabs", "OpenAI"]);
-    fireEvent.change(provider, { target: { value: "openai" } });
-    expect(setNarrationProvider).toHaveBeenCalledWith("openai");
+    expect(provider.value).toBe("openai");
+    expect([...provider.options].map((o) => o.text)).toEqual(["OpenAI", "ElevenLabs"]);
+    fireEvent.change(provider, { target: { value: "elevenlabs" } });
+    expect(setNarrationProvider).toHaveBeenCalledWith("elevenlabs");
   });
 
-  it("offers a hosted provider's voices and asks for its API key before speaking", async () => {
-    backend(SPEECH, { set_speech_key: withKey("openai", "saved") });
+  it("offers a provider's voices and asks for its API key before speaking", async () => {
+    backend(withKey("openai", null), { set_speech_key: SPEECH });
     useApp.setState({
       deck: { ...deckWith({ intro: "Hi." }), narration: { provider: "openai", voice: "coral", language: "en" } },
     });
@@ -337,8 +321,8 @@ describe("NarrationPanel speech", () => {
     const voice = screen.getByRole("combobox", { name: "Narration voice" }) as HTMLSelectElement;
     expect(voice.value).toBe("coral");
     expect([...voice.options].map((o) => o.value)).toEqual(["marin", "coral"]);
-    // No local model download for a hosted provider.
-    expect(screen.queryByRole("button", { name: /Download voice model/ })).toBeNull();
+    // There is no voice model to download any more.
+    expect(screen.queryByRole("button", { name: /Download/ })).toBeNull();
     const generate = screen.getByRole("button", { name: /Generate/ }) as HTMLButtonElement;
     expect(generate.disabled).toBe(true);
     expect(generate.title).toBe("Add your OpenAI API key first");
@@ -351,7 +335,7 @@ describe("NarrationPanel speech", () => {
     expect(invoke).toHaveBeenCalledWith("set_speech_key", { provider: "openai", key: "sk-test" });
     expect(screen.getByText("OpenAI API key saved")).toBeTruthy();
     expect((screen.getByRole("button", { name: /Generate/ }) as HTMLButtonElement).disabled).toBe(false);
-    backend(SPEECH, { set_speech_key: SPEECH });
+    backend(SPEECH, { set_speech_key: withKey("openai", null) });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: /Remove/ })));
     expect(invoke).toHaveBeenCalledWith("set_speech_key", { provider: "openai", key: null });
     expect(screen.getByLabelText("OpenAI API key")).toBeTruthy();
@@ -388,37 +372,6 @@ describe("NarrationPanel speech", () => {
       "George — male, british",
       "Me — Your voice",
     ]);
-  });
-
-  it("offers to download the voice model, showing its progress", async () => {
-    let finish!: () => void;
-    backend({ ...SPEECH, modelReady: false });
-    invoke.mockImplementation((command: string) =>
-      command === "speech_status"
-        ? Promise.resolve({ ...SPEECH, modelReady: false })
-        : command === "download_speech_model"
-          ? new Promise<void>((resolve) => (finish = resolve))
-          : Promise.resolve(),
-    );
-    await show();
-    expect(screen.getByText(/2.5 GB/)).toBeTruthy();
-    const generate = screen.getByRole("button", { name: /Generate/ }) as HTMLButtonElement;
-    expect(generate.disabled).toBe(true);
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Download voice model/ })));
-    expect(invoke).toHaveBeenCalledWith("download_speech_model");
-    act(() => useNarration.setState({ download: { received: 1_249_191_805, total: 2_498_383_610 } }));
-    expect(screen.getByRole("status").textContent).toContain("50%");
-    invoke.mockImplementation(async (command: string) => (command === "speech_status" ? SPEECH : undefined));
-    await act(async () => finish());
-    expect(screen.queryByRole("button", { name: /Download voice model/ })).toBeNull();
-    expect((screen.getByRole("button", { name: /Generate/ }) as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it("says when this platform cannot speak", async () => {
-    backend({ ...SPEECH, available: false, modelReady: false });
-    await show();
-    expect(screen.getByText(/not available on this platform/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /Download voice model/ })).toBeNull();
   });
 
   it("tells whether the slide's audio is there and up to date", async () => {

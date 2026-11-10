@@ -90,8 +90,8 @@ pub const NARRATION_FAILED_EVENT: &str = "narration-record-failed";
 /// Emitted when recording kept something of a slide's narration: the deck's id.
 pub const NARRATION_KEPT_EVENT: &str = "narration-recorded";
 
-/// `~/.slopslides/models`, where downloaded speech models live.
-pub fn models_dir(home: &Path) -> PathBuf {
+/// `~/.slopslides/models`, where the downloaded speech-to-text model lives.
+fn models_dir(home: &Path) -> PathBuf {
     home.join("models")
 }
 
@@ -1259,7 +1259,7 @@ async fn fetch(app: &AppHandle, model: &Model, part: &Path) -> Result<String> {
 
 /// Streams `url` to `part`, calling `progress` with the bytes received so far (and the
 /// download's size, when the server says) after each chunk; returns its SHA-256, hex.
-pub async fn fetch_to(
+async fn fetch_to(
     url: &str,
     part: &Path,
     mut progress: impl FnMut(u64, Option<u64>),
@@ -1287,7 +1287,7 @@ pub async fn fetch_to(
 }
 
 /// Moves a finished download into place if its checksum matches; otherwise deletes it.
-pub fn finish_download(part: &Path, dest: &Path, hash: &str, expected: &str) -> Result<()> {
+fn finish_download(part: &Path, dest: &Path, hash: &str, expected: &str) -> Result<()> {
     if !hash.eq_ignore_ascii_case(expected) {
         let _ = fs::remove_file(part);
         return Err(Error::msg(

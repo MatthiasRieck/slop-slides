@@ -1,9 +1,9 @@
-//! Narration said by a hosted text-to-speech service instead of the local model: ElevenLabs
-//! or OpenAI. The deck names which in its `slopslide-narration-provider` meta (see
-//! [`crate::html::narration_provider`]); without one it is the local model.
+//! Narration said by a hosted text-to-speech service: ElevenLabs or OpenAI. The deck names
+//! which in its `slopslide-narration-provider` meta (see [`crate::html::narration_provider`]);
+//! without one it is [`DEFAULT_PROVIDER`].
 //!
-//! Both are asked for raw 16-bit PCM at [`audio::RATE`], the rate the local model makes, so
-//! their audio is kept, played and exported the same way. ElevenLabs also says when each
+//! Both are asked for raw 16-bit PCM at [`audio::RATE`], so their audio is kept, played and
+//! exported the same way as recordings. ElevenLabs also says when each
 //! character is spoken, which becomes the slide's word timing at once (see [`words_of`]).
 //!
 //! The API keys are the user's, shared by every deck: saved in `~/.slopslides/speech-keys.json`
@@ -25,19 +25,20 @@ use crate::voice::Word;
 /// Who says a deck's narration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
-    /// The local model (see the parent module).
-    Local,
     ElevenLabs,
     OpenAi,
 }
 
-pub const PROVIDERS: [Provider; 3] = [Provider::Local, Provider::ElevenLabs, Provider::OpenAi];
+/// Every provider, the default first.
+pub const PROVIDERS: [Provider; 2] = [Provider::OpenAi, Provider::ElevenLabs];
+
+/// Who says a deck's narration when it names nobody (or someone unknown).
+pub const DEFAULT_PROVIDER: Provider = Provider::OpenAi;
 
 impl Provider {
     /// The id the deck names it by.
     pub fn id(self) -> &'static str {
         match self {
-            Provider::Local => "local",
             Provider::ElevenLabs => "elevenlabs",
             Provider::OpenAi => "openai",
         }
@@ -45,7 +46,6 @@ impl Provider {
 
     pub fn name(self) -> &'static str {
         match self {
-            Provider::Local => "Local voice model",
             Provider::ElevenLabs => "ElevenLabs",
             Provider::OpenAi => "OpenAI",
         }
@@ -58,18 +58,16 @@ impl Provider {
     /// The hosted model that says it; part of every audio fingerprint.
     pub fn model(self) -> &'static str {
         match self {
-            Provider::Local => "",
             Provider::ElevenLabs => ELEVENLABS_MODEL,
             Provider::OpenAi => OPENAI_MODEL,
         }
     }
 
     /// The environment variable its key may come from.
-    fn key_env(self) -> Option<&'static str> {
+    fn key_env(self) -> &'static str {
         match self {
-            Provider::Local => None,
-            Provider::ElevenLabs => Some("ELEVENLABS_API_KEY"),
-            Provider::OpenAi => Some("OPENAI_API_KEY"),
+            Provider::ElevenLabs => "ELEVENLABS_API_KEY",
+            Provider::OpenAi => "OPENAI_API_KEY",
         }
     }
 
@@ -77,23 +75,18 @@ impl Provider {
     /// too, see [`elevenlabs_voices`]); any of its voice ids will do.
     pub fn voices(self) -> &'static [CloudVoice] {
         match self {
-            Provider::Local => &[],
             Provider::ElevenLabs => ELEVENLABS_VOICES,
             Provider::OpenAi => OPENAI_VOICES,
         }
     }
 
     pub fn default_voice(self) -> &'static str {
-        match self {
-            Provider::Local => super::DEFAULT_VOICE,
-            _ => self.voices()[0].id,
-        }
+        self.voices()[0].id
     }
 
     /// Whether the deck may name `voice` for it.
     pub fn accepts_voice(self, voice: &str) -> bool {
         match self {
-            Provider::Local => super::voice(voice).is_some(),
             Provider::OpenAi => OPENAI_VOICES.iter().any(|v| v.id == voice),
             Provider::ElevenLabs => is_elevenlabs_voice_id(voice),
         }
@@ -266,16 +259,13 @@ pub fn key(home: &Path, provider: Provider) -> Option<(String, KeySource)> {
     if let Some(saved) = saved {
         return Some((saved, KeySource::Saved));
     }
-    let env = std::env::var(provider.key_env()?).ok()?;
+    let env = std::env::var(provider.key_env()).ok()?;
     let env = env.trim();
     (!env.is_empty()).then(|| (env.to_string(), KeySource::Environment))
 }
 
 /// Saves `provider`'s key, or forgets the saved one for None. The file is the user's alone.
 pub fn set_key(home: &Path, provider: Provider, key: Option<&str>) -> Result<()> {
-    if provider == Provider::Local {
-        return Err(Error::msg("The local voice model needs no API key."));
-    }
     let mut keys = read_keys(home);
     match key.map(str::trim).filter(|k| !k.is_empty()) {
         Some(key) => {
@@ -342,7 +332,6 @@ pub fn request(
         ))
     };
     match provider {
-        Provider::Local => Err(Error::msg("The local voice model is not a hosted service.")),
         Provider::ElevenLabs => {
             // It goes into the URL.
             if !is_elevenlabs_voice_id(voice) {
@@ -555,9 +544,6 @@ pub struct VoiceOption {
     pub id: String,
     pub name: String,
     pub description: String,
-    /// The language it speaks natively, for the local model's voices.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub native: Option<String>,
 }
 
 impl From<&CloudVoice> for VoiceOption {
@@ -566,7 +552,6 @@ impl From<&CloudVoice> for VoiceOption {
             id: v.id.into(),
             name: v.name.into(),
             description: v.description.into(),
-            native: None,
         }
     }
 }
@@ -602,7 +587,6 @@ pub fn parse_elevenlabs_voices(body: &[u8]) -> Result<Vec<VoiceOption>> {
                 id: id.into(),
                 name: name.into(),
                 description,
-                native: None,
             })
         })
         .collect())
@@ -646,11 +630,8 @@ mod tests {
 
     #[test]
     fn each_provider_has_its_own_voices() {
-        assert_eq!(Provider::Local.default_voice(), "ryan");
         assert_eq!(Provider::OpenAi.default_voice(), "marin");
         assert_eq!(Provider::ElevenLabs.default_voice(), "JBFqnCBsd6RMkjVDRZzb");
-        assert!(Provider::Local.accepts_voice("sohee"));
-        assert!(!Provider::Local.accepts_voice("marin"));
         assert!(Provider::OpenAi.accepts_voice("coral"));
         assert!(!Provider::OpenAi.accepts_voice("ryan"));
         // Any ElevenLabs voice id, the account's own too.
@@ -672,7 +653,7 @@ mod tests {
     #[test]
     fn keys_are_saved_for_the_user_alone_and_can_be_forgotten() {
         let home = temp_home();
-        assert_eq!(key(&home, Provider::Local), None);
+        assert!(key(&home, Provider::OpenAi).is_none_or(|(_, s)| s == KeySource::Environment));
         set_key(&home, Provider::OpenAi, Some("  sk-test  ")).unwrap();
         assert_eq!(
             key(&home, Provider::OpenAi),
@@ -690,7 +671,6 @@ mod tests {
         assert!(key(&home, Provider::OpenAi).is_none_or(|(_, s)| s == KeySource::Environment));
         assert_eq!(key(&home, Provider::ElevenLabs).unwrap().0, "el-key");
         assert!(set_key(&home, Provider::OpenAi, Some("two words")).is_err());
-        assert!(set_key(&home, Provider::Local, Some("x")).is_err());
         fs::remove_dir_all(home).unwrap();
     }
 
@@ -738,7 +718,6 @@ mod tests {
             "English"
         )
         .is_ok());
-        assert!(request(Provider::Local, "", "Hi", "ryan", "English").is_err());
         assert!(request(Provider::ElevenLabs, "k", "Hi", "../voices", "English").is_err());
     }
 

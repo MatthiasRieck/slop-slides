@@ -217,16 +217,16 @@ pub fn handle(
             }, "required": ["slide"] }
         }, {
             "name": GENERATE_TOOL,
-            "description": format!("Generate narration audio: the deck's voice (the app's local \
-                voice model, or the hosted service its narration provider meta names) reads \
+            "description": format!("Generate narration audio: the hosted text-to-speech service \
+                the deck's narration provider meta names (OpenAI without one) reads \
                 out the narration script (<aside class=\"narration\">) of one slide, of the \
                 slides listed, or of every slide when `slides` is left out, in the deck's voice \
                 and language. Only slides whose audio is missing or out of date (script, voice \
                 or language changed) are said again; the user's own recordings, audio set with \
                 {NARRATION_TOOL}, locked slides and slides without a script are left alone. It \
                 takes a while (seconds per sentence), so ask for the slides you changed rather \
-                than all of them. The local voice model must be downloaded, or the service's API key \
-                entered, in the Narration panel. Then call \
+                than all of them. The service's API key must be entered in the Narration panel \
+                (or set in the environment). Then call \
                 {TIMELINE_TOOL} for when its words fall on the slides."),
             "inputSchema": { "type": "object", "properties": {
                 "path": {
@@ -538,7 +538,7 @@ fn set_narration_audio(
     Ok(out)
 }
 
-/// The text-to-speech engine's state, so one generation runs at a time in this process.
+/// Narration's state, so one generation runs at a time in this process.
 static NARRATION: std::sync::OnceLock<narration::Narration> = std::sync::OnceLock::new();
 
 /// The slide ids `slides` of `arguments` lists; None when left out, for every slide.
@@ -564,7 +564,7 @@ fn slides_argument(arguments: &Value) -> Result<Option<Vec<String>>> {
         .map(Some)
 }
 
-/// Has the voice model in `home` say the narration of the deck at `path` (`arguments`): of its
+/// Has the deck's narration service, with the API key in `home`, say the narration of the deck at `path` (`arguments`): of its
 /// `slides`, or all of them, whose audio is missing or out of date. Slides locked in the deck,
 /// or in the turn's guard in the workspace's `session`, are left alone. What it did, for the
 /// agent, slide by slide.
@@ -841,7 +841,7 @@ fn narration_timeline(
                 match (clip.imported, clip.recorded) {
                     (true, _) => "imported audio",
                     (_, true) => "the presenter's recording",
-                    _ => "voice model",
+                    _ => "generated speech",
                 },
                 secs(clip.end - clip.start),
                 secs(clip.start),
@@ -1889,7 +1889,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_tool_reports_slides_it_leaves_alone_without_the_voice_model() {
+    fn generate_tool_reports_slides_it_leaves_alone_without_an_api_key() {
         let dir = speaking_deck();
         let file = dir.join(deck::DECK_FILE);
         let take: Vec<f32> = (0..8_000).map(|i| (i as f32 / 30.0).sin() * 0.2).collect();
@@ -1925,7 +1925,10 @@ mod tests {
     }
 
     #[test]
-    fn generate_tool_needs_the_voice_model_to_say_a_script() {
+    fn generate_tool_needs_an_api_key_to_say_a_script() {
+        if std::env::var_os("OPENAI_API_KEY").is_some() {
+            return;
+        }
         let dir = speaking_deck();
         let file = dir.join(deck::DECK_FILE);
         // Every slide, as when `slides` is left out: `talk` has a script to say.
@@ -1936,9 +1939,7 @@ mod tests {
             err.starts_with("Generating the narration audio failed: "),
             "{err}"
         );
-        let why = narration::engine::unavailable_reason()
-            .unwrap_or("Download the narration voice model first");
-        assert!(err.contains(why), "{err}");
+        assert!(err.contains("Add your OpenAI API key"), "{err}");
         assert!(!narration::audio_file(&file, "talk").exists());
         std::fs::remove_dir_all(dir).unwrap();
     }

@@ -294,19 +294,15 @@ export interface NarrationVoice {
   id: string;
   name: string;
   description: string;
-  /** The language a local model's voice speaks natively; others it speaks with an accent. */
-  native?: string;
 }
 
 /** Where a hosted provider's API key comes from: saved in the app, or its environment variable. */
 export type SpeechKeySource = "saved" | "environment";
 
-/** Who can say narration: the local voice model, or a hosted service (see src-tauri/src/narration/cloud.rs). */
+/** A hosted service that can say narration with the user's API key (see src-tauri/src/narration/cloud.rs). */
 export interface NarrationProvider {
   id: string;
   name: string;
-  /** It is a hosted service, called with the user's API key. */
-  needsKey: boolean;
   /** Where its key comes from; null while it has none. */
   key: SpeechKeySource | null;
   /** Its voices, the default first. */
@@ -321,16 +317,9 @@ export interface NarrationLanguage {
 
 /** What narration can do on this machine (see src-tauri/src/narration/mod.rs). */
 export interface SpeechStatus {
-  /** This build has the speech engine (not every platform does). */
-  available: boolean;
-  /** The voice model is downloaded. */
-  modelReady: boolean;
-  /** The model's download size. */
-  modelBytes: number;
-  downloading: boolean;
   /** The deck whose narration is being said, if any. */
   rendering: string | null;
-  /** The local voice model first, then the hosted services. */
+  /** Who can say narration, the default first. */
   providers: NarrationProvider[];
   languages: NarrationLanguage[];
 }
@@ -703,8 +692,6 @@ export const api = {
   deleteRecordedNarration: (id: string, slide: string) =>
     invoke<SlideAudio[]>("delete_recorded_narration", { id, slide }),
   speechStatus: () => invoke<SpeechStatus>("speech_status"),
-  /** Downloads the narration voice model to `~/.slopslides/models`, reporting `speech-download` events. */
-  downloadSpeechModel: () => invoke<void>("download_speech_model"),
   /** Each slide's narration audio, in slide order. */
   narrationAudio: (id: string) => invoke<SlideAudio[]>("narration_audio", { id }),
   /**

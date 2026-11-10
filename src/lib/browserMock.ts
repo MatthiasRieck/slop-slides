@@ -137,21 +137,15 @@ export function installBrowserMock() {
           throw new Error("Voice input requires the desktop app.");
         case "speech_status":
           return {
-            available: false,
-            modelReady: false,
-            modelBytes: 2_498_383_610,
-            downloading: false,
             rendering: null,
             providers: [
               {
-                id: "local",
-                name: "Local voice model",
-                needsKey: false,
+                id: "openai",
+                name: "OpenAI",
                 key: null,
-                voices: [{ id: "ryan", name: "Ryan", description: "Dynamic male voice", native: "en" }],
+                voices: [{ id: "marin", name: "Marin", description: "Natural, clear voice" }],
               },
-              { id: "elevenlabs", name: "ElevenLabs", needsKey: true, key: null, voices: [] },
-              { id: "openai", name: "OpenAI", needsKey: true, key: null, voices: [] },
+              { id: "elevenlabs", name: "ElevenLabs", key: null, voices: [] },
             ],
             languages: [{ id: "en", name: "English" }],
           };

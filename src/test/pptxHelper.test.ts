@@ -407,6 +407,19 @@ describe("PowerPoint helper", () => {
     expect(at(at(slides, 0).items, 0)).toMatchObject({ rotation: 90 });
   });
 
+  it("keeps the text of a turned text box as text, in the block the editor holds it in", async () => {
+    const { slides } = await helper(
+      SLIDE(
+        `<div data-added="text" data-box="100 100 400 200" style="display: flex; rotate: 10deg"><div data-text-body="">One <span style="font-weight: 700">bold</span><br>Two</div></div>`,
+      ),
+    ).scan();
+    expect(at(slides, 0).items.map((i) => i.kind)).toEqual(["text"]);
+    const text = at(at(slides, 0).items, 0);
+    expect(text).toMatchObject({ rotation: 10, x: 100, y: 100, w: 400, h: 200 });
+    const paragraphs = text.paragraphs as { runs: { text: string }[] }[];
+    expect(at(paragraphs, 0).runs.map((run) => run.text)).toEqual(["One ", "bold", "", "Two"]);
+  });
+
   it("orders items by stacking order, then by document order", async () => {
     const { slides } = await helper(
       SLIDE(

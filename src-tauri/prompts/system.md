@@ -257,8 +257,10 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   `transform: scaleX(-1)` / `scaleY(-1)` (`!important`, after any tilt), and `position: relative` with a `z-index` to change
   the stacking order), set one slide's background (inline `background-color` and `background-image: none` on its `<section>`),
   restyle words inside text (inline `<span style="…">`, `<sup>`, `<sub>`),
-  turn text into lists (`<ul>` / `<ol>` with inline `margin`, `padding-left` and
-  `list-style-type`), link text or elements (see links below), and add text boxes, shapes,
+  turn lines of text into lists (`<ul>` / `<ol>` with inline `margin`, `padding-left` and
+  `list-style-type`, and `list-style-position: inside` when the text is centered or
+  right-aligned, so the bullets stay next to it; plain lines may sit before, between and after
+  the lists of one text), link text or elements (see links below), and add text boxes, shapes,
   lines, arrows, connectors and freehand drawings, which carry `data-added="text"`, `"shape"`, or
   `"drawing"`. They can also group elements (`data-group`) and lock them (`data-lock`), see
   "Hand edits" below.
@@ -277,7 +279,7 @@ overflow. The canvas size in pixels is also available to CSS as `var(--slop-w)` 
   `assets/<file>` and arrives as `<img src="assets/<file>" alt="" data-dropped data-moved
   style="position: absolute; left: 0px; top: 0px; width: Npx; translate: Xpx Ypx">` at the
   end of the slide, on top of everything else (see "Hand edits" below).
-  Never add `data-moved`, `data-added`, `data-dropped`, `data-resize-placeholder`, `data-delete-placeholder`, `data-group`, `data-lock`, `contenteditable`, `spellcheck`, or `data-slop-*`
+  Never add `data-moved`, `data-added`, `data-text-body`, `data-dropped`, `data-resize-placeholder`, `data-delete-placeholder`, `data-group`, `data-lock`, `contenteditable`, `spellcheck`, or `data-slop-*`
   attributes yourself.
 - A slide with the `data-hidden` attribute is hidden: the user muted it in the editor and
   the player skips it when presenting. Keep the attribute when editing such a slide;
@@ -420,7 +422,15 @@ they added carries `data-added` (`text` for a text box, `shape` for a rectangle,
 triangle, star, speech bubble, diamond, chevron, block arrow, double-headed arrow, hexagon, octagon, pentagon,
 parallelogram, trapezoid, plus, cylinder, document or heart, which may hold text, `drawing` for an `<svg>` with a freehand
 line, a straight or curved line, an arrow, a connector, a bracket or a brace) and is absolutely positioned on the slide with inline `left`,
-`top`, `width`, and `height`. A line keeps its stroke, one `<path>` as the editor drew it
+`top`, `width`, and `height`. The text of a text box or shape sits in one block,
+`<div data-text-body>`, the box's only child: the box is a flex column (which aligns its text
+top, middle or bottom), so a `<span>`, `<br>` or list directly in it would become an item on a
+line of its own, apart from the rest of the text. Keep that block, and put all of the box's
+text (its line breaks, inline `<span>`s and lists) inside it, also when tidying; the editor
+selects, moves and edits the box and everything in the block as one text. When you write a flex
+or grid box that holds formatted text yourself, wrap the text in an ordinary block of its own
+for the same reason. The `text-body` lint warning lists a `data-text-body` that is not such a
+block or has elements next to it. A line keeps its stroke, one `<path>` as the editor drew it
 (`M … L …` when straight, `M … C … C …` when curved), which is what lets the user drag its
 points, and a `<path>` of its own for each head, with `data-head` saying which end and what kind
 (`"end arrow"`, `"start triangle"`; `arrow`, `triangle`, `bar` or `dot`); lines from older decks may

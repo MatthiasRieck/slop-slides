@@ -10,7 +10,7 @@ use crate::comments;
 use crate::html::{
     self, find_ci, has_class, parse_tag, ADDED_ATTR, AUTOFIT_ATTR, DROPPED_ATTR, DURATION_ATTR,
     EDITOR_ATTRS, HIDDEN_ATTR, LOCKED_ATTR, MOVED_ATTR, NARRATION_CLASS, NARRATION_START_ATTR,
-    SECTION_CLASS, SECTION_TITLE_ATTR, SHAPE_ATTR, SHAPE_KINDS, TIME_ATTR,
+    SECTION_CLASS, SECTION_TITLE_ATTR, SHAPE_ATTR, SHAPE_KINDS, TEXT_BODY_ATTR, TIME_ATTR,
 };
 use crate::html::{ADJUST_ATTR, HEAD_ATTR, HEAD_KINDS, ROUTES, ROUTE_ATTR};
 use crate::narration;
@@ -54,6 +54,10 @@ const FOREIGN: &[&str] = &["svg", "math"];
 struct Open {
     name: String,
     at: usize,
+    /// How many elements it holds so far.
+    children: usize,
+    /// Where the text body ([`TEXT_BODY_ATTR`]) it holds starts, until that one is reported.
+    body: Option<usize>,
 }
 
 struct Linter<'a> {
@@ -348,6 +352,40 @@ fn check_markup(l: &mut Linter) {
                         );
                     }
                 }
+                // A text body is all its box holds: an element next to it is an item of the box's
+                // flex column, apart from the text the editor selects and edits as one.
+                let is_body = tag.attrs.iter().any(|(n, ..)| n == TEXT_BODY_ATTR);
+                let beside_body = stack.last_mut().and_then(|parent| {
+                    parent.children += 1;
+                    if is_body && parent.body.is_none() && parent.children == 1 {
+                        parent.body = Some(i);
+                        return None;
+                    }
+                    if is_body {
+                        return Some(i);
+                    }
+                    parent.body.take()
+                });
+                if is_body && tag.name != "div" {
+                    l.report(
+                        "text-body",
+                        Severity::Warning,
+                        i,
+                        format!(
+                            "`{TEXT_BODY_ATTR}` belongs on the `<div>` that holds all the text of a text box or shape, not on <{}>; remove it here.",
+                            tag.name
+                        ),
+                    );
+                } else if let Some(at) = beside_body {
+                    l.report(
+                        "text-body",
+                        Severity::Warning,
+                        at,
+                        format!(
+                            "This `{TEXT_BODY_ATTR}` block has elements next to it. It holds all the text of its text box or shape, as the box's only child, so the editor selects and edits it as one text: move what sits beside it into it."
+                        ),
+                    );
+                }
                 if let Some((_, value, ..)) = tag.attrs.iter().find(|(n, ..)| n == SHAPE_ATTR) {
                     if !SHAPE_KINDS.contains(&value.as_str()) {
                         l.report(
@@ -443,6 +481,8 @@ fn check_markup(l: &mut Linter) {
                 stack.push(Open {
                     name: tag.name.clone(),
                     at: i,
+                    children: 0,
+                    body: None,
                 });
             }
         } else {
@@ -458,6 +498,8 @@ fn check_markup(l: &mut Linter) {
             stack.push(Open {
                 name: tag.name.clone(),
                 at: i,
+                children: 0,
+                body: None,
             });
             if RAW_TEXT.contains(&tag.name.as_str()) {
                 i = find_ci(html, tag.end, &format!("</{}", tag.name)).unwrap_or(bytes.len());
@@ -2671,6 +2713,25 @@ mod tests {
         );
         let found: Vec<_> = found.iter().map(|i| (i.rule, i.line)).collect();
         assert_eq!(found, [("shape-kind", 11)]);
+    }
+
+    #[test]
+    fn checks_the_text_body_of_text_boxes_and_shapes() {
+        // The body is the box's only child and holds whatever the text is made of.
+        let fine = "<section class=\"slide\" id=\"a\">\n<div class=\"note\" style=\"display: flex\"><div data-text-body=\"\">One <span style=\"font-weight: 700\">bold</span><br>Two<ul><li>Three</li></ul></div></div>\n</section>";
+        assert_eq!(rules(&deck(fine)), Vec::<&str>::new());
+        let found = lint(
+            &deck(
+                "<section class=\"slide\" id=\"a\">\n<div class=\"a\"><div data-text-body=\"\">One</div><span>Two</span><span>Three</span></div>\n<div class=\"b\"><p>One</p><div data-text-body=\"\">Two</div></div>\n<p data-text-body=\"\">Three</p>\n</section>",
+            ),
+            |_| true,
+            &[],
+        );
+        let found: Vec<_> = found.iter().map(|i| (i.rule, i.line)).collect();
+        assert_eq!(
+            found,
+            [("text-body", 11), ("text-body", 12), ("text-body", 13)]
+        );
     }
 
     #[test]

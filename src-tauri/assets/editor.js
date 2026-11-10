@@ -32,6 +32,13 @@
    Double-click (or Enter) edits its text, Escape selects the parent (see "Editing text" below).
    A list is selected and edited whole, from any of its items: the text element it was made
    from when the list is all that element holds, otherwise the outermost list.
+   A text box or shape the user added is one text, whatever it holds: its lines, lists and the
+   inline <span>s of its formatting are never picked on their own. Its text sits in one block,
+   `<div data-text-body>`, the box's only child: the box is a flex column (which is what aligns
+   its text top, middle or bottom), and a flex box would lay out each formatted run of text
+   directly in it as an item, on a line of its own. The editor makes the body when the text is
+   edited or formatted (also in boxes saved without one, and in any other flex or grid box whose
+   own text it formats), and keeps everything typed or pasted in it.
    Dragging and resizing snap to the slide's edges and center and to other elements' edges and
    centers, with guide lines (hold ⌘ / Ctrl to move freely; Shift-resizes, and turned elements'
    resizes, do not snap), and a readout by the pointer shows the position and size. Shift keeps a
@@ -133,9 +140,11 @@
    - { type: "slop:edit-background", color } sets the slide's own background, or with null, goes
      back to the deck's. The editor reports it, on load and when it changes, the same way:
      { type: "slop:edit-background", slide, color }.
-   - { type: "slop:edit-list", list: "ul" | "ol" } turns its text into a bulleted or numbered
-     list (one item per line), switches the list's kind, or with the same kind turns it back
-     into lines.
+   - { type: "slop:edit-list", list: "ul" | "ol" } turns lines into a bulleted or numbered list
+     (one item per line), switches their kind, or with the same kind turns them back into lines:
+     while typing, the lines the text selection (or caret) is in, so a text can hold plain lines
+     next to lists; otherwise all of them. Items next to each other share a list. Blank lines
+     between the lines stay blank.
    - { type: "slop:edit-link", href } links it (wrapping its text, or an element without text,
      in an <a>; `#slide-id` links go to another slide) or with a null href removes its link.
    - { type: "slop:edit-finish" } ends text editing (the app sends it on a click outside its
@@ -170,8 +179,10 @@
    selected text (wrapped in inline <span> styles, <sup> / <sub> or <a>); with only a caret, to
    the whole element. Editing survives a click on the app's toolbar (the text selection is kept
    and put back), and ends with Escape, Enter, a click elsewhere or { type: "slop:edit-finish" }.
-   In a list, Enter starts a new item (Enter on an empty item outdents it, or ends the list),
-   Tab / Shift+Tab indent and outdent the item, and Shift+Enter breaks the line. ⌘V pastes
+   In a list, Enter starts a new item (Enter on an empty item, or Backspace at the start of one,
+   outdents it or makes it a plain line again), Tab / Shift+Tab indent and outdent the item, and
+   Shift+Enter breaks the line. Centered or right-aligned text keeps its bullets and numbers next
+   to the text (`list-style-position: inside`) instead of at the box's left edge. ⌘V pastes
    with the formatting (bold, italic, underline, strikethrough, color, links and line breaks;
    fonts and sizes are dropped), ⌘⇧V as plain text: the editor asks the app for the clipboard's
    text with { type: "slop:edit-paste-request", slide, plain: true } and the app answers with
@@ -745,6 +756,8 @@
   var autofit = window.slopAutofit || null;
   // Inline elements: text runs that formatting splits and wraps. Anything else is a block.
   var INLINE = /^(a|abbr|b|bdi|bdo|cite|code|data|del|dfn|em|font|i|ins|kbd|mark|q|s|samp|small|span|strike|strong|sub|sup|time|u|var)$/i;
+  // The one block that holds the text of a text box or shape (see the top of this file).
+  var BODY_ATTR = "data-text-body";
   // Styles that apply to the selected text while typing; the others apply to the whole element.
   var TEXT_KEYS = ["color", "fontSize", "fontFamily", "bold", "italic", "underline", "strike", "script", "letterSpacing", "link"];
   var TOGGLES = { b: "bold", i: "italic", u: "underline" };
@@ -865,6 +878,11 @@
     var svg = el.closest("svg");
     while (svg && svg.parentElement && svg.parentElement.closest("svg")) svg = svg.parentElement.closest("svg");
     if (svg && slide.contains(svg)) el = svg;
+    // A text box or shape is one text: nothing in it is picked on its own.
+    var body = el.closest("[" + BODY_ATTR + "]");
+    if (body && body.parentElement && body.parentElement !== slide && slide.contains(body)) el = body.parentElement;
+    var box = el.closest("[" + ADDED + '="text"], [' + ADDED + '="shape"]');
+    if (box && slide.contains(box)) el = box;
     el = listHolder(el);
     while (el.parentElement !== slide && getComputedStyle(el).display === "inline") {
       // A link around an element without text (display: contents) leaves the element selected.
@@ -1004,23 +1022,13 @@
     return node && node.nodeType === 1 && el.contains(node) ? node : el;
   }
 
-  /** The list `el`'s text is in: `el` itself, its item's, the one at the caret, or one it holds. */
-  function listOf(el, node) {
-    if (/^(ul|ol)$/i.test(el.tagName)) return el;
-    if (/^li$/i.test(el.tagName) && /^(ul|ol)$/i.test(el.parentElement.tagName)) return el.parentElement;
-    var at = node && node !== el ? node.closest("ul, ol") : null;
-    if (at && el.contains(at)) return at;
-    return Array.prototype.find.call(el.children, function (child) {
-      return /^(ul|ol)$/i.test(child.tagName);
-    }) || null;
-  }
-
   /** The link `el` (or the text at `node` in it) is in, or that wraps all of its text. */
   function linkOf(el, node) {
     var at = (node || el).closest("a");
     if (at && (slide.contains(at) || at === el)) return at;
-    var only = el.children.length === 1 && el.firstElementChild;
-    return only && /^a$/i.test(only.tagName) && only.textContent.trim() === el.textContent.trim() ? only : null;
+    var root = textRoot(el);
+    var only = root.children.length === 1 && root.firstElementChild;
+    return only && /^a$/i.test(only.tagName) && only.textContent.trim() === root.textContent.trim() ? only : null;
   }
 
   /** The line height as a multiple of the font size; null when it is `normal`. */
@@ -1065,7 +1073,7 @@
     var range = editing === el ? editRange() : null;
     var script = node.closest("sup, sub");
     var link = linkOf(el, node);
-    var list = listOf(el, node);
+    var list = listKindOf(el);
     // A shrunk box reports the sizes it was given, not the ones it shrank to.
     var fit = autofit ? autofit.scale(el.closest('[data-autofit="shrink"]') || el) : 1;
     var spacing = parseFloat(text.letterSpacing);
@@ -1089,7 +1097,7 @@
       lineHeight: lineHeightOf(style),
       align: /center/.test(align) ? "center" : /right|end/.test(align) ? "right" : "left",
       valign: valignOf(style),
-      list: list ? list.tagName.toLowerCase() : null,
+      list: list,
       link: link ? link.getAttribute("href") || "" : null,
       autofit: /^(shrink|grow)$/.test(el.getAttribute("data-autofit") || "") ? el.getAttribute("data-autofit") : null,
       editing: editing === el,
@@ -1777,12 +1785,15 @@
     el.setAttribute("spellcheck", "true");
     el.setAttribute("data-slop-editing", "");
     slide.setAttribute("data-slop-typing", "");
+    var root = ensureBody(el);
+    // An empty body has no line for the caret to stand on.
+    if (root !== el) ensureLine(root);
     el.focus();
     placeHandles();
     var range = x !== undefined && document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y) : null;
-    if (!range || !el.contains(range.startContainer)) {
+    if (!range || !root.contains(range.startContainer)) {
       range = document.createRange();
-      range.selectNodeContents(el);
+      range.selectNodeContents(root);
     }
     var selection = window.getSelection();
     if (selection) {
@@ -1809,7 +1820,11 @@
       if (selected === el) select(null);
       el.parentElement.removeChild(el);
     } else {
-      dropTrailingBreaks(el);
+      // Whatever was typed around the body belongs in it.
+      var root = ensureBody(el);
+      dropTrailingBreaks(root);
+      // A shape without text holds nothing.
+      if (root !== el && !hasContent(root)) el.removeChild(root);
       refit(el);
     }
     placeHandles();
@@ -2128,6 +2143,14 @@
   function styleText(changes) {
     var el = editing;
     var range = editRange();
+    var formats = range && !range.collapsed && Object.keys(changes).some(function (key) {
+      return TEXT_KEYS.indexOf(key) >= 0;
+    });
+    if (formats) {
+      // The <span>s of the formatting stay in the text's lines only inside a body.
+      ensureBody(el, true);
+      range = editRange();
+    }
     var text = {};
     var rest = {};
     Object.keys(changes).forEach(function (key) {
@@ -2156,43 +2179,361 @@
     else applyToSelection(changes);
   }
 
-  /** Lines of `el`'s content, as fragments: split at line breaks and blocks, list items one each. */
-  function linesOf(el) {
-    var lines = [document.createDocumentFragment()];
-    var current = function () {
-      return lines[lines.length - 1];
-    };
-    var breakLine = function () {
-      if (current().childNodes.length) lines.push(document.createDocumentFragment());
-    };
-    var take = function (container) {
-      Array.prototype.slice.call(container.childNodes).forEach(function (node) {
+  function isTextBox(el) {
+    return /^(text|shape)$/.test(el.getAttribute(ADDED) || "");
+  }
+
+  function isList(node) {
+    return node.nodeType === 1 && /^(ul|ol)$/i.test(node.tagName);
+  }
+
+  /** The block holding `el`'s text, when it has one (see the top of this file). */
+  function bodyOf(el) {
+    return Array.prototype.find.call(el.children, function (child) {
+      return child.hasAttribute(BODY_ATTR);
+    }) || null;
+  }
+
+  /** Where `el`'s text is: its body, or `el` itself. */
+  function textRoot(el) {
+    return bodyOf(el) || el;
+  }
+
+  /**
+   * Whether formatted text needs a body in `el`: a flex or grid box lays out each inline element
+   * directly in it as an item of its own, so a bold word would leave its line. A box that holds
+   * elements of its own next to its text is left as it is.
+   */
+  function needsBody(el) {
+    if (!/flex|grid/.test(getComputedStyle(el).display || "")) return false;
+    var text = Array.prototype.some.call(el.childNodes, function (node) {
+      return node.nodeType === 3 && node.data.trim();
+    });
+    return text && Array.prototype.every.call(el.children, function (child) {
+      return INLINE.test(child.tagName) || /^(br|ul|ol)$/i.test(child.tagName);
+    });
+  }
+
+  /**
+   * Puts all of `el`'s text in its body and returns it: for a text box or shape, an element that
+   * has a body already, or with `formatting`, any box that needs one. Otherwise returns `el`.
+   * The text selection stays where it was.
+   */
+  function ensureBody(el, formatting) {
+    var body = bodyOf(el);
+    if (!body && !isTextBox(el) && !(formatting && needsBody(el))) return el;
+    var loose = Array.prototype.filter.call(el.childNodes, function (node) {
+      return node !== body && (node.nodeType === 1 || (node.nodeType === 3 && (!body || node.data.trim())));
+    });
+    if (body && !loose.length) return body;
+    var range = editing === el ? editRange() : null;
+    var caret = range ? caretOf(range) : null;
+    if (!body) {
+      body = document.createElement("div");
+      body.setAttribute(BODY_ATTR, "");
+      while (el.firstChild) body.appendChild(el.firstChild);
+      el.appendChild(body);
+      if (caret && caret.sc === el) caret.sc = body;
+      if (caret && caret.ec === el) caret.ec = body;
+    } else {
+      // What ended up around the body goes into it, on the side it was on.
+      var first = body.firstChild;
+      var before = true;
+      Array.prototype.slice.call(el.childNodes).forEach(function (node) {
+        if (node === body) before = false;
+        if (loose.indexOf(node) < 0) return;
+        var content = [node];
+        if (node.nodeType === 1 && node.hasAttribute(BODY_ATTR)) {
+          // A second body is more lines of the same text.
+          content = [document.createElement("br")].concat(Array.prototype.slice.call(node.childNodes));
+          el.removeChild(node);
+        }
+        content.forEach(function (part) {
+          if (before) body.insertBefore(part, first);
+          else body.appendChild(part);
+        });
+      });
+      if (caret && (caret.sc === el || caret.ec === el)) caret = null;
+    }
+    if (range) {
+      var back = caret && rangeFromCaret(caret, el);
+      if (!back) {
+        back = document.createRange();
+        back.selectNodeContents(body);
+        back.collapse(false);
+      }
+      useRange(back);
+    }
+    return body;
+  }
+
+  /** Whether `node` shows text or media: more than a line break or blank space. */
+  function showsText(node) {
+    if (node.nodeType === 3) return !!node.data.trim();
+    if (node.nodeType !== 1) return false;
+    return !!node.textContent.trim() || /^(img|svg)$/i.test(node.nodeName) || !!node.querySelector("img, svg");
+  }
+
+  /** Moves line breaks out of the inline elements around them, splitting those, so lines split between elements. */
+  function hoistBreaks(root) {
+    Array.prototype.slice.call(root.querySelectorAll("br")).forEach(function (br) {
+      while (br.parentNode !== root && br.parentNode.nodeType === 1 && INLINE.test(br.parentNode.tagName)) {
+        var parent = br.parentNode;
+        if (br.nextSibling) {
+          var tail = cloneShallow(parent);
+          while (br.nextSibling) tail.appendChild(br.nextSibling);
+          parent.parentNode.insertBefore(tail, parent.nextSibling);
+        }
+        parent.parentNode.insertBefore(br, parent.nextSibling);
+        if (!parent.firstChild) parent.parentNode.removeChild(parent);
+      }
+    });
+  }
+
+  /**
+   * The lines of the text in `root`, in order. A line is `{ nodes, kind, depth }`: its content,
+   * and for a list item the kind of its list ("ul" or "ol", otherwise null) and how many lists
+   * that one is in. An item also has `item` (its <li>) and `from` (its list, at `fromDepth`), a
+   * plain line ended by a line break has it in `br`, and a block that is neither (a paragraph
+   * in a card) is a line of its own with the element in `block`, kept as it is.
+   * Nothing is changed: `writeLines` puts lines back.
+   */
+  function readLines(root) {
+    var lines = [];
+    var run = [];
+    var flush = function () {
+      var parts = [[]];
+      var breaks = [];
+      run.forEach(function (node) {
         if (node.nodeName === "BR") {
-          lines.push(document.createDocumentFragment());
-        } else if (isInline(node)) {
-          current().appendChild(node);
-        } else if (/^(ul|ol)$/i.test(node.tagName)) {
-          breakLine();
-          Array.prototype.slice.call(node.children).forEach(function (item) {
-            take(item);
-            breakLine();
-          });
+          breaks.push(node);
+          parts.push([]);
         } else {
-          breakLine();
-          take(node);
-          breakLine();
+          parts[parts.length - 1].push(node);
         }
       });
+      run = [];
+      // A line break at the end ends its line; it does not start another.
+      if (parts.length > 1 && !parts[parts.length - 1].some(showsText)) parts.pop();
+      else if (parts.length === 1 && !parts[0].some(showsText)) return;
+      parts.forEach(function (nodes, i) {
+        lines.push({ nodes: nodes, kind: null, depth: 0, br: breaks[i] || null });
+      });
     };
-    take(el);
-    var full = lines.filter(hasContent);
-    return full.length ? full : [document.createDocumentFragment()];
+    var readList = function (list, depth) {
+      var kind = list.tagName.toLowerCase();
+      Array.prototype.slice.call(list.childNodes).forEach(function (item) {
+        if (item.nodeType !== 1) return;
+        if (isList(item)) {
+          readList(item, depth + 1);
+          return;
+        }
+        var line = { nodes: [], kind: kind, depth: depth, from: list, fromDepth: depth, item: /^li$/i.test(item.tagName) ? item : null };
+        var inner = [];
+        Array.prototype.slice.call(item.childNodes).forEach(function (node) {
+          if (isList(node)) inner.push(node);
+          else if (node.nodeType !== 3 || node.data) line.nodes.push(node);
+        });
+        // The break that keeps an empty item open is not content.
+        while (line.nodes.length && line.nodes[line.nodes.length - 1].nodeName === "BR") line.nodes.pop();
+        lines.push(line);
+        inner.forEach(function (list) {
+          readList(list, depth + 1);
+        });
+      });
+    };
+    Array.prototype.slice.call(root.childNodes).forEach(function (node) {
+      if (node.nodeType === 3 && !node.data) return;
+      if (node.nodeType !== 1 || INLINE.test(node.tagName) || /^(br|img|svg)$/i.test(node.nodeName)) {
+        run.push(node);
+      } else if (isList(node)) {
+        flush();
+        readList(node, 0);
+      } else {
+        flush();
+        lines.push({ nodes: [], kind: null, depth: 0, block: node });
+      }
+    });
+    flush();
+    return lines;
+  }
+
+  /** A caret at the start of `line`, as it stands in the text. */
+  function lineStart(line) {
+    var at = document.createRange();
+    if (line.kind && line.item) at.setStart(line.item, 0);
+    else if (line.block) at.setStartBefore(line.block);
+    else if (line.nodes.length) at.setStartBefore(line.nodes[0]);
+    else if (line.br) at.setStartBefore(line.br);
+    else return null;
+    at.collapse(true);
+    return at;
+  }
+
+  /** The lines `range` is in: the one its caret is in, or all it selects text of. */
+  function linesIn(lines, range) {
+    var indexAt = function (node, offset) {
+      var point = document.createRange();
+      point.setStart(node, offset);
+      point.collapse(true);
+      var found = 0;
+      lines.forEach(function (line, i) {
+        var start = lineStart(line);
+        if (start && start.compareBoundaryPoints(Range.START_TO_START, point) <= 0) found = i;
+      });
+      return found;
+    };
+    var first = indexAt(range.startContainer, range.startOffset);
+    var last = indexAt(range.endContainer, range.endOffset);
+    var into = last > first ? lineStart(lines[last]) : null;
+    if (into) {
+      // A selection that ends right at the start of a line has nothing of that line in it.
+      into.setEnd(range.endContainer, range.endOffset);
+      if (!into.toString()) last--;
+    }
+    return lines.slice(first, last + 1);
+  }
+
+  /**
+   * The lines a list change is for: those `range` is in (all of them without one), leaving out
+   * blank lines unless there is nothing else.
+   */
+  function pickLines(lines, range) {
+    var targets = range ? linesIn(lines, range) : lines;
+    var full = targets.filter(function (line) {
+      return line.kind || line.block || line.nodes.some(showsText);
+    });
+    return full.length ? full : targets.slice(0, 1);
+  }
+
+  /** Makes `line` an item of a list of `kind`, or with null, a plain line. */
+  function setLineKind(line, kind) {
+    if (kind && line.block) {
+      line.nodes = Array.prototype.slice.call(line.block.childNodes);
+      line.block = null;
+    }
+    if (!kind || !line.kind) line.depth = 0;
+    if (!kind) line.item = null;
+    line.kind = kind;
+  }
+
+  /** Which way `el` aligns its text: "left", "center" or "right". */
+  function alignOf(el) {
+    var align = getComputedStyle(el).textAlign || "";
+    return /center/.test(align) ? "center" : /right|end/.test(align) ? "right" : "left";
   }
 
   function styleList(list, depth) {
     list.style.margin = "0";
     list.style.paddingLeft = "1.2em";
     list.style.listStyleType = LIST_TYPES[list.tagName.toLowerCase()][depth % 3];
+  }
+
+  /**
+   * Keeps a list's bullets and numbers by its text: a marker outside the item stays at the left
+   * edge of the box while centered or right-aligned text moves away from it, so there it goes
+   * inside, at the start of the item's first line (and a list the editor made gives up the
+   * room it left for the marker).
+   */
+  function alignList(list, align, depth) {
+    var inside = align === "center" || align === "right";
+    if (inside) list.style.listStylePosition = "inside";
+    else list.style.removeProperty("list-style-position");
+    var room = inside && !depth ? "0px" : "1.2em";
+    if (/^(0px|1\.2em)$/.test(list.style.paddingLeft) && list.style.paddingLeft !== room) list.style.paddingLeft = room;
+    if (!list.getAttribute("style")) list.removeAttribute("style");
+  }
+
+  /** The list an item `line` goes in, `depth` lists deep: the one it came from where it can be, or a new one. */
+  function listFor(line, depth, used, align) {
+    var from = line.from;
+    var list;
+    if (from && from.tagName.toLowerCase() === line.kind) {
+      list = used.indexOf(from) < 0 ? from : cloneShallow(from);
+      while (list.firstChild) list.removeChild(list.firstChild);
+      if (line.fromDepth !== depth && list.style.listStyleType) list.style.listStyleType = LIST_TYPES[line.kind][depth % 3];
+    } else if (from) {
+      // Another kind of list: it keeps its attributes, and a bullet style the editor set follows the kind.
+      list = document.createElement(line.kind);
+      Array.prototype.forEach.call(from.attributes, function (attr) {
+        list.setAttribute(attr.name, attr.value);
+      });
+      if (used.indexOf(from) >= 0) list.removeAttribute("id");
+      if (list.style.listStyleType) list.style.listStyleType = LIST_TYPES[line.kind][depth % 3];
+    } else {
+      list = document.createElement(line.kind);
+      styleList(list, depth);
+    }
+    if (from) used.push(from);
+    alignList(list, align, depth);
+    return list;
+  }
+
+  /**
+   * Writes `lines` (see readLines) as the text in `root`: plain lines with a line break between
+   * them, items next to each other in one list, deeper ones in a list in the item before them.
+   */
+  function writeLines(root, lines, align) {
+    var out = document.createDocumentFragment();
+    var open = [];
+    var used = [];
+    lines.forEach(function (line, i) {
+      line.br = null;
+      if (!line.kind) {
+        open = [];
+        if (line.block) {
+          out.appendChild(line.block);
+          return;
+        }
+        line.nodes.forEach(function (node) {
+          out.appendChild(node);
+        });
+        var next = lines[i + 1];
+        // A break before the next plain line; a blank line needs one to be a line at all.
+        if ((next && !next.kind && !next.block) || !line.nodes.some(showsText)) {
+          line.br = document.createElement("br");
+          out.appendChild(line.br);
+        }
+        return;
+      }
+      // An item is at most one list deeper than the one before it.
+      var depth = Math.min(line.depth, open.length);
+      open.length = Math.min(open.length, depth + 1);
+      if (open.length > depth && open[depth].tagName.toLowerCase() !== line.kind) open.length = depth;
+      if (open.length === depth) {
+        var list = listFor(line, depth, used, align);
+        (depth ? open[depth - 1].lastElementChild : out).appendChild(list);
+        open.push(list);
+      }
+      var item = line.item || document.createElement("li");
+      while (item.firstChild) item.removeChild(item.firstChild);
+      line.nodes.forEach(function (node) {
+        item.appendChild(node);
+      });
+      ensureLine(item);
+      open[depth].appendChild(item);
+      line.item = item;
+      line.depth = depth;
+    });
+    root.textContent = "";
+    root.appendChild(out);
+  }
+
+  /**
+   * The kind of list ("ul" or "ol") `el`'s text is: of the lines the text selection is in while
+   * it is being edited, otherwise of all its lines. Null when any of them is not in such a list.
+   */
+  function listKindOf(el) {
+    if (isList(el)) return el.tagName.toLowerCase();
+    var root = textRoot(el);
+    if (!root.querySelector || !root.querySelector("ul, ol")) return null;
+    var lines = readLines(root);
+    if (!lines.length) return null;
+    var picked = pickLines(lines, editing === el ? editRange() : null);
+    var kind = picked[0].kind;
+    return kind && picked.every(function (line) {
+      return line.kind === kind;
+    }) ? kind : null;
   }
 
   /** How many lists `list` is nested in, inside `root`. */
@@ -2221,50 +2562,51 @@
   }
 
   /**
-   * Turns the selection's text into a list of `kind` ("ul" or "ol"), one item per line; turns
-   * its list into one of `kind`, or one of `kind` already back into lines.
+   * Turns lines of the selection's text into a list of `kind` ("ul" or "ol"), one item per line,
+   * or when they all are items of such a list already, back into plain lines. While typing,
+   * the lines the text selection is in; otherwise all of them.
    */
   function toggleList(kind) {
     var el = editing || selected;
     if (!el || !slide.contains(el) || !LIST_TYPES[kind] || !describe(el).text) return;
+    var root = isList(el) ? null : ensureBody(el, true);
     var range = editing ? editRange() : null;
     var caret = range ? caretOf(range) : null;
-    changeText(el, function () {
-      var list = listOf(el, range ? textNodeOf(el) : null);
-      if (list && list.tagName.toLowerCase() !== kind) {
-        var next = retag(list, kind, el);
-        if (list === el) {
-          if (editing === el) editing = next;
-          selected = next;
-          mark(next, "data-slop-selected", true);
-        }
-      } else if (list && list !== el && el.contains(list)) {
-        var lines = linesOf(list);
-        var flat = document.createDocumentFragment();
-        lines.forEach(function (line, i) {
-          if (i) flat.appendChild(document.createElement("br"));
-          flat.appendChild(line);
+    var at = null;
+    if (!root) {
+      // A list on its own stays a list: it only changes its kind.
+      if (el.tagName.toLowerCase() === kind) return;
+      changeText(el, function () {
+        var next = retag(el, kind, el);
+        if (editing === el) editing = next;
+        selected = next;
+        mark(next, "data-slop-selected", true);
+      });
+    } else {
+      // Moving line breaks out of formatted text moves the text the selection is in.
+      hoistBreaks(root);
+      if (caret) range = rangeFromCaret(caret, el);
+      changeText(el, function () {
+        var lines = readLines(root);
+        if (!lines.length) lines.push({ nodes: [], kind: null, depth: 0 });
+        var picked = pickLines(lines, range);
+        var off = picked.every(function (line) {
+          return line.kind === kind;
         });
-        list.parentNode.replaceChild(flat, list);
-      } else if (!list) {
-        var items = linesOf(el);
-        el.textContent = "";
-        var made = document.createElement(kind);
-        styleList(made, 0);
-        items.forEach(function (line) {
-          var item = document.createElement("li");
-          item.appendChild(line);
-          ensureLine(item);
-          made.appendChild(item);
+        picked.forEach(function (line) {
+          setLineKind(line, off ? null : kind);
         });
-        el.appendChild(made);
-      }
-    });
-    var back = caret && rangeFromCaret(caret, editing);
+        writeLines(root, lines, alignOf(el));
+        at = picked[0];
+      });
+    }
     if (editing) {
+      // The caret stays in its text; one that stood between elements goes to the start of its line.
+      var inText = caret && caret.sc.nodeType === 3 && caret.ec.nodeType === 3;
+      var back = (inText || !at ? caret && rangeFromCaret(caret, editing) : null) || (at && lineStart(at));
       if (!back) {
         back = document.createRange();
-        back.selectNodeContents(editing);
+        back.selectNodeContents(textRoot(editing));
         back.collapse(false);
       }
       useRange(back);
@@ -2272,6 +2614,46 @@
     placeHandles();
     report();
     if (!editing) commit();
+  }
+
+  /**
+   * Takes `item` out of its list while typing: a nested item moves out a level, any other
+   * becomes a plain line, with the caret at its start.
+   */
+  function unlistItem(item) {
+    var outer = item.parentElement.parentElement;
+    if (outer && /^li$/i.test(outer.tagName) && editing.contains(outer)) {
+      changeText(editing, function () {
+        outdent(item);
+      });
+      return;
+    }
+    var root = textRoot(editing);
+    changeText(editing, function () {
+      var lines = readLines(root);
+      var line = lines.filter(function (other) {
+        return other.item === item;
+      })[0];
+      if (!line) return;
+      setLineKind(line, null);
+      writeLines(root, lines, alignOf(editing));
+      var at = lineStart(line);
+      if (at) useRange(at);
+    });
+    report();
+  }
+
+  /** The item the caret stands at the very start of, when that item can leave its list. */
+  function itemAtCaretStart() {
+    var range = editRange();
+    var item = range && range.collapsed ? caretItem() : null;
+    if (!item) return null;
+    var before = document.createRange();
+    before.setStart(item, 0);
+    before.setEnd(range.startContainer, range.startOffset);
+    if (before.toString() || before.cloneContents().querySelector("img, svg, br, li")) return null;
+    var nested = /^li$/i.test((item.parentElement.parentElement || {}).tagName || "");
+    return nested || !isList(textRoot(editing)) ? item : null;
   }
 
   /** The list item the caret is in, inside the element being edited. */
@@ -2290,11 +2672,14 @@
       var outer = item.parentElement.parentElement;
       if (outer && /^li$/i.test(outer.tagName) && editing.contains(outer)) {
         outdent(item);
-      } else {
-        // An empty last item ends the list, and the editing.
+      } else if (isList(textRoot(editing))) {
+        // A list on its own cannot hold a plain line: its empty last item ends the editing.
         var list = item.parentElement;
         if (list.children.length > 1) list.removeChild(item);
         finishEditing();
+      } else {
+        // An empty item ends the list there: it becomes a plain line to go on typing in.
+        unlistItem(item);
       }
       return;
     }
@@ -2327,6 +2712,7 @@
       inner = cloneShallow(list);
       before.appendChild(inner);
       if (inner.style.listStyleType) inner.style.listStyleType = LIST_TYPES[inner.tagName.toLowerCase()][depthOf(inner, editing) % 3];
+      alignList(inner, alignOf(editing), depthOf(inner, editing));
     }
     inner.appendChild(item);
     var back = caret && rangeFromCaret(caret, editing);
@@ -2366,6 +2752,7 @@
 
   /** Puts `content` (a node or fragment) in place of the selected text and the caret after it. */
   function insertAtCaret(content) {
+    if (editing) ensureBody(editing, true);
     var range = editRange();
     if (!range) return;
     changeText(editing, function () {
@@ -2510,6 +2897,7 @@
     var el = editing || selected;
     if (!el || !slide.contains(el) || (given !== null && !href)) return;
     if (editing) {
+      ensureBody(el, true);
       var range = editRange();
       var node = textNodeOf(el);
       var at = node.closest("a");
@@ -2521,7 +2909,7 @@
           else unwrap(at);
         } else if (href) {
           var all = document.createRange();
-          all.selectNodeContents(el);
+          all.selectNodeContents(textRoot(el));
           formatRange(all, { link: href });
           var caret = rangeAt(el, { start: el.textContent.length, end: el.textContent.length });
           useRange(caret);
@@ -2538,8 +2926,9 @@
       unwrap(link);
     } else if (href && describe(el).text && el.textContent.trim()) {
       var a = linkTo(document.createElement("a"), href);
-      while (el.firstChild) a.appendChild(el.firstChild);
-      el.appendChild(a);
+      var into = ensureBody(el, true);
+      while (into.firstChild) a.appendChild(into.firstChild);
+      into.appendChild(a);
     } else if (href) {
       var around = linkTo(document.createElement("a"), href);
       around.style.display = "contents";
@@ -2650,7 +3039,10 @@
       "position: absolute; left: " + x + "px; top: " + y + "px;" + (w ? " width: " + w + "px;" : "") +
         " margin: 0; line-height: 1.2;" + textCss(),
     );
-    el.textContent = "Text";
+    var body = document.createElement("div");
+    body.setAttribute(BODY_ATTR, "");
+    body.textContent = "Text";
+    el.appendChild(body);
     return el;
   }
 
@@ -2890,6 +3282,8 @@
       return Object.prototype.hasOwnProperty.call(changes, key);
     };
     if (autofit) autofit.unfit(el);
+    // A box saved with its text directly in it (see the top of this file) gets its body now.
+    if (isTextBox(el) && el.textContent.trim()) ensureBody(el);
     var text = {};
     TEXT_KEYS.forEach(function (key) {
       if (has(key) && key !== "link" && key !== "script") text[key] = changes[key];
@@ -2917,14 +3311,20 @@
       Array.prototype.slice.call(el.querySelectorAll("sup, sub")).forEach(unwrap);
       if (changes.script === "sup" || changes.script === "sub") {
         var script = document.createElement(changes.script);
-        while (el.firstChild) script.appendChild(el.firstChild);
-        el.appendChild(script);
+        var into = ensureBody(el, true);
+        while (into.firstChild) script.appendChild(into.firstChild);
+        into.appendChild(script);
       }
     }
     if (has("letterSpacing")) el.style.letterSpacing = changes.letterSpacing ? changes.letterSpacing + "px" : "";
     if (has("lineHeight")) el.style.lineHeight = changes.lineHeight > 0 ? String(Math.round(changes.lineHeight * 100) / 100) : "";
     if (has("autofit")) setAutofit(el, changes.autofit);
-    if (has("align") && /^(left|center|right)$/.test(changes.align)) el.style.textAlign = changes.align;
+    if (has("align") && /^(left|center|right)$/.test(changes.align)) {
+      el.style.textAlign = changes.align;
+      withDescendants(el).filter(isList).forEach(function (list) {
+        alignList(list, changes.align, depthOf(list, el));
+      });
+    }
     if (has("valign") && JUSTIFY[changes.valign]) {
       var computed = getComputedStyle(el);
       if (/flex/.test(computed.display || "")) {
@@ -3247,7 +3647,9 @@
   window.addEventListener("load", scheduleOverflow);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleOverflow);
   scheduleOverflow();
-  document.addEventListener("input", function () {
+  document.addEventListener("input", function (event) {
+    // Typing over everything can take the body away, or leave text beside it.
+    if (editing && !event.isComposing) ensureBody(editing);
     if (editing) refit(editing);
     placeHandles();
     if (editing) scheduleReport();
@@ -3492,10 +3894,11 @@
     toolStyle = style && typeof style === "object" ? style : {};
     var el = newText(0, 0);
     toolStyle = toolStyleBefore;
-    el.textContent = "";
+    var body = textRoot(el);
+    body.textContent = "";
     text.split("\n").forEach(function (line, i) {
-      if (i) el.appendChild(document.createElement("br"));
-      el.appendChild(document.createTextNode(line));
+      if (i) body.appendChild(document.createElement("br"));
+      body.appendChild(document.createTextNode(line));
     });
     var maxW = Math.round((slide.offsetWidth || 1920) * PASTE_TEXT_WIDTH);
     if (sizeOf(el).w > maxW) el.style.width = maxW + "px";
@@ -4563,6 +4966,10 @@
         } else if (event.key === "Enter") {
           event.preventDefault();
           insertLineBreak();
+        } else if (event.key === "Backspace" && !mod && !event.altKey && itemAtCaretStart()) {
+          // At the start of an item, Backspace takes its bullet away before it joins lines.
+          event.preventDefault();
+          unlistItem(itemAtCaretStart());
         } else if (event.key === "Tab" && !mod) {
           // Focus stays in the text; in a list, Tab indents the item.
           event.preventDefault();

@@ -46,9 +46,8 @@ import {
 } from "../lib/sections";
 import { pixelsOf } from "../lib/slideSize";
 import { cn } from "../lib/utils";
-import { railSelection, useApp } from "../store";
+import { railSelection, reportingErrors, useApp } from "../store";
 import { ToolButton } from "./Button";
-import { reportingErrors } from "./editing/errors";
 import { Popover } from "./Popover";
 import { foldSlides, holdIframes, holdRow, openTop, releaseIframes, rowTop, type SectionMove } from "./rail/fold";
 import { SectionLabel } from "./SectionLabel";

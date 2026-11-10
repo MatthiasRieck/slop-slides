@@ -1,6 +1,7 @@
-import { api, type Deck, errorMessage, type RailEdit, type Slide } from "../lib/api";
+import { api, type Deck, type RailEdit, type Slide } from "../lib/api";
 import { applyOrder, railItems, stepRows } from "../lib/sections";
 import { queueEdit } from "./editQueue";
+import { showErrorIn } from "./errors";
 import { refreshHistory } from "./history";
 import type { AppState, AppStore, Slice } from "./types";
 
@@ -78,7 +79,7 @@ export function editRail(app: AppStore, change: (id: string) => Promise<RailEdit
       app.getState().setDeck(edit.deck);
       return edit;
     } catch (error) {
-      app.setState({ error: errorMessage(error) });
+      showErrorIn(app, error);
       return null;
     }
   });
@@ -189,7 +190,7 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
     try {
       if (get().deck?.id === deck.id) get().setDeck(await api.loadDeck(deck.id));
     } catch (error) {
-      set({ error: errorMessage(error) });
+      showErrorIn(app, error);
     }
   },
 
@@ -207,7 +208,7 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
     try {
       await api.copySlide(deck.id, selected);
     } catch (error) {
-      set({ error: errorMessage(error) });
+      showErrorIn(app, error);
     }
   },
 
@@ -223,7 +224,7 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
       }
       return true;
     } catch (error) {
-      set({ error: errorMessage(error) });
+      showErrorIn(app, error);
       return false;
     }
   },

@@ -2,9 +2,9 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { FolderOpen } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
-import { api, errorMessage } from "../lib/api";
+import { api } from "../lib/api";
 import { revealLabel } from "../lib/utils";
-import { type RewindChoice, rememberedRewind, rememberRewind, useApp } from "../store";
+import { type RewindChoice, rememberedRewind, rememberRewind, showError, useApp } from "../store";
 import { Button } from "./Button";
 import { SectionLabel } from "./SectionLabel";
 
@@ -29,7 +29,7 @@ export function SettingsPanel() {
     try {
       await revealItemInDir(await api.libraryFolder());
     } catch (error) {
-      useApp.getState().setError(errorMessage(error));
+      showError(error);
     }
   };
 

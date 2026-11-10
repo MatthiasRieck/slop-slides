@@ -1,8 +1,9 @@
 import { listen } from "@tauri-apps/api/event";
 
-import { type AgentEventEnvelope, api, errorMessage, type WorkspaceChanged } from "../lib/api";
+import { type AgentEventEnvelope, api, type WorkspaceChanged } from "../lib/api";
 import { basename, dirname } from "../lib/utils";
 import { applyAgentEvent } from "./chat";
+import { showErrorIn } from "./errors";
 import { adoptReview } from "./review";
 import type { AppStore } from "./types";
 
@@ -28,7 +29,7 @@ async function openPendingFolder(app: AppStore) {
     const path = await api.takePendingFolder();
     if (path) await app.getState().openWorkspace(path);
   } catch (error) {
-    app.getState().setError(errorMessage(error));
+    showErrorIn(app, error);
   }
 }
 

@@ -2,9 +2,9 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { FileUp, Folder, FolderOpen, Library, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { api, errorMessage, type RecentWorkspace } from "../lib/api";
+import { api, type RecentWorkspace } from "../lib/api";
 import { cn, isMac, relativeTime } from "../lib/utils";
-import { useApp } from "../store";
+import { showError, useApp } from "../store";
 import { Button, ToolButton } from "./Button";
 import { SectionLabel } from "./SectionLabel";
 import { TemplateSelect } from "./Templates";
@@ -34,7 +34,7 @@ export function Home() {
     api
       .recentWorkspaces()
       .then((list) => setRecent(Array.isArray(list) ? list : []))
-      .catch((error) => useApp.getState().setError(errorMessage(error)));
+      .catch((error) => showError(error));
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: load the recent list once on mount
   useEffect(() => {
@@ -45,7 +45,7 @@ export function Home() {
     try {
       await useApp.getState().openWorkspace(await api.libraryFolder());
     } catch (error) {
-      useApp.getState().setError(errorMessage(error));
+      showError(error);
     }
   };
 
@@ -54,7 +54,7 @@ export function Home() {
       await api.forgetWorkspace(workspace.path);
       await refresh();
     } catch (error) {
-      useApp.getState().setError(errorMessage(error));
+      showError(error);
     }
   };
 

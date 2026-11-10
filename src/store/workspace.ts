@@ -4,6 +4,7 @@ import { basename } from "../lib/utils";
 import { loadWorkspaceChat } from "./chat";
 import { confirmDiscard } from "./confirm";
 import { NO_EDIT_STATE } from "./editing";
+import { showErrorIn } from "./errors";
 import { refreshHistory } from "./history";
 import { settleInterrupted } from "./messages";
 import { relativePath, workspaceName } from "./paths";
@@ -123,7 +124,7 @@ export const createWorkspaceSlice: Slice<WorkspaceSlice> = (set, get, app) => ({
       set({ workspace, openedFile: null, workspaceChange: null });
       await loadWorkspaceChat(app, workspace.path);
     } catch (error) {
-      set({ error: errorMessage(error) });
+      showErrorIn(app, error);
       return;
     }
     const workspacePath = get().workspace!.path;
@@ -165,7 +166,7 @@ export const createWorkspaceSlice: Slice<WorkspaceSlice> = (set, get, app) => ({
     try {
       await openFileAt(app, path, await api.openFile(path));
     } catch (error) {
-      set({ error: errorMessage(error) });
+      showErrorIn(app, error);
     }
   },
 
@@ -189,7 +190,7 @@ export const createWorkspaceSlice: Slice<WorkspaceSlice> = (set, get, app) => ({
       const deck = await api.createDeck(title, template);
       await showDeck(app, workspaceName(get().workspace, deck.id), deck);
     } catch (error) {
-      set({ error: errorMessage(error) });
+      showErrorIn(app, error);
     }
   },
 
@@ -200,7 +201,7 @@ export const createWorkspaceSlice: Slice<WorkspaceSlice> = (set, get, app) => ({
       await showDeck(app, workspaceName(get().workspace, deck.id), deck);
       if (skipped.length > 0) set({ error: `Imported, with these changes: ${skipped.join("; ")}.` });
     } catch (error) {
-      set({ error: errorMessage(error) });
+      showErrorIn(app, error);
     }
   },
 

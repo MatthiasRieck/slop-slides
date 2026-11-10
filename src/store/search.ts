@@ -1,5 +1,6 @@
-import { api, errorMessage, type FindMatch, type FindOptions, type ReplacedText } from "../lib/api";
+import { api, type FindMatch, type FindOptions, type ReplacedText } from "../lib/api";
 import { editsSaved, queueEdit } from "./editQueue";
+import { showErrorIn } from "./errors";
 import { refreshHistory } from "./history";
 import type { AppState, Slice } from "./types";
 
@@ -111,7 +112,7 @@ export const createSearchSlice: Slice<SearchSlice> = (set, get, app) => ({
         if (get().deck?.id === deck.id) get().setDeck(replaced.deck);
         return replaced;
       } catch (error) {
-        set({ error: errorMessage(error) });
+        showErrorIn(app, error);
         return null;
       }
     }),

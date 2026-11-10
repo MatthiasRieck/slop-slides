@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, errorMessage } from "../lib/api";
 import { onDiskRead } from "../lib/codeSync";
 import { basename, cn, isMac } from "../lib/utils";
-import { useApp } from "../store";
+import { showError, useApp } from "../store";
 import { Button } from "./Button";
 import { replaceText, type SlideMarks, setActiveSlide, slideMarks, sourceExtensions } from "./code/sourceEditor";
 import { useDeckFile } from "./code/useDeckFile";
@@ -128,7 +128,7 @@ export function CodeView({ active }: { active: boolean }) {
     } catch (err) {
       const message = errorMessage(err);
       if (message.includes("changed on disk")) setConflict(true);
-      else useApp.getState().setError(message);
+      else showError(message);
     } finally {
       setSaving(false);
     }

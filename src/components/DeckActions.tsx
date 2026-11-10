@@ -18,9 +18,8 @@ import { useRef, useState } from "react";
 
 import { api, type Deck, errorMessage, type Screen, type Slide } from "../lib/api";
 import { VIDEO_CANCELLED, type VideoOptions, type VideoProgress } from "../lib/video";
-import { useApp } from "../store";
+import { reportingErrors, showError, useApp } from "../store";
 import { Button, ToolButton } from "./Button";
-import { reportingErrors, showError } from "./editing/errors";
 import { Popover, useDismiss } from "./Popover";
 import { ScreenPicker } from "./ScreenPicker";
 import { VideoExportPanel } from "./VideoExport";

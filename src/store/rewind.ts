@@ -1,5 +1,6 @@
-import { api, errorMessage, type HistoryEntry } from "../lib/api";
+import { api, type HistoryEntry } from "../lib/api";
 import { loadText, saveText } from "../lib/storage";
+import { showErrorIn } from "./errors";
 import { persistChat } from "./messages";
 import { quoteLabel, rewindNote } from "./prompts";
 import type { AppStore, Slice } from "./types";
@@ -100,6 +101,6 @@ async function applyRewind(app: AppStore, entry: HistoryEntry, choice: RewindCho
   try {
     await api.rewindChat(workspace.path, message.id, rewindNote(label));
   } catch (error) {
-    app.setState({ error: errorMessage(error) });
+    showErrorIn(app, error);
   }
 }

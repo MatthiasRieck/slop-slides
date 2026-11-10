@@ -14,9 +14,9 @@ import { SlideImageExport } from "./components/SlideImageExport";
 import { SlideRail } from "./components/SlideRail";
 import { Stage } from "./components/Stage";
 import { TopBar } from "./components/TopBar";
-import { api, errorMessage } from "./lib/api";
+import { api } from "./lib/api";
 import { cn, isMac } from "./lib/utils";
-import { deckMode, useApp } from "./store";
+import { deckMode, showError, useApp } from "./store";
 
 export function App() {
   const workspace = useApp((s) => s.workspace);
@@ -41,7 +41,7 @@ export function useNewWindowKey() {
     const onKey = (event: KeyboardEvent) => {
       if (!event.ctrlKey || event.shiftKey || event.altKey || event.metaKey || event.key.toLowerCase() !== "n") return;
       event.preventDefault();
-      api.newWindow().catch((error) => useApp.getState().setError(errorMessage(error)));
+      api.newWindow().catch((error) => showError(error));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

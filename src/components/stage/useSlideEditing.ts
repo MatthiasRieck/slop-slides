@@ -16,10 +16,9 @@ import {
   parseHexColor,
   parseSelection,
 } from "../../lib/editTools";
-import { useApp } from "../../store";
+import { reportingErrors, showError, useApp } from "../../store";
 import { parseSvgOpen, useSvgEditor } from "../../svgStore";
 import type { EditMenuAction } from "../EditContextMenu";
-import { reportingErrors, showError } from "../editing/errors";
 import { isEditTool, runEditKey, runHistoryKey, toolMessage } from "./editKeys";
 import { fromFrameIn, toAppPoint, toFramePoint } from "./frames";
 import { importImages, measureImages } from "./images";

@@ -1,7 +1,8 @@
-import { api, type Deck, errorMessage, type SlideTiming } from "../lib/api";
+import { api, type Deck, type SlideTiming } from "../lib/api";
 import { cleanNarrationPrompt } from "../lib/narration";
 import { promptAgent } from "./composer";
 import { queueEdit } from "./editQueue";
+import { showErrorIn } from "./errors";
 import { editRail } from "./slides";
 import type { AppStore, Slice } from "./types";
 
@@ -35,7 +36,7 @@ function editDeck(app: AppStore, change: (id: string) => Promise<Deck>): Promise
       const next = await change(deck.id);
       if (app.getState().deck?.id === deck.id) app.getState().setDeck(next);
     } catch (error) {
-      app.setState({ error: errorMessage(error) });
+      showErrorIn(app, error);
     }
   });
 }

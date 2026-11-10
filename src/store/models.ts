@@ -1,4 +1,4 @@
-import { api, errorMessage } from "../lib/api";
+import { api } from "../lib/api";
 import {
   defaultModel,
   PROVIDER_IDS,
@@ -16,6 +16,7 @@ import {
   type PermissionModes,
 } from "../lib/permissions";
 import { loadJson, loadText, saveJson } from "../lib/storage";
+import { showErrorIn } from "./errors";
 import type { AppState, AppStore, Slice } from "./types";
 
 export interface ModelSelection {
@@ -173,7 +174,7 @@ export const createModelsSlice: Slice<ModelsSlice> = (set, get, app) => ({
     // The provider cannot change during a turn, so the running turn is the selected provider's.
     const { running, workspace } = get();
     if (running && workspace) {
-      api.setPermissionMode(workspace.path, mode).catch((error) => set({ error: errorMessage(error) }));
+      api.setPermissionMode(workspace.path, mode).catch((error) => showErrorIn(app, error));
     }
   },
 

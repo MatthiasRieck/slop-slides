@@ -1418,3 +1418,35 @@ fn checks_the_slide_size_meta() {
     let commented = deck(r#"<!-- <meta name="slopslide-size" content="nope"> -->"#);
     assert_eq!(rules(&commented), Vec::<&str>::new());
 }
+
+#[test]
+fn markup_is_told_from_comments_scripts_and_styles_as_a_scan_of_the_text_before_would() {
+    // What `in_markup` answered before the ranges were found once per run: a scan of
+    // everything before `at`.
+    fn scanned(html: &str, at: usize) -> bool {
+        let before = &html[..at];
+        let lower = before.to_ascii_lowercase();
+        let open_comment = before
+            .rfind("<!--")
+            .is_some_and(|c| before[c..].find("-->").is_none());
+        let raw = ["script", "style"].iter().any(|t| {
+            lower
+                .rfind(&format!("<{t}"))
+                .is_some_and(|o| lower[o..].find(&format!("</{t}")).is_none())
+        });
+        !open_comment && !raw
+    }
+    let documents = [
+        "<p>a</p><!-- <meta> --><p>b</p><!--> c <!-- open <p>",
+        "<STYLE>.a{}</Style><p>x</p><style>.b{}<style>.c{}</style><p>y</p>",
+        "<script>if (a</b) '<!--'</script><p>-->x</p><ScRiPt>let s = '</style>'",
+        "<style>/* <script> */</style><p>z</p></script><!---->-->",
+        "",
+    ];
+    for html in documents {
+        let l = Linter::new(html);
+        for at in 0..=html.len() {
+            assert_eq!(in_markup(&l, at), scanned(html, at), "{html:?} at {at}");
+        }
+    }
+}

@@ -255,10 +255,9 @@ impl Sessions {
     /// one.
     pub fn new_chat(&self, workspace: &Path) -> Result<PathBuf> {
         if let Some(current) = self.current(workspace) {
+            // No provider means no provider session id either (see [`provider`]): the
+            // session is as good as new.
             if load_chat(Some(&current))?.is_null() && provider(&current)?.is_none() {
-                for provider in Provider::ALL {
-                    write_session(&current, provider.session_file(), None)?;
-                }
                 return Ok(current);
             }
         }

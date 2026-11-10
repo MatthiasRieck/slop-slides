@@ -45,7 +45,49 @@ struct Linter<'a> {
     html: &'a str,
     line_starts: Vec<usize>,
     slides: Vec<html::SlideSpan>,
+    /// Where comments, scripts and styles open and close (see [`in_markup`]).
+    raw: Vec<RawText>,
     issues: Vec<Issue>,
+}
+
+/// Where one kind of text that is not markup (a comment, a script, a style) opens and closes
+/// in the document, found once per lint run.
+struct RawText {
+    /// Where each opening marker starts, in document order, and how long the marker is.
+    opens: Vec<usize>,
+    open_len: usize,
+    /// The same for the closing marker.
+    closes: Vec<usize>,
+    close_len: usize,
+}
+
+impl RawText {
+    /// The places of `open` and `close` in `text`.
+    fn find(text: &str, open: &str, close: &str) -> Self {
+        let places = |marker: &str| text.match_indices(marker).map(|(at, _)| at).collect();
+        Self {
+            opens: places(open),
+            open_len: open.len(),
+            closes: places(close),
+            close_len: close.len(),
+        }
+    }
+
+    /// Whether the text before `at` ends inside this kind: its last opening marker there has
+    /// no closing marker after it.
+    fn open_at(&self, at: usize) -> bool {
+        let before = |starts: &[usize], len: usize| starts.partition_point(|&s| s + len <= at);
+        let Some(&open) = before(&self.opens, self.open_len)
+            .checked_sub(1)
+            .and_then(|last| self.opens.get(last))
+        else {
+            return false;
+        };
+        let closed = self.closes[..before(&self.closes, self.close_len)]
+            .last()
+            .is_some_and(|&close| close >= open);
+        !closed
+    }
 }
 
 impl<'a> Linter<'a> {
@@ -53,10 +95,16 @@ impl<'a> Linter<'a> {
         let line_starts = std::iter::once(0)
             .chain(html.match_indices('\n').map(|(i, _)| i + 1))
             .collect();
+        let lower = html.to_ascii_lowercase();
         Self {
             html,
             line_starts,
             slides: html::find_slides(html),
+            raw: vec![
+                RawText::find(html, "<!--", "-->"),
+                RawText::find(&lower, "<script", "</script"),
+                RawText::find(&lower, "<style", "</style"),
+            ],
             issues: Vec::new(),
         }
     }
@@ -150,17 +198,7 @@ pub fn narration_overlaps(
 
 /// Whether `at` is in markup rather than inside a comment, script, or style.
 fn in_markup(l: &Linter, at: usize) -> bool {
-    let before = &l.html[..at];
-    let lower = before.to_ascii_lowercase();
-    let open_comment = before
-        .rfind("<!--")
-        .is_some_and(|c| before[c..].find("-->").is_none());
-    let raw = ["script", "style"].iter().any(|t| {
-        lower
-            .rfind(&format!("<{t}"))
-            .is_some_and(|o| lower[o..].find(&format!("</{t}")).is_none())
-    });
-    !open_comment && !raw
+    !l.raw.iter().any(|raw| raw.open_at(at))
 }
 
 fn truncate(text: &str, max: usize) -> String {

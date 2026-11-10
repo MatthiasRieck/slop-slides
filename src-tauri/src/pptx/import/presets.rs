@@ -12,7 +12,7 @@ pub(super) fn adjust(props: &Node, name: &str, default: f64) -> f64 {
         .and_then(|g| g.attr("fmla"))
         .and_then(|f| f.strip_prefix("val "))
         .and_then(|v| v.parse::<f64>().ok())
-        .map_or(default, |v| v / 100_000.0)
+        .map_or(default, |v| v / WHOLE)
 }
 
 pub(super) fn polygon(points: &[(f64, f64)]) -> String {

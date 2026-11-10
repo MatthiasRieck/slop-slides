@@ -145,7 +145,7 @@ pub(super) fn apply_para(style: &mut ParaStyle, node: &Node, ctx: &Palette) {
         (
             n.child("spcPct")
                 .and_then(|p| p.num("val"))
-                .map(|v| v / 100_000.0),
+                .map(|v| v / WHOLE),
             n.child("spcPts")
                 .and_then(|p| p.num("val"))
                 .map(|v| v / 100.0),

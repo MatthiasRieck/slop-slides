@@ -278,7 +278,7 @@ impl Converter {
                             .and_then(|f| f.strip_prefix("val "))
                             .and_then(|v| v.parse::<f64>().ok())
                             .unwrap_or(16667.0);
-                        let radius = bx.w.abs().min(bx.h.abs()) * adjust / 100_000.0;
+                        let radius = bx.w.abs().min(bx.h.abs()) * adjust / WHOLE;
                         css_extra.push_str(&format!("; border-radius: {}px", self.px(radius)));
                     }
                     _ => {}
@@ -454,7 +454,7 @@ impl Converter {
             .unwrap_or_default();
         let mut extra = String::new();
         if let Some(amount) = blip.child("alphaModFix").and_then(|a| a.num("amt")) {
-            extra.push_str(&format!("; opacity: {}", round(amount / 100_000.0, 3)));
+            extra.push_str(&format!("; opacity: {}", round(amount / WHOLE, 3)));
         }
         match pic.at(&["spPr", "prstGeom"]).and_then(|g| g.attr("prst")) {
             Some("ellipse") => extra.push_str("; border-radius: 50%"),
@@ -496,7 +496,7 @@ impl Converter {
         let crop = |name: &str| {
             fill.child("srcRect")
                 .and_then(|c| c.num(name))
-                .map_or(0.0, |v| v / 100_000.0)
+                .map_or(0.0, |v| v / WHOLE)
         };
         let (l, t, r, b) = (crop("l"), crop("t"), crop("r"), crop("b"));
         if (l, t, r, b) == (0.0, 0.0, 0.0, 0.0) || l + r >= 1.0 || t + b >= 1.0 {

@@ -187,10 +187,10 @@ impl Converter {
         let fit = body.at(&["bodyPr", "normAutofit"]);
         let font_scale = fit
             .and_then(|f| f.num("fontScale"))
-            .map_or(1.0, |s| s / 100_000.0);
+            .map_or(1.0, |s| s / WHOLE);
         let line_reduction = fit
             .and_then(|f| f.num("lnSpcReduction"))
-            .map_or(0.0, |s| s / 100_000.0);
+            .map_or(0.0, |s| s / WHOLE);
         let mut out = String::new();
         // The list being written: its opening kind and level, to close and continue it.
         let mut open_list: Option<(Bullet, usize, &'static str)> = None;

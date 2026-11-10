@@ -23,7 +23,7 @@ mod tables;
 mod text;
 
 use super::xml::{self, Node};
-use super::{CANVAS_LONG_SIDE, DEFAULT_SECTION};
+use super::{CANVAS_LONG_SIDE, DEFAULT_SECTION, DEGREE, EMU_PER_POINT, WHOLE};
 use crate::deck;
 use crate::error::{Error, Result};
 use crate::html;
@@ -263,7 +263,7 @@ impl Converter {
 
     /// A font size or other length in points, as canvas pixels.
     fn pt(&self, points: f64) -> f64 {
-        round(points * 12_700.0 * self.px, 2)
+        round(points * EMU_PER_POINT * self.px, 2)
     }
 
     fn skip(&mut self, what: &str) {
@@ -338,7 +338,7 @@ impl Converter {
                     let mut stops: Vec<(f64, Color)> = child
                         .at(&["gsLst"])?
                         .all("gs")
-                        .filter_map(|gs| Some((gs.num("pos")? / 100_000.0, palette.color(gs)?)))
+                        .filter_map(|gs| Some((gs.num("pos")? / WHOLE, palette.color(gs)?)))
                         .collect();
                     stops.sort_by(|a, b| a.0.total_cmp(&b.0));
                     if stops.is_empty() {
@@ -349,7 +349,7 @@ impl Converter {
                     }
                     // OOXML angles run clockwise from the x axis; CSS's from the top.
                     let angle = child.child("lin").and_then(|l| l.num("ang")).unwrap_or(0.0)
-                        / 60_000.0
+                        / DEGREE
                         + 90.0;
                     return Some(Fill::Linear {
                         angle: angle.rem_euclid(360.0),
@@ -362,7 +362,7 @@ impl Converter {
                     let alpha = blip
                         .child("alphaModFix")
                         .and_then(|a| a.num("amt"))
-                        .map_or(1.0, |a| a / 100_000.0);
+                        .map_or(1.0, |a| a / WHOLE);
                     return Some(Fill::Image { asset, alpha });
                 }
                 _ => {}

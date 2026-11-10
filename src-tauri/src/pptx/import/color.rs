@@ -98,7 +98,7 @@ impl Color {
     /// Applies the modifiers under a colour element, such as `lumMod` and `alpha`.
     pub(super) fn modified(mut self, node: &Node) -> Color {
         for m in &node.children {
-            let value = m.num("val").unwrap_or(0.0) / 100_000.0;
+            let value = m.num("val").unwrap_or(0.0) / WHOLE;
             match m.name.as_str() {
                 "alpha" => self.a = value.clamp(0.0, 1.0),
                 "alphaMod" => self.a = (self.a * value).clamp(0.0, 1.0),

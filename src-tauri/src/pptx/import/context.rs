@@ -24,9 +24,9 @@ impl Palette<'_> {
                 "sysClr" => Color::hex(c.attr("lastClr").unwrap_or("000000"))?,
                 "prstClr" => preset_color(c.attr("val")?),
                 "scrgbClr" => Color {
-                    r: (c.num("r")? / 100_000.0 * 255.0).clamp(0.0, 255.0) as u8,
-                    g: (c.num("g")? / 100_000.0 * 255.0).clamp(0.0, 255.0) as u8,
-                    b: (c.num("b")? / 100_000.0 * 255.0).clamp(0.0, 255.0) as u8,
+                    r: (c.num("r")? / WHOLE * 255.0).clamp(0.0, 255.0) as u8,
+                    g: (c.num("g")? / WHOLE * 255.0).clamp(0.0, 255.0) as u8,
+                    b: (c.num("b")? / WHOLE * 255.0).clamp(0.0, 255.0) as u8,
                     a: 1.0,
                 },
                 _ => return None,
@@ -82,7 +82,7 @@ impl Frame {
             sy: self.sy * sy,
             tx: self.tx + self.sx * (off.0 - ch_off.0 * sx),
             ty: self.ty + self.sy * (off.1 - ch_off.1 * sy),
-            rotation: self.rotation + xfrm.num("rot").unwrap_or(0.0) / 60_000.0,
+            rotation: self.rotation + xfrm.num("rot").unwrap_or(0.0) / DEGREE,
         }
     }
 }
@@ -107,7 +107,7 @@ pub(super) fn read_box(xfrm: &Node, frame: Frame) -> Option<Box2> {
         y: frame.ty + off.num("y")? * frame.sy,
         w: ext.num("cx")? * frame.sx,
         h: ext.num("cy")? * frame.sy,
-        rotation: frame.rotation + xfrm.num("rot").unwrap_or(0.0) / 60_000.0,
+        rotation: frame.rotation + xfrm.num("rot").unwrap_or(0.0) / DEGREE,
         flip_h: xfrm.flag("flipH").unwrap_or(false),
         flip_v: xfrm.flag("flipV").unwrap_or(false),
     })

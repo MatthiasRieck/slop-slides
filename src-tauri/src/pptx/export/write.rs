@@ -7,12 +7,12 @@ use std::io::{Cursor, Write as _};
 
 use zip::write::SimpleFileOptions;
 
-use super::super::{EMU_PER_CSS_PX, WIDESCREEN_EMU};
+use super::super::{DEGREE, EMU_PER_CSS_PX, EMU_PER_INCH, EMU_PER_POINT, WHOLE, WIDESCREEN_EMU};
 use super::scene::*;
 use crate::error::{Error, Result};
 
 /// PowerPoint's smallest slide side, in EMU.
-const MIN_SLIDE_EMU: f64 = 914_400.0;
+const MIN_SLIDE_EMU: f64 = EMU_PER_INCH;
 
 const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const NS_R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -63,7 +63,7 @@ fn color_xml(color: Rgba, opacity: f64) -> String {
         format!(
             "<a:srgbClr val=\"{}\"><a:alpha val=\"{}\"/></a:srgbClr>",
             hex(color),
-            (alpha * 100_000.0).round() as i64
+            (alpha * WHOLE).round() as i64
         )
     }
 }
@@ -78,7 +78,7 @@ fn gradient_xml(gradient: &Gradient, opacity: f64) -> String {
         let _ = write!(
             stops,
             "<a:gs pos=\"{}\">{}</a:gs>",
-            (stop.at.clamp(0.0, 1.0) * 100_000.0).round() as i64,
+            (stop.at.clamp(0.0, 1.0) * WHOLE).round() as i64,
             color_xml(stop.color, opacity)
         );
     }
@@ -86,7 +86,7 @@ fn gradient_xml(gradient: &Gradient, opacity: f64) -> String {
     let angle = (gradient.angle - 90.0).rem_euclid(360.0);
     format!(
         "<a:gradFill rotWithShape=\"1\"><a:gsLst>{stops}</a:gsLst><a:lin ang=\"{}\" scaled=\"0\"/></a:gradFill>",
-        (angle * 60_000.0).round() as i64
+        (angle * DEGREE).round() as i64
     )
 }
 
@@ -163,7 +163,7 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
 
     /// Points for a length in canvas pixels.
     fn points(&self, px: f64) -> f64 {
-        px * self.emu / 12_700.0
+        px * self.emu / EMU_PER_POINT
     }
 
     fn id(&mut self) -> u32 {
@@ -175,7 +175,7 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
         let mut attrs = String::new();
         let angle = rotation.rem_euclid(360.0);
         if angle > 0.01 && angle < 359.99 {
-            let _ = write!(attrs, " rot=\"{}\"", (angle * 60_000.0).round() as i64);
+            let _ = write!(attrs, " rot=\"{}\"", (angle * DEGREE).round() as i64);
         }
         if flip_h {
             attrs.push_str(" flipH=\"1\"");
@@ -194,7 +194,7 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
             return "<a:prstGeom prst=\"ellipse\"><a:avLst/></a:prstGeom>".to_string();
         }
         if radius > 0.0 && w.min(h) > 0.0 {
-            let adjust = ((radius / w.min(h)) * 100_000.0).round().min(50_000.0) as i64;
+            let adjust = ((radius / w.min(h)) * WHOLE).round().min(50_000.0) as i64;
             return format!(
                 "<a:prstGeom prst=\"roundRect\"><a:avLst><a:gd name=\"adj\" fmla=\"val {adjust}\"/></a:avLst></a:prstGeom>"
             );
@@ -234,7 +234,7 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
             format!(
                 "<a:effectLst><a:outerShdw blurRad=\"{}\" dist=\"{distance}\" dir=\"{}\" algn=\"ctr\" rotWithShape=\"0\">{}</a:outerShdw></a:effectLst>",
                 self.emu(s.blur),
-                (direction * 60_000.0).round() as i64,
+                (direction * DEGREE).round() as i64,
                 color_xml(s.color, item.opacity)
             )
         });
@@ -443,13 +443,13 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
         let alpha = if opacity < 0.999 {
             format!(
                 "<a:alphaModFix amt=\"{}\"/>",
-                (opacity.clamp(0.0, 1.0) * 100_000.0).round() as i64
+                (opacity.clamp(0.0, 1.0) * WHOLE).round() as i64
             )
         } else {
             String::new()
         };
         let crop = crop.map_or("<a:srcRect/>".to_string(), |c| {
-            let part = |v: f64| (v.clamp(0.0, 1.0) * 100_000.0).round() as i64;
+            let part = |v: f64| (v.clamp(0.0, 1.0) * WHOLE).round() as i64;
             format!(
                 "<a:srcRect l=\"{}\" t=\"{}\" r=\"{}\" b=\"{}\"/>",
                 part(c.l),

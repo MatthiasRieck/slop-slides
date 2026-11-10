@@ -1,5 +1,5 @@
 import { ask } from "@tauri-apps/plugin-dialog";
-import { AudioLines, Download, KeyRound, Loader2, Play, Sparkles, Square, Timer, Trash2, X } from "lucide-react";
+import { AudioLines, KeyRound, Loader2, Play, Sparkles, Square, Timer, Trash2, X } from "lucide-react";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
 
 import { type Deck, errorMessage, type NarrationProvider, type Slide, type SlideAudio } from "../lib/api";
@@ -8,7 +8,6 @@ import { speakingTime, wordCount } from "../lib/narration";
 import { formatDuration, type Playback, playNarration } from "../lib/narrationAudio";
 import { useDraftText } from "../lib/useDraftText";
 import { cn } from "../lib/utils";
-import { formatBytes } from "../lib/voice";
 import { canSpeakWith, deckProvider, useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { Button } from "./Button";
@@ -65,7 +64,7 @@ export function NarrationPanel() {
   );
 }
 
-/** The deck's provider, voice and language, and the voice model's download or the service's API key. */
+/** The deck's provider, voice and language, and the service's API key. */
 function SpeechSettings({ deck }: { deck: Deck }) {
   const speech = useNarration((s) => s.speech);
   const accountVoices = useNarration((s) => s.accountVoices);
@@ -79,7 +78,6 @@ function SpeechSettings({ deck }: { deck: Deck }) {
   }, [providerId, hasKey, loadVoices]);
   if (!speech || !provider) return null;
   const settings = deck.narration ?? { voice: provider.voices[0]?.id ?? "", language: "en" };
-  const languageName = (id: string) => speech.languages.find((l) => l.id === id)?.name ?? id;
   const voices = accountVoices[provider.id] ?? provider.voices;
   // A voice the deck names that is not listed (an account's own, before the list came) stays pickable.
   const listed = voices.some((v) => v.id === settings.voice);
@@ -112,7 +110,6 @@ function SpeechSettings({ deck }: { deck: Deck }) {
               <option key={voice.id} value={voice.id}>
                 {voice.name}
                 {voice.description ? ` — ${voice.description}` : ""}
-                {voice.native ? ` (${languageName(voice.native)})` : ""}
               </option>
             ))}
           </select>
@@ -132,45 +129,7 @@ function SpeechSettings({ deck }: { deck: Deck }) {
           </select>
         </Field>
       </div>
-      {provider.needsKey ? <ApiKey provider={provider} /> : <LocalModel />}
-    </div>
-  );
-}
-
-/** Whether the local voice model can run here, and its download. */
-function LocalModel() {
-  const speech = useNarration((s) => s.speech);
-  const download = useNarration((s) => s.download);
-  const downloadModel = useNarration((s) => s.downloadModel);
-  if (!speech) return null;
-  const percent = download && download.total > 0 ? Math.round((download.received / download.total) * 100) : 0;
-  if (!speech.available) {
-    return (
-      <p className="text-muted-foreground">
-        The local voice model is not available on this platform yet. Pick ElevenLabs or OpenAI above.
-      </p>
-    );
-  }
-  if (speech.modelReady) return null;
-  return (
-    <div className="flex flex-col gap-2 rounded-md border bg-card p-2">
-      <p className="text-muted-foreground">
-        Narration is spoken on this computer by a voice model ({formatBytes(speech.modelBytes)}), downloaded once for
-        every deck. All its voices come with it.
-      </p>
-      {download ? (
-        <div className="flex flex-col gap-1" role="status">
-          <span>Downloading the voice model… {percent}%</span>
-          <div className="h-1 overflow-hidden rounded bg-muted">
-            <div className="h-full bg-primary" style={{ width: `${percent}%` }} />
-          </div>
-        </div>
-      ) : (
-        <Button size="md" onClick={() => void downloadModel()} className="self-start">
-          <Download />
-          Download voice model
-        </Button>
-      )}
+      <ApiKey provider={provider} />
     </div>
   );
 }
@@ -461,9 +420,7 @@ function SlideAudioControls(props: {
               title={
                 canSpeak
                   ? "Speak this slide's narration"
-                  : provider?.needsKey
-                    ? `Add your ${provider.name} API key first`
-                    : "Download the voice model first"
+                  : `Add your ${provider?.name ?? "narration service's"} API key first`
               }
             >
               <AudioLines />

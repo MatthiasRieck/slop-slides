@@ -19,14 +19,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/test-windows-build.ps1
-      - name: Install Windows narration dependencies
+      - name: Set up the Windows build environment
         if: runner.os == 'Windows'
-        uses: ./.github/actions/windows-narration
+        uses: ./.github/actions/windows-build
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libopenblas-dev patchelf xvfb
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev patchelf xvfb
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -61,9 +61,3 @@ jobs:
           name: export-smoke-${{ runner.os }}
           path: ${{ runner.temp }}/export-smoke
           if-no-files-found: ignore
-      - name: Verify explicit no-engine build
-        if: runner.os == 'Windows'
-        shell: bash
-        env:
-          SLOPSLIDE_NO_NARRATION_ENGINE: '1'
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib narration --quiet

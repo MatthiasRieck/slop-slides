@@ -1268,14 +1268,14 @@ pub fn set_slide_size(html: &str, size: SlideSize) -> String {
 }
 
 /// The app setting naming the voice the deck's narration is said in (see
-/// [`crate::narration::VOICES`]).
+/// [`crate::narration::Provider::accepts_voice`]).
 pub const NARRATION_VOICE_META: &str = "slopslide-narration-voice";
 /// The app setting naming the language the deck's narration is in (see
 /// [`crate::narration::LANGUAGES`]).
 pub const NARRATION_LANGUAGE_META: &str = "slopslide-narration-language";
 
 /// The app setting naming who says the deck's narration (see
-/// [`crate::narration::cloud::PROVIDERS`]); the local model without one.
+/// [`crate::narration::cloud::PROVIDERS`]); [`crate::narration::DEFAULT_PROVIDER`] without one.
 pub const NARRATION_PROVIDER_META: &str = "slopslide-narration-provider";
 
 /// The provider the deck's `<meta>` names for its narration, if any.

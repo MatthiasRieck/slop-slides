@@ -1085,16 +1085,6 @@ fn speech_status(narration: State<narration::Narration>) -> Result<narration::Sp
     Ok(narration.status(&deck::app_home()?))
 }
 
-/// Downloads the narration voice model to `~/.slopslides/models` unless it is there, with
-/// `speech-download` progress events.
-#[tauri::command]
-async fn download_speech_model(
-    app: AppHandle,
-    narration: State<'_, narration::Narration>,
-) -> Result<()> {
-    narration.download(&app, &deck::app_home()?).await
-}
-
 /// Each slide's narration audio: whether it is there and up to date, and how long it plays.
 #[tauri::command]
 fn narration_audio(id: String) -> Result<Vec<narration::SlideAudio>> {
@@ -1242,24 +1232,11 @@ pub fn run() {
     // `slopslide --lint-mcp [deck dir]`: the agent's lint tool, started by the agent CLI in
     // the deck folder.
     let args: Vec<String> = std::env::args().collect();
-    if args.get(1).map(String::as_str) == Some("--narration-license") {
-        println!("{}", narration::engine::license());
-        return;
-    }
     if args.get(1).map(String::as_str) == Some(mcp::FLAG) {
         let dir = args
             .get(2)
             .map_or_else(|| ".".into(), std::path::PathBuf::from);
         return mcp::serve(&dir);
-    }
-    // `slopslide --narration-worker <model dir>`: the speech engine's process (see
-    // narration/engine.rs), started by the app itself.
-    if args.get(1).map(String::as_str) == Some(narration::engine::WORKER_FLAG) {
-        let dir = args
-            .get(2)
-            .map(std::path::PathBuf::from)
-            .unwrap_or_default();
-        std::process::exit(narration::engine::worker_main(&dir));
     }
     let context = tauri::generate_context!();
     // `slopslide --export-smoke <deck.html> <out dir> [text…]`: exports a deck with the
@@ -1400,7 +1377,6 @@ pub fn run() {
             stop_narration_recording,
             delete_recorded_narration,
             speech_status,
-            download_speech_model,
             narration_audio,
             render_narration,
             cancel_narration,

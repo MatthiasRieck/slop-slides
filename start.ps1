@@ -7,13 +7,11 @@ Set up and start SlopSlide on x64 Windows.
 ./start.ps1 -Mode release   build an optimized executable and launch it
 ./start.ps1 -Mode build     build installers without launching
 ./start.ps1 -Mode browser   UI preview only; no native build tools required
-Add -NoNarration to explicitly omit the speech engine.
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('dev', 'release', 'build', 'browser')]
-    [string] $Mode = 'dev',
-    [switch] $NoNarration
+    [string] $Mode = 'dev'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -27,7 +25,7 @@ try {
     if ($nodeMajor -lt 22) { throw 'SlopSlide requires Node.js 22 or newer.' }
     if ($Mode -ne 'browser') {
         Require-BuildTool cargo 'Install stable Rust with the x86_64-pc-windows-msvc toolchain from https://rustup.rs.'
-        & "$PSScriptRoot/scripts/setup-windows.ps1" -NoNarration:$NoNarration
+        & "$PSScriptRoot/scripts/setup-windows.ps1"
     }
     Invoke-BuildCommand pnpm @('install', '--frozen-lockfile')
     switch ($Mode) {

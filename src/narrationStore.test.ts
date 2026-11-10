@@ -30,7 +30,6 @@ beforeEach(() => {
     audio: {},
     audioDeck: null,
     render: null,
-    download: null,
     timing: null,
   });
   useApp.setState({ deck: null, error: null });
@@ -97,23 +96,6 @@ describe("narration store", () => {
     expect(useApp.getState().error).toBeNull();
   });
 
-  it("shows download progress only while it downloads", async () => {
-    await initNarrationEvents();
-    const progress = listeners.get("speech-download");
-    progress?.({ payload: { received: 5, total: 10 } });
-    expect(useNarration.getState().download).toBeNull();
-    let finish!: () => void;
-    invoke.mockImplementation((command: string) =>
-      command === "download_speech_model" ? new Promise<void>((r) => (finish = r)) : Promise.resolve(null),
-    );
-    const done = useNarration.getState().downloadModel();
-    progress?.({ payload: { received: 5, total: 10 } });
-    expect(useNarration.getState().download).toEqual({ received: 5, total: 10 });
-    finish();
-    await done;
-    expect(useNarration.getState().download).toBeNull();
-    expect(invoke).toHaveBeenCalledWith("speech_status");
-  });
   it("times words, downloading the speech-to-text model first when it is missing", async () => {
     await initNarrationEvents();
     useApp.setState({ deck });
@@ -153,32 +135,27 @@ describe("narration store", () => {
 });
 
 const SPEECH: SpeechStatus = {
-  available: true,
-  modelReady: false,
-  modelBytes: 1,
-  downloading: false,
   rendering: null,
   providers: [
-    { id: "local", name: "Local voice model", needsKey: false, key: null, voices: [] },
-    { id: "openai", name: "OpenAI", needsKey: true, key: null, voices: [] },
-    { id: "elevenlabs", name: "ElevenLabs", needsKey: true, key: "environment", voices: [] },
+    { id: "openai", name: "OpenAI", key: null, voices: [] },
+    { id: "elevenlabs", name: "ElevenLabs", key: "environment", voices: [] },
   ],
   languages: [],
 };
 
 describe("narration providers", () => {
-  it("finds the deck's provider, the local model without one or for an unknown one", () => {
+  it("finds the deck's provider, the default (first) without one or for an unknown one", () => {
     const named = (provider?: string) => ({ ...deck, narration: { provider, voice: "x", language: "en" } });
-    expect(deckProvider(deck, SPEECH)?.id).toBe("local");
-    expect(deckProvider(named("openai"), SPEECH)?.id).toBe("openai");
-    expect(deckProvider(named("acme"), SPEECH)?.id).toBe("local");
+    expect(deckProvider(deck, SPEECH)?.id).toBe("openai");
+    expect(deckProvider(named("elevenlabs"), SPEECH)?.id).toBe("elevenlabs");
+    expect(deckProvider(named("acme"), SPEECH)?.id).toBe("openai");
+    // A deck made for the removed local voice model.
+    expect(deckProvider(named("local"), SPEECH)?.id).toBe("openai");
   });
 
-  it("can speak with the local model once downloaded, and with a hosted one once it has a key", () => {
-    const [local, openai, eleven] = SPEECH.providers;
-    expect(canSpeakWith(SPEECH, local)).toBe(false);
-    expect(canSpeakWith({ ...SPEECH, modelReady: true }, local)).toBe(true);
-    expect(canSpeakWith({ ...SPEECH, available: false, modelReady: true }, local)).toBe(false);
+  it("can speak with a provider once it has a key", () => {
+    const [openai, eleven] = SPEECH.providers;
+    expect(canSpeakWith(SPEECH, undefined)).toBe(false);
     expect(canSpeakWith(SPEECH, openai)).toBe(false);
     expect(canSpeakWith(SPEECH, { ...openai!, key: "saved" })).toBe(true);
     expect(canSpeakWith(SPEECH, eleven)).toBe(true);

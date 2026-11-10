@@ -21,7 +21,7 @@ beforeEach(() => {
   unlisten.mockReset();
   listen.mockResolvedValue(unlisten);
   localStorage.removeItem("slopslide.video");
-  useNarration.setState({ speech: null, audio: {}, audioDeck: null, render: null, download: null });
+  useNarration.setState({ speech: null, audio: {}, audioDeck: null, render: null });
   useApp.setState({
     workspace: WORKSPACE,
     openedFile: OPENED,
@@ -491,7 +491,7 @@ describe("video export", () => {
   });
 
   /** The deck with narration on its first two slides; the first one's audio ready. */
-  function narrated(speech: { available: boolean; modelReady: boolean }) {
+  function narrated(key: "saved" | null) {
     const deck = deckFor(DECK_HTML);
     const words = (n: number) => Array(n).fill("word").join(" ");
     useApp.setState({
@@ -503,11 +503,8 @@ describe("video export", () => {
     invoke.mockImplementation(async (command: string) =>
       command === "speech_status"
         ? {
-            ...speech,
-            modelBytes: 1,
-            downloading: false,
             rendering: null,
-            providers: [{ id: "local", name: "Local voice model", needsKey: false, key: null, voices: [] }],
+            providers: [{ id: "openai", name: "OpenAI", key, voices: [] }],
             languages: [],
           }
         : undefined,
@@ -522,7 +519,7 @@ describe("video export", () => {
   }
 
   it("speaks narration, each slide staying until its narration and the pauses end", async () => {
-    narrated({ available: true, modelReady: true });
+    narrated("saved");
     render(<DeckActions />);
     openPanel();
     await act(async () => {});
@@ -540,18 +537,14 @@ describe("video export", () => {
     expect(screen.getByText(/3 slides, 0:15 long/)).toBeTruthy();
   });
 
-  it("speaks a recording on a slide without written narration, with no voice model", async () => {
+  it("speaks a recording on a slide without written narration, with no API key", async () => {
     const deck = deckFor(DECK_HTML);
     useApp.setState({ deck: { ...deck, slides: deck.slides.map((s) => ({ ...s, narration: "" })) } });
     invoke.mockImplementation(async (command: string) =>
       command === "speech_status"
         ? {
-            available: true,
-            modelReady: false,
-            modelBytes: 1,
-            downloading: false,
             rendering: null,
-            providers: [{ id: "local", name: "Local voice model", needsKey: false, key: null, voices: [] }],
+            providers: [{ id: "openai", name: "OpenAI", key: null, voices: [] }],
             languages: [],
           }
         : undefined,
@@ -569,12 +562,12 @@ describe("video export", () => {
     expect(saveButton().disabled).toBe(false);
   });
 
-  it("asks for the voice model when narration still has to be spoken", async () => {
-    narrated({ available: true, modelReady: false });
+  it("asks for the API key when narration still has to be spoken", async () => {
+    narrated(null);
     render(<DeckActions />);
     openPanel();
     await act(async () => {});
-    expect(screen.getByRole("alert").textContent).toMatch(/Download the voice model/);
+    expect(screen.getByRole("alert").textContent).toMatch(/Add your OpenAI API key/);
     expect(saveButton().disabled).toBe(true);
     fireEvent.click(screen.getByRole("checkbox", { name: /Speak narration/ }));
     expect(saveButton().disabled).toBe(false);

@@ -4,45 +4,13 @@ import type { Deck, Slide } from "../lib/api";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { cn } from "../lib/utils";
 import { RecordingStatus, useNarrationRecorder } from "./NarrationRecorder";
+import { type Budget, formatElapsed, loadBudget, plannedBudget, remaining, saveBudget } from "./presenter/time";
 import { ScriptMarkdown } from "./ScriptMarkdown";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { FollowedScript, TeleprompterNotice, useTeleprompter } from "./Teleprompter";
 
-/** Time since the show started, like `4:07` or `1:04:07`. */
-export function formatElapsed(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const minutes = Math.floor(seconds / 60);
-  const clock = `${minutes % 60}:${pad(seconds % 60)}`;
-  return minutes >= 60 ? `${Math.floor(minutes / 60)}:${minutes % 60 < 10 ? "0" : ""}${clock}` : clock;
-}
-
-const BUDGET_KEY = "slopslide.presenterBudget";
-
-/** The times the presenter sets for themselves, in minutes; 0 is none. */
-export interface Budget {
-  total: number;
-  perSlide: number;
-}
-
-export function loadBudget(): Budget {
-  try {
-    const saved = JSON.parse(localStorage.getItem(BUDGET_KEY) ?? "{}");
-    const minutes = (value: unknown) => (typeof value === "number" && value > 0 && value < 1000 ? value : 0);
-    return { total: minutes(saved.total), perSlide: minutes(saved.perSlide) };
-  } catch {
-    return { total: 0, perSlide: 0 };
-  }
-}
-
-/** Time left of `minutes` after `elapsedMs`, like `12:30`, or `+1:05` once over; and whether it's over. */
-export function remaining(elapsedMs: number, minutes: number): { text: string; over: boolean } {
-  const left = minutes * 60_000 - elapsedMs;
-  const over = left < 0;
-  // Counts seconds up (rounding the other way) once over, so the display never sticks at 0:00.
-  const text = formatElapsed(over ? -left : Math.ceil(left / 1000) * 1000);
-  return { text: over ? `+${text}` : text, over };
-}
+// Kept here too for what imports them from the presenter view.
+export { type Budget, formatElapsed, loadBudget, remaining } from "./presenter/time";
 
 /**
  * The presenter's side of the show: time since the show started (against the total time the
@@ -74,13 +42,11 @@ export function PresenterPanel(props: {
   // Each slide's time starts when it comes on screen, and starts over with the show's timer.
   // biome-ignore lint/correctness/useExhaustiveDependencies: `id` and `startedAt` are the triggers.
   useEffect(() => setSlideStartedAt(Date.now()), [id, startedAt]);
-  // The times set on the slides come first: the slide's own, and all of them added up.
-  const planned = shown.reduce((sum, s) => sum + (s.time ?? 0), 0) / 60;
-  const times = { total: budget.total || planned, perSlide: slide?.time ? slide.time / 60 : budget.perSlide };
+  const times = plannedBudget(budget, shown, slide);
   const update = (change: Partial<Budget>) => {
     const next = { ...budget, ...change };
     setBudget(next);
-    localStorage.setItem(BUDGET_KEY, JSON.stringify(next));
+    saveBudget(next);
   };
   const teleprompter = useTeleprompter();
   const following = teleprompter.phase === "following";

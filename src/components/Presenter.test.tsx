@@ -20,7 +20,7 @@ import { useApp } from "../store";
 import { fakeCanvas2D } from "../test/fakeCanvas";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Presenter } from "./Presenter";
-import { fitWidth, formatElapsed, remaining } from "./PresenterPanel";
+import { fitWidth } from "./PresenterPanel";
 import { PresenterWindow } from "./PresenterWindow";
 
 beforeEach(() => {
@@ -922,21 +922,6 @@ describe("presenter view", () => {
     // A slide without a time of its own has the time per slide.
     fromFrame({ type: "slop:slide", index: 1, id: "outro" });
     expect(screen.getByTestId("slide-time").textContent).toBe("slide0:00 / 5:00");
-  });
-
-  it("counts down the rest and then up past the end", () => {
-    expect(remaining(0, 1)).toEqual({ text: "1:00", over: false });
-    expect(remaining(59_500, 1)).toEqual({ text: "0:01", over: false });
-    expect(remaining(60_000, 1)).toEqual({ text: "0:00", over: false });
-    expect(remaining(65_000, 1)).toEqual({ text: "+0:05", over: true });
-  });
-
-  it("formats the time", () => {
-    expect(formatElapsed(-5)).toBe("0:00");
-    expect(formatElapsed(59_999)).toBe("0:59");
-    expect(formatElapsed(247_000)).toBe("4:07");
-    expect(formatElapsed(3_847_000)).toBe("1:04:07");
-    expect(formatElapsed(36_000_000)).toBe("10:00:00");
   });
 
   it("shows notes as formatted Markdown, without links that would leave the app", () => {

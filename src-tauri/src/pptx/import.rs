@@ -64,7 +64,7 @@ pub fn import(source: &Path, root: &Path) -> Result<Imported> {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
     let converted = convert(bytes, &name)?;
-    let dir = deck::unique_dir(root, &html::slugify(&converted.title));
+    let dir = crate::files::unique_dir(root, &html::slugify(&converted.title));
     let written = write_deck(&dir, &converted);
     match written.and_then(|file| deck::open(&file, None, true)) {
         Ok(deck) => Ok(Imported {

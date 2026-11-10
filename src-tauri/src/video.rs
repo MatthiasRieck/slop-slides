@@ -354,7 +354,7 @@ async fn narrate(app: &AppHandle, file: &Path, progress: &impl Fn(Progress)) -> 
         .filter(|s| !s.hidden)
         .map(|s| s.id)
         .collect();
-    let home = deck::app_home()?;
+    let home = crate::files::app_home()?;
     let render = app
         .state::<Narration>()
         .inner()

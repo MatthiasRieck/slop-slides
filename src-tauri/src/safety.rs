@@ -87,7 +87,7 @@ impl Guard {
         fs::write(session.join("locked.json"), "{}")?;
         for file in before.keys() {
             history::checkpoint(home, file)?;
-            deck::guard_locked(file, session)?;
+            crate::guard::guard_locked(file, session)?;
         }
         Ok(Self {
             root: root.into(),
@@ -109,7 +109,7 @@ impl Guard {
                 continue;
             }
             let changed = fs::read(file).map_or(true, |now| now != *original);
-            match deck::release_guard(file, &self.session) {
+            match crate::guard::release_guard(file, &self.session) {
                 Ok(ids) if !ids.is_empty() => restored.push((
                     file.strip_prefix(&self.root)
                         .unwrap()
@@ -234,8 +234,8 @@ mod tests {
         let session = Sessions::new(&temp.join("home")).start(&root).unwrap();
         let guard = Guard::start(&root, &session, &temp.join("home")).unwrap();
         deck::set_slide_locked(&a, Some(&session), "a", false).unwrap();
-        assert!(deck::read_guard(&a, Some(&session)).is_empty());
-        assert_eq!(deck::read_guard(&b, Some(&session)).len(), 1);
+        assert!(crate::guard::read_guard(&a, Some(&session)).is_empty());
+        assert_eq!(crate::guard::read_guard(&b, Some(&session)).len(), 1);
         fs::remove_dir_all(root.join("talks")).unwrap();
         assert_eq!(
             guard.finish(&turn()).unwrap(),

@@ -88,7 +88,7 @@ pub fn paste(contents: Contents, target: &Path) -> Result<Pasted> {
         .map(|f| f.to_string_lossy().into_owned())
         .collect();
     if !files.is_empty() {
-        let images = deck::import_assets(target, files)?;
+        let images = crate::assets::import_assets(target, files)?;
         if !images.is_empty() {
             return Ok(Pasted::Images { images });
         }
@@ -102,7 +102,7 @@ pub fn paste(contents: Contents, target: &Path) -> Result<Pasted> {
         _ => None,
     };
     if let Some((bytes, ext)) = image {
-        let src = deck::write_asset(target, &format!("pasted-image.{ext}"), &bytes)?;
+        let src = crate::assets::write_asset(target, &format!("pasted-image.{ext}"), &bytes)?;
         return Ok(Pasted::Images { images: vec![src] });
     }
     match contents.text {
@@ -170,7 +170,7 @@ fn localized_element(element: &str, target: &Path) -> Result<String> {
     let Some(source) = source_deck(&header) else {
         return Ok(element.to_string());
     };
-    let markup = deck::bring_assets(&element[at..], &source, target)?;
+    let markup = crate::assets::bring_assets(&element[at..], &source, target)?;
     Ok(format!("{}{markup}", &element[..at]))
 }
 

@@ -15,7 +15,6 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot, watch};
 
-use crate::deck;
 use crate::env;
 use crate::error::{Error, Result};
 use crate::extensions::Extensions;
@@ -265,7 +264,7 @@ impl AgentManager {
 
     pub fn send(&self, app: AppHandle, args: SendArgs) -> Result<()> {
         let dir = crate::workspace::root(&args.workspace)?;
-        let app_home = deck::app_home()?;
+        let app_home = crate::files::app_home()?;
         let session_dir = Sessions::new(&app_home).current_or_start(&dir)?;
         let bin = args.provider.resolve()?;
         let extensions = Extensions::load(&app_home, &dir);
@@ -413,7 +412,7 @@ struct Turn {
     emit: Box<dyn Fn(&AgentEvent) + Send + Sync>,
     /// The workspace root, where the agent works.
     dir: PathBuf,
-    /// Where the files every deck's agent shares are written (see [`deck::app_home`]).
+    /// Where the files every deck's agent shares are written (see [`crate::files::app_home`]).
     app_home: PathBuf,
     /// The workspace's session this turn belongs to: chat state, provider session ids.
     session_dir: PathBuf,
@@ -469,7 +468,7 @@ impl Turn {
     /// Returns whether the turn was interrupted.
     async fn run(&self, prompt: &str, mut cancel: watch::Receiver<bool>) -> bool {
         let session_file = self.provider.session_file();
-        let session = deck::read_session(&self.session_dir, session_file);
+        let session = crate::sessions::read_session(&self.session_dir, session_file);
         if self.compact {
             if let Some(message) = compact_refusal(self.provider, session.as_deref()) {
                 self.emit(&AgentEvent::Error {
@@ -489,7 +488,7 @@ impl Turn {
         let mut cut = None;
         match plan {
             Some(rewind::Plan::Fresh) => {
-                let _ = deck::write_session(&self.session_dir, session_file, None);
+                let _ = crate::sessions::write_session(&self.session_dir, session_file, None);
                 session = None;
             }
             Some(rewind::Plan::At { point, note }) if session.is_some() => {
@@ -508,7 +507,7 @@ impl Turn {
             .await;
         if self.compact && matches!(outcome, Ok(Outcome::ResumeFailed)) {
             // Starting fresh would leave nothing to compact.
-            let _ = deck::write_session(&self.session_dir, session_file, None);
+            let _ = crate::sessions::write_session(&self.session_dir, session_file, None);
             self.emit(&AgentEvent::Error {
                 message: "The conversation could not be resumed, so there is nothing to compact."
                     .into(),
@@ -517,7 +516,7 @@ impl Turn {
         }
         if matches!(outcome, Ok(Outcome::ResumeFailed)) {
             // The stored session is gone (other machine, cleared history): start fresh.
-            let _ = deck::write_session(&self.session_dir, session_file, None);
+            let _ = crate::sessions::write_session(&self.session_dir, session_file, None);
             outcome = self.run_once(&prompt, None, None, &mut cancel).await;
         }
         match outcome {
@@ -574,7 +573,11 @@ impl Turn {
                 rewind,
             };
             let on_session = |id: &str| {
-                deck::write_session(&self.session_dir, self.provider.session_file(), Some(id))
+                crate::sessions::write_session(
+                    &self.session_dir,
+                    self.provider.session_file(),
+                    Some(id),
+                )
             };
             return copilot::run_turn(args, cancel, steers, &|event| self.emit(event), &on_session)
                 .await;
@@ -600,7 +603,11 @@ impl Turn {
                 steers,
                 &|event| self.emit(event),
                 &|id| {
-                    deck::write_session(&self.session_dir, self.provider.session_file(), Some(id))
+                    crate::sessions::write_session(
+                        &self.session_dir,
+                        self.provider.session_file(),
+                        Some(id),
+                    )
                 },
             )
             .await;
@@ -758,7 +765,7 @@ impl Turn {
                     }
                     if let Some(id) = session_id_of_init(&value) {
                         saw_init = true;
-                        deck::write_session(&self.session_dir, self.provider.session_file(), Some(&id))?;
+                        crate::sessions::write_session(&self.session_dir, self.provider.session_file(), Some(&id))?;
                         self.emit(&AgentEvent::Started { session_id: Some(id) });
                     }
                     if session.is_some() && !saw_init && is_missing_session(&value) {
@@ -2138,7 +2145,7 @@ mod tests {
             }
 
             fn session(&self) -> Option<String> {
-                deck::read_session(&self.session_dir(), Provider::Claude.session_file())
+                crate::sessions::read_session(&self.session_dir(), Provider::Claude.session_file())
             }
         }
 
@@ -2240,7 +2247,8 @@ echo '{{"type":"stream_event","event":{{"type":"content_block_delta","delta":{{"
         #[tokio::test]
         async fn a_compaction_takes_no_steer() {
             let fx = Fixture::new(&format!("{INIT}\n{OK}"));
-            deck::write_session(&fx.session_dir(), "claude-session", Some("s1")).unwrap();
+            crate::sessions::write_session(&fx.session_dir(), "claude-session", Some("s1"))
+                .unwrap();
             let (mut turn, steer) = fx.steered_turn();
             turn.compact = true;
             let (message, delivered) = Steer::new("Bluer", None);
@@ -2446,7 +2454,12 @@ echo "{{\"type\":\"assistant\",\"uuid\":\"u-$$\",\"parent_tool_use_id\":null,\"m
                 r#"echo "{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$RESUME\"}}"
 {OK}"#
             ));
-            deck::write_session(&fx.session_dir(), "claude-session", Some("old-session")).unwrap();
+            crate::sessions::write_session(
+                &fx.session_dir(),
+                "claude-session",
+                Some("old-session"),
+            )
+            .unwrap();
             assert!(!fx.run("Again", None).await);
             let runs = fx.invocations();
             assert_eq!(runs.len(), 1);
@@ -2472,7 +2485,8 @@ fi
 {INIT}
 {OK}"#
             ));
-            deck::write_session(&fx.session_dir(), "claude-session", Some("gone")).unwrap();
+            crate::sessions::write_session(&fx.session_dir(), "claude-session", Some("gone"))
+                .unwrap();
             assert!(!fx.run("Hi", None).await);
             let runs = fx.invocations();
             assert_eq!(runs.len(), 2, "retried once: {:?}", fx.errors());
@@ -2505,7 +2519,8 @@ fi
 {INIT}
 {OK}"#
             ));
-            deck::write_session(&fx.session_dir(), "claude-session", Some("gone")).unwrap();
+            crate::sessions::write_session(&fx.session_dir(), "claude-session", Some("gone"))
+                .unwrap();
             assert!(!fx.run("Hi", None).await);
             assert_eq!(fx.invocations().len(), 2);
             assert_eq!(fx.session().as_deref(), Some("new-session"));
@@ -2674,7 +2689,12 @@ echo "{{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$RESUME\"}}"
 echo '{{"type":"system","subtype":"compact_boundary","compact_metadata":{{"trigger":"manual"}}}}'
 {OK}"#
             ));
-            deck::write_session(&fx.session_dir(), "claude-session", Some("old-session")).unwrap();
+            crate::sessions::write_session(
+                &fx.session_dir(),
+                "claude-session",
+                Some("old-session"),
+            )
+            .unwrap();
             assert!(!fx.run_compact().await);
             let runs = fx.invocations();
             assert_eq!(runs.len(), 1);
@@ -2705,7 +2725,8 @@ fi
 {INIT}
 {OK}"#
             ));
-            deck::write_session(&fx.session_dir(), "claude-session", Some("gone")).unwrap();
+            crate::sessions::write_session(&fx.session_dir(), "claude-session", Some("gone"))
+                .unwrap();
             assert!(!fx.run_compact().await);
             assert_eq!(fx.invocations().len(), 1, "not retried without the session");
             assert_eq!(fx.session(), None, "the stale session is forgotten");

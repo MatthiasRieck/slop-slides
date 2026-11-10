@@ -191,7 +191,7 @@ async fn export_all(app: &AppHandle, args: &Args) -> Result<()> {
     }
 
     step("Slide image export", async {
-        let dir = deck::create_export_dir(&out, &loaded.title)?;
+        let dir = crate::files::create_export_dir(&out, &loaded.title)?;
         let images = slide_images(app, &file, &shown, &dir, canvas).await?;
         for image in &images {
             check_png(&std::fs::read(image)?, canvas)

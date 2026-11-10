@@ -102,7 +102,7 @@ pub async fn save_slide_image(
     width: Option<u32>,
 ) -> Result<PathBuf> {
     let png = snapshot(webview, rect, viewport, slide_image_width(width)).await?;
-    let path = dir.join(crate::deck::slide_image_name(index, total));
+    let path = dir.join(crate::files::slide_image_name(index, total));
     std::fs::write(&path, png)?;
     Ok(path)
 }

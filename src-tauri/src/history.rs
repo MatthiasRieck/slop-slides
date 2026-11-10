@@ -199,7 +199,7 @@ impl History {
         fs::create_dir_all(&self.dir)?;
         let json =
             serde_json::to_vec_pretty(&self.journal).map_err(|e| Error::msg(e.to_string()))?;
-        crate::deck::atomic_write(&self.dir.join(JOURNAL_FILE), &json)
+        crate::files::atomic_write(&self.dir.join(JOURNAL_FILE), &json)
     }
 
     fn head(&self) -> Option<&Entry> {
@@ -233,7 +233,7 @@ impl History {
         fs::create_dir_all(&self.dir)?;
         let blob = self.blob(&hash);
         if !blob.exists() {
-            crate::deck::atomic_write(&blob, &bytes)?;
+            crate::files::atomic_write(&blob, &bytes)?;
         }
         let time = now();
         let last = self.journal.entries.len().saturating_sub(1);
@@ -281,7 +281,7 @@ impl History {
         let hash = self.journal.entries[index].hash.clone();
         let bytes = fs::read(self.blob(&hash))
             .map_err(|_| Error::msg("That version of the deck is no longer available."))?;
-        crate::deck::atomic_write(&self.file, &bytes)?;
+        crate::files::atomic_write(&self.file, &bytes)?;
         self.journal.cursor = index;
         Ok(())
     }

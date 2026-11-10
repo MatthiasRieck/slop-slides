@@ -1322,7 +1322,7 @@ mod tests {
 
     #[test]
     fn shutdown_frees_a_loaded_model() {
-        let home = crate::deck::app_home().unwrap();
+        let home = crate::files::app_home().unwrap();
         let model = model_path(&home);
         if !model.is_file() {
             return; // the model is not downloaded on this machine
@@ -1335,7 +1335,7 @@ mod tests {
 
     #[test]
     fn shutdown_frees_the_word_timing_model_too() {
-        let home = crate::deck::app_home().unwrap();
+        let home = crate::files::app_home().unwrap();
         let model = model_path(&home);
         if !model.is_file() {
             return; // the model is not downloaded on this machine
@@ -1975,7 +1975,7 @@ mod tests {
     fn probe_word_times() {
         let path = std::env::var("SLOP_TIME_PROBE").expect("SLOP_TIME_PROBE");
         let (samples, rate) = narration::audio::decode(Path::new(&path)).unwrap();
-        let home = deck::app_home().unwrap();
+        let home = crate::files::app_home().unwrap();
         let voice = Voice::default();
         let words =
             tauri::async_runtime::block_on(voice.time_words(&home, samples, rate, None)).unwrap();

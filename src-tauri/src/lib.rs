@@ -1,7 +1,9 @@
 mod agent;
+mod assets;
 mod capture;
 mod clipboard;
 mod codex;
+mod commands;
 mod comments;
 mod copilot;
 mod deck;
@@ -10,8 +12,10 @@ mod error;
 mod export;
 mod export_smoke;
 mod extensions;
+mod files;
 mod find;
 mod git;
+mod guard;
 mod history;
 mod html;
 mod lint;
@@ -40,1190 +44,11 @@ mod watcher;
 mod windows;
 mod workspace;
 
-use std::path::{Path, PathBuf};
+use tauri::Manager;
 
-use serde::Serialize;
-use tauri::{AppHandle, Manager, State, Window};
-
-use agent::{AgentManager, SendArgs};
-use deck::{Deck, RailEdit};
-use error::Result;
-use history::{Change, Source};
-use sessions::Sessions;
+use agent::AgentManager;
 use watcher::WorkspaceWatcher;
 use workspace::OpenWorkspace;
-
-fn sessions() -> Result<Sessions> {
-    Ok(Sessions::new(&deck::app_home()?))
-}
-
-/// Runs `f`, a change to deck `id`'s file, and adds it to the deck's history (see [`history`]).
-fn changing<T>(id: &str, change: Change, f: impl FnOnce(&Path) -> Result<T>) -> Result<T> {
-    let file = deck::deck_file(id)?;
-    history::change(&deck::app_home()?, &file, change, || f(&file))
-}
-
-/// The current session of the window's workspace, starting one if it has none.
-fn session(window: &Window) -> Result<PathBuf> {
-    sessions()?.current_or_start(&workspace_root(window)?)
-}
-
-/// The current session of the window's workspace, if it has one.
-fn current_session(window: &Window) -> Result<Option<PathBuf>> {
-    Ok(sessions()?.current(&workspace_root(window)?))
-}
-
-/// The folder the window has open.
-fn workspace_root(window: &Window) -> Result<PathBuf> {
-    window
-        .state::<OpenWorkspace>()
-        .get(window.label())
-        .ok_or_else(|| error::Error::msg("No folder is open."))
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CreatedSlide {
-    deck: Deck,
-    slide: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WorkspaceInfo {
-    path: String,
-    name: String,
-}
-
-/// Opens a folder as the window's workspace: the file tree shows it, `slop://` serves from
-/// it, and the watcher reports its changes. A folder open in another window is shown there
-/// instead: two windows on one folder would share (and overwrite) its chat and session.
-#[tauri::command]
-fn open_workspace(
-    app: AppHandle,
-    window: Window,
-    open: State<OpenWorkspace>,
-    watcher: State<WorkspaceWatcher>,
-    path: String,
-) -> Result<WorkspaceInfo> {
-    let root = workspace::root(&path)?;
-    if let Some(other) = open.window_with(&root, window.label()) {
-        if let Some(other) = app.get_webview_window(&other) {
-            let _ = other.unminimize();
-            let _ = other.set_focus();
-        }
-        return Err(error::Error::msg(format!(
-            "{} is already open in another window.",
-            workspace::display_name(&root)
-        )));
-    }
-    sessions()?.current_or_start(&root)?;
-    open.set(window.label(), Some(root.clone()));
-    watcher.watch(app, window.label(), root.clone())?;
-    workspace::remember(&deck::app_home()?, &root)?;
-    Ok(WorkspaceInfo {
-        name: workspace::display_name(&root),
-        path: root.to_string_lossy().into_owned(),
-    })
-}
-
-#[tauri::command]
-fn close_workspace(window: Window, open: State<OpenWorkspace>, watcher: State<WorkspaceWatcher>) {
-    watcher.stop(window.label());
-    open.set(window.label(), None);
-}
-
-/// The folder waiting to be opened in this window (see [`windows::open_folder`]), once.
-#[tauri::command]
-fn take_pending_folder(window: Window, pending: State<windows::PendingFolders>) -> Option<String> {
-    pending
-        .take(window.label())
-        .map(|root| root.to_string_lossy().into_owned())
-}
-
-/// Opens another app window on the start screen. Off the main thread: building a window from
-/// a command on it deadlocks on Windows, leaving a blank window that cannot be closed.
-#[tauri::command(async)]
-fn new_window(app: AppHandle) -> Result<()> {
-    windows::open_new(&app)
-}
-
-/// The attached screens, for choosing where to present.
-#[tauri::command]
-fn list_screens(app: AppHandle) -> Result<Vec<screens::Screen>> {
-    screens::list_named(&app)
-}
-
-/// A screenshot of each attached screen, for telling them apart in the picker. `grabbed` hears
-/// when the screens are captured, which is well before the screenshots are ready.
-#[tauri::command]
-async fn screen_previews(app: AppHandle, grabbed: tauri::ipc::Channel<()>) -> Vec<Option<String>> {
-    screens::previews(&app, grabbed).await
-}
-
-/// Moves the show window to the `audience` screen and opens the presenter view on `presenter`.
-/// Off the main thread, which building a window from a command needs on Windows.
-#[tauri::command(async)]
-fn present_on(
-    app: AppHandle,
-    window: Window,
-    audience: usize,
-    presenter: Option<usize>,
-) -> Result<()> {
-    screens::present(&app, &window, audience, presenter)
-}
-
-/// Opens the presenter view in a window of its own beside the show, which stays where it is.
-/// Off the main thread, which building a window from a command needs on Windows.
-#[tauri::command(async)]
-fn present_in_windows(app: AppHandle) -> Result<()> {
-    screens::present_in_windows(&app)
-}
-
-/// Closes the presenter view window when the show ends.
-#[tauri::command]
-fn close_presenter_view(app: AppHandle) {
-    screens::close_presenter_view(&app);
-}
-
-#[tauri::command]
-fn recent_workspaces() -> Result<Vec<workspace::RecentWorkspace>> {
-    Ok(workspace::recent(&deck::app_home()?))
-}
-
-#[tauri::command]
-fn forget_workspace(path: String) -> Result<()> {
-    workspace::forget(&deck::app_home()?, &path)
-}
-
-/// `~/Documents/SlopSlide`, where decks lived before workspaces.
-#[tauri::command]
-fn library_folder(app: AppHandle) -> Result<String> {
-    Ok(deck::library_root(&app)?.to_string_lossy().into_owned())
-}
-
-/// One folder of the open workspace (`""` for its root).
-#[tauri::command]
-fn list_dir(window: Window, path: String) -> Result<Vec<workspace::Entry>> {
-    workspace::list_dir(&workspace_root(&window)?, &path)
-}
-
-/// A file of the open workspace, with the viewer it opens in.
-#[tauri::command]
-fn open_file(window: Window, path: String) -> Result<workspace::OpenedFile> {
-    workspace::open_file(&workspace_root(&window)?, &path)
-}
-
-/// Creates a deck in its own folder at the root of the open workspace.
-#[tauri::command]
-fn create_deck(window: Window, title: String, template: Option<String>) -> Result<Deck> {
-    let root = templates::user_root()?;
-    let source = template
-        .as_deref()
-        .map(|t| templates::source(&root, t))
-        .transpose()?;
-    let template = template
-        .as_deref()
-        .zip(source.as_deref())
-        .map(|(id, html)| deck::TemplateSource { id, html });
-    deck::create(&workspace_root(&window)?, &title, template)
-}
-
-/// Converts the PowerPoint file at `path` into a new deck in the open workspace.
-#[tauri::command]
-async fn import_pptx(window: Window, path: String) -> Result<pptx::Imported> {
-    let root = workspace_root(&window)?;
-    // Not on the main thread: a big file takes a moment, and the window must stay alive.
-    tauri::async_runtime::spawn_blocking(move || pptx::import(Path::new(&path), &root))
-        .await
-        .map_err(|e| error::Error::msg(format!("the import failed: {e}")))?
-}
-
-#[tauri::command]
-fn list_templates() -> Result<Vec<templates::TemplateSummary>> {
-    Ok(templates::list(&templates::user_root()?))
-}
-
-/// Copies a template into the deck's session for the agent; returns its absolute path.
-#[tauri::command]
-fn stage_template(window: Window, id: String, template: String) -> Result<String> {
-    deck::deck_file(&id)?;
-    templates::stage(&session(&window)?, &templates::user_root()?, &template)
-}
-
-/// Gives a deck without slides the template's styles.
-#[tauri::command]
-fn apply_template(id: String, template: String) -> Result<Deck> {
-    let root = templates::user_root()?;
-    let html = templates::source(&root, &template)?;
-    let source = deck::TemplateSource {
-        id: &template,
-        html: &html,
-    };
-    changing(&id, Change::new(Source::Deck, "Apply template"), |file| {
-        deck::apply_template(file, source)
-    })
-}
-
-/// Adds a copy of one of the template's slides after `after`.
-#[tauri::command]
-fn add_template_slide(
-    id: String,
-    template: String,
-    slide: String,
-    after: Option<String>,
-) -> Result<CreatedSlide> {
-    let html = templates::source(&templates::user_root()?, &template)?;
-    let (deck, slide) = changing(&id, Change::new(Source::Rail, "Add slide"), |file| {
-        deck::add_template_slide(file, after, &html, &slide)
-    })?;
-    Ok(CreatedSlide { deck, slide })
-}
-
-/// Saves the deck as a new user template, with placeholder text in place of its content.
-#[tauri::command]
-fn create_template(id: String, name: String) -> Result<templates::TemplateSummary> {
-    templates::create_from_deck(&deck::deck_file(&id)?, &templates::user_root()?, &name)
-}
-
-#[tauri::command]
-fn open_deck(window: Window, agent: State<AgentManager>, id: String) -> Result<Deck> {
-    let file = deck::deck_file(&id)?;
-    let session = current_session(&window)?;
-    let idle = !agent.is_running(&workspace_root(&window)?.to_string_lossy());
-    let deck = deck::open(&file, session.as_deref(), idle)?;
-    if idle {
-        history::checkpoint(&deck::app_home()?, &file)?;
-    }
-    Ok(deck)
-}
-
-#[tauri::command]
-fn load_deck(id: String) -> Result<Deck> {
-    deck::load(&deck::deck_file(&id)?)
-}
-
-#[tauri::command]
-fn save_review(id: String, review: review::Review) -> Result<()> {
-    let change = Change::new(Source::Review, "Review marks").grouped("review");
-    changing(&id, change, |file| deck::save_review(file, &review))
-}
-
-#[tauri::command]
-fn save_comments(id: String, comments: comments::Comments) -> Result<()> {
-    let change = Change::new(Source::Review, "Comments").grouped("comments");
-    changing(&id, change, |file| deck::save_comments(file, &comments))
-}
-
-#[tauri::command]
-fn rename_deck(id: String, title: String) -> Result<Deck> {
-    changing(&id, Change::new(Source::Deck, "Rename deck"), |file| {
-        deck::rename(file, &title)
-    })
-}
-
-#[tauri::command]
-fn reorder_slides(id: String, slides: Vec<String>) -> Result<RailEdit> {
-    changing(&id, Change::new(Source::Rail, "Move slides"), |file| {
-        deck::reorder(file, slides)
-    })
-}
-
-#[tauri::command]
-fn add_slide(id: String, after: Option<String>) -> Result<CreatedSlide> {
-    let (deck, slide) = changing(&id, Change::new(Source::Rail, "Add slide"), |file| {
-        deck::add_blank(file, after)
-    })?;
-    Ok(CreatedSlide { deck, slide })
-}
-
-#[tauri::command]
-fn duplicate_slides(id: String, slides: Vec<String>) -> Result<RailEdit> {
-    changing(&id, Change::new(Source::Rail, "Duplicate slides"), |file| {
-        deck::duplicate_slides(file, &slides)
-    })
-}
-
-#[tauri::command]
-fn set_slides_hidden(
-    window: Window,
-    id: String,
-    slides: Vec<String>,
-    hidden: bool,
-) -> Result<RailEdit> {
-    let session = current_session(&window)?;
-    let label = if hidden { "Hide slides" } else { "Show slides" };
-    changing(&id, Change::new(Source::Rail, label), |file| {
-        deck::set_slides_hidden(file, session.as_deref(), &slides, hidden)
-    })
-}
-
-/// Sets what is said over a slide; empty `text` removes its narration.
-#[tauri::command]
-fn set_slide_narration(id: String, slide: String, text: String) -> Result<Deck> {
-    let change =
-        Change::new(Source::Narration, "Edit narration").grouped(format!("narration:{slide}"));
-    changing(&id, change, |file| {
-        deck::set_slide_narration(file, &slide, &text)
-    })
-}
-
-/// Sets a slide's speaker notes; empty `text` removes them.
-#[tauri::command]
-fn set_slide_notes(id: String, slide: String, text: String) -> Result<Deck> {
-    let change = Change::new(Source::Notes, "Edit notes").grouped(format!("notes:{slide}"));
-    changing(&id, change, |file| {
-        deck::set_slide_notes(file, &slide, &text)
-    })
-}
-
-/// Sets the seconds the presenter expects to spend on a slide; 0 removes them.
-#[tauri::command]
-fn set_slide_time(id: String, slide: String, seconds: u32) -> Result<Deck> {
-    let change = Change::new(Source::Notes, "Set slide time").grouped(format!("time:{slide}"));
-    changing(&id, change, |file| {
-        deck::set_slide_time(file, &slide, seconds)
-    })
-}
-
-/// Sets the timing of slides on the narration timeline, all in one write.
-#[tauri::command]
-fn set_slide_timing(id: String, timing: Vec<deck::SlideTiming>) -> Result<RailEdit> {
-    let change = Change::new(Source::Narration, "Change timing").grouped("timing");
-    changing(&id, change, |file| deck::set_slide_timing(file, &timing))
-}
-
-/// Gives every slide of the deck the canvas `size`.
-#[tauri::command]
-fn set_slide_size(id: String, size: size::SlideSize) -> Result<Deck> {
-    changing(
-        &id,
-        Change::new(Source::Deck, "Change slide size"),
-        |file| deck::set_slide_size(file, size),
-    )
-}
-
-#[tauri::command]
-fn set_slide_locked(window: Window, id: String, slide: String, locked: bool) -> Result<Deck> {
-    let session = current_session(&window)?;
-    let label = if locked { "Lock slide" } else { "Unlock slide" };
-    changing(&id, Change::new(Source::Rail, label), |file| {
-        deck::set_slide_locked(file, session.as_deref(), &slide, locked)
-    })
-}
-
-#[tauri::command]
-fn add_section(id: String, before: Option<String>, title: String) -> Result<Deck> {
-    changing(&id, Change::new(Source::Rail, "Add section"), |file| {
-        deck::add_section(file, before, &title)
-    })
-}
-
-#[tauri::command]
-fn rename_section(id: String, index: usize, title: String) -> Result<Deck> {
-    changing(&id, Change::new(Source::Rail, "Rename section"), |file| {
-        deck::rename_section(file, index, &title)
-    })
-}
-
-#[tauri::command]
-fn delete_section(id: String, index: usize) -> Result<Deck> {
-    changing(&id, Change::new(Source::Rail, "Delete section"), |file| {
-        deck::delete_section(file, index)
-    })
-}
-
-#[tauri::command]
-fn delete_slides(id: String, slides: Vec<String>) -> Result<RailEdit> {
-    changing(&id, Change::new(Source::Rail, "Delete slides"), |file| {
-        deck::delete_slides(file, &slides)
-    })
-}
-
-/// Slide `slide` of deck `id` as it is in the file, with its hash: what the SVG editor
-/// changes an element of and saves back with `update_slide`.
-#[tauri::command]
-fn slide_source(id: String, slide: String) -> Result<deck::SlideSource> {
-    deck::slide_source(&deck::deck_file(&id)?, &slide)
-}
-
-/// Saves a slide edited on the stage (text edits, moved elements). `base` is its hash when
-/// the edit started.
-#[tauri::command]
-fn update_slide(id: String, slide: String, markup: String, base: String) -> Result<Deck> {
-    let (deck, _) = changing(&id, Change::new(Source::Edit, "Edit slide"), |file| {
-        deck::update_slide(file, &slide, &markup, &base)
-    })?;
-    Ok(deck)
-}
-
-/// What undo and redo would do in deck `id`. A change made outside the app since is noticed
-/// first, unless the agent is working: its unfinished edits would become an entry.
-#[tauri::command]
-fn deck_history(window: Window, agent: State<AgentManager>, id: String) -> Result<history::Status> {
-    let idle = !agent.is_running(&workspace_root(&window)?.to_string_lossy());
-    history::status(&deck::app_home()?, &deck::deck_file(&id)?, idle)
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct HistoryStep {
-    deck: Deck,
-    #[serde(flatten)]
-    step: history::Step,
-}
-
-/// Undoes (`back`) or redoes the newest change of deck `id`, whatever made it.
-fn step_history(
-    window: &Window,
-    agent: &AgentManager,
-    id: &str,
-    back: bool,
-) -> Result<HistoryStep> {
-    if agent.is_running(&workspace_root(window)?.to_string_lossy()) {
-        return Err(error::Error::msg(
-            "The agent is still working on the deck; stop it or wait for it to finish first.",
-        ));
-    }
-    let (home, file) = (deck::app_home()?, deck::deck_file(id)?);
-    let step = if back {
-        history::undo(&home, &file)?
-    } else {
-        history::redo(&home, &file)?
-    };
-    Ok(HistoryStep {
-        deck: deck::load(&file)?,
-        step,
-    })
-}
-
-#[tauri::command]
-fn undo_deck(window: Window, agent: State<AgentManager>, id: String) -> Result<HistoryStep> {
-    step_history(&window, &agent, &id, true)
-}
-
-#[tauri::command]
-fn redo_deck(window: Window, agent: State<AgentManager>, id: String) -> Result<HistoryStep> {
-    step_history(&window, &agent, &id, false)
-}
-
-/// Puts `slides` back as they were at version `since` of deck `id`'s history, as one change.
-#[tauri::command]
-fn restore_slides(id: String, since: String, slides: Vec<String>) -> Result<Deck> {
-    let version = history::version(&deck::app_home()?, &deck::deck_file(&id)?, &since)?;
-    changing(&id, Change::new(Source::Edit, "Discard edits"), |file| {
-        deck::restore_slides(file, &version, &slides)
-    })
-}
-
-#[tauri::command]
-fn save_deck_source(
-    window: Window,
-    agent: State<AgentManager>,
-    id: String,
-    source: String,
-    base: Option<String>,
-) -> Result<Deck> {
-    // Normalizing mid-turn could rewrite ids the agent is about to reference.
-    let normalize = !agent.is_running(&workspace_root(&window)?.to_string_lossy());
-    changing(&id, Change::new(Source::Code, "Edit source"), |file| {
-        deck::save_source(file, &source, base.as_deref(), normalize)
-    })
-}
-
-fn asset_target(root: &Path, id: &str) -> Result<PathBuf> {
-    let path = PathBuf::from(id);
-    if !workspace::inside(root, &path) {
-        return Err(error::Error::msg("asset target outside workspace"));
-    }
-    if path == root || path.canonicalize()? == root.canonicalize()? {
-        Ok(root.into())
-    } else {
-        deck::deck_file(id)
-    }
-}
-
-#[tauri::command]
-fn import_assets(window: Window, id: String, paths: Vec<String>) -> Result<Vec<String>> {
-    let root = workspace_root(&window)?;
-    let target = asset_target(&root, &id)?;
-    deck::import_assets(&target, paths)
-}
-
-#[tauri::command]
-fn save_asset(window: Window, id: String, name: String, data: String) -> Result<String> {
-    let root = workspace_root(&window)?;
-    let target = asset_target(&root, &id)?;
-    deck::save_asset(&target, &name, &data)
-}
-
-/// Puts an element copied in the slide editor of deck `id` on the system clipboard.
-#[tauri::command]
-fn copy_to_clipboard(html: String, text: String, id: Option<String>) -> Result<()> {
-    let html = match id {
-        Some(id) => clipboard::with_source(&html, &deck::deck_file(&id)?),
-        None => html,
-    };
-    clipboard::write(&html, &text)
-}
-
-/// Puts slide `slide` of deck `id` on the system clipboard, to paste into any deck.
-#[tauri::command]
-fn copy_slide(id: String, slide: String) -> Result<()> {
-    clipboard::copy_slide(&deck::deck_file(&id)?, &slide)
-}
-
-/// Inserts the slide on the system clipboard into deck `id` after `after`, with the assets
-/// it shows; None when the clipboard holds no slide.
-#[tauri::command]
-fn paste_slide(id: String, after: Option<String>) -> Result<Option<CreatedSlide>> {
-    let Some(copied) = clipboard::read_slide()? else {
-        return Ok(None);
-    };
-    let (deck, slide) = changing(&id, Change::new(Source::Rail, "Paste slide"), |file| {
-        deck::paste_slide(file, after, copied.deck.as_deref(), &copied.markup)
-    })?;
-    Ok(Some(CreatedSlide { deck, slide }))
-}
-
-/// The clipboard's plain text, for pasting into text on a slide without its formatting.
-#[tauri::command]
-fn read_clipboard_text() -> Result<String> {
-    clipboard::read_text()
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ReplacedText {
-    deck: Deck,
-    /// How many matches were replaced.
-    count: usize,
-    /// The slides that changed.
-    slides: Vec<String>,
-    /// Locked slides with matches, left as they were.
-    skipped: Vec<String>,
-    /// The deck's source before and after, to undo the replace by saving `previous` over `source`.
-    previous: String,
-    source: String,
-}
-
-/// Where `query` is found in the text of deck `id`'s slides.
-#[tauri::command]
-fn find_in_deck(id: String, query: String, options: find::Options) -> Result<Vec<find::Match>> {
-    deck::find_text(&deck::deck_file(&id)?, &query, options)
-}
-
-/// Replaces `query` with `replacement` in the text of deck `id`'s slides (or of `slides`).
-#[tauri::command]
-fn replace_in_deck(
-    id: String,
-    query: String,
-    replacement: String,
-    options: find::Options,
-    slides: Option<Vec<String>>,
-) -> Result<ReplacedText> {
-    let done = changing(&id, Change::new(Source::Edit, "Replace text"), |file| {
-        deck::replace_text(file, &query, &replacement, options, slides.as_deref())
-    })?;
-    Ok(ReplacedText {
-        deck: done.deck,
-        count: done.count,
-        slides: done.slides,
-        skipped: done.skipped,
-        previous: done.previous,
-        source: done.source,
-    })
-}
-
-/// What pasting into deck `id` brings in; pasted images are saved into its assets.
-#[tauri::command]
-fn paste_from_clipboard(window: Window, id: String) -> Result<clipboard::Pasted> {
-    let root = workspace_root(&window)?;
-    let target = asset_target(&root, &id)?;
-    clipboard::paste(clipboard::read()?, &target)
-}
-
-#[tauri::command]
-fn export_deck(id: String, dest: String) -> Result<()> {
-    deck::export(&deck::deck_file(&id)?, std::path::Path::new(&dest))
-}
-
-/// Whether the deck is in a git repository. Off the main thread: it runs git.
-#[tauri::command(async)]
-fn deck_in_repository(id: String) -> Result<bool> {
-    git::in_repository(&deck::deck_file(&id)?)
-}
-
-/// What changed in the deck since the last commit. Off the main thread: it runs git.
-#[tauri::command(async)]
-fn deck_changes(id: String) -> Result<git::DeckChanges> {
-    git::changes(&deck::deck_file(&id)?)
-}
-
-#[tauri::command(async)]
-fn stage_change(id: String, change: git::Change) -> Result<()> {
-    git::stage(&deck::deck_file(&id)?, &change)
-}
-
-#[tauri::command(async)]
-fn unstage_change(id: String, change: git::Change) -> Result<()> {
-    git::unstage(&deck::deck_file(&id)?, &change)
-}
-
-/// Puts a change back as it was committed, in the deck and the index; the slide list's undo
-/// takes the deck's part back.
-#[tauri::command(async)]
-fn restore_change(id: String, change: git::Change) -> Result<RailEdit> {
-    let file = deck::deck_file(&id)?;
-    let before = deck::read_html(&file)?;
-    let source = git::restored(&file, &change)?;
-    let slide = match &change {
-        git::Change::Slide { id, .. } => id.as_deref(),
-        git::Change::Move { id, .. } => Some(id.as_str()),
-        git::Change::Styles => None,
-    };
-    let edit = changing(&id, Change::new(Source::Deck, "Restore from git"), |file| {
-        deck::restore(file, slide, source)
-    })?;
-    git::finish_restore(&file, &change, &before)?;
-    Ok(edit)
-}
-
-#[tauri::command(async)]
-fn stage_all(id: String) -> Result<()> {
-    git::stage_all(&deck::deck_file(&id)?)
-}
-
-#[tauri::command(async)]
-fn unstage_all(id: String) -> Result<()> {
-    git::unstage_all(&deck::deck_file(&id)?)
-}
-
-#[tauri::command(async)]
-fn commit_changes(id: String, message: String) -> Result<()> {
-    git::commit(&deck::deck_file(&id)?, &message)
-}
-
-#[tauri::command]
-fn lint_deck(window: Window, id: String) -> Result<Vec<lint::Issue>> {
-    let file = deck::deck_file(&id)?;
-    deck::lint(&file, current_session(&window)?.as_deref())
-}
-
-/// Screenshots `rect` of the window (the sketched-on slide) into the deck's session.
-/// Both are in CSS pixels; `viewport` is the window's size, to find the display scale.
-#[tauri::command]
-async fn capture_sketch(
-    window: Window,
-    webview: tauri::Webview,
-    id: String,
-    rect: capture::Rect,
-    viewport: capture::Size,
-) -> Result<String> {
-    deck::deck_file(&id)?;
-    let png = capture::snapshot(&webview, rect, viewport, capture::SKETCH_WIDTH).await?;
-    deck::save_sketch(&session(&window)?, &png)
-}
-
-/// Screenshots `rect` of the window (an area of the slide a comment is on) into the deck's
-/// session, with what lies outside `outline` (in fractions of `rect`) made transparent.
-#[tauri::command]
-async fn capture_area(
-    window: Window,
-    webview: tauri::Webview,
-    id: String,
-    rect: capture::Rect,
-    viewport: capture::Size,
-    outline: Vec<[f64; 2]>,
-) -> Result<String> {
-    deck::deck_file(&id)?;
-    let png = capture::snapshot_within(
-        &webview,
-        rect,
-        viewport,
-        capture::SKETCH_WIDTH,
-        Some(outline),
-    )
-    .await?;
-    deck::save_sketch(&session(&window)?, &png)
-}
-
-/// Creates `<parent>/<deck title>` (or `<deck title> 2`, …) for exported slide images.
-#[tauri::command]
-fn create_image_export_dir(id: String, parent: String) -> Result<String> {
-    let deck = deck::load(&deck::deck_file(&id)?)?;
-    let dir = deck::create_export_dir(std::path::Path::new(&parent), &deck.title)?;
-    Ok(dir.to_string_lossy().into_owned())
-}
-
-/// Screenshots `rect` of the window (one slide, shown full size) as `<dir>/<slide-NN>.png`, at
-/// most `width` pixels wide: the slides' canvas width.
-#[tauri::command]
-async fn export_slide_image(
-    webview: tauri::Webview,
-    dir: String,
-    index: usize,
-    total: usize,
-    rect: capture::Rect,
-    viewport: capture::Size,
-    width: Option<u32>,
-) -> Result<String> {
-    let path = capture::save_slide_image(
-        &webview,
-        Path::new(&dir),
-        index,
-        total,
-        rect,
-        viewport,
-        width,
-    )
-    .await?;
-    Ok(path.to_string_lossy().into_owned())
-}
-
-/// Prints the deck to `dest` as a PDF, one page per shown slide, with selectable text.
-#[tauri::command]
-async fn export_pdf(app: AppHandle, id: String, dest: String) -> Result<()> {
-    pdf::export(&app, &deck::deck_file(&id)?, Path::new(&dest)).await
-}
-
-/// Writes the deck to `dest` as a PowerPoint file, one slide per shown slide.
-#[tauri::command]
-async fn export_pptx(app: AppHandle, id: String, dest: String) -> Result<()> {
-    pptx::export(&app, &deck::deck_file(&id)?, Path::new(&dest)).await
-}
-
-/// Records the deck to `dest` as an MP4, each shown slide on screen for the same time (or,
-/// speaking its narration, as long as the narration timeline says), with
-/// `video-export-progress` events to `window` as it goes.
-#[tauri::command]
-async fn export_video(
-    app: AppHandle,
-    window: Window,
-    id: String,
-    dest: String,
-    options: video::Options,
-) -> Result<()> {
-    use tauri::Emitter;
-    let progress = |p: video::Progress| {
-        let _ = window.emit("video-export-progress", p);
-    };
-    video::export(
-        &app,
-        &deck::deck_file(&id)?,
-        Path::new(&dest),
-        options,
-        progress,
-    )
-    .await
-}
-
-/// Stops the running video export; it fails with "the video export was cancelled".
-#[tauri::command]
-fn cancel_video_export() {
-    video::cancel();
-}
-
-#[tauri::command]
-fn load_chat(id: String) -> Result<serde_json::Value> {
-    deck::load_chat(sessions()?.current(&workspace::root(&id)?).as_deref())
-}
-
-#[tauri::command]
-fn session_provider(id: String) -> Result<Option<agent::Provider>> {
-    sessions()?
-        .current(&workspace::root(&id)?)
-        .map(|path| sessions::provider(&path))
-        .transpose()
-        .map(Option::flatten)
-}
-
-#[tauri::command]
-fn save_chat(id: String, chat: serde_json::Value) -> Result<()> {
-    deck::save_chat(
-        &sessions()?.current_or_start(&workspace::root(&id)?)?,
-        &chat,
-    )
-}
-
-/// Takes workspace `id`'s conversation back to before chat message `message` when its next turn
-/// starts; that turn's prompt starts with `note` instead when it cannot be (see [`rewind`]).
-#[tauri::command]
-fn rewind_chat(id: String, message: String, note: String) -> Result<()> {
-    let session = sessions()?
-        .current(&workspace::root(&id)?)
-        .ok_or_else(|| error::Error::msg("This folder has no conversation."))?;
-    rewind::request(&session, &message, &note)
-}
-
-#[tauri::command]
-fn list_chat_threads(id: String) -> Result<Vec<serde_json::Value>> {
-    let sessions = sessions()?;
-    let root = workspace::root(&id)?;
-    let current = sessions.current(&root);
-    sessions
-        .list_scoped(&root)
-        .into_iter()
-        .rev()
-        .map(|path| {
-            let chat = deck::load_chat(Some(&path))?;
-            let messages = chat.as_array();
-            let first = messages.and_then(|items| items.iter().find(|m| m["role"] == "user"));
-            let title = first
-                .and_then(|m| m["text"].as_str())
-                .unwrap_or("New conversation");
-            Ok(serde_json::json!({
-                "id": path.file_name().unwrap().to_string_lossy(),
-                "title": title.chars().take(100).collect::<String>(),
-                "createdAt": first.and_then(|m| m["createdAt"].as_u64()),
-                "current": current.as_ref() == Some(&path),
-                "messageCount": messages.map_or(0, Vec::len),
-                "association": sessions::association_of(&path).map(|associated| {
-                    let relative = associated.strip_prefix(&root).unwrap_or(&associated);
-                    if relative.as_os_str().is_empty() { ".".to_string() }
-                    else { relative.to_string_lossy().replace('\\', "/") }
-                }),
-            }))
-        })
-        .collect()
-}
-
-#[tauri::command]
-fn select_chat_thread(
-    agent: State<AgentManager>,
-    id: String,
-    thread: String,
-) -> Result<serde_json::Value> {
-    if agent.is_running(&id) {
-        return Err(error::Error::msg(
-            "Stop the current turn before switching conversations.",
-        ));
-    }
-    let sessions = sessions()?;
-    let root = workspace::root(&id)?;
-    let path = sessions
-        .list_scoped(&root)
-        .into_iter()
-        .find(|path| path.file_name().is_some_and(|name| name == thread.as_str()))
-        .ok_or_else(|| error::Error::msg("Conversation not found in this workspace."))?;
-    // Read before selecting: a damaged transcript must not change the active conversation.
-    let chat = deck::load_chat(Some(&path))?;
-    let provider = sessions::provider(&path)?;
-    sessions.select(&root, &thread)?;
-    Ok(serde_json::json!({ "chat": chat, "provider": provider }))
-}
-
-/// Starts a new chat in a new session; the old conversation stays in its own.
-#[tauri::command]
-fn reset_chat(agent: State<AgentManager>, id: String) -> Result<()> {
-    agent.interrupt(&id);
-    new_chat(&sessions()?, &workspace::root(&id)?).map(|_| ())
-}
-
-/// A session for a new chat: the current one while it has no conversation yet, else a new one.
-fn new_chat(sessions: &Sessions, file: &Path) -> Result<PathBuf> {
-    if let Some(current) = sessions.current(file) {
-        if deck::load_chat(Some(&current))?.is_null() && sessions::provider(&current)?.is_none() {
-            for provider in agent::Provider::ALL {
-                deck::write_session(&current, provider.session_file(), None)?;
-            }
-            return Ok(current);
-        }
-    }
-    sessions.start(file)
-}
-
-#[tauri::command]
-fn send_message(app: AppHandle, agent: State<AgentManager>, args: SendArgs) -> Result<()> {
-    agent.send(app, args)
-}
-
-#[tauri::command]
-async fn permission_modes(
-    provider: agent::Provider,
-    id: String,
-) -> Result<Vec<permissions::PermissionMode>> {
-    match provider {
-        agent::Provider::Codex => codex::permission_modes(&workspace::root(&id)?).await,
-        _ => Ok(permissions::fixed_modes(provider)),
-    }
-}
-
-/// Changes the permission mode of the turn running in workspace `id`, if any.
-#[tauri::command]
-fn set_permission_mode(agent: State<AgentManager>, id: String, mode: permissions::PermissionMode) {
-    agent.set_permission_mode(&id, mode);
-}
-
-#[tauri::command]
-fn respond_approval(
-    agent: State<AgentManager>,
-    workspace: String,
-    id: String,
-    decision: permissions::Decision,
-) -> Result<()> {
-    agent.approvals.respond(&workspace, &id, decision)
-}
-
-#[tauri::command]
-fn interrupt_agent(agent: State<AgentManager>, id: String) {
-    agent.interrupt(&id);
-}
-
-/// Sends `prompt` into the workspace's running turn; false when it did not get in (no turn
-/// is running, or it is ending), and the frontend runs it as the next turn instead.
-#[tauri::command]
-async fn steer_agent(
-    agent: State<'_, AgentManager>,
-    workspace: String,
-    prompt: String,
-    message: Option<String>,
-) -> Result<bool> {
-    Ok(agent.steer(&workspace, &prompt, message.as_deref()).await)
-}
-
-#[tauri::command]
-fn agent_running(agent: State<AgentManager>, id: String) -> bool {
-    agent.is_running(&id)
-}
-
-#[tauri::command]
-async fn list_providers() -> Vec<providers::ProviderInfo> {
-    providers::list().await
-}
-
-#[tauri::command]
-fn voice_status(voice: State<voice::Voice>) -> Result<voice::VoiceStatus> {
-    Ok(voice.status(&deck::app_home()?))
-}
-
-/// Downloads the speech-to-text model to `~/.slopslides/models` unless it is there.
-#[tauri::command]
-async fn download_voice_model(app: AppHandle, voice: State<'_, voice::Voice>) -> Result<()> {
-    voice.download(&app, &deck::app_home()?).await
-}
-
-/// Listens for the teleprompter in the calling window, reporting recent words as `voice-heard`
-/// events until `cancel_recording`.
-#[tauri::command]
-async fn follow_speech(
-    app: AppHandle,
-    window: tauri::Window,
-    voice: State<'_, voice::Voice>,
-) -> Result<()> {
-    voice
-        .follow(app, &deck::app_home()?, window.label().to_string())
-        .await
-}
-
-/// Starts recording, transcribing live as `voice-partial` events.
-#[tauri::command]
-async fn start_recording(app: AppHandle, voice: State<'_, voice::Voice>) -> Result<()> {
-    voice.start(app, &deck::app_home()?).await
-}
-
-/// Stops recording and returns what was said.
-#[tauri::command]
-async fn stop_recording(voice: State<'_, voice::Voice>) -> Result<String> {
-    voice.stop(&deck::app_home()?).await
-}
-
-#[tauri::command]
-fn cancel_recording(voice: State<voice::Voice>) {
-    voice.cancel();
-}
-
-/// Starts recording the deck's narration for the calling window, from `slide` on: what is said
-/// goes to the slide on screen as text or as audio, with `narration-recorded` events as it does.
-#[tauri::command]
-async fn start_narration_recording(
-    app: AppHandle,
-    window: tauri::Window,
-    voice: State<'_, voice::Voice>,
-    id: String,
-    slide: String,
-    mode: voice::RecordMode,
-) -> Result<()> {
-    let target = voice::NarrationTarget {
-        file: deck::deck_file(&id)?,
-        deck: id,
-        mode,
-    };
-    voice
-        .record_narration(
-            app,
-            &deck::app_home()?,
-            window.label().to_string(),
-            target,
-            slide,
-        )
-        .await
-}
-
-/// Tells the narration recording which slide is on screen now.
-#[tauri::command]
-fn narration_recording_slide(voice: State<voice::Voice>, slide: String) {
-    voice.narrate_slide(&slide);
-}
-
-/// Ends the narration recording, once all of it is kept.
-#[tauri::command]
-async fn stop_narration_recording(voice: State<'_, voice::Voice>) -> Result<()> {
-    voice.stop_narration().await
-}
-
-/// Deletes a slide's recorded narration; returns every slide's audio.
-#[tauri::command]
-fn delete_recorded_narration(id: String, slide: String) -> Result<Vec<narration::SlideAudio>> {
-    let file = deck::deck_file(&id)?;
-    narration::delete_recording(&file, &slide)?;
-    Ok(narration::statuses(&file, &deck::load(&file)?))
-}
-
-#[tauri::command]
-fn speech_status(narration: State<narration::Narration>) -> Result<narration::SpeechStatus> {
-    Ok(narration.status(&deck::app_home()?))
-}
-
-/// Each slide's narration audio: whether it is there and up to date, and how long it plays.
-#[tauri::command]
-fn narration_audio(id: String) -> Result<Vec<narration::SlideAudio>> {
-    let file = deck::deck_file(&id)?;
-    Ok(narration::statuses(&file, &deck::load(&file)?))
-}
-
-/// Says the narration of the deck's `slides` (all for None) that has no up-to-date audio,
-/// with `narration-render` progress events to every window.
-#[tauri::command]
-async fn render_narration(
-    app: AppHandle,
-    narration: State<'_, narration::Narration>,
-    id: String,
-    slides: Option<Vec<String>>,
-) -> Result<Vec<narration::SlideAudio>> {
-    use tauri::Emitter;
-    let progress = |p: narration::RenderProgress| {
-        let _ = app.emit(narration::RENDER_EVENT, p);
-    };
-    narration
-        .render(
-            &deck::app_home()?,
-            &deck::deck_file(&id)?,
-            slides.as_deref(),
-            progress,
-        )
-        .await
-}
-
-/// Stops saying narration; the render fails with "the narration was cancelled".
-#[tauri::command]
-fn cancel_narration(narration: State<narration::Narration>) {
-    narration.cancel();
-}
-
-/// Has the speech-to-text model hear the up-to-date audio of the deck's `slides` (all for None)
-/// again, to keep when each word is said, with `narration-timing` progress events to every
-/// window; returns every slide's audio.
-#[tauri::command]
-async fn time_narration(
-    app: AppHandle,
-    voice: State<'_, voice::Voice>,
-    id: String,
-    slides: Option<Vec<String>>,
-) -> Result<Vec<narration::SlideAudio>> {
-    use tauri::Emitter;
-    let file = deck::deck_file(&id)?;
-    let progress = |p: narration::TimingProgress| {
-        let _ = app.emit(narration::TIMING_EVENT, p);
-    };
-    narration::time_words(
-        &voice,
-        &deck::app_home()?,
-        &file,
-        slides.as_deref(),
-        progress,
-    )
-    .await
-}
-
-/// When each word of a slide's narration audio is said, in seconds from the audio's start;
-/// null until `time_narration` heard it.
-#[tauri::command]
-fn narration_words(id: String, slide: String) -> Result<Option<Vec<voice::Word>>> {
-    Ok(narration::words(&deck::deck_file(&id)?, &slide))
-}
-
-/// A slide's narration audio, as WAV bytes.
-#[tauri::command]
-fn narration_wav(id: String, slide: String) -> Result<tauri::ipc::Response> {
-    let file = narration::audio_file(&deck::deck_file(&id)?, &slide);
-    Ok(tauri::ipc::Response::new(std::fs::read(file)?))
-}
-
-/// How loud a slide's narration audio is along its length, for drawing its waveform.
-#[tauri::command]
-async fn narration_peaks(id: String, slide: String) -> Result<Vec<f32>> {
-    let file = narration::audio_file(&deck::deck_file(&id)?, &slide);
-    let (samples, rate) = narration::audio::read_wav(&file)?;
-    Ok(narration::audio::peaks(&samples, rate))
-}
-
-#[tauri::command]
-fn set_narration_voice(id: String, voice: String) -> Result<Deck> {
-    changing(
-        &id,
-        Change::new(Source::Narration, "Change voice"),
-        |file| deck::set_narration_voice(file, &voice),
-    )
-}
-
-#[tauri::command]
-fn set_narration_provider(id: String, provider: String) -> Result<Deck> {
-    changing(
-        &id,
-        Change::new(Source::Narration, "Change narration provider"),
-        |file| deck::set_narration_provider(file, &provider),
-    )
-}
-
-/// Saves the API key of a hosted narration provider in `~/.slopslides`, or forgets it for
-/// None; returns what narration can do now.
-#[tauri::command]
-fn set_speech_key(
-    narration: State<narration::Narration>,
-    provider: String,
-    key: Option<String>,
-) -> Result<narration::SpeechStatus> {
-    let provider = narration::Provider::parse(&provider)
-        .ok_or_else(|| error::Error::msg(format!("unknown narration provider: {provider}")))?;
-    let home = deck::app_home()?;
-    narration::cloud::set_key(&home, provider, key.as_deref())?;
-    Ok(narration.status(&home))
-}
-
-/// Every voice the provider's account can use: for ElevenLabs, its premade voices and the
-/// account's own; for the others, their built-in ones.
-#[tauri::command]
-async fn speech_voices(provider: String) -> Result<Vec<narration::cloud::VoiceOption>> {
-    let provider = narration::Provider::parse(&provider)
-        .ok_or_else(|| error::Error::msg(format!("unknown narration provider: {provider}")))?;
-    let home = deck::app_home()?;
-    match (provider, narration::cloud::key(&home, provider)) {
-        (narration::Provider::ElevenLabs, Some((key, _))) => {
-            narration::cloud::elevenlabs_voices(&key).await
-        }
-        _ => Ok(provider.voices().iter().map(Into::into).collect()),
-    }
-}
-
-#[tauri::command]
-fn set_narration_language(id: String, language: String) -> Result<Deck> {
-    changing(
-        &id,
-        Change::new(Source::Narration, "Change language"),
-        |file| deck::set_narration_language(file, &language),
-    )
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -1277,118 +102,118 @@ pub fn run() {
             protocol::handle(ctx.app_handle(), request)
         })
         .invoke_handler(tauri::generate_handler![
-            new_window,
-            list_screens,
-            screen_previews,
-            present_on,
-            close_presenter_view,
-            present_in_windows,
-            take_pending_folder,
-            open_workspace,
-            close_workspace,
-            recent_workspaces,
-            forget_workspace,
-            library_folder,
-            list_dir,
-            open_file,
-            create_deck,
-            open_deck,
-            load_deck,
-            rename_deck,
-            save_review,
-            save_comments,
-            reorder_slides,
-            add_slide,
-            duplicate_slides,
-            set_slides_hidden,
-            set_slide_locked,
-            set_slide_narration,
-            set_slide_notes,
-            set_slide_time,
-            set_slide_timing,
-            set_slide_size,
-            add_section,
-            rename_section,
-            delete_section,
-            delete_slides,
-            update_slide,
-            slide_source,
-            save_deck_source,
-            deck_history,
-            undo_deck,
-            redo_deck,
-            restore_slides,
-            rewind_chat,
-            import_assets,
-            save_asset,
-            copy_to_clipboard,
-            copy_slide,
-            paste_slide,
-            paste_from_clipboard,
-            read_clipboard_text,
-            find_in_deck,
-            replace_in_deck,
-            export_deck,
-            deck_in_repository,
-            deck_changes,
-            stage_change,
-            unstage_change,
-            restore_change,
-            stage_all,
-            unstage_all,
-            commit_changes,
-            lint_deck,
-            capture_sketch,
-            capture_area,
-            create_image_export_dir,
-            export_slide_image,
-            export_pdf,
-            export_pptx,
-            import_pptx,
-            export_video,
-            cancel_video_export,
-            load_chat,
-            session_provider,
-            save_chat,
-            reset_chat,
-            list_chat_threads,
-            select_chat_thread,
-            send_message,
-            interrupt_agent,
-            steer_agent,
-            permission_modes,
-            respond_approval,
-            set_permission_mode,
-            agent_running,
-            list_providers,
-            list_templates,
-            stage_template,
-            apply_template,
-            add_template_slide,
-            create_template,
-            voice_status,
-            download_voice_model,
-            follow_speech,
-            start_recording,
-            stop_recording,
-            cancel_recording,
-            start_narration_recording,
-            narration_recording_slide,
-            stop_narration_recording,
-            delete_recorded_narration,
-            speech_status,
-            narration_audio,
-            render_narration,
-            cancel_narration,
-            narration_wav,
-            narration_peaks,
-            time_narration,
-            narration_words,
-            set_narration_voice,
-            set_narration_provider,
-            set_speech_key,
-            speech_voices,
-            set_narration_language,
+            commands::workspace::new_window,
+            commands::workspace::list_screens,
+            commands::workspace::screen_previews,
+            commands::workspace::present_on,
+            commands::workspace::close_presenter_view,
+            commands::workspace::present_in_windows,
+            commands::workspace::take_pending_folder,
+            commands::workspace::open_workspace,
+            commands::workspace::close_workspace,
+            commands::workspace::recent_workspaces,
+            commands::workspace::forget_workspace,
+            commands::workspace::library_folder,
+            commands::workspace::list_dir,
+            commands::workspace::open_file,
+            commands::deck::create_deck,
+            commands::deck::open_deck,
+            commands::deck::load_deck,
+            commands::deck::rename_deck,
+            commands::deck::save_review,
+            commands::deck::save_comments,
+            commands::deck::reorder_slides,
+            commands::deck::add_slide,
+            commands::deck::duplicate_slides,
+            commands::deck::set_slides_hidden,
+            commands::deck::set_slide_locked,
+            commands::deck::set_slide_narration,
+            commands::deck::set_slide_notes,
+            commands::deck::set_slide_time,
+            commands::deck::set_slide_timing,
+            commands::deck::set_slide_size,
+            commands::deck::add_section,
+            commands::deck::rename_section,
+            commands::deck::delete_section,
+            commands::deck::delete_slides,
+            commands::deck::update_slide,
+            commands::deck::slide_source,
+            commands::deck::save_deck_source,
+            commands::history::deck_history,
+            commands::history::undo_deck,
+            commands::history::redo_deck,
+            commands::history::restore_slides,
+            commands::chat::rewind_chat,
+            commands::deck::import_assets,
+            commands::deck::save_asset,
+            commands::clipboard::copy_to_clipboard,
+            commands::clipboard::copy_slide,
+            commands::clipboard::paste_slide,
+            commands::clipboard::paste_from_clipboard,
+            commands::clipboard::read_clipboard_text,
+            commands::deck::find_in_deck,
+            commands::deck::replace_in_deck,
+            commands::export::export_deck,
+            commands::git::deck_in_repository,
+            commands::git::deck_changes,
+            commands::git::stage_change,
+            commands::git::unstage_change,
+            commands::git::restore_change,
+            commands::git::stage_all,
+            commands::git::unstage_all,
+            commands::git::commit_changes,
+            commands::deck::lint_deck,
+            commands::chat::capture_sketch,
+            commands::chat::capture_area,
+            commands::export::create_image_export_dir,
+            commands::export::export_slide_image,
+            commands::export::export_pdf,
+            commands::export::export_pptx,
+            commands::deck::import_pptx,
+            commands::export::export_video,
+            commands::export::cancel_video_export,
+            commands::chat::load_chat,
+            commands::chat::session_provider,
+            commands::chat::save_chat,
+            commands::chat::reset_chat,
+            commands::chat::list_chat_threads,
+            commands::chat::select_chat_thread,
+            commands::chat::send_message,
+            commands::chat::interrupt_agent,
+            commands::chat::steer_agent,
+            commands::chat::permission_modes,
+            commands::chat::respond_approval,
+            commands::chat::set_permission_mode,
+            commands::chat::agent_running,
+            commands::chat::list_providers,
+            commands::templates::list_templates,
+            commands::templates::stage_template,
+            commands::templates::apply_template,
+            commands::templates::add_template_slide,
+            commands::templates::create_template,
+            commands::voice::voice_status,
+            commands::voice::download_voice_model,
+            commands::voice::follow_speech,
+            commands::voice::start_recording,
+            commands::voice::stop_recording,
+            commands::voice::cancel_recording,
+            commands::narration::start_narration_recording,
+            commands::narration::narration_recording_slide,
+            commands::narration::stop_narration_recording,
+            commands::narration::delete_recorded_narration,
+            commands::narration::speech_status,
+            commands::narration::narration_audio,
+            commands::narration::render_narration,
+            commands::narration::cancel_narration,
+            commands::narration::narration_wav,
+            commands::narration::narration_peaks,
+            commands::narration::time_narration,
+            commands::narration::narration_words,
+            commands::narration::set_narration_voice,
+            commands::narration::set_narration_provider,
+            commands::narration::set_speech_key,
+            commands::narration::speech_voices,
+            commands::narration::set_narration_language,
         ])
         .build(context)
         .expect("error while running SlopSlide")
@@ -1422,31 +247,6 @@ pub fn run() {
 }
 
 #[cfg(test)]
-mod session_tests {
-    use super::*;
-
-    #[test]
-    fn resetting_a_claimed_session_starts_a_new_chat_even_without_saved_messages() {
-        let root = std::env::temp_dir().join(format!("slopslide-reset-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        let file = root.join("deck.html");
-        std::fs::write(&file, "<html></html>").unwrap();
-        let sessions = Sessions::new(&root.join("home"));
-        let first = new_chat(&sessions, &root).unwrap();
-        assert_eq!(new_chat(&sessions, &root).unwrap(), first);
-        sessions::claim_provider(&first, agent::Provider::Codex).unwrap();
-        let next = new_chat(&sessions, &root).unwrap();
-        assert_ne!(next, first);
-        assert_eq!(sessions::provider(&next).unwrap(), None);
-        assert_eq!(
-            sessions::provider(&first).unwrap(),
-            Some(agent::Provider::Codex)
-        );
-        std::fs::remove_dir_all(root).unwrap();
-    }
-}
-
-#[cfg(test)]
 mod window_config_tests {
     #[test]
     fn traffic_lights_are_vertically_centered_in_the_top_bar() {
@@ -1459,34 +259,5 @@ mod window_config_tests {
         assert_eq!(position["y"].as_f64(), Some((56.0 - 14.0) / 2.0 + 9.0));
         // Leaves room before the `pl-[84px]` content padding.
         assert!(position["x"].as_f64().unwrap() + 54.0 < 84.0);
-    }
-}
-
-#[cfg(test)]
-mod command_thread_tests {
-    /// The attribute on the command `name` in this file.
-    fn command_attribute(name: &str) -> &'static str {
-        let source = include_str!("lib.rs");
-        let at = source
-            .find(&format!("\nfn {name}("))
-            .unwrap_or_else(|| panic!("no command {name}"));
-        source[..at]
-            .lines()
-            .rev()
-            .find(|line| line.starts_with("#[tauri::command"))
-            .unwrap()
-    }
-
-    #[test]
-    fn commands_that_open_windows_run_off_the_main_thread() {
-        // A synchronous command runs on the main thread, where building a window deadlocks on
-        // Windows: Ctrl+N left a blank window that could not be closed.
-        for name in ["new_window", "present_on"] {
-            assert_eq!(
-                command_attribute(name),
-                "#[tauri::command(async)]",
-                "{name}"
-            );
-        }
     }
 }

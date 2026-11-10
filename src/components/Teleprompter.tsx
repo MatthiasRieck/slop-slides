@@ -1,14 +1,15 @@
-import { listen } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { api, errorMessage, type VoiceDownloadProgress } from "../lib/api";
+import { type SpeechModelPhase, useSpeechModel } from "../hooks/useSpeechModel";
+import { useTauriEvent } from "../hooks/useTauriEvent";
+import { api, type VoiceDownloadProgress } from "../lib/api";
 import { markdownText, rehypePieces } from "../lib/markdown";
 import { follow, type Piece, pieces, startTrack, toScript } from "../lib/teleprompter";
 import { cn } from "../lib/utils";
 import { formatBytes } from "../lib/voice";
 import { ScriptMarkdown } from "./ScriptMarkdown";
 
-export type TeleprompterPhase = "off" | "offer" | "downloading" | "starting" | "following";
+export type TeleprompterPhase = SpeechModelPhase | "following";
 
 /** Where the speaker's line stays as the script scrolls: a third of the way down. */
 const LINE_AT = 1 / 3;
@@ -21,94 +22,39 @@ const pieceClass = (piece: Piece) => (piece.said ? "text-foreground/40" : "");
  * component using it, so the microphone goes off with it.
  */
 export function useTeleprompter() {
-  const [phase, setPhase] = useState<TeleprompterPhase>("off");
-  const [modelBytes, setModelBytes] = useState(0);
-  const [progress, setProgress] = useState<VoiceDownloadProgress | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const following = useRef(false);
-  const mounted = useRef(true);
-
-  const fail = (reason: unknown) => {
-    following.current = false;
-    setPhase("off");
-    setError(errorMessage(reason));
-  };
+  const model = useSpeechModel<"following">("voice-follow-failed", () => void api.cancelRecording());
+  const { phase, setPhase } = model;
 
   const listenToSpeaker = async () => {
     setPhase("starting");
     await api.followSpeech();
-    following.current = true;
-    if (mounted.current) setPhase("following");
-    else stopFollowing(following);
-  };
-
-  const download = async () => {
-    setProgress(null);
-    setPhase("downloading");
-    try {
-      await api.downloadVoiceModel();
-      if (mounted.current) await listenToSpeaker();
-    } catch (reason) {
-      fail(reason);
-    }
+    model.started("following");
   };
 
   const toggle = async () => {
-    setError(null);
+    model.setError(null);
     if (phase === "following") {
-      stopFollowing(following);
+      model.stop();
       return setPhase("off");
     }
     if (phase === "offer") return setPhase("off");
     if (phase !== "off") return;
     try {
-      const status = await api.voiceStatus();
-      setModelBytes(status.modelBytes);
-      if (status.modelReady) await listenToSpeaker();
-      // A download already running (started from the chat) is waited for.
-      else if (status.downloading) await download();
-      else setPhase("offer");
+      await model.withModel(listenToSpeaker);
     } catch (reason) {
-      fail(reason);
+      model.fail(reason);
     }
   };
 
-  useEffect(() => {
-    mounted.current = true;
-    const off = listen<string>("voice-follow-failed", (event) => {
-      if (!following.current) return;
-      stopFollowing(following);
-      setPhase("off");
-      setError(event.payload);
-    });
-    return () => {
-      mounted.current = false;
-      void off.then((fn) => fn());
-      stopFollowing(following);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (phase !== "downloading") return;
-    const off = listen<VoiceDownloadProgress>("voice-download", (event) => setProgress(event.payload));
-    return () => void off.then((fn) => fn());
-  }, [phase]);
-
   return {
     phase,
-    modelBytes,
-    progress,
-    error,
+    modelBytes: model.modelBytes,
+    progress: model.progress,
+    error: model.error,
     toggle,
-    download,
+    download: () => model.download(listenToSpeaker),
     decline: () => setPhase("off"),
   };
-}
-
-function stopFollowing(following: { current: boolean }) {
-  if (!following.current) return;
-  following.current = false;
-  void api.cancelRecording();
 }
 
 /** What a listening tool of the presenter view does with the speech model, and what it says about it. */
@@ -185,12 +131,7 @@ export function FollowedScript({ text, className }: { text: string; className?: 
   const [track, setTrack] = useState(() => startTrack(script));
   const box = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const off = listen<string>("voice-heard", (event) => {
-      setTrack((current) => follow(script, current, event.payload));
-    });
-    return () => void off.then((fn) => fn());
-  }, [script]);
+  useTauriEvent<string>("voice-heard", (heard) => setTrack((current) => follow(script, current, heard)));
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: scrolls each time the speaker moves.
   useEffect(() => {

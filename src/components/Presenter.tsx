@@ -1,8 +1,9 @@
-import { emit, listen } from "@tauri-apps/api/event";
+import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ChevronLeft, ChevronRight, type LucideIcon, Maximize, PanelRight, Pause, Play, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { useTauriEvent } from "../hooks/useTauriEvent";
 import { api, type Deck, errorMessage } from "../lib/api";
 import { zoomBox } from "../lib/ink";
 import { hasPresenterWindow } from "../lib/screens";
@@ -267,26 +268,13 @@ export interface PresenterState {
  * a deck.
  */
 function usePresenterFeed(deck: Deck | null, slide: string | null, go: (key: string) => void) {
-  const state = useRef<PresenterState | null>(null);
-  state.current = deck ? { deck, slide } : null;
-  const goRef = useRef(go);
-  goRef.current = go;
   const active = deck !== null;
   useEffect(() => {
     if (deck) void emit("presenter:state", { deck, slide });
   }, [deck, slide]);
-  useEffect(() => {
-    if (!active) return;
-    const sub = Promise.all([
-      listen("presenter:ready", () => state.current && void emit("presenter:state", state.current)),
-      listen<string>("presenter:key", (event) => goRef.current(event.payload)),
-      listen("presenter:exit", () => useApp.getState().setPresenting(false)),
-    ]);
-    return () =>
-      void sub.then((offs) => {
-        for (const off of offs) off();
-      });
-  }, [active]);
+  useTauriEvent("presenter:ready", () => deck && void emit("presenter:state", { deck, slide }), active);
+  useTauriEvent<string>("presenter:key", go, active);
+  useTauriEvent("presenter:exit", () => useApp.getState().setPresenting(false), active);
 }
 
 /**

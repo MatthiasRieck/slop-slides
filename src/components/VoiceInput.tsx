@@ -1,7 +1,7 @@
-import { listen } from "@tauri-apps/api/event";
 import { Loader2, Mic, Square } from "lucide-react";
 import { type Ref, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
+import { useTauriEvent } from "../hooks/useTauriEvent";
 import { api, errorMessage, type VoiceDownloadProgress } from "../lib/api";
 import { cn } from "../lib/utils";
 import { formatBytes, WAVEFORM_BAR, WAVEFORM_STEP, waveformBars } from "../lib/voice";
@@ -194,21 +194,9 @@ export function VoiceInput(
     void api.cancelRecording();
   }, []);
 
-  useEffect(() => {
-    if (phase !== "recording" && phase !== "downloading") return;
-    let disposed = false;
-    const unlisten =
-      phase === "recording"
-        ? [
-            listen<number>("voice-level", (e) => !disposed && setLevel(e.payload)),
-            listen<string>("voice-partial", (e) => !disposed && handlers.current.onPartial(e.payload)),
-          ]
-        : [listen<VoiceDownloadProgress>("voice-download", (e) => !disposed && setProgress(e.payload))];
-    return () => {
-      disposed = true;
-      for (const u of unlisten) void u.then((fn) => fn());
-    };
-  }, [phase]);
+  useTauriEvent("voice-level", setLevel, phase === "recording");
+  useTauriEvent<string>("voice-partial", (text) => handlers.current.onPartial(text), phase === "recording");
+  useTauriEvent("voice-download", setProgress, phase === "downloading");
 
   // Escape throws the recording away.
   useEffect(() => {

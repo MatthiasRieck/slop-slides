@@ -723,7 +723,12 @@ fn beats_tool_finds_the_beat_on_the_show() {
     );
     assert_eq!(res["result"]["isError"], false, "{res}");
     let text = text_of(&res);
-    let saved = dir.join("session/timing/deck.html.beats-song.json");
+    // Joined part by part, as the tool does: the text names the path with the platform's
+    // separators.
+    let saved = dir
+        .join("session")
+        .join("timing")
+        .join("deck.html.beats-song.json");
     let data: Value = serde_json::from_str(&std::fs::read_to_string(&saved).unwrap()).unwrap();
     let beats = data["beats"].as_array().unwrap();
     let header = format!(

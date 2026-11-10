@@ -611,7 +611,6 @@ fn compact_refusal(provider: Provider, session: Option<&str>) -> Option<&'static
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::permissions::Decision;
     use serde_json::json;
 
     #[test]
@@ -830,6 +829,7 @@ mod tests {
     #[cfg(unix)]
     mod process {
         use super::*;
+        use crate::permissions::Decision;
         use crate::test_support::TempDir;
         use std::fs;
         use std::sync::Arc;

@@ -4,7 +4,7 @@ use tauri::{AppHandle, State};
 
 use super::changing;
 use crate::deck::{self, Deck};
-use crate::error::{self, Result};
+use crate::error::Result;
 use crate::files;
 use crate::history::{Change, Source};
 use crate::narration;
@@ -171,7 +171,7 @@ pub fn set_speech_key(
     provider: String,
     key: Option<String>,
 ) -> Result<narration::SpeechStatus> {
-    let provider = parse_provider(&provider)?;
+    let provider = narration::Provider::named(&provider)?;
     let home = files::app_home()?;
     narration::cloud::set_key(&home, provider, key.as_deref())?;
     Ok(narration.status(&home))
@@ -181,7 +181,7 @@ pub fn set_speech_key(
 /// account's own; for the others, their built-in ones.
 #[tauri::command]
 pub async fn speech_voices(provider: String) -> Result<Vec<narration::cloud::VoiceOption>> {
-    let provider = parse_provider(&provider)?;
+    let provider = narration::Provider::named(&provider)?;
     let home = files::app_home()?;
     match (provider, narration::cloud::key(&home, provider)) {
         (narration::Provider::ElevenLabs, Some((key, _))) => {
@@ -198,10 +198,4 @@ pub fn set_narration_language(id: String, language: String) -> Result<Deck> {
         Change::new(Source::Narration, "Change language"),
         |file| deck::set_narration_language(file, &language),
     )
-}
-
-/// The hosted narration provider with id `provider`.
-fn parse_provider(provider: &str) -> Result<narration::Provider> {
-    narration::Provider::parse(provider)
-        .ok_or_else(|| error::Error::msg(format!("unknown narration provider: {provider}")))
 }

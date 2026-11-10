@@ -5,6 +5,8 @@
 
 use std::path::Path;
 
+use serde_json::{json, Value};
+
 use crate::deck::Deck;
 use crate::video;
 
@@ -50,6 +52,54 @@ pub struct Clip {
     /// When it would have started had the narration before it not still been playing: it
     /// never talks over that one, so it waits.
     pub planned: f64,
+}
+
+/// Where a slide's narration audio came from.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Source {
+    /// Audio made elsewhere and brought in.
+    Imported,
+    /// The presenter's own recording.
+    Recording,
+    /// Speech a narration service made from the script.
+    Voice,
+}
+
+impl Source {
+    /// How the timeline's data names it.
+    pub fn id(self) -> &'static str {
+        match self {
+            Source::Imported => "imported",
+            Source::Recording => "recording",
+            Source::Voice => "voice",
+        }
+    }
+}
+
+impl Clip {
+    pub fn source(&self) -> Source {
+        match (self.imported, self.recorded) {
+            (true, _) => Source::Imported,
+            (_, true) => Source::Recording,
+            _ => Source::Voice,
+        }
+    }
+
+    /// How much later than planned it starts, in seconds: below zero when planned before the
+    /// show starts.
+    fn late(&self) -> f64 {
+        self.start - self.planned.max(0.0)
+    }
+
+    /// It starts later than planned, waiting for the narration before it.
+    pub fn waited(&self) -> bool {
+        self.start > self.planned + 0.005
+    }
+}
+
+/// Seconds as the timing data saves them: to the millisecond.
+pub fn ms(seconds: f64) -> f64 {
+    (seconds * 1000.0).round() / 1000.0
 }
 
 /// The deck's shown slides on the timeline, laid out with `options`.
@@ -155,7 +205,7 @@ pub fn overlaps(slides: &[Shown]) -> Vec<Overlap> {
         let Some(clip) = &slide.narration else {
             continue;
         };
-        let waits = clip.start - clip.planned.max(0.0);
+        let waits = clip.late();
         if waits < 0.005 {
             continue;
         }
@@ -174,10 +224,151 @@ pub fn overlaps(slides: &[Shown]) -> Vec<Overlap> {
     found
 }
 
+/// The other slides showing while the narration of `slide` plays.
+pub fn plays_over<'a>(slides: &'a [Shown], slide: &Shown) -> Vec<&'a str> {
+    let Some(clip) = &slide.narration else {
+        return Vec::new();
+    };
+    slides
+        .iter()
+        .filter(|s| s.id != slide.id && s.start < clip.end - 0.005 && s.end > clip.start)
+        .map(|s| s.id.as_str())
+        .collect()
+}
+
+/// A word of a slide's narration placed on the timeline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlacedWord {
+    pub text: String,
+    /// When it is said, in seconds into the show.
+    pub start: f64,
+    pub end: f64,
+    /// The slide showing as it starts, and seconds since that slide started showing.
+    pub slide: String,
+    pub into_slide: f64,
+}
+
+/// When the words of a slide's narration are said.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Words {
+    /// They are not timed (see [`super::time_words`]).
+    NotTimed,
+    /// No words are heard in it.
+    NoneHeard,
+    /// Its words that fall on the timeline.
+    Said(Vec<PlacedWord>),
+}
+
+/// How a deck plays out with its narration, as the agent's narration_timeline tells it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Timeline {
+    /// The deck's shown slides, laid out with [`DEFAULTS`].
+    pub slides: Vec<Shown>,
+    /// The words of each shown slide's narration that plays, by its slide id, in slide
+    /// order; None when not asked for.
+    pub words: Option<Vec<(String, Words)>>,
+}
+
+/// How the deck `file` plays out with its narration, laid out with [`DEFAULTS`], with when
+/// the words of each narration are said if `with_words`.
+pub fn timeline(file: &Path, deck: &Deck, with_words: bool) -> Timeline {
+    let slides = layout(file, deck, &DEFAULTS);
+    let words = with_words.then(|| {
+        slides
+            .iter()
+            .filter(|s| s.narration.is_some())
+            .map(|slide| {
+                let words = match super::words(file, &slide.id) {
+                    None => Words::NotTimed,
+                    Some(words) if words.is_empty() => Words::NoneHeard,
+                    Some(words) => Words::Said(
+                        words
+                            .into_iter()
+                            .filter_map(|word| {
+                                let at = place(&slides, &slide.id, word.start)?;
+                                Some(PlacedWord {
+                                    start: at.at,
+                                    end: at.at + word.end - word.start,
+                                    slide: at.slide,
+                                    into_slide: at.into_slide,
+                                    text: word.text,
+                                })
+                            })
+                            .collect(),
+                    ),
+                };
+                (slide.id.clone(), words)
+            })
+            .collect()
+    });
+    Timeline { slides, words }
+}
+
+impl Timeline {
+    /// When the show ends, in seconds.
+    pub fn end(&self) -> f64 {
+        self.slides.last().map_or(0.0, |s| s.end)
+    }
+
+    /// The timeline as JSON for the agent's scripts, of the deck `deck` (as the agent named
+    /// it), times to the millisecond.
+    pub fn data(&self, deck: &str) -> Value {
+        let d = DEFAULTS;
+        let slides: Vec<Value> = self
+            .slides
+            .iter()
+            .map(|slide| {
+                json!({
+                    "id": slide.id,
+                    "start": ms(slide.start),
+                    "end": ms(slide.end),
+                    "duration": slide.duration,
+                    "narrationStart": slide.narration_start,
+                    "narration": slide.narration.as_ref().map(|clip| json!({
+                        "start": ms(clip.start),
+                        "end": ms(clip.end),
+                        "source": clip.source().id(),
+                        "waits": ms(clip.late()).max(0.0),
+                    })),
+                    "unspoken": slide.unspoken,
+                })
+            })
+            .collect();
+        let mut words = Vec::new();
+        for (audio, said) in self.words.iter().flatten() {
+            let Words::Said(said) = said else {
+                continue;
+            };
+            for word in said {
+                words.push(json!({
+                    "audio": audio,
+                    "text": word.text,
+                    "start": ms(word.start),
+                    "end": ms(word.end),
+                    "slide": word.slide,
+                    "intoSlide": ms(word.into_slide),
+                }));
+            }
+        }
+        json!({
+            "deck": deck,
+            "assumed": {
+                "secondsPerSlide": d.seconds_per_slide,
+                "pauseBefore": d.pause_before,
+                "pauseAfter": d.pause_after,
+            },
+            "end": ms(self.end()),
+            "slides": slides,
+            "words": words,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::narration::{audio, import_audio};
+    use crate::narration::audio;
+    use crate::narration::recordings::import_audio;
     use std::fs;
 
     fn deck(slides: &str) -> (std::path::PathBuf, std::path::PathBuf) {
@@ -289,5 +480,144 @@ mod tests {
             .collect();
         assert_eq!(waiting, [Some("talk")]);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_timeline_tells_where_each_narration_comes_from_and_when_its_words_are_said() {
+        use super::super::manifest::{Entry, Manifest};
+        use crate::narration::{append_recording, audio_dir, audio_file, fingerprint, Provider};
+        use crate::voice::Word;
+        let dir = crate::test_support::TempDir::new("narration-timeline");
+        let file = dir.write(
+            "deck.html",
+            concat!(
+                r#"<main class="deck">"#,
+                r#"<section class="slide" id="v"><aside class="narration">Say v.</aside></section>"#,
+                r#"<section class="slide" id="h" data-hidden></section>"#,
+                r#"<section class="slide" id="rec"></section>"#,
+                r#"<section class="slide" id="long" data-duration="2" data-narration-start="0"></section>"#,
+                r#"<section class="slide" id="w" data-duration="2" data-narration-start="0.5"></section>"#,
+                r#"<section class="slide" id="u"><aside class="narration">Not said yet.</aside></section>"#,
+                r#"</main>"#,
+            ),
+        );
+        let word = |text: &str, start: f64, end: f64| Word {
+            text: text.into(),
+            start,
+            end,
+        };
+        // v: speech a service made, its words timed as it said them.
+        fs::create_dir_all(audio_dir(&file)).unwrap();
+        audio::write_wav(&audio_file(&file, "v"), &[0.1; 36_000], audio::RATE).unwrap();
+        Manifest::update(&audio_dir(&file), |m| {
+            let made = fingerprint(Provider::OpenAi, "Say v.", "marin", "en");
+            let words = vec![word("Say", 0.1, 0.5), word("v.", 0.6, 1.2)];
+            m.slides
+                .insert("v".into(), Entry::made(made, 1.5, Some(words)));
+        })
+        .unwrap();
+        // rec: the presenter's recording, untimed.
+        append_recording(&file, "rec", &[0.1; 16_000], 16_000).unwrap();
+        // long: 7 s brought in on a 2 s slide, playing on over w, whose own audio waits.
+        give_audio(&dir, &file, "long", 7.0);
+        give_audio(&dir, &file, "w", 1.0);
+        Manifest::update(&audio_dir(&file), |m| {
+            let timed = |e: &mut Entry, words: Vec<Word>| {
+                e.words = Some(words);
+                e.timing = super::super::manifest::WORD_TIMING;
+            };
+            timed(
+                m.slides.get_mut("long").unwrap(),
+                vec![word("later", 3.0, 3.5)],
+            );
+            timed(m.slides.get_mut("w").unwrap(), vec![]);
+        })
+        .unwrap();
+        let deck = crate::deck::load(&file).unwrap();
+
+        let found = timeline(&file, &deck, true);
+        let sources: Vec<Option<Source>> = found
+            .slides
+            .iter()
+            .map(|s| s.narration.as_ref().map(Clip::source))
+            .collect();
+        assert_eq!(
+            sources,
+            [
+                Some(Source::Voice),
+                Some(Source::Recording),
+                Some(Source::Imported),
+                Some(Source::Imported),
+                None
+            ]
+        );
+        let waited: Vec<bool> = found
+            .slides
+            .iter()
+            .filter_map(|s| s.narration.as_ref().map(Clip::waited))
+            .collect();
+        assert_eq!(waited, [false, false, false, true]);
+        let over = |id: &str| {
+            plays_over(
+                &found.slides,
+                found.slides.iter().find(|s| s.id == id).unwrap(),
+            )
+        };
+        assert_eq!(over("long"), ["w", "u"]);
+        assert_eq!(over("w"), ["u"]);
+        assert!(over("v").is_empty() && over("u").is_empty());
+        let words = found.words.as_ref().unwrap();
+        let kinds: Vec<(&str, &str)> = words
+            .iter()
+            .map(|(id, w)| {
+                let kind = match w {
+                    Words::NotTimed => "not timed",
+                    Words::NoneHeard => "none heard",
+                    Words::Said(_) => "said",
+                };
+                (id.as_str(), kind)
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("v", "said"),
+                ("rec", "not timed"),
+                ("long", "said"),
+                ("w", "none heard")
+            ]
+        );
+        assert_eq!(found.end(), 19.0);
+        assert_eq!(
+            found.data("deck.html"),
+            serde_json::json!({
+                "deck": "deck.html",
+                "assumed": {"secondsPerSlide": 5.0, "pauseBefore": 0.5, "pauseAfter": 1.0},
+                "end": 19.0,
+                "slides": [
+                    {"id": "v", "start": 0.0, "end": 5.0, "duration": null, "narrationStart": null,
+                     "narration": {"start": 0.5, "end": 2.0, "source": "voice", "waits": 0.0}, "unspoken": false},
+                    {"id": "rec", "start": 5.0, "end": 10.0, "duration": null, "narrationStart": null,
+                     "narration": {"start": 5.5, "end": 6.5, "source": "recording", "waits": 0.0}, "unspoken": false},
+                    {"id": "long", "start": 10.0, "end": 12.0, "duration": 2.0, "narrationStart": 0.0,
+                     "narration": {"start": 10.0, "end": 17.0, "source": "imported", "waits": 0.0}, "unspoken": false},
+                    {"id": "w", "start": 12.0, "end": 14.0, "duration": 2.0, "narrationStart": 0.5,
+                     "narration": {"start": 17.0, "end": 18.0, "source": "imported", "waits": 4.5}, "unspoken": false},
+                    {"id": "u", "start": 14.0, "end": 19.0, "duration": null, "narrationStart": null,
+                     "narration": null, "unspoken": true},
+                ],
+                "words": [
+                    {"audio": "v", "text": "Say", "start": 0.6, "end": 1.0, "slide": "v", "intoSlide": 0.6},
+                    {"audio": "v", "text": "v.", "start": 1.1, "end": 1.7, "slide": "v", "intoSlide": 1.1},
+                    // Said 3 s into long's audio, as w shows.
+                    {"audio": "long", "text": "later", "start": 13.0, "end": 13.5, "slide": "w", "intoSlide": 1.0},
+                ],
+            })
+        );
+
+        // Without words, the slides alone.
+        let found = timeline(&file, &deck, false);
+        assert_eq!(found.words, None);
+        assert_eq!(found.data("deck.html")["words"], serde_json::json!([]));
     }
 }

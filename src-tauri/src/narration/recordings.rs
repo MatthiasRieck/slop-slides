@@ -40,7 +40,7 @@ pub fn append_recording(file: &Path, slide: &str, samples: &[f32], rate: u32) ->
 
 /// Whether the slide's audio is the presenter's own recording (not audio brought in), which
 /// nothing could make again once it is replaced.
-pub fn has_own_recording(file: &Path, slide: &str) -> bool {
+fn has_own_recording(file: &Path, slide: &str) -> bool {
     Manifest::read(&audio_dir(file))
         .slides
         .get(slide)
@@ -86,6 +86,71 @@ pub fn import_audio(file: &Path, slide: &str, source: &Path) -> Result<f64> {
     Ok(seconds)
 }
 
+/// Why the agent may not replace a slide's audio with audio made elsewhere.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Refusal {
+    /// The slide is locked, in the deck or in the running turn's guard.
+    Locked,
+    /// Its audio is the presenter's own recording, which nothing could make again.
+    OwnRecording,
+}
+
+/// Why the audio of `slide` of the deck `file` may not be replaced, if it may not: it is
+/// locked in the deck, or in the turn's guard in the workspace's `session`; or it is the
+/// presenter's own recording, unless `replace` says the user agreed. Checked before the audio
+/// is replaced, as audio is not in the deck's history to undo.
+pub fn refusal(
+    file: &Path,
+    slide: &str,
+    session: Option<&Path>,
+    replace: bool,
+) -> Result<Option<Refusal>> {
+    let markup = fs::read_to_string(file)?;
+    if crate::html::is_locked(&markup, slide)
+        || crate::guard::read_guard(file, session)
+            .iter()
+            .any(|locked| locked.id == slide)
+    {
+        return Ok(Some(Refusal::Locked));
+    }
+    if !replace && has_own_recording(file, slide) {
+        return Ok(Some(Refusal::OwnRecording));
+    }
+    Ok(None)
+}
+
+/// What [`set_audio`] did.
+#[derive(Debug)]
+pub struct SetAudio {
+    /// How long the audio plays, in seconds.
+    pub seconds: f64,
+    /// Where it is kept now (see [`audio_file`]).
+    pub kept: std::path::PathBuf,
+    /// Whether its start could be pinned to the slide's (see [`set_audio`]).
+    pub pinned: Result<()>,
+}
+
+/// Makes the audio file `source` the narration of `slide` of the deck `file` (see
+/// [`import_audio`]), and pins it to start as the slide shows: audio made elsewhere plays from
+/// that moment, whatever the app's pause. The slide keeps its length.
+pub fn set_audio(file: &Path, slide: &crate::deck::Slide, source: &Path) -> Result<SetAudio> {
+    let seconds = import_audio(file, &slide.id, source)?;
+    let pinned = crate::deck::set_slide_timing(
+        file,
+        &[crate::deck::SlideTiming {
+            slide: slide.id.clone(),
+            duration: slide.duration,
+            narration_start: Some(0.0),
+        }],
+    )
+    .map(|_| ());
+    Ok(SetAudio {
+        seconds,
+        kept: audio_file(file, &slide.id),
+        pinned,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::manifest::fingerprint;
@@ -93,6 +158,7 @@ mod tests {
     use super::super::{ready_audio, statuses, AudioState, Provider};
     use super::*;
     use crate::deck;
+    use crate::test_support::TempDir;
 
     #[test]
     fn recordings_grow_replace_the_models_audio_and_stay_up_to_date() {
@@ -202,5 +268,64 @@ mod tests {
         assert!(import_audio(&file, "a", &dir.join("notes.txt")).is_err());
         assert_eq!(statuses(&file, &deck)[0].seconds, Some(0.5));
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn locked_slides_and_own_recordings_refuse_audio_made_elsewhere() {
+        let dir = TempDir::new("narration-refusal");
+        let slides = r#"<main class="deck"><section class="slide" id="a"{}></section><section class="slide" id="b"></section></main>"#;
+        let file = dir.write("deck.html", slides.replace("{}", " data-locked"));
+        assert_eq!(
+            refusal(&file, "a", None, true).unwrap(),
+            Some(Refusal::Locked)
+        );
+        assert_eq!(refusal(&file, "b", None, false).unwrap(), None);
+        // Locked in the turn's guard, though the turn unlocked it.
+        let session = dir.join("session");
+        fs::create_dir_all(&session).unwrap();
+        crate::guard::guard_locked(&file, &session).unwrap();
+        dir.write("deck.html", slides.replace("{}", ""));
+        assert_eq!(refusal(&file, "a", None, false).unwrap(), None);
+        assert_eq!(
+            refusal(&file, "a", Some(&session), false).unwrap(),
+            Some(Refusal::Locked)
+        );
+        // The presenter's own recording is kept unless replacing it was agreed.
+        append_recording(&file, "b", &[0.1; 8_000], 16_000).unwrap();
+        assert_eq!(
+            refusal(&file, "b", None, false).unwrap(),
+            Some(Refusal::OwnRecording)
+        );
+        assert_eq!(refusal(&file, "b", None, true).unwrap(), None);
+        // Audio brought in before is no recording of the user's.
+        let source = dir.join("take.wav");
+        audio::write_wav(&source, &[0.25; 8_000], 16_000).unwrap();
+        import_audio(&file, "b", &source).unwrap();
+        assert_eq!(refusal(&file, "b", None, false).unwrap(), None);
+        assert!(refusal(&dir.join("gone.html"), "b", None, false).is_err());
+    }
+
+    #[test]
+    fn audio_set_for_a_slide_starts_as_it_shows_and_keeps_its_length() {
+        let dir = TempDir::new("narration-set-audio");
+        let file = dir.write(
+            "talk.html",
+            r#"<main class="deck"><section class="slide" id="a" data-duration="3" data-narration-start="2"></section></main>"#,
+        );
+        let source = dir.join("take.wav");
+        audio::write_wav(&source, &[0.25; 8_000], 16_000).unwrap();
+        let slide = deck::load(&file).unwrap().slides.remove(0);
+        let set = set_audio(&file, &slide, &source).unwrap();
+        assert_eq!(set.seconds, 0.5);
+        assert_eq!(set.kept, dir.join("narration/talk/a.wav"));
+        assert!(set.kept.is_file() && set.pinned.is_ok());
+        let slide = &deck::load(&file).unwrap().slides[0];
+        assert_eq!(
+            (slide.duration, slide.narration_start),
+            (Some(3.0), Some(0.0))
+        );
+        // Audio that is none changes nothing.
+        fs::write(dir.join("notes.txt"), "hello").unwrap();
+        assert!(set_audio(&file, slide, &dir.join("notes.txt")).is_err());
     }
 }

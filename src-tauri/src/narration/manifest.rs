@@ -82,7 +82,7 @@ pub(super) struct Entry {
     /// The presenter's own voice rather than the service's.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(super) recorded: bool,
-    /// The audio was made elsewhere and brought in (see [`super::import_audio`]); kept like a
+    /// The audio was made elsewhere and brought in (see [`super::set_audio`]); kept like a
     /// recording, but a recording replaces it rather than going on from its end.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(super) imported: bool,

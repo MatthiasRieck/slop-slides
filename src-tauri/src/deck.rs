@@ -536,11 +536,7 @@ pub fn set_narration_voice(file: &Path, voice: &str) -> Result<Deck> {
 /// Sets who says the deck's narration (one of [`narration::cloud::PROVIDERS`]); the default
 /// provider has no meta. A voice the new provider does not have becomes its default.
 pub fn set_narration_provider(file: &Path, provider: &str) -> Result<Deck> {
-    let Some(provider) = narration::Provider::parse(provider) else {
-        return Err(Error::msg(format!(
-            "unknown narration provider: {provider}"
-        )));
-    };
+    let provider = narration::Provider::named(provider)?;
     edit(file, |s| {
         let named = (provider != narration::DEFAULT_PROVIDER).then(|| provider.id());
         let mut out = html::set_narration_provider(s, named);

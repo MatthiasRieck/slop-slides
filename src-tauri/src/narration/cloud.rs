@@ -56,6 +56,11 @@ impl Provider {
         PROVIDERS.into_iter().find(|p| p.id() == id)
     }
 
+    /// The provider with id `id`; an error naming it when there is none.
+    pub fn named(id: &str) -> Result<Provider> {
+        Provider::parse(id).ok_or_else(|| Error::msg(format!("unknown narration provider: {id}")))
+    }
+
     /// The hosted model that says it; part of every audio fingerprint.
     pub fn model(self) -> &'static str {
         match self {
@@ -619,6 +624,11 @@ mod tests {
         }
         assert_eq!(Provider::parse("ElevenLabs"), None);
         assert_eq!(Provider::parse("google"), None);
+        assert_eq!(Provider::named("elevenlabs").unwrap(), Provider::ElevenLabs);
+        assert_eq!(
+            Provider::named("google").unwrap_err().to_string(),
+            "unknown narration provider: google"
+        );
     }
 
     #[test]

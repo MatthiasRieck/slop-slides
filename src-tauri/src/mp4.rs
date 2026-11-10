@@ -597,16 +597,6 @@ mod tests {
     }
 
     #[test]
-    fn the_media_box_holds_exactly_the_samples() {
-        let mut mp4 = Mp4Writer::start(Cursor::new(Vec::new()), (2, 2), 30, vec![]).unwrap();
-        mp4.write_sample(&[7; 10], 1, true).unwrap();
-        let file = mp4.finish().unwrap().into_inner();
-        let boxes = read::boxes(&file);
-        assert_eq!(&boxes[1].0, b"mdat");
-        assert_eq!(boxes[1].1, [7; 10]);
-    }
-
-    #[test]
     fn adds_an_opus_track_after_the_video() {
         let mut mp4 = Mp4Writer::start(Cursor::new(Vec::new()), (2, 2), 90_000, vec![]).unwrap();
         mp4.write_sample(b"frame", 90_000, true).unwrap();

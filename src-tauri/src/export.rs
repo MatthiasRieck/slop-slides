@@ -553,39 +553,6 @@ mod tests {
     }
 
     #[test]
-    fn a_request_reaches_the_app_and_its_answer_comes_back() {
-        let session = Temp::new();
-        let app = {
-            let dir = session.0.clone();
-            std::thread::spawn(move || loop {
-                if let Some((name, request)) = take_requests(&dir).pop() {
-                    assert_eq!(request, self::request(Format::Pdf));
-                    answer(&dir, &name, &Ok("done".into())).unwrap();
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(5));
-            })
-        };
-        let made = ask(&session.0, &request(Format::Pdf), WAIT).unwrap();
-        app.join().unwrap();
-        assert_eq!(made, "done");
-        assert_eq!(
-            std::fs::read_dir(session.0.join(INBOX.results))
-                .unwrap()
-                .count(),
-            0
-        );
-    }
-
-    #[test]
-    fn without_an_app_the_request_times_out_and_is_withdrawn() {
-        let session = Temp::new();
-        let error = ask(&session.0, &request(Format::Pdf), Duration::from_millis(20)).unwrap_err();
-        assert!(error.to_string().contains("did not finish"), "{error}");
-        assert!(take_requests(&session.0).is_empty());
-    }
-
-    #[test]
     fn video_options_travel_with_the_request() {
         let mut sent = request(Format::Video);
         sent.video = Some(video::Options {

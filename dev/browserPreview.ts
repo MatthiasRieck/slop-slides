@@ -33,7 +33,7 @@ export function stageScripts(query: URLSearchParams): string[] {
   const edit = query.has("edit");
   return [
     ...(edit || query.has("pan") || query.has("show") ? [asset("pasteboard.js")] : []),
-    ...(edit ? [editorScript()] : []),
+    ...(edit ? [asset("overflow.js") + editorScript()] : []),
   ];
 }
 

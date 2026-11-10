@@ -150,3 +150,15 @@ export function slideAt(timeline: Timeline, time: number): number {
   const index = timeline.slides.findIndex((s) => time < s.end);
   return index >= 0 ? index : timeline.slides.length - 1;
 }
+
+/**
+ * Which pictures of a filmstrip show: the strip is `width` wide and filled from its left with
+ * pictures `picture` wide, the last one cut off where the strip ends, and only what lies
+ * between `from` and `to` (measured from the strip's left) is in sight. All in pixels.
+ */
+export function filmstripFrames(width: number, picture: number, from: number, to: number): number[] {
+  if (!(width > 0) || !(picture > 0)) return [];
+  const first = Math.max(0, Math.floor(from / picture));
+  const last = Math.min(Math.ceil(width / picture), Math.ceil(to / picture)) - 1;
+  return Array.from({ length: Math.max(0, last - first + 1) }, (_, i) => first + i);
+}

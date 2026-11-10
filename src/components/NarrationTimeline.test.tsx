@@ -485,3 +485,80 @@ describe("rulerStep", () => {
     expect(rulerStep(100_000)).toBe(1200);
   });
 });
+
+describe("the slides as strips of film", () => {
+  const sizes: Record<string, [string, number]> = {
+    track: ["clientWidth", 1500],
+    scroller: ["clientWidth", 600],
+    filmstrip: ["clientHeight", 90],
+  };
+  const descriptors = ["clientWidth", "clientHeight"].map(
+    (name) => [name, Object.getOwnPropertyDescriptor(Element.prototype, name)] as const,
+  );
+
+  /** The track 1500 pixels wide with 600 of them in sight, and slides 90 pixels tall: pictures of 160. */
+  beforeEach(() => {
+    for (const name of ["clientWidth", "clientHeight"]) {
+      Object.defineProperty(Element.prototype, name, {
+        configurable: true,
+        get(this: HTMLElement) {
+          const kind =
+            this.dataset.testid === "filmstrip"
+              ? "filmstrip"
+              : this.className.includes("overflow-x-auto")
+                ? "scroller"
+                : "track";
+          const [measure, size] = sizes[kind] ?? ["", 0];
+          return measure === name ? size : 0;
+        },
+      });
+    }
+  });
+
+  afterEach(() => {
+    for (const [name, descriptor] of descriptors)
+      if (descriptor) Object.defineProperty(Element.prototype, name, descriptor);
+  });
+
+  const frames = (n: number) =>
+    [...screen.getByRole("button", { name: `Slide ${n}` }).querySelectorAll<HTMLElement>("[data-frame]")].map((f) => [
+      f.dataset.frame,
+      f.style.left,
+      f.style.width,
+    ]);
+
+  it("fills each slide with its picture, over and over, as far as is in sight", () => {
+    open();
+    // Three slides of 500 pixels each: the first shows whole, the second up to the 800th pixel.
+    expect(frames(1)).toEqual([
+      ["0", "0px", "160px"],
+      ["1", "160px", "160px"],
+      ["2", "320px", "160px"],
+      ["3", "480px", "160px"],
+    ]);
+    expect(frames(2)).toEqual([
+      ["0", "0px", "160px"],
+      ["1", "160px", "160px"],
+    ]);
+    expect(frames(3)).toEqual([]);
+    // Each slide says which it is, over its pictures.
+    expect(screen.getByRole("button", { name: "Slide 2" }).textContent).toBe("2");
+  });
+
+  it("shows the pictures scrolled to", () => {
+    open();
+    const scroller = screen.getByTestId("ruler").parentElement?.parentElement as HTMLElement;
+    Object.defineProperty(scroller, "scrollLeft", { configurable: true, value: 900 });
+    fireEvent.scroll(scroller);
+    expect(frames(1)).toEqual([]);
+    expect(frames(2).map(([frame]) => frame)).toEqual(["1", "2", "3"]);
+    expect(frames(3).map(([frame]) => frame)).toEqual(["0", "1", "2", "3"]);
+  });
+
+  it("has no pictures before the track is measured", () => {
+    sizes.filmstrip = ["clientHeight", 0];
+    open();
+    expect(frames(1)).toEqual([]);
+    sizes.filmstrip = ["clientHeight", 90];
+  });
+});

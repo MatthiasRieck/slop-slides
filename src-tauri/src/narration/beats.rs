@@ -7,7 +7,7 @@
 use symphonia::core::dsp::complex::Complex;
 use symphonia::core::dsp::fft::Fft;
 
-use crate::voice;
+use crate::sound;
 
 /// The rate the audio is looked at.
 const RATE: u32 = 16_000;
@@ -40,7 +40,7 @@ pub const BAR: usize = 4;
 /// The beat of `samples` (mono, at `rate`); None when there is none to find, as in silence or
 /// audio shorter than a few beats.
 pub fn find(samples: &[f32], rate: u32) -> Option<Beats> {
-    let audio = voice::resample(samples, rate, RATE);
+    let audio = sound::resample(samples, rate, RATE);
     let (onsets, bass) = onset_strength(&audio);
     let fps = f64::from(RATE) / HOP as f64;
     let period = tempo_period(&onsets, fps)?;

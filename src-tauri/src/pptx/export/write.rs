@@ -1,39 +1,18 @@
-//! Writes a deck as a new `.pptx`. The page helper (`assets/pptx.js`) reads each shown slide as
-//! rendered, in a hidden window, into a [`Scene`]; [`package`] turns that into a presentation of
-//! native shapes, text and pictures, so it stays editable in PowerPoint.
-//!
-//! PowerPoint cannot draw everything a browser can. Transparent fills, linear gradients and
-//! outer shadows map onto its own effects, backdrop blur is dropped, and anything else (SVG,
-//! filters, masks, 3D) comes as a picture. A picture needs its transparency: [`matte`] works it
-//! out from two captures of the element alone, over white and over black.
+//! The presentation's XML: each slide's items as DrawingML shapes, text and pictures, and the
+//! package of parts around them.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::{Cursor, Write as _};
-use std::path::Path;
 
-use base64::Engine as _;
-use serde::Deserialize;
-use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use tokio::sync::mpsc;
 use zip::write::SimpleFileOptions;
 
-use super::{EMU_PER_CSS_PX, WIDESCREEN_EMU};
-use crate::capture::{self, Image};
+use super::super::{DEGREE, EMU_PER_CSS_PX, EMU_PER_INCH, EMU_PER_POINT, WHOLE, WIDESCREEN_EMU};
+use super::scene::*;
 use crate::error::{Error, Result};
-use crate::{deck, html, pdf, protocol};
-
-/// Where the page's helper answers; the navigation is caught, never made.
-const SIGNAL_PATH: &str = "/.pptx-signal";
-/// The page's helper, run once it has loaded; it starts by reporting when it is ready.
-const PPTX_JS: &str = include_str!("../../assets/pptx.js");
-/// Pictures have this many pixels per slide pixel.
-const SHOT_SCALE: f64 = 2.0;
-const TASK: &str = "the PowerPoint export";
 
 /// PowerPoint's smallest slide side, in EMU.
-const MIN_SLIDE_EMU: f64 = 914_400.0;
+const MIN_SLIDE_EMU: f64 = EMU_PER_INCH;
 
 const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const NS_R: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -41,432 +20,6 @@ const NS_P: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
 const NS_RELS: &str = "http://schemas.openxmlformats.org/package/2006/relationships";
 const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const XML_HEADER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n";
-
-type Rgba = [f64; 4];
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub(super) struct Scene {
-    pub slides: Vec<SceneSlide>,
-    pub shots: Vec<ShotInfo>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub(super) struct ShotInfo {
-    /// The whole slide's background: nothing shows through, so one capture does.
-    pub opaque: bool,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub(super) struct SceneSlide {
-    pub id: String,
-    pub background: Background,
-    pub items: Vec<Item>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub(super) struct Background {
-    pub color: Option<Rgba>,
-    pub gradient: Option<Gradient>,
-    pub src: Option<String>,
-    pub shot: Option<usize>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(super) struct Gradient {
-    /// CSS angle, in degrees.
-    pub angle: f64,
-    pub stops: Vec<Stop>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(super) struct Stop {
-    pub at: f64,
-    pub color: Rgba,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub(super) enum Item {
-    Box(BoxItem),
-    Text(TextItem),
-    Image(ImageItem),
-    Shot(ShotItem),
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub(super) struct Fill {
-    pub color: Option<Rgba>,
-    pub gradient: Option<Gradient>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub(super) struct Border {
-    pub color: Rgba,
-    pub width: f64,
-    pub dash: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub(super) struct Shadow {
-    pub color: Rgba,
-    pub x: f64,
-    pub y: f64,
-    pub blur: f64,
-}
-
-fn one() -> f64 {
-    1.0
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct BoxItem {
-    pub x: f64,
-    pub y: f64,
-    pub w: f64,
-    pub h: f64,
-    #[serde(default)]
-    pub rotation: f64,
-    #[serde(default)]
-    pub fill: Option<Fill>,
-    #[serde(default)]
-    pub border: Option<Border>,
-    #[serde(default)]
-    pub shadow: Option<Shadow>,
-    #[serde(default)]
-    pub radius: f64,
-    #[serde(default)]
-    pub ellipse: bool,
-    #[serde(default = "one")]
-    pub opacity: f64,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct TextItem {
-    pub x: f64,
-    pub y: f64,
-    pub w: f64,
-    pub h: f64,
-    #[serde(default)]
-    pub rotation: f64,
-    #[serde(default)]
-    pub wrap: bool,
-    pub paragraphs: Vec<Paragraph>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub(super) struct Paragraph {
-    pub align: String,
-    pub line_height: Option<f64>,
-    pub space_before: Option<f64>,
-    pub margin_left: Option<f64>,
-    pub indent: Option<f64>,
-    pub bullet: Option<Bullet>,
-    pub runs: Vec<Run>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub(super) struct Bullet {
-    pub char: Option<String>,
-    /// The CSS `list-style-type` of a numbered list.
-    pub number: Option<String>,
-    pub start: Option<u32>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub(super) struct Run {
-    pub text: String,
-    pub line_break: bool,
-    pub font: String,
-    pub size: f64,
-    pub bold: bool,
-    pub italic: bool,
-    pub underline: bool,
-    pub strike: bool,
-    pub color: Option<Rgba>,
-    pub spacing: f64,
-    pub highlight: Option<Rgba>,
-    /// Percent raised; PowerPoint draws such text at two thirds of its size.
-    pub baseline: f64,
-    pub link: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
-pub(super) struct Crop {
-    pub l: f64,
-    pub t: f64,
-    pub r: f64,
-    pub b: f64,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct ImageItem {
-    pub src: String,
-    #[serde(default)]
-    pub alt: String,
-    pub x: f64,
-    pub y: f64,
-    pub w: f64,
-    pub h: f64,
-    #[serde(default)]
-    pub rotation: f64,
-    #[serde(default)]
-    pub flip_h: bool,
-    #[serde(default)]
-    pub border: Option<Border>,
-    #[serde(default)]
-    pub crop: Option<Crop>,
-    #[serde(default)]
-    pub radius: f64,
-    #[serde(default)]
-    pub ellipse: bool,
-    #[serde(default = "one")]
-    pub opacity: f64,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct ShotItem {
-    pub shot: usize,
-    pub x: f64,
-    pub y: f64,
-    pub w: f64,
-    pub h: f64,
-}
-
-/// What the file says beyond its slides.
-pub(super) struct Meta {
-    pub title: String,
-    pub canvas: (u32, u32),
-    /// Speaker notes by slide id.
-    pub notes: HashMap<String, String>,
-    /// A section's name and the id of the slide it starts with.
-    pub sections: Vec<(String, String)>,
-}
-
-/// Exports the deck `file` (in the open workspace) to `dest` as a PowerPoint file.
-pub async fn export(app: &AppHandle, file: &Path, dest: &Path) -> Result<()> {
-    let loaded = deck::load(file)?;
-    let canvas = html::slide_size(&deck::read_html(file)?).pixels();
-    let url = protocol::file_url(file, "static&print")
-        .parse()
-        .map_err(|e| Error::msg(format!("cannot open the deck for export: {e}")))?;
-    let (window_width, window_height) = pdf::window_size(canvas, pdf::screen_area(app));
-    let (signal_tx, signals) = mpsc::unbounded_channel::<Url>();
-    let label = format!("pptx-export-{}", uuid::Uuid::new_v4().simple());
-    let builder = WebviewWindowBuilder::new(app, &label, WebviewUrl::CustomProtocol(url))
-        .title("PowerPoint export")
-        .inner_size(window_width, window_height)
-        // No title bar: WebKit would inset the page under it, and captures would be off.
-        .decorations(false);
-    let window = pdf::out_of_sight(builder)
-        .on_page_load(|webview, payload| {
-            if payload.event() == PageLoadEvent::Finished {
-                let _ = webview.eval(PPTX_JS);
-            }
-        })
-        .on_navigation(move |url| {
-            if url.path() != SIGNAL_PATH {
-                return true;
-            }
-            let _ = signal_tx.send(url.clone());
-            false
-        })
-        .build()
-        .map_err(|e| Error::msg(format!("cannot open the deck for export: {e}")))?;
-
-    let mut helper = pdf::Helper {
-        window: &window,
-        signals,
-        task: TASK,
-    };
-    let read = read_scene(&mut helper).await;
-    let _ = window.destroy();
-    let (scene, shots) = read?;
-
-    let notes = deck_notes(&loaded);
-    let sections = deck_sections(&loaded);
-    let meta = Meta {
-        title: loaded.title.clone(),
-        canvas,
-        notes,
-        sections,
-    };
-    let folder = deck::folder(file).to_path_buf();
-    let dest = dest.to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || {
-        let bytes = package(&scene, &meta, &shots, |src| {
-            let path = deck::resolve_in_deck(&folder, src).ok()?;
-            std::fs::read(path).ok()
-        })?;
-        std::fs::write(dest, bytes)?;
-        Ok(())
-    })
-    .await
-    .map_err(|e| Error::msg(format!("writing the PowerPoint file failed: {e}")))?
-}
-
-/// Each slide's notes; narration stands in for them where there are none, as the words go on
-/// being said.
-fn deck_notes(loaded: &deck::Deck) -> HashMap<String, String> {
-    loaded
-        .slides
-        .iter()
-        .filter_map(|s| {
-            let text = if s.notes.is_empty() {
-                &s.narration
-            } else {
-                &s.notes
-            };
-            (!text.is_empty()).then(|| (s.id.clone(), text.clone()))
-        })
-        .collect()
-}
-
-/// Sections with the first shown slide of each; one with none shown is left out.
-fn deck_sections(loaded: &deck::Deck) -> Vec<(String, String)> {
-    loaded
-        .sections
-        .iter()
-        .enumerate()
-        .filter_map(|(i, section)| {
-            let end = loaded
-                .sections
-                .get(i + 1)
-                .map_or(loaded.slides.len(), |next| next.before);
-            let first = loaded
-                .slides
-                .get(section.before..end)?
-                .iter()
-                .find(|s| !s.hidden)?;
-            Some((section.title.clone(), first.id.clone()))
-        })
-        .collect()
-}
-
-/// Reads the scene from the page and captures its pictures.
-async fn read_scene(helper: &mut pdf::Helper<'_>) -> Result<(Scene, HashMap<usize, Vec<u8>>)> {
-    let ready = helper.answer("ready").await?;
-    let count: usize = ready
-        .get("slides")
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(0);
-    if count == 0 {
-        return Err(Error::msg("the deck has no shown slides to export"));
-    }
-    pdf::check_view(&ready)?;
-    let scanned = helper.run("window.__slopPptx.scan()", "scanned").await?;
-    let chunks: usize = scanned
-        .get("chunks")
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(0);
-    let mut encoded = String::new();
-    for index in 0..chunks {
-        let answer = helper
-            .run(&format!("window.__slopPptx.chunk({index})"), "chunk")
-            .await?;
-        encoded.push_str(answer.get("data").map_or("", String::as_str));
-    }
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(encoded)
-        .map_err(|e| Error::msg(format!("unreadable answer from the deck: {e}")))?;
-    let scene: Scene = serde_json::from_slice(&bytes)
-        .map_err(|e| Error::msg(format!("unreadable answer from the deck: {e}")))?;
-
-    let mut shots = HashMap::new();
-    for (index, shot) in scene.shots.iter().enumerate() {
-        let png = if shot.opaque {
-            capture_shot(helper, index, None).await?
-        } else {
-            let white = capture_shot(helper, index, Some("#ffffff")).await?;
-            let black = capture_shot(helper, index, Some("#000000")).await?;
-            capture::encode_png(&matte(
-                &capture::decode_png(&white)?,
-                &capture::decode_png(&black)?,
-            )?)?
-        };
-        shots.insert(index, png);
-    }
-    Ok((scene, shots))
-}
-
-async fn capture_shot(
-    helper: &mut pdf::Helper<'_>,
-    index: usize,
-    paper: Option<&str>,
-) -> Result<Vec<u8>> {
-    let paper = paper.map_or("null".to_string(), |p| format!("\"{p}\""));
-    let shown = helper
-        .run(
-            &format!("window.__slopPptx.isolate({index}, {paper})"),
-            "isolated",
-        )
-        .await?;
-    let (rect, viewport) = pdf::geometry(&shown)?;
-    let scale: f64 = shown
-        .get("scale")
-        .and_then(|s| s.parse().ok())
-        .filter(|s: &f64| *s > 0.0)
-        .unwrap_or(1.0);
-    let pixels = (rect.width / scale * SHOT_SCALE)
-        .round()
-        .clamp(1.0, f64::from(crate::size::MAX_PX)) as u32;
-    capture_region(helper.window, rect, viewport, pixels).await
-}
-
-async fn capture_region(
-    window: &WebviewWindow,
-    rect: capture::Rect,
-    viewport: capture::Size,
-    pixels: u32,
-) -> Result<Vec<u8>> {
-    #[cfg(target_os = "macos")]
-    return capture::render_region(window.as_ref(), rect, viewport, pixels).await;
-    #[cfg(not(target_os = "macos"))]
-    return capture::snapshot(window.as_ref(), rect, viewport, pixels).await;
-}
-
-/// The picture with its transparency, from the same picture over white and over black. A pixel
-/// lets through as much as it differs between the two; its colour is what it adds over black.
-pub(super) fn matte(white: &Image, black: &Image) -> Result<Image> {
-    if (white.width, white.height) != (black.width, black.height) {
-        return Err(Error::msg("the two captures differ in size"));
-    }
-    let mut rgba = Vec::with_capacity(white.rgba.len());
-    for (w, b) in white.rgba.chunks_exact(4).zip(black.rgba.chunks_exact(4)) {
-        let through: i32 = (0..3)
-            .map(|i| i32::from(w[i]) - i32::from(b[i]))
-            .sum::<i32>()
-            / 3;
-        let alpha = (255 - through).clamp(0, 255);
-        for channel in &b[..3] {
-            rgba.push(if alpha == 0 {
-                0
-            } else {
-                ((i32::from(*channel) * 255 + alpha / 2) / alpha).min(255) as u8
-            });
-        }
-        rgba.push(alpha as u8);
-    }
-    Ok(Image {
-        width: white.width,
-        height: white.height,
-        rgba,
-    })
-}
 
 /// EMU per canvas pixel: a 1920 px canvas fills a widescreen slide; smaller canvases keep their
 /// real size, at 96 pixels per inch.
@@ -510,7 +63,7 @@ fn color_xml(color: Rgba, opacity: f64) -> String {
         format!(
             "<a:srgbClr val=\"{}\"><a:alpha val=\"{}\"/></a:srgbClr>",
             hex(color),
-            (alpha * 100_000.0).round() as i64
+            (alpha * WHOLE).round() as i64
         )
     }
 }
@@ -525,7 +78,7 @@ fn gradient_xml(gradient: &Gradient, opacity: f64) -> String {
         let _ = write!(
             stops,
             "<a:gs pos=\"{}\">{}</a:gs>",
-            (stop.at.clamp(0.0, 1.0) * 100_000.0).round() as i64,
+            (stop.at.clamp(0.0, 1.0) * WHOLE).round() as i64,
             color_xml(stop.color, opacity)
         );
     }
@@ -533,7 +86,7 @@ fn gradient_xml(gradient: &Gradient, opacity: f64) -> String {
     let angle = (gradient.angle - 90.0).rem_euclid(360.0);
     format!(
         "<a:gradFill rotWithShape=\"1\"><a:gsLst>{stops}</a:gsLst><a:lin ang=\"{}\" scaled=\"0\"/></a:gradFill>",
-        (angle * 60_000.0).round() as i64
+        (angle * DEGREE).round() as i64
     )
 }
 
@@ -610,7 +163,7 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
 
     /// Points for a length in canvas pixels.
     fn points(&self, px: f64) -> f64 {
-        px * self.emu / 12_700.0
+        px * self.emu / EMU_PER_POINT
     }
 
     fn id(&mut self) -> u32 {
@@ -622,7 +175,7 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
         let mut attrs = String::new();
         let angle = rotation.rem_euclid(360.0);
         if angle > 0.01 && angle < 359.99 {
-            let _ = write!(attrs, " rot=\"{}\"", (angle * 60_000.0).round() as i64);
+            let _ = write!(attrs, " rot=\"{}\"", (angle * DEGREE).round() as i64);
         }
         if flip_h {
             attrs.push_str(" flipH=\"1\"");
@@ -641,7 +194,7 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
             return "<a:prstGeom prst=\"ellipse\"><a:avLst/></a:prstGeom>".to_string();
         }
         if radius > 0.0 && w.min(h) > 0.0 {
-            let adjust = ((radius / w.min(h)) * 100_000.0).round().min(50_000.0) as i64;
+            let adjust = ((radius / w.min(h)) * WHOLE).round().min(50_000.0) as i64;
             return format!(
                 "<a:prstGeom prst=\"roundRect\"><a:avLst><a:gd name=\"adj\" fmla=\"val {adjust}\"/></a:avLst></a:prstGeom>"
             );
@@ -681,7 +234,7 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
             format!(
                 "<a:effectLst><a:outerShdw blurRad=\"{}\" dist=\"{distance}\" dir=\"{}\" algn=\"ctr\" rotWithShape=\"0\">{}</a:outerShdw></a:effectLst>",
                 self.emu(s.blur),
-                (direction * 60_000.0).round() as i64,
+                (direction * DEGREE).round() as i64,
                 color_xml(s.color, item.opacity)
             )
         });
@@ -890,13 +443,13 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
         let alpha = if opacity < 0.999 {
             format!(
                 "<a:alphaModFix amt=\"{}\"/>",
-                (opacity.clamp(0.0, 1.0) * 100_000.0).round() as i64
+                (opacity.clamp(0.0, 1.0) * WHOLE).round() as i64
             )
         } else {
             String::new()
         };
         let crop = crop.map_or("<a:srcRect/>".to_string(), |c| {
-            let part = |v: f64| (v.clamp(0.0, 1.0) * 100_000.0).round() as i64;
+            let part = |v: f64| (v.clamp(0.0, 1.0) * WHOLE).round() as i64;
             format!(
                 "<a:srcRect l=\"{}\" t=\"{}\" r=\"{}\" b=\"{}\"/>",
                 part(c.l),
@@ -983,7 +536,7 @@ fn notes_xml(text: &str) -> String {
 }
 
 /// Builds the presentation. `load` reads a deck-relative asset; `shots` holds captured pictures.
-pub(super) fn package<F: Fn(&str) -> Option<Vec<u8>>>(
+pub(in crate::pptx) fn package<F: Fn(&str) -> Option<Vec<u8>>>(
     scene: &Scene,
     meta: &Meta,
     shots: &HashMap<usize, Vec<u8>>,
@@ -1176,7 +729,7 @@ fn sections_xml(scene: &Scene, meta: &Meta) -> String {
             Some(name) => groups.push(((*name).to_string(), vec![index])),
             None => match groups.last_mut() {
                 Some(group) => group.1.push(index),
-                None => groups.push((super::DEFAULT_SECTION.to_string(), vec![index])),
+                None => groups.push((super::super::DEFAULT_SECTION.to_string(), vec![index])),
             },
         }
     }

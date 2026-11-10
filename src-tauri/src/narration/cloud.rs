@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 
 use super::audio;
 use crate::error::{Error, Result};
+use crate::sound;
 use crate::voice::Word;
 
 /// Who says a deck's narration.
@@ -380,14 +381,6 @@ pub struct Said {
     pub words: Option<Vec<Word>>,
 }
 
-/// Mono 16-bit little-endian PCM as samples; an odd last byte is dropped.
-pub fn pcm16(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks_exact(2)
-        .map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32768.0)
-        .collect()
-}
-
 /// ElevenLabs' `with-timestamps` answer: its audio, and its words from the characters' times.
 pub fn parse_elevenlabs(body: &[u8]) -> Result<Said> {
     #[derive(Deserialize)]
@@ -415,7 +408,7 @@ pub fn parse_elevenlabs(body: &[u8]) -> Result<Said> {
         )
     });
     Ok(Said {
-        samples: pcm16(&bytes),
+        samples: sound::pcm16(&bytes),
         words: words.filter(|w| !w.is_empty()),
     })
 }
@@ -527,7 +520,7 @@ pub async fn say(
     let said = match provider {
         Provider::ElevenLabs => parse_elevenlabs(&body)?,
         _ => Said {
-            samples: pcm16(&body),
+            samples: sound::pcm16(&body),
             words: None,
         },
     };
@@ -719,12 +712,6 @@ mod tests {
         )
         .is_ok());
         assert!(request(Provider::ElevenLabs, "k", "Hi", "../voices", "English").is_err());
-    }
-
-    #[test]
-    fn pcm_becomes_samples() {
-        let bytes = [0x00, 0x00, 0x00, 0x40, 0x00, 0x80, 0xff, 0x7f, 0x01];
-        assert_eq!(pcm16(&bytes), vec![0.0, 0.5, -1.0, 32767.0 / 32768.0]);
     }
 
     #[test]

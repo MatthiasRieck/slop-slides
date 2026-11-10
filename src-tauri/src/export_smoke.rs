@@ -19,7 +19,7 @@ use tauri::{AppHandle, Manager, RunEvent};
 use crate::capture::{self, Image};
 use crate::error::{Error, Result};
 use crate::workspace::OpenWorkspace;
-use crate::{deck, html, pdf, pptx, protocol, render, video};
+use crate::{deck, export_window, html, pdf, pptx, protocol, render, video};
 
 pub const FLAG: &str = "--export-smoke";
 /// The label the workspace is opened under; no window has it, the exports only need the
@@ -203,18 +203,7 @@ async fn export_all(app: &AppHandle, args: &Args) -> Result<()> {
 
     step("Slide render", async {
         let dir = out.join("rendered");
-        std::fs::create_dir_all(&dir)?;
-        for rendered in render::render(app, &file, &shown, None).await? {
-            use base64::Engine as _;
-            let png = rendered
-                .png
-                .ok_or_else(|| Error::msg(format!("slide {} was not found", rendered.id)))?;
-            let png = base64::engine::general_purpose::STANDARD
-                .decode(png)
-                .map_err(|e| Error::msg(format!("slide {}: {e}", rendered.id)))?;
-            check_png(&png, canvas)
-                .map_err(|e| Error::msg(format!("slide {}: {e}", rendered.id)))?;
-            std::fs::write(dir.join(format!("{}.png", rendered.id)), png)?;
+        for rendered in check_renders(app, &file, &shown, None, &dir, canvas).await? {
             if !rendered.overflow.is_empty() {
                 println!(
                     "  {} overflows: {}",
@@ -230,19 +219,7 @@ async fn export_all(app: &AppHandle, args: &Args) -> Result<()> {
     // The same, a moment after each slide shows, with its animations held there.
     step("Slide render at a moment", async {
         let dir = out.join("rendered-at");
-        std::fs::create_dir_all(&dir)?;
-        for rendered in render::render(app, &file, &shown, Some(0.25)).await? {
-            use base64::Engine as _;
-            let png = rendered
-                .png
-                .ok_or_else(|| Error::msg(format!("slide {} was not found", rendered.id)))?;
-            let png = base64::engine::general_purpose::STANDARD
-                .decode(png)
-                .map_err(|e| Error::msg(format!("slide {}: {e}", rendered.id)))?;
-            check_png(&png, canvas)
-                .map_err(|e| Error::msg(format!("slide {}: {e}", rendered.id)))?;
-            std::fs::write(dir.join(format!("{}.png", rendered.id)), png)?;
-        }
+        check_renders(app, &file, &shown, Some(0.25), &dir, canvas).await?;
         Ok(dir)
     })
     .await?;
@@ -284,6 +261,33 @@ async fn step<T: AsRef<Path>>(
     Ok(written)
 }
 
+/// Renders the `shown` slides of the deck `file` for the agent, `at` seconds after each shows
+/// (every animation finished for None), checks each image and saves it in `dir`.
+async fn check_renders(
+    app: &AppHandle,
+    file: &Path,
+    shown: &[String],
+    at: Option<f64>,
+    dir: &Path,
+    canvas: (u32, u32),
+) -> Result<Vec<render::Rendered>> {
+    use base64::Engine as _;
+    std::fs::create_dir_all(dir)?;
+    let rendered = render::render(app, file, shown, at).await?;
+    for slide in &rendered {
+        let png = slide
+            .png
+            .as_ref()
+            .ok_or_else(|| Error::msg(format!("slide {} was not found", slide.id)))?;
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(png)
+            .map_err(|e| Error::msg(format!("slide {}: {e}", slide.id)))?;
+        check_png(&png, canvas).map_err(|e| Error::msg(format!("slide {}: {e}", slide.id)))?;
+        std::fs::write(dir.join(format!("{}.png", slide.id)), png)?;
+    }
+    Ok(rendered)
+}
+
 /// Exports the `shown` slides of the deck `file` as images into `dir`, as the app's slide
 /// image export does: each slide shown whole, then captured at most the canvas width wide.
 async fn slide_images(
@@ -294,7 +298,7 @@ async fn slide_images(
     canvas: (u32, u32),
 ) -> Result<Vec<PathBuf>> {
     let (window, signals) = render::open(app, file, false)?;
-    let mut helper = pdf::Helper {
+    let mut helper = export_window::Helper {
         window: &window,
         signals,
         task: render::TASK,
@@ -306,9 +310,9 @@ async fn slide_images(
             let answer = render::show(&mut helper, id, None)
                 .await?
                 .ok_or_else(|| Error::msg(format!("slide {id} was not found")))?;
-            let (rect, viewport) = pdf::geometry(&answer)?;
+            let (rect, viewport) = export_window::geometry(&answer)?;
             // The fitted slide sits at a fraction of a pixel; keep its edge out of the image.
-            let rect = pdf::inside_whole_points(rect);
+            let rect = export_window::inside_whole_points(rect);
             let path = capture::save_slide_image(
                 window.as_ref(),
                 dir,

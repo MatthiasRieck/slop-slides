@@ -70,15 +70,6 @@ export function isSessionFile(path: string): boolean {
   return path.startsWith("/") || path.startsWith("\\\\") || /^[A-Za-z]:[\\/]/.test(path);
 }
 
-/**
- * URL of a file shown in the chat: deck files (attached assets) are deck-relative, while
- * screenshots live in the deck's session outside it and come as absolute paths.
- */
-export function chatFileUrl(deckId: string, path: string): string {
-  if (!isSessionFile(path)) return deckFileUrl(deckId, path);
-  return servedUrl(SESSION_PREFIX, urlPath(path));
-}
-
 /** Chat attachments are workspace-relative; screenshots are absolute session paths. */
 export function workspaceChatFileUrl(workspace: string, path: string): string {
   if (isSessionFile(path)) return servedUrl(SESSION_PREFIX, urlPath(path));

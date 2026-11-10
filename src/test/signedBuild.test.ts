@@ -47,9 +47,15 @@ describe.runIf(process.platform === "darwin")("scripts/build-signed.sh", () => {
     dir = undefined;
   });
 
+  /** A scratch folder for the test, removed after it. */
+  const scratch = () => {
+    dir ??= mkdtempSync(join(tmpdir(), "slopslide-signing-"));
+    return dir;
+  };
+
   /** Runs the script with only the given settings (no inherited Apple variables). */
   function run(args: string[], settings: Record<string, string> = {}) {
-    dir = mkdtempSync(join(tmpdir(), "slopslide-signing-"));
+    const dir = scratch();
     const env: Record<string, string> = {
       PATH: process.env.PATH ?? "/usr/bin:/bin",
       HOME: process.env.HOME ?? dir,
@@ -61,75 +67,61 @@ describe.runIf(process.platform === "darwin")("scripts/build-signed.sh", () => {
   }
 
   function envFile(contents: string) {
-    dir = mkdtempSync(join(tmpdir(), "slopslide-signing-"));
-    const path = join(dir, "signing.env");
+    const path = join(scratch(), "signing.env");
     writeFileSync(path, contents);
     return path;
   }
 
-  it("rejects unknown options", () => {
-    const { status, output } = run(["--bogus"]);
-    expect(status).not.toBe(0);
-    expect(output).toContain("Unknown option: --bogus");
-  });
+  const DEVELOPER_ID = "Developer ID Application: Someone (ABCDE12345)";
 
-  it("asks for a signing identity", () => {
-    const { status, output } = run(["--check"]);
+  it.each<[string, string[], Record<string, string>, string]>([
+    ["rejects unknown options", ["--bogus"], {}, "Unknown option: --bogus"],
+    ["asks for a signing identity", ["--check"], {}, "APPLE_SIGNING_IDENTITY is not set"],
+    [
+      "refuses to notarize with a development certificate",
+      ["--check"],
+      { APPLE_SIGNING_IDENTITY: "Apple Development: someone@example.com (ABCDE12345)" },
+      'needs a "Developer ID Application" certificate',
+    ],
+    [
+      "asks for notarization credentials",
+      ["--check"],
+      { APPLE_SIGNING_IDENTITY: DEVELOPER_ID },
+      "No notarization credentials",
+    ],
+    [
+      "wants the whole Apple ID triple",
+      ["--check"],
+      { APPLE_SIGNING_IDENTITY: DEVELOPER_ID, APPLE_ID: "someone@example.com", APPLE_PASSWORD: "abcd-efgh-ijkl-mnop" },
+      "APPLE_TEAM_ID",
+    ],
+    [
+      "checks that the API key file exists",
+      ["--check"],
+      {
+        APPLE_SIGNING_IDENTITY: DEVELOPER_ID,
+        APPLE_API_KEY: "ABC123DEF4",
+        APPLE_API_ISSUER: "00000000-0000-0000-0000-000000000000",
+        APPLE_API_KEY_PATH: "/nonexistent/AuthKey_ABC123DEF4.p8",
+      },
+      "APPLE_API_KEY_PATH does not exist",
+    ],
+    [
+      "looks the identity up in the keychain",
+      ["--check", "--no-notarize"],
+      { APPLE_SIGNING_IDENTITY: "Apple Development: nobody-slopslide-test@example.com (ZZZZZ99999)" },
+      "was not found in your keychain",
+    ],
+    [
+      "resolves an identity given as a certificate hash",
+      ["--check", "--no-notarize"],
+      { APPLE_SIGNING_IDENTITY: "0000000000000000000000000000000000000000" },
+      "No signing certificate with hash 0000000000000000000000000000000000000000",
+    ],
+  ])("%s", (_, args, settings, message) => {
+    const { status, output } = run(args, settings);
     expect(status).not.toBe(0);
-    expect(output).toContain("APPLE_SIGNING_IDENTITY is not set");
-  });
-
-  it("refuses to notarize with a development certificate", () => {
-    const { status, output } = run(["--check"], {
-      APPLE_SIGNING_IDENTITY: "Apple Development: someone@example.com (ABCDE12345)",
-    });
-    expect(status).not.toBe(0);
-    expect(output).toContain('needs a "Developer ID Application" certificate');
-  });
-
-  it("asks for notarization credentials", () => {
-    const { status, output } = run(["--check"], {
-      APPLE_SIGNING_IDENTITY: "Developer ID Application: Someone (ABCDE12345)",
-    });
-    expect(status).not.toBe(0);
-    expect(output).toContain("No notarization credentials");
-  });
-
-  it("wants the whole Apple ID triple", () => {
-    const { status, output } = run(["--check"], {
-      APPLE_SIGNING_IDENTITY: "Developer ID Application: Someone (ABCDE12345)",
-      APPLE_ID: "someone@example.com",
-      APPLE_PASSWORD: "abcd-efgh-ijkl-mnop",
-    });
-    expect(status).not.toBe(0);
-    expect(output).toContain("APPLE_TEAM_ID");
-  });
-
-  it("checks that the API key file exists", () => {
-    const { status, output } = run(["--check"], {
-      APPLE_SIGNING_IDENTITY: "Developer ID Application: Someone (ABCDE12345)",
-      APPLE_API_KEY: "ABC123DEF4",
-      APPLE_API_ISSUER: "00000000-0000-0000-0000-000000000000",
-      APPLE_API_KEY_PATH: "/nonexistent/AuthKey_ABC123DEF4.p8",
-    });
-    expect(status).not.toBe(0);
-    expect(output).toContain("APPLE_API_KEY_PATH does not exist");
-  });
-
-  it("looks the identity up in the keychain", () => {
-    const { status, output } = run(["--check", "--no-notarize"], {
-      APPLE_SIGNING_IDENTITY: "Apple Development: nobody-slopslide-test@example.com (ZZZZZ99999)",
-    });
-    expect(status).not.toBe(0);
-    expect(output).toContain("was not found in your keychain");
-  });
-
-  it("resolves an identity given as a certificate hash", () => {
-    const { status, output } = run(["--check", "--no-notarize"], {
-      APPLE_SIGNING_IDENTITY: "0000000000000000000000000000000000000000",
-    });
-    expect(status).not.toBe(0);
-    expect(output).toContain("No signing certificate with hash 0000000000000000000000000000000000000000");
+    expect(output).toContain(message);
   });
 
   it("reads its settings from the signing env file", () => {
@@ -142,7 +134,7 @@ describe.runIf(process.platform === "darwin")("scripts/build-signed.sh", () => {
 
   it("accepts a .p12 certificate instead of the keychain", () => {
     const { status, output } = run(["--check", "--no-notarize"], {
-      APPLE_SIGNING_IDENTITY: "Developer ID Application: Someone (ABCDE12345)",
+      APPLE_SIGNING_IDENTITY: DEVELOPER_ID,
       APPLE_CERTIFICATE: "MIIabc",
       APPLE_CERTIFICATE_PASSWORD: "secret",
     });

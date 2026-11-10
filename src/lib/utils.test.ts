@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   basename,
-  chatFileUrl,
   cn,
   deckFileUrl,
   dirname,
@@ -13,6 +12,7 @@ import {
   revealLabelFor,
   slideUrl,
   templateSlideUrl,
+  workspaceChatFileUrl,
 } from "./utils";
 
 describe("cn", () => {
@@ -80,15 +80,15 @@ describe("deck URLs (browser preview)", () => {
     expect(basename("deck.html")).toBe("deck.html");
   });
 
-  it("serves chat files from the deck, or from its session when absolute", () => {
+  it("serves chat files from the workspace, or from its session when absolute", () => {
     expect(isSessionFile("assets/a.png")).toBe(false);
     expect(isSessionFile("/Users/me/x.png")).toBe(true);
     expect(isSessionFile("C:\\Users\\x.png")).toBe(true);
-    expect(chatFileUrl(TALK, "assets/a.png")).toBe("/__deck/.file/Users/me/talks/assets/a.png");
-    expect(chatFileUrl(TALK, "/Users/me/.slopslides/sessions/1-ab/sketches/2.png")).toBe(
+    expect(workspaceChatFileUrl("/Users/me/talks", "assets/a.png")).toBe("/__deck/.file/Users/me/talks/assets/a.png");
+    expect(workspaceChatFileUrl("/Users/me/talks", "/Users/me/.slopslides/sessions/1-ab/sketches/2.png")).toBe(
       "/__deck/.session/Users/me/.slopslides/sessions/1-ab/sketches/2.png",
     );
-    expect(chatFileUrl(TALK, "C:\\Users\\me\\.slopslides\\sessions\\1-ab\\s 1.png")).toBe(
+    expect(workspaceChatFileUrl("/Users/me/talks", "C:\\Users\\me\\.slopslides\\sessions\\1-ab\\s 1.png")).toBe(
       "/__deck/.session/C%3A/Users/me/.slopslides/sessions/1-ab/s%201.png",
     );
   });
@@ -146,7 +146,7 @@ describe("deck URLs (desktop app)", () => {
     expect(utils.workspaceChatFileUrl(String.raw`\\?\C:\my talks`, "assets/a.png")).toBe(
       "http://slop.localhost/.file/C%3A/my%20talks/assets/a.png",
     );
-    expect(utils.chatFileUrl(deck, String.raw`\\?\C:\sessions\sketches\1.png`)).toBe(
+    expect(utils.workspaceChatFileUrl(String.raw`\\?\C:\my talks`, String.raw`\\?\C:\sessions\sketches\1.png`)).toBe(
       "http://slop.localhost/.session/C%3A/sessions/sketches/1.png",
     );
   });

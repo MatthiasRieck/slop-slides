@@ -14,15 +14,11 @@ describe("license", () => {
     expect(license).toContain('THE SOFTWARE IS PROVIDED "AS IS"');
   });
 
-  it("declares MIT in package.json", () => {
-    expect(JSON.parse(read("package.json")).license).toBe("MIT");
-  });
-
-  it("declares MIT in Cargo.toml", () => {
-    expect(read("src-tauri/Cargo.toml")).toMatch(/^license = "MIT"$/m);
-  });
-
-  it("declares MIT in the app bundle config", () => {
-    expect(JSON.parse(read("src-tauri/tauri.conf.json")).bundle.license).toBe("MIT");
+  it.each([
+    ["package.json", () => JSON.parse(read("package.json")).license],
+    ["Cargo.toml", () => /^license = "(.*)"$/m.exec(read("src-tauri/Cargo.toml"))?.[1]],
+    ["the app bundle config", () => JSON.parse(read("src-tauri/tauri.conf.json")).bundle.license],
+  ])("declares MIT in %s", (_, license) => {
+    expect(license()).toBe("MIT");
   });
 });

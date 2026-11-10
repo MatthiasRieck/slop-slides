@@ -6,7 +6,6 @@
 use std::collections::{HashSet, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -14,10 +13,10 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::watch;
 
-use crate::agent::{AgentEvent, Outcome, Steers, SYSTEM_PROMPT};
+use crate::agent::{AgentEvent, Outcome, Steers, TurnArgs, SYSTEM_PROMPT};
 use crate::error::{Error, Result};
-use crate::extensions::{self, Extensions};
-use crate::permissions::{Approval, Approvals, Choices, Decision, LiveMode, PermissionMode};
+use crate::extensions;
+use crate::permissions::{self, Approval, Choices, PermissionMode};
 use crate::providers::ModelInfo;
 use crate::{mcp, rewind};
 
@@ -226,25 +225,6 @@ fn parse_model(model: &Value) -> Option<ModelInfo> {
     })
 }
 
-pub struct TurnArgs<'a> {
-    pub bin: &'a Path,
-    pub dir: &'a Path,
-    /// This app's binary, which serves the `lint_deck` MCP tool (`mcp.rs`).
-    pub lint_server: &'a Path,
-    pub prompt: &'a str,
-    pub model: Option<&'a str>,
-    pub effort: Option<&'a str>,
-    pub session: Option<&'a str>,
-    /// Summarize the session's history instead of sending `prompt`.
-    pub compact: bool,
-    pub workspace: &'a str,
-    /// Read at each request, so a change applies to the requests that follow.
-    pub mode: LiveMode,
-    pub approvals: Arc<Approvals>,
-    pub extensions: &'a Extensions,
-    pub rewind: rewind::TurnRewind<'a>,
-}
-
 /// The `session.create`/`session.resume` parameters. Copilot discovers no configuration of
 /// its own here (`enableConfigDiscovery` is off) but the workspace's `AGENTS.md`, so the
 /// user's extensions are passed in full; it loads plugins' MCP servers itself.
@@ -276,8 +256,9 @@ fn session_config(args: &TurnArgs<'_>) -> Value {
     })
 }
 
-/// Runs one turn. `on_session` persists the session id as soon as it is known.
-pub async fn run_turn(
+/// Runs one turn. The permission mode is read at each request, so a change applies to the
+/// requests that follow. `on_session` persists the session id as soon as it is known.
+pub(crate) async fn run_turn(
     args: TurnArgs<'_>,
     cancel: &mut watch::Receiver<bool>,
     steers: &mut Steers,
@@ -452,7 +433,7 @@ pub async fn run_turn(
         // The event of this turn's message, where taking the conversation back truncates it.
         if !anchored && event["type"] == "user.message" && event["data"]["content"] == *prompt {
             if let (Some(started), Some(id)) = (args.rewind.started, event["id"].as_str()) {
-                started(id);
+                started(Some(id));
             }
             anchored = true;
         }
@@ -601,19 +582,11 @@ fn permission(data: &Value, dir: &Path, mode: PermissionMode) -> Option<(String,
     };
     let details =
         details.unwrap_or_else(|| serde_json::to_string_pretty(request).unwrap_or_default());
-    let mut choices = Choices::from([
-        ("accept", json!({ "kind": "approve-once" })),
-        (
-            "decline",
-            json!({ "kind": "reject", "feedback": "The user declined this request." }),
-        ),
-    ]);
-    let mut decisions = vec![Decision::Accept];
-    if let Some(session) = session {
-        choices.insert("acceptForSession", session);
-        decisions.push(Decision::AcceptForSession);
-    }
-    decisions.push(Decision::Decline);
+    let (decisions, choices) = permissions::offer(
+        json!({ "kind": "approve-once" }),
+        session,
+        json!({ "kind": "reject", "feedback": "The user declined this request." }),
+    );
     let approval = Approval::new(title, text("intention"), details, decisions);
     Some((request_id, Permission::Ask(approval, choices)))
 }
@@ -789,6 +762,98 @@ fn tool_presentation(name: &str, args: &Value) -> (String, Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extensions::Extensions;
+    use crate::permissions::{fixed_mode, Approvals, Decision};
+    use crate::test_support::TempDir;
+    use std::sync::{Arc, Mutex};
+
+    /// A turn of `prompt` in `dir` with the Copilot at `bin`, in Ask mode, nothing to resume.
+    fn args<'a>(bin: &'a Path, dir: &'a Path, prompt: &'a str) -> TurnArgs<'a> {
+        TurnArgs {
+            bin,
+            dir,
+            app_home: dir,
+            session_dir: dir,
+            lint_server: Path::new("/app/slopslide"),
+            workspace: "deck-1",
+            prompt,
+            model: None,
+            effort: None,
+            session: None,
+            compact: false,
+            mode: fixed_mode(PermissionMode::Ask),
+            approvals: Arc::default(),
+            extensions: Box::leak(Box::default()),
+            rewind: Default::default(),
+        }
+    }
+
+    /// Runs `f` on a runtime of its own, failing after 20 seconds.
+    #[cfg(unix)]
+    fn block_on<T>(f: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                tokio::time::timeout(Duration::from_secs(20), f)
+                    .await
+                    .expect("timed out")
+            })
+    }
+
+    /// Runs one turn of `args`, emitting to `emit`.
+    #[cfg(unix)]
+    fn turn(
+        args: TurnArgs<'_>,
+        steers: &mut Steers,
+        emit: &(dyn Fn(&AgentEvent) + Sync),
+    ) -> Result<Outcome> {
+        let (_tx, mut rx) = watch::channel(false);
+        block_on(run_turn(args, &mut rx, steers, emit, &|_| Ok(())))
+    }
+
+    /// A stand-in `copilot --server --stdio` in Python that runs `body`, in a workspace folder
+    /// of its own: `read()` takes the next framed message (exiting when the client is gone),
+    /// `send(message)` writes one, and `event(kind, data, id)` sends a session event.
+    #[cfg(unix)]
+    fn fake_copilot(body: &str) -> (TempDir, std::path::PathBuf) {
+        let script = format!(
+            r#"#!/usr/bin/env python3
+import json, os, sys
+def read():
+    length = None
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line: sys.exit(0)
+        line = line.strip()
+        if not line: break
+        name, _, value = line.partition(b":")
+        if name.lower() == b"content-length": length = int(value)
+    return json.loads(sys.stdin.buffer.read(length))
+def send(message):
+    body = json.dumps(message).encode()
+    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+    sys.stdout.buffer.flush()
+def event(kind, data, id=None):
+    send({{"jsonrpc": "2.0", "method": "session.event", "params": {{"event": {{"id": id, "type": kind, "data": data}}}}}})
+{body}"#
+        );
+        let dir = TempDir::new("copilot");
+        let bin = dir.join("copilot");
+        crate::test_support::write_script(&bin, &script);
+        (dir, bin)
+    }
+
+    /// The JSON lines a fake Copilot logged to `name` in its folder.
+    #[cfg(unix)]
+    fn logged(dir: &Path, name: &str) -> Vec<Value> {
+        std::fs::read_to_string(dir.join(name))
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
 
     #[test]
     fn session_config_passes_the_users_extensions() {
@@ -810,21 +875,9 @@ mod tests {
             instructions: Some("Be brief.".into()),
             warnings: Vec::new(),
         };
-        let args = TurnArgs {
-            bin: Path::new("copilot"),
-            dir: Path::new("/talk"),
-            lint_server: Path::new("/Apps/SlopSlide"),
-            prompt: "hi",
-            model: None,
-            effort: None,
-            session: None,
-            compact: false,
-            workspace: "talk",
-            mode: crate::permissions::fixed_mode(PermissionMode::Ask),
-            approvals: Arc::default(),
-            extensions: &ext,
-            rewind: Default::default(),
-        };
+        let mut args = args(Path::new("copilot"), Path::new("/talk"), "hi");
+        args.lint_server = Path::new("/Apps/SlopSlide");
+        args.extensions = &ext;
         let config = session_config(&args);
         let servers = &config["mcpServers"];
         assert_eq!(
@@ -1057,23 +1110,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn lists_models_over_framed_stdio() {
-        let script = r#"#!/usr/bin/env python3
-import json, sys
-def read():
-    length = None
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line: sys.exit(0)
-        line = line.strip()
-        if not line: break
-        name, _, value = line.partition(b":")
-        if name.lower() == b"content-length": length = int(value)
-    return json.loads(sys.stdin.buffer.read(length))
-def send(message):
-    body = json.dumps(message).encode()
-    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
-    sys.stdout.buffer.flush()
-request = read()
+        let (_dir, bin) = fake_copilot(
+            r#"request = read()
 send({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32601, "message": "no connect"}})
 request = read()
 send({"jsonrpc": "2.0", "id": request["id"], "result": {"protocolVersion": 3}})
@@ -1081,17 +1119,9 @@ request = read()
 send({"jsonrpc": "2.0", "method": "session.lifecycle", "params": {}})
 send({"jsonrpc": "2.0", "id": request["id"], "result": {"models": [{"id": "m1", "name": "Model One"}]}})
 read()
-"#;
-        let path =
-            std::env::temp_dir().join(format!("slopslide-mock-copilot-{}", std::process::id()));
-        crate::test_support::write_script(&path, script);
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let models = runtime.block_on(list_models(&path));
-        let _ = std::fs::remove_file(&path);
-        let models = models.unwrap_or_else(|e| panic!("{e}"));
+"#,
+        );
+        let models = block_on(list_models(&bin)).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].label, "Model One");
     }
@@ -1101,27 +1131,8 @@ read()
     #[cfg(unix)]
     #[test]
     fn steers_the_running_turn_and_waits_for_its_answer() {
-        use std::sync::Mutex;
-
-        let script = r#"#!/usr/bin/env python3
-import json, sys
-log = open("requests.log", "a")
-def read():
-    length = None
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line: sys.exit(0)
-        line = line.strip()
-        if not line: break
-        name, _, value = line.partition(b":")
-        if name.lower() == b"content-length": length = int(value)
-    return json.loads(sys.stdin.buffer.read(length))
-def send(message):
-    body = json.dumps(message).encode()
-    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
-    sys.stdout.buffer.flush()
-def event(kind, data):
-    send({"jsonrpc": "2.0", "method": "session.event", "params": {"event": {"type": kind, "data": data}}})
+        let (dir, bin) = fake_copilot(
+            r#"log = open("requests.log", "a")
 while True:
     request = read()
     log.write(json.dumps(request) + "\n"); log.flush()
@@ -1135,57 +1146,19 @@ while True:
         event("session.idle", {})
     else:
         event("user.message", {"content": prompt})
-"#;
-        let dir = std::env::temp_dir().join(format!("slopslide-steer-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let bin = dir.join("copilot");
-        crate::test_support::write_script(&bin, script);
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let (_tx, mut rx) = watch::channel(false);
+"#,
+        );
         let (steer_tx, mut steers) = tokio::sync::mpsc::unbounded_channel();
         let (steer, delivered) = crate::agent::Steer::new("Make it blue", Some("m2"));
         steer_tx.send(steer).unwrap();
         let events = Mutex::new(Vec::new());
-        let args = TurnArgs {
-            bin: &bin,
-            dir: &dir,
-            lint_server: Path::new("/app/slopslide"),
-            prompt: "Go",
-            model: None,
-            effort: None,
-            session: None,
-            compact: false,
-            workspace: "deck-1",
-            mode: crate::permissions::fixed_mode(PermissionMode::Ask),
-            approvals: Arc::default(),
-            extensions: &Extensions::default(),
-            rewind: rewind::TurnRewind::default(),
-        };
-        let (outcome, delivered) = runtime.block_on(async {
-            let outcome = tokio::time::timeout(
-                Duration::from_secs(20),
-                run_turn(
-                    args,
-                    &mut rx,
-                    &mut steers,
-                    &|e| events.lock().unwrap().push(e.clone()),
-                    &|_| Ok(()),
-                ),
-            )
-            .await
-            .expect("turn timed out");
-            (outcome, delivered.await)
+        let outcome = turn(args(&bin, &dir, "Go"), &mut steers, &|e| {
+            events.lock().unwrap().push(e.clone())
         });
-        let log = std::fs::read_to_string(dir.join("requests.log")).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
         assert!(matches!(outcome, Ok(Outcome::Done)));
-        assert_eq!(delivered, Ok(true));
-        let sends: Vec<Value> = log
-            .lines()
-            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        assert_eq!(delivered.blocking_recv(), Ok(true));
+        let sends: Vec<Value> = logged(&dir, "requests.log")
+            .into_iter()
             .filter(|r| r["method"] == "session.send")
             .collect();
         assert_eq!(sends.len(), 2);
@@ -1228,27 +1201,9 @@ while True:
     #[cfg(unix)]
     #[test]
     fn truncates_the_history_before_the_turn_and_reports_its_message() {
-        use std::sync::Mutex;
-
-        let script = r#"#!/usr/bin/env python3
-import json, os, sys
-log = open("requests.log", "a")
-def read():
-    length = None
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line: sys.exit(0)
-        line = line.strip()
-        if not line: break
-        name, _, value = line.partition(b":")
-        if name.lower() == b"content-length": length = int(value)
-    return json.loads(sys.stdin.buffer.read(length))
-def send(message):
-    body = json.dumps(message).encode()
-    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
-    sys.stdout.buffer.flush()
-def event(kind, data, id=None):
-    send({"jsonrpc": "2.0", "method": "session.event", "params": {"event": {"id": id, "type": kind, "data": data}}})
+        for (refuse, prompt) in [(false, "Go"), (true, "NOTE\n\nGo")] {
+            let (dir, bin) = fake_copilot(
+                r#"log = open("requests.log", "a")
 while True:
     request = read()
     method = request["method"]
@@ -1262,62 +1217,22 @@ while True:
         event("session.idle", {})
     else:
         send({"jsonrpc": "2.0", "id": request["id"], "result": {}})
-"#;
-        for (refuse, prompt) in [(false, "Go"), (true, "NOTE\n\nGo")] {
-            let dir =
-                std::env::temp_dir().join(format!("slopslide-truncate-{}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(&dir).unwrap();
+"#,
+            );
             if refuse {
-                std::fs::write(dir.join("refuse"), "").unwrap();
+                dir.write("refuse", "");
             }
-            let bin = dir.join("copilot");
-            crate::test_support::write_script(&bin, script);
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
             let started = Mutex::new(Vec::new());
-            let record = |id: &str| started.lock().unwrap().push(id.to_string());
-            let (_tx, mut rx) = watch::channel(false);
-            let args = TurnArgs {
-                bin: &bin,
-                dir: &dir,
-                lint_server: Path::new("/app/slopslide"),
-                prompt: "Go",
-                model: None,
-                effort: None,
-                session: Some("s1"),
-                compact: false,
-                workspace: "deck-1",
-                mode: crate::permissions::fixed_mode(PermissionMode::Ask),
-                approvals: Arc::default(),
-                extensions: &Extensions::default(),
-                rewind: rewind::TurnRewind {
-                    cut: Some(("e-old", "NOTE")),
-                    started: Some(&record),
-                },
+            let record = |id: Option<&str>| started.lock().unwrap().push(id.map(str::to_string));
+            let mut args = args(&bin, &dir, "Go");
+            args.session = Some("s1");
+            args.rewind = rewind::TurnRewind {
+                cut: Some(("e-old", "NOTE")),
+                started: Some(&record),
             };
-            let outcome = runtime.block_on(async {
-                tokio::time::timeout(
-                    Duration::from_secs(20),
-                    run_turn(
-                        args,
-                        &mut rx,
-                        &mut crate::agent::no_steers(),
-                        &|_| {},
-                        &|_| Ok(()),
-                    ),
-                )
-                .await
-                .expect("turn timed out")
-            });
-            let log = std::fs::read_to_string(dir.join("requests.log")).unwrap();
-            let _ = std::fs::remove_dir_all(&dir);
+            let outcome = turn(args, &mut crate::agent::no_steers(), &|_| {});
             assert!(matches!(outcome, Ok(Outcome::Done)));
-            let requests: Vec<Value> = log
-                .lines()
-                .map(|l| serde_json::from_str(l).unwrap())
-                .collect();
+            let requests = logged(&dir, "requests.log");
             let at = |method: &str| requests.iter().position(|r| r["method"] == method).unwrap();
             let truncate = at("session.history.truncate");
             assert_eq!(
@@ -1329,36 +1244,18 @@ while True:
             assert_eq!(requests[send]["params"]["prompt"], prompt);
             assert_eq!(
                 *started.lock().unwrap(),
-                ["e1"],
+                [Some("e1".into())],
                 "this turn's message, not an older one"
             );
         }
     }
 
-    /// A stand-in Copilot server over framed stdio whose turn runs `turn` (Python, indented
-    /// eight spaces) after answering `session.send`, logging the decisions it receives.
+    /// A stand-in Copilot whose turn runs `turn` (Python, indented eight spaces) after
+    /// answering `session.send`, logging the decisions it receives to `decisions.log`.
     #[cfg(unix)]
-    fn fake_copilot(turn: &str) -> String {
-        format!(
-            r#"#!/usr/bin/env python3
-import json, sys
-log = open("decisions.log", "w")
-def read():
-    length = None
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line: sys.exit(0)
-        line = line.strip()
-        if not line: break
-        name, _, value = line.partition(b":")
-        if name.lower() == b"content-length": length = int(value)
-    return json.loads(sys.stdin.buffer.read(length))
-def send(message):
-    body = json.dumps(message).encode()
-    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
-    sys.stdout.buffer.flush()
-def event(kind, data):
-    send({{"jsonrpc": "2.0", "method": "session.event", "params": {{"event": {{"type": kind, "data": data}}}}}})
+    fn deciding_copilot(turn: &str) -> (TempDir, std::path::PathBuf) {
+        fake_copilot(&format!(
+            r#"log = open("decisions.log", "w")
 def decision():
     while True:
         request = read()
@@ -1378,7 +1275,7 @@ while True:
     else:
         send({{"jsonrpc": "2.0", "id": request["id"], "result": {{}}}})
 "#
-        )
+        ))
     }
 
     /// A stand-in server whose turn asks to run a shell command and then a workspace read,
@@ -1386,11 +1283,7 @@ while True:
     #[cfg(unix)]
     #[test]
     fn asks_the_user_over_framed_stdio() {
-        use std::sync::Mutex;
-
-        let dir = std::env::temp_dir().join(format!("slopslide-ask-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let script = &fake_copilot(
+        let (dir, bin) = deciding_copilot(
             r#"
         event("permission.requested", {"requestId": "p1", "permissionRequest": {"kind": "shell", "fullCommandText": "curl -sI https://example.com", "intention": "Check the site", "canOfferSessionApproval": True, "commands": [{"identifier": "curl", "readOnly": False}]}})
         decision()
@@ -1399,58 +1292,20 @@ while True:
         decision()
 "#,
         );
-        let bin = dir.join("copilot");
-        crate::test_support::write_script(&bin, script);
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
         let approvals = Arc::<Approvals>::default();
         let events = Mutex::new(Vec::new());
-        let (_tx, mut rx) = watch::channel(false);
-        let args = TurnArgs {
-            bin: &bin,
-            dir: &dir,
-            lint_server: Path::new("/app/slopslide"),
-            prompt: "Check the site",
-            model: None,
-            effort: None,
-            session: None,
-            compact: false,
-            workspace: "deck-1",
-            mode: crate::permissions::fixed_mode(PermissionMode::Ask),
-            approvals: approvals.clone(),
-            extensions: &Extensions::default(),
-            rewind: Default::default(),
-        };
-        let outcome = runtime.block_on(async {
-            tokio::time::timeout(
-                Duration::from_secs(20),
-                run_turn(
-                    args,
-                    &mut rx,
-                    &mut crate::agent::no_steers(),
-                    &|e| {
-                        events.lock().unwrap().push(e.clone());
-                        if let AgentEvent::ApprovalRequested { approval } = e {
-                            approvals
-                                .respond("deck-1", &approval.id, Decision::AcceptForSession)
-                                .unwrap();
-                        }
-                    },
-                    &|_| Ok(()),
-                ),
-            )
-            .await
-            .expect("turn timed out")
+        let mut args = args(&bin, &dir, "Check the site");
+        args.approvals = approvals.clone();
+        let outcome = turn(args, &mut crate::agent::no_steers(), &|e| {
+            events.lock().unwrap().push(e.clone());
+            if let AgentEvent::ApprovalRequested { approval } = e {
+                approvals
+                    .respond("deck-1", &approval.id, Decision::AcceptForSession)
+                    .unwrap();
+            }
         });
-        let decisions = std::fs::read_to_string(dir.join("decisions.log")).unwrap_or_default();
-        let _ = std::fs::remove_dir_all(&dir);
         assert!(matches!(outcome, Ok(Outcome::Done)));
-        let decisions: Vec<Value> = decisions
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
+        let decisions = logged(&dir, "decisions.log");
         assert_eq!(decisions.len(), 2, "{decisions:?}");
         assert_eq!(decisions[0]["requestId"], "p1");
         assert_eq!(
@@ -1483,11 +1338,7 @@ while True:
     #[cfg(unix)]
     #[test]
     fn full_access_granted_mid_turn_applies_at_once() {
-        use std::sync::Mutex;
-
-        let dir = std::env::temp_dir().join(format!("slopslide-live-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let script = &fake_copilot(
+        let (dir, bin) = deciding_copilot(
             r#"
         event("permission.requested", {"requestId": "p1", "permissionRequest": {"kind": "shell", "fullCommandText": "ls /", "canOfferSessionApproval": False, "commands": [{"identifier": "ls", "readOnly": True}]}})
         decision()
@@ -1495,56 +1346,18 @@ while True:
         decision()
 "#,
         );
-        let bin = dir.join("copilot");
-        crate::test_support::write_script(&bin, script);
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
         let events = Mutex::new(Vec::new());
-        let (_tx, mut rx) = watch::channel(false);
         let (mode, live) = watch::channel(PermissionMode::Ask);
-        let args = TurnArgs {
-            bin: &bin,
-            dir: &dir,
-            lint_server: Path::new("/app/slopslide"),
-            prompt: "Tidy up",
-            model: None,
-            effort: None,
-            session: None,
-            compact: false,
-            workspace: "deck-1",
-            mode: live,
-            approvals: Arc::default(),
-            extensions: &Extensions::default(),
-            rewind: Default::default(),
-        };
-        let outcome = runtime.block_on(async {
-            tokio::time::timeout(
-                Duration::from_secs(20),
-                run_turn(
-                    args,
-                    &mut rx,
-                    &mut crate::agent::no_steers(),
-                    &|e| {
-                        events.lock().unwrap().push(e.clone());
-                        if matches!(e, AgentEvent::ApprovalRequested { .. }) {
-                            mode.send_replace(PermissionMode::FullAccess);
-                        }
-                    },
-                    &|_| Ok(()),
-                ),
-            )
-            .await
-            .expect("turn timed out")
+        let mut args = args(&bin, &dir, "Tidy up");
+        args.mode = live;
+        let outcome = turn(args, &mut crate::agent::no_steers(), &|e| {
+            events.lock().unwrap().push(e.clone());
+            if matches!(e, AgentEvent::ApprovalRequested { .. }) {
+                mode.send_replace(PermissionMode::FullAccess);
+            }
         });
-        let decisions = std::fs::read_to_string(dir.join("decisions.log")).unwrap_or_default();
-        let _ = std::fs::remove_dir_all(&dir);
         assert!(matches!(outcome, Ok(Outcome::Done)));
-        let decisions: Vec<Value> = decisions
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
+        let decisions = logged(&dir, "decisions.log");
         assert_eq!(decisions.len(), 2, "{decisions:?}");
         for (decision, id) in decisions.iter().zip(["p1", "p2"]) {
             assert_eq!(decision["requestId"], id);
@@ -1569,34 +1382,18 @@ while True:
     #[test]
     #[ignore = "requires a signed-in GitHub Copilot CLI, network access, and a built app binary"]
     fn real_copilot_permissions_test() {
-        use std::sync::Mutex;
-
         let bin = crate::env::resolve_copilot().expect("Copilot installed");
         let lint = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug/slopslide");
         assert!(lint.is_file(), "Build the app before running this test");
-        let dir =
-            std::env::temp_dir().join(format!("slopslide-copilot-smoke-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let dir = dir.canonicalize().unwrap();
+        let temp = TempDir::new("copilot-smoke");
+        let dir = temp.canonicalize().unwrap();
         std::fs::write(dir.join("deck.html"), "<html><body><main class=\"deck\"><section class=\"slide\" id=\"smoke\"><div></section></main></body></html>").unwrap();
         let approvals = Arc::<Approvals>::default();
         let events = Mutex::new(Vec::new());
         let (_tx, mut rx) = watch::channel(false);
-        let args = TurnArgs {
-            bin: &bin,
-            dir: &dir,
-            lint_server: &lint,
-            prompt: "Do exactly these three steps and nothing else: 1. Call the slopslide MCP lint_deck tool once. 2. Read the file deck.html. 3. Run the shell command `curl -sI https://example.com`. If a step is declined, skip it. Then reply done.",
-            model: None,
-            effort: None,
-            session: None,
-            compact: false,
-            workspace: "deck-1",
-            mode: crate::permissions::fixed_mode(PermissionMode::Ask),
-            approvals: approvals.clone(),
-            extensions: &Extensions::default(),
-            rewind: Default::default(),
-        };
+        let mut args = args(&bin, &dir, "Do exactly these three steps and nothing else: 1. Call the slopslide MCP lint_deck tool once. 2. Read the file deck.html. 3. Run the shell command `curl -sI https://example.com`. If a step is declined, skip it. Then reply done.");
+        args.lint_server = &lint;
+        args.approvals = approvals.clone();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -1621,7 +1418,6 @@ while True:
             )
             .await
         });
-        let _ = std::fs::remove_dir_all(&dir);
         let events = events.into_inner().unwrap();
         assert!(matches!(outcome, Ok(Ok(Outcome::Done))), "{events:?}");
         let asked: Vec<_> = events
@@ -1654,33 +1450,11 @@ while True:
     #[cfg(unix)]
     #[test]
     fn compacts_over_framed_stdio() {
-        use std::sync::Mutex;
-
-        let dir = std::env::temp_dir().join(format!("slopslide-compact-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let script = r#"#!/usr/bin/env python3
-import json, sys
-log = open("methods.log", "w")
-def read():
-    length = None
-    while True:
-        line = sys.stdin.buffer.readline()
-        if not line: sys.exit(0)
-        line = line.strip()
-        if not line: break
-        name, _, value = line.partition(b":")
-        if name.lower() == b"content-length": length = int(value)
-    message = json.loads(sys.stdin.buffer.read(length))
-    log.write(message.get("method", "") + "\n"); log.flush()
-    return message
-def send(message):
-    body = json.dumps(message).encode()
-    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
-    sys.stdout.buffer.flush()
-def event(kind, data):
-    send({"jsonrpc": "2.0", "method": "session.event", "params": {"event": {"type": kind, "data": data}}})
+        let (dir, bin) = fake_copilot(
+            r#"log = open("methods.log", "w")
 while True:
     request = read()
+    log.write(json.dumps(request.get("method", "")) + "\n"); log.flush()
     method = request["method"]
     if method == "session.history.compact":
         event("session.compaction_start", {"currentTokens": 90000})
@@ -1689,41 +1463,17 @@ while True:
         send({"jsonrpc": "2.0", "id": request["id"], "result": {"success": True, "tokensRemoved": 78000, "messagesRemoved": 9}})
     else:
         send({"jsonrpc": "2.0", "id": request["id"], "result": {}})
-"#;
-        let bin = dir.join("copilot");
-        crate::test_support::write_script(&bin, script);
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+"#,
+        );
         let events = Mutex::new(Vec::new());
-        let (_tx, mut rx) = watch::channel(false);
-        let args = TurnArgs {
-            bin: &bin,
-            dir: &dir,
-            lint_server: Path::new("/app/slopslide"),
-            prompt: "/compact",
-            model: None,
-            effort: None,
-            session: Some("s1"),
-            compact: true,
-            workspace: "deck-1",
-            mode: crate::permissions::fixed_mode(PermissionMode::Ask),
-            approvals: Arc::default(),
-            extensions: &Extensions::default(),
-            rewind: Default::default(),
-        };
-        let outcome = runtime.block_on(run_turn(
-            args,
-            &mut rx,
-            &mut crate::agent::no_steers(),
-            &|e| events.lock().unwrap().push(e.clone()),
-            &|_| Ok(()),
-        ));
-        let methods = std::fs::read_to_string(dir.join("methods.log")).unwrap_or_default();
-        let _ = std::fs::remove_dir_all(&dir);
+        let mut args = args(&bin, &dir, "/compact");
+        args.session = Some("s1");
+        args.compact = true;
+        let outcome = turn(args, &mut crate::agent::no_steers(), &|e| {
+            events.lock().unwrap().push(e.clone())
+        });
         assert!(matches!(outcome, Ok(Outcome::Done)));
-        let methods: Vec<_> = methods.lines().collect();
+        let methods = logged(&dir, "methods.log");
         assert_eq!(
             methods,
             [

@@ -1,8 +1,9 @@
-//! Codex app-server transport. Provider policy and JSON-RPC stay out of the shared agent loop.
+//! Drives OpenAI Codex through `codex app-server`, one process per turn: its JSON-RPC
+//! connection, the thread and turn requests, its permission policies and approval requests,
+//! and the models it offers.
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -10,14 +11,16 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, watch};
 
-use crate::agent::{AgentEvent, Outcome, Steers, SYSTEM_PROMPT};
+use crate::agent::{AgentEvent, Outcome, Steers, TurnArgs, SYSTEM_PROMPT};
 use crate::error::{Error, Result};
 use crate::extensions::{self, Extensions};
-use crate::permissions::{Answer, Approval, Approvals, Choices, Decision, PermissionMode, Run};
+use crate::permissions::{self, Answer, Approval, Choices, Decision, PermissionMode, Run};
+use crate::providers::ModelInfo;
 use crate::{env, mcp, rewind};
 
+/// A `codex app-server` process and its newline-delimited JSON-RPC connection.
 struct Server {
-    _child: Child,
+    child: Child,
     stdin: ChildStdin,
     lines: Lines<BufReader<ChildStdout>>,
     next_id: u64,
@@ -27,6 +30,10 @@ struct Server {
 impl Server {
     /// `config` holds `-c` overrides.
     fn spawn(bin: &Path, cwd: Option<&Path>, config: &[String]) -> Result<Self> {
+        Self::start(bin, cwd, config, "Codex app-server")
+    }
+    /// Starts the server; errors name it `name`.
+    fn start(bin: &Path, cwd: Option<&Path>, config: &[String], name: &str) -> Result<Self> {
         let mut cmd = crate::process::command(bin)?;
         cmd.arg("app-server").args(config);
         if let Some(dir) = cwd {
@@ -37,11 +44,11 @@ impl Server {
             .stderr(Stdio::null());
         let mut child = cmd
             .spawn()
-            .map_err(|e| Error::msg(format!("Could not start Codex app-server: {e}")))?;
+            .map_err(|e| Error::msg(format!("Could not start {name}: {e}")))?;
         Ok(Self {
             stdin: child.stdin.take().expect("piped stdin"),
             lines: BufReader::new(child.stdout.take().expect("piped stdout")).lines(),
-            _child: child,
+            child,
             next_id: 0,
             buffered: VecDeque::new(),
             active_turn: None,
@@ -61,16 +68,21 @@ impl Server {
         self.read().await
     }
     async fn read(&mut self) -> Result<Value> {
-        loop {
-            let line =
-                self.lines.next_line().await?.ok_or_else(|| {
-                    Error::msg("Codex app-server exited before finishing the turn.")
-                })?;
+        self.read_message()
+            .await?
+            .ok_or_else(|| Error::msg("Codex app-server exited before finishing the turn."))
+    }
+    /// The next JSON message, skipping lines that are not; None once the server exits.
+    async fn read_message(&mut self) -> Result<Option<Value>> {
+        while let Some(line) = self.lines.next_line().await? {
             if let Ok(v) = serde_json::from_str(&line) {
-                return Ok(v);
+                return Ok(Some(v));
             }
         }
+        Ok(None)
     }
+    /// Sends request `method` and returns its result, keeping the notifications and requests
+    /// that arrive meanwhile for [`Server::next`].
     async fn request(&mut self, method: &str, params: Value) -> Result<Value> {
         self.next_id += 1;
         let id = self.next_id;
@@ -97,6 +109,26 @@ impl Server {
         })
         .await
         .map_err(|_| Error::msg(format!("Codex {method} timed out.")))?
+    }
+    /// Sends request `method` and returns its result, dropping everything else that arrives:
+    /// for short exchanges outside a turn, such as listing the models.
+    async fn probe(&mut self, method: &str, params: Value) -> Result<Value> {
+        self.next_id += 1;
+        let id = self.next_id;
+        self.send(&json!({"id":id,"method":method,"params":params}))
+            .await?;
+        while let Some(message) = self.read_message().await? {
+            // Skip notifications and server-initiated requests.
+            if message.get("method").is_some() || message["id"].as_u64() != Some(id) {
+                continue;
+            }
+            if let Some(error) = message.get("error") {
+                let detail = error["message"].as_str().unwrap_or("unknown error");
+                return Err(Error::msg(format!("Codex {method} failed: {detail}")));
+            }
+            return Ok(message["result"].clone());
+        }
+        Err(Error::msg("Codex exited before answering."))
     }
     async fn reject_unknown(&mut self, v: &Value) -> Result<()> {
         self.send(&json!({"id":v["id"],"error":{"code":-32601,"message":"SlopSlide does not support this interactive request; no permission was granted."}})).await
@@ -181,14 +213,98 @@ pub async fn permission_modes(dir: &Path) -> Result<Vec<PermissionMode>> {
     Ok(supported_modes(&config, &requirements))
 }
 
-fn thread_params(args: &TurnArgs<'_>, config: &Value) -> Value {
+/// Models the signed-in account may use: every page of `model/list`, from a short-lived
+/// `codex app-server`.
+pub async fn list_models(bin: &Path) -> Result<Vec<ModelInfo>> {
+    let mut server = Server::start(bin, None, &[], "Codex")?;
+    server
+        .probe(
+            "initialize",
+            json!({
+                "clientInfo": {
+                    "name": "slopslide",
+                    "title": "SlopSlide",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+            }),
+        )
+        .await?;
+    server.send(&json!({ "method": "initialized" })).await?;
+
+    let mut models = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let params = match &cursor {
+            Some(cursor) => json!({ "cursor": cursor }),
+            None => json!({}),
+        };
+        let page = server.probe("model/list", params).await?;
+        models.extend(
+            page["data"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(parse_model),
+        );
+        cursor = page["nextCursor"].as_str().map(str::to_string);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    let _ = server.child.kill().await;
+    Ok(models)
+}
+
+fn parse_model(model: &Value) -> Option<ModelInfo> {
+    if model["hidden"].as_bool().unwrap_or(false) {
+        return None;
+    }
+    let id = model["model"].as_str()?.to_string();
+    let name = model["displayName"].as_str().unwrap_or(&id);
+    Some(ModelInfo {
+        label: format_name(name),
+        is_default: model["isDefault"].as_bool().unwrap_or(false),
+        efforts: model["supportedReasoningEfforts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e["reasoningEffort"].as_str().map(str::to_string))
+            .collect(),
+        default_effort: model["defaultReasoningEffort"].as_str().map(str::to_string),
+        context_windows: Vec::new(),
+        default_context_window: None,
+        id,
+    })
+}
+
+/// `gpt-6-astra` → `GPT-6-Astra`, matching T3 Code.
+fn format_name(name: &str) -> String {
+    let name = match name.get(..3) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("gpt") => format!("GPT{}", &name[3..]),
+        _ => name.to_string(),
+    };
+    let mut out = String::with_capacity(name.len());
+    let mut after_dash = false;
+    for c in name.chars() {
+        out.push(if after_dash {
+            c.to_ascii_uppercase()
+        } else {
+            c
+        });
+        after_dash = c == '-';
+    }
+    out
+}
+
+/// The `thread/start`/`thread/resume` parameters for a turn in `mode`.
+fn thread_params(args: &TurnArgs<'_>, mode: PermissionMode, config: &Value) -> Value {
     let instructions = args.extensions.system_prompt(SYSTEM_PROMPT);
     let mut p = json!({"cwd":args.dir,"developerInstructions":instructions});
     if let Some(model) = args.model {
         p["model"] = json!(model);
     }
     // Custom must explicitly restore current config when resuming a previously unrestricted thread.
-    let (sandbox, policy, reviewer) = match args.mode {
+    let (sandbox, policy, reviewer) = match mode {
         PermissionMode::Ask => (json!("workspace-write"), json!("on-request"), json!("user")),
         PermissionMode::AutoReview => (
             json!("workspace-write"),
@@ -217,34 +333,22 @@ fn thread_params(args: &TurnArgs<'_>, config: &Value) -> Value {
     if config.get("approvals_reviewer").is_some() {
         p["approvalsReviewer"] = reviewer;
     }
-    if args.mode != PermissionMode::Custom && args.mode != PermissionMode::FullAccess {
+    if mode != PermissionMode::Custom && mode != PermissionMode::FullAccess {
         p["config"] = json!({"sandbox_workspace_write.network_access":false});
     }
     p
 }
 
-pub struct TurnArgs<'a> {
-    pub bin: &'a Path,
-    pub dir: &'a Path,
-    pub lint_server: &'a Path,
-    pub workspace: &'a str,
-    pub prompt: &'a str,
-    pub model: Option<&'a str>,
-    pub effort: Option<&'a str>,
-    pub session: Option<&'a str>,
-    pub mode: PermissionMode,
-    pub approvals: Arc<Approvals>,
-    pub extensions: &'a Extensions,
-    pub rewind: rewind::TurnRewind<'a>,
-}
-
-pub async fn run_turn(
+/// Runs one turn. Codex fixes the permission policy as the turn starts: a mode the user picks
+/// while it runs applies to the next turn. `on_session` persists the thread id once known.
+pub(crate) async fn run_turn(
     args: TurnArgs<'_>,
     cancel: &mut watch::Receiver<bool>,
     steers: &mut Steers,
     emit: &(dyn Fn(&AgentEvent) + Sync),
     on_session: &(dyn Fn(&str) -> Result<()> + Sync),
 ) -> Result<Outcome> {
+    let mode = *args.mode.borrow();
     let mut warnings = Vec::new();
     let mut config = mcp_config_args(args.lint_server, args.dir);
     config.extend(extensions::codex_config_args(
@@ -277,14 +381,16 @@ pub async fn run_turn(
             }
             Ok(Outcome::Interrupted)
         },
-        result = connected_turn(&mut server, &args, &run, &mut answers, steers, emit, on_session) => result,
+        result = connected_turn(&mut server, &args, mode, &run, &mut answers, steers, emit, on_session) => result,
     }
     // Server's kill_on_drop closes the transport, including any pending approvals.
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn connected_turn(
     server: &mut Server,
     args: &TurnArgs<'_>,
+    mode: PermissionMode,
     run: &Run,
     answers: &mut mpsc::UnboundedReceiver<Answer>,
     steers: &mut Steers,
@@ -304,12 +410,12 @@ async fn connected_turn(
         }
     }
     let (config, requirements) = server.configuration(args.dir).await?;
-    if !supported_modes(&config, &requirements).contains(&args.mode) {
+    if !supported_modes(&config, &requirements).contains(&mode) {
         return Err(Error::msg(
             "This permission mode is unavailable in your Codex configuration. Select another mode.",
         ));
     }
-    let mut params = thread_params(args, &config);
+    let mut params = thread_params(args, mode, &config);
     let method = if let Some(id) = args.session {
         params["threadId"] = json!(id);
         "thread/resume"
@@ -359,7 +465,7 @@ async fn connected_turn(
         .ok_or_else(|| Error::msg("Codex returned no turn ID."))?
         .to_string();
     if let Some(started) = args.rewind.started {
-        started(&turn);
+        started(Some(&turn));
     }
     server.active_turn = Some((thread.clone(), turn.clone()));
     let mut mapper = EventMapper::default();
@@ -581,33 +687,20 @@ fn mcp_approval_request(p: &Value) -> Option<(Approval, Choices)> {
     }
     let server = p["serverName"].as_str()?;
     let message = p["message"].as_str()?;
-    let mut decisions = vec![Decision::Accept];
-    let mut result = Choices::from([
-        ("accept", json!({"action":"accept","content":{}})),
-        ("decline", json!({"action":"decline"})),
-    ]);
     let persist = &meta["persist"];
-    if persist == "session"
+    let for_session = (persist == "session"
         || persist
             .as_array()
-            .is_some_and(|a| a.iter().any(|v| v == "session"))
-    {
-        decisions.push(Decision::AcceptForSession);
-        result.insert(
-            "acceptForSession",
-            json!({"action":"accept","content":{},"_meta":{"persist":"session"}}),
-        );
-    }
-    decisions.push(Decision::Decline);
+            .is_some_and(|a| a.iter().any(|v| v == "session")))
+    .then(|| json!({"action":"accept","content":{},"_meta":{"persist":"session"}}));
+    let (decisions, result) = permissions::offer(
+        json!({"action":"accept","content":{}}),
+        for_session,
+        json!({"action":"decline"}),
+    );
+    let details = serde_json::to_string_pretty(&json!({"server":server,"tool":meta})).ok()?;
     Some((
-        Approval {
-            id: uuid::Uuid::new_v4().to_string(),
-            title: "Use an MCP tool".into(),
-            reason: Some(message.into()),
-            details: serde_json::to_string_pretty(&json!({"server":server,"tool":meta})).ok()?,
-            accept_label: "Allow once".into(),
-            decisions,
-        },
+        Approval::new("Use an MCP tool", Some(message.into()), details, decisions),
         result,
     ))
 }

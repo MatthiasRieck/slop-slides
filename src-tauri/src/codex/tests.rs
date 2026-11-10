@@ -1,6 +1,8 @@
 use super::*;
+use crate::permissions::fixed_mode;
+use crate::test_support::TempDir;
 use std::collections::BTreeSet;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 mod fake_server;
 
@@ -8,13 +10,16 @@ fn args(dir: &Path) -> TurnArgs<'_> {
     TurnArgs {
         bin: dir,
         dir,
+        app_home: dir,
+        session_dir: dir,
         lint_server: dir,
         workspace: "deck-1",
         prompt: "Make slides",
         model: Some("test-model"),
         effort: Some("high"),
         session: None,
-        mode: PermissionMode::Ask,
+        compact: false,
+        mode: fixed_mode(PermissionMode::Ask),
         approvals: Arc::default(),
         extensions: Box::leak(Box::default()),
         rewind: Default::default(),
@@ -41,7 +46,7 @@ fn configures_the_builtin_mcp_server_as_preapproved() {
 
 #[test]
 fn skill_roots_leave_out_the_workspace_codex_reads_itself() {
-    let dir = std::env::temp_dir().join(format!("codex-skills-{}", uuid::Uuid::new_v4()));
+    let dir = TempDir::new("codex-skills");
     std::fs::create_dir_all(dir.join("plugin/skills")).unwrap();
     std::fs::create_dir_all(dir.join("bare-plugin")).unwrap();
     let ext = Extensions {
@@ -55,7 +60,65 @@ fn skill_roots_leave_out_the_workspace_codex_reads_itself() {
         [dir.join("skills"), dir.join("plugin/skills")]
     );
     assert!(skill_roots(&Extensions::default()).is_empty());
-    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn parses_models() {
+    let model = json!({
+        "id": "gpt-6-astra", "model": "gpt-6-astra", "displayName": "gpt-6-astra",
+        "description": "", "hidden": false, "isDefault": true,
+        "defaultReasoningEffort": "medium",
+        "supportedReasoningEfforts": [
+            {"reasoningEffort": "low", "description": ""},
+            {"reasoningEffort": "high", "description": ""}
+        ]
+    });
+    assert_eq!(
+        parse_model(&model),
+        Some(ModelInfo {
+            id: "gpt-6-astra".into(),
+            label: "GPT-6-Astra".into(),
+            is_default: true,
+            efforts: vec!["low".into(), "high".into()],
+            default_effort: Some("medium".into()),
+            context_windows: Vec::new(),
+            default_context_window: None,
+        })
+    );
+    assert_eq!(parse_model(&json!({"model": "x", "hidden": true})), None);
+}
+
+#[test]
+fn formats_model_names() {
+    assert_eq!(format_name("gpt-5.6-sol"), "GPT-5.6-Sol");
+    assert_eq!(format_name("GPT-6 Luna"), "GPT-6 Luna");
+    assert_eq!(format_name("o3"), "o3");
+}
+
+/// A stand-in `codex app-server` that answers by line order, paging `model/list` once.
+#[cfg(unix)]
+#[test]
+fn lists_models_over_app_server() {
+    let script = r#"#!/bin/sh
+read -r _; echo '{"method":"thread/started","params":{}}'; echo '{"id":1,"result":{"userAgent":"mock/0"}}'
+read -r _
+read -r _; echo '{"id":2,"result":{"data":[{"model":"gpt-a","displayName":"gpt-a","hidden":false,"isDefault":true,"defaultReasoningEffort":"medium","supportedReasoningEfforts":[]}],"nextCursor":"p2"}}'
+read -r _; echo '{"id":3,"result":{"data":[{"model":"gpt-b","displayName":"gpt-b","hidden":true,"isDefault":false,"supportedReasoningEfforts":[]},{"model":"gpt-c","displayName":"gpt-c","hidden":false,"isDefault":false,"supportedReasoningEfforts":[]}]}}'
+"#;
+    let dir = TempDir::new("mock-codex");
+    let path = dir.join("codex");
+    crate::test_support::write_script(&path, script);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let ids: Vec<_> = runtime
+        .block_on(list_models(&path))
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+    assert_eq!(ids, ["gpt-a", "gpt-c"]);
 }
 
 fn mcp_approval_params() -> Value {
@@ -186,7 +249,7 @@ mod contract_check {
     #[test]
     fn pinned_schemas_reject_a_wrong_permission_value() {
         let a = args(Path::new("/deck"));
-        let mut p = thread_params(&a, &json!({}));
+        let mut p = thread_params(&a, PermissionMode::Ask, &json!({}));
         let case = |p: &Value| vec![("ThreadStartParams".to_string(), p.clone())];
         assert_eq!(
             validate_cases(pinned_schema, &case(&p)),
@@ -203,7 +266,7 @@ fn codex_payloads_match_pinned_protocol_schemas() {
     let mut cases: Vec<(String, Value)> = Vec::new();
     let mut add = |schema: &str, payload: Value| cases.push((schema.into(), payload));
     let dir = std::env::temp_dir();
-    let mut a = args(&dir);
+    let a = args(&dir);
     let config = json!({"sandbox_mode":"read-only","approval_policy":"on-request","approvals_reviewer":"user"});
     for mode in [
         PermissionMode::Ask,
@@ -211,8 +274,7 @@ fn codex_payloads_match_pinned_protocol_schemas() {
         PermissionMode::FullAccess,
         PermissionMode::Custom,
     ] {
-        a.mode = mode;
-        let mut p = thread_params(&a, &config);
+        let mut p = thread_params(&a, mode, &config);
         add("ThreadStartParams", p.clone());
         add(
             "ClientRequest",
@@ -437,8 +499,7 @@ fn policies_are_explicit_and_custom_resets_resumed_threads() {
         ),
         (PermissionMode::Custom, "read-only", "never", "auto_review"),
     ] {
-        a.mode = mode;
-        let p = thread_params(&a, &config);
+        let p = thread_params(&a, mode, &config);
         assert_eq!(p["sandbox"], sandbox);
         assert_eq!(p["approvalPolicy"], policy);
         assert_eq!(p["approvalsReviewer"], reviewer);
@@ -451,14 +512,13 @@ fn policies_are_explicit_and_custom_resets_resumed_threads() {
         ..Default::default()
     };
     a.extensions = &ext;
-    let p = thread_params(&a, &json!({}));
+    let p = thread_params(&a, PermissionMode::Ask, &json!({}));
     assert_eq!(
         p["developerInstructions"],
         ext.system_prompt(SYSTEM_PROMPT),
         "the user's AGENTS.md follows the app's instructions"
     );
-    a.mode = PermissionMode::Custom;
-    let p = thread_params(&a, &json!({}));
+    let p = thread_params(&a, PermissionMode::Custom, &json!({}));
     assert_eq!(p["sandbox"], "read-only");
     assert_eq!(p["approvalPolicy"], "on-request");
     assert!(p.get("approvalsReviewer").is_none());
@@ -604,14 +664,13 @@ mod process {
     use super::*;
 
     pub(super) struct Fixture {
-        dir: std::path::PathBuf,
+        /// Its name has spaces, as users' folders do.
+        dir: TempDir,
         bin: std::path::PathBuf,
     }
     impl Fixture {
         pub(super) fn new(scenario: Value) -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("slopslide codex test {}", uuid::Uuid::new_v4()));
-            std::fs::create_dir_all(&dir).unwrap();
+            let dir = TempDir::new("codex test");
             // This test binary doubles as `codex app-server`; see fake_server.rs.
             let bin = std::env::current_exe().unwrap();
             std::fs::write(dir.join("scenario.json"), scenario.to_string()).unwrap();
@@ -628,11 +687,6 @@ mod process {
                 .lines()
                 .map(|s| serde_json::from_str(s).unwrap())
                 .collect()
-        }
-    }
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
     fn run(f: impl std::future::Future<Output = ()>) {
@@ -748,7 +802,8 @@ mod process {
             ] {
                 let f = Fixture::new(scenario);
                 let started = Mutex::new(Vec::new());
-                let record = |turn: &str| started.lock().unwrap().push(turn.to_string());
+                let record =
+                    |turn: Option<&str>| started.lock().unwrap().push(turn.map(str::to_string));
                 let mut a = f.args();
                 a.session = Some("thread-1");
                 a.rewind = rewind::TurnRewind {
@@ -773,7 +828,7 @@ mod process {
                 let start = at("turn/start").unwrap();
                 assert!(revert < start);
                 assert_eq!(requests[start]["params"]["input"][0]["text"], prompt);
-                assert_eq!(*started.lock().unwrap(), ["turn-1"]);
+                assert_eq!(*started.lock().unwrap(), [Some("turn-1".into())]);
             }
         });
     }
@@ -1115,7 +1170,7 @@ mod process {
                 let f = Fixture::new(json!({}));
                 let mut a = f.args();
                 a.session = Some("saved");
-                a.mode = mode;
+                a.mode = fixed_mode(mode);
                 let (_tx, mut rx) = watch::channel(false);
                 run_turn(a, &mut rx, &mut crate::agent::no_steers(), &|_| {}, &|_| {
                     Ok(())
@@ -1284,8 +1339,7 @@ fn real_codex_lint_approval_test() {
         .unwrap();
     runtime.block_on(async {
         let bin = env::resolve_codex().expect("Codex installed");
-        let dir = std::env::temp_dir().join(format!("slopslide-lint-smoke-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir::new("lint-smoke");
         std::fs::write(dir.join("deck.html"), "<html><body><main class=\"deck\"><section class=\"slide\" id=\"smoke\"><div></section></main></body></html>").unwrap();
         let lint = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug/slopslide");
         assert!(lint.is_file(), "Build the app before running this test");
@@ -1311,7 +1365,6 @@ fn real_codex_lint_approval_test() {
         }).expect("real lint_deck tool was called");
         assert!(events.iter().any(|e| matches!(e, AgentEvent::ToolResult { id, is_error: false } if id == tool_id)), "{events:?}");
         assert!(matches!(events.last(), Some(AgentEvent::Result { is_error: false, .. })), "{events:?}");
-        let _ = std::fs::remove_dir_all(dir);
     });
 }
 
@@ -1325,10 +1378,8 @@ fn real_codex_permission_modes_test() {
         .unwrap();
     runtime.block_on(async {
         let bin = env::resolve_codex().expect("Codex installed");
-        let dir =
-            std::env::temp_dir().join(format!("slopslide-policy-smoke-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut server = Server::spawn(&bin, Some(&dir), &[]).unwrap();
+        let dir = TempDir::new("policy-smoke");
+        let mut server = Server::spawn(&bin, Some(dir.path()), &[]).unwrap();
         server.initialize().await.unwrap();
         let (config, requirements) = server.configuration(&dir).await.unwrap();
         for (mode, sandbox, policy, reviewer) in [
@@ -1350,9 +1401,8 @@ fn real_codex_permission_modes_test() {
                 continue;
             }
             let mut a = args(&dir);
-            a.mode = mode;
             a.model = None;
-            let mut params = thread_params(&a, &config);
+            let mut params = thread_params(&a, mode, &config);
             params["ephemeral"] = json!(true);
             // No turn is started: inspect effective permissions without executing tools or inference.
             let response = server.request("thread/start", params).await.unwrap();
@@ -1363,7 +1413,6 @@ fn real_codex_permission_modes_test() {
                 assert_eq!(response["sandbox"]["networkAccess"], false);
             }
         }
-        let _ = std::fs::remove_dir_all(dir);
     });
 }
 
@@ -1373,10 +1422,9 @@ fn real_codex_permission_modes_test() {
 fn real_codex_smoke_test() {
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
         let bin=env::resolve_codex().expect("Codex installed");
-        let dir=std::env::temp_dir().join(format!("slopslide-real-smoke-{}",uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir=TempDir::new("real-smoke");
         let lint=Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug/slopslide");
-        let mut probe=Server::spawn(&bin,Some(&dir),&[]).unwrap();
+        let mut probe=Server::spawn(&bin,Some(dir.path()),&[]).unwrap();
         probe.initialize().await.unwrap();
         let models=probe.request("model/list",json!({})).await.unwrap();
         let model=models["data"].as_array().unwrap().iter().find(|m| m["isDefault"]==true).or_else(||models["data"].as_array().unwrap().first()).unwrap()["model"].as_str().unwrap();
@@ -1384,7 +1432,7 @@ fn real_codex_smoke_test() {
         for (mode,prompt) in [(PermissionMode::Ask,"Reply exactly SLOPSLIDE_SMOKE_OK. Do not use tools or change files."),(PermissionMode::Custom,"What exact marker did you reply with in your previous turn? Reply only with that marker. Do not use tools or change files.")] {
             let events=Mutex::new(Vec::new());
             let saved=Mutex::new(None);
-            let mut a=args(&dir);a.bin=&bin;a.lint_server=&lint;a.model=Some(model);a.effort=Some("low");a.prompt=prompt;a.mode=mode;a.session=session.as_deref();
+            let mut a=args(&dir);a.bin=&bin;a.lint_server=&lint;a.model=Some(model);a.effort=Some("low");a.prompt=prompt;a.mode=fixed_mode(mode);a.session=session.as_deref();
             let (_tx,mut rx)=watch::channel(false);
             let outcome=tokio::time::timeout(Duration::from_secs(90),run_turn(a,&mut rx, &mut crate::agent::no_steers(),&|e|events.lock().unwrap().push(e.clone()),&|s|{*saved.lock().unwrap()=Some(s.to_string());Ok(())})).await.expect("real turn timed out").unwrap();
             let events=events.into_inner().unwrap();
@@ -1395,6 +1443,5 @@ fn real_codex_smoke_test() {
             if let Some(previous)=&session {assert_eq!(saved.lock().unwrap().as_ref(),Some(previous));}
             session=saved.into_inner().unwrap();
         }
-        let _=std::fs::remove_dir_all(dir);
     });
 }

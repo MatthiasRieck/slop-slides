@@ -2,6 +2,7 @@ mod agent;
 mod app_block;
 mod assets;
 mod capture;
+mod claude;
 mod clipboard;
 mod codex;
 mod commands;
@@ -37,7 +38,7 @@ mod screens;
 mod sessions;
 mod size;
 mod templates;
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod test_support;
 mod video;
 mod voice;

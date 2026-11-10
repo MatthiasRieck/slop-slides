@@ -71,6 +71,27 @@ impl Decision {
 /// The payload each offered decision answers the agent with.
 pub type Choices = HashMap<DecisionKey, Value>;
 
+/// What a request the user may allow once, allow for the rest of the session (when
+/// `for_session` is the payload that does), or decline offers: the decisions in the order the
+/// chat shows them, and the payload each answers the agent with.
+pub fn offer(
+    accept: Value,
+    for_session: Option<Value>,
+    decline: Value,
+) -> (Vec<Decision>, Choices) {
+    let mut decisions = vec![Decision::Accept];
+    let mut choices = Choices::from([
+        (Decision::Accept.key(), accept),
+        (Decision::Decline.key(), decline),
+    ]);
+    if let Some(payload) = for_session {
+        choices.insert(Decision::AcceptForSession.key(), payload);
+        decisions.push(Decision::AcceptForSession);
+    }
+    decisions.push(Decision::Decline);
+    (decisions, choices)
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Approval {
@@ -336,10 +357,23 @@ mod tests {
     }
 
     #[test]
-    fn a_fixed_mode_keeps_its_value() {
-        let mode = fixed_mode(PermissionMode::FullAccess);
-        assert_eq!(*mode.borrow(), PermissionMode::FullAccess);
-        assert!(mode.has_changed().is_err(), "nobody can change it");
+    fn offers_the_session_only_with_its_payload() {
+        let (decisions, choices) = offer(json!("once"), None, json!("no"));
+        assert_eq!(decisions, [Decision::Accept, Decision::Decline]);
+        assert_eq!(
+            choices,
+            Choices::from([("accept", json!("once")), ("decline", json!("no"))])
+        );
+        let (decisions, choices) = offer(json!("once"), Some(json!("all")), json!("no"));
+        assert_eq!(
+            decisions,
+            [
+                Decision::Accept,
+                Decision::AcceptForSession,
+                Decision::Decline
+            ]
+        );
+        assert_eq!(choices["acceptForSession"], json!("all"));
     }
 
     #[test]

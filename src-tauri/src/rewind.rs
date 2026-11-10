@@ -76,7 +76,7 @@ fn load(session: &Path) -> State {
 fn save(session: &Path, state: &State) -> Result<()> {
     let json = serde_json::to_vec_pretty(state).map_err(|e| Error::msg(e.to_string()))?;
     fs::create_dir_all(session)?;
-    crate::deck::atomic_write(&session.join(REWIND_FILE), &json)
+    crate::files::atomic_write(&session.join(REWIND_FILE), &json)
 }
 
 /// Asks the next turn to take the conversation back to before `message`, telling the agent

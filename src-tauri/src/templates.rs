@@ -113,7 +113,7 @@ pub struct TemplateSummary {
 
 /// `~/.slopslides/templates`, created on first use.
 pub fn user_root() -> Result<PathBuf> {
-    let root = deck::app_home()?.join("templates");
+    let root = crate::files::app_home()?.join("templates");
     fs::create_dir_all(&root)?;
     Ok(root)
 }
@@ -265,12 +265,12 @@ pub fn read_file(root: &Path, id: &str, rel: &str) -> Option<(&'static str, Vec<
     if rel == DECK_FILE {
         let source = source(root, id).ok()?;
         return Some((
-            deck::mime_for(rel),
+            crate::assets::mime_for(rel),
             html::ensure_runtime(&source).into_bytes(),
         ));
     }
     let file = deck::resolve_in_deck(&user_dir(root, id)?, rel).ok()?;
-    Some((deck::mime_for(rel), fs::read(file).ok()?))
+    Some((crate::assets::mime_for(rel), fs::read(file).ok()?))
 }
 
 #[cfg(test)]

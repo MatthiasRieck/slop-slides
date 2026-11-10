@@ -25,7 +25,6 @@ use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_AL
 use tauri::http::{header, Request, Response, StatusCode};
 use tauri::{AppHandle, Manager};
 
-use crate::deck;
 use crate::git;
 use crate::html;
 use crate::sessions::Sessions;
@@ -98,7 +97,7 @@ fn serve(app: &AppHandle, raw_path: &str) -> Result<(&'static str, Vec<u8>), Sta
         return templates::read_file(&root, template, rel).ok_or(StatusCode::NOT_FOUND);
     }
     if prefix == SESSION_PREFIX {
-        let home = deck::app_home().map_err(|_| StatusCode::NOT_FOUND)?;
+        let home = crate::files::app_home().map_err(|_| StatusCode::NOT_FOUND)?;
         return read_in_session(&Sessions::new(&home), &rel);
     }
     if prefix == HEAD_PREFIX {
@@ -217,7 +216,7 @@ fn read_in_workspace(
         return Err(StatusCode::NOT_FOUND);
     }
     let bytes = std::fs::read(&file).map_err(|_| StatusCode::NOT_FOUND)?;
-    Ok((deck::mime_for(path), bytes))
+    Ok((crate::assets::mime_for(path), bytes))
 }
 
 /// A session file, by its absolute path without the leading `/` (`C:/…` on Windows).
@@ -227,7 +226,7 @@ fn read_in_session(sessions: &Sessions, path: &str) -> Result<(&'static str, Vec
         return Err(StatusCode::FORBIDDEN);
     }
     let bytes = std::fs::read(&file).map_err(|_| StatusCode::NOT_FOUND)?;
-    Ok((deck::mime_for(path), bytes))
+    Ok((crate::assets::mime_for(path), bytes))
 }
 
 /// A file of the open workspace as of the last commit, by its absolute path without the leading
@@ -242,7 +241,7 @@ fn read_at_head(
         return Err(StatusCode::FORBIDDEN);
     }
     match git::read_at_head(&file) {
-        Some(bytes) => Ok((deck::mime_for(path), bytes)),
+        Some(bytes) => Ok((crate::assets::mime_for(path), bytes)),
         None => read_in_workspace(workspace, path),
     }
 }

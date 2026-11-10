@@ -65,7 +65,9 @@ const DEFAULT_PROTOCOL: &str = "2024-11-05";
 /// Serves requests from stdin until it closes. Locked slides are checked against the deck's
 /// current session, where the app records them for the running turn.
 pub fn serve(dir: &Path) {
-    let sessions = deck::app_home().ok().map(|home| Sessions::new(&home));
+    let sessions = crate::files::app_home()
+        .ok()
+        .map(|home| Sessions::new(&home));
     let session = |_: &Path| sessions.as_ref().and_then(|s| s.current(dir));
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
@@ -378,7 +380,7 @@ pub fn handle(
             let arguments = &request["params"]["arguments"];
             let session = session(dir);
             text_result(
-                deck::app_home().and_then(|home| {
+                crate::files::app_home().and_then(|home| {
                     set_narration_audio(dir, arguments, &home, session.as_deref())
                 }),
             )
@@ -387,7 +389,7 @@ pub fn handle(
             let arguments = &request["params"]["arguments"];
             let session = session(dir);
             text_result(
-                deck::app_home()
+                crate::files::app_home()
                     .and_then(|home| narration_timeline(dir, arguments, &home, session.as_deref())),
             )
         }
@@ -402,7 +404,7 @@ pub fn handle(
         "tools/call" if request["params"]["name"] == GENERATE_TOOL => {
             let arguments = &request["params"]["arguments"];
             let session = session(dir);
-            text_result(deck::app_home().and_then(|home| {
+            text_result(crate::files::app_home().and_then(|home| {
                 generate_narration_audio(dir, arguments, &home, session.as_deref())
             }))
         }
@@ -480,7 +482,7 @@ fn set_narration_audio(
     // Checked before the audio is replaced: audio is not in the deck's history to undo.
     let markup = std::fs::read_to_string(&file)?;
     if crate::html::is_locked(&markup, slide)
-        || deck::read_guard(&file, session)
+        || crate::guard::read_guard(&file, session)
             .iter()
             .any(|locked| locked.id == slide)
     {
@@ -584,7 +586,7 @@ fn generate_narration_audio(
     {
         return Err(Error::msg(format!("{rel} has no slide `{missing}`")));
     }
-    let guard = deck::read_guard(&file, session);
+    let guard = crate::guard::read_guard(&file, session);
     let locked = |slide: &deck::Slide| slide.locked || guard.iter().any(|l| l.id == slide.id);
     let wanted: Vec<&deck::Slide> = deck
         .slides
@@ -1203,7 +1205,7 @@ mod tests {
     fn lint_tool_reports_locked_slides_changed_during_a_turn() {
         let html = "<html><body><main class=\"deck\"><section class=\"slide\" id=\"a\" data-locked>A</section></main></body></html>";
         let dir = temp_deck(html);
-        deck::guard_locked(&dir.join(deck::DECK_FILE), &dir.join("session")).unwrap();
+        crate::guard::guard_locked(&dir.join(deck::DECK_FILE), &dir.join("session")).unwrap();
         std::fs::write(dir.join(deck::DECK_FILE), html.replace(">A<", ">B<")).unwrap();
         let res = call(&dir, "tools/call", json!({"name": TOOL, "arguments": {}}));
         let text = res["result"]["content"][0]["text"].as_str().unwrap();
@@ -1953,7 +1955,7 @@ mod tests {
         let html = std::fs::read_to_string(&file).unwrap();
         let html = html.replace(r#"id="talk">"#, r#"id="talk" data-locked>"#);
         std::fs::write(&file, &html).unwrap();
-        deck::guard_locked(&file, &session).unwrap();
+        crate::guard::guard_locked(&file, &session).unwrap();
         std::fs::write(
             &file,
             html.replace(r#"id="talk" data-locked>"#, r#"id="talk">"#),

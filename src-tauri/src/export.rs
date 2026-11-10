@@ -141,7 +141,7 @@ pub fn destination(
         None => {
             let mut parts = parts(deck_rel)?;
             parts.pop();
-            let name = deck::safe_file_name(title);
+            let name = crate::files::safe_file_name(title);
             parts.push(FOLDER.into());
             parts.push(if name.is_empty() {
                 "presentation".into()
@@ -358,7 +358,7 @@ async fn images(app: &AppHandle, file: &Path, dir: &Path) -> Result<usize> {
                 .ok_or_else(|| Error::msg(format!("the deck has no slide `{id}`")))?;
             let (rect, viewport) = pdf::geometry(&shown)?;
             let png = video::capture(helper.window, rect, viewport, width).await?;
-            std::fs::write(dir.join(deck::slide_image_name(i, ids.len())), png)?;
+            std::fs::write(dir.join(crate::files::slide_image_name(i, ids.len())), png)?;
         }
         Ok(ids.len())
     }

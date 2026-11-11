@@ -70,6 +70,13 @@ describe("LayoutPicker", () => {
     expect(screen.getByText(/Adds a copy of the layout/)).toBeTruthy();
   });
 
+  it("lifts every layout's thumbnail off the panel with a shadow", () => {
+    useApp.setState({ deck: { ...DECK, template: "swiss" } });
+    render(<LayoutPicker mode="add" onDone={() => {}} />);
+    const picture = screen.getByRole("button", { name: "Title layout" }).firstElementChild!;
+    expect(picture.classList).toContain("shadow-thumbnail");
+  });
+
   it("stays on the deck's template without a style switcher when changing", async () => {
     useApp.setState({ deck: { ...DECK, template: "swiss" } });
     localStorage.setItem("slopslide.layoutTemplate", "bento-grid");
@@ -198,6 +205,14 @@ describe("style picker", () => {
     expect(swiss.getAttribute("aria-current")).toBe("true");
     expect(screen.getByRole("button", { name: "Mine style" }).textContent).toContain("Yours");
     expect(screen.getByText(/restyle every slide/)).toBeTruthy();
+  });
+
+  it("lifts every style's thumbnail off the panel with a shadow", () => {
+    useApp.setState({ deck: { ...DECK, template: "swiss" } });
+    render(<StylePicker />);
+    for (const name of ["Swiss Design style", "Mine style"]) {
+      expect(screen.getByRole("button", { name }).firstElementChild!.classList).toContain("shadow-thumbnail");
+    }
   });
 
   it("puts a restyle prompt in the composer", async () => {

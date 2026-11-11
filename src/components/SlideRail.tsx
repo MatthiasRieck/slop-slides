@@ -632,7 +632,7 @@ function Thumbnail(props: {
           onClick={onClick}
           onDoubleClick={onDoubleClick}
           className={cn(
-            "block w-full overflow-hidden rounded-md transition-shadow",
+            "block w-full overflow-hidden rounded-md shadow-thumbnail transition-shadow",
             // The offset gap keeps the ring visible against dark slides.
             selected
               ? "ring-2 ring-primary ring-offset-2 ring-offset-sidebar"

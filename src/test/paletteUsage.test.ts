@@ -86,6 +86,14 @@ describe("palette", () => {
     }
   });
 
+  it("shades a thumbnail in both themes, with an edge that shows on a dark surface", () => {
+    const theme = css.match(/@theme inline \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(theme).toMatch(/--shadow-thumbnail:[^;]*var\(--thumbnail-edge\)[^;]*var\(--thumbnail-shade\)/);
+    expect(blockOf(css, ":root")).toMatch(/--thumbnail-edge: --alpha\(var\(--color-black\)/);
+    expect(blockOf(css, ".dark")).toMatch(/--thumbnail-edge: --alpha\(var\(--color-white\)/);
+    for (const block of [":root", ".dark"]) expect(tokensIn(blockOf(css, block))).toContain("--thumbnail-shade");
+  });
+
   it("offers every class the components use", () => {
     const theme = css.match(/@theme inline \{[\s\S]*?\n\}/)?.[0] ?? "";
     for (const name of ["success", "warning", "info", "stage", "paper", "scrim", "overlay", "handle"]) {

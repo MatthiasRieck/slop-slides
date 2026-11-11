@@ -10,11 +10,13 @@ import { useApp } from "../../store";
  * The playhead of the deck's `timeline` and playing it from there, the stage following along:
  * `play` plays (or, while it plays, pauses), and `freeze` stops at a moment, the slide on the
  * stage frozen as it is then, its timed animations that far in. A changed deck stops it, and so
- * does leaving.
+ * does leaving. While `editing`, the stage is only taken to play: stopped, it stays the editor's,
+ * showing the slide's final state, whatever moment the playhead is at.
  */
-export function useTimelinePlayback(deck: Deck, timeline: Timeline) {
+export function useTimelinePlayback(deck: Deck, timeline: Timeline, editing = false) {
   const [time, setTime] = useState(0);
   const [stop, setStop] = useState<(() => void) | null>(null);
+  const playing = stop !== null;
 
   // Replacing what stops it stops it, and so does leaving.
   useEffect(() => stop ?? undefined, [stop]);
@@ -25,6 +27,14 @@ export function useTimelinePlayback(deck: Deck, timeline: Timeline) {
     setSlideClock(null);
   }, [deck]);
   useEffect(() => () => setSlideClock(null), []);
+  // Entering edit mode hands a frozen stage to the editor; leaving it, the stage is at the playhead again.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Only a change of mode moves the stage.
+  useEffect(() => {
+    if (playing) return;
+    const slide = timeline.slides[slideAt(timeline, time)];
+    if (editing || time <= 0 || slide?.id !== useApp.getState().selected) setSlideClock(null);
+    else clockAt(time, true);
+  }, [editing]);
 
   /** Puts the slide showing at `at` (and its timed animations) where the timeline is then; `paused`, they stay there. */
   const clockAt = (at: number, paused = false) => {
@@ -42,7 +52,8 @@ export function useTimelinePlayback(deck: Deck, timeline: Timeline) {
     setStop(null);
     setTime(to);
     select(slideAt(timeline, to));
-    clockAt(to, true);
+    if (editing) setSlideClock(null);
+    else clockAt(to, true);
   };
   const play = () => {
     if (stop) return freeze(time);
@@ -64,5 +75,5 @@ export function useTimelinePlayback(deck: Deck, timeline: Timeline) {
     setStop(() => stopping);
   };
 
-  return { time, playing: stop !== null, play, freeze, select };
+  return { time, playing, play, freeze, select };
 }

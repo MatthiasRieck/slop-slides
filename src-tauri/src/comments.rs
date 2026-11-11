@@ -26,7 +26,7 @@ const BLOCK: Block = Block {
     script_id: "slopslide-comments",
     name: "comments",
     entries: "comments",
-    problem: "a missing id or text, a bad position, or a bad area",
+    problem: "a missing id or text, a bad position, a bad area, or a bad time",
 };
 
 /// The element a comment is about, so its pin can follow it when the slide changes.
@@ -89,6 +89,10 @@ pub struct Comment {
     /// The area outlined on the slide, for a comment on an area rather than an element.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub area: Option<Area>,
+    /// The moment the comment is about, in seconds since the slide showed: where the timeline's
+    /// playhead held the slide when it was made. None for a comment on the slide whenever.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<f64>,
 }
 
 /// Comments by slide id.
@@ -118,6 +122,7 @@ fn valid(comment: &Comment) -> bool {
             .chain(at)
             .all(f64::is_finite)
         && comment.area.as_ref().map_or(true, Area::valid)
+        && comment.time.map_or(true, |t| t.is_finite() && t >= 0.0)
 }
 
 /// `html` with its comments block holding `comments`: slides without any are left out, and the
@@ -153,6 +158,7 @@ mod tests {
                 at: [0.1, 0.9],
             }),
             area: None,
+            time: None,
         }
     }
 
@@ -211,6 +217,25 @@ mod tests {
         assert!(html.contains(r#""area":{"shape":"rect","points":[[0.1,0.2],[0.4,0.5]]}"#));
         assert!(!html.contains("target"));
         assert_eq!(parse(&html), Ok(all));
+    }
+
+    #[test]
+    fn a_comment_on_a_moment_keeps_its_time() {
+        let at = |time| Comment {
+            time: Some(time),
+            ..comment("a", "Too fast")
+        };
+        let all = comments(&[("intro", vec![at(3.25)])]);
+        let html = write(DOC, &all);
+        assert!(html.contains(r#""time":3.25"#));
+        assert_eq!(parse(&html), Ok(all));
+        // Without a moment, nothing is written about one.
+        let plain = write(DOC, &comments(&[("intro", vec![comment("a", "Too fast")])]));
+        assert!(!plain.contains(r#""time""#));
+        // A moment before the slide shows, or none at all, is no moment.
+        for bad in [-1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(write(DOC, &comments(&[("intro", vec![at(bad)])])), DOC);
+        }
     }
 
     #[test]

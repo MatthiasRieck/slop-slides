@@ -9,6 +9,7 @@ import {
   type CommentArea,
   type CommentScope,
   type CommentSpot,
+  commentTime,
 } from "../lib/comments";
 import { toFraction } from "../lib/ink";
 import { cn } from "../lib/utils";
@@ -194,7 +195,7 @@ export function CommentEditor(props: {
     if (next && comment.id) {
       if (next !== comment.text) app.updateComment(comment.slide, comment.id, next);
     } else if (next) {
-      const { x, y, target, area } = comment;
+      const { x, y, target, area, time } = comment;
       app.addComment(comment.slide, {
         id: crypto.randomUUID(),
         text: next,
@@ -202,6 +203,7 @@ export function CommentEditor(props: {
         y,
         ...(target && { target }),
         ...(area && { area }),
+        ...(time !== null && { time }),
       });
       if (comment.shot) app.attachToComposer(comment.shot);
     }
@@ -251,6 +253,11 @@ export function CommentEditor(props: {
           <p className="truncate px-1 text-2xs text-muted-foreground">
             On the area inside the {AREA_NAMES[comment.area.shape]}
             {comment.shot && " · its screenshot goes in the chat"}
+          </p>
+        )}
+        {comment.time !== null && (
+          <p data-testid="comment-moment" className="truncate px-1 text-2xs text-muted-foreground">
+            At {commentTime(comment.time)} after the slide shows
           </p>
         )}
         <textarea

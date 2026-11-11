@@ -1,4 +1,4 @@
-import { Minus, Pause, Play, Plus, RotateCcw, StepBack, StepForward } from "lucide-react";
+import { ChevronDown, Minus, Pause, Play, Plus, RotateCcw, StepBack, StepForward } from "lucide-react";
 import {
   type KeyboardEvent,
   type MouseEvent,
@@ -10,6 +10,7 @@ import {
 } from "react";
 
 import type { Deck, Slide, SlideAudio, SlideTiming } from "../lib/api";
+import { type TimedComment, timedComments } from "../lib/comments";
 import { formatDuration } from "../lib/narrationAudio";
 import { pixelsOf } from "../lib/slideSize";
 import {
@@ -47,15 +48,20 @@ interface Measured {
 }
 
 /**
- * The deck on a timeline, under the slide in Play mode: the shown slides above their audio,
- * as a video export and the self-running show play them. Each slide is a strip of film, its
- * picture over and over for as long as it shows, with its narration a band of sound below. Dragging the end of a slide changes
- * how long it shows, the slides after it following with their narration. Dragging a narration
- * moves it, up to the narration on either side: so a slide can change in the middle of the
- * narration, and narration can run on over the next slide. The ruler moves the playhead, and
- * Play plays it from there, the stage following along. Not playing, the slide on the stage is
- * frozen as it is at the playhead, its animations that far in: pausing, pressing or dragging on
- * the ruler and stepping back or forward all leave it so, to look at one moment.
+ * The deck on a timeline, under the slide in View and in Edit while it is open: the shown slides
+ * above their audio, as a video export and the self-running show play them. Each slide is a strip
+ * of film, its picture over and over for as long as it shows, with its narration a band of sound
+ * below. The ruler moves the playhead, and Play plays it from there, the stage following along.
+ *
+ * In View it only plays and scrubs. Not playing, the slide on the stage is frozen as it is at the
+ * playhead, its animations that far in: pausing, pressing or dragging on the ruler and stepping
+ * back or forward all leave it so, to look at one moment, and to comment on it: a comment made
+ * then is about that moment, and marked on the ruler, where pressing its mark goes back to it.
+ *
+ * In Edit the timing changes too, and the stage stays the editor's unless the deck plays. Dragging
+ * the end of a slide changes how long it shows, the slides after it following with their
+ * narration. Dragging a narration moves it, up to the narration on either side: so a slide can
+ * change in the middle of the narration, and narration can run on over the next slide.
  */
 export function NarrationTimeline() {
   const deck = useApp((s) => s.deck);
@@ -79,10 +85,13 @@ function Tracks(props: {
   const { deck, slides, audio, layout } = props;
   const timeline = layout([]);
   const selected = useApp((s) => s.selected);
+  // Only Edit mode changes the timing; View plays and scrubs.
+  const editable = useApp((s) => s.editing);
+  const comments = useApp((s) => (s.reviewVisible ? s.comments : NO_COMMENTS));
   const [zoom, setZoom] = useState(1);
   const track = useRef<HTMLDivElement>(null);
-  const { time, playing, play, freeze, select } = useTimelinePlayback(deck, timeline);
-  const { shown, end, held, press, pointed, release, nudge } = useTimingEdits(layout, timeline, track);
+  const { time, playing, play, freeze, select } = useTimelinePlayback(deck, timeline, editable);
+  const { shown, end, held, press, pointed, release, nudge } = useTimingEdits(layout, timeline, track, editable);
   const scroller = useRef<HTMLDivElement>(null);
   const strips = useRef<HTMLDivElement>(null);
 
@@ -120,7 +129,7 @@ function Tracks(props: {
   };
   const step = (event: MouseEvent, direction: 1 | -1) => freeze(time + direction * (event.shiftKey ? 1 : STEP));
 
-  const reset = slides
+  const reset = (editable ? slides : [])
     .filter((s) => !s.locked && (s.duration != null || s.narrationStart != null))
     .map((s) => ({ slide: s.id, duration: null, narrationStart: null }));
 
@@ -177,6 +186,14 @@ function Tracks(props: {
           >
             <Plus />
           </Button>
+          <Button
+            size="xs"
+            aria-label="Hide timeline"
+            title="Fold the timeline away, leaving the room to the slide"
+            onClick={() => useApp.getState().setTimelineOpen(false)}
+          >
+            <ChevronDown />
+          </Button>
         </div>
       </div>
       {/* Clear of the panels' resize handles, which take a press a few pixels either side of them. */}
@@ -191,6 +208,14 @@ function Tracks(props: {
           style={{ width: `${zoom * 100 * Math.max(1, end / (held ?? end))}%` }}
         >
           <Ruler end={end} onSeek={seek} />
+          {timedComments(comments, shown.slides).map((comment) => (
+            <CommentMark
+              key={comment.id}
+              comment={comment}
+              left={percent(comment.at)}
+              onGo={() => freeze(comment.at)}
+            />
+          ))}
           <div className="relative min-h-0 flex-1">
             {shown.slides.map((placed, index) => {
               const moveEnd: Move = (by) => moveEdge(shown, index, placed.end + by);
@@ -221,8 +246,10 @@ function Tracks(props: {
                   <button
                     type="button"
                     aria-label={`End of slide ${index + 1}`}
-                    title="Drag to change how long this slide shows"
-                    disabled={placed.locked}
+                    title={
+                      editable ? "Drag to change how long this slide shows" : "Switch to Edit to change the timing"
+                    }
+                    disabled={placed.locked || !editable}
                     onPointerDown={(event) => press(event, moveEnd)}
                     onPointerMove={pointed}
                     onPointerUp={release}
@@ -248,7 +275,7 @@ function Tracks(props: {
                   clip={clip}
                   audio={audio[clip.slide]}
                   end={end}
-                  locked={slides.some((s) => s.id === clip.slide && s.locked)}
+                  locked={!editable || slides.some((s) => s.id === clip.slide && s.locked)}
                   onPress={(event) => press(event, moveNarration)}
                   onPoint={pointed}
                   onRelease={release}
@@ -296,6 +323,25 @@ function Ruler({ end, onSeek }: { end: number; onSeek: (event: PointerEvent<HTML
         </span>
       ))}
     </div>
+  );
+}
+
+const NO_COMMENTS: Record<string, never> = {};
+
+/** A comment made at a moment, over the ruler at that moment: pressing it goes there. */
+function CommentMark(props: { comment: TimedComment; left: string; onGo: () => void }) {
+  const { comment } = props;
+  const label = `Comment ${comment.number} on slide ${comment.index + 1}`;
+  return (
+    <button
+      type="button"
+      data-testid="comment-mark"
+      aria-label={label}
+      title={`${label}: ${comment.text}`}
+      onClick={props.onGo}
+      style={{ left: props.left }}
+      className="absolute top-0.5 z-30 size-3 -translate-x-1/2 rounded-full rounded-bl-none border border-background bg-primary hover:scale-125"
+    />
   );
 }
 

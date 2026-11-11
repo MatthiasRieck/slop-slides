@@ -20,10 +20,13 @@ function deckOf(changes: Record<string, Partial<Slide>> = {}): Deck {
   return { ...deck, slides: deck.slides.map((s) => ({ ...s, ...changes[s.id] })) };
 }
 
-/** Three five-second slides by default; the first has narration of three seconds. */
-function open(changes: Record<string, Partial<Slide>> = { intro: { narration: "Hello" } }) {
+/**
+ * Three five-second slides by default; the first has narration of three seconds. In Edit mode,
+ * where the timing changes, unless `editing` says View.
+ */
+function open(changes: Record<string, Partial<Slide>> = { intro: { narration: "Hello" } }, editing = true) {
   const deck = deckOf(changes);
-  useApp.setState({ deck, selected: "intro" });
+  useApp.setState({ deck, selected: "intro", editing });
   useNarration.setState({
     audioDeck: deck.id,
     audio: { intro: { slide: "intro", state: "ready", seconds: 3 } },
@@ -36,6 +39,9 @@ function open(changes: Record<string, Partial<Slide>> = { intro: { narration: "H
   return render(<NarrationTimeline />);
 }
 
+/** The same in View mode, which only plays and scrubs. */
+const watch = (changes?: Record<string, Partial<Slide>>) => open(changes, false);
+
 const timingCalls = () =>
   invoke.mock.calls.filter(([command]: unknown[]) => command === "set_slide_timing").map(([, a]) => a);
 
@@ -46,7 +52,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  useApp.setState({ deck: null, selected: null });
+  useApp.setState({ deck: null, selected: null, editing: false, comments: {} });
   useNarration.setState({ audio: {}, audioDeck: null });
 });
 
@@ -285,7 +291,7 @@ describe("NarrationTimeline", () => {
   });
 
   it("moves the playhead from the ruler, the stage following, frozen at that moment", () => {
-    open();
+    watch();
     const ruler = screen.getByTestId("ruler");
     ruler.getBoundingClientRect = () => ({ left: 0, width: 300 }) as DOMRect;
     fireEvent.pointerDown(ruler, { clientX: 150 });
@@ -297,7 +303,7 @@ describe("NarrationTimeline", () => {
   });
 
   it("scrubs along the ruler while the button is down, and not past its ends", () => {
-    open();
+    watch();
     const ruler = screen.getByTestId("ruler");
     ruler.getBoundingClientRect = () => ({ left: 0, width: 300 }) as DOMRect;
     // Passing over it without pressing moves nothing.
@@ -329,7 +335,7 @@ describe("NarrationTimeline", () => {
   it("steps a tenth of a second back and forward, a second with Shift, the slide frozen there", () => {
     const stop = vi.fn();
     play.mockReturnValue(stop);
-    open();
+    watch();
     const back = screen.getByRole("button", { name: "Step back" }) as HTMLButtonElement;
     const forward = screen.getByRole("button", { name: "Step forward" }) as HTMLButtonElement;
     const at = () => getSlideClock()?.at.toFixed(1);
@@ -370,6 +376,95 @@ describe("NarrationTimeline", () => {
     const edge = (n: number) => screen.getByRole("button", { name: `End of slide ${n}` }) as HTMLButtonElement;
     expect(edge(1).disabled).toBe(false);
     expect(edge(2).disabled).toBe(true);
+  });
+
+  it("changes no timing in View: the edges and the narration stay put, and nothing resets", () => {
+    watch({ intro: { narration: "Hello", duration: 2, narrationStart: 1 } });
+    const edge = screen.getByRole("button", { name: "End of slide 1" }) as HTMLButtonElement;
+    const clip = screen.getByRole("button", { name: "Narration of intro" }) as HTMLButtonElement;
+    expect([edge.disabled, clip.disabled]).toEqual([true, true]);
+    expect(edge.title).toBe("Switch to Edit to change the timing");
+    expect(screen.queryByRole("button", { name: "Reset timing" })).toBeNull();
+    // Where a disabled button still hears the pointer or a key, they move nothing either.
+    for (const handle of [edge, clip]) {
+      fireEvent.pointerDown(handle, { clientX: 100 });
+      fireEvent.pointerMove(handle, { clientX: 160 });
+      fireEvent.pointerUp(handle);
+      fireEvent.keyDown(handle, { key: "ArrowRight" });
+    }
+    expect(timingCalls()).toEqual([]);
+    // Edit mode has them back.
+    act(() => useApp.setState({ editing: true }));
+    expect([edge.disabled, clip.disabled]).toEqual([false, false]);
+    expect(screen.getByRole("button", { name: "Reset timing" })).toBeTruthy();
+  });
+
+  it("leaves the stage to the editor in Edit: scrubbing moves the playhead without freezing the slide", () => {
+    open();
+    const ruler = screen.getByTestId("ruler");
+    ruler.getBoundingClientRect = () => ({ left: 0, width: 300 }) as DOMRect;
+    fireEvent.pointerDown(ruler, { clientX: 150 });
+    expect(useApp.getState().selected).toBe("#2");
+    expect(screen.getByTestId("playhead").style.left).toBe("50%");
+    expect(getSlideClock()).toBeNull();
+    // Back in View the stage is at the playhead again, and entering Edit hands it back.
+    act(() => useApp.setState({ editing: false }));
+    expect(getSlideClock()).toEqual({ slide: "#2", at: 2.5, paused: true });
+    act(() => useApp.setState({ editing: true }));
+    expect(getSlideClock()).toBeNull();
+  });
+
+  it("plays in Edit too, and gives the stage back when paused", () => {
+    play.mockReturnValue(vi.fn());
+    open();
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    const events = play.mock.calls[0]?.[3] as { tick: (t: number) => void };
+    act(() => events.tick(1.5));
+    expect(getSlideClock()).toEqual({ slide: "intro", at: 1.5 });
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    expect(getSlideClock()).toBeNull();
+    expect(screen.getByText(`0:02 / ${formatDuration(15)}`)).toBeTruthy();
+  });
+
+  it("folds away from its own bar", () => {
+    useApp.setState({ timelineOpen: true });
+    watch();
+    fireEvent.click(screen.getByRole("button", { name: "Hide timeline" }));
+    expect(useApp.getState().timelineOpen).toBe(false);
+  });
+
+  describe("comments made at a moment", () => {
+    const comment = (id: string, time?: number) => ({ id, text: `About ${id}`, x: 0.5, y: 0.5, time });
+    const marks = () => screen.queryAllByTestId("comment-mark");
+
+    it("marks them on the ruler, and goes back to their moment when pressed", () => {
+      useApp.setState({
+        reviewVisible: true,
+        comments: { "#2": [comment("whenever"), comment("then", 2.5)], intro: [comment("early", 1)] },
+      });
+      watch();
+      // Only those made at a moment, in the order they come; the slides are 5 s each of 15 s.
+      expect(marks().map((m) => m.getAttribute("aria-label"))).toEqual([
+        "Comment 1 on slide 1",
+        "Comment 2 on slide 2",
+      ]);
+      expect(marks().map((m) => m.style.left)).toEqual([`${(1 / 15) * 100}%`, "50%"]);
+      expect(marks()[1]!.title).toBe("Comment 2 on slide 2: About then");
+      // They lie over the ruler, not in it: a press on one is not a press on the ruler.
+      expect(screen.getByTestId("ruler").contains(marks()[1]!)).toBe(false);
+      fireEvent.click(marks()[1]!);
+      expect(useApp.getState().selected).toBe("#2");
+      expect(getSlideClock()).toEqual({ slide: "#2", at: 2.5, paused: true });
+      expect(screen.getByTestId("playhead").style.left).toBe("50%");
+    });
+
+    it("keeps a mark within its slide when the slide has since got shorter, and hides them with the review", () => {
+      useApp.setState({ reviewVisible: true, comments: { intro: [comment("late", 60)] } });
+      watch();
+      expect(marks().map((m) => m.style.left)).toEqual([`${(5 / 15) * 100}%`]);
+      act(() => useApp.setState({ reviewVisible: false }));
+      expect(marks()).toEqual([]);
+    });
   });
 
   it("keeps the track clear of the resize handles on either side of its panel", () => {
@@ -422,7 +517,7 @@ describe("NarrationTimeline", () => {
 
   it("keeps the showing slide's animations with the playhead", () => {
     play.mockReturnValue(vi.fn());
-    open();
+    watch();
     fireEvent.click(screen.getByRole("button", { name: "Play" }));
     const [, timeline, , events] = play.mock.calls[0] as [
       string,

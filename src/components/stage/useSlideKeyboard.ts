@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-import { useApp } from "../../store";
+import { editingSlide, useApp } from "../../store";
 import { runHistoryKey } from "./editKeys";
 
 /** Whether the last press in the app was on the slide rail, so that ⌘C there means the slide. */
@@ -15,9 +15,10 @@ export function keyForRail(target: EventTarget | null) {
 }
 
 /**
- * Arrow keys / PageUp / PageDown move between slides unless the user is typing, and ⌘C / ⌘V
- * copy and paste whole slides outside edit mode; ⌘C with the slide rail pressed last copies the
- * slide in edit mode too. Also handles
+ * Arrow keys / PageUp / PageDown move between slides unless the user is typing, and ⌘C copies
+ * the whole slide while the slide editor is not at work (in View, or on a locked slide); ⌘C with
+ * the slide rail pressed last copies the slide while it is, too. What changes the deck is Edit
+ * mode's: ⌘V pasting a slide, and with the rail pressed last, ⌘↑ / ⌘↓ and Delete. Also handles
  * keys the slide preview forwards as `slop:key` messages, so navigation keeps working after
  * clicking into the slide. The preview cancels presses on it (to pan, select and drag), which
  * leaves focus where it was, e.g. in the chat composer: it asks for focus with `slop:focus`.
@@ -31,31 +32,39 @@ export function useSlideKeyboard() {
       else return false;
       return true;
     };
-    // Out of edit mode, ⌘C / ⌘V copy the selected slide and paste one after it, also from
-    // another window (edit mode copies and pastes elements, see useSlideEditing).
+    // With the slide editor not at work, ⌘C copies the selected slide, and in Edit mode ⌘V pastes
+    // one after it, also from another window (the editor copies and pastes elements, see
+    // useSlideEditing).
     const clipboard = (key: string, shift: boolean, fromApp: boolean, rail = false) => {
-      const { editing, presenting, copySlide, pasteSlide } = useApp.getState();
+      const { presenting, copySlide, pasteSlide } = useApp.getState();
+      const editing = editingSlide(useApp.getState());
       if (presenting || shift) return false;
       // Copying selected text comes first.
       if (fromApp && window.getSelection()?.toString()) return false;
       const lower = key.toLowerCase();
-      // In edit mode the slide editor has the keys (see useSlideEditing; its paste takes slides
+      // At work, the slide editor has the keys (see useSlideEditing; its paste takes slides
       // too), unless ⌘C is pressed on the rail, where the slide is what is selected.
       if (editing && !(rail && lower === "c")) return false;
       if (lower === "c") void copySlide();
-      else if (lower === "v") void pasteSlide();
+      // Pasting a slide changes the deck, which only Edit mode does.
+      else if (lower === "v" && useApp.getState().editing) void pasteSlide();
       else return false;
       return true;
     };
-    // Out of edit mode, whose keys these are on the slide: the deck's history, the rail's moves
-    // (⌘↑ / ⌘↓, also out of a section), and Delete and Escape for the slides picked in it.
-    const rail = (key: string, mod: boolean, shift: boolean) => {
+    // The deck's history, the rail's moves (⌘↑ / ⌘↓, also out of a section), and Delete and
+    // Escape for the slides picked in it. With the slide editor at work the keys are its own,
+    // but for those pressed `onRail`; and the moves and Delete change the deck, so they are
+    // Edit mode's.
+    const rail = (key: string, mod: boolean, shift: boolean, onRail = false) => {
       const app = useApp.getState();
-      if (app.editing || app.presenting) return false;
-      if (mod && runHistoryKey(key, shift)) return true;
-      if (mod && key === "ArrowUp") void app.moveSlides(-1);
-      else if (mod && key === "ArrowDown") void app.moveSlides(1);
-      else if (!mod && app.railSelected.length > 0 && (key === "Delete" || key === "Backspace"))
+      if (app.presenting) return false;
+      const editor = editingSlide(app);
+      if (editor && !onRail) return false;
+      // The editor's own keys undo and redo while it is at work.
+      if (!editor && mod && runHistoryKey(key, shift)) return true;
+      if (app.editing && mod && key === "ArrowUp") void app.moveSlides(-1);
+      else if (app.editing && mod && key === "ArrowDown") void app.moveSlides(1);
+      else if (app.editing && !mod && app.railSelected.length > 0 && (key === "Delete" || key === "Backspace"))
         void app.deleteSlides(app.railSelected);
       else if (!mod && app.railSelected.length > 0 && key === "Escape") app.clearRailSelection();
       else return false;
@@ -65,9 +74,9 @@ export function useSlideKeyboard() {
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, [contenteditable]")) return;
       const mod = event.metaKey || event.ctrlKey;
-      if (mod && !event.altKey && clipboard(event.key, event.shiftKey, true, keyForRail(target)))
-        event.preventDefault();
-      else if (!event.altKey && rail(event.key, mod, event.shiftKey)) event.preventDefault();
+      const onRail = keyForRail(target);
+      if (mod && !event.altKey && clipboard(event.key, event.shiftKey, true, onRail)) event.preventDefault();
+      else if (!event.altKey && rail(event.key, mod, event.shiftKey, onRail)) event.preventDefault();
       else if (navigate(event.key)) event.preventDefault();
     };
     const onPress = (event: PointerEvent) => {

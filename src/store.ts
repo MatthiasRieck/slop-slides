@@ -22,7 +22,7 @@ import { confirmDiscardEdits as confirmDeckEdits, createWorkspaceSlice } from ".
 
 export { SKETCH_TARGET_ATTR } from "./store/capture";
 export { COMPACT_COMMAND } from "./store/chat";
-export { type DeckMode, deckMode, editedSlidesOf } from "./store/editing";
+export { type DeckMode, deckMode, editedSlidesOf, editingSlide } from "./store/editing";
 export type {
   AssistantMessage,
   ChatMessage,

@@ -64,6 +64,7 @@ function Workbench() {
   const sidebarOpen = useApp((s) => s.sidebarOpen);
   const sidebarMaximized = useApp((s) => s.sidebarMaximized);
   const railOpen = useApp((s) => s.railOpen);
+  const timelineOpen = useApp((s) => s.timelineOpen);
   // Re-lint whenever the deck file changes on disk (agent, HTML view, slide operations).
   const deckVersion = useApp((s) =>
     s.deck ? [s.deck.id, s.deck.shellHash, ...s.deck.slides.map((x) => `${x.id}:${x.hash}`)].join("|") : "",
@@ -103,8 +104,8 @@ function Workbench() {
                   <div className="min-h-0 flex-1">
                     {mode === "settings" ? <DeckSettings /> : mode === "git" ? <ChangesView /> : <Stage />}
                   </div>
-                  {/* Play mode: the deck's timeline under the slide, whatever the sidebar shows. */}
-                  {mode === "play" && <NarrationTimeline />}
+                  {/* The deck's timeline under the slide, while it is open, whatever the sidebar shows. */}
+                  {timelineOpen && (mode === "view" || mode === "edit") && <NarrationTimeline />}
                 </div>
               ) : (
                 <FileViewer />

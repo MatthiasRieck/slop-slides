@@ -93,6 +93,7 @@ import { DashSelect, LineButton, Parallelogram, Trapezoid } from "./LineTools";
 import { LookTools } from "./LookTools";
 import { DropdownPanel, dropdownPanel } from "./Popover";
 import { RibbonRow, RibbonSection, useRibbonFit } from "./Ribbon";
+import { TimelineTools } from "./TimelineTools";
 
 const TOOLS: { tool: EditTool; label: string; icon: ReactNode }[] = [
   { tool: "select", label: "Select and move (V)", icon: <MousePointer2 /> },
@@ -497,6 +498,7 @@ export function EditToolbar(props: {
           </ToolButton>
         </RibbonRow>
       </RibbonSection>
+      <TimelineTools collapsed={collapsedFrom <= 5} />
     </div>
   );
 }

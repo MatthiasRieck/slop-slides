@@ -17,6 +17,8 @@ beforeEach(() => {
   useApp.setState({
     deck: DECK,
     selected: "intro",
+    // Changing the slides is Edit mode's.
+    editing: true,
     error: null,
     revealRev: 0,
     collapsedSections: [],
@@ -760,12 +762,79 @@ describe("double-clicking a thumbnail", () => {
     expect(useApp.getState()).toMatchObject({ selected: "b", editing: true });
   });
 
-  it("selects a locked slide without editing it", () => {
+  it("enters edit mode on a locked slide too, where it can be unlocked", () => {
     const deck = withSlides("a", "b");
     useApp.setState({ deck: { ...deck, slides: deck.slides.map((s) => ({ ...s, locked: s.id === "b" })) } });
     render(<SlideRail />);
+    expect(item(1).queryByTitle("Unlock slide")).toBeNull();
     fireEvent.doubleClick(button(1));
-    expect(useApp.getState()).toMatchObject({ selected: "b", editing: false });
+    expect(useApp.getState()).toMatchObject({ selected: "b", editing: true });
+    expect(item(1).getByTitle("Unlock slide")).toBeTruthy();
+  });
+});
+
+describe("in View mode, which changes nothing", () => {
+  const sectioned = (): Deck => ({
+    ...withSlides("a", "b", "c"),
+    sections: [{ index: 0, title: "One", before: 1 } as Section],
+  });
+  beforeEach(() => useApp.setState({ deck: sectioned(), selected: "a", editing: false }));
+
+  it("offers nothing that changes a slide or a section, only folding and picking", () => {
+    render(<SlideRail />);
+    for (const title of ["Lock slide", "Hide slide", "Duplicate", "Delete", "Rename section", "Remove section"]) {
+      expect(screen.queryByTitle(title)).toBeNull();
+    }
+    fireEvent.doubleClick(screen.getByText("One"));
+    expect(screen.queryByLabelText("Section title")).toBeNull();
+    fireEvent.click(screen.getByTitle("Collapse section"));
+    expect(useApp.getState().collapsedSections).toEqual(["b"]);
+    fireEvent.click(items()[0]!.querySelector("button")!);
+    expect(useApp.getState().selected).toBe("a");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("has New slide and the section button off, saying where they are on", () => {
+    render(<SlideRail />);
+    const add = screen.getByRole("button", { name: "New slide" }) as HTMLButtonElement;
+    expect(add.disabled).toBe(true);
+    expect(add.title).toBe("Switch to Edit to change the slides");
+    fireEvent.click(add);
+    expect(screen.queryByTitle("Add blank slide")).toBeNull();
+    const section = screen.getAllByTitle("Switch to Edit to change the slides")[0] as HTMLButtonElement;
+    expect(section.disabled).toBe(true);
+    // Edit mode turns them on, and puts a picker left open away again with it.
+    act(() => useApp.getState().setMode("edit"));
+    expect(add.disabled).toBe(false);
+    fireEvent.click(add);
+    expect(screen.getByTitle("Add blank slide")).toBeTruthy();
+    act(() => useApp.getState().setMode("view"));
+    expect(screen.queryByTitle("Add blank slide")).toBeNull();
+  });
+
+  it("does not let slides or sections be dragged", () => {
+    render(<SlideRail />);
+    expect(items().map((li) => li.getAttribute("aria-disabled"))).toEqual(["true", "true", "true", "true"]);
+    act(() => useApp.getState().setMode("edit"));
+    expect(items().map((li) => li.getAttribute("aria-disabled"))).toEqual(["false", "false", "false", "false"]);
+  });
+
+  it("keeps the picked slides' tools off, but for clearing the pick", () => {
+    render(<SlideRail />);
+    act(() => useApp.getState().extendRailSelection("b", "toggle"));
+    const bulk = within(screen.getByRole("toolbar", { name: "Selected slides" }));
+    for (const name of ["Move up", "Move down", "Hide slides", "Duplicate slides", "Delete slides"]) {
+      expect((bulk.getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
+    }
+    fireEvent.click(bulk.getByTitle("Clear selection"));
+    expect(useApp.getState().railSelected).toEqual([]);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("tells an empty deck where to add its first slide", () => {
+    useApp.setState({ deck: withSlides(), selected: null });
+    render(<SlideRail />);
+    expect(screen.getByText(/switch to Edit and add a blank slide/)).toBeTruthy();
   });
 });
 

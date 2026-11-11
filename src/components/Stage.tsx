@@ -1,11 +1,13 @@
-import { Sparkles } from "lucide-react";
+import { Lock, LockOpen, Sparkles } from "lucide-react";
 import { type ReactNode, useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useContentSize } from "../hooks/useContentSize";
+import { api } from "../lib/api";
 import { defaultsFrom, type EditStyle, familyOf, familyOfKind } from "../lib/editTools";
 import type { Stroke } from "../lib/ink";
 import { pixelsOf } from "../lib/slideSize";
-import { deckMode, SKETCH_TARGET_ATTR, searchHighlight, useApp } from "../store";
+import { deckMode, editingSlide, reportingErrors, SKETCH_TARGET_ATTR, searchHighlight, useApp } from "../store";
+import { Button } from "./Button";
 import { AreaDrawer, CommentEditor, CommentPins, useSlideComments } from "./Comments";
 import { EditContextMenu } from "./EditContextMenu";
 import { EditToolbar } from "./EditToolbar";
@@ -18,6 +20,7 @@ import { StageFooter } from "./stage/StageFooter";
 import { inkBox, usePasteboard } from "./stage/usePasteboard";
 import { useSlideEditing } from "./stage/useSlideEditing";
 import { useSketchKeyboard, useSlideKeyboard } from "./stage/useSlideKeyboard";
+import { TimelineTools } from "./TimelineTools";
 import { ViewToolbar } from "./ViewToolbar";
 
 /** The stage area's padding (Tailwind p-8), which the pasteboard covers too. */
@@ -29,7 +32,8 @@ export function Stage() {
   const selected = useApp((s) => s.selected);
   const sketches = useApp((s) => s.sketches);
   const reviewVisible = useApp((s) => s.reviewVisible);
-  const editing = useApp((s) => s.editing);
+  // The editor is at work on the slide: Edit mode, and the slide is not locked.
+  const editing = useApp(editingSlide);
   const mode = useApp(deckMode);
   const running = useApp((s) => s.running);
   const editTool = useApp((s) => s.editTool);
@@ -102,10 +106,6 @@ export function Stage() {
   const index = deck?.slides.findIndex((s) => s.id === selected) ?? -1;
   const slide = deck?.slides[index];
   const locked = !!slide?.locked;
-  // A locked slide cannot be edited: going to one, or locking this one, leaves edit mode.
-  useEffect(() => {
-    if (locked && editing) useApp.getState().setEditing(false);
-  }, [locked, editing]);
 
   if (!deck) return null;
 
@@ -138,6 +138,13 @@ export function Stage() {
             layers={editFrames.layers}
             onArrange={postToEditor}
           />
+        </ModeBar>
+      )}
+      {slide && mode === "edit" && locked && (
+        <ModeBar>
+          <LockedNote deck={deck.id} slide={slide.id} />
+          {/* The timeline is Edit mode's on a locked slide too, to play the deck and time the others. */}
+          <TimelineTools collapsed={false} />
         </ModeBar>
       )}
       {slide && mode === "view" && (
@@ -249,6 +256,24 @@ function ModeBar({ children }: { children: ReactNode }) {
   return (
     <div className="relative z-20 flex min-h-10 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b bg-background px-3 py-1 text-xs text-muted-foreground">
       {children}
+    </div>
+  );
+}
+
+/** Edit mode on a locked slide: why nothing on it can be changed, and the way to change that. */
+function LockedNote({ deck, slide }: { deck: string; slide: string }) {
+  const unlock = async () => {
+    const next = await reportingErrors(() => api.setSlideLocked(deck, slide, false));
+    if (next) useApp.getState().setDeck(next);
+  };
+  return (
+    <div role="status" className="flex flex-1 items-center gap-2 [&_svg]:size-3.5">
+      <Lock />
+      <span>This slide is locked: neither you nor the agent can change it.</span>
+      <Button variant="ghost" size="sm" onClick={() => void unlock()}>
+        <LockOpen />
+        Unlock
+      </Button>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { Eye, GitCompare, Pencil, Play } from "lucide-react";
+import { Eye, GitCompare, Pencil } from "lucide-react";
 import { useEffect } from "react";
 
 import { useChanges } from "../changesStore";
@@ -11,7 +11,6 @@ type TabMode = Exclude<DeckMode, "settings">;
 const MODES: { id: TabMode; label: string; icon: typeof Eye }[] = [
   { id: "view", label: "View", icon: Eye },
   { id: "edit", label: "Edit", icon: Pencil },
-  { id: "play", label: "Play", icon: Play },
   { id: "git", label: "Git", icon: GitCompare },
 ];
 
@@ -40,20 +39,20 @@ function useInRepository() {
 
 /**
  * The deck's modes, in the top bar: what the stage does with the slide. Each brings its own tools
- * to the row under it. The slide's narration and notes and the deck's HTML are tabs of the sidebar.
+ * to the row under it. View changes nothing in the deck but its review; Edit changes the slides,
+ * their order and their timing. The deck's timeline opens under the slide in either, and the
+ * slide's narration and notes and the deck's HTML are tabs of the sidebar.
  */
 export function ModeTabs() {
   const mode = useApp(deckMode);
-  const hasSlide = useApp((s) => s.deck?.slides.some((slide) => slide.id === s.selected) ?? false);
   const locked = useApp((s) => !!s.deck?.slides.find((slide) => slide.id === s.selected)?.locked);
   const inRepository = useInRepository();
 
   const titles: Record<TabMode, string> = {
-    view: "Show the slide, mark it up and comment on it; marks and comments go to the agent with your next message",
+    view: "Show the slide, play the deck on its timeline, and mark up and comment on what you see, without changing the slides; marks and comments go to the agent with your next message",
     edit: locked
-      ? "This slide is locked; unlock it in the slide list to edit it"
-      : "Edit the slide: click to select, drag to move, drag the handles to resize or rotate, double-click to edit text, drop images onto it to add them",
-    play: "Play the deck on its timeline, as a video or a self-running show does, and set how long each slide shows and when its narration starts",
+      ? "Change the deck: add, remove and reorder slides and set their timing. This slide is locked; unlock it to edit it"
+      : "Change the deck: on the slide, click to select, drag to move, drag the handles to resize or rotate, double-click to edit text, drop images onto it to add them; in the slide list, add, remove and reorder slides; on the timeline, set how long each slide shows and when its narration starts",
     git: "See what changed since the last commit, and compare each slide before and after",
   };
   const modes = MODES.filter(({ id }) => id !== "git" || inRepository);
@@ -67,7 +66,6 @@ export function ModeTabs() {
           role="tab"
           aria-selected={mode === id}
           title={titles[id]}
-          disabled={(id === "edit" && (!hasSlide || locked)) || (id === "play" && !hasSlide)}
           onClick={() => useApp.getState().setMode(id)}
           className={cn(
             "flex min-w-14 flex-col items-center justify-center gap-0.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40",

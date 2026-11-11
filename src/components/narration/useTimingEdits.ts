@@ -26,12 +26,14 @@ interface Drag {
  * arrow keys, saved to the deck once let go. Until it is saved, `shown` is the timeline as it
  * would be (laid out by `layout` from `timeline`'s timing changed so), and `end` how long the
  * longer of the two is. `held` is how long the track was when a drag took off: until it ends, a
- * second stays as wide. `track` is the element the timeline is laid out along.
+ * second stays as wide. `track` is the element the timeline is laid out along. Unless `editable`
+ * (Edit mode), nothing moves.
  */
 export function useTimingEdits(
   layout: (timing: SlideTiming[]) => Timeline,
   timeline: Timeline,
   track: RefObject<HTMLElement | null>,
+  editable = true,
 ) {
   // What a drag would save, until it is saved.
   const [preview, setPreview] = useState<SlideTiming[] | null>(null);
@@ -55,13 +57,13 @@ export function useTimingEdits(
       .then(() => setPreview((current) => (current === timing ? null : current)));
   };
   const nudge = (event: KeyboardEvent, move: Move) => {
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    if (!editable || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
     event.preventDefault();
     event.stopPropagation();
     finish(move((event.shiftKey ? 1 : STEP) * (event.key === "ArrowLeft" ? -1 : 1)));
   };
   const press = (event: PointerEvent, move: Move) => {
-    if (event.button !== 0) return;
+    if (!editable || event.button !== 0) return;
     event.stopPropagation();
     event.currentTarget.setPointerCapture?.(event.pointerId);
     const secondsPerPixel = end / (track.current?.getBoundingClientRect().width || 1);

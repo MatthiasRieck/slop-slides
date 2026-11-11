@@ -16,7 +16,7 @@ import {
   parseHexColor,
   parseSelection,
 } from "../../lib/editTools";
-import { reportingErrors, showError, useApp } from "../../store";
+import { editingSlide, reportingErrors, showError, useApp } from "../../store";
 import { parseSvgOpen, useSvgEditor } from "../../svgStore";
 import type { EditMenuAction } from "../EditContextMenu";
 import { isEditTool, runEditKey, runHistoryKey, toolMessage } from "./editKeys";
@@ -58,13 +58,13 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
   const post = useCallback((data: unknown) => frame.current?.contentWindow?.postMessage(data, "*"), []);
 
   const paste = useCallback(async () => {
-    const { deck, editing, selected } = useApp.getState();
-    if (!deck || !editing || !selected) return;
+    const { deck, selected } = useApp.getState();
+    if (!deck || !editingSlide(useApp.getState()) || !selected) return;
     await reportingErrors(async () => {
       const pasted = await api.pasteFromClipboard(deck.id);
       const loaded = frame.current;
       const now = useApp.getState();
-      if (!now.editing || now.selected !== selected || !loaded?.contentWindow) return;
+      if (!editingSlide(now) || now.selected !== selected || !loaded?.contentWindow) return;
       if (pasted.kind === "element") {
         loaded.contentWindow.postMessage({ type: "slop:edit-paste", html: pasted.html }, "*");
       } else if (pasted.kind === "text") {
@@ -107,8 +107,8 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
     };
     const onMessage = (event: MessageEvent) => {
       const data = event.data;
-      const { editing, selected } = useApp.getState();
-      if (!editing || !fromFrameIn(areaRef.current, event.source)) return;
+      const { selected } = useApp.getState();
+      if (!editingSlide(useApp.getState()) || !fromFrameIn(areaRef.current, event.source)) return;
       if (data?.type === "slop:edit-commit" && data.slide === selected && typeof data.markup === "string") {
         restore.current = Array.isArray(data.select)
           ? { slide: data.slide, path: data.select, also: Array.isArray(data.also) ? data.also : [] }
@@ -143,7 +143,7 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
         api
           .readClipboardText()
           .then((text) => {
-            if (useApp.getState().editing && text) post({ type: "slop:edit-insert-text", text });
+            if (editingSlide(useApp.getState()) && text) post({ type: "slop:edit-insert-text", text });
           })
           .catch((error) => showError(error));
       } else if (data?.type === "slop:edit-open-svg" && data.slide === selected) {
@@ -162,7 +162,7 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
     };
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (!useApp.getState().editing || target?.closest("input, textarea, select, [contenteditable]")) return;
+      if (!editingSlide(useApp.getState()) || target?.closest("input, textarea, select, [contenteditable]")) return;
       if (event.metaKey || event.ctrlKey) {
         if (
           runHistoryKey(event.key, event.shiftKey) ||
@@ -177,7 +177,7 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
     // text; the toolbar restyles the text being typed (see assets/editor/), and a press on the frame
     // is one passed on from the slide, where the editor sees it itself.
     const onPress = (event: PointerEvent) => {
-      if (!useApp.getState().editing) return;
+      if (!editingSlide(useApp.getState())) return;
       if ((event.target as Element | null)?.closest?.("[data-edit-toolbar], iframe")) return;
       post({ type: "slop:edit-finish" });
     };
@@ -194,7 +194,7 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
   useImageDrops(areaRef, frame);
 
   const current = useApp((s) => s.selected);
-  const editing = useApp((s) => s.editing);
+  const editing = useApp(editingSlide);
 
   const closeMenu = () => {
     setMenu(null);
@@ -268,7 +268,7 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
         if (paths.length === 0) return;
         const images = await importImages(deck.id, paths);
         const now = useApp.getState();
-        if (!now.editing || now.selected !== selected) return;
+        if (!editingSlide(now) || now.selected !== selected) return;
         if (replace && images[0]) post({ type: "slop:edit-replace-image", src: images[0].src });
         else post({ type: "slop:edit-paste-images", images });
       });
@@ -283,7 +283,8 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
       setSelection(null);
       setGeometry(null);
       setMenu(null);
-      const { editing, selected, editTool, editStyles } = useApp.getState();
+      const { selected, editTool, editStyles } = useApp.getState();
+      const editing = editingSlide(useApp.getState());
       if (editing) {
         post({ type: "slop:edit-size-mode", mode: sizeMode });
         post({ type: "slop:edit-keep-ratio", on: keepRatio });
@@ -313,7 +314,8 @@ function useImageDrops(areaRef: RefObject<HTMLDivElement | null>, frame: RefObje
     const insert = (deckId: string, slide: string, paths: string[], point: DropPoint) =>
       reportingErrors(async () => {
         const images = await importImages(deckId, paths);
-        const { editing, selected } = useApp.getState();
+        const { selected } = useApp.getState();
+        const editing = editingSlide(useApp.getState());
         const loaded = frame.current;
         if (!editing || selected !== slide || !loaded?.contentWindow || images.length === 0) return;
         // The preview is scaled down to fit; the editor wants the point in its own pixels.
@@ -321,7 +323,8 @@ function useImageDrops(areaRef: RefObject<HTMLDivElement | null>, frame: RefObje
         loaded.contentWindow.postMessage({ type: "slop:edit-insert-images", images, ...at }, "*");
       });
     const covers = (point: DropPoint) => {
-      const { deck, editing, selected } = useApp.getState();
+      const { deck, selected } = useApp.getState();
+      const editing = editingSlide(useApp.getState());
       const area = areaRef.current?.getBoundingClientRect();
       const inside =
         !!area && point.x >= area.left && point.x <= area.right && point.y >= area.top && point.y <= area.bottom;

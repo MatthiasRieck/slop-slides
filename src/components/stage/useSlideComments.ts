@@ -12,6 +12,7 @@ import {
   parseTarget,
   type SlideComment,
 } from "../../lib/comments";
+import { getSlideClock } from "../../lib/slideClock";
 import { loadText, trySaveText } from "../../lib/storage";
 import { useApp } from "../../store";
 import { fromFrameIn } from "./frames";
@@ -28,7 +29,18 @@ export interface OpenComment {
   area: CommentArea | null;
   /** A new area comment's screenshot of its area, attached in the composer once it is saved. */
   shot: string | null;
+  /** The moment it is about, in seconds since the slide showed; null for the slide whenever. */
+  time: number | null;
   text: string;
+}
+
+/**
+ * The moment the timeline's playhead holds `slide` at on the stage, in seconds since the slide
+ * showed, to the hundredth; null when it does not: nothing is held, or the deck is playing on.
+ */
+export function heldMoment(slide: string): number | null {
+  const clock = getSlideClock();
+  return clock?.paused && clock.slide === slide ? Math.round(Math.max(0, clock.at) * 100) / 100 : null;
 }
 
 const AREA_SHAPE_KEY = "slopslides.areaShape";
@@ -124,6 +136,7 @@ export function useSlideComments(
           target: parseTarget(data.target),
           area: null,
           shot: null,
+          time: heldMoment(data.slide),
           text: "",
         });
       }
@@ -158,7 +171,8 @@ export function useSlideComments(
     setCapturing(false);
     if (useApp.getState().selected !== slide) return;
     const { left, top } = areaBounds(area);
-    setOpen({ key: crypto.randomUUID(), slide, id: null, x: left, y: top, target: null, area, shot, text: "" });
+    const time = heldMoment(slide);
+    setOpen({ key: crypto.randomUUID(), slide, id: null, x: left, y: top, target: null, area, shot, time, text: "" });
   };
 
   const spots = found?.slide === selected ? found.spots : null;
@@ -192,6 +206,7 @@ export function useSlideComments(
         target: comment.target ?? null,
         area: comment.area ?? null,
         shot: null,
+        time: comment.time ?? null,
         text: comment.text,
       });
     },

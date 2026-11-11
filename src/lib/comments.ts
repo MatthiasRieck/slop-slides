@@ -35,6 +35,11 @@ export interface SlideComment {
   target?: CommentTarget | null;
   /** The area outlined, for a comment on an area rather than an element. */
   area?: CommentArea | null;
+  /**
+   * The moment the comment is about, in seconds since the slide showed: where the timeline's
+   * playhead held the slide when it was made. Absent for a comment on the slide whenever.
+   */
+  time?: number | null;
 }
 
 /** Which comments go out with a message: the selected slide's, or the whole deck's. */
@@ -90,7 +95,52 @@ export function commentLine(comment: PlacedComment, size: { width: number; heigh
     const [x, y] = px([comment.x, comment.y]);
     on = `on the slide as a whole, at x ${x}, y ${y}`;
   }
-  return `- ${where}, ${on}: ${JSON.stringify(comment.text)}`;
+  const when = comment.time == null ? "" : `, ${commentTime(comment.time)} after the slide shows`;
+  return `- ${where}, ${on}${when}: ${JSON.stringify(comment.text)}`;
+}
+
+/** A comment's moment as people and the agent read it, to a tenth of a second: `3.2 s`. */
+export function commentTime(seconds: number): string {
+  return `${(Math.round(seconds * 10) / 10).toFixed(1)} s`;
+}
+
+/** A comment on the timeline: when in the deck it is about. */
+export interface TimedComment {
+  id: string;
+  /** The slide's position among those the timeline shows, from 0. */
+  index: number;
+  /** Its place among its slide's comments, from 1, as its pin is numbered. */
+  number: number;
+  /** Seconds from the start of the timeline. */
+  at: number;
+  text: string;
+}
+
+/**
+ * The comments made at a moment, placed on a timeline whose `slides` show from `start` to `end`:
+ * each at its moment into its slide, kept within the slide's time, in the order they come.
+ */
+export function timedComments(
+  comments: Record<string, SlideComment[]>,
+  slides: { id: string; start: number; end: number }[],
+): TimedComment[] {
+  return slides
+    .flatMap((slide, index) =>
+      (comments[slide.id] ?? []).flatMap((comment, i) =>
+        comment.time == null
+          ? []
+          : [
+              {
+                id: comment.id,
+                index,
+                number: i + 1,
+                at: Math.min(slide.end, slide.start + Math.max(0, comment.time)),
+                text: comment.text,
+              },
+            ],
+      ),
+    )
+    .sort((a, b) => a.at - b.at);
 }
 
 /** The box around `area`, in fractions of the slide. */

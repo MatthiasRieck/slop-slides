@@ -17,17 +17,18 @@ import {
   Trash2,
   Undo2,
 } from "lucide-react";
-import { type ReactNode, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 import type { AreaShape } from "../lib/comments";
 import { INK_COLORS } from "../lib/ink";
 import { cn } from "../lib/utils";
 import { useApp } from "../store";
-import { ToolButton, toolButtonClass } from "./Button";
+import { ToolButton } from "./Button";
 import { SlideSearch } from "./FindReplace";
 import { Popover } from "./Popover";
 import type { Annotations } from "./PresenterTools";
-import { RibbonRow, RibbonSection, useRibbonFit } from "./Ribbon";
+import { RibbonRow, RibbonSection, RibbonToggle, useRibbonFit } from "./Ribbon";
+import { TimelineTools } from "./TimelineTools";
 
 const AREA_SHAPES: { shape: AreaShape; label: string; icon: LucideIcon }[] = [
   { shape: "rect", label: "Rectangle", icon: SquareDashed },
@@ -38,7 +39,8 @@ const AREA_SHAPES: { shape: AreaShape; label: string; icon: LucideIcon }[] = [
 /**
  * View mode's tools, in a ribbon like the edit tools': pen, highlighter and eraser for marking up
  * the slide, comments on its elements or on an area outlined with a rectangle, an ellipse or a
- * lasso, whether the slide plays its animations or shows its final state, and the search. Marks
+ * lasso, whether the slide plays its animations or shows its final state, the deck's timeline,
+ * and the search. Marks
  * and comments are saved in the deck file as a review, which can be shown and hidden, and go to
  * the agent with the next chat message: the marks as a screenshot, the comments as the composer
  * says, and each new area comment's screenshot of its area as an image in the composer.
@@ -195,33 +197,11 @@ export function ViewToolbar(props: {
           </RibbonToggle>
         </RibbonRow>
       </RibbonSection>
-      <RibbonSection title="Find" icon={<Search />} collapsed={collapsedFrom <= 3}>
+      <TimelineTools collapsed={collapsedFrom <= 3} />
+      <RibbonSection title="Find" icon={<Search />} collapsed={collapsedFrom <= 4}>
         <SlideSearch />
       </RibbonSection>
     </div>
-  );
-}
-
-/** A ribbon button with its name next to its icon, filling its row. `active` marks a choice as the one made. */
-function RibbonToggle(props: {
-  label: string;
-  active?: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={props.label}
-      title={props.label}
-      aria-pressed={props.active}
-      disabled={props.disabled}
-      onClick={props.onClick}
-      className={cn(toolButtonClass("toolbar", "sm", props.active), "flex flex-1 items-center gap-1 px-1.5 text-xs")}
-    >
-      {props.children}
-    </button>
   );
 }
 

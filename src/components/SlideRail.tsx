@@ -54,12 +54,21 @@ import { SectionLabel } from "./SectionLabel";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 import { LayoutPicker } from "./Templates";
 
+/** What the tools that change the deck say in View mode, where they are off. */
+const EDIT_ONLY = "Switch to Edit to change the slides";
+
 /** How a slide in the rail eases into and out of being hidden or locked. */
 const MARK_TRANSITION = "transition duration-200";
 
+/**
+ * The deck's slides and sections, to go through and pick from. Changing them is Edit mode's:
+ * adding, duplicating, deleting, hiding, locking and reordering slides, and the sections. In View
+ * the rail only shows them, folds sections and picks slides.
+ */
 export function SlideRail() {
   const deck = useApp((s) => s.deck);
   const selected = useApp((s) => s.selected);
+  const editable = useApp((s) => s.editing);
   const [editingSection, setEditingSection] = useState<number | null>(null);
   const [addingSlide, setAddingSlide] = useState(false);
   const addButton = useRef<HTMLButtonElement>(null);
@@ -190,11 +199,13 @@ export function SlideRail() {
           <ToolButton
             variant="panel"
             onClick={addSection}
-            disabled={!canAddSection}
+            disabled={!editable || !canAddSection}
             title={
-              selectedIndex >= 0 && !canAddSection
-                ? "This slide already starts a section"
-                : "Start a section at this slide"
+              !editable
+                ? EDIT_ONLY
+                : selectedIndex >= 0 && !canAddSection
+                  ? "This slide already starts a section"
+                  : "Start a section at this slide"
             }
           >
             <SquareSplitVertical className="size-4" />
@@ -204,13 +215,15 @@ export function SlideRail() {
             variant="panel"
             onClick={() => setAddingSlide((open) => !open)}
             aria-expanded={addingSlide}
-            title="New slide"
+            aria-label="New slide"
+            disabled={!editable}
+            title={editable ? "New slide" : EDIT_ONLY}
           >
             <Plus className="size-4" />
           </ToolButton>
         </div>
       </div>
-      {addingSlide && (
+      {addingSlide && editable && (
         <Popover
           anchor={addButton}
           placement="below"
@@ -221,11 +234,11 @@ export function SlideRail() {
           <LayoutPicker mode="add" onBlank={() => void addSlide()} onDone={() => setAddingSlide(false)} />
         </Popover>
       )}
-      <BulkActions deck={deck} />
+      <BulkActions deck={deck} editable={editable} />
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-1.5">
         {deck.slides.length === 0 ? (
           <p className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">
-            No slides yet. Describe your presentation in the chat, or add a blank slide.
+            No slides yet. Describe your presentation in the chat, or switch to Edit and add a blank slide.
           </p>
         ) : (
           <DndContext
@@ -242,7 +255,7 @@ export function SlideRail() {
               <p className="px-1 pt-2 text-xs leading-relaxed text-muted-foreground">No slide contains this text.</p>
             )}
             <Remeasure handle={remeasure} />
-            <SortableContext items={keys} strategy={verticalListSortingStrategy} disabled={!!found}>
+            <SortableContext items={keys} strategy={verticalListSortingStrategy} disabled={!!found || !editable}>
               <ol ref={list} className="flex flex-col gap-3">
                 {moving && looseSlides > 0 && <LooseSlides count={looseSlides} />}
                 {items.map((item) =>
@@ -252,6 +265,7 @@ export function SlideRail() {
                       deckId={deck.id}
                       slide={item.slide}
                       index={item.index}
+                      editable={editable}
                       filteredOut={(!!found && !found.has(item.slide.id)) || folded.has(item.slide.id)}
                       folded={!!moving}
                       still={!!moving || settling}
@@ -262,6 +276,7 @@ export function SlideRail() {
                       itemKey={item.key}
                       deckId={deck.id}
                       section={item.section}
+                      editable={editable}
                       filteredOut={!!found}
                       still={!!moving || settling}
                       slides={moving ? blocks.find((block) => block.key === item.key)!.rows.length - 1 : undefined}
@@ -297,8 +312,11 @@ export function SlideRail() {
   );
 }
 
-/** What can be done to the slides picked with ⇧/⌘-click. Locked ones are not deleted or hidden. */
-function BulkActions({ deck }: { deck: Deck }) {
+/**
+ * What can be done to the slides picked with ⇧/⌘-click. Locked ones are not deleted or hidden,
+ * and out of Edit mode (`editable`) none of them is changed.
+ */
+function BulkActions({ deck, editable }: { deck: Deck; editable: boolean }) {
   const count = useApp((s) => s.railSelected.length);
   const searching = useApp((s) => !!s.search.matches);
   if (count < 2) return null;
@@ -312,27 +330,47 @@ function BulkActions({ deck }: { deck: Deck }) {
   return (
     <div role="toolbar" aria-label="Selected slides" className="flex h-8 shrink-0 items-center gap-0.5 border-y px-3">
       <span className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">{picked.length} selected</span>
-      <ToolButton variant="panel" title="Move up (⌘↑)" disabled={searching} onClick={() => void app.moveSlides(-1)}>
+      <ToolButton
+        variant="panel"
+        aria-label="Move up"
+        title={editable ? "Move up (⌘↑)" : EDIT_ONLY}
+        disabled={!editable || searching}
+        onClick={() => void app.moveSlides(-1)}
+      >
         <ArrowUp className="size-3.5" />
       </ToolButton>
-      <ToolButton variant="panel" title="Move down (⌘↓)" disabled={searching} onClick={() => void app.moveSlides(1)}>
+      <ToolButton
+        variant="panel"
+        aria-label="Move down"
+        title={editable ? "Move down (⌘↓)" : EDIT_ONLY}
+        disabled={!editable || searching}
+        onClick={() => void app.moveSlides(1)}
+      >
         <ArrowDown className="size-3.5" />
       </ToolButton>
       <ToolButton
         variant="panel"
-        title={`${show ? "Show" : "Hide"} slides${skips}`}
-        disabled={free.length === 0}
+        aria-label={`${show ? "Show" : "Hide"} slides`}
+        title={editable ? `${show ? "Show" : "Hide"} slides${skips}` : EDIT_ONLY}
+        disabled={!editable || free.length === 0}
         onClick={() => void app.setSlidesHidden(ids, !show)}
       >
         {show ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
       </ToolButton>
-      <ToolButton variant="panel" title="Duplicate slides" onClick={() => void app.duplicateSlides(picked)}>
+      <ToolButton
+        variant="panel"
+        aria-label="Duplicate slides"
+        title={editable ? "Duplicate slides" : EDIT_ONLY}
+        disabled={!editable}
+        onClick={() => void app.duplicateSlides(picked)}
+      >
         <Copy className="size-3.5" />
       </ToolButton>
       <ToolButton
         variant="panel"
-        title={`Delete slides${skips}`}
-        disabled={free.length === 0}
+        aria-label="Delete slides"
+        title={editable ? `Delete slides${skips}` : EDIT_ONLY}
+        disabled={!editable || free.length === 0}
         onClick={() => void app.deleteSlides(ids)}
       >
         <Trash2 className="size-3.5" />
@@ -388,6 +426,8 @@ function SectionHeader(props: {
   itemKey: string;
   deckId: string;
   section: Section;
+  /** Edit mode: the section can be renamed, removed and moved. */
+  editable: boolean;
   filteredOut: boolean;
   /** How many slides are folded under the row while sections are being moved. */
   slides?: number;
@@ -466,8 +506,8 @@ function SectionHeader(props: {
         <>
           {/* Double-click is a shortcut for the adjacent keyboard-accessible Rename section button. */}
           <SectionLabel
-            title="Double-click to rename"
-            onDoubleClick={() => onEditing(true)}
+            title={props.editable ? "Double-click to rename" : undefined}
+            onDoubleClick={() => props.editable && onEditing(true)}
             className={cn("min-w-0 truncate", !section.title && "italic")}
           >
             {section.title || "Untitled section"}
@@ -484,14 +524,16 @@ function SectionHeader(props: {
                   {plural(props.count, "slide")}
                 </span>
               )}
-              <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">
-                <SectionAction title="Rename section" onClick={() => onEditing(true)}>
-                  <Pencil className="size-3" />
-                </SectionAction>
-                <SectionAction title="Remove section" onClick={remove}>
-                  <X className="size-3" />
-                </SectionAction>
-              </div>
+              {props.editable && (
+                <div className="invisible flex shrink-0 gap-0.5 group-hover:visible group-focus-within:visible">
+                  <SectionAction title="Rename section" onClick={() => onEditing(true)}>
+                    <Pencil className="size-3" />
+                  </SectionAction>
+                  <SectionAction title="Remove section" onClick={remove}>
+                    <X className="size-3" />
+                  </SectionAction>
+                </div>
+              )}
             </>
           )}
         </>
@@ -521,6 +563,8 @@ function Thumbnail(props: {
   deckId: string;
   slide: Slide;
   index: number;
+  /** Edit mode: the slide can be locked, hidden, duplicated and deleted from here. */
+  editable: boolean;
   filteredOut: boolean;
   folded: boolean;
   still: boolean;
@@ -583,7 +627,7 @@ function Thumbnail(props: {
       <div className="relative min-w-0 flex-1">
         <button
           type="button"
-          title={slide.locked ? undefined : "Double-click to edit"}
+          title={props.editable ? undefined : "Double-click to edit"}
           aria-pressed={picked || selected}
           onClick={onClick}
           onDoubleClick={onDoubleClick}
@@ -617,25 +661,27 @@ function Thumbnail(props: {
         >
           <Lock className="size-3" aria-label="Locked slide" />
         </RailMark>
-        <div className="absolute right-1 top-1 hidden gap-0.5 group-hover:flex">
-          <RailAction title={slide.locked ? "Unlock slide" : "Lock slide"} onClick={toggleLocked}>
-            {slide.locked ? <LockOpen className="size-3" /> : <Lock className="size-3" />}
-          </RailAction>
-          <RailAction
-            title={slide.hidden ? "Show slide" : "Hide slide"}
-            onClick={() => void useApp.getState().setSlidesHidden([slide.id], !slide.hidden)}
-          >
-            {slide.hidden ? <Eye className="size-3" /> : <EyeOff className="size-3" />}
-          </RailAction>
-          <RailAction title="Duplicate" onClick={() => void useApp.getState().duplicateSlides([slide.id])}>
-            <Copy className="size-3" />
-          </RailAction>
-          {!slide.locked && (
-            <RailAction title="Delete" onClick={() => void useApp.getState().deleteSlides([slide.id])}>
-              <Trash2 className="size-3" />
+        {props.editable && (
+          <div className="absolute right-1 top-1 hidden gap-0.5 group-hover:flex">
+            <RailAction title={slide.locked ? "Unlock slide" : "Lock slide"} onClick={toggleLocked}>
+              {slide.locked ? <LockOpen className="size-3" /> : <Lock className="size-3" />}
             </RailAction>
-          )}
-        </div>
+            <RailAction
+              title={slide.hidden ? "Show slide" : "Hide slide"}
+              onClick={() => void useApp.getState().setSlidesHidden([slide.id], !slide.hidden)}
+            >
+              {slide.hidden ? <Eye className="size-3" /> : <EyeOff className="size-3" />}
+            </RailAction>
+            <RailAction title="Duplicate" onClick={() => void useApp.getState().duplicateSlides([slide.id])}>
+              <Copy className="size-3" />
+            </RailAction>
+            {!slide.locked && (
+              <RailAction title="Delete" onClick={() => void useApp.getState().deleteSlides([slide.id])}>
+                <Trash2 className="size-3" />
+              </RailAction>
+            )}
+          </div>
+        )}
       </div>
     </li>
   );

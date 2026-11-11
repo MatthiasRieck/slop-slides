@@ -14,6 +14,7 @@ const SIDEBAR_TAB_KEY = "slopslide.sidebarTab";
 const SIDEBAR_TABS_KEY = "slopslide.sidebarTabs";
 const RAIL_OPEN_KEY = "slopslide.railOpen";
 const FINAL_STATE_KEY = "slopslide.finalState";
+const TIMELINE_OPEN_KEY = "slopslide.timelineOpen";
 
 /** How the window is laid out around the slides, the show, and the error shown. */
 export interface UiSlice {
@@ -29,6 +30,8 @@ export interface UiSlice {
   railOpen: boolean;
   /** The stage shows each slide's final state, its animations done, as the slide list does, rather than playing them. */
   finalState: boolean;
+  /** The deck's timeline is shown under the slide, in View and in Edit; folded away, the slide has the room. */
+  timelineOpen: boolean;
   presenting: boolean;
   /** Where the show goes: picked screens, or windows; null: full screen where it is. */
   screens: Placement | null;
@@ -42,6 +45,7 @@ export interface UiSlice {
   setSidebarMaximized: (maximized: boolean) => void;
   setRailOpen: (open: boolean) => void;
   setFinalState: (finalState: boolean) => void;
+  setTimelineOpen: (open: boolean) => void;
   setPresenting: (presenting: boolean, screens?: Placement | null) => void;
   setError: (error: string | null) => void;
 }
@@ -67,6 +71,7 @@ export const createUiSlice: Slice<UiSlice> = (set, get) => ({
   sidebarMaximized: false,
   railOpen: loadFlag(RAIL_OPEN_KEY, true),
   finalState: loadFlag(FINAL_STATE_KEY, false),
+  timelineOpen: loadFlag(TIMELINE_OPEN_KEY, false),
   presenting: false,
   screens: null,
   error: null,
@@ -112,6 +117,11 @@ export const createUiSlice: Slice<UiSlice> = (set, get) => ({
   setFinalState: (finalState) => {
     saveFlag(FINAL_STATE_KEY, finalState);
     set({ finalState });
+  },
+
+  setTimelineOpen: (timelineOpen) => {
+    saveFlag(TIMELINE_OPEN_KEY, timelineOpen);
+    set({ timelineOpen });
   },
 
   setPresenting: (presenting, screens = null) => set({ presenting, screens }),

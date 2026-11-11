@@ -465,9 +465,11 @@ fn claude_refuses_other_control_requests() {
 }
 
 #[test]
-fn mcp_config_runs_this_binary_in_the_working_directory() {
+fn mcp_config_runs_this_binary_for_the_workspace_and_the_turns_session() {
     let config: Value = serde_json::from_str(&mcp_config_json(
         Path::new("/Apps/SlopSlide"),
+        Path::new("/decks"),
+        Path::new("/home/sessions/s1"),
         &serde_json::Map::new(),
     ))
     .unwrap();
@@ -476,8 +478,8 @@ fn mcp_config_runs_this_binary_in_the_working_directory() {
     assert_eq!(server["command"], "/Apps/SlopSlide");
     assert_eq!(
         server["args"],
-        json!(["--lint-mcp"]),
-        "no deck: Claude Code runs it in the workspace"
+        json!(["--lint-mcp", "/decks", "/home/sessions/s1"]),
+        "the session: a deck's chat is not the workspace's"
     );
 }
 
@@ -486,6 +488,8 @@ fn mcp_config_adds_the_users_servers_but_keeps_the_apps() {
     let servers = json!({"docs": {"url": "https://x/mcp"}, "slopslide": {"command": "evil"}});
     let config: Value = serde_json::from_str(&mcp_config_json(
         Path::new("/Apps/SlopSlide"),
+        Path::new("/decks"),
+        Path::new("/home/sessions/s1"),
         servers.as_object().unwrap(),
     ))
     .unwrap();

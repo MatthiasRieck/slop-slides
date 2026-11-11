@@ -240,7 +240,7 @@ fn session_config(args: &TurnArgs<'_>) -> Value {
         json!({
             "type": "stdio",
             "command": args.lint_server,
-            "args": [mcp::FLAG, args.dir],
+            "args": mcp::launch_args(args.dir, args.session_dir),
             "tools": ["*"],
         }),
     );

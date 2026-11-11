@@ -949,3 +949,36 @@ fn lint_tool_reports_a_missing_deck_as_an_error() {
     );
     assert_eq!(res["result"]["isError"], true);
 }
+
+#[test]
+fn the_tools_work_in_the_turns_session_not_the_workspaces() {
+    let home = TempDir::new("mcp-home");
+    let workspace = TempDir::new("mcp-workspace");
+    workspace.write("talk/deck.html", "<main class=\"deck\"></main>");
+    let sessions = Sessions::new(&home);
+    let of_workspace = sessions.current_or_start(&workspace).unwrap();
+    let of_deck = sessions
+        .current_or_start(&workspace.join("talk/deck.html"))
+        .unwrap();
+    assert_ne!(of_workspace, of_deck, "a deck has a chat of its own");
+
+    // A deck's chat: the app serves its session, which the workspace does not lead to.
+    assert_eq!(
+        turn_session(Some(&of_deck), Some(&sessions), &workspace),
+        Some(of_deck.clone())
+    );
+    assert_eq!(
+        launch_args(&workspace, &of_deck),
+        [
+            FLAG.to_string(),
+            workspace.to_string_lossy().into_owned(),
+            of_deck.to_string_lossy().into_owned()
+        ]
+    );
+    // Started without one, it falls back to the workspace's.
+    assert_eq!(
+        turn_session(None, Some(&sessions), &workspace),
+        Some(of_workspace)
+    );
+    assert_eq!(turn_session(None, None, &workspace), None);
+}

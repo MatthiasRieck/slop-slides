@@ -1312,7 +1312,12 @@ echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id
             let mcp: Value = serde_json::from_str(&fs::read_to_string(&mcp_file).unwrap()).unwrap();
             assert_eq!(
                 mcp["mcpServers"]["slopslide"]["args"],
-                json!(["--lint-mcp"])
+                json!([
+                    "--lint-mcp",
+                    fx.dir.to_string_lossy(),
+                    fx.session_dir().to_string_lossy()
+                ]),
+                "the tools ask the app through the turn's own session"
             );
             let mut written: Vec<_> = fs::read_dir(&fx.dir)
                 .unwrap()

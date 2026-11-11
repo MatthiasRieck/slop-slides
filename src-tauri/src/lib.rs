@@ -59,14 +59,14 @@ use workspace::OpenWorkspace;
 pub fn run() {
     #[cfg(windows)]
     process::worker_if_requested();
-    // `slopslide --lint-mcp [deck dir]`: the agent's lint tool, started by the agent CLI in
-    // the deck folder.
+    // `slopslide --lint-mcp [workspace root] [session folder]`: the agent's tools, started by
+    // the agent CLI for a turn (see mcp.rs).
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some(mcp::FLAG) {
         let dir = args
             .get(2)
             .map_or_else(|| ".".into(), std::path::PathBuf::from);
-        return mcp::serve(&dir);
+        return mcp::serve(&dir, args.get(3).map(std::path::Path::new));
     }
     let context = tauri::generate_context!();
     // `slopslide --export-smoke <deck.html> <out dir> [text…]`: exports a deck with the

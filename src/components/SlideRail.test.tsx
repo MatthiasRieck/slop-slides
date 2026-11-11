@@ -153,6 +153,11 @@ describe("SlideRail", () => {
     expect(other.classList).not.toContain("ring-offset-2");
   });
 
+  it("lifts every thumbnail off the rail with a shadow, selected or not", () => {
+    render(<SlideRail />);
+    for (const li of items()) expect(li.querySelector("button")!.classList).toContain("shadow-thumbnail");
+  });
+
   it("adds a blank slide after the selected one and selects it", async () => {
     invoke.mockResolvedValue({ deck: withSlides("intro", "slide", "#2", "outro"), slide: "slide" });
     render(<SlideRail />);

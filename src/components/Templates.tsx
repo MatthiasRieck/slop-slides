@@ -109,7 +109,7 @@ export function LayoutPicker(props: { mode: "add" | "change"; onDone: () => void
                   onClick={() => choose(slide)}
                   className="group flex w-full flex-col gap-1 text-left"
                 >
-                  <div className="w-full overflow-hidden rounded-md ring-1 ring-border transition group-hover:ring-2 group-hover:ring-primary">
+                  <div className="w-full overflow-hidden rounded-md shadow-thumbnail ring-1 ring-border transition group-hover:ring-2 group-hover:ring-primary">
                     <TemplateSlide template={template.id} slide={slide} size={pixelsOf(template)} />
                   </div>
                   <span className="truncate text-2xs text-muted-foreground group-hover:text-foreground">
@@ -172,7 +172,7 @@ function StylePanel(props: {
                 >
                   <div
                     className={cn(
-                      "w-full overflow-hidden rounded-md ring-1 ring-border transition group-hover:ring-2 group-hover:ring-input",
+                      "w-full overflow-hidden rounded-md shadow-thumbnail ring-1 ring-border transition group-hover:ring-2 group-hover:ring-input",
                       t.id === current && "ring-2 ring-primary group-hover:ring-primary",
                     )}
                   >

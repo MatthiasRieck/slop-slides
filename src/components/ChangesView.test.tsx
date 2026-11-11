@@ -107,6 +107,13 @@ describe("ChangesRail", () => {
     expect(screen.getByRole("button", { name: "Slide 3, added" })).toBeTruthy();
   });
 
+  it("lifts every thumbnail off the rail with a shadow", async () => {
+    await show();
+    for (const name of ["Slide 1, modified", "Slide, removed", "Slide 2", "Slide 3, added"]) {
+      expect(screen.getByRole("button", { name }).classList).toContain("shadow-thumbnail");
+    }
+  });
+
   it("shows a removed slide from the commit, with its runtime brought up to date", async () => {
     await show();
     fireEvent.click(screen.getByRole("button", { name: "Slide, removed" }));

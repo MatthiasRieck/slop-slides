@@ -60,6 +60,10 @@
   --guide: var(--color-pink-500);
   --search: var(--color-yellow-300);
   --search-active: var(--color-orange-400);
+
+  /* What lifts a slide's thumbnail off the surface under it: a hairline edge and a soft shadow. */
+  --thumbnail-edge: --alpha(var(--color-black) / 6%);
+  --thumbnail-shade: --alpha(var(--color-black) / 14%);
 }
 
 .dark {
@@ -87,6 +91,10 @@
 
   --tok-string: var(--color-blue-300);
   --tok-variable: var(--color-violet-300);
+
+  /* A shadow barely shows on a near-black surface, so the edge turns light and does the lifting. */
+  --thumbnail-edge: --alpha(var(--color-white) / 14%);
+  --thumbnail-shade: --alpha(var(--color-black) / 70%);
 }
 
 @theme {
@@ -131,6 +139,8 @@
   --radius-xl: calc(var(--radius) + 4px);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --shadow-composer: 0 12px 28px -18px var(--scrim);
+  --shadow-thumbnail:
+    0 0 0 1px var(--thumbnail-edge), 0 1px 2px var(--thumbnail-shade), 0 4px 10px -3px var(--thumbnail-shade);
 }
 
 @layer base {

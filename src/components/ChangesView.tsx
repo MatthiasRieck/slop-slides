@@ -191,7 +191,7 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
               .join(", ")}
             onClick={() => useChanges.getState().pick(row.key)}
             className={cn(
-              "block w-full overflow-hidden rounded-md transition-shadow",
+              "block w-full overflow-hidden rounded-md shadow-thumbnail transition-shadow",
               picked
                 ? "ring-2 ring-primary ring-offset-2 ring-offset-sidebar"
                 : marks[0]

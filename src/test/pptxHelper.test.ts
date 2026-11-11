@@ -137,15 +137,31 @@ describe("PowerPoint helper", () => {
     await settle();
     api.scan(0);
     await settle();
-    expect(answers.slice(1)).toEqual(["scanned=0"]);
+    expect(answers.slice(1)).toEqual(["scanned=0&slides=3"]);
     api.scan(1);
     await settle();
-    expect(answers.slice(1)).toEqual(["scanned=0", "scanned=1"]);
+    expect(answers.slice(1)).toEqual(["scanned=0&slides=3", "scanned=1&slides=3"]);
     api.scan(2);
     await settle();
-    expect(answers.at(-1)).toMatch(/^scanned=2&chunks=[1-9]\d*$/);
+    expect(answers.at(-1)).toMatch(/^scanned=2&slides=3&chunks=[1-9]\d*$/);
     // Starting over reads the deck anew.
     expect((await scan()).slides.map((s) => s.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("answers at once for a slide that is gone, or one it cannot read", async () => {
+    const { window, doc, api, answers, settle } = helper(
+      `<section class="slide" id="a"><h1>One</h1></section><section class="slide" id="b"></section>`,
+    );
+    await settle();
+    doc.getElementById("b")?.setAttribute("data-hidden", "");
+    api.scan(1);
+    expect(answers.at(-1)).toBe("scanned=1&slides=1");
+    window.getComputedStyle = () => {
+      throw new TypeError("no styles");
+    };
+    api.scan(0);
+    await settle();
+    expect(answers.at(-1)).toBe(`scanned=0&slides=1&error=${encodeURIComponent("TypeError: no styles")}`);
   });
 
   it("skips hidden slides in the scene", async () => {

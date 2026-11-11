@@ -7,8 +7,9 @@ use std::io::{Cursor, Read, Write};
 use zip::write::SimpleFileOptions;
 
 use super::export::{
-    matte, package, Background, Border, BoxItem, Bullet, Crop, Fill, Gradient, ImageItem, Item,
-    Meta, Paragraph, Run, Scene, SceneSlide, Shadow, ShotInfo, ShotItem, Stop, TextItem,
+    matte, package, scanned_chunks, Background, Border, BoxItem, Bullet, Crop, Fill, Gradient,
+    ImageItem, Item, Meta, Paragraph, Run, Scene, SceneSlide, Shadow, ShotInfo, ShotItem, Stop,
+    TextItem,
 };
 use super::import::{self, convert};
 use super::xml;
@@ -1077,4 +1078,46 @@ fn cropped_pictures_may_be_taller_than_their_frame() {
         .unwrap()
         .html
         .contains(".ppt-crop img { position: absolute; max-width: none; max-height: none; }"));
+}
+
+#[test]
+fn checks_each_answer_of_the_scan() {
+    let answer = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    };
+    let error = |pairs: &[(&str, &str)], index| {
+        scanned_chunks(&answer(pairs), index, 3)
+            .unwrap_err()
+            .to_string()
+    };
+    assert_eq!(
+        scanned_chunks(&answer(&[("scanned", "0"), ("slides", "3")]), 0, 3).unwrap(),
+        0
+    );
+    assert_eq!(
+        scanned_chunks(
+            &answer(&[("scanned", "2"), ("slides", "3"), ("chunks", "4")]),
+            2,
+            3
+        )
+        .unwrap(),
+        4
+    );
+    // Another slide's answer, or one that names none.
+    assert!(error(&[("scanned", "0"), ("slides", "3")], 1).contains("out of turn"));
+    assert!(error(&[("scanned", ""), ("slides", "3")], 0).contains("out of turn"));
+    // The page now has fewer slides, or more.
+    assert!(error(&[("scanned", "2"), ("slides", "2")], 2).contains("slides changed"));
+    assert!(error(&[("scanned", "2"), ("slides", "4")], 2).contains("slides changed"));
+    let unread = error(
+        &[("scanned", "1"), ("slides", "3"), ("error", "TypeError: x")],
+        1,
+    );
+    assert!(
+        unread.contains("slide 2 could not be read: TypeError: x"),
+        "{unread}"
+    );
 }

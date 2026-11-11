@@ -1,5 +1,5 @@
-//! The presentation's XML: each slide's items as DrawingML shapes, text and pictures, and the
-//! package of parts around them.
+//! The presentation's XML: each slide's items as DrawingML shapes, freeforms, text and pictures,
+//! and the package of parts around them.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -88,6 +88,30 @@ fn gradient_xml(gradient: &Gradient, opacity: f64) -> String {
         "<a:gradFill rotWithShape=\"1\"><a:gsLst>{stops}</a:gsLst><a:lin ang=\"{}\" scaled=\"0\"/></a:gradFill>",
         (angle * DEGREE).round() as i64
     )
+}
+
+/// An outline as the page helper writes it (`PathItem::d`): each segment's letter and its
+/// numbers. `None` unless it is whole: a start, then lines, curves and closes.
+fn path_segments(d: &str) -> Option<Vec<(char, Vec<f64>)>> {
+    let mut segments: Vec<(char, Vec<f64>)> = Vec::new();
+    for token in d.split_whitespace() {
+        match token {
+            "M" | "L" | "C" | "Z" => segments.push((token.chars().next()?, Vec::new())),
+            number => {
+                let value: f64 = number.parse().ok().filter(|v: &f64| v.is_finite())?;
+                segments.last_mut()?.1.push(value);
+            }
+        }
+    }
+    let whole = segments.iter().all(|(kind, numbers)| {
+        numbers.len()
+            == match kind {
+                'C' => 6,
+                'Z' => 0,
+                _ => 2,
+            }
+    });
+    (whole && segments.len() > 1 && segments[0].0 == 'M').then_some(segments)
 }
 
 /// A slide's relationships as they are collected, with `rId1` its layout.
@@ -208,36 +232,158 @@ impl<F: Fn(&str) -> Option<Vec<u8>>> Writer<'_, F> {
             Some("dotted") => "<a:prstDash val=\"sysDot\"/>",
             _ => "",
         };
+        let cap = match border.cap.as_deref() {
+            Some("round") => " cap=\"rnd\"",
+            Some("square") => " cap=\"sq\"",
+            Some("butt") => " cap=\"flat\"",
+            _ => "",
+        };
+        let join = match border.join.as_deref() {
+            Some("round") => "<a:round/>",
+            Some("bevel") => "<a:bevel/>",
+            Some("miter" | "miter-clip" | "arcs") => "<a:miter lim=\"800000\"/>",
+            _ => "",
+        };
+        let end = |tag: &str, arrow: Option<&Arrow>| {
+            let Some(arrow) = arrow else {
+                return String::new();
+            };
+            let kind = match arrow.kind.as_str() {
+                "oval" => "oval",
+                "arrow" => "arrow",
+                _ => "triangle",
+            };
+            let size = match arrow.size.as_str() {
+                "sm" => "sm",
+                "lg" => "lg",
+                _ => "med",
+            };
+            format!("<a:{tag} type=\"{kind}\" w=\"{size}\" len=\"{size}\"/>")
+        };
         format!(
-            "<a:ln w=\"{}\">{}{dash}</a:ln>",
+            "<a:ln w=\"{}\"{cap}>{}{dash}{join}{}{}</a:ln>",
             self.emu(border.width).max(1),
-            solid_xml(border.color, opacity)
+            solid_xml(border.color, opacity),
+            end("headEnd", border.head.as_ref()),
+            end("tailEnd", border.tail.as_ref())
         )
     }
 
-    fn box_xml(&mut self, item: &BoxItem) -> String {
-        let id = self.id();
-        let fill = match item.fill.as_ref() {
-            Some(Fill {
-                gradient: Some(g), ..
-            }) => gradient_xml(g, item.opacity),
-            Some(Fill { color: Some(c), .. }) => solid_xml(*c, item.opacity),
-            _ => "<a:noFill/>".to_string(),
-        };
-        let line = match &item.border {
-            Some(border) => self.line_xml(border, item.opacity),
-            None => "<a:ln><a:noFill/></a:ln>".to_string(),
-        };
-        let effect = item.shadow.as_ref().map_or(String::new(), |s| {
+    fn shadow_xml(&self, shadow: Option<&Shadow>, opacity: f64) -> String {
+        shadow.map_or(String::new(), |s| {
             let distance = self.emu(s.x.hypot(s.y));
             let direction = s.y.atan2(s.x).to_degrees().rem_euclid(360.0);
             format!(
                 "<a:effectLst><a:outerShdw blurRad=\"{}\" dist=\"{distance}\" dir=\"{}\" algn=\"ctr\" rotWithShape=\"0\">{}</a:outerShdw></a:effectLst>",
                 self.emu(s.blur),
                 (direction * DEGREE).round() as i64,
-                color_xml(s.color, item.opacity)
+                color_xml(s.color, opacity)
             )
-        });
+        })
+    }
+
+    fn fill_xml(fill: Option<&Fill>, opacity: f64) -> String {
+        match fill {
+            Some(Fill {
+                gradient: Some(g), ..
+            }) => gradient_xml(g, opacity),
+            Some(Fill { color: Some(c), .. }) => solid_xml(*c, opacity),
+            _ => "<a:noFill/>".to_string(),
+        }
+    }
+
+    /// A freeform, or a line when that is all its outline is. Nothing if it cannot be read.
+    fn path_xml(&mut self, item: &PathItem) -> Option<String> {
+        let segments = path_segments(&item.d)?;
+        let line = match &item.border {
+            Some(border) => self.line_xml(border, 1.0),
+            None => "<a:ln><a:noFill/></a:ln>".to_string(),
+        };
+        let effect = self.shadow_xml(item.shadow.as_ref(), 1.0);
+        if let [('M', from), ('L', to)] = segments.as_slice() {
+            // Two points fill nothing.
+            item.border.as_ref()?;
+            let id = self.id();
+            let mut flips = String::new();
+            if from[0] > to[0] {
+                flips.push_str(" flipH=\"1\"");
+            }
+            if from[1] > to[1] {
+                flips.push_str(" flipV=\"1\"");
+            }
+            return Some(format!(
+                "<p:cxnSp><p:nvCxnSpPr><p:cNvPr id=\"{id}\" name=\"Line {id}\"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr><a:xfrm{flips}><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm><a:prstGeom prst=\"line\"><a:avLst/></a:prstGeom>{line}{effect}</p:spPr></p:cxnSp>",
+                self.emu(item.x),
+                self.emu(item.y),
+                self.emu(item.w).max(0),
+                self.emu(item.h).max(0)
+            ));
+        }
+        let id = self.id();
+        let (width, height) = (self.emu(item.w).max(0), self.emu(item.h).max(0));
+        let mut outline = String::new();
+        for (kind, numbers) in &segments {
+            let points: String = numbers
+                .chunks(2)
+                .map(|p| format!("<a:pt x=\"{}\" y=\"{}\"/>", self.emu(p[0]), self.emu(p[1])))
+                .collect();
+            let _ = match kind {
+                'M' => write!(outline, "<a:moveTo>{points}</a:moveTo>"),
+                'L' => write!(outline, "<a:lnTo>{points}</a:lnTo>"),
+                'C' => write!(outline, "<a:cubicBezTo>{points}</a:cubicBezTo>"),
+                _ => write!(outline, "<a:close/>"),
+            };
+        }
+        let unfilled = if item.fill.is_none() {
+            " fill=\"none\""
+        } else {
+            ""
+        };
+        Some(format!(
+            "<p:sp><p:nvSpPr><p:cNvPr id=\"{id}\" name=\"Freeform {id}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>{}<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l=\"0\" t=\"0\" r=\"r\" b=\"b\"/><a:pathLst><a:path w=\"{width}\" h=\"{height}\"{unfilled}>{outline}</a:path></a:pathLst></a:custGeom>{}{line}{effect}</p:spPr></p:sp>",
+            self.xfrm(item.x, item.y, item.w, item.h, 0.0, false),
+            Self::fill_xml(item.fill.as_ref(), 1.0),
+        ))
+    }
+
+    /// The shapes of one drawing, in a group that leaves them where they are on the slide.
+    fn group_xml(&mut self, item: &GroupItem) -> Option<String> {
+        let id = self.id();
+        let shapes: String = item
+            .items
+            .iter()
+            .filter_map(|child| self.item_xml(child))
+            .collect();
+        if shapes.is_empty() {
+            return None;
+        }
+        // A group scales its shapes by its size: never by nothing.
+        let (x, y) = (self.emu(item.x), self.emu(item.y));
+        let (w, h) = (self.emu(item.w).max(1), self.emu(item.h).max(1));
+        Some(format!(
+            "<p:grpSp><p:nvGrpSpPr><p:cNvPr id=\"{id}\" name=\"Group {id}\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x=\"{x}\" y=\"{y}\"/><a:ext cx=\"{w}\" cy=\"{h}\"/><a:chOff x=\"{x}\" y=\"{y}\"/><a:chExt cx=\"{w}\" cy=\"{h}\"/></a:xfrm></p:grpSpPr>{shapes}</p:grpSp>"
+        ))
+    }
+
+    fn item_xml(&mut self, item: &Item) -> Option<String> {
+        match item {
+            Item::Box(item) => Some(self.box_xml(item)),
+            Item::Text(item) => Some(self.text_xml(item)),
+            Item::Image(item) => self.image_xml(item),
+            Item::Shot(item) => self.shot_xml(item),
+            Item::Path(item) => self.path_xml(item),
+            Item::Group(item) => self.group_xml(item),
+        }
+    }
+
+    fn box_xml(&mut self, item: &BoxItem) -> String {
+        let id = self.id();
+        let fill = Self::fill_xml(item.fill.as_ref(), item.opacity);
+        let line = match &item.border {
+            Some(border) => self.line_xml(border, item.opacity),
+            None => "<a:ln><a:noFill/></a:ln>".to_string(),
+        };
+        let effect = self.shadow_xml(item.shadow.as_ref(), item.opacity);
         format!(
             "<p:sp><p:nvSpPr><p:cNvPr id=\"{id}\" name=\"Shape {id}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>{}{}{fill}{line}{effect}</p:spPr></p:sp>",
             self.xfrm(item.x, item.y, item.w, item.h, item.rotation, false),
@@ -589,13 +735,7 @@ pub(in crate::pptx) fn package<F: Fn(&str) -> Option<Vec<u8>>>(
         let background = writer.background_xml(&slide.background);
         let mut shapes = String::new();
         for item in &slide.items {
-            let xml = match item {
-                Item::Box(item) => Some(writer.box_xml(item)),
-                Item::Text(item) => Some(writer.text_xml(item)),
-                Item::Image(item) => writer.image_xml(item),
-                Item::Shot(item) => writer.shot_xml(item),
-            };
-            shapes.push_str(&xml.unwrap_or_default());
+            shapes.push_str(&writer.item_xml(item).unwrap_or_default());
         }
         parts.push((
             format!("ppt/slides/slide{number}.xml"),

@@ -3,8 +3,9 @@
 //! native shapes, text and pictures, so it stays editable in PowerPoint.
 //!
 //! PowerPoint cannot draw everything a browser can. Transparent fills, linear gradients and
-//! outer shadows map onto its own effects, backdrop blur is dropped, and anything else (SVG,
-//! filters, masks, 3D) comes as a picture. A picture needs its transparency: [`matte`] works it
+//! outer shadows map onto its own effects, an SVG's shapes, lines and text become freeforms,
+//! lines and text boxes, backdrop blur is dropped, and anything else (filters, masks, 3D, an
+//! SVG using those) comes as a picture. A picture needs its transparency: [`matte`] works it
 //! out from two captures of the element alone, over white and over black.
 
 mod scene;

@@ -134,8 +134,11 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   dropped, charts arrive as tables of their data, and EMF/WMF images are left out (the import
   says what it changed). The **PowerPoint** export writes a new `.pptx` of native, editable
   shapes and text, with notes and sections. Transparency, linear gradients and shadows stay
-  PowerPoint's own effects; backdrop blur is dropped; whatever PowerPoint cannot draw (SVG,
-  filters, masks, 3D) becomes a transparent picture. Web fonts are not embedded, so install them
+  PowerPoint's own effects; an inline SVG (and a shape drawn with the editor) becomes a group of
+  freeform shapes, lines with their arrowheads, and text boxes; backdrop blur is dropped;
+  whatever PowerPoint cannot draw (filters, masks, 3D, canvases, an SVG that uses filters,
+  masks, clips, patterns, radial gradients or pictures, or comes from an image file) becomes a
+  transparent picture. Web fonts are not embedded, so install them
   where the file is opened.
 - **Export:** saves the deck as **one self-contained HTML file** (attached images embedded)
   that plays in any browser: arrows/space/click to navigate, `F` for full screen, `#slide-id`

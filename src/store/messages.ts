@@ -17,6 +17,10 @@ export type ChatPart =
       name: string;
       input: Record<string, unknown>;
       status: "running" | "done" | "error";
+      /** What the tool gave back, as text; absent while it runs, when it gave nothing, and in chats saved before it was kept. */
+      output?: string | null;
+      /** Absolute paths, in the chat's session, of the images the tool gave back; absent when it gave none. */
+      images?: string[];
     };
 
 export interface UserMessage {

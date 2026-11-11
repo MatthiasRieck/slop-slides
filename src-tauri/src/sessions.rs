@@ -25,6 +25,8 @@ const SESSIONS_DIR: &str = "sessions";
 const META_FILE: &str = "meta.json";
 pub const CHAT_FILE: &str = "chat.json";
 const SKETCHES_KEPT: usize = 30;
+/// How many images of tool output a chat keeps; the chat says so of the ones it lost.
+const TOOL_IMAGES_KEPT: usize = 200;
 /// In a subject's newest session: the name of the session selected as its current one.
 const ACTIVE_FILE: &str = "active-session";
 
@@ -69,17 +71,48 @@ pub fn write_session(session: &Path, name: &str, session_id: Option<&str>) -> Re
 /// Saves a screenshot of a sketched-on slide under the session's `sketches/`, keeping the
 /// newest few. Returns its absolute path, for the agent to read.
 pub fn save_sketch(session: &Path, png: &[u8]) -> Result<String> {
-    let sketches = session.join("sketches");
-    fs::create_dir_all(&sketches)?;
+    save_image(&session.join("sketches"), "png", png, SKETCHES_KEPT)
+}
+
+/// Saves an image a tool gave the agent, a `data:` URL of base64, under the session's
+/// `tool-images/`, keeping the newest. Returns its absolute path, for the chat to show.
+pub fn save_tool_image(session: &Path, data_url: &str) -> Result<String> {
+    use base64::Engine;
+    let (kind, data) = data_url
+        .strip_prefix("data:")
+        .and_then(|rest| rest.split_once(";base64,"))
+        .ok_or_else(|| Error::msg("not an image a tool gave back"))?;
+    let extension = match kind {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        other => return Err(Error::msg(format!("an image of type {other} is not shown"))),
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.trim())
+        .map_err(|e| Error::msg(format!("invalid image data: {e}")))?;
+    save_image(
+        &session.join("tool-images"),
+        extension,
+        &bytes,
+        TOOL_IMAGES_KEPT,
+    )
+}
+
+/// Writes `bytes` into `dir` under a new name that starts with the time, keeping the `keep`
+/// newest files there. Returns the file's absolute path.
+fn save_image(dir: &Path, extension: &str, bytes: &[u8], keep: usize) -> Result<String> {
+    fs::create_dir_all(dir)?;
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
     let short = &uuid::Uuid::new_v4().simple().to_string()[..8];
-    let name = format!("{stamp}-{short}.png");
-    fs::write(sketches.join(&name), png)?;
-    prune_oldest(&sketches, SKETCHES_KEPT)?;
-    Ok(sketches.join(name).to_string_lossy().into_owned())
+    let name = format!("{stamp}-{short}.{extension}");
+    fs::write(dir.join(&name), bytes)?;
+    prune_oldest(dir, keep)?;
+    Ok(dir.join(name).to_string_lossy().into_owned())
 }
 
 /// Deletes all but the `keep` newest files of `dir`, whose names start with a timestamp.
@@ -457,6 +490,59 @@ mod tests {
         let a = save_sketch(&t.0.join("session"), b"a").unwrap();
         let b = save_sketch(&t.0.join("session"), b"b").unwrap();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn save_tool_image_writes_the_decoded_image_by_its_type() {
+        let t = Temp::new();
+        let session = t.0.join("session");
+        let png = save_tool_image(&session, "data:image/png;base64,iVBORw0KGgo=").unwrap();
+        assert!(
+            Path::new(&png).starts_with(session.join("tool-images")) && png.ends_with(".png"),
+            "absolute, in the session: {png}"
+        );
+        assert_eq!(fs::read(&png).unwrap(), b"\x89PNG\r\n\x1a\n");
+        let jpeg = save_tool_image(&session, "data:image/jpeg;base64,/9j/4AAQ").unwrap();
+        assert!(jpeg.ends_with(".jpg"), "{jpeg}");
+        assert_ne!(
+            save_tool_image(&session, "data:image/webp;base64,aGk=").unwrap(),
+            save_tool_image(&session, "data:image/webp;base64,aGk=").unwrap()
+        );
+    }
+
+    #[test]
+    fn save_tool_image_refuses_what_is_not_an_image_it_shows() {
+        let t = Temp::new();
+        let session = t.0.join("session");
+        for bad in [
+            "/etc/passwd",
+            "data:image/png;base64,not base64!",
+            "data:image/svg+xml;base64,aGk=",
+            "data:text/html;base64,aGk=",
+            "data:image/png,aGk=",
+        ] {
+            assert!(save_tool_image(&session, bad).is_err(), "{bad}");
+        }
+        assert!(!session.join("tool-images").exists());
+    }
+
+    #[test]
+    fn save_tool_image_prunes_old_ones() {
+        let t = Temp::new();
+        let session = t.0.join("session");
+        let images = session.join("tool-images");
+        fs::create_dir_all(&images).unwrap();
+        for n in 0..TOOL_IMAGES_KEPT + 2 {
+            let name = format!("{}-old.png", 1_000_000_000_000u64 + n as u64);
+            fs::write(images.join(name), b"old").unwrap();
+        }
+        let path = save_tool_image(&session, "data:image/png;base64,aGk=").unwrap();
+        assert_eq!(fs::read_dir(&images).unwrap().count(), TOOL_IMAGES_KEPT);
+        assert!(Path::new(&path).exists(), "new image kept");
+        assert!(
+            !images.join("1000000000000-old.png").exists(),
+            "oldest pruned"
+        );
     }
 
     #[test]

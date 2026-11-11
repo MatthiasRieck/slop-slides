@@ -10,7 +10,9 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::watch;
 
-use crate::agent::{AgentEvent, Outcome, Steers, TurnArgs, SYSTEM_PROMPT};
+use crate::agent::{
+    tool_images, tool_output, AgentEvent, Outcome, Steers, TurnArgs, SYSTEM_PROMPT,
+};
 use crate::error::{Error, Result};
 use crate::permissions::{self, Approval, Choices, PermissionMode};
 use crate::{mcp, rewind};
@@ -557,6 +559,8 @@ fn parse_line(value: &Value) -> Vec<AgentEvent> {
                     .unwrap_or_default()
                     .to_string(),
                 is_error: block["is_error"].as_bool().unwrap_or(false),
+                output: tool_output(&block["content"]),
+                images: tool_images(&block["content"]),
             })
             .collect(),
         Some("result") => {

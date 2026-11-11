@@ -13,7 +13,9 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::watch;
 
-use crate::agent::{AgentEvent, Outcome, Steers, TurnArgs, SYSTEM_PROMPT};
+use crate::agent::{
+    tool_images, tool_output, AgentEvent, Outcome, Steers, TurnArgs, SYSTEM_PROMPT,
+};
 use crate::error::{Error, Result};
 use crate::extensions;
 use crate::permissions::{self, Approval, Choices, PermissionMode};
@@ -695,6 +697,9 @@ impl EventMapper {
                 vec![AgentEvent::ToolResult {
                     id,
                     is_error: !data["success"].as_bool().unwrap_or(true),
+                    output: tool_output(&data["result"])
+                        .or_else(|| tool_output(&data["error"]["message"])),
+                    images: tool_images(&data["result"]),
                 }]
             }
             "session.error" => vec![AgentEvent::Error {
@@ -923,8 +928,7 @@ def event(kind, data, id=None):
             json!({"type":"assistant.message_delta","data":{"messageId":"m1","deltaContent":"Hi"}});
         let full = json!({"type":"assistant.message","data":{"messageId":"m1","content":"Hi"}});
         let tool = json!({"type":"tool.execution_start","data":{"toolCallId":"t1","toolName":"edit","arguments":{"path":"/d/deck.html","old_str":"a","new_str":"b"}}});
-        let done =
-            json!({"type":"tool.execution_complete","data":{"toolCallId":"t1","success":true}});
+        let done = json!({"type":"tool.execution_complete","data":{"toolCallId":"t1","success":true,"result":{"content":"Edited deck.html","contents":[{"type":"image","data":"iVBORw0KGgo","mimeType":"image/png"}]}}});
         let idle = json!({"type":"session.idle","data":{}});
         assert_eq!(
             mapper.map(&delta),
@@ -942,7 +946,21 @@ def event(kind, data, id=None):
             mapper.map(&done),
             vec![AgentEvent::ToolResult {
                 id: "t1".into(),
-                is_error: false
+                is_error: false,
+                output: Some("Edited deck.html".into()),
+                images: vec!["data:image/png;base64,iVBORw0KGgo".into()]
+            }]
+        );
+        let failing = json!({"type":"tool.execution_start","data":{"toolCallId":"t2","toolName":"view","arguments":{"path":"/d/gone.html"}}});
+        let failed = json!({"type":"tool.execution_complete","data":{"toolCallId":"t2","success":false,"error":{"message":"No such file"}}});
+        mapper.map(&failing);
+        assert_eq!(
+            mapper.map(&failed),
+            vec![AgentEvent::ToolResult {
+                id: "t2".into(),
+                is_error: true,
+                output: Some("No such file".into()),
+                images: vec![]
             }]
         );
         assert!(matches!(
@@ -1437,10 +1455,10 @@ while True:
         for name in [mcp::TOOL, "Read"] {
             let id = tool(name).unwrap_or_else(|| panic!("{name} was called: {events:?}"));
             assert!(
-                events.contains(&AgentEvent::ToolResult {
-                    id,
-                    is_error: false
-                }),
+                events.iter().any(|e| matches!(
+                    e,
+                    AgentEvent::ToolResult { id: done, is_error: false, .. } if *done == id
+                )),
                 "{name} ran: {events:?}"
             );
         }

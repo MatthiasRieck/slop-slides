@@ -1,7 +1,7 @@
 import { FileText, Globe, Pencil, Search, SquareTerminal } from "lucide-react";
 import { describe, expect, it } from "vitest";
 
-import { describeTool, editedSlide, type ToolPart } from "./toolCalls";
+import { describeTool, editedSlide, type ToolPart, toolArguments } from "./toolCalls";
 
 const DECK = "/decks/talk/deck.html";
 
@@ -29,6 +29,31 @@ describe("describeTool", () => {
     ["Write", { file_path: 42 }, FileText, "Wrote", ""],
   ])("describes %s calls", (name, input, icon, label, target) => {
     expect(describeTool(tool(name, input), DECK)).toEqual({ icon, label, target });
+  });
+});
+
+describe("toolArguments", () => {
+  it("lists text as it is and anything else as JSON, leaving out what is missing", () => {
+    const part = tool("Edit", {
+      file_path: "/decks/talk/deck.html",
+      new_string: "<h1>\n  New\n</h1>",
+      replace_all: false,
+      limit: 20,
+      edits: [{ a: 1 }],
+      nothing: null,
+    });
+    expect(toolArguments(part)).toEqual([
+      { name: "file_path", value: "/decks/talk/deck.html" },
+      { name: "new_string", value: "<h1>\n  New\n</h1>" },
+      { name: "replace_all", value: "false" },
+      { name: "limit", value: "20" },
+      { name: "edits", value: '[\n  {\n    "a": 1\n  }\n]' },
+    ]);
+  });
+
+  it("lists nothing for a call without arguments, or one saved without any", () => {
+    expect(toolArguments(tool("lint_deck", {}))).toEqual([]);
+    expect(toolArguments({ ...tool("lint_deck", {}), input: null as unknown as Record<string, unknown> })).toEqual([]);
   });
 });
 

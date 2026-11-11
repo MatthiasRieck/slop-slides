@@ -1,12 +1,12 @@
-import { AlertTriangle, ArrowDown, Check, Copy, FoldVertical, Loader2, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, Check, ChevronRight, Copy, FoldVertical, Loader2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { cn } from "../../lib/utils";
+import { cn, workspaceChatFileUrl } from "../../lib/utils";
 import { type AssistantMessage, type ChatMessage, type UserMessage, useApp } from "../../store";
 import { ApprovalCard, ApprovalReview } from "../Permissions";
-import { describeTool, editedSlide, type ToolPart } from "./toolCalls";
+import { describeTool, editedSlide, type ToolPart, toolArguments } from "./toolCalls";
 
 /**
  * The conversation, kept scrolled to the latest message unless the user scrolled up (then a
@@ -179,7 +179,10 @@ function AssistantBlock({ message }: { message: AssistantMessage }) {
   );
 }
 
-/** A tool call of the agent's; an edit of the deck's slide selects that slide when pressed. */
+/**
+ * A tool call of the agent's; an edit of the deck's slide selects that slide when pressed. Its
+ * arguments and output unfold beneath it.
+ */
 function ToolRow({ part }: { part: ToolPart }) {
   const deck = useApp((s) => s.deck);
   const { icon: Icon, label, target } = describeTool(part, deck?.id ?? "");
@@ -191,6 +194,113 @@ function ToolRow({ part }: { part: ToolPart }) {
         deck.slides.map((s) => s.id),
       )
     : null;
+  const [open, setOpen] = useState(false);
+  const args = toolArguments(part);
+  const images = part.images ?? [];
+  return (
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <div className="flex min-w-0 items-center gap-1">
+        <ToolSummary part={part} icon={Icon} label={label} target={target} slide={slide} />
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-label={`${open ? "Hide" : "Show"} arguments and output of ${label}${target ? ` ${target}` : ""}`}
+          title={open ? "Hide arguments and output" : "Show arguments and output"}
+          onClick={() => setOpen(!open)}
+          className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <ChevronRight className={cn("size-3 transition-transform", open && "rotate-90")} />
+        </button>
+      </div>
+      {open && (
+        <div className="selectable flex min-w-0 flex-col gap-2 rounded-lg border bg-muted/40 p-2.5 text-xs">
+          <ToolDetail title={`Arguments · ${part.name}`}>
+            {args.length === 0 ? (
+              <span className="text-muted-foreground">None</span>
+            ) : (
+              <dl className="flex min-w-0 flex-col gap-1.5">
+                {args.map((arg) => (
+                  <div key={arg.name} className="min-w-0">
+                    <dt className="font-mono text-2xs text-muted-foreground">{arg.name}</dt>
+                    <dd>
+                      <ToolText text={arg.value} />
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+          </ToolDetail>
+          <ToolDetail title={part.status === "error" ? "Error" : "Output"}>
+            {part.output ? (
+              <ToolText text={part.output} error={part.status === "error"} />
+            ) : (
+              !images.length && (
+                <span className="text-muted-foreground">{part.status === "running" ? "Running…" : "No output"}</span>
+              )
+            )}
+            {images.length > 0 && (
+              <div className="flex min-w-0 flex-col gap-2">
+                {images.map((path, i) => (
+                  <ToolImage key={path} path={path} alt={`Image ${i + 1} of ${images.length} the agent received`} />
+                ))}
+              </div>
+            )}
+          </ToolDetail>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A titled part of a tool call's details. */
+function ToolDetail(props: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="flex min-w-0 flex-col gap-1">
+      <h4 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">{props.title}</h4>
+      {props.children}
+    </section>
+  );
+}
+
+/** An image a tool gave the agent, as kept in the chat's session; the chat keeps only the newest. */
+function ToolImage({ path, alt }: { path: string; alt: string }) {
+  const [missing, setMissing] = useState(false);
+  if (missing) return <span className="text-muted-foreground">This image is no longer kept.</span>;
+  return (
+    // biome-ignore lint/a11y/noNoninteractiveElementInteractions: a failed load is not an interaction
+    <img
+      src={workspaceChatFileUrl("", path)}
+      alt={alt}
+      loading="lazy"
+      onError={() => setMissing(true)}
+      className="max-h-96 max-w-full self-start rounded-md border bg-muted object-contain"
+    />
+  );
+}
+
+/** Text of a tool call as it was written, scrolling when long. */
+function ToolText({ text, error }: { text: string; error?: boolean }) {
+  return (
+    <pre
+      className={cn(
+        "max-h-60 overflow-auto whitespace-pre-wrap break-words font-mono text-[0.95em] leading-relaxed",
+        error ? "text-destructive" : "text-foreground/80",
+      )}
+    >
+      {text}
+    </pre>
+  );
+}
+
+/** The line a tool call shows: what it did and to what, linked to the slide it edited. */
+function ToolSummary(props: {
+  part: ToolPart;
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  target: string;
+  slide: string | null;
+}) {
+  const { part, icon: Icon, label, target, slide } = props;
   return (
     <button
       type="button"

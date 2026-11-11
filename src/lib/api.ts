@@ -250,7 +250,7 @@ export type AgentEvent =
   | { type: "textStart" }
   | { type: "textDelta"; text: string }
   | { type: "toolUse"; id: string; name: string; input: Record<string, unknown> }
-  | { type: "toolResult"; id: string; isError: boolean }
+  | { type: "toolResult"; id: string; isError: boolean; output: string | null; images: string[] }
   | {
       type: "result";
       isError: boolean;

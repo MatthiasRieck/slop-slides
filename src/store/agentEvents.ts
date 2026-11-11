@@ -70,7 +70,14 @@ export function applyReplyEvent(m: AssistantMessage, event: ReplyEvent, chat: Re
       return {
         ...m,
         parts: m.parts.map((p) =>
-          p.kind === "tool" && p.id === event.id ? { ...p, status: event.isError ? "error" : "done" } : p,
+          p.kind === "tool" && p.id === event.id
+            ? {
+                ...p,
+                status: event.isError ? "error" : "done",
+                output: event.output,
+                ...(event.images?.length ? { images: event.images } : {}),
+              }
+            : p,
         ),
       };
     case "result": {

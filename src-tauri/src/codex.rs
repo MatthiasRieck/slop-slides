@@ -11,7 +11,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, watch};
 
-use crate::agent::{AgentEvent, Outcome, Steers, TurnArgs, SYSTEM_PROMPT};
+use crate::agent::{
+    tool_images, tool_output, AgentEvent, Outcome, Steers, TurnArgs, SYSTEM_PROMPT,
+};
 use crate::error::{Error, Result};
 use crate::extensions::{self, Extensions};
 use crate::permissions::{self, Answer, Approval, Choices, Decision, PermissionMode, Run};
@@ -772,6 +774,8 @@ impl EventMapper {
                         is_error: item["status"] == "failed"
                             || item["status"] == "declined"
                             || item["exitCode"].as_i64().is_some_and(|n| n != 0),
+                        output: output(item),
+                        images: tool_images(&item["result"]),
                     });
                 }
                 events
@@ -809,6 +813,26 @@ fn tool(item: &Value) -> Option<(String, Value)> {
             item["arguments"].clone(),
         )),
         "webSearch" => Some(("WebSearch".into(), json!({"query":item["query"]}))),
+        _ => None,
+    }
+}
+
+/// What a finished tool item gave back: a command's output, the diffs of a file change, or an
+/// MCP tool's result (or why it failed).
+fn output(item: &Value) -> Option<String> {
+    match item["type"].as_str()? {
+        "commandExecution" => tool_output(&item["aggregatedOutput"]),
+        "fileChange" => tool_output(&Value::Array(
+            item["changes"]
+                .as_array()?
+                .iter()
+                .map(|change| change["diff"].clone())
+                .filter(Value::is_string)
+                .collect(),
+        )),
+        "mcpToolCall" => {
+            tool_output(&item["result"]).or_else(|| tool_output(&item["error"]["message"]))
+        }
         _ => None,
     }
 }

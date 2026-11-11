@@ -23,6 +23,67 @@ use crate::rewind;
 use crate::sessions::Sessions;
 use crate::{claude, codex, copilot};
 
+/// The most of a tool's output the chat keeps, in characters: it is shown on demand and saved
+/// with the chat.
+pub(crate) const TOOL_OUTPUT_LIMIT: usize = 20_000;
+
+/// A tool's output as the chat shows it: `value` is its text, its content blocks, or an object
+/// holding either as `content`. Blocks that are not text (a screenshot the agent read) are only
+/// named, never carried along. Long output is cut to [`TOOL_OUTPUT_LIMIT`].
+pub(crate) fn tool_output(value: &Value) -> Option<String> {
+    let text = match value {
+        Value::String(text) => text.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|block| match (block.as_str(), block["text"].as_str()) {
+                (Some(text), _) | (_, Some(text)) => Some(text.to_string()),
+                _ => block["type"].as_str().map(|kind| format!("[{kind}]")),
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Value::Object(_) => return tool_output(&value["content"]),
+        _ => return None,
+    };
+    let text = text.trim_end();
+    if text.trim().is_empty() {
+        return None;
+    }
+    let total = text.chars().count();
+    if total <= TOOL_OUTPUT_LIMIT {
+        return Some(text.to_string());
+    }
+    let kept: String = text.chars().take(TOOL_OUTPUT_LIMIT).collect();
+    Some(format!(
+        "{kept}\n… ({} more characters)",
+        total - TOOL_OUTPUT_LIMIT
+    ))
+}
+
+/// The images in a tool's output, as `data:` URLs: `value` is its content blocks, or an object
+/// holding them as `content` or `contents`. A block carries its image the way Claude does
+/// (`source.media_type` and `source.data`) or the way MCP does (`mimeType` and `data`).
+pub(crate) fn tool_images(value: &Value) -> Vec<String> {
+    match value {
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter(|block| block["type"] == "image")
+            .filter_map(|block| {
+                let source = &block["source"];
+                let kind = source["media_type"]
+                    .as_str()
+                    .or(block["mimeType"].as_str())?;
+                let data = source["data"].as_str().or(block["data"].as_str())?;
+                Some(format!("data:{kind};base64,{data}"))
+            })
+            .collect(),
+        Value::Object(_) => ["content", "contents"]
+            .iter()
+            .flat_map(|key| tool_images(&value[*key]))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// The agent's instructions, with the design reference it consults appended.
 pub(crate) const SYSTEM_PROMPT: &str = concat!(
     include_str!("../prompts/system.md"),
@@ -168,6 +229,12 @@ pub enum AgentEvent {
     ToolResult {
         id: String,
         is_error: bool,
+        /// What the tool gave back, as text (see [`tool_output`]); `None` when it gave none.
+        output: Option<String>,
+        /// The images the tool gave back (a slide it rendered, an image file it opened). A
+        /// provider reports them as `data:` URLs (see [`tool_images`]); the frontend gets the
+        /// absolute paths of the files they were saved as in the chat's session.
+        images: Vec<String>,
     },
     Result {
         is_error: bool,
@@ -527,8 +594,28 @@ impl Turn {
         }
     }
 
+    /// Reports `event`; the images of a tool's output are saved in the session first, and
+    /// reported as those files (one that cannot be saved is left out).
     fn emit(&self, event: &AgentEvent) {
-        (self.emit)(event);
+        match event {
+            AgentEvent::ToolResult {
+                id,
+                is_error,
+                output,
+                images,
+            } if !images.is_empty() => (self.emit)(&AgentEvent::ToolResult {
+                id: id.clone(),
+                is_error: *is_error,
+                output: output.clone(),
+                images: images
+                    .iter()
+                    .filter_map(|image| {
+                        crate::sessions::save_tool_image(&self.session_dir, image).ok()
+                    })
+                    .collect(),
+            }),
+            _ => (self.emit)(event),
+        }
     }
 
     /// Returns whether the turn was interrupted.
@@ -713,6 +800,88 @@ mod tests {
         );
     }
     #[test]
+    fn reads_tool_output_from_text_blocks_and_objects() {
+        assert_eq!(tool_output(&json!("ok\n")), Some("ok".into()));
+        assert_eq!(
+            tool_output(&json!([{"type":"text","text":"a"},{"type":"text","text":"b"}])),
+            Some("a\nb".into())
+        );
+        assert_eq!(
+            tool_output(&json!({"content":"done","detailedContent":"more"})),
+            Some("done".into())
+        );
+        assert_eq!(
+            tool_output(&json!({"content":[{"type":"text","text":"x"}]})),
+            Some("x".into())
+        );
+        for nothing in [
+            json!(null),
+            json!(""),
+            json!("  \n"),
+            json!([]),
+            json!({}),
+            json!(3),
+        ] {
+            assert_eq!(tool_output(&nothing), None, "{nothing}");
+        }
+    }
+
+    /// A screenshot the agent read (the one Tidy layout sends) is named, not copied into the chat.
+    #[test]
+    fn names_images_in_tool_output_without_their_data() {
+        let image = json!([
+            {"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo"}}
+        ]);
+        assert_eq!(tool_output(&image), Some("[image]".into()));
+        let mixed = json!([{"type":"text","text":"shot"}, image[0]]);
+        assert_eq!(tool_output(&mixed), Some("shot\n[image]".into()));
+    }
+
+    #[test]
+    fn finds_the_images_in_tool_output() {
+        let claude = json!([
+            {"type":"text","text":"Slide 1"},
+            {"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo"}},
+            {"type":"image","source":{"type":"url","url":"https://example.com/a.png"}}
+        ]);
+        assert_eq!(tool_images(&claude), ["data:image/png;base64,iVBORw0KGgo"]);
+        let mcp = json!({"content":[
+            {"type":"image","data":"/9j/4AAQ","mimeType":"image/jpeg"},
+            {"type":"text","text":"done"},
+            {"type":"image","data":"iVBORw0KGgo","mimeType":"image/png"}
+        ]});
+        assert_eq!(
+            tool_images(&mcp),
+            [
+                "data:image/jpeg;base64,/9j/4AAQ",
+                "data:image/png;base64,iVBORw0KGgo"
+            ]
+        );
+        let copilot = json!({"content":"Viewed","contents":[{"type":"image","data":"R0lGOD","mimeType":"image/gif"}]});
+        assert_eq!(tool_images(&copilot), ["data:image/gif;base64,R0lGOD"]);
+        for nothing in [
+            json!(null),
+            json!("text"),
+            json!([]),
+            json!({"content":"text"}),
+        ] {
+            assert!(tool_images(&nothing).is_empty(), "{nothing}");
+        }
+    }
+
+    #[test]
+    fn cuts_long_tool_output() {
+        let long = "é".repeat(TOOL_OUTPUT_LIMIT + 7);
+        let output = tool_output(&json!(long)).unwrap();
+        assert_eq!(
+            output,
+            format!("{}\n… (7 more characters)", "é".repeat(TOOL_OUTPUT_LIMIT))
+        );
+        let exact = "x".repeat(TOOL_OUTPUT_LIMIT);
+        assert_eq!(tool_output(&json!(exact)), Some(exact));
+    }
+
+    #[test]
     fn events_serialize_to_the_frontend_shape() {
         let cases = [
             (
@@ -737,8 +906,19 @@ mod tests {
                 AgentEvent::ToolResult {
                     id: "t".into(),
                     is_error: true,
+                    output: None,
+                    images: vec![],
                 },
-                json!({"type":"toolResult","id":"t","isError":true}),
+                json!({"type":"toolResult","id":"t","isError":true,"output":null,"images":[]}),
+            ),
+            (
+                AgentEvent::ToolResult {
+                    id: "t".into(),
+                    is_error: false,
+                    output: Some("ok".into()),
+                    images: vec!["/s/tool-images/1.png".into()],
+                },
+                json!({"type":"toolResult","id":"t","isError":false,"output":"ok","images":["/s/tool-images/1.png"]}),
             ),
             (
                 AgentEvent::Result {
@@ -1262,6 +1442,36 @@ echo '{{"type":"stream_event","event":{{"type":"content_block_delta","delta":{{"
             assert_eq!(delivered.await, Ok(false));
         }
 
+        /// A slide the agent rendered, or an image file it opened: the chat gets the image as a
+        /// file in the session, never its data, and an image that cannot be kept is left out.
+        #[tokio::test]
+        async fn saves_the_images_of_tool_output_in_the_session() {
+            let fx = Fixture::new(&format!(
+                r#"{INIT}
+echo '{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"t1","name":"Read","input":{{"file_path":"/d/shot.png"}}}}]}}}}'
+echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"t1","content":[{{"type":"text","text":"Slide intro"}},{{"type":"image","source":{{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}}},{{"type":"image","source":{{"type":"base64","media_type":"image/png","data":"not base64!"}}}}]}}]}}}}'
+{OK}"#
+            ));
+            fx.run("Look at it", None).await;
+            let events = fx.events();
+            let Some(AgentEvent::ToolResult { output, images, .. }) = events
+                .iter()
+                .find(|e| matches!(e, AgentEvent::ToolResult { .. }))
+            else {
+                panic!("no tool result: {events:?}");
+            };
+            assert_eq!(output.as_deref(), Some("Slide intro\n[image]\n[image]"));
+            let [image] = &images[..] else {
+                panic!("one image kept: {images:?}");
+            };
+            let image = Path::new(image);
+            assert!(
+                image.starts_with(fx.session_dir().join("tool-images")),
+                "{image:?}"
+            );
+            assert_eq!(fs::read(image).unwrap(), b"\x89PNG\r\n\x1a\n");
+        }
+
         #[tokio::test]
         async fn streams_a_turn_and_stores_the_session() {
             let fx = Fixture::new(&format!(
@@ -1293,7 +1503,9 @@ echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id
                     },
                     AgentEvent::ToolResult {
                         id: "t1".into(),
-                        is_error: false
+                        is_error: false,
+                        output: None,
+                        images: vec![]
                     },
                     AgentEvent::Result {
                         is_error: false,

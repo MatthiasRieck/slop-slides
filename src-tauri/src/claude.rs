@@ -65,7 +65,12 @@ pub async fn run_turn(
     let mcp_config = args.session_dir.join(MCP_CONFIG);
     write_if_changed(
         &mcp_config,
-        &mcp_config_json(args.lint_server, &args.extensions.all_mcp_servers()),
+        &mcp_config_json(
+            args.lint_server,
+            args.dir,
+            args.session_dir,
+            &args.extensions.all_mcp_servers(),
+        ),
     )?;
     let mut plugins = args.extensions.plugins.clone();
     plugins.extend(
@@ -246,14 +251,19 @@ pub async fn run_turn(
     Ok(Outcome::Done)
 }
 
-fn mcp_config_json(exe: &Path, servers: &serde_json::Map<String, Value>) -> String {
+fn mcp_config_json(
+    exe: &Path,
+    dir: &Path,
+    session: &Path,
+    servers: &serde_json::Map<String, Value>,
+) -> String {
     let mut servers = servers.clone();
     servers.insert(
         mcp::SERVER.into(),
         json!({
             "type": "stdio",
             "command": exe,
-            "args": [mcp::FLAG],
+            "args": mcp::launch_args(dir, session),
         }),
     );
     json!({ "mcpServers": servers }).to_string()

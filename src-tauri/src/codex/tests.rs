@@ -28,14 +28,18 @@ fn args(dir: &Path) -> TurnArgs<'_> {
 
 #[test]
 fn configures_the_builtin_mcp_server_as_preapproved() {
-    let args = mcp_config_args(Path::new("/app/slopslide"), Path::new("/decks/talk"));
+    let args = mcp_config_args(
+        Path::new("/app/slopslide"),
+        Path::new("/decks/talk"),
+        Path::new("/home/sessions/s1"),
+    );
     assert_eq!(
         args,
         [
             "-c",
             "mcp_servers.slopslide.command=\"/app/slopslide\"",
             "-c",
-            "mcp_servers.slopslide.args=[\"--lint-mcp\",\"/decks/talk\"]",
+            "mcp_servers.slopslide.args=[\"--lint-mcp\",\"/decks/talk\",\"/home/sessions/s1\"]",
             "-c",
             "mcp_servers.slopslide.default_tools_approval_mode=\"approve\"",
             "-c",

@@ -152,10 +152,10 @@ impl Server {
 const MCP_TOOL_TIMEOUT_SECS: u32 = 3600;
 
 /// `-c` overrides that add the app's MCP server, its tools approved up front.
-fn mcp_config_args(exe: &Path, dir: &Path) -> Vec<String> {
+fn mcp_config_args(exe: &Path, dir: &Path, session: &Path) -> Vec<String> {
     let server = mcp::SERVER;
     let command = serde_json::to_string(&exe.to_string_lossy()).expect("serializable path");
-    let args = json!([mcp::FLAG, dir.to_string_lossy()]);
+    let args = json!(mcp::launch_args(dir, session));
     [
         format!("mcp_servers.{server}.command={command}"),
         format!("mcp_servers.{server}.args={args}"),
@@ -350,7 +350,7 @@ pub(crate) async fn run_turn(
 ) -> Result<Outcome> {
     let mode = *args.mode.borrow();
     let mut warnings = Vec::new();
-    let mut config = mcp_config_args(args.lint_server, args.dir);
+    let mut config = mcp_config_args(args.lint_server, args.dir, args.session_dir);
     config.extend(extensions::codex_config_args(
         &args.extensions.all_mcp_servers(),
         &mut warnings,

@@ -4,7 +4,7 @@
 //! makes an audio file the narration of a slide and times its words, and
 //! generate_narration_audio has the deck's voice say slides' narration scripts. export_deck
 //! exports a deck as the Export menu does (see export.rs).
-//! Started as `slopslide --lint-mcp [workspace root]`. This file speaks the protocol; the
+//! Started as `slopslide --lint-mcp [workspace root] [session folder]`. This file speaks the protocol; the
 //! tools are in `mcp/tools.rs` and `mcp/narration_tools.rs`.
 
 use std::io::{BufRead, Write};
@@ -59,13 +59,32 @@ pub fn display_name(name: &str) -> &str {
 
 const DEFAULT_PROTOCOL: &str = "2024-11-05";
 
-/// Serves requests from stdin until it closes. Locked slides are checked against the deck's
-/// current session, where the app records them for the running turn.
-pub fn serve(dir: &Path) {
+/// What starts this server for a turn in workspace `dir` whose chat is the session `session`,
+/// after the executable.
+pub fn launch_args(dir: &Path, session: &Path) -> [String; 3] {
+    [
+        FLAG.into(),
+        dir.to_string_lossy().into_owned(),
+        session.to_string_lossy().into_owned(),
+    ]
+}
+
+/// The session the tools work in: the turn's own (`given`, see [`launch_args`]), where the app
+/// serves render and export requests and records locked slides while the turn runs. A deck's
+/// chat is a session of the deck, not of the workspace, so it cannot be found from `dir`;
+/// started without one, the workspace's current session is the best guess.
+fn turn_session(given: Option<&Path>, sessions: Option<&Sessions>, dir: &Path) -> Option<PathBuf> {
+    given
+        .map(Path::to_path_buf)
+        .or_else(|| sessions?.current(dir))
+}
+
+/// Serves requests from stdin until it closes, for the turn whose session is `given`.
+pub fn serve(dir: &Path, given: Option<&Path>) {
     let sessions = crate::files::app_home()
         .ok()
         .map(|home| Sessions::new(&home));
-    let session = |_: &Path| sessions.as_ref().and_then(|s| s.current(dir));
+    let session = |_: &Path| turn_session(given, sessions.as_ref(), dir);
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     for line in stdin.lock().lines() {
@@ -89,7 +108,7 @@ pub fn serve(dir: &Path) {
     narration_tools::shutdown();
 }
 
-/// Answers one JSON-RPC message; notifications get no response. `session` finds the workspace's current session.
+/// Answers one JSON-RPC message; notifications get no response. `session` finds the turn's session.
 pub fn handle(
     request: &Value,
     dir: &Path,

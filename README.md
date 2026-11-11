@@ -335,7 +335,7 @@ src-tauri/src/
   find.rs               find and replace in the text on a deck's slides (never markup)
   lint.rs               HTML lint for deck.html: well-formed markup plus the deck format
                         rules; shown as the status button in the top bar
-  mcp.rs                stdio MCP server (`slopslide --lint-mcp [deck]`) exposing the
+  mcp.rs                stdio MCP server (`slopslide --lint-mcp [workspace] [session]`) exposing the
                         linter to the agent as its `lint_deck` tool, and `render_slide`
   render.rs             renders slides in a hidden window for `render_slide`, answering
                         the MCP server through the session folder

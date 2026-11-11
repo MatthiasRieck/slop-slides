@@ -19,7 +19,9 @@ const CASES = [
   ["listDir", () => api.listDir("talks"), "list_dir", { path: "talks" }],
   ["openFile", () => api.openFile("talks/q3.html"), "open_file", { path: "talks/q3.html" }],
   ["createDeck", () => api.createDeck("Talk"), "create_deck", { title: "Talk", template: null }],
-  ["openDeck", () => api.openDeck("talk"), "open_deck", { id: "talk" }],
+  ["openDeck", () => api.openDeck("talk"), "open_deck", { id: "talk", keepChat: false, quiet: false }],
+  ["closeDeck", () => api.closeDeck(), "close_deck", undefined],
+  ["moveChatToDeck", () => api.moveChatToDeck(), "move_chat_to_deck", undefined],
   ["loadDeck", () => api.loadDeck("talk"), "load_deck", { id: "talk" }],
   ["renameDeck", () => api.renameDeck("talk", "New"), "rename_deck", { id: "talk", title: "New" }],
   [
@@ -261,7 +263,7 @@ const CASES = [
   [
     "sendMessage",
     () =>
-      api.sendMessage("talk", "Hi", {
+      api.sendMessage("talk", "talk/deck.html", "Hi", {
         provider: "claude",
         model: "claude-opus-5-5",
         effort: "high",
@@ -271,6 +273,7 @@ const CASES = [
     {
       args: {
         workspace: "talk",
+        chat: "talk/deck.html",
         prompt: "Hi",
         provider: "claude",
         model: "claude-opus-5-5",
@@ -297,14 +300,14 @@ const CASES = [
     "respondApproval",
     () => api.respondApproval("talk", "request-1", "decline"),
     "respond_approval",
-    { workspace: "talk", id: "request-1", decision: "decline" },
+    { chat: "talk", id: "request-1", decision: "decline" },
   ],
   ["interruptAgent", () => api.interruptAgent("talk"), "interrupt_agent", { id: "talk" }],
   [
     "steerAgent",
     () => api.steerAgent("talk", "Bluer", "m1"),
     "steer_agent",
-    { workspace: "talk", prompt: "Bluer", message: "m1" },
+    { chat: "talk", prompt: "Bluer", message: "m1" },
   ],
   ["agentRunning", () => api.agentRunning("talk"), "agent_running", { id: "talk" }],
   ["listProviders", () => api.listProviders(), "list_providers", undefined],
@@ -391,6 +394,7 @@ describe("api", () => {
     invoke.mockResolvedValue(undefined);
     await api.sendMessage(
       "talk",
+      "talk",
       "/compact",
       { provider: "copilot", model: "gpt-x", effort: "", contextWindow: null },
       true,
@@ -398,6 +402,7 @@ describe("api", () => {
     expect(invoke).toHaveBeenLastCalledWith("send_message", {
       args: {
         workspace: "talk",
+        chat: "talk",
         prompt: "/compact",
         provider: "copilot",
         model: "gpt-x",
@@ -412,6 +417,7 @@ describe("api", () => {
     invoke.mockResolvedValue(undefined);
     await api.sendMessage(
       "talk",
+      "talk/deck.html",
       "[context]…",
       { provider: "claude", model: "m", effort: "", contextWindow: null },
       false,
@@ -427,6 +433,11 @@ describe("api", () => {
 
   it("covers every api function", () => {
     expect([...new Set(CASES.map(([name]) => name))].sort()).toEqual(Object.keys(api).sort());
+  });
+
+  it("openDeck can keep the folder's chat on show, and pass over a deck open elsewhere quietly", async () => {
+    await api.openDeck("talk", { keepChat: true, quiet: true });
+    expect(invoke).toHaveBeenLastCalledWith("open_deck", { id: "talk", keepChat: true, quiet: true });
   });
 
   it("passes backend rejections through", async () => {

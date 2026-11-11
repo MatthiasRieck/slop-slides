@@ -1,9 +1,9 @@
 //! Commands for a deck's undo history.
 
 use serde::Serialize;
-use tauri::{State, Window};
+use tauri::State;
 
-use super::{changing, workspace_root};
+use super::changing;
 use crate::agent::AgentManager;
 use crate::deck::{self, Deck};
 use crate::error::{self, Result};
@@ -13,13 +13,9 @@ use crate::history::{self, Change, Source};
 /// What undo and redo would do in deck `id`. A change made outside the app since is noticed
 /// first, unless the agent is working: its unfinished edits would become an entry.
 #[tauri::command]
-pub fn deck_history(
-    window: Window,
-    agent: State<AgentManager>,
-    id: String,
-) -> Result<history::Status> {
-    let idle = !agent.is_running(&workspace_root(&window)?.to_string_lossy());
-    history::status(&files::app_home()?, &deck::deck_file(&id)?, idle)
+pub fn deck_history(agent: State<AgentManager>, id: String) -> Result<history::Status> {
+    let file = deck::deck_file(&id)?;
+    history::status(&files::app_home()?, &file, !agent.works_on(&file))
 }
 
 #[derive(Serialize)]
@@ -31,13 +27,8 @@ pub struct HistoryStep {
 }
 
 /// Undoes (`back`) or redoes the newest change of deck `id`, whatever made it.
-fn step_history(
-    window: &Window,
-    agent: &AgentManager,
-    id: &str,
-    back: bool,
-) -> Result<HistoryStep> {
-    if agent.is_running(&workspace_root(window)?.to_string_lossy()) {
+fn step_history(agent: &AgentManager, id: &str, back: bool) -> Result<HistoryStep> {
+    if agent.works_on(&deck::deck_file(id)?) {
         return Err(error::Error::msg(
             "The agent is still working on the deck; stop it or wait for it to finish first.",
         ));
@@ -55,13 +46,13 @@ fn step_history(
 }
 
 #[tauri::command]
-pub fn undo_deck(window: Window, agent: State<AgentManager>, id: String) -> Result<HistoryStep> {
-    step_history(&window, &agent, &id, true)
+pub fn undo_deck(agent: State<AgentManager>, id: String) -> Result<HistoryStep> {
+    step_history(&agent, &id, true)
 }
 
 #[tauri::command]
-pub fn redo_deck(window: Window, agent: State<AgentManager>, id: String) -> Result<HistoryStep> {
-    step_history(&window, &agent, &id, false)
+pub fn redo_deck(agent: State<AgentManager>, id: String) -> Result<HistoryStep> {
+    step_history(&agent, &id, false)
 }
 
 /// Puts `slides` back as they were at version `since` of deck `id`'s history, as one change.

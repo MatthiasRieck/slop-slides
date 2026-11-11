@@ -6,8 +6,8 @@ import { api, errorMessage } from "../../lib/api";
 import { useApp } from "../../store";
 
 /**
- * The chat's header: past conversations of the workspace, to search and switch to, and a new
- * conversation. `switching` is on while it switches, which holds the chat still meanwhile.
+ * The chat's header: past conversations of the workspace, to search and go on with, and a new
+ * conversation. A deck's conversation opens its deck; any other moves to the chat on show. `switching` is on while it switches, which holds the chat still meanwhile.
  */
 export function ThreadNavigation({
   switching,
@@ -17,6 +17,7 @@ export function ThreadNavigation({
   setSwitching: (value: boolean) => void;
 }) {
   const workspace = useApp((s) => s.workspace);
+  const chatKey = useApp((s) => s.chatKey);
   const running = useApp((s) => s.running);
   const { open, setOpen, ref } = useDropdown({ escape: true, capture: true });
   const [threads, setThreads] = useState<Awaited<ReturnType<typeof api.listChatThreads>>>([]);
@@ -24,12 +25,12 @@ export function ThreadNavigation({
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   useEffect(() => {
-    if (!open || !workspace) return;
+    if (!open || !chatKey) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
     void api
-      .listChatThreads(workspace.path)
+      .listChatThreads(chatKey)
       .then((items) => {
         if (!cancelled) setThreads(items);
       })
@@ -42,14 +43,14 @@ export function ThreadNavigation({
     return () => {
       cancelled = true;
     };
-  }, [open, workspace]);
+  }, [open, chatKey]);
   const matches = (thread: (typeof threads)[number]) =>
     `${thread.title} ${thread.association ?? ""}`.toLowerCase().includes(query.toLowerCase());
-  const navigate = async (thread?: string) => {
+  const navigate = async (thread?: (typeof threads)[number]) => {
     setSwitching(true);
     setError(null);
     try {
-      if (thread) await useApp.getState().selectChatThread(thread);
+      if (thread) await useApp.getState().selectChatThread(thread.id, thread.deck);
       else await useApp.getState().resetChat();
       setOpen(false);
     } catch (e) {
@@ -110,7 +111,7 @@ export function ThreadNavigation({
                   key={thread.id}
                   type="button"
                   disabled={running || switching || thread.current}
-                  onClick={() => void navigate(thread.id)}
+                  onClick={() => void navigate(thread)}
                   className="flex w-full items-center gap-2 rounded-lg p-2 text-left hover:bg-accent disabled:opacity-60"
                   aria-current={thread.current ? "page" : undefined}
                 >

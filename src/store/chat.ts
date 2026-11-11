@@ -26,8 +26,21 @@ import { buildPrompt, withRevertNotes } from "./prompts";
 import { commentsInScope, flushReview, heldComment } from "./review";
 import type { AppState, AppStore, Slice } from "./types";
 
-/** The workspace's conversation with the agent: its messages, the turn running, and what waits for it. */
+/**
+ * The conversation with the agent on show: its messages, the turn running, and what waits for it.
+ * Each deck has its own; a folder has one too, for when no deck is open.
+ */
 export interface ChatSlice {
+  /**
+   * What the chat is about, which the backend knows it by: the open deck's id, or the workspace
+   * folder's path for the folder's own chat.
+   */
+  chatKey: string | null;
+  /**
+   * The folder's own chat is on show beside the open deck, which its running turn made and
+   * showed: when the turn ends, the chat moves to the deck (see `followDeck`).
+   */
+  chatFollowsDeck: boolean;
   messages: ChatMessage[];
   /**
    * Messages sent while the agent works, in order. The first goes out when a turn finishes
@@ -53,7 +66,8 @@ export interface ChatSlice {
   compact: () => Promise<void>;
   interrupt: () => void;
   resetChat: () => Promise<void>;
-  selectChatThread: (thread: string) => Promise<void>;
+  /** Goes on with a past conversation: in its deck `deck`, which opens, else in the chat on show, where it moves. */
+  selectChatThread: (thread: string, deck?: string | null) => Promise<void>;
 }
 
 export const COMPACT_COMMAND = "/compact";
@@ -62,6 +76,8 @@ export const COMPACT_COMMAND = "/compact";
 const pendingSteers = new Map<string, UserMessage>();
 
 export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
+  chatKey: null,
+  chatFollowsDeck: false,
   messages: [],
   queue: [],
   sessionProvider: null,
@@ -69,8 +85,8 @@ export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
   chatRevision: 0,
 
   send: async (text, options) => {
-    const { workspace, running, selection } = get();
-    if (!workspace) return;
+    const { chatKey: chat, running, selection } = get();
+    if (!chat) return;
     if (running) return enqueue(app, text, options);
     // Typed as a message, the command still compacts rather than reaching the agent as text.
     if (text.trim() === COMPACT_COMMAND) return get().compact();
@@ -78,35 +94,35 @@ export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
     const assistant = newReply(selection.provider);
     set((s) => ({ messages: [...s.messages, draft.user, assistant], running: true }));
     const ready = await readyMessage(app, draft);
-    if (get().workspace?.path !== workspace.path) return;
+    if (get().chatKey !== chat) return;
     set((s) => ({ messages: s.messages.map((m) => (m.id === ready.user.id ? ready.user : m)) }));
-    await startTurn(app, workspace.path, assistant.id, ready.prompt, false, ready.user);
+    await startTurn(app, chat, assistant.id, ready.prompt, false, ready.user);
   },
 
   steer: async (text, options) => {
-    const { workspace, running } = get();
-    if (!workspace) return;
+    const { chatKey: chat, running } = get();
+    if (!chat) return;
     if (!running) return get().send(text, options);
     // A compaction is a turn of its own.
     if (text.trim() === COMPACT_COMMAND) return enqueue(app, text, options);
     const ready = await readyMessage(app, draftMessage(get(), text, options));
-    if (get().workspace?.path !== workspace.path) return;
+    if (get().chatKey !== chat) return;
     pendingSteers.set(ready.user.id, ready.user);
     // The chat shows the message when the agent reports taking it (the `steered` event).
-    const delivered = await api.steerAgent(workspace.path, ready.prompt, ready.user.id).catch(() => false);
+    const delivered = await api.steerAgent(chat, ready.prompt, ready.user.id).catch(() => false);
     if (delivered) return;
     pendingSteers.delete(ready.user.id);
-    if (get().workspace?.path !== workspace.path) return;
+    if (get().chatKey !== chat) return;
     // The turn ended first: the message starts the next one.
     if (get().running) set((s) => ({ queue: [{ id: ready.user.id, text, options, ready }, ...s.queue] }));
-    else await sendReady(app, workspace.path, ready);
+    else await sendReady(app, chat, ready);
   },
 
   steerQueued: async (id) => {
     const item = get().takeQueued(id);
     if (!item) return;
-    const { workspace } = get();
-    if (item.ready && workspace && !get().running) return sendReady(app, workspace.path, item.ready);
+    const { chatKey: chat } = get();
+    if (item.ready && chat && !get().running) return sendReady(app, chat, item.ready);
     if (item.ready) {
       // Made ready already: it can only wait for the turn to end.
       set((s) => ({ queue: [item, ...s.queue] }));
@@ -122,8 +138,8 @@ export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
   },
 
   compact: async () => {
-    const { workspace, running, selection } = get();
-    if (!workspace || running) return;
+    const { chatKey: chat, running, selection } = get();
+    if (!chat || running) return;
     const user: UserMessage = {
       id: newId(),
       role: "user",
@@ -135,32 +151,35 @@ export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
     };
     const assistant = newReply(selection.provider);
     set((s) => ({ messages: [...s.messages, user, assistant], running: true }));
-    await startTurn(app, workspace.path, assistant.id, COMPACT_COMMAND, true);
+    await startTurn(app, chat, assistant.id, COMPACT_COMMAND, true);
   },
 
   interrupt: () => {
-    const { workspace } = get();
-    if (workspace) {
+    const { chatKey } = get();
+    if (chatKey) {
       updateLastAssistant(app, (m) => ({ ...m, parts: expireApprovals(m.parts) }));
-      void api.interruptAgent(workspace.path);
+      void api.interruptAgent(chatKey);
     }
   },
 
-  selectChatThread: async (thread) => {
-    const { workspace, running, messages } = get();
-    if (!workspace || running) return;
-    await api.saveChat(workspace.path, messages);
-    const { chat, provider } = await api.selectChatThread(workspace.path, thread);
-    if (get().workspace?.path !== workspace.path) return;
-    restoreWorkspaceChat(app, workspace.path, chat, false, provider);
+  selectChatThread: async (thread, deck = null) => {
+    if (get().running) return;
+    // A deck's conversation is gone on with in its deck.
+    if (deck && deck !== get().chatKey) await get().openDeck(deck);
+    const { chatKey: key, messages } = get();
+    if (!key || (deck && deck !== key)) return;
+    if (messages.length > 0) await api.saveChat(key, messages);
+    const { chat, provider } = await api.selectChatThread(key, thread);
+    if (get().chatKey !== key) return;
+    restoreChat(app, key, chat, false, provider);
     set((s) => ({ chatRevision: s.chatRevision + 1, composerFill: null, rewindAsk: null, revertNotes: [] }));
   },
 
   resetChat: async () => {
-    const { workspace, running } = get();
-    if (!workspace || running) return;
-    await api.resetChat(workspace.path);
-    if (get().workspace?.path !== workspace.path) return;
+    const { chatKey: key, running } = get();
+    if (!key || running) return;
+    await api.resetChat(key);
+    if (get().chatKey !== key) return;
     set((s) => ({
       messages: [],
       queue: [],
@@ -174,18 +193,77 @@ export const createChatSlice: Slice<ChatSlice> = (set, get, app) => ({
   },
 });
 
-/** Loads the chat of the workspace at `path`, and whether its agent is still at work. */
-export async function loadWorkspaceChat(app: AppStore, path: string) {
+/**
+ * Shows the chat about `key` (a deck's id, or a folder's path): loads it, and whether its agent
+ * is still at work.
+ */
+export async function loadChat(app: AppStore, key: string) {
+  if (app.getState().chatKey !== key) {
+    // The chat before is gone from view at once, and nothing of it reaches this one.
+    app.setState((s) => ({
+      chatKey: key,
+      chatFollowsDeck: false,
+      messages: [],
+      queue: [],
+      running: false,
+      sessionProvider: null,
+      rewindAsk: null,
+      revertNotes: [],
+      chatRevision: s.chatRevision + 1,
+    }));
+  }
   const [chat, running, provider] = await Promise.all([
-    api.loadChat(path),
-    api.agentRunning(path),
-    api.sessionProvider(path),
+    api.loadChat(key),
+    api.agentRunning(key),
+    api.sessionProvider(key),
   ]);
-  restoreWorkspaceChat(app, path, chat, running, provider);
+  restoreChat(app, key, chat, running, provider);
 }
 
-function restoreWorkspaceChat(app: AppStore, path: string, chat: unknown, running: boolean, provider: Provider | null) {
-  if (app.getState().workspace?.path !== path) return;
+/**
+ * Before the chat on show gives way to another: stops its turn and saves it. The folder's chat
+ * goes along with the deck it made, if it can.
+ */
+export async function leaveChat(app: AppStore) {
+  const { chatKey, running, messages } = app.getState();
+  if (!chatKey) return;
+  try {
+    if (running) await api.interruptAgent(chatKey);
+    // An empty chat needs no session.
+    if (messages.length > 0) await api.saveChat(chatKey, messages.map(settleInterrupted));
+    if (madeTheDeck(app.getState())) await api.moveChatToDeck();
+  } catch {
+    // Its deck is gone (renamed, deleted), or its turn is still ending: leaving goes on.
+  }
+}
+
+/** The folder's own chat is on show beside the deck its turn made, to move there. */
+function madeTheDeck(state: AppState): boolean {
+  return state.chatFollowsDeck && !!state.deck;
+}
+
+/**
+ * Once the turn that made the open deck is over, the folder's chat moves to the deck: it is the
+ * deck's chat from here on.
+ */
+async function followDeck(app: AppStore) {
+  const state = app.getState();
+  const { deck, chatKey: folder, messages } = state;
+  if (!madeTheDeck(state) || !deck || !folder || state.running) return;
+  try {
+    await api.saveChat(folder, messages);
+    await api.moveChatToDeck();
+  } catch (error) {
+    app.setState({ error: errorMessage(error) });
+    return;
+  }
+  if (app.getState().chatKey === folder && app.getState().deck?.id === deck.id) {
+    app.setState({ chatKey: deck.id, chatFollowsDeck: false });
+  }
+}
+
+function restoreChat(app: AppStore, key: string, chat: unknown, running: boolean, provider: Provider | null) {
+  if (app.getState().chatKey !== key) return;
   const messages = Array.isArray(chat) ? (chat as ChatMessage[]) : [];
   app.setState({
     messages: running ? messages : messages.map(settleInterrupted),
@@ -198,20 +276,23 @@ function restoreWorkspaceChat(app: AppStore, path: string, chat: unknown, runnin
 }
 
 /**
- * Hands `prompt` to the selected agent; a failure to start lands on reply `replyId`. `message`
- * is the user's message the turn answers.
+ * Hands `prompt` to the selected agent, in chat `chat`; a failure to start lands on reply
+ * `replyId`. `message` is the user's message the turn answers.
  */
 async function startTurn(
   app: AppStore,
-  workspace: string,
+  chat: string,
   replyId: string,
   prompt: string,
   compact: boolean,
   message?: UserMessage,
 ) {
   try {
+    const { workspace } = app.getState();
+    if (!workspace) throw new Error("No folder is open.");
     await api.sendMessage(
-      workspace,
+      workspace.path,
+      chat,
       prompt,
       turnSettings(app.getState()),
       compact,
@@ -238,19 +319,19 @@ function enqueue(app: AppStore, text: string, options: SendOptions) {
 
 /** Sends the first queued message, once a turn finished cleanly. */
 function advanceQueue(app: AppStore) {
-  const { queue, workspace, running } = app.getState();
+  const { queue, chatKey, running } = app.getState();
   const next = queue[0];
-  if (!next || !workspace || running) return;
+  if (!next || !chatKey || running) return;
   app.setState({ queue: queue.slice(1) });
-  if (next.ready) void sendReady(app, workspace.path, next.ready);
+  if (next.ready) void sendReady(app, chatKey, next.ready);
   else void app.getState().send(next.text, next.options);
 }
 
 /** Starts a turn for a message made ready before (a steer that came too late). */
-async function sendReady(app: AppStore, workspace: string, ready: ReadyMessage) {
+async function sendReady(app: AppStore, chat: string, ready: ReadyMessage) {
   const assistant = newReply(app.getState().selection.provider);
   app.setState((s) => ({ messages: [...s.messages, ready.user, assistant], running: true }));
-  await startTurn(app, workspace, assistant.id, ready.prompt, false, ready.user);
+  await startTurn(app, chat, assistant.id, ready.prompt, false, ready.user);
 }
 
 /** A user's message as sent now, before what takes waiting (see `readyMessage`). */
@@ -337,11 +418,11 @@ function updateLastAssistant(app: AppStore, update: (m: AssistantMessage, state:
   if (last) updateAssistant(app, last.id, update);
 }
 
-/** Follows an event of the workspace's agent in the chat. */
+/** Follows an event of the chat's agent in the chat. */
 export function applyAgentEvent(app: AppStore, event: AgentEvent) {
   switch (event.type) {
     case "openFile":
-      void app.getState().openPath(event.path);
+      void app.getState().openPath(event.path, { byAgent: true });
       return;
     case "started":
       return;
@@ -368,7 +449,12 @@ export function applyAgentEvent(app: AppStore, event: AgentEvent) {
       persistChat(app);
       // The turn's changes are in the decks' histories once it finished.
       void refreshHistory(app);
-      if (!event.interrupted && !failed) advanceQueue(app);
+      const next = () => {
+        if (!event.interrupted && !failed) advanceQueue(app);
+      };
+      // The deck this turn made takes the chat first; what is queued is said there.
+      if (madeTheDeck(app.getState())) void followDeck(app).then(next);
+      else next();
       return;
     }
     default:

@@ -13,7 +13,7 @@ fn args(dir: &Path) -> TurnArgs<'_> {
         app_home: dir,
         session_dir: dir,
         lint_server: dir,
-        workspace: "deck-1",
+        chat: "deck-1",
         prompt: "Make slides",
         model: Some("test-model"),
         effort: Some("high"),

@@ -3,8 +3,9 @@
 //! opens it in the viewer its [`FileKind`] calls for: an HTML file that is a SlopSlide deck
 //! in the editor, any other HTML page as it is.
 //!
-//! Each window opens one workspace; together they bound what the `slop://` protocol serves
-//! ([`OpenWorkspace`]). The
+//! Each window opens one workspace, and one deck in it at a time; together the workspaces bound
+//! what the `slop://` protocol serves ([`OpenWorkspace`]). Windows may share a folder, each
+//! with another of its decks. The
 //! folders opened before are remembered in `~/.slopslides/recent-workspaces.json`.
 
 use std::collections::HashMap;
@@ -191,34 +192,151 @@ pub fn open_file(root: &Path, rel: &str) -> Result<OpenedFile> {
     })
 }
 
-/// The folder each window has open, by window label. `slop://` serves files from inside
-/// them only.
+/// What a window has open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Open {
+    root: PathBuf,
+    /// The deck open in the folder, if one is.
+    deck: Option<PathBuf>,
+    /// What the window's chat is about: the deck, or the folder for its own chat (also while
+    /// that chat is still at work on the deck it made, see [`OpenWorkspace::open_deck`]).
+    chat: PathBuf,
+}
+
+/// The folder each window has open, and the deck open in it, by window label. `slop://`
+/// serves files from inside the folders only.
+///
+/// Windows may share a folder, but never a deck or a chat: two windows on one chat would
+/// overwrite each other's messages. So a deck is open in one window, and so is a folder
+/// without a deck (whose chat is the folder's own).
 #[derive(Default)]
-pub struct OpenWorkspace(Mutex<HashMap<String, PathBuf>>);
+pub struct OpenWorkspace(Mutex<HashMap<String, Open>>);
+
+fn canonical(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
 
 impl OpenWorkspace {
-    /// Opens `root` in `window`, or closes the window's folder for None.
+    /// Opens `root` in `window` with no deck, or closes the window's folder for None.
     pub fn set(&self, window: &str, root: Option<PathBuf>) {
         let mut open = self.0.lock().unwrap();
         match root {
-            Some(root) => open.insert(window.to_string(), root.canonicalize().unwrap_or(root)),
+            Some(root) => {
+                let root = canonical(&root);
+                open.insert(
+                    window.to_string(),
+                    Open {
+                        chat: root.clone(),
+                        deck: None,
+                        root,
+                    },
+                )
+            }
             None => open.remove(window),
         };
     }
 
     pub fn get(&self, window: &str) -> Option<PathBuf> {
-        self.0.lock().unwrap().get(window).cloned()
+        self.0.lock().unwrap().get(window).map(|o| o.root.clone())
     }
 
-    /// The window other than `except` that has `root` open.
-    pub fn window_with(&self, root: &Path, except: &str) -> Option<String> {
-        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    /// The deck `window` has open.
+    pub fn deck(&self, window: &str) -> Option<PathBuf> {
+        self.0.lock().unwrap().get(window)?.deck.clone()
+    }
+
+    /// What the chat of `window` is about: its deck, or its folder.
+    pub fn chat(&self, window: &str) -> Option<PathBuf> {
+        self.0.lock().unwrap().get(window).map(|o| o.chat.clone())
+    }
+
+    /// The window other than `except` whose chat is about `subject`: for a folder, the one
+    /// that has it open without a deck.
+    pub fn window_with(&self, subject: &Path, except: &str) -> Option<String> {
+        let subject = canonical(subject);
         self.0
             .lock()
             .unwrap()
             .iter()
-            .find(|(window, open)| window.as_str() != except && **open == root)
+            .find(|(window, open)| window.as_str() != except && open.chat == subject)
             .map(|(window, _)| window.clone())
+    }
+
+    /// What the chats of the windows other than `except` are about.
+    pub fn chats_except(&self, except: &str) -> Vec<PathBuf> {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(window, _)| window.as_str() != except)
+            .map(|(_, open)| open.chat.clone())
+            .collect()
+    }
+
+    /// The window other than `except` that has the deck `file` open.
+    pub fn window_with_deck(&self, file: &Path, except: &str) -> Option<String> {
+        let file = canonical(file);
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(window, open)| window.as_str() != except && open.deck.as_ref() == Some(&file))
+            .map(|(window, _)| window.clone())
+    }
+
+    /// Opens the deck `file` in `window`, whose chat becomes the deck's; with `keep_chat`, the
+    /// folder's chat stays instead (it made the deck and is still at work on it). `Err` names
+    /// the window that has the deck open already.
+    pub fn open_deck(
+        &self,
+        window: &str,
+        file: &Path,
+        keep_chat: bool,
+    ) -> std::result::Result<(), String> {
+        let file = canonical(file);
+        let mut open = self.0.lock().unwrap();
+        let taken = open.iter().find(|(other, o)| {
+            other.as_str() != window && (o.deck.as_ref() == Some(&file) || o.chat == file)
+        });
+        if let Some((other, _)) = taken {
+            return Err(other.clone());
+        }
+        if let Some(mine) = open.get_mut(window) {
+            if !(keep_chat && mine.chat == mine.root) {
+                mine.chat = file.clone();
+            }
+            mine.deck = Some(file);
+        }
+        Ok(())
+    }
+
+    /// Closes the deck of `window`, whose chat becomes the folder's own. `Err` names the
+    /// window that has the folder open without a deck already; the deck stays open then.
+    pub fn close_deck(&self, window: &str) -> std::result::Result<(), String> {
+        let mut open = self.0.lock().unwrap();
+        let Some(root) = open.get(window).map(|o| o.root.clone()) else {
+            return Ok(());
+        };
+        let taken = open
+            .iter()
+            .find(|(other, o)| other.as_str() != window && o.chat == root);
+        if let Some((other, _)) = taken {
+            return Err(other.clone());
+        }
+        let mine = open.get_mut(window).unwrap();
+        mine.deck = None;
+        mine.chat = root;
+        Ok(())
+    }
+
+    /// The chat of `window` is about its deck from here on: the folder's chat, which made the
+    /// deck, moved there (see [`crate::sessions::Sessions::move_current`]).
+    pub fn chat_follows_deck(&self, window: &str) {
+        if let Some(mine) = self.0.lock().unwrap().get_mut(window) {
+            if let Some(deck) = &mine.deck {
+                mine.chat = deck.clone();
+            }
+        }
     }
 
     /// Whether `path` is an existing file inside a folder some window has open.
@@ -227,7 +345,7 @@ impl OpenWorkspace {
             .lock()
             .unwrap()
             .values()
-            .any(|root| inside(root, path))
+            .any(|open| inside(&open.root, path))
     }
 }
 
@@ -474,6 +592,64 @@ mod tests {
         assert!(!open.contains(&a));
         assert!(open.contains(&b));
         assert_eq!(open.window_with(&t.join("a"), "window-2"), None);
+    }
+
+    #[test]
+    fn windows_share_a_folder_but_not_a_deck_or_a_chat() {
+        let t = TempDir::canonical("ws-decks");
+        let a = t.write("talks/a.html", DECK);
+        let b = t.write("talks/b.html", DECK);
+        let root = t.join("talks");
+        let open = OpenWorkspace::default();
+        open.set("main", Some(root.clone()));
+        assert_eq!(open.chat("main"), Some(root.clone()), "the folder's own");
+        assert_eq!(open.open_deck("main", &a, false), Ok(()));
+        assert_eq!(open.chat("main"), Some(a.clone()));
+        assert_eq!(open.window_with(&root, ""), None, "its chat is the deck's");
+
+        // The same folder in another window, with another of its decks.
+        open.set("window-2", Some(root.clone()));
+        assert_eq!(open.window_with(&root, "main").as_deref(), Some("window-2"));
+        assert_eq!(open.open_deck("window-2", &a, false), Err("main".into()));
+        assert_eq!(open.chat("window-2"), Some(root.clone()), "as it was");
+        assert_eq!(open.open_deck("window-2", &b, false), Ok(()));
+        assert_eq!(
+            open.window_with_deck(&b, "main").as_deref(),
+            Some("window-2")
+        );
+        assert_eq!(open.window_with_deck(&b, "window-2"), None, "not itself");
+        // Opening its own deck again is fine.
+        assert_eq!(open.open_deck("window-2", &b, false), Ok(()));
+
+        // One window at a time has the folder open without a deck.
+        assert_eq!(open.close_deck("main"), Ok(()));
+        assert_eq!(open.chat("main"), Some(root.clone()));
+        assert_eq!(open.close_deck("window-2"), Err("main".into()));
+        assert_eq!(
+            open.chat("window-2"),
+            Some(b.clone()),
+            "the deck stays open"
+        );
+        assert_eq!(open.close_deck("window-3"), Ok(()), "nothing is open there");
+    }
+
+    #[test]
+    fn the_folders_chat_stays_with_the_deck_it_made_until_it_moves_there() {
+        let t = TempDir::canonical("ws-keep");
+        let deck = t.write("talks/new.html", DECK);
+        let root = t.join("talks");
+        let open = OpenWorkspace::default();
+        open.set("main", Some(root.clone()));
+        assert_eq!(open.open_deck("main", &deck, true), Ok(()));
+        assert_eq!(open.chat("main"), Some(root.clone()));
+        assert_eq!(open.window_with_deck(&deck, "").as_deref(), Some("main"));
+        open.chat_follows_deck("main");
+        assert_eq!(open.chat("main"), Some(deck.clone()));
+
+        // A deck's chat does not stay when the window goes on to another deck.
+        let other = t.write("talks/other.html", DECK);
+        assert_eq!(open.open_deck("main", &other, true), Ok(()));
+        assert_eq!(open.chat("main"), Some(other));
     }
 
     #[test]

@@ -1,7 +1,9 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   ChevronDown,
+  FolderClosed,
   FolderOpen,
+  FolderSearch,
   MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
@@ -14,17 +16,19 @@ import {
 } from "lucide-react";
 
 import { useDropdown } from "../hooks/useDropdown";
-import type { HistoryEntry, OpenedFile } from "../lib/api";
+import type { HistoryEntry, OpenedFile, WorkspaceInfo } from "../lib/api";
 import { basename, cn, isMac, revealLabel } from "../lib/utils";
 import { useApp } from "../store";
 import { ToolButton } from "./Button";
 import { DeckActions, MenuItem } from "./DeckActions";
+import { chooseWorkspace } from "./Home";
 import { ModeTabs } from "./ModeTabs";
 
 /**
  * The workspace's bar. On the left, the slide rail toggle (for a deck), the open file's path from
  * the workspace folder with the deck's title under it, which opens a menu to open the deck's
- * settings, close the file (back to the workspace) or reveal it in the file manager, then undo /
+ * settings, close the file (back to the workspace) or reveal it in the file manager, and to open
+ * another folder or close this one (back to the start screen), then undo /
  * redo; for a deck, its mode tabs in the middle with the chat button after a separator, then export
  * and present; then the sidebar toggle while the sidebar is closed (open, it sits in the sidebar). The tools of each mode live above the slide (Stage), and the lint status beside Tidy layout under it.
  */
@@ -46,11 +50,7 @@ export function TopBar() {
     >
       <div data-tauri-drag-region className="flex min-w-0 items-center gap-1 self-stretch">
         {hasDeck && <RailToggle />}
-        {openedFile ? (
-          <FileMenu workspace={workspace.name} file={openedFile} deckTitle={deckTitle} />
-        ) : (
-          <Breadcrumbs workspace={workspace.name} path={null} small={false} />
-        )}
+        <FileMenu workspace={workspace} file={openedFile} deckTitle={deckTitle} />
         {hasDeck && <EditHistory />}
       </div>
       {hasDeck ? (
@@ -111,12 +111,13 @@ function Breadcrumbs({ workspace, path, small }: { workspace: string; path: stri
 }
 
 /**
- * The open file's path (and a deck's title under it) as one button, opening a menu like Export's:
- * the deck's settings (for a deck), close the file, or show it in the file manager.
+ * The open file's path (and a deck's title under it), or the folder's name with no file open, as
+ * one button, opening a menu like Export's: the deck's settings (for a deck), close the file, show
+ * it (or the folder) in the file manager, then open another folder or close this one.
  */
-function FileMenu({ workspace, file, deckTitle }: { workspace: string; file: OpenedFile; deckTitle: string | null }) {
+function FileMenu(props: { workspace: WorkspaceInfo; file: OpenedFile | null; deckTitle: string | null }) {
+  const { workspace, file, deckTitle } = props;
   const { open, setOpen, ref: menuRef } = useDropdown({ escape: true });
-  const name = basename(file.path);
 
   const choose = (action: () => void) => () => {
     setOpen(false);
@@ -129,7 +130,7 @@ function FileMenu({ workspace, file, deckTitle }: { workspace: string; file: Ope
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        title={file.path}
+        title={file?.path ?? workspace.path}
         onClick={() => setOpen((v) => !v)}
         className={cn(
           "flex min-w-0 max-w-full items-center gap-1 rounded-md py-1 pr-1.5 text-left hover:bg-accent",
@@ -137,7 +138,7 @@ function FileMenu({ workspace, file, deckTitle }: { workspace: string; file: Ope
         )}
       >
         <span className="flex min-w-0 flex-col justify-center">
-          <Breadcrumbs workspace={workspace} path={file.path} small={deckTitle !== null} />
+          <Breadcrumbs workspace={workspace.name} path={file?.path ?? null} small={deckTitle !== null} />
           {deckTitle !== null && (
             <span data-deck-title title={deckTitle} className="truncate px-1.5 text-sm font-medium leading-5">
               {deckTitle || "Untitled"}
@@ -156,8 +157,31 @@ function FileMenu({ workspace, file, deckTitle }: { workspace: string; file: Ope
               onClick={choose(() => useApp.getState().setMode("settings"))}
             />
           )}
-          <MenuItem icon={X} label={`Close ${name}`} onClick={choose(() => void useApp.getState().closeDeck())} />
-          <MenuItem icon={FolderOpen} label={revealLabel} onClick={choose(() => void revealItemInDir(file.absolute))} />
+          {file && (
+            <MenuItem
+              icon={X}
+              label={`Close ${basename(file.path)}`}
+              onClick={choose(() => void useApp.getState().closeDeck())}
+            />
+          )}
+          <MenuItem
+            icon={FolderSearch}
+            label={revealLabel}
+            onClick={choose(() => void revealItemInDir(file?.absolute ?? workspace.path))}
+          />
+          <hr className="my-1 border-border" />
+          <MenuItem
+            icon={FolderOpen}
+            label="Open folder…"
+            hint="Work on the decks of another folder"
+            onClick={choose(() => void chooseWorkspace())}
+          />
+          <MenuItem
+            icon={FolderClosed}
+            label={`Close ${workspace.name}`}
+            hint="Back to the start screen"
+            onClick={choose(() => void useApp.getState().closeWorkspace())}
+          />
         </div>
       )}
     </div>

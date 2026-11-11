@@ -356,7 +356,7 @@ pub(crate) async fn run_turn(
             prompt = rewind::with_note(note, args.prompt).into();
         }
     }
-    let (run, mut answers) = args.approvals.start(args.workspace);
+    let (run, mut answers) = args.approvals.start(args.chat);
     let mut mode = args.mode.clone();
     mode.mark_unchanged();
     emit(&AgentEvent::Thinking);
@@ -775,7 +775,7 @@ mod tests {
             app_home: dir,
             session_dir: dir,
             lint_server: Path::new("/app/slopslide"),
-            workspace: "deck-1",
+            chat: "deck-1",
             prompt,
             model: None,
             effort: None,

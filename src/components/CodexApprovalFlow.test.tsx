@@ -44,7 +44,7 @@ const approval = {
   decisions: ["accept", "acceptForSession", "decline"] as ApprovalDecision[],
 };
 const emit = (event: AgentEvent, workspace = "/decks/talk") =>
-  act(() => listeners.get("agent-event")!({ payload: { workspace, event } }));
+  act(() => listeners.get("agent-event")!({ payload: { chat: workspace, event } }));
 
 beforeEach(async () => {
   listeners.clear();
@@ -54,6 +54,7 @@ beforeEach(async () => {
   });
   useApp.setState({
     workspace: { path: "/decks/talk", name: "talk" },
+    chatKey: "/decks/talk",
     deck: deckFor(DECK_HTML),
     selected: "intro",
     messages: [],
@@ -83,7 +84,7 @@ describe("Codex approval event → store → chat → IPC", () => {
     emit({ type: "approvalRequested", approval });
     fireEvent.click(screen.getByRole("button", { name: label }));
     await waitFor(() => expect(calls("respond_approval")).toHaveLength(1));
-    expect(calls("respond_approval")[0]).toEqual({ workspace: "/decks/talk", id: "mcp-approval", decision });
+    expect(calls("respond_approval")[0]).toEqual({ chat: "/decks/talk", id: "mcp-approval", decision });
     emit({ type: "approvalResolved", id: approval.id });
     emit({ type: "finished", interrupted: false });
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();

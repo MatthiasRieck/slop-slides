@@ -12,7 +12,7 @@ export async function initEventBridge(app: AppStore) {
   // Listing Codex models starts its app server; don't hold up the rest of the bridge.
   void app.getState().refreshProviders();
   await listen<AgentEventEnvelope>("agent-event", ({ payload }) => {
-    if (payload.workspace === app.getState().workspace?.path) applyAgentEvent(app, payload.event);
+    if (payload.chat === app.getState().chatKey) applyAgentEvent(app, payload.event);
   });
   await listen<WorkspaceChanged>("workspace-changed", ({ payload }) => {
     if (payload.root === app.getState().workspace?.path) applyWorkspaceChanged(app, payload.paths);

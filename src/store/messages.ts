@@ -141,8 +141,8 @@ export function settleInterrupted(message: ChatMessage): ChatMessage {
   };
 }
 
-/** Saves the chat as it is now to the workspace's session. */
+/** Saves the chat as it is now to its session. */
 export function persistChat(app: AppStore) {
-  const { workspace, messages } = app.getState();
-  if (workspace) void api.saveChat(workspace.path, messages);
+  const { chatKey, messages } = app.getState();
+  if (chatKey) void api.saveChat(chatKey, messages);
 }

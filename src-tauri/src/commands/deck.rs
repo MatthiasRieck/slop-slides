@@ -2,9 +2,9 @@
 
 use std::path::Path;
 
-use tauri::{State, Window};
+use tauri::{AppHandle, State, Window};
 
-use super::{changing, current_session, workspace_root, CreatedSlide};
+use super::{changing, current_session, focus, sessions, workspace_root, CreatedSlide};
 use crate::agent::AgentManager;
 use crate::assets;
 use crate::comments;
@@ -18,6 +18,7 @@ use crate::pptx;
 use crate::review;
 use crate::size;
 use crate::templates;
+use crate::workspace::{self, OpenWorkspace};
 
 /// Creates a deck in its own folder at the root of the open workspace.
 #[tauri::command]
@@ -44,16 +45,58 @@ pub async fn import_pptx(window: Window, path: String) -> Result<pptx::Imported>
         .map_err(|e| error::Error::msg(format!("the import failed: {e}")))?
 }
 
+/// Opens deck `id` in the window, whose chat becomes the deck's. A deck open in another window
+/// is shown there instead (unless `quiet`): two windows on one deck would share its chat. With
+/// `keep_chat`, the folder's own chat stays: it made the deck and is still at work on it.
 #[tauri::command]
-pub fn open_deck(window: Window, agent: State<AgentManager>, id: String) -> Result<Deck> {
+pub fn open_deck(
+    app: AppHandle,
+    window: Window,
+    agent: State<AgentManager>,
+    open: State<OpenWorkspace>,
+    id: String,
+    keep_chat: Option<bool>,
+    quiet: Option<bool>,
+) -> Result<Deck> {
     let file = deck::deck_file(&id)?;
-    let session = current_session(&window)?;
-    let idle = !agent.is_running(&workspace_root(&window)?.to_string_lossy());
+    let label = window.label();
+    let taken = |other: String| {
+        if quiet != Some(true) {
+            focus(&app, &other);
+        }
+        error::Error::msg(format!(
+            "{} is already open in another window.",
+            workspace::display_name(&file)
+        ))
+    };
+    if let Some(other) = open.window_with_deck(&file, label) {
+        return Err(taken(other));
+    }
+    let root = workspace_root(&window)?;
+    let keep_chat = keep_chat == Some(true) && open.chat(label).as_ref() == Some(&root);
+    let subject = if keep_chat { &root } else { &file };
+    let session = sessions()?.current(subject);
+    let idle = !agent.works_on(&file);
     let deck = deck::open(&file, session.as_deref(), idle)?;
     if idle {
         history::checkpoint(&files::app_home()?, &file)?;
     }
+    open.open_deck(label, &file, keep_chat).map_err(taken)?;
     Ok(deck)
+}
+
+/// Closes the window's deck: its chat is the folder's own again. Refused while another window
+/// has the folder open without a deck, which is shown instead.
+#[tauri::command]
+pub fn close_deck(app: AppHandle, window: Window, open: State<OpenWorkspace>) -> Result<()> {
+    let root = workspace_root(&window)?;
+    open.close_deck(window.label()).map_err(|other| {
+        focus(&app, &other);
+        error::Error::msg(format!(
+            "{} is already open without a deck in another window. Open the next file there.",
+            workspace::display_name(&root)
+        ))
+    })
 }
 
 #[tauri::command]
@@ -217,14 +260,13 @@ pub fn update_slide(id: String, slide: String, markup: String, base: String) -> 
 
 #[tauri::command]
 pub fn save_deck_source(
-    window: Window,
     agent: State<AgentManager>,
     id: String,
     source: String,
     base: Option<String>,
 ) -> Result<Deck> {
     // Normalizing mid-turn could rewrite ids the agent is about to reference.
-    let normalize = !agent.is_running(&workspace_root(&window)?.to_string_lossy());
+    let normalize = !agent.works_on(&deck::deck_file(&id)?);
     changing(&id, Change::new(Source::Code, "Edit source"), |file| {
         deck::save_source(file, &source, base.as_deref(), normalize)
     })

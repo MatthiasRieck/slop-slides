@@ -12,6 +12,7 @@ beforeEach(() => {
   interrupt.mockReset();
   useApp.setState({
     workspace: { path: "/decks/talk", name: "talk" },
+    chatKey: "/decks/talk",
     deck: deckFor(DECK_HTML),
     selection: { provider: "codex", model: "m", label: "M", effort: "high", contextWindow: null },
     permissionModes: { claude: "ask", codex: "ask", copilot: "ask" },
@@ -170,7 +171,7 @@ describe("approval card", () => {
     fireEvent.click(button);
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
     expect(invoke).toHaveBeenCalledWith("respond_approval", {
-      workspace: "/decks/talk",
+      chat: "/decks/talk",
       id: "r1",
       decision: label === "Deny" ? "decline" : "accept",
     });
@@ -184,7 +185,7 @@ describe("approval card", () => {
     fireEvent.click(screen.getByRole("button", { name: "Allow for session" }));
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("respond_approval", {
-        workspace: "/decks/talk",
+        chat: "/decks/talk",
         id: "r1",
         decision: "acceptForSession",
       }),
@@ -202,7 +203,7 @@ describe("approval card", () => {
     fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
     await waitFor(() =>
       expect(invoke).toHaveBeenCalledWith("respond_approval", {
-        workspace: "/decks/talk",
+        chat: "/decks/talk",
         id: "r1",
         decision: "accept",
       }),

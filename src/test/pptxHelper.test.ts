@@ -535,8 +535,11 @@ function transformOf(text: string | null): Matrix {
     const turn = (a * Math.PI) / 180;
     if (name === "translate") m = times(m, [1, 0, 0, 1, a, b ?? 0]);
     else if (name === "scale") m = times(m, [a, 0, 0, b ?? a, 0, 0]);
-    else if (name === "rotate") m = times(m, [Math.cos(turn), Math.sin(turn), -Math.sin(turn), Math.cos(turn), 0, 0]);
-    else if (name === "matrix") m = times(m, [a, b ?? 0, c, d, e, f]);
+    else if (name === "rotate") {
+      // About (b, c), when given.
+      const spin: Matrix = [Math.cos(turn), Math.sin(turn), -Math.sin(turn), Math.cos(turn), 0, 0];
+      m = times(times(times(m, [1, 0, 0, 1, b ?? 0, c]), spin), [1, 0, 0, 1, -(b ?? 0), -c]);
+    } else if (name === "matrix") m = times(m, [a, b ?? 0, c, d, e, f]);
   }
   return m;
 }
@@ -847,6 +850,51 @@ describe("SVG as PowerPoint shapes", () => {
       fill: { color: [255, 0, 0, 1] },
       border: { color: [0, 0, 255, 1], width: 3 },
     });
+  });
+
+  it("draws the stretches of an outline its dashes leave, as a ring filled part of the way", async () => {
+    const ring = (attrs: string) =>
+      `<circle cx="50" cy="50" r="40" fill="none" stroke="${BLUE}" stroke-width="10" ${attrs}/>`;
+    const { items } = await drawn(
+      `<svg data-box="0 0 100 100">
+         ${ring('pathLength="100" stroke-dasharray="50 100" transform="rotate(-90 50 50)"')}
+         <g stroke-dasharray="1 1">${ring('pathLength="1"')}</g>
+         ${ring('pathLength="1" stroke-dasharray="1 1" stroke-dashoffset="1"')}
+         ${ring('stroke-dasharray="20 6"')}
+         <rect x="10" y="10" width="80" height="80" fill="${RED}" stroke="${BLUE}" stroke-dasharray="100 1000"/>
+         <line x1="0" y1="0" x2="100" y2="0" stroke="${BLUE}" stroke-dasharray="10 30 20 1000" stroke-dashoffset="-20"/>
+       </svg>`,
+    );
+    const [half, drawnIn, dashed, square, corner, marks] = shapesOf(items);
+    // Half of the ring, from the top, down its right side: two quarter curves, no dashes.
+    expect(half).toMatchObject({ kind: "path", fill: null, border: { width: 10, dash: null } });
+    expect(
+      String(half?.d)
+        .match(/[MLCZ]/g)
+        ?.join(""),
+    ).toBe("MCC");
+    expect(Number(half?.x)).toBeCloseTo(50);
+    expect(Number(half?.y)).toBeCloseTo(10);
+    expect(Number(half?.w)).toBeCloseTo(40);
+    expect(Number(half?.h)).toBeCloseTo(80);
+    // A ring a dash as long as itself draws in is a ring; one not yet drawn in shows nothing.
+    expect(drawnIn).toMatchObject({ kind: "box", ellipse: true, border: { dash: null } });
+    // A pattern that repeats stays PowerPoint's own dashes.
+    expect(dashed).toMatchObject({ kind: "box", ellipse: true, border: { dash: "dashed" } });
+    // The fill keeps its shape, under the stretch of outline: the top edge and a way down the right.
+    expect(square).toMatchObject({
+      kind: "box",
+      x: 10,
+      y: 10,
+      w: 80,
+      h: 80,
+      fill: { color: [255, 0, 0, 1] },
+      border: null,
+    });
+    expect(corner).toMatchObject({ kind: "path", x: 10, y: 10, w: 80, h: 20, d: "M 0 0 L 80 0 L 80 20", fill: null });
+    // Two dashes, pushed along by the offset; measured from the first.
+    expect(marks).toMatchObject({ kind: "path", x: 20, w: 60, d: "M 0 0 L 10 0 M 40 0 L 60 0" });
+    expect(shapesOf(items)).toHaveLength(6);
   });
 
   it("carries a drawing's own transform into its shapes, as for a line the import mirrored", async () => {

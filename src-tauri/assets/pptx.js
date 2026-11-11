@@ -588,6 +588,143 @@
       .join(" ");
   }
 
+  /** The point at `t` of the curve from `p` through the controls of `s`, a `["C", …]`. */
+  function curveAt(p, s, t) {
+    var u = 1 - t;
+    return [
+      u * u * u * p[0] + 3 * u * u * t * s[1] + 3 * u * t * t * s[3] + t * t * t * s[5],
+      u * u * u * p[1] + 3 * u * u * t * s[2] + 3 * u * t * t * s[4] + t * t * t * s[6],
+    ];
+  }
+
+  /** The stretch from `a` to `b` (0 to 1) of the line or curve `s` that starts at `p`. */
+  function stretchOf(p, s, a, b) {
+    if (s[0] === "L") return ["L", p[0] + (s[1] - p[0]) * b, p[1] + (s[2] - p[1]) * b];
+    var mix = function (m, n, t) {
+      return [m[0] + (n[0] - m[0]) * t, m[1] + (n[1] - m[1]) * t];
+    };
+    // Cut at `b` and keep the first part, then at `a` of that and keep the second.
+    var cut = function (q, t, first) {
+      var ab = mix(q[0], q[1], t);
+      var bc = mix(q[1], q[2], t);
+      var cd = mix(q[2], q[3], t);
+      var abc = mix(ab, bc, t);
+      var bcd = mix(bc, cd, t);
+      var mid = mix(abc, bcd, t);
+      return first ? [q[0], ab, abc, mid] : [mid, bcd, cd, q[3]];
+    };
+    var q = cut([p, [s[1], s[2]], [s[3], s[4]], [s[5], s[6]]], b, true);
+    if (a > 0) q = cut(q, a / b, false);
+    return ["C", q[1][0], q[1][1], q[2][0], q[2][1], q[3][0], q[3][1]];
+  }
+
+  /**
+   * `segments` as their dashes leave them: the outline itself (the very array) when they cover
+   * all of it, as a line drawn in by its dashes does once it is drawn; the stretches that show
+   * when those are few, as on a ring filled part of the way; null for a pattern that repeats,
+   * which PowerPoint has dashes of its own for. `dashes` and `offset` are measured as
+   * `pathLength` says, when it says.
+   */
+  function dashCut(segments, dashes, offset, pathLength) {
+    var period = 0;
+    dashes = dashes.length % 2 ? dashes.concat(dashes) : dashes;
+    dashes.forEach(function (d) {
+      period += d;
+    });
+    if (!(period > 0) || dashes.some(function (d) { return !(d >= 0); })) return segments;
+    // Each subpath as pieces: where it starts, the segment, how far along it is, and (a curve)
+    // how far along each of its steps is.
+    var STEPS = 32;
+    var paths = [];
+    var here = [0, 0];
+    var start = [0, 0];
+    var total = 0;
+    segments.forEach(function (s) {
+      if (s[0] === "M") {
+        here = start = [s[1], s[2]];
+        paths.push({ pieces: [], length: 0, closed: false });
+        return;
+      }
+      var path = paths[paths.length - 1];
+      if (!path) return;
+      var seg = s[0] === "Z" ? ["L", start[0], start[1]] : s;
+      var end = [seg[seg.length - 2], seg[seg.length - 1]];
+      var marks = [0];
+      var length = 0;
+      if (seg[0] === "L") {
+        length = Math.sqrt(Math.pow(end[0] - here[0], 2) + Math.pow(end[1] - here[1], 2));
+      } else {
+        var last = here;
+        for (var i = 1; i <= STEPS; i++) {
+          var point = curveAt(here, seg, i / STEPS);
+          length += Math.sqrt(Math.pow(point[0] - last[0], 2) + Math.pow(point[1] - last[1], 2));
+          marks.push(length);
+          last = point;
+        }
+      }
+      if (s[0] === "Z") path.closed = true;
+      path.pieces.push({ from: here, seg: seg, at: path.length, length: length, marks: marks });
+      path.length += length;
+      total += length;
+      here = end;
+    });
+    var unit = pathLength > 0 && total > 0 ? total / pathLength : 1;
+    period *= unit;
+    // How far along piece `piece` (0 to 1) the length `d` into it is.
+    var along = function (piece, d) {
+      if (piece.length <= 0) return 0;
+      if (piece.seg[0] === "L") return Math.min(Math.max(d / piece.length, 0), 1);
+      for (var i = 1; i <= STEPS; i++) {
+        if (d <= piece.marks[i] || i === STEPS) {
+          var span = piece.marks[i] - piece.marks[i - 1];
+          return Math.min(Math.max((i - 1 + (span > 0 ? (d - piece.marks[i - 1]) / span : 0)) / STEPS, 0), 1);
+        }
+      }
+      return 1;
+    };
+    var out = [];
+    var whole = true;
+    var shown = 0;
+    for (var p = 0; p < paths.length; p++) {
+      var path = paths[p];
+      var spans = [];
+      var at = -((((offset * unit) % period) + period) % period);
+      for (var i = 0; at < path.length; i = (i + 1) % dashes.length) {
+        var next = at + dashes[i] * unit;
+        if (i % 2 === 0 && next > 0 && next > at) {
+          var before = spans[spans.length - 1];
+          // A dash that runs on from the one before it, through a gap of nothing.
+          if (before && Math.max(at, 0) - before[1] < 1e-6) before[1] = Math.min(next, path.length);
+          else spans.push([Math.max(at, 0), Math.min(next, path.length)]);
+        }
+        at = next;
+        if (spans.length > 6) return null;
+      }
+      var full = spans.length === 1 && spans[0][0] <= 1e-6 && spans[0][1] >= path.length - 1e-6;
+      if (!full) whole = false;
+      shown += spans.length;
+      if (shown > 6) return null;
+      spans.forEach(function (span) {
+        var began = false;
+        path.pieces.forEach(function (piece) {
+          var a = Math.max(span[0], piece.at);
+          var b = Math.min(span[1], piece.at + piece.length);
+          if (b - a <= 1e-9) return;
+          var ta = along(piece, a - piece.at);
+          var tb = along(piece, b - piece.at);
+          if (!began) {
+            var first = piece.seg[0] === "L" ? stretchOf(piece.from, piece.seg, 0, ta) : ["L"].concat(curveAt(piece.from, piece.seg, ta));
+            out.push(["M", first[1], first[2]]);
+            began = true;
+          }
+          if (tb > ta) out.push(stretchOf(piece.from, piece.seg, ta, tb));
+        });
+        if (full && path.closed) out.push(["Z"]);
+      });
+    }
+    return whole ? segments : out;
+  }
+
   /** Whether a property that is `none` unless used is used. */
   function isSet(text) {
     return !!text && !/^none\b/.test(text);
@@ -756,7 +893,26 @@
       border.head = arrowOf(s.root, cs.markerStart, num(cs.strokeWidth, 1));
       border.tail = arrowOf(s.root, cs.markerEnd, num(cs.strokeWidth, 1));
     }
-    if (!fill && !border) return;
+    // An outline its dashes leave only stretches of is drawn as those, apart from the fill.
+    var apart = null;
+    if (border && isSet(cs.strokeDasharray)) {
+      var lengths = cs.strokeDasharray.split(/[\s,]+/).map(function (n) { return num(n, -1); });
+      var cut = dashCut(local, lengths, num(cs.strokeDashoffset), num(node.getAttribute("pathLength")));
+      if (cut) border.dash = null;
+      if (cut && cut !== local) {
+        if (cut.length) apart = { border: border, drawn: mapSegments(cut, m) };
+        border = null;
+      }
+    }
+    if (fill || border) shapeItem(asBox, m, own, frame, spread, corners, tag, fill, border, drawn, out);
+    if (apart) {
+      var reach = extentOf(apart.drawn);
+      out.push({ kind: "path", x: reach.x, y: reach.y, w: reach.w, h: reach.h, d: pathText(apart.drawn, reach.x, reach.y), fill: null, border: apart.border });
+    }
+  }
+
+  /** The box or freeform of one SVG shape, added to `out`. */
+  function shapeItem(asBox, m, own, frame, spread, corners, tag, fill, border, drawn, out) {
     if (asBox) {
       var centre = at(m, own.x + own.w / 2, own.y + own.h / 2);
       out.push({

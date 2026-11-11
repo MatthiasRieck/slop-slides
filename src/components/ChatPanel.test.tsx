@@ -103,6 +103,7 @@ beforeEach(() => {
   takeQueued.mockReset().mockReturnValue(null);
   useApp.setState({
     workspace: { path: "/decks/talk", name: "talk" },
+    chatKey: "/decks/talk",
     deck: deckFor(DECK_HTML),
     selected: "intro",
     messages: [],
@@ -1477,6 +1478,7 @@ describe("workspace attachments", () => {
   ])("attaches images with workspace-relative context when a deck is open: %s", async (hasDeck, reference, target) => {
     useApp.setState({
       workspace: { path: "/decks", name: "decks" },
+      chatKey: "/decks",
       deck: hasDeck ? deckFor(DECK_HTML) : null,
       selected: hasDeck ? "intro" : null,
     });

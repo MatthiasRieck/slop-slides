@@ -22,12 +22,12 @@ export function ChatPanel() {
   const composerFill = useApp((s) => s.composerFill);
   const [draft, setDraft] = useState("");
   const revision = useApp((s) => s.chatRevision);
-  const workspacePath = useApp((s) => s.workspace?.path);
+  const chatKey = useApp((s) => s.chatKey);
   const [switching, setSwitching] = useState(false);
   // biome-ignore lint/correctness/useExhaustiveDependencies: each conversation starts with its own empty draft
   useEffect(() => {
     setDraft("");
-  }, [revision, workspacePath]);
+  }, [revision, chatKey]);
 
   // Other parts of the app (e.g. the lint status) can hand the composer a prepared message.
   useEffect(() => {
@@ -39,10 +39,10 @@ export function ChatPanel() {
       <ThreadNavigation switching={switching} setSwitching={setSwitching} />
       <div className="flex min-h-0 flex-1 flex-col" inert={switching}>
         {cliMissing && <MissingCli provider={provider} />}
-        <MessageList key={`${workspacePath}-${revision}`} messages={messages} running={running}>
+        <MessageList key={`${chatKey}-${revision}`} messages={messages} running={running}>
           {messages.length === 0 && <EmptyChat deckEmpty={deckEmpty} onPick={(text) => setDraft(text)} />}
         </MessageList>
-        <Composer key={`composer-${workspacePath}-${revision}`} draft={draft} setDraft={setDraft} />
+        <Composer key={`composer-${chatKey}-${revision}`} draft={draft} setDraft={setDraft} />
       </div>
     </div>
   );

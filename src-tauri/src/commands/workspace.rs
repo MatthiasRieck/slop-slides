@@ -1,8 +1,8 @@
 //! Commands for the app's windows and the folder each has open.
 
-use tauri::{AppHandle, Manager, State, Window};
+use tauri::{AppHandle, State, Window};
 
-use super::{sessions, workspace_root};
+use super::{focus, workspace_root};
 use crate::error::{self, Result};
 use crate::files;
 use crate::screens;
@@ -19,8 +19,9 @@ pub struct WorkspaceInfo {
 }
 
 /// Opens a folder as the window's workspace: the file tree shows it, `slop://` serves from
-/// it, and the watcher reports its changes. A folder open in another window is shown there
-/// instead: two windows on one folder would share (and overwrite) its chat and session.
+/// it, and the watcher reports its changes. Other windows may have the folder open too, each
+/// with another of its decks; one that has it open without a deck is shown instead: two
+/// windows on the folder's own chat would share (and overwrite) it.
 #[tauri::command]
 pub fn open_workspace(
     app: AppHandle,
@@ -31,16 +32,12 @@ pub fn open_workspace(
 ) -> Result<WorkspaceInfo> {
     let root = workspace::root(&path)?;
     if let Some(other) = open.window_with(&root, window.label()) {
-        if let Some(other) = app.get_webview_window(&other) {
-            let _ = other.unminimize();
-            let _ = other.set_focus();
-        }
+        focus(&app, &other);
         return Err(error::Error::msg(format!(
             "{} is already open in another window.",
             workspace::display_name(&root)
         )));
     }
-    sessions()?.current_or_start(&root)?;
     open.set(window.label(), Some(root.clone()));
     watcher.watch(app, window.label(), root.clone())?;
     workspace::remember(&files::app_home()?, &root)?;

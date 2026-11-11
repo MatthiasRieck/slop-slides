@@ -1,8 +1,9 @@
-//! Commands for the workspace's conversations with the agent.
+//! Commands for the conversations with the agent: each deck has its own, and so does a folder
+//! for when no deck is open (see [`crate::sessions`]).
 
 use tauri::{AppHandle, State, Window};
 
-use super::{session, sessions};
+use super::{session, sessions, workspace_root};
 use crate::agent::{self, AgentManager, SendArgs};
 use crate::capture;
 use crate::codex;
@@ -12,17 +13,18 @@ use crate::permissions;
 use crate::providers;
 use crate::rewind;
 use crate::sessions::{self, OpenedThread, Thread};
-use crate::workspace;
+use crate::workspace::{self, OpenWorkspace};
 
+/// The chat of `id`: a deck's (its file's path), or a folder's own.
 #[tauri::command]
 pub fn load_chat(id: String) -> Result<serde_json::Value> {
-    sessions::load_chat(sessions()?.current(&workspace::root(&id)?).as_deref())
+    sessions::load_chat(sessions()?.current(&agent::subject(&id)?).as_deref())
 }
 
 #[tauri::command]
 pub fn session_provider(id: String) -> Result<Option<agent::Provider>> {
     sessions()?
-        .current(&workspace::root(&id)?)
+        .current(&agent::subject(&id)?)
         .map(|path| sessions::provider(&path))
         .transpose()
         .map(Option::flatten)
@@ -30,31 +32,32 @@ pub fn session_provider(id: String) -> Result<Option<agent::Provider>> {
 
 #[tauri::command]
 pub fn save_chat(id: String, chat: serde_json::Value) -> Result<()> {
-    sessions::save_chat(
-        &sessions()?.current_or_start(&workspace::root(&id)?)?,
-        &chat,
-    )
+    sessions::save_chat(&sessions()?.current_or_start(&agent::subject(&id)?)?, &chat)
 }
 
-/// Takes workspace `id`'s conversation back to before chat message `message` when its next turn
+/// Takes chat `id`'s conversation back to before chat message `message` when its next turn
 /// starts; that turn's prompt starts with `note` instead when it cannot be (see [`rewind`]).
 #[tauri::command]
 pub fn rewind_chat(id: String, message: String, note: String) -> Result<()> {
     let session = sessions()?
-        .current(&workspace::root(&id)?)
-        .ok_or_else(|| error::Error::msg("This folder has no conversation."))?;
+        .current(&agent::subject(&id)?)
+        .ok_or_else(|| error::Error::msg("There is no conversation here."))?;
     rewind::request(&session, &message, &note)
 }
 
-/// Workspace `id`'s conversations, newest first.
+/// The conversations of the window's workspace, newest first; `id` is the chat shown now.
 #[tauri::command]
-pub fn list_chat_threads(id: String) -> Result<Vec<Thread>> {
-    sessions()?.threads(&workspace::root(&id)?)
+pub fn list_chat_threads(window: Window, id: String) -> Result<Vec<Thread>> {
+    sessions()?.threads(&workspace_root(&window)?, &agent::subject(&id)?)
 }
 
+/// Goes on with conversation `thread` of the window's workspace in chat `id`, where it moves
+/// (see [`sessions::Sessions::open_thread`]).
 #[tauri::command]
 pub fn select_chat_thread(
+    window: Window,
     agent: State<AgentManager>,
+    open: State<OpenWorkspace>,
     id: String,
     thread: String,
 ) -> Result<OpenedThread> {
@@ -63,14 +66,50 @@ pub fn select_chat_thread(
             "Stop the current turn before switching conversations.",
         ));
     }
-    sessions()?.open_thread(&workspace::root(&id)?, &thread)
+    let sessions = sessions()?;
+    let shown_elsewhere = open.chats_except(window.label()).iter().any(|chat| {
+        sessions
+            .current(chat)
+            .is_some_and(|path| path.file_name().is_some_and(|name| name == thread.as_str()))
+    });
+    if shown_elsewhere {
+        return Err(error::Error::msg(
+            "This conversation is open in another window.",
+        ));
+    }
+    sessions.open_thread(&workspace_root(&window)?, &agent::subject(&id)?, &thread)
 }
 
 /// Starts a new chat in a new session; the old conversation stays in its own.
 #[tauri::command]
 pub fn reset_chat(agent: State<AgentManager>, id: String) -> Result<()> {
     agent.interrupt(&id);
-    sessions()?.new_chat(&workspace::root(&id)?).map(|_| ())
+    sessions()?.new_chat(&agent::subject(&id)?).map(|_| ())
+}
+
+/// Moves the folder's own chat to the deck the window has open, once the turn that made the
+/// deck is over: from here on it is the deck's chat.
+#[tauri::command]
+pub fn move_chat_to_deck(
+    window: Window,
+    agent: State<AgentManager>,
+    open: State<OpenWorkspace>,
+) -> Result<()> {
+    let (root, label) = (workspace_root(&window)?, window.label());
+    let deck = open
+        .deck(label)
+        .ok_or_else(|| error::Error::msg("No deck is open."))?;
+    if open.chat(label).as_ref() != Some(&root) {
+        return Ok(());
+    }
+    if agent.is_running(&root.to_string_lossy()) {
+        return Err(error::Error::msg(
+            "The agent is still working in this chat.",
+        ));
+    }
+    sessions()?.move_current(&root, &deck)?;
+    open.chat_follows_deck(label);
+    Ok(())
 }
 
 #[tauri::command]
@@ -89,7 +128,7 @@ pub async fn permission_modes(
     }
 }
 
-/// Changes the permission mode of the turn running in workspace `id`, if any.
+/// Changes the permission mode of the turn running in chat `id`, if any.
 #[tauri::command]
 pub fn set_permission_mode(
     agent: State<AgentManager>,
@@ -102,11 +141,11 @@ pub fn set_permission_mode(
 #[tauri::command]
 pub fn respond_approval(
     agent: State<AgentManager>,
-    workspace: String,
+    chat: String,
     id: String,
     decision: permissions::Decision,
 ) -> Result<()> {
-    agent.approvals.respond(&workspace, &id, decision)
+    agent.approvals.respond(&chat, &id, decision)
 }
 
 #[tauri::command]
@@ -114,16 +153,16 @@ pub fn interrupt_agent(agent: State<AgentManager>, id: String) {
     agent.interrupt(&id);
 }
 
-/// Sends `prompt` into the workspace's running turn; false when it did not get in (no turn
+/// Sends `prompt` into the chat's running turn; false when it did not get in (no turn
 /// is running, or it is ending), and the frontend runs it as the next turn instead.
 #[tauri::command]
 pub async fn steer_agent(
     agent: State<'_, AgentManager>,
-    workspace: String,
+    chat: String,
     prompt: String,
     message: Option<String>,
 ) -> Result<bool> {
-    Ok(agent.steer(&workspace, &prompt, message.as_deref()).await)
+    Ok(agent.steer(&chat, &prompt, message.as_deref()).await)
 }
 
 #[tauri::command]

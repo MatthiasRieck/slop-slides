@@ -268,7 +268,8 @@ export type AgentEvent =
   | { type: "finished"; interrupted: boolean };
 
 export interface AgentEventEnvelope {
-  workspace: string;
+  /** The chat the event belongs to: a deck's id, or a folder's path for its own chat. */
+  chat: string;
   event: AgentEvent;
 }
 
@@ -475,7 +476,15 @@ export const api = {
   importPptx: (path: string) => invoke<ImportedPptx>("import_pptx", { path }),
   /** Creates `<workspace>/<title>/deck.html`; with a template, it takes its styles (and names it). */
   createDeck: (title: string, template: string | null = null) => invoke<Deck>("create_deck", { title, template }),
-  openDeck: (id: string) => invoke<Deck>("open_deck", { id }),
+  /**
+   * Opens deck `id` in this window, whose chat becomes the deck's. A deck open in another window
+   * is refused and shown there (not when `quiet`). With `keepChat`, the folder's own chat stays:
+   * it made the deck and is still at work on it.
+   */
+  openDeck: (id: string, options: { keepChat?: boolean; quiet?: boolean } = {}) =>
+    invoke<Deck>("open_deck", { id, keepChat: options.keepChat ?? false, quiet: options.quiet ?? false }),
+  /** Closes this window's deck: the chat is the folder's own again. Refused while another window shows that chat. */
+  closeDeck: () => invoke<void>("close_deck"),
   loadDeck: (id: string) => invoke<Deck>("load_deck", { id }),
   /** Stores the review marks (by slide id) in the deck file. */
   saveReview: (id: string, review: Record<string, Stroke[]>) => invoke<void>("save_review", { id, review }),
@@ -618,13 +627,19 @@ export const api = {
         current: boolean;
         messageCount: number;
         association: string | null;
+        /** The deck the conversation is about, when it is one that still exists. */
+        deck: string | null;
       }[]
     >("list_chat_threads", { id }),
   selectChatThread: (id: string, thread: string) =>
     invoke<{ chat: unknown; provider: Provider | null }>("select_chat_thread", { id, thread }),
   resetChat: (id: string) => invoke<void>("reset_chat", { id }),
+  /** Moves the folder's own chat to the deck open in this window, which it made. */
+  moveChatToDeck: () => invoke<void>("move_chat_to_deck"),
+  /** Starts a turn of chat `chat` (a deck's id, or the folder's path), the agent working in folder `workspace`. */
   sendMessage: (
     workspace: string,
+    chat: string,
     prompt: string,
     selection: {
       provider: Provider;
@@ -637,24 +652,24 @@ export const api = {
     compact = false,
     /** The chat message the turn answers, and what the user wrote, for the decks' histories. */
     turn: { message: string; label: string } | null = null,
-  ) => invoke<void>("send_message", { args: { workspace, prompt, ...selection, compact, ...turn } }),
+  ) => invoke<void>("send_message", { args: { workspace, chat, prompt, ...selection, compact, ...turn } }),
   /**
-   * Takes the workspace's conversation back to before chat message `message` when its next turn
+   * Takes chat `id`'s conversation back to before chat message `message` when its next turn
    * starts; that turn's prompt starts with `note` when the provider cannot do it.
    */
   rewindChat: (id: string, message: string, note: string) => invoke<void>("rewind_chat", { id, message, note }),
   /** The modes `provider` offers in workspace `id` (Codex: per its configuration). */
   permissionModes: (provider: Provider, id: string) => invoke<PermissionMode[]>("permission_modes", { provider, id }),
   setPermissionMode: (id: string, mode: PermissionMode) => invoke<void>("set_permission_mode", { id, mode }),
-  respondApproval: (workspace: string, id: string, decision: ApprovalDecision) =>
-    invoke<void>("respond_approval", { workspace, id, decision }),
+  respondApproval: (chat: string, id: string, decision: ApprovalDecision) =>
+    invoke<void>("respond_approval", { chat, id, decision }),
   interruptAgent: (id: string) => invoke<void>("interrupt_agent", { id }),
   /**
    * Sends `prompt` into the running turn, for chat message `message`; false when it did not
    * get in (the turn was ending), and it should run as the next turn instead.
    */
-  steerAgent: (workspace: string, prompt: string, message: string) =>
-    invoke<boolean>("steer_agent", { workspace, prompt, message }),
+  steerAgent: (chat: string, prompt: string, message: string) =>
+    invoke<boolean>("steer_agent", { chat, prompt, message }),
   agentRunning: (id: string) => invoke<boolean>("agent_running", { id }),
   listProviders: () => invoke<ProviderInfo[]>("list_providers"),
   /** The user's templates first, then the built-in ones. */

@@ -110,7 +110,7 @@ export function PermissionPicker() {
 }
 
 export function ApprovalCard({ part }: { part: Extract<ChatPart, { kind: "approval" }> }) {
-  const deckId = useApp((s) => s.workspace?.path);
+  const deckId = useApp((s) => s.chatKey);
   const running = useApp((s) => s.running);
   const [submitted, setSubmitted] = useState<ApprovalDecision | null>(null);
   const [error, setError] = useState<string | null>(null);

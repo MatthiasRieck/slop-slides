@@ -1,7 +1,9 @@
 //! The locked-slide guard of an agent turn. Before a turn, the deck's locked slides are recorded
 //! in the session ([`LOCKS_FILE`]); while it runs, the lint tool tells the agent about any it
-//! changed, and when it ends, [`release_guard`] puts them back. In a workspace session the
-//! file holds the guards of every deck, keyed by the deck's path in the workspace.
+//! changed, and when it ends, [`release_guard`] puts them back. The file holds the guards of
+//! every deck of the turn, keyed by the deck's path in the session's folder
+//! ([`sessions::folder_of`]): all the decks of a folder for the folder's chat, the one deck for a
+//! deck's chat.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -18,7 +20,7 @@ const LOCKS_FILE: &str = "locked.json";
 /// What stands in for a deck file the agent removed, to put its locked slides back into.
 const EMPTY_DECK: &str = "<html><body><main class=\"deck\"></main></body></html>";
 
-/// A workspace session's guards, by [`guard_key`].
+/// A session's guards, by [`guard_key`].
 type Guards = BTreeMap<String, Vec<LockedSlide>>;
 
 /// The deck's path in the workspace `root`, with `/` separators; the same for a deck the agent
@@ -60,7 +62,7 @@ pub fn read_guard(file: &Path, session: Option<&Path>) -> Vec<LockedSlide> {
         return Vec::new();
     };
     let raw = fs::read_to_string(session.join(LOCKS_FILE)).unwrap_or_default();
-    if let Some(root) = sessions::workspace_of(session) {
+    if let Some(root) = sessions::folder_of(session) {
         let entries: Guards = serde_json::from_str(&raw).unwrap_or_default();
         guard_key(file, &root)
             .ok()
@@ -73,7 +75,7 @@ pub fn read_guard(file: &Path, session: Option<&Path>) -> Vec<LockedSlide> {
 
 fn write_guard(file: &Path, session: &Path, locked: &[LockedSlide]) -> Result<()> {
     fs::create_dir_all(session)?;
-    let value = if let Some(root) = sessions::workspace_of(session) {
+    let value = if let Some(root) = sessions::folder_of(session) {
         let mut entries: Guards = fs::read_to_string(session.join(LOCKS_FILE))
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -115,7 +117,7 @@ pub(crate) fn drop_stale(session: &Path) {
 /// Returns their ids.
 pub fn release_guard(file: &Path, session: &Path) -> Result<Vec<String>> {
     let guard = read_guard(file, Some(session));
-    if sessions::workspace_of(session).is_none() {
+    if sessions::folder_of(session).is_none() {
         drop_stale(session);
     }
     if guard.is_empty() {

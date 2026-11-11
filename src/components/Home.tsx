@@ -1,9 +1,9 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { FileUp, Folder, FolderOpen, Library, Plus, X } from "lucide-react";
+import { FileUp, Folder, FolderOpen, Library, Plus, Presentation, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api, type RecentWorkspace } from "../lib/api";
-import { cn, isMac, relativeTime } from "../lib/utils";
+import { basename, cn, dirname, isMac, relativeTime } from "../lib/utils";
 import { showError, useApp } from "../store";
 import { Button, ToolButton } from "./Button";
 import { SectionLabel } from "./SectionLabel";
@@ -13,6 +13,19 @@ import { TemplateSelect } from "./Templates";
 export async function chooseWorkspace() {
   const path = await open({ directory: true, title: "Open a folder" });
   if (path && !Array.isArray(path)) await useApp.getState().openWorkspace(path);
+}
+
+/** Asks for a deck file and opens it in its folder, which becomes the workspace. */
+export async function chooseDeck() {
+  const path = await open({
+    title: "Open a deck",
+    filters: [{ name: "HTML deck", extensions: ["html", "htm"] }],
+  });
+  if (!path || Array.isArray(path)) return;
+  const app = useApp.getState();
+  await app.openWorkspace(dirname(path));
+  // The folder may not have opened: it is open, without a deck, in another window.
+  if (useApp.getState().workspace) await useApp.getState().openPath(basename(path));
 }
 
 /** Asks for a PowerPoint file and imports it as a new deck; `beforeImport` gets a workspace open. */
@@ -26,7 +39,7 @@ export async function choosePptx(beforeImport?: () => Promise<boolean>) {
   await useApp.getState().importPptx(path);
 }
 
-/** The start screen: open a folder (or one opened before), or start a deck in the library. */
+/** The start screen: open a folder (or one opened before) or a deck in its folder, or start a deck in the library. */
 export function Home() {
   const [recent, setRecent] = useState<RecentWorkspace[] | null>(null);
 
@@ -86,6 +99,14 @@ export function Home() {
               >
                 <FolderOpen className="size-4" />
                 Open folder…
+              </button>
+              <button
+                type="button"
+                onClick={() => void chooseDeck()}
+                className="flex h-9 items-center gap-1.5 rounded-lg border bg-card px-3 text-sm font-medium hover:bg-accent"
+              >
+                <Presentation className="size-4" />
+                Open deck…
               </button>
               <button
                 type="button"

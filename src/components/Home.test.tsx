@@ -18,7 +18,7 @@ beforeEach(() => {
     { path: "/Users/me/talks", name: "talks", openedMs: NOW - 5 * 60_000 },
     { path: "/Users/me/work/q3", name: "q3", openedMs: NOW - 3 * 3_600_000 },
   ];
-  invoke.mockReset().mockImplementation(async (command: string, args?: { path?: string }) => {
+  invoke.mockReset().mockImplementation(async (command: string, args?: { path?: string; id?: string }) => {
     switch (command) {
       case "recent_workspaces":
         return recent;
@@ -31,6 +31,8 @@ beforeEach(() => {
         return { path: args?.path, name: args?.path?.split("/").pop() };
       case "create_deck":
         return { ...deckFor(DECK_HTML), id: `${LIBRARY}/talk/deck.html`, path: `${LIBRARY}/talk/deck.html` };
+      case "open_deck":
+        return { ...deckFor(DECK_HTML), id: args?.id, path: args?.id };
       case "import_pptx":
         return {
           deck: { ...deckFor(DECK_HTML), id: `${LIBRARY}/q3/deck.html`, path: `${LIBRARY}/q3/deck.html` },
@@ -99,6 +101,36 @@ describe("Home", () => {
     await act(async () => fireEvent.click(screen.getByRole("button", { name: /Open folder/ })));
     expect(openDialog).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
     expect(invoke).toHaveBeenCalledWith("open_workspace", { path: "/Users/me/new" });
+  });
+
+  it("opens a picked deck in its folder", async () => {
+    openDialog.mockResolvedValue("/Users/me/talks/q3/deck.html");
+    const base = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (command: string, args?: { path?: string; id?: string }) =>
+      command === "open_file"
+        ? { path: args?.path, absolute: `/Users/me/talks/q3/${args?.path}`, kind: "deck" }
+        : base(command, args),
+    );
+    render(<Home />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Open deck/ })));
+    expect(openDialog).toHaveBeenCalledWith(
+      expect.objectContaining({ filters: [{ name: "HTML deck", extensions: ["html", "htm"] }] }),
+    );
+    expect(invoke).toHaveBeenCalledWith("open_workspace", { path: "/Users/me/talks/q3" });
+    await waitFor(() => expect(useApp.getState().deck?.id).toBe("/Users/me/talks/q3/deck.html"));
+    expect(useApp.getState().chatKey).toBe("/Users/me/talks/q3/deck.html");
+  });
+
+  it("opens no deck when its folder cannot open", async () => {
+    openDialog.mockResolvedValue("/Users/me/talks/q3/deck.html");
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "open_workspace") throw "q3 is already open in another window.";
+      return [];
+    });
+    render(<Home />);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: /Open deck/ })));
+    expect(useApp.getState().error).toBe("q3 is already open in another window.");
+    expect(invoke).not.toHaveBeenCalledWith("open_file", expect.anything());
   });
 
   it("does nothing when the folder dialog is cancelled", async () => {

@@ -21,11 +21,16 @@ export function resetBackend() {
   listeners.clear();
 }
 
-/** A store module loaded afresh, its module state with it; by default with the workspace `/decks/talk` open. */
+/**
+ * A store module loaded afresh, its module state with it; by default with the workspace
+ * `/decks/talk` open, and its own chat on show.
+ */
 export async function freshModule(withWorkspace = true) {
   vi.resetModules();
   const module = await import("../store");
-  if (withWorkspace) module.useApp.setState({ workspace: { path: "/decks/talk", name: "talk" } });
+  if (withWorkspace) {
+    module.useApp.setState({ workspace: { path: "/decks/talk", name: "talk" }, chatKey: "/decks/talk" });
+  }
   return module;
 }
 
@@ -46,8 +51,7 @@ export async function withBridge(handlers: Record<string, Handler> = {}) {
   const module = await freshModule();
   backend({ list_providers: () => [], ...handlers });
   await module.initEventBridge();
-  const emit = (event: AgentEvent, workspace = "/decks/talk") =>
-    listeners.get("agent-event")!({ payload: { workspace, event } });
+  const emit = (event: AgentEvent, chat = "/decks/talk") => listeners.get("agent-event")!({ payload: { chat, event } });
   return { useApp: module.useApp, emit };
 }
 

@@ -359,7 +359,7 @@ pub(crate) async fn run_turn(
         emit(&AgentEvent::Error { message });
     }
     let mut server = Server::spawn(args.bin, Some(args.dir), &config)?;
-    let (run, mut answers) = args.approvals.start(args.workspace);
+    let (run, mut answers) = args.approvals.start(args.chat);
     // Cancellation covers initialization/resume as well as generation and approval waits.
     if *cancel.borrow() {
         return Ok(Outcome::Interrupted);

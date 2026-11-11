@@ -1,5 +1,5 @@
-//! Runs the agent's turns, one at a time per workspace, provider-neutrally: a turn resumes the
-//! workspace's session, takes back what the user rewound, and is guarded, steered,
+//! Runs the agent's turns, one at a time per chat (a deck's, or a folder's own: see
+//! [`crate::sessions`]), provider-neutrally: a turn resumes the chat's session, takes back what the user rewound, and is guarded, steered,
 //! interrupted and reported the same way whichever CLI runs it. The CLIs are driven by their
 //! own modules, all given a [`TurnArgs`]: Claude Code ([`crate::claude`]), OpenAI Codex
 //! ([`crate::codex`]) and GitHub Copilot ([`crate::copilot`]). Their events are normalized
@@ -82,7 +82,7 @@ pub struct AgentManager {
     pub approvals: Arc<Approvals>,
 }
 
-/// A workspace's turn in progress: how to stop it and how to steer it.
+/// A chat's turn in progress: how to stop it and how to steer it.
 struct Running {
     cancel: watch::Sender<bool>,
     steer: mpsc::UnboundedSender<Steer>,
@@ -203,14 +203,20 @@ pub enum AgentEvent {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Envelope<'a> {
-    workspace: &'a str,
+    /// The chat the event belongs to, as the frontend named it (see [`SendArgs::chat`]).
+    chat: &'a str,
     event: &'a AgentEvent,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendArgs {
+    /// The folder the agent works in: the one the window has open.
     pub workspace: String,
+    /// What the chat is about: the deck file's path, or the folder's for its own chat (also
+    /// when left out).
+    #[serde(default)]
+    pub chat: Option<String>,
     pub prompt: String,
     #[serde(default)]
     pub provider: Provider,
@@ -232,23 +238,70 @@ pub struct SendArgs {
     pub label: Option<String>,
 }
 
+/// A path in one spelling, to compare what chats are about.
+fn resolved(path: &str) -> PathBuf {
+    Path::new(path)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(path))
+}
+
+/// What chat `chat` is about: an existing deck file or folder.
+pub fn subject(chat: &str) -> Result<PathBuf> {
+    let path = PathBuf::from(chat);
+    let known = path.is_absolute() && (path.is_dir() || crate::deck::deck_file(chat).is_ok());
+    if !known {
+        return Err(Error::msg(format!("not a deck or a folder: {chat}")));
+    }
+    Ok(path.canonicalize()?)
+}
+
+/// Why a turn about `subject` cannot start beside the turns running in the chats `running`.
+/// A folder's chat works on all its decks, so it does not run beside theirs; the chats of two
+/// decks do run side by side.
+fn conflict<'a>(
+    mut running: impl Iterator<Item = &'a String>,
+    subject: &Path,
+) -> Option<&'static str> {
+    running.find_map(|key| {
+        let other = resolved(key);
+        if other == subject {
+            Some("The agent is still working in this chat.")
+        } else if subject.starts_with(&other) || other.starts_with(subject) {
+            Some("The agent is still working on this folder in another chat.")
+        } else {
+            None
+        }
+    })
+}
+
 impl AgentManager {
-    pub fn is_running(&self, workspace: &str) -> bool {
-        let path = Path::new(workspace)
-            .canonicalize()
-            .unwrap_or_else(|_| PathBuf::from(workspace));
-        self.running.lock().unwrap().keys().any(|key| {
-            Path::new(key)
-                .canonicalize()
-                .unwrap_or_else(|_| PathBuf::from(key))
-                == path
-        })
+    /// Whether a turn runs in chat `chat`.
+    pub fn is_running(&self, chat: &str) -> bool {
+        let path = resolved(chat);
+        self.running
+            .lock()
+            .unwrap()
+            .keys()
+            .any(|key| resolved(key) == path)
+    }
+
+    /// Whether a turn is at work on the deck `file`: one of the deck's own chat, or of the chat
+    /// of a folder above it, which works on every deck in the folder.
+    pub fn works_on(&self, file: &Path) -> bool {
+        let file = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
+        self.running
+            .lock()
+            .unwrap()
+            .keys()
+            .any(|key| file.starts_with(resolved(key)))
     }
 
     pub fn send(&self, app: AppHandle, args: SendArgs) -> Result<()> {
         let dir = crate::workspace::root(&args.workspace)?;
+        let chat = args.chat.clone().unwrap_or_else(|| args.workspace.clone());
+        let subject = subject(&chat)?;
         let app_home = crate::files::app_home()?;
-        let session_dir = Sessions::new(&app_home).current_or_start(&dir)?;
+        let session_dir = Sessions::new(&app_home).current_or_start(&subject)?;
         let bin = args.provider.resolve()?;
         let extensions = Extensions::load(&app_home, &dir);
         let (cancel_tx, cancel_rx) = watch::channel(false);
@@ -256,12 +309,12 @@ impl AgentManager {
         let (steer_tx, steers) = mpsc::unbounded_channel();
         {
             let mut running = self.running.lock().unwrap();
-            if running.contains_key(&args.workspace) {
-                return Err(Error::msg("The agent is still working in this workspace."));
+            if let Some(why) = conflict(running.keys(), &subject) {
+                return Err(Error::msg(why));
             }
             crate::sessions::claim_provider(&session_dir, args.provider)?;
             running.insert(
-                args.workspace.clone(),
+                chat.clone(),
                 Running {
                     cancel: cancel_tx,
                     mode: mode_tx,
@@ -271,16 +324,10 @@ impl AgentManager {
         }
         let approvals = self.approvals.clone();
         tauri::async_runtime::spawn(async move {
-            let (emitter, workspace) = (app.clone(), args.workspace.clone());
+            let (emitter, key) = (app.clone(), chat.clone());
             let turn = Turn {
                 emit: Box::new(move |event| {
-                    let _ = emitter.emit(
-                        "agent-event",
-                        Envelope {
-                            workspace: &workspace,
-                            event,
-                        },
-                    );
+                    let _ = emitter.emit("agent-event", Envelope { chat: &key, event });
                 }),
                 dir,
                 app_home,
@@ -297,7 +344,7 @@ impl AgentManager {
                 effort: args.effort.filter(|e| !e.is_empty()),
                 compact: args.compact,
                 message: args.message.clone(),
-                workspace: args.workspace.clone(),
+                chat: chat.clone(),
                 permission_mode: mode_rx,
                 approvals,
                 extensions,
@@ -312,7 +359,10 @@ impl AgentManager {
                     message: message.clone(),
                 });
             }
-            let guard = crate::safety::Guard::start(&turn.dir, &turn.session_dir, &turn.app_home);
+            // A deck's chat answers for its deck alone: other chats may be at work beside it.
+            let only = subject.is_file().then_some(subject.as_path());
+            let guard =
+                crate::safety::Guard::start(&turn.dir, only, &turn.session_dir, &turn.app_home);
             let change = crate::history::Change::chat(
                 args.label.as_deref().unwrap_or(""),
                 args.message.clone(),
@@ -347,33 +397,37 @@ impl AgentManager {
                 .running
                 .lock()
                 .unwrap()
-                .remove(&args.workspace);
+                .remove(&chat);
             turn.emit(&AgentEvent::Finished { interrupted });
         });
         Ok(())
     }
 
-    pub fn interrupt(&self, workspace: &str) {
-        self.approvals.cancel_workspace(workspace);
-        if let Some(running) = self.running.lock().unwrap().get(workspace) {
-            let _ = running.cancel.send(true);
+    pub fn interrupt(&self, chat: &str) {
+        let running = self.running.lock().unwrap();
+        // Whatever the spelling: a closing window names its chat by the resolved path.
+        let path = resolved(chat);
+        for (key, turn) in running.iter().filter(|(key, _)| resolved(key) == path) {
+            self.approvals.cancel_workspace(key);
+            let _ = turn.cancel.send(true);
         }
+        self.approvals.cancel_workspace(chat);
     }
 
-    /// Changes the permission mode of the turn running in `workspace`, if any. Claude Code
+    /// Changes the permission mode of the turn running in `chat`, if any. Claude Code
     /// and GitHub Copilot apply it to the requests that follow (Full access also allows
     /// those waiting); Codex fixes its policy when the turn starts, so it applies next turn.
-    pub fn set_permission_mode(&self, workspace: &str, mode: PermissionMode) {
-        if let Some(running) = self.running.lock().unwrap().get(workspace) {
+    pub fn set_permission_mode(&self, chat: &str, mode: PermissionMode) {
+        if let Some(running) = self.running.lock().unwrap().get(chat) {
             running.mode.send_replace(mode);
         }
     }
 
-    /// Sends `prompt` into the workspace's running turn. False when there is no turn, or it
+    /// Sends `prompt` into the chat's running turn. False when there is no turn, or it
     /// could not take the message: the caller then runs it as the next turn.
-    pub async fn steer(&self, workspace: &str, prompt: &str, message: Option<&str>) -> bool {
+    pub async fn steer(&self, chat: &str, prompt: &str, message: Option<&str>) -> bool {
         let (steer, delivered) = Steer::new(prompt, message);
-        let sent = match self.running.lock().unwrap().get(workspace) {
+        let sent = match self.running.lock().unwrap().get(chat) {
             Some(running) => running.steer.send(steer).is_ok(),
             None => false,
         };
@@ -397,7 +451,7 @@ struct Turn {
     dir: PathBuf,
     /// Where the files every deck's agent shares are written (see [`crate::files::app_home`]).
     app_home: PathBuf,
-    /// The workspace's session this turn belongs to: chat state, provider session ids.
+    /// The chat's session this turn belongs to: chat state, provider session ids.
     session_dir: PathBuf,
     provider: Provider,
     bin: PathBuf,
@@ -406,7 +460,8 @@ struct Turn {
     compact: bool,
     /// The chat message the turn answers (see [`SendArgs::message`]).
     message: Option<String>,
-    workspace: String,
+    /// The chat the turn runs in (see [`SendArgs::chat`]), which its approvals belong to.
+    chat: String,
     permission_mode: LiveMode,
     approvals: Arc<Approvals>,
     /// The user's MCP servers, skills, plugins and instructions.
@@ -432,11 +487,12 @@ pub(crate) struct TurnArgs<'a> {
     pub dir: &'a Path,
     /// Where the files every deck's agent shares are written (see [`crate::files::app_home`]).
     pub app_home: &'a Path,
-    /// The workspace's session the turn belongs to (see [`crate::sessions`]).
+    /// The chat's session the turn belongs to (see [`crate::sessions`]).
     pub session_dir: &'a Path,
     /// This app's binary, which serves the app's MCP tools (`mcp.rs`).
     pub lint_server: &'a Path,
-    pub workspace: &'a str,
+    /// The chat the turn runs in, which its approvals belong to.
+    pub chat: &'a str,
     pub prompt: &'a str,
     pub model: Option<&'a str>,
     pub effort: Option<&'a str>,
@@ -567,7 +623,7 @@ impl Turn {
             app_home: &self.app_home,
             session_dir: &self.session_dir,
             lint_server: &lint_server,
-            workspace: &self.workspace,
+            chat: &self.chat,
             prompt,
             model: self.model.as_deref(),
             effort: self.effort.as_deref(),
@@ -716,12 +772,12 @@ mod tests {
             assert_eq!(serde_json::to_value(&event).unwrap(), expected);
         }
         let envelope = Envelope {
-            workspace: "talk",
+            chat: "talk",
             event: &AgentEvent::Thinking,
         };
         assert_eq!(
             serde_json::to_value(envelope).unwrap(),
-            json!({"workspace":"talk","event":{"type":"thinking"}})
+            json!({"chat":"talk","event":{"type":"thinking"}})
         );
     }
 
@@ -733,6 +789,12 @@ mod tests {
             (args.workspace.as_str(), args.prompt.as_str()),
             ("talk", "Hi")
         );
+        assert_eq!(args.chat, None, "the folder's own chat");
+        let in_deck: SendArgs = serde_json::from_value(
+            json!({"workspace":"talk","chat":"talk/deck.html","prompt":"Hi"}),
+        )
+        .unwrap();
+        assert_eq!(in_deck.chat.as_deref(), Some("talk/deck.html"));
         assert_eq!(args.model, None);
         assert_eq!(
             args.provider,
@@ -776,6 +838,115 @@ mod tests {
             PermissionMode::FullAccess,
             "idle workspaces have no turn"
         );
+    }
+
+    /// A manager with a turn running in each of `chats`.
+    fn manager_running(chats: &[&Path]) -> AgentManager {
+        let manager = AgentManager::default();
+        for chat in chats {
+            let (cancel, _) = watch::channel(false);
+            let (mode, _) = watch::channel(PermissionMode::Ask);
+            let (steer, _) = mpsc::unbounded_channel();
+            manager.running.lock().unwrap().insert(
+                chat.to_string_lossy().into_owned(),
+                Running {
+                    cancel,
+                    steer,
+                    mode,
+                },
+            );
+        }
+        manager
+    }
+
+    #[test]
+    fn a_turn_works_on_its_deck_or_on_every_deck_of_its_folder() {
+        let temp = crate::test_support::TempDir::new("agent-chats");
+        let folder = temp.join("talks");
+        std::fs::create_dir_all(folder.join("q3")).unwrap();
+        let (a, b) = (folder.join("a.html"), folder.join("q3").join("b.html"));
+        std::fs::write(&a, "<html></html>").unwrap();
+        std::fs::write(&b, "<html></html>").unwrap();
+
+        // The chat of a deck: its deck alone.
+        let manager = manager_running(&[&a]);
+        assert!(manager.is_running(&a.to_string_lossy()));
+        assert!(!manager.is_running(&folder.to_string_lossy()));
+        assert!(manager.works_on(&a));
+        assert!(!manager.works_on(&b));
+
+        // The chat of a folder: every deck in it.
+        let manager = manager_running(&[&folder]);
+        assert!(manager.works_on(&a) && manager.works_on(&b));
+        assert!(!manager.is_running(&a.to_string_lossy()));
+        assert!(!manager.works_on(&temp.join("elsewhere.html")));
+    }
+
+    #[test]
+    fn deck_chats_run_side_by_side_but_not_beside_their_folders() {
+        let temp = crate::test_support::TempDir::canonical("agent-conflict");
+        let folder = temp.join("talks");
+        std::fs::create_dir_all(&folder).unwrap();
+        let (a, b) = (folder.join("a.html"), folder.join("b.html"));
+        std::fs::write(&a, "<html></html>").unwrap();
+        std::fs::write(&b, "<html></html>").unwrap();
+        let key = |path: &Path| path.to_string_lossy().into_owned();
+        let running = [key(&a)];
+        assert_eq!(conflict(running.iter(), &b), None);
+        assert_eq!(
+            conflict(running.iter(), &a),
+            Some("The agent is still working in this chat.")
+        );
+        assert_eq!(
+            conflict(running.iter(), &folder),
+            Some("The agent is still working on this folder in another chat.")
+        );
+        let running = [key(&folder)];
+        assert!(conflict(running.iter(), &a).is_some());
+        assert_eq!(conflict([].iter(), &a), None);
+    }
+
+    #[test]
+    fn a_chat_is_about_a_deck_file_or_a_folder() {
+        let temp = crate::test_support::TempDir::canonical("agent-subject");
+        let folder = temp.join("talks");
+        std::fs::create_dir_all(&folder).unwrap();
+        let deck = folder.join("deck.html");
+        std::fs::write(&deck, "<html></html>").unwrap();
+        std::fs::write(folder.join("notes.txt"), "x").unwrap();
+        assert_eq!(subject(&folder.to_string_lossy()).unwrap(), folder);
+        assert_eq!(subject(&deck.to_string_lossy()).unwrap(), deck);
+        for bad in ["", "talks", &folder.join("notes.txt").to_string_lossy()] {
+            assert!(subject(bad).is_err(), "{bad}");
+        }
+        assert!(subject(&folder.join("gone.html").to_string_lossy()).is_err());
+    }
+
+    #[test]
+    fn interrupts_a_chats_turn_however_its_path_is_spelled() {
+        let temp = crate::test_support::TempDir::new("agent-interrupt");
+        let deck = temp.write("talks/a.html", "<html></html>");
+        let other = temp.write("talks/b.html", "<html></html>");
+        let manager = AgentManager::default();
+        let mut stopped = Vec::new();
+        for chat in [&deck, &other] {
+            let (cancel, was_stopped) = watch::channel(false);
+            let (mode, _) = watch::channel(PermissionMode::Ask);
+            let (steer, _) = mpsc::unbounded_channel();
+            stopped.push(was_stopped);
+            manager.running.lock().unwrap().insert(
+                chat.to_string_lossy().into_owned(),
+                Running {
+                    cancel,
+                    steer,
+                    mode,
+                },
+            );
+        }
+        // As a closing window names it: resolved.
+        manager.interrupt(&deck.canonicalize().unwrap().to_string_lossy());
+        assert!(*stopped[0].borrow());
+        assert!(!*stopped[1].borrow(), "the other deck's turn goes on");
     }
 
     #[test]
@@ -900,7 +1071,7 @@ mod tests {
                     effort: None,
                     compact: false,
                     message: None,
-                    workspace: "test".into(),
+                    chat: "test".into(),
                     permission_mode: crate::permissions::fixed_mode(self.mode),
                     approvals,
                     extensions: Extensions::default(),

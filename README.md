@@ -68,20 +68,30 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   deck's first commit every slide is new; staging one puts the deck with just the staged slides in
   the next commit, restoring one takes it out of the deck, and the styles count as changed once
   they differ from what is staged.
-- **Right:** chat with the agent. It knows which slide you're on, and you can attach images
+- **Right:** chat with the agent. Every deck has a chat of its own, which comes on show with
+  the deck; with no deck open, the chat is the folder's own (say, to have a deck made, which
+  that chat then moves to). The agent works in the open folder either way, so it can read the
+  other decks and files in it. Past chats lists the chats of every deck in the folder: picking
+  a deck's opens that deck, and picking any other goes on with it here. Leaving a deck while
+  the agent works on it asks whether to stop the agent first. It knows which slide you're on, and you can attach images
   (paperclip, or drop files anywhere on the window). The microphone button dictates: click to
   start, and what you say shows up at the cursor as you speak; click again to keep it (Esc
   discards it). On macOS the first use asks for microphone access (when running from a
   terminal or editor, macOS asks for that app instead). Speech is
   transcribed on your computer with [Whisper](https://github.com/ggml-org/whisper.cpp) (small,
   multilingual); its model (190 MB) is downloaded on first use to `~/.slopslides/models`.
+- **Folders:** the start screen opens a folder, one opened before, or a deck (in the folder it
+  is in). In a folder, the menu on the file's path at the top left opens another folder or
+  closes this one, back to the start screen.
 - **Windows:** File › New Window (⌘N; Ctrl+N on Windows and Linux) opens another window,
-  each with a folder of its own and its own chat. On macOS, a double-click on the app in
+  each with a folder and a deck of its own. Two windows can have the same folder open, each
+  with another of its decks, and the agent can work on both decks at once; a deck is open in
+  one window at a time, and so is a folder with no deck open. On macOS, a double-click on the app in
   Finder or New Window in its Dock menu (right-click the icon) opens another window too, while
   a click on the Dock icon only brings the app back. A folder
   dropped on the app's icon or opened with it from Finder (Open With) opens in a window: one
-  on the start screen, else a new one. A folder already open in one window is brought to the
-  front instead of opening twice. Elements and whole slides copied in one
+  on the start screen, else a new one. A folder already open without a deck in one window is
+  brought to the front instead of opening twice. Elements and whole slides copied in one
   window paste into another; the images they show are copied into the receiving deck's
   `assets/`. A pasted element keeps its size and text look, but styles that come from the
   other deck's CSS (its classes, its theme) do not come along.
@@ -315,7 +325,7 @@ src-tauri/src/
   history.rs            each deck's undo history: whole-file versions of every change
                         (edits, rail, review, narration, code view, agent, other apps)
   rewind.rs             takes an agent's conversation back to before a message
-  sessions.rs           chat sessions in `~/.slopslides/sessions`, each tied to one workspace
+  sessions.rs           chat sessions in `~/.slopslides/sessions`, each tied to one deck (or folder)
   html.rs               finds the slide <section>s in deck.html and rewrites them;
                         installs the player runtime (assets/runtime.{css,js})
   size.rs               the deck's slide size (`slopslide-size` meta) and the stage CSS for it
@@ -364,8 +374,8 @@ everything else in `~/.slopslides/`:
 templates/<name>/          user templates
 history/<key>/             one deck's undo history: journal.json and each version
                            of its HTML (assets are not kept), the newest 100
-sessions/<session id>/     one chat about a workspace: meta.json (its workspace
-                           folder), chat.json, each provider's session id,
+sessions/<session id>/     one chat about a deck, or about a folder: meta.json (the
+                           deck file or the folder), chat.json, each provider's session id,
                            rewind.json, sketches/, templates staged for the agent,
                            and Claude Code's generated mcp.json and claude-plugins/
 system-prompt.md           the system prompt file Claude Code reads
@@ -375,8 +385,8 @@ plugins/<name>/            your plugins
 AGENTS.md                  your instructions, appended to the system prompt
 ```
 
-A workspace's newest session is its current chat; New chat starts another and keeps the old
-one. `system-prompt.md` and the session's Claude Code files are rewritten by the app when
+A deck's newest session is its current chat (a folder's, the chat with no deck open); New chat
+starts another and keeps the old one. `system-prompt.md` and the session's Claude Code files are rewritten by the app when
 they change.
 
 ### Extensions
@@ -426,9 +436,12 @@ provider's conversation is cut back when the next turn starts (Claude Code resum
 `--resume-session-at`, Codex reverts the thread, Copilot truncates its history), or, where
 it cannot be, the next prompt says what was undone. Keeping the chat marks the message and
 tells the agent with the next one.
-The safety scan skips dot folders and is bounded to 10,000 entries and 64 MiB of HTML;
-turns refuse to start if those limits are exceeded. Legacy per-deck sessions remain on
-disk; opening their workspace starts a fresh conversation.
+The turn of a deck's chat answers for that deck alone (its locked slides, its history entry):
+the chats of other decks in the folder may be at work beside it. The turn of a folder's own
+chat answers for every deck in the folder, so it does not run beside theirs. Its safety scan
+skips dot folders and is bounded to 10,000 entries and 64 MiB of HTML;
+turns refuse to start if those limits are exceeded. Chats saved for a folder before decks had
+their own stay the folder's, and are listed under Past chats.
 
 Claude receives file tools (Read/Write/Edit/Glob/Grep plus web search/fetch), skills, the
 app's `lint_deck`, `open_file` and `render_slide` tools and the MCP servers from Extensions. Codex uses its

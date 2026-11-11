@@ -1,6 +1,8 @@
 //! Turn-wide protection. Capture all decks, and checkpoint their histories, before granting the
 //! agent a turn; capturing eagerly avoids watcher races (atomic replacements, deletes, and rapid
 //! rewrites). Each deck the turn changed gets one history entry when it ends.
+//! The turn of a deck's chat answers for that deck alone: the chats of other decks in the folder
+//! may be at work beside it, and what one changes must not be taken for the other's.
 //! Limits fail closed: a partially scanned workspace is never handed to the agent.
 use std::collections::BTreeMap;
 use std::fs;
@@ -19,6 +21,21 @@ pub struct Guard {
     /// The app's folder, which keeps the decks' histories.
     home: PathBuf,
     before: BTreeMap<PathBuf, Vec<u8>>,
+    /// The turn is for one deck: the decks it adds are left alone.
+    one_deck: bool,
+}
+
+/// The deck `file` alone, as [`decks`] would have it; nothing while it is no deck.
+fn deck(file: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
+    let mut found = BTreeMap::new();
+    if fs::metadata(file)?.len() > MAX_BYTES {
+        return Err(Error::msg("Deck exceeds the safety size limit."));
+    }
+    let source = fs::read(file)?;
+    if workspace::classify(&String::from_utf8_lossy(&source)) == workspace::FileKind::Deck {
+        found.insert(file.to_path_buf(), source);
+    }
+    Ok(found)
 }
 
 fn decks(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
@@ -80,8 +97,12 @@ fn scan(root: &Path, max_entries: usize, max_bytes: u64) -> Result<BTreeMap<Path
 }
 
 impl Guard {
-    pub fn start(root: &Path, session: &Path, home: &Path) -> Result<Self> {
-        let before = decks(root)?;
+    /// Guards the decks in `root`, or the deck `only` for the turn of that deck's chat.
+    pub fn start(root: &Path, only: Option<&Path>, session: &Path, home: &Path) -> Result<Self> {
+        let before = match only {
+            Some(file) => deck(file)?,
+            None => decks(root)?,
+        };
         // Discard a stale guard from an interrupted app instance, once the full scan succeeds.
         fs::create_dir_all(session)?;
         fs::write(session.join("locked.json"), "{}")?;
@@ -94,6 +115,7 @@ impl Guard {
             session: session.into(),
             home: home.into(),
             before,
+            one_deck: only.is_some(),
         })
     }
 
@@ -112,7 +134,7 @@ impl Guard {
             match crate::guard::release_guard(file, &self.session) {
                 Ok(ids) if !ids.is_empty() => restored.push((
                     file.strip_prefix(&self.root)
-                        .unwrap()
+                        .unwrap_or(file)
                         .components()
                         .map(|part| part.as_os_str().to_string_lossy().into_owned())
                         .collect::<Vec<_>>()
@@ -132,8 +154,14 @@ impl Guard {
                 }
             }
         }
-        // New decks have no lock guard but still need ids and the runtime.
-        match decks(&self.root) {
+        // New decks have no lock guard but still need ids and the runtime. Beside other chats
+        // there is no telling whose they are: they get both when they are opened.
+        let now = if self.one_deck {
+            Ok(BTreeMap::new())
+        } else {
+            decks(&self.root)
+        };
+        match now {
             Ok(now) => {
                 for file in now.keys().filter(|f| !self.before.contains_key(*f)) {
                     // A new deck's history starts with the version the agent wrote.
@@ -177,7 +205,7 @@ mod tests {
         fs::write(&a, source).unwrap();
         fs::write(&b, source).unwrap();
         let session = Sessions::new(&temp.join("home")).start(&root).unwrap();
-        let guard = Guard::start(&root, &session, &temp.join("home")).unwrap();
+        let guard = Guard::start(&root, None, &session, &temp.join("home")).unwrap();
         fs::write(
             &b,
             source.replace(">A<", ">changed<").replace(" id=\"b\"", ""),
@@ -222,6 +250,48 @@ mod tests {
     }
 
     #[test]
+    fn the_turn_of_a_decks_chat_answers_for_that_deck_alone() {
+        let temp = TempDir::canonical("guard-one");
+        let root = temp.join("work");
+        fs::create_dir_all(&root).unwrap();
+        let (a, b) = (root.join("a.html"), root.join("b.html"));
+        let source = "<html><body><main class=\"deck\"><section class=\"slide\" id=\"a\" data-locked>A</section><section class=\"slide\" id=\"b\">B</section></main></body></html>";
+        fs::write(&a, source).unwrap();
+        fs::write(&b, source).unwrap();
+        let home = temp.join("home");
+        let session = Sessions::new(&home).start(&a).unwrap();
+        let guard = Guard::start(&root, Some(&a), &session, &home).unwrap();
+        // The chat of the other deck is at work beside it, and adds a deck.
+        let other = source.replace(">A<", ">theirs<");
+        fs::write(&b, &other).unwrap();
+        assert!(
+            crate::guard::read_guard(&b, Some(&session)).is_empty(),
+            "the other deck's locked slides are not this turn's to guard"
+        );
+        let new = "<main class=\"deck\"><section class=\"slide\">New</section></main>";
+        fs::write(root.join("new.html"), new).unwrap();
+        fs::write(
+            &a,
+            source.replace(">A<", ">changed<").replace(">B<", ">mine<"),
+        )
+        .unwrap();
+        assert_eq!(
+            guard.finish(&turn()).unwrap(),
+            [("a.html".into(), vec!["a".into()])]
+        );
+        let out = fs::read_to_string(&a).unwrap();
+        assert!(out.contains(">A</section>") && out.contains(">mine</section>"));
+        let undo = history::status(&home, &a, false).unwrap().undo.unwrap();
+        assert_eq!(undo.label, "Tidy the slides");
+        // The others are as their own turn left them, and not in this turn's histories.
+        assert_eq!(fs::read_to_string(&b).unwrap(), other);
+        assert_eq!(fs::read_to_string(root.join("new.html")).unwrap(), new);
+        // Their first version noticed is theirs, not a change to undo.
+        assert!(history::status(&home, &b, false).unwrap().undo.is_none());
+        assert!(!session.join("locked.json").exists());
+    }
+
+    #[test]
     fn restores_deleted_locked_decks_and_refreshes_only_the_users_file() {
         let temp = TempDir::new("delete");
         let root = temp.join("work");
@@ -232,7 +302,7 @@ mod tests {
         fs::write(&a, source).unwrap();
         fs::write(&b, source).unwrap();
         let session = Sessions::new(&temp.join("home")).start(&root).unwrap();
-        let guard = Guard::start(&root, &session, &temp.join("home")).unwrap();
+        let guard = Guard::start(&root, None, &session, &temp.join("home")).unwrap();
         deck::set_slide_locked(&a, Some(&session), "a", false).unwrap();
         assert!(crate::guard::read_guard(&a, Some(&session)).is_empty());
         assert_eq!(crate::guard::read_guard(&b, Some(&session)).len(), 1);
@@ -242,7 +312,7 @@ mod tests {
             [("talks/q3.html".into(), vec!["a".into()])]
         );
         assert!(fs::read_to_string(&b).unwrap().contains(">A</section>"));
-        let guard = Guard::start(&root, &session, &temp.join("home")).unwrap();
+        let guard = Guard::start(&root, None, &session, &temp.join("home")).unwrap();
         fs::write(&b, "broken document without a slide container").unwrap();
         assert_eq!(
             guard.finish(&turn()).unwrap(),

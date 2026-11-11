@@ -123,7 +123,7 @@ pub async fn run_turn(
     let mut stdin = child.stdin.take();
     let prompt = if args.compact { COMPACT } else { args.prompt };
     write_line(stdin.as_mut(), &user_message(prompt)).await?;
-    let (run, mut answers) = args.approvals.start(args.workspace);
+    let (run, mut answers) = args.approvals.start(args.chat);
     let mut mode_requests = 0;
 
     let mut stderr = child.stderr.take().expect("piped stderr");

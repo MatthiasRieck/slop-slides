@@ -77,10 +77,10 @@ export function turnRedone(app: AppStore, entry: HistoryEntry) {
  * goes back into the composer), or keeps it, marked, and tells the agent with the next message.
  */
 async function applyRewind(app: AppStore, entry: HistoryEntry, choice: RewindChoice) {
-  const { workspace, messages } = app.getState();
+  const { chatKey, messages } = app.getState();
   const index = messages.findIndex((m) => m.id === entry.message);
   const message = messages[index];
-  if (!workspace || message?.role !== "user") return;
+  if (!chatKey || message?.role !== "user") return;
   const label = quoteLabel(message.text);
   if (choice === "deck") {
     app.setState((s) => ({
@@ -99,7 +99,7 @@ async function applyRewind(app: AppStore, entry: HistoryEntry, choice: RewindCho
   app.getState().fillComposer(message.text);
   persistChat(app);
   try {
-    await api.rewindChat(workspace.path, message.id, rewindNote(label));
+    await api.rewindChat(chatKey, message.id, rewindNote(label));
   } catch (error) {
     showErrorIn(app, error);
   }

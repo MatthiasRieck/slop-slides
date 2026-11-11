@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Deck } from "../lib/api";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { ask, invoke } from "../test/tauri";
 import type { AssistantMessage, ChatMessage } from "./messages";
 import {
   assistantMessage,
@@ -179,6 +180,7 @@ describe("deck file changes", () => {
     const { useApp } = await withBridge({ load_deck: () => next() });
     useApp.setState({
       workspace: { path: "/decks", name: "decks" },
+      chatKey: "/decks",
       openedFile: { path: "talk/deck.html", absolute: DECK.id, kind: "deck" },
       deck: DECK,
       selected: "intro",
@@ -375,6 +377,95 @@ describe("deck file changes", () => {
   });
 });
 
+describe("the agent showing a deck it made", () => {
+  const MADE = { ...DECK, id: "/decks/talk/new/deck.html", path: "/decks/talk/new/deck.html" };
+  const emitTo = (chat: string, event: unknown) => listeners.get("agent-event")!({ payload: { chat, event } });
+
+  async function folderChatAtWork() {
+    const { useApp, initEventBridge } = await freshModule();
+    backend({
+      open_file: ({ path }) => ({ path, absolute: `/decks/talk/${path}`, kind: "deck" }),
+      open_deck: () => MADE,
+      load_chat: () => null,
+      agent_running: () => false,
+    });
+    useApp.setState({
+      messages: [userMessage("Make a deck"), assistantMessage({ status: "streaming" })],
+      running: true,
+    });
+    await initEventBridge();
+    return useApp;
+  }
+
+  it("shows the deck beside the folder's chat, which moves to the deck when the turn ends", async () => {
+    const useApp = await folderChatAtWork();
+    emitTo("/decks/talk", { type: "openFile", path: "new/deck.html" });
+    await vi.waitFor(() => expect(useApp.getState().deck).toEqual(MADE));
+    expect(calls("open_deck")).toEqual([{ id: MADE.id, keepChat: true, quiet: false }]);
+    // The turn goes on in the folder's chat: nothing asked, nothing stopped, nothing reloaded.
+    expect(ask).not.toHaveBeenCalled();
+    expect(calls("interrupt_agent")).toEqual([]);
+    expect(calls("load_chat")).toEqual([]);
+    expect(useApp.getState()).toMatchObject({ chatKey: "/decks/talk", chatFollowsDeck: true, running: true });
+    emitTo("/decks/talk", { type: "textDelta", text: "Done." });
+    expect((useApp.getState().messages[1] as AssistantMessage).parts).toEqual([{ kind: "text", text: "Done." }]);
+
+    useApp.setState({
+      queue: [{ id: "q1", text: "Now make it blue", options: { includeSlide: false, attachments: [] } }],
+    });
+    emitTo("/decks/talk", { type: "finished", interrupted: false });
+    await vi.waitFor(() => expect(useApp.getState().chatKey).toBe(MADE.id));
+    expect(calls("move_chat_to_deck")).toHaveLength(1);
+    expect(useApp.getState()).toMatchObject({ chatFollowsDeck: false, running: true });
+    expect(useApp.getState().messages[0]).toMatchObject({ text: "Make a deck" });
+    // The transcript is saved with the folder before it moves, and what waited is said in the deck's chat.
+    const order = invoke.mock.calls.map(([command]) => command);
+    expect(order.lastIndexOf("save_chat")).toBeLessThan(order.indexOf("move_chat_to_deck"));
+    await vi.waitFor(() => expect(calls("send_message")).toHaveLength(1));
+    expect(calls("send_message")[0]!.args).toMatchObject({ workspace: "/decks/talk", chat: MADE.id });
+    expect(order.indexOf("move_chat_to_deck")).toBeLessThan(
+      invoke.mock.calls.map(([command]) => command).indexOf("send_message"),
+    );
+  });
+
+  it("leaves the chat with the folder, saying why, when it cannot move", async () => {
+    const useApp = await folderChatAtWork();
+    backend({
+      open_file: ({ path }) => ({ path, absolute: `/decks/talk/${path}`, kind: "deck" }),
+      open_deck: () => MADE,
+      move_chat_to_deck: () => {
+        throw "The agent is still working in this chat.";
+      },
+    });
+    emitTo("/decks/talk", { type: "openFile", path: "new/deck.html" });
+    await vi.waitFor(() => expect(useApp.getState().deck).toEqual(MADE));
+    emitTo("/decks/talk", { type: "finished", interrupted: false });
+    await vi.waitFor(() => expect(useApp.getState().error).toBe("The agent is still working in this chat."));
+    expect(useApp.getState().chatKey).toBe("/decks/talk");
+  });
+
+  it("keeps a deck's chat with its deck: the file is the user's to open", async () => {
+    const useApp = await folderChatAtWork();
+    useApp.setState({
+      deck: DECK,
+      chatKey: DECK.id,
+      openedFile: { path: "deck.html", absolute: DECK.id, kind: "deck" },
+    });
+    emitTo(DECK.id, { type: "openFile", path: "new/deck.html" });
+    await Promise.resolve();
+    expect(calls("open_file")).toEqual([]);
+    expect(calls("open_deck")).toEqual([]);
+    expect(useApp.getState().error).toBe(
+      "The agent made new/deck.html. Open it from the Files tab: this chat stays with deck.html.",
+    );
+    expect(useApp.getState()).toMatchObject({ deck: DECK, chatKey: DECK.id, running: true });
+    // Its own deck, shown again, is nothing to say.
+    useApp.setState({ error: null });
+    emitTo(DECK.id, { type: "openFile", path: "deck.html" });
+    expect(useApp.getState().error).toBeNull();
+  });
+});
+
 describe("the agent opening a file", () => {
   it("keeps a running conversation and approvals when switching files, and routes openFile through openPath", async () => {
     const { useApp, initEventBridge } = await freshModule();
@@ -386,18 +477,18 @@ describe("the agent opening a file", () => {
     });
     await initEventBridge();
     listeners.get("agent-event")!({
-      payload: { workspace: "/other", event: { type: "openFile", path: "outside.html" } },
+      payload: { chat: "/other", event: { type: "openFile", path: "outside.html" } },
     });
     expect(calls("open_file")).toEqual([]);
     listeners.get("agent-event")!({
-      payload: { workspace: "/decks/talk", event: { type: "openFile", path: "site/index.html" } },
+      payload: { chat: "/decks/talk", event: { type: "openFile", path: "site/index.html" } },
     });
     await vi.waitFor(() => expect(useApp.getState().openedFile?.path).toBe("site/index.html"));
     expect(useApp.getState()).toMatchObject({ deck: null, running: true });
     expect(useApp.getState().messages).toHaveLength(2);
     expect(calls("interrupt_agent")).toEqual([]);
     listeners.get("agent-event")!({
-      payload: { workspace: "/decks/talk", event: { type: "textDelta", text: "Still here" } },
+      payload: { chat: "/decks/talk", event: { type: "textDelta", text: "Still here" } },
     });
     expect((useApp.getState().messages[1] as AssistantMessage).parts).toEqual([{ kind: "text", text: "Still here" }]);
   });

@@ -137,7 +137,7 @@ describe("workspace bar", () => {
     expect(fileButton().getAttribute("aria-expanded")).toBe("true");
     expect(
       screen.getAllByRole("menuitem").map((el) => el.firstElementChild?.nextElementSibling?.firstChild?.textContent),
-    ).toEqual(["Settings", "Close deck.html", "Show in folder"]);
+    ).toEqual(["Settings", "Close deck.html", "Show in folder", "Open folder…", "Close decks"]);
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
   });
@@ -176,6 +176,56 @@ describe("workspace bar", () => {
     expect(useApp.getState().openedFile).toBeNull();
     expect(useApp.getState().workspace).toEqual(WORKSPACE);
     expect(invoke).not.toHaveBeenCalledWith("close_workspace");
+  });
+
+  it("offers the folder's menu with no file open: show it, open another, or close it", async () => {
+    useApp.setState({ deck: null, openedFile: null });
+    render(<TopBar />);
+    openFileMenu();
+    expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
+      "Show in folder",
+      "Open folder…Work on the decks of another folder",
+      "Close decksBack to the start screen",
+    ]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Show in folder" }));
+    expect(revealItemInDir).toHaveBeenCalledWith("/decks");
+  });
+
+  it("closes the folder, back to the start screen", async () => {
+    render(<TopBar />);
+    openFileMenu();
+    await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: /^Close decks/ })));
+    expect(invoke).toHaveBeenCalledWith("close_workspace");
+    expect(useApp.getState()).toMatchObject({ workspace: null, deck: null, openedFile: null, chatKey: null });
+  });
+
+  it("opens another folder from the menu, closing this one first", async () => {
+    openDialog.mockResolvedValue("/other");
+    invoke.mockImplementation(async (command: string, args?: { path?: string }) =>
+      command === "open_workspace" ? { path: args?.path, name: "other" } : undefined,
+    );
+    render(<TopBar />);
+    openFileMenu();
+    await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: /^Open folder/ })));
+    expect(openDialog).toHaveBeenCalledWith(expect.objectContaining({ directory: true }));
+    expect(invoke).toHaveBeenCalledWith("close_workspace");
+    expect(useApp.getState().workspace).toEqual({ path: "/other", name: "other" });
+    expect(useApp.getState().deck).toBeNull();
+  });
+
+  it("stays in the folder while the agent works and the user does not stop it", async () => {
+    useApp.setState({ chatKey: OPENED.absolute, running: true });
+    ask.mockResolvedValue(false);
+    render(<TopBar />);
+    openFileMenu();
+    await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: /^Close decks/ })));
+    expect(ask).toHaveBeenCalledWith(
+      "The agent is still working in the chat of deck.html. Stop it to go on?",
+      expect.objectContaining({ okLabel: "Stop the agent" }),
+    );
+    expect(invoke).not.toHaveBeenCalledWith("close_workspace");
+    expect(useApp.getState().workspace).toEqual(WORKSPACE);
+    useApp.setState({ running: false, chatKey: null });
   });
 
   it("closes an open page that is not a deck", async () => {
@@ -318,6 +368,7 @@ describe("breadcrumbs", () => {
     render(<TopBar />);
     expect(crumbs()).toEqual(["decks"]);
     expect(screen.getByText("decks").getAttribute("aria-current")).toBe("page");
-    expect(document.querySelector("header button[aria-haspopup=menu]")).toBeNull();
+    // The folder's own menu: to open another folder, or close this one.
+    expect(fileButton().title).toBe("/decks");
   });
 });

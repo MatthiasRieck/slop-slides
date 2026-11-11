@@ -172,9 +172,9 @@ export const createModelsSlice: Slice<ModelsSlice> = (set, get, app) => ({
     saveJson(PERMISSIONS_KEY, permissionModes);
     set({ permissionModes });
     // The provider cannot change during a turn, so the running turn is the selected provider's.
-    const { running, workspace } = get();
-    if (running && workspace) {
-      api.setPermissionMode(workspace.path, mode).catch((error) => showErrorIn(app, error));
+    const { running, chatKey } = get();
+    if (running && chatKey) {
+      api.setPermissionMode(chatKey, mode).catch((error) => showErrorIn(app, error));
     }
   },
 

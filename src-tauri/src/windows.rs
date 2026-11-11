@@ -1,5 +1,5 @@
 //! App windows. Each window has a workspace of its own (see [`OpenWorkspace`]), so several
-//! folders can be open side by side; File › New Window (⌘N, Ctrl+N elsewhere) opens another.
+//! folders, or several decks of one folder, can be open side by side; File › New Window (⌘N, Ctrl+N elsewhere) opens another.
 //! On macOS so does opening the app again (a double-click in Finder) and the New Window item of
 //! its Dock menu, while a click on its Dock icon only brings it back: see `reopened`. Folders
 //! opened with the app from Finder (dropped on its icon, Open With) open in a window too: see
@@ -241,10 +241,10 @@ fn cascaded_position(app: &AppHandle) -> Option<LogicalPosition<f64>> {
 pub fn closed(window: &Window) {
     let label = window.label();
     let open = window.state::<OpenWorkspace>();
-    if let Some(root) = open.get(label) {
+    if let Some(chat) = open.chat(label) {
         window
             .state::<AgentManager>()
-            .interrupt(&root.to_string_lossy());
+            .interrupt(&chat.to_string_lossy());
     }
     open.set(label, None);
     window.state::<WorkspaceWatcher>().stop(label);

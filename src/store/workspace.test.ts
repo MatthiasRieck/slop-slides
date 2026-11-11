@@ -48,7 +48,7 @@ describe("workspaces", () => {
     workspaceBackend();
     await useApp.getState().openWorkspace("/ws");
     await useApp.getState().openPath("talks/q3.html");
-    expect(calls("open_deck")).toEqual([{ id: "/ws/talks/q3.html" }]);
+    expect(calls("open_deck")).toEqual([{ id: "/ws/talks/q3.html", keepChat: false, quiet: false }]);
     expect(useApp.getState().deck).toEqual(TALK);
     expect(useApp.getState().openedFile).toEqual({
       path: "talks/q3.html",
@@ -60,6 +60,7 @@ describe("workspaces", () => {
     expect(useApp.getState().deck).toBeNull();
     expect(useApp.getState().openedFile).toEqual(opened("site/index.html", "webpage"));
     expect(calls("open_deck")).toHaveLength(1);
+    expect(calls("close_deck")).toHaveLength(1);
 
     await useApp.getState().openPath("site/index.html");
     expect(calls("open_file")).toHaveLength(2);
@@ -144,7 +145,7 @@ describe("workspaces", () => {
 
   it("creates decks in the open folder and opens them", async () => {
     const useApp = await freshStore(false);
-    workspaceBackend();
+    workspaceBackend({ open_deck: ({ id }) => ({ ...TALK, id, path: id }) });
     await useApp.getState().openWorkspace("/ws");
     await useApp.getState().createDeck("New deck");
     expect(calls("create_deck")).toEqual([{ title: "New deck", template: null }]);
@@ -154,6 +155,168 @@ describe("workspaces", () => {
       kind: "deck",
     });
     expect(localStorage.getItem("slopslide.lastFile:/ws")).toBe("new-deck/deck.html");
+    expect(useApp.getState().chatKey).toBe("/ws/new-deck/deck.html");
+  });
+});
+
+describe("each deck's own chat", () => {
+  const A = { ...deckFor(DECK_HTML), id: "/ws/a.html", path: "/ws/a.html" };
+  const B = { ...A, id: "/ws/b.html", path: "/ws/b.html" };
+  const said = (text: string): ChatMessage[] => [userMessage(text), assistantMessage()];
+
+  beforeEach(() => localStorage.clear());
+
+  /** The workspace `/ws` open, with the decks `a.html` and `b.html`, each with a chat. */
+  async function inWorkspace(extra: Record<string, Handler> = {}) {
+    const useApp = await freshStore(false);
+    backend({
+      open_workspace: ({ path }) => ({ path, name: "ws" }),
+      open_file: ({ path }) => ({
+        path,
+        absolute: `/ws/${String(path)}`,
+        kind: String(path) === "page.html" ? "webpage" : "deck",
+      }),
+      open_deck: ({ id }) => ({ ...A, id, path: id }),
+      load_chat: ({ id }) => (id === A.id ? said("about a") : id === B.id ? said("about b") : said("about the folder")),
+      agent_running: () => false,
+      ...extra,
+    });
+    await useApp.getState().openWorkspace("/ws");
+    return useApp;
+  }
+
+  it("shows the folder's chat until a deck opens, then the deck's, and the folder's again when it closes", async () => {
+    const useApp = await inWorkspace();
+    expect(useApp.getState()).toMatchObject({ chatKey: "/ws", messages: said("about the folder") });
+    await useApp.getState().openPath("a.html");
+    expect(useApp.getState()).toMatchObject({ chatKey: A.id, messages: said("about a") });
+    expect(calls("save_chat")).toEqual([{ id: "/ws", chat: said("about the folder") }]);
+
+    await useApp.getState().openPath("b.html");
+    expect(useApp.getState()).toMatchObject({ chatKey: B.id, messages: said("about b"), deck: B });
+    expect(calls("save_chat").at(-1)).toEqual({ id: A.id, chat: said("about a") });
+
+    expect(await useApp.getState().closeDeck()).toBe(true);
+    expect(calls("close_deck")).toHaveLength(1);
+    expect(useApp.getState()).toMatchObject({ chatKey: "/ws", messages: said("about the folder"), deck: null });
+  });
+
+  it("starts no session for a chat nothing was said in", async () => {
+    const useApp = await inWorkspace({ load_chat: () => null });
+    await useApp.getState().openPath("a.html");
+    await useApp.getState().openPath("b.html");
+    expect(calls("save_chat")).toEqual([]);
+  });
+
+  it("asks before leaving a deck the agent is working on, and stays when the user cancels", async () => {
+    const useApp = await inWorkspace({ agent_running: ({ id }) => id === A.id });
+    await useApp.getState().openPath("a.html");
+    expect(useApp.getState().running).toBe(true);
+
+    ask.mockResolvedValue(false);
+    expect(await useApp.getState().openDeck(B.id)).toBe(false);
+    expect(await useApp.getState().closeDeck()).toBe(false);
+    expect(await useApp.getState().closeWorkspace()).toBe(false);
+    expect(ask).toHaveBeenCalledTimes(3);
+    expect(ask.mock.calls[0]![0]).toBe("The agent is still working in the chat of a.html. Stop it to go on?");
+    expect(useApp.getState()).toMatchObject({ deck: { id: A.id }, chatKey: A.id, running: true });
+    expect(calls("interrupt_agent")).toEqual([]);
+    expect(calls("open_deck")).toHaveLength(1);
+  });
+
+  it("stops the agent and saves its chat when the user leaves the deck anyway", async () => {
+    const useApp = await inWorkspace({ agent_running: ({ id }) => id === A.id });
+    await useApp.getState().openPath("a.html");
+    useApp.setState({ messages: [userMessage("go"), assistantMessage({ status: "streaming" })] });
+    ask.mockResolvedValue(true);
+    expect(await useApp.getState().openDeck(B.id)).toBe(true);
+    expect(calls("interrupt_agent")).toEqual([{ id: A.id }]);
+    expect(calls("save_chat").at(-1)).toMatchObject({ id: A.id, chat: [{}, { status: "interrupted" }] });
+    const order = invoke.mock.calls.map(([command]) => command);
+    expect(order.indexOf("interrupt_agent")).toBeLessThan(order.lastIndexOf("save_chat"));
+    expect(order.lastIndexOf("save_chat")).toBeLessThan(order.lastIndexOf("open_deck"));
+    expect(useApp.getState()).toMatchObject({ deck: { id: B.id }, chatKey: B.id, running: false });
+  });
+
+  it("leaves a deck that is gone, though its chat cannot be saved", async () => {
+    const useApp = await inWorkspace({
+      save_chat: ({ id }) => {
+        if (id === A.id) throw "not a deck or a folder: /ws/a.html";
+      },
+    });
+    await useApp.getState().openPath("a.html");
+    expect(await useApp.getState().openDeck(B.id)).toBe(true);
+    expect(useApp.getState()).toMatchObject({ deck: { id: B.id }, chatKey: B.id, error: null });
+  });
+
+  it("keeps the open deck and its chat when the next one is open in another window", async () => {
+    const useApp = await inWorkspace({
+      open_deck: ({ id }) => {
+        if (id === B.id) throw "b.html is already open in another window.";
+        return A;
+      },
+    });
+    await useApp.getState().openPath("a.html");
+    expect(await useApp.getState().openDeck(B.id)).toBe(false);
+    expect(useApp.getState().error).toBe("b.html is already open in another window.");
+    expect(useApp.getState()).toMatchObject({ deck: A, chatKey: A.id, messages: said("about a") });
+    expect(useApp.getState().openedFile?.path).toBe("a.html");
+  });
+
+  it("starts at the files, without a word, when the deck last open is open in another window", async () => {
+    localStorage.setItem("slopslide.lastFile:/ws", "a.html");
+    const useApp = await inWorkspace({
+      open_deck: () => {
+        throw "a.html is already open in another window.";
+      },
+    });
+    expect(calls("open_deck")).toEqual([{ id: A.id, keepChat: false, quiet: true }]);
+    expect(useApp.getState()).toMatchObject({ deck: null, openedFile: null, error: null, sidebarTab: "files" });
+    expect(useApp.getState().chatKey).toBe("/ws");
+    expect(localStorage.getItem("slopslide.lastFile:/ws")).toBe("a.html");
+  });
+
+  it("keeps the deck open when another window shows the folder's own chat", async () => {
+    const useApp = await inWorkspace({
+      close_deck: () => {
+        throw "ws is already open without a deck in another window. Open the next file there.";
+      },
+    });
+    await useApp.getState().openPath("a.html");
+    expect(await useApp.getState().closeDeck()).toBe(false);
+    await useApp.getState().openPath("page.html");
+    expect(useApp.getState().error).toMatch(/^ws is already open without a deck/);
+    expect(useApp.getState()).toMatchObject({ deck: A, chatKey: A.id });
+    expect(useApp.getState().openedFile?.path).toBe("a.html");
+  });
+
+  it("goes on with a deck's past conversation in its deck", async () => {
+    const useApp = await inWorkspace({
+      select_chat_thread: () => ({ chat: said("earlier, about b"), provider: null }),
+    });
+    await useApp.getState().openPath("a.html");
+    await useApp.getState().selectChatThread("t1", B.id);
+    expect(useApp.getState()).toMatchObject({ deck: { id: B.id }, chatKey: B.id });
+    expect(calls("select_chat_thread")).toEqual([{ id: B.id, thread: "t1" }]);
+    expect(useApp.getState().messages).toEqual(said("earlier, about b"));
+
+    // Any other conversation moves to the chat on show.
+    await useApp.getState().selectChatThread("t2", null);
+    expect(calls("select_chat_thread").at(-1)).toEqual({ id: B.id, thread: "t2" });
+    expect(useApp.getState().deck).toMatchObject({ id: B.id });
+  });
+
+  it("does not go on with a deck's conversation when its deck cannot open", async () => {
+    const useApp = await inWorkspace({
+      open_deck: ({ id }) => {
+        if (id === B.id) throw "b.html is already open in another window.";
+        return A;
+      },
+    });
+    await useApp.getState().openPath("a.html");
+    await useApp.getState().selectChatThread("t1", B.id);
+    expect(calls("select_chat_thread")).toEqual([]);
+    expect(useApp.getState().chatKey).toBe(A.id);
   });
 });
 
@@ -211,8 +374,8 @@ describe("opening and creating decks", () => {
     backend({
       open_workspace: () => ({ path: "/decks/talk", name: "talk" }),
       open_deck: () => DECK,
-      load_chat: () => chat,
-      agent_running: () => true,
+      load_chat: ({ id }) => (id === DECK.id ? chat : null),
+      agent_running: ({ id }) => id === DECK.id,
     });
     useApp.setState({
       assetsRev: 4,
@@ -222,8 +385,9 @@ describe("opening and creating decks", () => {
     });
     await useApp.getState().openWorkspace("/decks/talk");
     await useApp.getState().openDeck("/decks/talk/deck.html");
-    expect(calls("open_deck")).toEqual([{ id: "/decks/talk/deck.html" }]);
-    expect(calls("load_chat")).toEqual([{ id: "/decks/talk" }]);
+    expect(calls("open_deck")).toEqual([{ id: "/decks/talk/deck.html", keepChat: false, quiet: false }]);
+    expect(calls("load_chat")).toEqual([{ id: "/decks/talk" }, { id: "/decks/talk/deck.html" }]);
+    expect(calls("agent_running").at(-1)).toEqual({ id: "/decks/talk/deck.html" });
     const state = useApp.getState();
     expect(state.deck).toEqual(DECK);
     expect(state.selected).toBe("intro");
@@ -298,10 +462,13 @@ describe("opening and creating decks", () => {
 
   it("createDeck creates and opens the new deck", async () => {
     const useApp = await freshStore();
-    backend({ create_deck: () => DECK, load_chat: () => null, agent_running: () => false });
+    backend({ create_deck: () => DECK, open_deck: () => DECK, load_chat: () => null, agent_running: () => false });
     await useApp.getState().createDeck("Talk");
     expect(calls("create_deck")).toEqual([{ title: "Talk", template: null }]);
+    // Opened like any deck: the window has it, and its chat is on show.
+    expect(calls("open_deck")).toEqual([{ id: DECK.id, keepChat: false, quiet: false }]);
     expect(useApp.getState().deck).toEqual(DECK);
+    expect(useApp.getState().chatKey).toBe(DECK.id);
   });
 
   it("createDeck reports failures", async () => {
@@ -364,14 +531,15 @@ describe("the agent's turn when the workspace closes and opens", () => {
         }),
       ],
     });
+    ask.mockResolvedValue(true);
     await store.getState().closeWorkspace();
     const order = invoke.mock.calls.map(([command]) => command);
     expect(order.indexOf("interrupt_agent")).toBeLessThan(order.indexOf("save_chat"));
     expect(calls("save_chat")[0]!.chat).toMatchObject([{ status: "interrupted", parts: [{ status: "expired" }] }]);
-    expect(store.getState().deck).toBeNull();
+    expect(store.getState()).toMatchObject({ deck: null, workspace: null, chatKey: null, running: false });
   });
 
-  it("keeps the existing background behavior for other providers", async () => {
+  it("keeps the turn of the folder's chat running when its deck closes", async () => {
     const store = await freshStore();
     store.setState({
       deck: deckFor(DECK_HTML),

@@ -36,14 +36,30 @@ fn changing<T>(id: &str, change: Change, f: impl FnOnce(&Path) -> Result<T>) -> 
     crate::history::change(&files::app_home()?, &file, change, || f(&file))
 }
 
-/// The current session of the window's workspace, starting one if it has none.
+/// The current session of the window's chat, starting one if it has none.
 fn session(window: &Window) -> Result<PathBuf> {
-    sessions()?.current_or_start(&workspace_root(window)?)
+    sessions()?.current_or_start(&chat_subject(window)?)
 }
 
-/// The current session of the window's workspace, if it has one.
+/// The current session of the window's chat, if it has one.
 fn current_session(window: &Window) -> Result<Option<PathBuf>> {
-    Ok(sessions()?.current(&workspace_root(window)?))
+    Ok(sessions()?.current(&chat_subject(window)?))
+}
+
+/// What the window's chat is about: the deck it has open, or its folder.
+fn chat_subject(window: &Window) -> Result<PathBuf> {
+    window
+        .state::<OpenWorkspace>()
+        .chat(window.label())
+        .ok_or_else(|| error::Error::msg("No folder is open."))
+}
+
+/// Brings the app window `label` to the front.
+fn focus(app: &tauri::AppHandle, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
 }
 
 /// The folder the window has open.

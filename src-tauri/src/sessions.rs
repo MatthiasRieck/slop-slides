@@ -1,13 +1,14 @@
-//! Conversations belong to a workspace folder. The newest session records the active thread.
-//! `meta.json` stores {"workspace": "<canonical folder>"}; chat, provider ids, sketches,
-//! templates, where each turn's conversation started (`rewind.json`, see [`crate::rewind`]),
-//! and locked.json keyed by relative deck path live here. The decks' undo histories do not:
-//! they outlive chats (see [`crate::history`]).
+//! Conversations belong to what they are about (their subject): a deck file, or a folder for
+//! the chat of a workspace with no deck open. The newest session of a subject records its active
+//! thread. `meta.json` stores {"deck": "<canonical deck file>"} or {"workspace": "<canonical
+//! folder>"}; chat, provider ids, sketches, templates, where each turn's conversation started
+//! (`rewind.json`, see [`crate::rewind`]), and locked.json keyed by relative deck path live
+//! here. The decks' undo histories do not: they outlive chats (see [`crate::history`]).
 //!
-//! Migration: legacy {"deck": ...} sessions (including folder-keyed ones) remain
-//! readable on disk. Opening a workspace starts a fresh conversation rather than
-//! silently adopting one of several decks' unrelated histories.
-//! provider.json records the provider chosen for the workspace conversation.
+//! A conversation moves to another subject when it is continued there: picked from the past
+//! chats of a workspace ([`Sessions::open_thread`]), or when the chat of a folder made the deck
+//! it goes on with ([`Sessions::move_current`]). So no two subjects ever share one.
+//! provider.json records the provider chosen for the conversation.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,8 +25,10 @@ const SESSIONS_DIR: &str = "sessions";
 const META_FILE: &str = "meta.json";
 pub const CHAT_FILE: &str = "chat.json";
 const SKETCHES_KEPT: usize = 30;
+/// In a subject's newest session: the name of the session selected as its current one.
+const ACTIVE_FILE: &str = "active-session";
 
-/// The session's chat; Null for a deck without one yet.
+/// The session's chat; Null without one yet.
 pub fn load_chat(session: Option<&Path>) -> Result<Value> {
     let Some(session) = session else {
         return Ok(Value::Null);
@@ -142,46 +145,41 @@ impl Sessions {
         }
     }
 
-    /// Session folders of the workspace folder `workspace`, oldest first.
-    pub fn list(&self, workspace: &Path) -> Vec<PathBuf> {
-        let workspace = canonical(workspace);
-        let Ok(entries) = fs::read_dir(&self.root) else {
-            return Vec::new();
-        };
-        let mut found: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|dir| workspace_of(dir).is_some_and(|d| canonical(&d) == workspace))
-            .collect();
-        found.sort();
-        found
+    /// Session folders of `subject` (a deck file or a folder), oldest first.
+    pub fn list(&self, subject: &Path) -> Vec<PathBuf> {
+        let subject = canonical(subject);
+        self.all(|path| *path == subject)
     }
 
-    /// All folder and legacy deck conversations underneath the opened root.
-    pub fn list_scoped(&self, workspace: &Path) -> Vec<PathBuf> {
-        let root = canonical(workspace);
+    /// All conversations about the folder `root` or anything underneath it.
+    pub fn list_scoped(&self, root: &Path) -> Vec<PathBuf> {
+        let root = canonical(root);
+        self.all(|path| path.starts_with(&root))
+    }
+
+    /// The sessions whose subject `keep` takes, oldest first.
+    fn all(&self, keep: impl Fn(&PathBuf) -> bool) -> Vec<PathBuf> {
         let Ok(entries) = fs::read_dir(&self.root) else {
             return Vec::new();
         };
         let mut found: Vec<PathBuf> = entries
             .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .filter(|session| {
-                association_of(session).is_some_and(|path| canonical(&path).starts_with(&root))
-            })
+            .filter(|session| subject_of(session).is_some_and(|path| keep(&canonical(&path))))
             .collect();
         found.sort();
         found
     }
 
-    /// The workspace's current session, if it has one.
-    pub fn current(&self, workspace: &Path) -> Option<PathBuf> {
-        let listed = self.list(workspace);
+    /// The subject's current session, if it has one: the one selected, else the newest.
+    pub fn current(&self, subject: &Path) -> Option<PathBuf> {
+        let listed = self.list(subject);
         let newest = listed.last()?;
-        if let Ok(selected) = fs::read_to_string(newest.join("active-session")) {
-            if let Some(path) = self.list_scoped(workspace).into_iter().find(|path| {
+        if let Ok(selected) = fs::read_to_string(newest.join(ACTIVE_FILE)) {
+            if let Some(path) = listed.iter().find(|path| {
                 path.file_name()
                     .is_some_and(|name| name == selected.as_str())
             }) {
-                return Some(path);
+                return Some(path.clone());
             }
         }
         Some(newest.clone())
@@ -189,30 +187,32 @@ impl Sessions {
 
     /// The session folder of conversation `thread`, one of [`Sessions::list_scoped`]; never
     /// any other path.
-    fn thread(&self, workspace: &Path, thread: &str) -> Result<PathBuf> {
-        self.list_scoped(workspace)
+    fn thread(&self, root: &Path, thread: &str) -> Result<PathBuf> {
+        self.list_scoped(root)
             .into_iter()
             .find(|path| path.file_name().is_some_and(|name| name == thread))
             .ok_or_else(|| Error::msg("Conversation not found in this workspace."))
     }
 
-    /// Select only a session belonging to this workspace; never accept arbitrary paths.
-    pub fn select(&self, workspace: &Path, thread: &str) -> Result<()> {
-        self.thread(workspace, thread)?;
-        // Keep the selection on this root's own session, so opening a parent folder
-        // does not change the active conversation of a separately opened subfolder.
-        let anchor = match self.list(workspace).pop() {
-            Some(path) => path,
-            None => self.start(workspace)?,
-        };
-        fs::write(anchor.join("active-session"), thread)?;
+    /// Makes `thread`, one of the subject's own sessions, its current one.
+    pub fn select(&self, subject: &Path, thread: &str) -> Result<()> {
+        let listed = self.list(subject);
+        if !listed
+            .iter()
+            .any(|path| path.file_name().is_some_and(|name| name == thread))
+        {
+            return Err(Error::msg("Conversation not found here."));
+        }
+        // The newest session holds the selection (see [`Sessions::current`]).
+        fs::write(listed.last().unwrap().join(ACTIVE_FILE), thread)?;
         Ok(())
     }
 
-    /// The workspace's conversations, newest first, for picking one to go back to.
-    pub fn threads(&self, workspace: &Path) -> Result<Vec<Thread>> {
-        let current = self.current(workspace);
-        self.list_scoped(workspace)
+    /// The conversations of workspace `root`, newest first, for picking one to go back to;
+    /// `subject` is what the chat is about now.
+    pub fn threads(&self, root: &Path, subject: &Path) -> Result<Vec<Thread>> {
+        let current = self.current(subject);
+        self.list_scoped(root)
             .into_iter()
             .rev()
             .map(|path| {
@@ -222,58 +222,82 @@ impl Sessions {
                 let title = first
                     .and_then(|m| m["text"].as_str())
                     .unwrap_or("New conversation");
+                let about = subject_of(&path);
                 Ok(Thread {
                     id: path.file_name().unwrap().to_string_lossy().into_owned(),
                     title: title.chars().take(100).collect(),
                     created_at: first.and_then(|m| m["createdAt"].as_u64()),
                     current: current.as_ref() == Some(&path),
                     message_count: messages.map_or(0, Vec::len),
-                    association: association_of(&path).map(|associated| {
-                        let relative = associated.strip_prefix(workspace).unwrap_or(&associated);
+                    association: about.as_ref().map(|associated| {
+                        let relative = associated.strip_prefix(root).unwrap_or(associated);
                         if relative.as_os_str().is_empty() {
                             ".".to_string()
                         } else {
                             relative.to_string_lossy().replace('\\', "/")
                         }
                     }),
+                    deck: about
+                        .filter(|path| path.is_file())
+                        .map(|path| path.to_string_lossy().into_owned()),
                 })
             })
             .collect()
     }
 
-    /// Makes conversation `thread` the workspace's current one; returns its chat and provider.
-    pub fn open_thread(&self, workspace: &Path, thread: &str) -> Result<OpenedThread> {
-        let path = self.thread(workspace, thread)?;
+    /// Goes on with conversation `thread` of workspace `root` as the current one of `subject`,
+    /// moving it there from what it was about before; returns its chat and provider.
+    pub fn open_thread(&self, root: &Path, subject: &Path, thread: &str) -> Result<OpenedThread> {
+        let path = self.thread(root, thread)?;
         // Read before selecting: a damaged transcript must not change the active conversation.
         let chat = load_chat(Some(&path))?;
         let provider = provider(&path)?;
-        self.select(workspace, thread)?;
+        self.adopt(&path, subject)?;
         Ok(OpenedThread { chat, provider })
+    }
+
+    /// Moves the current conversation of `from` to `to`, where it becomes the current one.
+    /// Nothing happens when `from` has none.
+    pub fn move_current(&self, from: &Path, to: &Path) -> Result<()> {
+        match self.current(from) {
+            Some(session) => self.adopt(&session, to),
+            None => Ok(()),
+        }
+    }
+
+    /// Makes `session` the current conversation of `subject`, whatever it was about.
+    fn adopt(&self, session: &Path, subject: &Path) -> Result<()> {
+        if subject_of(session).map(|path| canonical(&path)) != Some(canonical(subject)) {
+            // Its selection was among the sessions of its old subject.
+            let _ = fs::remove_file(session.join(ACTIVE_FILE));
+            fs::write(session.join(META_FILE), meta(subject).to_string())?;
+        }
+        self.select(subject, &session.file_name().unwrap().to_string_lossy())
     }
 
     /// A session for a new chat: the current one while it has no conversation yet, else a new
     /// one.
-    pub fn new_chat(&self, workspace: &Path) -> Result<PathBuf> {
-        if let Some(current) = self.current(workspace) {
+    pub fn new_chat(&self, subject: &Path) -> Result<PathBuf> {
+        if let Some(current) = self.current(subject) {
             // No provider means no provider session id either (see [`provider`]): the
             // session is as good as new.
             if load_chat(Some(&current))?.is_null() && provider(&current)?.is_none() {
                 return Ok(current);
             }
         }
-        self.start(workspace)
+        self.start(subject)
     }
 
-    /// The workspace's current session, starting one if it has none.
-    pub fn current_or_start(&self, workspace: &Path) -> Result<PathBuf> {
-        match self.current(workspace) {
+    /// The subject's current session, starting one if it has none.
+    pub fn current_or_start(&self, subject: &Path) -> Result<PathBuf> {
+        match self.current(subject) {
             Some(dir) => Ok(dir),
-            None => self.start(workspace),
+            None => self.start(subject),
         }
     }
 
-    /// Starts a new, empty session for `workspace` and makes it the current one.
-    pub fn start(&self, workspace: &Path) -> Result<PathBuf> {
+    /// Starts a new, empty session for `subject` and makes it the current one.
+    pub fn start(&self, subject: &Path) -> Result<PathBuf> {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -281,9 +305,8 @@ impl Sessions {
         let short = &uuid::Uuid::new_v4().simple().to_string()[..8];
         let dir = self.root.join(format!("{stamp:013}-{short}"));
         fs::create_dir_all(&dir)?;
-        let meta = json!({ "workspace": canonical(workspace) });
-        fs::write(dir.join(META_FILE), meta.to_string())?;
-        self.select(workspace, dir.file_name().unwrap().to_str().unwrap())?;
+        fs::write(dir.join(META_FILE), meta(subject).to_string())?;
+        self.select(subject, dir.file_name().unwrap().to_str().unwrap())?;
         Ok(dir)
     }
 
@@ -306,11 +329,13 @@ pub struct Thread {
     pub title: String,
     /// When its first message was written, in ms since the epoch.
     pub created_at: Option<u64>,
-    /// Whether it is the workspace's current conversation.
+    /// Whether it is the current conversation of what the chat is about.
     pub current: bool,
     pub message_count: usize,
-    /// The folder or deck it started in, relative to the workspace (`.` for the workspace).
+    /// The deck or folder it is about, relative to the workspace (`.` for the workspace).
     pub association: Option<String>,
+    /// The deck file it is about, when that is a file that still exists.
+    pub deck: Option<String>,
 }
 
 /// A conversation picked to go on with (see [`Sessions::open_thread`]).
@@ -320,24 +345,38 @@ pub struct OpenedThread {
     pub provider: Option<Provider>,
 }
 
-/// The folder or slide deck originally associated with a conversation.
-pub fn association_of(session: &Path) -> Option<PathBuf> {
+/// What a conversation is about: a deck file, or the folder of a workspace's own chat.
+pub fn subject_of(session: &Path) -> Option<PathBuf> {
     let raw = fs::read_to_string(session.join(META_FILE)).ok()?;
     let meta: Value = serde_json::from_str(&raw).ok()?;
-    meta["workspace"]
+    meta["deck"]
         .as_str()
-        .or_else(|| meta["deck"].as_str())
+        .or_else(|| meta["workspace"].as_str())
         .map(PathBuf::from)
 }
 
-/// The workspace folder a session belongs to; legacy deck sessions have no workspace.
-pub fn workspace_of(session: &Path) -> Option<PathBuf> {
-    let raw = fs::read_to_string(session.join(META_FILE)).ok()?;
-    let meta: Value = serde_json::from_str(&raw).ok()?;
-    meta["workspace"].as_str().map(PathBuf::from)
+/// The folder a session's locked-slide guards are keyed in (see [`crate::guard`]): the folder it
+/// is about, or the one its deck is in.
+pub fn folder_of(session: &Path) -> Option<PathBuf> {
+    let subject = subject_of(session)?;
+    if subject.is_dir() {
+        Some(subject)
+    } else {
+        subject.parent().map(Path::to_path_buf)
+    }
 }
 
-/// The workspace's path in one canonical spelling, so the same folder always matches.
+/// The `meta.json` of a session about `subject`.
+fn meta(subject: &Path) -> Value {
+    let subject = canonical(subject);
+    if subject.is_dir() {
+        json!({ "workspace": subject })
+    } else {
+        json!({ "deck": subject })
+    }
+}
+
+/// A path in one canonical spelling, so the same file or folder always matches.
 fn canonical(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
@@ -486,7 +525,7 @@ mod tests {
             ]),
         )
         .unwrap();
-        let json = serde_json::to_value(sessions.threads(&root).unwrap()).unwrap();
+        let json = serde_json::to_value(sessions.threads(&root, &root).unwrap()).unwrap();
         assert_eq!(
             json,
             json!([
@@ -497,6 +536,7 @@ mod tests {
                     "current": true,
                     "messageCount": 3,
                     "association": ".",
+                    "deck": null,
                 },
                 {
                     "id": empty.file_name().unwrap().to_string_lossy(),
@@ -505,6 +545,7 @@ mod tests {
                     "current": false,
                     "messageCount": 0,
                     "association": "q3",
+                    "deck": null,
                 },
             ])
         );
@@ -519,7 +560,7 @@ mod tests {
         save_chat(&old, &json!([{"role": "assistant", "provider": "codex"}])).unwrap();
         let new = sessions.start(&root).unwrap();
         let id = old.file_name().unwrap().to_str().unwrap();
-        let opened = serde_json::to_value(sessions.open_thread(&root, id).unwrap()).unwrap();
+        let opened = serde_json::to_value(sessions.open_thread(&root, &root, id).unwrap()).unwrap();
         assert_eq!(
             opened,
             json!({"chat": [{"role": "assistant", "provider": "codex"}], "provider": "codex"})
@@ -528,11 +569,11 @@ mod tests {
 
         // A damaged conversation leaves the current one as it is.
         let new_id = new.file_name().unwrap().to_str().unwrap();
-        sessions.open_thread(&root, new_id).unwrap();
+        sessions.open_thread(&root, &root, new_id).unwrap();
         fs::write(old.join("provider.json"), "{damaged").unwrap();
-        assert!(sessions.open_thread(&root, id).is_err());
+        assert!(sessions.open_thread(&root, &root, id).is_err());
         assert_eq!(sessions.current(&root), Some(new));
-        assert!(sessions.open_thread(&root, "../escape").is_err());
+        assert!(sessions.open_thread(&root, &root, "../escape").is_err());
     }
 
     #[test]
@@ -603,17 +644,16 @@ mod tests {
     }
 
     #[test]
-    fn root_history_includes_nested_folders_and_legacy_decks_only() {
+    fn a_workspace_lists_the_chats_underneath_it_and_moves_the_one_it_goes_on_with() {
         let t = Temp::new();
         let root = t.deck("talks");
         let nested = root.join("quarterly");
         fs::create_dir_all(&nested).unwrap();
-        let sessions = t.sessions();
-        let folder_chat = sessions.start(&nested).unwrap();
-        let deck_chat = sessions.start(&nested).unwrap();
         let deck = nested.join("pitch.html");
         fs::write(&deck, "<html></html>").unwrap();
-        fs::write(deck_chat.join(META_FILE), json!({"deck": deck}).to_string()).unwrap();
+        let sessions = t.sessions();
+        let folder_chat = sessions.start(&nested).unwrap();
+        let deck_chat = sessions.start(&deck).unwrap();
         let outside = sessions.start(&t.deck("talks-other")).unwrap();
         let listed = sessions.list_scoped(&root);
         assert!(listed.contains(&folder_chat));
@@ -624,22 +664,74 @@ mod tests {
             None,
             "do not silently adopt a nested chat"
         );
-        let folder_current = sessions.current(&nested);
-        sessions
-            .select(&root, deck_chat.file_name().unwrap().to_str().unwrap())
-            .unwrap();
-        assert_eq!(t.sessions().current(&root), Some(deck_chat.clone()));
-        assert_eq!(
-            sessions.current(&nested),
-            folder_current,
-            "parent selection is independent"
+        let id = |path: &Path| path.file_name().unwrap().to_str().unwrap().to_string();
+        assert!(
+            sessions.select(&root, &id(&deck_chat)).is_err(),
+            "only its own sessions are selected"
         );
-        assert!(sessions
-            .select(&root, outside.file_name().unwrap().to_str().unwrap())
-            .is_err());
+        // Going on with the deck's chat in the workspace's own moves it there.
+        sessions.open_thread(&root, &root, &id(&deck_chat)).unwrap();
+        assert_eq!(t.sessions().current(&root), Some(deck_chat.clone()));
+        assert_eq!(sessions.current(&deck), None);
+        assert_eq!(sessions.current(&nested), Some(folder_chat));
+        assert!(sessions.open_thread(&root, &root, &id(&outside)).is_err());
         let fresh = sessions.start(&root).unwrap();
         assert_eq!(sessions.current(&root), Some(fresh));
         assert!(sessions.list_scoped(&root).contains(&deck_chat));
+    }
+
+    #[test]
+    fn threads_name_the_deck_a_chat_is_about() {
+        let t = Temp::new();
+        let root = t.deck("talk").canonicalize().unwrap();
+        let deck = root.join("deck.html");
+        let sessions = t.sessions();
+        sessions.start(&root).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        sessions.start(&deck).unwrap();
+        let threads = sessions.threads(&root, &deck).unwrap();
+        assert_eq!(
+            threads
+                .iter()
+                .map(|t| (t.association.as_deref(), t.deck.clone(), t.current))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    Some("deck.html"),
+                    Some(deck.to_string_lossy().into_owned()),
+                    true
+                ),
+                (Some("."), None, false),
+            ]
+        );
+        // A deck that is gone is no longer one to open.
+        fs::remove_file(&deck).unwrap();
+        assert_eq!(sessions.threads(&root, &root).unwrap()[0].deck, None);
+    }
+
+    #[test]
+    fn the_chat_of_a_folder_moves_to_the_deck_it_made() {
+        let t = Temp::new();
+        let folder = t.deck("talk");
+        let deck = folder.join("deck.html");
+        let sessions = t.sessions();
+        // Nothing to move yet.
+        sessions.move_current(&folder, &deck).unwrap();
+        assert_eq!(sessions.current(&deck), None);
+        let older = sessions.start(&folder).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let made_it = sessions.start(&folder).unwrap();
+        save_chat(&made_it, &json!([{"role": "user", "text": "Make a deck"}])).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let own = sessions.start(&deck).unwrap();
+        sessions.move_current(&folder, &deck).unwrap();
+        assert_eq!(sessions.current(&deck), Some(made_it.clone()));
+        assert_eq!(sessions.list(&deck), [made_it, own]);
+        assert_eq!(
+            sessions.current(&folder),
+            Some(older),
+            "the folder goes back to the chat before"
+        );
     }
 
     #[test]
@@ -675,18 +767,28 @@ mod tests {
     }
 
     #[test]
-    fn every_deck_in_a_workspace_shares_its_session() {
+    fn every_deck_has_a_chat_of_its_own() {
         let t = Temp::new();
         let folder = t.deck("talks");
-        fs::write(folder.join("q3.html"), "<html></html>").unwrap();
+        let (a, b) = (folder.join("deck.html"), folder.join("q3.html"));
+        fs::write(&b, "<html></html>").unwrap();
         let sessions = t.sessions();
-        let session = sessions.current_or_start(&folder).unwrap();
-        assert_eq!(sessions.current_or_start(&folder).unwrap(), session);
-        assert_eq!(workspace_of(&session), Some(folder.canonicalize().unwrap()));
+        let in_folder = sessions.current_or_start(&folder).unwrap();
+        let in_a = sessions.current_or_start(&a).unwrap();
+        let in_b = sessions.current_or_start(&b).unwrap();
+        assert!(in_folder != in_a && in_a != in_b && in_folder != in_b);
+        assert_eq!(sessions.current_or_start(&a).unwrap(), in_a);
+        assert_eq!(sessions.current(&folder), Some(in_folder.clone()));
+        assert_eq!(subject_of(&in_a), Some(a.canonicalize().unwrap()));
+        assert_eq!(subject_of(&in_folder), Some(folder.canonicalize().unwrap()));
+        assert_eq!(
+            fs::read_to_string(in_b.join(META_FILE)).unwrap(),
+            json!({"deck": b.canonicalize().unwrap()}).to_string()
+        );
     }
 
     #[test]
-    fn legacy_deck_sessions_are_preserved_but_not_adopted() {
+    fn chats_saved_for_a_deck_before_folders_had_chats_are_that_decks() {
         let t = Temp::new();
         let folder = t.deck("talk");
         let file = folder.join("deck.html");
@@ -695,10 +797,10 @@ mod tests {
         fs::write(old.join(META_FILE), json!({"deck": file}).to_string()).unwrap();
         fs::write(old.join(CHAT_FILE), "[1]").unwrap();
         assert_eq!(sessions.current(&folder), None);
+        assert_eq!(sessions.current(&file), Some(old.clone()));
         let new = sessions.current_or_start(&folder).unwrap();
         assert_ne!(new, old);
         assert_eq!(fs::read_to_string(old.join(CHAT_FILE)).unwrap(), "[1]");
-        assert_eq!(workspace_of(&new), Some(folder.canonicalize().unwrap()));
     }
 
     #[test]

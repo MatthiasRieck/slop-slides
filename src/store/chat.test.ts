@@ -80,6 +80,7 @@ describe("sending a message", () => {
     await useApp.getState().send("a", { includeSlide: false, attachments: [] });
     expect(calls("send_message")[0]!.args).toEqual({
       workspace: "/decks/talk",
+      chat: "/decks/talk",
       prompt: "[context]\nOpen file: deck.html (deck)\n[/context]\n\na",
       provider: "codex",
       model: "gpt-6-astra",
@@ -380,7 +381,7 @@ describe("sending a message", () => {
     const useApp = await freshStore(false);
     useApp.getState().interrupt();
     expect(calls("interrupt_agent")).toEqual([]);
-    useApp.setState({ workspace: { path: "/decks/talk", name: "talk" } });
+    useApp.setState({ workspace: { path: "/decks/talk", name: "talk" }, chatKey: "/decks/talk" });
     useApp.getState().interrupt();
     expect(calls("interrupt_agent")).toEqual([{ id: "/decks/talk" }]);
   });
@@ -445,6 +446,7 @@ describe("sending a message", () => {
     backend({ select_chat_thread: () => ({ chat: past, provider: "codex" }) });
     useApp.setState({
       workspace: { path: "/decks/talk", name: "talk" },
+      chatKey: "/decks/talk",
       messages: [userMessage("Current")],
       running: true,
     });
@@ -464,7 +466,12 @@ describe("sending a message", () => {
     const useApp = await freshStore(false);
     await useApp.getState().resetChat();
     expect(calls("reset_chat")).toEqual([]);
-    useApp.setState({ workspace: { path: "/decks/talk", name: "talk" }, messages: [userMessage("x")], running: false });
+    useApp.setState({
+      workspace: { path: "/decks/talk", name: "talk" },
+      chatKey: "/decks/talk",
+      messages: [userMessage("x")],
+      running: false,
+    });
     await useApp.getState().resetChat();
     expect(calls("reset_chat")).toEqual([{ id: "/decks/talk" }]);
     expect(useApp.getState().messages).toEqual([]);
@@ -576,7 +583,7 @@ describe("queueing and steering", () => {
     const steering = useApp.getState().steer("Make it blue", { includeSlide: true, attachments: [] });
     await vi.waitFor(() => expect(calls("steer_agent")).toHaveLength(1));
     const [args] = calls("steer_agent");
-    expect(args).toMatchObject({ workspace: "/decks/talk" });
+    expect(args).toMatchObject({ chat: "/decks/talk" });
     expect(args!.prompt).toContain(`Current slide: <section id="intro">`);
     expect(args!.prompt).toMatch(/Make it blue$/);
     // Nothing shows until the agent takes it.

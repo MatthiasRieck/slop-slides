@@ -136,10 +136,10 @@ async fn read_scene(helper: &mut Helper<'_>) -> Result<(Scene, HashMap<usize, Ve
         let scanned = helper
             .run(&format!("window.__slopPptx.scan({index})"), "scanned")
             .await?;
-        chunks = scanned
-            .get("chunks")
-            .and_then(|n| n.parse().ok())
-            .unwrap_or(0);
+        chunks = scanned_chunks(&scanned, index, count)?;
+    }
+    if chunks == 0 {
+        return Err(Error::msg("the deck did not answer with its slides"));
     }
     let mut encoded = String::new();
     for index in 0..chunks {
@@ -169,6 +169,33 @@ async fn read_scene(helper: &mut Helper<'_>) -> Result<(Scene, HashMap<usize, Ve
         shots.insert(index, png);
     }
     Ok((scene, shots))
+}
+
+/// What the helper said of reading slide `index` of `count`: the pieces its answer comes in,
+/// which it tells after the last slide (0 before). An error if it read another slide, could not
+/// read this one, or no longer has `count` slides.
+pub(super) fn scanned_chunks(
+    answer: &HashMap<String, String>,
+    index: usize,
+    count: usize,
+) -> Result<usize> {
+    let number = |key: &str| answer.get(key).and_then(|n| n.parse::<usize>().ok());
+    if number("scanned") != Some(index) {
+        return Err(Error::msg(format!(
+            "the deck answered out of turn while slide {} was read",
+            index + 1
+        )));
+    }
+    if let Some(error) = answer.get("error") {
+        return Err(Error::msg(format!(
+            "slide {} could not be read: {error}",
+            index + 1
+        )));
+    }
+    if number("slides") != Some(count) {
+        return Err(Error::msg("the deck's slides changed during the export"));
+    }
+    Ok(number("chunks").unwrap_or(0))
 }
 
 async fn capture_shot(

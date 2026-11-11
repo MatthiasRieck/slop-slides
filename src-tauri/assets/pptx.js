@@ -989,8 +989,9 @@
     },
 
     /**
-     * Reads slide `index`, starting the scene over at the first, and reports it read; after the
-     * last, also the size of the answer. The app asks for each slide in turn: timers alone
+     * Reads slide `index`, starting the scene over at the first, and reports it read with the
+     * number of slides there are now; after the last, also the size of the answer. A slide that
+     * is not there, or cannot be read, is reported at once. The app asks for each slide in turn: timers alone
      * cannot carry the scan through a long deck, as WebKit slows and then stops those of a
      * hidden window until the app next reaches the page.
      */
@@ -1000,15 +1001,25 @@
         scene = [];
         shots = [];
       }
+      var answer = "scanned=" + index + "&slides=" + all.length;
+      if (!all[index]) {
+        signal(answer);
+        return;
+      }
       show(index);
       setTimeout(function () {
-        scene.push(scanSlide(all[index]));
+        try {
+          scene.push(scanSlide(all[index]));
+        } catch (e) {
+          signal(answer + "&error=" + encodeURIComponent(String(e).slice(0, 200)));
+          return;
+        }
         if (index + 1 < all.length) {
-          signal("scanned=" + index);
+          signal(answer);
           return;
         }
         encoded = encode(JSON.stringify({ slides: scene, shots: shots.map(function (s) { return { opaque: s.opaque }; }) }));
-        signal("scanned=" + index + "&chunks=" + Math.ceil(encoded.length / CHUNK));
+        signal(answer + "&chunks=" + Math.ceil(encoded.length / CHUNK));
       }, 40);
     },
 

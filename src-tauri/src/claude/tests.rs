@@ -40,7 +40,9 @@ fn parses_tools_and_results() {
         parse_line(&result),
         vec![AgentEvent::ToolResult {
             id: "t1".into(),
-            is_error: false
+            is_error: false,
+            output: Some("ok".into()),
+            images: vec![]
         }]
     );
     assert!(matches!(
@@ -172,8 +174,41 @@ fn reports_failed_tool_results() {
         parse_line(&result),
         vec![AgentEvent::ToolResult {
             id: "a".into(),
-            is_error: true
+            is_error: true,
+            output: Some("denied".into()),
+            images: vec![]
         }]
+    );
+}
+
+/// Reading the slide screenshot of Tidy layout gives an image: it is reported as an image, and
+/// the output's text only names it.
+#[test]
+fn reports_tool_output_blocks_with_their_images_apart() {
+    let result = json!({"type":"user","message":{"content":[
+        {"type":"tool_result","tool_use_id":"shot","content":[
+            {"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo"}}
+        ]},
+        {"type":"tool_result","tool_use_id":"text","content":[{"type":"text","text":"1\tline"}]},
+        {"type":"tool_result","tool_use_id":"none"}
+    ]}});
+    let output = |id: &str, output: Option<&str>, images: &[&str]| AgentEvent::ToolResult {
+        id: id.into(),
+        is_error: false,
+        output: output.map(str::to_string),
+        images: images.iter().map(|i| i.to_string()).collect(),
+    };
+    assert_eq!(
+        parse_line(&result),
+        vec![
+            output(
+                "shot",
+                Some("[image]"),
+                &["data:image/png;base64,iVBORw0KGgo"]
+            ),
+            output("text", Some("1\tline"), &[]),
+            output("none", None, &[])
+        ]
     );
 }
 

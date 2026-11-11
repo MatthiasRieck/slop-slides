@@ -56,10 +56,13 @@ describe("agent events on the reply", () => {
     ]);
     const done = replay([
       ...started,
-      { type: "toolResult", id: "t2", isError: true },
-      { type: "toolResult", id: "t1", isError: false },
+      { type: "toolResult", id: "t2", isError: true, output: "No such file", images: [] },
+      { type: "toolResult", id: "t1", isError: false, output: null, images: ["/s/tool-images/1.png"] },
     ]);
+    expect(done.parts.map((p) => p.kind === "tool" && p.images)).toEqual([["/s/tool-images/1.png"], undefined]);
     expect(done.parts.map((p) => p.kind === "tool" && p.status)).toEqual(["done", "error"]);
+    expect(done.parts.map((p) => p.kind === "tool" && p.output)).toEqual([null, "No such file"]);
+    expect(done.parts.map((p) => p.kind === "tool" && p.input)).toEqual([{ file_path: "/d/deck.html" }, {}]);
   });
 
   it("keeps text that has content when a tool starts", () => {

@@ -19,6 +19,7 @@ vi.mock("@tauri-apps/api/webview", () => ({
 
 import { catchDrops } from "../lib/drop";
 import type { ProviderInfo } from "../lib/models";
+import { workspaceChatFileUrl } from "../lib/utils";
 import {
   type AssistantMessage,
   type ChatMessage,
@@ -154,12 +155,16 @@ const tool = (
   name: string,
   input: Record<string, unknown>,
   status: "running" | "done" | "error" = "done",
+  output?: string | null,
+  images?: string[],
 ): ChatPart => ({
   kind: "tool",
   id: `${name}-${JSON.stringify(input)}`,
   name,
   input,
   status,
+  ...(output === undefined ? {} : { output }),
+  ...(images ? { images } : {}),
 });
 
 /** jsdom's accessible names drop the space before nested spans, so match on text. */
@@ -1200,6 +1205,94 @@ describe("ChatPanel: transcript", () => {
     const rows = screen.getAllByRole("button", { name: /^Edited/ }) as HTMLButtonElement[];
     expect(rows.map((r) => r.disabled)).toEqual([true, true]);
     expect(rows.map((r) => r.textContent)).toEqual(["Edited deck.html", "Edited notes.html"]);
+  });
+
+  it("unfolds a tool call's arguments and output, and folds them again", () => {
+    showMessages(
+      reply({
+        parts: [tool("Bash", { command: "ls assets", timeout: 5000 }, "done", "logo.png\nphoto.jpg")],
+      }),
+    );
+    expect(screen.queryByText("Output")).toBeNull();
+    const toggle = screen.getByRole("button", { name: "Show arguments and output of Ran ls assets" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Arguments · Bash")).toBeTruthy();
+    expect(screen.getByText("command").nextElementSibling!.textContent).toBe("ls assets");
+    expect(screen.getByText("timeout").nextElementSibling!.textContent).toBe("5000");
+    expect(screen.getByText("Output").nextElementSibling!.textContent).toBe("logo.png\nphoto.jpg");
+    fireEvent.click(screen.getByRole("button", { name: "Hide arguments and output of Ran ls assets" }));
+    expect(screen.queryByText("Output")).toBeNull();
+  });
+
+  it("shows a failed tool's output as its error, and says when a tool has none yet or at all", () => {
+    showMessages(
+      reply({
+        status: "streaming",
+        parts: [
+          tool("Read", { file_path: "/decks/talk/gone.html" }, "error", "No such file"),
+          tool("lint_deck", {}, "done", null),
+          tool("Glob", { pattern: "assets/*" }),
+          tool("Write", { file_path: "/decks/talk/deck.html" }, "running"),
+        ],
+      }),
+    );
+    for (const toggle of screen.getAllByRole("button", { name: /^Show arguments and output/ })) fireEvent.click(toggle);
+    expect(screen.getByText("Error").nextElementSibling!.textContent).toBe("No such file");
+    expect(screen.getByText("None")).toBeTruthy();
+    expect(screen.getAllByText("No output")).toHaveLength(2);
+    expect(screen.getByText("Running…")).toBeTruthy();
+  });
+
+  it("shows the images a tool gave the agent, from the chat's session", () => {
+    const shots = [
+      "/home/.slopslides/sessions/1-ab/tool-images/1.png",
+      "/home/.slopslides/sessions/1-ab/tool-images/2.png",
+    ];
+    showMessages(
+      reply({
+        parts: [
+          tool("render_slides", { slides: ["intro", "outro"] }, "done", "intro\n[image]\noutro\n[image]", shots),
+          tool("Read", { file_path: "/decks/talk/assets/logo.png" }, "done", null, [shots[0]!]),
+        ],
+      }),
+    );
+    expect(screen.queryByRole("img")).toBeNull();
+    const [render, read] = screen.getAllByRole("button", { name: /^Show arguments and output/ });
+    fireEvent.click(render!);
+    const images = screen.getAllByRole("img") as HTMLImageElement[];
+    expect(images.map((i) => i.getAttribute("src"))).toEqual(shots.map((s) => workspaceChatFileUrl("", s)));
+    expect(images.map((i) => i.alt)).toEqual(["Image 1 of 2 the agent received", "Image 2 of 2 the agent received"]);
+    expect(screen.getByText("Output").nextElementSibling!.textContent).toBe("intro\n[image]\noutro\n[image]");
+
+    fireEvent.click(read!);
+    expect(screen.getAllByRole("img")).toHaveLength(3);
+    expect(screen.queryByText("No output")).toBeNull();
+  });
+
+  it("says so when an image of a tool's output is no longer kept", () => {
+    showMessages(
+      reply({
+        parts: [
+          tool("Read", { file_path: "/d/a.png" }, "done", null, ["/home/.slopslides/sessions/1-ab/tool-images/1.png"]),
+        ],
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Show arguments and output/ }));
+    fireEvent.error(screen.getByRole("img"));
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(screen.getByText("This image is no longer kept.")).toBeTruthy();
+  });
+
+  it("still selects the slide an edit touched while its details are open", () => {
+    const edit = tool("Edit", { file_path: "/decks/talk/deck.html", new_string: `<section id="outro">` }, "done", "ok");
+    showMessages(reply({ parts: [edit] }));
+    fireEvent.click(screen.getByRole("button", { name: /^Show arguments and output/ }));
+    expect(useApp.getState().selected).not.toBe("outro");
+    fireEvent.click(toolRow("Edited deck.html · #outro"));
+    expect(useApp.getState().selected).toBe("outro");
+    expect(screen.getByText("Output").nextElementSibling!.textContent).toBe("ok");
   });
 
   it("shows thinking while the reply has nothing yet", () => {

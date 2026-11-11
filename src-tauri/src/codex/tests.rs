@@ -639,6 +639,49 @@ fn mapper_streams_text_once_and_preserves_tools_usage_and_reviews() {
         )[..],
         [AgentEvent::ToolResult { is_error: true, .. }]
     ));
+    let mut output = |item: Value| match &m.map("item/completed", &json!({ "item": item }))[..] {
+        [.., AgentEvent::ToolResult { output, .. }] => output.clone(),
+        events => panic!("no tool result: {events:?}"),
+    };
+    assert_eq!(
+        output(
+            json!({"id":"c","type":"commandExecution","command":"ls","aggregatedOutput":"deck.html\n","exitCode":0})
+        ),
+        Some("deck.html".into())
+    );
+    assert_eq!(
+        output(
+            json!({"id":"f","type":"fileChange","status":"completed","changes":[
+                {"path":"/deck/deck.html","diff":"+Slide"},{"path":"/deck/a.css"},{"path":"/deck/b.css","diff":"-old"}
+            ]})
+        ),
+        Some("+Slide\n-old".into())
+    );
+    assert_eq!(
+        output(
+            json!({"id":"m","type":"mcpToolCall","tool":"lint_deck","arguments":{},"result":{"content":[{"type":"text","text":"No problems"}]}})
+        ),
+        Some("No problems".into())
+    );
+    assert_eq!(
+        output(
+            json!({"id":"x","type":"mcpToolCall","tool":"lint_deck","arguments":{},"status":"failed","error":{"message":"No deck"}})
+        ),
+        Some("No deck".into())
+    );
+    assert_eq!(
+        output(json!({"id":"w","type":"webSearch","query":"decks"})),
+        None
+    );
+    let rendered = json!({"item":{"id":"r","type":"mcpToolCall","tool":"render_slides","arguments":{},"result":{"content":[
+        {"type":"text","text":"Slide intro"},
+        {"type":"image","data":"iVBORw0KGgo","mimeType":"image/png"}
+    ]}}});
+    assert!(matches!(
+        &m.map("item/completed", &rendered)[..],
+        [.., AgentEvent::ToolResult { output: Some(text), images, .. }]
+            if text == "Slide intro\n[image]" && images[..] == ["data:image/png;base64,iVBORw0KGgo"]
+    ));
     assert_eq!(
         m.map(
             "thread/tokenUsage/updated",
@@ -1363,7 +1406,7 @@ fn real_codex_lint_approval_test() {
             AgentEvent::ToolUse { id, name, .. } if name == "lint_deck" => Some(id),
             _ => None,
         }).expect("real lint_deck tool was called");
-        assert!(events.iter().any(|e| matches!(e, AgentEvent::ToolResult { id, is_error: false } if id == tool_id)), "{events:?}");
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::ToolResult { id, is_error: false, .. } if id == tool_id)), "{events:?}");
         assert!(matches!(events.last(), Some(AgentEvent::Result { is_error: false, .. })), "{events:?}");
     });
 }

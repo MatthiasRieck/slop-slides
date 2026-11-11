@@ -37,6 +37,13 @@ export function describeTool(part: ToolPart, deckId: string): { icon: LucideIcon
   }
 }
 
+/** A tool call's arguments as the transcript lists them: text as it is, anything else as JSON. */
+export function toolArguments(part: ToolPart): { name: string; value: string }[] {
+  return Object.entries(part.input ?? {})
+    .filter(([, value]) => value !== undefined && value !== null)
+    .map(([name, value]) => ({ name, value: typeof value === "string" ? value : JSON.stringify(value, null, 2) }));
+}
+
 /**
  * The slide of the deck a tool call edited, when its `target` (see {@link describeTool}) is the
  * deck file: found via an `id="…"` of one of `slideIds` in the edited text.

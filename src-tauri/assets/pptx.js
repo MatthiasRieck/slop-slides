@@ -43,6 +43,7 @@
   var IMAGE_FILE = /^(\.\/)?assets\/[^?#]+\.(png|jpe?g|gif|bmp)$/i;
   var MARKERS = { disc: "•", circle: "◦", square: "▪" };
 
+  var scene = [];
   var shots = [];
   var encoded = "";
   var colorCanvas = null;
@@ -987,24 +988,28 @@
       });
     },
 
-    /** Reads every slide, showing each in turn, and reports the size of the answer. */
-    scan: function () {
+    /**
+     * Reads slide `index`, starting the scene over at the first, and reports it read; after the
+     * last, also the size of the answer. The app asks for each slide in turn: timers alone
+     * cannot carry the scan through a long deck, as WebKit slows and then stops those of a
+     * hidden window until the app next reaches the page.
+     */
+    scan: function (index) {
       var all = slides();
-      var scene = [];
-      shots = [];
-      var step = function (index) {
-        if (index >= all.length) {
-          encoded = encode(JSON.stringify({ slides: scene, shots: shots.map(function (s) { return { opaque: s.opaque }; }) }));
-          signal("scanned&chunks=" + Math.ceil(encoded.length / CHUNK));
+      if (index === 0) {
+        scene = [];
+        shots = [];
+      }
+      show(index);
+      setTimeout(function () {
+        scene.push(scanSlide(all[index]));
+        if (index + 1 < all.length) {
+          signal("scanned=" + index);
           return;
         }
-        show(index);
-        setTimeout(function () {
-          scene.push(scanSlide(all[index]));
-          step(index + 1);
-        }, 40);
-      };
-      step(0);
+        encoded = encode(JSON.stringify({ slides: scene, shots: shots.map(function (s) { return { opaque: s.opaque }; }) }));
+        signal("scanned=" + index + "&chunks=" + Math.ceil(encoded.length / CHUNK));
+      }, 40);
     },
 
     /** Answers with piece `index` of the scene. */

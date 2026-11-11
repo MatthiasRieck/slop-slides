@@ -10,7 +10,7 @@ import PPTX_JS from "../../src-tauri/assets/pptx.js?raw";
 import { openHelper } from "./deckDom";
 
 interface Helper {
-  scan: () => void;
+  scan: (index: number) => void;
   chunk: (index: number) => void;
   isolate: (index: number, paper: string | null) => void;
 }
@@ -65,9 +65,13 @@ function helper(slides: string, css = "") {
   });
   const scan = async (): Promise<Scene> => {
     await settle();
-    api.scan();
-    await settle();
-    const chunks = Number(answers.find((a) => a.startsWith("scanned"))?.split("chunks=")[1]);
+    // As the app does: a step for each shown slide, the last one telling the size of the answer.
+    const shown = window.document.querySelectorAll(".deck > .slide:not([data-hidden])").length;
+    for (let i = 0; i < shown; i++) {
+      api.scan(i);
+      await settle();
+    }
+    const chunks = Number(at(answers, answers.length - 1).split("chunks=")[1]);
     let encoded = "";
     for (let i = 0; i < chunks; i++) {
       api.chunk(i);
@@ -115,7 +119,7 @@ describe("PowerPoint helper", () => {
   it("keeps the export under way when a canceled navigation reinjects the helper", async () => {
     const { window, api, answers, settle } = helper(SLIDE("<h1>Title</h1>"));
     await settle();
-    api.scan();
+    api.scan(0);
     await settle();
     window.eval(PPTX_JS);
     await settle();
@@ -124,6 +128,24 @@ describe("PowerPoint helper", () => {
     expect(answers.filter((a) => a.startsWith("ready"))).toHaveLength(1);
     current.chunk(0);
     expect(answers.at(-1)).toMatch(/^chunk=0&data=./);
+  });
+
+  it("reads one slide for each step, so that no step outlasts a hidden window's timers", async () => {
+    const { api, answers, settle, scan } = helper(
+      `<section class="slide" id="a"><h1>One</h1></section><section class="slide" id="b"></section><section class="slide" id="c"></section>`,
+    );
+    await settle();
+    api.scan(0);
+    await settle();
+    expect(answers.slice(1)).toEqual(["scanned=0"]);
+    api.scan(1);
+    await settle();
+    expect(answers.slice(1)).toEqual(["scanned=0", "scanned=1"]);
+    api.scan(2);
+    await settle();
+    expect(answers.at(-1)).toMatch(/^scanned=2&chunks=[1-9]\d*$/);
+    // Starting over reads the deck anew.
+    expect((await scan()).slides.map((s) => s.id)).toEqual(["a", "b", "c"]);
   });
 
   it("skips hidden slides in the scene", async () => {

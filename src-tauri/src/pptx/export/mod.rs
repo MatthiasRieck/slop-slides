@@ -130,11 +130,17 @@ async fn read_scene(helper: &mut Helper<'_>) -> Result<(Scene, HashMap<usize, Ve
         return Err(Error::msg("the deck has no shown slides to export"));
     }
     export_window::check_view(&ready)?;
-    let scanned = helper.run("window.__slopPptx.scan()", "scanned").await?;
-    let chunks: usize = scanned
-        .get("chunks")
-        .and_then(|n| n.parse().ok())
-        .unwrap_or(0);
+    // A step for each slide: a hidden window's timers stop before a long deck is read through.
+    let mut chunks: usize = 0;
+    for index in 0..count {
+        let scanned = helper
+            .run(&format!("window.__slopPptx.scan({index})"), "scanned")
+            .await?;
+        chunks = scanned
+            .get("chunks")
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0);
+    }
     let mut encoded = String::new();
     for index in 0..chunks {
         let answer = helper

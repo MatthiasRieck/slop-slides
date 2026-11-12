@@ -372,6 +372,94 @@ describe("PowerPoint helper", () => {
     expect(at(at(slides, 0).items, 0)).toMatchObject({ y: 10 });
   });
 
+  describe("the anchor of a text box", () => {
+    const BOX = `data-box="100 100 300 100"`;
+    const FILL = "background-color: rgb(0, 0, 255)";
+    const anchors = async (html: string) => {
+      const { slides } = await helper(SLIDE(html)).scan();
+      return at(slides, 0)
+        .items.filter((item) => item.kind === "text")
+        .map((item) => item.anchor);
+    };
+
+    it("is the middle for text a box centres, by flex, grid, a table cell or even padding", async () => {
+      expect(
+        await anchors(
+          `<div ${BOX} style="display: flex; align-items: center; ${FILL}"><p data-box="100 140 300 20">Row</p></div>
+           <div ${BOX} style="display: flex; flex-direction: column; justify-content: center; ${FILL}"><p data-box="100 140 300 20">Column</p></div>
+           <div ${BOX} style="display: grid; align-items: center; ${FILL}"><p data-box="100 140 300 20">Grid</p></div>
+           <div ${BOX} style="display: table-cell; vertical-align: middle; ${FILL}"><p data-box="100 140 300 20">Cell</p></div>
+           <div ${BOX} style="padding: 40px 0; ${FILL}"><p data-box="100 140 300 20">Padded</p></div>
+           <div ${BOX} style="display: flex; align-items: center"><p data-box="100 140 300 20">No fill</p></div>`,
+        ),
+      ).toEqual(["center", "center", "center", "center", "center", "center"]);
+    });
+
+    it("looks through wrappers to the box that centres the text", async () => {
+      expect(
+        await anchors(
+          `<div ${BOX} style="display: flex; align-items: center; ${FILL}">
+             <div data-box="100 140 300 20"><p data-box="100 140 300 20">Deep</p></div>
+           </div>`,
+        ),
+      ).toEqual(["center"]);
+    });
+
+    it("is the bottom for text a box pushes down, and the top otherwise", async () => {
+      expect(
+        await anchors(
+          `<div ${BOX} style="display: flex; flex-direction: column; justify-content: flex-end; ${FILL}"><p data-box="100 170 300 20">Bottom</p></div>
+           <div ${BOX} style="${FILL}"><p data-box="100 110 300 20">Top</p></div>
+           <div ${BOX} style="padding-top: 70px; ${FILL}"><p data-box="100 170 300 20">Padded down</p></div>
+           <div ${BOX}><p data-box="100 140 300 20">No box, no alignment</p></div>`,
+        ),
+      ).toEqual(["bottom", "top", "top", "top"]);
+    });
+
+    it("stays the top for text stacked with other content, but not for what stands beside it", async () => {
+      expect(
+        await anchors(
+          `<div ${BOX} style="display: flex; flex-direction: column; justify-content: center; ${FILL}">
+             <p data-box="100 125 300 20">Title</p><p data-box="100 155 300 20">Subtitle</p>
+           </div>
+           <div ${BOX} style="display: flex; align-items: center; ${FILL}">
+             <i data-box="100 130 40 40" style="display: block"></i><p data-box="150 140 250 20">Beside an icon</p>
+           </div>`,
+        ),
+      ).toEqual(["top", "top", "center"]);
+    });
+
+    it("follows the box for turned text and for text a pseudo-element writes", async () => {
+      expect(
+        await anchors(
+          `<div ${BOX} style="width: 300px; height: 100px; transform: matrix(0, 1, -1, 0, 0, 0); display: flex; flex-direction: column; justify-content: center"><p>Turned</p></div>
+           <div ${BOX} style="width: 300px; height: 100px; transform: matrix(0, 1, -1, 0, 0, 0); display: flex; flex-direction: column; justify-content: flex-end"><p>Turned down</p></div>`,
+        ),
+      ).toEqual(["center", "bottom"]);
+      const h = helper(
+        SLIDE(
+          `<div class="badge" ${BOX} style="display: flex; align-items: center"></div><div class="badge" ${BOX}></div>`,
+        ),
+      );
+      withPseudos(h.window, ".badge", '"1"', "none");
+      const { slides } = await h.scan();
+      expect(at(slides, 0).items.map((item) => item.anchor)).toEqual(["center", "top"]);
+    });
+
+    it("starts a list's text box at its first item, under the list's padding", async () => {
+      const { slides } = await helper(
+        SLIDE(
+          `<ul ${BOX} style="padding: 30px 0; ${FILL}">
+             <li data-box="140 130 260 20" style="list-style-type: disc">One</li>
+             <li data-box="140 150 260 20" style="list-style-type: disc">Two</li>
+           </ul>`,
+        ),
+      ).scan();
+      const list = at(at(slides, 0).items, 1);
+      expect(list).toMatchObject({ kind: "text", x: 100, y: 130, w: 300, h: 40, anchor: "center" });
+    });
+  });
+
   it("lets wrapped text keep its block's width past the space hanging off a line", async () => {
     const h = helper(SLIDE(`<p data-box="0 0 784 90" style="font-size: 34px">Wrapping text</p>`));
     h.window.Range.prototype.getBoundingClientRect = () =>

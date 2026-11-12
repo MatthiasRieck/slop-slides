@@ -1657,6 +1657,66 @@
     return tops.length;
   }
 
+  /** How a box places what it holds from top to bottom, when not at the top: `center` or `end`. */
+  function stacking(cs) {
+    var display = cs.display || "";
+    var value = "";
+    if (/flex/.test(display)) value = /^column/.test(cs.flexDirection || "") ? cs.justifyContent : cs.alignItems;
+    else if (/grid/.test(display)) value = /center|end/.test(cs.alignItems || "") ? cs.alignItems : cs.alignContent;
+    else if (display === "table-cell") value = cs.verticalAlign === "middle" ? "center" : cs.verticalAlign === "bottom" ? "end" : "";
+    if (/center/.test(value || "")) return "center";
+    return /end/.test(value || "") ? "end" : null;
+  }
+
+  /** The anchor of a text box filling a box that stacks its content as `cs` says. */
+  function anchorOf(cs) {
+    var how = stacking(cs);
+    return how === "center" ? "center" : how === "end" ? "bottom" : "top";
+  }
+
+  /** Whether `el` holds something above or below the text at `r`, besides the nodes `inside`. */
+  Scanner.prototype.stacked = function (el, inside, r) {
+    var self = this;
+    return Array.prototype.some.call(el.childNodes, function (node) {
+      if (inside.indexOf(node) >= 0) return false;
+      if (node.nodeType === 3) return hasText(node);
+      if (node.nodeType !== 1 || NEVER[node.tagName.toLowerCase()]) return false;
+      var cs = getComputedStyle(node);
+      if (cs.display === "none" || cs.position === "absolute" || cs.position === "fixed") return false;
+      var box = self.rect(node.getBoundingClientRect());
+      if (box.w <= 0 && box.h <= 0) return false;
+      return box.y + box.h <= r.y + 1 || box.y >= r.y + r.h - 1;
+    });
+  };
+
+  /**
+   * Where the text at `r`, the `nodes` of `parent`, stands in the box around it: `center`,
+   * `bottom` or `top`. The text box is only as tall as its lines, so the anchor moves nothing
+   * here; it keeps the text in place where PowerPoint sets the lines taller or shorter than the
+   * browser did (another font, other leading, a line more), and when the text is edited there.
+   * Centred is text alone in a box with as much room above as below, however the CSS got it there.
+   */
+  Scanner.prototype.anchor = function (parent, nodes, r, size, ctx) {
+    if (ctx.rotation) return "top";
+    var slack = Math.max(2, size * 0.1);
+    var inside = nodes;
+    for (var el = parent; el; el = el.parentElement) {
+      if (this.stacked(el, inside, r)) return "top";
+      var cs = getComputedStyle(el);
+      var box = this.rect(el.getBoundingClientRect());
+      var above = r.y - box.y;
+      var below = box.y + box.h - r.y - r.h;
+      var how = stacking(cs);
+      var boxed = hasBox(cs);
+      var even = Math.abs(above - below) <= slack;
+      if (even && (boxed || (how === "center" && above > 1))) return "center";
+      if (how === "end" && above > below + slack) return "bottom";
+      if (boxed || (el.classList && el.classList.contains("slide"))) return "top";
+      inside = [el];
+    }
+    return "top";
+  };
+
   /**
    * A text box for the inline `nodes`, which sit in `parent`; `first` and `last` tell whether
    * they open and close it, and so stand beside the text of its pseudo-elements.
@@ -1716,7 +1776,8 @@
       para.indent = -hang;
       r = { x: r.x - hang, y: r.y, w: r.w + hang, h: r.h };
     }
-    this.push({ kind: "text", x: r.x, y: r.y, w: r.w, h: r.h, rotation: ctx.rotation, wrap: wrap, paragraphs: [para] }, ctx);
+    var anchor = this.anchor(parent, nodes, r, size, ctx);
+    this.push({ kind: "text", x: r.x, y: r.y, w: r.w, h: r.h, rotation: ctx.rotation, wrap: wrap, anchor: anchor, paragraphs: [para] }, ctx);
   };
 
   /** Whether a list can be one text box: items of plain text, each without a box of its own. */
@@ -1772,7 +1833,13 @@
       paragraphs.push(para);
     });
     if (!paragraphs.length) return;
-    this.push({ kind: "text", x: r.x, y: r.y, w: r.w, h: r.h, rotation: ctx.rotation, wrap: true, paragraphs: paragraphs }, ctx);
+    // The items start below the list's own padding, and the text box has none.
+    var top = this.rect(el.children[0].getBoundingClientRect()).y;
+    var lines = { x: r.x, y: top, w: r.w, h: Math.max(previous.y + previous.h - top, 0) };
+    if (ctx.rotation || !(lines.h > 0) || lines.y < r.y - 1 || lines.y + lines.h > r.y + r.h + 1) lines = r;
+    var size = (paragraphs[0].runs[0] && paragraphs[0].runs[0].size) || 16;
+    var anchor = this.anchor(el, Array.prototype.slice.call(el.childNodes), lines, size, ctx);
+    this.push({ kind: "text", x: lines.x, y: lines.y, w: lines.w, h: lines.h, rotation: ctx.rotation, wrap: true, anchor: anchor, paragraphs: paragraphs }, ctx);
   };
 
   /**
@@ -1813,7 +1880,7 @@
       w: r.w - left - num(cs.paddingRight) * ctx.scale,
       h: r.h - top - num(cs.paddingBottom) * ctx.scale,
     };
-    this.push({ kind: "text", x: inner.x, y: inner.y, w: inner.w, h: inner.h, rotation: ctx.rotation, wrap: paragraphs.length > 1, paragraphs: paragraphs }, ctx);
+    this.push({ kind: "text", x: inner.x, y: inner.y, w: inner.w, h: inner.h, rotation: ctx.rotation, wrap: paragraphs.length > 1, anchor: anchorOf(cs), paragraphs: paragraphs }, ctx);
   };
 
   /** The children of `el`: lines of text in order with the elements between them. */
@@ -1915,7 +1982,7 @@
         pseudoRun(el, "::after", next, next.link, runs);
         tidy(runs);
         if (runs.length) {
-          this.push({ kind: "text", x: r.x, y: r.y, w: r.w, h: r.h, rotation: next.rotation, wrap: false, paragraphs: [paragraph(el, cs, runs, next)] }, next);
+          this.push({ kind: "text", x: r.x, y: r.y, w: r.w, h: r.h, rotation: next.rotation, wrap: false, anchor: anchorOf(cs), paragraphs: [paragraph(el, cs, runs, next)] }, next);
         }
         return;
       }

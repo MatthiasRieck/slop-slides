@@ -571,6 +571,7 @@ fn scene() -> Scene {
                         h: 80.0,
                         rotation: 90.0,
                         wrap: true,
+                        anchor: String::new(),
                         paragraphs: vec![
                             Paragraph {
                                 align: "center".into(),
@@ -964,6 +965,48 @@ fn raised_text_is_sized_for_powerpoint_to_shrink_and_comes_back_the_same() {
     assert!(html.contains("font-size: 60px"), "the size it was");
     assert!(html.contains("vertical-align: 0.45em; line-height: 0"));
     assert!(!html.contains("font-size: 90px"));
+}
+
+#[test]
+fn text_boxes_are_anchored_where_the_text_stood_and_come_back_the_same() {
+    let anchored = |anchor: &str| {
+        Item::Text(TextItem {
+            w: 800.0,
+            h: 80.0,
+            anchor: anchor.into(),
+            paragraphs: vec![Paragraph {
+                runs: vec![run("label")],
+                ..Paragraph::default()
+            }],
+            ..TextItem::default()
+        })
+    };
+    for (anchor, written, css) in [
+        ("center", "ctr", Some("justify-content: center")),
+        ("bottom", "b", Some("justify-content: flex-end")),
+        ("top", "t", None),
+        ("", "t", None),
+    ] {
+        let scene = Scene {
+            slides: vec![SceneSlide {
+                id: "one".into(),
+                items: vec![anchored(anchor)],
+                ..scene().slides[0].clone()
+            }],
+            shots: vec![],
+        };
+        let parts = read_parts(package(&scene, &meta(), &HashMap::new(), |_| None).unwrap());
+        let slide = text_of(&parts, "ppt/slides/slide1.xml");
+        assert!(
+            slide.contains(&format!(r#"anchor="{written}""#)),
+            "{anchor:?} is written as {written}"
+        );
+        let html = through_export(anchored(anchor)).html;
+        match css {
+            Some(css) => assert!(html.contains(css), "{anchor:?} comes back as {css}"),
+            None => assert!(!html.contains("justify-content")),
+        }
+    }
 }
 
 #[test]

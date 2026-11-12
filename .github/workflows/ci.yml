@@ -53,7 +53,7 @@ jobs:
           if [[ "$RUNNER_OS" == Linux ]]; then display=(xvfb-run -a); fi
           "${display[@]}" src-tauri/target/debug/slopslide --export-smoke \
             fixtures/export-smoke/deck.html "$RUNNER_TEMP/export-smoke" \
-            "Export smoke test" "Shapes and pictures" "Gradient card"
+            "Export smoke test" "Shapes and pictures" "Gradient card" "Badge label"
       - name: Upload the exported sample deck
         if: always()
         uses: actions/upload-artifact@v4

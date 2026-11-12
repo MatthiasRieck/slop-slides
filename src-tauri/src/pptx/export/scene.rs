@@ -58,6 +58,8 @@ pub(in crate::pptx) enum Item {
     Text(TextItem),
     Image(ImageItem),
     Shot(ShotItem),
+    Path(PathItem),
+    Group(GroupItem),
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -73,6 +75,21 @@ pub(in crate::pptx) struct Border {
     pub color: Rgba,
     pub width: f64,
     pub dash: Option<String>,
+    /// SVG's `stroke-linecap` and `stroke-linejoin`, for the outline of a drawing.
+    pub cap: Option<String>,
+    pub join: Option<String>,
+    /// Arrowheads where an open line starts and ends.
+    pub head: Option<Arrow>,
+    pub tail: Option<Arrow>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub(in crate::pptx) struct Arrow {
+    /// `triangle`, `arrow` or `oval`.
+    pub kind: String,
+    /// `sm`, `med` or `lg`, against the line's width.
+    pub size: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -208,6 +225,35 @@ pub(in crate::pptx) struct ShotItem {
     pub y: f64,
     pub w: f64,
     pub h: f64,
+}
+
+/// A freeform from an SVG: an outline of straight lines and curves.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(in crate::pptx) struct PathItem {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    /// `M x y`, `L x y`, `C x1 y1 x2 y2 x y` and `Z`, in canvas pixels from (`x`, `y`).
+    pub d: String,
+    #[serde(default)]
+    pub fill: Option<Fill>,
+    #[serde(default)]
+    pub border: Option<Border>,
+    #[serde(default)]
+    pub shadow: Option<Shadow>,
+}
+
+/// The shapes of one SVG, which move as one.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub(in crate::pptx) struct GroupItem {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub items: Vec<Item>,
 }
 
 /// What the file says beyond its slides.

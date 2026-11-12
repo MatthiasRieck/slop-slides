@@ -7,8 +7,9 @@ use std::io::{Cursor, Read, Write};
 use zip::write::SimpleFileOptions;
 
 use super::export::{
-    matte, package, Background, Border, BoxItem, Bullet, Crop, Fill, Gradient, ImageItem, Item,
-    Meta, Paragraph, Run, Scene, SceneSlide, Shadow, ShotInfo, ShotItem, Stop, TextItem,
+    matte, package, Arrow, Background, Border, BoxItem, Bullet, Crop, Fill, Gradient, GroupItem,
+    ImageItem, Item, Meta, Paragraph, PathItem, Run, Scene, SceneSlide, Shadow, ShotInfo, ShotItem,
+    Stop, TextItem,
 };
 use super::import::{self, convert};
 use super::xml;
@@ -528,6 +529,7 @@ fn scene() -> Scene {
                             color: [0.0, 0.0, 255.0, 1.0],
                             width: 3.0,
                             dash: Some("dashed".into()),
+                            ..Border::default()
                         }),
                         shadow: Some(Shadow {
                             color: [0.0, 0.0, 0.0, 0.3],
@@ -1021,6 +1023,7 @@ fn rounded_and_outlined_pictures_keep_their_look_and_size() {
             color: [255.0, 255.0, 255.0, 1.0],
             width: 6.0,
             dash: None,
+            ..Border::default()
         }),
         opacity: 1.0,
         ..ImageItem::default()
@@ -1060,6 +1063,7 @@ fn an_outline_centred_on_a_shapes_edge_grows_the_css_box_it_is_drawn_inside() {
             color: [0.0, 0.0, 0.0, 1.0],
             width: 4.0,
             dash: None,
+            ..Border::default()
         }),
         opacity: 1.0,
         ..BoxItem::default()
@@ -1077,4 +1081,267 @@ fn cropped_pictures_may_be_taller_than_their_frame() {
         .unwrap()
         .html
         .contains(".ppt-crop img { position: absolute; max-width: none; max-height: none; }"));
+}
+
+// --- Export: drawings ---------------------------------------------------------------------------
+
+/// The first slide of a deck holding only `items`.
+fn slide_of(items: Vec<Item>) -> String {
+    let scene = Scene {
+        slides: vec![SceneSlide {
+            id: "one".into(),
+            items,
+            ..SceneSlide::default()
+        }],
+        shots: vec![],
+    };
+    let bytes = package(&scene, &meta(), &HashMap::new(), |_| None).unwrap();
+    text_of(&read_parts(bytes), "ppt/slides/slide1.xml")
+}
+
+fn stroke() -> Border {
+    Border {
+        color: [0.0, 0.0, 255.0, 1.0],
+        width: 2.0,
+        ..Border::default()
+    }
+}
+
+fn blob() -> PathItem {
+    PathItem {
+        x: 100.0,
+        y: 200.0,
+        w: 40.0,
+        h: 20.0,
+        d: "M 0 20 L 40 20 C 40 10 30 0 20 0 Z".into(),
+        fill: Some(Fill {
+            color: Some([255.0, 0.0, 0.0, 0.5]),
+            gradient: None,
+        }),
+        ..PathItem::default()
+    }
+}
+
+#[test]
+fn an_svg_path_becomes_a_freeform_of_its_lines_and_curves() {
+    let slide = slide_of(vec![Item::Path(blob())]);
+    xml::parse(slide.as_bytes()).unwrap();
+    assert_eq!(slide.matches("<p:pic>").count(), 0);
+    // 6350 EMU to the canvas pixel of a 1920 px canvas.
+    assert!(slide.contains(r#"<a:off x="635000" y="1270000"/><a:ext cx="254000" cy="127000"/>"#));
+    assert!(slide.contains(concat!(
+        r#"<a:path w="254000" h="127000">"#,
+        r#"<a:moveTo><a:pt x="0" y="127000"/></a:moveTo>"#,
+        r#"<a:lnTo><a:pt x="254000" y="127000"/></a:lnTo>"#,
+        r#"<a:cubicBezTo><a:pt x="254000" y="63500"/><a:pt x="190500" y="0"/><a:pt x="127000" y="0"/></a:cubicBezTo>"#,
+        r#"<a:close/></a:path>"#
+    )));
+    assert!(slide.contains(r#"<a:srgbClr val="FF0000"><a:alpha val="50000"/></a:srgbClr>"#));
+    assert!(slide.contains("<a:ln><a:noFill/></a:ln>"));
+    // The order PowerPoint's schema asks for: geometry, fill, line.
+    assert!(slide.contains("</a:custGeom><a:solidFill>"));
+    assert!(slide.contains("</a:solidFill><a:ln>"));
+}
+
+#[test]
+fn an_outline_keeps_its_ends_corners_and_arrowheads() {
+    let slide = slide_of(vec![Item::Path(PathItem {
+        d: "M 0 0 L 40 20 L 0 20".into(),
+        fill: None,
+        border: Some(Border {
+            dash: Some("dotted".into()),
+            cap: Some("round".into()),
+            join: Some("miter".into()),
+            head: Some(Arrow {
+                kind: "oval".into(),
+                size: "sm".into(),
+            }),
+            tail: Some(Arrow {
+                kind: "\"><x".into(),
+                size: "huge".into(),
+            }),
+            ..stroke()
+        }),
+        ..blob()
+    })]);
+    xml::parse(slide.as_bytes()).unwrap();
+    assert!(slide.contains(r#"<a:path w="254000" h="127000" fill="none">"#));
+    assert!(slide.contains(concat!(
+        r#"<a:ln w="12700" cap="rnd"><a:solidFill><a:srgbClr val="0000FF"/></a:solidFill>"#,
+        r#"<a:prstDash val="sysDot"/><a:miter lim="800000"/>"#,
+        r#"<a:headEnd type="oval" w="sm" len="sm"/><a:tailEnd type="triangle" w="med" len="med"/></a:ln>"#
+    )));
+}
+
+#[test]
+fn a_straight_stroke_becomes_a_line_that_runs_the_same_way() {
+    let line = |d: &str| {
+        slide_of(vec![Item::Path(PathItem {
+            d: d.into(),
+            fill: None,
+            border: Some(stroke()),
+            ..blob()
+        })])
+    };
+    let down = line("M 0 0 L 40 20");
+    assert!(down.contains(r#"<p:cxnSp>"#) && down.contains(r#"prst="line""#));
+    assert!(
+        down.contains(r#"<a:xfrm><a:off x="635000" y="1270000"/><a:ext cx="254000" cy="127000"/>"#)
+    );
+    assert!(line("M 40 20 L 0 0").contains(r#"<a:xfrm flipH="1" flipV="1">"#));
+    assert!(line("M 0 20 L 40 0").contains(r#"<a:xfrm flipV="1">"#));
+    // Nothing to fill, nothing to stroke: nothing to show.
+    let unstroked = slide_of(vec![Item::Path(PathItem {
+        d: "M 0 0 L 40 20".into(),
+        ..blob()
+    })]);
+    assert!(!unstroked.contains("<p:cxnSp>") && !unstroked.contains("<p:sp>"));
+}
+
+#[test]
+fn an_outline_that_cannot_be_read_is_left_out() {
+    for d in [
+        "",
+        "M 0 0",
+        "L 1 1 L 2 2",
+        "M 0 0 L 1",
+        "M 0 0 C 1 1 2 2 Z",
+        "M 0 0 L NaN 1",
+        "M 0 0 Q 1 1 2 2",
+        "M 0 0 L 1 1 \"/><x",
+    ] {
+        let slide = slide_of(vec![Item::Path(PathItem {
+            d: d.into(),
+            border: Some(stroke()),
+            ..blob()
+        })]);
+        xml::parse(slide.as_bytes()).unwrap();
+        assert!(
+            !slide.contains("<p:sp>") && !slide.contains("<p:cxnSp>"),
+            "{d}"
+        );
+    }
+}
+
+#[test]
+fn the_shapes_of_one_drawing_stay_where_they_are_in_a_group() {
+    let group = |items: Vec<Item>| {
+        Item::Group(GroupItem {
+            x: 100.0,
+            y: 200.0,
+            w: 40.0,
+            h: 0.0,
+            items,
+        })
+    };
+    let slide = slide_of(vec![
+        group(vec![
+            Item::Path(blob()),
+            Item::Box(BoxItem {
+                w: 10.0,
+                h: 10.0,
+                opacity: 1.0,
+                ..BoxItem::default()
+            }),
+        ]),
+        group(vec![Item::Path(PathItem {
+            d: "broken".into(),
+            ..blob()
+        })]),
+    ]);
+    xml::parse(slide.as_bytes()).unwrap();
+    assert_eq!(
+        slide.matches("<p:grpSp>").count(),
+        1,
+        "an empty group is left out"
+    );
+    // The same box inside as outside, so nothing is moved or scaled; never a size of nothing.
+    assert!(slide.contains(concat!(
+        r#"<a:off x="635000" y="1270000"/><a:ext cx="254000" cy="1"/>"#,
+        r#"<a:chOff x="635000" y="1270000"/><a:chExt cx="254000" cy="1"/>"#
+    )));
+    let ids: Vec<&str> = slide
+        .split("<p:cNvPr id=\"")
+        .skip(1)
+        .map(|s| &s[..1])
+        .collect();
+    assert_eq!(
+        ids,
+        ["1", "2", "3", "4"],
+        "every shape has an id of its own"
+    );
+}
+
+#[test]
+fn a_drawing_keeps_its_shadow_and_gradient() {
+    let slide = slide_of(vec![Item::Path(PathItem {
+        fill: Some(Fill {
+            color: None,
+            gradient: Some(Gradient {
+                angle: 90.0,
+                stops: vec![
+                    Stop {
+                        at: 0.25,
+                        color: [0.0, 0.0, 0.0, 1.0],
+                    },
+                    Stop {
+                        at: 1.0,
+                        color: [255.0, 255.0, 255.0, 1.0],
+                    },
+                ],
+            }),
+        }),
+        shadow: Some(Shadow {
+            color: [0.0, 0.0, 0.0, 0.35],
+            x: 0.0,
+            y: 4.0,
+            blur: 12.0,
+        }),
+        ..blob()
+    })]);
+    assert!(slide.contains(r#"<a:gs pos="25000">"#));
+    assert!(slide.contains(r#"<a:lin ang="0" scaled="0"/>"#));
+    assert!(slide.contains(r#"<a:outerShdw blurRad="76200" dist="25400" dir="5400000""#));
+    assert!(slide.find("</a:ln>").unwrap() < slide.find("<a:effectLst>").unwrap());
+}
+
+#[test]
+fn drawings_come_back_as_drawings() {
+    let html = through_export(Item::Group(GroupItem {
+        x: 100.0,
+        y: 200.0,
+        w: 40.0,
+        h: 20.0,
+        items: vec![
+            Item::Path(blob()),
+            Item::Path(PathItem {
+                d: "M 40 20 L 0 0".into(),
+                fill: None,
+                border: Some(Border {
+                    tail: Some(Arrow {
+                        kind: "triangle".into(),
+                        size: "med".into(),
+                    }),
+                    ..stroke()
+                }),
+                ..blob()
+            }),
+        ],
+    }))
+    .html;
+    assert!(
+        html.contains(
+            "<path d=\"M0 20 L40 20 C40 10 30 0 20 0 Z\" fill=\"rgba(255, 0, 0, 0.5)\"/>"
+        ),
+        "{html}"
+    );
+    assert!(
+        html.contains("<path d=\"M0 0 L40 20\" fill=\"none\" stroke=\"#0000ff\""),
+        "{html}"
+    );
+    assert!(
+        html.contains("scaleX(-1) scaleY(-1)"),
+        "the line runs back: {html}"
+    );
+    assert!(html.contains("<polygon"), "the line's arrowhead: {html}");
 }

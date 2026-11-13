@@ -2005,6 +2005,73 @@ describe("Stage", () => {
       expect(save).toHaveBeenCalledTimes(1);
     });
 
+    describe("after the editor saves", () => {
+      const withHash = (hash: string) => {
+        const deck = useApp.getState().deck!;
+        return { ...deck, slides: deck.slides.map((s) => (s.id === "intro" ? { ...s, hash } : s)) };
+      };
+      const frames = (container: HTMLElement) => [...container.querySelectorAll("iframe")];
+      /** The editor's preview, once it has loaded in place of the slide's. */
+      const editorFrame = (container: HTMLElement) => {
+        const frame = frames(container).at(-1)!;
+        fireEvent.load(frame);
+        expect(frames(container)).toEqual([frame]);
+        return frame;
+      };
+      const commit = async (frame: HTMLIFrameElement, hash: string) => {
+        vi.mocked(invoke).mockImplementation(async (command) =>
+          command === "update_slide" ? withHash(hash) : undefined,
+        );
+        fromFrame(frame, { type: "slop:edit-commit", slide: "intro", markup: MARKUP, select: [0] });
+        await waitFor(() => expect(useApp.getState().deck!.slides[0]!.hash).toBe(hash));
+      };
+
+      it("keeps the editor running on the version it saved, so what the user does next is not lost to a reload", async () => {
+        useApp.setState({ selected: "intro" });
+        const { container } = render(<Stage />);
+        toggleEditing();
+        const frame = editorFrame(container);
+        const src = frame.getAttribute("src");
+        await commit(frame, "saved-1");
+        await commit(frame, "saved-2");
+        expect(useApp.getState().editSaved).toEqual({ intro: "saved-2" });
+        expect(frames(container)).toEqual([frame]);
+        expect(frame.getAttribute("src")).toBe(src);
+      });
+
+      it("loads the slide again for a change the editor did not make, or a save that failed", async () => {
+        useApp.setState({ selected: "intro" });
+        const { container } = render(<Stage />);
+        toggleEditing();
+        const frame = editorFrame(container);
+        await commit(frame, "saved-1");
+        // The agent changes the slide.
+        act(() => useApp.getState().setDeck(withHash("agent")));
+        const [, next] = frames(container);
+        expect(next!.getAttribute("src")).toContain("agent");
+        fireEvent.load(next!);
+        expect(frames(container)).toEqual([next]);
+        // An undo back to what the editor saved shows the file, not what the editor has now.
+        act(() => {
+          useApp.getState().setDeck(withHash("saved-1"));
+          useApp.setState((s) => ({ editReload: s.editReload + 1 }));
+        });
+        const undone = frames(container).at(-1)!;
+        expect(undone).not.toBe(next);
+        expect(undone.getAttribute("src")).toContain("saved-1");
+      });
+
+      it("forgets what the editor saved when edit mode is left", async () => {
+        useApp.setState({ selected: "intro" });
+        const { container } = render(<Stage />);
+        toggleEditing();
+        const frame = editorFrame(container);
+        await commit(frame, "saved-1");
+        toggleEditing();
+        expect(useApp.getState().editSaved).toEqual({});
+      });
+    });
+
     it("deletes the editor's selection from the edit tools, enabled only while something is selected", () => {
       const { container } = render(<Stage />);
       toggleEditing();

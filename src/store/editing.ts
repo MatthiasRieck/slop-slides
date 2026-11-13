@@ -43,6 +43,11 @@ export interface EditingSlice {
   editBase: { version: string; hashes: Record<string, string> } | null;
   /** The slides edited on the stage since edit mode started. */
   editedSlides: string[];
+  /**
+   * The hash each slide got when the stage's editor last saved it. The editor already shows such
+   * a version, so the stage keeps it running instead of loading the slide again.
+   */
+  editSaved: Record<string, string>;
 
   /** Enters or leaves edit mode, keeping the edits made so far. */
   setEditing: (editing: boolean) => void;
@@ -75,7 +80,7 @@ export interface EditingSlice {
 }
 
 /** No edit session's edits. */
-export const NO_EDIT_STATE = { editBase: null, editedSlides: [] };
+export const NO_EDIT_STATE = { editBase: null, editedSlides: [], editSaved: {} as Record<string, string> };
 
 /** The mode of the deck: editing has its own state, the rest is `slideMode`. */
 export function deckMode(state: Pick<AppState, "editing" | "slideMode">): DeckMode {
@@ -98,7 +103,10 @@ export function editedSlidesOf(state: Pick<AppState, "deck" | "editBase" | "edit
 }
 
 /** Shows the deck a slide edit saved, and counts the slide as edited in this session. */
-function showEdited(app: AppStore, slide: string, next: Deck) {
+function showEdited(app: AppStore, slide: string, next: Deck, fromEditor = false) {
+  const hash = next.slides.find((s) => s.id === slide)?.hash;
+  // Before the deck, so the stage never sees the new version without knowing whose it is.
+  if (fromEditor && hash) app.setState((s) => ({ editSaved: { ...s.editSaved, [slide]: hash } }));
   app.getState().setDeck(next);
   app.setState((s) => ({ editedSlides: s.editedSlides.includes(slide) ? s.editedSlides : [...s.editedSlides, slide] }));
 }
@@ -122,6 +130,7 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
   editStyles: DEFAULT_EDIT_STYLES,
   editBase: null,
   editedSlides: [],
+  editSaved: {},
 
   setEditing: (editing) => {
     if (editing === get().editing) return;
@@ -171,7 +180,7 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
       if (!deck || !base) return;
       try {
         const next = await api.updateSlide(deck.id, slide, markup, base);
-        if (get().deck?.id === deck.id) showEdited(app, slide, next);
+        if (get().deck?.id === deck.id) showEdited(app, slide, next, true);
       } catch (error) {
         set((s) => ({ error: errorMessage(error), editReload: s.editReload + 1 }));
       }

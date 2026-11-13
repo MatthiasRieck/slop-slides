@@ -14,8 +14,10 @@ vi.mock("./components/Presenter", () => ({ Presenter: () => <div data-testid="st
 
 import { invoke } from "@tauri-apps/api/core";
 import { App, SIDEBAR_MAX_SIZE } from "./App";
-import { useApp } from "./store";
+import { openShortcutHelp, showError, useApp } from "./store";
+import { lastError } from "./store/errors";
 import { DECK_HTML, deckFor } from "./test/fixtures";
+import { appWindow, ask, requestClose } from "./test/tauri";
 
 const WORKSPACE = { path: "/decks", name: "decks" };
 
@@ -28,7 +30,7 @@ beforeEach(() => {
     sidebarOpen: true,
     railOpen: true,
     presenting: false,
-    error: null,
+    toasts: [],
   });
 });
 
@@ -167,13 +169,50 @@ describe("App", () => {
     expect(shown("stage")).toBe(true);
   });
 
+  it("offers the keyboard shortcuts in any mode of an open workspace, not on the start screen", () => {
+    const help = () => screen.queryByRole("dialog", { name: "Keyboard shortcuts" });
+    const { unmount } = render(<App />);
+    fireEvent.keyDown(document.body, { key: "?" });
+    expect(help()).toBeNull();
+    unmount();
+    useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) });
+    render(<App />);
+    fireEvent.keyDown(document.body, { key: "?" });
+    expect(help()).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(help()).toBeNull();
+    act(() => useApp.getState().setMode("git"));
+    fireEvent.keyDown(document.body, { key: "/", ctrlKey: true });
+    expect(help()).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    // Without a deck too.
+    act(() => useApp.setState({ deck: null }));
+    act(() => openShortcutHelp());
+    expect(help()).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+  });
+
+  it("names its window after what is open, and asks before the window closes over unsaved edits", async () => {
+    render(<App />);
+    expect(appWindow.setTitle).toHaveBeenLastCalledWith("SlopSlide");
+    act(() => useApp.setState({ workspace: WORKSPACE, deck: deckFor(DECK_HTML) }));
+    expect(appWindow.setTitle).toHaveBeenLastCalledWith("Talk — decks");
+    await act(async () => {});
+    expect(await requestClose()).toBe(true);
+    act(() => useApp.setState({ codeDirty: true }));
+    ask.mockResolvedValue(false);
+    expect(await requestClose()).toBe(false);
+    ask.mockReset();
+    act(() => useApp.setState({ codeDirty: false }));
+  });
+
   it("shows errors in a dismissible toast", () => {
     render(<App />);
     expect(screen.queryByText("deck not found: x")).toBeNull();
-    act(() => useApp.getState().setError("deck not found: x"));
-    expect(screen.getByText("deck not found: x")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button"));
-    expect(useApp.getState().error).toBeNull();
+    act(() => showError("deck not found: x"));
+    expect(screen.getByRole("alert").textContent).toContain("deck not found: x");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(lastError(useApp.getState())).toBeNull();
     expect(screen.queryByText("deck not found: x")).toBeNull();
   });
 });

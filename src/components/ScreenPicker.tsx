@@ -36,7 +36,7 @@ export function ScreenPicker(props: {
     <Dialog
       label="Choose screens"
       onClose={props.onCancel}
-      className="static flex w-[34rem] max-w-[90vw] flex-col gap-4 rounded-xl border border-border bg-background p-5 text-foreground shadow-2xl"
+      className="flex w-[34rem] max-w-[90vw] flex-col gap-4 rounded-xl border border-border bg-background p-5 text-foreground shadow-2xl outline-none"
       heading={
         <>
           <h2 className="text-base font-semibold">Present on</h2>

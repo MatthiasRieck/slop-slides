@@ -154,10 +154,15 @@ const ORDER: { to: StackOrder; label: string; icon: ReactNode }[] = [
 ];
 
 /** The text's on-or-off looks, each a button of its own. */
-const TEXT_MARKS: { mark: "bold" | "italic" | "underline" | "strike"; label: string; icon: ReactNode }[] = [
-  { mark: "bold", label: "Bold (⌘B)", icon: <Bold /> },
-  { mark: "italic", label: "Italic (⌘I)", icon: <Italic /> },
-  { mark: "underline", label: "Underline (⌘U)", icon: <Underline /> },
+const TEXT_MARKS: {
+  mark: "bold" | "italic" | "underline" | "strike";
+  label: string;
+  shortcut?: string;
+  icon: ReactNode;
+}[] = [
+  { mark: "bold", label: "Bold", shortcut: "mod+b", icon: <Bold /> },
+  { mark: "italic", label: "Italic", shortcut: "mod+i", icon: <Italic /> },
+  { mark: "underline", label: "Underline", shortcut: "mod+u", icon: <Underline /> },
   { mark: "strike", label: "Strikethrough", icon: <Strikethrough /> },
 ];
 
@@ -297,6 +302,7 @@ export function EditToolbar(props: {
               keepFocus
               key={m.mark}
               label={m.label}
+              shortcut={m.shortcut}
               active={!textOff && !!style[m.mark]}
               disabled={textOff}
               onClick={() => props.onStyle({ [m.mark]: !style[m.mark] })}
@@ -385,7 +391,7 @@ export function EditToolbar(props: {
             disabled={textOff || !selection}
             value={selection?.autofit ?? ""}
             onChange={(event) => props.onStyle({ autofit: (event.target.value || null) as Autofit | null })}
-            className="h-6 w-full min-w-0 flex-1 rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-30"
+            className="h-6 w-full min-w-0 flex-1 rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-40"
           >
             <option value="">Report overflow</option>
             <option value="shrink">Shrink text</option>
@@ -419,7 +425,7 @@ export function EditToolbar(props: {
             disabled={!state || !!selection?.clipped}
             value={String(style.strokeWidth ?? 0)}
             onChange={(event) => props.onStyle({ strokeWidth: Number(event.target.value) })}
-            className="h-6 w-24 rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-30"
+            className="h-6 w-24 rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-40"
           >
             {[...new Set([...BORDER_WIDTHS, style.strokeWidth ?? 0])]
               .sort((a, b) => a - b)
@@ -493,7 +499,14 @@ export function EditToolbar(props: {
             </ToolButton>
           ))}
           <GroupControls geometry={props.geometry ?? null} selection={selection} onArrange={props.onArrange} />
-          <ToolButton keepFocus label="Delete (⌫)" disabled={!props.selection} onClick={props.onDelete}>
+          <ToolButton
+            keepFocus
+            destructive
+            label="Delete"
+            shortcut="backspace"
+            disabled={!props.selection}
+            onClick={props.onDelete}
+          >
             <Trash2 />
           </ToolButton>
         </RibbonRow>
@@ -581,7 +594,7 @@ function ColorButton(props: {
         disabled={props.disabled}
         onMouseDown={keepFocus}
         onClick={toggle}
-        className="flex flex-col items-center rounded-md px-1 pt-0.5 pb-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-30 [&_svg]:size-3.5"
+        className="flex flex-col items-center rounded-md px-1 pt-0.5 pb-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-3.5"
       >
         {props.icon}
         <span
@@ -692,7 +705,7 @@ function FontPicker(props: {
         const value = event.target.value;
         if (value !== "__current") props.onChange(value || null);
       }}
-      className="h-6 w-28 truncate rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-30"
+      className="h-6 w-28 truncate rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-40"
     >
       <option value="">Default font</option>
       {current && <option value="__current">{current}</option>}
@@ -728,7 +741,7 @@ function FontSizeInput(props: { value: number | null; onChange: (size: number) =
       sanitize={(text) => text.replace(/[^\d.]/g, "")}
       onChange={props.onChange}
       onDone={props.onDone}
-      className="h-6 w-9 rounded-md border bg-transparent px-1 text-center text-xs tabular-nums disabled:opacity-30"
+      className="h-6 w-9 rounded-md border bg-transparent px-1 text-center text-xs tabular-nums disabled:opacity-40"
     />
   );
 }

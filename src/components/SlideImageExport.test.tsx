@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useApp } from "../store";
+import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke, revealItemInDir } from "../test/tauri";
 import { SETTLE_MS, SlideImageExport } from "./SlideImageExport";
@@ -26,7 +27,7 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(24, 30, 1280, 720));
   useApp.setState({
     deck: deckFor(DECK_HTML),
-    error: null,
+    toasts: [],
     imageExport: { dir: DIR, slides: ["intro", "#2", "outro"] },
   });
 });
@@ -167,7 +168,7 @@ describe("SlideImageExport", () => {
 
   it("can be cancelled with Escape", () => {
     render(<SlideImageExport />);
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(useApp.getState().imageExport).toBeNull();
   });
 
@@ -175,7 +176,7 @@ describe("SlideImageExport", () => {
     invoke.mockRejectedValue("slide screenshots are not supported on this platform");
     render(<SlideImageExport />);
     await loadSlide();
-    expect(useApp.getState().error).toBe(
+    expect(lastError(useApp.getState())).toBe(
       "Could not save slide 1 as an image: slide screenshots are not supported on this platform",
     );
     expect(useApp.getState().imageExport).toBeNull();

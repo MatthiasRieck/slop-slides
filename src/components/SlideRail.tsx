@@ -30,8 +30,8 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-
 import { api, type Deck, type Section, type Slide } from "../lib/api";
+import { scrollBehavior } from "../lib/motion";
 import {
   dropRows,
   dropSection,
@@ -332,8 +332,9 @@ function BulkActions({ deck, editable }: { deck: Deck; editable: boolean }) {
       <span className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">{picked.length} selected</span>
       <ToolButton
         variant="panel"
-        aria-label="Move up"
-        title={editable ? "Move up (⌘↑)" : EDIT_ONLY}
+        label="Move up"
+        shortcut="mod+up"
+        disabledReason={editable ? undefined : EDIT_ONLY}
         disabled={!editable || searching}
         onClick={() => void app.moveSlides(-1)}
       >
@@ -341,8 +342,9 @@ function BulkActions({ deck, editable }: { deck: Deck; editable: boolean }) {
       </ToolButton>
       <ToolButton
         variant="panel"
-        aria-label="Move down"
-        title={editable ? "Move down (⌘↓)" : EDIT_ONLY}
+        label="Move down"
+        shortcut="mod+down"
+        disabledReason={editable ? undefined : EDIT_ONLY}
         disabled={!editable || searching}
         onClick={() => void app.moveSlides(1)}
       >
@@ -580,7 +582,7 @@ function Thumbnail(props: {
   const itemRef = useRef<HTMLLIElement | null>(null);
 
   useEffect(() => {
-    if (selected) itemRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (selected) itemRef.current?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() });
   }, [selected]);
 
   const deckSize = useApp((s) => s.deck?.size);

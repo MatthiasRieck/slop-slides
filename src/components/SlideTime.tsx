@@ -54,7 +54,7 @@ export function SlideTime({ deck }: { deck: Deck }) {
             event.currentTarget.blur();
           }
         }}
-        className="w-12 rounded-md bg-transparent px-1.5 py-1 text-foreground tabular-nums outline-none hover:bg-accent focus:bg-accent disabled:opacity-50"
+        className="w-12 rounded-md bg-transparent px-1.5 py-1 text-foreground tabular-nums outline-none hover:bg-accent focus:bg-accent disabled:opacity-40"
       />
       {total > 0 && (
         <span data-testid="deck-time" title="The expected times of all slides shown" className="tabular-nums">

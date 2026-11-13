@@ -17,6 +17,7 @@ import {
 import { useRef, useState } from "react";
 
 import { useDropdown } from "../hooks/useDropdown";
+import { useMenuKeys } from "../hooks/useMenuKeys";
 import { api, type Deck, errorMessage, type Screen, type Slide } from "../lib/api";
 import { VIDEO_CANCELLED, type VideoOptions, type VideoProgress } from "../lib/video";
 import { reportingErrors, showError, useApp } from "../store";
@@ -188,7 +189,8 @@ function useScreenPicker() {
  * it in a call, and the presenter view in a window of its own. That works on a single screen.
  */
 function PresentButton(props: { disabled: boolean; onPresent: () => void; onWindows: () => void }) {
-  const { open, setOpen, ref: menuRef } = useDropdown({ escape: true });
+  const { open, setOpen, ref: menuRef } = useDropdown();
+  const menu = useMenuKeys();
 
   return (
     <div ref={menuRef} className="relative flex">
@@ -216,7 +218,11 @@ function PresentButton(props: { disabled: boolean; onPresent: () => void; onWind
         <ChevronDown className="size-3" />
       </Button>
       {open && (
-        <div role="menu" className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card p-1 shadow-lg">
+        <div
+          role="menu"
+          {...menu}
+          className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card p-1 shadow-lg outline-none"
+        >
           <MenuItem
             icon={AppWindow}
             label="Present in windows"
@@ -255,7 +261,8 @@ function ExportMenu(props: {
   onImages: () => void;
   onVideo: (options: VideoOptions) => void;
 }) {
-  const { open, setOpen, ref: menuRef } = useDropdown({ escape: true });
+  const { open, setOpen, ref: menuRef } = useDropdown();
+  const menu = useMenuKeys();
   const [videoOpen, setVideoOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const label = props.progress !== null ? progressLabel(props.progress) : props.busy ? "Exporting…" : null;
@@ -283,7 +290,11 @@ function ExportMenu(props: {
         <ChevronDown className="size-3 text-muted-foreground" />
       </Button>
       {open && (
-        <div role="menu" className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card p-1 shadow-lg">
+        <div
+          role="menu"
+          {...menu}
+          className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border bg-card p-1 shadow-lg outline-none"
+        >
           <MenuItem
             icon={FileCode2}
             label="HTML file"
@@ -348,7 +359,7 @@ export function MenuItem(props: { icon: typeof Share; label: string; hint?: stri
       type="button"
       role="menuitem"
       onClick={props.onClick}
-      className="flex w-full items-start gap-2.5 rounded-md px-2 py-1.5 text-left hover:bg-accent"
+      className="flex w-full items-start gap-2.5 rounded-md px-2 py-1.5 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
     >
       <Icon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
       <span className="flex flex-col">

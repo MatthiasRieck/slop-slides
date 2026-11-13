@@ -317,7 +317,7 @@ export function CommentEditor(props: {
               e.preventDefault();
               submit();
             } else if (e.key === "Escape") {
-              // Keeps the popover from taking it as a close, which saves.
+              // Keeps the popover from taking it as a close, which saves (see ../lib/layers.ts).
               e.stopPropagation();
               cancel();
             }
@@ -443,16 +443,7 @@ function CommentList({ anchor, onClose }: { anchor: RefObject<HTMLElement | null
   );
   const comments = commentsInScope(state);
   return (
-    <Popover
-      anchor={anchor}
-      onClose={onClose}
-      width={300}
-      variant="menu"
-      portal
-      follow
-      capture
-      className="p-1 shadow-composer"
-    >
+    <Popover anchor={anchor} onClose={onClose} width={300} variant="menu" portal follow className="p-1 shadow-composer">
       {comments.length === 0 && <p className="p-2 text-xs text-muted-foreground">No comments on this slide.</p>}
       {comments.map((comment) => {
         const included = !heldComment(state, comment);

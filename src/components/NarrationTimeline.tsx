@@ -441,7 +441,7 @@ function Clip(props: {
       onPointerCancel={props.onRelease}
       onKeyDown={props.onKeyDown}
       className={cn(
-        "absolute inset-y-0.5 cursor-grab overflow-hidden rounded-md border text-primary focus-visible:ring-2 focus-visible:ring-primary active:cursor-grabbing disabled:cursor-default",
+        "absolute inset-y-0.5 cursor-grab overflow-hidden rounded-md border text-primary active:cursor-grabbing disabled:cursor-default",
         seconds === null ? "border-dashed bg-muted/40" : "border-primary/40 bg-primary/25",
         audio?.state === "stale" && "border-dashed text-muted-foreground",
       )}

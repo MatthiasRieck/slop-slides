@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 import { parseSvg, replaceSvgInSlide } from "./lib/svgEdit";
-import { useApp } from "./store";
+import { showError, useApp } from "./store";
 import { confirmDiscard } from "./store/confirm";
 
 /** What the slide editor hands over to open a drawing (see "slop:edit-open-svg" in assets/editor/). */
@@ -110,12 +110,17 @@ export const isDirty = (edit: SvgEdit | null) => !!edit && edit.draft !== edit.o
 
 const confirmLeave = () => confirmDiscard("The drawing has changes you have not accepted. Discard them?");
 
+/** Whether the drawing open in the SVG editor can be left: it has no changes, or the user gives them up. */
+export async function confirmDiscardDrawing(): Promise<boolean> {
+  return !isDirty(useSvgEditor.getState().edit) || confirmLeave();
+}
+
 export const useSvgEditor = create<SvgEditorState>((set, get) => ({
   edit: null,
 
   open: async (drawing) => {
     if (!parseSvg(drawing.markup)) {
-      useApp.getState().setError("The selection is not an SVG drawing.");
+      showError("The selection is not an SVG drawing.");
       return false;
     }
     const current = get().edit;
@@ -167,11 +172,11 @@ export const useSvgEditor = create<SvgEditorState>((set, get) => ({
     const { deck } = useApp.getState();
     if (!edit || !isDirty(edit) || edit.saving) return false;
     if (deck?.id !== edit.deckId) {
-      useApp.getState().setError("Open the deck the drawing is in to save it.");
+      showError("Open the deck the drawing is in to save it.");
       return false;
     }
     if (!parseSvg(edit.draft)) {
-      useApp.getState().setError("The markup is not one <svg> drawing; fix it before accepting.");
+      showError("The markup is not one <svg> drawing; fix it before accepting.");
       return false;
     }
     const { original, draft, path, slide } = edit;

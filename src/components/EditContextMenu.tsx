@@ -1,6 +1,9 @@
 import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { useMenuKeys } from "../hooks/useMenuKeys";
 import type { EditElement, StackOrder } from "../lib/editTools";
+import { formatKeys } from "../lib/keys";
+import { openLayer } from "../lib/layers";
 
 export type EditMenuAction =
   | "cut"
@@ -24,15 +27,16 @@ const WIDTH = 224;
 interface Item {
   action: EditMenuAction;
   label: string;
+  /** The keys that do the same, as a `formatKeys` spec. */
   keys?: string;
 }
 
 const EDIT_ITEMS: Item[] = [
-  { action: "cut", label: "Cut", keys: "⌘X" },
-  { action: "copy", label: "Copy", keys: "⌘C" },
-  { action: "paste", label: "Paste", keys: "⌘V" },
-  { action: "duplicate", label: "Duplicate", keys: "⌘D" },
-  { action: "delete", label: "Delete", keys: "⌫" },
+  { action: "cut", label: "Cut", keys: "mod+x" },
+  { action: "copy", label: "Copy", keys: "mod+c" },
+  { action: "paste", label: "Paste", keys: "mod+v" },
+  { action: "duplicate", label: "Duplicate", keys: "mod+d" },
+  { action: "delete", label: "Delete", keys: "backspace" },
 ];
 const ORDER_ITEMS: Item[] = [
   { action: "front", label: "Bring to front" },
@@ -44,8 +48,8 @@ const FLIP_ITEMS: Item[] = [
   { action: "flip-x", label: "Flip horizontally" },
   { action: "flip-y", label: "Flip vertically" },
 ];
-const GROUP: Item = { action: "group", label: "Group", keys: "⌘G" };
-const UNGROUP: Item = { action: "ungroup", label: "Ungroup", keys: "⇧⌘G" };
+const GROUP: Item = { action: "group", label: "Group", keys: "mod+g" };
+const UNGROUP: Item = { action: "ungroup", label: "Ungroup", keys: "mod+shift+g" };
 const LOCK: Item = { action: "lock", label: "Lock" };
 const UNLOCK: Item = { action: "unlock", label: "Unlock" };
 const ASK: Item = { action: "ask", label: "Ask the agent about this…" };
@@ -57,7 +61,9 @@ const isDrawing = (element: EditElement | null) => !!element && /^<svg[\s>]/i.te
 
 /**
  * The menu for a right-click in the slide editor. It lives in the app, not in the preview, so it
- * can reach past the slide; a cover over the preview catches the click that closes it.
+ * can reach past the slide; a cover over the preview catches the click that closes it. It takes
+ * the focus from the preview, so the keys come here: the arrows go through its choices and Escape
+ * closes it (see `useMenuKeys`), and it gives the focus back as it closes.
  */
 export function EditContextMenu(props: {
   x: number;
@@ -89,22 +95,16 @@ export function EditContextMenu(props: {
     });
   }, [x, y]);
 
-  // Takes focus from the preview, so the keys come here.
-  useEffect(() => menuRef.current?.focus(), []);
+  const menu = useMenuKeys();
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  // Escape closes the menu, and nothing under it sees the key.
+  useEffect(() => openLayer(() => closeRef.current()), []);
 
-  const onKeyDown = (event: KeyboardEvent) => {
-    // Nothing reaches the stage's shortcuts while the menu is open.
-    event.stopPropagation();
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onClose();
-    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      const items = Array.from(menuRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled)") ?? []);
-      const at = items.indexOf(document.activeElement as HTMLElement);
-      const step = event.key === "ArrowDown" ? 1 : -1;
-      items[at < 0 && step < 0 ? items.length - 1 : (at + step + items.length) % items.length]?.focus();
-    }
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    menu.onKeyDown(event);
+    // Nothing reaches the stage's shortcuts while the menu is open; Escape goes on, to close it.
+    if (event.key !== "Escape") event.stopPropagation();
   };
 
   const button = ({ action, label, keys }: Item, disabled: boolean, title?: string) => (
@@ -118,7 +118,7 @@ export function EditContextMenu(props: {
       className="flex w-full items-center justify-between rounded-md px-2 py-1 text-left hover:bg-accent focus:bg-accent focus:outline-none disabled:pointer-events-none disabled:opacity-40"
     >
       {label}
-      {keys && <span className="text-muted-foreground">{keys}</span>}
+      {keys && <span className="text-muted-foreground">{formatKeys(keys)}</span>}
     </button>
   );
   const divider = <div className="my-1 h-px bg-border" />;
@@ -138,7 +138,10 @@ export function EditContextMenu(props: {
       }}
     >
       <div
-        ref={menuRef}
+        ref={(element) => {
+          menuRef.current = element;
+          return menu.ref(element);
+        }}
         role="menu"
         aria-label="Element"
         tabIndex={-1}

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { Deck } from "../lib/api";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { lastError } from "./errors";
 import { backend, calls, freshStore, historyEntry, historyStatus, resetBackend } from "./testing";
 
 beforeEach(resetBackend);
@@ -29,7 +30,7 @@ describe("undo and redo", () => {
     await useApp.getState().undo();
     expect(calls("undo_deck")).toEqual([{ id }]);
     expect(useApp.getState().deck!.slides.find((s) => s.id === "outro")!.hash).toBe("new");
-    expect(useApp.getState()).toMatchObject({ selected: "outro", editReload: 1, error: null });
+    expect(useApp.getState()).toMatchObject({ selected: "outro", editReload: 1, toasts: [] });
     expect(useApp.getState().history!.redo!.label).toBe("Edit slide");
   });
 
@@ -51,7 +52,7 @@ describe("undo and redo", () => {
       },
     });
     await useApp.getState().undo();
-    expect(useApp.getState().error).toContain("still working");
+    expect(lastError(useApp.getState())).toContain("still working");
   });
 
   it("takes back review marks with the deck", async () => {

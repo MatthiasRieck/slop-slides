@@ -1,4 +1,3 @@
-import { X } from "lucide-react";
 import { type ReactNode, useEffect, useRef } from "react";
 import { Group, Panel, type PanelSize, Separator, usePanelRef } from "react-resizable-panels";
 
@@ -9,11 +8,14 @@ import { Home } from "./components/Home";
 import { NarrationTimeline } from "./components/NarrationTimeline";
 import { Presenter } from "./components/Presenter";
 import { RewindDialog } from "./components/RewindDialog";
+import { ShortcutHelp } from "./components/ShortcutHelp";
 import { Sidebar } from "./components/Sidebar";
 import { SlideImageExport } from "./components/SlideImageExport";
 import { SlideRail } from "./components/SlideRail";
 import { Stage } from "./components/Stage";
+import { Toasts } from "./components/Toasts";
 import { TopBar } from "./components/TopBar";
+import { useCloseGuard, useWindowTitle } from "./hooks/useWindowShell";
 import { api } from "./lib/api";
 import { cn, isMac } from "./lib/utils";
 import { deckMode, showError, useApp } from "./store";
@@ -22,6 +24,8 @@ export function App() {
   const workspace = useApp((s) => s.workspace);
   const presenting = useApp((s) => s.presenting);
   useNewWindowKey();
+  useCloseGuard();
+  useWindowTitle();
 
   return (
     <>
@@ -29,7 +33,7 @@ export function App() {
       {presenting && <Presenter />}
       <SlideImageExport />
       <RewindDialog />
-      <ErrorToast />
+      <Toasts />
     </>
   );
 }
@@ -74,62 +78,66 @@ function Workbench() {
     void useApp.getState().refreshLint();
   }, [deckVersion]);
   return (
-    <Group orientation="horizontal" className="h-full">
-      <Panel id="main" minSize={480}>
-        <div className="flex h-full flex-col">
-          <TopBar />
-          <Group orientation="horizontal" className="min-h-0 flex-1">
-            {hasDeck && (
-              <>
-                <SidePanel
-                  id="rail"
-                  open={railOpen}
-                  onOpenChange={useApp.getState().setRailOpen}
-                  defaultSize={220}
-                  minSize={150}
-                  maxSize={360}
-                >
-                  {/* The slide list stays mounted so its thumbnails do not load all over again. */}
-                  <div className={cn("h-full", mode === "git" && "hidden")}>
-                    <SlideRail />
-                  </div>
-                  {mode === "git" && <ChangesRail />}
-                </SidePanel>
-                <ResizeHandle />
-              </>
-            )}
-            <Panel id="stage" minSize={360}>
-              {hasDeck ? (
-                <div className="flex h-full flex-col">
-                  <div className="min-h-0 flex-1">
-                    {mode === "settings" ? <DeckSettings /> : mode === "git" ? <ChangesView /> : <Stage />}
-                  </div>
-                  {/* The deck's timeline under the slide, while it is open, whatever the sidebar shows. */}
-                  {timelineOpen && (mode === "view" || mode === "edit") && <NarrationTimeline />}
-                </div>
-              ) : (
-                <FileViewer />
+    <>
+      <Group orientation="horizontal" className="h-full">
+        <Panel id="main" minSize={480}>
+          <div className="flex h-full flex-col">
+            <TopBar />
+            <Group orientation="horizontal" className="min-h-0 flex-1">
+              {hasDeck && (
+                <>
+                  <SidePanel
+                    id="rail"
+                    open={railOpen}
+                    onOpenChange={useApp.getState().setRailOpen}
+                    defaultSize={220}
+                    minSize={150}
+                    maxSize={360}
+                  >
+                    {/* The slide list stays mounted so its thumbnails do not load all over again. */}
+                    <div className={cn("h-full", mode === "git" && "hidden")}>
+                      <SlideRail />
+                    </div>
+                    {mode === "git" && <ChangesRail />}
+                  </SidePanel>
+                  <ResizeHandle />
+                </>
               )}
-            </Panel>
-          </Group>
-        </div>
-      </Panel>
-      <ResizeHandle />
-      <SidePanel
-        id="sidebar"
-        open={sidebarOpen}
-        onOpenChange={useApp.getState().setSidebarOpen}
-        defaultSize={380}
-        minSize={260}
-        // Up to two thirds of the window, however wide it is, the slides keeping the rest.
-        maxSize={SIDEBAR_MAX_SIZE}
-      >
-        {/* Fixed, it leaves the panel (and the layout) where it was, so restoring it is instant. */}
-        <div data-testid="sidebar-body" className={sidebarMaximized ? "fixed inset-0 z-40 bg-background" : "h-full"}>
-          <Sidebar />
-        </div>
-      </SidePanel>
-    </Group>
+              <Panel id="stage" minSize={360}>
+                {hasDeck ? (
+                  <div className="flex h-full flex-col">
+                    <div className="min-h-0 flex-1">
+                      {mode === "settings" ? <DeckSettings /> : mode === "git" ? <ChangesView /> : <Stage />}
+                    </div>
+                    {/* The deck's timeline under the slide, while it is open, whatever the sidebar shows. */}
+                    {timelineOpen && (mode === "view" || mode === "edit") && <NarrationTimeline />}
+                  </div>
+                ) : (
+                  <FileViewer />
+                )}
+              </Panel>
+            </Group>
+          </div>
+        </Panel>
+        <ResizeHandle />
+        <SidePanel
+          id="sidebar"
+          open={sidebarOpen}
+          onOpenChange={useApp.getState().setSidebarOpen}
+          defaultSize={380}
+          minSize={260}
+          // Up to two thirds of the window, however wide it is, the slides keeping the rest.
+          maxSize={SIDEBAR_MAX_SIZE}
+        >
+          {/* Fixed, it leaves the panel (and the layout) where it was, so restoring it is instant. */}
+          <div data-testid="sidebar-body" className={sidebarMaximized ? "fixed inset-0 z-40 bg-background" : "h-full"}>
+            <Sidebar />
+          </div>
+        </SidePanel>
+      </Group>
+      {/* The keyboard shortcuts, for the whole workbench: `?` or a button opens them. */}
+      <ShortcutHelp />
+    </>
   );
 }
 
@@ -200,22 +208,5 @@ function SidePanel(props: {
 function ResizeHandle() {
   return (
     <Separator className="relative w-px bg-border outline-none transition-colors after:absolute after:inset-y-0 after:-left-1 after:-right-1 data-[separator=active]:bg-primary data-[separator=hover]:bg-primary/50" />
-  );
-}
-
-function ErrorToast() {
-  const error = useApp((s) => s.error);
-  if (!error) return null;
-  return (
-    <div className="fixed bottom-4 left-1/2 z-[60] flex max-w-lg -translate-x-1/2 items-start gap-2 rounded-lg border border-destructive/30 bg-card px-3 py-2 text-sm shadow-lg">
-      <span className="selectable flex-1 text-destructive">{error}</span>
-      <button
-        type="button"
-        onClick={() => useApp.getState().setError(null)}
-        className="text-muted-foreground hover:text-foreground"
-      >
-        <X className="size-4" />
-      </button>
-    </div>
   );
 }

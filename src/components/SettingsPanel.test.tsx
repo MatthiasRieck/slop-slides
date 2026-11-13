@@ -2,12 +2,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { REWIND_KEY, useApp } from "../store";
+import { lastError } from "../store/errors";
 import { invoke, revealItemInDir } from "../test/tauri";
 import { SettingsPanel } from "./SettingsPanel";
 
 beforeEach(() => {
   localStorage.clear();
-  useApp.setState({ reviewVisible: true, error: null });
+  useApp.setState({ reviewVisible: true, toasts: [] });
 });
 
 const radio = (name: string) => screen.getByRole("radio", { name }) as HTMLInputElement;
@@ -52,6 +53,6 @@ describe("SettingsPanel", () => {
     });
     render(<SettingsPanel />);
     fireEvent.click(screen.getByRole("button", { name: /Reveal|Show|Open/ }));
-    await waitFor(() => expect(useApp.getState().error).toBe("cannot locate home folder"));
+    await waitFor(() => expect(lastError(useApp.getState())).toBe("cannot locate home folder"));
   });
 });

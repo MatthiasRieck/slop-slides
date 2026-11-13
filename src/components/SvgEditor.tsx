@@ -27,6 +27,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { useRovingTabs } from "../hooks/useRovingTabs";
+import { formatKeys, isMod, keepsKey } from "../lib/keys";
 import { SWATCHES } from "../lib/palette";
 import {
   addHandle,
@@ -48,10 +50,10 @@ import {
   setPresentation,
   translateBy,
 } from "../lib/svgEdit";
-import { cn, isMac } from "../lib/utils";
+import { cn } from "../lib/utils";
 import { useApp } from "../store";
 import { isDirty, type SvgEdit, useSvgEditor } from "../svgStore";
-import { Button, ToolButton } from "./Button";
+import { Button, keepFocus, ToolButton } from "./Button";
 import { Field, inputClass, wideSelectClass } from "./Field";
 import { SectionLabel } from "./SectionLabel";
 import { checkerboard, duplicate, NO_OVERLAY, type Overlay, overlayOf, showDrawing, subtreeSize } from "./svg/drawing";
@@ -106,6 +108,7 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
   const [point, setPoint] = useState<string | null>(null);
   const [zoom, setZoom] = useState<number | null>(null);
   const [tab, setTab] = useState<InspectorTab>("properties");
+  const inspectorTabs = useRovingTabs();
   // The backdrop the user picked; null follows the drawing's colors.
   const [picked, setPicked] = useState<Backdrop | null>(null);
   const auto = useMemo(() => (svg ? backdropFor(svg, edit.color, edit.vars) : "light"), [svg, edit.color, edit.vars]);
@@ -174,9 +177,8 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
-    const target = event.target as HTMLElement;
-    if (target.closest("input, textarea, select")) return;
-    const mod = isMac ? event.metaKey : event.ctrlKey;
+    if (keepsKey(event.nativeEvent)) return;
+    const mod = isMod(event);
     const key = event.key.toLowerCase();
     let handled = true;
     if (mod && key === "z") (event.shiftKey ? store().redo : store().undo)();
@@ -202,17 +204,13 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
     // biome-ignore lint/a11y/noNoninteractiveElementInteractions: the editor's shortcuts apply anywhere in it.
     <div className="@container flex h-full min-h-0 flex-col" onKeyDown={onKeyDown}>
       <div className="flex h-10 shrink-0 items-center gap-1 border-b px-2">
-        <ToolButton
-          variant="panel"
-          label={`Undo (${isMac ? "⌘" : "Ctrl+"}Z)`}
-          disabled={!edit.past.length}
-          onClick={store().undo}
-        >
+        <ToolButton variant="panel" label="Undo" shortcut="mod+z" disabled={!edit.past.length} onClick={store().undo}>
           <Undo2 />
         </ToolButton>
         <ToolButton
           variant="panel"
-          label={`Redo (${isMac ? "⌘⇧" : "Ctrl+Shift+"}Z)`}
+          label="Redo"
+          shortcut="mod+shift+z"
           disabled={!edit.future.length}
           onClick={store().redo}
         >
@@ -252,7 +250,7 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
           title={
             otherDeck
               ? "Open the deck the drawing is in to save it"
-              : `Save the drawing into the slide (${isMac ? "⌘" : "Ctrl+"}S)`
+              : `Save the drawing into the slide (${formatKeys("mod+s")})`
           }
         >
           <Check />
@@ -286,13 +284,20 @@ function DrawingEditor({ edit }: { edit: SvgEdit }) {
           )}
         </div>
         <div className="flex min-h-0 flex-1 basis-1/2 flex-col border-t @3xl:w-80 @3xl:flex-none @3xl:basis-auto @3xl:border-l @3xl:border-t-0">
-          <div role="tablist" aria-label="Inspector" className="flex shrink-0 gap-1 border-b px-2 py-1.5">
+          <div
+            role="tablist"
+            aria-label="Inspector"
+            {...inspectorTabs}
+            className="flex shrink-0 gap-1 border-b px-2 py-1.5"
+          >
             {(["properties", "layers", "markup"] as const).map((id) => (
               <button
                 key={id}
                 type="button"
                 role="tab"
                 aria-selected={tab === id}
+                // A press leaves the focus where it is, as the editor's keys go on working there.
+                onMouseDown={keepFocus}
                 onClick={() => setTab(id)}
                 className={cn(
                   "rounded-md px-2 py-1 text-xs font-medium capitalize text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -719,12 +724,7 @@ function Properties(props: {
         >
           <ArrowDown />
         </ToolButton>
-        <ToolButton
-          variant="panel"
-          label={`Duplicate (${isMac ? "⌘" : "Ctrl+"}D)`}
-          disabled={root}
-          onClick={props.onDuplicate}
-        >
+        <ToolButton variant="panel" label="Duplicate" shortcut="mod+d" disabled={root} onClick={props.onDuplicate}>
           <Copy />
         </ToolButton>
         <ToolButton

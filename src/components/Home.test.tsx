@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it } from "vitest";
 import type { RecentWorkspace } from "../lib/api";
 import { useApp } from "../store";
+import { lastError, toastTexts } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke, open as openDialog } from "../test/tauri";
 import { Home } from "./Home";
@@ -50,7 +51,7 @@ beforeEach(() => {
     }
   });
   openDialog.mockReset();
-  useApp.setState({ workspace: null, openedFile: null, deck: null, error: null });
+  useApp.setState({ workspace: null, openedFile: null, deck: null, toasts: [] });
 });
 
 const rows = () => screen.queryAllByRole("listitem");
@@ -75,7 +76,7 @@ describe("Home", () => {
   it("reports a recent list that cannot be read", async () => {
     invoke.mockRejectedValue("cannot locate home folder");
     render(<Home />);
-    await waitFor(() => expect(useApp.getState().error).toBe("cannot locate home folder"));
+    await waitFor(() => expect(lastError(useApp.getState())).toBe("cannot locate home folder"));
   });
 
   it("opens a recent folder when it is clicked", async () => {
@@ -129,7 +130,7 @@ describe("Home", () => {
     });
     render(<Home />);
     await act(async () => fireEvent.click(screen.getByRole("button", { name: /Open deck/ })));
-    expect(useApp.getState().error).toBe("q3 is already open in another window.");
+    expect(lastError(useApp.getState())).toBe("q3 is already open in another window.");
     expect(invoke).not.toHaveBeenCalledWith("open_file", expect.anything());
   });
 
@@ -175,7 +176,7 @@ describe("Home", () => {
     });
     render(<Home />);
     await act(async () => fireEvent.submit(screen.getByPlaceholderText(/Deck title/)));
-    expect(useApp.getState().error).toBe("not a folder");
+    expect(lastError(useApp.getState())).toBe("not a folder");
     expect(invoke).not.toHaveBeenCalledWith("create_deck", expect.anything());
   });
 
@@ -198,7 +199,7 @@ describe("Home", () => {
     await waitFor(() => expect(useApp.getState().deck?.id).toBe(`${LIBRARY}/q3/deck.html`));
     expect(invoke).toHaveBeenCalledWith("open_workspace", { path: LIBRARY });
     expect(invoke).toHaveBeenCalledWith("import_pptx", { path: "/Users/me/Downloads/q3.pptx" });
-    expect(useApp.getState().error).toBeNull();
+    expect(lastError(useApp.getState())).toBeNull();
   });
 
   it("opens no workspace when the PowerPoint dialog is cancelled", async () => {
@@ -216,7 +217,11 @@ describe("Home", () => {
     render(<Home />);
     fireEvent.click(screen.getByRole("button", { name: "Import PowerPoint…" }));
     await waitFor(() =>
-      expect(useApp.getState().error).toBe("Imported, with these changes: charts (their data came along as tables)."),
+      expect(toastTexts(useApp.getState(), "info")).toEqual([
+        "Imported, with these changes: charts (their data came along as tables).",
+      ]),
     );
+    // It is something to know, not a failure.
+    expect(lastError(useApp.getState())).toBeNull();
   });
 });

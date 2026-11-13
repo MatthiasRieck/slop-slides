@@ -37,7 +37,7 @@ export function DashSelect(props: {
       disabled={props.disabled}
       value={props.value}
       onChange={(event) => props.onChange({ dash: event.target.value as Dash })}
-      className="h-6 w-20 rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-30"
+      className="h-6 w-20 rounded-md bg-transparent px-1 text-xs hover:bg-accent disabled:opacity-40"
     >
       {DASHES.map((d) => (
         <option key={d} value={d}>

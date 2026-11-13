@@ -167,7 +167,7 @@ export function ArrangeControls(props: {
                   onMouseDown={keepFocus}
                   onClick={() => setTarget(t)}
                   className={cn(
-                    "rounded px-1.5 py-0.5 text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-30",
+                    "rounded px-1.5 py-0.5 text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-40",
                     alignTo === t && "bg-accent text-foreground",
                   )}
                 >
@@ -368,7 +368,7 @@ function GeometryInput(props: {
         sanitize={(text) => text.replace(/[^\d.-]/g, "")}
         onChange={props.onChange}
         onDone={props.onDone}
-        className="h-6 w-12 rounded-md border bg-transparent px-1 text-center text-foreground tabular-nums disabled:opacity-30"
+        className="h-6 w-12 rounded-md border bg-transparent px-1 text-center text-foreground tabular-nums disabled:opacity-40"
       />
     </label>
   );
@@ -389,7 +389,8 @@ export function GroupControls(props: {
     <>
       <ToolButton
         keepFocus
-        label="Group (⌘G)"
+        label="Group"
+        shortcut="mod+g"
         title="Group the selected elements, to move, size and style them as one (two or more)"
         disabled={count < 2}
         onClick={() => props.onArrange?.({ type: "slop:edit-group" })}
@@ -398,7 +399,8 @@ export function GroupControls(props: {
       </ToolButton>
       <ToolButton
         keepFocus
-        label="Ungroup (⇧⌘G)"
+        label="Ungroup"
+        shortcut="mod+shift+g"
         disabled={!props.selection?.group}
         onClick={() => props.onArrange?.({ type: "slop:edit-ungroup" })}
       >

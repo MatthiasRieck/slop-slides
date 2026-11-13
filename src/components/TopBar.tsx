@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import { useDropdown } from "../hooks/useDropdown";
+import { useMenuKeys } from "../hooks/useMenuKeys";
 import type { HistoryEntry, OpenedFile, WorkspaceInfo } from "../lib/api";
 import { basename, cn, isMac, revealLabel } from "../lib/utils";
 import { useApp } from "../store";
@@ -117,7 +118,8 @@ function Breadcrumbs({ workspace, path, small }: { workspace: string; path: stri
  */
 function FileMenu(props: { workspace: WorkspaceInfo; file: OpenedFile | null; deckTitle: string | null }) {
   const { workspace, file, deckTitle } = props;
-  const { open, setOpen, ref: menuRef } = useDropdown({ escape: true });
+  const { open, setOpen, ref: menuRef } = useDropdown();
+  const menu = useMenuKeys();
 
   const choose = (action: () => void) => () => {
     setOpen(false);
@@ -148,7 +150,11 @@ function FileMenu(props: { workspace: WorkspaceInfo; file: OpenedFile | null; de
         <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
       </button>
       {open && (
-        <div role="menu" className="absolute left-0 top-full z-20 mt-1 w-56 rounded-lg border bg-card p-1 shadow-lg">
+        <div
+          role="menu"
+          {...menu}
+          className="absolute left-0 top-full z-20 mt-1 w-56 rounded-lg border bg-card p-1 shadow-lg outline-none"
+        >
           {deckTitle !== null && (
             <MenuItem
               icon={Settings2}
@@ -197,14 +203,17 @@ function EditHistory() {
   const redo = useApp((s) => s.history?.redo ?? null);
   const running = useApp((s) => s.running);
   const app = useApp.getState;
-  const busy = running ? " (once the agent is done)" : "";
+  /** Said while the agent works, when the step has to wait. */
+  const later = (step: string) => `${step}, once the agent is done`;
   return (
     <div className="flex items-center">
       <ToolButton
         variant="panel"
         size="md"
         label="Undo"
-        title={undo ? `Undo ${historyLabel(undo)} (⌘Z)${busy}` : "Nothing to undo"}
+        title={undo ? `Undo ${historyLabel(undo)}` : undefined}
+        shortcut="mod+z"
+        disabledReason={undo ? later(`Undo ${historyLabel(undo)}`) : "Nothing to undo"}
         disabled={!undo || running}
         onClick={() => void app().undo()}
       >
@@ -214,7 +223,9 @@ function EditHistory() {
         variant="panel"
         size="md"
         label="Redo"
-        title={redo ? `Redo ${historyLabel(redo)} (⇧⌘Z)${busy}` : "Nothing to redo"}
+        title={redo ? `Redo ${historyLabel(redo)}` : undefined}
+        shortcut="mod+shift+z"
+        disabledReason={redo ? later(`Redo ${historyLabel(redo)}`) : "Nothing to redo"}
         disabled={!redo || running}
         onClick={() => void app().redo()}
       >

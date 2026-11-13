@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ask, invoke } from "../test/tauri";
+import { lastError } from "./errors";
 import type { AssistantMessage, ChatMessage } from "./messages";
 import { assistantMessage, backend, calls, DECK, freshStore, type Handler, resetBackend, userMessage } from "./testing";
 
@@ -72,7 +73,7 @@ describe("workspaces", () => {
     await useApp.getState().openWorkspace("/ws");
     await useApp.getState().openPath("notes.md");
     await useApp.getState().openPath("gone.html");
-    expect(useApp.getState().error).toBe("file not found: gone.html");
+    expect(lastError(useApp.getState())).toBe("file not found: gone.html");
     expect(useApp.getState().openedFile).toEqual(opened("notes.md", "file"));
   });
 
@@ -115,7 +116,7 @@ describe("workspaces", () => {
     workspaceBackend();
     await useApp.getState().openWorkspace("/ws");
     expect(useApp.getState().openedFile).toBeNull();
-    expect(useApp.getState().error).toBeNull();
+    expect(lastError(useApp.getState())).toBeNull();
     expect(localStorage.getItem("slopslide.lastFile:/ws")).toBeNull();
   });
 
@@ -140,7 +141,7 @@ describe("workspaces", () => {
     backend({ open_workspace: () => Promise.reject("not a folder: /nope") });
     await useApp.getState().openWorkspace("/nope");
     expect(useApp.getState().workspace).toBeNull();
-    expect(useApp.getState().error).toBe("not a folder: /nope");
+    expect(lastError(useApp.getState())).toBe("not a folder: /nope");
   });
 
   it("creates decks in the open folder and opens them", async () => {
@@ -246,7 +247,7 @@ describe("each deck's own chat", () => {
     });
     await useApp.getState().openPath("a.html");
     expect(await useApp.getState().openDeck(B.id)).toBe(true);
-    expect(useApp.getState()).toMatchObject({ deck: { id: B.id }, chatKey: B.id, error: null });
+    expect(useApp.getState()).toMatchObject({ deck: { id: B.id }, chatKey: B.id, toasts: [] });
   });
 
   it("keeps the open deck and its chat when the next one is open in another window", async () => {
@@ -258,7 +259,7 @@ describe("each deck's own chat", () => {
     });
     await useApp.getState().openPath("a.html");
     expect(await useApp.getState().openDeck(B.id)).toBe(false);
-    expect(useApp.getState().error).toBe("b.html is already open in another window.");
+    expect(lastError(useApp.getState())).toBe("b.html is already open in another window.");
     expect(useApp.getState()).toMatchObject({ deck: A, chatKey: A.id, messages: said("about a") });
     expect(useApp.getState().openedFile?.path).toBe("a.html");
   });
@@ -271,7 +272,7 @@ describe("each deck's own chat", () => {
       },
     });
     expect(calls("open_deck")).toEqual([{ id: A.id, keepChat: false, quiet: true }]);
-    expect(useApp.getState()).toMatchObject({ deck: null, openedFile: null, error: null, sidebarTab: "files" });
+    expect(useApp.getState()).toMatchObject({ deck: null, openedFile: null, toasts: [], sidebarTab: "files" });
     expect(useApp.getState().chatKey).toBe("/ws");
     expect(localStorage.getItem("slopslide.lastFile:/ws")).toBe("a.html");
   });
@@ -285,7 +286,7 @@ describe("each deck's own chat", () => {
     await useApp.getState().openPath("a.html");
     expect(await useApp.getState().closeDeck()).toBe(false);
     await useApp.getState().openPath("page.html");
-    expect(useApp.getState().error).toMatch(/^ws is already open without a deck/);
+    expect(lastError(useApp.getState())).toMatch(/^ws is already open without a deck/);
     expect(useApp.getState()).toMatchObject({ deck: A, chatKey: A.id });
     expect(useApp.getState().openedFile?.path).toBe("a.html");
   });
@@ -456,7 +457,7 @@ describe("opening and creating decks", () => {
       },
     });
     await useApp.getState().openDeck("/decks/talk/deck.html");
-    expect(useApp.getState().error).toBe("deck not found: talk");
+    expect(lastError(useApp.getState())).toBe("deck not found: talk");
     expect(useApp.getState().deck).toBeNull();
   });
 
@@ -479,7 +480,7 @@ describe("opening and creating decks", () => {
       },
     });
     await useApp.getState().createDeck("Talk");
-    expect(useApp.getState().error).toBe("disk full");
+    expect(lastError(useApp.getState())).toBe("disk full");
   });
 
   it("closeDeck resets the editor state", async () => {

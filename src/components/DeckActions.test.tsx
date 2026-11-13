@@ -6,6 +6,7 @@ const unlisten = vi.fn();
 
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
+import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { DeckActions } from "./DeckActions";
 
@@ -32,7 +33,7 @@ beforeEach(() => {
     railOpen: true,
     codeDirty: false,
     presenting: false,
-    error: null,
+    toasts: [],
     imageExport: null,
   });
 });
@@ -250,7 +251,7 @@ describe("deck actions", () => {
     invoke.mockRejectedValueOnce("Permission denied (os error 13)");
     render(<DeckActions />);
     await exportAs(item);
-    expect(useApp.getState().error).toBe(`${failure}Permission denied (os error 13)`);
+    expect(lastError(useApp.getState())).toBe(`${failure}Permission denied (os error 13)`);
     expect(revealItemInDir).not.toHaveBeenCalled();
     expect(exportButton().disabled).toBe(false);
   });
@@ -262,7 +263,7 @@ describe("deck actions", () => {
     });
     render(<DeckActions />);
     await exportAs("PowerPoint");
-    await vi.waitFor(() => expect(useApp.getState().error).toBe("Could not save the PowerPoint file: disk full"));
+    await vi.waitFor(() => expect(lastError(useApp.getState())).toBe("Could not save the PowerPoint file: disk full"));
   });
 
   it.each([
@@ -289,11 +290,26 @@ describe("deck actions", () => {
       "PNG imagesOne image per slide, in a new folder",
       "VideoAn MP4 with each slide shown for a set time",
     ]);
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
     fireEvent.click(exportButton());
     fireEvent.pointerDown(document.body);
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("works the export menu from the keyboard", () => {
+    render(<DeckActions />);
+    exportButton().focus();
+    fireEvent.keyDown(exportButton(), { key: " " });
+    fireEvent.click(exportButton());
+    const items = screen.getAllByRole("menuitem");
+    expect(document.activeElement).toBe(items[0]);
+    fireEvent.keyDown(items[0]!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(items.at(-1));
+    fireEvent.keyDown(items.at(-1)!, { key: "Home" });
+    expect(document.activeElement).toBe(items[0]);
+    fireEvent.keyDown(items[0]!, { key: "Escape" });
+    expect(document.activeElement).toBe(exportButton());
   });
 
   it("exports PNGs into a new folder named after the deck", async () => {
@@ -339,7 +355,7 @@ describe("deck actions", () => {
     invoke.mockRejectedValue("Permission denied (os error 13)");
     render(<DeckActions />);
     await exportAs("PNG images");
-    expect(useApp.getState().error).toBe("Permission denied (os error 13)");
+    expect(lastError(useApp.getState())).toBe("Permission denied (os error 13)");
     expect(useApp.getState().imageExport).toBeNull();
   });
 
@@ -553,7 +569,7 @@ describe("video export", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel video export" }));
     expect(invoke).toHaveBeenCalledWith("cancel_video_export");
     await act(async () => fail("the video export was cancelled"));
-    expect(useApp.getState().error).toBeNull();
+    expect(lastError(useApp.getState())).toBeNull();
     expect(revealItemInDir).not.toHaveBeenCalled();
     expect(exportButton().textContent).not.toContain("Exporting");
     expect(exportButton().disabled).toBe(false);
@@ -566,7 +582,7 @@ describe("video export", () => {
     render(<DeckActions />);
     openPanel();
     await act(async () => fireEvent.click(saveButton()));
-    expect(useApp.getState().error).toBe(
+    expect(lastError(useApp.getState())).toBe(
       "Could not save the video: the deck took too long to get ready for recording the video",
     );
     expect(unlisten).toHaveBeenCalled();

@@ -1,7 +1,9 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
-import { type RefObject, useRef } from "react";
+import { type ReactNode, type RefObject, useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { useMenuKeys } from "../hooks/useMenuKeys";
+import { hasOpenLayer } from "../lib/layers";
 import { DropdownPanel, dropdownPanel, Popover, useDismiss } from "./Popover";
 
 const created: HTMLElement[] = [];
@@ -45,67 +47,98 @@ describe("useDismiss", () => {
 
   it("does nothing while closed", () => {
     const close = vi.fn();
-    renderHook(() => useDismiss(false, refTo(element()), close, { escape: true }));
+    renderHook(() => useDismiss(false, refTo(element()), close));
     fireEvent.pointerDown(document.body);
     pressEscape();
     expect(close).not.toHaveBeenCalled();
+    expect(hasOpenLayer()).toBe(false);
   });
 
-  it("ignores Escape unless asked to close on it", () => {
+  it("closes on Escape, unless told not to", () => {
     const close = vi.fn();
-    renderHook(() => useDismiss(true, refTo(element()), close));
+    const { unmount } = renderHook(() => useDismiss(true, refTo(element()), close, { escape: false }));
     pressEscape();
     expect(close).not.toHaveBeenCalled();
-  });
-
-  it("closes on Escape and lets it go on without capture", () => {
-    const close = vi.fn();
-    const after = vi.fn();
-    document.addEventListener("keydown", after);
-    renderHook(() => useDismiss(true, refTo(element()), close, { escape: true }));
+    unmount();
+    renderHook(() => useDismiss(true, refTo(element()), close));
     pressEscape();
     expect(close).toHaveBeenCalledTimes(1);
-    expect(after).toHaveBeenCalledTimes(1);
-    document.removeEventListener("keydown", after);
   });
 
-  it("listens on the window in the bubble phase without capture", () => {
-    const add = vi.spyOn(window, "addEventListener");
-    renderHook(() => useDismiss(true, refTo(element()), vi.fn(), { escape: true }));
-    expect(add).toHaveBeenCalledWith("pointerdown", expect.any(Function), false);
-    expect(add).toHaveBeenCalledWith("keydown", expect.any(Function), false);
-  });
-
-  it("with capture, sees Escape first on the document and stops it there", () => {
+  it("sees Escape before anything else does and stops it there", () => {
     const close = vi.fn();
     const inner = vi.fn();
+    const page = vi.fn();
     const target = element();
     target.addEventListener("keydown", inner);
-    const add = vi.spyOn(document, "addEventListener");
-    renderHook(() => useDismiss(true, refTo(element()), close, { escape: true, capture: true }));
-    expect(add).toHaveBeenCalledWith("pointerdown", expect.any(Function), true);
-    pressEscape(target);
+    window.addEventListener("keydown", page);
+    renderHook(() => useDismiss(true, refTo(element()), close));
+    const pressed = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    target.dispatchEvent(pressed);
     expect(close).toHaveBeenCalledTimes(1);
     expect(inner).not.toHaveBeenCalled();
+    expect(page).not.toHaveBeenCalled();
+    expect(pressed.defaultPrevented).toBe(true);
+    // Other keys are not its business.
+    fireEvent.keyDown(target, { key: "Enter" });
+    expect(inner).toHaveBeenCalledTimes(1);
+    window.removeEventListener("keydown", page);
+  });
+
+  it("closes only what opened last on one Escape", () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    renderHook(() => useDismiss(true, refTo(element()), first));
+    const top = renderHook(() => useDismiss(true, refTo(element()), second));
+    pressEscape();
+    expect([first, second].map((close) => close.mock.calls.length)).toEqual([0, 1]);
+    top.unmount();
+    pressEscape();
+    expect([first, second].map((close) => close.mock.calls.length)).toEqual([1, 1]);
+  });
+
+  it("sees a press that something on the way keeps to itself", () => {
+    const close = vi.fn();
+    const quiet = element();
+    quiet.addEventListener("pointerdown", (event) => event.stopPropagation());
+    renderHook(() => useDismiss(true, refTo(element()), close));
+    fireEvent.pointerDown(quiet);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes on a press in a slide preview, which reports it, not on one from elsewhere", () => {
+    const close = vi.fn();
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    created.push(frame);
+    renderHook(() => useDismiss(true, refTo(element()), close));
+    const message = (data: unknown, source: MessageEventSource | null) =>
+      act(() => void window.dispatchEvent(new MessageEvent("message", { data, source })));
+    message({ type: "slop:press" }, null);
+    message({ type: "slop:view" }, frame.contentWindow);
+    expect(close).not.toHaveBeenCalled();
+    message({ type: "slop:press" }, frame.contentWindow);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("calls the latest close without listening again", () => {
     const first = vi.fn();
     const second = vi.fn();
     const ref = refTo(element());
-    const add = vi.spyOn(window, "addEventListener");
+    const add = vi.spyOn(document, "addEventListener");
     const { rerender } = renderHook(({ close }) => useDismiss(true, ref, close), { initialProps: { close: first } });
     rerender({ close: second });
     fireEvent.pointerDown(document.body);
+    pressEscape();
     expect(first).not.toHaveBeenCalled();
-    expect(second).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(2);
     expect(add.mock.calls.filter(([type]) => type === "pointerdown")).toHaveLength(1);
   });
 
-  it.each([false, true])("stops listening when closed or unmounted (capture %s)", (capture) => {
+  it("stops listening when closed or unmounted", () => {
     const close = vi.fn();
     const ref = refTo(element());
-    const { rerender, unmount } = renderHook(({ open }) => useDismiss(open, ref, close, { escape: true, capture }), {
+    const { rerender, unmount } = renderHook(({ open }) => useDismiss(open, ref, close), {
       initialProps: { open: true },
     });
     rerender({ open: false });
@@ -117,6 +150,7 @@ describe("useDismiss", () => {
     fireEvent.pointerDown(document.body);
     pressEscape();
     expect(close).not.toHaveBeenCalled();
+    expect(hasOpenLayer()).toBe(false);
   });
 });
 
@@ -187,6 +221,47 @@ function Focusing() {
         <input ref={field} aria-label="Field" />
       </Popover>
     </>
+  );
+}
+
+/** A button that opens a popover holding `children`, and another button beside it. */
+function Opening({ children }: { children: ReactNode }) {
+  const anchor = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        ref={(el) => {
+          anchor.current = el;
+          if (el) el.getBoundingClientRect = () => new DOMRect(0, 0, 10, 10);
+        }}
+        onClick={() => setOpen(true)}
+      >
+        Open
+      </button>
+      <button type="button">Other</button>
+      {open && (
+        <Popover anchor={anchor} width={100} onClose={() => setOpen(false)}>
+          {children}
+        </Popover>
+      )}
+    </>
+  );
+}
+
+/** A menu of two shapes, with the keyboard's part of a menu. */
+function Menu() {
+  const menu = useMenuKeys();
+  return (
+    <div role="menu" aria-label="Shapes" {...menu}>
+      <button type="button" role="menuitem">
+        Box
+      </button>
+      <button type="button" role="menuitem">
+        Circle
+      </button>
+    </div>
   );
 }
 
@@ -268,6 +343,80 @@ describe("Popover", () => {
     expect(document.activeElement).toBe(field);
     screen.getByText("Anchor").focus();
     await waitFor(() => expect(document.activeElement).toBe(field));
+  });
+
+  it("focuses what its markup marks, when given nothing to focus", () => {
+    render(
+      <Opening>
+        <button type="button">First</button>
+        <input aria-label="Marked" data-autofocus="" />
+      </Opening>,
+    );
+    fireEvent.click(screen.getByText("Open"));
+    expect(document.activeElement).toBe(screen.getByLabelText("Marked"));
+  });
+
+  it("leaves the focus where it is when the panel names no place for it", () => {
+    render(
+      <Opening>
+        <button type="button">First</button>
+      </Opening>,
+    );
+    const open = screen.getByText("Open");
+    open.focus();
+    fireEvent.click(open);
+    expect(screen.getByText("First")).toBeTruthy();
+    expect(document.activeElement).toBe(open);
+  });
+
+  it("gives the focus back to what had it when it closes with the focus inside", () => {
+    render(
+      <Opening>
+        <input aria-label="Marked" data-autofocus="" />
+      </Opening>,
+    );
+    const open = screen.getByText("Open");
+    open.focus();
+    fireEvent.click(open);
+    expect(document.activeElement).toBe(screen.getByLabelText("Marked"));
+    act(() => void pressEscape(screen.getByLabelText("Marked")));
+    expect(screen.queryByLabelText("Marked")).toBeNull();
+    expect(document.activeElement).toBe(open);
+  });
+
+  it("leaves the focus alone when it closes with the focus elsewhere", () => {
+    render(
+      <Opening>
+        <input aria-label="Marked" data-autofocus="" />
+      </Opening>,
+    );
+    fireEvent.click(screen.getByText("Open"));
+    const other = screen.getByText("Other");
+    other.focus();
+    act(() => void fireEvent.pointerDown(other));
+    expect(screen.queryByLabelText("Marked")).toBeNull();
+    expect(document.activeElement).toBe(other);
+  });
+
+  it("moves the focus into the menu it holds, to its first choice when opened with the keyboard", () => {
+    render(
+      <Opening>
+        <Menu />
+      </Opening>,
+    );
+    const open = screen.getByText("Open");
+    // Pressed with the pointer: the menu has the focus, no choice looking picked.
+    fireEvent.click(open);
+    expect(document.activeElement).toBe(screen.getByRole("menu"));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "ArrowDown" });
+    expect(document.activeElement).toBe(screen.getByText("Box"));
+    act(() => void pressEscape());
+    // Opened from the keyboard, with the focus showing on the button.
+    open.focus();
+    fireEvent.click(open);
+    expect(document.activeElement).toBe(screen.getByText("Box"));
+    act(() => void pressEscape());
+    expect(document.activeElement).toBe(open);
   });
 
   it("follows the anchor on resize only when asked", () => {

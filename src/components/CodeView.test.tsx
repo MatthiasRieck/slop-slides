@@ -2,6 +2,7 @@ import { EditorView } from "@codemirror/view";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useApp } from "../store";
+import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
 import { CodePanel, CodeView } from "./CodeView";
@@ -22,7 +23,7 @@ beforeEach(() => {
     selected: "intro",
     revealRev: 0,
     codeDirty: false,
-    error: null,
+    toasts: [],
   });
 });
 
@@ -330,7 +331,7 @@ describe("CodeView: editing and saving", () => {
     await type(view, "<h1>Hello", "!");
     invoke.mockRejectedValue("disk full");
     await act(async () => fireEvent.click(button("Save")));
-    expect(useApp.getState().error).toBe("disk full");
+    expect(lastError(useApp.getState())).toBe("disk full");
     expect(useApp.getState().codeDirty).toBe(true);
     expect(screen.queryByText(/changed on disk while/)).toBeNull();
   });
@@ -390,7 +391,7 @@ describe("CodeView: conflicts with changes on disk", () => {
       "save_deck_source",
       expect.objectContaining({ source: view.state.doc.toString(), base: DECK_HTML }),
     );
-    expect(useApp.getState().error).toBeNull();
+    expect(lastError(useApp.getState())).toBeNull();
     expect(screen.getByText("deck.html changed on disk while you were editing.")).toBeTruthy();
   });
 
@@ -400,7 +401,7 @@ describe("CodeView: conflicts with changes on disk", () => {
     invoke.mockRejectedValue("deck.html changed on disk since you started editing");
     await act(async () => fireEvent.click(button("Save")));
     await screen.findByText("deck.html changed on disk while you were editing.");
-    expect(useApp.getState().error).toBeNull();
+    expect(lastError(useApp.getState())).toBeNull();
   });
 
   it("no conflict when the disk catches up to the edits", async () => {

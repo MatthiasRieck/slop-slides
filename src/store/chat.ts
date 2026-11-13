@@ -6,6 +6,7 @@ import { pixelsOf } from "../lib/slideSize";
 import { applyReplyEvent, replyProvider } from "./agentEvents";
 import { captureSlide } from "./capture";
 import { editsSaved } from "./editQueue";
+import { showErrorIn } from "./errors";
 import { refreshHistory } from "./history";
 import {
   type AssistantMessage,
@@ -254,7 +255,7 @@ async function followDeck(app: AppStore) {
     await api.saveChat(folder, messages);
     await api.moveChatToDeck();
   } catch (error) {
-    app.setState({ error: errorMessage(error) });
+    showErrorIn(app, error);
     return;
   }
   if (app.getState().chatKey === folder && app.getState().deck?.id === deck.id) {

@@ -1,4 +1,4 @@
-import { api, type Deck, errorMessage } from "../lib/api";
+import { api, type Deck } from "../lib/api";
 import {
   DEFAULT_EDIT_STYLES,
   type EditElement,
@@ -182,7 +182,8 @@ export const createEditingSlice: Slice<EditingSlice> = (set, get, app) => ({
         const next = await api.updateSlide(deck.id, slide, markup, base);
         if (get().deck?.id === deck.id) showEdited(app, slide, next, true);
       } catch (error) {
-        set((s) => ({ error: errorMessage(error), editReload: s.editReload + 1 }));
+        showErrorIn(app, error);
+        set((s) => ({ editReload: s.editReload + 1 }));
       }
     }),
 

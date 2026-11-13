@@ -13,6 +13,7 @@ import { claimDrop, dropCovered } from "../lib/drop";
 import { DEFAULT_EDIT_STYLES } from "../lib/editTools";
 import { setSlideClock } from "../lib/slideClock";
 import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
+import { lastError } from "../store/errors";
 import { useSvgEditor } from "../svgStore";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Stage } from "./Stage";
@@ -179,7 +180,7 @@ describe("Stage", () => {
   describe("copying and pasting slides", () => {
     beforeEach(() => {
       vi.mocked(invoke).mockReset();
-      useApp.setState({ editing: false, error: null });
+      useApp.setState({ editing: false, toasts: [] });
     });
 
     it("copies the selected slide with ⌘C in View, where ⌘V pastes nothing", async () => {
@@ -253,7 +254,7 @@ describe("Stage", () => {
       expect(useApp.getState().selected).toBe("intro");
       vi.mocked(invoke).mockRejectedValue("could not copy");
       await act(async () => void fireEvent.keyDown(document.body, { key: "c", metaKey: true }));
-      await waitFor(() => expect(useApp.getState().error).toBe("could not copy"));
+      await waitFor(() => expect(lastError(useApp.getState())).toBe("could not copy"));
     });
 
     it("leaves the keys to typing, selected text, presenting and ⌘⇧V", () => {
@@ -1360,11 +1361,11 @@ describe("Stage", () => {
 
       it("has nothing to style until something is selected or a tool is picked", () => {
         const { frame } = enter();
-        for (const name of ["Text color", "Bold (⌘B)", "Fill", "Border color", "Bring to front", "Delete (⌫)"]) {
+        for (const name of ["Text color", "Bold", "Fill", "Border color", "Bring to front", "Delete"]) {
           expect(button(name).disabled).toBe(true);
         }
         select(frame);
-        for (const name of ["Text color", "Bold (⌘B)", "Fill", "Border color", "Bring to front", "Delete (⌫)"]) {
+        for (const name of ["Text color", "Bold", "Fill", "Border color", "Bring to front", "Delete"]) {
           expect(button(name).disabled).toBe(false);
         }
         select(frame, null);
@@ -1375,8 +1376,8 @@ describe("Stage", () => {
         const { frame } = enter();
         select(frame);
         expect((screen.getByLabelText("Font size") as HTMLInputElement).value).toBe("40");
-        expect(button("Italic (⌘I)").getAttribute("aria-pressed")).toBe("true");
-        expect(button("Bold (⌘B)").getAttribute("aria-pressed")).toBe("false");
+        expect(button("Italic").getAttribute("aria-pressed")).toBe("true");
+        expect(button("Bold").getAttribute("aria-pressed")).toBe("false");
         expect(button("Center text").getAttribute("aria-pressed")).toBe("true");
         expect(button("Center text vertically").getAttribute("aria-pressed")).toBe("true");
         expect(screen.getByTestId("Fill swatch").style.background).toBe("rgb(59, 130, 246)");
@@ -1388,7 +1389,7 @@ describe("Stage", () => {
         select(frame);
         fireEvent.click(button("Larger text"));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { fontSize: 48 } }, "*");
-        fireEvent.click(button("Bold (⌘B)"));
+        fireEvent.click(button("Bold"));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { bold: true } }, "*");
         fireEvent.click(button("Align text to the bottom"));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-style", style: { valign: "bottom" } }, "*");
@@ -1423,7 +1424,7 @@ describe("Stage", () => {
           strokeWidth: 6,
           fill: null,
         });
-        expect(button("Bold (⌘B)").disabled).toBe(true);
+        expect(button("Bold").disabled).toBe(true);
         expect(button("Line color").disabled).toBe(false);
         expect((screen.getByLabelText("Line width") as HTMLSelectElement).value).toBe("6");
       });
@@ -1432,7 +1433,7 @@ describe("Stage", () => {
         const { post } = enter();
         fireEvent.click(button("Add text (T)"));
         expect(button("Fill").disabled).toBe(false);
-        fireEvent.click(button("Italic (⌘I)"));
+        fireEvent.click(button("Italic"));
         expect(useApp.getState().editStyles.text.italic).toBe(true);
         expect(post).not.toHaveBeenCalledWith(expect.objectContaining({ type: "slop:edit-style" }), "*");
         expect(post).toHaveBeenLastCalledWith(
@@ -1577,7 +1578,7 @@ describe("Stage", () => {
 
       it("groups, ungroups and locks from the toolbar", () => {
         const { frame, post } = enter();
-        expect(button("Group (⌘G)").disabled).toBe(true);
+        expect(button("Group").disabled).toBe(true);
         expect(button("Lock").disabled).toBe(true);
         select(frame, { ...SELECTION, kind: "group", group: true });
         fromFrame(frame, {
@@ -1585,9 +1586,9 @@ describe("Stage", () => {
           slide: "intro",
           geometry: { count: 3, x: 0, y: 0, w: 1, h: 1 },
         });
-        fireEvent.click(button("Group (⌘G)"));
+        fireEvent.click(button("Group"));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-group" }, "*");
-        fireEvent.click(button("Ungroup (⇧⌘G)"));
+        fireEvent.click(button("Ungroup"));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-ungroup" }, "*");
         fireEvent.click(button("Lock"));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-lock", locked: true }, "*");
@@ -1750,8 +1751,8 @@ describe("Stage", () => {
           vi.mocked(open).mockResolvedValue(["/tmp/a.png"] as never);
           vi.mocked(invoke).mockRejectedValue("disk full");
           fireEvent.click(button("Add an image from a file"));
-          await waitFor(() => expect(useApp.getState().error).toBe("disk full"));
-          act(() => useApp.getState().setError(null));
+          await waitFor(() => expect(lastError(useApp.getState())).toBe("disk full"));
+          act(() => useApp.setState({ toasts: [] }));
         });
 
         it("offers the image panel for images only", () => {
@@ -1820,7 +1821,7 @@ describe("Stage", () => {
         select(frame);
         fireEvent.click(button("Bring forward"));
         fireEvent.click(button("Send to back"));
-        fireEvent.click(button("Delete (⌫)"));
+        fireEvent.click(button("Delete"));
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-order", to: "forward" }, "*");
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-order", to: "back" }, "*");
         expect(post).toHaveBeenCalledWith({ type: "slop:edit-delete" }, "*");
@@ -1847,10 +1848,10 @@ describe("Stage", () => {
         it("underlines, strikes through, raises and lists the selection's text", () => {
           const { frame, post } = enter();
           select(frame, { ...TEXT, underline: true, script: "sup", list: "ul" });
-          expect(button("Underline (⌘U)").getAttribute("aria-pressed")).toBe("true");
+          expect(button("Underline").getAttribute("aria-pressed")).toBe("true");
           expect(button("Superscript").getAttribute("aria-pressed")).toBe("true");
           expect(button(/^Bulleted list/).getAttribute("aria-pressed")).toBe("true");
-          fireEvent.click(button("Underline (⌘U)"));
+          fireEvent.click(button("Underline"));
           fireEvent.click(button("Strikethrough"));
           fireEvent.click(button("Superscript"));
           fireEvent.click(button("Subscript"));
@@ -1868,7 +1869,7 @@ describe("Stage", () => {
         it("keeps the defaults when styling words while typing", () => {
           const { frame, post } = enter();
           select(frame, { ...TEXT, editing: true, range: true });
-          fireEvent.click(button("Bold (⌘B)"));
+          fireEvent.click(button("Bold"));
           expect(post).toHaveBeenCalledWith(style({ bold: true }), "*");
           expect(useApp.getState().editStyles).toEqual(DEFAULT_EDIT_STYLES);
         });
@@ -1877,12 +1878,36 @@ describe("Stage", () => {
           const { frame, post } = enter();
           select(frame, TEXT);
           const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
-          button("Bold (⌘B)").dispatchEvent(press);
+          button("Bold").dispatchEvent(press);
           expect(press.defaultPrevented).toBe(true);
-          fireEvent.pointerDown(button("Bold (⌘B)"));
+          fireEvent.pointerDown(button("Bold"));
           expect(post).not.toHaveBeenCalledWith({ type: "slop:edit-finish" }, "*");
           fireEvent.pointerDown(document.body);
           expect(post).toHaveBeenCalledWith({ type: "slop:edit-finish" }, "*");
+        });
+
+        it("closes the toolbar's popup on Escape, pressed in the app or in the slide, staying in edit mode", () => {
+          const { frame, post } = enter();
+          select(frame, TEXT);
+          const popup = () => screen.queryByRole("dialog", { name: "Text color" });
+          fireEvent.click(button("Text color"));
+          // The slide is told, so that it hands its Escape over instead of deselecting.
+          expect(post).toHaveBeenCalledWith({ type: "slop:layer", open: true }, "*");
+          fromFrame(frame, { type: "slop:dismiss" });
+          expect(popup()).toBeNull();
+          expect(post).toHaveBeenCalledWith({ type: "slop:layer", open: false }, "*");
+          // Escape the player forwards as a key closes it too, before it means leaving edit mode.
+          fireEvent.click(button("Text color"));
+          fromFrame(frame, { type: "slop:key", key: "Escape", mod: false });
+          expect(popup()).toBeNull();
+          expect(useApp.getState().editing).toBe(true);
+          fireEvent.click(button("Text color"));
+          fireEvent.keyDown(document.body, { key: "Escape" });
+          expect(popup()).toBeNull();
+          expect(useApp.getState().editing).toBe(true);
+          // With nothing open, Escape from the slide leaves edit mode, as before.
+          fromFrame(frame, { type: "slop:key", key: "Escape", mod: false });
+          expect(useApp.getState().editing).toBe(false);
         });
 
         it("closes the toolbar's popups on a press in the slide, leaving the typing to the editor", () => {
@@ -1890,7 +1915,7 @@ describe("Stage", () => {
           select(frame, TEXT);
           fireEvent.click(button("Text color"));
           expect(screen.getByRole("dialog", { name: "Text color" })).toBeTruthy();
-          fromFrame(frame, { type: "slop:edit-press" });
+          fromFrame(frame, { type: "slop:press" });
           expect(screen.queryByRole("dialog", { name: "Text color" })).toBeNull();
           expect(post).not.toHaveBeenCalledWith({ type: "slop:edit-finish" }, "*");
         });
@@ -2137,7 +2162,7 @@ describe("Stage", () => {
       toggleEditing();
       const frame = stageFrame(container);
       fireEvent.load(frame);
-      const remove = () => screen.getByRole("button", { name: "Delete (⌫)" }) as HTMLButtonElement;
+      const remove = () => screen.getByRole("button", { name: "Delete" }) as HTMLButtonElement;
       expect(remove().disabled).toBe(true);
       fromFrame(frame, { type: "slop:edit-selection", slide: "outro", selected: true, selection: { kind: "element" } });
       fromFrame(null, { type: "slop:edit-selection", slide: "intro", selected: true, selection: { kind: "element" } });
@@ -2229,7 +2254,7 @@ describe("Stage", () => {
         toggleEditing();
         laidOut(container);
         await act(async () => void claimDrop(["/tmp/photo.png"], { x: 100, y: 100 }));
-        await waitFor(() => expect(useApp.getState().error).toBe("disk full"));
+        await waitFor(() => expect(lastError(useApp.getState())).toBe("disk full"));
       });
     });
 
@@ -2657,7 +2682,7 @@ describe("Stage", () => {
         expect(post).not.toHaveBeenCalled();
         vi.mocked(invoke).mockRejectedValue("no clipboard");
         await act(async () => void fireEvent.keyDown(document.body, { key: "v", metaKey: true }));
-        await waitFor(() => expect(useApp.getState().error).toBe("no clipboard"));
+        await waitFor(() => expect(lastError(useApp.getState())).toBe("no clipboard"));
       });
     });
 
@@ -2876,6 +2901,8 @@ describe("Stage", () => {
         const frame = stageFrame(container);
         fireEvent.load(frame);
         const post = vi.spyOn(frame.contentWindow!, "postMessage");
+        // The right-click is a press in the slide first, which the preview reports.
+        fromFrame(frame, { type: "slop:press" });
         post.mockClear();
         fromFrame(frame, { type: "slop:edit-menu", slide: "intro", x: 100, y: 50, element });
         return { frame, post };
@@ -3094,17 +3121,6 @@ describe("Stage", () => {
         fireEvent.keyDown(document.activeElement!, { key: "t" });
         expect(useApp.getState().editTool).toBe("select");
       });
-    });
-
-    it("shows the keyboard shortcuts only in edit mode", () => {
-      render(<Stage />);
-      fireEvent.keyDown(document.body, { key: "?" });
-      expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).toBeNull();
-      toggleEditing();
-      fireEvent.keyDown(document.body, { key: "?" });
-      expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeTruthy();
-      toggleEditing();
-      expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).toBeNull();
     });
 
     it("always offers to tidy the slide, and is busy while the agent runs", () => {

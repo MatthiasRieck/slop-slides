@@ -25,7 +25,7 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   to undo (the deck's one history; see How it works). ⌘V also pastes images and text copied in other apps, like a browser. Pastes go
   on top of the slide, under the pointer (or in the middle of the view), without moving the
   layout. Right-click an element for these actions and its stacking order, to ask the agent
-  about it, or to have the agent tidy just an element you added. `?` lists the shortcuts.
+  about it, or to have the agent tidy just an element you added.
   Lines and arrows have a point at each end instead of a box: drag one to move that end,
   drag the small handle on the line to add a point that curves it, and double-click a point
   in between to remove it.
@@ -95,6 +95,23 @@ the slides. Keep talking to it to restyle, rewrite, split, or add slides while y
   window paste into another; the images they show are copied into the receiving deck's
   `assets/`. A pasted element keeps its size and text look, but styles that come from the
   other deck's CSS (its classes, its theme) do not come along.
+  A window is named after what is open in it (the deck and its folder), and asks before it
+  closes over unsaved HTML edits, a drawing with changes not accepted, or the agent's running turn.
+- **Keyboard:** `?` (or ⌘/, Ctrl+/ on Windows and Linux) lists every shortcut, by where it works:
+  the slides, View, Edit, text, the chat, presenting, the HTML and SVG editors. Tooltips name a
+  button's shortcut as the system writes it (⌘Z on macOS, Ctrl+Z elsewhere), also on a button
+  that is off, where the tooltip says what it waits for. Escape closes what opened last, one
+  thing at a time: a menu, a popover, a dialog, then a message; in a field it first does what
+  the field does with it. That holds with the focus in the slide too, and a press in the slide
+  closes what is open in the app. Menus take the arrow keys, Home and End, and so do tabs;
+  a dialog keeps Tab and the keys inside it and gives the focus back when it closes.
+- **Messages:** what goes wrong shows at the bottom right of the window and stays until
+  dismissed; what is only worth knowing (what an import changed, a file the agent made, with
+  a button to open it) goes away after a few seconds, unless the pointer is on it. Up to three
+  show at once.
+- **Appearance:** the app follows the system's light or dark appearance, native controls and
+  scrollbars included, and its request for reduced motion: nothing in the app then slides,
+  fades or spins, and lists jump instead of scrolling. A slide's own animations are the deck's.
 - **Styles and layouts:** decks can follow a template, a deck of example layouts (title,
   section, bullets, split, stats, quote, closing) in one style, with its own entrance animation. 31 come
   with the app (Claymorphism, Swiss Design, Synthwave, Terminal Green, Wabi-Sabi, …); add your own as folders in

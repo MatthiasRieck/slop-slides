@@ -12,7 +12,11 @@
    sends { type: "slop:canvas", color, accent, ... }: the color of the panel around the slide and
    the palette's colors (src/index.css) as `--slop-*`, for what the preview and the editor draw.
    A press on the preview while it lacks keyboard focus posts { type: "slop:focus" }, and the
-   app focuses the preview.
+   app focuses the preview. Every press posts { type: "slop:press" }: it never reaches the app's
+   window, but whatever is open there (a menu, a popover) closes on a press outside it, which this
+   is. While something is open there, the app says so with { type: "slop:layer", open }, and
+   Escape pressed here goes to the app as { type: "slop:dismiss" }, to close that first, instead
+   of to the editor or the player.
 
    { type: "slop:search", query, matchCase, wholeWord, active } marks what the search in the app's
    toolbar finds on the slide, with the `active`th hit stronger. It reads the text as find.rs does,
@@ -276,6 +280,29 @@
     restore(selecting.covers);
     selecting = null;
   }
+
+  // Whatever is open in the app closes on a press outside it, which a press here is.
+  window.addEventListener(
+    "pointerdown",
+    function () {
+      window.parent.postMessage({ type: "slop:press" }, "*");
+    },
+    true,
+  );
+
+  // Something is open in the app over the preview (see { type: "slop:layer" }): Escape closes
+  // that first. Capture phase, and before the editor adds its keys, so nothing here acts on it.
+  var layerOpen = false;
+  window.addEventListener(
+    "keydown",
+    function (event) {
+      if (!layerOpen || event.key !== "Escape" || event.isComposing) return;
+      window.parent.postMessage({ type: "slop:dismiss" }, "*");
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    },
+    true,
+  );
 
   // Panning and the editor cancel the press, so it never moves keyboard focus here by itself and
   // keys would stay with whatever had it in the app (the chat composer, say). The app focuses
@@ -649,6 +676,7 @@
   window.addEventListener("message", function (event) {
     var data = event.data;
     if (event.source !== window.parent || !data) return;
+    if (data.type === "slop:layer") layerOpen = !!data.open;
     if (data.type === "slop:search") highlight(data);
     if (data.type === "slop:comment-tool" && !show) setCommenting(data.on);
     if (data.type === "slop:comment-locate" && Array.isArray(data.comments)) {

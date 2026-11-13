@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { useDropdown } from "./useDropdown";
 
-function Dropdown(props: { disabled?: boolean; escape?: boolean; capture?: boolean; onClose?: () => void }) {
+function Dropdown(props: { disabled?: boolean; escape?: boolean; onClose?: () => void }) {
   const { open, ref, toggle } = useDropdown(props);
   return (
     <div>
@@ -36,24 +36,27 @@ describe("useDropdown", () => {
     expect(menu()).toBeNull();
   });
 
-  it("closes on Escape only when asked to", () => {
-    const { rerender } = render(<Dropdown />);
+  it("closes on Escape, unless told not to", () => {
+    const { rerender } = render(<Dropdown escape={false} />);
     fireEvent.click(screen.getByText("Menu"));
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(menu()).toBeTruthy();
-    rerender(<Dropdown escape />);
-    fireEvent.keyDown(window, { key: "Escape" });
+    rerender(<Dropdown />);
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(menu()).toBeNull();
   });
 
-  it("with capture, takes Escape before the page does, and keeps it from going further", () => {
+  it("takes Escape before the page does, and keeps it from going further", () => {
     const page = vi.fn();
     window.addEventListener("keydown", page);
-    render(<Dropdown escape capture />);
+    render(<Dropdown />);
     fireEvent.click(screen.getByText("Menu"));
-    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(menu()).toBeNull();
     expect(page).not.toHaveBeenCalled();
+    // Closed, it leaves the key to the page.
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(page).toHaveBeenCalledOnce();
     window.removeEventListener("keydown", page);
   });
 

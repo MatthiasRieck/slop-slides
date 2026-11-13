@@ -65,14 +65,14 @@ export function PermissionPicker() {
         title={`${name} permissions: ${PERMISSION_MODES[mode].label}`}
         aria-expanded={open}
         onClick={() => setOpen(!open)}
-        className="flex h-7 items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+        className="flex h-7 items-center gap-1 rounded-md px-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
       >
         <Shield className="size-3.5 shrink-0" />
         <span className="hidden @[26rem]:inline">{PERMISSION_MODES[mode].label}</span>
         <ChevronDown className="hidden size-3 @[17rem]:block" />
       </button>
       {open && (
-        <Popover anchor={root} onClose={close} width={256} variant="menu" portal follow capture className="p-1.5">
+        <Popover anchor={root} onClose={close} width={256} variant="menu" portal follow className="p-1.5">
           <fieldset aria-label="Permission modes">
             {error ? (
               <p role="alert" className="p-2 text-xs text-destructive">

@@ -2,6 +2,7 @@ import { CaseSensitive, ChevronDown, ChevronUp, Replace, Search, Undo2, WholeWor
 import { useEffect, useRef, useState } from "react";
 
 import { api, type ReplacedText } from "../lib/api";
+import { formatKeys } from "../lib/keys";
 import { plural } from "../lib/utils";
 import { activeMatch, useApp } from "../store";
 import { ToolButton } from "./Button";
@@ -39,7 +40,7 @@ export function SlideSearch() {
   const { setSearch, stepSearch } = useApp.getState();
   const found = matches?.length ?? 0;
   const slideCount = new Set(matches?.map((m) => m.slide)).size;
-  const step = "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30";
+  const step = "rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40";
 
   return (
     <search className="flex min-w-0 flex-col gap-0.5">
@@ -49,7 +50,7 @@ export function SlideSearch() {
           ref={input}
           aria-label="Search slides"
           placeholder="Search slides"
-          title="Search the text on the slides and in their notes (⌘F)"
+          title={`Search the text on the slides and in their notes (${formatKeys("mod+f")})`}
           value={query}
           onChange={(event) => setSearch({ query: event.target.value })}
           onKeyDown={(event) => {
@@ -106,7 +107,7 @@ export function SlideSearch() {
         <button
           type="button"
           aria-label="Previous match"
-          title="Previous match (⇧Enter)"
+          title={`Previous match (${formatKeys("shift+enter")})`}
           disabled={found === 0}
           onClick={() => stepSearch(-1)}
           className={step}

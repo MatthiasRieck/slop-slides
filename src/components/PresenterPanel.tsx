@@ -286,7 +286,7 @@ function PanelButton(props: {
       onMouseDown={(event) => event.preventDefault()}
       onClick={props.onClick}
       className={cn(
-        "flex size-7 items-center justify-center rounded-lg hover:bg-foreground/10 disabled:pointer-events-none disabled:opacity-35 [&_svg]:size-4",
+        "flex size-7 items-center justify-center rounded-lg hover:bg-foreground/10 disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-4",
         props.active ? "bg-destructive/15 text-destructive" : "text-foreground/70 hover:text-foreground",
       )}
     >

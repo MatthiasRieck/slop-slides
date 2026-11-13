@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import type { Deck } from "../lib/api";
 import { zoomBox } from "../lib/ink";
+import { dismissTopLayer } from "../lib/layers";
 import { hasPresenterWindow } from "../lib/screens";
 import { onSlideClock, postSlideClock, setSlideClock } from "../lib/slideClock";
 import { loadFlag, saveFlag } from "../lib/storage";
@@ -85,7 +86,11 @@ export function Presenter() {
     };
     const onMessage = (event: MessageEvent) => {
       if (event.source !== frameRef.current?.contentWindow) return;
-      if (event.data?.type === "slop:key") handle(String(event.data.key), Boolean(event.data.mod));
+      if (event.data?.type === "slop:key") {
+        // Escape closes what is open over the show (a message, say) before it ends the show.
+        if (event.data.key === "Escape" && dismissTopLayer(event)) return;
+        handle(String(event.data.key), Boolean(event.data.mod));
+      }
       if (event.data?.type === "slop:zoom") {
         const { x, y, k } = event.data;
         if ([x, y, k].every(Number.isFinite)) setZoom({ x, y, k });

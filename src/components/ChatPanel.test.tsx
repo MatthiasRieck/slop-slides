@@ -29,6 +29,7 @@ import {
   TIDY_PROMPT,
   useApp,
 } from "../store";
+import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ChatPanel } from "./ChatPanel";
 
@@ -119,7 +120,7 @@ beforeEach(() => {
     },
     providers: PROVIDERS,
     favoriteModels: [],
-    error: null,
+    toasts: [],
     sketches: {},
     sketchesSent: {},
     reviewVisible: true,
@@ -550,7 +551,7 @@ describe("ChatPanel: composing", () => {
   it("shows a stop button while the agent works", () => {
     useApp.setState({ running: true });
     render(<ChatPanel />);
-    expect(textarea().placeholder).toMatch(/^Queue a message, or (⌘↵|Ctrl\+↵) to steer the agent now…$/);
+    expect(textarea().placeholder).toMatch(/^Queue a message, or Ctrl\+Enter to steer the agent now…$/);
     expect(screen.queryByTitle("Send")).toBeNull();
     fireEvent.click(screen.getByTitle("Stop"));
     expect(interrupt).toHaveBeenCalledOnce();
@@ -1060,7 +1061,7 @@ describe("ChatPanel: attachments", () => {
     invoke.mockRejectedValue("disk full");
     render(<ChatPanel />);
     await act(async () => paste([new File(["hi"], "image.png", { type: "image/png" })]));
-    await waitFor(() => expect(useApp.getState().error).toBe("disk full"));
+    await waitFor(() => expect(lastError(useApp.getState())).toBe("disk full"));
   });
 
   it("shows image previews in a fan that opens a grid to review and remove them", async () => {
@@ -1122,7 +1123,7 @@ describe("ChatPanel: attachments", () => {
     invoke.mockRejectedValue("permission denied");
     render(<ChatPanel />);
     await act(async () => fireEvent.click(screen.getByTitle("Attach images or files")));
-    expect(useApp.getState().error).toBe("permission denied");
+    expect(lastError(useApp.getState())).toBe("permission denied");
   });
 });
 

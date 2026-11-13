@@ -36,7 +36,6 @@ export function DiscardButton() {
       {asking && selected && (
         <Dialog
           label="Discard changes"
-          takeFocus
           closeOnBackdrop
           onClose={() => setAsking(false)}
           className="flex w-96 max-w-[90vw] flex-col gap-4 rounded-xl border bg-background p-5 text-foreground shadow-2xl outline-none"

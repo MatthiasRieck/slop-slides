@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
+import { lastError } from "./errors";
 import { backend, calls, DECK, freshStore, resetBackend } from "./testing";
 
 beforeEach(resetBackend);
@@ -37,9 +38,9 @@ describe("what is said over the slides", () => {
         throw "The slide `intro` is locked; unlock it to change it.";
       },
     });
-    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", error: null });
+    useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", toasts: [] });
     await useApp.getState().setNarration("intro", "Hi");
-    expect(useApp.getState().error).toContain("locked");
+    expect(lastError(useApp.getState())).toContain("locked");
   });
 
   it("saves speaker notes after edits still being saved, and shows the deck", async () => {

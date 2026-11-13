@@ -45,7 +45,7 @@ beforeEach(() => {
     selected: "intro",
     templates: [MINE, SWISS, BENTO],
     composerFill: null,
-    error: null,
+    toasts: [],
     running: false,
     sidebarOpen: true,
   });
@@ -180,7 +180,7 @@ describe("SlideRail pickers", () => {
         .getAllByRole("button")
         .map((b) => b.getAttribute("aria-label")),
     ).toEqual(["Blank slide", "Title layout", "Split layout", "Quote layout"]);
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 

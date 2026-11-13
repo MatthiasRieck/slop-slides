@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { api, errorMessage } from "../lib/api";
 import { onDiskRead } from "../lib/codeSync";
-import { basename, cn, isMac } from "../lib/utils";
+import { formatKeys } from "../lib/keys";
+import { basename, cn } from "../lib/utils";
 import { showError, useApp } from "../store";
 import { Button } from "./Button";
 import { replaceText, type SlideMarks, setActiveSlide, slideMarks, sourceExtensions } from "./code/sourceEditor";
@@ -164,7 +165,6 @@ export function CodeView({ active }: { active: boolean }) {
   const span = marks.spans[index];
   const doc = viewRef.current?.state.doc;
   const lines = span && doc ? [doc.lineAt(span.from).number, doc.lineAt(span.to).number] : null;
-  const mod = isMac ? "⌘" : "Ctrl+";
 
   return (
     <div className={cn("@container h-full flex-col bg-background", active ? "flex" : "hidden")}>
@@ -187,7 +187,7 @@ export function CodeView({ active }: { active: boolean }) {
           </>
         )}
         <span className="ml-auto hidden text-2xs @2xl:inline">
-          {mod}F search · {mod}S save
+          {formatKeys("mod+f")} search · {formatKeys("mod+s")} save
         </span>
         <span className="ml-auto @2xl:hidden" />
         <Button
@@ -205,7 +205,7 @@ export function CodeView({ active }: { active: boolean }) {
           size="md"
           disabled={!dirty || saving}
           onClick={() => saveRef.current()}
-          title={`Save ${fileName} (${mod}S)`}
+          title={`Save ${fileName} (${formatKeys("mod+s")})`}
           className="shadow-sm"
         >
           <Save className="size-3.5" />

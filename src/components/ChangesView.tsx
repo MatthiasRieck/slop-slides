@@ -5,6 +5,8 @@ import { useChanges, visibleRows } from "../changesStore";
 import { useContentSize } from "../hooks/useContentSize";
 import type { Change, Deck, DeckChanges, Slide, SlideChange } from "../lib/api";
 import { MAX_FEATHER, normalAngle } from "../lib/compare";
+import { formatKeys, keepsKey } from "../lib/keys";
+import { scrollBehavior } from "../lib/motion";
 import { pixelsOf } from "../lib/slideSize";
 import { cn, headSlideUrl } from "../lib/utils";
 import { useApp } from "../store";
@@ -133,7 +135,9 @@ function CommitBox({ deck, changes }: { deck: string; changes: DeckChanges }) {
         <button
           type="button"
           disabled={!ready}
-          title={stagedFiles === 0 ? "Stage something to commit it" : "Commit what is staged (⌘Enter)"}
+          title={
+            stagedFiles === 0 ? "Stage something to commit it" : `Commit what is staged (${formatKeys("mod+enter")})`
+          }
           onClick={() => void commit()}
           className="min-w-0 flex-1 truncate rounded bg-primary px-2 py-1 text-xs font-medium text-primary-foreground disabled:opacity-40"
         >
@@ -173,7 +177,7 @@ function ChangeRow(props: { deck: Deck; row: SlideChange; number?: number; commi
   const content = contentMarkOf(row);
   const itemRef = useRef<HTMLLIElement>(null);
   useEffect(() => {
-    if (picked) itemRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (picked) itemRef.current?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() });
   }, [picked]);
 
   return (
@@ -328,7 +332,7 @@ function MarkRow(props: {
           title={
             locked
               ? "This slide is locked; unlock it to restore it"
-              : `Put ${actions.noun} back as committed, or staged (⌘Z undoes it)`
+              : `Put ${actions.noun} back as committed, or staged (${formatKeys("mod+z")} undoes it)`
           }
           disabled={locked}
           onClick={() => void restore(deck, actions.change)}
@@ -400,7 +404,7 @@ function useChangesKeyboard() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (useApp.getState().presenting || event.altKey) return;
-      if ((event.target as Element | null)?.closest?.("input, textarea, [contenteditable], [role=slider]")) return;
+      if (keepsKey(event)) return;
       // A restore is a change to the deck: the same keys take it back as anywhere else.
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
@@ -639,7 +643,9 @@ function ActionGroup(props: {
       </ActionButton>
       <ActionButton
         title={
-          locked ? "This slide is locked; unlock it to restore it" : `Put ${noun} back as committed (⌘Z undoes it)`
+          locked
+            ? "This slide is locked; unlock it to restore it"
+            : `Put ${noun} back as committed (${formatKeys("mod+z")} undoes it)`
         }
         disabled={locked}
         onClick={() => void restore(deck, change)}

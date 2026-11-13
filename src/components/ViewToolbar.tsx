@@ -20,6 +20,8 @@ import {
 } from "lucide-react";
 import { useRef, useState } from "react";
 
+import { useMenuKeys } from "../hooks/useMenuKeys";
+
 import type { AreaShape } from "../lib/comments";
 import { INK_COLORS } from "../lib/ink";
 import { cn } from "../lib/utils";
@@ -227,6 +229,7 @@ function AreaTool(props: {
   onShape: (shape: AreaShape) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const menu = useMenuKeys();
   const anchor = useRef<HTMLDivElement>(null);
   const current = AREA_SHAPES.find((s) => s.shape === props.shape) ?? AREA_SHAPES[0]!;
   const Icon = current.icon;
@@ -251,7 +254,7 @@ function AreaTool(props: {
       </ToolButton>
       {menuOpen && (
         <Popover anchor={anchor} onClose={() => setMenuOpen(false)} width={180} variant="menu" portal className="p-1">
-          <div role="menu" aria-label="Area shape">
+          <div role="menu" aria-label="Area shape" {...menu} className="outline-none">
             {AREA_SHAPES.map(({ shape, label, icon: ShapeIcon }) => (
               <button
                 key={shape}
@@ -262,7 +265,7 @@ function AreaTool(props: {
                   setMenuOpen(false);
                   props.onShape(shape);
                 }}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-accent [&_svg]:size-3.5"
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-accent focus-visible:bg-accent focus-visible:outline-none [&_svg]:size-3.5"
               >
                 <ShapeIcon />
                 <span className="flex-1 text-left">{label}</span>

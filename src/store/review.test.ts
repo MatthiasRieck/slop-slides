@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { invoke } from "../test/tauri";
+import { lastError } from "./errors";
 import { backend, calls, DECK, freshModule, freshStore, resetBackend } from "./testing";
 
 beforeEach(resetBackend);
@@ -69,7 +70,7 @@ describe("review", () => {
       useApp.setState({ deck: DECK });
       useApp.getState().setSketches(() => ({ intro: ink }));
       await flushReviewSave();
-      expect(useApp.getState().error).toBe("Could not save the review marks and comments: disk full");
+      expect(lastError(useApp.getState())).toBe("Could not save the review marks and comments: disk full");
     });
 
     it("are loaded with the deck", async () => {

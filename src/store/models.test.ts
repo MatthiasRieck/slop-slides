@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderInfo } from "../lib/models";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
+import { lastError } from "./errors";
 import { backend, calls, DECK, freshStore, resetBackend } from "./testing";
 
 beforeEach(resetBackend);
@@ -251,7 +252,7 @@ describe("permissions", () => {
       if (command === "set_permission_mode") throw "turn gone";
     });
     store.getState().setPermissionMode("fullAccess");
-    await vi.waitFor(() => expect(store.getState().error).toBe("turn gone"));
+    await vi.waitFor(() => expect(lastError(store.getState())).toBe("turn gone"));
   });
 
   it("sends each provider its own mode", async () => {

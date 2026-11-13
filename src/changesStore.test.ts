@@ -5,6 +5,7 @@ import { useChanges, visibleRows } from "./changesStore";
 import type { DeckChanges, SlideChange, SlideStatus } from "./lib/api";
 import { DEFAULT_DIVIDER } from "./lib/compare";
 import { useApp } from "./store";
+import { lastError } from "./store/errors";
 import { DECK_HTML, deckFor } from "./test/fixtures";
 
 const row = (status: SlideStatus, id: string): SlideChange => ({
@@ -99,7 +100,7 @@ describe("refresh", () => {
   it("reports what went wrong", async () => {
     vi.mocked(invoke).mockRejectedValue("the deck is gone");
     await useChanges.getState().refresh(DECK);
-    expect(useApp.getState().error).toContain("the deck is gone");
+    expect(lastError(useApp.getState())).toContain("the deck is gone");
   });
 });
 
@@ -156,12 +157,12 @@ describe("checkRepository", () => {
   });
 
   it("counts a failed check as no repository, without an error", async () => {
-    useApp.setState({ error: null });
+    useApp.setState({ toasts: [] });
     useChanges.setState({ repository: DECK });
     found(Promise.reject("the deck is gone"));
     await useChanges.getState().checkRepository(DECK);
     expect(useChanges.getState().repository).toBeNull();
-    expect(useApp.getState().error).toBeNull();
+    expect(lastError(useApp.getState())).toBeNull();
   });
 
   it("ignores an answer about a deck that is no longer open", async () => {
@@ -188,7 +189,7 @@ describe("changing the repository", () => {
       return changes();
     });
     await useChanges.getState().unstage(DECK, STYLES);
-    expect(useApp.getState().error).toContain("index.lock exists");
+    expect(lastError(useApp.getState())).toContain("index.lock exists");
     expect(called()).toContain("deck_changes");
   });
 

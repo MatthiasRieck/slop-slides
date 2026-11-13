@@ -10,6 +10,7 @@ import { getSlideClock } from "../lib/slideClock";
 import { playTimeline } from "../lib/timelinePlayback";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
+import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { NarrationTimeline, rulerStep } from "./NarrationTimeline";
 
@@ -197,8 +198,8 @@ describe("NarrationTimeline", () => {
     fireEvent.keyDown(screen.getByRole("button", { name: "End of slide 1" }), { key: "ArrowRight", shiftKey: true });
     await act(async () => {});
     expect(screen.getByRole("button", { name: "Slide 2" }).parentElement?.style.left).toBe(before);
-    expect(useApp.getState().error).toContain("nope");
-    useApp.setState({ error: null });
+    expect(lastError(useApp.getState())).toContain("nope");
+    useApp.setState({ toasts: [] });
   });
 
   it("adds up arrow keys pressed faster than they are saved", async () => {

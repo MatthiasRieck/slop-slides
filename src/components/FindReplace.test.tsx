@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it } from "vitest";
 import type { FindMatch, ReplacedText } from "../lib/api";
 import { searchHighlight, useApp } from "../store";
+import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
 import { SlideSearch } from "./FindReplace";
@@ -30,7 +31,7 @@ const found = (matches: FindMatch[]) =>
 beforeEach(() => {
   invoke.mockReset();
   useApp.getState().clearSearch();
-  useApp.setState({ deck: DECK, selected: "intro", error: null });
+  useApp.setState({ deck: DECK, selected: "intro", toasts: [] });
 });
 
 describe("search", () => {
@@ -219,7 +220,7 @@ describe("replace", () => {
     await open();
     await waitFor(() => expect(button("Replace all").disabled).toBe(false));
     fireEvent.click(button("Replace all"));
-    await waitFor(() => expect(useApp.getState().error).toBe("disk full"));
+    await waitFor(() => expect(lastError(useApp.getState())).toBe("disk full"));
     expect(screen.getByRole("dialog", { name: "Replace" })).toBeTruthy();
   });
 });

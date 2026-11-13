@@ -123,7 +123,7 @@ export const createSearchSlice: Slice<SearchSlice> = (set, get, app) => ({
     const { deck, history } = get();
     if (!deck || deck.id !== replaced.deck.id) return false;
     if (history?.undo?.source !== "edit" || history.undo.label !== REPLACE_LABEL) {
-      set({ error: "The replace cannot be undone: the deck changed since." });
+      showErrorIn(app, "The replace cannot be undone: the deck changed since.");
       return false;
     }
     await get().undo();

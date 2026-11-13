@@ -62,10 +62,10 @@ describe("EditToolbar ribbon", () => {
     const inGroup = (group: string, tool: string) =>
       within(screen.getByRole("group", { name: group })).getByRole("button", { name: tool });
     expect(inGroup("Insert", "Add an image from a file")).toBeTruthy();
-    expect(inGroup("Text", "Bold (⌘B)")).toBeTruthy();
+    expect(inGroup("Text", "Bold")).toBeTruthy();
     expect(inGroup("Paragraph", "Bulleted list (Tab indents, Shift+Tab outdents)")).toBeTruthy();
     expect(inGroup("Style", "Fill")).toBeTruthy();
-    expect(inGroup("Arrange", "Delete (⌫)")).toBeTruthy();
+    expect(inGroup("Arrange", "Delete")).toBeTruthy();
     // The timeline's tools are the same as in the view ribbon.
     expect(inGroup("Timeline", "Show the timeline under the slide")).toBeTruthy();
   });
@@ -83,14 +83,14 @@ describe("EditToolbar ribbon", () => {
     expect(collapsedButton("Arrange")).toBeTruthy();
     expect(collapsedButton("Style")).toBeTruthy();
     expect(collapsedButton("Paragraph")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Delete (⌫)" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
 
     widen(100);
     for (const name of SECTIONS) expect(collapsedButton(name)).toBeTruthy();
 
     widen(5000);
     for (const name of SECTIONS) expect(collapsedButton(name)).toBeNull();
-    expect(screen.getByRole("button", { name: "Delete (⌫)" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeTruthy();
   });
 
   it("opens a collapsed section's tools from its icon, working as they do in the ribbon", () => {

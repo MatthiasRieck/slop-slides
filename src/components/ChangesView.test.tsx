@@ -6,6 +6,7 @@ import { useChanges } from "../changesStore";
 import type { DeckChanges, SlideChange, SlideStatus } from "../lib/api";
 import { DEFAULT_DIVIDER } from "../lib/compare";
 import { deckMode, useApp } from "../store";
+import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ChangesRail, ChangesView } from "./ChangesView";
 
@@ -83,7 +84,7 @@ beforeEach(() => {
     selected: "intro",
     editing: false,
     slideMode: "view",
-    error: null,
+    toasts: [],
   });
   useChanges.setState({ changes: null, deck: null, picked: null, onlyChanges: false, divider: DEFAULT_DIVIDER });
 });
@@ -378,7 +379,7 @@ describe("committing", () => {
       fireEvent.keyDown(message(), { key: "Enter", metaKey: true });
     });
     expect(message().value).toBe("Fix");
-    expect(useApp.getState().error).toContain("hook said no");
+    expect(lastError(useApp.getState())).toContain("hook said no");
   });
 
   it("warns when the commit takes in files from elsewhere", async () => {

@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Deck, FindMatch, Section } from "../lib/api";
 import { useApp } from "../store";
+import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
 import { SlideRail } from "./SlideRail";
@@ -19,7 +20,7 @@ beforeEach(() => {
     selected: "intro",
     // Changing the slides is Edit mode's.
     editing: true,
-    error: null,
+    toasts: [],
     revealRev: 0,
     collapsedSections: [],
     templates: [{ id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title"] }],
@@ -252,7 +253,7 @@ describe("SlideRail", () => {
     render(<SlideRail />);
     const target = button();
     await act(async () => fireEvent.click(target));
-    await waitFor(() => expect(useApp.getState().error).toBe("Slide not found: intro"));
+    await waitFor(() => expect(lastError(useApp.getState())).toBe("Slide not found: intro"));
     expect(useApp.getState().deck).toEqual(DECK);
   });
 });
@@ -333,7 +334,7 @@ describe("hidden slides in the rail", () => {
     invoke.mockRejectedValue("disk full");
     render(<SlideRail />);
     await act(async () => fireEvent.click(within(items()[0]!).getByTitle("Hide slide")));
-    expect(useApp.getState().error).toBe("disk full");
+    expect(lastError(useApp.getState())).toBe("disk full");
     expect(useApp.getState().deck?.slides[0]?.hidden).toBe(false);
   });
 });
@@ -396,7 +397,7 @@ describe("locked slides in the rail", () => {
     invoke.mockRejectedValue("disk full");
     render(<SlideRail />);
     await act(async () => fireEvent.click(item(0).getByTitle("Lock slide")));
-    expect(useApp.getState().error).toBe("disk full");
+    expect(lastError(useApp.getState())).toBe("disk full");
   });
 });
 
@@ -513,7 +514,7 @@ describe("picking several slides", () => {
     useApp.setState({ railSelected: ["b", "c"] });
     invoke.mockResolvedValue(edited(withSlides("b", "c", "a", "d")));
     render(<SlideRail />);
-    await act(async () => fireEvent.click(bulk().getByTitle("Move up (⌘↑)")));
+    await act(async () => fireEvent.click(bulk().getByTitle("Move up (Ctrl+↑)")));
     expect(invoke).toHaveBeenCalledWith("reorder_slides", { id: DECK.id, slides: ["b", "c", "a", "d"] });
     expect(picked()).toEqual(["b", "c"]);
   });
@@ -959,14 +960,14 @@ describe("sections in the rail", () => {
     } else {
       await act(async () => fireEvent.click(within(headers()[0]!).getByTitle(title)));
     }
-    await waitFor(() => expect(useApp.getState().error).toBe("Section not found: 0"));
+    await waitFor(() => expect(lastError(useApp.getState())).toBe("Section not found: 0"));
   });
 
   it("reports a failed add", async () => {
     invoke.mockRejectedValue("Slide not found: intro");
     render(<SlideRail />);
     await act(async () => fireEvent.click(screen.getByTitle("Start a section at this slide")));
-    await waitFor(() => expect(useApp.getState().error).toBe("Slide not found: intro"));
+    await waitFor(() => expect(lastError(useApp.getState())).toBe("Slide not found: intro"));
     expect(screen.queryByLabelText("Section title")).toBeNull();
   });
   describe("dragging a slide", () => {

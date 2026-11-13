@@ -4,6 +4,7 @@ import { type SpeechModelPhase, useSpeechModel } from "../hooks/useSpeechModel";
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { api, type VoiceDownloadProgress } from "../lib/api";
 import { markdownText, rehypePieces } from "../lib/markdown";
+import { scrollBehavior } from "../lib/motion";
 import { follow, type Piece, pieces, startTrack, toScript } from "../lib/teleprompter";
 import { cn } from "../lib/utils";
 import { formatBytes } from "../lib/voice";
@@ -138,7 +139,7 @@ export function FollowedScript({ text, className }: { text: string; className?: 
     const el = box.current;
     const line = el?.querySelector<HTMLElement>("[data-current]");
     if (!el || !line) return;
-    el.scrollTo?.({ top: line.offsetTop - el.clientHeight * LINE_AT, behavior: "smooth" });
+    el.scrollTo?.({ top: line.offsetTop - el.clientHeight * LINE_AT, behavior: scrollBehavior() });
   }, [track.position]);
 
   return (

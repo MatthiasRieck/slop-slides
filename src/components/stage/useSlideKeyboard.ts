@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 
+import { isTypingTarget, keepsKey } from "../../lib/keys";
+import { dismissTopLayer } from "../../lib/layers";
 import { editingSlide, useApp } from "../../store";
 import { runHistoryKey } from "./editKeys";
 
@@ -22,6 +24,7 @@ export function keyForRail(target: EventTarget | null) {
  * keys the slide preview forwards as `slop:key` messages, so navigation keeps working after
  * clicking into the slide. The preview cancels presses on it (to pan, select and drag), which
  * leaves focus where it was, e.g. in the chat composer: it asks for focus with `slop:focus`.
+ * Escape forwarded from the slide first closes what is open in the app (see ../../lib/layers.ts).
  */
 export function useSlideKeyboard() {
   useEffect(() => {
@@ -71,8 +74,9 @@ export function useSlideKeyboard() {
       return true;
     };
     const onKey = (event: KeyboardEvent) => {
+      // Typing keeps its keys, and so does a widget its plain ones (the arrows of a tab list, say).
+      if (keepsKey(event)) return;
       const target = event.target as HTMLElement | null;
-      if (target?.closest("input, textarea, [contenteditable]")) return;
       const mod = event.metaKey || event.ctrlKey;
       const onRail = keyForRail(target);
       if (mod && !event.altKey && clipboard(event.key, event.shiftKey, true, onRail)) event.preventDefault();
@@ -84,14 +88,18 @@ export function useSlideKeyboard() {
     };
     const onMessage = (event: MessageEvent) => {
       const type = event.data?.type;
-      if (type !== "slop:key" && type !== "slop:focus") return;
+      if (type !== "slop:key" && type !== "slop:focus" && type !== "slop:press") return;
       const slide = Array.from(document.querySelectorAll("iframe")).find(
         (frame) => frame.contentWindow === event.source,
       );
       if (!slide) return;
       if (type === "slop:focus") slide.focus();
+      // A press in the slide is a press off the rail, though it never reaches this window.
+      else if (type === "slop:press") pressedRail = false;
       else {
         const key = String(event.data.key);
+        // Escape closes what is open in the app (a menu, a toast) before it means anything else.
+        if (key === "Escape" && dismissTopLayer(event)) return;
         const [mod, shift] = [Boolean(event.data.mod), Boolean(event.data.shift)];
         if (!(mod && clipboard(key, shift, false)) && !rail(key, mod, shift)) navigate(key);
       }
@@ -115,8 +123,7 @@ export function useSketchKeyboard(active: boolean, putAway: () => void) {
   useEffect(() => {
     if (!active) return;
     const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (event.key !== "Escape" || target?.closest("input, textarea, [contenteditable]")) return;
+      if (event.key !== "Escape" || isTypingTarget(event.target)) return;
       if (useApp.getState().presenting) return;
       putAwayRef.current();
       event.preventDefault();

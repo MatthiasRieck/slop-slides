@@ -5,7 +5,7 @@ import { create } from "zustand";
 import { createChatSlice } from "./store/chat";
 import { createComposerSlice } from "./store/composer";
 import { createEditingSlice } from "./store/editing";
-import { reportingErrorsIn, showErrorIn } from "./store/errors";
+import { reportingErrorsIn, showErrorIn, showInfoIn, showSuccessIn } from "./store/errors";
 import { initEventBridge as bridgeEvents } from "./store/events";
 import { createHistorySlice } from "./store/history";
 import { createLintSlice } from "./store/lint";
@@ -17,12 +17,13 @@ import { createSearchSlice } from "./store/search";
 import { createSlidesSlice } from "./store/slides";
 import { createTemplatesSlice } from "./store/templates";
 import type { AppState } from "./store/types";
-import { createUiSlice } from "./store/ui";
-import { confirmDiscardEdits as confirmDeckEdits, createWorkspaceSlice } from "./store/workspace";
+import { createUiSlice, type ToastAction } from "./store/ui";
+import { confirmDiscardEdits as confirmDeckEdits, createWorkspaceSlice, leaveForClose } from "./store/workspace";
 
 export { SKETCH_TARGET_ATTR } from "./store/capture";
 export { COMPACT_COMMAND } from "./store/chat";
 export { type DeckMode, deckMode, editedSlidesOf, editingSlide } from "./store/editing";
+export { lastError, toastTexts } from "./store/errors";
 export type {
   AssistantMessage,
   ChatMessage,
@@ -48,7 +49,7 @@ export { commentsInScope, heldComment } from "./store/review";
 export { REWIND_KEY, type RewindChoice, rememberedRewind, rememberRewind } from "./store/rewind";
 export { activeMatch, type SlideSearch, searchHighlight } from "./store/search";
 export { railSelection } from "./store/slides";
-export { SIDEBAR_TABS, type SidebarTab } from "./store/ui";
+export { SIDEBAR_TABS, type SidebarTab, type Toast, type ToastAction, type ToastKind } from "./store/ui";
 export type { WorkspaceChange } from "./store/workspace";
 
 export const useApp = create<AppState>()((...a) => ({
@@ -74,11 +75,29 @@ export const flushReviewSave = () => flushReview(useApp);
 /** Whether the user gives up the unsaved edits in the sidebar's HTML tab. */
 export const confirmDiscardEdits = () => confirmDeckEdits(useApp);
 
+/**
+ * Gets what is open ready for the window to close; false when the user stays, for unsaved edits,
+ * for what `alsoAsk` asks about, or for the agent's running turn.
+ */
+export const leaveForWindowClose = (alsoAsk?: () => Promise<boolean>) => leaveForClose(useApp, alsoAsk);
+
 /** Follows the backend's events: the agent's, changes in the open workspace, and a folder opened from Finder. */
 export const initEventBridge = () => bridgeEvents(useApp);
 
-/** Shows what went wrong in the app's error banner, after `prefix` when there is one. */
+/** Shows what went wrong in the app's toasts, after `prefix` when there is one; it stays until dismissed. */
 export const showError = (error: unknown, prefix = "") => showErrorIn(useApp, error, prefix);
 
-/** Runs `action`, showing what goes wrong in the app's error banner; undefined when it failed. */
+/** Tells the user something worth knowing that is no failure; `action` is a button in the toast. It goes away by itself. */
+export const showInfo = (text: string, action?: ToastAction) => showInfoIn(useApp, text, action);
+
+/** Tells the user that what they asked for is done; `action` is a button in the toast. It goes away by itself. */
+export const showSuccess = (text: string, action?: ToastAction) => showSuccessIn(useApp, text, action);
+
+/** Takes the toast with `id` away. */
+export const dismissToast = (id: number) => useApp.getState().dismissToast(id);
+
+/** Opens the list of keyboard shortcuts. */
+export const openShortcutHelp = () => useApp.getState().setShortcutHelpOpen(true);
+
+/** Runs `action`, showing what goes wrong in the app's toasts; undefined when it failed. */
 export const reportingErrors = <T>(action: () => Promise<T>, prefix = "") => reportingErrorsIn(useApp, action, prefix);

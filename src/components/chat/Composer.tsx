@@ -1,7 +1,8 @@
 import { ArrowUp, CornerDownRight, ListEnd, Paperclip, Square } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { cn, isMac } from "../../lib/utils";
+import { formatKeys } from "../../lib/keys";
+import { cn } from "../../lib/utils";
 import { useApp } from "../../store";
 import { EffortPicker, ModelPicker } from "../ModelPicker";
 import { PermissionPicker } from "../Permissions";
@@ -15,7 +16,7 @@ import { useAttachments } from "./useAttachments";
 import { useDictation } from "./useDictation";
 
 /** The key that steers the agent with the composer's message. */
-const STEER_KEY = isMac ? "⌘↵" : "Ctrl+↵";
+const STEER_KEY = formatKeys("mod+enter");
 
 /**
  * Where the user writes (or dictates) to the agent, with what goes along with the message: the
@@ -258,7 +259,7 @@ export function Composer(props: { draft: string; setDraft: (text: string) => voi
                   onClick={() => (dictation.dictating ? voiceInput.current?.finishAndSend() : submit())}
                   disabled={!dictation.dictating && !draft.trim()}
                   title={dictation.dictating ? "Stop and send" : "Send"}
-                  className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background hover:opacity-90 disabled:opacity-30"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background hover:opacity-90 disabled:opacity-40"
                 >
                   <ArrowUp className="size-4" />
                 </button>

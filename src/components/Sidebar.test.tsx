@@ -101,6 +101,39 @@ describe("Sidebar", () => {
     expect(shown("chat")).toBe(true);
   });
 
+  it("works the + menu from the keyboard", () => {
+    useApp.setState({ sidebarTabs: ["files"], sidebarTab: "files" });
+    render(<Sidebar />);
+    const plus = screen.getByRole("button", { name: "Open a tab" });
+    plus.focus();
+    fireEvent.keyDown(plus, { key: "Enter" });
+    fireEvent.click(plus);
+    const items = screen.getAllByRole("menuitem");
+    expect(document.activeElement).toBe(items[0]);
+    fireEvent.keyDown(items[0]!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(items[1]);
+    fireEvent.keyDown(items[1]!, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(plus);
+  });
+
+  it("moves between its tabs with the arrow keys, Tab stopping at the one shown", () => {
+    useApp.setState({ sidebarTabs: ["chat", "files", "notes"], sidebarTab: "files" });
+    render(<Sidebar />);
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((tab) => tab.tabIndex)).toEqual([-1, 0, -1]);
+    tabs[1]!.focus();
+    fireEvent.keyDown(tabs[1]!, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tabs[2]);
+    fireEvent.keyDown(tabs[2]!, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tabs[0]);
+    // Moving the focus picks nothing; a click (Enter, Space) does.
+    expect(useApp.getState().sidebarTab).toBe("files");
+    fireEvent.click(tabs[0]!);
+    expect(useApp.getState().sidebarTab).toBe("chat");
+    expect(screen.getAllByRole("tab").map((tab) => tab.tabIndex)).toEqual([0, -1, -1]);
+  });
+
   it("maximizes over the window and back", () => {
     useApp.setState({ sidebarMaximized: false });
     render(<Sidebar />);

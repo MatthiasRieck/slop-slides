@@ -5,6 +5,7 @@ import { useContentSize } from "../hooks/useContentSize";
 import { api, type Deck, type Slide } from "../lib/api";
 import { type Pixels, pixelsOf } from "../lib/slideSize";
 import { showError, useApp } from "../store";
+import { Dialog } from "./Dialog";
 import { SlideFrame, useSlideVersion } from "./SlideFrame";
 
 /** Wait after a slide loads before capturing it, for web fonts and images to paint. */
@@ -42,18 +43,10 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
     useApp.getState().endImageExport();
   };
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: install the Escape handler once for the export's lifetime
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      cancel();
-    };
     stopped.current = false;
-    window.addEventListener("keydown", onKey);
     return () => {
       stopped.current = true;
-      window.removeEventListener("keydown", onKey);
     };
   }, []);
 
@@ -90,10 +83,11 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
   };
 
   return (
-    <div
-      role="dialog"
-      aria-label="Saving slide images"
-      className="dark fixed inset-0 z-50 flex flex-col bg-background text-foreground"
+    // Escape cancels, as the button does.
+    <Dialog
+      label="Saving slide images"
+      onClose={cancel}
+      className="dark fixed inset-0 flex flex-col bg-background text-foreground outline-none"
     >
       <div ref={areaRef} className="flex min-h-0 flex-1 items-center justify-center p-6">
         {slide && (
@@ -121,7 +115,7 @@ function ExportRun({ dir, slides, deck }: { dir: string; slides: string[]; deck:
           Cancel
         </button>
       </div>
-    </div>
+    </Dialog>
   );
 }
 

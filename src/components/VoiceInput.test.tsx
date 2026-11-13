@@ -10,6 +10,7 @@ listen.mockImplementation(async (name: string, handler: (event: { payload: unkno
 });
 
 import { useApp } from "../store";
+import { lastError } from "../store/errors";
 import { fakeCanvas2D } from "../test/fakeCanvas";
 import { VoiceInput, type VoiceInputHandle } from "./VoiceInput";
 
@@ -50,7 +51,7 @@ const micButton = () => screen.getByRole("button", { name: /dictat|downloading|s
 beforeEach(() => {
   invoke.mockReset();
   listeners.clear();
-  useApp.setState({ error: null });
+  useApp.setState({ toasts: [] });
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
 });
 
@@ -206,7 +207,7 @@ describe("VoiceInput", () => {
     fireEvent.click(micButton());
     await waitFor(() => expect(micButton().getAttribute("aria-pressed")).toBe("true"));
     act(() => voice.current!.finishAndSend());
-    await waitFor(() => expect(useApp.getState().error).toBe("Transcription failed."));
+    await waitFor(() => expect(lastError(useApp.getState())).toBe("Transcription failed."));
     expect(h.onEnd).toHaveBeenCalledWith("", false);
   });
 
@@ -267,7 +268,7 @@ describe("VoiceInput", () => {
     backend({ ready: true, startError: "No microphone found." });
     render(<VoiceInput {...handlers()} />);
     fireEvent.click(micButton());
-    await waitFor(() => expect(useApp.getState().error).toBe("No microphone found."));
+    await waitFor(() => expect(lastError(useApp.getState())).toBe("No microphone found."));
     expect(micButton().getAttribute("aria-pressed")).toBe("false");
     expect((micButton() as HTMLButtonElement).disabled).toBe(false);
   });

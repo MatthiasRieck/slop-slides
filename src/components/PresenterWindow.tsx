@@ -1,6 +1,7 @@
 import { emit, listen } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";
 
+import { isTypingTarget } from "../lib/keys";
 import { useApp } from "../store";
 import type { PresenterState } from "./Presenter";
 import { PresenterPanel } from "./PresenterPanel";
@@ -24,7 +25,7 @@ export function PresenterWindow() {
     // Asked once the listener is up, so the answer is not missed.
     void sub.then(() => emit("presenter:ready"));
     const onKey = (event: KeyboardEvent) => {
-      if (event.target instanceof HTMLInputElement) return;
+      if (isTypingTarget(event.target)) return;
       if (event.key === "Escape") void emit("presenter:exit");
       else void emit("presenter:key", event.key);
       event.preventDefault();

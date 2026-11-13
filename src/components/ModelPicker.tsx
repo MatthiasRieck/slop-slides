@@ -1,6 +1,6 @@
 import { AlertTriangle, Check, ChevronDown, Gauge, Loader2, RotateCw, Search, Star } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-
+import { formatKeys, isMod } from "../lib/keys";
 import {
   contextWindowLabel,
   effortLabel,
@@ -11,7 +11,7 @@ import {
   type ProviderInfo,
   type ProviderModel,
 } from "../lib/models";
-import { cn, isMac } from "../lib/utils";
+import { cn } from "../lib/utils";
 import { chatProvider, useApp } from "../store";
 import { Popover } from "./Popover";
 import { ProviderIcon } from "./ProviderIcon";
@@ -51,7 +51,6 @@ export function ModelPicker() {
           variant="menu"
           portal
           follow
-          capture
           className="flex overflow-hidden"
         >
           <ModelMenu onClose={close} />
@@ -117,7 +116,7 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
     } else if (e.key === "Enter") {
       e.preventDefault();
       choose(rows[active]);
-    } else if ((isMac ? e.metaKey : e.ctrlKey) && /^[1-9]$/.test(e.key)) {
+    } else if (isMod(e) && /^[1-9]$/.test(e.key)) {
       e.preventDefault();
       choose(rows[Number(e.key) - 1]);
     }
@@ -224,7 +223,7 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
                     onMouseMove={() => setActive(index)}
                     onFocus={() => setActive(index)}
                     aria-pressed={row.provider === selection.provider && row.id === selection.model}
-                    className="min-w-0 flex-1 rounded text-left focus-visible:outline focus-visible:outline-primary"
+                    className="min-w-0 flex-1 rounded text-left"
                   >
                     <div className="flex items-center gap-1.5 text-sm text-foreground">
                       <span className="truncate">{row.label}</span>
@@ -244,8 +243,7 @@ function ModelMenu({ onClose }: { onClose: () => void }) {
                   )}
                   {index < 9 && (
                     <kbd className="shrink-0 font-sans text-2xs text-muted-foreground/80">
-                      {isMac ? "⌘" : "Ctrl+"}
-                      {index + 1}
+                      {formatKeys(`mod+${index + 1}`)}
                     </kbd>
                   )}
                   <button
@@ -355,7 +353,7 @@ export function EffortPicker() {
         <ChevronDown className="hidden size-3 shrink-0 opacity-60 @[17rem]:block" />
       </button>
       {open && (
-        <Popover anchor={rootRef} onClose={close} width={160} variant="menu" portal follow capture className="p-1.5">
+        <Popover anchor={rootRef} onClose={close} width={160} variant="menu" portal follow className="p-1.5">
           {sections.map((section, index) => (
             <div key={section.title} className={cn(index > 0 && "mt-1.5 border-t pt-1.5")}>
               <div className="px-2 pt-1 pb-1.5 text-2xs font-medium text-muted-foreground">{section.title}</div>

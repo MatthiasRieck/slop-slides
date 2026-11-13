@@ -87,7 +87,7 @@ function SlideSizePanel(props: { current: SlideSize }) {
             disabled={!!problem}
             onClick={() => show(withOrientation(draft, id))}
             className={cn(
-              "flex items-center justify-center gap-1.5 rounded px-2 py-1 font-medium text-muted-foreground hover:text-foreground disabled:opacity-50",
+              "flex items-center justify-center gap-1.5 rounded px-2 py-1 font-medium text-muted-foreground hover:text-foreground disabled:opacity-40",
               orientation === id && "bg-background text-foreground shadow-sm ring-1 ring-border",
             )}
           >

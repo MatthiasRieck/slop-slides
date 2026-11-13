@@ -144,7 +144,7 @@ describe("ScreenPicker", () => {
   it("cancels with Escape", () => {
     const onCancel = vi.fn();
     render(<ScreenPicker screens={screens} onStart={() => {}} onCancel={onCancel} onWindows={() => {}} />);
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(onCancel).toHaveBeenCalled();
   });
 });

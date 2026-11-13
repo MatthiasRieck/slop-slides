@@ -92,30 +92,18 @@ export function Home() {
           <section className="flex flex-col gap-2">
             <SectionLabel as="h2">Open</SectionLabel>
             <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => void chooseWorkspace()}
-                className="flex h-9 items-center gap-1.5 rounded-lg border bg-card px-3 text-sm font-medium hover:bg-accent"
-              >
-                <FolderOpen className="size-4" />
+              <Button size="2xl" onClick={() => void chooseWorkspace()} className="bg-card">
+                <FolderOpen />
                 Open folder…
-              </button>
-              <button
-                type="button"
-                onClick={() => void chooseDeck()}
-                className="flex h-9 items-center gap-1.5 rounded-lg border bg-card px-3 text-sm font-medium hover:bg-accent"
-              >
-                <Presentation className="size-4" />
+              </Button>
+              <Button size="2xl" onClick={() => void chooseDeck()} className="bg-card">
+                <Presentation />
                 Open deck…
-              </button>
-              <button
-                type="button"
-                onClick={() => void openLibrary()}
-                className="flex h-9 items-center gap-1.5 rounded-lg border bg-card px-3 text-sm font-medium hover:bg-accent"
-              >
-                <Library className="size-4" />
+              </Button>
+              <Button size="2xl" onClick={() => void openLibrary()} className="bg-card">
+                <Library />
                 SlopSlide library
-              </button>
+              </Button>
             </div>
           </section>
 
@@ -185,13 +173,10 @@ export function NewDeckForm(props: { heading: string; hint?: string; beforeCreat
           className="h-10 flex-1 rounded-lg border bg-card px-3 text-sm outline-none focus:border-input focus:ring-2 focus:ring-primary/20"
         />
         <TemplateSelect value={template} onChange={setTemplate} />
-        <button
-          type="submit"
-          className="flex h-10 items-center gap-1.5 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground hover:opacity-90"
-        >
-          <Plus className="size-4" />
+        <Button type="submit" variant="primary" size="3xl">
+          <Plus />
           New deck
-        </button>
+        </Button>
       </div>
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-muted-foreground">{props.hint}</p>

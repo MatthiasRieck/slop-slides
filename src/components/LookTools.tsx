@@ -162,7 +162,7 @@ function Slider(props: {
           disabled={props.disabled}
           value={draft}
           onChange={(event) => setDraft(Number(event.target.value))}
-          className="h-4 w-28 disabled:opacity-30"
+          className="h-4 w-28 disabled:opacity-40"
         />
         <span className="w-10 text-right tabular-nums">
           {draft}

@@ -3,6 +3,7 @@ import { type Ref, useCallback, useEffect, useImperativeHandle, useRef, useState
 
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { api, type VoiceDownloadProgress } from "../lib/api";
+import { openLayer } from "../lib/layers";
 import { cn } from "../lib/utils";
 import { formatBytes, WAVEFORM_BAR, WAVEFORM_STEP, waveformBars } from "../lib/voice";
 import { showError } from "../store";
@@ -198,17 +199,9 @@ export function VoiceInput(
   useTauriEvent<string>("voice-partial", (text) => handlers.current.onPartial(text), phase === "recording");
   useTauriEvent("voice-download", setProgress, phase === "downloading");
 
-  // Escape throws the recording away.
+  // Escape throws the recording away, before it closes anything opened earlier.
   useEffect(() => {
-    if (phase !== "recording") return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        cancel();
-      }
-    };
-    document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
+    if (phase === "recording") return openLayer(cancel);
   }, [phase, cancel]);
 
   // Leaving the composer mid-recording releases the microphone.
@@ -268,7 +261,6 @@ export function VoiceInput(
           variant="menu"
           portal={props.portal ?? true}
           follow
-          capture
           className="p-3 text-xs"
         >
           {phase === "offer" ? (

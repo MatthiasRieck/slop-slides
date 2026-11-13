@@ -114,6 +114,24 @@ describe("slide editor", () => {
     expect(e.keys()).toEqual([{ type: "slop:key", key: "z", mod: true, shift: false }]);
   });
 
+  it("leaves Escape to the app while something is open there, keeping the selection", () => {
+    const e = editor();
+    e.down(e.$(".card p"));
+    e.fromParent({ type: "slop:layer", open: true });
+    e.key("Escape");
+    expect(e.selected()).toEqual([e.$(".card p")]);
+    expect(e.messages("slop:dismiss")).toHaveLength(1);
+    expect(e.keys()).toEqual([]);
+    // Typing is not ended by it either: the app closes what it has open first.
+    e.key("Enter");
+    e.key("Escape");
+    expect(e.$(".card p").hasAttribute("contenteditable")).toBe(true);
+    expect(e.messages("slop:dismiss")).toHaveLength(2);
+    e.fromParent({ type: "slop:layer", open: false });
+    e.key("Escape");
+    expect(e.$(".card p").hasAttribute("contenteditable")).toBe(false);
+  });
+
   it("walks up to the parent with Escape", () => {
     const e = editor();
     e.down(e.$(".card p"));
@@ -483,7 +501,7 @@ describe("slide editor", () => {
     it("tells the app about a press, so what is open there closes", () => {
       const e = editor();
       e.down(e.$(".card p"));
-      expect(e.posted()).toContainEqual({ type: "slop:edit-press" });
+      expect(e.posted()).toContainEqual({ type: "slop:press" });
     });
 
     it("reports the dropped image to the edit toolbar as media", () => {

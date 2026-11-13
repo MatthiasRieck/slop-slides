@@ -30,7 +30,7 @@ beforeEach(() => {
     railOpen: true,
     codeDirty: false,
     presenting: false,
-    error: null,
+    toasts: [],
     imageExport: null,
   });
 });
@@ -73,15 +73,15 @@ describe("undo and redo", () => {
           history: { undo: entry("Bigger title", "chat"), redo: entry("Move slides", "rail"), current: "v2" },
         }),
       );
-      expect(button("Undo").title).toBe("Undo chat: “Bigger title” (⌘Z)");
-      expect(button("Redo").title).toBe("Redo “Move slides” (⇧⌘Z)");
+      expect(button("Undo").title).toBe("Undo chat: “Bigger title” (Ctrl+Z)");
+      expect(button("Redo").title).toBe("Redo “Move slides” (Ctrl+Shift+Z)");
       fireEvent.click(button("Undo"));
       fireEvent.click(button("Redo"));
       expect([undo, redo].map((f) => f.mock.calls.length)).toEqual([1, 1]);
 
       act(() => useApp.setState({ running: true }));
       expect(button("Undo").disabled).toBe(true);
-      expect(button("Undo").title).toContain("once the agent is done");
+      expect(button("Undo").title).toBe("Undo chat: “Bigger title”, once the agent is done");
     } finally {
       useApp.setState({ undo: realUndo, redo: realRedo, history: null, running: false });
     }
@@ -138,8 +138,24 @@ describe("workspace bar", () => {
     expect(
       screen.getAllByRole("menuitem").map((el) => el.firstElementChild?.nextElementSibling?.firstChild?.textContent),
     ).toEqual(["Settings", "Close deck.html", "Show in folder", "Open folder…", "Close decks"]);
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("works its menu from the keyboard: the arrows go through it and Escape gives the focus back", () => {
+    render(<TopBar />);
+    fileButton().focus();
+    fireEvent.keyDown(fileButton(), { key: "Enter" });
+    openFileMenu();
+    const items = screen.getAllByRole("menuitem");
+    expect(document.activeElement).toBe(items[0]);
+    fireEvent.keyDown(items[0]!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(items[1]);
+    fireEvent.keyDown(items[1]!, { key: "End" });
+    expect(document.activeElement).toBe(items.at(-1));
+    fireEvent.keyDown(items.at(-1)!, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(fileButton());
   });
 
   it("switches the deck to Settings mode from the file's menu and closes the menu", () => {

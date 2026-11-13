@@ -4,7 +4,7 @@ import { basename } from "../lib/utils";
 import { leaveChat, loadChat } from "./chat";
 import { confirmDiscard, confirmStopAgent } from "./confirm";
 import { NO_EDIT_STATE } from "./editing";
-import { showErrorIn } from "./errors";
+import { showErrorIn, showInfoIn } from "./errors";
 import { refreshHistory } from "./history";
 import { workspaceName } from "./paths";
 import { flushReview, reviewLoaded } from "./review";
@@ -78,24 +78,44 @@ export function confirmDiscardEdits(app: AppStore): Promise<boolean> {
   return confirmDiscard(`You have unsaved changes to ${name}. Discard them?`);
 }
 
+/** What leaving what is open is for, and what else stands in its way. */
+interface LeaveOptions {
+  /** What stopping the agent is for, as the question ends: "Stop it to …?" */
+  to?: string;
+  /** Asked after the unsaved edits and before the agent's turn; false when the user stays for it. */
+  alsoAsk?: () => Promise<boolean>;
+}
+
 /**
  * Gets what is open ready to give way, the chat about `next` coming on show (null: none). False
- * when the user stays: for unsaved edits, or for the agent's turn, which ends with its chat
- * leaving.
+ * when the user stays: for unsaved edits, for what `alsoAsk` asks about, or for the agent's
+ * turn, which ends with its chat leaving.
  */
-async function leaveFile(app: AppStore, next: string | null): Promise<boolean> {
+async function leaveFile(app: AppStore, next: string | null, options: LeaveOptions = {}): Promise<boolean> {
   const { deck, codeDirty, running, chatKey, workspace } = app.getState();
   if (deck && codeDirty && !(await confirmDiscardEdits(app))) return false;
+  if (options.alsoAsk && !(await options.alsoAsk())) return false;
   const leaving = chatKey !== next;
   if (leaving && running) {
     const about = deck ? basename(deck.id) : (workspace?.name ?? "this folder");
-    if (!(await confirmStopAgent(`The agent is still working in the chat of ${about}. Stop it to go on?`))) {
+    const to = options.to ?? "go on";
+    if (!(await confirmStopAgent(`The agent is still working in the chat of ${about}. Stop it to ${to}?`))) {
       return false;
     }
   }
   if (deck) await flushReview(app);
   if (leaving) await leaveChat(app);
   return true;
+}
+
+/**
+ * Gets what is open ready for its window to close, as for any leaving (see `leaveFile`): the
+ * user is asked about unsaved edits, about what `alsoAsk` holds (changes kept outside this
+ * store) and about the agent's running turn, and the review marks and the chat are saved. False
+ * when the user stays, and the window with them.
+ */
+export function leaveForClose(app: AppStore, alsoAsk?: () => Promise<boolean>): Promise<boolean> {
+  return leaveFile(app, null, { to: "close the window", alsoAsk });
 }
 
 /** Reopens `path` the next time its workspace opens. */
@@ -239,7 +259,10 @@ export const createWorkspaceSlice: Slice<WorkspaceSlice> = (set, get, app) => ({
     if (!workspace || openedFile?.path === path) return;
     if (byAgent && deck && chatKey === deck.id) {
       // A deck's chat stays with its deck; going to the file is the user's to do.
-      set({ error: `The agent made ${path}. Open it from the Files tab: this chat stays with ${basename(deck.id)}.` });
+      showInfoIn(app, `The agent made ${path}. This chat stays with ${basename(deck.id)}.`, {
+        label: "Open",
+        run: () => void get().openPath(path),
+      });
       return;
     }
     try {
@@ -273,7 +296,7 @@ export const createWorkspaceSlice: Slice<WorkspaceSlice> = (set, get, app) => ({
     try {
       const { deck, skipped } = await api.importPptx(path);
       await switchToDeck(app, deck.id, {});
-      if (skipped.length > 0) set({ error: `Imported, with these changes: ${skipped.join("; ")}.` });
+      if (skipped.length > 0) showInfoIn(app, `Imported, with these changes: ${skipped.join("; ")}.`);
     } catch (error) {
       showErrorIn(app, error);
     }

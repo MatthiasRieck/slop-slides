@@ -65,7 +65,7 @@ export function ImageGrid(props: {
 }) {
   const { workspacePath, images, onClose } = props;
   const ref = useRef<HTMLDivElement>(null);
-  useDismiss(true, ref, onClose, { escape: true, capture: true });
+  useDismiss(true, ref, onClose);
   return (
     <div
       ref={ref}

@@ -168,7 +168,7 @@ function StylePanel(props: {
                   aria-label={`${t.title} style`}
                   aria-current={t.id === current || undefined}
                   onClick={() => void useApp.getState().applyStyle(t.id)}
-                  className="group flex w-full flex-col gap-1 text-left disabled:opacity-50"
+                  className="group flex w-full flex-col gap-1 text-left disabled:opacity-40"
                 >
                   <div
                     className={cn(
@@ -263,7 +263,7 @@ function SaveAsTemplate() {
           <button
             type="submit"
             disabled={saving}
-            className="flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            className="flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
           >
             {saving && <Loader2 className="size-3 animate-spin" />}
             Save

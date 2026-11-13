@@ -65,7 +65,7 @@ beforeEach(async () => {
     sketches: {},
     sketchesSent: {},
     favoriteModels: [],
-    error: null,
+    toasts: [],
   });
   await initEventBridge();
   render(<ChatPanel />);

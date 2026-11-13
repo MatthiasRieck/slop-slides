@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { useApp } from "./store";
+import { lastError } from "./store/errors";
 import { isDirty, parseSvgOpen, type SvgOpen, useSvgEditor } from "./svgStore";
 import { DECK_HTML, deckFor } from "./test/fixtures";
 import { ask, calls, invoke } from "./test/tauri";
@@ -31,7 +32,7 @@ beforeEach(() => {
   useApp.setState({
     deck: deckFor(DECK_HTML),
     selected: "intro",
-    error: null,
+    toasts: [],
     sidebarOpen: false,
     sidebarTabs: ["chat"],
     sidebarTab: "chat",
@@ -133,7 +134,7 @@ describe("the SVG editor's drawing", () => {
   it("refuses markup that is not a drawing", async () => {
     expect(await useSvgEditor.getState().open(drawing({ markup: "<div></div>" }))).toBe(false);
     expect(useSvgEditor.getState().edit).toBeNull();
-    expect(useApp.getState().error).toMatch(/not an SVG/);
+    expect(lastError(useApp.getState())).toMatch(/not an SVG/);
   });
 
   it("undoes and redoes its changes, a drag being one step", () => {
@@ -211,7 +212,7 @@ describe("the SVG editor's drawing", () => {
     useSvgEditor.getState().change(DRAFT);
     expect(await useSvgEditor.getState().accept()).toBe(false);
     expect(calls("update_slide")).toEqual([]);
-    expect(useApp.getState().error).toMatch(/has changed/);
+    expect(lastError(useApp.getState())).toMatch(/has changed/);
     expect(useSvgEditor.getState().edit).toMatchObject({ original: ORIGINAL, draft: DRAFT, saving: false });
   });
 
@@ -221,7 +222,7 @@ describe("the SVG editor's drawing", () => {
     useSvgEditor.getState().change(DRAFT);
     useApp.setState({ deck: { ...deckFor(DECK_HTML), id: "/decks/other/deck.html" } });
     expect(await useSvgEditor.getState().accept()).toBe(false);
-    expect(useApp.getState().error).toMatch(/Open the deck/);
+    expect(lastError(useApp.getState())).toMatch(/Open the deck/);
     expect(invoke).not.toHaveBeenCalled();
   });
 

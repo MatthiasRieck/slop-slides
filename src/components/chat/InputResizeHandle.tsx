@@ -29,7 +29,7 @@ export function InputResizeHandle(props: {
       aria-valuenow={props.height ?? MIN_INPUT_HEIGHT}
       tabIndex={0}
       title="Drag up to make the message input taller"
-      className="group flex h-4 w-full cursor-ns-resize touch-none items-center justify-center rounded-t-2xl outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      className="group flex h-4 w-full cursor-ns-resize touch-none items-center justify-center rounded-t-2xl"
       onPointerDown={(e) => {
         if (e.button !== 0) return;
         e.preventDefault();

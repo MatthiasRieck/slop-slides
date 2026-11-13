@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { editedSlidesOf, editingSlide } from "./editing";
+import { lastError } from "./errors";
 import { backend, calls, DECK, freshModule, freshStore, resetBackend } from "./testing";
 
 beforeEach(resetBackend);
@@ -101,7 +102,7 @@ describe("editing slides on the stage", () => {
     await Promise.all([first, second]);
     expect(calls("update_slide").map((c) => c.base)).toEqual(["intro-1", "intro-2"]);
     expect(disk.markup()).toContain("Hi");
-    expect(useApp.getState().error).toBeNull();
+    expect(lastError(useApp.getState())).toBeNull();
   });
 
   it("changes a slide's markup as it is in the file, saving it against the hash it was read at", async () => {
@@ -147,7 +148,7 @@ describe("editing slides on the stage", () => {
     });
     expect(saved).toBe(false);
     expect(calls("update_slide")).toEqual([]);
-    expect(useApp.getState().error).toBe("The drawing has changed.");
+    expect(lastError(useApp.getState())).toBe("The drawing has changed.");
   });
 
   it("reports a refused save and reloads the slide from disk", async () => {
@@ -155,7 +156,7 @@ describe("editing slides on the stage", () => {
     slideBackend();
     useApp.setState({ deck: deckFor(DECK_HTML, "9"), selected: "intro", editReload: 0 });
     await useApp.getState().saveSlideEdit("intro", MOVED);
-    expect(useApp.getState().error).toContain("changed");
+    expect(lastError(useApp.getState())).toContain("changed");
     expect(useApp.getState().editReload).toBe(1);
     expect(useApp.getState().editedSlides).toEqual([]);
   });
@@ -190,7 +191,7 @@ describe("editing slides on the stage", () => {
     await useApp.getState().discardSlideEdits();
     expect(calls("restore_slides")).toEqual([{ id: "/decks/talk/deck.html", since: "v7", slides: ["intro"] }]);
     expect(disk.markup()).toBe(ORIGINAL);
-    expect(useApp.getState()).toMatchObject({ editing: true, editedSlides: [], editReload: 1, error: null });
+    expect(useApp.getState()).toMatchObject({ editing: true, editedSlides: [], editReload: 1, toasts: [] });
   });
 
   it("discarding one slide puts only it back and keeps the others' edits", async () => {
@@ -202,7 +203,7 @@ describe("editing slides on the stage", () => {
     useApp.setState((s) => ({ editedSlides: [...s.editedSlides, "outro"] }));
     await useApp.getState().discardSlideEdits("intro");
     expect(calls("restore_slides").at(-1)).toMatchObject({ slides: ["intro"] });
-    expect(useApp.getState()).toMatchObject({ editing: true, editedSlides: ["outro"], error: null });
+    expect(useApp.getState()).toMatchObject({ editing: true, editedSlides: ["outro"], toasts: [] });
   });
 
   it("counts only slides that are not as they were on entering edit mode as edited", () => {
@@ -225,7 +226,7 @@ describe("editing slides on the stage", () => {
       },
     });
     await useApp.getState().discardSlideEdits();
-    expect(useApp.getState().error).toContain("locked");
+    expect(lastError(useApp.getState())).toContain("locked");
     expect(useApp.getState()).toMatchObject({ editing: true, editedSlides: ["intro"] });
   });
 

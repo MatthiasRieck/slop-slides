@@ -1,4 +1,4 @@
-import { api, errorMessage, type TemplateSummary } from "../lib/api";
+import { api, type TemplateSummary } from "../lib/api";
 import { DEFAULT_SIZE, type SlideSize, sameSize } from "../lib/slideSize";
 import { promptAgent } from "./composer";
 import { showErrorIn } from "./errors";
@@ -43,7 +43,8 @@ export const createTemplatesSlice: Slice<TemplatesSlice> = (set, get, app) => {
         const templates = await api.listTemplates();
         set({ templates: Array.isArray(templates) ? templates : [] });
       } catch (error) {
-        set({ templates: [], error: errorMessage(error) });
+        set({ templates: [] });
+        showErrorIn(app, error);
       }
     },
 

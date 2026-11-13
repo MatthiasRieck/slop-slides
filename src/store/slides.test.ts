@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { Deck } from "../lib/api";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { lastError } from "./errors";
 import { backend, calls, DECK, freshStore, resetBackend, type TestStore } from "./testing";
 
 beforeEach(resetBackend);
@@ -140,7 +141,7 @@ describe("slide rail changes", () => {
     });
     await useApp.getState().moveSlides(1);
     expect(useApp.getState().deck).toBe(deck);
-    expect(useApp.getState().error).toBe("The slides changed while reordering; try again.");
+    expect(lastError(useApp.getState())).toBe("The slides changed while reordering; try again.");
   });
 
   it("does not move past the end, or while a search shows only some slides", async () => {
@@ -207,6 +208,6 @@ describe("the slide clipboard", () => {
     });
     expect(await useApp.getState().pasteSlide()).toBe(false);
     expect(calls("paste_slide")).toEqual([{ id: DECK.id, after: null }]);
-    expect(useApp.getState().error).toBe("The clipboard holds no slide.");
+    expect(lastError(useApp.getState())).toBe("The clipboard holds no slide.");
   });
 });

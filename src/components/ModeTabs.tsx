@@ -2,8 +2,10 @@ import { Eye, GitCompare, Pencil } from "lucide-react";
 import { useEffect } from "react";
 
 import { useChanges } from "../changesStore";
+import { useRovingTabs } from "../hooks/useRovingTabs";
 import { cn } from "../lib/utils";
 import { type DeckMode, deckMode, useApp } from "../store";
+import { keepFocus } from "./Button";
 
 /** The modes with a tab. Settings opens from the file menu instead (TopBar). */
 type TabMode = Exclude<DeckMode, "settings">;
@@ -56,9 +58,10 @@ export function ModeTabs() {
     git: "See what changed since the last commit, and compare each slide before and after",
   };
   const modes = MODES.filter(({ id }) => id !== "git" || inRepository);
+  const tabs = useRovingTabs();
 
   return (
-    <div role="tablist" aria-label="Mode" className="flex items-center gap-1 self-stretch">
+    <div role="tablist" aria-label="Mode" {...tabs} className="flex items-center gap-1 self-stretch">
       {modes.map(({ id, label, icon: Icon }) => (
         <button
           key={id}
@@ -66,6 +69,8 @@ export function ModeTabs() {
           role="tab"
           aria-selected={mode === id}
           title={titles[id]}
+          // A press leaves the focus where it is (in the slide, say), as its keys go on working there.
+          onMouseDown={keepFocus}
           onClick={() => useApp.getState().setMode(id)}
           className={cn(
             "flex min-w-14 flex-col items-center justify-center gap-0.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40",

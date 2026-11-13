@@ -12,7 +12,6 @@ import { AreaDrawer, CommentEditor, CommentPins, useSlideComments } from "./Comm
 import { EditContextMenu } from "./EditContextMenu";
 import { EditToolbar } from "./EditToolbar";
 import { AnnotationLayer, useAnnotations } from "./PresenterTools";
-import { ShortcutHelp } from "./ShortcutHelp";
 import { CurrentSlide } from "./stage/CurrentSlide";
 import { DiscardButton } from "./stage/DiscardButton";
 import { toolMessage } from "./stage/editKeys";
@@ -235,7 +234,6 @@ export function Stage() {
           onClose={editFrames.closeMenu}
         />
       )}
-      {editing && <ShortcutHelp />}
       {deck.slides.length > 0 && (
         <StageFooter
           index={index}

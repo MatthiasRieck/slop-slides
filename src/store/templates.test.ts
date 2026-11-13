@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { Deck } from "../lib/api";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
+import { lastError } from "./errors";
 import { backend, calls, DECK, freshModule, freshStore, resetBackend } from "./testing";
 
 beforeEach(resetBackend);
@@ -60,7 +61,8 @@ describe("templates", () => {
       },
     });
     await useApp.getState().refreshTemplates();
-    expect(useApp.getState()).toMatchObject({ templates: [], error: "cannot locate home folder" });
+    expect(useApp.getState().templates).toEqual([]);
+    expect(lastError(useApp.getState())).toBe("cannot locate home folder");
   });
 
   it("restyles a deck with slides through a prompt in the composer", async () => {
@@ -99,7 +101,7 @@ describe("templates", () => {
       },
     });
     await useApp.getState().applyStyle("swiss");
-    expect(useApp.getState().error).toBe("template not found: swiss");
+    expect(lastError(useApp.getState())).toBe("template not found: swiss");
     expect(useApp.getState().composerFill).toBeNull();
   });
 
@@ -174,7 +176,7 @@ describe("templates", () => {
       },
     });
     expect(await useApp.getState().saveAsTemplate("Talk")).toBeNull();
-    expect(useApp.getState().error).toBe("The deck has no slides to make a template from.");
+    expect(lastError(useApp.getState())).toBe("The deck has no slides to make a template from.");
   });
 });
 
@@ -229,9 +231,9 @@ describe("changing the slide size", () => {
         throw "A slide must be 100 to 10000 pixels on each side";
       },
     });
-    useApp.setState({ deck: DECK, composerFill: null, error: null, running: false });
+    useApp.setState({ deck: DECK, composerFill: null, toasts: [], running: false });
     await useApp.getState().resizeSlides({ width: 1, height: 1, unit: "in" });
-    expect(useApp.getState().error).toContain("100 to 10000");
+    expect(lastError(useApp.getState())).toContain("100 to 10000");
     expect(useApp.getState().deck).toBe(DECK);
     expect(useApp.getState().composerFill).toBeNull();
   });

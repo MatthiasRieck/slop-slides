@@ -19,7 +19,7 @@ export function ThreadNavigation({
   const workspace = useApp((s) => s.workspace);
   const chatKey = useApp((s) => s.chatKey);
   const running = useApp((s) => s.running);
-  const { open, setOpen, ref } = useDropdown({ escape: true, capture: true });
+  const { open, setOpen, ref } = useDropdown();
   const [threads, setThreads] = useState<Awaited<ReturnType<typeof api.listChatThreads>>>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -112,7 +112,7 @@ export function ThreadNavigation({
                   type="button"
                   disabled={running || switching || thread.current}
                   onClick={() => void navigate(thread)}
-                  className="flex w-full items-center gap-2 rounded-lg p-2 text-left hover:bg-accent disabled:opacity-60"
+                  className="flex w-full items-center gap-2 rounded-lg p-2 text-left hover:bg-accent disabled:opacity-40"
                   aria-current={thread.current ? "page" : undefined}
                 >
                   <div className="min-w-0 flex-1">

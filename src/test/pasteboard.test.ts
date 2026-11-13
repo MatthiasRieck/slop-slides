@@ -413,6 +413,34 @@ describe("pasteboard", () => {
     expect(show.focusRequests()).toBe(0);
   });
 
+  it("tells the app of every press, so what is open there closes, in the show too", () => {
+    const p = pasteboard();
+    p.doc.hasFocus = () => true;
+    p.pointer("pointerdown", p.$("h1"), 100, 100);
+    p.pointer("pointerdown", p.$("a"), 100, 100, 1);
+    expect(p.posted("slop:press")).toEqual([{ type: "slop:press" }, { type: "slop:press" }]);
+    const show = pasteboard({ show: true });
+    show.pointer("pointerdown", show.$("h1"), 100, 100);
+    expect(show.posted("slop:press")).toHaveLength(1);
+  });
+
+  it("hands Escape to the app while something is open there, and keeps it otherwise", () => {
+    const p = pasteboard();
+    p.fromParent({ type: "slop:layer", open: true });
+    const handed = p.key("Escape");
+    expect(p.posted("slop:dismiss")).toEqual([{ type: "slop:dismiss" }]);
+    expect(handed.defaultPrevented).toBe(true);
+    // The player never saw it, so it is not also forwarded as a key.
+    expect(p.keys()).toEqual([]);
+    // Other keys go on as ever.
+    p.key("ArrowRight");
+    expect(p.keys()).toEqual([{ type: "slop:key", key: "ArrowRight", mod: false, shift: false }]);
+    p.fromParent({ type: "slop:layer", open: false });
+    p.key("Escape");
+    expect(p.posted("slop:dismiss")).toHaveLength(1);
+    expect(p.keys()).toContainEqual({ type: "slop:key", key: "Escape", mod: false, shift: false });
+  });
+
   it("leaves links and other controls on the slide to be clicked", () => {
     const p = pasteboard();
     p.drag(p.$("a"), 50, 0);

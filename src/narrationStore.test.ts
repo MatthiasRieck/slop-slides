@@ -18,6 +18,7 @@ import {
   useNarration,
 } from "./narrationStore";
 import { useApp } from "./store";
+import { lastError } from "./store/errors";
 import { DECK_HTML, deckFor } from "./test/fixtures";
 
 const deck = deckFor(DECK_HTML);
@@ -32,7 +33,7 @@ beforeEach(() => {
     render: null,
     timing: null,
   });
-  useApp.setState({ deck: null, error: null });
+  useApp.setState({ deck: null, toasts: [] });
 });
 
 describe("narration store", () => {
@@ -84,16 +85,16 @@ describe("narration store", () => {
       return [];
     });
     expect(await useNarration.getState().renderAudio(deck.id, ["intro"])).toBe(false);
-    expect(useApp.getState().error).toBe("Slide intro: the speech engine stopped unexpectedly");
+    expect(lastError(useApp.getState())).toBe("Slide intro: the speech engine stopped unexpectedly");
     expect(useNarration.getState().render).toBeNull();
 
-    useApp.setState({ error: null });
+    useApp.setState({ toasts: [] });
     invoke.mockImplementation(async (command: string) => {
       if (command === "render_narration") throw NARRATION_CANCELLED;
       return [];
     });
     expect(await useNarration.getState().renderAudio(deck.id, null)).toBe(false);
-    expect(useApp.getState().error).toBeNull();
+    expect(lastError(useApp.getState())).toBeNull();
   });
 
   it("times words, downloading the speech-to-text model first when it is missing", async () => {
@@ -129,7 +130,7 @@ describe("narration store", () => {
     });
     expect(await useNarration.getState().timeWords(deck.id, ["intro"])).toBe(false);
     expect(invoke).not.toHaveBeenCalledWith("download_voice_model");
-    expect(useApp.getState().error).toBe("Slide intro: Transcription failed");
+    expect(lastError(useApp.getState())).toBe("Slide intro: Transcription failed");
     expect(useNarration.getState().timing).toBeNull();
   });
 });
@@ -171,7 +172,7 @@ describe("narration providers", () => {
     expect(useNarration.getState().accountVoices).toEqual({});
     invoke.mockRejectedValue("An API key has no spaces in it.");
     expect(await useNarration.getState().setKey("openai", "a b")).toBe(false);
-    expect(useApp.getState().error).toContain("no spaces");
+    expect(lastError(useApp.getState())).toContain("no spaces");
   });
 
   it("keeps the built-in voices when the account's cannot be listed", async () => {
@@ -182,6 +183,6 @@ describe("narration providers", () => {
     invoke.mockRejectedValue("offline");
     await useNarration.getState().loadVoices("openai");
     expect(useNarration.getState().accountVoices.openai).toBeUndefined();
-    expect(useApp.getState().error).toBeNull();
+    expect(lastError(useApp.getState())).toBeNull();
   });
 });

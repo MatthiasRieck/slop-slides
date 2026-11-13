@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Deck } from "../lib/api";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ask, invoke } from "../test/tauri";
+import { lastError } from "./errors";
 import type { AssistantMessage, ChatMessage } from "./messages";
 import {
   assistantMessage,
@@ -91,7 +92,7 @@ describe("agent events", () => {
       },
     });
     await store.initEventBridge();
-    expect(store.useApp.getState().error).toBe("no such window");
+    expect(lastError(store.useApp.getState())).toBe("no such window");
   });
 
   it.each([
@@ -316,7 +317,7 @@ describe("deck file changes", () => {
     changed(["deck.html"]);
     await vi.advanceTimersByTimeAsync(120);
     expect(useApp.getState().deck).toEqual(DECK);
-    expect(useApp.getState().error).toBeNull();
+    expect(lastError(useApp.getState())).toBeNull();
   });
 
   it("does nothing when the deck was closed meanwhile", async () => {
@@ -440,7 +441,7 @@ describe("the agent showing a deck it made", () => {
     emitTo("/decks/talk", { type: "openFile", path: "new/deck.html" });
     await vi.waitFor(() => expect(useApp.getState().deck).toEqual(MADE));
     emitTo("/decks/talk", { type: "finished", interrupted: false });
-    await vi.waitFor(() => expect(useApp.getState().error).toBe("The agent is still working in this chat."));
+    await vi.waitFor(() => expect(lastError(useApp.getState())).toBe("The agent is still working in this chat."));
     expect(useApp.getState().chatKey).toBe("/decks/talk");
   });
 
@@ -455,14 +456,23 @@ describe("the agent showing a deck it made", () => {
     await Promise.resolve();
     expect(calls("open_file")).toEqual([]);
     expect(calls("open_deck")).toEqual([]);
-    expect(useApp.getState().error).toBe(
-      "The agent made new/deck.html. Open it from the Files tab: this chat stays with deck.html.",
-    );
+    // Something to know, not a failure, with a button that goes to the file.
+    expect(lastError(useApp.getState())).toBeNull();
+    const [toast] = useApp.getState().toasts;
+    expect(toast).toMatchObject({
+      kind: "info",
+      text: "The agent made new/deck.html. This chat stays with deck.html.",
+      action: { label: "Open" },
+    });
     expect(useApp.getState()).toMatchObject({ deck: DECK, chatKey: DECK.id, running: true });
+    const openPath = vi.fn(async () => {});
+    useApp.setState({ openPath });
+    toast!.action!.run();
+    expect(openPath).toHaveBeenCalledWith("new/deck.html");
     // Its own deck, shown again, is nothing to say.
-    useApp.setState({ error: null });
+    useApp.setState({ toasts: [] });
     emitTo(DECK.id, { type: "openFile", path: "deck.html" });
-    expect(useApp.getState().error).toBeNull();
+    expect(useApp.getState().toasts).toEqual([]);
   });
 });
 

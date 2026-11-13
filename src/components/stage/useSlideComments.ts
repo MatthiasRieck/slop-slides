@@ -12,6 +12,7 @@ import {
   parseTarget,
   type SlideComment,
 } from "../../lib/comments";
+import { dismissTopLayer } from "../../lib/layers";
 import { getSlideClock } from "../../lib/slideClock";
 import { loadText, trySaveText } from "../../lib/storage";
 import { useApp } from "../../store";
@@ -117,7 +118,7 @@ export function useSlideComments(
     const onMessage = (event: MessageEvent) => {
       const data = event.data;
       // Keys pressed in the preview after a click on the slide land here.
-      if (data?.type === "slop:key" && data.key === "Escape") {
+      if (data?.type === "slop:key" && data.key === "Escape" && !dismissTopLayer(event)) {
         setPicking(false);
         setOutlining(false);
       }

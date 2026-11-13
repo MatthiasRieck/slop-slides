@@ -16,7 +16,29 @@ const RAIL_OPEN_KEY = "slopslide.railOpen";
 const FINAL_STATE_KEY = "slopslide.finalState";
 const TIMELINE_OPEN_KEY = "slopslide.timelineOpen";
 
-/** How the window is laid out around the slides, the show, and the error shown. */
+/** How a toast reads: something went wrong, something to know, or something that worked. */
+export type ToastKind = "error" | "info" | "success";
+
+/** What a toast offers to do about what it says, as a button in it. */
+export interface ToastAction {
+  label: string;
+  run: () => void;
+}
+
+/** A message shown over the window for a while (see `Toasts` in ../components/Toasts.tsx). */
+export interface Toast {
+  id: number;
+  kind: ToastKind;
+  text: string;
+  action?: ToastAction;
+}
+
+/** How many toasts show at once; a new one beyond that drops the oldest. */
+export const MAX_TOASTS = 3;
+
+let nextToastId = 1;
+
+/** How the window is laid out around the slides, the show, and the toasts shown. */
 export interface UiSlice {
   /** The right sidebar is shown; the user can collapse it to give the stage more room. */
   sidebarOpen: boolean;
@@ -35,7 +57,10 @@ export interface UiSlice {
   presenting: boolean;
   /** Where the show goes: picked screens, or windows; null: full screen where it is. */
   screens: Placement | null;
-  error: string | null;
+  /** What the app has to tell the user, oldest first; at most `MAX_TOASTS`. */
+  toasts: Toast[];
+  /** The shortcut help is open (see ../components/ShortcutHelp.tsx). */
+  shortcutHelpOpen: boolean;
 
   setSidebarOpen: (open: boolean) => void;
   /** Shows the sidebar on `tab`, opening that tab (after the others) if it is closed. */
@@ -47,7 +72,13 @@ export interface UiSlice {
   setFinalState: (finalState: boolean) => void;
   setTimelineOpen: (open: boolean) => void;
   setPresenting: (presenting: boolean, screens?: Placement | null) => void;
-  setError: (error: string | null) => void;
+  /**
+   * Shows a toast, after the others, and gives its id. Said again, a message moves to the end
+   * rather than showing twice. The helpers in ./errors.ts are what the app calls.
+   */
+  showToast: (kind: ToastKind, text: string, action?: ToastAction) => number;
+  dismissToast: (id: number) => void;
+  setShortcutHelpOpen: (open: boolean) => void;
 }
 
 /** The sidebar's tabs as last left; anything saved that is not a tab is dropped. */
@@ -74,7 +105,8 @@ export const createUiSlice: Slice<UiSlice> = (set, get) => ({
   timelineOpen: loadFlag(TIMELINE_OPEN_KEY, false),
   presenting: false,
   screens: null,
-  error: null,
+  toasts: [],
+  shortcutHelpOpen: false,
 
   setSidebarOpen: (sidebarOpen) => {
     // Opening it with every tab closed brings back the chat, rather than an empty panel.
@@ -126,5 +158,15 @@ export const createUiSlice: Slice<UiSlice> = (set, get) => ({
 
   setPresenting: (presenting, screens = null) => set({ presenting, screens }),
 
-  setError: (error) => set({ error }),
+  showToast: (kind, text, action) => {
+    const toast: Toast = { id: nextToastId++, kind, text, ...(action && { action }) };
+    set((s) => ({
+      toasts: [...s.toasts.filter((t) => t.kind !== kind || t.text !== text), toast].slice(-MAX_TOASTS),
+    }));
+    return toast.id;
+  },
+
+  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+
+  setShortcutHelpOpen: (shortcutHelpOpen) => set({ shortcutHelpOpen }),
 });

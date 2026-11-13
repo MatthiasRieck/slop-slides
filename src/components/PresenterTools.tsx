@@ -430,7 +430,14 @@ export function PresenterToolbar({ annotations, onExit }: { annotations: Annotat
           </div>
         )}
         <div className="mx-1 h-5 w-px bg-foreground/15" />
-        <ToolButton variant="presenter" keepFocus label="Undo (⌘Z)" disabled={strokes.length === 0} onClick={undo}>
+        <ToolButton
+          variant="presenter"
+          keepFocus
+          label="Undo"
+          shortcut="mod+z"
+          disabled={strokes.length === 0}
+          onClick={undo}
+        >
           <Undo2 />
         </ToolButton>
         <ToolButton

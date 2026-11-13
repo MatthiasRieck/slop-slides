@@ -37,7 +37,6 @@ export function RewindDialog() {
   return (
     <Dialog
       label="Undo chat changes"
-      takeFocus
       onClose={() => answer(null)}
       className="flex w-[28rem] max-w-[90vw] flex-col gap-4 rounded-xl border bg-background p-5 text-foreground shadow-2xl outline-none"
       heading={

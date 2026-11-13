@@ -17,6 +17,7 @@ import { LASER_SIZE, TRAIL_FADE_MS, TRAIL_HOLD_MS } from "../lib/ink";
 import { saveVideoOptions } from "../lib/video";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
+import { lastError } from "../store/errors";
 import { fakeCanvas2D } from "../test/fakeCanvas";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { Presenter } from "./Presenter";
@@ -1287,7 +1288,7 @@ describe("Presenter on several screens", () => {
 });
 
 describe("Presenter in windows", () => {
-  beforeEach(() => useApp.setState({ screens: "windows", error: null }));
+  beforeEach(() => useApp.setState({ screens: "windows", toasts: [] }));
 
   it("opens the presenter view in a window and leaves the show's window as it is", async () => {
     localStorage.setItem("slopslide.presenterPanel", "true");
@@ -1329,7 +1330,7 @@ describe("Presenter in windows", () => {
     invoke.mockRejectedValueOnce("cannot open the presenter view: no");
     render(<Presenter />);
     await act(async () => {});
-    expect(useApp.getState().error).toContain("cannot open the presenter view");
+    expect(lastError(useApp.getState())).toContain("cannot open the presenter view");
   });
 });
 

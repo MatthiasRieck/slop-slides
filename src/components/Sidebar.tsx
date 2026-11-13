@@ -13,13 +13,16 @@ import {
   StickyNote,
   X,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 
 import { useDropdown } from "../hooks/useDropdown";
+import { useMenuKeys } from "../hooks/useMenuKeys";
+import { useRovingTabs } from "../hooks/useRovingTabs";
+import { scrollBehavior } from "../lib/motion";
 import { cn, isMac } from "../lib/utils";
 import { confirmDiscardEdits, SIDEBAR_TABS, type SidebarTab, useApp } from "../store";
 import { useSvgEditor } from "../svgStore";
-import { ToolButton } from "./Button";
+import { keepFocus, ToolButton } from "./Button";
 import { ChatPanel } from "./ChatPanel";
 import { CodePanel } from "./CodeView";
 import { FileTree } from "./FileTree";
@@ -149,7 +152,8 @@ interface Overflow {
  * ends fade out, and ‹ › after the `+` scroll it a page at a time. The active tab scrolls into view.
  */
 function TabStrip({ tabs, active }: { tabs: SidebarTab[]; active: SidebarTab | null }) {
-  const ref = useRef<HTMLDivElement>(null);
+  const roving = useRovingTabs();
+  const ref = roving.ref;
   const [overflow, setOverflow] = useState<Overflow>({ left: 0, right: 0 });
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measures, and watches the new tabs, when tabs open or close
@@ -179,7 +183,7 @@ function TabStrip({ tabs, active }: { tabs: SidebarTab[]; active: SidebarTab | n
 
   const scroll = (direction: -1 | 1) => {
     const strip = ref.current;
-    if (strip) strip.scrollBy({ left: direction * strip.clientWidth * 0.75, behavior: "smooth" });
+    if (strip) strip.scrollBy({ left: direction * strip.clientWidth * 0.75, behavior: scrollBehavior() });
   };
   const fade = 24;
   const mask = `linear-gradient(to right, ${overflow.left ? "transparent" : "black"}, black ${overflow.left ? fade : 0}px, black calc(100% - ${overflow.right ? fade : 0}px), ${overflow.right ? "transparent" : "black"})`;
@@ -191,6 +195,7 @@ function TabStrip({ tabs, active }: { tabs: SidebarTab[]; active: SidebarTab | n
         ref={ref}
         role="tablist"
         aria-label="Sidebar"
+        onKeyDown={roving.onKeyDown}
         className="no-scrollbar flex min-w-0 items-center gap-1 overflow-x-auto"
         data-fade={[overflow.left && "left", overflow.right && "right"].filter(Boolean).join(" ") || undefined}
         style={overflowing ? { maskImage: mask, WebkitMaskImage: mask } : undefined}
@@ -246,6 +251,8 @@ function Tab({ id, active }: { id: SidebarTab; active: boolean }) {
         type="button"
         role="tab"
         aria-selected={active}
+        // A press leaves the focus where it is (in the slide, say), as its keys go on working there.
+        onMouseDown={keepFocus}
         onClick={() => useApp.getState().setSidebarTab(id)}
         className="flex items-center gap-1.5 py-1 pl-2 pr-2.5"
       >
@@ -270,7 +277,8 @@ function Tab({ id, active }: { id: SidebarTab; active: boolean }) {
 
 /** `+`: a menu of the surfaces not open in a tab yet. */
 function OpenTabMenu({ open: openTabs }: { open: SidebarTab[] }) {
-  const { open, setOpen, ref: menuRef } = useDropdown({ escape: true });
+  const { open, setOpen, ref: menuRef } = useDropdown();
+  const menu = useMenuKeys();
   const closed = SIDEBAR_TABS.filter((id) => !openTabs.includes(id));
   return (
     <div ref={menuRef} className="relative shrink-0">
@@ -287,7 +295,11 @@ function OpenTabMenu({ open: openTabs }: { open: SidebarTab[] }) {
         <Plus className="size-4" />
       </ToolButton>
       {open && closed.length > 0 && (
-        <div role="menu" className="absolute left-0 top-full z-20 mt-1 w-40 rounded-lg border bg-card p-1 shadow-lg">
+        <div
+          role="menu"
+          {...menu}
+          className="absolute left-0 top-full z-20 mt-1 w-40 rounded-lg border bg-card p-1 shadow-lg outline-none"
+        >
           {closed.map((id) => {
             const { label, hint, icon: Icon } = TABS[id];
             return (
@@ -300,7 +312,7 @@ function OpenTabMenu({ open: openTabs }: { open: SidebarTab[] }) {
                   setOpen(false);
                   useApp.getState().setSidebarTab(id);
                 }}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent"
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
               >
                 <Icon className="size-3.5 shrink-0 text-muted-foreground" />
                 {label}

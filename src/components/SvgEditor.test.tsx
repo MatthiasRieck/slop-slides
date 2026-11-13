@@ -57,7 +57,7 @@ beforeEach(() => {
   proto.getBBox = () => ({ x: 0, y: 0, width: 10, height: 10 });
   invoke.mockReset().mockResolvedValue(undefined);
   useSvgEditor.setState({ edit: null });
-  useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", error: null });
+  useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", toasts: [] });
 });
 
 afterEach(() => {
@@ -263,6 +263,19 @@ describe("SvgEditor", () => {
     expect(draft().match(/<rect/g)).toHaveLength(2);
     // The copy has no id of its own, so it does not clash.
     expect(draft().match(/id="box"/g)).toHaveLength(1);
+  });
+
+  it("moves between the inspector's tabs with the arrow keys, without nudging the drawing", async () => {
+    await open();
+    const before = draft();
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.map((tab) => tab.tabIndex)).toEqual([0, -1, -1]);
+    tabs[0]!.focus();
+    fireEvent.keyDown(tabs[0]!, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tabs[1]);
+    fireEvent.keyDown(tabs[1]!, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(tabs[0]);
+    expect(draft()).toBe(before);
   });
 
   it("picks elements from the layers", async () => {

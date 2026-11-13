@@ -57,7 +57,7 @@ export function LintStatus() {
       aria-label={`Lint: ${summary}`}
       title={`${summary}\n${details}\n\nClick to ask the agent to fix ${lint.length === 1 ? "it" : "them"}.`}
       onClick={() => useApp.getState().fillComposer(lintFixPrompt(lint, file))}
-      className={cn(base, "gap-2 hover:bg-accent disabled:opacity-50")}
+      className={cn(base, "gap-2 hover:bg-accent disabled:opacity-40")}
     >
       {errors > 0 && (
         <span data-testid="lint-errors" className="flex items-center gap-1 text-destructive">

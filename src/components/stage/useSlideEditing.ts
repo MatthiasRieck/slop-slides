@@ -16,6 +16,8 @@ import {
   parseHexColor,
   parseSelection,
 } from "../../lib/editTools";
+import { keepsKey } from "../../lib/keys";
+import { dismissTopLayer } from "../../lib/layers";
 import { editingSlide, reportingErrors, showError, useApp } from "../../store";
 import { parseSvgOpen, useSvgEditor } from "../../svgStore";
 import type { EditMenuAction } from "../EditContextMenu";
@@ -121,9 +123,6 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
         void useApp.getState().saveSlideEdit(data.slide, data.markup);
       } else if (data?.type === "slop:edit-overflow" && data.slide === selected && Array.isArray(data.items)) {
         setOverflow({ slide: data.slide, items: data.items.map(String) });
-      } else if (data?.type === "slop:edit-press") {
-        // A press in the preview never reaches this window, but for what is open here it is a press outside.
-        frame.current?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
       } else if (data?.type === "slop:edit-selection" && data.slide === selected) {
         // The editor reports on every keystroke and move of the caret, mostly the same thing.
         const next = { slide: data.slide, selection: parseSelection(data.selection) };
@@ -161,6 +160,8 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
           .copyToClipboard(data.html, String(data.text ?? ""), useApp.getState().deck?.id ?? null)
           .catch((error) => showError(error));
       } else if (data?.type === "slop:key") {
+        // Escape closes what is open in the app before it puts a tool away or leaves edit mode.
+        if (data.key === "Escape" && dismissTopLayer(event)) return;
         if (data.mod)
           runHistoryKey(String(data.key), Boolean(data.shift)) ||
             runClipboardKey(String(data.key), Boolean(data.shift), false);
@@ -169,7 +170,7 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
     };
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (!editingSlide(useApp.getState()) || target?.closest("input, textarea, select, [contenteditable]")) return;
+      if (!editingSlide(useApp.getState()) || keepsKey(event)) return;
       if (event.metaKey || event.ctrlKey) {
         if (
           runHistoryKey(event.key, event.shiftKey) ||
@@ -181,8 +182,8 @@ export function useSlideEditing(areaRef: RefObject<HTMLDivElement | null>, reset
       }
     };
     // A press anywhere in the app but the edit toolbar ends typing in the slide, keeping the
-    // text; the toolbar restyles the text being typed (see assets/editor/), and a press on the frame
-    // is one passed on from the slide, where the editor sees it itself.
+    // text; the toolbar restyles the text being typed (see assets/editor/), and a press in the
+    // slide is the editor's to see.
     const onPress = (event: PointerEvent) => {
       if (!editingSlide(useApp.getState())) return;
       if ((event.target as Element | null)?.closest?.("[data-edit-toolbar], iframe")) return;

@@ -42,6 +42,29 @@ describe("ModeTabs", () => {
     expect(selected()).toEqual(["View"]);
   });
 
+  it("moves between the modes with the arrow keys, Tab stopping at the selected one", () => {
+    render(<ModeTabs />);
+    expect(screen.getAllByRole("tab").map((t) => t.tabIndex)).toEqual([0, -1, -1]);
+    tab("View").focus();
+    fireEvent.keyDown(tab("View"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tab("Edit"));
+    fireEvent.keyDown(tab("Edit"), { key: "End" });
+    expect(document.activeElement).toBe(tab("Git"));
+    fireEvent.keyDown(tab("Git"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tab("View"));
+    // Moving the focus changes no mode; a click (Enter, Space) does.
+    expect(selected()).toEqual(["View"]);
+    fireEvent.click(tab("Edit"));
+    expect(screen.getAllByRole("tab").map((t) => t.tabIndex)).toEqual([-1, 0, -1]);
+  });
+
+  it("leaves the focus where it is when a mode is pressed, for the keys that work there", () => {
+    render(<ModeTabs />);
+    const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    tab("Edit").dispatchEvent(press);
+    expect(press.defaultPrevented).toBe(true);
+  });
+
   it("leaves narration, notes and the HTML to the sidebar's tabs", () => {
     render(<ModeTabs />);
     for (const name of ["Narration", "Notes", "HTML"]) expect(screen.queryByRole("tab", { name })).toBeNull();

@@ -1,4 +1,4 @@
-import { type RefObject, useEffect, useRef, useSyncExternalStore } from "react";
+import { type RefObject, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import type { Slide } from "../../lib/api";
 import { getSlideClock, onSlideClock, postSlideClock } from "../../lib/slideClock";
@@ -29,11 +29,12 @@ export function CurrentSlide(props: {
   });
   const frame = useRef<HTMLIFrameElement | null>(null);
   useEffect(() => onSlideClock(() => postSlideClock(frame.current, id, true)), [id]);
+  const version = useEditorVersion(props.slide, props.editing && !played, editReload);
   return (
     <SlideFrame
       deckId={props.deckId}
       slideId={id}
-      version={useSlideVersion(props.slide)}
+      version={version}
       editKey={props.editing && !played ? String(editReload) : undefined}
       still={finalState && !played}
       arena={props.arena}
@@ -47,6 +48,26 @@ export function CurrentSlide(props: {
       }}
     />
   );
+}
+
+/**
+ * The version of `slide` the preview loads (see `useSlideVersion`). A version the slide editor
+ * saved itself is the one it already shows, so while `editing` the preview stays on the version
+ * it has: loading the slide again would take the editor away for a moment, and with it whatever
+ * the user did since (the next drag, the next clicks on a toolbar button). Any other change (the
+ * agent's, an undo, the deck's styles, an asset) loads the slide as before.
+ */
+function useEditorVersion(slide: Slide, editing: boolean, editReload: number): string {
+  const version = useSlideVersion(slide);
+  const own = useApp((s) => editing && s.editSaved[slide.id] === slide.hash);
+  const shellHash = useApp((s) => s.deck?.shellHash ?? "");
+  const assetsRev = useApp((s) => s.assetsRev);
+  // Everything else the preview shows, and what reloads it.
+  const around = `${slide.id}.${shellHash}.${assetsRev}.${editReload}`;
+  const [loaded, setLoaded] = useState({ version, around });
+  const keep = own && loaded.around === around;
+  if (!keep && (loaded.version !== version || loaded.around !== around)) setLoaded({ version, around });
+  return keep ? loaded.version : version;
 }
 
 /** The panel's color, and the palette's colors for the preview's own marks, resolved for its frame. */

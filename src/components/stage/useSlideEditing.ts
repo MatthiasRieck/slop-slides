@@ -36,7 +36,7 @@ export function unlessSame<T>(was: T, next: T): T {
 
 /**
  * Connects the stage to the slide editor running in its preview (src-tauri/assets/editor/):
- * saves the markup it posts, keeps the selection across the reload that follows, and
+ * saves the markup it posts, keeps the selection across a reload of the slide, and
  * handles undo and leaving edit mode. Images dropped on the stage go onto the slide. The
  * editor copies elements through the system clipboard, and ⌘V pastes from it: an element
  * copied there, images (saved as assets) or text from anywhere.

@@ -5,7 +5,7 @@
  * first screen does not show are reached only through `import()` (see src/components/lazy.tsx).
  */
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const ROOT = resolve(__dirname, "../..");
@@ -26,6 +26,16 @@ function sourceFile(from: string, specifier: string): string | null {
   return candidates.find((path) => existsSync(path) && /\.(tsx?|css)$/.test(path)) ?? null;
 }
 
+/** `path` with `/` between its parts, whatever `separator` the system writes. */
+function slashed(path: string, separator: string = sep): string {
+  return path.split(separator).join("/");
+}
+
+/** `file` as the tests name it: from the repository root, the same on every system. */
+function repoPath(file: string): string {
+  return slashed(relative(ROOT, file));
+}
+
 /** Every source file and package reached from `entry` without an `import()`. */
 function eagerGraph(entry: string) {
   const files = new Set<string>();
@@ -41,8 +51,16 @@ function eagerGraph(entry: string) {
     }
   };
   visit(entry);
-  return { files: [...files].map((file) => relative(ROOT, file)), packages: [...packages] };
+  return { files: [...files].map((file) => repoPath(file)), packages: [...packages] };
 }
+
+describe("the paths the graph reports", () => {
+  it("use / whatever the system's separator is", () => {
+    expect(repoPath(join(ROOT, "src", "App.tsx"))).toBe("src/App.tsx");
+    expect(slashed("src\\components\\Sidebar.tsx", "\\")).toBe("src/components/Sidebar.tsx");
+    expect(slashed("src/components/Sidebar.tsx", "/")).toBe("src/components/Sidebar.tsx");
+  });
+});
 
 describe("what the window loads before it shows anything", () => {
   const graph = eagerGraph(join(ROOT, "src/main.tsx"));

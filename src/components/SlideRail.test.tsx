@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Deck, FindMatch, Section } from "../lib/api";
-import { useApp } from "../store";
+import { flushReviewSave, useApp } from "../store";
 import { lastError } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
@@ -26,6 +26,9 @@ beforeEach(() => {
     templates: [{ id: "swiss", title: "Swiss Design", builtin: true, path: null, slides: ["title"] }],
   });
 });
+
+// A review save a test leaves waiting would otherwise run, and fail, in a later test.
+afterEach(() => flushReviewSave());
 
 // dnd-kit gives sortable items role="button", so find them by tag.
 const items = () => [...document.querySelectorAll<HTMLElement>("ol > li")];

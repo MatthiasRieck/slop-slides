@@ -58,7 +58,7 @@
       }
       if (mod && !event.altKey && !event.shiftKey) {
         if (TOGGLES[letter] && selected && describe(selected).text) {
-          if (nudgeTimer) commit();
+          saveNudges();
           toggleStyle(TOGGLES[letter]);
           event.preventDefault();
           event.stopImmediatePropagation();
@@ -96,18 +96,21 @@
       if (!selected) return;
       if (event.metaKey || event.ctrlKey) {
         // Undo, paste and other shortcuts go to the app, after any pending nudge is saved.
-        if (nudgeTimer) commit();
+        saveNudges();
         return;
       }
       var step = event.shiftKey ? 10 : 1;
       var nudge = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[event.key];
       if (nudge) {
-        movable().forEach(function (el) {
+        var moving = movable();
+        moving.forEach(function (el) {
           moveBy(el, nudge[0], nudge[1]);
         });
-        followLines(movable());
-        clearTimeout(nudgeTimer);
-        nudgeTimer = setTimeout(commit, NUDGE_SAVE_MS);
+        followStuck(nudgeFollowers(moving));
+        // A run of nudges of the same elements is one step to undo, however many saves it takes.
+        saveSoon("nudge:" + moving.map(function (el) {
+          return pathOf(el).join(".");
+        }).join(","));
       } else if (event.key === "Escape") {
         select(extras.length || selected.parentElement === slide ? null : selected.parentElement);
       } else if (event.key === "Enter") {

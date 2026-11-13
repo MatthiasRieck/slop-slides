@@ -42,17 +42,40 @@ fn decks(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
     scan(root, MAX_ENTRIES, MAX_BYTES)
 }
 
+/// Folders of downloaded or generated files, never searched for decks: a project's
+/// `node_modules` alone is tens of thousands of files, more than the scan may read at all, so a
+/// workspace with one could not be handed to the agent. They are told by name, for the ones
+/// whose name means nothing else, and by the `CACHEDIR.TAG` file that tools put in the caches
+/// they make (Cargo's `target` has one). A deck in one of them is not guarded by a folder's turn.
+const DEPENDENCY_DIRS: &[&str] = &[
+    "node_modules",
+    "bower_components",
+    "__pycache__",
+    "site-packages",
+];
+/// Marks a folder as a cache that can be made again (<https://bford.info/cachedir/>).
+const CACHE_TAG: &str = "CACHEDIR.TAG";
+
+/// The decks under `root`, each with its content. The root is resolved once; below it a folder
+/// or file is where its parent is unless it is a link, and only a link is resolved, to see that
+/// it stays inside. Every HTML file is read whole: what makes a page a deck may stand anywhere
+/// in it, and a deck taken for a page would go unguarded.
 fn scan(root: &Path, max_entries: usize, max_bytes: u64) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
-    let mut todo = vec![root.to_path_buf()];
+    let resolved_root = root.canonicalize()?;
+    // Each folder as it is reached from `root`, and resolved.
+    let mut todo = vec![(root.to_path_buf(), resolved_root.clone())];
     let mut seen = std::collections::HashSet::new();
     let mut found = BTreeMap::new();
     let (mut count, mut bytes) = (0, 0);
-    while let Some(dir) = todo.pop() {
-        if !seen.insert(dir.canonicalize()?) {
+    while let Some((dir, resolved_dir)) = todo.pop() {
+        if !seen.insert(resolved_dir.clone()) {
             continue;
         }
-        for entry in fs::read_dir(&dir)? {
-            let entry = entry?;
+        let entries = fs::read_dir(&dir)?.collect::<std::io::Result<Vec<_>>>()?;
+        if entries.iter().any(|entry| entry.file_name() == CACHE_TAG) {
+            continue;
+        }
+        for entry in entries {
             let name = entry.file_name();
             let name = name.to_string_lossy();
             if name.starts_with('.') || name.contains(".tmp-") {
@@ -63,11 +86,25 @@ fn scan(root: &Path, max_entries: usize, max_bytes: u64) -> Result<BTreeMap<Path
                 return Err(Error::msg("Workspace safety scan exceeds the file limit."));
             }
             let path = entry.path();
-            if !workspace::inside(root, &path) {
-                continue;
-            }
-            if path.is_dir() {
-                todo.push(path);
+            let kind = entry.file_type()?;
+            let resolved = if kind.is_symlink() {
+                // A link that leads nowhere, or out of the workspace, is not the agent's.
+                match path.canonicalize() {
+                    Ok(target) if target.starts_with(&resolved_root) => target,
+                    _ => continue,
+                }
+            } else {
+                resolved_dir.join(entry.file_name())
+            };
+            let is_dir = if kind.is_symlink() {
+                resolved.is_dir()
+            } else {
+                kind.is_dir()
+            };
+            if is_dir {
+                if !DEPENDENCY_DIRS.contains(&name.as_ref()) {
+                    todo.push((path, resolved));
+                }
                 continue;
             }
             if !deck::is_html(&path) {
@@ -94,6 +131,31 @@ fn scan(root: &Path, max_entries: usize, max_bytes: u64) -> Result<BTreeMap<Path
         }
     }
     Ok(found)
+}
+
+/// [`Guard::start`] on a thread that may block, for a turn's async task: it reads every deck of
+/// the workspace before the agent gets to them.
+pub async fn start(
+    root: PathBuf,
+    only: Option<PathBuf>,
+    session: PathBuf,
+    home: PathBuf,
+) -> Result<Guard> {
+    blocking(move || Guard::start(&root, only.as_deref(), &session, &home)).await
+}
+
+/// [`Guard::finish`] on a thread that may block: it reads the decks again and writes the ones
+/// the turn changed.
+pub async fn finish(guard: Guard, change: Change) -> Result<Vec<(String, Vec<String>)>> {
+    blocking(move || guard.finish(&change)).await
+}
+
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .unwrap_or_else(|e| Err(Error::msg(format!("the workspace guard stopped: {e}"))))
 }
 
 impl Guard {
@@ -337,5 +399,127 @@ mod tests {
         assert_eq!(scan(&root, 10, 1000).unwrap().len(), 1);
         assert!(scan(&root, 1, 1000).is_err());
         assert!(scan(&root, 10, 1).is_err());
+    }
+
+    const DECK: &str = "<main class=\"deck\"></main>";
+
+    #[test]
+    fn does_not_search_dependency_and_cache_folders() {
+        let root = TempDir::new("scan");
+        for dir in [
+            "talk",
+            "node_modules/reveal/demo",
+            "web/node_modules/x",
+            "target/debug",
+            "target audience",
+            "tools/__pycache__",
+        ] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+            fs::write(root.join(dir).join("deck.html"), DECK).unwrap();
+        }
+        // As Cargo marks its build folder; a folder merely called `target` is searched.
+        fs::write(
+            root.join("target/CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55",
+        )
+        .unwrap();
+        // More files than the scan may read, where it must not look.
+        for n in 0..40 {
+            fs::write(root.join("node_modules/reveal").join(format!("{n}.js")), "").unwrap();
+        }
+        let found = scan(&root, 20, 1_000_000).unwrap();
+        let mut found: Vec<String> = found
+            .keys()
+            .map(|file| {
+                let rel = file.strip_prefix(root.path()).unwrap();
+                rel.to_string_lossy().replace('\\', "/")
+            })
+            .collect();
+        found.sort();
+        assert_eq!(found, ["talk/deck.html", "target audience/deck.html"]);
+
+        fs::remove_file(root.join("target/CACHEDIR.TAG")).unwrap();
+        assert_eq!(scan(&root, 20, 1_000_000).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn finds_decks_at_any_depth_wherever_their_mark_stands() {
+        let root = TempDir::new("scan");
+        fs::create_dir_all(root.join("a/b/c")).unwrap();
+        // The mark of a deck far into the file, behind styles longer than any sniff reads.
+        let late = format!("<html><style>{}</style>{DECK}</html>", "x".repeat(100_000));
+        fs::write(root.join("a/b/c/late.html"), &late).unwrap();
+        fs::write(root.join("a/top.html"), DECK).unwrap();
+        fs::write(root.join("a/b/page.html"), "<html>Page</html>").unwrap();
+        fs::write(root.join("a/notes.txt"), DECK).unwrap();
+        let found = scan(&root, 100, 1_000_000).unwrap();
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[&root.join("a/b/c/late.html")], late.as_bytes());
+        assert!(found.contains_key(&root.join("a/top.html")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn follows_links_inside_the_workspace_only_and_each_folder_once() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new("scan");
+        let root = temp.join("ws");
+        fs::create_dir_all(root.join("talk")).unwrap();
+        fs::create_dir_all(temp.join("outside")).unwrap();
+        fs::write(root.join("talk/deck.html"), DECK).unwrap();
+        fs::write(temp.join("outside/secret.html"), DECK).unwrap();
+        symlink(temp.join("outside"), root.join("out")).unwrap();
+        symlink(temp.join("outside/secret.html"), root.join("leak.html")).unwrap();
+        symlink(root.join("talk/deck.html"), root.join("alias.html")).unwrap();
+        symlink(temp.join("nowhere"), root.join("broken.html")).unwrap();
+        // A link back up: the folder it leads to has been searched already.
+        symlink(&root, root.join("talk/up")).unwrap();
+
+        let found = scan(&root, 100, 1_000_000).unwrap();
+        let mut names: Vec<&Path> = found
+            .keys()
+            .map(|file| file.strip_prefix(&root).unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            [Path::new("alias.html"), Path::new("talk/deck.html")]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_turn_is_guarded_off_its_async_task() {
+        let temp = TempDir::new("guard");
+        let root = temp.join("work");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("deck.html"), DECK).unwrap();
+        let session = Sessions::new(&temp.join("home")).start(&root).unwrap();
+        let guard = start(root.clone(), None, session, temp.join("home"))
+            .await
+            .unwrap();
+        fs::write(
+            root.join("deck.html"),
+            "<main class=\"deck\"><section class=\"slide\">A</section></main>",
+        )
+        .unwrap();
+        assert!(finish(guard, turn()).await.unwrap().is_empty());
+        assert!(
+            fs::read_to_string(root.join("deck.html"))
+                .unwrap()
+                .contains("slopslide:runtime-js"),
+            "the deck the turn changed is normalized when it ends"
+        );
+        assert!(
+            start(
+                temp.join("missing"),
+                None,
+                temp.join("s"),
+                temp.join("home")
+            )
+            .await
+            .is_err(),
+            "a workspace that cannot be scanned is not handed over"
+        );
     }
 }

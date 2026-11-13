@@ -76,9 +76,18 @@
    `data-delete-placeholder` in its slot (or takes over its resize placeholder) so the rest of
    the layout stays put.
    Every change is posted to the app as the slide's new markup:
-   { type: "slop:edit-commit", slide, markup, select, also }; `select` and `also` are the paths of
-   the selection's primary element and of the others, which the app selects again after the
-   reload with { type: "slop:edit-select", path, also }.
+   { type: "slop:edit-commit", slide, markup, select, also, group }; `select` and `also` are the
+   paths of the selection's primary element and of the others, which the app selects again after
+   the reload with { type: "slop:edit-select", path, also }. `group` is there only for a save of
+   arrow-key nudges, which save once they pause: "nudge:" and the paths of the elements nudged
+   ("nudge:0.1,2"), the same for every such save of a run of nudges, so the app can keep them as
+   one step to undo.
+
+   What follows the pointer is done once a frame, however many events a frame brings: placing
+   the handles, picking what is hovered, the readout, the reports of the selection and its
+   geometry, a figure's redrawing. What takes measuring the whole slide (what overflows, the
+   layers) waits until a drag, a marquee or the typing is over. Where the slide is on screen and
+   how far it is zoomed comes from the pasteboard (`scale()`, `origin()`), not from measuring it.
 
    A selected SVG drawing (an <svg> on the slide) shows an "Edit SVG" button at its top right
    (not a line or arrow drawn with the line tools, which has its own handles and toolbar controls),

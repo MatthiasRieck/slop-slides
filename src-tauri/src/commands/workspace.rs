@@ -116,7 +116,7 @@ pub fn close_presenter_view(app: AppHandle) {
     screens::close_presenter_view(&app);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn recent_workspaces() -> Result<Vec<workspace::RecentWorkspace>> {
     Ok(workspace::recent(&files::app_home()?))
 }
@@ -127,7 +127,7 @@ pub fn forget_workspace(path: String) -> Result<()> {
 }
 
 /// The decks opened before, newest first, for the start screen.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn recent_decks() -> Result<Vec<workspace::RecentDeck>> {
     Ok(workspace::recent_decks(&files::app_home()?))
 }
@@ -143,14 +143,16 @@ pub fn library_folder(app: AppHandle) -> Result<String> {
     Ok(files::library_root(&app)?.to_string_lossy().into_owned())
 }
 
-/// One folder of the open workspace (`""` for its root).
-#[tauri::command]
+/// One folder of the open workspace (`""` for its root). Off the main thread: the start of
+/// every HTML file in the folder is read to tell decks from other pages.
+#[tauri::command(async)]
 pub fn list_dir(window: Window, path: String) -> Result<Vec<workspace::Entry>> {
     workspace::list_dir(&workspace_root(&window)?, &path)
 }
 
-/// A file of the open workspace, with the viewer it opens in.
-#[tauri::command]
+/// A file of the open workspace, with the viewer it opens in. Off the main thread: the file is
+/// read whole to tell what it is.
+#[tauri::command(async)]
 pub fn open_file(window: Window, path: String) -> Result<workspace::OpenedFile> {
     workspace::open_file(&workspace_root(&window)?, &path)
 }

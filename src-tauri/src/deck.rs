@@ -21,13 +21,15 @@
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::assets::{bring_assets, mime_for};
 use crate::comments::{self, Comments};
+use crate::deck_cache::{self, Cached};
 use crate::error::{Error, Result};
-use crate::files::{atomic_write, unique_dir};
+use crate::files::{atomic_write_stamped, unique_dir};
 use crate::find;
 use crate::guard::{self, read_guard, refresh_guard};
 use crate::html;
@@ -35,6 +37,7 @@ use crate::lint;
 use crate::narration;
 use crate::review::{self, Review};
 use crate::size::{SizeInfo, SlideSize, SIZE_META};
+use crate::stamp::Stamp;
 use crate::templates;
 
 /// The file name of decks the app creates.
@@ -153,7 +156,138 @@ pub fn read_html(file: &Path) -> Result<String> {
 }
 
 pub(crate) fn write_html(file: &Path, html: &str) -> Result<()> {
-    atomic_write(file, html.as_bytes())
+    write_deck(file, html).map(drop)
+}
+
+/// Writes `html` over the deck and keeps it in the deck cache, so that what looks at the deck
+/// next neither reads nor scans the file again; returns it as kept there.
+fn write_deck(file: &Path, html: &str) -> Result<Arc<Cached>> {
+    let written = atomic_write_stamped(file, html.as_bytes())?;
+    let stamp = Stamp::from_metadata(&written)?;
+    Ok(deck_cache::shared().put(file, html.into(), stamp))
+}
+
+/// Everything the app reads out of a deck's source, worked out in two passes over it (the
+/// slides and sections, then what each slide holds) where each question used to scan the
+/// document for itself. The deck cache keeps it with the source (see [`crate::deck_cache`]).
+pub struct Parsed {
+    pub slides: Vec<html::SlideSpan>,
+    pub sections: Vec<html::SectionSpan>,
+    /// Each slide's hash and what the app shows of it, in the order of `slides`.
+    contents: Vec<(String, html::SlideContent)>,
+    title: Option<String>,
+    shell_hash: String,
+    review: Review,
+    comments: Comments,
+    metas: html::AppMetas,
+}
+
+#[cfg(test)]
+thread_local! {
+    static PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many decks this thread has parsed, for tests that pin how often an operation does.
+#[cfg(test)]
+pub(crate) fn parses() -> usize {
+    PARSES.get()
+}
+
+impl Parsed {
+    pub fn of(source: &str) -> Self {
+        #[cfg(test)]
+        PARSES.set(PARSES.get() + 1);
+        let (slides, sections) = html::find_spans(source);
+        let contents = slides
+            .iter()
+            .map(|span| {
+                let markup = &source[span.range.clone()];
+                (html::content_hash(markup), html::slide_content(markup))
+            })
+            .collect();
+        Self {
+            contents,
+            title: html::title(source),
+            shell_hash: html::shell_hash(source, &slides, &sections),
+            review: review::read(source),
+            comments: comments::read(source),
+            metas: html::AppMetas::read(source),
+            slides,
+            sections,
+        }
+    }
+
+    /// The slide `id`, with its hash.
+    fn slide(&self, id: &str) -> Option<(&html::SlideSpan, &str)> {
+        let index = self
+            .slides
+            .iter()
+            .position(|s| s.id.as_deref() == Some(id))?;
+        Some((&self.slides[index], &self.contents[index].0))
+    }
+
+    /// Whether slide `id` exists and is locked.
+    fn is_locked(&self, id: &str) -> bool {
+        self.slide(id)
+            .is_some_and(|(span, _)| span.locked.is_some())
+    }
+
+    /// The deck in `file`, whose source this was parsed from.
+    pub fn deck(&self, file: &Path) -> Deck {
+        let slides = self
+            .slides
+            .iter()
+            .zip(&self.contents)
+            .enumerate()
+            .map(|(index, (span, (hash, content)))| Slide {
+                // A slide the agent has not given an id yet is addressed by position until
+                // the turn ends and `normalize` assigns one.
+                id: span.id.clone().unwrap_or_else(|| format!("#{}", index + 1)),
+                hash: hash.clone(),
+                hidden: span.hidden.is_some(),
+                locked: span.locked.is_some(),
+                moved: content.moved,
+                narration: content.narration.clone(),
+                notes: content.notes.clone(),
+                time: span
+                    .time
+                    .as_ref()
+                    .and_then(|(_, value)| html::parse_time(value))
+                    .unwrap_or(0),
+                duration: span
+                    .duration
+                    .as_ref()
+                    .and_then(|(_, value)| html::parse_duration(value)),
+                narration_start: span
+                    .narration_start
+                    .as_ref()
+                    .and_then(|(_, value)| html::parse_narration_start(value)),
+            })
+            .collect();
+        let path = file.to_string_lossy().into_owned();
+        Deck {
+            id: path.clone(),
+            title: self.title.clone().unwrap_or_else(|| fallback_title(file)),
+            path,
+            shell_hash: self.shell_hash.clone(),
+            review: self.review.clone(),
+            comments: self.comments.clone(),
+            template: self.metas.template.clone(),
+            size: self.metas.slide_size().into(),
+            narration: narration::Settings::from_metas(&self.metas),
+            sections: self
+                .sections
+                .iter()
+                .enumerate()
+                .map(|(index, span)| Section {
+                    index,
+                    title: span.title.clone(),
+                    before: span.before,
+                })
+                .collect(),
+            slides,
+        }
+    }
 }
 
 /// Writes `updated` over the deck unless it is `source`, the text it has now, so the watcher
@@ -179,8 +313,8 @@ fn fallback_title(file: &Path) -> String {
 /// Keeps the deck consistent: unique slide ids and the current player runtime. Safe to call
 /// repeatedly; only writes when something changed.
 pub fn normalize(file: &Path) -> Result<()> {
-    let source = read_html(file)?;
-    let fixed = html::normalize_ids(&source).unwrap_or_else(|| source.clone());
+    let source = deck_cache::source_of(file)?;
+    let fixed = html::normalize_ids(&source).unwrap_or_else(|| source.to_string());
     let fixed = html::ensure_runtime(&fixed);
     let fixed = prune_review(&fixed).unwrap_or(fixed);
     write_if_changed(file, &source, &fixed)
@@ -232,77 +366,24 @@ pub fn open(file: &Path, session: Option<&Path>, normalize_first: bool) -> Resul
     load(file)
 }
 
+/// The deck as it is on disk now. The file is read and parsed again only when it changed
+/// since it was last looked at (see [`crate::deck_cache`]).
 pub fn load(file: &Path) -> Result<Deck> {
-    let source = read_html(file)?;
-    let spans = html::find_slides(&source);
-    let section_spans = html::find_sections(&source);
-    let slides = spans
-        .iter()
-        .enumerate()
-        .map(|(index, span)| {
-            let markup = &source[span.range.clone()];
-            Slide {
-                // A slide the agent has not given an id yet is addressed by position until
-                // the turn ends and `normalize` assigns one.
-                id: span.id.clone().unwrap_or_else(|| format!("#{}", index + 1)),
-                hash: html::content_hash(markup),
-                hidden: span.hidden.is_some(),
-                locked: span.locked.is_some(),
-                moved: html::has_moved(markup),
-                narration: html::narration(markup),
-                notes: html::notes(markup),
-                time: span
-                    .time
-                    .as_ref()
-                    .and_then(|(_, value)| html::parse_time(value))
-                    .unwrap_or(0),
-                duration: span
-                    .duration
-                    .as_ref()
-                    .and_then(|(_, value)| html::parse_duration(value)),
-                narration_start: span
-                    .narration_start
-                    .as_ref()
-                    .and_then(|(_, value)| html::parse_narration_start(value)),
-            }
-        })
-        .collect();
-    let path = file.to_string_lossy().into_owned();
-    Ok(Deck {
-        id: path.clone(),
-        title: html::title(&source).unwrap_or_else(|| fallback_title(file)),
-        path,
-        shell_hash: html::shell_hash(&source, &spans, &section_spans),
-        review: review::read(&source),
-        comments: comments::read(&source),
-        template: html::template(&source),
-        size: html::slide_size(&source).into(),
-        narration: narration::Settings::of(&source),
-        sections: section_spans
-            .iter()
-            .enumerate()
-            .map(|(index, span)| Section {
-                index,
-                title: span.title.clone(),
-                before: span.before,
-            })
-            .collect(),
-        slides,
-    })
+    Ok(deck_cache::get(file)?.parsed().deck(file))
 }
 
 type EditResult<T> = std::result::Result<T, String>;
 
-/// Writes the deck's source as `f` changes it; returns the source before and after, and what
-/// else `f` gave. `f` refuses the change with a message for the user.
+/// Writes the deck's source as `f` changes it; returns the deck as written, and what else `f`
+/// gave. `f` refuses the change with a message for the user. The file is read once at most
+/// and written once, and what was written is not read back.
 fn rewrite<T>(
     file: &Path,
-    f: impl FnOnce(&str) -> EditResult<(String, T)>,
-) -> Result<(String, String, T)> {
-    let previous = read_html(file)?;
-    let (updated, value) = f(&previous).map_err(Error::Message)?;
-    write_html(file, &updated)?;
-    Ok((previous, updated, value))
+    f: impl FnOnce(&Cached) -> EditResult<(String, T)>,
+) -> Result<(Arc<Cached>, T)> {
+    let current = deck_cache::get(file)?;
+    let (updated, value) = f(&current).map_err(Error::Message)?;
+    Ok((write_deck(file, &updated)?, value))
 }
 
 /// Writes the deck's source as `f` changes it; returns the deck as it is then.
@@ -312,14 +393,14 @@ fn edit(file: &Path, f: impl FnOnce(&str) -> EditResult<String>) -> Result<Deck>
 
 /// Like [`edit`], also returning the value `f` gives alongside the new source.
 fn edit_with<T>(file: &Path, f: impl FnOnce(&str) -> EditResult<(String, T)>) -> Result<(Deck, T)> {
-    let (_, _, value) = rewrite(file, f)?;
-    Ok((load(file)?, value))
+    let (written, value) = rewrite(file, |deck| f(deck.source()))?;
+    Ok((written.parsed().deck(file), value))
 }
 
 /// Stores `marks` (review marks or comments) in deck.html with `write`, dropping those of
 /// slides that are gone. Leaves the file alone when nothing changed, so the watcher stays quiet.
 fn save_marks<M>(file: &Path, marks: &M, write: fn(&str, &M) -> String) -> Result<()> {
-    let source = read_html(file)?;
+    let source = deck_cache::source_of(file)?;
     let updated = write(&source, marks);
     let updated = prune_review(&updated).unwrap_or(updated);
     write_if_changed(file, &source, &updated)
@@ -340,14 +421,12 @@ pub fn rename(file: &Path, title: &str) -> Result<Deck> {
     edit(file, |s| Ok(html::set_title(s, &title)))
 }
 
-/// What a change from the slide rail did, with the deck's source before and after, so it can be
-/// undone by saving `previous` back over `source` (see [`save_source`]).
+/// What a change from the slide rail did. The deck's history takes it back (see
+/// [`crate::history`]), so the source before and after it does not travel to the frontend.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RailEdit {
     pub deck: Deck,
-    pub previous: String,
-    pub source: String,
     /// Ids of the slides it added.
     pub created: Vec<String>,
 }
@@ -356,13 +435,8 @@ fn rail_edit(
     file: &Path,
     f: impl FnOnce(&str) -> EditResult<(String, Vec<String>)>,
 ) -> Result<RailEdit> {
-    let (previous, source, created) = rewrite(file, f)?;
-    Ok(RailEdit {
-        deck: load(file)?,
-        previous,
-        source,
-        created,
-    })
+    let (deck, created) = edit_with(file, f)?;
+    Ok(RailEdit { deck, created })
 }
 
 pub fn reorder(file: &Path, slides: Vec<String>) -> Result<RailEdit> {
@@ -440,13 +514,11 @@ pub fn paste_slides(
 /// Puts a copy of each of `slides` right after it, all in one write.
 pub fn duplicate_slides(file: &Path, slides: &[String]) -> Result<RailEdit> {
     rail_edit(file, |s| {
-        let mut out = s.to_string();
         let mut created = Vec::with_capacity(slides.len());
-        for slide in slides {
-            let (next, id) = html::duplicate(&out, slide)?;
-            out = next;
-            created.push(id);
-        }
+        let out = html::edit_slides(s, slides.iter().map(String::as_str), |_, slide| {
+            created.push(slide.duplicate()?);
+            Ok(())
+        })?;
         Ok((out, created))
     })
 }
@@ -459,10 +531,8 @@ pub fn set_slides_hidden(
     hidden: bool,
 ) -> Result<RailEdit> {
     let done = rail_edit(file, |s| {
-        let mut out = s.to_string();
-        for slide in slides {
-            out = html::set_hidden(&out, slide, hidden)?;
-        }
+        let ids = slides.iter().map(String::as_str);
+        let out = html::edit_slides(s, ids, |_, slide| slide.set_hidden(hidden))?;
         Ok((out, Vec::new()))
     })?;
     for slide in slides {
@@ -496,7 +566,7 @@ pub fn append_slide_narration(
 
 /// Whether the slide is locked.
 pub fn slide_locked(file: &Path, slide: &str) -> Result<bool> {
-    Ok(html::is_locked(&read_html(file)?, slide))
+    Ok(deck_cache::get(file)?.parsed().is_locked(slide))
 }
 
 /// Sets a slide's speaker notes (see [`html::set_notes`]); empty `text` removes them. A locked
@@ -521,12 +591,15 @@ pub fn set_slide_time(file: &Path, slide: &str, seconds: u32) -> Result<Deck> {
 /// every slide. Locked slides keep theirs.
 pub fn set_slide_timing(file: &Path, timing: &[SlideTiming]) -> Result<RailEdit> {
     rail_edit(file, |s| {
-        let mut out = s.to_string();
-        for t in timing {
-            ensure_unlocked(&out, &t.slide)?;
-            out = html::set_duration(&out, &t.slide, t.duration)?;
-            out = html::set_narration_start(&out, &t.slide, t.narration_start)?;
-        }
+        let ids = timing.iter().map(|t| t.slide.as_str());
+        let out = html::edit_slides(s, ids, |index, slide| {
+            let t = &timing[index];
+            if slide.is_locked() {
+                return Err(locked_message(&t.slide));
+            }
+            slide.set_duration(t.duration)?;
+            slide.set_narration_start(t.narration_start)
+        })?;
         Ok((out, Vec::new()))
     })
 }
@@ -583,16 +656,34 @@ pub fn set_slide_locked(
     slide: &str,
     locked: bool,
 ) -> Result<Deck> {
-    let deck = edit(file, |s| html::set_locked(s, slide, locked))?;
-    refresh_guard(file, session, slide)?;
+    set_slides_locked(file, session, &[slide.to_string()], locked)
+}
+
+/// Locks or unlocks `slides`, all in one write. Each slide's guard is refreshed as
+/// [`set_slide_locked`] does.
+pub fn set_slides_locked(
+    file: &Path,
+    session: Option<&Path>,
+    slides: &[String],
+    locked: bool,
+) -> Result<Deck> {
+    let deck = edit(file, |s| {
+        let ids = slides.iter().map(String::as_str);
+        html::edit_slides(s, ids, |_, slide| slide.set_locked(locked))
+    })?;
+    for slide in slides {
+        refresh_guard(file, session, slide)?;
+    }
     Ok(deck)
+}
+
+fn locked_message(slide: &str) -> String {
+    format!("The slide `{slide}` is locked; unlock it to change it.")
 }
 
 fn ensure_unlocked(source: &str, slide: &str) -> std::result::Result<(), String> {
     if html::is_locked(source, slide) {
-        return Err(format!(
-            "The slide `{slide}` is locked; unlock it to change it."
-        ));
+        return Err(locked_message(slide));
     }
     Ok(())
 }
@@ -611,27 +702,32 @@ pub fn delete_section(file: &Path, index: usize) -> Result<Deck> {
 
 /// Deletes `slides` along with their review marks and comments, all in one write; none if any is locked.
 pub fn delete_slides(file: &Path, slides: &[String]) -> Result<RailEdit> {
-    let source = read_html(file)?;
-    for slide in slides {
-        ensure_unlocked(&source, slide).map_err(Error::Message)?;
-    }
-    rail_edit(file, |s| {
-        let mut out = s.to_string();
-        for slide in slides {
-            out = html::delete(&out, slide)?;
+    let (written, ()) = rewrite(file, |deck| {
+        if let Some(locked) = slides.iter().find(|s| deck.parsed().is_locked(s)) {
+            return Err(locked_message(locked));
         }
-        Ok((prune_review(&out).unwrap_or(out), Vec::new()))
+        let ids = slides.iter().map(String::as_str);
+        let out = html::edit_slides(deck.source(), ids, |_, slide| slide.delete())?;
+        Ok((prune_review(&out).unwrap_or(out), ()))
+    })?;
+    Ok(RailEdit {
+        deck: written.parsed().deck(file),
+        created: Vec::new(),
     })
 }
 
 /// Writes `source` over the deck, as a change that can be undone. Locked `slides` refuse it, and
 /// review marks and comments of slides that went with it are dropped.
 pub fn restore(file: &Path, slide: Option<&str>, source: String) -> Result<RailEdit> {
-    if let Some(slide) = slide {
-        ensure_unlocked(&read_html(file)?, slide).map_err(Error::Message)?;
-    }
-    rail_edit(file, |_| {
-        Ok((prune_review(&source).unwrap_or(source), Vec::new()))
+    let (written, ()) = rewrite(file, |deck| {
+        if let Some(slide) = slide.filter(|slide| deck.parsed().is_locked(slide)) {
+            return Err(locked_message(slide));
+        }
+        Ok((prune_review(&source).unwrap_or(source), ()))
+    })?;
+    Ok(RailEdit {
+        deck: written.parsed().deck(file),
+        created: Vec::new(),
     })
 }
 
@@ -645,31 +741,41 @@ pub struct SlideSource {
 /// Slide `slide`'s markup and hash, read from the file: what an edit made outside the stage's
 /// preview (such as the SVG editor's) starts from.
 pub fn slide_source(file: &Path, slide: &str) -> Result<SlideSource> {
-    let source = read_html(file)?;
-    let markup = html::slide_markup(&source, slide).map_err(Error::Message)?;
+    let deck = deck_cache::get(file)?;
+    let (span, hash) = deck
+        .parsed()
+        .slide(slide)
+        .ok_or_else(|| Error::msg(format!("Slide not found: {slide}")))?;
     Ok(SlideSource {
-        markup: markup.to_string(),
-        hash: html::content_hash(markup),
+        markup: deck.source()[span.range.clone()].to_string(),
+        hash: hash.to_string(),
     })
 }
 
 /// Replaces one slide with markup edited on the stage. `base` is the slide's hash the edit
 /// started from; the save is refused when the slide has changed since. Returns the slide's
 /// previous markup, so the edit can be undone by saving it back.
+///
+/// The deck is read once (not at all when it is the one last looked at), written once, and
+/// the deck returned comes from the text just written.
 pub fn update_slide(file: &Path, slide: &str, markup: &str, base: &str) -> Result<(Deck, String)> {
-    let source = read_html(file)?;
-    let current = html::find_slides(&source)
-        .into_iter()
-        .find(|s| s.id.as_deref() == Some(slide))
-        .map(|s| html::content_hash(&source[s.range]))
-        .ok_or_else(|| Error::msg(format!("Slide not found: {slide}")))?;
-    ensure_unlocked(&source, slide).map_err(Error::Message)?;
-    if current != base {
-        return Err(Error::msg(
-            "The slide changed while you were editing it; your last change was not saved.",
-        ));
-    }
-    edit_with(file, |s| html::replace_slide(s, slide, markup))
+    let (written, previous) = rewrite(file, |deck| {
+        let (span, current) = deck
+            .parsed()
+            .slide(slide)
+            .ok_or_else(|| format!("Slide not found: {slide}"))?;
+        if span.locked.is_some() {
+            return Err(locked_message(slide));
+        }
+        if current != base {
+            return Err(
+                "The slide changed while you were editing it; your last change was not saved."
+                    .into(),
+            );
+        }
+        html::replace_slide_at(deck.source(), span, markup)
+    })?;
+    Ok((written.parsed().deck(file), previous))
 }
 
 /// Puts `slides` back as they are in `version`, an earlier version of the deck, all in one
@@ -696,8 +802,7 @@ pub fn restore_slides(file: &Path, version: &str, slides: &[String]) -> Result<D
     })
 }
 
-/// What [`replace_text`] did, with the deck's source before and after, so it can be undone by
-/// saving `previous` back over `source`.
+/// What [`replace_text`] did. The deck's history takes it back (see [`crate::history`]).
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplacedText {
@@ -708,14 +813,12 @@ pub struct ReplacedText {
     pub slides: Vec<String>,
     /// Locked slides with matches, left as they were.
     pub skipped: Vec<String>,
-    /// The deck's source before and after, to undo the replace by saving `previous` over `source`.
-    pub previous: String,
-    pub source: String,
 }
 
-/// Where `query` is found on the deck's slides (see [`find::find`]).
+/// Where `query` is found on the deck's slides (see [`find::find_in`]).
 pub fn find_text(file: &Path, query: &str, options: find::Options) -> Result<Vec<find::Match>> {
-    Ok(find::find(&read_html(file)?, query, options))
+    let deck = deck_cache::get(file)?;
+    Ok(find::find_in(deck.source(), deck.slides(), query, options))
 }
 
 /// Replaces `query` with `replacement` in the text of the deck's slides (or of `only`); locked
@@ -727,9 +830,9 @@ pub fn replace_text(
     options: find::Options,
     only: Option<&[String]>,
 ) -> Result<ReplacedText> {
-    let previous = read_html(file)?;
-    let replaced = find::replace(&previous, query, replacement, options, only);
-    write_replaced(file, previous, replaced)
+    let current = deck_cache::get(file)?;
+    let replaced = find::replace(current.source(), query, replacement, options, only);
+    write_replaced(file, current, replaced)
 }
 
 /// Replaces one match of `query` with `replacement`: the `nth` on slide `slide` (see
@@ -742,23 +845,27 @@ pub fn replace_match(
     slide: &str,
     nth: usize,
 ) -> Result<ReplacedText> {
-    let previous = read_html(file)?;
-    let replaced = find::replace_nth(&previous, query, replacement, options, slide, nth);
-    write_replaced(file, previous, replaced)
+    let current = deck_cache::get(file)?;
+    let replaced = find::replace_nth(current.source(), query, replacement, options, slide, nth);
+    write_replaced(file, current, replaced)
 }
 
-/// Writes what a replace made of the deck (`previous` before it), if it changed anything.
-fn write_replaced(file: &Path, previous: String, replaced: find::Replaced) -> Result<ReplacedText> {
-    if replaced.count > 0 {
-        write_html(file, &replaced.html)?;
-    }
+/// Writes what a replace made of the deck (`current` before it), if it changed anything.
+fn write_replaced(
+    file: &Path,
+    current: Arc<Cached>,
+    replaced: find::Replaced,
+) -> Result<ReplacedText> {
+    let now = if replaced.count > 0 {
+        write_deck(file, &replaced.html)?
+    } else {
+        current
+    };
     Ok(ReplacedText {
-        deck: load(file)?,
+        deck: now.parsed().deck(file),
         count: replaced.count,
         slides: replaced.slides,
         skipped: replaced.skipped,
-        previous,
-        source: replaced.html,
     })
 }
 
@@ -771,7 +878,7 @@ pub fn save_source(
     base: Option<&str>,
     normalize_after: bool,
 ) -> Result<Deck> {
-    let current = read_html(file)?;
+    let current = deck_cache::source_of(file)?;
     if let Some(base) = base {
         if !same_text(&current, base) {
             return Err(Error::msg(
@@ -814,20 +921,29 @@ pub fn export(file: &Path, dest: &Path) -> Result<()> {
 
 /// Lints the deck file; asset references are checked against the files next to it, and during
 /// an agent turn, locked slides against how they were when it started.
+///
+/// The deck comes from the deck cache: one that was just loaded or saved is not read or
+/// scanned for its slides again.
 pub fn lint(file: &Path, session: Option<&Path>) -> Result<Vec<lint::Issue>> {
-    let source = read_html(file)?;
+    let cached = deck_cache::get(file)?;
+    let (source, parsed) = (cached.source(), cached.parsed());
     let asset_exists = |rel: &str| {
         let rel = percent_encoding::percent_decode_str(rel).decode_utf8_lossy();
         resolve_in_deck(folder(file), &rel).is_ok_and(|path| path.is_file())
     };
-    let mut issues = lint::lint(&source, asset_exists, &read_guard(file, session));
-    if let Ok(deck) = load(file) {
-        let slides = narration::timeline::layout(file, &deck, &narration::timeline::DEFAULTS);
-        let overlaps = narration::timeline::overlaps(&slides);
-        if !overlaps.is_empty() {
-            issues.extend(lint::narration_overlaps(&source, &overlaps));
-            issues.sort_by_key(|i| (i.line, i.severity));
-        }
+    let mut issues = lint::lint_parsed(
+        source,
+        &parsed.slides,
+        &parsed.sections,
+        asset_exists,
+        &read_guard(file, session),
+    );
+    let deck = parsed.deck(file);
+    let slides = narration::timeline::layout(file, &deck, &narration::timeline::DEFAULTS);
+    let overlaps = narration::timeline::overlaps(&slides);
+    if !overlaps.is_empty() {
+        issues.extend(lint::narration_overlaps(source, &parsed.slides, &overlaps));
+        issues.sort_by_key(|i| (i.line, i.severity));
     }
     Ok(issues)
 }
@@ -884,8 +1000,6 @@ mod tests {
         let pasted = paste_slides(&deck.file(), Some("a".into()), None, &copied).unwrap();
         assert_eq!(pasted.created, ["x", "a-2"]);
         assert_eq!(slide_ids(&pasted.deck), ["a", "x", "a-2", "b", "c"]);
-        // One change to take back: the source before it is the deck as it was.
-        assert_eq!(pasted.previous, THREE);
         // Without a slide to go after, they go to the end, still in their order.
         let ended = paste_slides(&deck.file(), None, None, &copied).unwrap();
         assert_eq!(ended.created, ["x-2", "a-3"]);
@@ -1006,9 +1120,8 @@ mod tests {
             (done.count, done.slides.clone()),
             (1, vec!["a".to_string()])
         );
-        assert_eq!(done.previous, EDITED);
-        assert_eq!(deck.html(), done.source);
-        assert!(deck.html().contains(">Alpha</section>"));
+        let replaced = deck.html();
+        assert!(replaced.contains(">Alpha</section>"));
 
         // Nothing found: the file is left alone.
         let none = replace_text(&deck.file(), "zzz", "x", options, None).unwrap();
@@ -1016,17 +1129,15 @@ mod tests {
 
         // One match: only that one, written the same way.
         let one = replace_match(&deck.file(), "alpha", "Beta", options, "a", 0).unwrap();
-        assert_eq!(
-            (one.count, one.previous.as_str()),
-            (1, done.source.as_str())
-        );
-        assert!(deck.html().contains(">Beta</section>"));
+        assert_eq!(one.count, 1);
+        let again = deck.html();
+        assert!(again.contains(">Beta</section>"));
         let past = replace_match(&deck.file(), "beta", "x", options, "a", 1).unwrap();
-        assert_eq!((past.count, deck.html()), (0, one.source.clone()));
-        save_source(&deck.file(), &one.previous, Some(&one.source), false).unwrap();
+        assert_eq!((past.count, deck.html()), (0, again.clone()));
+        save_source(&deck.file(), &replaced, Some(&again), false).unwrap();
 
         // Undo: the previous source saved back over this one.
-        save_source(&deck.file(), &done.previous, Some(&done.source), false).unwrap();
+        save_source(&deck.file(), EDITED, Some(&replaced), false).unwrap();
         assert_eq!(deck.html(), EDITED);
     }
 
@@ -1098,7 +1209,6 @@ mod tests {
             ],
         )
         .unwrap();
-        assert_eq!(edit.previous, EDITED);
         assert_eq!(edit.deck.slides[0].duration, Some(4.5));
         assert_eq!(edit.deck.slides[1].narration_start, Some(-1.25));
 
@@ -1772,29 +1882,23 @@ mod tests {
     }
 
     #[test]
-    fn a_rail_edit_is_undone_by_saving_its_previous_source_back() {
+    fn a_rail_edit_is_undone_by_saving_the_source_before_it_back() {
         let deck = TempDeck::new(THREE);
         save_review(&deck.file(), &marks(&["a", "b"])).unwrap();
         let before = deck.html();
-        let deleted = delete_slides(&deck.file(), &ids(&["b"])).unwrap();
-        assert_eq!(deleted.previous, before);
-        assert_eq!(deleted.source, deck.html());
+        delete_slides(&deck.file(), &ids(&["b"])).unwrap();
+        let after = deck.html();
 
-        let restored = save_source(
-            &deck.file(),
-            &deleted.previous,
-            Some(&deleted.source),
-            false,
-        )
-        .unwrap();
+        let restored = save_source(&deck.file(), &before, Some(&after), false).unwrap();
         assert_eq!(slide_ids(&restored), ["a", "b", "c"]);
         assert_eq!(restored.review, marks(&["a", "b"]));
         assert_eq!(deck.html(), before);
 
-        let moved = reorder(&deck.file(), ids(&["c", "b", "a"])).unwrap();
+        reorder(&deck.file(), ids(&["c", "b", "a"])).unwrap();
+        let moved = deck.html();
         set_slide_notes(&deck.file(), "a", "Changed since").unwrap();
         assert!(
-            save_source(&deck.file(), &moved.previous, Some(&moved.source), false).is_err(),
+            save_source(&deck.file(), &before, Some(&moved), false).is_err(),
             "an undo refuses to overwrite what came after the edit"
         );
     }
@@ -2162,5 +2266,197 @@ mod tests {
         assert_eq!(second, "quote-2");
         assert_eq!(slide_ids(&at_end).last(), Some(&"quote-2"));
         assert!(add_template_slide(&deck.file(), None, source, "nope").is_err());
+    }
+
+    /// The slide's hash, as the frontend has it from the deck it was last given.
+    fn hash_of(deck: &Deck, slide: &str) -> String {
+        let slide = deck.slides.iter().find(|s| s.id == slide).unwrap();
+        slide.hash.clone()
+    }
+
+    #[test]
+    fn a_save_and_what_the_frontend_asks_after_it_parse_the_deck_twice_at_most() {
+        let deck = TempDeck::new(&html::fixtures::big_deck(6));
+        let file = deck.file();
+        let before = parses();
+        let opened = load(&file).unwrap();
+        assert_eq!(parses() - before, 1);
+
+        // One save of one slide, then what the frontend asks for after it.
+        let before = (parses(), html::scans());
+        let markup = "<section class=\"slide\" id=\"slide-2\"><h1>Edited</h1><aside class=\"narration\">Said.</aside></section>";
+        let (saved, _) =
+            update_slide(&file, "slide-2", markup, &hash_of(&opened, "slide-2")).unwrap();
+        let loaded = load(&file).unwrap();
+        let issues = lint(&file, None).unwrap();
+        let audio = narration::statuses(&file, &load(&file).unwrap());
+        let found = find_text(&file, "edited", find::Options::default()).unwrap();
+        let source = slide_source(&file, "slide-2").unwrap();
+        assert!(
+            parses() - before.0 <= 2,
+            "parsed {} times",
+            parses() - before.0
+        );
+        // The deck as written is parsed once; the edited markup is scanned to check it is
+        // the slide. The deck as it was came from the cache.
+        assert_eq!(parses() - before.0, 1);
+        assert_eq!(html::scans() - before.1, 2);
+
+        assert_eq!(saved.slides[2].narration, "Said.");
+        assert_eq!(hash_of(&loaded, "slide-2"), hash_of(&saved, "slide-2"));
+        assert_ne!(hash_of(&saved, "slide-2"), hash_of(&opened, "slide-2"));
+        assert_eq!(saved.shell_hash, opened.shell_hash);
+        assert_eq!((audio.len(), found.len()), (6, 1));
+        assert_eq!(
+            (source.markup.as_str(), source.hash),
+            (markup, hash_of(&saved, "slide-2"))
+        );
+        assert!(
+            issues.iter().all(|i| i.rule != "unclosed-tag"),
+            "{issues:?}"
+        );
+        assert!(deck.html().contains("<h1>Edited</h1>"));
+    }
+
+    #[test]
+    fn a_change_made_outside_the_app_is_loaded_and_edited_not_the_deck_remembered() {
+        let deck = TempDeck::new(THREE);
+        let file = deck.file();
+        assert_eq!(slide_ids(&load(&file).unwrap()), ["a", "b", "c"]);
+        // Of the same length, right after: nothing but its text tells it from the last.
+        let outside = THREE.replace(">B<", ">X<");
+        fs::write(&file, &outside).unwrap();
+        let loaded = load(&file).unwrap();
+        assert_ne!(
+            hash_of(&loaded, "b"),
+            html::content_hash("<section class=\"slide\" id=\"b\">B</section>")
+        );
+        // An edit starts from it: the outside change stays, and a stale base is refused.
+        let renamed = rename(&file, "Renamed").unwrap();
+        assert_eq!(renamed.title, "Renamed");
+        assert!(deck.html().contains(">X<"));
+        fs::write(&file, THREE).unwrap();
+        let stale = hash_of(&loaded, "b");
+        let markup = "<section class=\"slide\" id=\"b\">Mine</section>";
+        assert!(update_slide(&file, "b", markup, &stale).is_err());
+        assert_eq!(deck.html(), THREE);
+    }
+
+    #[test]
+    fn the_deck_parsed_once_is_the_deck_each_question_by_itself_gives() {
+        let source = html::fixtures::big_deck(4)
+            .replace("<title>Big deck</title>", "<title>Big deck</title>\n  <meta name=\"slopslide-template\" content=\"swiss\">\n  <meta name=\"slopslide-narration-language\" content=\"de\">")
+            .replace("id=\"slide-1\"", "id=\"slide-1\" data-hidden data-locked data-duration=\"4.5\" data-narration-start=\"-1\"")
+            .replace("<h1 class=\"title\">Slide 2", "<h1 class=\"title\" data-moved>Slide 2");
+        let deck = TempDeck::new(&source);
+        let loaded = load(&deck.file()).unwrap();
+        let spans = html::find_slides(&source);
+        let sections = html::find_sections(&source);
+        assert_eq!(loaded.slides.len(), 4);
+        for (slide, span) in loaded.slides.iter().zip(&spans) {
+            let markup = &source[span.range.clone()];
+            assert_eq!(slide.hash, html::content_hash(markup));
+            assert_eq!(slide.moved, html::has_moved(markup));
+            assert_eq!(slide.narration, html::narration(markup));
+            assert_eq!(slide.notes, html::notes(markup));
+        }
+        let one = &loaded.slides[1];
+        assert!(one.hidden && one.locked && !one.moved);
+        assert_eq!(
+            (one.duration, one.narration_start, one.time),
+            (Some(4.5), Some(-1.0), 31)
+        );
+        assert!(loaded.slides[2].moved);
+        assert_eq!(loaded.title, "Big deck");
+        assert_eq!(loaded.template.as_deref(), Some("swiss"));
+        assert_eq!(loaded.narration, narration::Settings::of(&source));
+        assert_eq!(loaded.narration.language, "de");
+        assert_eq!(
+            loaded.shell_hash,
+            html::shell_hash(&source, &spans, &sections)
+        );
+        assert_eq!(loaded.sections.len(), sections.len());
+    }
+
+    #[test]
+    fn locks_and_unlocks_several_slides_in_one_write() {
+        let deck = TempDeck::new(THREE);
+        let before = html::scans();
+        let locked = set_slides_locked(&deck.file(), None, &ids(&["a", "c"]), true).unwrap();
+        assert_eq!(locked_flags(&locked), [true, false, true]);
+        // One scan to lock them all, one of the deck as written.
+        assert_eq!(html::scans() - before, 2);
+        // Nothing is written when one of them is not there.
+        let html = deck.html();
+        assert!(set_slides_locked(&deck.file(), None, &ids(&["b", "zz"]), true).is_err());
+        assert_eq!(deck.html(), html);
+        let unlocked = set_slides_locked(&deck.file(), None, &ids(&["a", "c"]), false).unwrap();
+        assert_eq!(locked_flags(&unlocked), [false, false, false]);
+        assert_eq!(deck.html(), THREE);
+    }
+
+    #[test]
+    fn resetting_the_timing_of_every_slide_scans_the_deck_once() {
+        let deck = TempDeck::new(&html::fixtures::big_deck(20));
+        let all: Vec<SlideTiming> = load(&deck.file())
+            .unwrap()
+            .slides
+            .iter()
+            .map(|s| timing(&s.id, Some(6.0), Some(0.5)))
+            .collect();
+        let before = html::scans();
+        let set = set_slide_timing(&deck.file(), &all).unwrap();
+        // The scan the changes are worked out against, and the one of the deck as written.
+        assert_eq!(html::scans() - before, 2);
+        assert!(set.deck.slides.iter().all(|s| s.duration == Some(6.0)));
+        let none: Vec<SlideTiming> = all.iter().map(|t| timing(&t.slide, None, None)).collect();
+        let reset = set_slide_timing(&deck.file(), &none).unwrap();
+        assert!(reset
+            .deck
+            .slides
+            .iter()
+            .all(|s| s.duration.is_none() && s.narration_start.is_none()));
+        assert_eq!(deck.html(), html::fixtures::big_deck(20));
+    }
+
+    /// How long one save of one slide of a deck of 60 heavy slides takes, with what the
+    /// frontend asks for after it. Run it with
+    /// `cargo test saves_a_slide_of_a_big_deck -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a timing, not a check"]
+    fn saves_a_slide_of_a_big_deck_fast() {
+        let deck = TempDeck::new(&html::fixtures::big_deck(60));
+        let file = deck.file();
+        let mut current = load(&file).unwrap();
+        let runs = 20;
+        let mut spent = [std::time::Duration::ZERO; 4];
+        let mut time = |step: usize, run: &mut dyn FnMut()| {
+            let started = std::time::Instant::now();
+            run();
+            spent[step] += started.elapsed();
+        };
+        for n in 0..runs {
+            let markup =
+                format!("<section class=\"slide\" id=\"slide-7\"><h1>Edit {n}</h1></section>");
+            let base = hash_of(&current, "slide-7");
+            time(0, &mut || {
+                current = update_slide(&file, "slide-7", &markup, &base).unwrap().0
+            });
+            time(1, &mut || drop(load(&file).unwrap()));
+            time(2, &mut || drop(lint(&file, None).unwrap()));
+            time(3, &mut || {
+                narration::statuses(&file, &load(&file).unwrap());
+            });
+        }
+        println!(
+            "{} KB deck, one save of one slide",
+            deck.html().len() / 1024
+        );
+        for (step, spent) in ["update_slide", "load", "lint", "narration audio"]
+            .iter()
+            .zip(spent)
+        {
+            println!("{step}: {:?}", spent / runs);
+        }
     }
 }

@@ -413,6 +413,24 @@ describe("Home", () => {
     expect(screen.queryByTestId("first-run")).toBeNull();
   });
 
+  it("shows the lists as last read at once when it comes back, and reads them again", async () => {
+    const { unmount } = render(<Home />);
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    unmount();
+    // Meanwhile a folder was opened: it is on the list the backend has now.
+    recent = [{ path: "/Users/me/new", name: "new", openedMs: NOW }, ...recent];
+    invoke.mockClear();
+    render(<Home />);
+    // Before the backend has answered: what was listed before.
+    expect(rows()).toHaveLength(2);
+    expect(rows()[0]!.textContent).toContain("talks");
+    await waitFor(() => expect(rows()).toHaveLength(3));
+    expect(rows()[0]!.textContent).toContain("new");
+    // Both lists are asked for together, once each.
+    const asked = invoke.mock.calls.map(([command]) => command).filter((c) => String(c).startsWith("recent_"));
+    expect(asked.sort()).toEqual(["recent_decks", "recent_workspaces"]);
+  });
+
   describe("dropping on the start screen", () => {
     const over = (type: "enter" | "over" | "leave") => act(() => dragDrop!({ payload: { type, paths: [] } }));
 

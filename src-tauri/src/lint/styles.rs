@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use std::ops::Range;
 
-use crate::html::{find_ci, parse_tag, MOVED_ATTR};
+use crate::html::{parse_tag, MOVED_ATTR};
 
 use super::css::{
     animates_reveal, css_id_references, easing_vars, steep_tilts, transform_keyframes,
@@ -17,11 +17,11 @@ fn style_blocks(l: &Linter) -> Vec<Range<usize>> {
     let html = l.html;
     let mut blocks = Vec::new();
     let mut from = 0;
-    while let Some(open) = find_ci(html, from, "<style") {
+    while let Some(open) = l.marks.styles.next_open(from) {
         let Some(start) = html[open..].find('>').map(|i| open + i + 1) else {
             break;
         };
-        let end = find_ci(html, start, "</style").unwrap_or(html.len());
+        let end = l.marks.styles.next_close(start).unwrap_or(html.len());
         from = end;
         if in_markup(l, open) {
             blocks.push(start..end);
@@ -35,13 +35,13 @@ pub(super) fn check_slide_id_styles(l: &mut Linter) {
     let ids: HashSet<_> = l.slides.iter().filter_map(|s| s.id.as_deref()).collect();
     let mut references = Vec::new();
     let mut from = 0;
-    while let Some(open) = find_ci(l.html, from, "<style") {
+    while let Some(open) = l.marks.styles.next_open(from) {
         let Some(tag) = parse_tag(l.html, open) else {
             break;
         };
-        let end = find_ci(l.html, tag.end, "</style").unwrap_or(l.html.len());
+        let end = l.marks.styles.next_close(tag.end).unwrap_or(l.html.len());
         from = end;
-        if tag.name != "style" || !in_markup(l, open) {
+        if !tag.is("style") || !in_markup(l, open) {
             continue;
         }
         let mut input = cssparser::ParserInput::new(&l.html[tag.end..end]);

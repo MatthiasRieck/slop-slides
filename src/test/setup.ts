@@ -44,6 +44,11 @@ async function setUpDom() {
     dispatchEvent: () => false,
   })) as typeof window.matchMedia;
 
+  // No layout, so nothing scrolls: everything is in view unless a test places it (see ./intersection.ts).
+  const { installIntersectionObserver, resetPlaces } = await import("./intersection");
+  installIntersectionObserver();
+  afterEach(resetPlaces);
+
   globalThis.ResizeObserver ??= class {
     observe() {}
     unobserve() {}

@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { formatKeys } from "../../lib/keys";
 import { hasOpenLayer } from "../../lib/layers";
+import { slideNumber as slideNumberOf } from "../../lib/slideNumbers";
 import { cn } from "../../lib/utils";
 import { useApp } from "../../store";
 import { lastSentText } from "../../store/messages";
@@ -13,19 +14,17 @@ import { ComposerChips } from "./ComposerChips";
 import { ContextMeter } from "./ContextMeter";
 import { appendDraft } from "./draft";
 import { ImageFan, ImageGrid } from "./ImageAttachments";
-import { InputResizeHandle, MIN_INPUT_HEIGHT } from "./InputResizeHandle";
+import { InputResizeHandle } from "./InputResizeHandle";
+import { fitInput, showCaret } from "./inputLayout";
 import { QueuedMessages } from "./QueuedMessages";
 import { useAttachments } from "./useAttachments";
+import { useComposerDraft } from "./useComposerDraft";
 import { useDictation } from "./useDictation";
 
 /** The key that steers the agent with the composer's message. */
 const STEER_KEY = formatKeys("mod+enter");
 /** What the send button says it does, with the keys of the message input. */
 export const SEND_TITLE = `Send (${formatKeys("enter")}) · New line (${formatKeys("shift+enter")})`;
-/** How tall the input grows by itself as the draft gets longer, in pixels. */
-const AUTO_MAX_HEIGHT = 240;
-/** How much of the window's height the input may be dragged to. */
-const MANUAL_MAX_SHARE = 0.6;
 
 /**
  * Where the user writes (or dictates) to the agent, with what goes along with the message: the
@@ -33,12 +32,16 @@ const MANUAL_MAX_SHARE = 0.6;
  * with the modifier it steers the turn. A message sent while an attachment is still being saved
  * waits for it. Escape in the empty input stops the agent's turn, and the up arrow brings back
  * the last message sent.
+ *
+ * The draft is its own (see `useComposerDraft`), so that a key pressed renders the composer and
+ * nothing else of the chat. Of the deck, which changes with every save, it takes only what it
+ * shows: the number of the selected slide.
  */
-export function Composer(props: { draft: string; setDraft: (text: string) => void }) {
-  const { draft, setDraft } = props;
-  const deck = useApp((s) => s.deck);
-  const workspace = useApp((s) => s.workspace);
+export function Composer() {
+  const [draft, setDraft] = useComposerDraft();
+  const workspacePath = useApp((s) => s.workspace?.path);
   const selected = useApp((s) => s.selected);
+  const slideNumber = useApp((s) => slideNumberOf(s.deck, s.selected));
   const running = useApp((s) => s.running);
   const [includeSlide, setIncludeSlide] = useState(true);
   const attachments = useAttachments();
@@ -46,11 +49,9 @@ export function Composer(props: { draft: string; setDraft: (text: string) => voi
   const [gridOpen, setGridOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [inputHeight, setInputHeight] = useState<number | null>(null);
-  const maxInputHeight = Math.max(MIN_INPUT_HEIGHT, Math.round(window.innerHeight * MANUAL_MAX_SHARE));
   /** A message sent while attachments were being saved: it goes out once they are, if none failed. */
   const [held, setHeld] = useState<{ steer: boolean; failures: number } | null>(null);
 
-  const slideNumber = selected && deck ? deck.slides.findIndex((s) => s.id === selected) + 1 : 0;
   // Marks go out once while on show (see `send`); they stay on the slide as a review.
   const unsentSketch = useApp((s) => {
     const marks = selected ? s.sketches[selected] : undefined;
@@ -79,37 +80,14 @@ export function Composer(props: { draft: string; setDraft: (text: string) => voi
   const voiceInput = useRef<VoiceInputHandle>(null);
   const shownDraft = dictation.shownDraft;
 
-  useLayoutEffect(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    if (inputHeight !== null) {
-      el.style.height = `${inputHeight}px`;
-      return;
-    }
-    // An empty composer stays at its smallest; measuring the placeholder while the panel
-    // is still opening (and narrow) would otherwise make it start out tall.
-    if (!shownDraft) {
-      el.style.height = `${MIN_INPUT_HEIGHT}px`;
-      return;
-    }
-    el.style.height = "auto";
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, MIN_INPUT_HEIGHT), AUTO_MAX_HEIGHT)}px`;
-  }, [shownDraft, inputHeight]);
-
-  // The textarea doesn't have focus while dictating, so it doesn't follow the words coming in:
-  // keep the end of the dictated text in view, measured as the height of the text up to it.
+  // The input is as tall as its text, or as the user made it. It doesn't have the focus while
+  // dictating, so it doesn't follow the words coming in: the end of what was said is kept in view.
   // biome-ignore lint/correctness/useExhaustiveDependencies: follows the shown text
   useLayoutEffect(() => {
     const el = textareaRef.current;
-    const caret = dictation.caret;
-    if (!el || caret === null) return;
-    const value = el.value;
-    el.value = value.slice(0, caret);
-    const bottom = el.scrollHeight;
-    el.value = value;
-    if (bottom > el.scrollTop + el.clientHeight || bottom < el.scrollTop) {
-      el.scrollTop = Math.max(0, bottom - el.clientHeight);
-    }
+    if (!el) return;
+    fitInput(el, shownDraft, inputHeight);
+    if (dictation.caret !== null) showCaret(el, dictation.caret);
   }, [shownDraft, inputHeight]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: refocus when the draft is sent or cleared
@@ -186,11 +164,11 @@ export function Composer(props: { draft: string; setDraft: (text: string) => voi
     <div className="mx-auto w-full max-w-3xl shrink-0 px-3 pb-3">
       <QueuedMessages onEdit={editQueued} />
       <div className="relative">
-        {workspace &&
+        {workspacePath &&
           images.length > 0 &&
           (gridOpen ? (
             <ImageGrid
-              workspacePath={workspace.path}
+              workspacePath={workspacePath}
               images={images}
               onRemove={(path) => {
                 attachments.remove(path);
@@ -200,7 +178,7 @@ export function Composer(props: { draft: string; setDraft: (text: string) => voi
             />
           ) : (
             <ImageFan
-              workspacePath={workspace.path}
+              workspacePath={workspacePath}
               images={images}
               onOpen={() => setGridOpen(true)}
               onRemove={attachments.remove}
@@ -215,7 +193,7 @@ export function Composer(props: { draft: string; setDraft: (text: string) => voi
             if (e.target === e.currentTarget) textareaRef.current?.focus();
           }}
           className={cn(
-            "relative z-10 flex flex-col rounded-2xl border bg-card/95 shadow-composer backdrop-blur-xl transition-colors focus-within:border-ring/50",
+            "relative z-10 flex flex-col rounded-2xl border bg-card shadow-composer transition-colors focus-within:border-ring/50",
             attachments.dragging && "border-primary ring-2 ring-primary/30",
           )}
         >
@@ -253,7 +231,6 @@ export function Composer(props: { draft: string; setDraft: (text: string) => voi
           <InputResizeHandle
             textarea={textareaRef}
             height={inputHeight}
-            max={maxInputHeight}
             onResize={setInputHeight}
             className="order-first"
           />

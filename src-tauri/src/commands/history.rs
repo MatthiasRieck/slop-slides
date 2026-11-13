@@ -12,7 +12,7 @@ use crate::history::{self, Change, Source};
 
 /// What undo and redo would do in deck `id`. A change made outside the app since is noticed
 /// first, unless the agent is working: its unfinished edits would become an entry.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn deck_history(agent: State<AgentManager>, id: String) -> Result<history::Status> {
     let file = deck::deck_file(&id)?;
     history::status(&files::app_home()?, &file, !agent.works_on(&file))
@@ -45,18 +45,18 @@ fn step_history(agent: &AgentManager, id: &str, back: bool) -> Result<HistorySte
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn undo_deck(agent: State<AgentManager>, id: String) -> Result<HistoryStep> {
     step_history(&agent, &id, true)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn redo_deck(agent: State<AgentManager>, id: String) -> Result<HistoryStep> {
     step_history(&agent, &id, false)
 }
 
 /// Puts `slides` back as they were at version `since` of deck `id`'s history, as one change.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn restore_slides(id: String, since: String, slides: Vec<String>) -> Result<Deck> {
     let version = history::version(&files::app_home()?, &deck::deck_file(&id)?, &since)?;
     changing(&id, Change::new(Source::Edit, "Discard edits"), |file| {

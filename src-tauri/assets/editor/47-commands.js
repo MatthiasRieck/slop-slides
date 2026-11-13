@@ -15,8 +15,7 @@
     selected = primary;
     extras = others;
     batching = false;
-    placeHandles();
-    report();
+    restyled();
     commit();
   }
 
@@ -26,7 +25,7 @@
       styleText(changes);
       return;
     }
-    if (nudgeTimer) commit();
+    saveNudges();
     applyToSelection(changes);
   }
 
@@ -43,7 +42,7 @@
   function flipSelection(axis) {
     if (axis !== "x" && axis !== "y") return;
     finishEditing();
-    if (nudgeTimer) commit();
+    saveNudges();
     var targets = leavesOf(movable()).filter(flippable);
     if (!targets.length) return;
     withEach(targets, function (el) {
@@ -93,7 +92,7 @@
     };
     if (!part(taken) || !part(taken.shared) || !part(taken.paint) || !part(taken.text)) return;
     finishEditing();
-    if (nudgeTimer) commit();
+    saveNudges();
     var targets = leavesOf(movable());
     if (!targets.length) return;
     withEach(targets, function (el) {
@@ -148,7 +147,7 @@
       report();
       return;
     }
-    if (nudgeTimer) commit();
+    saveNudges();
     var targets = leavesOf(movable()).filter(function (el) {
       return vectorsOf(el).length === 0 && !isImage(el);
     });
@@ -244,7 +243,7 @@
     var bracket = keyOfPair(event, "[{", "]}", "BracketLeft", "BracketRight");
     if (bracket) {
       if (editing) return false;
-      if (nudgeTimer) commit();
+      saveNudges();
       var to = shift ? (bracket > 0 ? "front" : "back") : bracket > 0 ? "forward" : "backward";
       forEachSelected(function () {
         restack(to, false);

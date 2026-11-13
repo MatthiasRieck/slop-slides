@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 
 import { type AgentEventEnvelope, api, type WorkspaceChanged } from "../lib/api";
+import { wroteAsset } from "../lib/ownAssets";
 import { basename, dirname } from "../lib/utils";
 import { applyAgentEvent } from "./chat";
 import { showErrorIn } from "./errors";
@@ -11,16 +12,24 @@ import type { AppStore } from "./types";
 export async function initEventBridge(app: AppStore) {
   // Listing Codex models starts its app server; don't hold up the rest of the bridge.
   void app.getState().refreshProviders();
-  await listen<AgentEventEnvelope>("agent-event", ({ payload }) => {
-    if (payload.chat === app.getState().chatKey) applyAgentEvent(app, payload.event);
-  });
-  await listen<WorkspaceChanged>("workspace-changed", ({ payload }) => {
-    if (payload.root === app.getState().workspace?.path) applyWorkspaceChanged(app, payload.paths);
-  });
-  // A folder opened with the app from Finder may be waiting for this window: one opened before
-  // the window was up, or one sent to it later.
-  await listen("folder-pending", () => void openPendingFolder(app));
-  await openPendingFolder(app);
+  try {
+    // Registered together: the window shows nothing until they are up and the folder is known.
+    await Promise.all([
+      listen<AgentEventEnvelope>("agent-event", ({ payload }) => {
+        if (payload.chat === app.getState().chatKey) applyAgentEvent(app, payload.event);
+      }),
+      listen<WorkspaceChanged>("workspace-changed", ({ payload }) => {
+        if (payload.root === app.getState().workspace?.path) applyWorkspaceChanged(app, payload.paths);
+      }),
+      // A folder opened with the app from Finder may be waiting for this window: one opened before
+      // the window was up, or one sent to it later.
+      listen("folder-pending", () => void openPendingFolder(app)),
+    ]);
+    await openPendingFolder(app);
+  } finally {
+    // Whatever came of it, the window now shows what it has: that folder, or the start screen.
+    app.setState({ booted: true });
+  }
 }
 
 /** Opens the folder from Finder waiting for this window, if there is one. */
@@ -55,7 +64,10 @@ let reloadTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** `paths` are relative to the deck's folder; `file` is the deck file's name. */
 function applyDeckChanged(app: AppStore, paths: string[], file: string) {
-  if (paths.some((p) => p.startsWith("assets/"))) {
+  const deckId = app.getState().deck?.id;
+  // An asset changed or went: the previews showing it are stale. One the app just wrote itself is
+  // new, and a slide shows it only once its markup names it, which loads that slide's preview.
+  if (deckId && paths.some((p) => p.startsWith("assets/") && !wroteAsset(deckId, p))) {
     app.setState((s) => ({ assetsRev: s.assetsRev + 1 }));
   }
   if (!paths.includes(file)) return;

@@ -286,6 +286,30 @@ describe("previewing a restyle", () => {
     expect(e.commits()[0]!.markup).not.toContain("border-radius");
   });
 
+  it("reports the selection once per frame while it previews, however many elements are selected", async () => {
+    const e = editor();
+    e.pick("#a", "#b", "#pic");
+    const reports = () => e.messages<{ selection: { opacity: number } }>("slop:edit-selection");
+    const before = reports().length;
+    for (const opacity of [0.8, 0.7, 0.6]) {
+      e.fromParent({ type: "slop:edit-style", style: { opacity }, preview: true });
+    }
+    // It shows on every element with every tick; the toolbar hears of it with the frame.
+    expect(e.$("#pic").style.opacity).toBe("0.6");
+    expect(reports()).toHaveLength(before);
+    await e.frame();
+    expect(reports()).toHaveLength(before + 1);
+    expect(reports().at(-1)!.selection.opacity).toBe(0.6);
+    // Applied for good, it is reported at once, and once for all three.
+    e.fromParent({ type: "slop:edit-style", style: { opacity: 0.5 }, preview: true });
+    e.fromParent({ type: "slop:edit-style", style: { opacity: 0.4 } });
+    expect(reports()).toHaveLength(before + 2);
+    expect(reports().at(-1)!.selection.opacity).toBe(0.4);
+    await e.frame();
+    expect(reports()).toHaveLength(before + 2);
+    expect(e.commits()).toHaveLength(1);
+  });
+
   it("keeps a preview the app never finished, saving it with the next thing done on the slide", () => {
     const e = editor();
     e.pick("#a");

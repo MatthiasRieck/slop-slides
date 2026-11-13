@@ -12,14 +12,20 @@ listen.mockImplementation(async (name: string, handler: (event: { payload: unkno
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setFullscreen }) }));
 const playNarration = vi.fn();
 vi.mock("../lib/narrationAudio", () => ({ playNarration: (...args: unknown[]) => playNarration(...args) }));
+// Counted, to tell when the show's bar renders: its buttons are these.
+vi.mock("./Button", async (original) => {
+  const actual = await original<typeof import("./Button")>();
+  return { ...actual, ToolButton: vi.fn(actual.ToolButton) };
+});
 
-import { LASER_SIZE, TRAIL_FADE_MS, TRAIL_HOLD_MS } from "../lib/ink";
+import { LASER_SIZE, TRAIL_FADE_MS, TRAIL_GLOW, TRAIL_HOLD_MS } from "../lib/ink";
 import { saveVideoOptions } from "../lib/video";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { lastError } from "../store/errors";
 import { fakeCanvas2D } from "../test/fakeCanvas";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { ToolButton } from "./Button";
 import { Presenter } from "./Presenter";
 import { fitWidth } from "./PresenterPanel";
 import { PresenterWindow } from "./PresenterWindow";
@@ -82,11 +88,57 @@ describe("Presenter", () => {
     expect(frame().getAttribute("src")).toBe("/__deck/.file/decks/talk/deck.html?v=shell-1&show#%232");
   });
 
-  it("does not restart when the editor selection follows the show", () => {
-    render(<Presenter />);
-    fromFrame({ type: "slop:slide", id: "intro" });
-    expect(useApp.getState().selected).toBe("intro");
-    expect(frame().getAttribute("src")).toContain("#outro");
+  it("leaves the editor's selection alone while it runs, and lands the editor on the slide it ended on", () => {
+    const select = vi.fn(useApp.getState().select);
+    const real = useApp.getState().select;
+    useApp.setState({ select });
+    try {
+      const { unmount } = render(<Presenter />);
+      fromFrame({ type: "slop:slide", id: "intro", index: 0 });
+      fromFrame({ type: "slop:slide", id: "#2", index: 1 });
+      // The show knows its slide; the editor under it is not told, and loads and scrolls nothing.
+      expect(screen.getByTestId("show-position").textContent).toBe("2 / 3");
+      expect(useApp.getState().selected).toBe("outro");
+      expect(useApp.getState().revealRev).toBe(0);
+      expect(select).not.toHaveBeenCalled();
+      expect(frame().getAttribute("src")).toContain("#outro");
+      unmount();
+      expect(select.mock.calls).toEqual([["#2"]]);
+      expect(useApp.getState().selected).toBe("#2");
+    } finally {
+      useApp.setState({ select: real });
+    }
+  });
+
+  it("selects nothing when it ends on the slide it started from, or before the player said one", () => {
+    const first = render(<Presenter />);
+    first.unmount();
+    const second = render(<Presenter />);
+    fromFrame({ type: "slop:slide", id: "intro", index: 0 });
+    fromFrame({ type: "slop:slide", id: "outro", index: 2 });
+    second.unmount();
+    expect(useApp.getState().selected).toBe("outro");
+    expect(useApp.getState().revealRev).toBe(0);
+  });
+
+  it("renders its bar neither for a zoom or pan of the slide nor as the time passes", () => {
+    vi.useFakeTimers();
+    try {
+      render(<Presenter />);
+      fireEvent.keyDown(document.body, { key: "n" });
+      // The bar goes once the pointer rests; after that nothing of the show changes by itself.
+      act(() => void vi.advanceTimersByTime(3000));
+      vi.mocked(ToolButton).mockClear();
+      for (let k = 1; k <= 30; k++) fromFrame({ type: "slop:zoom", x: -k, y: -k, k: 1 + k / 10 });
+      expect(screen.getByTestId("annotation-zoom").style.width).toBe("400%");
+      expect(screen.getByTitle(/fit to the screen/).textContent).toBe("400%");
+      act(() => void vi.advanceTimersByTime(30_000));
+      // The presenter view's clocks ran on meanwhile.
+      expect(screen.getByRole("timer").textContent).toBe("0:33");
+      expect(ToolButton).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("goes full screen for the show and back afterwards", () => {
@@ -986,8 +1038,11 @@ describe("Presenter tools", () => {
     expect(screen.queryByTestId("laser")).toBeNull();
     fireEvent.pointerMove(layer(), { clientX: 120, clientY: 80 });
     const dot = screen.getByTestId("laser");
-    expect(dot.style.left).toBe("120px");
-    expect(dot.style.top).toBe("80px");
+    // Moved, not laid out again: the layer does not render as the pointer goes.
+    expect(dot.style.transform).toBe("translate(120px, 80px)");
+    fireEvent.pointerMove(layer(), { clientX: 300, clientY: 40 });
+    expect(screen.getByTestId("laser")).toBe(dot);
+    expect(dot.style.transform).toBe("translate(300px, 40px)");
     fireEvent.pointerDown(layer(), { button: 0, clientX: 120, clientY: 80 });
     fireEvent.pointerUp(layer());
     expect(strokes()).toHaveLength(0);
@@ -1079,7 +1134,7 @@ describe("Presenter tools", () => {
     expect(new Set(glow)).toEqual(new Set(colors(dot.style.boxShadow)));
   });
 
-  it("a zoomed-in laser trail only gets a canvas the size of the screen", () => {
+  it("a zoomed-in laser trail only gets a canvas around the trail, inside the screen", () => {
     paintedTrail();
     const zoomed = { left: -1000, top: -500, width: window.innerWidth * 4, height: window.innerHeight * 4 };
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
@@ -1092,10 +1147,22 @@ describe("Presenter tools", () => {
     render(<Presenter />);
     dragLaser();
     const canvas = screen.getByTestId("laser-trail") as HTMLCanvasElement;
-    expect([canvas.style.left, canvas.style.top]).toEqual(["1000px", "500px"]);
-    expect([canvas.style.width, canvas.style.height]).toEqual([`${window.innerWidth}px`, `${window.innerHeight}px`]);
+    const box = ["left", "top", "width", "height"].map((side) =>
+      Number.parseFloat(canvas.style.getPropertyValue(side)),
+    );
+    const [left, top, width, height] = box as [number, number, number, number];
+    // The trail runs from (100, 100) to (300, 150) on screen, which is (1100, 600) to (1300, 650)
+    // on the layer: the canvas reaches around it by the glow, and no further than the screen.
+    expect(left).toBeGreaterThanOrEqual(1000);
+    expect(top).toBeGreaterThanOrEqual(500);
+    expect(left).toBeLessThanOrEqual(1100 - TRAIL_GLOW);
+    expect(top).toBeLessThanOrEqual(600 - TRAIL_GLOW);
+    expect(left + width).toBeGreaterThanOrEqual(1300 + TRAIL_GLOW);
+    expect(top + height).toBeGreaterThanOrEqual(650 + TRAIL_GLOW);
+    expect(width).toBeLessThan(window.innerWidth);
+    expect(height).toBeLessThan(window.innerHeight);
     const scale = window.devicePixelRatio || 1;
-    expect([canvas.width, canvas.height]).toEqual([window.innerWidth * scale, window.innerHeight * scale]);
+    expect([canvas.width, canvas.height]).toEqual([width * scale, height * scale]);
   });
 
   it("putting the laser away clears its trail", () => {
@@ -1944,6 +2011,27 @@ describe("PresenterWindow", () => {
     expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "End show" }));
     expect(emit).toHaveBeenLastCalledWith("presenter:exit");
+  });
+
+  it("keeps the next slide's picture as the show moves on to it, loading only the one after", async () => {
+    const { deck, send } = await opened();
+    const [, next] = screen.getAllByTestId("fitted-slide");
+    expect(next?.closest("div.flex-col")?.textContent).toContain("Next");
+    send({ slide: deck.slides[1]?.id });
+    const [now, after] = screen.getAllByTestId("fitted-slide");
+    // The very element that was Next is Now: its page was not loaded again.
+    expect(now).toBe(next);
+    expect(now?.closest("div.flex-col")?.textContent).toContain("Now");
+    expect(now?.querySelector("button")).toBeNull();
+    expect(after).not.toBe(next);
+    expect(after?.querySelector("button")?.getAttribute("aria-label")).toBe("Go to the next slide");
+    // Going back, the slide on screen becomes the next one again, and stays as it is too.
+    send({ slide: deck.slides[0]?.id });
+    expect(screen.getAllByTestId("fitted-slide")[1]).toBe(now);
+    // On the last slide there is no next one.
+    send({ slide: deck.slides.at(-1)?.id });
+    expect(screen.getAllByTestId("fitted-slide")).toHaveLength(1);
+    expect(screen.getByText("The end of the show.")).toBeTruthy();
   });
 
   it("moves the show on when the next slide's picture is pressed", async () => {

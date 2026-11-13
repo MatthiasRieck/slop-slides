@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemplateSummary } from "../lib/api";
 import { useApp } from "../store";
 import { DECK_HTML, deckFor } from "../test/fixtures";
+import { placeElements } from "../test/intersection";
 import { invoke, revealItemInDir as reveal } from "../test/tauri";
 import { SlideRail } from "./SlideRail";
 import { LayoutPicker, StylePicker } from "./Templates";
@@ -75,6 +76,30 @@ describe("LayoutPicker", () => {
     render(<LayoutPicker mode="add" onDone={() => {}} />);
     const picture = screen.getByRole("button", { name: "Title layout" }).firstElementChild!;
     expect(picture.classList).toContain("shadow-thumbnail");
+  });
+
+  it("loads a layout's preview only when the list shows it", () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private report: ResizeObserverCallback) {}
+        observe(target: Element) {
+          this.report([{ target, contentRect: { width: 160 } } as ResizeObserverEntry], this as never);
+        }
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    useApp.setState({ deck: { ...DECK, template: "swiss" } });
+    const preview = (name: string) => screen.getByRole("button", { name }).querySelector("iframe");
+    placeElements((element) => (element.closest("button")?.getAttribute("aria-label") === "Quote layout" ? 6 : 0));
+    render(<LayoutPicker mode="add" onDone={() => {}} />);
+    expect(preview("Title layout")).toBeTruthy();
+    expect(preview("Quote layout")).toBeNull();
+    for (const frame of document.querySelectorAll("iframe")) fireEvent.load(frame);
+    act(() => placeElements(() => 0));
+    expect(preview("Quote layout")).toBeTruthy();
+    vi.unstubAllGlobals();
   });
 
   it("stays on the deck's template without a style switcher when changing", async () => {

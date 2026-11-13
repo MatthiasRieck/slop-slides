@@ -6,7 +6,7 @@
     if (event.button !== 0 || !kind || !selected || isLocked(selected)) return;
     event.preventDefault();
     event.stopPropagation();
-    if (nudgeTimer) commit();
+    saveNudges();
     var dir = (event.target.getAttribute("data-dir") || "0 0").split(" ").map(Number);
     drag = {
       mode: kind,
@@ -22,11 +22,9 @@
       zoom: zoom(),
       dir: { x: dir[0], y: dir[1] },
       resize: sizeMode === "resize",
-      vectors: sizeMode === "resize" && selected.getAttribute(ADDED) === "drawing" ? vectorShapes(selected) : null,
-      // A group's resize spreads what it holds.
-      members: sizeMode === "resize" && isGroup(selected) ? memberBoxes(selected) : null,
       moved: false,
     };
+    if (drag.resize) holdContents(drag);
     if (event.target.setPointerCapture) {
       try {
         event.target.setPointerCapture(event.pointerId);
@@ -44,7 +42,7 @@
     else if (kind === "adjust") {
       selected.removeAttribute(ADJUST_ATTR);
       paintFigure(selected, figurePaint(selected));
-      placeHandles();
+      scheduleHandles();
     } else scaleTo(selected, 1, 1);
     commit();
   });
@@ -118,7 +116,7 @@
     var cy = fromCenter || !d.y ? 0 : (d.y * h * (sy - s0.y)) / 2;
     var shift = turn(cx / drag.spread.x, cy / drag.spread.y, drag.angle);
     if (drag.resize) {
-      resizeTo(sx, sy, shift);
+      resizeTo(drag, sx, sy, shift);
       return;
     }
     scaleTo(drag.el, sx, sy);
@@ -162,62 +160,99 @@
   }
 
   /** Reserves the original footprint before taking an element out of normal flow. */
-  function reserveLayout(el) {
+  function reserveLayout(el, k) {
     var computed = getComputedStyle(el);
     if (/^(absolute|fixed)$/.test(computed.position) || placeholderOf(el)) return;
     var size = sizeOf(el);
     var center = centerOf(el);
     el.parentElement.insertBefore(slotFor(el, PLACEHOLDER), el.nextSibling);
-    var contentBox = computed.boxSizing !== "border-box";
-    var px = function (name) { return parseFloat(computed[name]) || 0; };
-    var width = size.w - (contentBox ? px("paddingLeft") + px("paddingRight") + px("borderLeftWidth") + px("borderRightWidth") : 0);
-    var height = size.h - (contentBox ? px("paddingTop") + px("paddingBottom") + px("borderTopWidth") + px("borderBottomWidth") : 0);
+    var pad = boxPadding(computed);
     el.style.position = "absolute";
     el.style.margin = "0px";
     el.style.left = el.style.top = "0px";
     el.style.right = el.style.bottom = "auto";
-    el.style.width = Math.max(0, width) + "px";
-    el.style.height = Math.max(0, height) + "px";
+    el.style.width = Math.max(0, size.w - pad.x) + "px";
+    el.style.height = Math.max(0, size.h - pad.y) + "px";
     // Locate it in its existing containing block, preserving its rotation, scale and translate.
     var placed = centerOf(el);
-    el.style.left = (center.x - placed.x) / drag.zoom + "px";
-    el.style.top = (center.y - placed.y) / drag.zoom + "px";
+    el.style.left = (center.x - placed.x) / k + "px";
+    el.style.top = (center.y - placed.y) / k + "px";
   }
 
-  /** Changes the border box without scaling its contents or discarding an existing scale. */
-  function resizeTo(sx, sy, shift) {
-    var el = drag.el;
-    reserveLayout(el);
-    var w = drag.size.w;
-    var h = drag.size.h;
-    var nw = Math.max(1, Math.round(w * sx / drag.scale.x * 1000) / 1000);
-    var nh = Math.max(1, Math.round(h * sy / drag.scale.y * 1000) / 1000);
-    var computed = getComputedStyle(el);
+  /** How much of a box with this computed style its `width` and `height` leave out: its padding and borders, unless they count in. */
+  function boxPadding(computed) {
+    if (computed.boxSizing === "border-box") return { x: 0, y: 0 };
     var px = function (name) { return parseFloat(computed[name]) || 0; };
-    var contentBox = computed.boxSizing !== "border-box";
-    var paddingX = contentBox ? px("paddingLeft") + px("paddingRight") + px("borderLeftWidth") + px("borderRightWidth") : 0;
-    var paddingY = contentBox ? px("paddingTop") + px("paddingBottom") + px("borderTopWidth") + px("borderBottomWidth") : 0;
-    el.style.width = Math.max(0, nw - paddingX) + "px";
-    el.style.minWidth = "0px";
-    if (el.getAttribute("data-autofit") === "grow") {
-      // A box that grows with its text keeps the height as its least.
-      el.style.height = "auto";
-      el.style.minHeight = Math.max(0, nh - paddingY) + "px";
-    } else {
-      el.style.height = Math.max(0, nh - paddingY) + "px";
-      el.style.minHeight = "0px";
+    return {
+      x: px("paddingLeft") + px("paddingRight") + px("borderLeftWidth") + px("borderRightWidth"),
+      y: px("paddingTop") + px("paddingBottom") + px("borderTopWidth") + px("borderBottomWidth"),
+    };
+  }
+
+  /**
+   * Adds to `state` (what a resize starts from: its `el` and `size`) what the element holds that
+   * a resize spreads with its box: a drawing's shapes, a group's members.
+   */
+  function holdContents(state) {
+    var el = state.el;
+    state.vectors = el.getAttribute(ADDED) === "drawing" ? vectorShapes(el, state.size) : null;
+    state.members = isGroup(el) ? memberBoxes(el) : null;
+  }
+
+  /**
+   * Changes the border box of `state.el` without scaling its contents or discarding an existing
+   * scale. `state` is what the resize started from: the element's `size`, `scale`, `offset` and
+   * the `zoom`, with its contents (see holdContents). The first step takes the element out of
+   * the layout, reads what every step needs and writes what none of them changes (in between
+   * the rest, so the styles keep their order); after it a step only writes the size.
+   */
+  function resizeTo(state, sx, sy, shift) {
+    var el = state.el;
+    var first = !state.sizing;
+    if (first) {
+      reserveLayout(el, state.zoom);
+      var computed = getComputedStyle(el);
+      state.sizing = {
+        // A box that grows with its text keeps the height as its least.
+        grows: el.getAttribute("data-autofit") === "grow",
+        contentBox: computed.boxSizing !== "border-box",
+        pad: boxPadding(computed),
+        inline: computed.display === "inline",
+        nowrap: computed.whiteSpace === "nowrap",
+        figure: null,
+      };
     }
-    el.style.maxWidth = "none";
-    el.style.maxHeight = "none";
-    el.style.flexShrink = "0";
-    el.style.flexBasis = "auto";
-    if (computed.display === "inline") el.style.display = "inline-block";
-    if (computed.whiteSpace === "nowrap") el.style.whiteSpace = "normal";
-    if (drag.vectors && w && h) spreadVectors(drag.vectors, nw / w, nh / h);
-    if (drag.members && w && h) spreadMembers(drag.members, nw / w, nh / h);
-    fitFigure(el);
+    var sizing = state.sizing;
+    // A figure's padding goes by its size: where it is not part of the box, each step counts the latest.
+    if (sizing.figure && sizing.contentBox) sizing.pad = boxPadding(getComputedStyle(el));
+    var w = state.size.w;
+    var h = state.size.h;
+    var nw = Math.max(1, Math.round(w * sx / state.scale.x * 1000) / 1000);
+    var nh = Math.max(1, Math.round(h * sy / state.scale.y * 1000) / 1000);
+    var height = Math.max(0, nh - sizing.pad.y) + "px";
+    el.style.width = Math.max(0, nw - sizing.pad.x) + "px";
+    if (first) el.style.minWidth = "0px";
+    if (sizing.grows) {
+      if (first) el.style.height = "auto";
+      el.style.minHeight = height;
+    } else {
+      el.style.height = height;
+      if (first) el.style.minHeight = "0px";
+    }
+    if (first) {
+      el.style.maxWidth = "none";
+      el.style.maxHeight = "none";
+      el.style.flexShrink = "0";
+      el.style.flexBasis = "auto";
+      if (sizing.inline) el.style.display = "inline-block";
+      if (sizing.nowrap) el.style.whiteSpace = "normal";
+    }
+    if (state.vectors && w && h) spreadVectors(state.vectors, nw / w, nh / h);
+    if (state.members && w && h) spreadMembers(state.members, nw / w, nh / h);
+    if (first) sizing.figure = resizedPaint(el);
+    if (sizing.figure) scheduleFigure(el, sizing.figure);
     // Layout grows from the top left; translate compensates to keep the opposite handle fixed.
-    moveTo(el, drag.offset.x + shift.x - (nw - w) / 2, drag.offset.y + shift.y - (nh - h) / 2);
+    moveTo(el, state.offset.x + shift.x - (nw - w) / 2, state.offset.y + shift.y - (nh - h) / 2);
   }
 
   /** The element's viewBox as [x, y, w, h], or null without a usable one. */
@@ -226,12 +261,12 @@
     return box.length === 4 && box.every(isFinite) && box[2] > 0 && box[3] > 0 ? box : null;
   }
 
-  /** A drawing's viewBox and its shapes' geometry, as they were when the stretch started. */
-  function vectorShapes(el) {
+  /** A drawing's viewBox (or without one, its `size`) and its shapes' geometry, as they were when the stretch started. */
+  function vectorShapes(el, size) {
     var vectors = vectorsOf(el);
     return {
       el: el,
-      viewBox: viewBoxOf(el),
+      viewBox: viewBoxOf(el) || [0, 0, size.w, size.h],
       // The line's half width pads the box around the points (see finishDrawing).
       pad: vectors.length ? Math.ceil((parseFloat(vectors[0].getAttribute("stroke-width")) || 0) / 2) : 0,
       items: vectors.map(function (vector) {
@@ -246,7 +281,7 @@
 
   /** Spreads the drawing's points by `kx` × `ky` around its padded box; the lines keep their width. */
   function spreadVectors(shapes, kx, ky) {
-    var box = shapes.viewBox || [0, 0, drag.size.w, drag.size.h];
+    var box = shapes.viewBox;
     var pad = shapes.pad;
     var vw = box[2] * kx;
     var vh = box[3] * ky;
@@ -336,24 +371,36 @@
     return out;
   }
 
-  function drawOverflow(hits) {
-    wires.textContent = "";
-    hits.forEach(function (hit) {
-      var left = Math.max(hit.rect.left, 0);
-      var top = Math.max(hit.rect.top, 0);
-      var right = Math.min(hit.rect.right, window.innerWidth);
-      var bottom = Math.min(hit.rect.bottom, window.innerHeight);
-      var wire = document.createElement("div");
+  /** Draws a wire around each element that overflows, where its box (kept in slide pixels) shows in the window now. */
+  function drawOverflow() {
+    var at = camera();
+    var nodes = fitChildren(wires, overflowBoxes.length, function () {
+      var wire = newDiv();
       wire.setAttribute("data-wire", "");
-      wire.style.cssText = "left:" + left + "px;top:" + top + "px;width:" + Math.max(0, right - left) + "px;height:" + Math.max(0, bottom - top) + "px";
-      wires.appendChild(wire);
+      return wire;
+    });
+    overflowBoxes.forEach(function (box, i) {
+      var left = Math.max(at.left + box.left * at.k, 0);
+      var top = Math.max(at.top + box.top * at.k, 0);
+      var right = Math.min(at.left + box.right * at.k, window.innerWidth);
+      var bottom = Math.min(at.top + box.bottom * at.k, window.innerHeight);
+      nodes[i].style.cssText = "left:" + left + "px;top:" + top + "px;width:" + Math.max(0, right - left) + "px;height:" + Math.max(0, bottom - top) + "px";
     });
   }
 
   function refreshOverflow() {
     overflowFrame = 0;
     var hits = overflow.find(slide);
-    drawOverflow(hits);
+    var at = camera();
+    overflowBoxes = hits.map(function (hit) {
+      return {
+        left: (hit.rect.left - at.left) / at.k,
+        top: (hit.rect.top - at.top) / at.k,
+        right: (hit.rect.right - at.left) / at.k,
+        bottom: (hit.rect.bottom - at.top) / at.k,
+      };
+    });
+    drawOverflow();
     var items = hits.map(overflow.describe);
     var key = JSON.stringify(items);
     if (key === reportedOverflow) return;
@@ -361,15 +408,39 @@
     window.parent.postMessage({ type: "slop:edit-overflow", slide: slide.id, items: items }, "*");
   }
 
+  /** Whether a drag, adding an element with a tool, or a marquee is under way: the pointer is down and has moved. */
+  function gesturing() {
+    return !!(drag && drag.moved) || !!(create && create.moved) || !!(marquee && marquee.moved);
+  }
+
   /**
    * Re-checks what overflows and the slide's layers, which means measuring every element on the
-   * slide: next frame, or while typing, once the typing pauses, so keystrokes do not wait for it.
+   * slide: next frame, or while typing, once the typing pauses, so keystrokes do not wait for it,
+   * or during a drag (or adding an element, or a marquee) once it ends, so pointer moves do not.
    */
   function scheduleSlideChecks() {
     clearTimeout(slideChecksTimer);
     slideChecksTimer = null;
-    if (editing) slideChecksTimer = setTimeout(checkSlide, TYPING_PAUSE_MS);
+    if (gesturing()) slideChecksDue = true;
+    else if (editing) slideChecksTimer = setTimeout(typingPaused, TYPING_PAUSE_MS);
     else checkSlide();
+  }
+
+  /** The drag (or what else held the slide's checks back) ended: they run now if anything asked for them. */
+  function resumeSlideChecks() {
+    if (!slideChecksDue || gesturing()) return;
+    slideChecksDue = false;
+    scheduleSlideChecks();
+  }
+
+  /** The typing paused: a box that shrinks its text to fit is fitted to what was typed, and the slide checked. */
+  function typingPaused() {
+    if (refitDue && editing) {
+      refitDue = false;
+      refit(editing);
+      layHandles();
+    }
+    checkSlide();
   }
 
   function checkSlide() {

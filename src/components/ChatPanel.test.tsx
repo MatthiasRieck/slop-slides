@@ -379,6 +379,37 @@ describe("ChatPanel: composing", () => {
     expect(input.style.height).toBe("64px");
   });
 
+  it("follows the window as it is resized: the tallest is its share of the height now", () => {
+    const height = window.innerHeight;
+    render(<ChatPanel />);
+    const input = textarea();
+    vi.spyOn(input, "getBoundingClientRect").mockReturnValue({ height: 80 } as DOMRect);
+    try {
+      window.innerHeight = 500;
+      act(() => void window.dispatchEvent(new Event("resize")));
+      expect(resizeHandle().getAttribute("aria-valuemax")).toBe("300");
+      dragInput(400, -1000);
+      expect(input.style.height).toBe("300px");
+      window.innerHeight = 1000;
+      act(() => void window.dispatchEvent(new Event("resize")));
+      fireEvent.keyDown(resizeHandle(), { key: "End" });
+      expect(input.style.height).toBe("600px");
+    } finally {
+      window.innerHeight = height;
+    }
+  });
+
+  it("is an opaque card: nothing behind it has to be blurred for each frame", () => {
+    useApp.setState({ queue: [{ id: "q1", text: "Later", options: { includeSlide: false, attachments: [] } }] });
+    render(<ChatPanel />);
+    const card = textarea().parentElement!;
+    const queued = screen.getByRole("region", { name: "Queued messages" });
+    for (const surface of [card, queued]) {
+      expect(surface.className).toMatch(/\bbg-card\b(?!\/)/);
+      expect(surface.className).not.toContain("backdrop-blur");
+    }
+  });
+
   it("fits the text again on a double click of the grip, or Escape on it", () => {
     render(<ChatPanel />);
     const input = textarea();
@@ -874,6 +905,41 @@ describe("ChatPanel: voice input", () => {
     // "abcdefghij klmno" ends 160px down, so its last line sits at the bottom of the box.
     expect(el.value).toBe("abcdefghij klmno");
     expect(el.scrollTop).toBe(110);
+  });
+
+  it("shows what is said once per frame at most, the latest of it", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "voice_status") return { modelReady: true, modelBytes: 1, downloading: false, recording: false };
+      return [];
+    });
+    render(<ChatPanel />);
+    fireEvent.click(screen.getByRole("button", { name: "Dictate a message" }));
+    await screen.findByRole("button", { name: /Stop dictating/ });
+    const onPartial = await waitFor(partial);
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
+    try {
+      const shown: string[] = [];
+      const input = textarea();
+      const own = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!;
+      Object.defineProperty(input, "value", {
+        configurable: true,
+        get: () => own.get!.call(input),
+        set: (text: string) => {
+          shown.push(text);
+          own.set!.call(input, text);
+        },
+      });
+      act(() => {
+        for (const said of ["Make", "Make the", "Make the title", "Make the title big"]) onPartial({ payload: said });
+      });
+      // The first shows at once; of the rest, said within the same frame, only the last, in the next.
+      expect(shown).toEqual(["Make"]);
+      act(() => frames.splice(0).forEach((frame) => void frame(0)));
+      expect(shown).toEqual(["Make", "Make the title big"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("restores the draft when dictation is discarded", async () => {
@@ -1520,6 +1586,15 @@ describe("ChatPanel: context meter", () => {
     expect(screen.getByText("90k tokens")).toBeTruthy();
     expect(screen.getByText("70% of 128k context used")).toBeTruthy();
     expect(compactButton()).toBeNull();
+  });
+
+  it("fills its bar by moving it, which takes no layout", () => {
+    useApp.setState({ selection: copilot });
+    showMessages(used(57_600, 128_000, "copilot"));
+    const bar = meter()!.firstElementChild as HTMLElement;
+    expect(bar.style.transform).toBe("translateX(-55%)");
+    expect(bar.style.width).toBe("");
+    expect(bar.className).toContain("transition-transform");
   });
 
   it("offers /compact above 70%", () => {
@@ -2296,6 +2371,25 @@ describe("ChatPanel: attachments still being saved", () => {
     expect(textarea().value).toBe("");
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.queryByLabelText(/attached image/)).toBeNull();
+  });
+
+  it("attaches what was saved while the chat was out of view, and sends the message held for it", async () => {
+    const save = slowSave();
+    const { rerender } = render(<ChatPanel active />);
+    type("What is this?");
+    await act(async () => paste([shot()]));
+    await save.asked();
+    fireEvent.keyDown(textarea(), { key: "Enter" });
+    rerender(<ChatPanel active={false} />);
+    await save.finish("assets/pasted-image.png");
+    expect(send).not.toHaveBeenCalled();
+
+    rerender(<ChatPanel active />);
+    expect(send).toHaveBeenCalledWith("What is this?", {
+      includeSlide: true,
+      attachments: ["assets/pasted-image.png"],
+    });
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("keeps the message back when its attachment could not be saved", async () => {

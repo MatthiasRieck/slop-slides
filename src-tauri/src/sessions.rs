@@ -10,11 +10,14 @@
 //! it goes on with ([`Sessions::move_current`]). So no two subjects ever share one.
 //! provider.json records the provider chosen for the conversation.
 
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
+use serde_json::value::RawValue;
 use serde_json::{json, Value};
 
 use crate::agent::Provider;
@@ -48,6 +51,21 @@ pub fn save_chat(session: &Path, chat: &Value) -> Result<()> {
         &session.join(CHAT_FILE),
         serde_json::to_string(chat).expect("json").as_bytes(),
     )
+}
+
+/// The session's chat as the JSON text it was saved as, for handing to the frontend as it is;
+/// `null` without one yet, or when the file is no JSON.
+pub fn load_chat_text(session: Option<&Path>) -> Result<Box<RawValue>> {
+    let null = || RawValue::from_string("null".into()).expect("json");
+    let Some(session) = session else {
+        return Ok(null());
+    };
+    match fs::read_to_string(session.join(CHAT_FILE)) {
+        // Checked, not built: a damaged file must not reach the frontend as broken JSON.
+        Ok(raw) => Ok(RawValue::from_string(raw).unwrap_or_else(|_| null())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(null()),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Each agent provider keeps its own resumable session id in the session, stored under `name`.
@@ -165,6 +183,25 @@ pub fn claim_provider(session: &Path, requested: Provider) -> Result<()> {
     Ok(())
 }
 
+/// What every session is about, kept in memory. Finding a subject's session used to mean
+/// reading and parsing the `meta.json` of every session ever started, and that is asked with
+/// every lint, save and open. The index is read once and kept up to date by what changes a
+/// session's subject here ([`Sessions::start`], [`Sessions::adopt`]). Sessions come and go
+/// outside this process too (another instance of the app, the user tidying up), which shows in
+/// the time the sessions folder was last changed: the index is read again when that moved.
+#[derive(Debug, Default)]
+struct Index {
+    /// When the sessions folder was last changed, as of the reading; None before the first.
+    read_at: Option<SystemTime>,
+    /// Each session folder and the subject in its `meta.json`, resolved, by folder name
+    /// (oldest first: the names start with the time).
+    subjects: BTreeMap<PathBuf, PathBuf>,
+}
+
+/// The indexes of the sessions folders in use, by folder: one in the app, one per test.
+static INDEXES: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<Index>>>>> =
+    LazyLock::new(Mutex::default);
+
 /// All sessions, under the app's home folder.
 #[derive(Debug, Clone)]
 pub struct Sessions {
@@ -192,15 +229,50 @@ impl Sessions {
 
     /// The sessions whose subject `keep` takes, oldest first.
     fn all(&self, keep: impl Fn(&PathBuf) -> bool) -> Vec<PathBuf> {
+        self.with_index(|index| {
+            let kept = index.subjects.iter().filter(|(_, subject)| keep(subject));
+            kept.map(|(session, _)| session.clone()).collect()
+        })
+    }
+
+    /// Runs `f` on the index of these sessions, read first when there is none yet or sessions
+    /// were added or removed since it was read.
+    fn with_index<T>(&self, f: impl FnOnce(&mut Index) -> T) -> T {
+        let shared = INDEXES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(self.root.clone())
+            .or_default()
+            .clone();
+        let mut index = shared.lock().unwrap_or_else(|e| e.into_inner());
+        let changed_at = fs::metadata(&self.root)
+            .and_then(|meta| meta.modified())
+            .ok();
+        if index.read_at.is_none() || index.read_at != changed_at {
+            index.subjects = self.read_subjects();
+            index.read_at = changed_at;
+        }
+        f(&mut index)
+    }
+
+    /// What every session is about, from the `meta.json` of each.
+    fn read_subjects(&self) -> BTreeMap<PathBuf, PathBuf> {
         let Ok(entries) = fs::read_dir(&self.root) else {
-            return Vec::new();
+            return BTreeMap::new();
         };
-        let mut found: Vec<PathBuf> = entries
+        entries
             .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-            .filter(|session| subject_of(session).is_some_and(|path| keep(&canonical(&path))))
-            .collect();
-        found.sort();
-        found
+            .filter_map(|session| {
+                let subject = canonical(&subject_of(&session)?);
+                Some((session, subject))
+            })
+            .collect()
+    }
+
+    /// Records that `session` is about `subject` from here on, as its `meta.json` now says.
+    fn index_subject(&self, session: &Path, subject: &Path) {
+        let (session, subject) = (session.to_path_buf(), canonical(subject));
+        self.with_index(|index| index.subjects.insert(session, subject));
     }
 
     /// The subject's current session, if it has one: the one selected, else the newest.
@@ -304,6 +376,7 @@ impl Sessions {
             // Its selection was among the sessions of its old subject.
             let _ = fs::remove_file(session.join(ACTIVE_FILE));
             fs::write(session.join(META_FILE), meta(subject).to_string())?;
+            self.index_subject(session, subject);
         }
         self.select(subject, &session.file_name().unwrap().to_string_lossy())
     }
@@ -339,6 +412,7 @@ impl Sessions {
         let dir = self.root.join(format!("{stamp:013}-{short}"));
         fs::create_dir_all(&dir)?;
         fs::write(dir.join(META_FILE), meta(subject).to_string())?;
+        self.index_subject(&dir, subject);
         self.select(subject, dir.file_name().unwrap().to_str().unwrap())?;
         Ok(dir)
     }
@@ -879,7 +953,12 @@ mod tests {
         let folder = t.deck("talk");
         let file = folder.join("deck.html");
         let sessions = t.sessions();
-        let old = sessions.start(&folder).unwrap();
+        // As an earlier version of the app left it on disk.
+        let old =
+            t.0.join("home")
+                .join(SESSIONS_DIR)
+                .join("0000000000001-legacy");
+        fs::create_dir_all(&old).unwrap();
         fs::write(old.join(META_FILE), json!({"deck": file}).to_string()).unwrap();
         fs::write(old.join(CHAT_FILE), "[1]").unwrap();
         assert_eq!(sessions.current(&folder), None);
@@ -887,6 +966,121 @@ mod tests {
         let new = sessions.current_or_start(&folder).unwrap();
         assert_ne!(new, old);
         assert_eq!(fs::read_to_string(old.join(CHAT_FILE)).unwrap(), "[1]");
+    }
+
+    #[test]
+    fn a_saved_chat_is_handed_on_as_the_text_it_is() {
+        let t = Temp::new();
+        let session = t.0.join("session");
+        assert_eq!(load_chat_text(None).unwrap().get(), "null");
+        assert_eq!(load_chat_text(Some(&session)).unwrap().get(), "null");
+        let chat = json!([{"id": "1", "role": "user", "text": "hi ✨"}]);
+        save_chat(&session, &chat).unwrap();
+        let text = load_chat_text(Some(&session)).unwrap();
+        assert_eq!(
+            text.get(),
+            fs::read_to_string(session.join(CHAT_FILE)).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&text).unwrap(),
+            chat,
+            "the frontend reads the same chat"
+        );
+        fs::write(session.join(CHAT_FILE), "{not json").unwrap();
+        assert_eq!(
+            load_chat_text(Some(&session)).unwrap().get(),
+            "null",
+            "a damaged file is no chat, as for load_chat"
+        );
+    }
+
+    /// Overwrites the `meta.json` of every session, which changes no folder.
+    fn scramble_metas(t: &Temp) {
+        let root = t.0.join("home").join(SESSIONS_DIR);
+        for entry in fs::read_dir(root).unwrap() {
+            fs::write(entry.unwrap().path().join(META_FILE), "{unread").unwrap();
+        }
+    }
+
+    #[test]
+    fn finding_a_session_again_reads_no_session_files() {
+        let t = Temp::new();
+        let root = t.0.join("home").join(SESSIONS_DIR);
+        let decks: Vec<PathBuf> = (0..5).map(|n| t.deck(&format!("d{n}"))).collect();
+        // 500 sessions of other decks, as years of use leave them.
+        for n in 0..500 {
+            let dir = root.join(format!("{n:013}-fake"));
+            fs::create_dir_all(&dir).unwrap();
+            let about = &decks[n % decks.len()];
+            fs::write(
+                dir.join(META_FILE),
+                json!({ "workspace": about }).to_string(),
+            )
+            .unwrap();
+        }
+        let sessions = t.sessions();
+        let mine = t.deck("mine");
+        let session = sessions.start(&mine).unwrap();
+        assert_eq!(sessions.current(&mine), Some(session.clone()));
+        assert_eq!(sessions.list(&decks[0]).len(), 100);
+
+        // From here on what each session is about comes from memory: were any `meta.json` read
+        // again, it would no longer say.
+        scramble_metas(&t);
+        assert_eq!(sessions.current(&mine), Some(session.clone()));
+        assert_eq!(sessions.list(&decks[0]).len(), 100);
+        assert_eq!(sessions.list_scoped(&t.0.join("library")).len(), 501);
+        assert_eq!(
+            t.sessions().current(&mine),
+            Some(session),
+            "whoever asks, by another handle too"
+        );
+        assert_eq!(sessions.current(&t.deck("none")), None);
+    }
+
+    #[test]
+    fn the_index_follows_sessions_started_and_moved_here() {
+        let t = Temp::new();
+        let (a, b) = (t.deck("a"), t.deck("b"));
+        let sessions = t.sessions();
+        let first = sessions.start(&a).unwrap();
+        assert_eq!(sessions.list(&a), std::slice::from_ref(&first));
+        // Names start with the millisecond: a later one, so the two list in the order they began.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let second = sessions.start(&a).unwrap();
+        assert_eq!(sessions.list(&a), [first.clone(), second.clone()]);
+        assert_eq!(sessions.current(&a), Some(second.clone()));
+
+        sessions.move_current(&a, &b).unwrap();
+        assert_eq!(sessions.list(&a), [first]);
+        assert_eq!(sessions.current(&b), Some(second.clone()));
+        assert_eq!(
+            subject_of(&second),
+            Some(b.canonicalize().unwrap()),
+            "as on disk"
+        );
+    }
+
+    #[test]
+    fn the_index_notices_sessions_that_came_or_went_outside_the_app() {
+        let t = Temp::new();
+        let deck = t.deck("a");
+        let sessions = t.sessions();
+        let first = sessions.start(&deck).unwrap();
+        assert_eq!(sessions.list(&deck), std::slice::from_ref(&first));
+
+        // Another instance of the app starts one; the user deletes one in the file manager.
+        let root = t.0.join("home").join(SESSIONS_DIR);
+        let other = root.join("9999999999999-other");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::create_dir_all(&other).unwrap();
+        fs::write(other.join(META_FILE), meta(&deck).to_string()).unwrap();
+        assert_eq!(sessions.list(&deck), [first.clone(), other.clone()]);
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::remove_dir_all(&first).unwrap();
+        assert_eq!(sessions.list(&deck), std::slice::from_ref(&other));
+        assert_eq!(sessions.current(&deck), Some(other));
     }
 
     #[test]

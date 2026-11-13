@@ -3,11 +3,24 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vite
 import { invoke } from "../test/tauri";
 
 vi.mock("../lib/timelinePlayback", () => ({ playTimeline: vi.fn() }));
+// Counted, to tell what renders and what is worked out again: a slide's block says how long it
+// shows, a waveform draws its path, and the timeline is laid out.
+vi.mock("../lib/timeline", async (original) => {
+  const actual = await original<typeof import("../lib/timeline")>();
+  return { ...actual, formatShown: vi.fn(actual.formatShown), layoutTimeline: vi.fn(actual.layoutTimeline) };
+});
+vi.mock("../lib/waveform", async (original) => {
+  const actual = await original<typeof import("../lib/waveform")>();
+  return { wavePath: vi.fn(actual.wavePath) };
+});
 
 import type { Deck, RailEdit, Slide } from "../lib/api";
 import { formatDuration } from "../lib/narrationAudio";
-import { getSlideClock } from "../lib/slideClock";
+import { forgetNarration } from "../lib/narrationCache";
+import { getSlideClock, onSlideClock } from "../lib/slideClock";
+import { formatShown, layoutTimeline } from "../lib/timeline";
 import { playTimeline } from "../lib/timelinePlayback";
+import { wavePath } from "../lib/waveform";
 import { useNarration } from "../narrationStore";
 import { useApp } from "../store";
 import { lastError } from "../store/errors";
@@ -15,6 +28,9 @@ import { DECK_HTML, deckFor } from "../test/fixtures";
 import { NarrationTimeline, rulerStep } from "./NarrationTimeline";
 
 const play = playTimeline as unknown as Mock;
+const shown = formatShown as unknown as Mock;
+const waved = wavePath as unknown as Mock;
+const laidOut = layoutTimeline as unknown as Mock;
 
 function deckOf(changes: Record<string, Partial<Slide>> = {}): Deck {
   const deck = deckFor(DECK_HTML);
@@ -34,7 +50,7 @@ function open(changes: Record<string, Partial<Slide>> = { intro: { narration: "H
   });
   invoke.mockImplementation(async (command: string) => {
     if (command === "narration_peaks") return [0.5, 1];
-    if (command === "set_slide_timing") return { deck, previous: "a", source: "b", created: [] } satisfies RailEdit;
+    if (command === "set_slide_timing") return { deck, created: [] } satisfies RailEdit;
     return null;
   });
   return render(<NarrationTimeline />);
@@ -46,13 +62,36 @@ const watch = (changes?: Record<string, Partial<Slide>>) => open(changes, false)
 const timingCalls = () =>
   invoke.mock.calls.filter(([command]: unknown[]) => command === "set_slide_timing").map(([, a]) => a);
 
+// Time stands still, and no frame comes, until a test lets one: see `frame`.
+let now = 0;
+let frames: (FrameRequestCallback | undefined)[] = [];
+
+/** Lets `ms` pass and the animation frame due after them come. */
+function frame(ms = 16) {
+  now += ms;
+  const due = frames;
+  frames = [];
+  act(() => {
+    for (const run of due) run?.(now);
+  });
+}
+
 beforeEach(() => {
   invoke.mockReset();
   play.mockReset();
   localStorage.clear();
+  forgetNarration();
+  now = 0;
+  frames = [];
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((run) => frames.push(run));
+  vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+    frames[id - 1] = undefined;
+  });
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   useApp.setState({ deck: null, selected: null, editing: false, comments: {} });
   useNarration.setState({ audio: {}, audioDeck: null });
 });
@@ -170,8 +209,6 @@ describe("NarrationTimeline", () => {
     let saved = (_: RailEdit) => {};
     const edit = {
       deck: deckOf({ intro: { narration: "Hello", duration: 6 } }),
-      previous: "a",
-      source: "b",
       created: [],
     };
     invoke.mockImplementation((command: string) =>
@@ -301,7 +338,7 @@ describe("NarrationTimeline", () => {
     ruler.getBoundingClientRect = () => ({ left: 0, width: 300 }) as DOMRect;
     fireEvent.pointerDown(ruler, { clientX: 150 });
     expect(useApp.getState().selected).toBe("#2");
-    expect(screen.getByTestId("playhead").style.left).toBe("50%");
+    expect(screen.getByTestId("playhead").style.transform).toBe("translateX(50%)");
     expect(screen.getByText("0:07.5 / 0:15")).toBeTruthy();
     // The second slide starts at 5 s: it shows as it is 2.5 s in, and stays so.
     expect(getSlideClock()).toEqual({ slide: "#2", at: 2.5, paused: true });
@@ -321,9 +358,12 @@ describe("NarrationTimeline", () => {
     fireEvent.pointerMove(ruler, { clientX: 220, buttons: 1 });
     expect(getSlideClock()).toEqual({ slide: "outro", at: 1, paused: true });
     expect(useApp.getState().selected).toBe("outro");
+    // Of the moves within a frame, the first goes at once and the last when the next frame comes.
     fireEvent.pointerMove(ruler, { clientX: -50, buttons: 1 });
+    expect(getSlideClock()).toEqual({ slide: "outro", at: 1, paused: true });
+    frame();
     expect(getSlideClock()).toEqual({ slide: "intro", at: 0, paused: true });
-    expect(screen.getByTestId("playhead").style.left).toBe("0%");
+    expect(screen.getByTestId("playhead").style.transform).toBe("translateX(0%)");
   });
 
   it("has back to start, step back, play and step forward together in the middle of the bar", () => {
@@ -410,7 +450,7 @@ describe("NarrationTimeline", () => {
     ruler.getBoundingClientRect = () => ({ left: 0, width: 300 }) as DOMRect;
     fireEvent.pointerDown(ruler, { clientX: 150 });
     expect(useApp.getState().selected).toBe("#2");
-    expect(screen.getByTestId("playhead").style.left).toBe("50%");
+    expect(screen.getByTestId("playhead").style.transform).toBe("translateX(50%)");
     expect(getSlideClock()).toBeNull();
     // Back in View the stage is at the playhead again, and entering Edit hands it back.
     act(() => useApp.setState({ editing: false }));
@@ -460,7 +500,7 @@ describe("NarrationTimeline", () => {
       fireEvent.click(marks()[1]!);
       expect(useApp.getState().selected).toBe("#2");
       expect(getSlideClock()).toEqual({ slide: "#2", at: 2.5, paused: true });
-      expect(screen.getByTestId("playhead").style.left).toBe("50%");
+      expect(screen.getByTestId("playhead").style.transform).toBe("translateX(50%)");
     });
 
     it("keeps a mark within its slide when the slide has since got shorter, and hides them with the review", () => {
@@ -620,46 +660,210 @@ describe("the slides as strips of film", () => {
       if (descriptor) Object.defineProperty(Element.prototype, name, descriptor);
   });
 
-  const frames = (n: number) =>
-    [...screen.getByRole("button", { name: `Slide ${n}` }).querySelectorAll<HTMLElement>("[data-frame]")].map((f) => [
-      f.dataset.frame,
-      f.style.left,
-      f.style.width,
-    ]);
+  const pictures = () => screen.queryAllByTestId("film-picture");
+  /** Which slides show their picture, by number. */
+  const pictured = () => pictures().map((picture) => picture.closest("button")?.getAttribute("aria-label"));
+  const scrollTo = (left: number) => {
+    const scroller = screen.getByTestId("ruler").parentElement?.parentElement as HTMLElement;
+    Object.defineProperty(scroller, "scrollLeft", { configurable: true, value: left });
+    fireEvent.scroll(scroller);
+  };
+  /** A deck of `count` slides, each shown for five seconds. */
+  function long(count: number) {
+    const deck = deckOf();
+    const slides = Array.from({ length: count }, (_, i) => ({ ...deck.slides[0]!, id: `s${i}`, narration: "" }));
+    useApp.setState({ deck: { ...deck, slides }, selected: "s0", editing: false });
+    return render(<NarrationTimeline />);
+  }
 
-  it("fills each slide with its picture, over and over, as far as is in sight", () => {
+  it("shows each slide's picture once, at the start of its strip, with empty film after it", () => {
     open();
-    // Three slides of 500 pixels each: the first shows whole, the second up to the 800th pixel.
-    expect(frames(1)).toEqual([
-      ["0", "0px", "160px"],
-      ["1", "160px", "160px"],
-      ["2", "320px", "160px"],
-      ["3", "480px", "160px"],
+    // Three slides of 500 pixels each, 600 in sight: the first two are near enough to be loaded.
+    expect(pictured()).toEqual(["Slide 1", "Slide 2"]);
+    expect(pictures().map((picture) => [picture.style.left, picture.style.width])).toEqual([
+      ["", "160px"],
+      ["", "160px"],
     ]);
-    expect(frames(2)).toEqual([
-      ["0", "0px", "160px"],
-      ["1", "160px", "160px"],
-    ]);
-    expect(frames(3)).toEqual([]);
-    // Each slide says which it is and how long it shows, over its pictures.
+    // The rest of a strip is film in frames as wide as the picture, not more pictures.
+    const film = screen.getAllByTestId("filmstrip")[0]!;
+    expect(film.style.backgroundImage).toContain("repeating-linear-gradient");
+    expect(film.style.backgroundImage).toContain("160px");
+    expect(film.querySelectorAll("[data-testid=film-picture]")).toHaveLength(1);
+    // Each slide says which it is and how long it shows, over its picture.
     expect(screen.getByRole("button", { name: "Slide 2" }).textContent).toBe("25.0s");
   });
 
-  it("shows the pictures scrolled to", () => {
+  it("shows the pictures scrolled to, and not those scrolled away from", () => {
     open();
-    const scroller = screen.getByTestId("ruler").parentElement?.parentElement as HTMLElement;
-    Object.defineProperty(scroller, "scrollLeft", { configurable: true, value: 900 });
-    fireEvent.scroll(scroller);
-    expect(frames(1)).toEqual([]);
-    expect(frames(2).map(([frame]) => frame)).toEqual(["1", "2", "3"]);
-    expect(frames(3).map(([frame]) => frame)).toEqual(["0", "1", "2", "3"]);
+    scrollTo(900);
+    expect(pictured()).toEqual(["Slide 2", "Slide 3"]);
+    scrollTo(1200);
+    expect(pictured()).toEqual(["Slide 3"]);
   });
 
   it("has no pictures before the track is measured", () => {
     sizes.filmstrip = ["clientHeight", 0];
     open();
-    expect(frames(1)).toEqual([]);
+    expect(pictures()).toEqual([]);
     sizes.filmstrip = ["clientHeight", 90];
+  });
+
+  it("loads no page for strips too narrow to make a slide out on", () => {
+    // A hundred slides on 1500 pixels: slivers of 15.
+    long(100);
+    expect(screen.getAllByTestId("filmstrip")).toHaveLength(100);
+    expect(pictures()).toEqual([]);
+  });
+
+  it("loads only the few pages in sight of a long deck zoomed in, and none for a short scroll", () => {
+    // A hundred slides of 240 pixels each, 600 of them in sight.
+    sizes.track = ["clientWidth", 24_000];
+    try {
+      long(100);
+      expect(pictured()).toEqual(["Slide 1", "Slide 2", "Slide 3", "Slide 4"]);
+      const before = pictures();
+      shown.mockClear();
+      // Less than a picture's width: nothing is mounted, and nothing rendered.
+      scrollTo(100);
+      scrollTo(150);
+      expect(pictures()).toEqual(before);
+      expect(shown).not.toHaveBeenCalled();
+      // Far along, other slides are in sight, still only a few.
+      scrollTo(12_000);
+      expect(pictured()).toEqual(["Slide 50", "Slide 51", "Slide 52", "Slide 53", "Slide 54"]);
+      expect(pictures().length).toBeLessThanOrEqual(8);
+    } finally {
+      sizes.track = ["clientWidth", 1500];
+    }
+  });
+});
+
+describe("NarrationTimeline: what playing and scrubbing cost", () => {
+  const ruler = () => {
+    const found = screen.getByTestId("ruler");
+    found.getBoundingClientRect = () => ({ left: 0, width: 300 }) as DOMRect;
+    return found;
+  };
+
+  it("moves the playhead every frame while it plays, rendering neither the slides nor the waveform", async () => {
+    play.mockReturnValue(vi.fn());
+    watch();
+    await act(async () => {});
+    expect(screen.getByRole("button", { name: "Narration of slide 1" }).querySelector("path")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    shown.mockClear();
+    waved.mockClear();
+    const playhead = screen.getByTestId("playhead");
+    const places = new Set<string>();
+    for (let i = 0; i < 60; i++) {
+      frame(1000 / 60);
+      places.add(playhead.style.transform);
+    }
+    expect(places.size).toBeGreaterThan(10);
+    expect(playhead.style.transform).toMatch(/^translateX\(6\.6\d+%\)$/);
+    expect(shown).not.toHaveBeenCalled();
+    expect(waved).not.toHaveBeenCalled();
+    // The time counts on by itself, in whole seconds.
+    expect(screen.getByTestId("timeline-time").textContent).toBe("0:01 / 0:15");
+  });
+
+  it("keeps to what plays: its clock sets the playhead right, and pausing stops where it is", () => {
+    play.mockReturnValue(vi.fn());
+    watch();
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    const events = play.mock.calls[0]?.[3] as { tick: (t: number) => void };
+    act(() => events.tick(3));
+    frame(250);
+    expect(screen.getByTestId("playhead").style.transform).toBe(`translateX(${(3.25 / 15) * 100}%)`);
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    expect(getSlideClock()).toEqual({ slide: "intro", at: 3.25, paused: true });
+    // Stopped, no frame moves it.
+    frame(500);
+    expect(screen.getByTestId("playhead").style.transform).toBe(`translateX(${(3.25 / 15) * 100}%)`);
+    expect(screen.getByTestId("timeline-time").textContent).toBe("0:03.3 / 0:15");
+  });
+
+  it("tells the app the slide only when the playhead comes to another one", () => {
+    const select = vi.fn(useApp.getState().select);
+    const real = useApp.getState().select;
+    useApp.setState({ select });
+    try {
+      watch();
+      // Thirty moments within the second slide, then one in the third.
+      for (let x = 110; x < 140; x++) fireEvent.pointerDown(ruler(), { clientX: x });
+      expect(select.mock.calls).toEqual([["#2"]]);
+      fireEvent.pointerDown(ruler(), { clientX: 250 });
+      expect(select.mock.calls).toEqual([["#2"], ["outro"]]);
+      // Stepping within it and pressing its own block tell nothing more.
+      fireEvent.click(screen.getByRole("button", { name: "Step back" }));
+      fireEvent.click(screen.getByRole("button", { name: "Slide 3" }));
+      expect(select).toHaveBeenCalledTimes(2);
+    } finally {
+      useApp.setState({ select: real });
+    }
+  });
+
+  it("moves the playhead once a frame at most while the ruler is dragged", () => {
+    watch();
+    const moved = vi.fn();
+    const stop = onSlideClock(moved);
+    fireEvent.pointerDown(ruler(), { clientX: 10 });
+    moved.mockClear();
+    for (let x = 11; x <= 40; x++) fireEvent.pointerMove(ruler(), { clientX: x, buttons: 1 });
+    expect(moved).toHaveBeenCalledTimes(1);
+    frame();
+    expect(moved).toHaveBeenCalledTimes(2);
+    expect(getSlideClock()).toEqual({ slide: "intro", at: 2, paused: true });
+    stop();
+  });
+
+  it("reads a narration's waveform once, however often it is shown", async () => {
+    const view = open();
+    await act(async () => {});
+    view.unmount();
+    open();
+    await act(async () => {});
+    expect(screen.getByRole("button", { name: "Narration of slide 1" }).querySelector("path")).toBeTruthy();
+    expect(invoke.mock.calls.filter(([command]) => command === "narration_peaks")).toHaveLength(1);
+  });
+
+  it("lays the timeline out once, however often it renders", () => {
+    watch();
+    laidOut.mockClear();
+    fireEvent.pointerDown(ruler(), { clientX: 150 });
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    act(() => useApp.getState().select("outro"));
+    expect(laidOut).not.toHaveBeenCalled();
+  });
+
+  it("lays a dragged edge's preview out once for each move, not for every render during the drag", () => {
+    open();
+    const line = screen.getByRole("button", { name: "End of slide 1" }).closest(".relative.flex") as HTMLElement;
+    line.getBoundingClientRect = () => ({ left: 0, width: 300 }) as DOMRect;
+    const edge = screen.getByRole("button", { name: "End of slide 1" });
+    fireEvent.pointerDown(edge, { clientX: 100, button: 0 });
+    laidOut.mockClear();
+    fireEvent.pointerMove(edge, { clientX: 140 });
+    expect(laidOut).toHaveBeenCalledTimes(1);
+    // Something else renders the timeline meanwhile.
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(laidOut).toHaveBeenCalledTimes(1);
+    fireEvent.pointerMove(edge, { clientX: 160 });
+    expect(laidOut).toHaveBeenCalledTimes(2);
+    fireEvent.pointerCancel(edge);
+  });
+
+  it("says where the playhead is on the ruler when it is moved or stopped, not as it plays", () => {
+    play.mockReturnValue(vi.fn());
+    watch();
+    fireEvent.pointerDown(ruler(), { clientX: 100 });
+    expect(ruler().getAttribute("aria-valuenow")).toBe("5");
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    frame(1000);
+    expect(ruler().getAttribute("aria-valuenow")).toBe("5");
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    expect(ruler().getAttribute("aria-valuenow")).toBe("6");
+    expect(ruler().getAttribute("aria-valuetext")).toBe("0:06.0 of 0:15, slide 2");
   });
 });
 
@@ -784,7 +988,7 @@ describe("NarrationTimeline: finding one's way", () => {
     fireEvent.click(screen.getByRole("button", { name: "Slide 3" }));
     expect(useApp.getState().selected).toBe("outro");
     expect(time()).toBe("0:10.0 / 0:15");
-    expect(screen.getByTestId("playhead").style.left).toBe(`${(10 / 15) * 100}%`);
+    expect(screen.getByTestId("playhead").style.transform).toBe(`translateX(${(10 / 15) * 100}%)`);
     // The slide shows as it does anywhere, not frozen before its first animation.
     expect(getSlideClock()).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Play" }));

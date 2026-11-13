@@ -27,14 +27,12 @@ export function queuedExtras(item: QueuedMessage, slideIds: string[]): string {
 export function QueuedMessages({ onEdit }: { onEdit: (id: string) => void }) {
   const queue = useApp((s) => s.queue);
   const running = useApp((s) => s.running);
-  const slides = useApp((s) => s.deck?.slides);
+  // The slides change with every save of the deck, and are only named while something waits.
+  const slides = useApp((s) => (s.queue.length > 0 ? s.deck?.slides : undefined));
   if (queue.length === 0) return null;
   const slideIds = (slides ?? []).map((slide) => slide.id);
   return (
-    <section
-      aria-label="Queued messages"
-      className="mx-3 mb-1.5 rounded-xl border bg-card/95 p-1 shadow-composer backdrop-blur-xl"
-    >
+    <section aria-label="Queued messages" className="mx-3 mb-1.5 rounded-xl border bg-card p-1 shadow-composer">
       <p className="px-2 pt-0.5 pb-1 text-2xs text-muted-foreground">
         {running ? "Sent when the agent finishes" : "Waiting: the last turn did not finish"}
       </p>

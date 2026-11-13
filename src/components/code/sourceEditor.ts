@@ -3,7 +3,7 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { html } from "@codemirror/lang-html";
 import { bracketMatching, foldGutter, foldKeymap, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
-import { type Extension, RangeSetBuilder, StateEffect, StateField, Transaction } from "@codemirror/state";
+import { Annotation, type Extension, RangeSetBuilder, StateEffect, StateField, Transaction } from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
@@ -15,6 +15,8 @@ import {
   highlightActiveLineGutter,
   keymap,
   lineNumbers,
+  ViewPlugin,
+  type ViewUpdate,
 } from "@codemirror/view";
 import { classHighlighter } from "@lezer/highlight";
 
@@ -22,7 +24,10 @@ import { changedRange } from "../../lib/codeSync";
 import { findSlideSpans, type SlideSpan } from "../../lib/slideSpans";
 
 export interface SlideMarks {
-  /** Slides of the document as currently edited, re-found on every change. */
+  /**
+   * Slides of the document as currently edited. While the user types they move along with the
+   * text, and are found again once the typing pauses (see `REFIND_DELAY`).
+   */
   spans: SlideSpan[];
   active: string | null;
 }
@@ -30,16 +35,55 @@ export interface SlideMarks {
 /** Tells the editor which slide is selected. */
 export const setActiveSlide = StateEffect.define<string | null>();
 
+/** Marks a change as the deck file's text from disk, not the user's typing. */
+export const fromDisk = Annotation.define<boolean>();
+
+/** How long typing pauses before the slides are found again in the whole document. */
+export const REFIND_DELAY = 150;
+
+/** Has the slides found again in the document as it is now. */
+const refindSlides = StateEffect.define<null>();
+
 /** Where the slides are in the document, and which one is selected. */
 export const slideMarks = StateField.define<SlideMarks>({
   create: (state) => ({ spans: findSlideSpans(state.doc.toString()), active: null }),
   update: (value, tr) => {
     let next = value;
-    if (tr.docChanged) next = { ...next, spans: findSlideSpans(tr.newDoc.toString()) };
+    const refind = tr.effects.some((effect) => effect.is(refindSlides));
+    // Finding the slides reads the whole document: done for text from disk and once typing
+    // pauses, not for every key, which only moves the slides found before.
+    if (refind || (tr.docChanged && tr.annotation(fromDisk))) {
+      next = { ...next, spans: findSlideSpans(tr.newDoc.toString()) };
+    } else if (tr.docChanged) {
+      const moved = (span: SlideSpan) => {
+        const from = tr.changes.mapPos(span.from, 1);
+        return { ...span, from, to: Math.max(from, tr.changes.mapPos(span.to, -1)) };
+      };
+      next = { ...next, spans: next.spans.map(moved) };
+    }
     for (const effect of tr.effects) if (effect.is(setActiveSlide)) next = { ...next, active: effect.value };
     return next;
   },
 });
+
+/** Finds the slides again once the user's typing has paused for `REFIND_DELAY`. */
+const refindAfterTyping = ViewPlugin.fromClass(
+  class {
+    private timer: ReturnType<typeof setTimeout> | undefined;
+
+    constructor(private readonly view: EditorView) {}
+
+    update(update: ViewUpdate) {
+      if (!update.transactions.some((tr) => tr.docChanged && !tr.annotation(fromDisk))) return;
+      clearTimeout(this.timer);
+      this.timer = setTimeout(() => this.view.dispatch({ effects: refindSlides.of(null) }), REFIND_DELAY);
+    }
+
+    destroy() {
+      clearTimeout(this.timer);
+    }
+  },
+);
 
 const activeLine = Decoration.line({ class: "cm-slide-line" });
 const activeFirstLine = Decoration.line({ class: "cm-slide-line cm-slide-first" });
@@ -193,6 +237,7 @@ export const sourceExtensions: Extension[] = [
     indentWithTab,
   ]),
   slideMarks,
+  refindAfterTyping,
   slideHighlight,
   theme,
 ];
@@ -204,6 +249,6 @@ export function replaceText(view: EditorView, next: string) {
   view.dispatch({
     changes,
     // Disk updates are not the user's edits; undo should not step back through them.
-    annotations: Transaction.addToHistory.of(false),
+    annotations: [Transaction.addToHistory.of(false), fromDisk.of(true)],
   });
 }

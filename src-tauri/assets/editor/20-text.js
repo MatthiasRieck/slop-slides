@@ -51,6 +51,7 @@
       dropTrailingBreaks(root);
       // A shape without text holds nothing.
       if (root !== el && !hasContent(root)) el.removeChild(root);
+      refitDue = false;
       refit(el);
     }
     placeHandles();

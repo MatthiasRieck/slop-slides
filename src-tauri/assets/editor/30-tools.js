@@ -23,9 +23,8 @@
 
   /** Where the pointer at (x, y) is on the slide, in slide pixels. */
   function slidePoint(x, y) {
-    var rect = slide.getBoundingClientRect();
-    var k = zoom();
-    return { x: Math.round((x - rect.left) / k), y: Math.round((y - rect.top) / k) };
+    var at = camera();
+    return { x: Math.round((x - at.left) / at.k), y: Math.round((y - at.top) / at.k) };
   }
 
   function addElement(kind, css, svg) {
@@ -192,7 +191,7 @@
       }
     }
     select(null);
-    create = { tool: tool, x: event.clientX, y: event.clientY, at: at, el: null, moved: false, line: isLine(tool) };
+    create = { tool: tool, x: event.clientX, y: event.clientY, at: at, el: null, moved: false, line: isLine(tool), sticks: null };
     if (tool === "draw" || create.line) {
       create.drawing = newDrawing(at);
       create.el = create.drawing.svg;
@@ -212,8 +211,10 @@
     create.moved = true;
     var at = slidePoint(event.clientX, event.clientY);
     if (create.line) {
+      // Nothing but the line changes while it is drawn: what it can stick to is measured once.
+      if (!create.sticks) create.sticks = stickCandidates(create.el);
       var to = event.shiftKey ? snapLine(create.at, at) : at;
-      var hit = event.metaKey || event.ctrlKey ? null : stickTarget(to, create.el);
+      var hit = event.metaKey || event.ctrlKey ? null : stickTarget(to, create.el, create.sticks);
       if (hit && (hit.edge || hit.site) && !event.shiftKey) to = endSpot(hit, [create.at.x, create.at.y], create.el);
       drawLine(create, to, hit);
       previewStick(hit);
@@ -235,20 +236,24 @@
     if (!create.el) create.el = create.tool === "text" ? newText(x, y, w) : newShape(create.tool, x, y, w, h);
     if (OUTLINES[create.tool]) drawOutline(create.el, x, y, w, h);
     else place(create.el, x, y, w, create.tool === "text" ? null : h);
-    fitFigure(create.el);
-    placeHandles();
+    // A figure is redrawn at its new size once per frame, with the paint it was given.
+    if (create.paint === undefined) create.paint = resizedPaint(create.el);
+    if (create.paint) scheduleFigure(create.el, create.paint);
+    scheduleHandles();
   }
 
   function finishCreating() {
     var done = create;
     create = null;
+    flushFigures();
     if (done.line) {
+      if (!done.sticks) done.sticks = stickCandidates(done.el);
       if (!done.moved) drawLine(done, { x: done.at.x + SHAPE_SIZE.w, y: done.at.y });
       previewStick(null);
       var ends = done.points;
       var stuck = false;
       ENDS.forEach(function (end, i) {
-        var hit = stickTarget({ x: ends[i][0], y: ends[i][1] }, done.el);
+        var hit = stickTarget({ x: ends[i][0], y: ends[i][1] }, done.el, done.sticks);
         if (hit) stick(done.el, end, hit);
         stuck = stuck || !!hit;
       });
@@ -302,6 +307,7 @@
     if (!create) return;
     if (create.el && create.el.parentElement) create.el.parentElement.removeChild(create.el);
     create = null;
+    resumeSlideChecks();
   }
 
   /**
@@ -423,9 +429,24 @@
     if (!el.getAttribute("style")) el.removeAttribute("style");
     if (editing) tidy(el);
     refit(el);
-    placeHandles();
-    report();
+    restyled();
     if (!editing) commit();
+  }
+
+  /**
+   * After a restyle: the handles and the toolbar follow it. Once for all the elements restyled
+   * together (what restyles them calls this when it is through), and while a slider previews
+   * the restyle, once per frame.
+   */
+  function restyled() {
+    if (batching) return;
+    if (preview) {
+      scheduleHandles();
+      scheduleReport();
+    } else {
+      placeHandles();
+      report();
+    }
   }
 
   function overlaps(a, b) {

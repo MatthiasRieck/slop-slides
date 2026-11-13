@@ -7,7 +7,11 @@ export interface TimelineEvents {
   slide: (index: number) => void;
   /** It reached its end. */
   ended: () => void;
-  /** Where it is, in seconds, about every {@link TICK} ms while it plays. */
+  /**
+   * Where it is, in seconds, about every {@link TICK} ms while it plays: often enough to keep a
+   * slide's animations and a clock of one's own (see ./playbackClock.ts) with it. What must move
+   * every frame follows such a clock, not this.
+   */
   tick?: (time: number) => void;
 }
 

@@ -1,18 +1,22 @@
 import { type ReactNode, useEffect, useRef } from "react";
 import { Group, Panel, type PanelSize, Separator, usePanelRef } from "react-resizable-panels";
 
-import { ChangesRail, ChangesView } from "./components/ChangesView";
 import { useChatShortcut } from "./components/chat/useChatShortcut";
-import { DeckSettings } from "./components/DeckSettings";
 import { FileViewer } from "./components/FileViewer";
 import { Home } from "./components/Home";
-import { NarrationTimeline } from "./components/NarrationTimeline";
-import { Presenter } from "./components/Presenter";
+import {
+  ChangesRail,
+  ChangesView,
+  DeckSettings,
+  NarrationTimeline,
+  Presenter,
+  preloadLazyPartsWhenIdle,
+  RewindDialog,
+  SlideImageExport,
+} from "./components/lazy";
 import { usePresentKeys } from "./components/presenter/present";
-import { RewindDialog } from "./components/RewindDialog";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { Sidebar } from "./components/Sidebar";
-import { SlideImageExport } from "./components/SlideImageExport";
 import { SlideRail } from "./components/SlideRail";
 import { Stage } from "./components/Stage";
 import { Toasts } from "./components/Toasts";
@@ -22,22 +26,32 @@ import { useShellKeys } from "./hooks/useShellKeys";
 import { useCloseGuard, useWindowTitle } from "./hooks/useWindowShell";
 import { api } from "./lib/api";
 import { cn, isMac } from "./lib/utils";
-import { deckMode, showError, useApp } from "./store";
+import { deckMode, lintKey, showError, useApp } from "./store";
 
+/**
+ * The window: the start screen until a folder is open, then the workbench. Neither shows before
+ * the window knows whether a folder waits for it (see `booted`), so the start screen does not
+ * flash by on the way to that folder. What is not on the first screen loads once the browser is
+ * idle (see ./components/lazy.tsx).
+ */
 export function App() {
-  const workspace = useApp((s) => s.workspace);
+  const hasWorkspace = useApp((s) => s.workspace !== null);
+  const booted = useApp((s) => s.booted);
   const presenting = useApp((s) => s.presenting);
+  const exportingImages = useApp((s) => s.imageExport !== null);
+  const askingRewind = useApp((s) => s.rewindAsk !== null);
   useNewWindowKey();
   usePresentKeys();
   useCloseGuard();
   useWindowTitle();
+  useEffect(() => preloadLazyPartsWhenIdle(), []);
 
   return (
     <>
-      {workspace ? <Workbench /> : <Home />}
+      {hasWorkspace ? <Workbench /> : booted && <Home />}
       {presenting && <Presenter />}
-      <SlideImageExport />
-      <RewindDialog />
+      {exportingImages && <SlideImageExport />}
+      {askingRewind && <RewindDialog />}
       <UnsavedChanges />
       <Toasts />
     </>
@@ -78,12 +92,10 @@ function Workbench() {
   const timelineOpen = useApp((s) => s.timelineOpen);
   useShellKeys();
   // Re-lint whenever the deck file changes on disk (agent, HTML view, slide operations).
-  const deckVersion = useApp((s) =>
-    s.deck ? [s.deck.id, s.deck.shellHash, ...s.deck.slides.map((x) => `${x.id}:${x.hash}`)].join("|") : "",
-  );
+  const deckVersion = useApp((s) => lintKey(s.deck));
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-lint whenever the deck's content changes
   useEffect(() => {
-    void useApp.getState().refreshLint();
+    useApp.getState().lintChanged();
   }, [deckVersion]);
   return (
     <>

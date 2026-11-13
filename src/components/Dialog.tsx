@@ -13,6 +13,7 @@ import { createPortal } from "react-dom";
 import { focusableIn, focusTarget, restoreFocus, wrapTab } from "../lib/focus";
 import { isTextField } from "../lib/keys";
 import { openLayer } from "../lib/layers";
+import { cn } from "../lib/utils";
 import { ToolButton } from "./Button";
 
 /** The app under a dialog: everything but what is rendered into the body beside it. */
@@ -39,7 +40,8 @@ function holdApp(): () => void {
  *   `closeKeys` leaves Escape out); the other `closeKeys` close it too, unless typed in a field;
  * - closed, it gives the focus back to what had it (a slide preview, say).
  *
- * It renders into the body, so nothing it is used in clips it.
+ * It renders into the body, so nothing it is used in clips it. The scrim fades in and the box
+ * comes in with it (see `enter-fade` and `enter-pop` in src/index.css).
  */
 export function Dialog(props: {
   /** The dialog's accessible name. */
@@ -135,7 +137,7 @@ export function Dialog(props: {
   return createPortal(
     <div
       data-testid={props.backdropTestId}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim"
+      className="enter-fade fixed inset-0 z-50 flex items-center justify-center bg-scrim"
       onPointerDown={
         props.closeOnBackdrop
           ? (event) => {
@@ -152,7 +154,7 @@ export function Dialog(props: {
         aria-label={props.label}
         tabIndex={-1}
         onKeyDown={onKeyDown}
-        className={props.className}
+        className={cn("enter-pop", props.className)}
       >
         {heading}
         {props.children}

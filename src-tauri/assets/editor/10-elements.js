@@ -29,18 +29,71 @@
     return [el].concat(Array.prototype.slice.call(el.querySelectorAll("*")));
   }
 
-  function commit() {
+  /** Keeps the slide's markup as it is now, unchanged by the editor, for `commit` to tell a change from. */
+  function keepSaved() {
+    if (saved === null) saved = serialize();
+  }
+
+  /** Runs `fn` once, when the page has loaded and its fonts are in: what may still lay the slide out anew. */
+  function whenSettled(fn) {
+    var waiting = 1;
+    var arrived = function () {
+      waiting--;
+      if (!waiting) fn();
+    };
+    if (document.readyState !== "complete") {
+      waiting++;
+      window.addEventListener("load", arrived);
+    }
+    if (document.fonts && document.fonts.ready) {
+      waiting++;
+      document.fonts.ready.then(arrived);
+    }
+    arrived();
+  }
+
+  /** Runs `fn` once the page has painted, so it does not hold up the slide showing. */
+  function afterPaint(fn) {
+    window.requestAnimationFrame(function () {
+      setTimeout(fn, 0);
+    });
+  }
+
+  /**
+   * Saves the slide when it changed. `group` is the key of a run of small changes that belong
+   * together (see saveNudges): the app is given it, to keep their saves as one undo step.
+   */
+  function commit(group) {
     if (batching || preview) return;
     followLines([]);
     clearTimeout(nudgeTimer);
     nudgeTimer = null;
+    nudgeGroup = null;
+    nudgeLines = null;
+    // What was waiting for the next frame is part of what is saved, and shows with it.
+    flushFigures();
+    flushHandles();
     var markup = serialize();
     if (markup === saved) return;
     saved = markup;
-    window.parent.postMessage(
-      { type: "slop:edit-commit", slide: slide.id, markup: markup, select: pathOf(selected), also: extras.map(pathOf) },
-      "*",
-    );
+    var message = { type: "slop:edit-commit", slide: slide.id, markup: markup, select: pathOf(selected), also: extras.map(pathOf) };
+    if (typeof group === "string") message.group = group;
+    window.parent.postMessage(message, "*");
+  }
+
+  /** Saves the nudges (and tilt steps) that wait for a pause, before anything else changes the slide. */
+  function saveNudges() {
+    if (nudgeTimer) commit(nudgeGroup);
+  }
+
+  /**
+   * Nudges and tilt steps save together once they pause. `group` names the run (null for one
+   * that is not only nudges of the same elements); a run with another name waiting makes it null.
+   */
+  function saveSoon(group) {
+    nudgeGroup = nudgeTimer && nudgeGroup !== group ? null : group;
+    clearTimeout(nudgeTimer);
+    nudgeTimer = setTimeout(saveNudges, NUDGE_SAVE_MS);
   }
 
   /** Child-index path from the slide to `el`, to select it again after the preview reloads. */
@@ -140,19 +193,33 @@
   }
 
   function select(el) {
-    // Selecting what is outside the group being worked in leaves it.
-    if (enteredGroup && !(el && el !== enteredGroup && enteredGroup.contains(el))) enteredGroup = null;
-    if (el === selected && !extras.length) return;
-    clearExtras();
-    mark(selected, "data-slop-selected", false);
-    selected = el;
-    mark(selected, "data-slop-selected", true);
+    if (!setSelection(el, [])) return;
     placeHandles();
     report();
   }
 
+  /** Makes `el` the primary selected element and `others` the rest; false when that is the selection already. */
+  function setSelection(el, others) {
+    // Selecting what is outside the group being worked in leaves it.
+    if (enteredGroup && !(el && el !== enteredGroup && enteredGroup.contains(el))) enteredGroup = null;
+    var same = el === selected && others.length === extras.length && others.every(function (other, i) {
+      return other === extras[i];
+    });
+    if (same) return false;
+    clearExtras();
+    mark(selected, "data-slop-selected", false);
+    selected = el;
+    mark(selected, "data-slop-selected", true);
+    extras = others;
+    extras.forEach(function (other) {
+      mark(other, "data-slop-selected", true);
+    });
+    return true;
+  }
+
   /** Tells the app what its toolbar shows for the selection. */
   function report() {
+    if (reportFrame) window.cancelAnimationFrame(reportFrame);
     reportFrame = 0;
     window.parent.postMessage({ type: "slop:edit-selection", slide: slide.id, selected: !!selected, selection: describeSelection() }, "*");
   }
@@ -184,7 +251,7 @@
     return !!value && !/^(none|transparent)$/i.test(value) && !/^rgba\(0, 0, 0, 0\)$/.test(value) && toHex(value) === null && !/^rgba?\(/.test(value);
   }
 
-  /** Reports once per frame, however often the text selection moves while typing. */
+  /** Reports once per frame, however often the text selection moves while typing, a marquee grows or a slider previews. */
   function scheduleReport() {
     if (!reportFrame) reportFrame = window.requestAnimationFrame(report);
   }
@@ -364,10 +431,46 @@
 
   /** Marks `el` as under the pointer: outlined, or a line glowing along its stroke rather than boxed in. */
   function hover(el) {
+    hoverPick = null;
     if (el === hovered) return;
     mark(hovered, "data-slop-hover", false);
     hovered = el;
     if (hovered) hovered.setAttribute("data-slop-hover", lineOf(hovered) ? "line" : "");
+  }
+
+  // Where the pointer last moved to with nothing held, until the next frame picks what is there,
+  // and what the last pick was made on: `settled` when moving on over the same target picks the same.
+  var hoverAt = null;
+  var hoverPick = null;
+
+  /** Picks what is under the pointer next frame, however often it moves until then. */
+  function scheduleHover(event) {
+    hoverAt = { target: event.target, x: event.clientX, y: event.clientY };
+    if (!hoverFrame) hoverFrame = window.requestAnimationFrame(pickHover);
+  }
+
+  /** No longer hovers anything, nor picks for a pointer that moved before now. */
+  function dropHover() {
+    hoverAt = null;
+    hover(null);
+  }
+
+  function pickHover() {
+    hoverFrame = 0;
+    var at = hoverAt;
+    hoverAt = null;
+    if (!at || drag || create || marquee) return;
+    if (editing || tool !== "select" || ui.contains(at.target) || pointUi.contains(at.target)) {
+      dropHover();
+      return;
+    }
+    if (hoverPick && hoverPick.settled && hoverPick.target === at.target) return;
+    var el = pickable(at.target, at.x, at.y);
+    hover(el);
+    // On the element itself, anywhere on the same target picks it again. A line is picked only on
+    // its stroke, and what shows through a see-through target depends on the spot.
+    var settled = at.target === slide || (!!el && el.contains(at.target) && !lineOf(el));
+    hoverPick = { target: at.target, settled: settled };
   }
 
   /** The element's inline `translate` offset in slide pixels. */
@@ -463,7 +566,7 @@
     else el.style.setProperty(prop, value, priority || "");
     if (!el.getAttribute("style")) el.removeAttribute("style");
     mark(el, MOVED, !!(el.style.translate || el.style.rotate || el.style.scale || TILT.test(el.style.transform || "")));
-    placeHandles();
+    scheduleHandles();
   }
 
   /** The center of the element's box on screen; a tilt in perspective would shift its bounds. */
@@ -489,9 +592,33 @@
     };
   }
 
+  /**
+   * How the slide shows in the window: `k` screen pixels per slide pixel, and its top left corner
+   * on screen. The pasteboard knows both, and what it says is kept until the view changes
+   * (see cameraMoved); without one that tells, the slide is measured each time.
+   */
+  function camera() {
+    if (keptCamera) return keptCamera;
+    if (typeof pasteboard.scale === "function" && typeof pasteboard.origin === "function") {
+      var k = pasteboard.scale();
+      var at = pasteboard.origin();
+      keptCamera = { k: isFinite(k) && k > 0 ? k : 1, left: at.x, top: at.y };
+      return keptCamera;
+    }
+    var rect = slide.getBoundingClientRect();
+    return { k: overflow.zoom(slide, rect), left: rect.left, top: rect.top };
+  }
+
   /** Screen pixels per slide pixel. */
   function zoom() {
-    return overflow.zoom(slide);
+    return camera().k;
+  }
+
+  /** The view panned or zoomed, or the window changed size: what is laid over the slide goes with it. */
+  function cameraMoved() {
+    keptCamera = null;
+    layHandles();
+    drawOverflow();
   }
 
   /**
@@ -505,7 +632,8 @@
       var center = centerOf(el);
       var size = sizeOf(el);
       var scale = scaleOf(el);
-      return { x: center.x, y: center.y, w: size.w * scale.x * zoom(), h: size.h * scale.y * zoom(), angle: angle };
+      var k = zoom();
+      return { x: center.x, y: center.y, w: size.w * scale.x * k, h: size.h * scale.y * k, angle: angle };
     }
     if (!angle) {
       var rect = el.getBoundingClientRect();
@@ -531,16 +659,61 @@
     var frame = shownFrame(el);
     var size = sizeOf(el);
     var scale = scaleOf(el);
+    var k = zoom();
     var spread = function (box, shown) {
-      return shown > 0 ? Math.min(MAX_SPREAD, (box * zoom()) / shown) : MAX_SPREAD;
+      return shown > 0 ? Math.min(MAX_SPREAD, (box * k) / shown) : MAX_SPREAD;
     };
     return { x: spread(size.w * scale.x, frame.w), y: spread(size.h * scale.y, frame.h) };
   }
 
-  /** Lays the handles over the selection's frame, turned with it; they keep their size on screen. */
-  function placeHandles() {
+  /**
+   * Something about the slide or the selection changed: the checks of the whole slide and the
+   * geometry report follow, and the pointer may be over something else now.
+   */
+  function noteChange() {
+    hoverPick = null;
     scheduleSlideChecks();
     scheduleGeometry();
+  }
+
+  /** Puts the handles where the selection is now (see layHandles), after a change. */
+  function placeHandles() {
+    noteChange();
+    layHandles();
+  }
+
+  /**
+   * Like placeHandles, but next frame: once however many elements a pointer move or a command
+   * moves, as every placing measures each selected element.
+   */
+  function scheduleHandles() {
+    noteChange();
+    if (!handlesFrame) handlesFrame = window.requestAnimationFrame(layHandles);
+  }
+
+  /** Places the handles now if that still waits for the next frame, for what reads where they are. */
+  function flushHandles() {
+    if (handlesFrame) layHandles();
+  }
+
+  /**
+   * Gives `parent` exactly `count` children, keeping those it has: `make` adds each one missing,
+   * and the ones too many go. Overlays redrawn on every pointer move reuse their nodes this way.
+   */
+  function fitChildren(parent, count, make) {
+    while (parent.childNodes.length > count) parent.removeChild(parent.lastChild);
+    while (parent.childNodes.length < count) parent.appendChild(make());
+    return parent.childNodes;
+  }
+
+  function newDiv() {
+    return document.createElement("div");
+  }
+
+  /** Lays the handles over the selection's frame, turned with it; they keep their size on screen. */
+  function layHandles() {
+    if (handlesFrame) window.cancelAnimationFrame(handlesFrame);
+    handlesFrame = 0;
     // A locked element shows its frame, but no handles to change it.
     mark(ui, "data-locked", !!selected && isLocked(selected));
     placeFrames();
@@ -589,7 +762,7 @@
     var x = (paint.flipX ? 1 - at[0] : at[0]) * size.w;
     var y = (paint.flipY ? 1 - at[1] : at[1]) * size.h;
     setAdjust(el, spec.fromHandle(size.w, size.h, [x, y]));
-    placeHandles();
+    scheduleHandles();
   }
 
   // ---- The SVG editor's button: a selected drawing opens in the app's SVG editor.
@@ -616,7 +789,7 @@
   /** Hands the drawing `el` to the app's SVG editor. */
   function openSvg(el) {
     if (!isDrawing(el)) return;
-    if (nudgeTimer) commit();
+    saveNudges();
     var size = sizeOf(el);
     var computed = getComputedStyle(el);
     var styles = deckStyles();

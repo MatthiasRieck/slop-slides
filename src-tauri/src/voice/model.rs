@@ -87,6 +87,8 @@ async fn fetch_to(
 ) -> Result<String> {
     let failed =
         |e: reqwest::Error| Error::msg(format!("Downloading the speech model failed: {e}"));
+    // It reads the proxy to go through from the shell's environment (see [`crate::env`]).
+    crate::env::ready();
     let response = reqwest::get(url)
         .await
         .and_then(|r| r.error_for_status())

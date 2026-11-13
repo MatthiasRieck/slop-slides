@@ -63,15 +63,13 @@ import {
   Underline,
   Wallpaper,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { memo, type ReactNode, useMemo, useState } from "react";
 import { useDropdown } from "../hooks/useDropdown";
-import type { ArrangeMessage, EditGeometry, EditLayer } from "../lib/arrange";
+import type { ArrangeMessage } from "../lib/arrange";
 import {
   type AgentInsert,
   AUTOFIT_LABELS,
   type Autofit,
-  type DeckColor,
-  type EditSelection,
   type EditStyle,
   type EditTool,
   type FontChoice,
@@ -92,6 +90,7 @@ import {
   type VerticalAlign,
 } from "../lib/editTools";
 import { cn } from "../lib/utils";
+import { useApp } from "../store";
 import { AlignControls, GroupControls, LayersPanel, PositionControls, SnapToggle } from "./ArrangeControls";
 import { ToolButton } from "./Button";
 import { ColorButton } from "./ColorButton";
@@ -101,6 +100,7 @@ import { DashSelect, LineButton, Parallelogram, Trapezoid } from "./LineTools";
 import { LookTools } from "./LookTools";
 import { DropdownPanel, dropdownPanel } from "./Popover";
 import { RibbonRow, RibbonSection, RibbonSelect, useRibbonFit } from "./Ribbon";
+import { type SizeMode, useEditorState, useSlideReport } from "./stage/editorState";
 import { TimelineTools } from "./TimelineTools";
 
 /** A tool of the Insert section: `title` adds how it is used to its name, `shortcut` is its key. */
@@ -253,10 +253,27 @@ const LISTS: { value: ListKind; label: string; title: string; icon: ReactNode }[
 const NEEDS_TEXT = "Select text or a text box";
 const NEEDS_ELEMENT = "Select an element";
 
-/** A slide a link can go to. */
-export interface LinkTarget {
-  id: string;
-  label: string;
+/** What every section of the ribbon is told: whether it is collapsed to its icon, and the tool in hand. */
+interface SectionProps {
+  collapsed: boolean;
+  tool: EditTool;
+}
+
+/** What the sections that restyle are told on top: the looks of what the tools add, and how to restyle. */
+interface StyleSectionProps extends SectionProps {
+  styles: Record<ToolFamily, EditStyle>;
+  onStyle: (changes: EditStyle) => void;
+  onReturnFocus?: () => void;
+}
+
+/**
+ * What a section's controls show and which of them are enabled: the selection the editor reports
+ * (see `toolbarState`), read here so that only the sections showing it render when it changes.
+ */
+function useToolbarState(tool: EditTool, styles: Record<ToolFamily, EditStyle>) {
+  const selection = useSlideReport((report) => report.selection);
+  const state = toolbarState(selection, tool, styles);
+  return { selection, state, style: state?.style ?? {}, textOff: !state?.text };
 }
 
 /**
@@ -272,24 +289,18 @@ export interface LinkTarget {
  *
  * Its buttons keep focus in the slide, so the text being edited keeps its selection; after a
  * typed value or a pick from a list `onReturnFocus` gives focus back to the slide.
+ *
+ * What the slide editor reports (the selection, where it is, the layers, the deck's fonts and
+ * colors) is not handed in: each control reads what it shows from `useEditorState`. The ribbon
+ * and its sections render only when what they are given changes, so a report from the editor,
+ * which comes with every keystroke and every frame of a drag, renders the controls showing it
+ * and no more. Its callbacks should so stay the same from one render of its parent to the next.
  */
-export function EditToolbar(props: {
-  sizeMode: "resize" | "stretch";
-  onSizeMode: (mode: "resize" | "stretch") => void;
-  /** Resizes keep the aspect ratio. */
-  keepRatio?: boolean;
+export const EditToolbar = memo(function EditToolbar(props: {
+  onSizeMode: (mode: SizeMode) => void;
   onKeepRatio?: (on: boolean) => void;
   tool: EditTool;
-  selection: EditSelection | null;
   styles: Record<ToolFamily, EditStyle>;
-  /** The fonts the deck's styles use. */
-  fonts?: FontChoice[];
-  /** The colors in the deck's CSS variables. */
-  colors?: DeckColor[];
-  /** The current slide's background color. */
-  background?: string | null;
-  /** The deck's slides, for links between them. */
-  slides?: LinkTarget[];
   onTool: (tool: EditTool) => void;
   onStyle: (changes: EditStyle) => void;
   onList?: (list: ListKind) => void;
@@ -302,24 +313,66 @@ export function EditToolbar(props: {
   onReturnFocus?: () => void;
   onOrder: (to: StackOrder) => void;
   onDelete: () => void;
-  /** Where the selection is, for the arrange controls. */
-  geometry?: EditGeometry | null;
-  /** What is on the slide, the top-most first, for the Layers panel. */
-  layers?: EditLayer[];
   onArrange?: (message: ArrangeMessage) => void;
 }) {
-  const state = toolbarState(props.selection, props.tool, props.styles);
-  const style = state?.style ?? {};
-  const textOff = !state?.text;
-  const fontSize = style.fontSize ?? 48;
-  const selection = props.selection;
-  const returnFocus = () => props.onReturnFocus?.();
   const ribbon = useRibbonFit();
   const { collapsedFrom } = ribbon;
-  const vector = !!state?.vector;
-  const strokeOff = !state || !!selection?.clipped;
-  const strokeReason = selection?.clipped ? "A cut-out shape takes no border" : NEEDS_ELEMENT;
-  const strokeWidth = style.strokeWidth ?? 0;
+  const { tool, styles, onStyle, onReturnFocus } = props;
+  const restyling = { tool, styles, onStyle, onReturnFocus };
+
+  return (
+    <div
+      ref={ribbon.ref}
+      role="toolbar"
+      aria-label="Edit tools"
+      data-edit-toolbar=""
+      className="flex min-w-0 flex-[1_1_200px]"
+    >
+      <InsertSection
+        collapsed={collapsedFrom <= 0}
+        tool={tool}
+        onTool={props.onTool}
+        onPickImage={props.onPickImage}
+        onInsertAsk={props.onInsertAsk}
+      />
+      <TextSection collapsed={collapsedFrom <= 1} {...restyling} onLink={props.onLink} onArrange={props.onArrange} />
+      <ParagraphSection collapsed={collapsedFrom <= 2} {...restyling} onList={props.onList} />
+      <StyleSection
+        collapsed={collapsedFrom <= 3}
+        {...restyling}
+        onTool={props.onTool}
+        onArrange={props.onArrange}
+        onPickImage={props.onPickImage}
+      />
+      <SlideSection
+        collapsed={collapsedFrom <= 4}
+        tool={tool}
+        onBackground={props.onBackground}
+        onReturnFocus={onReturnFocus}
+      />
+      <ArrangeSection
+        collapsed={collapsedFrom <= 5}
+        tool={tool}
+        onArrange={props.onArrange}
+        onOrder={props.onOrder}
+        onDelete={props.onDelete}
+        onReturnFocus={onReturnFocus}
+        onSizeMode={props.onSizeMode}
+        onKeepRatio={props.onKeepRatio}
+      />
+      <TimelineTools collapsed={collapsedFrom <= 6} />
+    </div>
+  );
+});
+
+/** The tools that add to the slide, and the requests to the agent for what they do not draw. */
+const InsertSection = memo(function InsertSection(
+  props: SectionProps & {
+    onTool: (tool: EditTool) => void;
+    onPickImage?: (replace: boolean) => void;
+    onInsertAsk?: (kind: AgentInsert) => void;
+  },
+) {
   const toolButton = (t: ToolChoice) => (
     <ToolButton
       keepFocus
@@ -333,336 +386,397 @@ export function EditToolbar(props: {
       {t.icon}
     </ToolButton>
   );
-
   return (
-    <div
-      ref={ribbon.ref}
-      role="toolbar"
-      aria-label="Edit tools"
-      data-edit-toolbar=""
-      className="flex min-w-0 flex-[1_1_200px]"
-    >
-      <RibbonSection title="Insert" icon={<Shapes />} collapsed={collapsedFrom <= 0} closeOn={props.tool}>
-        <RibbonRow>
-          {TOOLS.slice(0, FIRST_ROW_TOOLS).map(toolButton)}
-          <MoreShapes tool={props.tool} onTool={props.onTool} />
-        </RibbonRow>
-        <RibbonRow>
-          {TOOLS.slice(FIRST_ROW_TOOLS).map(toolButton)}
-          <ToolButton keepFocus label="Add an image from a file" onClick={() => props.onPickImage?.(false)}>
-            <ImagePlus />
-          </ToolButton>
-          {AGENT_INSERTS.map((insert) => (
-            <ToolButton
-              keepFocus
-              key={insert.kind}
-              label={insert.label}
-              title={insert.title}
-              onClick={() => props.onInsertAsk?.(insert.kind)}
-            >
-              {insert.icon}
-            </ToolButton>
-          ))}
-        </RibbonRow>
-      </RibbonSection>
-      <RibbonSection title="Text" icon={<Type />} collapsed={collapsedFrom <= 1} closeOn={props.tool}>
-        <RibbonRow>
-          <FontPicker
-            value={style.fontFamily ?? null}
-            fonts={props.fonts ?? []}
-            disabled={textOff}
-            onChange={(fontFamily) => props.onStyle({ fontFamily })}
-            onDone={returnFocus}
-          />
+    <RibbonSection title="Insert" icon={<Shapes />} collapsed={props.collapsed} closeOn={props.tool}>
+      <RibbonRow>
+        {TOOLS.slice(0, FIRST_ROW_TOOLS).map(toolButton)}
+        <MoreShapes tool={props.tool} onTool={props.onTool} />
+      </RibbonRow>
+      <RibbonRow>
+        {TOOLS.slice(FIRST_ROW_TOOLS).map(toolButton)}
+        <ToolButton keepFocus label="Add an image from a file" onClick={() => props.onPickImage?.(false)}>
+          <ImagePlus />
+        </ToolButton>
+        {AGENT_INSERTS.map((insert) => (
           <ToolButton
             keepFocus
-            label="Smaller text"
-            shortcut="mod+shift+,"
-            disabled={textOff}
-            disabledReason={NEEDS_TEXT}
-            onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, -1) })}
+            key={insert.kind}
+            label={insert.label}
+            title={insert.title}
+            onClick={() => props.onInsertAsk?.(insert.kind)}
           >
-            <Minus />
+            {insert.icon}
           </ToolButton>
-          <FontSizeInput
-            value={state?.text ? fontSize : null}
-            onChange={(size) => props.onStyle({ fontSize: size })}
-            onDone={returnFocus}
-          />
-          <ToolButton
-            keepFocus
-            label="Larger text"
-            shortcut="mod+shift+."
-            disabled={textOff}
-            disabledReason={NEEDS_TEXT}
-            onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, 1) })}
-          >
-            <Plus />
-          </ToolButton>
-        </RibbonRow>
-        <RibbonRow>
-          {TEXT_MARKS.map((m) => (
-            <ToolButton
-              keepFocus
-              key={m.mark}
-              label={m.label}
-              shortcut={m.shortcut}
-              active={!textOff && !!style[m.mark]}
-              disabled={textOff}
-              disabledReason={NEEDS_TEXT}
-              onClick={() => props.onStyle({ [m.mark]: !style[m.mark] })}
-            >
-              {m.icon}
-            </ToolButton>
-          ))}
-          {SCRIPTS.map((s) => (
-            <ToolButton
-              keepFocus
-              key={s.value}
-              label={s.label}
-              active={!textOff && !!selection && selection.script === s.value}
-              disabled={textOff || !selection}
-              disabledReason={NEEDS_TEXT}
-              onClick={() => props.onStyle({ script: selection?.script === s.value ? null : s.value })}
-            >
-              {s.icon}
-            </ToolButton>
-          ))}
-          <ColorButton
-            label="Text color"
-            icon={<Baseline />}
-            value={style.color ?? null}
-            other={!!selection?.colorOther}
-            disabled={textOff}
-            disabledReason={NEEDS_TEXT}
-            deck={props.colors}
-            onChange={(color) => props.onStyle({ color })}
-            onDone={returnFocus}
-          />
-          <LinkButton
-            value={selection?.link ?? null}
-            disabled={!selection}
-            slides={props.slides ?? []}
-            onChange={(href) => props.onLink?.(href)}
-            onDone={returnFocus}
-          />
-          <ToolButton
-            keepFocus
-            label="Clear formatting"
-            title="Clear formatting: take bold, colors, sizes and other formatting off the text, keeping its links"
-            disabled={textOff || !selection}
-            disabledReason={NEEDS_TEXT}
-            onClick={() => props.onArrange?.({ type: "slop:edit-clear-formatting" })}
-          >
-            <RemoveFormatting />
-          </ToolButton>
-        </RibbonRow>
-      </RibbonSection>
-      <RibbonSection title="Paragraph" icon={<AlignLeft />} collapsed={collapsedFrom <= 2} closeOn={props.tool}>
-        <RibbonRow>
-          {ALIGN.map((a) => (
-            <ToolButton
-              keepFocus
-              key={a.value}
-              label={a.label}
-              shortcut={a.shortcut}
-              active={!textOff && style.align === a.value}
-              disabled={textOff}
-              disabledReason={NEEDS_TEXT}
-              onClick={() => props.onStyle({ align: a.value })}
-            >
-              {a.icon}
-            </ToolButton>
-          ))}
-          {LISTS.map((l) => (
-            <ToolButton
-              keepFocus
-              key={l.value}
-              label={l.label}
-              title={l.title}
-              active={!textOff && !!selection && selection.list === l.value}
-              disabled={textOff || !selection}
-              disabledReason={NEEDS_TEXT}
-              onClick={() => props.onList?.(l.value)}
-            >
-              {l.icon}
-            </ToolButton>
-          ))}
-          <SpacingButton
-            lineHeight={style.lineHeight ?? null}
-            letterSpacing={style.letterSpacing ?? 0}
-            disabled={textOff}
-            onChange={props.onStyle}
-            onDone={returnFocus}
-          />
-        </RibbonRow>
-        <RibbonRow>
-          {VALIGN.map((a) => (
-            <ToolButton
-              keepFocus
-              key={a.value}
-              label={a.label}
-              active={!textOff && !!state?.valign && style.valign === a.value}
-              disabled={textOff || !state?.valign}
-              disabledReason={textOff ? NEEDS_TEXT : "This element's text cannot align vertically"}
-              onClick={() => props.onStyle({ valign: a.value })}
-            >
-              {a.icon}
-            </ToolButton>
-          ))}
-          <RibbonSelect
-            label="When text does not fit"
-            title="When text does not fit its box: leave it (the overflow is marked), shrink the text, or grow the box"
-            disabled={textOff || !selection}
-            disabledReason={NEEDS_TEXT}
-            value={selection?.autofit ?? ""}
-            onPick={(autofit) => props.onStyle({ autofit: (autofit || null) as Autofit | null })}
-            onDone={returnFocus}
-            className="w-full min-w-0 flex-1 enabled:hover:bg-accent"
-          >
-            {AUTOFIT_LABELS.map((choice) => (
-              <option key={choice.value} value={choice.value}>
-                {choice.label}
-              </option>
-            ))}
-          </RibbonSelect>
-        </RibbonRow>
-      </RibbonSection>
-      <RibbonSection title="Style" icon={<PaintBucket />} collapsed={collapsedFrom <= 3} closeOn={props.tool}>
-        <RibbonRow>
-          <ColorButton
-            label="Fill"
-            icon={<PaintBucket />}
-            value={style.fill ?? null}
-            other={!!selection?.fillOther}
-            disabled={!state}
-            disabledReason={NEEDS_ELEMENT}
-            none
-            deck={props.colors}
-            onChange={(fill) => props.onStyle({ fill })}
-            onDone={returnFocus}
-          />
-          <ColorButton
-            label={vector ? "Line color" : "Border color"}
-            icon={<SquareDashed />}
-            value={style.stroke ?? null}
-            other={!!selection?.strokeOther}
-            disabled={strokeOff}
-            disabledReason={strokeReason}
-            none
-            deck={props.colors}
-            onChange={(stroke) => props.onStyle({ stroke })}
-            onDone={returnFocus}
-          />
-          <RibbonSelect
-            label={vector ? "Line width" : "Border width"}
-            disabled={strokeOff}
-            disabledReason={strokeReason}
-            value={String(strokeWidth)}
-            onPick={(width) => props.onStyle({ strokeWidth: Number(width) })}
-            onDone={returnFocus}
-            className="w-24 enabled:hover:bg-accent"
-          >
-            {strokeWidths(strokeWidth, vector).map((w) => (
-              <option key={w} value={w}>
-                {w === 0 ? "No border" : `${w}px`}
-              </option>
-            ))}
-          </RibbonSelect>
-          <DashSelect
-            value={style.dash ?? "solid"}
-            vector={vector}
-            disabled={strokeOff}
-            disabledReason={strokeReason}
-            onChange={props.onStyle}
-            onDone={returnFocus}
-          />
-        </RibbonRow>
-        <RibbonRow>
-          <LookTools
-            tool={props.tool}
-            selection={selection}
-            onTool={props.onTool}
-            onStyle={props.onStyle}
-            onArrange={props.onArrange}
-            onPickImage={props.onPickImage}
-            onReturnFocus={returnFocus}
-          />
-          <LineButton selection={selection} onChange={props.onStyle} onDone={returnFocus} />
-        </RibbonRow>
-      </RibbonSection>
-      <RibbonSection title="Slide" icon={<Presentation />} collapsed={collapsedFrom <= 4} closeOn={props.tool}>
-        <RibbonRow>
-          <ColorButton
-            label="Slide background"
-            icon={<Wallpaper />}
-            value={props.background ?? null}
-            none
-            deck={props.colors}
-            panel="background"
-            onChange={(color) => props.onBackground?.(color)}
-            onDone={returnFocus}
-          />
-        </RibbonRow>
-      </RibbonSection>
-      <RibbonSection title="Arrange" icon={<Move />} collapsed={collapsedFrom <= 5} closeOn={props.tool}>
-        <RibbonRow>
-          <AlignControls geometry={props.geometry ?? null} onArrange={props.onArrange} />
-          <PositionControls
-            geometry={props.geometry ?? null}
-            selection={selection}
-            onArrange={props.onArrange}
-            onDone={returnFocus}
-            sizeMode={props.sizeMode}
-            onSizeMode={props.onSizeMode}
-            keepRatio={props.keepRatio}
-            onKeepRatio={props.onKeepRatio}
-          />
-        </RibbonRow>
-        <RibbonRow>
-          {ORDER.map((o) => (
-            <ToolButton
-              keepFocus
-              key={o.to}
-              label={o.label}
-              shortcut={o.shortcut}
-              disabled={!props.selection}
-              disabledReason={NEEDS_ELEMENT}
-              onClick={() => props.onOrder(o.to)}
-            >
-              {o.icon}
-            </ToolButton>
-          ))}
-          <GroupControls geometry={props.geometry ?? null} selection={selection} onArrange={props.onArrange} />
-          <LayersPanel layers={props.layers ?? []} onArrange={props.onArrange} />
-          <SnapToggle />
-          <ToolButton
-            keepFocus
-            label="Duplicate"
-            shortcut="mod+d"
-            disabled={!props.selection}
-            disabledReason={NEEDS_ELEMENT}
-            onClick={() => props.onArrange?.({ type: "slop:edit-duplicate" })}
-          >
-            <CopyPlus />
-          </ToolButton>
-          <ToolButton
-            keepFocus
-            destructive
-            label="Delete"
-            shortcut="backspace"
-            disabled={!props.selection}
-            disabledReason={NEEDS_ELEMENT}
-            onClick={props.onDelete}
-          >
-            <Trash2 />
-          </ToolButton>
-        </RibbonRow>
-      </RibbonSection>
-      <TimelineTools collapsed={collapsedFrom <= 6} />
-    </div>
+        ))}
+      </RibbonRow>
+    </RibbonSection>
   );
-}
+});
+
+/** The text's font, size, marks, color and link. */
+const TextSection = memo(function TextSection(
+  props: StyleSectionProps & {
+    onLink?: (href: string | null) => void;
+    onArrange?: (message: ArrangeMessage) => void;
+  },
+) {
+  const { selection, state, style, textOff } = useToolbarState(props.tool, props.styles);
+  const fonts = useEditorState((s) => s.fonts);
+  const colors = useEditorState((s) => s.colors);
+  const fontSize = style.fontSize ?? 48;
+  const returnFocus = () => props.onReturnFocus?.();
+  return (
+    <RibbonSection title="Text" icon={<Type />} collapsed={props.collapsed} closeOn={props.tool}>
+      <RibbonRow>
+        <FontPicker
+          value={style.fontFamily ?? null}
+          fonts={fonts}
+          disabled={textOff}
+          onChange={(fontFamily) => props.onStyle({ fontFamily })}
+          onDone={returnFocus}
+        />
+        <ToolButton
+          keepFocus
+          label="Smaller text"
+          shortcut="mod+shift+,"
+          disabled={textOff}
+          disabledReason={NEEDS_TEXT}
+          onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, -1) })}
+        >
+          <Minus />
+        </ToolButton>
+        <FontSizeInput
+          value={state?.text ? fontSize : null}
+          onChange={(size) => props.onStyle({ fontSize: size })}
+          onDone={returnFocus}
+        />
+        <ToolButton
+          keepFocus
+          label="Larger text"
+          shortcut="mod+shift+."
+          disabled={textOff}
+          disabledReason={NEEDS_TEXT}
+          onClick={() => props.onStyle({ fontSize: stepFontSize(fontSize, 1) })}
+        >
+          <Plus />
+        </ToolButton>
+      </RibbonRow>
+      <RibbonRow>
+        {TEXT_MARKS.map((m) => (
+          <ToolButton
+            keepFocus
+            key={m.mark}
+            label={m.label}
+            shortcut={m.shortcut}
+            active={!textOff && !!style[m.mark]}
+            disabled={textOff}
+            disabledReason={NEEDS_TEXT}
+            onClick={() => props.onStyle({ [m.mark]: !style[m.mark] })}
+          >
+            {m.icon}
+          </ToolButton>
+        ))}
+        {SCRIPTS.map((s) => (
+          <ToolButton
+            keepFocus
+            key={s.value}
+            label={s.label}
+            active={!textOff && !!selection && selection.script === s.value}
+            disabled={textOff || !selection}
+            disabledReason={NEEDS_TEXT}
+            onClick={() => props.onStyle({ script: selection?.script === s.value ? null : s.value })}
+          >
+            {s.icon}
+          </ToolButton>
+        ))}
+        <ColorButton
+          label="Text color"
+          icon={<Baseline />}
+          value={style.color ?? null}
+          other={!!selection?.colorOther}
+          disabled={textOff}
+          disabledReason={NEEDS_TEXT}
+          deck={colors}
+          onChange={(color) => props.onStyle({ color })}
+          onDone={returnFocus}
+        />
+        <LinkButton
+          value={selection?.link ?? null}
+          disabled={!selection}
+          onChange={(href) => props.onLink?.(href)}
+          onDone={returnFocus}
+        />
+        <ToolButton
+          keepFocus
+          label="Clear formatting"
+          title="Clear formatting: take bold, colors, sizes and other formatting off the text, keeping its links"
+          disabled={textOff || !selection}
+          disabledReason={NEEDS_TEXT}
+          onClick={() => props.onArrange?.({ type: "slop:edit-clear-formatting" })}
+        >
+          <RemoveFormatting />
+        </ToolButton>
+      </RibbonRow>
+    </RibbonSection>
+  );
+});
+
+/** How the text is aligned, listed and spaced, and what it does when it does not fit. */
+const ParagraphSection = memo(function ParagraphSection(
+  props: StyleSectionProps & { onList?: (list: ListKind) => void },
+) {
+  const { selection, state, style, textOff } = useToolbarState(props.tool, props.styles);
+  const returnFocus = () => props.onReturnFocus?.();
+  return (
+    <RibbonSection title="Paragraph" icon={<AlignLeft />} collapsed={props.collapsed} closeOn={props.tool}>
+      <RibbonRow>
+        {ALIGN.map((a) => (
+          <ToolButton
+            keepFocus
+            key={a.value}
+            label={a.label}
+            shortcut={a.shortcut}
+            active={!textOff && style.align === a.value}
+            disabled={textOff}
+            disabledReason={NEEDS_TEXT}
+            onClick={() => props.onStyle({ align: a.value })}
+          >
+            {a.icon}
+          </ToolButton>
+        ))}
+        {LISTS.map((l) => (
+          <ToolButton
+            keepFocus
+            key={l.value}
+            label={l.label}
+            title={l.title}
+            active={!textOff && !!selection && selection.list === l.value}
+            disabled={textOff || !selection}
+            disabledReason={NEEDS_TEXT}
+            onClick={() => props.onList?.(l.value)}
+          >
+            {l.icon}
+          </ToolButton>
+        ))}
+        <SpacingButton
+          lineHeight={style.lineHeight ?? null}
+          letterSpacing={style.letterSpacing ?? 0}
+          disabled={textOff}
+          onChange={props.onStyle}
+          onDone={returnFocus}
+        />
+      </RibbonRow>
+      <RibbonRow>
+        {VALIGN.map((a) => (
+          <ToolButton
+            keepFocus
+            key={a.value}
+            label={a.label}
+            active={!textOff && !!state?.valign && style.valign === a.value}
+            disabled={textOff || !state?.valign}
+            disabledReason={textOff ? NEEDS_TEXT : "This element's text cannot align vertically"}
+            onClick={() => props.onStyle({ valign: a.value })}
+          >
+            {a.icon}
+          </ToolButton>
+        ))}
+        <RibbonSelect
+          label="When text does not fit"
+          title="When text does not fit its box: leave it (the overflow is marked), shrink the text, or grow the box"
+          disabled={textOff || !selection}
+          disabledReason={NEEDS_TEXT}
+          value={selection?.autofit ?? ""}
+          onPick={(autofit) => props.onStyle({ autofit: (autofit || null) as Autofit | null })}
+          onDone={returnFocus}
+          className="w-full min-w-0 flex-1 enabled:hover:bg-accent"
+        >
+          {AUTOFIT_LABELS.map((choice) => (
+            <option key={choice.value} value={choice.value}>
+              {choice.label}
+            </option>
+          ))}
+        </RibbonSelect>
+      </RibbonRow>
+    </RibbonSection>
+  );
+});
+
+/** The selection's fill, border or line, and the rest of its look. */
+const StyleSection = memo(function StyleSection(
+  props: StyleSectionProps & {
+    onTool: (tool: EditTool) => void;
+    onArrange?: (message: ArrangeMessage) => void;
+    onPickImage?: (replace: boolean) => void;
+  },
+) {
+  const { selection, state, style } = useToolbarState(props.tool, props.styles);
+  const colors = useEditorState((s) => s.colors);
+  const returnFocus = () => props.onReturnFocus?.();
+  const vector = !!state?.vector;
+  const strokeOff = !state || !!selection?.clipped;
+  const strokeReason = selection?.clipped ? "A cut-out shape takes no border" : NEEDS_ELEMENT;
+  const strokeWidth = style.strokeWidth ?? 0;
+  return (
+    <RibbonSection title="Style" icon={<PaintBucket />} collapsed={props.collapsed} closeOn={props.tool}>
+      <RibbonRow>
+        <ColorButton
+          label="Fill"
+          icon={<PaintBucket />}
+          value={style.fill ?? null}
+          other={!!selection?.fillOther}
+          disabled={!state}
+          disabledReason={NEEDS_ELEMENT}
+          none
+          deck={colors}
+          onChange={(fill) => props.onStyle({ fill })}
+          onDone={returnFocus}
+        />
+        <ColorButton
+          label={vector ? "Line color" : "Border color"}
+          icon={<SquareDashed />}
+          value={style.stroke ?? null}
+          other={!!selection?.strokeOther}
+          disabled={strokeOff}
+          disabledReason={strokeReason}
+          none
+          deck={colors}
+          onChange={(stroke) => props.onStyle({ stroke })}
+          onDone={returnFocus}
+        />
+        <RibbonSelect
+          label={vector ? "Line width" : "Border width"}
+          disabled={strokeOff}
+          disabledReason={strokeReason}
+          value={String(strokeWidth)}
+          onPick={(width) => props.onStyle({ strokeWidth: Number(width) })}
+          onDone={returnFocus}
+          className="w-24 enabled:hover:bg-accent"
+        >
+          {strokeWidths(strokeWidth, vector).map((w) => (
+            <option key={w} value={w}>
+              {w === 0 ? "No border" : `${w}px`}
+            </option>
+          ))}
+        </RibbonSelect>
+        <DashSelect
+          value={style.dash ?? "solid"}
+          vector={vector}
+          disabled={strokeOff}
+          disabledReason={strokeReason}
+          onChange={props.onStyle}
+          onDone={returnFocus}
+        />
+      </RibbonRow>
+      <RibbonRow>
+        <LookTools
+          tool={props.tool}
+          selection={selection}
+          onTool={props.onTool}
+          onStyle={props.onStyle}
+          onArrange={props.onArrange}
+          onPickImage={props.onPickImage}
+          onReturnFocus={returnFocus}
+        />
+        <LineButton selection={selection} onChange={props.onStyle} onDone={returnFocus} />
+      </RibbonRow>
+    </RibbonSection>
+  );
+});
+
+/** What is the slide's own, whatever is selected: its background. */
+const SlideSection = memo(function SlideSection(
+  props: SectionProps & { onBackground?: (color: string | null) => void; onReturnFocus?: () => void },
+) {
+  const background = useEditorState((s) => s.background);
+  const colors = useEditorState((s) => s.colors);
+  return (
+    <RibbonSection title="Slide" icon={<Presentation />} collapsed={props.collapsed} closeOn={props.tool}>
+      <RibbonRow>
+        <ColorButton
+          label="Slide background"
+          icon={<Wallpaper />}
+          value={background}
+          none
+          deck={colors}
+          panel="background"
+          onChange={(color) => props.onBackground?.(color)}
+          onDone={() => props.onReturnFocus?.()}
+        />
+      </RibbonRow>
+    </RibbonSection>
+  );
+});
+
+/**
+ * Where the selection is and how it lies among the rest. The section itself only knows whether
+ * anything is selected; the controls that show where (see ArrangeControls.tsx) follow the
+ * selection as it is dragged by themselves.
+ */
+const ArrangeSection = memo(function ArrangeSection(
+  props: SectionProps & {
+    onArrange?: (message: ArrangeMessage) => void;
+    onOrder: (to: StackOrder) => void;
+    onDelete: () => void;
+    onReturnFocus?: () => void;
+    onSizeMode: (mode: SizeMode) => void;
+    onKeepRatio?: (on: boolean) => void;
+  },
+) {
+  const nothing = useSlideReport((report) => report.selection === null);
+  const { onArrange, onReturnFocus } = props;
+  return (
+    <RibbonSection title="Arrange" icon={<Move />} collapsed={props.collapsed} closeOn={props.tool}>
+      <RibbonRow>
+        <AlignControls onArrange={onArrange} />
+        <PositionControls
+          onArrange={onArrange}
+          onDone={onReturnFocus}
+          onSizeMode={props.onSizeMode}
+          onKeepRatio={props.onKeepRatio}
+        />
+      </RibbonRow>
+      <RibbonRow>
+        {ORDER.map((o) => (
+          <ToolButton
+            keepFocus
+            key={o.to}
+            label={o.label}
+            shortcut={o.shortcut}
+            disabled={nothing}
+            disabledReason={NEEDS_ELEMENT}
+            onClick={() => props.onOrder(o.to)}
+          >
+            {o.icon}
+          </ToolButton>
+        ))}
+        <GroupControls onArrange={onArrange} />
+        <LayersPanel onArrange={onArrange} />
+        <SnapToggle />
+        <ToolButton
+          keepFocus
+          label="Duplicate"
+          shortcut="mod+d"
+          disabled={nothing}
+          disabledReason={NEEDS_ELEMENT}
+          onClick={() => onArrange?.({ type: "slop:edit-duplicate" })}
+        >
+          <CopyPlus />
+        </ToolButton>
+        <ToolButton
+          keepFocus
+          destructive
+          label="Delete"
+          shortcut="backspace"
+          disabled={nothing}
+          disabledReason={NEEDS_ELEMENT}
+          onClick={props.onDelete}
+        >
+          <Trash2 />
+        </ToolButton>
+      </RibbonRow>
+    </RibbonSection>
+  );
+});
 
 /** The "More shapes" picker: diagram shapes under their headings, which go back to Select once one is added. */
 function MoreShapes(props: { tool: EditTool; onTool: (tool: EditTool) => void }) {
@@ -778,7 +892,6 @@ function FontSizeInput(props: { value: number | null; onChange: (size: number) =
 function LinkButton(props: {
   value: string | null;
   disabled: boolean;
-  slides: LinkTarget[];
   onChange: (href: string | null) => void;
   onDone: () => void;
 }) {
@@ -861,24 +974,13 @@ function LinkButton(props: {
             }}
             className={cn("h-7 rounded border bg-transparent px-2", invalid && "border-destructive")}
           />
-          {props.slides.length > 0 && (
-            <select
-              aria-label="Link to slide"
-              value={slide}
-              onChange={(event) => {
-                setSlide(event.target.value);
-                setInvalid(false);
-              }}
-              className="h-7 rounded border bg-transparent px-1"
-            >
-              <option value="">Or link to a slide…</option>
-              {props.slides.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
-          )}
+          <LinkTargets
+            value={slide}
+            onChange={(id) => {
+              setSlide(id);
+              setInvalid(false);
+            }}
+          />
           {invalid && <p className="text-destructive">Enter a web address, an email address, or pick a slide.</p>}
           <div className="flex justify-end gap-1">
             {props.value && (
@@ -893,6 +995,31 @@ function LinkButton(props: {
         </form>
       )}
     </div>
+  );
+}
+
+/**
+ * The deck's slides, to pick the one a link goes to. It is part of the open Link popover: only
+ * then is the list made, and kept up with the deck.
+ */
+function LinkTargets(props: { value: string; onChange: (slide: string) => void }) {
+  const slides = useApp((s) => s.deck?.slides);
+  const targets = useMemo(() => (slides ?? []).map((s, i) => ({ id: s.id, label: `${i + 1}. ${s.id}` })), [slides]);
+  if (targets.length === 0) return null;
+  return (
+    <select
+      aria-label="Link to slide"
+      value={props.value}
+      onChange={(event) => props.onChange(event.target.value)}
+      className="h-7 rounded border bg-transparent px-1"
+    >
+      <option value="">Or link to a slide…</option>
+      {targets.map((target) => (
+        <option key={target.id} value={target.id}>
+          {target.label}
+        </option>
+      ))}
+    </select>
   );
 }
 

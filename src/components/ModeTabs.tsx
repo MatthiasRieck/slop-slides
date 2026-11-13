@@ -6,6 +6,7 @@ import { useRovingTabs } from "../hooks/useRovingTabs";
 import { SHELL_SHORTCUTS } from "../lib/shellKeys";
 import { cn } from "../lib/utils";
 import { type DeckMode, deckMode, useApp } from "../store";
+import { selectedSlideLocked } from "../store/chrome";
 import { keepFocus, withShortcut } from "./Button";
 
 /** The modes with a tab. The deck's settings open from the file menu instead (TopBar). */
@@ -49,7 +50,7 @@ function useInRepository() {
  */
 export function ModeTabs() {
   const mode = useApp(deckMode);
-  const locked = useApp((s) => !!s.deck?.slides.find((slide) => slide.id === s.selected)?.locked);
+  const locked = useApp(selectedSlideLocked);
   const inRepository = useInRepository();
 
   /** One line each: what the mode is for, then the keys that go to it. */

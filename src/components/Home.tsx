@@ -115,22 +115,38 @@ function useHomeDrops(onDrop: (paths: string[]) => void) {
   return dragging;
 }
 
+/** The decks and folders opened before, as the start screen lists them. */
+interface Recent {
+  decks: RecentDeck[];
+  folders: RecentWorkspace[];
+}
+
+/**
+ * The lists as last read, in this window: coming back to the start screen shows them at once,
+ * while they are read again.
+ */
+let lastRecent: Recent | null = null;
+
 /**
  * The start screen: start a deck in the library, open a folder, a deck in its folder or the
  * library, import a PowerPoint file, or go back to a deck or a folder opened before. A folder, a
  * deck or a PowerPoint file dropped on it opens the same way.
  */
 export function Home() {
-  const [folders, setFolders] = useState<RecentWorkspace[] | null>(null);
-  const [decks, setDecks] = useState<RecentDeck[] | null>(null);
+  const [recent, setRecent] = useState(lastRecent);
+  const decks = recent?.decks ?? null;
+  const folders = recent?.folders ?? null;
   const pptx = usePptxImport(openLibrary);
   useShellKeys();
 
   const refresh = () =>
     Promise.all([api.recentDecks(), api.recentWorkspaces()])
       .then(([deckList, folderList]) => {
-        setDecks(Array.isArray(deckList) ? deckList : []);
-        setFolders(Array.isArray(folderList) ? folderList : []);
+        lastRecent = {
+          decks: Array.isArray(deckList) ? deckList : [],
+          folders: Array.isArray(folderList) ? folderList : [],
+        };
+        setRecent(lastRecent);
       })
       .catch((error) => showError(error));
 

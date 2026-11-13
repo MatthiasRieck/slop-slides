@@ -1,5 +1,5 @@
 import { Check, Loader2, Mic } from "lucide-react";
-import { type Ref, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { type Ref, type RefObject, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 import { useTauriEvent } from "../hooks/useTauriEvent";
 import { api, type VoiceDownloadProgress } from "../lib/api";
@@ -38,7 +38,7 @@ const WAVEFORM_INTERVAL = 60;
  * The microphone's level over time, coming out of the stop button on its right. Once `live`
  * is off (the words are being transcribed) the bars keep moving and run out, leaving a dotted line.
  */
-function Waveform(props: { level: number; live: boolean }) {
+function Waveform(props: { level: RefObject<number>; live: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const input = useRef(props);
   input.current = props;
@@ -55,7 +55,7 @@ function Waveform(props: { level: number; live: boolean }) {
     const draw = (now: number) => {
       frame = requestAnimationFrame(draw);
       const { level, live } = input.current;
-      peak = Math.max(peak, live ? level : 0);
+      peak = Math.max(peak, live ? level.current : 0);
       const width = el.clientWidth;
       const height = el.clientHeight;
       while (now - last >= WAVEFORM_INTERVAL) {
@@ -119,7 +119,14 @@ export function VoiceInput(
   const [phase, setPhase] = useState<Phase>("idle");
   const [modelBytes, setModelBytes] = useState(0);
   const [progress, setProgress] = useState<VoiceDownloadProgress | null>(null);
-  const [level, setLevel] = useState(0);
+  // The microphone's level comes many times a second and is only drawn: by the waveform, on its
+  // own frames, and as the ring around the button, which is moved by hand. It renders nothing.
+  const level = useRef(0);
+  const ring = useRef<HTMLSpanElement>(null);
+  const setLevel = (value: number) => {
+    level.current = value;
+    if (ring.current) ring.current.style.transform = `scale(${1 + value * 0.35})`;
+  };
   const button = useRef<HTMLButtonElement>(null);
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
@@ -239,10 +246,10 @@ export function VoiceInput(
       >
         {phase === "recording" && (
           <span
+            ref={ring}
             aria-hidden
             data-testid="voice-level"
             className="pointer-events-none absolute inset-0 rounded-full border-2 border-destructive/60 transition-transform duration-75"
-            style={{ transform: `scale(${1 + level * 0.35})` }}
           />
         )}
         {phase === "transcribing" || phase === "starting" || phase === "downloading" ? (
@@ -299,7 +306,11 @@ export function VoiceInput(
                 aria-valuenow={percent}
                 className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"
               >
-                <div className="h-full bg-primary transition-[width]" style={{ width: `${percent}%` }} />
+                {/* As wide as its track and moved into it from the left: moving takes no layout, a width changing does. */}
+                <div
+                  className="h-full bg-primary transition-transform"
+                  style={{ transform: `translateX(${percent - 100}%)` }}
+                />
               </div>
               <p className="mt-1.5 text-muted-foreground">
                 {progress ? `${formatBytes(progress.received)} of ${formatBytes(progress.total)}` : "Starting…"}

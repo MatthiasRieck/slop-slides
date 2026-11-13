@@ -271,8 +271,6 @@ describe("replace", () => {
       count,
       slides: ["intro"],
       skipped: [],
-      previous: "<old>",
-      source: "<new>",
     });
     invoke.mockImplementation(async (cmd: string) => {
       if (cmd === "find_in_deck") return left;
@@ -340,8 +338,6 @@ describe("replace", () => {
       count: 2,
       slides: ["intro", "outro"],
       skipped: ["locked"],
-      previous: "<old>",
-      source: "<new>",
     };
     invoke.mockImplementation(async (cmd: string) => {
       if (cmd === "find_in_deck") return MATCHES;

@@ -1,5 +1,6 @@
 import { api, type Deck, type RailEdit, type Slide } from "../lib/api";
-import { applyOrder, railItems, stepRows } from "../lib/sections";
+import { applyOrder, railItems, stepRows, withoutSlides, withSlidesMarked } from "../lib/sections";
+import { shareDeck } from "../lib/share";
 import { loadJson, saveJson } from "../lib/storage";
 import { plural } from "../lib/utils";
 import { queueEdit } from "./editQueue";
@@ -27,6 +28,10 @@ export interface SlidesSlice {
   /** Slides being saved as images into `dir`, one at a time; null when not exporting. */
   imageExport: { dir: string; slides: string[] } | null;
 
+  /**
+   * Shows `deck` as the open deck's new state. What did not change in it stays the very objects
+   * it was (see `shareDeck`), and a deck that changed nothing leaves the store untouched.
+   */
   setDeck: (deck: Deck) => void;
   select: (slide: string | null) => void;
   /**
@@ -55,6 +60,7 @@ export interface SlidesSlice {
   addSlide: (after?: string | null) => Promise<void>;
   /**
    * Deletes `slides`, leaving locked ones alone, and selects a slide next to them if need be.
+   * They go from the rail right away, and come back should the deck file refuse the change.
    * Says how many went, with a way to take it back; `verb` is what happened to them ("Deleted").
    */
   deleteSlides: (slides: string[], verb?: string) => Promise<void>;
@@ -65,8 +71,9 @@ export interface SlidesSlice {
   removeSection: (index: number) => Promise<void>;
   /** Runs a change to the deck file as one the slide list can undo; null when it failed. */
   editRail: (change: (id: string) => Promise<RailEdit>) => Promise<RailEdit | null>;
+  /** Hides or shows `slides`, as one change, which shows right away. */
   setSlidesHidden: (slides: string[], hidden: boolean) => Promise<void>;
-  /** Locks or unlocks `slides`, as one change. */
+  /** Locks or unlocks `slides`, as one change, which shows right away. */
   setSlidesLocked: (slides: string[], locked: boolean) => Promise<void>;
   /** Copies `slides`, each right after itself, and selects the copies. */
   duplicateSlides: (slides: string[]) => Promise<void>;
@@ -158,7 +165,94 @@ export function selectedSlide(state: Pick<AppState, "deck" | "selected">): Slide
   return state.deck?.slides.find((s) => s.id === state.selected);
 }
 
-/** Queues a rail change after the edits before it and shows its deck. */
+/** No slides picked. The same list every time, so that picking none again changes nothing. */
+const unpicked = (state: Pick<AppState, "railSelected">) => (state.railSelected.length === 0 ? state.railSelected : []);
+
+/** A change to the open deck that is shown before the backend has made it (see `editAhead`). */
+type Prediction = { deck: string; predict: (deck: Deck) => Deck };
+
+/**
+ * The changes shown ahead, oldest first. Until the backend has answered one, every deck it sends
+ * (a slide edit saved before it, the deck file read again) still lacks it, so each is shown with
+ * these applied: a deleted slide does not come back for a moment.
+ */
+const ahead: Prediction[] = [];
+
+/** Shows the deck the backend sent, with the changes shown ahead of it; see `putDeck`. */
+function showDeck(app: AppStore, incoming: Deck): boolean {
+  return putDeck(
+    app,
+    ahead.reduce((deck, shown) => (shown.deck === deck.id ? shown.predict(deck) : deck), incoming),
+  );
+}
+
+/**
+ * Makes `next` the open deck, keeping what did not change as the objects they were, the
+ * selection on a slide that is still there and the picks that are. Resolves to whether anything
+ * changed: a deck that is the one shown already does not touch the store.
+ */
+function putDeck(app: AppStore, next: Deck): boolean {
+  const { deck: before, selected, railSelected } = app.getState();
+  const deck = shareDeck(before, next);
+  if (deck === before) return false;
+  if (deck.slides === before?.slides) {
+    app.setState({ deck });
+    return true;
+  }
+  const ids = new Set(deck.slides.map((s) => s.id));
+  app.setState({
+    deck,
+    selected: selected !== null && ids.has(selected) ? selected : (deck.slides[0]?.id ?? null),
+    railSelected: railSelected.every((id) => ids.has(id)) ? railSelected : railSelected.filter((id) => ids.has(id)),
+  });
+  return true;
+}
+
+/**
+ * Shows a change to the open deck right away, as `predict` says the deck will be, then makes it
+ * after the edits queued before it and shows the deck the backend answers with (`deckOf` its
+ * answer). One that fails is reported and the deck read from its file again, which takes what
+ * was shown ahead back. Resolves to the backend's answer, null when it failed. The deck's
+ * history is asked once, when the change is made: what was shown ahead is not in it yet.
+ */
+function editAhead<T>(
+  app: AppStore,
+  predict: (deck: Deck) => Deck,
+  change: (id: string) => Promise<T>,
+  deckOf: (answer: T) => Deck,
+): Promise<T | null> {
+  const { deck } = app.getState();
+  if (!deck) return Promise.resolve(null);
+  const shown: Prediction = { deck: deck.id, predict };
+  putDeck(app, predict(deck));
+  ahead.push(shown);
+  const open = () => app.getState().deck?.id === deck.id;
+  return queueEdit(async () => {
+    try {
+      const answer = await change(deck.id);
+      ahead.splice(ahead.indexOf(shown), 1);
+      if (open()) {
+        showDeck(app, deckOf(answer));
+        void refreshHistory(app);
+      }
+      return answer;
+    } catch (error) {
+      ahead.splice(ahead.indexOf(shown), 1);
+      showErrorIn(app, error);
+      if (!open()) return null;
+      // What was shown ahead did not happen: back to the deck as its file has it, or, should
+      // that not be readable either, as it was before the change.
+      const saved = await api.loadDeck(deck.id).catch(() => deck);
+      if (open()) showDeck(app, saved);
+      return null;
+    }
+  });
+}
+
+/**
+ * Queues a rail change after the edits before it and shows its deck. The change is one more in
+ * the deck's history even when it leaves the slides as the app has them, so the history is asked.
+ */
 export function editRail(app: AppStore, change: (id: string) => Promise<RailEdit>): Promise<RailEdit | null> {
   return queueEdit(async () => {
     const { deck } = app.getState();
@@ -166,7 +260,8 @@ export function editRail(app: AppStore, change: (id: string) => Promise<RailEdit
     try {
       const edit = await change(deck.id);
       if (app.getState().deck?.id !== deck.id) return edit;
-      app.getState().setDeck(edit.deck);
+      showDeck(app, edit.deck);
+      void refreshHistory(app);
       return edit;
     } catch (error) {
       showErrorIn(app, error);
@@ -185,17 +280,11 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
   imageExport: null,
 
   setDeck: (deck) => {
-    const { selected, railSelected } = get();
-    const stillThere = deck.slides.some((s) => s.id === selected);
-    set({
-      deck,
-      selected: stillThere ? selected : (deck.slides[0]?.id ?? null),
-      railSelected: railSelected.filter((id) => deck.slides.some((s) => s.id === id)),
-    });
-    void refreshHistory(app);
+    // Only a deck that changed can have a history that did.
+    if (showDeck(app, deck)) void refreshHistory(app);
   },
 
-  select: (slide) => set((s) => ({ selected: slide, railSelected: [], revealRev: s.revealRev + 1 })),
+  select: (slide) => set((s) => ({ selected: slide, railSelected: unpicked(s), revealRev: s.revealRev + 1 })),
 
   selectRelative: (delta) => {
     const { deck, selected } = get();
@@ -212,7 +301,7 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
       next = delta > 0 ? ids.find((id) => all.indexOf(id) > here) : ids.findLast((id) => all.indexOf(id) < here);
       if (next === undefined) return;
     }
-    set((s) => ({ selected: next ?? null, railSelected: [], revealRev: s.revealRev + 1 }));
+    set((s) => ({ selected: next ?? null, railSelected: unpicked(s), revealRev: s.revealRev + 1 }));
   },
 
   selectEdge: (edge) => {
@@ -293,24 +382,31 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
   },
 
   deleteSlides: async (slides, verb = "Deleted") => {
-    const { deck } = get();
+    const { deck, selected } = get();
     const doomed = new Set(deck?.slides.filter((s) => slides.includes(s.id) && !s.locked).map((s) => s.id));
     if (!deck || doomed.size === 0) return;
-    const edit = await editRail(app, async (id) => {
-      const edit = await api.deleteSlides(id, [...doomed]);
-      // The deck file drops the slides' review marks with them; forget them here too.
-      for (const slide of doomed) get().clearSketch(slide);
-      const { selected } = get();
-      const here = deck.slides.findIndex((s) => s.id === selected);
-      if (selected && doomed.has(selected)) {
-        const left = (s: Slide) => !doomed.has(s.id);
-        const neighbor = deck.slides.slice(here + 1).find(left) ?? deck.slides.slice(0, here).findLast(left);
-        get().select(neighbor?.id ?? null);
+    // The slide on the stage goes: on to the next one that stays, else the one before it.
+    const leaving = selected !== null && doomed.has(selected);
+    const here = deck.slides.findIndex((s) => s.id === selected);
+    const left = (s: Slide) => !doomed.has(s.id);
+    const neighbor = deck.slides.slice(here + 1).find(left) ?? deck.slides.slice(0, here).findLast(left);
+    if (leaving) get().select(neighbor?.id ?? null);
+    set((s) => ({ railSelected: unpicked(s) }));
+    const edit = await editAhead(
+      app,
+      (shown) => withoutSlides(shown, doomed),
+      (id) => api.deleteSlides(id, [...doomed]),
+      (answer) => answer.deck,
+    );
+    if (!edit) {
+      // The slides are back: so is the one that was on the stage, unless the user went on since.
+      if (leaving && get().selected === (neighbor?.id ?? null) && get().deck?.slides.some((s) => s.id === selected)) {
+        get().select(selected);
       }
-      return edit;
-    });
-    set({ railSelected: [] });
-    if (!edit) return;
+      return;
+    }
+    // The deck file drops the slides' review marks with them; forget them here too.
+    for (const slide of doomed) get().clearSketch(slide);
     const text = `${verb} ${plural(doomed.size, "slide")}`;
     showSuccessIn(app, text, undoAction(app, DELETE_SLIDES_LABEL, "delete"));
   },
@@ -357,18 +453,23 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
   },
 
   setSlidesHidden: async (slides, hidden) => {
-    if (slides.length > 0) await editRail(app, (id) => api.setSlidesHidden(id, slides, hidden));
+    if (slides.length === 0) return;
+    await editAhead(
+      app,
+      (shown) => withSlidesMarked(shown, slides, { hidden }),
+      (id) => api.setSlidesHidden(id, slides, hidden),
+      (answer) => answer.deck,
+    );
   },
 
   setSlidesLocked: async (slides, locked) => {
-    const { deck } = get();
-    if (!deck || slides.length === 0) return;
-    try {
-      const next = await api.setSlidesLocked(deck.id, slides, locked);
-      if (get().deck?.id === deck.id) get().setDeck(next);
-    } catch (error) {
-      showErrorIn(app, error);
-    }
+    if (slides.length === 0) return;
+    await editAhead(
+      app,
+      (shown) => withSlidesMarked(shown, slides, { locked }),
+      (id) => api.setSlidesLocked(id, slides, locked),
+      (answer) => answer,
+    );
   },
 
   duplicateSlides: async (slides) => {
@@ -380,16 +481,18 @@ export const createSlidesSlice: Slice<SlidesSlice> = (set, get, app) => ({
   },
 
   reorderRail: async (order) => {
-    const { deck } = get();
-    if (!deck) return;
-    get().setDeck(applyOrder(deck, order));
-    const edit = await editRail(app, (id) => api.reorderSlides(id, order));
-    if (edit) return;
-    try {
-      if (get().deck?.id === deck.id) get().setDeck(await api.loadDeck(deck.id));
-    } catch (error) {
-      showErrorIn(app, error);
-    }
+    const rows = new Set(order);
+    // An order only says where the rows it names go: a deck with other rows is left as it is.
+    const complete = (shown: Deck) => {
+      const items = railItems(shown);
+      return items.length === rows.size && items.every((item) => rows.has(item.key));
+    };
+    await editAhead(
+      app,
+      (shown) => (complete(shown) ? applyOrder(shown, order) : shown),
+      (id) => api.reorderSlides(id, order),
+      (answer) => answer.deck,
+    );
   },
 
   moveSlides: async (delta) => {

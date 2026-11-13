@@ -313,7 +313,7 @@ describe("hidden slides in the rail", () => {
       slides: ["intro"],
       hidden: true,
     });
-    expect(useApp.getState().deck).toBe(next);
+    expect(useApp.getState().deck).toEqual(next);
     expect(markShown(within(items()[0]!).getByTestId("hidden-mark"))).toBe(true);
   });
 
@@ -375,7 +375,7 @@ describe("locked slides in the rail", () => {
       slides: ["intro"],
       locked: true,
     });
-    expect(useApp.getState().deck).toBe(next);
+    expect(useApp.getState().deck).toEqual(next);
     expect(markShown(item(0).getByTestId("locked-mark"))).toBe(true);
     expect(item(0).queryByTitle("Delete")).toBeNull();
   });
@@ -919,7 +919,7 @@ describe("sections in the rail", () => {
     await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
     await act(async () => fireEvent.blur(input));
     expect(invoke).toHaveBeenCalledWith("rename_section", { id: "/decks/talk/deck.html", index: 0, title: "Core" });
-    expect(useApp.getState().deck).toBe(renamed);
+    expect(useApp.getState().deck).toEqual(renamed);
     expect(screen.queryByLabelText("Section title")).toBeNull();
   });
 
@@ -1168,7 +1168,8 @@ describe("the menu of a right-click", () => {
     act(() => useApp.getState().extendRailSelection("outro", "toggle"));
     fireEvent.contextMenu(thumb(1));
     expect(useApp.getState().railSelected).toEqual(["intro", "outro"]);
-    invoke.mockResolvedValue(edit(DECK));
+    // Locking answers with the deck, the rail's other changes with the deck and what they did.
+    invoke.mockImplementation(async (command) => (command === "set_slides_locked" ? DECK : edit(DECK)));
     await act(async () => fireEvent.click(choice(/^Hide/)));
     // A change waits for the ones before it, so it may take a moment.
     await waitFor(() =>

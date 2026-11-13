@@ -89,11 +89,9 @@ export interface SlideTiming {
   narrationStart: number | null;
 }
 
-/** What a change from the slide rail did, with the deck's source before and after. */
+/** What a change from the slide rail did. The deck's history takes it back. */
 export interface RailEdit {
   deck: Deck;
-  previous: string;
-  source: string;
   /** Ids of the slides it added. */
   created: string[];
 }
@@ -235,9 +233,6 @@ export interface ReplacedText {
   slides: string[];
   /** Locked slides with matches, left as they were. */
   skipped: string[];
-  /** The deck's source before and after. */
-  previous: string;
-  source: string;
 }
 
 export interface LintIssue {
@@ -537,9 +532,13 @@ export const api = {
   deleteSection: (id: string, index: number) => invoke<Deck>("delete_section", { id, index }),
   /** Deletes `slides` along with their review marks; none of them if any is locked. */
   deleteSlides: (id: string, slides: string[]) => invoke<RailEdit>("delete_slides", { id, slides }),
-  /** Replaces one slide's markup; refused when the slide's hash is no longer `base`. */
-  updateSlide: (id: string, slide: string, markup: string, base: string) =>
-    invoke<Deck>("update_slide", { id, slide, markup, base }),
+  /**
+   * Replaces one slide's markup; refused when the slide's hash is no longer `base`. `group` names
+   * a run of small edits that belong together (the editor's arrow-key nudges of the same
+   * elements): their saves, close together, are one step to undo.
+   */
+  updateSlide: (id: string, slide: string, markup: string, base: string, group?: string) =>
+    invoke<Deck>("update_slide", { id, slide, markup, base, group }),
   /** One slide's markup as it is in the file, with the hash `updateSlide` takes as its base. */
   slideSource: (id: string, slide: string) => invoke<SlideSource>("slide_source", { id, slide }),
   saveDeckSource: (id: string, source: string, base: string | null) =>

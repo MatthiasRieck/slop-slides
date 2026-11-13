@@ -65,6 +65,9 @@
   --search: var(--color-yellow-300);
   --search-active: var(--color-orange-400);
 
+  /* What mutes the "thinking" text to the muted foreground, laid over it in the surface's color. */
+  --shimmer-veil: --alpha(var(--background) / 36%);
+
   /* What lifts a slide's thumbnail off the surface under it: a hairline edge and a soft shadow. */
   --thumbnail-edge: --alpha(var(--color-black) / 6%);
   --thumbnail-shade: --alpha(var(--color-black) / 14%);
@@ -97,6 +100,8 @@
 
   --tok-string: var(--color-blue-300);
   --tok-variable: var(--color-violet-300);
+
+  --shimmer-veil: --alpha(var(--background) / 49%);
 
   /* A shadow barely shows on a near-black surface, so the edge turns light and does the lifting. */
   --thumbnail-edge: --alpha(var(--color-white) / 14%);
@@ -206,35 +211,100 @@
   }
 }
 
+/*
+ * The "thinking" line: the text in the foreground color under a veil of the surface's color, which
+ * mutes it, with a gap in the veil sweeping across. Only the veil's transform animates, so the
+ * compositor does it all: nothing is painted again while the agent works.
+ */
 @keyframes shimmer {
   from {
-    background-position: 200% 0;
+    transform: translateX(-66.667%);
   }
   to {
-    background-position: -200% 0;
+    transform: translateX(0);
   }
 }
 
 .shimmer-text {
+  position: relative;
+  display: inline-block;
+  overflow: hidden;
+  color: var(--foreground);
+}
+.shimmer-text::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 300%;
+  pointer-events: none;
   background: linear-gradient(
     90deg,
-    var(--muted-foreground) 0%,
-    var(--muted-foreground) 40%,
-    var(--foreground) 50%,
-    var(--muted-foreground) 60%,
-    var(--muted-foreground) 100%
+    var(--shimmer-veil) 0%,
+    var(--shimmer-veil) 46%,
+    transparent 50%,
+    var(--shimmer-veil) 54%,
+    var(--shimmer-veil) 100%
   );
-  background-size: 200% 100%;
-  background-clip: text;
-  -webkit-background-clip: text;
-  color: transparent;
+  will-change: transform;
   animation: shimmer 2.2s linear infinite;
 }
 
 /*
+ * How what opens over the app comes in: a short fade with a small move from where it opens
+ * (`enter-below` under its button, `enter-above` over it), a dialog's box growing a little
+ * (`enter-pop`) on its fading scrim (`enter-fade`), a toast rising (`toast-enter`) and sinking
+ * as it goes (`toast-exit`). Only opacity and transform animate, which the compositor does
+ * without layout or paint; an element's own `translate` (Tailwind's) is left alone.
+ */
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--enter-y, 0)) scale(var(--enter-scale, 1));
+  }
+}
+@keyframes leave {
+  to {
+    opacity: 0;
+    transform: translateY(var(--enter-y, 0)) scale(var(--enter-scale, 1));
+  }
+}
+
+.enter-below,
+.enter-above,
+.enter-pop,
+.enter-fade,
+.toast-enter {
+  animation: enter 140ms var(--ease-drawer) backwards;
+}
+.enter-below {
+  --enter-y: -4px;
+  --enter-scale: 0.98;
+  transform-origin: top;
+}
+.enter-above {
+  --enter-y: 4px;
+  --enter-scale: 0.98;
+  transform-origin: bottom;
+}
+.enter-pop {
+  --enter-y: 6px;
+  --enter-scale: 0.97;
+}
+.toast-enter,
+.toast-exit {
+  --enter-y: 8px;
+}
+.toast-exit {
+  animation: leave 140ms ease-in forwards;
+  pointer-events: none;
+}
+
+/*
  * For those who asked their system for less motion: nothing in the app slides, fades or spins (a
- * spinner stands still, the "thinking" text does not shimmer), and scrolling jumps (in scripts,
- * see `scrollBehavior` in src/lib/motion.ts). The slides in their frames are the deck's own.
+ * spinner stands still, the "thinking" text does not shimmer, what opens is just there), and
+ * scrolling jumps (in scripts, see `scrollBehavior` in src/lib/motion.ts). The slides in their
+ * frames are the deck's own.
  */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -247,9 +317,33 @@
   }
   .shimmer-text {
     animation: none !important;
-    background: none;
     color: var(--muted-foreground);
   }
+  .shimmer-text::after {
+    display: none;
+  }
+  .enter-below,
+  .enter-above,
+  .enter-pop,
+  .enter-fade,
+  .toast-enter,
+  .toast-exit {
+    animation: none !important;
+  }
+}
+
+/*
+ * A message of the chat. The browser lays out and paints only those in view, and takes the rest
+ * to be as tall as they were when last seen (a guess before that), so a long conversation costs
+ * what is on screen when the sidebar is resized or shown. What is left out can still be found,
+ * selected and scrolled to. The padding, taken back by the margin, is room for the focus ring of
+ * a button at the message's edge: nothing is painted outside a message's own box.
+ */
+.chat-message {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 6rem;
+  margin: -4px;
+  padding: 4px;
 }
 
 .markdown {

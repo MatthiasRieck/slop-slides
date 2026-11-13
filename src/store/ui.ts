@@ -41,6 +41,11 @@ let nextToastId = 1;
 
 /** How the window is laid out around the slides, the show, and the toasts shown. */
 export interface UiSlice {
+  /**
+   * The window knows what it starts with: a folder opened with the app (from Finder) is open, or
+   * none was waiting. Until then it shows neither the start screen nor a folder (see ./events.ts).
+   */
+  booted: boolean;
   /** The right sidebar is shown; the user can collapse it to give the stage more room. */
   sidebarOpen: boolean;
   /** The sidebar's open tabs, in the order they show; each kind at most once. */
@@ -106,6 +111,7 @@ function saveSidebarTabs(tabs: SidebarTab[], active: SidebarTab | null) {
 }
 
 export const createUiSlice: Slice<UiSlice> = (set, get) => ({
+  booted: false,
   sidebarOpen: loadFlag(SIDEBAR_OPEN_KEY, true),
   ...loadSidebarTabs(),
   sidebarMaximized: false,

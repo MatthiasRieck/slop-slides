@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { createRef } from "react";
+import { createRef, Profiler } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke, listen } from "../test/tauri";
 
@@ -100,6 +100,35 @@ describe("VoiceInput", () => {
     await waitFor(() => expect(listeners.has("voice-level")).toBe(true));
     act(() => listeners.get("voice-level")!({ payload: 1 }));
     expect(screen.getByTestId("voice-level").style.transform).toBe("scale(1.35)");
+  });
+
+  it("follows the level without rendering: it comes many times a second and is only drawn", async () => {
+    backend({ ready: true });
+    const commits = vi.fn();
+    render(
+      <Profiler id="voice" onRender={commits}>
+        <VoiceInput {...handlers()} />
+      </Profiler>,
+    );
+    fireEvent.click(micButton());
+    await waitFor(() => expect(listeners.has("voice-level")).toBe(true));
+    commits.mockClear();
+    for (let i = 1; i <= 20; i++) act(() => listeners.get("voice-level")!({ payload: i / 20 }));
+    expect(commits).not.toHaveBeenCalled();
+    expect(screen.getByTestId("voice-level").style.transform).toBe("scale(1.35)");
+  });
+
+  it("starts each recording with the ring at rest", async () => {
+    backend({ ready: true });
+    render(<VoiceInput {...handlers()} />);
+    fireEvent.click(micButton());
+    await waitFor(() => expect(listeners.has("voice-level")).toBe(true));
+    act(() => listeners.get("voice-level")!({ payload: 1 }));
+    fireEvent.click(micButton());
+    await waitFor(() => expect(micButton().getAttribute("aria-pressed")).toBe("false"));
+    fireEvent.click(micButton());
+    await waitFor(() => expect(micButton().getAttribute("aria-pressed")).toBe("true"));
+    expect(screen.getByTestId("voice-level").style.transform).toBe("");
   });
 
   it("ends with no text when nothing was said", async () => {
@@ -237,6 +266,10 @@ describe("VoiceInput", () => {
     await waitFor(() => expect(listeners.has("voice-download")).toBe(true));
     act(() => listeners.get("voice-download")!({ payload: { received: MODEL_BYTES / 2, total: MODEL_BYTES } }));
     expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("50");
+    // The bar is moved into its track, which takes no layout; its width does not change.
+    const bar = screen.getByRole("progressbar").firstElementChild as HTMLElement;
+    expect(bar.style.transform).toBe("translateX(-50%)");
+    expect(bar.style.width).toBe("");
     expect(screen.getByText("95 MB of 190 MB")).toBeTruthy();
 
     await act(async () => server.finishDownload());

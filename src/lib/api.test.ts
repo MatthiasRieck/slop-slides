@@ -97,6 +97,12 @@ const CASES = [
     "update_slide",
     { id: "talk", slide: "a", markup: "<section>", base: "h1" },
   ],
+  [
+    "updateSlide",
+    () => api.updateSlide("talk", "a", "<section>", "h1", "nudge:0.2"),
+    "update_slide",
+    { id: "talk", slide: "a", markup: "<section>", base: "h1", group: "nudge:0.2" },
+  ],
   ["slideSource", () => api.slideSource("talk", "a"), "slide_source", { id: "talk", slide: "a" }],
   ["deckHistory", () => api.deckHistory("talk"), "deck_history", { id: "talk" }],
   ["undoDeck", () => api.undoDeck("talk"), "undo_deck", { id: "talk" }],

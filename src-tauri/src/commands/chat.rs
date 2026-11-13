@@ -15,13 +15,14 @@ use crate::rewind;
 use crate::sessions::{self, OpenedThread, Thread};
 use crate::workspace::{self, OpenWorkspace};
 
-/// The chat of `id`: a deck's (its file's path), or a folder's own.
-#[tauri::command]
-pub fn load_chat(id: String) -> Result<serde_json::Value> {
-    sessions::load_chat(sessions()?.current(&agent::subject(&id)?).as_deref())
+/// The chat of `id`: a deck's (its file's path), or a folder's own. It goes to the frontend as
+/// the JSON text it was saved as, and is read off the main thread: a long chat is megabytes.
+#[tauri::command(async)]
+pub fn load_chat(id: String) -> Result<Box<serde_json::value::RawValue>> {
+    sessions::load_chat_text(sessions()?.current(&agent::subject(&id)?).as_deref())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn session_provider(id: String) -> Result<Option<agent::Provider>> {
     sessions()?
         .current(&agent::subject(&id)?)
@@ -30,6 +31,9 @@ pub fn session_provider(id: String) -> Result<Option<agent::Provider>> {
         .map(Option::flatten)
 }
 
+/// Saves the chat of `id`. On the main thread, where commands run in the order the frontend
+/// sent them: a save that ran after the `reset_chat` or `select_chat_thread` sent behind it
+/// would write this chat into the conversation that one made current.
 #[tauri::command]
 pub fn save_chat(id: String, chat: serde_json::Value) -> Result<()> {
     sessions::save_chat(&sessions()?.current_or_start(&agent::subject(&id)?)?, &chat)
@@ -45,8 +49,9 @@ pub fn rewind_chat(id: String, message: String, note: String) -> Result<()> {
     rewind::request(&session, &message, &note)
 }
 
-/// The conversations of the window's workspace, newest first; `id` is the chat shown now.
-#[tauri::command]
+/// The conversations of the window's workspace, newest first; `id` is the chat shown now. Off
+/// the main thread: every one of their chats is read for its title.
+#[tauri::command(async)]
 pub fn list_chat_threads(window: Window, id: String) -> Result<Vec<Thread>> {
     sessions()?.threads(&workspace_root(&window)?, &agent::subject(&id)?)
 }

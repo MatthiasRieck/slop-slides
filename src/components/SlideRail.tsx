@@ -15,7 +15,7 @@ import {
 import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { SortableContext, sortableKeyboardCoordinates, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { ArrowDown, ArrowUp, Copy, Eye, EyeOff, Plus, SquareSplitVertical, Trash2, X } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Deck } from "../lib/api";
 import {
   dropRows,
@@ -26,6 +26,7 @@ import {
   railItems,
   sectionBlocks,
   sectionKey,
+  sectionSizes,
   sectionStarts,
   startsSection,
 } from "../lib/sections";
@@ -42,8 +43,58 @@ import { Thumbnail } from "./rail/Thumbnail";
 import { SectionLabel } from "./SectionLabel";
 import { LayoutPicker } from "./Templates";
 
+/**
+ * How a drag starts. The same objects for every render: dnd-kit takes new options for new
+ * sensors and tells every row of them.
+ */
+const POINTER_DRAG = { activationConstraint: { distance: 4 } };
 /** The keys that move a row with the keyboard: Space picks it up and puts it down; Enter is the thumbnail's own. */
-const KEYBOARD_DRAG = { start: ["Space"], cancel: ["Escape"], end: ["Space", "Enter"] };
+const KEYBOARD_DRAG = {
+  coordinateGetter: sortableKeyboardCoordinates,
+  keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space", "Enter"] },
+};
+
+/** What the rail's drags are held to, and how they scroll it: the same for every render. */
+const DRAG_MODIFIERS = [restrictToVerticalAxis];
+const DRAG_SCROLL = { layoutShiftCompensation: false };
+const MEASURE_ALWAYS = { droppable: { strategy: MeasuringStrategy.Always } };
+const MEASURE_DRAGGING = { droppable: { strategy: MeasuringStrategy.WhileDragging } };
+
+const NONE_FOLDED: ReadonlySet<string> = new Set();
+
+/**
+ * `keys` as the same list for as long as it names the same rows in the same order. dnd-kit tells
+ * every row when its list of rows is another one, which a slide saved anew would otherwise be.
+ */
+function useSameKeys(keys: string[]): string[] {
+  const [kept, setKept] = useState(keys);
+  const same = kept.length === keys.length && kept.every((key, i) => key === keys[i]);
+  if (!same) setKept(keys);
+  return same ? kept : keys;
+}
+
+/**
+ * The rail's rows and what is looked up in them, worked out once for each change to the slides
+ * or the sections. The deck keeps both as they are while they do not change (see `shareDeck`),
+ * so a slide's comments or the review marks leave all of this alone.
+ */
+function useRailRows(deck: Deck | null) {
+  const slides = deck?.slides;
+  const sections = deck?.sections;
+  return useMemo(() => {
+    const items = slides && sections ? railItems({ slides, sections }) : [];
+    const blocks = sectionBlocks(items);
+    return {
+      items,
+      blocks,
+      itemKeys: items.map((item) => item.key),
+      blockKeys: blocks.map((block) => block.key),
+      starts: sectionStarts(blocks),
+      sizes: sectionSizes(blocks),
+      looseSlides: items.findIndex((item) => item.kind === "section"),
+    };
+  }, [slides, sections]);
+}
 
 /** A right-click's menu, where it was asked for. */
 type OpenMenu = { label: string; x: number; y: number; entries: MenuEntry[] };
@@ -57,18 +108,18 @@ type OpenMenu = { label: string; x: number; y: number; entries: MenuEntry[] };
  * that is not picked it picks that slide first, and with several picked it is about all of them.
  * Slides and sections are moved by dragging, or with the keyboard: Space on a row picks it up, the
  * arrows move it, Space puts it down. One of several picked slides takes the others along.
+ *
+ * The rail itself does not follow which slide is selected: the rows that are picked or let go
+ * follow it themselves, as do the bits of its header that depend on it (`StartSectionButton`,
+ * `OpenSelectedFold`), so going through the slides renders two rows, not the whole list.
  */
 export function SlideRail() {
   const deck = useApp((s) => s.deck);
-  const selected = useApp((s) => s.selected);
   const editable = useApp((s) => s.editing);
   const [editingSection, setEditingSection] = useState<number | null>(null);
   const [addingSlide, setAddingSlide] = useState(false);
   const addButton = useRef<HTMLButtonElement>(null);
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates, keyboardCodes: KEYBOARD_DRAG }),
-  );
+  const sensors = useSensors(useSensor(PointerSensor, POINTER_DRAG), useSensor(KeyboardSensor, KEYBOARD_DRAG));
   const [menu, setMenu] = useState<OpenMenu | null>(null);
   // The slides going along with the one being dragged, itself included; empty when it goes alone.
   const [dragged, setDragged] = useState<string[]>([]);
@@ -92,13 +143,6 @@ export function SlideRail() {
   const list = useRef<HTMLOListElement>(null);
   const remeasure = useRef<() => void>(undefined);
   useEffect(() => releaseIframes, []);
-  // Going to a slide folded away, with the keys or from the stage, opens its section to show it.
-  useEffect(() => {
-    const { deck, collapsedSections, toggleSection } = useApp.getState();
-    if (!deck || !selected) return;
-    const first = foldHolding(sectionBlocks(railItems(deck)), collapsedSections, selected);
-    if (first !== undefined) toggleSection(first, false);
-  }, [selected]);
   useEffect(() => () => stopHolding.current?.(), []);
   useLayoutEffect(() => {
     const rows = list.current;
@@ -122,21 +166,75 @@ export function SlideRail() {
       setSettling(false);
     });
   }, [moving]);
+  const { items, blocks, itemKeys, blockKeys, starts, sizes, looseSlides } = useRailRows(deck);
+  // A search shows what it found wherever it is.
+  const folded = useMemo(() => (found ? NONE_FOLDED : foldedSlides(blocks, collapsed)), [found, blocks, collapsed]);
+  const app = useApp.getState;
+
+  /** Starts a section at `slide`, and goes on to naming it. */
+  const startSection = useCallback(
+    async (slide: string) => setEditingSection(await useApp.getState().startSection(slide)),
+    [],
+  );
+
+  // The menus read what they are about when they open, so every row gets the same two functions.
+  const openSlideMenu = useCallback(
+    (event: React.MouseEvent, slide: string) => {
+      const app = useApp.getState;
+      const { deck } = app();
+      if (!deck) return;
+      event.preventDefault();
+      // A slide that is not picked is what the menu is about; one of the picked ones stands for all.
+      if (!railSelection(app()).includes(slide)) app().select(slide);
+      const state = app();
+      const entries = slideMenu(
+        deck,
+        slide,
+        railSelection(state),
+        { editable: state.editing, searching: !!state.search.matches },
+        {
+          addSlide: (after) => void app().addSlide(after),
+          duplicate: (slides) => void app().duplicateSlides(slides),
+          copy: () => void app().copySlides(),
+          cut: () => void app().cutSlides(),
+          paste: () => void app().pasteSlides(),
+          remove: (slides) => void app().deleteSlides(slides),
+          setHidden: (slides, hidden) => void app().setSlidesHidden(slides, hidden),
+          setLocked: (slides, locked) => void app().setSlidesLocked(slides, locked),
+          move: (delta) => void app().moveSlides(delta),
+          startSection: (at) => void startSection(at),
+        },
+      );
+      setMenu({ label: "Slide", x: event.clientX, y: event.clientY, entries });
+    },
+    [startSection],
+  );
+
+  const openSectionMenu = useCallback((event: React.MouseEvent, key: string) => {
+    const app = useApp.getState;
+    const { deck, editing, collapsedSections } = app();
+    if (!deck) return;
+    const items = railItems(deck);
+    const row = items.find((item) => item.key === key);
+    if (row?.kind !== "section") return;
+    event.preventDefault();
+    const { section } = row;
+    const entries = sectionMenu(key, sectionBlocks(items), collapsedSections, editing, {
+      rename: () => setEditingSection(section.index),
+      setCollapsed: (first, folded) => app().toggleSection(first, folded),
+      setAllCollapsed: (firsts, folded) => app().setSectionsCollapsed(firsts, folded),
+      select: (slides) => app().pickSlides(slides),
+      remove: () => void app().removeSection(section.index),
+    });
+    setMenu({ label: "Section", x: event.clientX, y: event.clientY, entries });
+  }, []);
+
+  const keys = useSameKeys(moving ? blockKeys : itemKeys);
   if (!deck) return null;
   // The layouts add a slide, which is Edit mode's: leaving it puts them away.
   if (addingSlide && !editable) setAddingSlide(false);
 
-  const items = railItems(deck);
-  const blocks = sectionBlocks(items);
-  const keys = moving ? blocks.map((block) => block.key) : items.map((item) => item.key);
-  const looseSlides = items.findIndex((item) => item.kind === "section");
-  const starts = sectionStarts(blocks);
-  // A search shows what it found wherever it is.
-  const folded = found ? new Set<string>() : foldedSlides(blocks, collapsed);
-  const selectedIndex = deck.slides.findIndex((s) => s.id === selected);
-  const canAddSection = selectedIndex >= 0 && !startsSection(deck, selectedIndex);
   const hiddenCount = deck.slides.filter((s) => s.hidden).length;
-  const app = useApp.getState;
 
   const onDragStart = ({ active }: DragStartEvent) => {
     holdIframes();
@@ -188,54 +286,10 @@ export function SlideRail() {
     await useApp.getState().reorderRail(dropRows(keys, moved, key, String(over.id)));
   };
 
-  /** Starts a section at `slide`, and goes on to naming it. */
-  const startSection = async (slide: string) => setEditingSection(await app().startSection(slide));
-
   /** The "+": the layouts to add a slide on. Adding one is Edit mode's, so in View it goes there first. */
   const openLayouts = () => {
     if (!editable) app().setMode("edit");
     setAddingSlide((open) => !open);
-  };
-
-  const openSlideMenu = (event: React.MouseEvent, slide: string) => {
-    event.preventDefault();
-    // A slide that is not picked is what the menu is about; one of the picked ones stands for all.
-    if (!railSelection(app()).includes(slide)) app().select(slide);
-    const state = app();
-    const entries = slideMenu(
-      deck,
-      slide,
-      railSelection(state),
-      { editable, searching: !!state.search.matches },
-      {
-        addSlide: (after) => void app().addSlide(after),
-        duplicate: (slides) => void app().duplicateSlides(slides),
-        copy: () => void app().copySlides(),
-        cut: () => void app().cutSlides(),
-        paste: () => void app().pasteSlides(),
-        remove: (slides) => void app().deleteSlides(slides),
-        setHidden: (slides, hidden) => void app().setSlidesHidden(slides, hidden),
-        setLocked: (slides, locked) => void app().setSlidesLocked(slides, locked),
-        move: (delta) => void app().moveSlides(delta),
-        startSection: (at) => void startSection(at),
-      },
-    );
-    setMenu({ label: "Slide", x: event.clientX, y: event.clientY, entries });
-  };
-
-  const openSectionMenu = (event: React.MouseEvent, key: string) => {
-    const row = items.find((item) => item.key === key);
-    if (row?.kind !== "section") return;
-    event.preventDefault();
-    const { section } = row;
-    const entries = sectionMenu(key, blocks, app().collapsedSections, editable, {
-      rename: () => setEditingSection(section.index),
-      setCollapsed: (first, folded) => app().toggleSection(first, folded),
-      setAllCollapsed: (firsts, folded) => app().setSectionsCollapsed(firsts, folded),
-      select: (slides) => app().pickSlides(slides),
-      remove: () => void app().removeSection(section.index),
-    });
-    setMenu({ label: "Section", x: event.clientX, y: event.clientY, entries });
   };
 
   return (
@@ -243,21 +297,7 @@ export function SlideRail() {
       <div className="flex h-10 shrink-0 items-center justify-between px-3">
         <SectionLabel>{railTitle(deck.slides.length, found?.size, hiddenCount)}</SectionLabel>
         <div className="flex items-center gap-0.5">
-          <ToolButton
-            variant="panel"
-            label="Start a section at this slide"
-            onClick={() => selected && void startSection(selected)}
-            disabled={!editable || !canAddSection}
-            disabledReason={
-              !editable
-                ? EDIT_ONLY
-                : selectedIndex < 0
-                  ? "Select a slide to start a section"
-                  : "This slide already starts a section"
-            }
-          >
-            <SquareSplitVertical className="size-4" />
-          </ToolButton>
+          <StartSectionButton deck={deck} editable={editable} onStart={startSection} />
           <ToolButton
             ref={addButton}
             variant="panel"
@@ -283,6 +323,7 @@ export function SlideRail() {
         </Popover>
       )}
       {menu && <ContextMenu {...menu} onClose={() => setMenu(null)} />}
+      <OpenSelectedFold />
       <BulkActions deck={deck} editable={editable} />
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-1.5">
         {deck.slides.length === 0 ? (
@@ -293,9 +334,9 @@ export function SlideRail() {
           <DndContext
             sensors={sensors}
             collisionDetection={collisionDetection}
-            modifiers={[restrictToVerticalAxis]}
-            autoScroll={{ layoutShiftCompensation: false }}
-            measuring={{ droppable: { strategy: moving ? MeasuringStrategy.Always : MeasuringStrategy.WhileDragging } }}
+            modifiers={DRAG_MODIFIERS}
+            autoScroll={DRAG_SCROLL}
+            measuring={moving ? MEASURE_ALWAYS : MEASURE_DRAGGING}
             onDragStart={onDragStart}
             onDragEnd={onDragEnd}
             onDragCancel={onDragCancel}
@@ -320,7 +361,7 @@ export function SlideRail() {
                       still={!!moving || settling}
                       draggedAlong={dragged.length > 1 && dragged.includes(item.slide.id)}
                       matches={found?.get(item.slide.id)}
-                      onMenu={(event) => openSlideMenu(event, item.slide.id)}
+                      onMenu={openSlideMenu}
                     />
                   ) : (
                     <SectionHeader
@@ -330,13 +371,13 @@ export function SlideRail() {
                       editable={editable}
                       filteredOut={!!found}
                       still={!!moving || settling}
-                      slides={moving ? blocks.find((block) => block.key === item.key)!.rows.length - 1 : undefined}
+                      slides={moving ? sizes.get(item.key) : undefined}
                       first={starts.get(item.key)}
                       collapsed={collapsed.includes(starts.get(item.key) ?? "")}
-                      count={blocks.find((block) => block.key === item.key)!.rows.length - 1}
+                      count={sizes.get(item.key) ?? 0}
                       editing={editingSection === item.section.index}
-                      onEditing={(editing) => setEditingSection(editing ? item.section.index : null)}
-                      onMenu={(event) => openSectionMenu(event, item.key)}
+                      onEditing={setEditingSection}
+                      onMenu={openSectionMenu}
                     />
                   ),
                 )}
@@ -352,7 +393,7 @@ export function SlideRail() {
                   <SectionLabel className="min-w-0 truncate">{sectionTitle(items, moving.key)}</SectionLabel>
                   <span className="h-px flex-1 bg-border" />
                   <span className="shrink-0 text-2xs text-muted-foreground">
-                    {plural((blocks.find((block) => block.key === moving.key)?.rows.length ?? 1) - 1, "slide")}
+                    {plural(sizes.get(moving.key) ?? 0, "slide")}
                   </span>
                 </div>
               </DragOverlay>
@@ -372,6 +413,38 @@ export function SlideRail() {
         )}
       </div>
     </div>
+  );
+}
+
+/** Going to a slide folded away, with the keys or from the stage, opens its section to show it. */
+function OpenSelectedFold() {
+  const selected = useApp((s) => s.selected);
+  useEffect(() => {
+    const { deck, collapsedSections, toggleSection } = useApp.getState();
+    if (!deck || !selected) return;
+    const first = foldHolding(sectionBlocks(railItems(deck)), collapsedSections, selected);
+    if (first !== undefined) toggleSection(first, false);
+  }, [selected]);
+  return null;
+}
+
+/** Starts a section at the selected slide, which is what it follows, so that the rail need not. */
+function StartSectionButton(props: { deck: Deck; editable: boolean; onStart: (slide: string) => void }) {
+  const { deck, editable } = props;
+  const selected = useApp((s) => s.selected);
+  const index = deck.slides.findIndex((s) => s.id === selected);
+  return (
+    <ToolButton
+      variant="panel"
+      label="Start a section at this slide"
+      onClick={() => selected && props.onStart(selected)}
+      disabled={!editable || index < 0 || startsSection(deck, index)}
+      disabledReason={
+        !editable ? EDIT_ONLY : index < 0 ? "Select a slide to start a section" : "This slide already starts a section"
+      }
+    >
+      <SquareSplitVertical className="size-4" />
+    </ToolButton>
   );
 }
 

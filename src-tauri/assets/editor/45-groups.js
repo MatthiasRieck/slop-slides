@@ -40,18 +40,14 @@
    * and drops the translate that moved it: its place is all in left and top now.
    */
   function freeBox(el, left, top, w, h) {
-    var computed = getComputedStyle(el);
-    var px = function (name) { return parseFloat(computed[name]) || 0; };
-    var contentBox = computed.boxSizing !== "border-box";
-    var padX = contentBox ? px("paddingLeft") + px("paddingRight") + px("borderLeftWidth") + px("borderRightWidth") : 0;
-    var padY = contentBox ? px("paddingTop") + px("paddingBottom") + px("borderTopWidth") + px("borderBottomWidth") : 0;
+    var pad = boxPadding(getComputedStyle(el));
     el.style.position = "absolute";
     el.style.margin = "0px";
     el.style.left = roundTenth(left) + "px";
     el.style.top = roundTenth(top) + "px";
     el.style.right = el.style.bottom = "auto";
-    el.style.width = roundTenth(Math.max(0, w - padX)) + "px";
-    if (el.getAttribute("data-autofit") !== "grow") el.style.height = roundTenth(Math.max(0, h - padY)) + "px";
+    el.style.width = roundTenth(Math.max(0, w - pad.x)) + "px";
+    if (el.getAttribute("data-autofit") !== "grow") el.style.height = roundTenth(Math.max(0, h - pad.y)) + "px";
     el.style.flex = "none";
     moveTo(el, 0, 0);
   }
@@ -63,7 +59,7 @@
    */
   function groupSelection() {
     finishEditing();
-    if (nudgeTimer) commit();
+    saveNudges();
     var members = inDocumentOrder(movable());
     if (members.length < 2) return;
     var bounds = boundsOf(members);
@@ -97,16 +93,15 @@
   /** ⇧⌘G: takes the selected groups apart, their elements staying where they show, turned and scaled as they look. */
   function ungroupSelection() {
     finishEditing();
-    if (nudgeTimer) commit();
+    saveNudges();
     var freed = [];
     movable().filter(isGroup).forEach(function (group) {
       var angle = angleOf(group);
       var scale = scaleOf(group);
-      var origin = slide.getBoundingClientRect();
-      var k = zoom();
+      var at = camera();
       var places = membersOf(group).map(function (el) {
         var center = centerOf(el);
-        return { el: el, x: (center.x - origin.left) / k, y: (center.y - origin.top) / k, size: sizeOf(el), scale: scaleOf(el) };
+        return { el: el, x: (center.x - at.left) / at.k, y: (center.y - at.top) / at.k, size: sizeOf(el), scale: scaleOf(el) };
       });
       places.forEach(function (p) {
         var el = p.el;
@@ -130,36 +125,48 @@
   function memberBoxes(group) {
     return membersOf(group).map(function (el) {
       var computed = getComputedStyle(el);
-      return {
-        el: el,
-        left: parseFloat(computed.left) || 0,
-        top: parseFloat(computed.top) || 0,
-        size: sizeOf(el),
-        offset: offsetOf(el),
-        vectors: el.getAttribute(ADDED) === "drawing" ? vectorShapes(el) : null,
-        members: isGroup(el) ? memberBoxes(el) : null,
-      };
+      var box = { el: el, left: parseFloat(computed.left) || 0, top: parseFloat(computed.top) || 0, size: sizeOf(el), offset: offsetOf(el) };
+      holdContents(box);
+      return box;
     });
   }
 
-  /** Spreads what a group holds by kx × ky with its box: their places and sizes, not their text or line widths. */
+  /**
+   * Spreads what a group holds by kx × ky with its box: their places and sizes, not their text or
+   * line widths. The first step gives each a fixed box in its group and reads what every step
+   * needs; after it a step only writes its place and size.
+   */
   function spreadMembers(boxes, kx, ky) {
     boxes.forEach(function (b) {
       var el = b.el;
       var w = b.size.w * kx;
       var h = b.size.h * ky;
-      freeBox(el, b.left * kx, b.top * ky, w, h);
+      var first = !b.pad;
+      if (first) {
+        freeBox(el, b.left, b.top, b.size.w, b.size.h);
+        var computed = getComputedStyle(el);
+        b.pad = boxPadding(computed);
+        b.contentBox = computed.boxSizing !== "border-box";
+        b.grows = el.getAttribute("data-autofit") === "grow";
+      }
+      // As in resizeTo: a figure's padding goes by its size.
+      if (b.figure && b.contentBox) b.pad = boxPadding(getComputedStyle(el));
+      el.style.left = roundTenth(b.left * kx) + "px";
+      el.style.top = roundTenth(b.top * ky) + "px";
+      el.style.width = roundTenth(Math.max(0, w - b.pad.x)) + "px";
+      if (!b.grows) el.style.height = roundTenth(Math.max(0, h - b.pad.y)) + "px";
       moveTo(el, b.offset.x * kx, b.offset.y * ky);
       if (b.vectors && b.size.w && b.size.h) spreadVectors(b.vectors, kx, ky);
       if (b.members) spreadMembers(b.members, kx, ky);
-      fitFigure(el);
+      if (first) b.figure = resizedPaint(el);
+      if (b.figure) scheduleFigure(el, b.figure);
     });
   }
 
   /** Locks or unlocks `list` (with nothing given, the selection). */
   function lockElements(list, on) {
     finishEditing();
-    if (nudgeTimer) commit();
+    saveNudges();
     list.forEach(function (el) {
       mark(el, LOCK_ATTR, !!on);
     });

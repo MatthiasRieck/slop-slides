@@ -24,17 +24,139 @@ export function editorScript(): string {
     .join("");
 }
 
+/** One of the app's own scripts for a deck page, by the name it is served under. */
+export interface StageScript {
+  name: string;
+  source: string;
+}
+
 /**
- * Like `stage_scripts` in src-tauri/src/protocol.rs: the scripts a deck page gets for its query, in
- * the order they run. `?pan` and `?show` add the pasteboard; `?edit` adds it too, then overflow
- * detection with the slide editor, which needs it, in one script.
+ * Like `for_query` in src-tauri/src/protocol/scripts.rs: the scripts a deck page gets for its
+ * query, in the order they run. `?pan` and `?show` add the pasteboard; `?edit` adds it too, then
+ * overflow detection with the slide editor, which needs it, in one script.
  */
-export function stageScripts(query: URLSearchParams): string[] {
+export function stageScripts(query: URLSearchParams): StageScript[] {
   const edit = query.has("edit");
   return [
-    ...(edit || query.has("pan") || query.has("show") ? [asset("pasteboard.js")] : []),
-    ...(edit ? [asset("overflow.js") + editorScript()] : []),
+    ...(edit || query.has("pan") || query.has("show")
+      ? [{ name: "pasteboard.js", source: asset("pasteboard.js") }]
+      : []),
+    ...(edit ? [{ name: "editor.js", source: asset("overflow.js") + editorScript() }] : []),
   ];
+}
+
+/** First path segment of the app's scripts, as in src-tauri/src/protocol/scripts.rs. */
+const APP_PREFIX = ".app";
+
+/** What a script is, as a few hex digits: the version in its address, which is kept for good. */
+const scriptVersion = (script: StageScript) => createHash("sha1").update(script.source).digest("hex").slice(0, 16);
+
+/**
+ * Like `tags` in src-tauri/src/protocol/scripts.rs: the tags that load `scripts`, each from an
+ * address of its own that carries its version. Plain scripts, neither deferred nor asynchronous:
+ * each runs where it stands, in order, as the page is read, right after the player.
+ */
+export function scriptTags(scripts: StageScript[]): string {
+  return scripts
+    .map((script) => `<script src="/__deck/${APP_PREFIX}/${scriptVersion(script)}/${script.name}"></script>\n`)
+    .join("");
+}
+
+/** The script served at `/__deck/.app/<version>/<name>`; null for another version or name. */
+export function stageScriptAt(pathname: string): string | null {
+  const [, version, name] = /^\/__deck\/\.app\/([^/]+)\/([^/]+)$/.exec(pathname) ?? [];
+  const all = stageScripts(new URLSearchParams("edit"));
+  return all.find((script) => script.name === name && scriptVersion(script) === version)?.source ?? null;
+}
+
+/** A quoted or bare attribute value, as the first of its three groups that matched. */
+const VALUE = String.raw`(?:"([^"]*)"|'([^']*)'|([^\s>]+))`;
+const attribute = (tag: string, name: string) => {
+  const found = new RegExp(String.raw`\s${name}\s*=\s*${VALUE}`, "i").exec(tag);
+  return found ? (found[1] ?? found[2] ?? found[3] ?? "") : null;
+};
+
+/** The top-level slides of `html`: where each starts and ends, its opening tag and its id. */
+function slideSpans(html: string) {
+  // Comments and the text of scripts and styles are skipped whole; what is left are the tags.
+  const scan =
+    /<!--[\s\S]*?(?:-->|$)|<(script|style|textarea|title)\b[^>]*>[\s\S]*?(?=<\/\1|$)|<(\/?)section\b(?:"[^"]*"|'[^']*'|[^>"'])*>/gi;
+  const slides: { start: number; end: number; open: string; id: string | null }[] = [];
+  let open: { start: number; tag: string; depth: number } | null = null;
+  for (const match of html.matchAll(scan)) {
+    if (!/^<\/?section/i.test(match[0])) continue;
+    const closing = match[2] === "/";
+    if (open && !closing) open.depth++;
+    else if (open && open.depth > 0) open.depth--;
+    else if (open) {
+      slides.push({
+        start: open.start,
+        end: match.index + match[0].length,
+        open: open.tag,
+        id: attribute(open.tag, "id"),
+      });
+      open = null;
+    } else if (!closing && (attribute(match[0], "class") ?? "").split(/\s+/).includes("slide")) {
+      open = { start: match.index, tag: match[0], depth: 0 };
+    }
+  }
+  return slides;
+}
+
+/** The ids written inside a slide's markup (not on scripts or styles, nor in comments), each as it is written. */
+function idsWithin(markup: string): string[] {
+  const scan =
+    /<!--[\s\S]*?(?:-->|$)|<(script|style|textarea|title)\b[^>]*>[\s\S]*?(?=<\/\1|$)|<[a-z][^\s/>]*(?:"[^"]*"|'[^']*'|[^>"'])*>/gi;
+  const written = new RegExp(String.raw`(?<=\s)id\s*=\s*${VALUE}`, "i");
+  return [...markup.matchAll(scan)].flatMap((match) => {
+    const id = /^<[a-z]/i.test(match[0]) && !match[1] ? written.exec(match[0]) : null;
+    return id && (id[1] ?? id[2] ?? id[3]) ? [id[0]] : [];
+  });
+}
+
+/**
+ * Like `single_slide` in src-tauri/src/html/single.rs: `html` with only the slide `reference`
+ * names (an id, or a position as `#3`) left whole. Each other slide stays as its opening tag,
+ * without a `style` that loads something, and `</section>`, so the slides keep their count and
+ * places; with `ids`, for the slide editor, it also holds an empty element for each id that was
+ * in it. Both are held to the same example (src/test/fixtures/single-slide).
+ */
+export function singleSlide(html: string, reference: string, ids = false): string {
+  const slides = slideSpans(html);
+  if (slides.length === 0) return html;
+  // As the player's `indexFor` (src-tauri/assets/runtime.js) finds it.
+  const byId = reference ? slides.findIndex((slide) => slide.id === reference) : 0;
+  const position = Number.parseInt(reference.replace(/^#/, ""), 10);
+  const fallback = Number.isNaN(position) ? 0 : Math.min(slides.length - 1, Math.max(0, position - 1));
+  const kept = byId >= 0 ? byId : fallback;
+  let out = "";
+  let at = 0;
+  slides.forEach((slide, index) => {
+    out += html.slice(at, slide.start);
+    if (index === kept) out += html.slice(slide.start, slide.end);
+    else {
+      const style = attribute(slide.open, "style");
+      const loads = style?.includes("url(") ?? false;
+      const tag = loads ? slide.open.replace(new RegExp(String.raw`(?<=\s)style\s*=\s*${VALUE}`, "i"), "") : slide.open;
+      const inside = html.slice(slide.start + slide.open.length, slide.end);
+      const holders = ids ? idsWithin(inside).map((id) => `<i ${id}></i>`) : [];
+      out += `${tag}${holders.join("")}</section>`;
+    }
+    at = slide.end;
+  });
+  return out + html.slice(at);
+}
+
+/**
+ * Like `page_for` in src-tauri/src/protocol.rs: a deck page as its frame asked for it, cut down
+ * to the one slide a preview shows (`embed` with `slide`) and with the tags of the app's scripts
+ * for the stage and the show.
+ */
+export function pageFor(html: string, query: URLSearchParams): string {
+  const slide = query.has("embed") ? query.get("slide") : null;
+  const page = slide === null ? html : singleSlide(html, slide, query.has("edit"));
+  const added = stageScripts(query);
+  return added.length > 0 ? beforeBodyEnd(page, scriptTags(added)) : page;
 }
 
 /** Like src-tauri/src/templates.rs: the user's templates first, then the built-in ones they do not replace. */
@@ -236,7 +358,18 @@ export function browserPreview(): Plugin {
             return res.end();
           }
           res.setHeader("content-type", "text/html; charset=utf-8");
-          return res.end(html);
+          return res.end(pageFor(html, url.searchParams));
+        }
+        // The app's own scripts, which the pages load by tag (see `scriptTags`).
+        if (url.pathname.startsWith(`/__deck/${APP_PREFIX}/`)) {
+          const script = stageScriptAt(url.pathname);
+          if (script === null) {
+            res.statusCode = 404;
+            return res.end();
+          }
+          res.setHeader("content-type", "text/javascript; charset=utf-8");
+          res.setHeader("cache-control", "public, max-age=31536000, immutable");
+          return res.end(script);
         }
         // Files as of the last commit, like src-tauri/src/protocol.rs: what it does not have
         // comes from the workspace.
@@ -245,8 +378,9 @@ export function browserPreview(): Plugin {
           const file = path.resolve("/", decodeURIComponent(head[1]!));
           const committed = file.startsWith(library + path.sep) ? atHead(file) : null;
           if (committed) {
-            if (file.endsWith(".html")) res.setHeader("content-type", "text/html; charset=utf-8");
-            return res.end(committed);
+            if (!file.endsWith(".html")) return res.end(committed);
+            res.setHeader("content-type", "text/html; charset=utf-8");
+            return res.end(pageFor(committed.toString("utf8"), url.searchParams));
           }
           url.pathname = url.pathname.replace("/.head/", "/.file/");
         }
@@ -259,11 +393,7 @@ export function browserPreview(): Plugin {
         }
         if (file.endsWith(".html")) {
           res.setHeader("content-type", "text/html; charset=utf-8");
-          const added = stageScripts(url.searchParams);
-          if (added.length > 0) {
-            const scripts = added.map((script) => `<script>\n${script}</script>\n`).join("");
-            return res.end(beforeBodyEnd(fs.readFileSync(file, "utf8"), scripts));
-          }
+          return res.end(pageFor(fs.readFileSync(file, "utf8"), url.searchParams));
         }
         fs.createReadStream(file).pipe(res);
       });

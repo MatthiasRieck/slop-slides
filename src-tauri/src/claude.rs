@@ -179,6 +179,7 @@ pub async fn run_turn(
             }
             line = lines.next_line() => {
                 let Some(line) = line? else { break };
+                if is_unshown_delta(&line) { continue }
                 let Ok(value) = serde_json::from_str::<Value>(&line) else { continue };
                 match value["type"].as_str() {
                     Some("control_request") => {
@@ -503,6 +504,25 @@ fn session_id_of_init(value: &Value) -> Option<String> {
     (value["type"] == "system" && value["subtype"] == "init")
         .then(|| value["session_id"].as_str().map(str::to_string))
         .flatten()
+}
+
+/// How a line of the stream starts when it is a piece of the model's output as it comes.
+const STREAM_EVENT: &str = r#"{"type":"stream_event""#;
+/// The pieces the chat shows nothing of: a tool's input as it is written (the whole input comes
+/// with the finished message), and the model's thinking and its signature.
+const UNSHOWN_DELTAS: [&str; 3] = [
+    r#""type":"input_json_delta""#,
+    r#""type":"thinking_delta""#,
+    r#""type":"signature_delta""#,
+];
+
+/// Whether `line` is one [`parse_line`] makes nothing of, told without reading it as JSON. While
+/// the agent writes a deck, its input streams as hundreds of such lines a second, each of which
+/// would be parsed into a tree only to be dropped. A line is only taken for one when it is
+/// spelled exactly as the CLI writes them; inside a string the quotes of these marks would be
+/// escaped, so text that quotes them is never mistaken. Anything else is read in full.
+fn is_unshown_delta(line: &str) -> bool {
+    line.starts_with(STREAM_EVENT) && UNSHOWN_DELTAS.iter().any(|mark| line.contains(mark))
 }
 
 /// Maps one Claude Code stream-json line to UI events. Unknown lines map to nothing.

@@ -3,14 +3,16 @@ import { describe, expect, it } from "vitest";
 
 import type { Slide } from "./api";
 import {
-  filmstripFrames,
   formatShown,
   formatTenths,
+  LEAST_PICTURE,
   layoutTimeline,
   moveClip,
   moveEdge,
   scrollForZoom,
+  scrollStep,
   scrollToPlayhead,
+  showsPicture,
   slideAt,
   spokenSeconds,
   withTiming,
@@ -240,25 +242,33 @@ describe("slideAt", () => {
   });
 });
 
-describe("filmstripFrames", () => {
-  it("fills the strip with pictures, the last one cut off", () => {
-    expect(filmstripFrames(250, 100, 0, 1000)).toEqual([0, 1, 2]);
-    expect(filmstripFrames(200, 100, 0, 1000)).toEqual([0, 1]);
-    // Narrower than a picture, a strip still shows the start of one.
-    expect(filmstripFrames(30, 100, 0, 1000)).toEqual([0]);
+describe("showsPicture", () => {
+  it("shows the picture at the start of a strip in sight", () => {
+    expect(showsPicture(0, 500, 100, 0, 600)).toBe(true);
+    // Only where the picture is counts, not the empty film after it.
+    expect(showsPicture(0, 500, 100, 90, 600)).toBe(true);
+    expect(showsPicture(0, 500, 100, 100, 600)).toBe(false);
+    expect(showsPicture(700, 500, 100, 0, 600)).toBe(false);
+    expect(showsPicture(599, 500, 100, 0, 600)).toBe(true);
   });
 
-  it("leaves out the pictures out of sight", () => {
-    expect(filmstripFrames(1000, 100, 250, 520)).toEqual([2, 3, 4, 5]);
-    expect(filmstripFrames(1000, 100, -300, 150)).toEqual([0, 1]);
-    // A strip wholly before or after what is in sight.
-    expect(filmstripFrames(1000, 100, 1200, 1500)).toEqual([]);
-    expect(filmstripFrames(1000, 100, -500, -100)).toEqual([]);
+  it("shows none in a strip with room for only a sliver of it", () => {
+    expect(showsPicture(0, 100 * LEAST_PICTURE, 100, 0, 600)).toBe(true);
+    expect(showsPicture(0, 100 * LEAST_PICTURE - 1, 100, 0, 600)).toBe(false);
+    // A strip narrower than its picture is in sight as far as it reaches.
+    expect(showsPicture(0, 50, 100, 60, 600)).toBe(false);
   });
 
   it("shows nothing before the strip is measured", () => {
-    expect(filmstripFrames(0, 100, 0, 1000)).toEqual([]);
-    expect(filmstripFrames(500, 0, 0, 1000)).toEqual([]);
+    expect(showsPicture(0, 0, 100, 0, 1000)).toBe(false);
+    expect(showsPicture(0, 500, 0, 0, 1000)).toBe(false);
+  });
+});
+
+describe("scrollStep", () => {
+  it("moves on only from one step to the next", () => {
+    expect([0, 99, 100, 250].map((scrolled) => scrollStep(scrolled, 100))).toEqual([0, 0, 100, 200]);
+    expect(scrollStep(250, 0)).toBe(0);
   });
 });
 

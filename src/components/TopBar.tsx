@@ -182,7 +182,7 @@ function FileMenu(props: { workspace: WorkspaceInfo; file: OpenedFile | null; de
         <div
           role="menu"
           {...menu}
-          className="absolute left-0 top-full z-20 mt-1 w-60 rounded-lg border bg-card p-1 shadow-lg outline-none"
+          className="enter-below absolute left-0 top-full z-20 mt-1 w-60 rounded-lg border bg-card p-1 shadow-lg outline-none"
         >
           {file && (
             <>

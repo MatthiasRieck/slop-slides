@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke, listen, open as openDialog, revealItemInDir, save } from "../test/tauri";
 
 const unlisten = vi.fn();
@@ -9,6 +9,7 @@ import { useApp } from "../store";
 import { lastError, toastTexts } from "../store/errors";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { DeckActions } from "./DeckActions";
+import { VideoExportPanel } from "./lazy";
 import { usePresent, usePresentKeys } from "./presenter/present";
 
 /** Mounts the keys that start a show, as the app does next to its other global keys. */
@@ -16,6 +17,9 @@ function Keys() {
   usePresentKeys();
   return null;
 }
+
+// The video export's panel is loaded on first use; here it is there, as once the app has been idle.
+beforeAll(VideoExportPanel.preload);
 
 const WORKSPACE = { path: "/decks", name: "decks" };
 const OPENED = { path: "talk/deck.html", absolute: "/decks/talk/deck.html", kind: "deck" as const };

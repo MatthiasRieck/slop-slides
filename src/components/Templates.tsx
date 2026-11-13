@@ -20,7 +20,7 @@ export function useTemplates(): TemplateSummary[] | undefined {
   return templates;
 }
 
-/** A still preview of one of a template's slides. */
+/** A still preview of one of a template's slides, loaded when the list it is in shows it. */
 export function TemplateSlide(props: { template: string; slide: string; size?: Pixels; className?: string }) {
   return (
     <SlideFrame
@@ -28,6 +28,7 @@ export function TemplateSlide(props: { template: string; slide: string; size?: P
       slideId={props.slide}
       version=""
       thumbnail
+      lazy
       size={props.size}
       url={templateSlideUrl(props.template, props.slide)}
       className={props.className}

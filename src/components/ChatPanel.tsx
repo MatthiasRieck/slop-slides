@@ -1,12 +1,11 @@
 import { AlertTriangle, RotateCw, SquarePen } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Activity, useEffect, useState } from "react";
 
 import { PROVIDERS, type Provider } from "../lib/models";
 import { cn } from "../lib/utils";
 import { chatProvider, useApp } from "../store";
 import { Button } from "./Button";
 import { Composer } from "./chat/Composer";
-import { appendDraft } from "./chat/draft";
 import { InstallHint } from "./chat/InstallHint";
 import { MessageList } from "./chat/MessageList";
 import { ThreadNavigation } from "./chat/ThreadNavigation";
@@ -26,36 +25,40 @@ const DECK_REQUESTS = [
   "Review the flow of the deck and tell me what to cut, add or reorder.",
 ];
 
+/** The start of a chat, the same element each time: given it, the conversation has nothing new to render. */
+const EMPTY_CHAT = <EmptyChat />;
+
 /**
- * The chat with the agent: its header, the conversation and the composer. The draft belongs to
- * the conversation: it starts empty in another one, and stays when the folder's chat becomes the
- * chat of the deck it made (the same conversation under another key).
+ * The chat with the agent, which stays as it is while the sidebar shows another tab (`active`
+ * is off): the conversation where it was scrolled to, its tool calls unfolded, the draft and
+ * what goes along with it. Out of view it does nothing at all: it follows neither the agent nor
+ * the deck, counts no seconds, and listens for nothing (no files dropped on the window, no
+ * microphone), until it is shown again and catches up.
  */
-export function ChatPanel() {
-  const messages = useApp((s) => s.messages);
-  const running = useApp((s) => s.running);
+export function ChatPanel({ active = true }: { active?: boolean }) {
+  return (
+    <Activity mode={active ? "visible" : "hidden"}>
+      <Chat />
+    </Activity>
+  );
+}
+
+/**
+ * The chat's header, the conversation and the composer. The draft belongs to the conversation:
+ * it starts empty in another one, and stays when the folder's chat becomes the chat of the deck
+ * it made (the same conversation under another key).
+ *
+ * It knows of the conversation only whether there is one yet: the messages are the list's to
+ * take, and the draft the composer's, so neither a key pressed nor an event of the agent's
+ * renders it.
+ */
+function Chat() {
+  const empty = useApp((s) => s.messages.length === 0);
   const provider = useApp((s) => s.selection.provider);
   const cliMissing = useApp((s) => s.providers?.find((p) => p.id === s.selection.provider)?.installed === false);
-  const deckEmpty = useApp((s) => (s.deck?.slides.length ?? 0) === 0);
-  const onSlide = useApp((s) => !!s.deck && !!s.selected);
-  const composerFill = useApp((s) => s.composerFill);
-  const [draft, setDraft] = useState("");
   // Goes up with every other conversation shown (see `loadChat`), not when the chat follows its deck.
   const revision = useApp((s) => s.chatRevision);
   const [switching, setSwitching] = useState(false);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: each conversation starts with its own empty draft
-  useEffect(() => {
-    setDraft("");
-  }, [revision]);
-
-  // Other parts of the app (e.g. the lint status) can hand the composer a prepared message,
-  // which goes after what is typed already. Taken, it is the composer's: it does not come again
-  // when the chat is shown the next time.
-  useEffect(() => {
-    if (!composerFill) return;
-    if (composerFill.text) setDraft((typed) => appendDraft(typed, composerFill.text));
-    useApp.getState().clearComposerFill();
-  }, [composerFill]);
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -66,16 +69,8 @@ export function ChatPanel() {
         aria-busy={switching || undefined}
       >
         {cliMissing && <MissingCli provider={provider} />}
-        <MessageList key={revision} messages={messages} running={running}>
-          {messages.length === 0 && (
-            <EmptyChat
-              deckEmpty={deckEmpty}
-              onSlide={onSlide}
-              onPick={(text) => useApp.getState().fillComposer(text)}
-            />
-          )}
-        </MessageList>
-        <Composer key={`composer-${revision}`} draft={draft} setDraft={setDraft} />
+        <MessageList key={revision}>{empty ? EMPTY_CHAT : null}</MessageList>
+        <Composer key={`composer-${revision}`} />
       </div>
     </div>
   );
@@ -138,8 +133,9 @@ function MissingCli({ provider }: { provider: Provider }) {
  * The start of a chat: what the agent can be asked, and requests to start from. Picking one puts
  * it in the composer, to be changed or sent.
  */
-function EmptyChat(props: { deckEmpty: boolean; onSlide: boolean; onPick: (text: string) => void }) {
-  const { deckEmpty, onSlide, onPick } = props;
+function EmptyChat() {
+  const deckEmpty = useApp((s) => (s.deck?.slides.length ?? 0) === 0);
+  const onSlide = useApp((s) => !!s.deck && !!s.selected);
   const suggestions = deckEmpty ? STARTERS : [...(onSlide ? [SLIDE_REQUEST] : []), ...DECK_REQUESTS];
   return (
     <div className="flex flex-col gap-3 px-1 pt-6">
@@ -154,7 +150,7 @@ function EmptyChat(props: { deckEmpty: boolean; onSlide: boolean; onPick: (text:
             key={text}
             type="button"
             title="Put this in the message box"
-            onClick={() => onPick(text)}
+            onClick={() => useApp.getState().fillComposer(text)}
             className="rounded-lg border px-3 py-2 text-left text-xs leading-relaxed text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             {text}

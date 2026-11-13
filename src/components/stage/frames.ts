@@ -1,8 +1,3 @@
-/** Whether a message came from one of the slide previews in `area`. */
-export function fromFrameIn(area: HTMLElement | null | undefined, source: MessageEventSource | null): boolean {
-  return Array.from(area?.querySelectorAll("iframe") ?? []).some((frame) => frame.contentWindow === source);
-}
-
 /** How many app pixels one of the preview's own pixels takes: the preview is scaled down to fit. */
 function scaleOf(frame: HTMLIFrameElement, rect: DOMRect) {
   return frame.clientWidth ? rect.width / frame.clientWidth : 1;

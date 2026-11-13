@@ -19,14 +19,14 @@ import {
   SquareDashed,
   Trash2,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
 
 import { useMenuKeys } from "../hooks/useMenuKeys";
 
 import type { AreaShape } from "../lib/comments";
 import { INK_COLORS } from "../lib/ink";
 import { cn } from "../lib/utils";
-import { useApp } from "../store";
+import { deckComments, hasReview, useApp } from "../store";
 import { ToolButton, toolButtonClass } from "./Button";
 import { CommentsOverview } from "./Comments";
 import { SlideSearch } from "./FindReplace";
@@ -52,8 +52,11 @@ const AREA_SHAPES: { shape: AreaShape; label: string; icon: LucideIcon }[] = [
  *
  * Every tool is always there, off when it has nothing to work on, so the sections keep their
  * widths and the ribbon knows what fits.
+ *
+ * It renders when a tool or the review changes, not with the stage around it: `annotations` and
+ * the callbacks stay the same until then.
  */
-export function ViewToolbar(props: {
+export const ViewToolbar = memo(function ViewToolbar(props: {
   annotations: Annotations;
   commenting: boolean;
   onCommenting: (on: boolean) => void;
@@ -67,9 +70,7 @@ export function ViewToolbar(props: {
   const reviewVisible = useApp((s) => s.reviewVisible);
   const commentTexts = useApp((s) => s.commentTexts);
   const finalState = useApp((s) => s.finalState);
-  const hasReview = useApp((s) =>
-    [...Object.values(s.sketches), ...Object.values(s.comments)].some((items) => items.length > 0),
-  );
+  const reviewed = useApp(hasReview);
   const ribbon = useRibbonFit();
   const { collapsedFrom } = ribbon;
   const toggleReview = () => {
@@ -176,7 +177,7 @@ export function ViewToolbar(props: {
           <RibbonToggle
             label="Show review marks and comments on the slides"
             active={reviewVisible}
-            disabled={!hasReview}
+            disabled={!reviewed}
             onClick={toggleReview}
           >
             <Eye />
@@ -239,7 +240,7 @@ export function ViewToolbar(props: {
       </RibbonSection>
     </div>
   );
-}
+});
 
 /** One half of a two-way choice in the ribbon; `active` is the half chosen. */
 function Segment(props: { label: string; active: boolean; onClick: () => void; children: React.ReactNode }) {
@@ -262,10 +263,7 @@ function Segment(props: { label: string; active: boolean; onClick: () => void; c
 
 /** How many comments the deck has, opening the list of them (see `CommentsOverview`). */
 function CommentsButton() {
-  const count = useApp((s) => {
-    const slides = new Set(s.deck?.slides.map((slide) => slide.id));
-    return Object.entries(s.comments).reduce((sum, [slide, list]) => sum + (slides.has(slide) ? list.length : 0), 0);
-  });
+  const count = useApp((s) => deckComments(s).length);
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLButtonElement>(null);
   return (

@@ -1,8 +1,17 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The tabs' contents have their own tests.
-vi.mock("./ChatPanel", () => ({ ChatPanel: () => <div data-testid="chat" /> }));
+const chatMounts = vi.fn();
+vi.mock("./ChatPanel", async () => {
+  const { useEffect } = await import("react");
+  return {
+    ChatPanel: ({ active }: { active: boolean }) => {
+      useEffect(() => void chatMounts(), []);
+      return <div data-testid="chat" data-active={String(active)} />;
+    },
+  };
+});
 vi.mock("./FileTree", () => ({ FileTree: () => <div data-testid="files" /> }));
 vi.mock("./SettingsPanel", () => ({ SettingsPanel: () => <div data-testid="settings" /> }));
 vi.mock("./SvgEditor", () => ({ SvgEditor: () => <div data-testid="svg" /> }));
@@ -24,7 +33,11 @@ import { useSvgEditor } from "../svgStore";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { ask } from "../test/tauri";
 import { answerUnsaved, unsavedAsked } from "../test/unsaved";
+import { CodePanel, SvgEditor } from "./lazy";
 import { Sidebar } from "./Sidebar";
+
+// The HTML and SVG tabs are loaded on first use; here they are there, as once the app has been idle.
+beforeAll(() => Promise.all([CodePanel.preload(), SvgEditor.preload()]));
 
 beforeEach(() => {
   localStorage.clear();
@@ -46,7 +59,12 @@ beforeEach(() => {
 
 const tab = (name: string) => screen.getByRole("tab", { name });
 const tabNames = () => screen.queryAllByRole("tab").map((t) => t.textContent);
-const shown = (id: string) => screen.queryByTestId(id) !== null;
+/** On show: mounted, and not kept hidden behind the tab that shows (as the chat and the HTML are). */
+const shown = (id: string) => {
+  const content = screen.queryByTestId(id);
+  return content !== null && !content.parentElement?.classList.contains("hidden");
+};
+const mounted = (id: string) => screen.queryByTestId(id) !== null;
 
 describe("Sidebar", () => {
   it("shows one tab at a time and switches between them", () => {
@@ -213,6 +231,36 @@ describe("Sidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: `Close ${name}` }));
     expect(tabNames()).toEqual(["Chat", "Files"]);
     expect(shown(id)).toBe(false);
+  });
+
+  it("does not mount a tab that stays mounted before it first shows", () => {
+    useApp.setState({ sidebarTabs: ["files", "code"], sidebarTab: "files" });
+    render(<Sidebar />);
+    expect(mounted("code")).toBe(false);
+    expect(codeMounts).not.toHaveBeenCalled();
+    fireEvent.click(tab("HTML"));
+    expect(shown("code")).toBe(true);
+    fireEvent.click(tab("Files"));
+    expect([mounted("code"), shown("code")]).toEqual([true, false]);
+    expect(codeMounts).toHaveBeenCalledOnce();
+    // Closed, it is gone; opened again, it starts anew when it shows.
+    act(() => useApp.getState().closeSidebarTab("code"));
+    expect(mounted("code")).toBe(false);
+  });
+
+  it("keeps the chat mounted behind the other tabs, telling it whether it shows", () => {
+    chatMounts.mockClear();
+    render(<Sidebar />);
+    const chat = () => screen.getByTestId("chat");
+    expect(chat().dataset.active).toBe("true");
+    fireEvent.click(tab("Files"));
+    expect([mounted("chat"), shown("chat")]).toEqual([true, false]);
+    expect(chat().dataset.active).toBe("false");
+    fireEvent.click(tab("Chat"));
+    expect(shown("chat")).toBe(true);
+    expect(chat().dataset.active).toBe("true");
+    // The same chat all along: its draft, its scroll position and its unfolded tool calls stay.
+    expect(chatMounts).toHaveBeenCalledOnce();
   });
 
   it("keeps the HTML mounted behind the other tabs, so unsaved edits survive", () => {

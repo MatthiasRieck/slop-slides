@@ -38,9 +38,13 @@ const KIND_LABELS: Record<FileKind, string> = {
   file: "File",
 };
 
+/** How long the watcher stays quiet before the tree lists again the folders whose files changed. */
+export const TREE_RELOAD_DELAY = 100;
+
 /**
  * Loads the workspace's folders only when asked for (expanded), keeping them after they are
- * collapsed, and reloads loaded ones on request (the watcher reported changes in them).
+ * collapsed, and reloads loaded ones on request (the watcher reported changes in them). A
+ * loaded folder can be forgotten instead: it is listed again when next asked for.
  */
 export function useDirectoryEntries(root: string) {
   const [folders, setFolders] = useState(new Map<string, WorkspaceEntry[]>());
@@ -87,7 +91,17 @@ export function useDirectoryEntries(root: string) {
 
   const reload = useCallback((paths: readonly string[]) => Promise.all(paths.map((p) => load(p, true))), [load]);
 
-  return { folders, errors, load, reload };
+  const forget = useCallback((paths: readonly string[]) => {
+    if (paths.length === 0) return;
+    for (const path of paths) requested.current.delete(path);
+    setFolders((prev) => {
+      const next = new Map(prev);
+      for (const path of paths) next.delete(path);
+      return next;
+    });
+  }, []);
+
+  return { folders, errors, load, reload, forget };
 }
 
 function loadExpanded(root: string): Set<string> {
@@ -121,7 +135,9 @@ interface OpenMenu {
 function WorkspaceTree({ root, name }: { root: string; name: string }) {
   const openedPath = useApp((s) => s.openedFile?.path ?? null);
   const change = useApp((s) => s.workspaceChange);
-  const { folders, errors, load, reload } = useDirectoryEntries(root);
+  /** The tree is on show: the sidebar is open on its tab. */
+  const showing = useApp((s) => s.sidebarOpen && s.sidebarTab === "files");
+  const { folders, errors, load, reload, forget } = useDirectoryEntries(root);
   const [expanded, setExpanded] = useState(() => loadExpanded(root));
   const [refreshing, setRefreshing] = useState(false);
   /** The row the keys last went to; the one Tab comes back to. */
@@ -141,12 +157,32 @@ function WorkspaceTree({ root, name }: { root: string; name: string }) {
     setExpanded((prev) => (above.every((f) => prev.has(f)) ? prev : new Set([...prev, ...above])));
   }, [openedPath]);
 
-  // Follow the watcher: reload the folders whose files changed.
+  // Follow the watcher. Its reports come in bursts while the agent works: what changed adds up,
+  // and once the reports pause the folders on show are listed again, each once. A collapsed
+  // folder is only forgotten, to be listed when it opens; and nothing is listed while the tree
+  // is out of sight, which catches up as it shows again.
   const loadedRef = useRef(folders);
   loadedRef.current = folders;
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
+  const changed = useRef(new Set<string>());
+  /** The report there was before the tree was: it has just listed what it shows. */
+  const reported = useRef(change);
   useEffect(() => {
-    if (change) void reload(foldersToReload(change.paths, loadedRef.current.keys()));
-  }, [change, reload]);
+    if (change && change !== reported.current) {
+      reported.current = change;
+      for (const path of change.paths) changed.current.add(path);
+    }
+    if (!showing || changed.current.size === 0) return;
+    const timer = setTimeout(() => {
+      const stale = foldersToReload([...changed.current], loadedRef.current.keys());
+      changed.current.clear();
+      const shown = (folder: string) => folder === "" || expandedRef.current.has(folder);
+      forget(stale.filter((folder) => !shown(folder)));
+      void reload(stale.filter(shown));
+    }, TREE_RELOAD_DELAY);
+    return () => clearTimeout(timer);
+  }, [change, showing, reload, forget]);
 
   const rows = useMemo(() => visibleRows(folders, expanded), [folders, expanded]);
   const rootError = errors.get("");

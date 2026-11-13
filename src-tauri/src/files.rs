@@ -35,10 +35,18 @@ pub fn library_root(app: &AppHandle) -> Result<PathBuf> {
 /// Writes `bytes` to `path` through a temporary file next to it, so a reader never sees half
 /// of it.
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    atomic_write_stamped(path, bytes).map(drop)
+}
+
+/// [`atomic_write`], returning the metadata of the file as written. It is taken from the
+/// temporary file before that takes `path`'s place (which keeps its modification time), so it
+/// is that of these bytes even when someone else writes `path` right after.
+pub(crate) fn atomic_write_stamped(path: &Path, bytes: &[u8]) -> Result<fs::Metadata> {
     let tmp = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4().simple()));
     fs::write(&tmp, bytes)?;
+    let metadata = fs::metadata(&tmp)?;
     fs::rename(&tmp, path)?;
-    Ok(())
+    Ok(metadata)
 }
 
 /// `<root>/<stem>`, or `<stem>-2`, `<stem>-3`, … when that is taken; `untitled` for no stem.

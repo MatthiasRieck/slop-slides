@@ -30,8 +30,30 @@ describe("undo and redo", () => {
     await useApp.getState().undo();
     expect(calls("undo_deck")).toEqual([{ id }]);
     expect(useApp.getState().deck!.slides.find((s) => s.id === "outro")!.hash).toBe("new");
-    expect(useApp.getState()).toMatchObject({ selected: "outro", editReload: 1, toasts: [] });
+    // The change was on another slide: the stage goes there, which loads it; no editor starts again for it.
+    expect(useApp.getState()).toMatchObject({ selected: "outro", editReload: 0, toasts: [] });
     expect(useApp.getState().history!.redo!.label).toBe("Edit slide");
+  });
+
+  it("starts the slide editor again only when the slide shown or the deck's styles changed", async () => {
+    const useApp = await freshStore();
+    const reloads = () => useApp.getState().editReload;
+    const undoing = async (deck: Deck) => {
+      useApp.setState({ deck: deckFor(DECK_HTML), selected: "intro", editReload: 0 });
+      backend({ undo_deck: () => ({ deck, entry: entry("Edit slide"), status: status() }) });
+      await useApp.getState().undo();
+    };
+    // Nothing on a slide changed (the order of the slides, say, or a note): the editor goes on.
+    await undoing(deckFor(DECK_HTML));
+    expect(reloads()).toBe(0);
+    expect(useApp.getState().selected).toBe("intro");
+    await undoing(changed("outro"));
+    expect(reloads()).toBe(0);
+    // The slide it shows is another now, and so are the deck's styles: it has to load them.
+    await undoing(changed("intro"));
+    expect(reloads()).toBe(1);
+    await undoing({ ...deckFor(DECK_HTML), shellHash: "restyled" });
+    expect(reloads()).toBe(1);
   });
 
   it("keeps the selected slide when the change was on it", async () => {

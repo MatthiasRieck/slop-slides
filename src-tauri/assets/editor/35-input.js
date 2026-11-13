@@ -7,7 +7,10 @@
     wires.removeAttribute("data-quiet");
     if (editing && editing.contains(event.target)) return;
     finishEditing();
-    if (nudgeTimer) commit();
+    saveNudges();
+    // The handles are where a press reads them, and what was hovered is picked anew after it.
+    flushHandles();
+    hoverPick = null;
     if (tool !== "select") {
       event.preventDefault();
       startCreating(event);
@@ -116,7 +119,7 @@
     // On macOS, Control-click starts out as a primary press.
     endDrag();
     finishEditing();
-    if (nudgeTimer) commit();
+    saveNudges();
     var el = pickable(event.target, event.clientX, event.clientY) || lockedAt(event.target, event.clientX, event.clientY);
     // A member of a multi-selection, or what is inside the selection (it may be a parent, picked
     // with Escape), leaves it selected.
@@ -151,8 +154,7 @@
       return;
     }
     if (!drag) {
-      var onHandle = ui.contains(event.target) || pointUi.contains(event.target);
-      hover(editing || onHandle || tool !== "select" ? null : pickable(event.target, event.clientX, event.clientY));
+      scheduleHover(event);
       return;
     }
     if (drag.mode === "point") {
@@ -160,9 +162,11 @@
       return;
     }
     if (drag.mode !== "move") {
+      // The lines stuck to what the handle changes go with it.
+      if (!drag.followers) drag.followers = linesFollowing([drag.el], [drag.el]);
       drag.moved = true;
       transformTo(event);
-      followLines([drag.el]);
+      followStuck(drag.followers);
       showReadout(event);
       return;
     }
@@ -171,14 +175,19 @@
     if (!drag.moved && Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
     drag.moved = true;
     lastDown = { el: null, at: 0 };
-    hover(null);
+    dropHover();
     moveDrag(event, dx, dy);
   });
 
+  /** The pointer let go (or was taken away): whatever it was in the middle of ends. */
   function endDrag() {
     if (create) finishCreating();
     if (marquee) finishMarquee();
-    if (!drag) return;
+    if (drag) finishDrag();
+    resumeSlideChecks();
+  }
+
+  function finishDrag() {
     var moved = drag.moved;
     var el = drag.el;
     // A click on one of several selected elements leaves just that one selected.
@@ -192,8 +201,10 @@
     }
     drag = null;
     clearDragMarks();
-    // The handles to add points are away during a drag.
-    if (point) placeHandles();
+    // What waited for the next frame during the drag shows where it ended, and the handles to
+    // add points, away during a drag, are back.
+    flushFigures();
+    if (moved || point) placeHandles();
     if (moved) {
       refit(el);
       commit();
@@ -204,16 +215,18 @@
   document.addEventListener("pointercancel", endDrag);
   document.documentElement.addEventListener("pointerleave", function () {
     pointer = null;
-    hover(null);
+    dropHover();
   });
-  window.addEventListener("resize", placeHandles);
-  window.addEventListener("load", scheduleOverflow);
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleOverflow);
+  window.addEventListener("resize", cameraMoved);
+  // What overflows is looked for right away, and once more when the page's images and fonts are
+  // all in, which may lay it out anew.
   scheduleOverflow();
+  whenSettled(scheduleOverflow);
   document.addEventListener("input", function (event) {
     // Typing over everything can take the body away, or leave text beside it.
     if (editing && !event.isComposing) ensureBody(editing);
-    if (editing) refit(editing);
+    // Fitting the text again lays it out several times over: it waits for a pause in the typing.
+    if (editing) refitDue = true;
     placeHandles();
     if (editing) scheduleReport();
   });
@@ -267,9 +280,8 @@
    */
   function insertImages(images, x, y) {
     finishEditing();
-    if (nudgeTimer) commit();
-    var rect = slide.getBoundingClientRect();
-    var k = zoom();
+    saveNudges();
+    var view = camera();
     var maxW = (slide.offsetWidth || 1920) / 3;
     var maxH = (slide.offsetHeight || 1080) / 2;
     var last = null;
@@ -291,7 +303,7 @@
       img.style.width = w + "px";
       slide.appendChild(img);
       var shift = DROP_CASCADE * placed++;
-      moveTo(img, (x - rect.left) / k - w / 2 + shift, (y - rect.top) / k - h / 2 + shift);
+      moveTo(img, (x - view.left) / view.k - w / 2 + shift, (y - view.top) / view.k - h / 2 + shift);
       mark(img, MOVED, true);
       last = img;
     });
@@ -308,7 +320,7 @@
   function copySelected(cut) {
     if (!selected || !slide.contains(selected)) return;
     finishEditing();
-    if (nudgeTimer) commit();
+    saveNudges();
     var group = inDocumentOrder(allSelected());
     if (!group.length) return;
     var headers = group.map(clipHeader);
@@ -330,8 +342,7 @@
     var computed = getComputedStyle(el);
     var center = centerOf(el);
     var size = sizeOf(el);
-    var rect = slide.getBoundingClientRect();
-    var k = zoom();
+    var view = camera();
     var look = {};
     LOOK.forEach(function (prop) {
       if (computed[prop]) look[prop] = computed[prop];
@@ -341,8 +352,8 @@
       path: pathOf(el),
       free: /^(absolute|fixed)$/.test(computed.position),
       box: {
-        x: Math.round((center.x - rect.left) / k - size.w / 2),
-        y: Math.round((center.y - rect.top) / k - size.h / 2),
+        x: Math.round((center.x - view.left) / view.k - size.w / 2),
+        y: Math.round((center.y - view.top) / view.k - size.h / 2),
         w: Math.round(size.w),
         h: Math.round(size.h),
       },
@@ -413,7 +424,7 @@
     var clip = parseClip(html);
     if (!clip) return;
     finishEditing();
-    if (nudgeTimer) commit();
+    saveNudges();
     if (Array.isArray(clip.header.group) && clip.header.group.length === clip.els.length && clip.els.length > 1) {
       pasteGroup(clip, at);
       return;
@@ -490,7 +501,7 @@
     text = String(text || "").replace(/\r\n?/g, "\n").replace(/\s+$/, "");
     if (!text.trim()) return;
     finishEditing();
-    if (nudgeTimer) commit();
+    saveNudges();
     var toolStyleBefore = toolStyle;
     toolStyle = style && typeof style === "object" ? style : {};
     var el = newText(0, 0);

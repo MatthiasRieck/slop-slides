@@ -4,10 +4,14 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 use super::attrs::{ADDED_ATTR, MOVED_ATTR};
-use super::edit::{end_of_deck, indent_before, remove};
+#[cfg(test)]
+use super::edit::remove;
+use super::edit::{end_of_deck, indent_before};
+#[cfg(test)]
 use super::scan::tags;
+use super::scan::Tag;
 use super::slide_attrs::set_locked;
-use super::spans::{find_sections, find_slides, section_key, slide_span, span_of};
+use super::spans::{find_sections, find_slides, section_key, slide_span, span_of, SlideSpan};
 
 pub fn slugify(text: &str) -> String {
     let mut slug = String::new();
@@ -22,7 +26,7 @@ pub fn slugify(text: &str) -> String {
     slug.trim_end_matches('-').to_string()
 }
 
-fn unique_id(taken: &HashSet<String>, base: &str) -> String {
+pub(super) fn unique_id(taken: &HashSet<String>, base: &str) -> String {
     let base = if base.is_empty() { "slide" } else { base };
     if !taken.contains(base) {
         return base.to_string();
@@ -110,6 +114,9 @@ pub fn reorder(html: &str, order: &[String]) -> Result<String, String> {
     Ok(out)
 }
 
+/// `html` without slide `id`. The app deletes slides several at once (see
+/// [`super::edit_slides`]); this is the change to one, which tests hold that against.
+#[cfg(test)]
 pub fn delete(html: &str, id: &str) -> Result<String, String> {
     let slides = find_slides(html);
     let span = slide_span(&slides, id)?;
@@ -127,7 +134,7 @@ pub fn insert(
     let slides = find_slides(html);
     let taken: HashSet<String> = slides.iter().filter_map(|s| s.id.clone()).collect();
     let id = unique_id(&taken, &slugify(id_hint));
-    let section = section.replace("{{ID}}", &id);
+    let section = section.replace(ID_PLACEHOLDER, &id);
     let anchor = after.and_then(|a| span_of(&slides, a)).or(slides.last());
     let (at, indent) = match anchor {
         Some(span) => (
@@ -146,54 +153,85 @@ pub fn insert(
     Ok((out, id))
 }
 
+/// Whether `tag` opens an element moved or added by hand.
+pub(super) fn is_moved(tag: &Tag) -> bool {
+    tag.attrs().any(|a| a.is(MOVED_ATTR) || a.is(ADDED_ATTR))
+}
+
 /// Whether the slide markup contains an element moved or added by hand (see [`MOVED_ATTR`] and
-/// [`ADDED_ATTR`]).
+/// [`ADDED_ATTR`]). The app reads it along with the rest it shows of a slide (see
+/// [`super::slide_content`]); this is the question by itself, which tests hold that against.
+#[cfg(test)]
 pub fn has_moved(slide: &str) -> bool {
-    tags(slide).any(|(_, tag)| {
-        !tag.closing
-            && tag
-                .attrs
-                .iter()
-                .any(|a| a.0 == MOVED_ATTR || a.0 == ADDED_ATTR)
-    })
+    tags(slide).any(|(_, tag)| !tag.closing && is_moved(&tag))
 }
 
 /// Replaces slide `id` with `markup`, which must be one whole `<section class="slide">` with
 /// the same id. Returns the new document and the slide's previous markup.
 pub fn replace_slide(html: &str, id: &str, markup: &str) -> Result<(String, String), String> {
+    let markup = whole_slide(markup, id)?;
+    let slides = find_slides(html);
+    Ok(put_slide(html, slide_span(&slides, id)?, markup))
+}
+
+/// [`replace_slide`] of the slide at `span`, one of `html`'s slides already found.
+pub fn replace_slide_at(
+    html: &str,
+    span: &SlideSpan,
+    markup: &str,
+) -> Result<(String, String), String> {
+    let id = span.id.as_deref().unwrap_or_default();
+    let markup = whole_slide(markup, id)?;
+    Ok(put_slide(html, span, markup))
+}
+
+/// `markup` trimmed, when it is one whole `<section class="slide">` with the id `id`.
+fn whole_slide<'a>(markup: &'a str, id: &str) -> Result<&'a str, String> {
     let markup = markup.trim();
     let replacement = find_slides(markup);
     match replacement.as_slice() {
-        [only] if only.range == (0..markup.len()) && only.id.as_deref() == Some(id) => {}
-        _ => return Err(format!("The edited markup is not slide `{id}`.")),
+        [only] if only.range == (0..markup.len()) && only.id.as_deref() == Some(id) => Ok(markup),
+        _ => Err(format!("The edited markup is not slide `{id}`.")),
     }
-    let slides = find_slides(html);
-    let span = slide_span(&slides, id)?;
+}
+
+/// `html` with `markup` in place of the slide at `span`, and that slide's markup.
+fn put_slide(html: &str, span: &SlideSpan, markup: &str) -> (String, String) {
     let previous = html[span.range.clone()].to_string();
     let out = format!(
         "{}{markup}{}",
         &html[..span.range.start],
         &html[span.range.end..]
     );
-    Ok((out, previous))
+    (out, previous)
 }
 
-/// Slide `id` of `html` with its id replaced by the `{{ID}}` placeholder [`insert`] fills in.
+/// What [`insert`] replaces with the new slide's id in the markup it is given.
+pub(super) const ID_PLACEHOLDER: &str = "{{ID}}";
+
+/// Slide `id` of `html` with its id replaced by the placeholder [`insert`] fills in.
 fn slide_with_id_placeholder(html: &str, id: &str) -> Result<String, String> {
     let slides = find_slides(html);
-    let span = slide_span(&slides, id)?;
+    Ok(with_id_placeholder(html, slide_span(&slides, id)?))
+}
+
+/// The slide at `span` of `html`, which has an id, with [`ID_PLACEHOLDER`] for it.
+pub(super) fn with_id_placeholder(html: &str, span: &SlideSpan) -> String {
     let range = span
         .id_value
         .clone()
         .expect("slides with ids have id ranges");
-    Ok(format!(
-        "{}{{{{ID}}}}{}",
+    format!(
+        "{}{ID_PLACEHOLDER}{}",
         &html[span.range.start..range.start],
         &html[range.end..span.range.end]
-    ))
+    )
 }
 
 /// Inserts a copy of slide `id` right after it. The copy is not locked, so it can be changed.
+/// The app duplicates slides several at once (see [`super::edit_slides`]); this is the change
+/// to one, which tests hold that against.
+#[cfg(test)]
 pub fn duplicate(html: &str, id: &str) -> Result<(String, String), String> {
     let copy = slide_with_id_placeholder(html, id)?;
     let (out, new_id) = insert(html, Some(id), &copy, &format!("{id}-copy"))?;

@@ -1,17 +1,13 @@
-import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import { zoomBox } from "../../lib/ink";
 import { isMod, keepsKey } from "../../lib/keys";
+import { perFrame } from "../../lib/perFrame";
 import { useApp } from "../../store";
-import { fromFrameIn } from "./frames";
+import type { FrameMessages } from "./messages";
+import { type PasteboardView, useStageView } from "./stageView";
 
-/** The pasteboard's view: pan in slide pixels and zoom, relative to the slide centered at full size. */
-export interface PasteboardView {
-  slide: string;
-  x: number;
-  y: number;
-  k: number;
-}
+export type { PasteboardView };
 
 /** Puts what lies on the slide (`scale` CSS px per slide px) where the view has it. */
 export function inkBox(view: PasteboardView | null, scale: number) {
@@ -44,28 +40,35 @@ export function zoomKey(
  * Each slide starts centered at full size. The zoom buttons under the slide and the zoom keys
  * pressed in the app (see `zoomKey`; the preview has the same keys for when the focus is in it)
  * zoom around the middle of the view.
+ *
+ * The view is kept in `useStageView`, once per animation frame however often the pasteboard
+ * reports it, for what moves with the slide to read. What this gives back never changes.
  */
-export function usePasteboard(areaRef: RefObject<HTMLDivElement | null>) {
+export function usePasteboard(messages: FrameMessages) {
   const frame = useRef<HTMLIFrameElement | null>(null);
-  const [view, setView] = useState<PasteboardView | null>(null);
 
   useEffect(() => {
-    const onMessage = (event: MessageEvent) => {
-      const data = event.data;
-      if (data?.type !== "slop:view" || !fromFrameIn(areaRef.current, event.source)) return;
-      if (data.slide === useApp.getState().selected && [data.x, data.y, data.k].every(Number.isFinite)) {
-        setView({ slide: data.slide, x: data.x, y: data.y, k: data.k });
-      }
+    const show = perFrame<PasteboardView>((view) => useStageView.setState({ view }));
+    const forget = () => {
+      show.cancel();
+      if (useStageView.getState().view) useStageView.setState({ view: null });
     };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [areaRef]);
-
-  const current = useApp((s) => s.selected);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a different slide starts centered
-  useEffect(() => {
-    setView(null);
-  }, [current]);
+    const offMessages = messages.on({
+      "slop:view": (data) => {
+        if (data.slide !== useApp.getState().selected || ![data.x, data.y, data.k].every(Number.isFinite)) return;
+        show.push({ slide: data.slide, x: data.x, y: data.y, k: data.k });
+      },
+    });
+    // A different slide starts centered.
+    const offSlide = useApp.subscribe((now, before) => {
+      if (now.selected !== before.selected) forget();
+    });
+    return () => {
+      offMessages();
+      offSlide();
+      forget();
+    };
+  }, [messages]);
 
   const send = useCallback((camera: object) => {
     frame.current?.contentWindow?.postMessage({ type: "slop:camera", ...camera }, "*");
@@ -83,22 +86,19 @@ export function usePasteboard(areaRef: RefObject<HTMLDivElement | null>) {
     return () => window.removeEventListener("keydown", onKey);
   }, [send]);
 
-  const shown = view?.slide === current ? view : null;
   return {
-    /** The view of the current slide, if it has moved; null when centered at full size. */
-    current: shown,
-    view: shown && !(shown.x === 0 && shown.y === 0 && shown.k === 1) ? shown : null,
     /** Back to the whole slide, centered: the view every slide starts with. */
-    resetView: () => send({ home: true }),
+    resetView: useCallback(() => send({ home: true }), [send]),
     /** Zooms by `factor` around the middle of the view. */
-    zoomBy: (factor: number) => send({ zoomBy: factor }),
+    zoomBy: useCallback((factor: number) => send({ zoomBy: factor }), [send]),
     /** Zooms to `k` times the size the slide fits the stage at, around the middle of the view. */
-    zoomTo: (k: number) => send({ zoomTo: k }),
-    onFrameReady: (loaded: HTMLIFrameElement) => {
+    zoomTo: useCallback((k: number) => send({ zoomTo: k }), [send]),
+    onFrameReady: useCallback((loaded: HTMLIFrameElement) => {
       frame.current = loaded;
+      const { view } = useStageView.getState();
       if (view && view.slide === useApp.getState().selected) {
         loaded.contentWindow?.postMessage({ type: "slop:camera", x: view.x, y: view.y, k: view.k }, "*");
       }
-    },
+    }, []),
   };
 }

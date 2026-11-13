@@ -7,8 +7,11 @@
 //! `~/.slopslides/templates/<id>/deck.html` (with an optional `assets/` folder), one folder
 //! per template; a user template replaces a built-in one with the same id.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+use std::time::SystemTime;
 
 use serde::Serialize;
 
@@ -96,7 +99,7 @@ const BUILTIN: &[(&str, &str)] = &[
 /// Where staged copies of templates go inside a deck, for the agent to read.
 pub const STAGED_DIR: &str = "templates";
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct TemplateSummary {
     pub id: String,
@@ -111,11 +114,16 @@ pub struct TemplateSummary {
     pub size: SizeInfo,
 }
 
-/// `~/.slopslides/templates`, created on first use.
+/// `~/.slopslides/templates`, created on first use. It is asked for with every template preview,
+/// so the folder is made once and its path kept.
 pub fn user_root() -> Result<PathBuf> {
+    static ROOT: OnceLock<PathBuf> = OnceLock::new();
+    if let Some(root) = ROOT.get() {
+        return Ok(root.clone());
+    }
     let root = crate::files::app_home()?.join("templates");
     fs::create_dir_all(&root)?;
-    Ok(root)
+    Ok(ROOT.get_or_init(|| root).clone())
 }
 
 /// Template ids are folder names that are safe in a URL path segment and an attribute.
@@ -165,6 +173,18 @@ fn summary(id: &str, source: &str, path: Option<&Path>) -> TemplateSummary {
     }
 }
 
+/// What the built-in templates are. They are compiled in, so each is read (its slides found,
+/// its title and size) once, not every time the templates are listed.
+fn builtin_summaries() -> &'static [TemplateSummary] {
+    static SUMMARIES: LazyLock<Vec<TemplateSummary>> = LazyLock::new(|| {
+        BUILTIN
+            .iter()
+            .map(|(id, source)| summary(id, source, None))
+            .collect()
+    });
+    &SUMMARIES
+}
+
 /// The user's templates (by title), then the built-in ones they do not replace.
 pub fn list(root: &Path) -> Vec<TemplateSummary> {
     let mut own: Vec<TemplateSummary> = fs::read_dir(root)
@@ -179,10 +199,10 @@ pub fn list(root: &Path) -> Vec<TemplateSummary> {
         .filter(|t| !t.slides.is_empty())
         .collect();
     own.sort_by_key(|t| t.title.to_lowercase());
-    let builtins: Vec<TemplateSummary> = BUILTIN
+    let builtins: Vec<TemplateSummary> = builtin_summaries()
         .iter()
-        .filter(|(id, _)| !own.iter().any(|t| t.id == *id))
-        .map(|(id, source)| summary(id, source, None))
+        .filter(|builtin| !own.iter().any(|t| t.id == builtin.id))
+        .cloned()
         .collect();
     own.extend(builtins);
     own
@@ -263,18 +283,75 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Serves a template file to the editor's previews: deck.html with the player runtime, or
-/// one of a user template's assets.
-pub fn read_file(root: &Path, id: &str, rel: &str) -> Option<(&'static str, Vec<u8>)> {
-    if rel == DECK_FILE {
-        let source = source(root, id).ok()?;
-        return Some((
-            crate::assets::mime_for(rel),
-            html::ensure_runtime(&source).into_bytes(),
-        ));
+/// A template file for the editor's previews.
+#[derive(Debug, PartialEq)]
+pub enum Preview {
+    /// The template's deck.html with the player runtime, and the file it is made from when
+    /// the template is the user's.
+    Deck {
+        html: Arc<[u8]>,
+        file: Option<PathBuf>,
+    },
+    /// One of a user template's assets.
+    Asset(PathBuf),
+}
+
+/// A template's deck.html with the player runtime, as served.
+type Page = Arc<[u8]>;
+/// When a file was written and how long it is: what tells one version of it from the next.
+type Stamp = (Option<SystemTime>, u64);
+
+/// A built-in template with the player runtime, made on first use: every layout's preview asks
+/// for the whole template again.
+fn builtin_preview(id: &str) -> Option<Page> {
+    static MADE: LazyLock<Mutex<HashMap<&'static str, Page>>> = LazyLock::new(Mutex::default);
+    let (id, source) = BUILTIN.iter().find(|(b, _)| *b == id)?;
+    let mut made = MADE.lock().unwrap_or_else(|e| e.into_inner());
+    let html = made
+        .entry(id)
+        .or_insert_with(|| html::ensure_runtime(source).into_bytes().into());
+    Some(html.clone())
+}
+
+/// The user template at `file` with the player runtime, made again only when the file was
+/// written since (told by its time and length).
+fn user_preview(file: &Path) -> Option<Page> {
+    static MADE: LazyLock<Mutex<HashMap<PathBuf, (Stamp, Page)>>> = LazyLock::new(Mutex::default);
+    let meta = fs::metadata(file).ok()?;
+    let stamp = (meta.modified().ok(), meta.len());
+    let known = MADE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(file)
+        .cloned();
+    if let Some((_, html)) = known.filter(|(made_of, _)| *made_of == stamp) {
+        return Some(html);
     }
-    let file = deck::resolve_in_deck(&user_dir(root, id)?, rel).ok()?;
-    Some((crate::assets::mime_for(rel), fs::read(file).ok()?))
+    let source = fs::read_to_string(file).ok()?;
+    let html: Page = html::ensure_runtime(&source).into_bytes().into();
+    MADE.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(file.to_path_buf(), (stamp, html.clone()));
+    Some(html)
+}
+
+/// A template file for the editor's previews: deck.html with the player runtime, or one of a
+/// user template's assets (which may not exist).
+pub fn preview(root: &Path, id: &str, rel: &str) -> Option<Preview> {
+    let own = user_dir(root, id);
+    if rel != DECK_FILE {
+        return Some(Preview::Asset(deck::resolve_in_deck(&own?, rel).ok()?));
+    }
+    match own.map(|dir| dir.join(DECK_FILE)) {
+        Some(file) => Some(Preview::Deck {
+            html: user_preview(&file)?,
+            file: Some(file),
+        }),
+        None => Some(Preview::Deck {
+            html: builtin_preview(id)?,
+            file: None,
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -429,16 +506,60 @@ mod tests {
         assert!(source(&root.0, "nope").is_err());
         assert!(source(&root.0, "../mine").is_err());
 
-        let (mime, body) = read_file(&root.0, "swiss", "deck.html").unwrap();
-        assert_eq!(mime, "text/html; charset=utf-8");
-        assert!(String::from_utf8(body).unwrap().contains(html::JS_START));
+        let Some(Preview::Deck { html, file: None }) = preview(&root.0, "swiss", "deck.html")
+        else {
+            panic!("a built-in template has no file");
+        };
+        assert!(String::from_utf8_lossy(&html).contains(html::JS_START));
         assert_eq!(
-            read_file(&root.0, "mine", "assets/logo.svg"),
-            Some(("image/svg+xml", b"<svg/>".to_vec()))
+            preview(&root.0, "mine", "assets/logo.svg"),
+            Some(Preview::Asset(dir.join("assets/logo.svg")))
         );
-        assert_eq!(read_file(&root.0, "mine", "../mine/deck.html"), None);
-        assert_eq!(read_file(&root.0, "swiss", "assets/logo.svg"), None);
-        assert_eq!(read_file(&root.0, "nope", "deck.html"), None);
+        assert_eq!(preview(&root.0, "mine", "../mine/deck.html"), None);
+        assert_eq!(preview(&root.0, "swiss", "assets/logo.svg"), None);
+        assert_eq!(preview(&root.0, "nope", "deck.html"), None);
+    }
+
+    #[test]
+    fn a_template_gets_its_runtime_once_for_all_its_previews() {
+        let root = TempFolder::new();
+        let dir = root.add("mine", MINE);
+        let deck = |id: &str| match preview(&root.0, id, "deck.html") {
+            Some(Preview::Deck { html, file }) => (html, file),
+            other => panic!("no deck: {other:?}"),
+        };
+
+        let (first, none) = deck("swiss");
+        assert!(none.is_none());
+        assert!(
+            Arc::ptr_eq(&first, &deck("swiss").0),
+            "a built-in template is made once"
+        );
+
+        let (mine, file) = deck("mine");
+        assert_eq!(file, Some(dir.join(DECK_FILE)));
+        assert!(String::from_utf8_lossy(&mine).contains(html::JS_START));
+        assert!(
+            Arc::ptr_eq(&mine, &deck("mine").0),
+            "the user's own is kept while its file is as it was"
+        );
+        fs::write(dir.join(DECK_FILE), MINE.replace("Mine", "Mine, changed")).unwrap();
+        let (changed, _) = deck("mine");
+        assert!(
+            !Arc::ptr_eq(&mine, &changed),
+            "and made again once it changed"
+        );
+        assert!(String::from_utf8_lossy(&changed).contains("Mine, changed"));
+    }
+
+    #[test]
+    fn builtin_templates_are_read_once_for_every_listing() {
+        let (first, again) = (builtin_summaries(), builtin_summaries());
+        assert!(std::ptr::eq(first, again));
+        assert_eq!(first.len(), BUILTIN.len());
+        let root = TempFolder::new();
+        let listed = list(&root.0);
+        assert_eq!(listed.as_slice(), first, "a listing copies what is kept");
     }
 
     #[test]

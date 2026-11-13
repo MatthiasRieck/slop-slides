@@ -72,6 +72,54 @@ fn morph_names_are_valid_and_unique_per_slide() {
 }
 
 #[test]
+fn only_tags_carry_morph_names_and_stuck_ends() {
+    // Text that reads like attributes is no tag: the checks look at what starts with `<`.
+    let html = deck(
+        r#"<section class="slide" id="a"><p>Write data-morph="Bad Name" > or data-to-at="x"> in text</p><P DATA-MORPH="Hero">x</P><svg><path data-from="gone" data-from-at="50% 50%"/></svg></section>"#,
+    );
+    let issues = lint(&html, |_| true, &[]);
+    let count = |rule: &str| issues.iter().filter(|i| i.rule == rule).count();
+    assert_eq!(count("morph-name"), 1, "the tag's, whatever its case");
+    assert_eq!(count("stuck-line-target"), 1);
+    assert_eq!(count("stuck-line-anchor"), 0);
+}
+
+#[test]
+fn tags_and_attributes_are_read_whatever_their_case() {
+    let html = deck(
+        r#"<SECTION CLASS="slide" ID="a"><IMG SRC="https://example.com/x.png"><DIV ID="x" Id="y"><A HREF="JavaScript:void(0)">go</A></DIV><Script>1</Script></SECTION>"#,
+    );
+    let issues = lint(&html, |_| true, &[]);
+    let message = |rule: &str| {
+        let found = issues.iter().find(|i| i.rule == rule);
+        found.map(|i| i.message.as_str()).unwrap_or_default()
+    };
+    assert!(
+        issues
+            .iter()
+            .all(|i| i.rule != "unclosed-tag" && i.rule != "stray-end-tag"),
+        "{issues:?}"
+    );
+    assert_eq!(
+        message("duplicate-attribute"),
+        "<div> has the attribute `id` more than once."
+    );
+    assert!(!message("remote-image").is_empty() && !message("img-alt").is_empty());
+    assert!(!message("script-link").is_empty() && !message("script-in-slide").is_empty());
+    let unclosed = lint(
+        &deck("<section class=\"slide\" id=\"a\"><DIV><Span>x</DIV></section>"),
+        |_| true,
+        &[],
+    );
+    assert!(
+        unclosed.iter().any(|i| i
+            .message
+            .starts_with("<span> is never closed (</div> on line")),
+        "{unclosed:?}"
+    );
+}
+
+#[test]
 fn the_hero_morph_example_in_the_design_reference_is_clean() {
     let reference = include_str!("../../prompts/design-reference.md");
     let section = &reference[reference.find("## Hero Morphs").unwrap()..];
@@ -575,7 +623,12 @@ fn reports_narration_that_waits_for_audio_still_playing() {
         waits: 2.54,
         after_end,
     };
-    let issues = narration_overlaps(&source, &[overlap("talk", true), overlap("gone", false)]);
+    let slides = html::find_slides(&source);
+    let issues = narration_overlaps(
+        &source,
+        &slides,
+        &[overlap("talk", true), overlap("gone", false)],
+    );
     assert_eq!(issues.len(), 1, "slides no longer there are skipped");
     let issue = &issues[0];
     assert_eq!(
@@ -591,7 +644,32 @@ fn reports_narration_that_waits_for_audio_still_playing() {
         "{}",
         issue.message
     );
-    assert!(narration_overlaps(&source, &[]).is_empty());
+    assert!(narration_overlaps(&source, &slides, &[]).is_empty());
+    // The line and slide are those the lint itself gives an issue at the slide's start.
+    let at = source.find("<section class=\"slide\" id=\"talk\"").unwrap();
+    let l = Linter::new(&source, &slides, &[]);
+    assert_eq!(issue.line, l.line(at));
+    assert_eq!(issue.slide, l.slide_at(at));
+}
+
+#[test]
+fn the_slide_a_place_is_in_is_found_as_a_walk_over_the_slides_would() {
+    let html = deck(
+        "<section class=\"slide\" id=\"a\"><p>A</p></section>\n<p>between</p><section class=\"slide\"><p>no id</p></section><section class=\"slide\" id=\"c\"></section>\n",
+    );
+    let slides = html::find_slides(&html);
+    assert_eq!(slides.len(), 3);
+    let l = Linter::new(&html, &slides, &[]);
+    for at in 0..=html.len() {
+        let walked = slides.iter().find(|s| s.range.contains(&at));
+        assert_eq!(
+            l.slide_span_at(at).map(|s| s.range.clone()),
+            walked.map(|s| s.range.clone()),
+            "at {at}"
+        );
+        assert_eq!(l.slide_at(at), walked.and_then(|s| s.id.clone()), "at {at}");
+    }
+    assert!(Linter::new("", &[], &[]).slide_span_at(0).is_none());
 }
 
 #[test]
@@ -1459,9 +1537,53 @@ fn markup_is_told_from_comments_scripts_and_styles_as_a_scan_of_the_text_before_
         "",
     ];
     for html in documents {
-        let l = Linter::new(html);
+        let l = Linter::new(html, &[], &[]);
         for at in 0..=html.len() {
             assert_eq!(in_markup(&l, at), scanned(html, at), "{html:?} at {at}");
         }
     }
+}
+
+/// How long each check of a deck of 60 heavy slides takes. Run it with
+/// `cargo test lints_a_big_deck -- --ignored --nocapture`.
+#[test]
+#[ignore = "a timing, not a check"]
+fn lints_a_big_deck_fast() {
+    let html = html::fixtures::big_deck(60);
+    let (slides, sections) = html::find_spans(&html);
+    let runs = 10;
+    let time = |what: &str, check: &dyn Fn(&mut Linter)| {
+        let started = std::time::Instant::now();
+        for _ in 0..runs {
+            check(&mut Linter::new(&html, &slides, &sections));
+        }
+        println!("{what}: {:?}", started.elapsed() / runs);
+    };
+    println!("{} KB deck", html.len() / 1024);
+    time("nothing (what every run sets up)", &|_| {});
+    time("markup", &|l| check_markup(l));
+    time("document", &|l| check_document(l));
+    time("slides", &|l| check_slides(l));
+    time("narration", &|l| check_narration(l));
+    time("slide id styles", &|l| check_slide_id_styles(l));
+    time("sections", &|l| check_sections(l));
+    time("review and comments", &|l| {
+        check_review(l);
+        check_comments(l)
+    });
+    time("app metas", &|l| {
+        check_template(l);
+        check_slide_size(l);
+        check_narration_settings(l)
+    });
+    time("entrances", &|l| check_entrances(l));
+    time("tilts", &|l| check_tilts(l));
+    time("untimed delays", &|l| check_untimed_delays(l));
+    time("morphs", &|l| check_morphs(l));
+    time("stuck lines", &|l| check_stuck_lines(l));
+    time("assets", &|l| check_assets(l, |_| true));
+    time("links", &|l| check_links(l));
+    time("all of it", &|l| {
+        l.issues = lint_parsed(&html, &slides, &sections, |_| true, &[]);
+    });
 }

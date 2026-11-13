@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DECK_HTML, deckFor } from "../test/fixtures";
 import { invoke } from "../test/tauri";
+import { LINT_DELAY, lintKey } from "./lint";
 import { backend, calls, freshStore, resetBackend } from "./testing";
 
 beforeEach(resetBackend);
@@ -89,6 +90,64 @@ describe("lint", () => {
     await useApp.getState().refreshLint();
     expect(useApp.getState().lint).toBeNull();
     expect(useApp.getState().lintError).toBe("The check gave no result.");
+  });
+
+  describe("as the deck changes", () => {
+    beforeEach(() => void vi.useFakeTimers());
+    afterEach(() => void vi.useRealTimers());
+
+    it("checks a deck just opened at once", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: deckFor(DECK_HTML), lint: null, lintError: null });
+      backend({ lint_deck: () => [] });
+      useApp.getState().lintChanged();
+      expect(calls("lint_deck")).toHaveLength(1);
+    });
+
+    it("checks once after a burst of saves, when the deck has settled", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: deckFor(DECK_HTML), lint: [], lintError: null });
+      backend({ lint_deck: () => [issue()] });
+      for (let save = 0; save < 5; save++) {
+        useApp.getState().lintChanged();
+        await vi.advanceTimersByTimeAsync(LINT_DELAY - 100);
+      }
+      expect(calls("lint_deck")).toEqual([]);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(calls("lint_deck")).toHaveLength(1);
+      expect(useApp.getState().lint).toEqual([issue()]);
+    });
+
+    it("waits after a failed check too, and a check asked for by hand takes the waiting one's place", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: deckFor(DECK_HTML), lint: null, lintError: "no" });
+      backend({ lint_deck: () => [] });
+      useApp.getState().lintChanged();
+      expect(calls("lint_deck")).toEqual([]);
+      // Still shown as failed until the check runs.
+      expect(useApp.getState().lintError).toBe("no");
+      await useApp.getState().refreshLint();
+      expect(calls("lint_deck")).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(LINT_DELAY * 2);
+      expect(calls("lint_deck")).toHaveLength(1);
+    });
+
+    it("checks nothing without a deck", async () => {
+      const useApp = await freshStore();
+      useApp.getState().lintChanged();
+      await vi.advanceTimersByTimeAsync(LINT_DELAY * 2);
+      expect(calls("lint_deck")).toEqual([]);
+    });
+  });
+
+  it("knows what of a deck the check reads, worked out once per deck", async () => {
+    const deck = deckFor(DECK_HTML);
+    const read = vi.spyOn(deck.slides, "map");
+    expect(lintKey(deck)).toBe("/decks/talk/deck.html|shell-1|intro:intro-1|#2:#2-1|outro:outro-1");
+    expect(lintKey(deck)).toBe(lintKey(deck));
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(lintKey(deckFor(DECK_HTML, "2"))).not.toBe(lintKey(deck));
+    expect(lintKey(null)).toBe("");
   });
 
   it("resets lint and composer text when the deck closes", async () => {

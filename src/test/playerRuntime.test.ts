@@ -7,9 +7,12 @@ import { readFileSync } from "node:fs";
 import type { DOMWindow } from "jsdom";
 import { describe, expect, it, vi } from "vitest";
 
+import { singleSlide } from "../../dev/browserPreview";
 import RUNTIME from "../../src-tauri/assets/runtime.js?raw";
 import { strokePath, toPixels } from "../lib/ink";
 import { openDeck } from "./deckDom";
+import SINGLE_DECK from "./fixtures/single-slide/deck.html?raw";
+import SINGLE_SECOND from "./fixtures/single-slide/second.html?raw";
 
 const DECK = `<!DOCTYPE html><html><body>
 <main class="deck">
@@ -668,6 +671,9 @@ describe("player: in the presenter", () => {
     parent.postMessage.mockClear();
     p.doc.dispatchEvent(new p.window.MouseEvent("mousemove", { bubbles: true }));
     expect(parent.postMessage).toHaveBeenCalledWith({ type: "slop:pointer" }, "*");
+    // Told once: the moves that follow before the presenter answers say nothing new.
+    for (let i = 0; i < 10; i++) p.doc.dispatchEvent(new p.window.MouseEvent("mousemove", { bubbles: true }));
+    expect(parent.postMessage.mock.calls.filter(([d]) => d.type === "slop:pointer")).toHaveLength(1);
     idle(false);
     expect(hidden()).toBe(false);
     const css = readFileSync("src-tauri/assets/runtime.css", "utf8");
@@ -1070,6 +1076,182 @@ describe("player: text that shrinks to fit", () => {
     expect(fit.original!(box)).toBeNull();
     expect(fit.scale!(box)).toBe(1);
   });
+
+  interface Autofit {
+    fit: (el: Element) => boolean;
+    unfit: (el: Element) => void;
+    scale: (el: Element) => number;
+  }
+  const autofit = (window: DOMWindow) => (window as unknown as { slopAutofit: Autofit }).slopAutofit;
+
+  /**
+   * `layout`, with #box's text as tall as `lines.count`× its font size, counting how often each
+   * box is measured: once for whether it overflows at all, then once for every size tried.
+   */
+  function measured(lines = { count: 10 }) {
+    const reads: Record<string, number> = {};
+    const setup = (window: DOMWindow) => {
+      layout(window);
+      Object.defineProperty(window.HTMLElement.prototype, "scrollHeight", {
+        configurable: true,
+        get(this: HTMLElement) {
+          reads[this.id] = (reads[this.id] ?? 0) + 1;
+          const size = Number.parseFloat(this.style.fontSize || "40");
+          return size * (this.id === "short" ? 5 : lines.count);
+        },
+      });
+    };
+    return { lines, reads, setup };
+  }
+
+  it("searches from the size a box was fitted to before, and finds what a full search does", () => {
+    const m = measured();
+    const p = player({ html: FIT_DECK, setup: m.setup });
+    const box = p.doc.getElementById("box")!;
+    const fit = autofit(p.window);
+    const size = () => Number.parseFloat(box.style.fontSize);
+    // From scratch: whether it overflows, then halving 0.2 to 1 down to a hundredth.
+    expect(m.reads.box).toBe(7);
+    const first = size();
+    // Nothing changed: it fits where it did and no larger, and that is all it takes to know.
+    m.reads.box = 0;
+    expect(fit.fit(box)).toBe(true);
+    expect(m.reads.box).toBe(3);
+    expect(size()).toBe(first);
+    // The editor takes the fit off while it changes the text; the next search still starts there.
+    for (const [count, tries] of [
+      // A little more text, as when typing: found in a few tries.
+      [10.2, 5],
+      [10.5, 5],
+      [10.4, 5],
+      // Far from where it was (a paste, say) it gets there too, in a few tries more than from scratch.
+      [18, 13],
+      [7, 13],
+    ] as const) {
+      fit.unfit(box);
+      m.lines.count = count;
+      m.reads.box = 0;
+      fit.fit(box);
+      const scratch = measured({ count });
+      const full = player({ html: FIT_DECK, setup: scratch.setup });
+      const whole = Number.parseFloat(full.doc.getElementById("box")!.style.fontSize);
+      // Within the hundredth the search stops at; a full search never takes fewer tries.
+      expect(Math.abs(size() - whole)).toBeLessThanOrEqual(0.4);
+      expect(fit.scale(box)).toBeCloseTo(autofit(full.window).scale(full.doc.getElementById("box")!), 2);
+      expect(scratch.reads.box).toBeGreaterThanOrEqual(7);
+      expect(m.reads.box).toBeLessThanOrEqual(tries);
+      // It fits, and a hundredth more would not.
+      expect(count * size()).toBeLessThanOrEqual(201);
+      expect(count * (size() + 0.4)).toBeGreaterThan(201);
+    }
+    // Text that fits again gets its own size back.
+    m.lines.count = 4;
+    expect(fit.fit(box)).toBe(false);
+    expect(box.style.fontSize).toBe("40px");
+    expect(fit.scale(box)).toBe(1);
+  });
+
+  const TWO_SLIDES = `<!DOCTYPE html><html><body><main class="deck">
+  <section class="slide" id="a"><div id="one" data-autofit="shrink" style="font-size: 40px">Long</div></section>
+  <section class="slide" id="b"><div id="two" data-autofit="shrink" style="font-size: 40px">Long</div></section>
+</main></body></html>`;
+
+  it("fits only the slide an embedded preview shows, and every slide of a show or a print", () => {
+    const fittedIn = (at: string) => {
+      const m = measured();
+      const p = player({ html: TWO_SLIDES, at, setup: m.setup });
+      const fit = autofit(p.window);
+      return {
+        scales: ["one", "two"].map((id) => fit.scale(p.doc.getElementById(id)!) < 1),
+        measured: Object.keys(m.reads).sort(),
+      };
+    };
+    // The other slide's box is not even measured.
+    expect(fittedIn("?embed&slide=b")).toEqual({ scales: [false, true], measured: ["two"] });
+    expect(fittedIn("?embed&slide=a&static")).toEqual({ scales: [true, false], measured: ["one"] });
+    for (const at of ["", "#b", "?show", "?print", "?static&print"]) {
+      expect(fittedIn(at)).toEqual({ scales: [true, true], measured: ["one", "two"] });
+    }
+  });
+
+  describe("as the page loads", () => {
+    /** A page whose web fonts load when the test says; `fits()` counts how often every box was fitted. */
+    function loading({ fonts = true } = {}) {
+      const m = measured();
+      const faces = [{ status: "loading" }, { status: "unloaded" }];
+      let fontsReady = () => {};
+      const p = player({
+        html: FIT_DECK.replace("</section>", '<img id="picture"></section>'),
+        setup: (window) => {
+          m.setup(window);
+          if (!fonts) return;
+          const ready = new Promise<void>((resolve) => {
+            fontsReady = resolve;
+          });
+          Object.defineProperty(window.document, "fonts", {
+            value: { ready, forEach: (fn: (face: { status: string }) => void) => faces.forEach(fn) },
+          });
+        },
+      });
+      return {
+        ...p,
+        lines: m.lines,
+        faces,
+        /** #short fits, so each fit of every box measures it once. */
+        fits: () => m.reads.short,
+        size: () => Number.parseFloat(p.doc.getElementById("box")!.style.fontSize),
+        fontsReady: async () => {
+          fontsReady();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        },
+        loaded: () => p.window.dispatchEvent(new p.window.Event("load")),
+      };
+    }
+
+    it("fits once when nothing arrives that changes how the text measures", async () => {
+      const p = loading();
+      expect(p.fits()).toBe(1);
+      // No font was loaded after all (the text needed none), and the page had nothing to wait for.
+      p.faces[0]!.status = "error";
+      await p.fontsReady();
+      p.loaded();
+      expect(p.fits()).toBe(1);
+    });
+
+    it("fits again once a web font arrived, however late", async () => {
+      const p = loading();
+      const before = p.size();
+      p.loaded();
+      expect(p.fits()).toBe(1);
+      // The font is in: the same text now runs longer.
+      p.faces[0]!.status = "loaded";
+      p.lines.count = 12;
+      await p.fontsReady();
+      expect(p.fits()).toBe(2);
+      expect(p.size()).toBeLessThan(before);
+      expect(12 * p.size()).toBeLessThanOrEqual(201);
+    });
+
+    it("fits again after an image or a style sheet arrived, or failed to", async () => {
+      const p = loading();
+      await p.fontsReady();
+      // Their events do not bubble.
+      p.doc.getElementById("picture")!.dispatchEvent(new p.window.Event("load"));
+      p.loaded();
+      expect(p.fits()).toBe(2);
+      p.loaded();
+      expect(p.fits()).toBe(2);
+      p.doc.getElementById("picture")!.dispatchEvent(new p.window.Event("error"));
+      p.loaded();
+      expect(p.fits()).toBe(3);
+    });
+
+    it("fits again whenever something may have arrived, where the browser does not say which fonts loaded", () => {
+      const p = loading({ fonts: false });
+      p.loaded();
+      expect(p.fits()).toBe(2);
+    });
+  });
 });
 
 describe("player: without JavaScript", () => {
@@ -1189,5 +1371,64 @@ describe("player: shared heroes", () => {
     const still = player({ html, setup, at: "?static" });
     still.key("ArrowRight");
     expect(still.doc.startViewTransition).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A preview is served its deck cut down to the one slide it shows (src-tauri/src/html/single.rs,
+ * mirrored by `singleSlide`): the other slides are empty stand-ins. The player must find the same
+ * slide in it, at the same place among as many slides, as in the whole deck.
+ */
+describe("player: a preview's deck cut down to one slide", () => {
+  const places = (p: ReturnType<typeof player>) => {
+    const slides = [...p.doc.querySelectorAll<HTMLElement>(".deck > .slide")];
+    return {
+      count: slides.length,
+      active: p.active(),
+      activeCount: p.activeCount(),
+      ids: slides.map((slide) => slide.id),
+      // What CSS counts by: each slide's place among the deck's children.
+      nth: slides.map((slide) => [...slide.parentElement!.children].indexOf(slide)),
+      whole: slides.flatMap((slide, index) => (slide.childElementCount > 0 ? [index] : [])),
+    };
+  };
+
+  it("shows the same slide, in the same place, as the whole deck does", () => {
+    for (const reference of ["intro", "plan", "end", "#1", "#2", "#3", "#4", "#99", "#0", "unknown", ""]) {
+      const at = `?embed&slide=${encodeURIComponent(reference)}&static`;
+      const whole = places(player({ html: SINGLE_DECK, at }));
+      const single = places(player({ html: singleSlide(SINGLE_DECK, reference), at }));
+      expect(single.count, reference).toBe(4);
+      expect(single.active, reference).toBe(whole.active);
+      expect(single.activeCount, reference).toBe(1);
+      expect(single.ids, reference).toEqual(whole.ids);
+      expect(single.nth, reference).toEqual(whole.nth);
+      expect(single.whole, reference).toEqual([whole.active]);
+    }
+  });
+
+  it("finds a slide without an id by its position in the page the app serves", () => {
+    // The page exactly as the backend cuts it (the Rust tests hold it to this file).
+    const p = player({ html: SINGLE_SECOND, at: "?embed&slide=%232&static" });
+    const shown = p.doc.querySelector<HTMLElement>(".deck > .slide.active")!;
+    expect(p.active()).toBe(1);
+    expect(shown.querySelector("img")?.getAttribute("src")).toBe("assets/second.png");
+    expect(shown.hasAttribute("data-hidden")).toBe(true);
+    expect(p.doc.querySelectorAll(".deck > .slide")).toHaveLength(4);
+    expect(p.doc.querySelectorAll(".deck > .slide img, .deck > .slide video")).toHaveLength(1);
+  });
+
+  it("leaves nothing of the other slides for the page to load", () => {
+    const p = player({ html: singleSlide(SINGLE_DECK, "plan"), at: "?embed&slide=plan&static" });
+    const loads = [...p.doc.querySelectorAll("[src]")].map((el) => el.getAttribute("src"));
+    expect(loads).toEqual(["assets/plan.mp4"]);
+    // The editor's page, which keeps the other slides' ids, loads nothing more and shows the same.
+    const edited = player({ html: singleSlide(SINGLE_DECK, "plan", true), at: "?embed&slide=plan&static&edit=0" });
+    expect([...edited.doc.querySelectorAll("[src]")].map((el) => el.getAttribute("src"))).toEqual(loads);
+    expect(places(edited).active).toBe(2);
+    expect(edited.doc.getElementById("el-1")?.closest(".slide")?.id).toBe("intro");
+    const slides = [...p.doc.querySelectorAll<HTMLElement>(".deck > .slide")];
+    const styled = slides.map((slide) => slide.getAttribute("style"));
+    expect(styled).toEqual([null, null, "color: red", null]);
   });
 });

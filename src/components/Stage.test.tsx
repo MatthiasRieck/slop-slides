@@ -11,6 +11,7 @@ vi.mock("../lib/drop", async (importOriginal) => ({
 import { invoke } from "@tauri-apps/api/core";
 import { claimDrop, dropCovered } from "../lib/drop";
 import { DEFAULT_EDIT_STYLES } from "../lib/editTools";
+import { wroteAsset } from "../lib/ownAssets";
 import { setSlideClock } from "../lib/slideClock";
 import { flushReviewSave, SKETCH_TARGET_ATTR, useApp } from "../store";
 import { lastError } from "../store/errors";
@@ -1374,6 +1375,44 @@ describe("Stage", () => {
       toggleEditing();
     });
 
+    it("loads what the agent writes of the slide shown as stills, and plays it when the user comes or asks", () => {
+      const { container } = render(<Stage />);
+      const shown = () => [...container.querySelectorAll("iframe")].at(-1)!.getAttribute("src") ?? "";
+      const agentWrites = (version: string) => act(() => useApp.getState().setDeck(deckFor(DECK_HTML, version)));
+      expect(shown()).not.toContain("static");
+      // The agent at work changes nothing by itself.
+      act(() => useApp.setState({ running: true }));
+      expect(shown()).not.toContain("static");
+      // Each step of its writing would play the slide's entrance from the start: they load as stills.
+      agentWrites("2");
+      expect(shown()).toContain("intro-2");
+      expect(shown()).toContain("&static");
+      agentWrites("3");
+      expect(shown()).toContain("intro-3");
+      expect(shown()).toContain("&static");
+      // Done, the slide stays as it shows: it is not loaded once more just to play.
+      const last = shown();
+      act(() => useApp.setState({ running: false }));
+      expect(shown()).toBe(last);
+      // Asked to, it plays.
+      act(() => useApp.getState().replaySlide());
+      expect(shown()).not.toContain("static");
+      // And so does a slide the user goes to while the agent works, and the one they come back to.
+      act(() => useApp.setState({ running: true }));
+      agentWrites("4");
+      expect(shown()).toContain("&static");
+      act(() => useApp.getState().select("outro"));
+      expect(shown()).toContain("slide=outro");
+      expect(shown()).not.toContain("static");
+      act(() => useApp.getState().select("intro"));
+      expect(shown()).not.toContain("static");
+      act(() => useApp.setState({ running: false }));
+      // The user's own changes, with the agent idle, play as before.
+      agentWrites("5");
+      expect(shown()).toContain("intro-5");
+      expect(shown()).not.toContain("static");
+    });
+
     it("has the search in the view ribbon, as its last section", () => {
       render(<Stage />);
       const ribbon = screen.getByRole("toolbar", { name: "View tools" });
@@ -1923,6 +1962,46 @@ describe("Stage", () => {
         expect(useApp.getState().editStyles.shape).toEqual(DEFAULT_EDIT_STYLES.shape);
       });
 
+      it("shows a dragged slider's value in the slide once per frame, and the last one before it is applied", () => {
+        const frames: FrameRequestCallback[] = [];
+        vi.spyOn(window, "requestAnimationFrame").mockImplementation((run) => frames.push(run));
+        const { frame, post } = enter();
+        select(frame, { ...SELECTION, opacity: 1, shadow: 0, radius: 8 });
+        fireEvent.click(button("Appearance"));
+        const previews = () =>
+          post.mock.calls
+            .map(([data]) => data as { type: string; preview?: boolean; style?: { opacity?: number } })
+            .filter((data) => data.type === "slop:edit-style" && data.preview)
+            .map((data) => data.style?.opacity);
+        const opacity = screen.getByLabelText("Opacity") as HTMLInputElement;
+        // The slider passes many values within a frame.
+        for (const value of ["90", "80", "70", "60"]) fireEvent.input(opacity, { target: { value } });
+        expect(previews()).toEqual([0.9]);
+        act(() => frames.splice(0).forEach((run) => void run(0)));
+        expect(previews()).toEqual([0.9, 0.6]);
+        // Let go within the frame: the slide still shows where it was let go before that is saved.
+        fireEvent.input(opacity, { target: { value: "50" } });
+        fireEvent.input(opacity, { target: { value: "40" } });
+        post.mockClear();
+        act(() => void opacity.dispatchEvent(new Event("change")));
+        const restyles = post.mock.calls.map(([data]) => data).filter((data) => data.type === "slop:edit-style");
+        expect(restyles).toEqual([
+          { type: "slop:edit-style", style: { opacity: 0.4 }, preview: true },
+          { type: "slop:edit-style", style: { opacity: 0.4 } },
+        ]);
+        // Nothing is left to show when the frame comes.
+        act(() => frames.splice(0).forEach((run) => void run(0)));
+        expect(previews()).toEqual([0.4]);
+        post.mockClear();
+        // A drag given up is taken back, and the value it had reached is not shown after.
+        fireEvent.input(opacity, { target: { value: "30" } });
+        fireEvent.input(opacity, { target: { value: "20" } });
+        fireEvent.keyDown(opacity, { key: "Escape" });
+        act(() => frames.splice(0).forEach((run) => void run(0)));
+        expect(post).toHaveBeenLastCalledWith({ type: "slop:edit-style-cancel" }, "*");
+        expect(previews()).toEqual([0.3]);
+      });
+
       it("changes a shape's proportions from the appearance panel, for shapes that have them", () => {
         const { frame, post } = enter();
         select(frame, { ...SELECTION, opacity: 1, shadow: 0, radius: null });
@@ -2375,13 +2454,26 @@ describe("Stage", () => {
       toggleEditing();
       const frame = stageFrame(container);
       fromFrame(frame, { type: "slop:edit-commit", slide: "intro", markup: MARKUP, select: [0] });
-      expect(save).toHaveBeenCalledWith("intro", MARKUP);
+      expect(save).toHaveBeenCalledWith("intro", MARKUP, undefined);
       // Not from another slide, a stray window, or outside edit mode.
       fromFrame(frame, { type: "slop:edit-commit", slide: "outro", markup: MARKUP, select: null });
       fromFrame(null, { type: "slop:edit-commit", slide: "intro", markup: MARKUP, select: null });
       toggleEditing();
       fromFrame(frame, { type: "slop:edit-commit", slide: "intro", markup: MARKUP, select: null });
       expect(save).toHaveBeenCalledTimes(1);
+    });
+
+    it("passes on the run of nudges the editor names with a save", () => {
+      const save = vi.fn().mockResolvedValue(undefined);
+      useApp.setState({ saveSlideEdit: save });
+      const { container } = render(<Stage />);
+      toggleEditing();
+      const commit = { type: "slop:edit-commit", slide: "intro", markup: MARKUP, select: [0] };
+      fromFrame(stageFrame(container), { ...commit, group: "nudge:0.1" });
+      expect(save).toHaveBeenLastCalledWith("intro", MARKUP, "nudge:0.1");
+      // Anything but a name is no run.
+      fromFrame(stageFrame(container), { ...commit, group: 7 });
+      expect(save).toHaveBeenLastCalledWith("intro", MARKUP, undefined);
     });
 
     describe("after the editor saves", () => {
@@ -3043,6 +3135,9 @@ describe("Stage", () => {
             "*",
           ),
         );
+        // The file is the app's own doing: its appearing on disk loads no preview again, the editor's least of all.
+        expect(wroteAsset(useApp.getState().deck!.id, "assets/pasted-image.png")).toBe(true);
+        expect(wroteAsset(useApp.getState().deck!.id, "assets/other.png")).toBe(false);
       });
 
       it("pastes a copied slide as a new slide after the selected one", async () => {
@@ -3177,6 +3272,16 @@ describe("Stage", () => {
     });
 
     describe("pasteboard view", () => {
+      // The view is taken up once per animation frame: here each frame is over at once, so every
+      // view a test posts shows right away.
+      beforeEach(() => {
+        vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+          cb(0);
+          return 0;
+        });
+      });
+      afterEach(() => void vi.mocked(window.requestAnimationFrame).mockRestore());
+
       // The stage is 960px wide for a 1920px slide in these tests: fit to it, the slide shows at 50%.
       const zoom = () => screen.getByRole("button", { name: /^Zoom: / });
       const level = () => zoom().textContent;

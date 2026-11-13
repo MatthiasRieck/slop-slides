@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 use crate::comments;
 use crate::html::{
-    self, find_ci, parse_tag, DURATION_ATTR, HIDDEN_ATTR, LOCKED_ATTR, NARRATION_START_ATTR,
+    self, parse_tag, Tag, DURATION_ATTR, HIDDEN_ATTR, LOCKED_ATTR, NARRATION_START_ATTR,
     SECTION_TITLE_ATTR, TIME_ATTR,
 };
 use crate::narration;
@@ -58,38 +58,48 @@ pub(super) fn check_document(l: &mut Linter) {
 
 /// Shared-element names are unique within each click state, reusable across slides.
 pub(super) fn check_morphs(l: &mut Linter) {
-    for slide in l.slides.clone() {
+    for slide in l.slides {
         let mut seen = HashSet::new();
-        let mut at = slide.range.start;
-        while at < slide.range.end {
-            if let Some(tag) = parse_tag(l.html, at) {
-                if !tag.closing {
-                    if let Some((_, name, ..)) = tag.attrs.iter().find(|(n, ..)| n == "data-morph")
-                    {
-                        if name.is_empty()
-                            || !name.as_bytes()[0].is_ascii_lowercase()
-                            || !name
-                                .bytes()
-                                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-                        {
-                            l.report(
-                                "morph-name",
-                                Severity::Warning,
-                                at,
-                                "data-morph needs a lowercase name such as product-hero.".into(),
-                            );
-                        } else if !seen.insert(name.clone()) {
-                            l.report("morph-duplicate", Severity::Warning, at,
-                                format!("data-morph=\"{name}\" occurs twice on this slide; use each name once per slide."));
-                        }
-                    }
-                }
-                at = tag.end;
-            } else {
-                at += 1;
+        for (at, tag) in tags_in(l.html, slide.range.clone()) {
+            let Some(name) = tag.attr("data-morph").map(|a| a.value) else {
+                continue;
+            };
+            if name.is_empty()
+                || !name.as_bytes()[0].is_ascii_lowercase()
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            {
+                l.report(
+                    "morph-name",
+                    Severity::Warning,
+                    at,
+                    "data-morph needs a lowercase name such as product-hero.".into(),
+                );
+            } else if !seen.insert(name) {
+                l.report("morph-duplicate", Severity::Warning, at,
+                    format!("data-morph=\"{name}\" occurs twice on this slide; use each name once per slide."));
             }
         }
     }
+}
+
+/// Every start tag in `range` of `html`, with where it starts. Each `<` is tried, also in
+/// comments and scripts.
+fn tags_in(html: &str, range: std::ops::Range<usize>) -> impl Iterator<Item = (usize, Tag<'_>)> {
+    let mut at = range.start;
+    std::iter::from_fn(move || loop {
+        let start = at + html.get(at..range.end)?.find('<')?;
+        match parse_tag(html, start) {
+            Some(tag) => {
+                at = tag.end;
+                if !tag.closing {
+                    return Some((start, tag));
+                }
+            }
+            None => at = start + 1,
+        }
+    })
 }
 
 /// The ends of a line the user stuck to elements in the editor: `data-from` / `data-to` name
@@ -98,42 +108,39 @@ pub(super) fn check_morphs(l: &mut Linter) {
 /// outline there (`"0% 0% edge"`).
 pub(super) fn check_stuck_lines(l: &mut Linter) {
     const ENDS: [(&str, &str); 2] = [("data-from", "data-from-at"), ("data-to", "data-to-at")];
-    for slide in l.slides.clone() {
+    for slide in l.slides {
         let mut ids = HashSet::new();
         let mut stuck = Vec::new();
-        let mut at = slide.range.start;
-        while at < slide.range.end {
-            let Some(tag) = parse_tag(l.html, at) else {
-                at += 1;
-                continue;
-            };
-            if !tag.closing {
-                let attr = |name: &str| {
-                    tag.attrs
-                        .iter()
-                        .find(|(n, ..)| n == name)
-                        .map(|(_, v, ..)| v.trim().to_string())
-                };
-                if let Some(id) = attr("id") {
-                    ids.insert(id);
-                }
-                for (end, spot) in ENDS {
-                    match (attr(end), attr(spot)) {
-                        (Some(id), spot) => stuck.push((at, end, id, spot)),
-                        (None, Some(_)) => l.report(
-                            "stuck-line-anchor",
-                            Severity::Warning,
-                            at,
-                            format!("`{spot}` means nothing without `{end}`; remove it."),
-                        ),
-                        (None, None) => {}
+        for (at, tag) in tags_in(l.html, slide.range.clone()) {
+            // The first of each of the five attributes, from one reading of the tag.
+            const NAMES: [&str; 5] = ["id", ENDS[0].0, ENDS[0].1, ENDS[1].0, ENDS[1].1];
+            let mut values = [None; 5];
+            for attr in tag.attrs() {
+                for (value, name) in values.iter_mut().zip(NAMES) {
+                    if value.is_none() && attr.is(name) {
+                        *value = Some(attr.value.trim());
                     }
                 }
             }
-            at = tag.end;
+            let [id, ends @ ..] = values;
+            if let Some(id) = id {
+                ids.insert(id);
+            }
+            for ((end, spot), found) in ENDS.iter().copied().zip(ends.chunks(2)) {
+                match (found[0], found[1]) {
+                    (Some(id), spot) => stuck.push((at, end, id, spot)),
+                    (None, Some(_)) => l.report(
+                        "stuck-line-anchor",
+                        Severity::Warning,
+                        at,
+                        format!("`{spot}` means nothing without `{end}`; remove it."),
+                    ),
+                    (None, None) => {}
+                }
+            }
         }
         for (at, end, id, spot) in stuck {
-            if !ids.contains(&id) {
+            if !ids.contains(id) {
                 l.report(
                     "stuck-line-target",
                     Severity::Warning,
@@ -141,7 +148,7 @@ pub(super) fn check_stuck_lines(l: &mut Linter) {
                     format!("This line's `{end}` names `{id}`, but no element on this slide has that id. Give the element it ends on that id, or remove `{end}` and its `-at`."),
                 );
             }
-            if !spot.as_deref().is_some_and(is_anchor) {
+            if !spot.is_some_and(is_anchor) {
                 l.report(
                     "stuck-line-anchor",
                     Severity::Warning,
@@ -170,8 +177,7 @@ fn is_anchor(value: &str) -> bool {
 /// Slide ids: present, unique, kebab-case.
 pub(super) fn check_slides(l: &mut Linter) {
     let mut seen = HashSet::new();
-    let slides = l.slides.clone();
-    for (index, slide) in slides.iter().enumerate() {
+    for (index, slide) in l.slides.iter().enumerate() {
         let at = slide.range.start;
         match &slide.id {
             None => l.report(
@@ -284,8 +290,7 @@ pub(super) fn check_slides(l: &mut Linter) {
 
 /// Narration: one `<aside class="narration">` of Markdown text per slide, no HTML in it.
 pub(super) fn check_narration(l: &mut Linter) {
-    let slides = l.slides.clone();
-    for slide in &slides {
+    for slide in l.slides {
         let markup = &l.html[slide.range.clone()];
         let spans = html::narration_spans(markup);
         for extra in spans.iter().skip(1) {
@@ -300,7 +305,7 @@ pub(super) fn check_narration(l: &mut Linter) {
             let inner = &markup[span.inner.clone()];
             let has_markup = inner
                 .match_indices('<')
-                .any(|(at, _)| html::parse_tag(inner, at).is_some_and(|t| t.name != "br"));
+                .any(|(at, _)| html::parse_tag(inner, at).is_some_and(|t| !t.is("br")));
             if has_markup {
                 l.report(
                     "narration-markup",
@@ -315,7 +320,7 @@ pub(super) fn check_narration(l: &mut Linter) {
 
 /// Locked slides the agent changed or removed this turn; the app puts them back after it.
 pub(super) fn check_locked(l: &mut Linter, locked: &[html::LockedSlide]) {
-    for id in html::changed_locked(l.html, locked) {
+    for id in html::changed_locked_in(l.html, l.slides, locked) {
         let span = l.slides.iter().find(|s| s.id.as_deref() == Some(&id));
         let (at, message) = match span {
             Some(span) => (
@@ -339,7 +344,7 @@ pub(super) fn check_locked(l: &mut Linter, locked: &[html::LockedSlide]) {
 
 /// Section markers between slides: each needs a title and no content of its own.
 pub(super) fn check_sections(l: &mut Linter) {
-    for (index, section) in html::find_sections(l.html).iter().enumerate() {
+    for (index, section) in l.sections.iter().enumerate() {
         let at = section.range.start;
         if section.title.is_empty() {
             l.report(
@@ -380,7 +385,7 @@ pub(super) fn check_review(l: &mut Linter) {
             ),
         );
     }
-    if l.slides.iter().any(|s| s.range.contains(&at)) {
+    if l.slide_span_at(at).is_some() {
         l.report(
             "review-misplaced",
             Severity::Warning,
@@ -407,7 +412,7 @@ pub(super) fn check_comments(l: &mut Linter) {
             ),
         );
     }
-    if l.slides.iter().any(|s| s.range.contains(&at)) {
+    if l.slide_span_at(at).is_some() {
         l.report(
             "comments-misplaced",
             Severity::Warning,
@@ -558,27 +563,21 @@ fn check_app_meta(
 ) {
     let [invalid_rule, duplicate_rule, misplaced_rule] = rules;
     let html = l.html;
-    let body = find_ci(html, 0, "<body").unwrap_or(html.len());
+    let body = l.marks.body.unwrap_or(html.len());
     let mut seen = 0;
-    let mut from = 0;
-    while let Some(at) = find_ci(html, from, "<meta") {
-        from = at + 1;
+    for index in 0..l.marks.metas.len() {
+        let at = l.marks.metas[index];
         let Some(tag) = parse_tag(html, at) else {
             continue;
         };
         let named = tag
-            .attrs
-            .iter()
-            .any(|(n, v, _, _)| n == "name" && v.trim().eq_ignore_ascii_case(name));
-        if tag.name != "meta" || !named || !in_markup(l, at) {
+            .attrs()
+            .any(|a| a.is("name") && a.value.trim().eq_ignore_ascii_case(name));
+        if !tag.is("meta") || !named || !in_markup(l, at) {
             continue;
         }
         seen += 1;
-        let content = tag
-            .attrs
-            .iter()
-            .find(|(n, _, _, _)| n == "content")
-            .map_or("", |(_, v, _, _)| v.trim());
+        let content = tag.attr("content").map_or("", |a| a.value.trim());
         if let Some(message) = invalid(content) {
             l.report(invalid_rule, Severity::Warning, at, message);
         }
@@ -623,21 +622,15 @@ pub(super) fn check_assets(l: &mut Linter, asset_exists: impl Fn(&str) -> bool) 
             );
         }
     }
-    let mut from = 0;
-    while let Some(at) = find_ci(html, from, "<img") {
-        from = at + 4;
-        let Some(tag) = parse_tag(html, at).filter(|t| t.name == "img") else {
+    for index in 0..l.marks.images.len() {
+        let at = l.marks.images[index];
+        let Some(tag) = parse_tag(html, at).filter(|t| t.is("img")) else {
             continue;
         };
         if !in_markup(l, at) {
             continue;
         }
-        let attr = |name: &str| {
-            tag.attrs
-                .iter()
-                .find(|(n, ..)| n == name)
-                .map(|a| a.1.as_str())
-        };
+        let attr = |name: &str| tag.attr(name).map(|a| a.value);
         if attr("src").is_some_and(|s| s.starts_with("http://") || s.starts_with("https://")) {
             l.report(
                 "remote-image",
@@ -670,20 +663,22 @@ pub(super) fn check_links(l: &mut Linter) {
     let html = l.html;
     let ids: HashSet<String> = l.slides.iter().filter_map(|s| s.id.clone()).collect();
     let count = l.slides.len();
-    let mut from = 0;
-    while let Some(at) = find_ci(html, from, "<a") {
-        from = at + 2;
-        let Some(tag) = parse_tag(html, at).filter(|t| t.name == "a" && !t.closing) else {
+    for index in 0..l.marks.links.len() {
+        let at = l.marks.links[index];
+        let Some(tag) = parse_tag(html, at).filter(|t| t.is("a") && !t.closing) else {
             continue;
         };
-        if !in_markup(l, at) || !l.slides.iter().any(|s| s.range.contains(&at)) {
+        if !in_markup(l, at) || l.slide_span_at(at).is_none() {
             continue;
         }
-        let Some((_, href, ..)) = tag.attrs.iter().find(|(n, ..)| n == "href") else {
+        let Some(href) = tag.attr("href").map(|a| a.value.trim()) else {
             continue;
         };
-        let href = href.trim();
-        if href.to_ascii_lowercase().starts_with("javascript:") {
+        let scheme = "javascript:";
+        if href
+            .get(..scheme.len())
+            .is_some_and(|s| s.eq_ignore_ascii_case(scheme))
+        {
             l.report(
                 "script-link",
                 Severity::Warning,

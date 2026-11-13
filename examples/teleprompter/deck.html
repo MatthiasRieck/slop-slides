@@ -666,10 +666,12 @@ We should go back to the Moon because it is the nearest place to learn how to li
   // Text boxes with data-autofit="shrink" shrink their text until it fits their box. Every
   // font size in the box scales by the same factor, set inline; `original` gives back what the
   // inline font size was before, so the slide editor saves the markup without the fit.
-  var FIT_MIN = 0.2;
-  var FIT_STEPS = 10;
+  // Scales are tried in hundredths, down to FIT_MIN of them.
+  var FIT_MIN = 20;
   var fitted = typeof Map === "function" ? new Map() : null;
   var fitScales = typeof Map === "function" ? new Map() : null;
+  // The hundredths each box was last shrunk to, which is where the next search for it begins.
+  var fitHints = fitted && new WeakMap();
 
   function overflows(el) {
     return el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1;
@@ -697,6 +699,36 @@ We should go back to the Moon because it is the nearest place to learn how to li
     fitScales.delete(el);
   }
 
+  /**
+   * The most hundredths, from FIT_MIN up, at which `fits` holds, given that it does not at 100
+   * and holds for everything under the answer. Every question lays the box out again, so the
+   * search begins at `near`, the answer the box had last time, and steps away from it, twice as
+   * far each time, until the answer lies between two steps: text that is typed into, or that is
+   * fitted again once a font arrived, mostly still fits where it did, or nearly.
+   */
+  function searchFit(fits, near) {
+    var lo = FIT_MIN;
+    var hi = 100;
+    if (near > lo && near < hi) {
+      var grows = fits(near);
+      if (grows) lo = near;
+      else hi = near;
+      for (var step = 1; hi - lo > step; step *= 2) {
+        var probe = grows ? lo + step : hi - step;
+        var fitsThere = fits(probe);
+        if (fitsThere) lo = probe;
+        else hi = probe;
+        if (fitsThere !== grows) break;
+      }
+    }
+    while (hi - lo > 1) {
+      var mid = (lo + hi) >> 1;
+      if (fits(mid)) lo = mid;
+      else hi = mid;
+    }
+    return lo;
+  }
+
   /** Shrinks the text of a `data-autofit="shrink"` box until it fits; false when it already does. */
   function fitText(el) {
     if (!fitted) return false;
@@ -719,21 +751,45 @@ We should go back to the Moon because it is the nearest place to learn how to li
         if (sizes[i]) node.style.setProperty("font-size", Math.round(sizes[i] * k * 100) / 100 + "px", "important");
       });
     };
-    var lo = FIT_MIN;
-    var hi = 1;
-    for (var step = 0; step < FIT_STEPS; step++) {
-      var mid = (lo + hi) / 2;
-      scaleTo(mid);
-      if (overflows(el)) hi = mid;
-      else lo = mid;
-    }
-    scaleTo(lo);
-    fitScales.set(el, lo);
+    // The scale last tried, so the answer is not set twice when the search ends on it.
+    var set = 0;
+    var best = searchFit(function (hundredths) {
+      set = hundredths;
+      scaleTo(hundredths / 100);
+      return !overflows(el);
+    }, fitHints.get(el));
+    if (set !== best) scaleTo(best / 100);
+    fitHints.set(el, best);
+    fitScales.set(el, best / 100);
     return true;
   }
 
+  // What has arrived since the last fit of all boxes that changes how text measures: an image or
+  // a style sheet (`arrived`), or a web font (more of them loaded than `fontsFitted`).
+  var arrived = false;
+  var fontsFitted = 0;
+
+  /** How many web fonts are loaded; -1 where the browser does not say. */
+  function fontsLoaded() {
+    if (!document.fonts || !document.fonts.forEach) return -1;
+    var loaded = 0;
+    document.fonts.forEach(function (face) {
+      if (face.status === "loaded") loaded += 1;
+    });
+    return loaded;
+  }
+
   function fitAll() {
-    Array.prototype.forEach.call(document.querySelectorAll('.slide [data-autofit="shrink"]'), fitText);
+    arrived = false;
+    fontsFitted = fontsLoaded();
+    // An embedded preview shows one slide and never another, so only that one is fitted.
+    var within = embed ? slides[current] : document;
+    Array.prototype.forEach.call(within.querySelectorAll('.slide [data-autofit="shrink"]'), fitText);
+  }
+
+  /** Fits every box again if anything arrived that the last fit did not see. */
+  function refit() {
+    if (arrived || fontsFitted < 0 || fontsLoaded() !== fontsFitted) fitAll();
   }
 
   window.slopAutofit = {
@@ -753,9 +809,21 @@ We should go back to the Moon because it is the nearest place to learn how to li
   window.addEventListener("resize", fit);
   fit();
   show(indexFor(embed ? params.get("slide") : decodeURIComponent(location.hash.slice(1))));
+  // Fitted before the first paint, and again once web fonts are in and once the page has loaded,
+  // if something arrived by then. An image's or a style sheet's `load` and `error` do not bubble,
+  // so they are caught on the way down; the page's own `load` is no arrival.
   fitAll();
-  window.addEventListener("load", fitAll);
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitAll);
+  ["load", "error"].forEach(function (type) {
+    document.addEventListener(
+      type,
+      function (event) {
+        if (event.target !== document) arrived = true;
+      },
+      true,
+    );
+  });
+  window.addEventListener("load", refit);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit);
 
   function toggleFullscreen() {
     if (document.fullscreenElement) document.exitFullscreen();
@@ -912,6 +980,8 @@ We should go back to the Moon because it is the nearest place to learn how to li
   // key, shift }. Its controls come and go with the pointer, whose moves over the slide only this
   // page sees: it says so ({ type: "slop:pointer" }, a few times a second at most), and hides the
   // cursor while the presenter says the pointer rests ({ type: "slop:idle", idle }).
+  var POINTER_MS = 250;
+  var pointerTold = 0;
   window.addEventListener("message", function (event) {
     var data = event.data;
     if (!framed || !data) return;
@@ -919,15 +989,16 @@ We should go back to the Moon because it is the nearest place to learn how to li
     if (data.type === "slop:idle") {
       if (data.idle) root.setAttribute("data-slop-idle", "");
       else root.removeAttribute("data-slop-idle");
+      // The first move after a rest is told at once, so the cursor is back at once.
+      if (data.idle) pointerTold = 0;
     }
   });
   if (framed) {
-    var POINTER_MS = 250;
-    var pointerTold = 0;
     document.addEventListener("mousemove", function () {
       var now = Date.now();
-      // The first move after a rest is told at once, so the cursor is back at once.
-      if (now - pointerTold < POINTER_MS && !root.hasAttribute("data-slop-idle")) return;
+      // Once told, the moves that follow say nothing new, also while the presenter's answer
+      // that the pointer no longer rests is on its way.
+      if (now - pointerTold < POINTER_MS) return;
       pointerTold = now;
       window.parent.postMessage({ type: "slop:pointer" }, "*");
     });

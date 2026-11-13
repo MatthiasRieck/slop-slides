@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HistoryEntry } from "../lib/api";
 import { useApp } from "../store";
@@ -23,6 +23,22 @@ describe("RewindDialog", () => {
     useApp.setState({ rewindAsk: null });
     render(<RewindDialog />);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("does not look through the messages until then, however often they change", () => {
+    const find = vi.spyOn(Array.prototype, "find");
+    try {
+      useApp.setState({ rewindAsk: null });
+      render(<RewindDialog />);
+      const message = useApp.getState().messages[0]!;
+      const messages = () => Array.from({ length: 50 }, (_, i) => ({ ...message, id: `u${i}` }));
+      find.mockClear();
+      for (let update = 0; update < 20; update++) act(() => useApp.setState({ messages: messages() }));
+      const searched = find.mock.contexts.filter((list) => Array.isArray(list) && list.length === 50);
+      expect(searched).toHaveLength(0);
+    } finally {
+      find.mockRestore();
+    }
   });
 
   it("says what happened and asks what becomes of the chat", () => {

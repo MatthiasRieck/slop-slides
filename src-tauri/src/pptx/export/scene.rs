@@ -139,6 +139,9 @@ pub(in crate::pptx) struct TextItem {
     pub rotation: f64,
     #[serde(default)]
     pub wrap: bool,
+    /// Where the text stands in its box: `center`, `bottom`, or the top.
+    #[serde(default)]
+    pub anchor: String,
     pub paragraphs: Vec<Paragraph>,
 }
 

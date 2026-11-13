@@ -160,6 +160,14 @@ export function useSlideComments(
     [selected, shown],
   );
 
+  // A comment taken off the slide while it is open (sent to the agent) has nothing left to change.
+  const openGone = !!open?.id && !comments.some((c) => c.id === open.id);
+  useEffect(() => {
+    if (!openGone) return;
+    keepOpen.current = null;
+    setOpen(null);
+  }, [openGone]);
+
   /** Screenshots the area just outlined, then opens a new comment on it. */
   const commentOnArea = async (area: CommentArea) => {
     const { deck, selected: slide } = useApp.getState();

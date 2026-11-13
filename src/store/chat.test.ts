@@ -328,23 +328,46 @@ describe("sending a message", () => {
       expect(prompts()[0]).toContain("Bigger");
     });
 
-    it("sends a comment once, and again once it changed or was picked", async () => {
+    it("takes a comment off its slide once it is sent, in the deck file too, and keeps it in the chat", async () => {
       const useApp = await freshStore();
-      useApp.setState({ deck: DECK, selected: "intro", comments });
+      useApp.setState({ deck: DECK, selected: "intro", comments, commentsHeld: { a: "stale" } });
       await useApp.getState().send("One", { includeSlide: true, attachments: [] });
+      // Only the comments sent go: the other slide's stays.
+      expect(useApp.getState().comments).toEqual({ intro: [], outro: [second] });
+      expect(useApp.getState().commentsHeld).toEqual({});
+      expect(useApp.getState().messages[0]).toMatchObject({ comments: [{ id: "a", text: first.text }] });
+      expect(calls("save_comments").at(-1)).toMatchObject({ comments: { outro: [second] } });
+      const order = invoke.mock.calls.map(([c]) => c);
+      expect(order.indexOf("save_comments")).toBeLessThan(order.indexOf("send_message"));
       finish(useApp);
       await useApp.getState().send("Two", { includeSlide: true, attachments: [] });
-      finish(useApp);
       expect(prompts()[1]).not.toContain("Comments from the user");
+    });
+
+    it("takes sent comments off even when the turn fails", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "intro", comments });
+      invoke.mockImplementation(async (command: string) => {
+        if (command === "send_message") throw new Error("agent is down");
+        return undefined;
+      });
+      await useApp.getState().send("One", { includeSlide: true, attachments: [] });
+      expect(useApp.getState().comments.intro).toEqual([]);
+    });
+
+    it("keeps a comment changed since it was sent", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "intro", comments });
+      useApp.getState().removeSentComments([{ ...first, text: "What it said before" }, second]);
+      expect(useApp.getState().comments).toEqual({ intro: [first], outro: [] });
+    });
+
+    it("keeps comments held back on their slides", async () => {
+      const useApp = await freshStore();
+      useApp.setState({ deck: DECK, selected: "intro", comments });
+      useApp.getState().setCommentHeld(first, true);
+      await useApp.getState().send("One", { includeSlide: true, attachments: [] });
       expect(useApp.getState().comments).toEqual(comments);
-      useApp.getState().updateComment("intro", "a", "Smaller");
-      await useApp.getState().send("Three", { includeSlide: true, attachments: [] });
-      finish(useApp);
-      expect(prompts()[2]).toContain("Smaller");
-      const changed = useApp.getState().comments.intro![0]!;
-      useApp.getState().setCommentHeld(changed, false);
-      await useApp.getState().send("Four", { includeSlide: true, attachments: [] });
-      expect(prompts()[3]).toContain("Smaller");
     });
 
     it("leaves out comments held back and hidden ones", async () => {
@@ -362,7 +385,9 @@ describe("sending a message", () => {
     it("saves what is pending before the agent starts", async () => {
       const useApp = await freshStore();
       useApp.setState({ deck: DECK, selected: "intro", comments: {} });
+      // Held back, it stays on its slide, so the deck file is to have it.
       useApp.getState().addComment("intro", second);
+      useApp.getState().setCommentHeld(second, true);
       await useApp.getState().send("Go", { includeSlide: true, attachments: [] });
       expect(calls("save_comments")).toHaveLength(1);
       const order = invoke.mock.calls.map(([c]) => c);

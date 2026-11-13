@@ -1,5 +1,5 @@
 import { MessageSquare, Trash2, X } from "lucide-react";
-import { type PointerEvent as ReactPointerEvent, type RefObject, useCallback, useRef, useState } from "react";
+import { Fragment, type PointerEvent as ReactPointerEvent, type RefObject, useCallback, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import {
@@ -21,7 +21,10 @@ import { VoiceInput, type VoiceInputHandle } from "./VoiceInput";
 
 export { type SlideComments, useSlideComments };
 
-/** The numbered pins over the slide; they take the clicks unless `inking` needs the slide. */
+/**
+ * The numbered pins over the slide; they take the clicks unless `inking` needs the slide. A pin
+ * pointed at (or focused) shows what its comment says next to it, and all do when `texts` is on.
+ */
 export function CommentPins(props: {
   pins: SlideComments;
   inking: boolean;
@@ -29,6 +32,8 @@ export function CommentPins(props: {
 }) {
   const { pins, inking, anchor } = props;
   const { comments, open } = pins;
+  const texts = useApp((s) => s.commentTexts);
+  const [pointedAt, setPointedAt] = useState<string | null>(null);
   if (pins.capturing) return null;
   const areas = comments.flatMap((c) => (c.area ? [{ id: c.id, area: c.area }] : []));
   if (open?.area && !open.id) areas.push({ id: "new", area: open.area });
@@ -48,17 +53,23 @@ export function CommentPins(props: {
       )}
       {comments.map((comment, i) => {
         const spot = pins.spotOf(comment);
+        const pointed = (on: boolean) => setPointedAt((id) => (on ? comment.id : id === comment.id ? null : id));
+        // The editor says it while the comment is open.
+        const bubble = (texts || pointedAt === comment.id) && open?.id !== comment.id;
         return (
-          <Pin
-            key={comment.id}
-            ref={open?.id === comment.id ? anchor : undefined}
-            mark={String(i + 1)}
-            label={`Comment ${i + 1}`}
-            title={spot.found ? comment.text : `${comment.text}\n\nThe element it was on is gone.`}
-            spot={spot}
-            inking={inking}
-            onClick={() => pins.openComment(comment)}
-          />
+          <Fragment key={comment.id}>
+            <Pin
+              ref={open?.id === comment.id ? anchor : undefined}
+              mark={String(i + 1)}
+              label={`Comment ${i + 1}`}
+              title={spot.found ? undefined : "The element it was on is gone."}
+              spot={spot}
+              inking={inking}
+              onClick={() => pins.openComment(comment)}
+              onPointed={pointed}
+            />
+            {bubble && <CommentBubble text={comment.text} spot={spot} raised={pointedAt === comment.id} />}
+          </Fragment>
         );
       })}
       {open && !open.id && (
@@ -72,6 +83,33 @@ export function CommentPins(props: {
         />
       )}
     </>
+  );
+}
+
+/**
+ * What a comment says, floating beside its pin: towards the middle of the slide, so it stays in
+ * view. It never takes the pointer, so the slide under it stays in reach.
+ */
+function CommentBubble({ text, spot, raised }: { text: string; spot: CommentSpot; raised: boolean }) {
+  const leftwards = spot.x > 0.6;
+  return (
+    <div
+      role="note"
+      data-testid="comment-bubble"
+      style={{
+        left: `${spot.x * 100}%`,
+        top: `${spot.y * 100}%`,
+        transform: `translate(${leftwards ? "calc(-100% - 4px)" : "28px"}, -24px)`,
+      }}
+      className={cn(
+        "pointer-events-none absolute w-max max-w-56 rounded-md border bg-card px-2 py-1 text-xs leading-snug text-foreground shadow-md",
+        raised ? "z-20" : "z-10",
+        !spot.found && "opacity-80",
+      )}
+    >
+      <p className="line-clamp-6 whitespace-pre-wrap break-words">{text}</p>
+      {!spot.found && <p className="mt-0.5 text-2xs text-muted-foreground">The element it was on is gone.</p>}
+    </div>
   );
 }
 
@@ -144,10 +182,12 @@ function Pin(props: {
   ref?: RefObject<HTMLButtonElement | null>;
   mark: string;
   label: string;
-  title: string;
+  title?: string;
   spot: CommentSpot;
   inking: boolean;
   onClick?: () => void;
+  /** The pointer or the focus came to the pin, or left it. */
+  onPointed?: (on: boolean) => void;
 }) {
   const { spot } = props;
   return (
@@ -158,9 +198,13 @@ function Pin(props: {
       aria-label={props.label}
       title={props.title}
       onClick={props.onClick}
+      onPointerEnter={() => props.onPointed?.(true)}
+      onPointerLeave={() => props.onPointed?.(false)}
+      onFocus={() => props.onPointed?.(true)}
+      onBlur={() => props.onPointed?.(false)}
       style={{ left: `${spot.x * 100}%`, top: `${spot.y * 100}%` }}
       className={cn(
-        "absolute flex size-6 -translate-y-full items-center justify-center rounded-full rounded-bl-none border-2 border-background bg-primary text-2xs font-semibold text-primary-foreground shadow-md",
+        "absolute z-10 flex size-6 -translate-y-full items-center justify-center rounded-full rounded-bl-none border-2 border-background bg-primary text-2xs font-semibold text-primary-foreground shadow-md",
         props.inking ? "pointer-events-none" : "pointer-events-auto",
         !spot.found && "opacity-60",
       )}
@@ -373,7 +417,7 @@ export function ComposerComments() {
         <button
           type="button"
           aria-label="Don't send comments"
-          title="Don't send these comments; they stay on the slides"
+          title="Don't send these comments; they stay on the slides until they are sent"
           onClick={() => useApp.getState().holdComments(commentsInScope(useApp.getState()))}
           className="hover:text-foreground"
         >

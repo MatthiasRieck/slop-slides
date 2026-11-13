@@ -9,6 +9,7 @@ import {
   Lasso,
   type LucideIcon,
   MessageSquarePlus,
+  MessageSquareText,
   PenLine,
   Play,
   Search,
@@ -60,6 +61,7 @@ export function ViewToolbar(props: {
   const { annotations, commenting, onCommenting, drawingArea, onDrawingArea } = props;
   const { tool, setTool, colors, setColor, strokes, undo, clear } = annotations;
   const reviewVisible = useApp((s) => s.reviewVisible);
+  const commentTexts = useApp((s) => s.commentTexts);
   const finalState = useApp((s) => s.finalState);
   const hasReview = useApp((s) =>
     [...Object.values(s.sketches), ...Object.values(s.comments)].some((items) => items.length > 0),
@@ -173,6 +175,18 @@ export function ViewToolbar(props: {
             {reviewVisible ? <Eye /> : <EyeOff />}
             {reviewVisible ? "Shown" : "Hidden"}
           </RibbonToggle>
+          <ToolButton
+            label={
+              commentTexts
+                ? "Show a comment's text only when its pin is pointed at"
+                : "Show every comment's text next to its pin"
+            }
+            active={commentTexts}
+            disabled={!reviewVisible}
+            onClick={() => useApp.getState().setCommentTexts(!commentTexts)}
+          >
+            <MessageSquareText />
+          </ToolButton>
         </RibbonRow>
       </RibbonSection>
       <RibbonSection title="Animations" icon={<Play />} collapsed={collapsedFrom <= 2} closeOn={finalState}>

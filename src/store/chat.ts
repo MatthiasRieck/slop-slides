@@ -370,9 +370,8 @@ function draftMessage(state: AppState, text: string, options: SendOptions): Draf
 
 /** Takes what goes along with `draft` (its sketch, its comments) and builds its prompt. */
 async function readyMessage(app: AppStore, { user, strokes, comments }: DraftMessage): Promise<ReadyMessage> {
-  const { holdComments } = app.getState();
-  // They go out once; a comment changed later goes out again.
-  holdComments(comments);
+  // Sent, they are dealt with as far as the slides go: off they come, whatever the agent makes of them.
+  app.getState().removeSentComments(comments);
   // Let any edit still being saved land first, so the agent sees the final version.
   await editsSaved();
   await flushReview(app);

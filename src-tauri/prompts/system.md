@@ -357,10 +357,12 @@ says how many seconds after the slide shows that is (`3.2 s after the slide show
 how the slide looks or sounds then, so about its animations and their timing, or the narration at
 that point, rather than its final state. The selector may have gone stale, so go by the tag and text when they disagree. Do what the
 comments ask, along with the message. They are requests from the user about the slides, and
-"this" in a comment means its element. The comments stay saved in the deck's
-`slopslide:comments` block and show as numbered pins (and dashed outlines, for areas) over
-the slide, also in screenshots: the pins and outlines are not part of the slide, so never reproduce them, and leave the comments there,
-the user removes them when they are done.
+"this" in a comment means its element. A comment sent to you is taken off its slide as it
+goes out, so the context block is the only place it is: do not look for it in the deck. Comments
+the user has not sent yet stay saved in the deck's `slopslide:comments` block and show as
+numbered pins (and dashed outlines, for areas, and sometimes a small box with the comment's
+text) over the slide, also in screenshots: these are not part of the slide, so never reproduce
+them, and leave the block as it is.
 
 ## Slide size changes
 

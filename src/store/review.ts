@@ -16,13 +16,15 @@ export interface ReviewSlice {
   sketchesSent: Record<string, Stroke[]>;
   /** Review marks and comments are shown on the stage (and sent to the agent). */
   reviewVisible: boolean;
-  /** Comments on slides, by slide id. Saved in the deck file. */
+  /** Every comment's text floats next to its pin, rather than only the one pointed at. */
+  commentTexts: boolean;
+  /** Comments on slides, by slide id. Saved in the deck file. Sent to the agent, they are taken off. */
   comments: Record<string, SlideComment[]>;
   /** Which comments the next message takes along. */
   commentScope: CommentScope;
   /**
-   * What comments said when they were last sent or left out, by id: they go out again once
-   * changed, or when the user picks them in the composer.
+   * What comments said when the user left them out of the next messages, by id: they go out
+   * once changed, or when the user picks them in the composer.
    */
   commentsHeld: Record<string, string>;
 
@@ -31,9 +33,15 @@ export interface ReviewSlice {
   /** Keeps the slide's current marks out of the next message. */
   skipSketch: (slide: string) => void;
   setReviewVisible: (visible: boolean) => void;
+  setCommentTexts: (shown: boolean) => void;
   addComment: (slide: string, comment: SlideComment) => void;
   updateComment: (slide: string, id: string, text: string) => void;
   removeComment: (slide: string, id: string) => void;
+  /**
+   * Takes comments that went to the agent off their slides, whatever comes of the turn: the chat
+   * keeps what they said. One changed since it was sent stays, and goes out again.
+   */
+  removeSentComments: (sent: SlideComment[]) => void;
   setCommentScope: (scope: CommentScope) => void;
   /** Leaves a comment out of the next messages, or takes it along again. */
   setCommentHeld: (comment: SlideComment, held: boolean) => void;
@@ -41,6 +49,7 @@ export interface ReviewSlice {
 }
 
 const REVIEW_VISIBLE_KEY = "slopslide.reviewVisible";
+const COMMENT_TEXTS_KEY = "slopslide.commentTexts";
 
 /** The comments the composer offers to send: the selected slide's or the deck's, in deck order. */
 export function commentsInScope(
@@ -60,6 +69,7 @@ export const createReviewSlice: Slice<ReviewSlice> = (set, _get, app) => ({
   sketches: {},
   sketchesSent: {},
   reviewVisible: loadFlag(REVIEW_VISIBLE_KEY, true),
+  commentTexts: loadFlag(COMMENT_TEXTS_KEY, false),
   comments: {},
   commentScope: "slide",
   commentsHeld: {},
@@ -84,6 +94,11 @@ export const createReviewSlice: Slice<ReviewSlice> = (set, _get, app) => ({
     set({ reviewVisible });
   },
 
+  setCommentTexts: (commentTexts) => {
+    saveFlag(COMMENT_TEXTS_KEY, commentTexts);
+    set({ commentTexts });
+  },
+
   addComment: (slide, comment) => {
     set((s) => ({ comments: { ...s.comments, [slide]: [...(s.comments[slide] ?? []), comment] } }));
     scheduleReviewSave(app);
@@ -98,6 +113,18 @@ export const createReviewSlice: Slice<ReviewSlice> = (set, _get, app) => ({
 
   removeComment: (slide, id) => {
     set((s) => ({ comments: { ...s.comments, [slide]: (s.comments[slide] ?? []).filter((c) => c.id !== id) } }));
+    scheduleReviewSave(app);
+  },
+
+  removeSentComments: (sent) => {
+    if (sent.length === 0) return;
+    const texts = new Map(sent.map((c) => [c.id, c.text]));
+    set((s) => ({
+      comments: Object.fromEntries(
+        Object.entries(s.comments).map(([slide, list]) => [slide, list.filter((c) => texts.get(c.id) !== c.text)]),
+      ),
+      commentsHeld: Object.fromEntries(Object.entries(s.commentsHeld).filter(([id]) => !texts.has(id))),
+    }));
     scheduleReviewSave(app);
   },
 

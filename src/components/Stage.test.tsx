@@ -796,11 +796,71 @@ describe("Stage", () => {
         expect(pin.style.left).toBe("75%");
       });
 
-      it("shows pins in View only, and not while the review is hidden", () => {
+      it("shows what a comment says while its pin is pointed at or focused", () => {
+        useApp.setState({ comments: { intro: [comment, { ...comment, id: "second", text: "Bolder", x: 0.9 }] } });
+        render(<Stage />);
+        const bubbles = () => screen.queryAllByTestId("comment-bubble").map((b) => b.textContent);
+        expect(bubbles()).toEqual([]);
+        const [first, second] = screen.getAllByTestId("comment-pin") as [HTMLElement, HTMLElement];
+        fireEvent.pointerEnter(first);
+        expect(bubbles()).toEqual(["Bigger"]);
+        fireEvent.pointerEnter(second);
+        fireEvent.pointerLeave(first);
+        expect(bubbles()).toEqual(["Bolder"]);
+        // Near the right edge it opens towards the middle of the slide.
+        expect(screen.getByTestId("comment-bubble").style.transform).toContain("-100%");
+        fireEvent.pointerLeave(second);
+        expect(bubbles()).toEqual([]);
+        fireEvent.focus(first);
+        expect(bubbles()).toEqual(["Bigger"]);
+        fireEvent.blur(first);
+        expect(bubbles()).toEqual([]);
+      });
+
+      it("shows every comment's text when asked to, but the open one's", () => {
+        useApp.setState({ comments: { intro: [comment, { ...comment, id: "second", text: "Bolder" }] } });
+        render(<Stage />);
+        const bubbles = () => screen.queryAllByTestId("comment-bubble").map((b) => b.textContent);
+        fireEvent.click(tool("Show every comment's text next to its pin"));
+        expect(useApp.getState().commentTexts).toBe(true);
+        expect(localStorage.getItem("slopslide.commentTexts")).toBe("true");
+        expect(bubbles()).toEqual(["Bigger", "Bolder"]);
+        fireEvent.click(screen.getByRole("button", { name: "Comment 1" }));
+        expect(bubbles()).toEqual(["Bolder"]);
+        fireEvent.keyDown(input(), { key: "Escape" });
+        fireEvent.click(tool("Show a comment's text only when its pin is pointed at"));
+        expect(bubbles()).toEqual([]);
+      });
+
+      it("says in the text when the element is gone", () => {
+        useApp.setState({ comments: { intro: [comment] }, commentTexts: true });
+        const { container } = render(<Stage />);
+        fromFrame(container, {
+          type: "slop:comment-spots",
+          slide: "intro",
+          spots: [{ id: "first", x: 0.25, y: 0.5, found: false }],
+        });
+        expect(screen.getByTestId("comment-bubble").textContent).toContain("gone");
+        act(() => useApp.setState({ commentTexts: false }));
+      });
+
+      it("closes a comment taken off the slide while it is open, without bringing it back", () => {
+        useApp.setState({ comments: { intro: [comment] } });
+        render(<Stage />);
+        fireEvent.click(screen.getByRole("button", { name: "Comment 1" }));
+        fireEvent.change(input(), { target: { value: "Smaller" } });
+        act(() => useApp.getState().removeSentComments([comment]));
+        expect(screen.queryByRole("dialog", { name: "Comment" })).toBeNull();
+        expect(useApp.getState().comments.intro).toEqual([]);
+      });
+
+      it("shows pins in View and Edit, and not while the review is hidden", () => {
         useApp.setState({ comments: { intro: [comment] } });
         render(<Stage />);
         act(() => useApp.getState().setMode("settings"));
         expect(screen.queryByTestId("comment-pin")).toBeNull();
+        act(() => useApp.getState().setMode("edit"));
+        expect(screen.getByTestId("comment-pin")).toBeTruthy();
         act(() => useApp.getState().setMode("view"));
         expect(screen.getByTestId("comment-pin")).toBeTruthy();
         fireEvent.click(tool("Hide review marks and comments"));

@@ -46,7 +46,8 @@ export function Stage() {
   const pasteboard = usePasteboard(areaRef);
   const editFrames = useSlideEditing(areaRef, pasteboard.resetView);
   const postToEditor = editFrames.post;
-  const reviewShown = mode === "view" && reviewVisible;
+  // Comments are written in View, and stay on show while the slide is edited.
+  const reviewShown = (mode === "view" || mode === "edit") && reviewVisible;
   const inkRef = useRef<HTMLDivElement>(null);
   const commentPins = useSlideComments(areaRef, postToEditor, reviewShown, inkRef);
   const pinAnchor = useRef<HTMLButtonElement>(null);
@@ -78,7 +79,7 @@ export function Stage() {
   useEffect(() => {
     if (annotations.tool !== "pointer") useApp.getState().setReviewVisible(true);
   }, [annotations.tool]);
-  // The sketch tools and comments are View mode's: leaving it puts them away.
+  // The sketch and comment tools are View mode's: leaving it puts them away.
   const putToolAway = annotations.setTool;
   useEffect(() => {
     if (mode === "view") return;
